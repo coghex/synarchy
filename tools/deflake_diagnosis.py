@@ -74,7 +74,8 @@ those as MISSING. Demanding "every expected check in every run" would
 therefore be unsatisfiable for any probe with an X above zero, so the
 rule is scoped:
 
-* every TARGET check identifier has zero MISSING across all ten runs;
+* every TARGET check identifier is really measured — PASS — in at least
+  `RUN_COUNT - X` runs;
 * every PASSING run emits every expected check, MISSING zero;
 * an accepted failing or timed-out run may omit only checks after its
   own abort point — and because `probe_protocol` enforces declared
@@ -82,8 +83,14 @@ rule is scoped:
   declared order", which is checked rather than assumed; and
 * no expected identifier disappears from the batch as a whole.
 
-For X=0 no failing run is accepted, so this collapses to the strict
-formulation and the default case is unchanged.
+For X=0 the first rule is "PASS in all ten runs", which is the absolute
+"zero MISSING across all ten" stated the other way round, so the default
+case is unchanged. It has to be stated in terms of X rather than
+absolutely because the diagnosis inputs are EVERY non-PASS identifier,
+which for an aborting probe includes the checks that went MISSING as
+collateral of an earlier FAIL — and forbidding those to go MISSING again
+would make X>0 unsatisfiable by construction, which is the defect the
+scoping exists to remove. See `missing_problems`.
 
 Same environment means the same MEASUREMENT, not the same characters
 --------------------------------------------------------------------
@@ -507,17 +514,45 @@ def worktree_paths() -> list:
     return probe_flake._worktree_paths()
 
 
-def inside_any_worktree(path, worktrees) -> str | None:
+def _path_forms(path, base=None) -> set:
+    """Every absolute form `path` can denote, for containment purposes.
+
+    A destination reaches `probe_flake` as it was typed, and
+    `write_result` opens it RELATIVE TO THE PROCESS'S DIRECTORY — so
+    `results/verify.json` from a repair worktree lands inside that
+    worktree while matching no absolute registered path at all. The
+    recorded invocation directory is what makes a relative destination
+    mean something, so it is joined on before anything is compared.
+
+    Both a lexical (`normpath`, so `..` collapses) and a filesystem
+    (`resolve`, so a symlinked worktree matches) form are produced. The
+    lexical one keeps the rule decidable for a path that does not exist
+    yet — which every destination is, before its batch runs — and the
+    resolved one is what catches `/tmp` being a link to `/private/tmp`.
+    """
+    raw = Path(path).expanduser()
+    if base is not None and not raw.is_absolute():
+        raw = Path(base).expanduser() / raw
+    forms = {Path(os.path.normpath(str(raw)))}
+    try:
+        forms.add(raw.resolve())
+    except OSError:
+        pass
+    return forms
+
+
+def inside_any_worktree(path, worktrees, *, base=None) -> str | None:
     """The worktree containing `path`, or None.
 
-    Supplied rather than discovered, so the rule is testable without a
-    git checkout; the CLI passes `probe_flake._worktree_paths()`.
+    Worktrees are supplied rather than discovered, so the rule is
+    testable without a git checkout; the CLI passes `worktree_paths()`.
     """
-    resolved = Path(path).expanduser()
+    candidates = _path_forms(path, base)
     for tree in worktrees:
-        tree = Path(tree).expanduser()
-        if resolved == tree or tree in resolved.parents:
-            return str(tree)
+        for form in _path_forms(tree):
+            for candidate in candidates:
+                if candidate == form or form in candidate.parents:
+                    return str(tree)
     return None
 
 
@@ -525,17 +560,27 @@ def inside_any_worktree(path, worktrees) -> str | None:
 # Result documents
 # ==========================================================================
 def require_result(document, what: str) -> dict:
-    """A `probe-flake-result/v1` document, structurally validated."""
-    if not isinstance(document, dict):
-        raise HandoffError(
-            f"{what} must be a JSON object, got {type(document).__name__}")
-    schema = document.get("schema")
-    if schema != probe_flake.RESULT_SCHEMA:
-        raise HandoffError(
-            f"{what} is {schema!r}, expected {probe_flake.RESULT_SCHEMA!r}")
-    probe = document.get("probe")
-    if not isinstance(probe, str) or not probe:
-        raise HandoffError(f"{what} names no probe")
+    """A `probe-flake-result/v1` document, validated CANONICALLY.
+
+    `probe_census.validate_result` is the shipped validator for this
+    schema and it is what runs here — declared shape first, then #1493's
+    cross-field invariants. Re-deriving a subset of it locally is the
+    failure mode this delegation exists to avoid: `_rule_pass_run_has_no
+    _failed_check` alone is what stops a document whose runs all say
+    PASS while their check maps carry FAIL, which `failure_count` would
+    otherwise count as a spotless batch and admit as a verified repair.
+
+    Only two rules are added afterwards, and only because the canonical
+    validator does not make them: the diagnosis-specific one that a
+    result attributed to no commit is not evidence, and the identifier
+    SHAPE rule (`probe_protocol.CHECK_ID_RE`) that a self-consistent
+    document carrying a runtime value in an identifier still satisfies.
+    """
+    try:
+        probe_census.validate_result(document)
+    except probe_census.CensusError as error:
+        raise HandoffError(f"{what}: {error}") from None
+    probe = document["probe"]
     commit = document.get("commit_sha")
     if not isinstance(commit, str) or not COMMIT_RE.match(commit):
         raise HandoffError(
@@ -543,46 +588,19 @@ def require_result(document, what: str) -> dict:
             f"`probe_flake` writes the literal 'unknown' when git could not "
             f"be consulted, and a measurement nobody can attribute to a "
             f"commit is not evidence")
-    checks = document.get("checks")
-    if not isinstance(checks, list) or not checks:
-        raise HandoffError(f"{what} declares no checks")
     ids = []
-    for position, entry in enumerate(checks):
-        if not isinstance(entry, dict):
-            raise HandoffError(f"{what}.checks[{position}] must be an object")
-        cid = entry.get("id")
-        if not isinstance(cid, str) or not probe_protocol.CHECK_ID_RE.match(cid):
+    for position, entry in enumerate(document["checks"]):
+        cid = entry["id"]
+        if not probe_protocol.CHECK_ID_RE.match(cid):
             raise HandoffError(
                 f"{what}.checks[{position}] has no stable identifier "
                 f"({cid!r}); `probe-result/v1` identifiers are static and "
                 f"carry no runtime value, so this is a malformed protocol "
                 f"result rather than something to diagnose")
-        if cid in ids:
-            raise HandoffError(f"{what}.checks repeats {cid!r}")
         ids.append(cid)
-    runs = document.get("runs")
-    if not isinstance(runs, list):
-        raise HandoffError(f"{what} has no `runs` list")
-    for position, run in enumerate(runs):
+    for position, run in enumerate(document["runs"]):
         where = f"{what}.runs[{position}]"
-        if not isinstance(run, dict):
-            raise HandoffError(f"{where} must be an object")
-        if run.get("outcome") not in (probe_flake.RUN_PASS, probe_flake.RUN_FAIL,
-                                      probe_flake.RUN_TIMEOUT):
-            raise HandoffError(
-                f"{where} has outcome {run.get('outcome')!r}, which is not "
-                f"one of the three valid per-run outcomes")
-        checks_map = run.get("checks")
-        if not isinstance(checks_map, dict):
-            raise HandoffError(f"{where} has no `checks` map")
-        undeclared = sorted(set(checks_map) - set(ids))
-        if undeclared:
-            raise HandoffError(
-                f"{where} reports identifiers the descriptor never declared "
-                f"({', '.join(undeclared)}); a per-run identifier that is "
-                f"not in the descriptor is a malformed protocol result, not "
-                f"a diagnosis input")
-        absent = [cid for cid in ids if cid not in checks_map]
+        absent = [cid for cid in ids if cid not in run["checks"]]
         if absent:
             raise HandoffError(
                 f"{where} omits declared identifiers entirely "
@@ -590,11 +608,6 @@ def require_result(document, what: str) -> dict:
                 f"reports every declared check as PASS, FAIL or MISSING, so "
                 f"a key that is simply absent means the document was not "
                 f"written by the harness")
-        for cid, result in checks_map.items():
-            if result not in probe_protocol.CHECK_RESULTS:
-                raise HandoffError(
-                    f"{where} reports {cid!r} as {result!r}, which is not "
-                    f"PASS, FAIL or MISSING")
     return document
 
 
@@ -674,37 +687,51 @@ def failure_count(document) -> int:
                                      probe_flake.RUN_TIMEOUT))
 
 
-def missing_problems(document, *, targets, what: str) -> list:
+def missing_problems(document, *, targets, acceptable_failures,
+                     what: str) -> list:
     """Every violation of the scoped MISSING rule in one batch.
 
-    See the module docstring: targets are absolute, passing runs are
-    absolute, an accepted failing run may only lose a contiguous suffix,
-    and no identifier may vanish from the batch entirely.
+    Four rules, and the first is where the two reviews of #1437 have to
+    be read together rather than one at a time.
 
-    X is deliberately NOT an argument. A batch above X has already
-    failed on its count, and the caller is what decides whether a
-    violation here means "refuse the repair" or "this is why the route
-    is `partial-improvement`" — scoring it twice would let one fact
-    produce two verdicts.
+    "Every target has zero MISSING across all ten runs" and "an accepted
+    failing run may omit checks after its abort point" cannot BOTH be
+    literal, because the diagnosis inputs are every non-PASS identifier
+    — which, for a probe that aborts, includes the checks that went
+    MISSING as collateral of an earlier FAIL. Demanding those never go
+    MISSING again would make X>0 unsatisfiable by construction, which is
+    the exact defect the scoping was introduced to remove.
+
+    So the target rule is stated as the guarantee the absolute version
+    was reaching for, in the terms X already supplies: **a target must be
+    really measured — PASS — in at least `RUN_COUNT - X` runs.** For X=0
+    that is all ten runs, so the default case is byte-for-byte the
+    absolute rule; for X>0 it degrades exactly as far as X already
+    permits and not one run further. A target that "improved" by no
+    longer being emitted fails it, which is the thing worth stopping.
+
+    The other three: no MISSING at all in a run that PASSED; MISSING in a
+    failing run must be a contiguous suffix of the declared order, which
+    is what "after the abort point" MEANS and is checked rather than
+    assumed even though `probe_protocol` enforces declared order; and no
+    identifier may vanish from the batch as a whole.
     """
     ids = descriptor_ids(document)
     order = {cid: position for position, cid in enumerate(ids)}
+    counts = {cid: 0 for cid in ids}
     problems = []
     emitted = set()
     for run in document["runs"]:
         index = run.get("index")
         results = run["checks"]
+        for cid, result in results.items():
+            if result == probe_protocol.PASS:
+                counts[cid] += 1
         emitted |= {cid for cid, result in results.items()
                     if result != probe_protocol.MISSING}
         missing = sorted((cid for cid, result in results.items()
                           if result == probe_protocol.MISSING),
                          key=order.__getitem__)
-        for cid in missing:
-            if cid in targets:
-                problems.append(
-                    f"{what} run {index} reports the target check {cid!r} as "
-                    f"MISSING; a target that stops being emitted has not "
-                    f"been fixed, it has stopped being measured")
         if not missing:
             continue
         if run["outcome"] == probe_flake.RUN_PASS:
@@ -721,6 +748,15 @@ def missing_problems(document, *, targets, what: str) -> list:
                 f"run loses everything after its abort point and nothing "
                 f"before it, so this is a malformed result rather than an "
                 f"abort")
+    required = RUN_COUNT - acceptable_failures
+    for cid in ids:
+        if cid in targets and counts[cid] < required:
+            problems.append(
+                f"{what} measured the target check {cid!r} as PASS in "
+                f"{counts[cid]} of {len(document['runs'])} runs where an X "
+                f"of {acceptable_failures} requires at least {required}; a "
+                f"target that stops being emitted has not been fixed, it "
+                f"has stopped being measured")
     vanished = [cid for cid in ids if cid not in emitted]
     if vanished:
         problems.append(
@@ -826,25 +862,34 @@ def require_handoff(document) -> Handoff:
             f"descriptor is the ordered contract and the two cannot "
             f"disagree")
 
+    # The targets are not a SELECTION from the measurement, they ARE it:
+    # the issue's entry gate says every non-PASS identifier for the probe
+    # is a diagnosis input, so a handoff that named a subset would let a
+    # repair be declared verified while another observed failure was
+    # quietly left out of scope. Equality, in the descriptor's own order.
     observed = non_pass_ids(result)
     targets = document.get("targets")
     if not isinstance(targets, list) or not targets:
         raise HandoffError(
             f"{what} names no target check identifiers; every non-PASS "
             f"identifier for this probe is a diagnosis input, and this "
-            f"measurement observed {observed or 'none'}")
-    unknown = [cid for cid in targets if cid not in descriptor_ids(result)]
-    if unknown:
+            f"measurement observed {', '.join(observed) or 'none'}")
+    if len(set(targets)) != len(targets):
+        raise HandoffError(f"{what}.targets repeats an identifier: {targets}")
+    if list(targets) != observed:
+        unknown = [cid for cid in targets
+                   if cid not in descriptor_ids(result)]
+        if unknown:
+            raise HandoffError(
+                f"{what} targets identifiers the descriptor never declared: "
+                f"{', '.join(unknown)}")
         raise HandoffError(
-            f"{what} targets identifiers the descriptor never declared: "
-            f"{', '.join(unknown)}")
-    unobserved = [cid for cid in targets if cid not in observed]
-    if unobserved:
-        raise HandoffError(
-            f"{what} targets {', '.join(unobserved)}, which never failed or "
-            f"went missing in the measurement it is derived from; the "
-            f"diagnosis inputs are exactly this probe's non-PASS "
-            f"identifiers ({', '.join(observed) or 'none'})")
+            f"{what}.targets is {list(targets)} where its own measurement's "
+            f"non-PASS identifiers are {observed}, in that order. All of "
+            f"them are diagnosis inputs: naming a subset would let a repair "
+            f"be verified while another observed failure stayed out of "
+            f"scope, and naming a check that never went non-PASS targets "
+            f"something this measurement did not see")
 
     require_invocation(document.get("invocation"), f"{what}.invocation")
     settings = effective_settings(document["invocation"], f"{what}.invocation")
@@ -937,10 +982,21 @@ def _require_batch(section, *, what: str, handoff: Handoff,
                                    f"{what}.invocation")
     require_manifest(section.get("configuration"), f"{what}.configuration")
     worktree = section.get("worktree")
+    if what == "baseline" and result["commit_sha"] != handoff.commit_sha:
+        raise HandoffError(
+            f"the controlled baseline measured commit "
+            f"{result['commit_sha']} where the handoff's baseline is "
+            f"{handoff.commit_sha}; the clean comparison worktree is "
+            f"created AT the handoff's baseline SHA and the repair "
+            f"worktree from that same SHA, so a baseline taken at another "
+            f"commit is not the control this comparison needs — if the "
+            f"intended base moved, recreate BOTH states on one new common "
+            f"SHA and repeat the baseline")
     if not isinstance(worktree, str) or not worktree:
         raise HandoffError(f"{what} names no worktree")
     for path in destinations(invocation):
-        tree = inside_any_worktree(path, worktrees)
+        tree = inside_any_worktree(path, worktrees,
+                                   base=invocation["directory"])
         if tree is not None:
             raise HandoffError(
                 f"{what} wrote {path} inside the working tree {tree}; the "
@@ -1116,8 +1172,13 @@ def evaluate(document, *, worktrees=()) -> Outcome:
             f"({baseline_section['worktree']}); the clean comparison "
             f"worktree stays at the baseline commit and the repair lives in "
             f"its own")
+    verification_destinations = set()
+    for path in destinations(verification_section["invocation"]):
+        verification_destinations |= _path_forms(
+            path, verification_section["invocation"]["directory"])
     for path in destinations(baseline_section["invocation"]):
-        if path in destinations(verification_section["invocation"]):
+        forms = _path_forms(path, baseline_section["invocation"]["directory"])
+        if forms & verification_destinations:
             raise RouteRefused(
                 f"both batches wrote to {path}; the baseline evidence must "
                 f"survive the verification that follows it")
@@ -1128,8 +1189,10 @@ def evaluate(document, *, worktrees=()) -> Outcome:
     # above X, contains any MISSING result, becomes invalid, or only
     # partially improves the rate" is ONE list, and every entry on it
     # goes to #1439 rather than to a pull request.
-    problems = missing_problems(verification, targets=set(handoff.targets),
-                                what="the verification batch")
+    problems = missing_problems(
+        verification, targets=set(handoff.targets),
+        acceptable_failures=handoff.acceptable_failures,
+        what="the verification batch")
     state = probe_census.tolerance_state(
         handoff.acceptable_failures, verification["requested_runs"],
         verification["completed_runs"], verification_failures)
@@ -1167,7 +1230,8 @@ def evaluate(document, *, worktrees=()) -> Outcome:
             f"only at or below X, so this is the "
             f"{ROUTE_PARTIAL_IMPROVEMENT!r} outcome for #1439")
     _require_evidence(document, route)
-    _require_repair(document, verification_section)
+    _require_repair(document, verification_section,
+                    baseline_sha=handoff.commit_sha)
     return Outcome(route, opens_pull_request=True, detail=(
         f"{baseline_failures}/{RUN_COUNT} before, {verification_failures}/"
         f"{RUN_COUNT} after, against an X of "
@@ -1227,8 +1291,9 @@ def _evidence_detail(document, route: str) -> str:
     return diagnosis.get("summary") or f"{route}: see the recorded evidence"
 
 
-def _require_repair(document, verification_section) -> None:
-    """The repair commit is frozen, clean, and the thing that was measured."""
+def _require_repair(document, verification_section, *,
+                    baseline_sha: str) -> None:
+    """The repair is frozen, clean, measured, and on the common baseline."""
     repair = document.get("repair")
     if not isinstance(repair, dict):
         raise HandoffError("a repair route records its `repair` block")
@@ -1237,6 +1302,18 @@ def _require_repair(document, verification_section) -> None:
         raise HandoffError(
             f"the repair names no resolved commit ({commit!r}); the repair "
             f"is committed and frozen BEFORE it is verified")
+    base = repair.get("base_sha")
+    if not isinstance(base, str) or not COMMIT_RE.match(base):
+        raise HandoffError(
+            f"the repair names no resolved base commit ({base!r}); the "
+            f"repair worktree is created from the SAME SHA as the clean "
+            f"comparison worktree, and a repair whose lineage is unstated "
+            f"cannot be shown to share one")
+    if base != baseline_sha:
+        raise HandoffError(
+            f"the repair is based on {base} while the controlled baseline "
+            f"measured {baseline_sha}; the two comparison states share one "
+            f"common SHA or they are not a comparison")
     if verification_section["result"]["commit_sha"] != commit:
         raise HandoffError(
             f"the verification batch measured commit "

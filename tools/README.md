@@ -1677,6 +1677,25 @@ root, invocation directory and exact command — so a handoff rebuilt from the
 durable census row cannot identify the baseline invocation, and the gate
 refuses it by name.
 
+Every result document is validated by `probe_census.validate_result`, the
+shipped validator for that schema, before a single field is read. Deriving a
+subset of it locally is the failure this delegation exists to avoid:
+`_rule_pass_run_has_no_failed_check` alone is what stops a document whose runs
+all claim PASS while their check maps carry FAIL, which a run-outcome failure
+count would otherwise read as a spotless batch.
+
+**The targets are not a selection from the measurement — they ARE it.** Every
+non-PASS identifier is a diagnosis input, so the handoff's target list must
+equal the measurement's ordered non-PASS identifiers exactly. A subset would
+let a repair be declared verified while another observed failure stayed
+quietly out of scope.
+
+**One common SHA.** The clean comparison worktree is created at the handoff's
+baseline commit and the repair worktree from that same commit, so the baseline
+result must name the handoff's SHA and the repair must record the `base_sha`
+it was cut from. If the intended base moves, both states are recreated on one
+new common SHA and the baseline is repeated.
+
 **Descriptor equality, not identifier normalization.** `probe-result/v1`
 already requires static identifiers and puts every runtime value in an event's
 `detail`, so a per-run undeclared or changing identifier is a MALFORMED
@@ -1685,18 +1704,27 @@ scored.
 
 **The scoped MISSING rule.** Probes abort, so "every expected check in every
 run" is unsatisfiable for any probe with an X above zero. Instead: every TARGET
-identifier has zero MISSING across all ten runs; every PASSING run emits
-everything; an accepted failing or timed-out run may lose only a contiguous
-suffix of the declared order — which is checked, not assumed; and no identifier
-disappears from the batch as a whole. For X=0 this collapses to the strict
-formulation, so the default case is unchanged.
+identifier is really measured — PASS — in at least `RUN_COUNT - X` runs; every
+PASSING run emits everything; an accepted failing or timed-out run may lose
+only a contiguous suffix of the declared order, which is checked rather than
+assumed; and no identifier disappears from the batch as a whole.
+
+For X=0 the first rule is "PASS in all ten runs", which is "zero MISSING
+across all ten" stated the other way round, so the default case is unchanged.
+It has to be expressed in terms of X rather than absolutely because the
+diagnosis inputs are EVERY non-PASS identifier, which for an aborting probe
+includes the checks that went MISSING as collateral of an earlier FAIL —
+forbidding those to go MISSING again would make X>0 unsatisfiable by
+construction, which is the defect the scoping exists to remove.
 
 **Same environment means the same measurement, not the same characters.** The
 two batches necessarily differ in worktree and destination, and ports are
 leased dynamically, so they are compared on behavior-affecting settings with
 effective defaults filled in. Both destinations must still sit outside every
 worktree: `check_artifact_root` guards the artifact root, but `--result` is
-written wherever it is pointed.
+written wherever it is pointed — and it is opened RELATIVE TO THE PROCESS'S
+DIRECTORY, so a destination is joined onto the recorded invocation directory
+and normalised before anyone asks which worktree it lands in.
 
 **The repair is frozen before it is verified.** `probe_flake` records only
 `git rev-parse HEAD` and cannot see uncommitted source, so a declared repair

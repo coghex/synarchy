@@ -109,7 +109,7 @@ def expect_refused(thunk, fragment: str, msg: str) -> None:
 # --------------------------------------------------------------------------
 def result_document(*, probe: str = PROBE, commit: str = BASE_COMMIT,
                     checks=None, runs=None, rts_caps=None,
-                    requested=None) -> dict:
+                    requested=None, harness_error: bool = False) -> dict:
     """A REAL `probe-flake-result/v1` document.
 
     `runs` is a list of per-run check maps; the run outcome is derived
@@ -143,11 +143,29 @@ def result_document(*, probe: str = PROBE, commit: str = BASE_COMMIT,
         measurement.runs.append(probe_flake.RunRecord(
             index, 9100 + index, outcome, 1.5, dict(checks_map),
             (root / "invocation" / f"run-{index:03d}") if keep else None))
+    if harness_error:
+        # The run that broke the stream is never one of the completed
+        # ones, so a real harness error always leaves one uncompleted.
+        broken = measurement.runs.pop()
+        measurement.status = "harness-error"
+        measurement.error = (f"run {broken.index}: the event stream could "
+                             f"not be trusted")
+        measurement.error_run = probe_flake.RunRecord(
+            broken.index, broken.port, probe_flake.RUN_HARNESS_ERROR, 0.5,
+            {}, root / "invocation" / f"run-{broken.index:03d}")
     return measurement.to_document()
 
 
-def failing_runs(count: int, *, cid: str = "beta", declared=None) -> list:
-    """`count` runs that FAIL at `cid` and abort, and clean runs after."""
+def failing_runs(count: int, *, cid: str = "beta", declared=None,
+                 abort: bool = True) -> list:
+    """`count` runs that FAIL at `cid`, then clean runs to fill the batch.
+
+    `abort=True` is the common shape: the probe stops there and every
+    later check is MISSING. `abort=False` is a probe that reports a
+    failed check and keeps going, which is the only way a measurement's
+    non-PASS set is NOT suffix-closed — and therefore the only way two
+    measurements can fail at genuinely disjoint checks.
+    """
     declared = CHECKS if declared is None else declared
     ids = [c for c, _l in declared]
     position = ids.index(cid)
@@ -155,10 +173,10 @@ def failing_runs(count: int, *, cid: str = "beta", declared=None) -> list:
     for _ in range(count):
         run = {}
         for index, name in enumerate(ids):
-            if index < position:
-                run[name] = PASS
-            elif index == position:
+            if index == position:
                 run[name] = FAIL
+            elif index < position or not abort:
+                run[name] = PASS
             else:
                 run[name] = MISSING
         runs.append(run)
@@ -197,20 +215,29 @@ def manifest(entries=()) -> dict:
 
 
 def handoff_document(*, probe: str = PROBE, acceptable: int = 0,
-                     targets=("beta",), result=None, inv=None,
+                     targets=None, result=None, inv=None,
                      config=None) -> dict:
-    document = {
+    """A handoff whose targets DERIVE from its own measurement.
+
+    Deriving rather than declaring is the point: the entry gate requires
+    the target list to equal the measurement's ordered non-PASS
+    identifiers exactly, so a fixture that hard-coded one would be
+    asserting against itself. A case that wants a wrong target passes
+    `targets=` explicitly.
+    """
+    result = result if result is not None else result_document(
+        probe=probe, runs=failing_runs(3))
+    return {
         "schema": dd.HANDOFF_SCHEMA,
         "probe": probe,
         "acceptable_failures": acceptable,
-        "targets": list(targets),
-        "result": result if result is not None else result_document(
-            probe=probe, runs=failing_runs(3)),
+        "targets": (list(targets) if targets is not None
+                    else dd.non_pass_ids(result)),
+        "result": result,
         "invocation": invocation() if inv is None else inv,
         "configuration": manifest() if config is None else config,
         "artifacts": [f"{OUTSIDE}/artifacts/run-001"],
     }
-    return document
 
 
 def diagnosis_document(*, route: str = dd.ROUTE_REPAIR, handoff=None,
@@ -237,6 +264,7 @@ def diagnosis_document(*, route: str = dd.ROUTE_REPAIR, handoff=None,
             "invocation": invocation(),
             "configuration": manifest(),
         }
+    document["baseline"].setdefault("result", result_document())
     if verification is not None:
         document["verification"] = verification
     elif route in (dd.ROUTE_REPAIR, dd.ROUTE_PARTIAL_IMPROVEMENT):
@@ -256,6 +284,7 @@ def diagnosis_document(*, route: str = dd.ROUTE_REPAIR, handoff=None,
             name: True for name in dd.ATTESTATIONS}
         document["repair"] = repair if repair is not None else {
             "commit_sha": REPAIR_COMMIT,
+            "base_sha": BASE_COMMIT,
             "changed_paths": ["tools/role_probe.py"],
         }
     else:
@@ -340,19 +369,32 @@ def test_a_handoff_whose_result_measured_another_probe_is_refused() -> None:
                     "a handoff whose result is another probe's")
 
 
-def test_targets_must_be_declared_and_observed() -> None:
-    undeclared = handoff_document(targets=("delta",))
-    expect_rejected(lambda: dd.require_handoff(undeclared),
-                    "identifiers the descriptor never declared",
-                    "a target that is not a declared check")
-    unobserved = handoff_document(targets=("gamma",),
-                                  result=result_document(runs=failing_runs(3)))
-    # `gamma` is MISSING in the aborted runs, so it IS observed; use a
-    # check that passed in every run instead.
-    unobserved["targets"] = ["alpha"]
-    expect_rejected(lambda: dd.require_handoff(unobserved),
-                    "never failed or went missing",
-                    "a target that never went non-PASS")
+def test_the_targets_are_every_non_pass_identifier_in_order() -> None:
+    """Not a selection FROM the measurement — they are it."""
+    accepted = dd.require_handoff(handoff_document())
+    expect(list(accepted.targets) == ["beta", "gamma"],
+           f"an abort at beta implicates gamma too; got {accepted.targets}")
+
+    expect_rejected(lambda: dd.require_handoff(handoff_document(
+        targets=("delta",))),
+        "identifiers the descriptor never declared",
+        "a target that is not a declared check")
+    expect_rejected(lambda: dd.require_handoff(handoff_document(
+        targets=("beta",))),
+        "naming a subset would let a repair be verified",
+        "a target list that omits an observed failure")
+    expect_rejected(lambda: dd.require_handoff(handoff_document(
+        targets=("alpha", "beta", "gamma"))),
+        "targets something this measurement did not see",
+        "a target that never went non-PASS")
+    expect_rejected(lambda: dd.require_handoff(handoff_document(
+        targets=("gamma", "beta"))),
+        "in that order",
+        "targets in an order the descriptor does not declare")
+    expect_rejected(lambda: dd.require_handoff(handoff_document(
+        targets=("beta", "beta", "gamma"))),
+        "repeats an identifier",
+        "a repeated target")
 
 
 def test_a_handoff_with_no_targets_is_refused() -> None:
@@ -434,8 +476,8 @@ def test_an_incomplete_batch_is_not_a_measurement() -> None:
 
 
 def test_a_harness_error_is_not_a_comparison_side() -> None:
-    document = handoff_document()
-    document["result"]["status"] = "harness-error"
+    document = handoff_document(result=result_document(
+        runs=failing_runs(3), harness_error=True))
     expect_rejected(lambda: dd.require_handoff(document),
                     "only a valid measurement", "a harness-error batch")
 
@@ -452,6 +494,35 @@ def test_an_overlapping_harness_invalidates_the_control() -> None:
     document["result"]["peak_concurrency"] = 2
     expect_rejected(lambda: dd.require_handoff(document),
                     "peak concurrency", "a contended batch")
+
+
+def test_a_pass_run_carrying_a_failed_check_is_refused() -> None:
+    """Delegation to `probe_census.validate_result`, and why it matters.
+
+    `failure_count` counts RUNS by their outcome, so a document whose
+    runs all claim PASS while their check maps carry FAIL would read as a
+    spotless batch and could be admitted as a verified repair. The
+    canonical validator's `_rule_pass_run_has_no_failed_check` is what
+    refuses it, which is why every result document goes through the
+    shipped validator before a single field is read.
+    """
+    document = handoff_document()
+    result = document["result"]
+    for run in result["runs"]:
+        run["outcome"] = probe_flake.RUN_PASS
+        run["checks"]["beta"] = FAIL
+        run["checks"]["gamma"] = PASS
+    result["check_counts"]["beta"] = {PASS: 0, FAIL: dd.RUN_COUNT, MISSING: 0}
+    result["check_counts"]["gamma"] = {PASS: dd.RUN_COUNT, FAIL: 0,
+                                       MISSING: 0}
+    result["failure_count"] = 0
+    result["failure_rate"] = 0.0
+    result["timeout_count"] = 0
+    expect(dd.failure_count(result) == 0,
+           "the run-outcome count really would read this as spotless")
+    expect_rejected(lambda: dd.require_handoff(document),
+                    "internally inconsistent",
+                    "runs claiming PASS while carrying a FAIL check")
 
 
 def test_an_unresolved_commit_is_not_evidence() -> None:
@@ -613,13 +684,73 @@ def test_a_baseline_that_never_hits_the_target_cannot_support_a_repair() -> None
     check would have made it MISSING, which is a non-PASS observation and
     would legitimately count as reproducing the pattern.
     """
-    document = diagnosis_document(handoff=handoff_document(
-        targets=("alpha",), result=result_document(
-            runs=failing_runs(3, cid="alpha"))))
+    handoff = handoff_document(result=result_document(
+        runs=failing_runs(3, cid="alpha", abort=False)))
+    expect(handoff["targets"] == ["alpha"],
+           f"a non-aborting failure implicates only itself; got "
+           f"{handoff['targets']}")
+    document = diagnosis_document(handoff=handoff)
     document["baseline"]["result"] = result_document(
-        runs=failing_runs(4, cid="beta"))
+        runs=failing_runs(4, cid="gamma", abort=False))
     expect_refused(lambda: evaluate(document), "cannot-reproduce",
                    "a baseline that reproduced another failure")
+
+
+def test_the_baseline_must_be_measured_at_the_handoffs_own_commit() -> None:
+    """One common SHA, or the two states are not a comparison."""
+    document = diagnosis_document()
+    document["baseline"]["result"] = result_document(
+        commit="d" * 40, runs=failing_runs(4))
+    expect_rejected(lambda: evaluate(document),
+                    "recreate BOTH states on one new common SHA",
+                    "a baseline measured at another commit")
+
+
+def test_the_repair_must_be_cut_from_that_same_commit() -> None:
+    document = diagnosis_document()
+    del document["repair"]["base_sha"]
+    expect_rejected(lambda: evaluate(document),
+                    "names no resolved base commit",
+                    "a repair whose lineage is unstated")
+
+    document = diagnosis_document()
+    document["repair"]["base_sha"] = "e" * 40
+    expect_rejected(lambda: evaluate(document),
+                    "share one common SHA or they are not a comparison",
+                    "a repair cut from another commit")
+
+
+def test_a_relative_destination_is_resolved_before_it_is_judged() -> None:
+    """`probe_flake.write_result` opens `--result` relative to its cwd.
+
+    So `results/verification.json` from inside the repair worktree lands
+    IN that worktree while matching no absolute registered path at all.
+    The recorded invocation directory is what makes a relative
+    destination mean something, and it is joined on before containment
+    is decided.
+    """
+    trees = ["/tmp/deflake-role"]
+    for relative in ("results/verification.json",
+                     "./results/verification.json",
+                     "../deflake-role/verification.json"):
+        document = diagnosis_document()
+        document["verification"]["invocation"] = invocation(
+            cmd=command(result=relative, artifacts=f"{OUTSIDE}/verify-artifacts",
+                        worktree="/tmp/deflake-role"),
+            directory="/tmp/deflake-role", ports=[9201])
+        expect_rejected(lambda d=document: evaluate(d, worktrees=trees),
+                        "inside the working tree",
+                        f"a --result of {relative!r}")
+
+    outside = diagnosis_document()
+    outside["verification"]["invocation"] = invocation(
+        cmd=command(result="../evidence/verification.json",
+                    artifacts=f"{OUTSIDE}/verify-artifacts",
+                    worktree="/tmp/deflake-role"),
+        directory="/tmp/deflake-role", ports=[9201])
+    outcome = evaluate(outside, worktrees=trees)
+    expect(outcome.route == dd.ROUTE_REPAIR,
+           "a relative path that really does leave the worktree is fine")
 
 
 def test_both_batches_must_stay_outside_every_worktree() -> None:
@@ -765,11 +896,9 @@ def test_an_identifier_carrying_a_runtime_value_is_malformed() -> None:
     """
     valued = [("alpha", "the first check"), ("beta_two", "the second check"),
               ("gamma", "the third check")]
-    document = handoff_document(
-        targets=("beta_two",),
-        result=result_document(checks=valued,
-                               runs=failing_runs(3, cid="beta_two",
-                                                 declared=valued)))
+    document = handoff_document(result=result_document(
+        checks=valued,
+        runs=failing_runs(3, cid="beta_two", declared=valued)))
     accepted = dd.require_handoff(copy.deepcopy(document))
     expect(accepted.probe == PROBE,
            "a spelled-out number is a legitimate identifier")
@@ -778,23 +907,35 @@ def test_an_identifier_carrying_a_runtime_value_is_malformed() -> None:
             entry["id"] = "beta_2"
     for run in document["result"]["runs"]:
         run["checks"]["beta_2"] = run["checks"].pop("beta_two")
-    document["targets"] = ["beta_2"]
+    document["result"]["check_counts"]["beta_2"] = (
+        document["result"]["check_counts"].pop("beta_two"))
+    document["targets"] = [("beta_2" if cid == "beta_two" else cid)
+                           for cid in document["targets"]]
     expect_rejected(lambda: dd.require_handoff(document),
                     "identifiers are static",
                     "an identifier carrying a measured value")
 
 
 def test_a_run_reporting_an_undeclared_identifier_is_malformed() -> None:
+    """Delegated: `probe_census.validate_result` owns the tally rules."""
     document = handoff_document()
     document["result"]["runs"][0]["checks"]["delta"] = PASS
     expect_rejected(lambda: dd.require_handoff(document),
-                    "identifiers the descriptor never declared",
+                    "internally inconsistent",
                     "a run reporting an undeclared check")
 
 
 def test_a_run_that_simply_omits_a_declared_identifier_is_malformed() -> None:
+    """A key the harness always writes, absent with a tally that agrees.
+
+    Kept as a rule of this module's own because it is exactly the shape
+    the canonical validator cannot see: `check_counts` is derived from
+    `runs`, so a document whose tally was lowered to match the omission
+    is internally consistent and still was not written by the harness.
+    """
     document = handoff_document()
-    del document["result"]["runs"][0]["checks"]["gamma"]
+    dropped = document["result"]["runs"][0]["checks"].pop("gamma")
+    document["result"]["check_counts"]["gamma"][dropped] -= 1
     expect_rejected(lambda: dd.require_handoff(document),
                     "was not written by the harness",
                     "a run whose check map lost a key")
@@ -803,17 +944,41 @@ def test_a_run_that_simply_omits_a_declared_identifier_is_malformed() -> None:
 # ==========================================================================
 # MISSING
 # ==========================================================================
-def test_a_target_that_goes_missing_is_never_a_fix() -> None:
-    document = diagnosis_document()
-    runs = [{"alpha": PASS, "beta": MISSING, "gamma": MISSING,
-             "__timeout__": True}]
-    runs += [{cid: PASS for cid, _l in CHECKS}] * (dd.RUN_COUNT - 1)
-    document["handoff"]["acceptable_failures"] = 1
+def test_a_target_must_really_be_measured_in_ten_runs_minus_x() -> None:
+    """The scoped target rule, isolated.
+
+    Asserted against `missing_problems` directly. Inside `evaluate` the
+    failure COUNT refuses this batch too — a check can only go MISSING in
+    a run that did not pass — so driving it end to end would prove the
+    count rule and say nothing about this one.
+    """
+    document = result_document(commit=REPAIR_COMMIT,
+                               runs=failing_runs(3, cid="beta"))
+    for acceptable, expected in ((2, True), (3, False)):
+        problems = dd.missing_problems(
+            document, targets={"gamma"}, acceptable_failures=acceptable,
+            what="the verification batch")
+        offending = [p for p in problems if "stopped being measured" in p]
+        expect(bool(offending) is expected,
+               f"gamma passes 7 of 10 runs, so an X of {acceptable} "
+               f"requires {dd.RUN_COUNT - acceptable}: expected "
+               f"{'a' if expected else 'no'} complaint, got {problems}")
+
+    spotless = result_document(commit=REPAIR_COMMIT)
+    expect(dd.missing_problems(spotless, targets={"gamma"},
+                               acceptable_failures=0,
+                               what="x") == [],
+           "and an X of zero is satisfied by ten real passes")
+
+
+def test_a_target_that_stops_being_emitted_is_refused_end_to_end() -> None:
+    """One accepted failing run may lose it; more than X may not."""
+    handoff = handoff_document(acceptable=1)
+    document = diagnosis_document(handoff=handoff)
     document["verification"]["result"] = result_document(
-        commit=REPAIR_COMMIT, runs=runs)
-    expect_refused(lambda: evaluate(document),
-                   "has not been fixed, it has stopped being measured",
-                   "a target check that became MISSING")
+        commit=REPAIR_COMMIT, runs=failing_runs(2))
+    expect_refused(lambda: evaluate(document), "partial-improvement",
+                   "a target lost in more runs than X allows")
 
 
 def test_a_passing_run_may_not_omit_a_check() -> None:
@@ -829,9 +994,8 @@ def test_a_passing_run_may_not_omit_a_check() -> None:
 
 def test_an_accepted_failing_run_may_lose_the_suffix_after_its_abort() -> None:
     """The scoped rule: X>0 stays satisfiable, which strict MISSING is not."""
-    handoff = handoff_document(acceptable=1, targets=("alpha",),
-                               result=result_document(
-                                   runs=failing_runs(3, cid="alpha")))
+    handoff = handoff_document(acceptable=1, result=result_document(
+        runs=failing_runs(3, cid="alpha")))
     document = diagnosis_document(handoff=handoff)
     document["baseline"]["result"] = result_document(
         runs=failing_runs(4, cid="alpha"))
@@ -859,7 +1023,6 @@ def test_an_identifier_that_vanishes_from_the_batch_is_refused() -> None:
     runs = [{"alpha": PASS, "beta": FAIL, "gamma": MISSING}] * dd.RUN_COUNT
     document["verification"]["result"] = result_document(
         commit=REPAIR_COMMIT, runs=runs)
-    document["handoff"]["targets"] = ["beta"]
     expect_refused(lambda: evaluate(document),
                    "never emitted gamma",
                    "a check that was never emitted in the whole batch")
@@ -1047,7 +1210,7 @@ def test_every_preservation_attestation_is_required() -> None:
 
 def test_a_repair_may_not_change_production_code() -> None:
     document = diagnosis_document(repair={
-        "commit_sha": REPAIR_COMMIT,
+        "commit_sha": REPAIR_COMMIT, "base_sha": BASE_COMMIT,
         "changed_paths": ["tools/role_probe.py", "src/Unit/Thread.hs"]})
     expect_rejected(lambda: evaluate(document),
                     "outside this workflow's repair scope",
@@ -1057,7 +1220,7 @@ def test_a_repair_may_not_change_production_code() -> None:
 def test_a_repair_may_extend_the_headless_suite() -> None:
     """Focused regression coverage is required, so it must be allowed."""
     document = diagnosis_document(repair={
-        "commit_sha": REPAIR_COMMIT,
+        "commit_sha": REPAIR_COMMIT, "base_sha": BASE_COMMIT,
         "changed_paths": ["tools/role_probe.py",
                           "test-headless/Test/Headless/Role.hs"]})
     outcome = evaluate(document)
@@ -1085,6 +1248,7 @@ def test_the_verification_must_measure_the_proposed_commit() -> None:
 
 def test_a_repair_with_no_resolved_commit_is_refused() -> None:
     document = diagnosis_document(repair={"commit_sha": "HEAD",
+                                          "base_sha": BASE_COMMIT,
                                           "changed_paths": ["tools/x.py"]})
     expect_rejected(lambda: evaluate(document), "names no resolved commit",
                     "a repair with no commit")
@@ -1092,6 +1256,7 @@ def test_a_repair_with_no_resolved_commit_is_refused() -> None:
 
 def test_a_repair_with_no_changed_paths_is_refused() -> None:
     document = diagnosis_document(repair={"commit_sha": REPAIR_COMMIT,
+                                          "base_sha": BASE_COMMIT,
                                           "changed_paths": []})
     expect_rejected(lambda: evaluate(document), "records no changed paths",
                     "a repair that changed nothing")
