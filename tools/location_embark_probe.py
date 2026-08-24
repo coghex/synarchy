@@ -63,9 +63,19 @@ Two phases:
 Needs a GPU (Vulkan device) — manual-only, never CI-gated, same as
 tools/offscreen_probe.py / tools/portal_ghost_probe.py.
 
+Every artifact this probe creates — the four engine logs, the two save
+slots, and the screenshots — lives under ONE directory this invocation
+owns (#1569), and the run deletes that directory again whether it
+passes or fails. The engines boot with that directory's own resource
+root, so the save slots below are unreachable from an ordinary
+`cabal run` and the developer's live `saves/` is neither written nor
+rotated. `--keep-artifacts` is the explicit opt-in that retains the
+directory instead, for diagnosing a failure.
+
 Usage:
   python3 tools/location_embark_probe.py
   python3 tools/location_embark_probe.py --seed 42 --size 64 --port 9420
+  python3 tools/location_embark_probe.py --keep-artifacts
 """
 from __future__ import annotations
 
@@ -73,9 +83,11 @@ import argparse
 import json
 import os
 import re
+import shutil
 import sys
 import tempfile
 import time
+import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from probelib import boot, poll_until, quit_engine, send, send_json, clear_find_water
@@ -88,10 +100,7 @@ from offscreen_probe import (
 )
 from portal_ghost_probe import center_on_tile, in_world_view
 
-LOG_PREP = "/tmp/location_embark_prep_engine.log"
-LOG_S1 = "/tmp/location_embark_session1_engine.log"
-LOG_S2 = "/tmp/location_embark_session2_engine.log"
-LOG_S3 = "/tmp/location_embark_session3_engine.log"
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 PORTAL = "acolyte_portal"
 RUIN_LABEL = "Small Ruin"  # data/locations/ruin_small.yaml `label`
@@ -101,6 +110,12 @@ RUIN_LABEL = "Small Ruin"  # data/locations/ruin_small.yaml `label`
 # they cannot drift apart again.
 FIXTURE_PAGE = "ew"
 
+#: The two save slots, named inside THIS invocation's own resource root
+#: (below) rather than the developer's live one. Uniqueness is a
+#: property of the complete path, not of the key: two invocations own
+#: two different roots, so two runs can hold these same two keys without
+#: touching each other's files — and a developer slot that happens to
+#: share a name is in a third root entirely, never opened.
 SAVE_BASE = "location_embark_base"     # portal-free fixture, loaded by (a) and (b)
 SAVE_LOCAL = "location_embark_local"   # (b)'s own save, reloaded by (c)
 
@@ -130,6 +145,108 @@ def check(name: str, ok: bool, detail: str = "") -> bool:
             for line in _tail(_current_log[0]).splitlines():
                 print(f"      {line}")
     return ok
+
+
+# --------------------------------------------------------------------------
+# Invocation-owned artifacts and isolation (#1569)
+# --------------------------------------------------------------------------
+class RunArtifacts:
+    """Every file one invocation of this probe creates, under a single
+    directory that invocation owns.
+
+    `base` comes from `tempfile.mkdtemp`, so it is this process's alone
+    and disjoint from every other invocation's — which is what makes the
+    logical names inside it (`engine_prep.log`, `location_embark_base`,
+    `icon_discovered.png`) safe to keep fixed. Two concurrent runs on
+    different `--port` values write two different trees; a developer
+    save slot of the same name lives in the checkout's root and is never
+    opened at all.
+    """
+
+    def __init__(self, base: str) -> None:
+        self.base = base
+        self.root = os.path.join(base, "root")
+        self.logs = os.path.join(base, "logs")
+        self.shots = os.path.join(base, "screenshots")
+
+    def build(self) -> None:
+        """Materialise the throwaway resource root and the two artifact
+        directories beside it.
+
+        The read-only content families are symlinked; `config/` is
+        COPIED without the developer's `*.local.yaml` overrides, so a
+        personal setting can neither be changed by this run nor decide
+        what it observes; `saves/` starts empty and belongs to this run.
+        `app/App/ResourceRoot.hs` chdirs each engine into `root`, so
+        every relative write the sessions below make — the two save
+        slots above especially — lands inside this tree.
+        """
+        os.makedirs(self.root, exist_ok=True)
+        for family in ("scripts", "assets", "data"):
+            target = os.path.join(self.root, family)
+            if not os.path.exists(target):
+                os.symlink(os.path.join(REPO, family), target)
+        config_dst = os.path.join(self.root, "config")
+        if not os.path.exists(config_dst):
+            shutil.copytree(os.path.join(REPO, "config"), config_dst,
+                            ignore=shutil.ignore_patterns("*.local.yaml"))
+        os.makedirs(os.path.join(self.root, "saves"), exist_ok=True)
+        os.makedirs(self.logs, exist_ok=True)
+        os.makedirs(self.shots, exist_ok=True)
+
+    def log(self, name: str) -> str:
+        return os.path.join(self.logs, f"{name}.log")
+
+    def boot_args(self, extra: list[str] | None = None) -> list[str]:
+        """Engine CLI args pinning the boot to THIS run's root. Every
+        boot the probe makes — including each phase-0 seed retry — goes
+        through here, so none of them can fall back to the cwd."""
+        return [*(extra or []), "--resource-root", self.root]
+
+
+def release_artifacts(art: RunArtifacts, keep: bool) -> None:
+    """Retire this invocation's artifact directory, once every engine it
+    booted has been through `quit_engine`.
+
+    Without `--keep-artifacts` the whole tree goes away and anything
+    that SURVIVES is recorded as a failing check: a green result sitting
+    beside leftover saves is exactly the outcome this isolation exists
+    to prevent, so it must not be reported as a pass. That residue
+    report is not the diagnostic opt-in — it names what is left over
+    precisely because the run did not intend to leave it.
+
+    Only ever removes the directory this process made with
+    `tempfile.mkdtemp`; `rmtree` unlinks the symlinked content families
+    rather than recursing into them, so the real `scripts/`, `assets/`
+    and `data/` are never followed.
+    """
+    if keep:
+        # Each line names what this run ACTUALLY produced. A run that
+        # failed at phase 0 holds no save slot and no screenshot, and
+        # saying otherwise would send the reader looking for files the
+        # failure is the reason they do not have.
+        saves = os.path.join(art.root, "saves")
+        print(f"\nretained this run's artifacts (--keep-artifacts): {art.base}")
+        for label, path in (("engine logs", art.logs),
+                            ("screenshots", art.shots),
+                            ("saves", saves)):
+            try:
+                held = sorted(os.listdir(path))
+            except OSError:
+                held = []
+            print(f"  {label:14} {path}"
+                  + (f" ({', '.join(held)})" if held else " (empty)"))
+        print(f"  {'resource root':14} {art.root}")
+        return
+    try:
+        shutil.rmtree(art.base)
+    except OSError as exc:
+        failures.append(f"could not remove this run's artifact directory "
+                        f"{art.base}: {exc}")
+        return
+    if os.path.exists(art.base):
+        failures.append(f"this run's artifact directory survived removal: "
+                        f"{art.base}")
 
 
 # --------------------------------------------------------------------------
@@ -498,16 +615,22 @@ def order_move_to(port: int, target_gx: int, target_gy: int, cx0: int, cy0: int)
 # --------------------------------------------------------------------------
 # Phase 1: headless fixture prep
 # --------------------------------------------------------------------------
-def prepare_fixture(port: int, seeds: list[int], size: int, min_ruins: int = 2,
+def prepare_fixture(port: int, seeds: list[int], size: int,
+                     art: RunArtifacts, min_ruins: int = 2,
                      page: str = FIXTURE_PAGE):
     """Try each seed in turn until one places >= min_ruins ruin_small
     locations, then save it as SAVE_BASE. Returns (seed, ruins) or
     (None, []) if every candidate seed falls short — a fail-fast
     diagnostic, never a silent generation-density change (out of
-    scope per the issue)."""
+    scope per the issue).
+
+    Every retry boots into `art.root`, so the seed that eventually wins
+    writes its fixture save there and the ones that don't write nothing
+    the developer's root can see."""
     for candidate in seeds:
-        set_log(LOG_PREP)
-        proc = boot(port, log=LOG_PREP, label=f"prep engine (seed {candidate})")
+        set_log(art.log("engine_prep"))
+        proc = boot(port, log=art.log("engine_prep"), args=art.boot_args(),
+                    label=f"prep engine (seed {candidate})")
         try:
             load_defs(port)
             gen_world(port, page, candidate, size)
@@ -1046,6 +1169,67 @@ def session_reload_check(port: int, w: int, h: int, shots: str,
                               min_fraction=0.0001))
 
 
+def run_probe(args, w: int, h: int, art: RunArtifacts) -> None:
+    """Phase 0 plus the three offscreen sessions, all inside the caller's
+    cleanup guard. Every `boot` here goes through `art.boot_args`, and
+    every session shuts its engine down in a `finally` before control
+    can return to that guard."""
+    art.build()
+    # Named while the run is live so its logs can be tailed, and named
+    # honestly: without the opt-in this path is gone by the time the
+    # summary prints, and only the summary is allowed to point at
+    # artifacts that are still there.
+    print(f"isolated resource root: {art.root}"
+          + ("" if args.keep_artifacts
+             else " (removed on exit; pass --keep-artifacts to retain it)"))
+    seeds = [args.seed] + [int(s) for s in args.alt_seeds.split(",") if s.strip()]
+
+    print(f"== phase 0: headless fixture prep (size {args.size}) ==")
+    used_seed, ruins = prepare_fixture(args.port, seeds, args.size, art)
+    if not check("a candidate seed placed at least two ruin_small locations",
+                  len(ruins) >= 2,
+                  f"tried seeds {seeds}, best count {len(ruins)}"):
+        return
+    print(f"  fixture ready: seed={used_seed}, {len(ruins)} ruin(s), "
+          f"saved as '{SAVE_BASE}'")
+
+    ruins_sorted = sorted(ruins, key=lambda e: (e["cx"], e["cy"]))
+    target, control = ruins_sorted[0], ruins_sorted[1]
+    expected_total = len(ruins)
+    shots = art.shots
+    win = art.boot_args(["--size", args.win_size])
+
+    print("== session (a): zoom-map icons, ghost validity, remote-modal flow ==")
+    set_log(art.log("engine_session_a"))
+    proc1 = boot(args.port, mode=("--offscreen",), args=win,
+                 log=art.log("engine_session_a"),
+                 label="offscreen engine (session a)")
+    try:
+        session_ghost_and_remote(args.port, w, h, shots, target, control)
+    finally:
+        quit_engine(args.port, proc1)
+
+    print("== session (b): local placement, roster, real-order discovery, save ==")
+    set_log(art.log("engine_session_b"))
+    proc2 = boot(args.port, mode=("--offscreen",), args=win,
+                 log=art.log("engine_session_b"),
+                 label="offscreen engine (session b)")
+    try:
+        session_local_and_discovery(args.port, w, h, shots, target, control)
+    finally:
+        quit_engine(args.port, proc2)
+
+    print("== session (c): fresh restart -> load -> verify persistence ==")
+    set_log(art.log("engine_session_c"))
+    proc3 = boot(args.port, mode=("--offscreen",), args=win,
+                 log=art.log("engine_session_c"),
+                 label="offscreen engine (session c)")
+    try:
+        session_reload_check(args.port, w, h, shots, target, control, expected_total)
+    finally:
+        quit_engine(args.port, proc3)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--seed", type=int, default=42)
@@ -1055,62 +1239,47 @@ def main() -> int:
     ap.add_argument("--size", type=int, default=64)
     ap.add_argument("--port", type=int, default=9420)
     ap.add_argument("--win-size", default="1280x720")
+    ap.add_argument("--keep-artifacts", action="store_true",
+                    help="keep this run's artifact directory (engine logs, "
+                         "isolated resource root with its saves, and "
+                         "screenshots) instead of deleting it, and name it "
+                         "in the summary — for diagnosing a failure")
     args = ap.parse_args()
 
     w, h = (int(v) for v in args.win_size.lower().split("x"))
-    shots = tempfile.mkdtemp(prefix="location_embark_probe_")
-    seeds = [args.seed] + [int(s) for s in args.alt_seeds.split(",") if s.strip()]
-
-    print(f"== phase 0: headless fixture prep (size {args.size}) ==")
-    used_seed, ruins = prepare_fixture(args.port, seeds, args.size)
-    if not check("a candidate seed placed at least two ruin_small locations",
-                  len(ruins) >= 2,
-                  f"tried seeds {seeds}, best count {len(ruins)}"):
-        return report(shots)
-    print(f"  fixture ready: seed={used_seed}, {len(ruins)} ruin(s), "
-          f"saved as '{SAVE_BASE}'")
-
-    ruins_sorted = sorted(ruins, key=lambda e: (e["cx"], e["cy"]))
-    target, control = ruins_sorted[0], ruins_sorted[1]
-    expected_total = len(ruins)
-
-    print("== session (a): zoom-map icons, ghost validity, remote-modal flow ==")
-    set_log(LOG_S1)
-    proc1 = boot(args.port, mode=("--offscreen",), args=["--size", args.win_size],
-                 log=LOG_S1, label="offscreen engine (session a)")
+    # The guard starts HERE, one statement after the directory exists,
+    # so nothing between this point and the report below — building the
+    # isolated root, a phase-0 seed that never boots an engine, an early
+    # return, a dead engine, an unexpected exception — can leave the
+    # tree behind.
+    art = RunArtifacts(tempfile.mkdtemp(prefix="synarchy_location_embark_"))
     try:
-        session_ghost_and_remote(args.port, w, h, shots, target, control)
-    finally:
-        quit_engine(args.port, proc1)
-
-    print("== session (b): local placement, roster, real-order discovery, save ==")
-    set_log(LOG_S2)
-    proc2 = boot(args.port, mode=("--offscreen",), args=["--size", args.win_size],
-                 log=LOG_S2, label="offscreen engine (session b)")
-    try:
-        session_local_and_discovery(args.port, w, h, shots, target, control)
-    finally:
-        quit_engine(args.port, proc2)
-
-    print("== session (c): fresh restart -> load -> verify persistence ==")
-    set_log(LOG_S3)
-    proc3 = boot(args.port, mode=("--offscreen",), args=["--size", args.win_size],
-                 log=LOG_S3, label="offscreen engine (session c)")
-    try:
-        session_reload_check(args.port, w, h, shots, target, control, expected_total)
-    finally:
-        quit_engine(args.port, proc3)
-
-    return report(shots)
+        run_probe(args, w, h, art)
+    except KeyboardInterrupt:
+        release_artifacts(art, args.keep_artifacts)
+        raise
+    except SystemExit as exc:
+        # `probelib.boot` aborts the run this way when an engine dies
+        # before READY or never prints it. Recording it as a failing
+        # check rather than letting it exit keeps the artifact release
+        # below on the path, and names the abort in the summary.
+        failures.append(f"the run aborted before finishing: {exc}")
+    except Exception as exc:  # noqa: BLE001 - reported, then re-summarised
+        failures.append(f"unexpected {type(exc).__name__} during the run: {exc}")
+        traceback.print_exc()
+    return report(art, args.keep_artifacts)
 
 
-def report(shots: str) -> int:
-    print(f"\nscreenshots kept in {shots}")
+def report(art: RunArtifacts, keep: bool) -> int:
+    release_artifacts(art, keep)
     print("-" * 56)
     if failures:
         for f in failures:
             print(f"FAIL: {f}", file=sys.stderr)
         print(f"location_embark_probe: {len(failures)} check(s) FAILED")
+        if not keep:
+            print("  (re-run with --keep-artifacts to retain this run's "
+                  "engine logs, saves and screenshots)")
         return 1
     print("location_embark_probe: all checks passed")
     return 0
