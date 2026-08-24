@@ -238,6 +238,13 @@ python3 tools/world_check.py --quick
 # still yielding a removable tree. That probe is manual-only needs-gpu,
 # so without this companion the contract is only ever observed by a GPU
 # run neither gate can make; the companion boots nothing.
+# test_movement_probe is #1586's: tools/movement_probe.py --list is a
+# metadata query answered from scripts/movement_arena.lua before any
+# boot(), for every --mode, and the derived view is held to the runtime
+# M.listCourses() by every real course run. That probe is manual-only, so
+# without this companion a reintroduced boot() on the listing path, a
+# mode dispatch that preempts --list again, or a silently empty inventory
+# would only ever be noticed by hand; the companion boots nothing.
 echo "==> [19/21] probe runner self-tests"
 python3 tools/ci_probes.py --self-test
 python3 tools/ci_expensive_gates.py --self-test
@@ -252,6 +259,7 @@ python3 tools/test_probe_claim.py
 python3 tools/test_probe_resource_lock.py
 python3 tools/test_deflake.py
 python3 tools/test_location_embark_probe.py
+python3 tools/test_movement_probe.py
 
 # Cheap, no-engine self-test of CI's cache-outcome report (#1358). The
 # report itself runs only in CI -- `make ci` restores no GitHub Actions
