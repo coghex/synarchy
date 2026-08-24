@@ -138,8 +138,12 @@ def result_document(*, probe: str = PROBE, commit: str = BASE_COMMIT,
     caps = dd.RTS_CAPABILITIES if rts_caps is None else rts_caps
     root = Path(artifact_root if artifact_root is not None
                 else f"{OUTSIDE}/artifacts")
+    # `new_invocation_dir` names this `{probe}-{stamp}-{pid}-{uuid8}` and
+    # creates it directly under the root, and the fixture reproduces that
+    # rather than inventing a tidier layout the harness never makes.
+    invocation_dir = root / f"{probe}-20260821T120000Z-4711-abcdef12"
     measurement = probe_flake.Measurement(
-        probe, descriptor, requested, caps, root, root / "invocation")
+        probe, descriptor, requested, caps, root, invocation_dir)
     measurement.commit_sha = commit
     measurement.timestamp = "2026-08-21T12:00:00Z"
     if runs is None:
@@ -158,7 +162,7 @@ def result_document(*, probe: str = PROBE, commit: str = BASE_COMMIT,
         keep = outcome != probe_flake.RUN_PASS
         measurement.runs.append(probe_flake.RunRecord(
             index, 9100 + index, outcome, 1.5, dict(checks_map),
-            (root / "invocation" / f"run-{index:03d}") if keep else None))
+            (invocation_dir / f"run-{index:03d}") if keep else None))
     if harness_error:
         # The run that broke the stream is never one of the completed
         # ones, so a real harness error always leaves one uncompleted.
@@ -168,7 +172,7 @@ def result_document(*, probe: str = PROBE, commit: str = BASE_COMMIT,
                              f"not be trusted")
         measurement.error_run = probe_flake.RunRecord(
             broken.index, broken.port, probe_flake.RUN_HARNESS_ERROR, 0.5,
-            {}, root / "invocation" / f"run-{broken.index:03d}")
+            {}, invocation_dir / f"run-{broken.index:03d}")
     return measurement.to_document()
 
 
@@ -736,14 +740,17 @@ def test_a_batch_may_not_write_into_the_other_declared_worktree() -> None:
                     "inside the working tree",
                     "a baseline writing into the repair worktree")
 
+    # The layout moves as a whole, because topology pins every derived
+    # path to the artifact root — so the reachable case is a root inside
+    # the OTHER comparison state.
     other = diagnosis_document(handoff=handoff_document(acceptable=1))
+    root = f"{CLEAN_WT}/artifacts"
     other["verification"]["result"] = verification_result(
-        runs=failing_runs(1))
-    failing = next(run for run in other["verification"]["result"]["runs"]
-                   if run["outcome"] != probe_flake.RUN_PASS)
-    moved = f"{CLEAN_WT}/artifacts/run-001"
-    other["verification"]["result"]["retained_artifacts"] = [moved]
-    failing["artifact_dir"] = moved
+        runs=failing_runs(1), artifact_root=root)
+    other["verification"]["invocation"] = invocation(
+        cmd=command(result=f"{OUTSIDE}/verify.json", artifacts=root,
+                    worktree=REPAIR_WT),
+        directory=REPAIR_WT, ports=[9201])
     expect_rejected(lambda: evaluate(other, worktrees=()),
                     "inside the working tree",
                     "a verification retaining logs in the clean worktree")
@@ -1066,6 +1073,124 @@ def test_only_the_real_harness_options_are_accepted() -> None:
                         f"a command carrying {extra[0]}")
 
 
+def test_an_integer_option_uses_the_harnesss_own_grammar() -> None:
+    """`--runs 10.0` is numerically ten and argparse would refuse it.
+
+    `probe_flake.main` declares both as `type=int`, so a float spelling
+    exits before the harness measures anything — while a comparison that
+    parsed it as a number would let the fabricated command compare equal
+    to a real one.
+    """
+    for token in ("10.0", "1e1", " 10.5", "ten", "", "0x0a"):
+        document = diagnosis_document()
+        document["baseline"]["invocation"] = invocation(
+            cmd=command() [:4] + ["--runs", token] + [
+                "--rts-caps", str(dd.RTS_CAPABILITIES),
+                "--result", f"{OUTSIDE}/baseline.json",
+                "--artifact-root", f"{OUTSIDE}/artifacts"])
+        expect_rejected(lambda d=document: evaluate(d),
+                        "must be an integer",
+                        f"a --runs of {token!r}")
+
+    for token in ("4.0", "four"):
+        document = diagnosis_document()
+        document["baseline"]["invocation"] = invocation(
+            cmd=command() [:6] + ["--rts-caps", token] + [
+                "--result", f"{OUTSIDE}/baseline.json",
+                "--artifact-root", f"{OUTSIDE}/artifacts"])
+        expect_rejected(lambda d=document: evaluate(d),
+                        "must be an integer",
+                        f"a --rts-caps of {token!r}")
+
+    # What `int()` does accept, this accepts, because that is argparse's
+    # own grammar and nothing narrower.
+    document = diagnosis_document()
+    document["baseline"]["invocation"] = invocation(
+        cmd=command() [:4] + ["--runs", f" {dd.RUN_COUNT} "] + [
+            "--rts-caps", str(dd.RTS_CAPABILITIES),
+            "--result", f"{OUTSIDE}/baseline.json",
+            "--artifact-root", f"{OUTSIDE}/artifacts"])
+    outcome = evaluate(document)
+    expect(outcome.route == dd.ROUTE_REPAIR,
+           f"a spelling argparse accepts is accepted; got {outcome.route}")
+
+
+def test_a_command_that_wrote_no_result_document_produced_no_evidence() -> None:
+    """`probe_flake.main` writes the document only `if args.result`."""
+    for section in ("baseline", "verification"):
+        document = diagnosis_document()
+        cmd = [token for token in command()]
+        index = cmd.index("--result")
+        del cmd[index:index + 2]
+        document[section]["invocation"] = invocation(
+            cmd=cmd, directory=(CLEAN_WT if section == "baseline"
+                                else REPAIR_WT))
+        expect_rejected(lambda d=document: evaluate(d), "names no --result",
+                        f"a {section} command with no result destination")
+
+    document = handoff_document()
+    cmd = [token for token in command()]
+    index = cmd.index("--result")
+    del cmd[index:index + 2]
+    document["invocation"] = invocation(cmd=cmd)
+    expect_rejected(lambda: dd.require_handoff(document), "names no --result",
+                    "a handoff command with no result destination")
+
+
+def test_the_artifact_layout_is_the_one_the_harness_creates() -> None:
+    """Three recorded values determine the whole layout, and nothing else.
+
+    `new_invocation_dir` puts the invocation directory directly under the
+    artifact root and names it after the probe; every run directory is
+    `invocation_dir / f"run-{index:03d}"`. Containment alone let a batch
+    swap a failed run's directory for an unrelated external path and keep
+    `repair-pr`.
+    """
+    nested = handoff_document()
+    result = nested["result"]
+    result["invocation_dir"] = f"{OUTSIDE}/artifacts/deeper/{PROBE}-x-1-a"
+    expect_rejected(lambda: dd.require_handoff(nested),
+                    "DIRECT child of the root",
+                    "an invocation directory two levels under the root")
+
+    misnamed = handoff_document()
+    misnamed["result"]["invocation_dir"] = f"{OUTSIDE}/artifacts/invocation"
+    expect_rejected(lambda: dd.require_handoff(misnamed),
+                    "does not begin with",
+                    "an invocation directory not named after the probe")
+
+    for label, replacement in (
+            ("an unrelated external path", f"{OUTSIDE}/elsewhere/run-001"),
+            ("another run's directory", None),
+            ("a sibling of the invocation directory", None)):
+        document = handoff_document()
+        result = document["result"]
+        failing = next(run for run in result["runs"]
+                       if run["outcome"] != probe_flake.RUN_PASS)
+        if replacement is None:
+            other = next(run for run in result["runs"]
+                         if run["outcome"] != probe_flake.RUN_PASS
+                         and run["index"] != failing["index"])
+            replacement = (other["artifact_dir"] if label.startswith("another")
+                           else str(Path(result["invocation_dir"]).parent
+                                    / f"run-{failing['index']:03d}"))
+        result["retained_artifacts"] = [
+            replacement if path == failing["artifact_dir"] else path
+            for path in result["retained_artifacts"]]
+        failing["artifact_dir"] = replacement
+        expect_rejected(lambda d=document: dd.require_handoff(d),
+                        "evidence from somewhere other than this measurement",
+                        f"a run directory replaced by {label}")
+
+    broken = handoff_document(result=result_document(
+        runs=failing_runs(2), harness_error=True))
+    broken["result"]["error_run"]["artifact_dir"] = f"{OUTSIDE}/elsewhere/run"
+    broken["result"]["retained_artifacts"][-1] = f"{OUTSIDE}/elsewhere/run"
+    expect_rejected(lambda: dd.require_handoff(broken),
+                    "evidence from somewhere other than this measurement",
+                    "a harness-error run directory somewhere else")
+
+
 def test_a_fabricated_argv_is_not_a_harness_invocation() -> None:
     for label, cmd in (
             ("another script", ["python3", f"{CLEAN_WT}/tools/run_probes.py",
@@ -1118,9 +1243,13 @@ def test_the_option_table_matches_the_shipped_harness() -> None:
     expect(real == set(dd.HARNESS_OPTIONS),
            f"the classified options {sorted(dd.HARNESS_OPTIONS)} are exactly "
            f"the shipped ones {sorted(real)}")
-    expect(set(dd.REQUIRED_OPTIONS).isdisjoint(dd.DESTINATION_OPTIONS)
-           and set(dd.INVOCATION_DEFAULTS).isdisjoint(dd.DESTINATION_OPTIONS),
+    expect(set(dd.CONDITION_OPTIONS).isdisjoint(dd.DESTINATION_OPTIONS),
            "and no option is both a condition and a destination")
+    expect(set(dd.HARNESS_OPTIONS) ==
+           set(dd.CONDITION_OPTIONS) | set(dd.DESTINATION_OPTIONS),
+           "every classified option is a condition or a destination")
+    expect(set(dd.REQUIRED_OPTIONS) <= set(dd.HARNESS_OPTIONS),
+           "and every required option is one the harness has")
 
 
 # ==========================================================================
@@ -1492,51 +1621,94 @@ def test_a_section_with_no_worktree_at_all_is_refused() -> None:
                         f"a section whose worktree is {value!r}")
 
 
-def test_a_result_document_that_names_a_path_inside_a_worktree_is_refused() -> None:
-    """Where a batch says it WROTE is bound like where it was told to.
+def test_an_artifact_layout_inside_a_worktree_is_refused() -> None:
+    """Raw artifacts never land in a repository worktree.
 
-    Checking only the command would accept a document whose own artifact
-    root is inside the repair worktree while its separately recorded
-    command names an external one.
+    The whole layout moves together, because `require_topology` pins the
+    invocation directory and every run directory to the artifact root —
+    so a batch cannot put one of them in a worktree while leaving the
+    others outside, and the honest case is a root that is itself inside
+    one.
     """
-    # `artifact_root` is reached by the agreement rule first — the command
-    # named an external root and the document reports one inside the
-    # worktree, which is exactly the disagreement that rule exists for —
-    # so it is asserted separately rather than pinned to the wrong rule.
-    document = diagnosis_document()
-    document["verification"]["result"]["artifact_root"] = f"{REPAIR_WT}/a"
-    expect_rejected(lambda: evaluate(document),
-                    "have to describe one measurement",
-                    "a result document whose artifact_root is in a worktree")
-
-    def relocate(result) -> None:
-        """Move the one FAILING run's retained directory into the worktree.
-
-        Retention pairs a run's directory with its outcome exactly, so a
-        containment case has to move a real retained path rather than
-        invent one on a passing run — which would be refused for keeping
-        artifacts, not for where it kept them.
-        """
-        failing = next(run for run in result["runs"]
-                       if run["outcome"] != probe_flake.RUN_PASS)
-        moved = f"{REPAIR_WT}/artifacts/run-{failing['index']:03d}"
-        result["retained_artifacts"] = [
-            moved if path == failing["artifact_dir"] else path
-            for path in result["retained_artifacts"]]
-        failing["artifact_dir"] = moved
-
-    for label, mutate in (
-            ("invocation_dir",
-             lambda r: r.update({"invocation_dir": f"{REPAIR_WT}/inv"})),
-            ("a retained run directory", relocate),
-    ):
+    for label, root in (("the repair worktree", f"{REPAIR_WT}/artifacts"),
+                        ("the clean worktree", f"{CLEAN_WT}/artifacts")):
         document = diagnosis_document(handoff=handoff_document(acceptable=1))
         document["verification"]["result"] = verification_result(
-            runs=failing_runs(1))
-        mutate(document["verification"]["result"])
-        expect_rejected(lambda d=document: evaluate(d),
+            runs=failing_runs(1), artifact_root=root)
+        document["verification"]["invocation"] = invocation(
+            cmd=command(result=f"{OUTSIDE}/verify.json", artifacts=root,
+                        worktree=REPAIR_WT),
+            directory=REPAIR_WT, ports=[9201])
+        expect_rejected(lambda d=document: evaluate(d, worktrees=()),
                         "inside the working tree",
-                        f"a result document whose {label} is in a worktree")
+                        f"a verification whose artifacts live in {label}")
+
+
+def test_a_default_artifact_root_inside_a_worktree_is_still_refused() -> None:
+    """`--artifact-root` is optional, and that is where this rule earns its keep.
+
+    With the option present, the agreement rule ties the reported root to
+    a destination that is already containment-checked. Omitted — which is
+    legitimate, since `probe_flake.default_artifact_root` supplies a
+    temporary directory — nothing else constrains the root the document
+    reports, so the sweep over the paths a result NAMES is the only thing
+    standing between a worktree-resident layout and `repair-pr`.
+    """
+    document = diagnosis_document(handoff=handoff_document(acceptable=1))
+    document["verification"]["result"] = verification_result(
+        runs=failing_runs(1), artifact_root=f"{REPAIR_WT}/artifacts")
+    document["verification"]["invocation"] = invocation(
+        cmd=["python3", f"{REPAIR_WT}/tools/probe_flake.py",
+             "--probe", PROBE, "--runs", str(dd.RUN_COUNT),
+             "--rts-caps", str(dd.RTS_CAPABILITIES),
+             "--result", f"{OUTSIDE}/verify.json"],
+        directory=REPAIR_WT, ports=[9201])
+    expect_rejected(lambda: evaluate(document, worktrees=()),
+                    "inside the working tree",
+                    "a default artifact root inside the repair worktree")
+
+    outside = diagnosis_document(handoff=handoff_document(acceptable=1))
+    outside["verification"]["result"] = verification_result(
+        runs=failing_runs(1), artifact_root=f"{OUTSIDE}/defaulted")
+    outside["verification"]["invocation"] = invocation(
+        cmd=["python3", f"{REPAIR_WT}/tools/probe_flake.py",
+             "--probe", PROBE, "--runs", str(dd.RUN_COUNT),
+             "--rts-caps", str(dd.RTS_CAPABILITIES),
+             "--result", f"{OUTSIDE}/verify.json"],
+        directory=REPAIR_WT, ports=[9201])
+    outcome = evaluate(outside, worktrees=())
+    expect(outcome.route == dd.ROUTE_REPAIR,
+           f"and omitting the option is otherwise fine; got {outcome.route}")
+
+
+def test_the_result_paths_a_document_names_are_all_of_them() -> None:
+    """What the containment sweep covers, pinned.
+
+    With `--artifact-root` supplied, topology derives every other path
+    from a root the agreement rule has already tied to a checked
+    destination — so this list is what the sweep still owns when the
+    option is omitted, and it must not silently stop covering any of it.
+    """
+    document = result_document(runs=failing_runs(2), harness_error=True)
+    labels = {label for label, _path in dd.result_paths(document)}
+    expect("artifact_root" in labels and "invocation_dir" in labels,
+           f"the root and the invocation directory are swept: {labels}")
+    expect(any(label.startswith("runs[") for label in labels),
+           f"and every run's directory: {labels}")
+    expect("error_run.artifact_dir" in labels,
+           f"and the run that broke the stream: {labels}")
+    expect(any(label.startswith("retained_artifacts[") for label in labels),
+           f"and every retained entry: {labels}")
+
+    inside = [path for _label, path in dd.result_paths(document)
+              if dd.inside_any_worktree(path, [REPAIR_WT]) is not None]
+    expect(inside == [], "an external layout is outside every worktree")
+    moved = result_document(runs=failing_runs(2), harness_error=True,
+                            artifact_root=f"{REPAIR_WT}/artifacts")
+    inside = [path for _label, path in dd.result_paths(moved)
+              if dd.inside_any_worktree(path, [REPAIR_WT]) is not None]
+    expect(len(inside) == len(dd.result_paths(moved)),
+           f"and a layout rooted in one is entirely inside it: {inside}")
 
 
 def test_the_command_and_its_result_must_describe_one_measurement() -> None:

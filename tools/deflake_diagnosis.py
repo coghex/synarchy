@@ -103,8 +103,14 @@ run count, RTS capabilities, retry policy — while `--result`,
 differ.
 
 A command is first checked against the REAL harness interface. Every
-option must be one `probe_flake.main` actually accepts, and the argv must
-be a PYTHON INTERPRETER running a path ending in `probe_flake.py`,
+option must be one `probe_flake.main` actually accepts and be spelled the
+way its own argparse would read it — `--runs` and `--rts-caps` are
+`type=int`, so `--runs 10.0` is refused here exactly as the harness would
+have refused it rather than compared as the number ten. `--result` is
+required alongside `--probe` and `--runs`, because the document is
+written only `if args.result` and a command without one produced no
+evidence at all. And the argv must be a PYTHON INTERPRETER running a path
+ending in `probe_flake.py`,
 because an option the CLI does not have — `--timeout`, say — would
 compare equal across two batches while describing a measurement neither
 could have run, and `/bin/echo .../probe_flake.py --probe role --runs 10`
@@ -148,6 +154,24 @@ recorded separately in its own manifest, whose entries must be members
 of the `config/*.local.yaml` family and nothing else. Two manifests that
 agree perfectly about `../outside.local.yaml` establish nothing about
 the state the probes actually read.
+
+The artifact layout is the one the harness creates
+--------------------------------------------------
+`new_invocation_dir` puts the invocation directory DIRECTLY under the
+artifact root and names it after the probe, and every run directory is
+`invocation_dir / f"run-{index:03d}"` — so three recorded values
+determine the whole layout and nothing in it is free. Checking only "is
+this inside a worktree" left a batch able to swap a failed run's
+directory for an unrelated external path and keep `repair-pr`, though no
+harness run could produce that. Pinning the exact path also makes the run
+directories unique by construction.
+
+The containment sweep over the paths a result NAMES stays, and
+`--artifact-root` being OPTIONAL is where it earns its keep: with the
+option supplied, every path derives from a root the agreement rule has
+tied to an already-checked destination; omitted — which is legitimate,
+since `default_artifact_root` supplies a temporary directory — nothing
+else constrains the root the document reports.
 
 Artifacts are paired with outcomes, and handed on
 -------------------------------------------------
@@ -280,11 +304,25 @@ DESTINATION_OPTIONS = ("--result", "--artifact-root")
 # Behavior-affecting settings, with the effective default `probe_flake`
 # applies when one is absent. `--probe` and `--runs` have no default:
 # `probe_flake.main` requires both, so a command missing either never ran.
-REQUIRED_OPTIONS = ("--probe", "--runs")
+# `--result` is required alongside them: `probe_flake.main` writes the
+# `probe-flake-result/v1` document only `if args.result`, so a command
+# without one produced NO document — and a section embedding a result
+# while claiming a command that could not have written it is describing
+# two different things.
+REQUIRED_OPTIONS = ("--probe", "--runs", "--result")
 INVOCATION_DEFAULTS = {"--rts-caps": RTS_CAPABILITIES}
 
+# Being REQUIRED and being a DESTINATION are orthogonal: `--result` is
+# both, because a command that wrote no result document produced no
+# evidence, while where it wrote must still differ between the batches.
+# The split that has to be exclusive is condition-versus-destination —
+# a destination compared as a condition would refuse every legitimate
+# pair, and a condition dropped as a destination would compare equal
+# whatever it said.
+CONDITION_OPTIONS = ("--probe", "--runs") + tuple(INVOCATION_DEFAULTS)
+
 HARNESS_OPTIONS = frozenset(REQUIRED_OPTIONS) | frozenset(
-    DESTINATION_OPTIONS) | frozenset(INVOCATION_DEFAULTS)
+    DESTINATION_OPTIONS) | frozenset(CONDITION_OPTIONS)
 
 # The probe-side defect categories of the issue's diagnosis boundary.
 # A declared repair names exactly one: "several independent causes" is
@@ -512,20 +550,27 @@ def parse_command(command, what: str) -> dict:
     return options
 
 
-def _number(value, what: str):
-    """A supplied option value as a number, or a refusal naming it."""
+def _integer(value, what: str) -> int:
+    """A supplied option value as the harness's argparse would read it.
+
+    `probe_flake.main` declares `--runs` and `--rts-caps` as `type=int`,
+    so argparse calls `int(token)` and REFUSES anything it raises on.
+    Accepting a float spelling here instead — `--runs 10.0` — would let a
+    fabricated command compare numerically equal to a real one while
+    `probe_flake` would have exited before measuring anything. So this is
+    `int()` and nothing wider: the same grammar, deliberately.
+    """
     if isinstance(value, bool):
-        raise HandoffError(f"{what} must be a number, got {value!r}")
-    if isinstance(value, (int, float)):
+        raise HandoffError(f"{what} must be an integer, got {value!r}")
+    if isinstance(value, int):
         return value
     try:
         return int(value)
     except (TypeError, ValueError):
-        pass
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        raise HandoffError(f"{what} must be a number, got {value!r}") from None
+        raise HandoffError(
+            f"{what} must be an integer the harness's own `type=int` would "
+            f"accept, got {value!r}; `probe_flake` would have refused this "
+            f"command before it measured anything") from None
 
 
 def require_invocation(document, what: str) -> dict:
@@ -573,10 +618,10 @@ def effective_settings(invocation, what: str) -> dict:
     options = parse_command(invocation["command"], f"{what}.command")
     settings = {}
     settings["probe"] = options["--probe"]
-    settings["runs"] = _number(options["--runs"], f"{what}.command --runs")
+    settings["runs"] = _integer(options["--runs"], f"{what}.command --runs")
     for option, default in INVOCATION_DEFAULTS.items():
         key = option.lstrip("-").replace("-", "_")
-        settings[key] = (_number(options[option], f"{what}.command {option}")
+        settings[key] = (_integer(options[option], f"{what}.command {option}")
                          if option in options else default)
     settings["retries"] = invocation["retries"]
     return settings
@@ -703,6 +748,7 @@ def require_result(document, what: str) -> dict:
                 f"a key that is simply absent means the document was not "
                 f"written by the harness")
     _require_retention(document, what)
+    require_topology(document, what)
     return document
 
 
@@ -1142,6 +1188,55 @@ class Outcome:
             "retained_artifacts": self.artifacts,
             "notes": self.notes or None,
         }
+
+
+def require_topology(document, what: str) -> None:
+    """The artifact layout `probe_flake.measure` actually creates.
+
+    `new_invocation_dir` puts the invocation directory DIRECTLY under the
+    artifact root and names it after the probe, and every run directory
+    is `invocation_dir / f"run-{index:03d}"` — the run's own index, so
+    the whole layout is determined by three recorded values and nothing
+    is free.
+
+    Checking only "is it inside a worktree" left a batch able to replace
+    a failed run's directory with an unrelated external path and keep
+    `repair-pr`, though no harness run could produce that layout. Naming
+    the exact path also makes the run directories unique by
+    construction, which a uniqueness test would only approximate.
+    """
+    root = Path(os.path.normpath(document["artifact_root"]))
+    invocation = Path(os.path.normpath(document["invocation_dir"]))
+    if invocation.parent != root:
+        raise HandoffError(
+            f"{what} reports the invocation directory {invocation} under the "
+            f"artifact root {root}; `probe_flake.new_invocation_dir` creates "
+            f"it as a DIRECT child of the root, so this pair was not "
+            f"produced by a harness run")
+    prefix = f"{document['probe']}-"
+    if not invocation.name.startswith(prefix):
+        raise HandoffError(
+            f"{what} reports the invocation directory {invocation.name!r}, "
+            f"which does not begin with {prefix!r}; the harness names it "
+            f"after the probe it measured")
+    records = [(f"{what}.runs[{position}]", run)
+               for position, run in enumerate(document["runs"])]
+    broken = document.get("error_run")
+    if isinstance(broken, dict):
+        records.append((f"{what}.error_run", broken))
+    for where, run in records:
+        directory = run.get("artifact_dir")
+        if directory is None:
+            continue
+        expected = invocation / f"run-{run['index']:03d}"
+        if Path(os.path.normpath(directory)) != expected:
+            raise HandoffError(
+                f"{where} reports the artifact directory {directory} where "
+                f"run {run['index']} of this invocation would be at "
+                f"{expected}; every run directory is "
+                f"`invocation_dir / f\"run-{{index:03d}}\"`, so a path "
+                f"anywhere else is evidence from somewhere other than this "
+                f"measurement")
 
 
 def result_paths(document) -> list:

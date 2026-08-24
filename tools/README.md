@@ -1721,13 +1721,26 @@ construction, which is the defect the scoping exists to remove.
 two batches necessarily differ in worktree and destination, and ports are
 leased dynamically, so they are compared on behavior-affecting settings with
 effective defaults filled in. A command is first checked against the REAL
-harness interface — every option one `probe_flake.main` accepts, and an argv
-that is a PYTHON INTERPRETER plus a path ending in `probe_flake.py` — because
-an option the CLI does not have would compare equal across both batches while
-describing a measurement neither could have run, and `/bin/echo
-.../probe_flake.py …` has the right shape and measures nothing. Each command is
-then bound to its own result document, so two commands agreeing with each other
-cannot stand in for the contract.
+harness interface — every option one `probe_flake.main` accepts, spelled the way
+its own argparse would read it (`--runs` and `--rts-caps` are `type=int`, so
+`--runs 10.0` is refused rather than compared as ten), `--result` required
+because the document is written only `if args.result`, and an argv that is a
+PYTHON INTERPRETER plus a path ending in `probe_flake.py` — because an option
+the CLI does not have would compare equal across both batches while describing a
+measurement neither could have run, and `/bin/echo .../probe_flake.py …` has the
+right shape and measures nothing. Each command is then bound to its own result
+document, so two commands agreeing with each other cannot stand in for the
+contract.
+
+**The artifact layout is the one the harness creates.** `new_invocation_dir`
+puts the invocation directory directly under the artifact root and names it
+after the probe, and every run directory is `invocation_dir /
+f"run-{index:03d}"` — three recorded values determine the whole layout, so a
+failed run's directory cannot be swapped for an unrelated path, and the run
+directories are unique by construction. The containment sweep over the paths a
+result NAMES stays for the case `--artifact-root` is omitted, which is
+legitimate: `default_artifact_root` supplies a temporary directory, and nothing
+else then constrains the root the document reports.
 
 Two labels are not two worktrees, either: the declared paths are canonicalised,
 neither may contain the other, and each invocation must have run inside the
