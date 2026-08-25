@@ -9,7 +9,7 @@ PR #291's location definitions have since grown validated spatial, icon, content
 ## Status
 
 - [x] PRR-1. Texture handle zero is both the undefined sentinel and the first allocated asset — [#1696]
-- [ ] PRR-2. The fixed handle table silently expires after 65,536 allocations
+- [x] PRR-2. The fixed handle table silently expires after 65,536 allocations — [#1699]
 
 ## 1. Texture-handle zero ownership
 
@@ -42,7 +42,7 @@ PR #291's location definitions have since grown validated spatial, icon, content
 
 ## 2. Stable-handle table capacity
 
-### PRR-2. The fixed handle table silently expires after 65,536 allocations
+### [#1699] PRR-2. The fixed handle table silently expires after 65,536 allocations
 
 > **Captured note:** Give stable texture handles an enforced lifetime/capacity contract. The engine must not accept a handle that the GPU table cannot represent and then announce it as loaded; grow or recycle the stable-id namespace safely, or reject exhaustion before allocating/uploading resources with an observable failure.
 
