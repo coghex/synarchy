@@ -33,7 +33,7 @@ from older direct history remain here until their owning batches are reviewed.
 
 - [x] PRR-1. Devices below 16,384 descriptors pass a gate their fixed-size shaders cannot satisfy — [#1689]
 - [x] PRR-2. Descriptor-slot exhaustion is published as successful texture loading — [#1690]
-- [ ] PRR-3. Loaded disk-texture cleanup closures are unreachable from runtime and shutdown
+- [x] PRR-3. Loaded disk-texture cleanup closures are unreachable from runtime and shutdown — [#1691]
 
 ## 1. Bindless shader/layout capacity
 
@@ -175,7 +175,7 @@ uncertain control-flow conclusion.
 
 ## 3. Disk-texture lifetime
 
-### PRR-3. Loaded disk-texture cleanup closures are unreachable from runtime and shutdown
+### [#1691] PRR-3. Loaded disk-texture cleanup closures are unreachable from runtime and shutdown
 
 > **Captured note:** Every disk atlas owns an explicit closure that destroys
 > its image view, image, and device memory. The only functions that invoke
