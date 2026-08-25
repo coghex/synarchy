@@ -9,7 +9,7 @@ PR #211's click/box-select domain exclusion, #210's ordinary gameplay-key gate, 
 ## Status
 
 - [x] PRR-1. Escape leaves a hidden page's unit selection alive — [#1672]
-- [ ] PRR-2. Unit AI can combine actor and building snapshots from different pages
+- [x] PRR-2. Unit AI can combine actor and building snapshots from different pages — [#1673]
 - [ ] PRR-3. Chunk eviction can turn an accepted structure placement into a staged phantom
 - [ ] PRR-4. Rejected structure placements still grow the persistent texture palette
 
@@ -39,7 +39,7 @@ PR #211's click/box-select domain exclusion, #210's ordinary gameplay-key gate, 
 
 ## 2. Active-page action ownership
 
-### PRR-2. Unit AI can combine actor and building snapshots from different pages
+### [#1673] PRR-2. Unit AI can combine actor and building snapshots from different pages
 
 > **Captured note:** `unit.getAllIds()` and `building.getActiveIds()` independently resolve “active”; a page switch between them can pair an old-page actor with a new-page building, and the legacy transfer verbs accept that cross-page pair.
 
