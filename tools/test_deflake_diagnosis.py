@@ -2246,9 +2246,10 @@ def test_a_malformed_record_is_refused_rather_than_crashing() -> None:
 
     # End to end, because the value of this is that `evaluate` answers.
     document = diagnosis_document()
+    token = f"python3.{'0' * 20}1"
     for batch in ("baseline", "verification"):
         recorded = document[batch]["invocation"]
-        recorded["command"] = [f"python3.{'0' * 20}1"] + recorded["command"][1:]
+        recorded["command"] = [token] + recorded["command"][1:]
     expect_rejected(lambda d=document: evaluate(d),
                     "is not a Python 3 interpreter token",
                     "a controlled command with an absurd version token")
