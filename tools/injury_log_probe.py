@@ -6,7 +6,9 @@ but the data path that feeds them is pure engine plumbing and IS testable.
 This guards that plumbing against silent breakage:
 
   1. injury.emit / injury.drainEvents roundtrip (+ drain clears the buffer).
-  2. unit.injure on a live spawned unit emits an "injure" injury event.
+  2. unit.injure on a live spawned unit emits an "injure" injury event
+     attributed to THAT unit, carrying back the part/woundKind/severity
+     it was called with.
   3. engine.emitEventForUnit tags the event with a uid that getEventLog
      surfaces (the per-unit log panel filters on this).
   4. A real fall emits a "fall" injury event whose target is the unit that
@@ -31,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import math
 import socket
 import subprocess
 import sys
@@ -61,6 +64,21 @@ FALL_LANE_OFFSET = 2
 # (src/Unit/Thread/Movement.hs:193-203), so this — not a fracture
 # threshold — is what the fixture height has to clear.
 FALL_MIN_DAMAGING_DROP = 2
+
+# Phase 2's inputs to unit.injure, asserted back out of the drained event
+# rather than pattern-matched inside a concatenation. A correctly shaped
+# event attributed to a stale id, a sentinel, or another unit is exactly
+# what this phase exists to reject, so target/kind/part/woundKind are
+# compared as WHOLE values against these.
+#
+# severity is the exception: the engine renders it with `show` on the
+# Float the wound stores (src/Engine/Scripting/Lua/API/Units/Combat.hs:472,
+# src/Unit/Types/Wound.hs:30), so the text coming back is not guaranteed
+# to be the literal this probe typed. Compare it numerically.
+INJURE_PART = "l_thigh"
+INJURE_WOUND_KIND = "stab"
+INJURE_SEVERITY = 0.4
+INJURE_SEVERITY_TOL = 1e-6
 
 # One phase-4 poll: keep the session running, then scan one drained batch
 # for the event this phase is about — kind "fall" AND target == the unit we
@@ -148,6 +166,24 @@ def parse_float(text: str | None) -> float | None:
         return None
 
 
+def parse_uid(text: str | None) -> int | None:
+    """A uid the console may render as "12" or "12.0" — never as text.
+
+    None when absent, not a number, or not an exact whole number. The
+    float fallback exists only for that trailing ".0": truncating
+    anything else would round a target of "1.5" into agreement with a
+    spawned uid of 1, which is precisely the mismatch the callers exist
+    to report, and int() on nan/inf raises instead of reporting it.
+    """
+    v = parse_int(text)
+    if v is not None:
+        return v
+    f = parse_float(text)
+    if f is None or not math.isfinite(f) or not f.is_integer():
+        return None
+    return int(f)
+
+
 def terrain_z(port: int, gx: int, gy: int) -> int | None:
     """Ground z of TILE (gx, gy) — integer tile coords, not the +0.5
     world positions a unit is spawned at (getTerrainAt takes tiles).
@@ -189,15 +225,51 @@ def main() -> int:
         print("2. unit.injure on a live unit emits an injury event")
         send(args.port, "return require('scripts.movement_arena').buildCourse('flat')")
         time.sleep(0.8)
-        send(args.port, "_TU = unit.spawn('acolyte', 0, 0); return _TU")
+        tu = parse_uid(send(args.port,
+                            "_TU = unit.spawn('acolyte', 0, 0); return _TU"))
         time.sleep(0.8)
-        r = send(args.port,
-            "local ok=unit.injure(_TU,'l_thigh','stab',0.4); "
-            "local e=injury.drainEvents(); if #e<1 then return 'NONE' end; "
-            "return e[1].target..'|'..e[1].kind..'|'..(e[1].payload.woundKind or '?')")
-        # target should equal _TU; we only assert kind/woundKind shape here.
-        ok = ("|injure|stab" in r) and r != "NONE"
-        passed &= check("unit.injure -> 'injure' event", ok, r)
+        # The injure and the drain stay ONE console command. bootstrap has
+        # already stubbed injury_log_panel's tick, but a single round trip
+        # additionally leaves no window at all for another consumer to take
+        # the event between the two calls.
+        #
+        # Every field is read off the SAME drained event (drainEvents returns
+        # oldest-first, src/Engine/Scripting/Lua/API/Combat.hs:146-157, and
+        # phase 1 left the buffer empty, so e[1] is the event this call just
+        # produced). `target` is the point: pushInjuryEvent records the victim
+        # uid as ceTarget (src/Combat/Types.hs:96-103), so comparing it with
+        # the spawned uid is what proves unit.injure attributes its event to
+        # the unit it wounded — which phase 3's different producer cannot show.
+        ev = send_json(args.port,
+            f"local ok=unit.injure(_TU,'{INJURE_PART}','{INJURE_WOUND_KIND}',"
+            f"{INJURE_SEVERITY}); "
+            "local e=injury.drainEvents(); local n=#e; "
+            "if n<1 then return {n=tostring(n), injured=tostring(ok)} end; "
+            "local v=e[1]; local p=v.payload or {}; "
+            "return {n=tostring(n), injured=tostring(ok), "
+            "target=tostring(v.target), kind=tostring(v.kind), "
+            "part=tostring(p.part or ''), woundKind=tostring(p.woundKind or ''), "
+            "severity=tostring(p.severity or '')}")
+        if not isinstance(ev, dict):
+            passed &= check("unit.injure -> 'injure' event for the injured unit",
+                            False, f"malformed drain response {ev!r}")
+        else:
+            severity = parse_float(ev.get("severity"))
+            ok = (tu is not None
+                  and parse_uid(ev.get("target")) == tu
+                  and ev.get("kind") == "injure"
+                  and ev.get("part") == INJURE_PART
+                  and ev.get("woundKind") == INJURE_WOUND_KIND
+                  and severity is not None
+                  and abs(severity - INJURE_SEVERITY) <= INJURE_SEVERITY_TOL)
+            passed &= check(
+                "unit.injure -> 'injure' event for the injured unit", ok,
+                f"target={ev.get('target')} (spawned {tu}) "
+                f"kind={ev.get('kind')} part={ev.get('part')} "
+                f"woundKind={ev.get('woundKind')} "
+                f"severity={ev.get('severity')} "
+                f"injured={ev.get('injured')} "
+                f"({ev.get('n')} event(s) drained)")
 
         print("3. emitEventForUnit tags a uid that getEventLog surfaces")
         r = send(args.port,
@@ -247,12 +319,8 @@ def main() -> int:
                 send(args.port, "injury.drainEvents(); return 'cleared'")  # clear prior
                 fu_raw = send(args.port,
                               f"_FU = unit.spawn('acolyte', {sx}, {sy}); return _FU")
-                # The console may render the uid as "12" or "12.0"; compare
-                # the event's target numerically, never as text.
-                fu = parse_int(fu_raw)
-                if fu is None:
-                    fu = parse_float(fu_raw)
-                    fu = int(fu) if fu is not None else None
+                # Compare the event's target numerically, never as text.
+                fu = parse_uid(fu_raw)
                 if fu is None or fu < 0:
                     passed &= check("spawned the falling unit", False,
                                     f"unit.spawn returned {fu_raw!r}")

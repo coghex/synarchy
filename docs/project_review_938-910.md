@@ -8,14 +8,14 @@ PR #938's non-regular-file animation discovery is already PRR-3 in `docs/project
 
 ## Status
 
-- [ ] PRR-1. Pickup orders inspect the active page but commit against the carrier's page
-- [ ] PRR-2. An empty location table can restore an allocator below its first valid id
+- [x] PRR-1. Pickup orders inspect the active page but commit against the carrier's page — [#1666]
+- [x] PRR-2. An empty location table can restore an allocator below its first valid id — [#1667]
 - [ ] PRR-3. Persisted location geometry bypasses component validation
 - [ ] PRR-4. The authoritative EngineEnv inventory reports the wrong field total
 
 ## 1. Ordered ground-item retrieval
 
-### PRR-1. Pickup orders inspect the active page but commit against the carrier's page
+### [#1666] PRR-1. Pickup orders inspect the active page but commit against the carrier's page
 
 > **Captured note:** Make every phase of `unitAi.commandPickup(uid, gid)` resolve the ground id on the carrier's owning page. The #1208 repair moved the atomic pickup verb to that page, but #929's command-time, utility, movement, capacity, label, and event calculations still inspect `item.listGround()` on the active page.
 
@@ -41,7 +41,7 @@ PR #938's non-regular-file animation discovery is already PRR-3 in `docs/project
 
 ## 2. Location-instance allocator validation
 
-### PRR-2. An empty location table can restore an allocator below its first valid id
+### [#1667] PRR-2. An empty location table can restore an allocator below its first valid id
 
 > **Captured note:** Validate `lisNextId` itself, even when a saved page has no location instances. The #911 allocator check validates each existing key against the cursor but treats every empty map as well formed, so a decoded cursor of zero or less survives and the next dynamic allocation violates the engine-wide positive-id contract.
 

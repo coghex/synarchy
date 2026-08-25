@@ -82,12 +82,30 @@ def find_tillable(port, span=4):
     return None
 
 
+def fluid_scan_axis(span=4, stride=4):
+    """The exclusion scan's sampling lattice for ONE axis, in TILE
+    coordinates, over the chunk span the region load covers. The scan and
+    its fixture diagnostic both read it, so the bounds and stride reported
+    to the operator are always the ones actually walked."""
+    return range(-span * 16, span * 16 + 1, stride)
+
+
 def find_fluid_tile(port, span=4):
-    """Scan for a fluid-covered tile, for the untillable-exclusion check."""
-    for sx in range(-span * 16, span * 16 + 1, 4):
-        for sy in range(-span * 16, span * 16 + 1, 4):
-            fluid = send_json(port, f"return world.getFluidAt({sx},{sy})")
-            if isinstance(fluid, dict) and fluid.get("type"):
+    """Scan for a fluid-covered tile, for the untillable-exclusion check.
+
+    ``world.getFluidAt`` is a MULTI-RETURN query and its ARITY is the
+    contract (`Engine.Scripting.Lua.API.WorldQuery.Fluid`): a fluid tile
+    pushes TWO values — the type string and the fluid surface z — while a
+    dry tile, and one whose chunk is not loaded, pushes a single nil. The
+    debug console joins several return values with tabs, so asking for
+    both back yields text like ``river\t12``, never anything JSON-shaped.
+    Bind the first return alone: a non-nil first value IS the fluid type.
+    """
+    for sx in fluid_scan_axis(span):
+        for sy in fluid_scan_axis(span):
+            fluid = send_json(port, f"local t = world.getFluidAt({sx},{sy}); "
+                                    f"return t")
+            if isinstance(fluid, str) and fluid:
                 return sx, sy
     return None
 
@@ -157,20 +175,30 @@ def _run(port, proc, args, passed):
               f"it: {d2}")
 
         # --- 2. Untillable exclusion: fluid tile never designated ---
+        # A missing fluid tile is a fixture failure, not something to skip
+        # past: the exclusion rule is one of this probe's six declared
+        # behaviours, and skipping it returns success with the rule never
+        # exercised (#1609). Fail the same way the tillable-tile
+        # prerequisite above does, naming what was scanned so the operator
+        # can act without re-running.
         fluid_tile = find_fluid_tile(port)
-        if fluid_tile:
-            fx, fy = fluid_tile
-            send(port, f"till.designate('probe',{fx},{fy},{fx},{fy}); "
-                       f"return 'ok'")
-            time.sleep(0.5)
-            df = send_json(port, f"return till.getDesignationAt('probe',{fx},{fy})")
-            ok2 = not isinstance(df, dict)
-            passed &= ok2
-            print(f"  [{'PASS' if ok2 else 'FAIL'}] fluid tile excluded "
-                  f"from designation ({fx},{fy}): {df}")
-        else:
-            print("  [SKIP] no fluid tile found in the loaded region to "
-                  "test exclusion against")
+        if not fluid_tile:
+            axis = fluid_scan_axis()
+            print(f"  [FAIL] no fluid tile in the loaded region to test "
+                  f"exclusion against: sampled x and y over "
+                  f"{axis[0]}..{axis[-1]} step {axis.step} on seed "
+                  f"{args.seed}, world size {args.size}, {args.plates} "
+                  f"plates (try another seed)")
+            return 1
+        fx, fy = fluid_tile
+        send(port, f"till.designate('probe',{fx},{fy},{fx},{fy}); "
+                   f"return 'ok'")
+        time.sleep(0.5)
+        df = send_json(port, f"return till.getDesignationAt('probe',{fx},{fy})")
+        ok2 = not isinstance(df, dict)
+        passed &= ok2
+        print(f"  [{'PASS' if ok2 else 'FAIL'}] fluid tile excluded "
+              f"from designation ({fx},{fy}): {df}")
 
         # Re-designate the tillable tile for the save + AI phases.
         send(port, f"till.designate('probe',{tx},{ty},{tx},{ty}); "
