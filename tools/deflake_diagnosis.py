@@ -27,6 +27,9 @@ hold to — and they live here so `tools/test_deflake_diagnosis.py` can
 assert them:
 
 * the entry gate over a #1436 handoff, including one-probe enforcement;
+* the closed producer-provenance contract (#1661) — the launcher
+  grammars, artifact topology and retention, identity delegation, and
+  the measurement-apparatus repair scope;
 * X-out-of-10 arithmetic, taken from `probe_census` rather than restated;
 * the configuration manifest, including CONFIRMED ABSENCE;
 * MISSING evaluation and stable check identity;
@@ -132,19 +135,25 @@ impossible to submit while accepting an argv nobody ran.
 Within a tool's own surface, every option must be one it actually accepts
 and be spelled the way its argparse would read it — `--runs` and
 `--rts-caps` are `type=int`, so `--runs 10.0` is refused here exactly as
-the harness would have refused it rather than compared as the number ten.
+the harness would have refused it rather than compared as the number ten,
+and both carry the producer's own POSITIVE constraint on top of that
+grammar, since `int()` accepts `0` while `measure` refuses it before
+opening a port.
 `--result` is required of `probe_flake.py`, because the document is
 written only `if args.result` and a command without one produced no
 evidence at all; it is optional for `/deflake`, which retains the
 document beside its artifacts either way. ORDER is part of the grammar
 too: argv[0] is the interpreter, argv[1] the script, and only argv[2:]
 are options, because Python rejects an option it does not know before the
-script runs. And the argv must be a PYTHON 3 INTERPRETER — `python3`, optionally
-versioned; not bare `python`, which is whichever of the two that machine
-means, and not `python2`, which cannot parse these programs at all —
-named rather than given by path, since a document cannot show which
-binary sits at `/tmp/counterfeit/python3` — running one of those two
-scripts. The script is
+script runs. And the argv must be a PYTHON 3 INTERPRETER — `python3`, or a
+version-qualified `python3.<minor>[.<patch>]` at or above the 3.10
+syntax floor these tools' runtime-evaluated `X | None` annotations
+impose; not bare `python`, which is whichever of the two that machine
+means, not `python2`, which cannot parse these programs at all, and not
+`python3.9`, which names a version that could not have run the program
+whose document quotes it — named rather than given by path, since a
+document cannot show which binary sits at `/tmp/counterfeit/python3` —
+running one of those two scripts. The script is
 RESOLVED FROM THE DIRECTORY THE COMMAND RAN IN — which is what Python
 does with a relative path — and must then be the tool the DECLARED
 checkout ships: `<worktree>/tools/probe_flake.py` for a controlled
@@ -221,7 +230,11 @@ root and GENERATES its name — `{probe}-{%Y%m%dT%H%M%SZ}-{pid}-{uuid8}` —
 from a real clock and a real process, both of which are checked for
 MEANING and not only shape: eight digits, `T`, six digits and `Z` also
 matches `99999999T999999Z`, and a bare digit run also matches a pid of
-0, and neither was ever produced. Every run
+0, and neither was ever produced. The name is split from the RIGHT, so
+the three generated fields come off the end and the probe segment is
+left whole — then required to EQUAL the document's own probe, which a
+left-to-right split would misattribute the day a hyphenated probe key
+were registered. Every run
 directory is
 `invocation_dir / f"run-{index:03d}"` — so three recorded values
 determine the whole layout and nothing in it is free. Checking only "is
@@ -370,19 +383,43 @@ RTS_CAPABILITIES = probe_flake.DEFAULT_RTS_CAPS
 # rigorously as contents do.
 CONFIG_GLOB = "config/*.local.yaml"
 
-# The two identity shapes every document is held to: a SHA-256 digest and
-# a resolved Git commit.
+# The digest shape every configuration manifest entry is held to.
 #
 # UNANCHORED on purpose, and matched with `fullmatch` at every call site
 # below. `re.match` with a trailing `$` is not full-string validation:
 # `$` also matches immediately BEFORE a final newline, so
-# `COMMIT_RE.match("<40 hex>\n")` succeeds and a document could spell
-# every commit identity that way and still be attributed to a real SHA.
-# Leaving the anchors off makes `fullmatch` the only thing that can
-# decide the question, so a call site that forgets it fails loudly on
-# every input rather than silently on one.
+# `SHA256_RE.match("<64 hex>\n")` succeeds and a document could spell
+# every digest that way and still look like a real one. Leaving the
+# anchors off makes `fullmatch` the only thing that can decide the
+# question, so a call site that forgets it fails loudly on every input
+# rather than silently on one.
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
-COMMIT_RE = re.compile(r"[0-9a-f]{40}")
+
+
+def require_commit(value, what: str, *, because: str) -> str:
+    """A resolved Git commit identity, DELEGATED rather than restated.
+
+    `probe_census.require_commit_identity` already implements exactly
+    the rule this module needs — the complete lowercase hexadecimal
+    form, matched full-string so a trailing newline or suffix is
+    refused, with the literal `unknown` `probe_flake._commit_sha` writes
+    when `git rev-parse` could not be consulted refused BY NAME — and it
+    is already the grammar `deflake._require_commit` applies to the
+    result document this workflow consumes. A second local copy could
+    drift into accepting a batch the producer and the census both
+    reject, which is the whole reason `timestamp_utc` is delegated to
+    `probe_census.parse_timestamp` too.
+
+    `CensusError` is caught here rather than allowed to escape: every
+    violation this module finds is a malformed INPUT, and the contract
+    is to report the specific malformed field, not to exit through an
+    uncaught traceback from a helper module.
+    """
+    try:
+        return probe_census.require_commit_identity(value, what)
+    except probe_census.CensusError as error:
+        raise HandoffError(f"{error}; {because}") from None
+
 
 # The two programs that really produce this lab's measurements, and the
 # only kind of program that runs either — `/bin/echo .../probe_flake.py
@@ -394,8 +431,9 @@ COMMIT_RE = re.compile(r"[0-9a-f]{40}")
 # CLI has no `--probe` and no `--runs` at all. So requiring a
 # `probe_flake.py` argv everywhere would have made a truthful #1436
 # handoff impossible to submit while accepting an argv that never ran.
-# EXACTLY `python3`, and nothing else — not bare `python`, not `python2`,
-# and not a versioned `python3.9` / `python3.14.2` either.
+# A PERMITTED PYTHON INTERPRETER TOKEN, which is `python3` or a
+# version-qualified spelling of it at or above the syntax floor — and
+# nothing else. Not bare `python`, not `python2`, not `python3.9`.
 #
 # The first two are refused for the obvious reason: every tool in this
 # lab is a Python 3 program, so `python2 tools/probe_flake.py` is a
@@ -403,26 +441,81 @@ COMMIT_RE = re.compile(r"[0-9a-f]{40}")
 # of the two that machine happens to mean, which a document cannot
 # settle.
 #
-# A VERSIONED spelling is refused for a different and stronger reason:
-# nothing in this repository produces one. Every tracked invocation of
-# either launcher is bare `python3` — `tools/ci-local.sh`,
-# `.github/workflows/ci.yml`, `tools/README.md`, and, load-bearingly,
-# `probe_flake.py`'s own `--describe` subprocess (`cmd = ["python3",
-# ...]`) — so a recorded `python3.9 tools/probe_flake.py` is a command
-# nobody in this lab types, and admitting it admits a measurement no
-# tracked path could have produced.
+# A VERSION-QUALIFIED spelling is admitted because it names the same
+# interpreter more precisely rather than a different one: a machine with
+# several Python 3 installations spells the one it means `python3.12`,
+# and that command runs exactly the program `python3` would have run had
+# it pointed there. What it may NOT do is name a version these programs
+# cannot parse, which is what the floor is for.
 #
-# The narrow rule is deliberate. Refusing versions BELOW some minimum
-# would require this module to name that minimum, and this repository
-# declares none: `.github/ci/Dockerfile` installs apt's unpinned
-# `python3`, no tool carries a `sys.version_info` floor, and every one
-# of these sources opens with `from __future__ import annotations`,
-# which makes their `X | None` annotations parse as far back as 3.6.
-# Any floor written here would therefore be invented rather than
-# derived, and would need an edit every time it drifted. "The spelling
-# every tracked caller actually uses" is checkable against the tree
-# instead, and subsumes the version question entirely.
-INTERPRETER_RE = re.compile(r"python3")
+# The floor is 3.10 and it is DERIVED rather than invented: the shipped
+# tools annotate with `X | None`, and while `from __future__ import
+# annotations` defers the ones in signatures, nothing defers a type
+# EVALUATED at runtime, so 3.10 is where this lab's own sources stop
+# being parseable-and-runnable rather than merely parseable. Below the
+# floor the recorded command names an interpreter that could not have
+# produced the document quoting it.
+#
+# A version is a dotted run of digits with no leading zero: `python3.10`
+# and `python3.10.4`, never `python3.010` (two spellings of one version,
+# and no interpreter is installed under that name), never `python3.` and
+# never `python3.x`. Diagnosis evidence gets one canonical spelling per
+# interpreter for the same reason a duplicated option is refused below.
+INTERPRETER_MINOR_FLOOR = 10
+_VERSION_COMPONENT = r"(?:0|[1-9][0-9]*)"
+INTERPRETER_RE = re.compile(
+    rf"python3(?:\.(?P<minor>{_VERSION_COMPONENT})"
+    rf"(?:\.(?P<patch>{_VERSION_COMPONENT}))?)?")
+
+
+def _below(digits: str, floor: int) -> bool:
+    """Is the ASCII digit run `digits` below `floor`, without converting it?
+
+    `int(digits)` would be the obvious spelling and is a LIVENESS bug
+    here: since 3.11 CPython caps integer-from-string conversion at
+    4,300 digits and raises `ValueError` past it, so a recorded
+    `python3.` followed by five thousand nines would escape this
+    module's controlled refusal as a traceback — a malformed input
+    crashing the validator that exists to refuse it. Bounding the
+    grammar to "a plausible version" instead would be inventing a limit
+    no producer states.
+
+    The comparison needs no conversion at all. `_VERSION_COMPONENT`
+    admits no leading zero, so a longer digit run is always the larger
+    number and two of equal length compare lexicographically exactly as
+    they compare numerically.
+    """
+    reference = str(floor)
+    if len(digits) != len(reference):
+        return len(digits) < len(reference)
+    return digits < reference
+
+
+def interpreter_problem(program: str):
+    """Why `program` is not a permitted interpreter token, or `None`.
+
+    The token is a BARE NAME resolved through `PATH`. A path-qualified
+    spelling is refused by the caller before this is reached, because a
+    document cannot show which binary sits at `/tmp/counterfeit/python3`
+    — that is a property of a filesystem this module never sees, not of
+    the string it was handed.
+    """
+    matched = INTERPRETER_RE.fullmatch(program)
+    if matched is None:
+        return (f"{program!r} is not a Python 3 interpreter token; this lab "
+                f"records `python3`, optionally version-qualified as "
+                f"`python3.<minor>` or `python3.<minor>.<patch>` with no "
+                f"leading zero in a version component. Another program with "
+                f"the right shape (`/bin/echo .../probe_flake.py --probe "
+                f"role --runs 10`) measures nothing")
+    minor = matched["minor"]
+    if minor is not None and _below(minor, INTERPRETER_MINOR_FLOOR):
+        return (f"{program!r} names Python 3.{minor}, below this lab's 3."
+                f"{INTERPRETER_MINOR_FLOOR} syntax floor; the shipped tools "
+                f"annotate with `X | None`, so an interpreter below the "
+                f"floor could not have run the program whose document this "
+                f"is")
+    return None
 
 
 class Launcher:
@@ -435,12 +528,15 @@ class Launcher:
     from its command line; `fixed` are the ones it does not expose at
     all and supplies itself, which is what makes `/deflake`'s
     measurement contract a property of the module rather than of a
-    command nobody typed.
+    command nobody typed. `positive` names the integer options the
+    PRODUCER additionally constrains beyond `type=int` — `int()` accepts
+    `0` and `-3` quite happily, and `probe_flake.measure` refuses both
+    before it measures anything.
     """
 
     def __init__(self, script, *, values, flags=(), destinations=(),
                  required=(), conditions=(), defaults=None, fixed=None,
-                 probe_from_result=False, describes=""):
+                 positive=(), probe_from_result=False, describes=""):
         self.script = script
         self.values = frozenset(values)
         self.flags = frozenset(flags)
@@ -448,6 +544,7 @@ class Launcher:
         self.required = tuple(required)
         self.conditions = tuple(conditions)
         self.defaults = dict(defaults or {})
+        self.positive = frozenset(positive)
         self.fixed = dict(fixed or {})
         self.probe_from_result = probe_from_result
         self.describes = describes
@@ -473,6 +570,15 @@ REQUIRED_OPTIONS = ("--probe", "--runs", "--result")
 INVOCATION_DEFAULTS = {"--rts-caps": RTS_CAPABILITIES}
 CONDITION_OPTIONS = ("--probe", "--runs") + tuple(INVOCATION_DEFAULTS)
 
+# `type=int` is only half of what the harness accepts. `measure` refuses
+# a non-positive run count and a non-positive capability count BEFORE it
+# opens a port (`probe_flake.measure`'s two `Rejection`s), so a recorded
+# `--runs 0` describes a command that measured nothing — and without this
+# it would compare as the number zero and be reported as a batch that
+# merely failed to replay the handoff's conditions, which is a ROUTE and
+# not the malformed input it is.
+POSITIVE_OPTIONS = ("--runs", "--rts-caps")
+
 HARNESS_OPTIONS = frozenset(REQUIRED_OPTIONS) | frozenset(
     DESTINATION_OPTIONS) | frozenset(CONDITION_OPTIONS)
 
@@ -483,6 +589,7 @@ HARNESS_LAUNCHER = Launcher(
     required=REQUIRED_OPTIONS,
     conditions=CONDITION_OPTIONS,
     defaults=INVOCATION_DEFAULTS,
+    positive=POSITIVE_OPTIONS,
     describes="the controlled baseline and verification batches")
 
 # `deflake.main`'s entire surface: one flag and one optional destination,
@@ -716,16 +823,67 @@ def manifest_differences(left, right, *, left_name: str,
 TOOLS_DIR = "tools"
 
 # `new_invocation_dir`'s generated name: the probe, a UTC stamp, the pid
-# and eight hex characters of a uuid4. Serialized by the harness and by
-# nothing else, so an arbitrary name like `role-not-a-harness-directory`
-# is a forged layout however coherent the rest of the document is. The
-# STAMP and the PID are checked for meaning as well as shape below —
+# and eight hex characters of a uuid4, joined by hyphens. Serialized by
+# the harness and by nothing else, so an arbitrary name like
+# `role-not-a-harness-directory` is a forged layout however coherent the
+# rest of the document is.
+#
+# The three GENERATED fields are the last three, and the name is split
+# from the RIGHT to find them. Every probe key registered today is
+# lowercase `[a-z0-9_]` with no hyphen (`tools/run_probes.py`), so a
+# left-to-right split happens to work — but it would silently misparse
+# the day a hyphenated key were registered, attributing part of the
+# probe name to the stamp field. Splitting from the right is
+# unambiguous whatever the key contains, and what remains in front is
+# then required to EQUAL the document's own `probe` rather than merely
+# to look like a probe key.
+#
+# The STAMP and the PID are checked for MEANING as well as shape:
 # `\d{8}T\d{6}Z` alone matches `99999999T999999Z`, which no clock ever
 # produced, and `\d+` matches a pid of 0, which no process ever has.
-INVOCATION_DIR_RE = re.compile(
-    r"^(?P<probe>[a-z][a-z_]*)-(?P<stamp>\d{8}T\d{6}Z)-(?P<pid>\d+)"
-    r"-[0-9a-f]{8}$")
+#
+# `[0-9]`, never `\d`: a `str` pattern's `\d` also matches every Unicode
+# decimal digit, so `\d+` accepted an Arabic-Indic pid the harness — an
+# f-string over `os.getpid()` — could not have written, and handed
+# `datetime.strptime` a stamp in digits `strftime` never emits.
+INVOCATION_GENERATED_FIELDS = 3
+INVOCATION_STAMP_RE = re.compile(r"[0-9]{8}T[0-9]{6}Z")
+INVOCATION_PID_RE = re.compile(r"[0-9]+")
+INVOCATION_UNIQUE_RE = re.compile(r"[0-9a-f]{8}")
 INVOCATION_STAMP_FORMAT = "%Y%m%dT%H%M%SZ"
+
+
+def invocation_name_problem(name: str, probe: str):
+    """Why `name` is not this measurement's generated directory, or `None`.
+
+    Right-anchored: `rsplit` takes exactly the three generated fields off
+    the end and leaves the probe segment whole, however many hyphens it
+    contains.
+    """
+    fields = name.rsplit("-", INVOCATION_GENERATED_FIELDS)
+    if len(fields) != INVOCATION_GENERATED_FIELDS + 1:
+        return "it is not the generated shape"
+    named, stamp, pid, unique = fields
+    if not INVOCATION_UNIQUE_RE.fullmatch(unique):
+        return f"{unique!r} is not eight hex characters of a uuid4"
+    if not INVOCATION_PID_RE.fullmatch(pid):
+        return f"{pid!r} is not a process id"
+    if not INVOCATION_STAMP_RE.fullmatch(stamp):
+        return f"{stamp!r} is not a UTC stamp"
+    if named != probe:
+        return f"it names the probe {named!r}"
+    try:
+        datetime.strptime(stamp, INVOCATION_STAMP_FORMAT)
+    except ValueError:
+        return f"{stamp!r} is not a real UTC instant"
+    # `int(pid) <= 0` would read the same and raise `ValueError` on a
+    # five-thousand-digit run (CPython's 4,300-digit conversion cap), so
+    # a forged name would crash this refusal instead of receiving it.
+    # A `[0-9]+` run carries no sign, so it is non-positive exactly when
+    # every digit is a zero.
+    if set(pid) == {"0"}:
+        return f"{pid!r} is not a process id"
+    return None
 
 
 def parse_command(command, what: str, *, launcher=None, root=None,
@@ -779,18 +937,14 @@ def parse_command(command, what: str, *, launcher=None, root=None,
         raise HandoffError(
             f"{what} runs the interpreter by path ({program!r}); a document "
             f"cannot show which binary sits at an arbitrary path, so the "
-            f"interpreter is named — `python3` — and resolved from PATH like "
-            f"every command this lab records. `/tmp/counterfeit/python3` is "
-            f"exactly the shape this refuses")
-    if not INTERPRETER_RE.fullmatch(program):
-        raise HandoffError(
-            f"{what} runs {program!r}, which is not the interpreter this lab "
-            f"records; every tracked invocation of either launcher — both CI "
-            f"files, tools/README.md, and probe_flake.py's own `--describe` "
-            f"subprocess — spells it exactly `python3`. Another program with "
-            f"the right shape (`/bin/echo .../probe_flake.py --probe role "
-            f"--runs 10`) measures nothing, and a versioned spelling "
-            f"(`python3.9`) is a command no tracked path here produces")
+            f"interpreter is NAMED — `python3`, optionally version-qualified "
+            f"— and resolved from PATH like every command this lab records. "
+            f"`/tmp/counterfeit/python3` is exactly the shape this refuses, "
+            f"whatever version it appears to name")
+    problem = interpreter_problem(program)
+    if problem is not None:
+        raise HandoffError(f"{what} runs an interpreter this lab does not "
+                           f"record: {problem}")
     return _parse_from_script(command, 1, what, launcher=launcher,
                               root=root, base=base)
 
@@ -877,8 +1031,8 @@ def _parse_from_script(command, position: int, what: str, *, launcher, root,
     return found, options
 
 
-def _integer(value, what: str) -> int:
-    """A supplied option value as the harness's argparse would read it.
+def _integer(value, what: str, *, positive: bool = False) -> int:
+    """A supplied option value as the harness would have read it.
 
     `probe_flake.main` declares `--runs` and `--rts-caps` as `type=int`,
     so argparse calls `int(token)` and REFUSES anything it raises on.
@@ -886,18 +1040,36 @@ def _integer(value, what: str) -> int:
     fabricated command compare numerically equal to a real one while
     `probe_flake` would have exited before measuring anything. So this is
     `int()` and nothing wider: the same grammar, deliberately.
+
+    `positive` is the producer's OWN constraint on top of that grammar,
+    and it has to be applied here rather than left to the comparison
+    downstream. `int()` accepts `0` and `-3`; `probe_flake.measure`
+    raises on both before it opens a port. A recorded `--runs 0` beside
+    a result document that also says zero is self-consistent, so nothing
+    downstream would call it malformed — it would compare as the number
+    zero and surface as a batch that merely failed to replay the
+    handoff's conditions, which is a diagnosis ROUTE and loses the fact
+    that no such measurement was ever run.
     """
     if isinstance(value, bool):
         raise HandoffError(f"{what} must be an integer, got {value!r}")
     if isinstance(value, int):
         return value
     try:
-        return int(value)
+        number = int(value)
     except (TypeError, ValueError):
         raise HandoffError(
             f"{what} must be an integer the harness's own `type=int` would "
             f"accept, got {value!r}; `probe_flake` would have refused this "
             f"command before it measured anything") from None
+    if positive and number < 1:
+        raise HandoffError(
+            f"{what} must be a positive count, got {number}; "
+            f"`probe_flake.measure` refuses a run or capability count below "
+            f"one before it opens a port, so this command measured nothing "
+            f"— it is a malformed record, not a batch that disagreed with "
+            f"the handoff")
+    return number
 
 
 def require_invocation(document, what: str, *, launcher=None,
@@ -1057,10 +1229,15 @@ def effective_settings(invocation, what: str, *, result=None) -> dict:
         settings["probe"] = options["--probe"]
     if "--runs" in launcher.conditions:
         settings["runs"] = _integer(options["--runs"],
-                                    f"{what}.command --runs")
+                                    f"{what}.command --runs",
+                                    positive="--runs" in launcher.positive)
     for option, default in launcher.defaults.items():
         key = option.lstrip("-").replace("-", "_")
-        settings[key] = (_integer(options[option], f"{what}.command {option}")
+        # An ABSENT option is the shipped default, which is positive by
+        # construction; only a value the record actually carries is
+        # constrained.
+        settings[key] = (_integer(options[option], f"{what}.command {option}",
+                                  positive=option in launcher.positive)
                          if option in options else default)
     settings["retries"] = invocation["retries"]
     settings["timeout_seconds"] = invocation["timeout_seconds"]
@@ -1203,26 +1380,25 @@ def require_result(document, what: str) -> dict:
     PASS while their check maps carry FAIL, which `failure_count` would
     otherwise count as a spotless batch and admit as a verified repair.
 
-    Its `timestamp_utc` goes through `probe_census.parse_timestamp` too, so
-    it names a real UTC instant rather than merely having the right
-    shape. Two further rules are this module's own, because the
-    canonical validator does not make them: a result attributed to no
-    commit is not evidence, and the identifier SHAPE rule
-    (`probe_protocol.CHECK_ID_RE`) that a self-consistent document
-    carrying a runtime value in an identifier still satisfies.
+    Its `timestamp_utc` goes through `probe_census.parse_timestamp` and
+    its `commit_sha` through `probe_census.require_commit_identity` (via
+    `require_commit`), so both name a real instant and a real commit
+    rather than merely having the right shape, and neither grammar is
+    written twice. The identifier SHAPE rule
+    (`probe_protocol.CHECK_ID_RE`) is this module's own addition, because
+    the canonical validator does not make it and a self-consistent
+    document carrying a runtime value in an identifier still satisfies
+    everything it does check.
     """
     try:
         probe_census.validate_result(document)
     except probe_census.CensusError as error:
         raise HandoffError(f"{what}: {error}") from None
     probe = document["probe"]
-    commit = document.get("commit_sha")
-    if not isinstance(commit, str) or not COMMIT_RE.fullmatch(commit):
-        raise HandoffError(
-            f"{what} does not name a resolved commit ({commit!r}); "
-            f"`probe_flake` writes the literal 'unknown' when git could not "
-            f"be consulted, and a measurement nobody can attribute to a "
-            f"commit is not evidence")
+    require_commit(
+        document.get("commit_sha"), f"{what}.commit_sha",
+        because="a measurement nobody can attribute to a commit is not "
+                "evidence")
     try:
         probe_census.parse_timestamp(document.get("timestamp_utc"),
                                      f"{what}.timestamp_utc")
@@ -1971,19 +2147,7 @@ def require_topology(document, what: str) -> None:
             f"artifact root {root}; `probe_flake.new_invocation_dir` creates "
             f"it as a DIRECT child of the root, so this pair was not "
             f"produced by a harness run")
-    generated = INVOCATION_DIR_RE.fullmatch(invocation.name)
-    problem = None
-    if generated is None:
-        problem = "it is not the generated shape"
-    elif generated["probe"] != document["probe"]:
-        problem = f"it names the probe {generated['probe']!r}"
-    else:
-        try:
-            datetime.strptime(generated["stamp"], INVOCATION_STAMP_FORMAT)
-        except ValueError:
-            problem = f"{generated['stamp']!r} is not a real UTC instant"
-        if problem is None and int(generated["pid"]) <= 0:
-            problem = f"{generated['pid']!r} is not a process id"
+    problem = invocation_name_problem(invocation.name, document["probe"])
     if problem is not None:
         raise HandoffError(
             f"{what} reports the invocation directory {invocation.name!r}: "
@@ -2759,18 +2923,14 @@ def _require_repair(document, verification_section, *,
     repair = document.get("repair")
     if not isinstance(repair, dict):
         raise HandoffError("a repair route records its `repair` block")
-    commit = repair.get("commit_sha")
-    if not isinstance(commit, str) or not COMMIT_RE.fullmatch(commit):
-        raise HandoffError(
-            f"the repair names no resolved commit ({commit!r}); the repair "
-            f"is committed and frozen BEFORE it is verified")
-    base = repair.get("base_sha")
-    if not isinstance(base, str) or not COMMIT_RE.fullmatch(base):
-        raise HandoffError(
-            f"the repair names no resolved base commit ({base!r}); the "
-            f"repair worktree is created from the SAME SHA as the clean "
-            f"comparison worktree, and a repair whose lineage is unstated "
-            f"cannot be shown to share one")
+    commit = require_commit(
+        repair.get("commit_sha"), "the repair's `commit_sha`",
+        because="the repair is committed and frozen BEFORE it is verified")
+    base = require_commit(
+        repair.get("base_sha"), "the repair's `base_sha`",
+        because="the repair worktree is created from the SAME SHA as the "
+                "clean comparison worktree, and a repair whose lineage is "
+                "unstated cannot be shown to share one")
     if base != baseline_sha:
         raise HandoffError(
             f"the repair is based on {base} while the controlled baseline "

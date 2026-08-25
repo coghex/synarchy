@@ -35,6 +35,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import types
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -822,11 +823,65 @@ def test_a_pass_run_carrying_a_failed_check_is_refused() -> None:
 
 
 def test_an_unresolved_commit_is_not_evidence() -> None:
+    """`probe_flake` writes the literal `unknown` when git was unreachable.
+
+    That is a well-formed result FIELD — the declared schema accepts it,
+    and `probe_census.require_commit_identity` refuses it BY NAME rather
+    than by failing a hex test. Diagnosis evidence needs the identity,
+    so the placeholder is malformed input here; a `/deflake`-produced
+    record can never carry one, because `deflake._require_commit`
+    already refuses to record such a measurement.
+    """
     document = handoff_document(result=result_document(
         runs=failing_runs(3), commit="unknown"))
     expect_rejected(lambda: dd.require_handoff(document),
-                    "does not name a resolved commit",
-                    "a result document with no commit")
+                    "is the placeholder 'unknown'",
+                    "a result document carrying the placeholder commit")
+
+    for field in ("commit_sha", "base_sha"):
+        document = diagnosis_document()
+        document["repair"][field] = "unknown"
+        expect_rejected(lambda d=document: evaluate(d),
+                        "is the placeholder 'unknown'",
+                        f"a repair whose {field} is the placeholder")
+
+
+def test_commit_identity_is_delegated_rather_than_reimplemented() -> None:
+    """One grammar, `probe_census`'s, exactly as `timestamp_utc` is.
+
+    A second local copy could drift into accepting a batch the producer
+    and the census both reject. The delegation is asserted directly —
+    the helper is called and its `CensusError` is converted — because a
+    reimplementation that happened to agree today would satisfy every
+    behavioural case above while still being a second grammar.
+    """
+    calls = []
+    original = probe_census.require_commit_identity
+
+    def recording(value, what):
+        calls.append((value, what))
+        return original(value, what)
+
+    probe_census.require_commit_identity = recording
+    try:
+        evaluate(diagnosis_document())
+    finally:
+        probe_census.require_commit_identity = original
+    expect(calls, "every commit identity goes through probe_census")
+    expect(any(what.endswith("commit_sha") for _v, what in calls),
+           f"including the result documents' own: {[w for _v, w in calls]}")
+
+    # And the census's own refusal reaches the caller as a controlled
+    # malformed-input rejection, never as an escaping `CensusError`.
+    try:
+        dd.require_commit("nope", "a field", because="because")
+    except dd.HandoffError as error:
+        expect("because" in str(error),
+               f"the refusal says why the field matters: {error}")
+    except probe_census.CensusError:  # pragma: no cover - the bug this pins
+        expect(False, "a CensusError escaped instead of a HandoffError")
+    else:
+        expect(False, "an invalid identity was accepted")
 
 
 # ==========================================================================
@@ -1172,7 +1227,7 @@ def test_the_repair_must_be_cut_from_that_same_commit() -> None:
     document = diagnosis_document()
     del document["repair"]["base_sha"]
     expect_rejected(lambda: evaluate(document),
-                    "names no resolved base commit",
+                    "must be a commit hash string",
                     "a repair whose lineage is unstated")
 
     document = diagnosis_document()
@@ -1610,13 +1665,16 @@ def test_only_a_python_three_interpreter_is_accepted() -> None:
 
     Bare `python` is refused for a different reason: it is whichever of
     the two that machine happens to mean, which a document cannot settle.
+    A token that is not a version-qualified `python3` at all — `pypy`,
+    `python4x`, a bare `sh` — never names the interpreter these
+    documents quote.
     """
     for program in ("python", "python2", "python2.7", "pypy", "python4x"):
         document = diagnosis_document()
         document["baseline"]["invocation"] = invocation(
             cmd=[program] + command()[1:])
         expect_rejected(lambda d=document: evaluate(d),
-                        "not the interpreter this lab records",
+                        "is not a Python 3 interpreter token",
                         f"a command run by {program!r}")
 
     document = diagnosis_document()
@@ -1627,36 +1685,100 @@ def test_only_a_python_three_interpreter_is_accepted() -> None:
            f"'python3' is the recorded spelling; got {outcome.route}")
 
 
-def test_a_versioned_interpreter_is_not_a_recorded_command() -> None:
-    """`python3.9 tools/probe_flake.py` is a command nobody here types.
+def test_a_version_qualified_interpreter_names_the_same_program() -> None:
+    """`python3.12` is `python3` said precisely, not a different tool.
 
-    Every tracked invocation of either launcher spells the interpreter
-    bare — both CI files, `tools/README.md`, and `probe_flake.py`'s own
-    `--describe` subprocess — so a versioned spelling names a path no
-    tracked caller could have taken, whatever version it names. The
-    check is deliberately NOT a minimum-version floor: this repository
-    declares no minimum, and every one of these sources opens with
-    `from __future__ import annotations`, so its `X | None` annotations
-    parse far below any floor that could be written here.
+    A machine with several Python 3 installations spells the one it
+    means with its version, and that command runs exactly the program a
+    correctly-pointed `python3` would have run. Refusing the spelling
+    outright would reject a truthful record for naming its interpreter
+    more exactly than the bare form does.
 
-    Changing EVERY recorded command consistently is the mutation that
-    matters — a single altered record is already caught by the
-    same-environment comparison, which would make this rule look
-    enforced when only that one was.
+    Both controlled commands are changed together, because a single
+    altered record is already caught by the same-environment comparison
+    — which would make this rule look enforced when only that one was.
     """
-    for program in ("python3.9", "python3.12", "python3.14.2", "python3."):
+    for program in ("python3.10", "python3.12", "python3.10.4",
+                    f"python3.{dd.INTERPRETER_MINOR_FLOOR}"):
         document = diagnosis_document()
         for batch in ("baseline", "verification"):
-            document[batch]["invocation"] = invocation(
-                cmd=[program] + command()[1:])
+            recorded = document[batch]["invocation"]
+            recorded["command"] = [program] + recorded["command"][1:]
+        outcome = evaluate(document)
+        expect(outcome.route == dd.ROUTE_REPAIR,
+               f"{program!r} is at or above the floor; got {outcome.route}")
+
+
+def test_an_interpreter_below_the_syntax_floor_could_not_have_run_it() -> None:
+    """`python3.9` names a version that cannot run the program quoting it.
+
+    The floor is DERIVED, not invented: the shipped tools annotate with
+    `X | None`, and while `from __future__ import annotations` defers the
+    ones in signatures, nothing defers a type evaluated at runtime — so
+    3.10 is where these sources stop being runnable rather than merely
+    parseable. A record naming an older interpreter describes a run that
+    could not have produced the document.
+    """
+    for program in ("python3.0", "python3.6", "python3.9", "python3.9.18"):
+        document = diagnosis_document()
+        for batch in ("baseline", "verification"):
+            recorded = document[batch]["invocation"]
+            recorded["command"] = [program] + recorded["command"][1:]
         expect_rejected(lambda d=document: evaluate(d),
-                        "not the interpreter this lab records",
+                        "below this lab's 3.10 syntax floor",
                         f"every controlled command run by {program!r}")
 
-    # The handoff records `sys.argv`, which has no interpreter token to
-    # version — putting one there is refused as the wrong FORM, which is
-    # a stronger statement than refusing the version.
-    for program in ("python3", "python3.9"):
+    expect(dd.INTERPRETER_MINOR_FLOOR == 10,
+           f"the floor is 3.10, the version `X | None` needs; got "
+           f"3.{dd.INTERPRETER_MINOR_FLOOR}")
+
+
+def test_a_malformed_version_token_is_not_an_interpreter() -> None:
+    """A version is a dotted run of digits, with no second spelling.
+
+    `python3.010` and `python3.10` would name one interpreter two ways,
+    and diagnosis evidence gets one canonical spelling per interpreter
+    for the same reason a duplicated option is refused. `python3.` and
+    `python3.x` name no version at all.
+    """
+    for program in ("python3.", "python3.x", "python3..10", "python3.010",
+                    "python3.10.", "python3.10.04", "python3.-1"):
+        document = diagnosis_document()
+        for batch in ("baseline", "verification"):
+            recorded = document[batch]["invocation"]
+            recorded["command"] = [program] + recorded["command"][1:]
+        expect_rejected(lambda d=document: evaluate(d),
+                        "is not a Python 3 interpreter token",
+                        f"every controlled command run by {program!r}")
+
+
+def test_a_path_qualified_interpreter_is_refused_whatever_it_names() -> None:
+    """The token is a bare name resolved through `PATH`.
+
+    A document cannot show which binary sits at an arbitrary path, so
+    the rejection is about the SHAPE of the token and does not depend on
+    the version it appears to name — `/usr/bin/python3.12` is refused
+    exactly as `/tmp/counterfeit/python3` is.
+    """
+    for program in ("/usr/bin/python3", "/usr/bin/python3.12",
+                    "/tmp/counterfeit/python3", "./python3",
+                    "../bin/python3.11"):
+        document = diagnosis_document()
+        document["baseline"]["invocation"] = invocation(
+            cmd=[program] + command()[1:])
+        expect_rejected(lambda d=document: evaluate(d),
+                        "runs the interpreter by path",
+                        f"a command run by {program!r}")
+
+
+def test_a_handoff_argv_carries_no_interpreter_token_at_all() -> None:
+    """`sys.argv[0]` is the SCRIPT, whatever the interpreter was called.
+
+    Putting a token there is refused as the wrong FORM, which is a
+    stronger statement than refusing its version — and it holds for an
+    accepted spelling exactly as for a below-floor one.
+    """
+    for program in ("python3", "python3.12", "python3.9"):
         document = handoff_document()
         document["invocation"]["argv"] = (
             [program] + document["invocation"]["argv"])
@@ -1669,8 +1791,10 @@ def test_an_identity_with_a_trailing_newline_is_not_an_identity() -> None:
     """`re.match` with `$` is not full-string validation.
 
     `$` matches immediately before a final newline, so a 40-character
-    hash spelled `"<sha>\n"` satisfies `COMMIT_RE.match` while being no
-    Git SHA at all. Every identity in the document is mutated together,
+    hash spelled `"<sha>\n"` satisfies a `re.match` anchored with `$`
+    while being no Git SHA at all — which is why
+    `probe_census.require_commit_identity` compares the whole string.
+    Every identity in the document is mutated together,
     because a document that spells one that way spells all of them that
     way — and a single altered field would be caught by the equality
     comparisons instead, hiding whether this rule is enforced.
@@ -1679,19 +1803,19 @@ def test_an_identity_with_a_trailing_newline_is_not_an_identity() -> None:
     document["handoff"]["result"]["commit_sha"] += "\n"
     document["baseline"]["result"]["commit_sha"] += "\n"
     expect_rejected(lambda d=document: evaluate(d),
-                    "does not name a resolved commit",
+                    "must be 40 lowercase hex characters",
                     "a measurement commit with a trailing newline")
 
     document = diagnosis_document()
     document["repair"]["commit_sha"] += "\n"
     expect_rejected(lambda d=document: evaluate(d),
-                    "names no resolved commit",
+                    "must be 40 lowercase hex characters",
                     "a repair commit with a trailing newline")
 
     document = diagnosis_document()
     document["repair"]["base_sha"] += "\n"
     expect_rejected(lambda d=document: evaluate(d),
-                    "names no resolved base commit",
+                    "must be 40 lowercase hex characters",
                     "a repair base commit with a trailing newline")
 
 
@@ -1909,13 +2033,37 @@ def test_a_repair_may_not_change_the_measurement_apparatus() -> None:
                         "measurement apparatus",
                         f"a repair that changed {module}")
 
-    expect("tools/probe_flake.py" in dd.HARNESS_MODULES
-           and "tools/probe_protocol.py" in dd.HARNESS_MODULES
-           and "tools/deflake.py" in dd.HARNESS_MODULES,
-           f"the apparatus names the tools that decide what a run IS: "
-           f"{dd.HARNESS_MODULES}")
+    # The inventory is CLOSED and pinned exactly, not spot-checked: a
+    # spot check passes while a module quietly leaves the list, and
+    # leaving one out is precisely how a repair would reach the
+    # apparatus. Every path owns probe selection, launch, port or
+    # resource leasing, protocol reconciliation, measurement timing and
+    # construction, result recording or census intake, or diagnosis
+    # semantics.
+    expect(dd.HARNESS_MODULES == (
+        "tools/probe_flake.py",
+        "tools/probe_protocol.py",
+        "tools/probe_census.py",
+        "tools/probe_claim.py",
+        "tools/probe_resource_lock.py",
+        "tools/probe_select.py",
+        "tools/probe_engine.py",
+        "tools/probelib.py",
+        "tools/run_probes.py",
+        "tools/deflake.py",
+        "tools/deflake_diagnosis.py",
+    ), f"the measurement apparatus is exactly this inventory: "
+       f"{dd.HARNESS_MODULES}")
     expect("tools/role_probe.py" not in dd.HARNESS_MODULES,
            "and not the probes it runs")
+
+    # Every named path ships, so the inventory cannot drift into
+    # excluding a module that no longer exists while a renamed
+    # replacement goes unguarded.
+    tools = Path(TOOL).parent
+    for module in dd.HARNESS_MODULES:
+        expect((tools.parent / module).is_file(),
+               f"{module} is a real tracked module")
 
 
 def test_the_defaults_no_command_line_names_are_pinned() -> None:
@@ -2068,6 +2216,268 @@ def test_a_generated_directory_name_names_a_real_instant_and_process() -> None:
                         f"an invocation directory with {label}")
 
 
+def test_a_malformed_record_is_refused_rather_than_crashing() -> None:
+    """A validator that raises on its own input has refused nothing.
+
+    `int(digits)` reads naturally and is a liveness bug on both paths
+    that once used it: CPython caps integer-from-string conversion at
+    4,300 digits and raises `ValueError` past it, so a version component
+    or a pid of five thousand digits escaped as a traceback out of the
+    very code that exists to refuse it. Both are compared without
+    converting now, so an absurd digit run gets the controlled answer.
+    """
+    absurd = "9" * 6000
+    problem = dd.interpreter_problem(f"python3.{absurd}")
+    expect(problem is None,
+           f"an absurdly long version is above the floor, not a crash: "
+           f"{problem}")
+    problem = dd.interpreter_problem(f"python3.{'0' * 5999}9")
+    expect(problem is not None and "is not a Python 3 interpreter token"
+           in problem,
+           f"and a leading-zero one is malformed, not a crash: {problem}")
+
+    name = f"{PROBE}-20260821T120000Z-{absurd}-abcdef12"
+    expect(dd.invocation_name_problem(name, PROBE) is None,
+           "an absurdly long pid is a positive one, not a crash")
+    name = f"{PROBE}-20260821T120000Z-{'0' * 6000}-abcdef12"
+    problem = dd.invocation_name_problem(name, PROBE)
+    expect(problem is not None and "is not a process id" in problem,
+           f"and an all-zero one is refused, not a crash: {problem}")
+
+    # End to end, because the value of this is that `evaluate` answers.
+    document = diagnosis_document()
+    token = f"python3.{'0' * 20}1"
+    for batch in ("baseline", "verification"):
+        recorded = document[batch]["invocation"]
+        recorded["command"] = [token] + recorded["command"][1:]
+    expect_rejected(lambda d=document: evaluate(d),
+                    "is not a Python 3 interpreter token",
+                    "a controlled command with an absurd version token")
+
+
+def test_only_ascii_digits_spell_a_generated_directory() -> None:
+    """`\\d` in a `str` pattern matches every Unicode decimal digit.
+
+    The harness writes this name from `strftime` and an f-string over
+    `os.getpid()`, both of which emit ASCII and nothing else, so a name
+    carrying Arabic-Indic or fullwidth digits was not written by the
+    measurement it claims to describe — and `\\d+` accepted one while
+    `int()` happily read it as a number.
+    """
+    for label, name in (
+            ("an Arabic-Indic pid",
+             f"{PROBE}-20260821T120000Z-\u0664\u0667-abcdef12"),
+            ("a fullwidth pid",
+             f"{PROBE}-20260821T120000Z-\uff14\uff17-abcdef12"),
+            ("an Arabic-Indic stamp",
+             f"{PROBE}-\u0662\u0660\u0662\u0666\u0660\u0668\u0662\u0661"
+             f"T120000Z-4711-abcdef12")):
+        expect(dd.invocation_name_problem(name, PROBE) is not None,
+               f"{label} is not a generated name: {name!r}")
+
+    expect(dd.INVOCATION_PID_RE.pattern == "[0-9]+"
+           and dd.INVOCATION_STAMP_RE.pattern == "[0-9]{8}T[0-9]{6}Z",
+           f"both patterns are ASCII-only: {dd.INVOCATION_PID_RE.pattern}, "
+           f"{dd.INVOCATION_STAMP_RE.pattern}")
+
+
+def test_the_generated_name_is_split_from_the_right() -> None:
+    """The three generated fields come off the END; the probe stays whole.
+
+    Every probe key registered today is lowercase `[a-z0-9_]` with no
+    hyphen, so a left-to-right split happens to agree — but it would
+    misattribute part of a hyphenated key to the stamp field the day one
+    were registered, and then compare that fragment to the document's
+    probe. Right-anchoring is unambiguous whatever the key contains.
+
+    Driven through `invocation_name_problem` directly, because the
+    behaviour only DIFFERS for a probe key this repository does not
+    register, which no end-to-end fixture could carry.
+    """
+    stamp, pid, unique = "20260821T120000Z", "4711", "abcdef12"
+    for key in ("role", "blood_gpu_lifecycle", "a-hyphenated-key", "a-b"):
+        name = f"{key}-{stamp}-{pid}-{unique}"
+        expect(dd.invocation_name_problem(name, key) is None,
+               f"{name!r} is {key!r}'s own generated directory")
+        # A left-to-right split would have read `a` as the probe here and
+        # accepted it for a document whose probe is `a`.
+        head = key.split("-", 1)[0]
+        if head != key:
+            expect(dd.invocation_name_problem(name, head) is not None,
+                   f"{name!r} does not belong to the probe {head!r}")
+
+    for label, name in (
+            ("too few fields", f"{PROBE}-{stamp}-{pid}"),
+            ("an empty probe segment", f"-{stamp}-{pid}-{unique}"),
+            ("a uuid that is not hex", f"{PROBE}-{stamp}-{pid}-abcdefgh"),
+            ("a uuid of the wrong length", f"{PROBE}-{stamp}-{pid}-abcdef1"),
+            ("a pid that is not a number", f"{PROBE}-{stamp}-pid-{unique}"),
+            ("a stamp of the wrong shape", f"{PROBE}-2026-08-21-{unique}")):
+        expect(dd.invocation_name_problem(name, PROBE) is not None,
+               f"{label} is not a generated name: {name!r}")
+
+
+def test_both_spellings_of_a_value_taking_option_are_read() -> None:
+    """`--runs 10` and `--runs=10` are one option to argparse, so to this.
+
+    Read as a bare flag instead, `--runs=10` would leave the command
+    naming no run count at all and be refused for a requiredness it
+    satisfies. The VALUE has to survive the spelling too, which is why
+    the accepted case is driven all the way through the binding that
+    compares it to the result document.
+    """
+    document = diagnosis_document()
+    document["baseline"]["invocation"] = invocation(cmd=[
+        "python3", f"{CLEAN_WT}/tools/probe_flake.py",
+        f"--probe={PROBE}", f"--runs={dd.RUN_COUNT}",
+        f"--rts-caps={dd.RTS_CAPABILITIES}",
+        f"--result={OUTSIDE}/baseline.json",
+        f"--artifact-root={OUTSIDE}/artifacts"])
+    outcome = evaluate(document)
+    expect(outcome.route == dd.ROUTE_REPAIR,
+           f"the inline spelling is the same command; got {outcome.route}")
+
+    # And the value really is read, rather than the option merely being
+    # seen: a wrong one is bound to the result document and refused.
+    document = diagnosis_document()
+    document["baseline"]["invocation"] = invocation(cmd=[
+        "python3", f"{CLEAN_WT}/tools/probe_flake.py",
+        f"--probe={PROBE}", f"--runs={dd.RUN_COUNT + 1}",
+        f"--rts-caps={dd.RTS_CAPABILITIES}",
+        f"--result={OUTSIDE}/baseline.json",
+        f"--artifact-root={OUTSIDE}/artifacts"])
+    expect_rejected(lambda d=document: evaluate(d),
+                    "where its own result document reports",
+                    "an inline --runs that disagrees with its own result")
+
+
+def _zero_run_batch(token: str = "0", requested: int = 0) -> dict:
+    """A baseline whose command and result agree on a count `measure` refuses.
+
+    They have to agree: a `--runs 0` beside a normal ten-run document is
+    already refused by the command-to-result binding, which would make
+    the positivity rule look enforced when it was not.
+    """
+    document = diagnosis_document()
+    document["baseline"]["invocation"] = invocation(cmd=[
+        "python3", f"{CLEAN_WT}/tools/probe_flake.py", "--probe", PROBE,
+        "--runs", token, "--rts-caps", str(dd.RTS_CAPABILITIES),
+        "--result", f"{OUTSIDE}/baseline.json",
+        "--artifact-root", f"{OUTSIDE}/artifacts"])
+    document["baseline"]["result"] = result_document(runs=[],
+                                                     requested=requested)
+    return document
+
+
+def test_a_recorded_count_carries_the_producers_positive_constraint()\
+        -> None:
+    """`type=int` accepts `0` and `-3`; `measure` refuses both.
+
+    `probe_flake.measure` raises before it resolves a probe or opens a
+    port, so a recorded non-positive count describes a command that
+    measured nothing. Left to the comparison downstream it would be a
+    diagnosis ROUTE — "the baseline did not replay the handoff's
+    conditions" — which reports a disagreement between two measurements
+    where only one of them exists.
+    """
+    expect_rejected(lambda: evaluate(_zero_run_batch()),
+                    "must be a positive count",
+                    "a baseline command with --runs 0")
+
+    # Zero is the only non-positive count reachable end to end: the
+    # declared schema already floors `requested_runs` at zero, so a
+    # NEGATIVE command value can never agree with a schema-valid result
+    # document, and pairing it with a zero one would be refused by the
+    # command-to-result binding instead. Driven through the parse
+    # itself, which is where the constraint lives.
+    for token in ("0", "-1", "-10"):
+        expect_rejected(
+            lambda t=token: dd._integer(t, "a count", positive=True),
+            "must be a positive count",
+            f"a parsed count of {token}")
+        expect(dd._integer(token, "a count") == int(token),
+               f"and {token} is still a perfectly good integer otherwise")
+
+    for token in ("0", "-4"):
+        document = diagnosis_document()
+        document["baseline"]["invocation"] = invocation(
+            cmd=[*_command_without("--rts-caps"), "--rts-caps", token])
+        expect_rejected(lambda d=document: evaluate(d),
+                        "must be a positive count",
+                        f"a baseline command with --rts-caps {token}")
+
+    expect(dd.POSITIVE_OPTIONS == ("--runs", "--rts-caps"),
+           f"both of the harness's integer options carry it: "
+           f"{dd.POSITIVE_OPTIONS}")
+    expect(dd.HARNESS_LAUNCHER.positive == frozenset(dd.POSITIVE_OPTIONS),
+           "and the launcher declares them")
+    # `/deflake` exposes no integer option at all, so it declares none.
+    expect(dd.DEFLAKE_LAUNCHER.positive == frozenset(),
+           f"`/deflake` constrains no command-line integer: "
+           f"{dd.DEFLAKE_LAUNCHER.positive}")
+
+
+def test_an_option_may_not_be_repeated() -> None:
+    """Argparse would keep the last value; evidence gets one spelling.
+
+    `--runs 10 --runs 3` reads as three runs to the shipped tool and as
+    ten to anyone reading the record left to right, so a duplicate is
+    refused rather than resolved. It holds for both grammars, and for a
+    flag as well as for a value-taking option.
+    """
+    for label, extra in (
+            ("a repeated --runs", ["--runs", str(dd.RUN_COUNT)]),
+            ("a repeated --probe", ["--probe", PROBE]),
+            ("a repeated --result", ["--result", f"{OUTSIDE}/baseline.json"]),
+            ("a repeated --rts-caps",
+             ["--rts-caps", str(dd.RTS_CAPABILITIES)]),
+            ("a repeated --artifact-root",
+             ["--artifact-root", f"{OUTSIDE}/artifacts"]),
+            # The inline spelling is the same option, not a second one.
+            ("--runs twice, spelled two ways", [f"--runs={dd.RUN_COUNT}"])):
+        document = diagnosis_document()
+        document["baseline"]["invocation"] = invocation(
+            cmd=command() + extra)
+        expect_rejected(lambda d=document: evaluate(d), "repeats",
+                        f"a baseline command with {label}")
+
+    for label, extra in (("a repeated --json", ["--json"]),
+                         ("a repeated --result",
+                          ["--result", f"{OUTSIDE}/handoff.json"])):
+        document = handoff_document()
+        document["invocation"]["argv"] = (
+            list(document["invocation"]["argv"]) + extra)
+        expect_rejected(lambda d=document: dd.require_handoff(d), "repeats",
+                        f"a handoff argv with {label}")
+
+
+def test_a_harness_error_run_must_still_have_its_logs() -> None:
+    """`stop_with_harness_error` is its only constructor and always passes one.
+
+    `RunRecord.to_document` makes `artifact_dir` nullable because a
+    PASSING run has none, so a null on the error run is a shape the
+    schema permits and the harness never wrote — and it is the one run
+    whose logs say why the stream broke.
+    """
+    result = result_document(runs=failing_runs(3), harness_error=True)
+    retained = result["error_run"]["artifact_dir"]
+    expect(retained, "the fixture's error run retains its directory")
+    # A harness-error batch is not a usable comparison side, so this is
+    # driven through the retention rule itself rather than through the
+    # gate, which would refuse the fixture for the batch's status first
+    # and hide whether the null case is checked at all.
+    dd.require_result(copy.deepcopy(result), "a harness-error result")
+
+    stripped = copy.deepcopy(result)
+    stripped["error_run"]["artifact_dir"] = None
+    stripped["retained_artifacts"] = [entry for entry
+                                      in stripped["retained_artifacts"]
+                                      if entry != retained]
+    expect_rejected(lambda d=stripped: dd.require_result(d, "a result"),
+                    "a failure whose logs are gone",
+                    "a harness-error run that kept no artifacts")
+
+
 def test_a_measurements_timestamp_is_an_instant() -> None:
     """Delegated to `probe_census.parse_timestamp`, the shipped reader."""
     for label, stamp in (("an impossible date", "2026-99-99T99:99:99Z"),
@@ -2107,7 +2517,7 @@ def test_a_fabricated_argv_is_not_a_harness_invocation() -> None:
              ["python3", f"{CLEAN_WT}/tools/probe_flake.py", "extra",
               "--probe", PROBE, "--runs", "10",
               "--result", f"{OUTSIDE}/b.json"]),
-            ("no script at all", "not the interpreter this lab records",
+            ("no script at all", "is not a Python 3 interpreter token",
              ["--probe", PROBE, "--runs", "10"]),
             # The right SHAPE, running something that measures nothing.
             ("a program that is not an interpreter",
@@ -2122,7 +2532,7 @@ def test_a_fabricated_argv_is_not_a_harness_invocation() -> None:
              ["python3", "/tmp/counterfeit/probe_flake.py",
               "--probe", PROBE, "--runs", "10",
               "--result", f"{OUTSIDE}/b.json"]),
-            ("a shell", "not the interpreter this lab records",
+            ("a shell", "is not a Python 3 interpreter token",
              ["sh", f"{CLEAN_WT}/tools/probe_flake.py",
               "--probe", PROBE, "--runs", "10"]),
             # Order is part of the grammar: Python rejects an option it
@@ -3317,7 +3727,8 @@ def test_a_repair_with_no_resolved_commit_is_refused() -> None:
     document = diagnosis_document(repair={"commit_sha": "HEAD",
                                           "base_sha": BASE_COMMIT,
                                           "changed_paths": ["tools/x.py"]})
-    expect_rejected(lambda: evaluate(document), "names no resolved commit",
+    expect_rejected(lambda: evaluate(document),
+                    "must be 40 lowercase hex characters",
                     "a repair with no commit")
 
 
@@ -3590,6 +4001,587 @@ def test_x_arithmetic_is_delegated_rather_than_reimplemented() -> None:
            "the tolerance comparison is the census policy's own")
     expect("probe_census.require_acceptable_failures" in source,
            "and so is X's validation")
+
+
+# ==========================================================================
+# Mutation evidence
+# ==========================================================================
+# Every provenance invariant below is asserted twice: once by a rejection
+# test above, and once here by NEUTRALISING exactly that invariant and
+# proving the same fixture is then ACCEPTED.
+#
+# The second half is what makes the first half evidence. A rejection test
+# passes just as happily when a DIFFERENT rule is what did the rejecting
+# — the fixture that violates an interpreter floor also, quite often,
+# violates a path binding — and then the invariant it claims to cover
+# could be deleted without a single test turning red. Bypassing one rule
+# at a time is the only way to show which rule each case actually holds.
+#
+# The bypass is a TEXTUAL edit to a private copy of the module source,
+# compiled into a throwaway module. Nothing in the shipped module exists
+# to support it: a production hook a test could flip would be a second
+# code path in the thing under test, which is exactly what this suite is
+# for catching.
+def mutant(anchor: str, replacement: str):
+    """`deflake_diagnosis` with one invariant neutralised, as a module.
+
+    The anchor must appear EXACTLY once. A silently-missed replacement
+    would produce an unmodified module, whose faithful rejection would
+    then read as "the bypass changed nothing" — evidence for the
+    invariant where none was gathered — so a drifted anchor is a loud
+    failure rather than a quiet pass.
+    """
+    source = Path(dd.__file__).read_text(encoding="utf-8")
+    found = source.count(anchor)
+    if found != 1:
+        raise AssertionError(
+            f"the mutation anchor appears {found} times, not once: "
+            f"{anchor!r}. It has drifted from the module and this case is "
+            f"gathering no evidence.")
+    module = types.ModuleType(f"deflake_diagnosis_mutant_{abs(hash(anchor))}")
+    module.__file__ = dd.__file__
+    exec(compile(source.replace(anchor, replacement), dd.__file__, "exec"),
+         module.__dict__)
+    return module
+
+
+def _through_evaluate(module, document):
+    return module.evaluate(document, worktrees=WORKTREES, primary=PRIMARY_WT)
+
+
+def _through_gate(module, document):
+    return module.require_handoff(document)
+
+
+def _refusal(module, document, run):
+    """The message `module` refuses `document` with, or `None`."""
+    try:
+        run(module, document)
+    except (module.HandoffError, module.RouteRefused) as error:
+        return str(error)
+    return None
+
+
+def check_mutation(label, fragment, anchor, replacement, build,
+                   run=_through_evaluate):
+    """One invariant, held to both halves of the mutation contract.
+
+    `build` returns a fresh document violating this invariant, and
+    `fragment` is what the rejection test above asserts. The shipped
+    module must refuse it naming that fragment; the module with this one
+    rule bypassed must NOT — which is precisely "bypassing only this
+    invariant makes its rejection test fail".
+
+    Usually the bypassed module accepts the document outright. Where one
+    invariant is nested inside a broader one — two batches that share an
+    invocation directory are also, necessarily, each writing inside the
+    other's — the bypassed module refuses for the OTHER reason, and the
+    rejection test still fails because it is asserting on the message.
+    Both outcomes are reported distinctly so a reader can tell which
+    happened.
+    """
+    document = build()
+    refusal = _refusal(dd, document, run)
+    if refusal is None:
+        FAILURES.append(f"{label}: the shipped module ACCEPTED the fixture, "
+                        f"so this case proves nothing")
+        return
+    if fragment not in refusal:
+        FAILURES.append(f"{label}: the shipped module refused the fixture for "
+                        f"{refusal!r} rather than {fragment!r}, so the "
+                        f"fixture does not isolate this invariant")
+        return
+    try:
+        bypassed = mutant(anchor, replacement)
+    except AssertionError as error:
+        FAILURES.append(f"{label}: {error}")
+        return
+    after = _refusal(bypassed, build(), run)
+    if after is not None and fragment in after:
+        FAILURES.append(
+            f"{label}: with this invariant bypassed the fixture is still "
+            f"refused for {after!r}, so the rejection test above is held up "
+            f"by some OTHER rule and this invariant is unevidenced")
+
+
+def _relaunched(program: str) -> dict:
+    """Both controlled commands relaunched under `program`."""
+    document = diagnosis_document()
+    for batch in ("baseline", "verification"):
+        recorded = document[batch]["invocation"]
+        recorded["command"] = [program] + recorded["command"][1:]
+    return document
+
+
+def _baseline_command(*tokens) -> dict:
+    document = diagnosis_document()
+    document["baseline"]["invocation"] = invocation(cmd=list(tokens))
+    return document
+
+
+def _relocate_artifacts(result, old: str, new: str) -> dict:
+    """Respell every artifact-derived path in `result`, consistently.
+
+    A fixture that changed one of them would violate the topology rule
+    as well as whatever it meant to test, and the mutation harness would
+    correctly report that it proves nothing.
+    """
+    result["artifact_root"] = result["artifact_root"].replace(old, new)
+    result["invocation_dir"] = result["invocation_dir"].replace(old, new)
+    for run in result["runs"] + ([result["error_run"]]
+                                 if result.get("error_run") else []):
+        if run.get("artifact_dir"):
+            run["artifact_dir"] = run["artifact_dir"].replace(old, new)
+    result["retained_artifacts"] = [entry.replace(old, new)
+                                    for entry in result["retained_artifacts"]]
+    return result
+
+
+def _command_without(option: str) -> list:
+    tokens = command()
+    index = tokens.index(option)
+    return tokens[:index] + tokens[index + 2:]
+
+
+def _require_result(module, document):
+    return module.require_result(document, "a result")
+
+
+def _deflake_argv_without_json(*extra) -> dict:
+    document = handoff_document()
+    document["invocation"]["argv"] = [
+        token for token in document["invocation"]["argv"]
+        if token != "--json"] + list(extra)
+    return document
+
+
+def test_the_interpreter_floor_is_what_refuses_an_old_interpreter() -> None:
+    check_mutation(
+        "the 3.10 syntax floor",
+        "below this lab's 3.10 syntax floor",
+        "    if minor is not None and _below(minor, "
+        "INTERPRETER_MINOR_FLOOR):",
+        "    if False:",
+        lambda: _relaunched("python3.9"))
+
+
+def test_the_interpreter_grammar_is_what_refuses_another_program() -> None:
+    check_mutation(
+        "the interpreter token grammar",
+        "is not a Python 3 interpreter token",
+        "    matched = INTERPRETER_RE.fullmatch(program)",
+        '    matched = INTERPRETER_RE.fullmatch("python3")',
+        lambda: _relaunched("pypy"))
+
+
+def test_the_bare_name_rule_is_what_refuses_a_path_qualified_interpreter()\
+        -> None:
+    """Bypassing it means reading the token as the bare name it ends with.
+
+    The two interpreter rules cannot be separated by choosing a cleverer
+    fixture — no path-qualified token satisfies the grammar, because the
+    grammar admits no separator — so the bypass is what isolates them:
+    with the path rule gone, `/tmp/counterfeit/python3` is `python3`.
+    """
+    check_mutation(
+        "the bare-interpreter-name rule",
+        "runs the interpreter by path",
+        "    if os.sep in program or (os.altsep and os.altsep in program):",
+        "    program = os.path.basename(program)\n    if False:",
+        lambda: _relaunched("/tmp/counterfeit/python3"))
+
+
+def test_the_script_binding_is_what_refuses_a_counterfeit_tool() -> None:
+    check_mutation(
+        "the script-to-checkout binding",
+        "the checkout it declares keeps that tool at",
+        "        if not (_path_forms(script, base if base is not None "
+        "else root)\n                & _path_forms(expected)):",
+        "        if False:",
+        lambda: _baseline_command(
+            "python3", "/tmp/counterfeit/probe_flake.py", *command()[2:]))
+
+
+def test_the_option_surface_is_what_refuses_an_invented_option() -> None:
+    check_mutation(
+        "the closed option surface",
+        "does not accept",
+        "        if name not in found.options:",
+        "        if False:",
+        lambda: _baseline_command(*command(), "--timeout", "600"))
+
+
+def test_the_positional_rule_is_what_refuses_a_bare_token() -> None:
+    """Bypassing it means silently ignoring the token instead.
+
+    Reading it as an option name would only move the refusal to the
+    closed option surface, which is a different invariant with its own
+    case above.
+    """
+    check_mutation(
+        "the no-positionals rule",
+        "positional token",
+        '        if not token.startswith("--"):\n'
+        '            raise HandoffError(',
+        '        if not token.startswith("--"):\n'
+        '            index += 1\n'
+        '            continue\n'
+        '        if False:\n'
+        '            raise HandoffError(',
+        lambda: _baseline_command(*command(), "extra"))
+
+
+def test_the_arity_rule_is_what_refuses_a_value_on_a_flag() -> None:
+    check_mutation(
+        "flag arity",
+        "which is a flag",
+        '            if inline:\n'
+        '                raise HandoffError(\n'
+        '                    f"{what} passes a value to {name}, which is a '
+        'flag")',
+        '            if inline:\n'
+        '                pass',
+        lambda: _deflake_argv_without_json("--json=yes"),
+        run=_through_gate)
+
+
+def test_the_duplicate_rule_is_what_refuses_a_repeated_option() -> None:
+    check_mutation(
+        "duplicate-option rejection",
+        "repeats",
+        '            raise HandoffError(f"{what} repeats {name}")',
+        "            pass",
+        lambda: _baseline_command(*command(), "--runs", str(dd.RUN_COUNT)))
+
+
+def test_the_missing_value_rule_is_what_refuses_a_dangling_option() -> None:
+    """The dangling option is one the command does not already carry.
+
+    Repeating an option it does have would be refused as a duplicate — a
+    different invariant, with its own case above.
+    """
+    check_mutation(
+        "a value-taking option with no value",
+        "has no value",
+        '                raise HandoffError(f"{what}: {token} has no value")',
+        "                break",
+        lambda: _baseline_command(*_command_without("--artifact-root"),
+                                  "--artifact-root"))
+
+
+def test_the_required_rule_is_what_refuses_a_command_with_no_result() -> None:
+    check_mutation(
+        "required options",
+        "names no --result",
+        "    for option in found.required:",
+        "    for option in ():",
+        lambda: _baseline_command(*_command_without("--result")))
+
+
+def test_the_positive_rule_is_what_refuses_a_zero_run_count() -> None:
+    """Bypassed, the same record surfaces as a condition disagreement.
+
+    That is the exact failure the rule exists to prevent: a route
+    reporting that two measurements disagreed, when one of them was
+    never run.
+    """
+    check_mutation(
+        "the producer's positive-value constraint",
+        "must be a positive count",
+        "    if positive and number < 1:",
+        "    if False:",
+        _zero_run_batch)
+
+
+def test_the_integer_grammar_is_what_refuses_a_float_run_count() -> None:
+    check_mutation(
+        "argparse's own `int()` grammar",
+        "must be an integer",
+        "        number = int(value)",
+        "        number = int(float(value))",
+        lambda: _baseline_command(*_command_without("--runs"),
+                                  "--runs", f"{dd.RUN_COUNT}.0"))
+
+
+def test_canonical_spelling_is_what_refuses_a_traversal_path() -> None:
+    """Every artifact path is respelled together, so only spelling differs.
+
+    Changing one of them alone would move the invocation directory out
+    from under its own root, and the topology rule — not this one —
+    would be what refused the fixture.
+    """
+    check_mutation(
+        "resolve-canonical artifact paths",
+        "which is not the spelling",
+        "    if resolved != path:",
+        "    if False:",
+        lambda: handoff_document(result=_relocate_artifacts(
+            result_document(runs=failing_runs(3)),
+            f"{OUTSIDE}/artifacts", f"{OUTSIDE}/forged/../artifacts")),
+        run=_through_gate)
+
+
+def test_the_direct_child_rule_is_what_refuses_a_nested_invocation() -> None:
+    check_mutation(
+        "invocation_dir is a direct child of artifact_root",
+        "DIRECT child of the root",
+        "    if invocation.parent != root:",
+        "    if False:",
+        lambda: handoff_document(result=_relocate_artifacts(
+            result_document(runs=failing_runs(3)),
+            f"{OUTSIDE}/artifacts/{PROBE}",
+            f"{OUTSIDE}/artifacts/deeper/{PROBE}")),
+        run=_through_gate)
+
+
+def test_the_generated_name_rule_is_what_refuses_a_hand_made_directory()\
+        -> None:
+    check_mutation(
+        "the generated invocation-directory name",
+        "not a directory this measurement created",
+        "    problem = invocation_name_problem(invocation.name, "
+        'document["probe"])',
+        "    problem = None",
+        lambda: handoff_document(result=_relocate_artifacts(
+            result_document(runs=failing_runs(3)),
+            f"{PROBE}-20260821T120000Z-4711-abcdef12", f"{PROBE}-evidence")),
+        run=_through_gate)
+
+
+def test_the_run_index_rule_is_what_refuses_a_reordered_batch() -> None:
+    """The records are SWAPPED whole, so each keeps its own `run-NNN`.
+
+    Swapping only the index fields would put run 2's record in run 1's
+    directory, and the topology rule would refuse it first.
+    """
+    def build():
+        result = result_document(runs=failing_runs(3))
+        result["runs"][0], result["runs"][1] = (result["runs"][1],
+                                                result["runs"][0])
+        result["retained_artifacts"] = [run["artifact_dir"]
+                                        for run in result["runs"]
+                                        if run["artifact_dir"]]
+        return result
+
+    check_mutation("run indices are 1..len(runs)",
+        "numbers its runs",
+                   "    if indices != expected:", "    if False:",
+                   build, run=_require_result)
+
+
+def test_the_error_index_rule_is_what_refuses_a_stray_error_run() -> None:
+    """The error run's own directory moves with its index.
+
+    Leaving the directory behind would collide with a completed run's,
+    and the topology rule would be what refused the fixture.
+    """
+    def build():
+        result = result_document(runs=failing_runs(3), harness_error=True)
+        broken = result["error_run"]
+        stale = broken["artifact_dir"]
+        broken["index"] = len(result["runs"]) + 2
+        broken["artifact_dir"] = str(Path(result["invocation_dir"])
+                                     / f"run-{broken['index']:03d}")
+        result["retained_artifacts"] = [
+            broken["artifact_dir"] if entry == stale else entry
+            for entry in result["retained_artifacts"]]
+        return result
+
+    check_mutation(
+        "the harness-error run's index",
+        "numbers its harness-error run",
+        '    if isinstance(broken, dict) and broken["index"] != len(expected) '
+        '+ 1:',
+        "    if False:",
+        build, run=_require_result)
+
+
+def test_the_run_directory_rule_is_what_refuses_a_foreign_artifact_dir()\
+        -> None:
+    def build():
+        result = result_document(runs=failing_runs(3))
+        run = result["runs"][0]
+        elsewhere = f"{OUTSIDE}/artifacts/elsewhere/run-001"
+        result["retained_artifacts"] = [
+            elsewhere if entry == run["artifact_dir"] else entry
+            for entry in result["retained_artifacts"]]
+        run["artifact_dir"] = elsewhere
+        return result
+
+    check_mutation("every run directory is `invocation_dir/run-NNN`",
+        "every run directory is",
+                   "        if Path(directory) != expected:",
+                   "        if False:",
+                   build, run=_require_result)
+
+
+def test_the_retention_rule_is_what_refuses_a_kept_passing_run() -> None:
+    """The kept directory is NOT declared, so only this rule is violated.
+
+    Declaring it too would break the retained-list equality, which has
+    its own case below.
+    """
+    def build():
+        result = result_document(runs=failing_runs(3))
+        for run in result["runs"]:
+            if run["outcome"] == probe_flake.RUN_PASS:
+                run["artifact_dir"] = str(Path(result["invocation_dir"])
+                                          / f"run-{run['index']:03d}")
+                break
+        return result
+
+    check_mutation(
+        "a passing run keeps nothing",
+        "passed and still names the artifact directory",
+        "            if directory is not None:", "            if False:",
+        build, run=_require_result)
+
+
+def test_the_retention_rule_is_what_refuses_a_discarded_failure() -> None:
+    def build():
+        result = result_document(runs=failing_runs(3))
+        for run in result["runs"]:
+            if run["artifact_dir"]:
+                result["retained_artifacts"] = [
+                    entry for entry in result["retained_artifacts"]
+                    if entry != run["artifact_dir"]]
+                run["artifact_dir"] = None
+                break
+        return result
+
+    check_mutation(
+        "an unsuccessful run keeps everything",
+        "a failure whose logs are gone",
+        '        if directory is None:\n'
+        '            raise HandoffError(\n'
+        '                f"{where} did not pass',
+        '        if directory is None:\n'
+        '            continue\n'
+        '        if False:\n'
+        '            raise HandoffError(\n'
+        '                f"{where} did not pass',
+        build, run=_require_result)
+
+
+def test_the_retained_list_rule_is_what_refuses_a_shuffled_list() -> None:
+    """Ordered equality: a shuffled list names the same set, in no order.
+
+    The bypass compares the two as SETS, which is exactly the weakening
+    this rule exists to refuse — `Measurement.retained_artifacts` builds
+    the list in run order and the error run comes last.
+    """
+    def build():
+        result = result_document(runs=failing_runs(3))
+        result["retained_artifacts"] = list(
+            reversed(result["retained_artifacts"]))
+        return result
+
+    check_mutation(
+        "retained_artifacts is the ORDERED list of kept directories",
+        "naming evidence it does not have",
+        "    if list(declared) != retained:",
+        "    if sorted(declared) != sorted(retained):",
+        build, run=_require_result)
+
+
+def test_the_commit_delegation_is_what_refuses_a_placeholder_identity()\
+        -> None:
+    check_mutation(
+        "commit identity via probe_census",
+        "is the placeholder 'unknown'",
+        "        return probe_census.require_commit_identity(value, what)",
+        "        return value",
+        lambda: result_document(runs=failing_runs(3), commit="unknown"),
+        run=_require_result)
+
+
+def test_the_timestamp_delegation_is_what_refuses_a_shaped_non_instant()\
+        -> None:
+    def build():
+        result = result_document(runs=failing_runs(3))
+        result["timestamp_utc"] = "2026-99-99T99:99:99Z"
+        return result
+
+    check_mutation(
+        "timestamp via probe_census.parse_timestamp",
+        "records WHEN its baseline was measured",
+        '        probe_census.parse_timestamp(document.get("timestamp_utc"),',
+        '        _ = 0 and probe_census.parse_timestamp('
+        'document.get("timestamp_utc"),',
+        build, run=_require_result)
+
+
+def test_the_schema_delegation_is_what_refuses_an_impossible_result() -> None:
+    """A run that says PASS while its own check map carries a FAIL.
+
+    `probe_census.validate_result`'s rule and nothing local — which is
+    what makes the delegation load-bearing rather than decorative.
+    """
+    def build():
+        result = result_document(runs=failing_runs(3))
+        for run in result["runs"]:
+            if run["outcome"] == probe_flake.RUN_FAIL:
+                run["outcome"] = probe_flake.RUN_PASS
+                result["retained_artifacts"] = [
+                    entry for entry in result["retained_artifacts"]
+                    if entry != run["artifact_dir"]]
+                run["artifact_dir"] = None
+                break
+        return result
+
+    check_mutation(
+        "probe_census.validate_result",
+        "PASS",
+        "        probe_census.validate_result(document)",
+        "        pass",
+        build, run=_require_result)
+
+
+def test_the_containment_rule_is_what_refuses_a_shared_invocation_dir()\
+        -> None:
+    def build():
+        """Both batches default their root, so only the sharing is wrong.
+
+        Pointing the verification at the baseline's invocation directory
+        while it declared its own root would put that directory outside
+        the root it reports, and the direct-child rule would be what
+        refused the fixture.
+        """
+        def defaulted(section, tree, result):
+            section["invocation"] = invocation(
+                cmd=["python3", f"{tree}/tools/probe_flake.py",
+                     "--probe", PROBE, "--runs", str(dd.RUN_COUNT),
+                     "--rts-caps", str(dd.RTS_CAPABILITIES),
+                     "--result", result],
+                directory=tree)
+
+        document = diagnosis_document()
+        defaulted(document["baseline"], CLEAN_WT, f"{OUTSIDE}/baseline.json")
+        defaulted(document["verification"], REPAIR_WT,
+                  f"{OUTSIDE}/verify.json")
+        shared_root = f"{OUTSIDE}/defaulted"
+        document["baseline"]["result"] = result_document(
+            runs=failing_runs(4), artifact_root=shared_root)
+        document["verification"]["result"] = verification_result(
+            artifact_root=shared_root)
+        return document
+
+    check_mutation(
+        "the two batches hold distinct invocation directories",
+        "creates a fresh one per invocation",
+        "    if shared:", "    if False:", build)
+
+
+def test_the_apparatus_inventory_is_what_refuses_a_harness_repair() -> None:
+    check_mutation(
+        "the measurement-apparatus inventory",
+        "measurement apparatus",
+        "    apparatus = [path for path in changed if path in "
+        "HARNESS_MODULES]",
+        "    apparatus = []",
+        lambda: diagnosis_document(repair={
+            "commit_sha": REPAIR_COMMIT, "base_sha": BASE_COMMIT,
+            "changed_paths": ["tools/role_probe.py", "tools/probe_flake.py"]}))
 
 
 def main() -> int:
