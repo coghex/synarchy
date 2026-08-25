@@ -8,14 +8,14 @@ PR #714's modifier-lifetime fix, #712's semantic-name layer, #711's offscreen re
 
 ## Status
 
-- [ ] PRR-1. Persona flavoring marks empty or non-string model output as successful
+- [x] PRR-1. Persona flavoring marks empty or non-string model output as successful — [#1701]
 - [ ] PRR-2. The registered F4 behavior probe no longer passes on master
 - [ ] PRR-3. The critic can publish conflicting verdicts for one friction candidate
 - [ ] PRR-4. Lenient player replies crash the harness on valid non-object JSON
 
 ## 1. Persona flavor output validation
 
-### PRR-1. Persona flavoring marks empty or non-string model output as successful
+### [#1701] PRR-1. Persona flavoring marks empty or non-string model output as successful
 
 > **Captured note:** Validate the model's flavor object before freezing it into a persona. Empty or wrong-typed `name`/`blurb` values must not leave the deterministic template unchanged—or stringify `null`—while provenance claims that flavoring succeeded.
 
