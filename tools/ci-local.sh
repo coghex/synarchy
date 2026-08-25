@@ -245,6 +245,12 @@ python3 tools/world_check.py --quick
 # without this companion a reintroduced boot() on the listing path, a
 # mode dispatch that preempts --list again, or a silently empty inventory
 # would only ever be noticed by hand; the companion boots nothing.
+#
+# tools/test_deflake_diagnosis.py (#1437) is deliberately absent from
+# this list as well, and from the CI job it mirrors: that issue's
+# approved rereview amendment scopes the diagnosis lab's own self-test
+# to manual invocation. It is engine-free and takes seconds -- run it by
+# hand when touching tools/deflake_diagnosis.py.
 echo "==> [19/21] probe runner self-tests"
 python3 tools/ci_probes.py --self-test
 python3 tools/ci_expensive_gates.py --self-test

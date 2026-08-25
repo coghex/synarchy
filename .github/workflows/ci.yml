@@ -790,6 +790,12 @@ jobs:
       # preempts --list again, or a silently empty inventory would only
       # ever be caught by hand. It boots nothing and runs in well under
       # a second.
+      #
+      # tools/test_deflake_diagnosis.py (#1437) is deliberately absent
+      # too, and from tools/ci-local.sh's mirrored list: that issue's
+      # approved rereview amendment scopes the diagnosis lab's own
+      # self-test to manual invocation, so it is run by hand when
+      # tools/deflake_diagnosis.py changes rather than gated here.
       - name: probe runner self-tests
         run: |
           python3 tools/ci_probes.py --self-test

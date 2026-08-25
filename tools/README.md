@@ -1672,6 +1672,306 @@ is an injected adapter, while `probe_census` and `probe_flake.Measurement`
 themselves are driven for real against throwaway censuses, because the census
 claims it checks are properties of the shipped recorder.
 
+### `deflake_diagnosis.py` — is the probe wrong, and did the fix work? (#1437)
+
+`deflake.py` answers "how often does this probe fail". A number is not a fix,
+and this is the step after it: given one complete measurement handoff, decide
+mechanically whether the evidence supports a probe-side repair and, when it
+does not, which declared non-repair route the invocation takes instead.
+
+```bash
+python3 tools/deflake_diagnosis.py --handoff handoff.json      # the entry gate alone
+python3 tools/deflake_diagnosis.py --diagnosis diagnosis.json  # the route its evidence supports
+python3 tools/deflake_diagnosis.py --manifest .                # a checkout's config manifest
+python3 tools/test_deflake_diagnosis.py                        # the deterministic self-test
+```
+
+Nothing here boots an engine, runs a probe, opens a port, edits a worktree or
+talks to GitHub: it reads documents and answers questions about them. The
+expensive half — twenty real runs across two worktrees — is `probe_flake.py`
+performing ten twice, and its retained `probe-flake-result/v1` documents are
+this tool's input.
+
+**Why a tracked module rather than skill prose.** The `/deflake` workflow
+surface is not tracked in this repository (`.gitignore` ignores `.claude/`), so
+a repository test cannot cover prose. The MECHANICAL half lives here so
+`tools/test_deflake_diagnosis.py` can hold it: the entry gate and one-probe
+enforcement, X-out-of-10 arithmetic, the configuration manifest including
+confirmed absence, MISSING evaluation and stable check identity,
+same-environment verification and the no-retry rule, the required diagnosis
+evidence and preservation attestations, and the one-PR limit. Whether a
+diagnosis is convincing, a repair minimal, or an expectation genuinely
+obsolete stays the reviewer's judgement — the module refuses a route whose
+machine-checkable evidence is missing and claims no more than that.
+
+**The entry gate.** One invocation, one handoff, one probe. A
+`deflake-handoff/v1` EMBEDS the original `probe-flake-result/v1` document
+rather than paraphrasing it, because `probe_census.ingest_result`
+deliberately drops the ports, per-run check maps, descriptor labels, artifact
+root, invocation directory and exact command — so a handoff rebuilt from the
+durable census row cannot identify the baseline invocation, and the gate
+refuses it by name.
+
+Every result document is validated by `probe_census.validate_result`, the
+shipped validator for that schema, before a single field is read. Deriving a
+subset of it locally is the failure this delegation exists to avoid:
+`_rule_pass_run_has_no_failed_check` alone is what stops a document whose runs
+all claim PASS while their check maps carry FAIL, which a run-outcome failure
+count would otherwise read as a spotless batch. Its `timestamp_utc` is read by
+`probe_census.parse_timestamp` too, so it names a real UTC instant rather than
+merely having the right shape.
+
+**A descriptor is compared whole.** Identifiers, their order, AND their labels:
+a label is the check's stated meaning, so a batch that kept every identifier
+while relabelling one to describe a different assertion has changed what it
+measures and said so nowhere. A repair's `changed_paths` are normalised
+repository-relative paths before the `tools/` scope check is applied, since
+`tools/../src/Engine/Core/Init.hs` begins with `tools/` and changes production
+code — and a repair may not touch the measurement APPARATUS at all
+(`HARNESS_MODULES`), because `measure`'s timeout and starting port are module
+constants and lengthening one would buy a calmer verification while both command
+records still compared equal.
+
+**The producer's spelling is the contract, down to the argv FORM.**
+`deflake.build_handoff` writes `invocation.argv`, `cwd` and `timeout`, and a
+bare `configuration` LIST; the controlled batches this module defines itself
+use `command`, `directory`, `timeout_seconds` and a manifest object. And the
+two argv forms genuinely differ: a controlled record is a COMMAND this
+workflow ran, interpreter first, while the handoff's is `sys.argv` —
+`deflake.main` passes `list(sys.argv)`, whose [0] is the SCRIPT, so a truthful
+handoff carries no interpreter token at all. The entry gate reads what #1659
+actually writes and adapts it at the boundary, so one vocabulary reaches
+everything downstream while the producer stays the authority. Putting an
+interpreter into a handoff argv is refused as the wrong form, which is a
+stronger statement than refusing a particular interpreter. The self-test
+builds its handoffs by CALLING `deflake.build_handoff` rather than assembling
+an envelope by hand, and takes the argv form from an actual subprocess rather
+than writing it out — a hand-written fixture agrees with whatever the
+validator happens to require, which is exactly how a gate that could not
+consume a single real handoff kept a green suite, twice.
+
+**The envelope's redundant relationships are enforced.** `probe` equals
+`result.probe`, `targets` equals the descriptor-ordered union of FAIL/MISSING
+identifiers, `artifacts` equals `result.retained_artifacts`, and
+`invocation.ports` equals the ordered run ports. Each is a value the producer
+DERIVED from the embedded result, so a document where the two disagree was not
+the one that measurement produced — and `probe_census.validate_result` checks
+none of them.
+
+**The targets are not a selection from the measurement — they ARE it.** Every
+non-PASS identifier is a diagnosis input, so the handoff's target list must
+equal the measurement's ordered non-PASS identifiers exactly. A subset would
+let a repair be declared verified while another observed failure stayed
+quietly out of scope. An EMPTY list is legitimate rather than malformed:
+`/deflake` writes one for an all-PASS measurement, and it is the `no-target`
+route to #1439 — nothing to diagnose, no batch run, no PR opened.
+
+**Two independent qualifications for repair.** The controlled baseline exceeds
+X, OR a target check is reproducibly MISSING. The second is not reachable
+through the first: `probe_protocol.parse_event_stream` represents an unemitted
+declared check as MISSING while `probe_flake.reconcile` classifies a zero-exit
+run carrying no FAIL event as PASS, so a batch can sit at 0 failures with a
+target that was never observed at all. Verification is NOT relaxed to match —
+it must still come in at or below X and satisfy the MISSING rules.
+
+**The handoff's manifest defines both batches' configuration**, not whatever
+`config/` held when the diagnosis started: `Engine.Core.Init.migrateLegacyConfig`
+can materialize an absent local file during a first boot, so those are
+different questions. Bytes that cannot be recreated exactly are the
+`cannot-reproduce` outcome for #1439 — a result to hand on with its evidence,
+not a malformed input.
+
+**Each batch holds the probe's declared cross-process interests**, for the
+configuration install as well as the runs. `probe_flake`'s `peak_concurrency`
+counts other flake-harness invocations only, so an independent
+`tools/run_probes.py` sweep holding the same repository-relative resource
+never appears in it; `probe_resource_lock` is what coordinates across
+processes. A hold that was not obtained is a batch that did not run under
+control, routed to #1439 rather than rejected.
+
+**One common SHA.** The clean comparison worktree is created at the handoff's
+baseline commit and the repair worktree from that same commit, so the baseline
+result must name the handoff's SHA and the repair must record the `base_sha`
+it was cut from. If the intended base moves, both states are recreated on one
+new common SHA and the baseline is repeated.
+
+**Descriptor equality, not identifier normalization.** `probe-result/v1`
+already requires static identifiers and puts every runtime value in an event's
+`detail`, so a per-run undeclared or changing identifier is a MALFORMED
+protocol result — a rejected handoff — and never a diagnosis outcome to be
+scored.
+
+**The scoped MISSING rule.** Every TARGET identifier has ZERO MISSING across
+all ten runs; every PASSING run emits everything; an accepted failing or
+timed-out run may lose only a contiguous suffix of the declared order, which is
+checked rather than assumed; and no identifier disappears from the batch as a
+whole.
+
+The suffix allowance is for the checks that are NOT targets: an accepted
+failing run may abort, but not BEFORE a target, because a run that never
+reached the target did not demonstrate it was fixed. Since the targets are
+every non-PASS identifier and an aborting probe's form a suffix of the
+descriptor, that means a verification's accepted failing runs must not abort
+before the end — restrictive for an X above zero, satisfiable (a run that FAILs
+its last check, or reports a failed check and keeps going, emits everything),
+and exactly what the approved contract says.
+
+**Same environment means the same measurement, not the same characters.** The
+two batches necessarily differ in worktree and destination, and ports are
+leased dynamically, so they are compared on behavior-affecting settings with
+effective defaults filled in — including the TIMEOUT and STARTING PORT
+`probe_flake.measure` applies from module constants that no command line
+exposes. Each invocation records them, and each is PINNED to the harness's own
+value — neither CLI can set them, so the default is the only value a real
+measurement can have used, and altering all three records together would agree
+perfectly and still be fiction. The comparison runs the
+whole chain, handoff → baseline → verification: comparing only the last pair
+would let both controlled batches agree on some arbitrary value while the
+handoff sat at the defaults, and the first link crosses launchers, which is
+where `/deflake`'s own constants and the harness's command line are made to
+agree. A command is checked against the REAL
+interface of the tool that ran it, and there are TWO tools because the three
+batches do not come from one command: `/deflake` does not shell out — it calls
+`probe_flake.measure` in process, and its CLI has no `--probe`, `--runs` or RTS
+override — so the handoff's command is `python3 tools/deflake.py` with its
+contract from `/deflake`'s own constants and its probe from the result document,
+while the two controlled batches are the `probe_flake.py --probe … --runs 10`
+the issue spells out. Requiring a harness argv everywhere would make a truthful
+#1436 handoff impossible to submit while accepting an argv nobody ran.
+
+Within a tool's surface: every option one it accepts, spelled the way its
+argparse would read it (`--runs` and `--rts-caps` are `type=int`, so `--runs
+10.0` is refused rather than compared as ten), `--result` required of
+`probe_flake.py` and optional for `/deflake`, order-sensitive argv (interpreter,
+then script, then options — Python rejects an unknown option before the script
+runs), exactly `python3` as the interpreter — not bare `python`, which is whichever
+of the two the machine means; nor `python2`, which cannot parse these programs;
+nor one given by path, since a document cannot show which binary sits at
+`/tmp/counterfeit/python3`; and nor a VERSIONED `python3.9`, because every
+tracked invocation of either launcher spells it bare (both CI files, this file,
+and `probe_flake.py`'s own `--describe` subprocess), so a versioned spelling
+names a path no tracked caller could have taken. That rule is deliberately not
+a minimum-version floor: this repository declares no minimum, and every one of
+these sources opens with `from __future__ import annotations`, so a floor
+written here would be invented rather than derived. Also a script RESOLVED FROM THE DIRECTORY THE
+COMMAND RAN IN (which is what Python does with a relative script path) and
+required to be the tool the declared checkout ships — `<worktree>/tools/probe_flake.py`
+for a controlled batch, `<directory>/tools/deflake.py` for the handoff, since
+matching only the file name would admit `/tmp/counterfeit/probe_flake.py` —
+and the handoff's directory must be the PRIMARY checkout rather than any path
+calling itself one. Each command is
+then bound to its own result document, so two commands agreeing with each other
+cannot stand in for the contract.
+
+**The artifact layout is the one the harness creates.** Every path is absolute
+and fully RESOLVED — `check_artifact_root` calls `Path.resolve` on its root
+before a run begins, so no real path carries a `.`, a `..`, a doubled separator,
+a trailing slash or an unresolved symlink. A lexical check alone would accept
+`/tmp/evidence/forged/../artifacts/…`, and on a host where `/tmp` links to
+`/private/tmp` it would call two different places the same one. `new_invocation_dir` puts the invocation directory
+directly under that root and GENERATES its name,
+`{probe}-{%Y%m%dT%H%M%SZ}-{pid}-{uuid8}`, whose stamp must be a real UTC instant
+and whose pid must be a real process — the shape alone matches
+`99999999T999999Z` and a pid of 0. And every run directory is `invocation_dir /
+f"run-{index:03d}"` — three recorded values determine the whole layout, so a
+failed run's directory cannot be swapped for an unrelated path, and the run
+directories are unique by construction. The containment sweep over the paths a
+result NAMES stays for the case `--artifact-root` is omitted, which is
+legitimate: `default_artifact_root` supplies a temporary directory, and nothing
+else then constrains the root the document reports.
+
+Two labels are not two worktrees, either: the declared paths are canonicalised,
+neither may contain the other, and each invocation must have run inside the
+worktree its section names. Deliberately not "must be a registered `git
+worktree`" — the workflow removes or hands off both comparison worktrees when
+it finishes, so by evaluation time the paths it correctly names may be gone.
+Both declarations are collected before the HANDOFF is admitted and before either
+batch is validated, so every path — the handoff's own result tree and extra
+retained artifacts included — is checked against both comparison states even
+once neither is registered.
+
+Both worktrees are attested source-clean at measurement time — the recorded SHA
+cannot reveal an uncommitted change — and a configuration manifest's entries
+must be members of the `config/*.local.yaml` family, since two manifests that
+agree perfectly about `../outside.local.yaml` establish nothing about the state
+the probes actually read.
+
+The two controlled batches may SHARE an artifact root — `--artifact-root` is
+optional and `default_artifact_root` supplies a temporary directory to both —
+but never the invocation directory beneath it, which `new_invocation_dir`
+creates fresh per invocation: a verification naming the baseline's is claiming
+the baseline's artifacts as its own. Nor may either batch write INTO the
+other's invocation directory — a `--result` pointing at the baseline's retained
+`run-001/events.jsonl` is a distinct path that overwrites the very evidence the
+comparison is made of — while a shared root stays legitimate, since a root
+contains both invocation directories rather than sitting inside either.
+
+Run indices are the sequence `measure` emits, `1..len(runs)`, with the
+harness-error record next: ten records all numbered `1` is one run replayed ten
+times, and every other rule reads a run's index.
+
+Destinations must sit outside every worktree, registered or declared:
+`check_artifact_root` guards the artifact root, but `--result` is written
+wherever it is pointed — and it is opened RELATIVE TO THE PROCESS'S DIRECTORY,
+so a destination is joined onto the recorded invocation directory and
+normalised first. Where a batch SAYS it wrote is bound by the same rule, and
+its declared `--artifact-root` must agree with the root its result document
+reports.
+
+**Artifacts are paired with outcomes, and handed on.** `probe_flake` deletes a
+run's directory the moment it passes and retains every unsuccessful one, so
+`artifact_dir` pairs with the outcome exactly and `retained_artifacts` is the
+list of the non-null ones — checked in both directions, because "no
+successful-run raw artifacts remain" is one of verification's success
+conditions and a failing run whose logs are gone is a failure nobody can
+diagnose. An emitted outcome then names the retained artifacts of EVERY batch
+the invocation ran, not just the handoff's: the batch that went wrong is
+usually the verification.
+
+**An invalid batch is a route, not a rejection.** "Verification remains above
+X, contains any MISSING result, becomes invalid, or only partially improves the
+rate" is one list in the issue and every entry goes to #1439 — so a harness
+error, a short batch or a contended machine reaches `partial-improvement` in
+the verification and `cannot-reproduce` in the baseline, with the evidence
+retained. A gate rejection would describe an invocation that got nowhere and
+lose the artifacts it did keep. What stays a rejection is a document that is
+not a `probe-flake-result/v1` at all, and a descriptor whose identities
+changed.
+
+**The repair is frozen before it is verified.** `probe_flake` records only
+`git rev-parse HEAD` and cannot see uncommitted source, so a declared repair
+needs a source-clean repair worktree and a verification whose `commit_sha` is
+the repair commit being proposed.
+
+**Routes.** `repair-pr` is the only one that opens a pull request, and the
+`Diagnosis` session enforces at most one per invocation. `handoff-rejected`
+stops at the gate; `no-target`, `cannot-reproduce`, `no-confident-fix` and
+`partial-improvement` hand off to #1439; `production-defect` hands off to
+#1438 and does not touch the probe.
+
+Emitting a handoff means emitting `deflake-diagnosis-outcome/v1`, and #1437
+owns that PRODUCER record: the route, its owning issue, the identity of the
+`/deflake` invocation consumed (its command, directory, artifact root,
+invocation directory and timestamp — none of which the census row retains),
+the probe and targets, the baseline SHA and X, the configuration manifest,
+references to the controlled results, the diagnosis evidence, the preservation
+attestations, and the repair commit and verification evidence when the route
+has them. A route with no batches states those halves as `null` rather than
+dropping the keys, so a consumer reads one shape. What #1438 and #1439 then do
+with it is theirs to define.
+
+The gate is `tools/test_deflake_diagnosis.py`, engine-free and document-only.
+It is deliberately NOT wired into `make ci` or GitHub CI — #1437's approved
+rereview amendment scopes this lab's own self-test to manual invocation — so
+run it by hand when touching `tools/deflake_diagnosis.py`. It takes seconds and
+boots nothing. (`tools/test_deflake.py`, the #1436 orchestrator's self-test,
+IS in both; the two issues scoped their gates differently.)
+
+What stays out of everything, exactly as for `deflake.py`, is the REAL
+engine-booting measurement: a diagnosis consumes twenty ten-run batches' worth
+of wall clock and is supplemental manual pull-request evidence, never a merge
+gate.
+
 ### `ci_expensive_gates.py` — CI worldgen/graphical/unit-assets/save-compat selection
 
 Selects the four expensive gates that are conditional on pull requests:
