@@ -55,6 +55,10 @@ import Engine.Scripting.Lua.API.Save.Integrity (knownEntitiesFromSaveData)
 import World.Save.Reference (SamePageRef(..))
 import World.Save.Snapshot
 import Location.Types (emptyLocationRegistry)
+import Location.Bounds (AbsBounds(..))
+import Location.Instance
+    ( LocationInstance(..), LocationInstances(..), LocationInstanceId(..)
+    , LocationLifecycle(..) )
 import World.Save.Snapshot.Adapter
     (SaveRequestMeta(..), snapshotSaveMetadata, snapshotToSaveData)
 import World.Save.Types
@@ -1083,6 +1087,143 @@ spec = do
                                 (GroundItem richItem 0 0))))
                         HM.empty ])
                 `shouldBe` []
+
+    -- #1668: the stored footprint of a persisted location instance is
+    -- durable spatial authority (#911/#777), and the save decode path
+    -- is the ONE 'AbsBounds' construction site that does not sit
+    -- downstream of the YAML loader's inverted-bounds gate --
+    -- 'fromAbsBoundsDTO' copies four unrestricted 'Int's off the wire.
+    -- These cases drive the real decode+validate boundary
+    -- ('decodeComponentValue' 's own @ccDecode@ then @ccValidate@
+    -- sequence) at EVERY carrier shape, so no historical version
+    -- routes around the check: the current 'LocationInstanceDTO' rides
+    -- @world-pages@ v7, 'LocationInstanceDTOv3' rides v6,
+    -- 'LocationInstanceDTOv2' rides v4/v5 and 'LocationInstanceDTOv1'
+    -- rides v2/v3 (one version per identical carrier shape suffices).
+    -- @world-pages@ v1 predates persisted instances and carries no
+    -- 'AbsBoundsDTO' at all.
+    describe "location-instance stored bounds (#1668)" $ do
+        let gpWith b = defaultGP
+                { wgpLocationInstances = LocationInstances
+                    { lisNextId        = 2
+                    , lisById          = HM.singleton (LocationInstanceId 1)
+                        LocationInstance
+                            { liId              = LocationInstanceId 1
+                            , liDefId           = "ruin"
+                            , liChunk           = ChunkCoord 0 0
+                            , liAnchor          = (8, 8)
+                            , liBounds          = b
+                            , liDisplayName     = "Small Ruin"
+                            , liGloss           = Nothing
+                            , liEtymology       = Nothing
+                            , liLifecycle       = LifecycleUnknown
+                            , liContentsSpawned = False }
+                    , lisPendingLegacy = Nothing } }
+            -- One box per carrier, all inverted on x, so a failure names
+            -- which version leaked rather than which coordinate did.
+            invertedX = AbsBounds 10 6 6 10
+            invertedY = AbsBounds 6 10 10 6
+            invertedXY = AbsBounds 10 10 6 6
+            degenerate = AbsBounds 6 6 6 6
+
+            bytesAt ∷ Word32 → AbsBounds → BS.ByteString
+            bytesAt 7 b = S.encode (WorldPagesDTO
+                [ (pageCore page1) { pcGenParams = toWorldGenParamsDTO (gpWith b) } ])
+            bytesAt 6 b = S.encode (WorldPagesDTOv6
+                [ PageCoreDTOv6
+                    { pc6PageId = page1
+                    , pc6GenParams = toWorldGenParamsDTOv5 (gpWith b)
+                    , pc6CameraX = 0, pc6CameraY = 0
+                    , pc6TimeHour = 0, pc6TimeMinute = 0
+                    , pc6DateYear = 1, pc6DateMonth = 1, pc6DateDay = 1
+                    , pc6MapMode = ZMDefault, pc6Identity = Nothing } ])
+            bytesAt 5 b = S.encode (WorldPagesDTOv5
+                [ PageCoreDTOv5
+                    { pc5PageId = page1
+                    , pc5GenParams = toWorldGenParamsDTOv4 (gpWith b)
+                    , pc5CameraX = 0, pc5CameraY = 0
+                    , pc5TimeHour = 0, pc5TimeMinute = 0
+                    , pc5DateYear = 1, pc5DateMonth = 1, pc5DateDay = 1
+                    , pc5MapMode = ZMDefault, pc5Identity = Nothing } ])
+            bytesAt 3 b = S.encode (WorldPagesDTOv3
+                [ (pageCoreV3 page1)
+                    { pc3GenParams = toWorldGenParamsDTOv2 (gpWith b) } ])
+            bytesAt v _ = error ("bytesAt: unsupported version " <> show v)
+
+            -- Exactly what 'decodeComponentValue' does: decode at the
+            -- descriptor's version, then validate the canonical value.
+            decodeThenValidate v b =
+                case ccDecode worldPagesCodec v (bytesAt v b) of
+                    Left e   → Left e
+                    Right wp → Right (ccValidate worldPagesCodec wp)
+
+            carriers ∷ [(String, Word32)]
+            carriers = [ ("v7 / LocationInstanceDTO",   7)
+                       , ("v6 / LocationInstanceDTOv3", 6)
+                       , ("v5 / LocationInstanceDTOv2", 5)
+                       , ("v3 / LocationInstanceDTOv1", 3) ]
+
+            expectErrors label v b check =
+                case decodeThenValidate v b of
+                    Left e → expectationFailure
+                        (label <> ": decode failed -- "
+                         <> T.unpack (renderComponentError e))
+                    Right [] → expectationFailure
+                        (label <> ": an inverted stored box was ACCEPTED")
+                    Right es → check es
+
+        it "rejects an x-inverted stored box at EVERY carrier shape, in \
+           \ValidatePhase, naming the component, the page, the instance \
+           \and the axis" $
+            forM_ carriers $ \(label, v) →
+                expectErrors label v invertedX $ \es → do
+                    map cePhase es `shouldBe` [ValidatePhase]
+                    map ceComponent es `shouldBe` [worldPagesComponentId]
+                    es `shouldSatisfy` mentions "page1"
+                    es `shouldSatisfy` mentions "location instance #1"
+                    es `shouldSatisfy` mentions "x axis"
+                    es `shouldSatisfy` mentions "minX 10"
+                    es `shouldSatisfy` mentions "maxX 6"
+
+        it "rejects a y-inverted stored box at every carrier shape" $
+            forM_ carriers $ \(label, v) →
+                expectErrors label v invertedY $ \es → do
+                    es `shouldSatisfy` mentions "y axis"
+                    es `shouldNotSatisfy` mentions "x axis"
+
+        it "names BOTH axes when a stored box is inverted on both -- a \
+           \single unspecified inversion would not say what is wrong" $
+            forM_ carriers $ \(label, v) →
+                expectErrors label v invertedXY $ \es → do
+                    length es `shouldBe` 2
+                    es `shouldSatisfy` mentions "x axis"
+                    es `shouldSatisfy` mentions "y axis"
+
+        it "ACCEPTS a degenerate single-tile stored box at every carrier \
+           \shape -- inclusive bounds make min ≡ max a real 1x1 \
+           \footprint, not corruption" $
+            forM_ carriers $ \(label, v) →
+                case decodeThenValidate v degenerate of
+                    Left e → expectationFailure
+                        (label <> ": decode failed -- "
+                         <> T.unpack (renderComponentError e))
+                    Right es → (label, es) `shouldBe` (label, [])
+
+        it "leaves an accepted stored box AUTHORITATIVE -- the decoded \
+           \footprint is the one on the wire, never rederived (#911)" $
+            forM_ carriers $ \(label, v) →
+                case ccDecode worldPagesCodec v (bytesAt v degenerate) of
+                    Left e → expectationFailure
+                        (label <> ": decode failed -- "
+                         <> T.unpack (renderComponentError e))
+                    Right wp →
+                        ( label
+                        , map liBounds
+                            (concatMap (HM.elems ∘ lisById
+                                          ∘ wgpLocationInstances
+                                          ∘ pgsGenParams)
+                                       (HM.elems (wpBase wp))) )
+                            `shouldBe` (label, [degenerate])
 
         it "converts snapshot ↔ DTO with no live-state reads: the world \
            \seed survives the round trip (a meaningful seed stays present, \

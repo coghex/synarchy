@@ -81,6 +81,7 @@ module Location.Instance
     , resolveLegacyLocationInstances
       -- * Validation
     , locationInstanceAllocatorErrors
+    , locationInstanceBoundsErrors
     ) where
 
 import UPrelude
@@ -91,7 +92,7 @@ import Data.List (sortOn)
 import Data.Serialize (Serialize)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
-import Location.Bounds (AbsBounds, translateBounds)
+import Location.Bounds (AbsBounds(..), translateBounds)
 import Language.Etymology.Source (EtymologySource)
 import Location.Naming (LocationNamer, nameLocationInstance)
 import Location.Overlay.Types (LocationOverlay, overlayToList)
@@ -469,3 +470,54 @@ locationInstanceAllocatorErrors lis =
     | (iid, inst) ← HM.toList (lisById lis)
     , liId inst ≢ iid
     ]
+
+-- | Component-local GEOMETRY invariant for a decoded table (#1668): the
+--   stored 'liBounds' box of every instance must be ORDERED on both
+--   axes, @abMinX ≤ abMaxX@ and @abMinY ≤ abMaxY@. Empty ⇒ every box is
+--   well-formed.
+--
+--   No engine constructor can produce an inverted one:
+--   'newLocationInstance' builds the box as
+--   @translateBounds anchor (ldBounds def)@, and
+--   'Location.Bounds.translateBounds' offsets both ends by the same
+--   amount, so it preserves the ordering of a 'Location.Bounds.RelBounds'
+--   that "Engine.Asset.YamlLocations" has already refused to load if
+--   inverted (#777). The SAVE decode path is the construction site that
+--   gate does not cover:
+--   'World.Save.Component.WorldGen.fromAbsBoundsDTO' copies four
+--   unrestricted 'Int's straight off the wire, so a corrupt or
+--   hand-edited payload reaches an 'AbsBounds' without passing the
+--   loader — which is why this rule needs a second implementation here
+--   rather than being left to #1151's single YAML-side one.
+--
+--   An inverted box fails SILENTLY rather than loudly, differently in
+--   each consumer: 'Location.Bounds.boundsContainsPoint' is false at
+--   every wrap image, so 'Location.Discovery' can never reveal the
+--   location, while 'Location.Bounds.boundsIntersect' compares each
+--   box's min against the other's max and still reports overlap, so
+--   #778's placement exclusion blocks valid ground far away.
+--
+--   A DEGENERATE box — @min ≡ max@ on either or both axes — is a
+--   legitimate 1x1 footprint under inclusive bounds and stays valid,
+--   exactly as the YAML loader accepts it.
+--
+--   Each inverted axis is reported SEPARATELY, so a box inverted on
+--   BOTH names both rather than reporting one unspecified inversion.
+--   Entries are addressed by their MAP KEY, like the allocator check
+--   above; a key that disagrees with the instance's own 'liId' is that
+--   check's finding, not this one's.
+locationInstanceBoundsErrors ∷ LocationInstances → [Text]
+locationInstanceBoundsErrors lis =
+    [ "location instance #" <> tshow (unLocationInstanceId iid)
+        <> " has inverted bounds on the " <> axis <> " axis ("
+        <> lo <> " > " <> hi <> ")"
+    | (iid, inst) ← sortOn (unLocationInstanceId . fst) (HM.toList (lisById lis))
+    , (axis, lo, hi) ← invertedAxes (liBounds inst)
+    ]
+  where
+    invertedAxes b =
+        [ ("x", "minX " <> tshow (abMinX b), "maxX " <> tshow (abMaxX b))
+        | abMinX b > abMaxX b ]
+        ⧺
+        [ ("y", "minY " <> tshow (abMinY b), "maxY " <> tshow (abMaxY b))
+        | abMinY b > abMaxY b ]

@@ -13,6 +13,7 @@ import Test.Hspec
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Serialize as S
+import qualified Data.Text as T
 import Location.Bounds (AbsBounds(..), RelBounds(..))
 import Location.Instance
 import Location.Overlay.Types (LocationOverlay, emptyLocationOverlay)
@@ -183,6 +184,102 @@ spec = describe "Location instance identity" $ do
                     , lisById          = HM.singleton (LocationInstanceId 5) inst
                     , lisPendingLegacy = Nothing }
             locationInstanceAllocatorErrors broken `shouldSatisfy` (not . null)
+
+    -- #1668: the table's GEOMETRY, beside its ids. No engine
+    -- constructor can invert a stored box -- 'newLocationInstance'
+    -- translates an already-loader-validated 'RelBounds', and
+    -- 'translateBounds' offsets both ends alike -- but the save decode
+    -- path rebuilds an 'AbsBounds' from four unrestricted wire 'Int's,
+    -- so a corrupt payload can. Rejecting it is silent-failure
+    -- prevention: an inverted box contains no point at any wrap image
+    -- (discovery can never fire) while still reporting intersection
+    -- with unrelated terrain (placement blocks valid ground).
+    describe "stored-bounds validation" $ do
+        let withBounds b = LocationInstances
+                { lisNextId        = 2
+                , lisById          = HM.singleton (LocationInstanceId 1)
+                    ((newLocationInstance Nothing (LocationInstanceId 1)
+                          (ChunkCoord 0 0) ruinDef) { liBounds = b })
+                , lisPendingLegacy = Nothing }
+
+        it "accepts every box an engine-placed table carries" $
+            locationInstanceBoundsErrors instances3 `shouldBe` []
+
+        it "accepts an empty table" $
+            locationInstanceBoundsErrors emptyLocationInstances `shouldBe` []
+
+        it "accepts a DEGENERATE single-tile box -- inclusive bounds make \
+           \min ≡ max a legitimate 1x1 footprint, exactly as the YAML \
+           \loader accepts it" $
+            locationInstanceBoundsErrors (withBounds (AbsBounds 4 7 4 7))
+                `shouldBe` []
+
+        it "accepts a box degenerate on ONE axis only" $ do
+            locationInstanceBoundsErrors (withBounds (AbsBounds 4 7 4 9))
+                `shouldBe` []
+            locationInstanceBoundsErrors (withBounds (AbsBounds 4 7 6 7))
+                `shouldBe` []
+
+        it "rejects an x-inverted box, naming the instance, the axis and \
+           \both offending coordinates" $
+            case locationInstanceBoundsErrors (withBounds (AbsBounds 5 0 2 4)) of
+                [msg] → do
+                    msg `shouldSatisfy` T.isInfixOf "#1"
+                    msg `shouldSatisfy` T.isInfixOf "x axis"
+                    msg `shouldSatisfy` T.isInfixOf "minX 5"
+                    msg `shouldSatisfy` T.isInfixOf "maxX 2"
+                    msg `shouldNotSatisfy` T.isInfixOf "y axis"
+                other → expectationFailure
+                    ("expected exactly one x-axis error, got " <> show other)
+
+        it "rejects a y-inverted box, naming the y axis alone" $
+            case locationInstanceBoundsErrors (withBounds (AbsBounds 0 5 4 2)) of
+                [msg] → do
+                    msg `shouldSatisfy` T.isInfixOf "y axis"
+                    msg `shouldSatisfy` T.isInfixOf "minY 5"
+                    msg `shouldSatisfy` T.isInfixOf "maxY 2"
+                    msg `shouldNotSatisfy` T.isInfixOf "x axis"
+                other → expectationFailure
+                    ("expected exactly one y-axis error, got " <> show other)
+
+        it "names BOTH axes when both are inverted -- reporting one \
+           \unspecified inversion would not say what to repair" $ do
+            let msgs = locationInstanceBoundsErrors
+                           (withBounds (AbsBounds 5 5 2 2))
+            length msgs `shouldBe` 2
+            msgs `shouldSatisfy` any (T.isInfixOf "x axis")
+            msgs `shouldSatisfy` any (T.isInfixOf "y axis")
+
+        it "reports EVERY offending instance in the table, keyed by the \
+           \map key the entry is addressed under" $ do
+            let inst iid b = (newLocationInstance Nothing iid
+                                 (ChunkCoord 0 0) ruinDef) { liBounds = b }
+                table = LocationInstances
+                    { lisNextId = 4
+                    , lisById   = HM.fromList
+                        [ (LocationInstanceId 1,
+                              inst (LocationInstanceId 1) (AbsBounds 0 0 2 2))
+                        , (LocationInstanceId 2,
+                              inst (LocationInstanceId 2) (AbsBounds 9 0 1 2))
+                        , (LocationInstanceId 3,
+                              inst (LocationInstanceId 3) (AbsBounds 0 9 2 1)) ]
+                    , lisPendingLegacy = Nothing }
+                msgs = locationInstanceBoundsErrors table
+            length msgs `shouldBe` 2
+            msgs `shouldSatisfy` any (T.isInfixOf "#2")
+            msgs `shouldSatisfy` any (T.isInfixOf "#3")
+            msgs `shouldNotSatisfy` any (T.isInfixOf "#1")
+
+        it "is independent of the allocator check -- a table can fail one \
+           \and pass the other" $ do
+            let geometryOnly = withBounds (AbsBounds 5 0 2 4)
+            locationInstanceAllocatorErrors geometryOnly `shouldBe` []
+            locationInstanceBoundsErrors geometryOnly
+                `shouldSatisfy` (not . null)
+            locationInstanceAllocatorErrors (instances3 { lisNextId = 2 })
+                `shouldSatisfy` (not . null)
+            locationInstanceBoundsErrors (instances3 { lisNextId = 2 })
+                `shouldBe` []
 
     describe "stored geometry and display name" $ do
         it "stores the anchor, resolved absolute bounds and name \

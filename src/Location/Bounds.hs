@@ -39,15 +39,27 @@ import World.Plate (worldWidthTiles)
 -- | An inclusive, axis-aligned tile box in offsets relative to a
 --   location's anchor tile.
 --
---   Every authored box satisfies min ≤ max on both axes, and that rule
---   has exactly ONE implementation in the tree: the inverted-bounds
---   rejection in 'Engine.Asset.YamlLocations' 's 'LocationYamlDef'
---   parser, which fails the whole file's load naming the def and the
---   offending field (#777). A 'RelBounds' only ever exists downstream
---   of that gate — the single production construction site is the
---   API loader's @toBounds@ conversion from an already-validated
---   'Engine.Asset.YamlLocations.LocationYamlBounds' — so nothing here
---   re-states or re-checks the rule (#1151).
+--   Every authored box satisfies min ≤ max on both axes, and for a
+--   'RelBounds' that rule has exactly ONE implementation in the tree:
+--   the inverted-bounds rejection in 'Engine.Asset.YamlLocations' 's
+--   'LocationYamlDef' parser, which fails the whole file's load naming
+--   the def and the offending field (#777). A 'RelBounds' only ever
+--   exists downstream of that gate — the single production
+--   construction site is the API loader's @toBounds@ conversion from an
+--   already-validated 'Engine.Asset.YamlLocations.LocationYamlBounds' —
+--   so nothing here re-states or re-checks the rule (#1151).
+--
+--   The same rule over an 'AbsBounds' has a SECOND implementation, and
+--   deliberately so (#1668): 'Location.Instance.locationInstanceBoundsErrors',
+--   run by "World.Save.Component.Page" 's @validatePages@. A persisted
+--   location instance's box is rebuilt by
+--   'World.Save.Component.WorldGen.fromAbsBoundsDTO' from four
+--   unrestricted wire 'Int's, which is the one 'AbsBounds' construction
+--   site NOT downstream of the loader gate above, so the save boundary
+--   must state the rule itself. That is not a duplicate that drifted
+--   from this one — the two guard different types at different
+--   boundaries — and it is not #1151's deleted shared @validRelBounds@
+--   predicate reinstated.
 data RelBounds = RelBounds
     { rbMinX ∷ !Int
     , rbMinY ∷ !Int
