@@ -33,6 +33,7 @@ module Craft.Bills
     , claimAvailable
     , claimBill
     , releaseBill
+    , reconcileBillClaimants
     , addBillProgress
     , completeBillCycle
     , setBillPaused
@@ -43,7 +44,7 @@ module Craft.Bills
 import UPrelude
 import GHC.Generics (Generic)
 import Data.Hashable (Hashable)
-import Data.List (sortOn, findIndex)
+import Data.List (sort, sortOn, findIndex)
 import Data.Serialize (Serialize)
 import qualified Data.HashMap.Strict as HM
 import Building.Types (BuildingId(..))
@@ -80,7 +81,10 @@ data CraftBill = CraftBill
     , cbClaimant  ∷ !(Maybe UnitId)
       -- ^ The worker currently on the bill, if any. One crafter per
       --   bill; stale claims (dead / stuck claimant) are recoverable —
-      --   see 'claimAvailable'.
+      --   see 'claimAvailable' for the takeover path a live rival
+      --   drives, and 'reconcileBillClaimants' (#1680) for the
+      --   engine-side sweep that drops a claimant that no longer
+      --   exists at all, which needs no rival and works while paused.
     , cbClaimedAt ∷ !Double
       -- ^ Game-time of the last claim or refresh. Meaningless while
       --   'cbClaimant' is Nothing.
@@ -121,7 +125,11 @@ data CraftBill = CraftBill
       --   yet, and, conversely, a bill paused mid-cycle keeps drawing
       --   for as long as its existing holder keeps working it (pausing
       --   never touches this flag, only blocks fresh claims). False
-      --   (not working) whenever unclaimed. Appended field — save v80.
+      --   (not working) whenever unclaimed — including after
+      --   'reconcileBillClaimants' disowns a bill whose crafter was
+      --   destroyed mid-cycle, which is what stops the grid billing a
+      --   station for a worker that is gone (#1680). Appended field —
+      --   save v80.
     , cbMode       ∷ !BillMode
       -- ^ #795: FixedCount/RepeatForever for an ordinary 'addBill'
       --   (mirrors the sign of the count that produced it); UntilStock
@@ -283,6 +291,55 @@ releaseBill bid bills = case lookupBill bid bills of
     Just bill →
         let bill' = bill { cbClaimant = Nothing, cbWorking = False }
         in (bills { cbsBills = HM.insert bid bill' (cbsBills bills) }, True)
+
+-- | #1680: drop ownership of every bill whose claimant no longer
+--   exists, and report which bills changed (sorted by id; empty when
+--   nothing did, in which case the queue is returned unchanged).
+--
+--   This is the ONLY clearing path that does not run inside the
+--   claimant's own AI tick. 'releaseBill' and 'completeBillCycle' both
+--   need a live worker to call them, so before this existed a crafter
+--   that was destroyed mid-cycle left its bill claimed and
+--   'cbWorking' = True forever — and
+--   'Power.Network.activeCraftConsumersOn' kept billing the station the
+--   recipe's full wattage for a worker that was gone. Nothing else
+--   repaired it either: 'claimAvailable's dead-claimant takeover needs
+--   a live worker to actually SUCCEED at claiming (no eligible crafter,
+--   missing inputs or an unpowered station all leave the stale state in
+--   place), and while the bill is PAUSED that takeover is refused
+--   outright, so the repair could never happen at all.
+--
+--   Deliberately narrow, in three ways:
+--
+--   * It clears OWNERSHIP only — 'cbProgress', 'cbRemaining',
+--     'cbPaused' and 'cbStation' are all left alone, so a later worker
+--     resumes the queued cycle from its retained progress exactly as it
+--     would after an ordinary 'releaseBill'.
+--   * It never grants a claim. Clearing 'cbClaimant' on a paused bill
+--     leaves it as unclaimable as any other paused unclaimed bill —
+--     'claimAvailable's @Nothing → not (cbPaused bill)@ branch — so
+--     #796's contract that a paused bill is never handed to a new
+--     worker is untouched.
+--   * A LIVE claimant is never disturbed, whether it is mid-cycle
+--     ('cbWorking' True — the bounded refresh window #796 relies on) or
+--     still fetching/walking ('cbWorking' False).
+--
+--   @alive@ is the same predicate the claim path uses
+--   (@HM.member uid (umInstances um)@ — see
+--   'Engine.Scripting.Lua.API.Craft.Bill.craftClaimBillFn'), so
+--   "no longer exists" means one thing across both.
+reconcileBillClaimants ∷ (UnitId → Bool) → CraftBills → (CraftBills, [BillId])
+reconcileBillClaimants alive bills
+    | null stale = (bills, [])
+    | otherwise  =
+        (bills { cbsBills = HM.map disown (cbsBills bills) }, stale)
+  where
+    orphaned bill = maybe False (not ∘ alive) (cbClaimant bill)
+    stale = sort [ cbId bill
+                 | bill ← HM.elems (cbsBills bills), orphaned bill ]
+    disown bill
+        | orphaned bill = bill { cbClaimant = Nothing, cbWorking = False }
+        | otherwise     = bill
 
 -- | Mark whether the current claimant is ACTIVELY pouring work into
 --   this cycle right now (#590) — see 'cbWorking'. The craft AI calls

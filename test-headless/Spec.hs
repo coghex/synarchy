@@ -114,6 +114,7 @@ import qualified Test.Headless.Construct.Footprint as ConstructFootprint
 import qualified Test.Headless.Construct.PendingRefusal as ConstructPendingRefusal
 import qualified Test.Headless.Craft.Execute as CraftExecute
 import qualified Test.Headless.Craft.Bills as CraftBills
+import qualified Test.Headless.Craft.BillReconcile as CraftBillReconcile
 import qualified Test.Headless.Power.Types as PowerTypes
 import qualified Test.Headless.Power.Placement as PowerPlacement
 import qualified Test.Headless.Power.Demolition as PowerDemolition
@@ -352,6 +353,13 @@ main = hspec $ do
     -- installs its own two-page world manager and drives the real
     -- building-command drain, which would disturb the shared engine.
     aroundAll withHeadlessEngine PowerDemolition.spec
+    -- Own engine for the same reason (#1680): the craft-bill claimant
+    -- sweep installs its own two-page world manager, rewrites the unit
+    -- manager, and pins the engine paused. It needs the world worker
+    -- RUNNING -- the whole gate is that the REAL tickWorldTime performs
+    -- the reconciliation -- and its pages carry no gen params, so that
+    -- worker skips them for chunk loading.
+    aroundAll withHeadlessEngine CraftBillReconcile.spec
     -- Own engine (#1585): the blood.gpuHandles gate installs its own
     -- single-page world manager and writes that page's blood handle map
     -- plus the engine-wide texture-size cache, which would disturb the

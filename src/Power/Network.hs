@@ -471,6 +471,17 @@ consumersOn pageId now bm = HM.fromList
 --   work state — requirement #3's "always runnable" recipes are simply
 --   invisible to the power grid.
 --
+--   There is deliberately no liveness check on 'cbClaimant' here: this
+--   fold has neither a 'UnitManager' nor an alive predicate in scope,
+--   and adding one would put the same judgement in two places. The bill
+--   itself is kept honest instead —
+--   'World.Thread.CraftBills.tickCraftBillOwners' clears the claim (and
+--   with it 'cbWorking') on every loaded page as soon as a claimant
+--   stops existing, so a destroyed crafter's station drops off this
+--   fold on its own within a tick (#1680). Before that sweep existed
+--   the load here was immortal: nothing else could clear 'cbWorking'
+--   without the claimant's own AI running.
+--
 --   @exclude@ drops one specific bill (by id) from the fold before
 --   summing — the hook 'Engine.Scripting.Lua.API.Power.isRecipePoweredAt'
 --   uses to ask "what does this station ALREADY draw from every OTHER

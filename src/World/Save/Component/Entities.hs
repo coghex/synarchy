@@ -1281,6 +1281,16 @@ migrateCraftBillsDTOv1 (CraftBillsDTOv1 ps) = CraftBillsDTO
 --   station/claimant that resolves on a DIFFERENT page than the bill
 --   itself (a genuine wrong-page violation, never legitimate) while
 --   still tolerating one absent from the entire session.
+--
+--   #1680 does not change any of that, and specifically does not make a
+--   dangling 'cbClaimant' a load-time rejection: the restore stays
+--   verbatim, and the repair happens afterwards, in LIVE state.
+--   'World.Thread.CraftBills.tickCraftBillOwners' runs on every loaded
+--   page and independently of the pause flag, so the first ordinary
+--   world tick after 'World.Load.Publish' — which brings a session up
+--   paused — drops the claim and its 'cbWorking' flag, and the station
+--   stops drawing the recipe's wattage for a worker the save no longer
+--   contains.
 validateCraftBills ∷ CraftBillsDTO → [ComponentError]
 validateCraftBills (CraftBillsDTO slices) = concat
     [ [ ComponentError craftBillsComponentId 2 ValidatePhase

@@ -629,6 +629,7 @@ library
                      World.Thread.ItemTemp
                      World.Thread.Power
                      World.Thread.Discovery
+                     World.Thread.CraftBills
                      World.Thread.ChunkLoading
                      World.Thread.Command
                      World.Thread.Command.Basic
@@ -1180,6 +1181,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Construct.PendingRefusal
                    Test.Headless.Craft.Execute
                    Test.Headless.Craft.Bills
+                   Test.Headless.Craft.BillReconcile
                    Test.Headless.Power.Types
                    Test.Headless.Power.Placement
                    Test.Headless.Power.Demolition
