@@ -27,7 +27,7 @@ Next direct-commit cursor: `f753927e5af535379050dfc30150b3a3ef91fc62`.
 
 ## Status
 
-- [ ] PRR-7. Framebuffer resize events do not request swapchain recreation
+- [x] PRR-7. Framebuffer resize events do not request swapchain recreation — [#1693]
 - [ ] PRR-8. UI attachment can create multiple owners and stale descendant page ownership
 - [ ] PRR-9. Lua tick intervals can busy-spin or permanently stall the scheduler
 
@@ -40,7 +40,7 @@ Next direct-commit cursor: `f753927e5af535379050dfc30150b3a3ef91fc62`.
 
 ## 1. Window and swapchain lifecycle
 
-### PRR-7. Framebuffer resize events do not request swapchain recreation
+### [#1693] PRR-7. Framebuffer resize events do not request swapchain recreation
 
 > Captured note: The window-resize work updates the engine’s recorded framebuffer dimensions and notifies Lua, but it does not directly tell the renderer to rebuild the swapchain.
 
