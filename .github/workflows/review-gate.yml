@@ -9,10 +9,11 @@
 #   - PR opened / updated → "review-approved" check FAILS
 #     (red = "review verdict pending", merging blocked)
 #   - reviewer applies `reviewed:approve`  → check PASSES
-#   - new commits that touch a file this PR owns → label auto-removed
-#     (stale approvals don't carry a changed PR through; re-approve)
-#   - a synchronize push that touches NO file this PR owns (a "merge
-#     base into head" branch update, e.g. from strict branch
+#   - a synchronize push that changes this PR's own patch → label
+#     auto-removed (stale approvals don't carry a changed PR through;
+#     re-approve)
+#   - a synchronize push that leaves this PR's own patch byte-identical
+#     (a "merge base into head" branch update, e.g. from strict branch
 #     protection's up-to-date-with-base requirement being satisfied by
 #     a human clicking "Update branch", or equivalent automation, after
 #     an unrelated sibling PR merges) → label is KEPT (#801 review, the
@@ -37,15 +38,31 @@ jobs:
             exit 1
           fi
 
-  # New commits that touch this PR's own files invalidate a prior
+  # New commits that change this PR's own patch invalidate a prior
   # approval: strip the label so the gate closes until the reviewer
   # re-approves the updated code. The removal fires an `unlabeled`
-  # event, which re-runs review-approved. A synchronize push that
-  # touches none of this PR's own files -- a base-branch update merged
-  # forward with no overlapping content -- leaves the label alone: the
-  # reviewed code hasn't actually changed, only the branch's ancestry
-  # has, and stripping it anyway causes exactly the kind of race that
-  # made review-pr.py report a spurious failure (#801 review).
+  # event, which re-runs review-approved. A synchronize push that leaves
+  # this PR's own patch identical -- a base-branch update merged forward
+  # with no overlapping content -- leaves the label alone: the reviewed
+  # code hasn't actually changed, only the branch's ancestry has, and
+  # stripping it anyway causes exactly the kind of race that made
+  # review-pr.py report a spurious failure (#801 review).
+  #
+  # The decision itself lives in tools/review_gate_decision.py (#1679),
+  # not inline here, for two reasons. It compares the PR's own PATCH on
+  # each side of the push rather than intersecting the push's paths with
+  # the PR's post-push file list, because a file reverted to its base
+  # content vanishes from that list and so erased the very evidence that
+  # it had been approved. And a decision that lives in a tools/ script
+  # can be driven by a self-test: tools/review_gate_decision.py
+  # --self-test runs in .github/workflows/ci.yml and tools/ci-local.sh,
+  # against real throwaway commit graphs, so this job's policy is
+  # checked by the same gate set as everything else.
+  #
+  # Fail-closed all the way out: the script exits non-zero for every
+  # case it cannot positively prove is content-free, and a crash, a bad
+  # argument or an absent script (a branch that predates #1679) is a
+  # non-zero exit too, so the `else` below strips.
   dismiss-stale-approval:
     if: github.event.action == 'synchronize'
     runs-on: ubuntu-latest
@@ -63,55 +80,29 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           BEFORE: ${{ github.event.before }}
           AFTER: ${{ github.event.after }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
         run: |
-          strip() {
-            gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label reviewed:approve || true
-          }
-          # Any case where staleness can't be positively ruled out keeps
-          # the historical unconditional-strip behavior -- this only ever
-          # SKIPS a strip when it can prove the push is content-free for
-          # this PR, never the reverse.
-          if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
-            echo "no usable 'before' SHA -- can't confirm this is a no-op update, stripping"
-            strip
-            exit 0
-          fi
-          if ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
-            echo "'before' SHA not reachable in this checkout -- can't confirm, stripping"
-            strip
-            exit 0
-          fi
-          if [ -z "$AFTER" ] || [ "$AFTER" = "0000000000000000000000000000000000000000" ]; then
-            echo "no usable 'after' SHA -- can't confirm this is a no-op update, stripping"
-            strip
-            exit 0
-          fi
-          if ! git cat-file -e "$AFTER^{commit}" 2>/dev/null; then
-            echo "'after' SHA not reachable in this checkout -- can't confirm, stripping"
-            strip
-            exit 0
-          fi
-          if ! drifted_files=$(git diff --name-only "$BEFORE" "$AFTER"); then
-            echo "couldn't diff 'before'..'after' -- can't confirm, stripping"
-            strip
-            exit 0
-          fi
-          if [ -z "$drifted_files" ]; then
-            echo "push introduced no file changes -- stripping (unexpected, be safe)"
-            strip
-            exit 0
-          fi
-          if ! pr_files=$(gh pr diff "$PR_NUMBER" --repo "$REPO" --name-only); then
-            echo "couldn't fetch this PR's own file list -- can't confirm, stripping"
-            strip
-            exit 0
-          fi
-          overlap=$(comm -12 <(printf '%s\n' "$pr_files" | sort -u) <(printf '%s\n' "$drifted_files" | sort -u))
-          if [ -n "$overlap" ]; then
-            echo "push touched PR-owned file(s): $overlap -- stripping"
-            strip
+          # The decision needs the BASE BRANCH, to find each side's merge
+          # base with it. `fetch-depth: 0` above brings the whole history,
+          # but this checkout is pinned to a SHA, so make the base ref's
+          # existence explicit rather than depending on the action's
+          # refspec. Best effort: if it fails, the decision falls back to
+          # the event's own base.sha and, failing that, strips.
+          git fetch --no-tags --quiet origin \
+            "+refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF" || true
+          if python3 tools/review_gate_decision.py \
+               --before "$BEFORE" \
+               --after "$AFTER" \
+               --base-ref "$BASE_REF" \
+               --base-sha "$BASE_SHA"; then
+            echo "this PR's own patch is unchanged -- keeping reviewed:approve"
           else
-            echo "push touched no PR-owned files (branch-update merge) -- keeping reviewed:approve"
+            echo "stripping reviewed:approve"
+            # Best effort, exactly as it has always been: the label may
+            # already be absent, and failing the job over that would turn
+            # a correct strip into a red required check.
+            gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label reviewed:approve || true
           fi
