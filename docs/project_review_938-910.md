@@ -10,7 +10,7 @@ PR #938's non-regular-file animation discovery is already PRR-3 in `docs/project
 
 - [x] PRR-1. Pickup orders inspect the active page but commit against the carrier's page — [#1666]
 - [x] PRR-2. An empty location table can restore an allocator below its first valid id — [#1667]
-- [ ] PRR-3. Persisted location geometry bypasses component validation
+- [x] PRR-3. Persisted location geometry bypasses component validation — [#1668]
 - [ ] PRR-4. The authoritative EngineEnv inventory reports the wrong field total
 
 ## 1. Ordered ground-item retrieval
@@ -66,7 +66,7 @@ PR #938's non-regular-file animation discovery is already PRR-3 in `docs/project
 
 ## 3. Location-instance geometry validation
 
-### PRR-3. Persisted location geometry bypasses component validation
+### [#1668] PRR-3. Persisted location geometry bypasses component validation
 
 > **Captured note:** Validate the intrinsic shape of stored location-instance geometry before publishing a save. Anchor, absolute bounds, and discovery margin are deliberately durable authority, but the DTO accepts them verbatim and the page validator checks only ids; an inverted footprint, negative halo, or anchor unrelated to its hosting chunk becomes live query, discovery, and placement geometry.
 
