@@ -10,7 +10,7 @@ PR #211's click/box-select domain exclusion, #210's ordinary gameplay-key gate, 
 
 - [x] PRR-1. Escape leaves a hidden page's unit selection alive — [#1672]
 - [x] PRR-2. Unit AI can combine actor and building snapshots from different pages — [#1673]
-- [ ] PRR-3. Chunk eviction can turn an accepted structure placement into a staged phantom
+- [x] PRR-3. Chunk eviction can turn an accepted structure placement into a staged phantom — [#1674]
 - [ ] PRR-4. Rejected structure placements still grow the persistent texture palette
 
 ## 1. Selection cancellation ownership
@@ -65,7 +65,7 @@ PR #211's click/box-select domain exclusion, #210's ordinary gameplay-key gate, 
 
 ## 3. Structure staging acknowledgement
 
-### PRR-3. Chunk eviction can turn an accepted structure placement into a staged phantom
+### [#1674] PRR-3. Chunk eviction can turn an accepted structure placement into a staged phantom
 
 > **Captured note:** The Lua side checks that a chunk is loaded before staging, but the world thread checks again later and can drop the queued edit after an intervening eviction; no acknowledgement removes the staged piece.
 
