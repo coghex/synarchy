@@ -853,9 +853,20 @@ before touching each area:
   actual instance, batches are ordered and report per-item outcomes, and
   no item ever half-moves. The lax AI verbs
   (`transferItemToUnit`/`transferItemToBuilding`/`depositToCargo`/
-  `withdrawFromCargo`) are a SEPARATE, deliberately unchecked path the
-  fetch/repair/medic ladders depend on — never route AI work through the
-  strict one, and never delete them.
+  `withdrawFromCargo`) are a SEPARATE path the fetch/repair/medic
+  ladders depend on — never route AI work through the strict one, and
+  never delete them. What is unchecked there is adjacency and receiver
+  eligibility (and unit-to-unit capacity), **never the world PAGE**
+  (#1673): all four refuse a cross-page endpoint pair, mutating nothing
+  and revealing nothing, which is the floor `Unit.Transfer.reachable`
+  holds even where it defers adjacency. The AI finders page-qualify
+  every candidate against the ACTING unit
+  (`scripts/unit_ai_page.lua`) instead of trusting the active page that
+  `unit.getAllIds` / `building.getActiveIds` / `craft.getBills` each
+  snapshot separately, and revalidate every PERSISTED building
+  reference (`deliveryClaim.bid`, `craftJob.bid`, `repairJob.bid`)
+  before it can steer a walk or reach a verb. Gates: hspec
+  `--match "Unit cargo"` / `"AI page pairing"`.
 
   **TWO player modes, ONE commit policy.** Mode B queues a durable order
   and Mode A commits on the spot, but both build the IDENTICAL request
