@@ -12,7 +12,7 @@ PR #846's unbound-key outcome, #845's unified wheel routing, #843's remote-porta
 - [x] PRR-2. Construction cancellation and claim state identify jobs by coordinate without their world page — [no-issue]
 - [x] PRR-3. A full-file revert can retain a stale `reviewed:approve` label — [#1679]
 - [x] PRR-4. A paused craft bill keeps drawing power forever when its working claimant dies — [#1680]
-- [ ] PRR-5. The location-anchor validator and matcher duplicate the vocabulary and retain an unconstrained fallback
+- [x] PRR-5. The location-anchor validator and matcher duplicate the vocabulary and retain an unconstrained fallback — [#1681]
 - [ ] PRR-6. The flora-growth probe shares fixed fixture paths and never cleans them
 
 ## 1. Deferred input-coordinate ownership
@@ -122,7 +122,7 @@ PR #846's unbound-key outcome, #845's unified wheel routing, #843's remote-porta
 
 ## 5. Location anchor authority
 
-### PRR-5. The location-anchor validator and matcher duplicate the vocabulary and retain an unconstrained fallback
+### [#1681] PRR-5. The location-anchor validator and matcher duplicate the vocabulary and retain an unconstrained fallback
 
 > **Captured note:** Parse anchor tags into one shared closed type or central lookup that owns both validation and semantics. The current loader list and placement pattern match are manually duplicated, and the matcher's wildcard still returns `True`; adding a newly “valid” tag on only the loader side silently recreates the arbitrary-placement bug #801 was meant to eliminate.
 
