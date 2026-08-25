@@ -135,7 +135,10 @@ impossible to submit while accepting an argv nobody ran.
 Within a tool's own surface, every option must be one it actually accepts
 and be spelled the way its argparse would read it — `--runs` and
 `--rts-caps` are `type=int`, so `--runs 10.0` is refused here exactly as
-the harness would have refused it rather than compared as the number ten.
+the harness would have refused it rather than compared as the number ten,
+and both carry the producer's own POSITIVE constraint on top of that
+grammar, since `int()` accepts `0` while `measure` refuses it before
+opening a port.
 `--result` is required of `probe_flake.py`, because the document is
 written only `if args.result` and a command without one produced no
 evidence at all; it is optional for `/deflake`, which retains the
@@ -502,12 +505,15 @@ class Launcher:
     from its command line; `fixed` are the ones it does not expose at
     all and supplies itself, which is what makes `/deflake`'s
     measurement contract a property of the module rather than of a
-    command nobody typed.
+    command nobody typed. `positive` names the integer options the
+    PRODUCER additionally constrains beyond `type=int` — `int()` accepts
+    `0` and `-3` quite happily, and `probe_flake.measure` refuses both
+    before it measures anything.
     """
 
     def __init__(self, script, *, values, flags=(), destinations=(),
                  required=(), conditions=(), defaults=None, fixed=None,
-                 probe_from_result=False, describes=""):
+                 positive=(), probe_from_result=False, describes=""):
         self.script = script
         self.values = frozenset(values)
         self.flags = frozenset(flags)
@@ -515,6 +521,7 @@ class Launcher:
         self.required = tuple(required)
         self.conditions = tuple(conditions)
         self.defaults = dict(defaults or {})
+        self.positive = frozenset(positive)
         self.fixed = dict(fixed or {})
         self.probe_from_result = probe_from_result
         self.describes = describes
@@ -540,6 +547,15 @@ REQUIRED_OPTIONS = ("--probe", "--runs", "--result")
 INVOCATION_DEFAULTS = {"--rts-caps": RTS_CAPABILITIES}
 CONDITION_OPTIONS = ("--probe", "--runs") + tuple(INVOCATION_DEFAULTS)
 
+# `type=int` is only half of what the harness accepts. `measure` refuses
+# a non-positive run count and a non-positive capability count BEFORE it
+# opens a port (`probe_flake.measure`'s two `Rejection`s), so a recorded
+# `--runs 0` describes a command that measured nothing — and without this
+# it would compare as the number zero and be reported as a batch that
+# merely failed to replay the handoff's conditions, which is a ROUTE and
+# not the malformed input it is.
+POSITIVE_OPTIONS = ("--runs", "--rts-caps")
+
 HARNESS_OPTIONS = frozenset(REQUIRED_OPTIONS) | frozenset(
     DESTINATION_OPTIONS) | frozenset(CONDITION_OPTIONS)
 
@@ -550,6 +566,7 @@ HARNESS_LAUNCHER = Launcher(
     required=REQUIRED_OPTIONS,
     conditions=CONDITION_OPTIONS,
     defaults=INVOCATION_DEFAULTS,
+    positive=POSITIVE_OPTIONS,
     describes="the controlled baseline and verification batches")
 
 # `deflake.main`'s entire surface: one flag and one optional destination,
@@ -981,8 +998,8 @@ def _parse_from_script(command, position: int, what: str, *, launcher, root,
     return found, options
 
 
-def _integer(value, what: str) -> int:
-    """A supplied option value as the harness's argparse would read it.
+def _integer(value, what: str, *, positive: bool = False) -> int:
+    """A supplied option value as the harness would have read it.
 
     `probe_flake.main` declares `--runs` and `--rts-caps` as `type=int`,
     so argparse calls `int(token)` and REFUSES anything it raises on.
@@ -990,18 +1007,36 @@ def _integer(value, what: str) -> int:
     fabricated command compare numerically equal to a real one while
     `probe_flake` would have exited before measuring anything. So this is
     `int()` and nothing wider: the same grammar, deliberately.
+
+    `positive` is the producer's OWN constraint on top of that grammar,
+    and it has to be applied here rather than left to the comparison
+    downstream. `int()` accepts `0` and `-3`; `probe_flake.measure`
+    raises on both before it opens a port. A recorded `--runs 0` beside
+    a result document that also says zero is self-consistent, so nothing
+    downstream would call it malformed — it would compare as the number
+    zero and surface as a batch that merely failed to replay the
+    handoff's conditions, which is a diagnosis ROUTE and loses the fact
+    that no such measurement was ever run.
     """
     if isinstance(value, bool):
         raise HandoffError(f"{what} must be an integer, got {value!r}")
     if isinstance(value, int):
         return value
     try:
-        return int(value)
+        number = int(value)
     except (TypeError, ValueError):
         raise HandoffError(
             f"{what} must be an integer the harness's own `type=int` would "
             f"accept, got {value!r}; `probe_flake` would have refused this "
             f"command before it measured anything") from None
+    if positive and number < 1:
+        raise HandoffError(
+            f"{what} must be a positive count, got {number}; "
+            f"`probe_flake.measure` refuses a run or capability count below "
+            f"one before it opens a port, so this command measured nothing "
+            f"— it is a malformed record, not a batch that disagreed with "
+            f"the handoff")
+    return number
 
 
 def require_invocation(document, what: str, *, launcher=None,
@@ -1161,10 +1196,15 @@ def effective_settings(invocation, what: str, *, result=None) -> dict:
         settings["probe"] = options["--probe"]
     if "--runs" in launcher.conditions:
         settings["runs"] = _integer(options["--runs"],
-                                    f"{what}.command --runs")
+                                    f"{what}.command --runs",
+                                    positive="--runs" in launcher.positive)
     for option, default in launcher.defaults.items():
         key = option.lstrip("-").replace("-", "_")
-        settings[key] = (_integer(options[option], f"{what}.command {option}")
+        # An ABSENT option is the shipped default, which is positive by
+        # construction; only a value the record actually carries is
+        # constrained.
+        settings[key] = (_integer(options[option], f"{what}.command {option}",
+                                  positive=option in launcher.positive)
                          if option in options else default)
     settings["retries"] = invocation["retries"]
     settings["timeout_seconds"] = invocation["timeout_seconds"]

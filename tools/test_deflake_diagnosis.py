@@ -2286,6 +2286,72 @@ def test_both_spellings_of_a_value_taking_option_are_read() -> None:
                     "an inline --runs that disagrees with its own result")
 
 
+def _zero_run_batch(token: str = "0", requested: int = 0) -> dict:
+    """A baseline whose command and result agree on a count `measure` refuses.
+
+    They have to agree: a `--runs 0` beside a normal ten-run document is
+    already refused by the command-to-result binding, which would make
+    the positivity rule look enforced when it was not.
+    """
+    document = diagnosis_document()
+    document["baseline"]["invocation"] = invocation(cmd=[
+        "python3", f"{CLEAN_WT}/tools/probe_flake.py", "--probe", PROBE,
+        "--runs", token, "--rts-caps", str(dd.RTS_CAPABILITIES),
+        "--result", f"{OUTSIDE}/baseline.json",
+        "--artifact-root", f"{OUTSIDE}/artifacts"])
+    document["baseline"]["result"] = result_document(runs=[],
+                                                     requested=requested)
+    return document
+
+
+def test_a_recorded_count_carries_the_producers_positive_constraint()\
+        -> None:
+    """`type=int` accepts `0` and `-3`; `measure` refuses both.
+
+    `probe_flake.measure` raises before it resolves a probe or opens a
+    port, so a recorded non-positive count describes a command that
+    measured nothing. Left to the comparison downstream it would be a
+    diagnosis ROUTE — "the baseline did not replay the handoff's
+    conditions" — which reports a disagreement between two measurements
+    where only one of them exists.
+    """
+    expect_rejected(lambda: evaluate(_zero_run_batch()),
+                    "must be a positive count",
+                    "a baseline command with --runs 0")
+
+    # Zero is the only non-positive count reachable end to end: the
+    # declared schema already floors `requested_runs` at zero, so a
+    # NEGATIVE command value can never agree with a schema-valid result
+    # document, and pairing it with a zero one would be refused by the
+    # command-to-result binding instead. Driven through the parse
+    # itself, which is where the constraint lives.
+    for token in ("0", "-1", "-10"):
+        expect_rejected(
+            lambda t=token: dd._integer(t, "a count", positive=True),
+            "must be a positive count",
+            f"a parsed count of {token}")
+        expect(dd._integer(token, "a count") == int(token),
+               f"and {token} is still a perfectly good integer otherwise")
+
+    for token in ("0", "-4"):
+        document = diagnosis_document()
+        document["baseline"]["invocation"] = invocation(
+            cmd=[*_command_without("--rts-caps"), "--rts-caps", token])
+        expect_rejected(lambda d=document: evaluate(d),
+                        "must be a positive count",
+                        f"a baseline command with --rts-caps {token}")
+
+    expect(dd.POSITIVE_OPTIONS == ("--runs", "--rts-caps"),
+           f"both of the harness's integer options carry it: "
+           f"{dd.POSITIVE_OPTIONS}")
+    expect(dd.HARNESS_LAUNCHER.positive == frozenset(dd.POSITIVE_OPTIONS),
+           "and the launcher declares them")
+    # `/deflake` exposes no integer option at all, so it declares none.
+    expect(dd.DEFLAKE_LAUNCHER.positive == frozenset(),
+           f"`/deflake` constrains no command-line integer: "
+           f"{dd.DEFLAKE_LAUNCHER.positive}")
+
+
 def test_an_option_may_not_be_repeated() -> None:
     """Argparse would keep the last value; evidence gets one spelling.
 
@@ -4146,12 +4212,27 @@ def test_the_required_rule_is_what_refuses_a_command_with_no_result() -> None:
         lambda: _baseline_command(*_command_without("--result")))
 
 
+def test_the_positive_rule_is_what_refuses_a_zero_run_count() -> None:
+    """Bypassed, the same record surfaces as a condition disagreement.
+
+    That is the exact failure the rule exists to prevent: a route
+    reporting that two measurements disagreed, when one of them was
+    never run.
+    """
+    check_mutation(
+        "the producer's positive-value constraint",
+        "must be a positive count",
+        "    if positive and number < 1:",
+        "    if False:",
+        _zero_run_batch)
+
+
 def test_the_integer_grammar_is_what_refuses_a_float_run_count() -> None:
     check_mutation(
         "argparse's own `int()` grammar",
         "must be an integer",
-        "        return int(value)",
-        "        return int(float(value))",
+        "        number = int(value)",
+        "        number = int(float(value))",
         lambda: _baseline_command(*_command_without("--runs"),
                                   "--runs", f"{dd.RUN_COUNT}.0"))
 
