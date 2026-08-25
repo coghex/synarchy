@@ -10,7 +10,7 @@ PR #846's unbound-key outcome, #845's unified wheel routing, #843's remote-porta
 
 - [x] PRR-1. Deferred mouse outcomes lose their press-time framebuffer coordinate contract — [#1676]
 - [x] PRR-2. Construction cancellation and claim state identify jobs by coordinate without their world page — [no-issue]
-- [ ] PRR-3. A full-file revert can retain a stale `reviewed:approve` label
+- [x] PRR-3. A full-file revert can retain a stale `reviewed:approve` label — [#1679]
 - [ ] PRR-4. A paused craft bill keeps drawing power forever when its working claimant dies
 - [ ] PRR-5. The location-anchor validator and matcher duplicate the vocabulary and retain an unconstrained fallback
 - [ ] PRR-6. The flora-growth probe shares fixed fixture paths and never cleans them
@@ -71,7 +71,7 @@ PR #846's unbound-key outcome, #845's unified wheel routing, #843's remote-porta
 
 ## 3. Review-gate revert handling
 
-### PRR-3. A full-file revert can retain a stale `reviewed:approve` label
+### [#1679] PRR-3. A full-file revert can retain a stale `reviewed:approve` label
 
 > **Captured note:** Decide overlap against the approved revision's file set as well as the new revision's, or compare the reviewed patch identities directly. `gh pr diff --name-only` runs after the synchronize push, so a commit that completely removes one approved file from the PR also removes the evidence that the changed path belonged to the approved patch.
 
