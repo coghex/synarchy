@@ -11,7 +11,7 @@ PR #938's non-regular-file animation discovery is already PRR-3 in `docs/project
 - [x] PRR-1. Pickup orders inspect the active page but commit against the carrier's page — [#1666]
 - [x] PRR-2. An empty location table can restore an allocator below its first valid id — [#1667]
 - [x] PRR-3. Persisted location geometry bypasses component validation — [#1668]
-- [ ] PRR-4. The authoritative EngineEnv inventory reports the wrong field total
+- [x] PRR-4. The authoritative EngineEnv inventory reports the wrong field total — [#1669]
 
 ## 1. Ordered ground-item retrieval
 
@@ -92,7 +92,7 @@ PR #938's non-regular-file animation discovery is already PRR-3 in `docs/project
 
 ## 4. EngineEnv inventory authority
 
-### PRR-4. The authoritative EngineEnv inventory reports the wrong field total
+### [#1669] PRR-4. The authoritative EngineEnv inventory reports the wrong field total
 
 > **Captured note:** Synchronize or mechanically verify the EngineEnv field total in the capability documentation. Both maintainer entry points say the shared record has exactly 83 fields, while the same checked-in capability audit parses 84 live fields and 84 classified rows.
 
