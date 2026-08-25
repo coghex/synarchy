@@ -10,7 +10,7 @@ PR #792's probe reclassification has since been superseded accurately where late
 
 - [x] PRR-1. Persistence inventory CI stops at manager pointer fields — [#1703]
 - [x] PRR-2. Catatonia can freeze a standing unit in mid-air — [#1709]
-- [ ] PRR-3. The lunge landing strike is unreachable through the AI dispatcher
+- [x] PRR-3. The lunge landing strike is unreachable through the AI dispatcher — [#1713]
 
 ## 1. Persistence inventory audit depth
 
@@ -67,7 +67,7 @@ PR #792's probe reclassification has since been superseded accurately where late
 
 ## 3. Lash-out and shared lunge completion
 
-### PRR-3. The lunge landing strike is unreachable through the AI dispatcher
+### [#1713] PRR-3. The lunge landing strike is unreachable through the AI dispatcher
 
 > **Captured note:** Let the combat lunge state machine observe its airborne phase independently of the dispatcher's general "do not run AI while transitioning" guard. Otherwise short-reach lash-out units leap, time out, and discard the reach/impact strike the lunge exists to deliver.
 
