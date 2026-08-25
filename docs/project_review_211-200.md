@@ -8,14 +8,14 @@ PR #211's click/box-select domain exclusion, #210's ordinary gameplay-key gate, 
 
 ## Status
 
-- [ ] PRR-1. Escape leaves a hidden page's unit selection alive
+- [x] PRR-1. Escape leaves a hidden page's unit selection alive — [#1672]
 - [ ] PRR-2. Unit AI can combine actor and building snapshots from different pages
 - [ ] PRR-3. Chunk eviction can turn an accepted structure placement into a staged phantom
 - [ ] PRR-4. Rejected structure placements still grow the persistent texture palette
 
 ## 1. Selection cancellation ownership
 
-### PRR-1. Escape leaves a hidden page's unit selection alive
+### [#1672] PRR-1. Escape leaves a hidden page's unit selection alive
 
 > **Captured note:** Escape applies the exact off-page guard that PR #207 removed for buildings to the globally stored unit selection, so a hidden page's selected unit can survive and reappear.
 
