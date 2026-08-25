@@ -11,7 +11,7 @@ PR #846's unbound-key outcome, #845's unified wheel routing, #843's remote-porta
 - [x] PRR-1. Deferred mouse outcomes lose their press-time framebuffer coordinate contract — [#1676]
 - [x] PRR-2. Construction cancellation and claim state identify jobs by coordinate without their world page — [no-issue]
 - [x] PRR-3. A full-file revert can retain a stale `reviewed:approve` label — [#1679]
-- [ ] PRR-4. A paused craft bill keeps drawing power forever when its working claimant dies
+- [x] PRR-4. A paused craft bill keeps drawing power forever when its working claimant dies — [#1680]
 - [ ] PRR-5. The location-anchor validator and matcher duplicate the vocabulary and retain an unconstrained fallback
 - [ ] PRR-6. The flora-growth probe shares fixed fixture paths and never cleans them
 
@@ -96,7 +96,7 @@ PR #846's unbound-key outcome, #845's unified wheel routing, #843's remote-porta
 
 ## 4. Paused craft claimant death
 
-### PRR-4. A paused craft bill keeps drawing power forever when its working claimant dies
+### [#1680] PRR-4. A paused craft bill keeps drawing power forever when its working claimant dies
 
 > **Captured note:** Reconcile dead/stale claimants independently of fresh-claim eligibility. A paused bill should remain unavailable for new work, but its dead holder must be cleared and `cbWorking` must become false so the station stops drawing recipe power and the persisted bill returns to an honest idle state.
 
