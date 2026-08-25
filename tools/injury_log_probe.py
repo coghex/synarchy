@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import math
 import socket
 import subprocess
 import sys
@@ -167,12 +168,20 @@ def parse_float(text: str | None) -> float | None:
 
 def parse_uid(text: str | None) -> int | None:
     """A uid the console may render as "12" or "12.0" — never as text.
-    None when absent or not a number."""
+
+    None when absent, not a number, or not an exact whole number. The
+    float fallback exists only for that trailing ".0": truncating
+    anything else would round a target of "1.5" into agreement with a
+    spawned uid of 1, which is precisely the mismatch the callers exist
+    to report, and int() on nan/inf raises instead of reporting it.
+    """
     v = parse_int(text)
     if v is not None:
         return v
     f = parse_float(text)
-    return None if f is None else int(f)
+    if f is None or not math.isfinite(f) or not f.is_integer():
+        return None
+    return int(f)
 
 
 def terrain_z(port: int, gx: int, gy: int) -> int | None:
