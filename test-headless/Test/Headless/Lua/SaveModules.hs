@@ -269,6 +269,8 @@ unitAiReconcilePrelude =
     , "  if id == 'known_repair' then return { id = id } end end,"
     , "  repairAt = function() return true end }"
     , "item = { listGround = function() return {} end,"
+    , "  -- #1666: owning-page ground lookup; nothing on this page."
+    , "  getGroundForUnit = function() return nil, true end,"
     , "  listDefs = function() return { { name = 'axe_steel' },"
     , "                                 { name = 'whetstone' } } end }"
     , "building = { findStation = function() return nil end,"

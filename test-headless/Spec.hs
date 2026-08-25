@@ -41,6 +41,7 @@ import qualified Test.Headless.Unit.LineOfSight as LineOfSightTest
 import qualified Test.Headless.World.TimeLocal as TimeLocal
 import qualified Test.Headless.World.Climate as Climate
 import qualified Test.Headless.Item.GroundPageOwnership as GroundPageOwnership
+import qualified Test.Headless.Lua.UnitAiPickupPage as LuaUnitAiPickupPage
 import qualified Test.Headless.Item.Temperature as ItemTemp
 import qualified Test.Headless.Item.BuffYaml as ItemBuffYaml
 import qualified Test.Headless.Item.QualityTier as ItemQualityTier
@@ -360,6 +361,11 @@ main = hspec $ do
     -- installs TWO live pages and rewrites the unit/world manager refs
     -- to put a unit on the non-active one.
     aroundAll withHeadlessEngine GroundPageOwnership.spec
+    -- Own engine for the same reason, and against the same two-page
+    -- fixture: #1666's pickup-order gate keeps page A active while the
+    -- carrier and its target sit on live, non-active page B, and drives
+    -- the production scripts/unit_ai_pickup.lua over it.
+    aroundAll withHeadlessEngine LuaUnitAiPickupPage.spec
     -- Own engine for the same reason (#1599): the pause-speed gate
     -- installs its own two-page world manager, rewrites wmVisible
     -- mid-example, and drives the real scripts/pause.lua against the

@@ -12,6 +12,7 @@ module Engine.Scripting.Lua.API.Items.Ground
     , itemGetGroundTempFn
     , itemSetGroundTempFn
     , itemPickupGroundFn
+    , itemGetGroundForUnitFn
     , pickupGroundOnPage
     ) where
 
@@ -139,11 +140,68 @@ itemSpawnGroundFn env = do
                 _ → Lua.pushnil >> return 1
         _ → Lua.pushnil >> return 1
 
+-- | Push ONE @{id, defName, x, y, fill, quality, qualityTier,
+--   condition, weight}@ ground-item row, leaving it on top of the
+--   stack.
+--
+--   The single place that row shape is built (#1666). The whole-page
+--   listing and the owning-page single-entry lookup below both go
+--   through it, so the two cannot come to describe the same item
+--   differently — which is exactly the divergence a caller that
+--   switches from one to the other would be unable to see.
+pushGroundRow ∷ ItemManager → Int → GroundItem
+              → Lua.LuaE Lua.Exception ()
+pushGroundRow im gid gi = do
+    Lua.newtable
+    Lua.pushinteger (fromIntegral gid)
+    Lua.setfield (Lua.nth 2) "id"
+    Lua.pushstring (TE.encodeUtf8 (iiDefName (giInst gi)))
+    Lua.setfield (Lua.nth 2) "defName"
+    Lua.pushnumber (Lua.Number (realToFrac (giX gi)))
+    Lua.setfield (Lua.nth 2) "x"
+    Lua.pushnumber (Lua.Number (realToFrac (giY gi)))
+    Lua.setfield (Lua.nth 2) "y"
+    Lua.pushnumber (Lua.Number (realToFrac
+        (iiCurrentFill (giInst gi))))
+    Lua.setfield (Lua.nth 2) "fill"
+    Lua.pushnumber (Lua.Number (realToFrac
+        (iiQuality (giInst gi))))
+    Lua.setfield (Lua.nth 2) "quality"
+    -- Tier label only when the def actually declares a
+    -- quality spec (mirrors unit.getInventory / the
+    -- equipment queries — #345).
+    case lookupItemDef (iiDefName (giInst gi)) im of
+        Just d | Just _ ← idQualitySpec d →
+            case qualityTierLabel d
+                     (iiQuality (giInst gi)) of
+                Just tier → do
+                    Lua.pushstring (TE.encodeUtf8 tier)
+                    Lua.setfield (Lua.nth 2) "qualityTier"
+                Nothing → pure ()
+        _ → pure ()
+    Lua.pushnumber (Lua.Number (realToFrac
+        (iiCondition (giInst gi))))
+    Lua.setfield (Lua.nth 2) "condition"
+    -- True live mass: empty weight + fill (at the
+    -- container's per-unit fill weight) + everything
+    -- nested in iiContents, computed recursively. A
+    -- stocked first-aid kit weighs its contents, not
+    -- just its empty case.
+    Lua.pushnumber (Lua.Number (realToFrac
+        (itemTotalWeight im (giInst gi))))
+    Lua.setfield (Lua.nth 2) "weight"
+
 -- | item.listGround() → array of {id, defName, x, y, fill, quality,
 --   qualityTier, condition, weight}. `weight` is the live total mass
 --   (itemTotalWeight: empty weight + fill + nested contents), not the
 --   static def weight. `qualityTier` (#345) is present only when the
 --   def declares a quality spec.
+--
+--   ACTIVE-page scoped, deliberately: this is the UI's listing, and
+--   the UI only ever shows the world the player is looking at. A
+--   caller that already knows WHICH unit an id belongs to must use
+--   'itemGetGroundForUnitFn' instead — an id from here paired with an
+--   off-page unit names a different item entirely (#1666).
 itemListGroundFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 itemListGroundFn env = do
     mWs ← Lua.liftIO $ activeWorldStateFrom (wsWorldManagerRef (toWorldSimCapability env))
@@ -155,46 +213,74 @@ itemListGroundFn env = do
             Lua.newtable
             forM_ (zip [1 ∷ Int ..] (HM.toList (gisItems gis))) $
                 \(i, (gid, gi)) → do
-                    Lua.newtable
-                    Lua.pushinteger (fromIntegral gid)
-                    Lua.setfield (Lua.nth 2) "id"
-                    Lua.pushstring (TE.encodeUtf8 (iiDefName (giInst gi)))
-                    Lua.setfield (Lua.nth 2) "defName"
-                    Lua.pushnumber (Lua.Number (realToFrac (giX gi)))
-                    Lua.setfield (Lua.nth 2) "x"
-                    Lua.pushnumber (Lua.Number (realToFrac (giY gi)))
-                    Lua.setfield (Lua.nth 2) "y"
-                    Lua.pushnumber (Lua.Number (realToFrac
-                        (iiCurrentFill (giInst gi))))
-                    Lua.setfield (Lua.nth 2) "fill"
-                    Lua.pushnumber (Lua.Number (realToFrac
-                        (iiQuality (giInst gi))))
-                    Lua.setfield (Lua.nth 2) "quality"
-                    -- Tier label only when the def actually declares a
-                    -- quality spec (mirrors unit.getInventory / the
-                    -- equipment queries — #345).
-                    case lookupItemDef (iiDefName (giInst gi)) im of
-                        Just d | Just _ ← idQualitySpec d →
-                            case qualityTierLabel d
-                                     (iiQuality (giInst gi)) of
-                                Just tier → do
-                                    Lua.pushstring (TE.encodeUtf8 tier)
-                                    Lua.setfield (Lua.nth 2) "qualityTier"
-                                Nothing → pure ()
-                        _ → pure ()
-                    Lua.pushnumber (Lua.Number (realToFrac
-                        (iiCondition (giInst gi))))
-                    Lua.setfield (Lua.nth 2) "condition"
-                    -- True live mass: empty weight + fill (at the
-                    -- container's per-unit fill weight) + everything
-                    -- nested in iiContents, computed recursively. A
-                    -- stocked first-aid kit weighs its contents, not
-                    -- just its empty case.
-                    Lua.pushnumber (Lua.Number (realToFrac
-                        (itemTotalWeight im (giInst gi))))
-                    Lua.setfield (Lua.nth 2) "weight"
+                    pushGroundRow im gid gi
                     Lua.rawseti (Lua.nth 2) (fromIntegral i)
             return 1
+
+-- | item.getGroundForUnit(uid, gid) → entry|nil, pageResolved
+--
+--   The owning-page counterpart to 'itemListGroundFn' (#1666): ONE
+--   ground row, looked up on the page unit @uid@ is standing on, in
+--   the identical shape @item.listGround@ produces. Resolved through
+--   the same 'unitOwningWorldState' 'itemPickupGroundFn' commits
+--   through, so a caller that inspects an entry here and then picks it
+--   up is guaranteed to have described the instance it moved — the
+--   halves of that contract cannot disagree the way an active-page
+--   read paired with an owning-page write did.
+--
+--   Deliberately NOT a session-wide search and deliberately NOT a
+--   whole-page listing: it answers about ONE named unit and ONE id,
+--   because a session-wide ground listing would recreate the very
+--   same-numbered-gid-on-another-page hazard somewhere else.
+--
+--   The SECOND return value is the load-bearing one. Lua cannot tell
+--   "this page says the item is gone" from "this unit has no live
+--   page to ask" out of a lone @nil@, and those must not be treated
+--   alike: the first retires an order, the second is not an answer at
+--   all and must never fall back to the active page. So:
+--
+--   * entry, @true@  — present on the carrier's own page;
+--   * @nil@, @true@  — that page is live and genuinely has no such id;
+--   * @nil@, @false@ — no live page for this unit (or no such unit, or
+--     a malformed argument), so nothing was determined.
+--
+--   Both arguments must be Lua numbers. 'Lua.tointeger' happily
+--   coerces the numeric STRING @"3"@, and a query whose answer decides
+--   whether an item is retired should not silently accept a
+--   type-confused id.
+itemGetGroundForUnitFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+itemGetGroundForUnitFn env = do
+    uidArg ← numberArgAt 1
+    gidArg ← numberArgAt 2
+    case (uidArg, gidArg) of
+        (Just u, Just g) → do
+            mWs ← Lua.liftIO $
+                unitOwningWorldState env (UnitId (fromIntegral u))
+            case mWs of
+                Nothing → unresolved
+                Just ws → do
+                    gis ← Lua.liftIO $ readIORef (wsGroundItemsRef ws)
+                    im  ← Lua.liftIO $ readIORef
+                        (crItemManagerRef (toContentRegistriesCapability env))
+                    case HM.lookup (fromIntegral g) (gisItems gis) of
+                        Nothing → Lua.pushnil
+                        Just gi → pushGroundRow im (fromIntegral g) gi
+                    Lua.pushboolean True
+                    return 2
+        _ → unresolved
+  where
+    unresolved = do
+        Lua.pushnil
+        Lua.pushboolean False
+        return 2
+
+-- | An integer argument that must actually BE a Lua number. Guards the
+--   'Lua.tointeger' numeric-string coercion described above; the
+--   stack index is absolute because nothing is pushed before it.
+numberArgAt ∷ Lua.StackIndex → Lua.LuaE Lua.Exception (Maybe Lua.Integer)
+numberArgAt idx = do
+    ty ← Lua.ltype idx
+    if ty ≢ Lua.TypeNumber then pure Nothing else Lua.tointeger idx
 
 -- | item.removeGround(gid) → true | false
 itemRemoveGroundFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults

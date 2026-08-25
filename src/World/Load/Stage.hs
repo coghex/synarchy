@@ -169,7 +169,15 @@ stageSession env logger saveData registry = case sdWorlds saveData of
                     { umDefs = unitDefs, umInstances = mergedUnits
                     , umSelected = mempty, umNextId = nextUid }
                 mCamera    = listToMaybe [ c | Just c ← map psrCamera results ]
-                mZoomAtlas = listToMaybe [ z | Just z ← map psrZoomAtlas results ]
+                -- #1670: keep the atlas paired with the id of the page
+                -- whose own zoom cache produced it. Only one staged
+                -- page builds atlas pixels (the active one, below),
+                -- but every non-arena page builds its own cache, so
+                -- publish must know WHICH page this belongs to rather
+                -- than handing it to all of them.
+                mZoomAtlas = listToMaybe
+                    [ (spPageId (psrPage r), w, h, bytes)
+                    | r ← results, Just (w, h, bytes) ← [psrZoomAtlas r] ]
                 mPreview   = listToMaybe [ p | Just p ← map psrPreview results ]
             pure $ case mCamera of
                 -- Every staged session resolves exactly one active page

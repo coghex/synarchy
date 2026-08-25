@@ -36,9 +36,13 @@ Checks, in one uninterrupted session against a REAL generated world:
      refused at command time — no `pickupOrder`, no travel, and a
      player-visible warning naming that carrier and that item. Shedding
      one ballast item makes the identical order succeed, so the gate is
-     the exact `getCarryingWeight + listGround().weight > capacity`
+     the exact `getCarryingWeight + <ground row>.weight > capacity`
      formula (both sides live: worn/accessory mass on the carrier, fill
-     and nested contents on the instance) and not a coarse guess. The
+     and nested contents on the instance) and not a coarse guess. Since
+     #1666 the order reads that row through
+     `item.getGroundForUnit(uid, gid)` — the CARRIER'S own page — rather
+     than through the active-page `item.listGround()`; here the carrier
+     is on the active page, so both name the same instance. The
      pre-existing ARRIVAL-time check is untouched and still runs.
   2. TRAVEL + PICKUP + CARRIER IDENTITY. The carrier walks to the ruin
      over many ticks (no teleport, monotonically closing), picks the
@@ -413,8 +417,10 @@ def stage_target(port: int, gx: int, gy: int):
     Staging it here keeps that determinism without teaching the ruin to
     guarantee anything. The ruin's chunk is already loaded by the
     caller, so the instance lands in the room like any other ground
-    item; everything downstream reads it back through the same
-    item.listGround() surface it always did.
+    item; this probe reads it back through the same item.listGround()
+    surface it always did, and the pickup order reads it through
+    item.getGroundForUnit on the carrier's own page (#1666) — the same
+    page, for a carrier standing on the active one.
 
     Returns the staged ground instance, or None if it never appeared."""
     send(port, f"item.spawnGround('{TARGET_DEF}', {gx}, {gy}, nil, '{PAGE}'); "

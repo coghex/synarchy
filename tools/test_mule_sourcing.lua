@@ -186,6 +186,8 @@ building = {
 item = {
     listDefs = function() return ITEM_DEFS end,
     listGround = function() return {} end,
+    -- #1666: owning-page ground lookup; nothing on this page.
+    getGroundForUnit = function() return nil, true end,
 }
 
 world = {

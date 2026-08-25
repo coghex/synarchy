@@ -15,7 +15,19 @@
 -- Both gates measure the same two quantities: the carrier's live
 -- unit.getCarryingWeight (loose + equipped + accessory mass, fill and
 -- nested container contents included) against the ground instance's
--- live total weight from item.listGround.
+-- live total weight.
+--
+-- EVERY phase of an order resolves its ground entry on the CARRIER'S
+-- OWN page (#1666). Ground-item ids are per-page allocators, so the
+-- same number names a different item on every page; item.pickupGround
+-- has committed on the carrier's own page since #1208, and this layer
+-- used to select and measure the entry from item.listGround -- the
+-- ACTIVE page -- so the two halves of one contract could describe two
+-- different items. item.getGroundForUnit(uid, gid) is the owning-page
+-- read that closes it: one named unit, one id, resolved through the
+-- same unitOwningWorldState the commit resolves through. This is the
+-- same active-page-query-authorizing-an-owning-page-mutation rule
+-- unit_ai_reconcile.lua states for the post-load boundary (#1589).
 
 local unitAi = package.loaded["scripts.unit_ai"]
 local core = require("scripts.unit_ai_core")
@@ -36,11 +48,17 @@ local PICKUP_PROGRESS_TILES = 0.5
 
 local M = {}
 
-local function pickupGroundEntry(gid)
-    for _, g in ipairs(item.listGround() or {}) do
-        if g.id == gid then return g end
-    end
-    return nil
+-- The ground entry `gid` names ON `uid`'S OWN PAGE, plus whether that
+-- page could be resolved at all (#1666).
+--
+-- The second value is what keeps "gone" honest. `nil, true` is the
+-- page answering that it genuinely holds no such id -- the only thing
+-- that may retire an order. `nil, false` is no answer at all (the unit
+-- is gone, or its page has no live world), and a caller must hold the
+-- order rather than retire it: falling back to the active page is
+-- precisely the wrong-entity match this whole path exists to refuse.
+local function pickupGroundEntry(uid, gid)
+    return item.getGroundForUnit(uid, gid)
 end
 
 local function pickupItemDef(defName)
@@ -75,7 +93,7 @@ local function unitLabel(uid)
     return n:sub(1, 1):upper() .. n:sub(2)
 end
 
--- The live total mass of a ground instance. listGround's `weight` is
+-- The live total mass of a ground instance. The ground row's `weight` is
 -- already the instance weight (empty weight + fill + nested contents;
 -- gems and part-full canteens vary per find); def mean + fill is the
 -- fallback for a table that predates it.
@@ -103,11 +121,19 @@ end
 local function pickupUtility(uid, s, params)
     local order = s.pickupOrder
     if not order then return -math.huge end
-    local g = pickupGroundEntry(order.gid)
+    local g, resolved = pickupGroundEntry(uid, order.gid)
     if not g then
-        -- Item gone (someone else took it / already collected) — normal,
-        -- not a failure.
-        s.pickupOrder = nil
+        if resolved then
+            -- The carrier's OWN page says the item is gone (someone
+            -- else took it / already collected) — normal, not a
+            -- failure.
+            s.pickupOrder = nil
+        end
+        -- Otherwise the page could not be resolved, which is not an
+        -- answer: the order is unjudgeable this tick, not finished, so
+        -- it is left standing. No eligible time is charged either —
+        -- an action that cannot be scored never becomes currentAction,
+        -- so the #1291 stall budget is not spent on it.
         return -math.huge
     end
     -- pickup_timeout is a STALL timer, not a total-trip budget (#920).
@@ -146,10 +172,20 @@ end
 local function pickupExecute(uid, s, params)
     local order = s.pickupOrder
     if not order then return end
-    local g = pickupGroundEntry(order.gid)
+    local g, resolved = pickupGroundEntry(uid, order.gid)
+    -- unit.getInfo is a GLOBAL lookup, so an off-active-page carrier
+    -- still answers — with coordinates in ITS OWN page's frame, which
+    -- is the frame `g` is now measured in too.
     local info = unit.getInfo(uid)
-    if not g or not info then
+    if not info then
+        -- The unit itself is gone; its order is moot.
         s.pickupOrder = nil
+        return
+    end
+    if not g then
+        -- Same split as pickupUtility: only the carrier's own page
+        -- saying "no such id" retires the order.
+        if resolved then s.pickupOrder = nil end
         return
     end
 
@@ -190,19 +226,33 @@ end
 -- Player order: send `uid` to fetch ground item `gid`. Returns true if
 -- the order was accepted, false if it was refused up front.
 --
--- The refusal case is the point (#920): a retrieval that cannot fit is
--- rejected here, before any travel, with a player-visible warning. An
--- item that is already GONE still queues — pickupUtility retires that
--- order quietly on the next tick, which is not a failure worth warning
--- about, and re-deriving that distinction here would duplicate it.
+-- TWO refusals, and they are deliberately different in kind.
+--
+-- `gid` does not name a ground item on `uid`'s OWN page (#1666). This
+-- is a CALLER error — a public verb handed an id belonging to some
+-- other page, or to a unit whose page is not live — not a colonist who
+-- cannot lift something. So it says nothing to the player: no
+-- over-capacity warning, no event naming a carrier and an item, just a
+-- diagnostic line. Nothing is inspected and nothing is written: the
+-- capacity gate never runs (there is no instance to weigh), no order is
+-- stored, any position hold stays exactly as it was (#1216), and
+-- nextActionAt is left alone.
+--
+-- Capacity (#920): a retrieval that cannot fit is rejected here, before
+-- any travel, with a player-visible warning.
 function unitAi.commandPickup(uid, gid)
-    local g = pickupGroundEntry(gid)
-    if g then
-        local over, total, maxW = capacityCheck(uid, g)
-        if over then
-            reportOverCapacity(uid, g, total, maxW)
-            return false
-        end
+    local g, resolved = pickupGroundEntry(uid, gid)
+    if not g then
+        engine.logWarn("commandPickup: ground item " .. tostring(gid)
+            .. " is not on unit " .. tostring(uid) .. "'s own page"
+            .. (resolved and "" or " (no live page for that unit)")
+            .. " — order refused")
+        return false
+    end
+    local over, total, maxW = capacityCheck(uid, g)
+    if over then
+        reportOverCapacity(uid, g, total, maxW)
+        return false
     end
     local s = ensureState(uid)
     -- #1216: an ACCEPTED player order supersedes a position hold. Past

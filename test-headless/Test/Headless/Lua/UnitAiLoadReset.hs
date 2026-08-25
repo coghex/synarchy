@@ -124,6 +124,8 @@ prelude = lns
     , "  cancelDesignation = function() end, setMaterialsPaid = function() end,"
     , "  addJobProgress = function() end }"
     , "item = { spawnGround = function() end, listGround = function() return {} end,"
+    , "  -- #1666: owning-page ground lookup; nothing on this page."
+    , "  getGroundForUnit = function() return nil, true end,"
     , "  listDefs = function() return { { name = 'axe' }, { name = 'c' } } end }"
     , "building = { spawn = function() return nil end,"
     , "  listDefs = function() return { { name = 'hut' } } end }"

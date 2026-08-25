@@ -10,10 +10,10 @@ PR #846's unbound-key outcome, #845's unified wheel routing, #843's remote-porta
 
 - [x] PRR-1. Deferred mouse outcomes lose their press-time framebuffer coordinate contract — [#1676]
 - [x] PRR-2. Construction cancellation and claim state identify jobs by coordinate without their world page — [no-issue]
-- [ ] PRR-3. A full-file revert can retain a stale `reviewed:approve` label
-- [ ] PRR-4. A paused craft bill keeps drawing power forever when its working claimant dies
-- [ ] PRR-5. The location-anchor validator and matcher duplicate the vocabulary and retain an unconstrained fallback
-- [ ] PRR-6. The flora-growth probe shares fixed fixture paths and never cleans them
+- [x] PRR-3. A full-file revert can retain a stale `reviewed:approve` label — [#1679]
+- [x] PRR-4. A paused craft bill keeps drawing power forever when its working claimant dies — [#1680]
+- [x] PRR-5. The location-anchor validator and matcher duplicate the vocabulary and retain an unconstrained fallback — [#1681]
+- [x] PRR-6. The flora-growth probe shares fixed fixture paths and never cleans them — [#1682]
 
 ## 1. Deferred input-coordinate ownership
 
@@ -71,7 +71,7 @@ PR #846's unbound-key outcome, #845's unified wheel routing, #843's remote-porta
 
 ## 3. Review-gate revert handling
 
-### PRR-3. A full-file revert can retain a stale `reviewed:approve` label
+### [#1679] PRR-3. A full-file revert can retain a stale `reviewed:approve` label
 
 > **Captured note:** Decide overlap against the approved revision's file set as well as the new revision's, or compare the reviewed patch identities directly. `gh pr diff --name-only` runs after the synchronize push, so a commit that completely removes one approved file from the PR also removes the evidence that the changed path belonged to the approved patch.
 
@@ -96,7 +96,7 @@ PR #846's unbound-key outcome, #845's unified wheel routing, #843's remote-porta
 
 ## 4. Paused craft claimant death
 
-### PRR-4. A paused craft bill keeps drawing power forever when its working claimant dies
+### [#1680] PRR-4. A paused craft bill keeps drawing power forever when its working claimant dies
 
 > **Captured note:** Reconcile dead/stale claimants independently of fresh-claim eligibility. A paused bill should remain unavailable for new work, but its dead holder must be cleared and `cbWorking` must become false so the station stops drawing recipe power and the persisted bill returns to an honest idle state.
 
@@ -122,7 +122,7 @@ PR #846's unbound-key outcome, #845's unified wheel routing, #843's remote-porta
 
 ## 5. Location anchor authority
 
-### PRR-5. The location-anchor validator and matcher duplicate the vocabulary and retain an unconstrained fallback
+### [#1681] PRR-5. The location-anchor validator and matcher duplicate the vocabulary and retain an unconstrained fallback
 
 > **Captured note:** Parse anchor tags into one shared closed type or central lookup that owns both validation and semantics. The current loader list and placement pattern match are manually duplicated, and the matcher's wildcard still returns `True`; adding a newly “valid” tag on only the loader side silently recreates the arbitrary-placement bug #801 was meant to eliminate.
 
@@ -148,7 +148,7 @@ PR #846's unbound-key outcome, #845's unified wheel routing, #843's remote-porta
 
 ## 6. Flora probe fixture ownership
 
-### PRR-6. The flora-growth probe shares fixed fixture paths and never cleans them
+### [#1682] PRR-6. The flora-growth probe shares fixed fixture paths and never cleans them
 
 > **Captured note:** Give each flora-growth probe invocation an isolated temporary resource/fixture directory and remove it in an outer `finally`. `probe_berry.yaml` and the new `probe_clover.yaml` are written to fixed shared `/tmp` names, so concurrent runs overwrite one another's inputs and every success/failure leaves stale fixtures behind.
 

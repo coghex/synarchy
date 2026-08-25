@@ -19,6 +19,8 @@ import Engine.Core.Capability.Events
     (EventsCapability(..), toEventsCapability)
 import Engine.Core.Capability.InputView
     (InputViewCapability(..), toInputViewCapability)
+import Engine.Core.Capability.UnitCombat
+    (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.HashMap.Strict as HM
@@ -33,6 +35,7 @@ import Engine.Core.Log (logWarn, LogCategory(..))
 import Engine.Core.State (EngineEnv, activeWorldPageFrom)
 import Engine.PlayerEvent
 import Engine.Scripting.Lua.Types (LuaMsg(..))
+import Unit.Types (UnitId(..), UnitInstance(..), UnitManager(..))
 import World.Page.Types (WorldPageId(..))
 import World.Pause (imposePause)
 
@@ -88,6 +91,24 @@ emitEventAt env category source eventText mCoords =
 --   stored 'PlayerEvent' (peUid) so the per-unit log panel can filter
 --   event-log entries to a single unit. Coords and uid are independent —
 --   pass either, both, or neither.
+--
+--   When it carries BOTH, the page is taken from the NAMED UNIT rather
+--   than snapshotted from the active one (#1666). An event about a unit
+--   states that unit's position, and a unit's coordinates are in the
+--   frame of the page it stands on ('uiPage') — which need not be the
+--   active page, since a unit-attributed emitter can run for an
+--   off-page unit. Attributing those coordinates to whichever world the
+--   player happens to be looking at is the same wrong-page match the
+--   ground verbs refuse to make, and #1588's popup would then offer to
+--   pan the WRONG world to them.
+--
+--   This is 'resolveEventPage' case 1 — an explicit page from the
+--   emitter — reached through the same single 'emitEventFullOnPage'
+--   entry point, not a second emit path or a fourth precedence rule.
+--   Everything else is unchanged: a coords-free unit event still names
+--   no page (attributing one would invent a frame it does not have),
+--   and a unit that is no longer in the manager falls through to case
+--   2's active-page snapshot, exactly as before.
 emitEventFull ∷ EngineEnv
               → Text                  -- ^ category id
               → Text                  -- ^ source tag (dev debug)
@@ -95,8 +116,25 @@ emitEventFull ∷ EngineEnv
               → Maybe (Int, Int)      -- ^ optional grid coords
               → Maybe Word32          -- ^ optional unit this is about
               → IO ()
-emitEventFull env category source eventText mCoords mUid =
-    emitEventFullOnPage env category source eventText mCoords mUid Nothing
+emitEventFull env category source eventText mCoords mUid = do
+    mPage ← case (mCoords, mUid) of
+        (Just _, Just uid) → unitEventPage env (UnitId uid)
+        _                  → pure Nothing
+    emitEventFullOnPage env category source eventText mCoords mUid mPage
+
+-- | The page a live unit stands on, or 'Nothing' when it is not in the
+--   manager (already dead by the time its event fires).
+--
+--   Reads @uiPage@ directly rather than through
+--   'Engine.Scripting.Lua.API.Units.Page.unitOwningWorldState': that
+--   resolver answers "which live WorldState may I mutate?", while this
+--   one answers "which frame are these coordinates in?" — a question
+--   the recorded id answers honestly whether or not the page is still
+--   loaded, and a page name is all 'peSourcePage' stores.
+unitEventPage ∷ EngineEnv → UnitId → IO (Maybe Text)
+unitEventPage env uid = do
+    um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
+    pure $ unWorldPageId ∘ uiPage <$> HM.lookup uid (umInstances um)
 
 -- | Like 'emitEventFull', but the caller may also name the WORLD PAGE
 --   the event concerns ('peSourcePage', #780) — for an emitter whose
@@ -107,7 +145,8 @@ emitEventFull env category source eventText mCoords mUid =
 --
 --   This is where every emit path converges, so it is where the one
 --   page-attribution rule lives ('resolveEventPage', #1588): an
---   explicit @mSourcePage@ wins, an otherwise-unattributed
+--   explicit @mSourcePage@ wins — including the one 'emitEventFull'
+--   derives from a named unit (#1666) — an otherwise-unattributed
 --   coords-carrying emit snapshots the active page, and anything else
 --   stays unattributed. Passing 'Just' coords together with a hidden
 --   page is no longer a hazard the caller has to avoid — the resulting
@@ -184,17 +223,20 @@ emitEventFullOnPage env category source eventText mCoords mUid mSourcePage = do
 --
 --   In precedence order:
 --
---   1. An explicit page from the emitter wins. Only #780's location
---      discovery passes one, and it is the emitter that genuinely knows
---      better than the active-page snapshot does: it ticks every loaded
---      page, hidden ones included.
+--   1. An explicit page from the emitter wins. Two emitters pass one,
+--      and each genuinely knows better than the active-page snapshot
+--      does: #780's location discovery, which ticks every loaded page,
+--      hidden ones included; and 'emitEventFull' whenever an event
+--      names BOTH a unit and coordinates (#1666), because those
+--      coordinates are in that unit's own page's frame.
 --   2. Otherwise, an event carrying COORDINATES is attributed to the
 --      canonically resolved active page
 --      ('Engine.Core.State.resolveActiveWorld', reached through
 --      'activeWorldPageFrom' so this module keeps its narrowed
 --      'WorldSimCapability' view). This is the automatic half: every
---      @emitEventAt@ \/ @emitEventForUnit@ caller — Lua and Haskell
---      alike — gets a self-describing coordinate with no code change.
+--      @emitEventAt@ caller — Lua and Haskell alike — gets a
+--      self-describing coordinate with no code change, and so does a
+--      unit-attributed one whose unit is already gone.
 --   3. Otherwise 'Nothing'. A coords-free event has no coordinate frame
 --      to name, and a coords-carrying one emitted with no world
 --      registered (the main menu) genuinely has no page: attributing it
