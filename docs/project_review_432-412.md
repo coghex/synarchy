@@ -8,7 +8,7 @@ The settings-log gating, production warning policy, algorithm-comment numbering,
 
 ## Status
 
-- [ ] PRR-1. The texture-path guard is absent from CI and currently rejects prose
+- [x] PRR-1. The texture-path guard is absent from CI and currently rejects prose — [#1705]
 - [ ] PRR-2. Structure quads do not follow the cylindrical render alias
 - [ ] PRR-3. Front-wall handling is fixed to the FaceSouth edge pair
 - [ ] PRR-4. Hidden walls can still lift visible flora and vegetation
@@ -18,7 +18,7 @@ The settings-log gating, production warning policy, algorithm-comment numbering,
 
 ## 1. Texture-reference enforcement
 
-### PRR-1. The texture-path guard is absent from CI and currently rejects prose
+### [#1705] PRR-1. The texture-path guard is absent from CI and currently rejects prose
 
 > **Captured note:** Make the all-reference texture-path check an enforced, syntax-aware contract. PR #430 introduced it as the mandatory guard against silent magenta assets, but neither CI nor `make ci` runs it, and its raw line regex currently treats a Haddock counterexample as a real path and fails on `assets/textures/iconsEvil/x.png`.
 
