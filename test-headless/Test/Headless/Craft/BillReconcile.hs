@@ -13,16 +13,19 @@
 --     'World.Thread.Power.tickPowerNetworks' skips, and the reason
 --     hooking the sweep there would have left the bug alive
 --     (requirement 6).
---   * It runs while the engine is globally PAUSED. This is the
---     save/load lifecycle boundary requirement 7 names: bills restore
---     VERBATIM (#763 — 'World.Load.Stage' never prunes them, and the
---     component validator deliberately tolerates a claimant absent from
---     the whole session), and 'World.Load.Publish' brings the session up
---     paused, so a dangling claimed-and-working bill would keep the
---     station drawing power for a worker that does not exist until the
---     player happened to unpause. Requirement 7 is satisfied by the
---     AFTER-publish arm: the codec is untouched, the live state is
---     repaired by the first ordinary world tick.
+--   * It runs at the right point of a REAL load transaction, which is
+--     requirement 7's boundary. The last example drives the production
+--     lifecycle rather than describing it: a queue round-tripped through
+--     the component's own DTO and encoding is handed to the real
+--     'World.Load.Publish.publishStagedSession' as a staged session
+--     whose unit manager does not contain the claimant, with the phases
+--     driven through the real 'Engine.Load.Status' handoff. That pins
+--     all three steps — publication restores the bill VERBATIM and
+--     leaves the session paused; the tick's 'loadInProgress' gate holds
+--     the sweep off while the transaction is still in flight (#763's
+--     leave-the-old-session-alone contract); and the first ordinary tick
+--     after 'finishLoad' repairs it, with nothing unpaused. Moving the
+--     call outside that gate fails the example.
 --   * It is driven by the REAL 'World.Thread.Time.tickWorldTime' on the
 --     REAL world thread the harness starts — nothing here calls the
 --     tick itself, so a future edit that unhooks it fails this gate.
@@ -45,15 +48,20 @@ import Control.Concurrent (threadDelay)
 import qualified Data.Map.Strict as Map
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Serialize as S
+import qualified Data.Text as T
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Data.IORef (readIORef, writeIORef)
-import Building.Types (BuildingId(..))
+import Building.Types (BuildingId(..), emptyBuildingManager)
 import Craft.Bills
     ( BillId, CraftBill(..), CraftBills(..), addBill, addBillProgress
     , claimBill, lookupBill, setBillPaused, setBillWorking )
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Core.State (EngineEnv(..))
+import Engine.Graphics.Camera (defaultCamera)
+import Engine.Load.Status
+    ( LoadPhase(..), advanceLoad, beginLoad, finishLoad, loadInProgress )
+import Structure.Palette (emptyTexPalette)
 import Structure.Types (emptyChunkStructures)
 import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
@@ -66,7 +74,11 @@ import World.Flora.Types (emptyFloraChunkData)
 import World.Fluid.Types (emptyIceMap)
 import Power.Types (PowerNodes(..))
 import World.Page.Types (WorldPageId(..))
+import World.Load.Publish (publishStagedSession)
+import World.Load.Types (StagedPage(..), StagedSession(..))
+import World.Material (emptyMaterialRegistry)
 import World.Save.Component.Entities (fromBillQueueDTO, toBillQueueDTO)
+import World.Save.Payload (emptyLoadReconcileContext)
 import World.State.Types
     (WorldManager(..), WorldState(..), emptyWorldState, emptyWorldManager)
 import World.Tile.Types (WorldTileData(..))
@@ -79,6 +91,14 @@ import World.Tile.Types (WorldTileData(..))
 homePage, hiddenPage ∷ WorldPageId
 homePage   = WorldPageId "cbr_home"
 hiddenPage = WorldPageId "cbr_hidden"
+
+-- | The page a staged (loaded) session publishes. Deliberately a THIRD
+--   id: a load REPLACES the complete session, so neither live page
+--   above survives it, and reading the bill back off the published page
+--   proves the assertion is about the loaded session rather than about
+--   a page the spec had already installed by hand.
+loadPage ∷ WorldPageId
+loadPage = WorldPageId "cbr_loaded"
 
 -- | Only 'liveUid' is ever written into the unit manager. 'deadUid'
 --   names a worker that has been destroyed — the state a crafter killed
@@ -213,6 +233,58 @@ resetScene env = do
     writeIORef (enginePausedRef env) True
     pure (wsHome, wsHidden)
 
+-- | A complete replacement session carrying @bills@ on 'loadPage',
+--   shaped exactly as 'World.Load.Stage' hands one to publication: the
+--   page's own 'WorldState', and a unit manager that does NOT contain
+--   'deadUid' — the save's units component had no such unit, which is
+--   what makes its bill's claim dangling in the published session.
+--
+--   Everything else is the emptiest honest value: this spec asserts on
+--   craft-bill ownership and the pause flag, and publication performs
+--   only 'IORef' assignment plus deferred queue sends, so nothing here
+--   is load-bearing beyond the page, the units and the bills.
+stagedSessionWith ∷ CraftBills → IO StagedSession
+stagedSessionWith bills = do
+    ws ← emptyWorldState
+    writeIORef (wsTilesRef ws) flatTiles
+    writeIORef (wsCraftBillsRef ws) bills
+    pure StagedSession
+        { ssPages         = [ StagedPage { spPageId        = loadPage
+                                         , spWorldState    = ws
+                                         , spSimSeeds      = []
+                                         , spLocationStamps = [] } ]
+        , ssActivePage    = loadPage
+        , ssVisiblePages  = [loadPage]
+        , ssBuildings     = emptyBuildingManager
+        , ssUnits         = emptyUnitManager
+            { umDefs      = HM.singleton "acolyte" minimalDef
+            , umInstances = HM.singleton liveUid (mkUnit loadPage)
+            }
+        , ssUnitSimStates = HM.empty
+        , ssGameTime      = 0
+        , ssTexPalette    = emptyTexPalette
+        , ssNextItemId    = 1
+        , ssCamera        = defaultCamera
+        , ssZoomAtlas     = Nothing
+        , ssPreview       = Nothing
+        , ssReconcile     = emptyLoadReconcileContext
+        , ssMaterialRegistry = emptyMaterialRegistry
+        }
+
+-- | The LIVE 'WorldState' registered under @pid@, read back off the
+--   world manager rather than kept from the value handed to publish —
+--   so the assertions that follow are about the session publication
+--   actually installed.
+livePage ∷ EngineEnv → WorldPageId → IO WorldState
+livePage env pid = do
+    wm ← readIORef (worldManagerRef env)
+    case lookup pid (wmWorlds wm) of
+        Just ws → pure ws
+        Nothing → do
+            expectationFailure $
+                "page " <> show pid <> " is not live after publication"
+            emptyWorldState
+
 -- | Poll @ws@'s live bill queue until @done@ holds, or give up. The
 --   world thread ticks about every 16 ms, so this normally settles on
 --   the first pass; the deadline only exists so a REGRESSION fails
@@ -285,16 +357,19 @@ spec = describe "craft bill claimant reconciliation (#1680)" $ do
         (cbClaimant ⊚ mBill) `shouldBe` Just (Just liveUid)
         (cbWorking ⊚ mBill) `shouldBe` Just True
 
-    it "the save/load boundary: a bill restored VERBATIM from the save \
-       \codec still carries the dangling claim, and the first live tick \
-       \after publish is what clears it" $ \env → do
-        (wsHome, _) ← resetScene env
+    it "the real load transaction: staged bills restore VERBATIM through \
+       \the save codec, survive publication untouched while the load is \
+       \still in flight, and are cleared by the first tick after the \
+       \transaction ends — with the loaded session still paused" $ \env → do
+        _ ← resetScene env
+        logger ← readIORef (loggerRef env)
         let (bills, bid) = workingBill deadUid
-        -- The wire half: through the component's own DTO and encoding,
-        -- exactly as 'World.Save.Component.Entities.craftBillsCodec'
-        -- writes and reads a page's queue. Nothing about #1680 changes
-        -- it — the claim and the working flag come back untouched, which
-        -- is the #763 verbatim-restore contract this must not disturb.
+        -- (1) The WIRE half: through the component's own DTO and
+        -- encoding, exactly as
+        -- 'World.Save.Component.Entities.craftBillsCodec' writes and
+        -- reads a page's queue. #1680 changes nothing here — the claim
+        -- and the working flag come back untouched, which is the #763
+        -- verbatim-restore contract this must not disturb.
         restored ← case S.decode (S.encode (toBillQueueDTO bills)) of
             Left err  → expectationFailure ("bill queue decode: " <> err)
                           >> pure bills
@@ -303,10 +378,58 @@ spec = describe "craft bill claimant reconciliation (#1680)" $ do
         (cbWorking ⊚ lookupBill bid restored) `shouldBe` Just True
         (cbProgress ⊚ lookupBill bid restored)
             `shouldBe` (cbProgress ⊚ lookupBill bid bills)
-        -- The live half: publishing that restored queue onto a page of a
-        -- PAUSED session (what 'World.Load.Publish' leaves behind) is
-        -- repaired by the ordinary world tick, with no unpause.
-        writeIORef (wsCraftBillsRef wsHome) restored
-        mBill ← awaitBill wsHome bid disowned
+
+        -- (2) A REAL load transaction. The staged page carries that
+        -- decoded queue and the staged unit manager does NOT contain
+        -- 'deadUid' — the save's units component simply had no such
+        -- unit, which is the whole scenario. Phases are driven through
+        -- 'Engine.Load.Status' exactly as the production handoff does,
+        -- so the tick's own 'loadInProgress' gate is under test rather
+        -- than assumed.
+        staged ← stagedSessionWith restored
+        began ← beginLoad (loadStatusRef env) "cbr_load_fixture"
+        reqId ← case began of
+            Left err → expectationFailure ("beginLoad: " <> T.unpack err)
+                         >> pure 0
+            Right n  → pure n
+        advanceLoad (loadStatusRef env) reqId LoadWaitingPublish
+        inFlight ← loadInProgress (loadStatusRef env)
+        inFlight `shouldBe` True
+
+        publishStagedSession env logger reqId staged
+        wsLoaded ← livePage env loadPage
+
+        -- (3) Publication itself restores the bill verbatim and leaves
+        -- the session paused. Neither is incidental: the sweep must not
+        -- be something publish does, and the pause is what makes the
+        -- repair below a real requirement rather than a side effect of
+        -- the player resuming.
+        publishedBill ← lookupBill bid ⊚ readIORef (wsCraftBillsRef wsLoaded)
+        (cbClaimant ⊚ publishedBill) `shouldBe` Just (Just deadUid)
+        (cbWorking ⊚ publishedBill) `shouldBe` Just True
+        pausedAfterPublish ← readIORef (enginePausedRef env)
+        pausedAfterPublish `shouldBe` True
+
+        -- (4) Still in flight (the Lua reconciliation broadcast has not
+        -- reported yet), so the tick's load gate must hold the sweep
+        -- off — the same gate #763 relies on to keep a tick landing in
+        -- staging from mutating a session a failed load must leave
+        -- unchanged. Long enough for many real world ticks.
+        threadDelay 400000
+        heldOff ← lookupBill bid ⊚ readIORef (wsCraftBillsRef wsLoaded)
+        (cbClaimant ⊚ heldOff) `shouldBe` Just (Just deadUid)
+        (cbWorking ⊚ heldOff) `shouldBe` Just True
+
+        -- (5) End the transaction the way the production handoff does.
+        -- From here 'loadInProgress' is false and the very next ordinary
+        -- world tick performs the repair, with nothing unpaused.
+        finishLoad (loadStatusRef env) reqId
+        mBill ← awaitBill wsLoaded bid disowned
         (cbClaimant ⊚ mBill) `shouldBe` Just Nothing
         (cbWorking ⊚ mBill) `shouldBe` Just False
+        -- Ownership only, exactly as on a live page.
+        (cbProgress ⊚ mBill) `shouldBe` (cbProgress ⊚ lookupBill bid bills)
+        (cbRemaining ⊚ mBill) `shouldBe` Just 3
+        (cbPaused ⊚ mBill) `shouldBe` Just True
+        stillPaused ← readIORef (enginePausedRef env)
+        stillPaused `shouldBe` True
