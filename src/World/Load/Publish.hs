@@ -128,14 +128,33 @@ publishStagedSession env logger requestId staged = do
     writeIORef (unitManagerRef env) (ssUnits staged)
     writeIORef (utsRef env) (UnitThreadState { utsSimStates = ssUnitSimStates staged })
     writeIORef (cameraRef env) (ssCamera staged)
-    -- Pair the atlas with the EXACT WorldStates it
-    -- belongs to (this publish's own pages) so the eventual GPU upload
+    -- Pair the atlas with the EXACT WorldState it belongs to -- the ONE
+    -- staged page whose own zoom cache produced these pixels, named by
+    -- 'ssZoomAtlas' itself -- so the eventual GPU upload
     -- (Engine.Scripting.Lua.Message.WorldTexture.handleZoomAtlasUpload)
     -- never has to re-read worldManagerRef later and risk a NEWER
     -- publish's pages having already replaced these by then.
-    let targetStates = map spWorldState (ssPages staged)
-    forM_ (ssZoomAtlas staged) $ \(w, h, bytes) →
-        writeIORef (zoomAtlasDataRef env) (Just (w, h, bytes, targetStates))
+    --
+    -- #1670: this is a per-PAGE association, never a per-session one.
+    -- 'World.Load.Stage' gives every non-arena page its own
+    -- wsZoomCacheRef but builds atlas pixels for only one of them, and
+    -- 'World.Render.Zoom.Bake' indexes each visible page's own cache
+    -- using that page's ASSIGNED atlas layout -- so handing this payload
+    -- to every published page (which is what this did before #1670) made
+    -- a second visible page bake its quads against another world's
+    -- pixels, and index past the texture whenever its cache was the
+    -- longer one. Pages left out keep wsZoomAtlasRef at Nothing, which
+    -- ensureBakedAtlas already supports as per-material baking.
+    forM_ (ssZoomAtlas staged) $ \(ownerPid, w, h, bytes) → do
+        let atlasOwners = [ spWorldState p
+                          | p ← ssPages staged, spPageId p ≡ ownerPid ]
+        when (null atlasOwners) $ logWarn logger CatWorld $
+            "Load publish: staged zoom atlas names page "
+            <> unWorldPageId ownerPid
+            <> ", which is not among this session's staged pages -- \
+               \publishing it with no target rather than attaching it \
+               \to a page whose cache did not produce it"
+        writeIORef (zoomAtlasDataRef env) (Just (w, h, bytes, atlasOwners))
     -- Bump the preview generation on EVERY publish,
     -- unconditionally — never only inside the 'Just' branch below. A
     -- page staged via the arena-reconstruction path
