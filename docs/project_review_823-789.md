@@ -8,14 +8,14 @@ PR #821's input-thread split, #820's ordered immutable CI-image publication, #81
 
 ## Status
 
-- [ ] PRR-1. Direct tile selection leaves both deferred cursor-selection arms live
+- [x] PRR-1. Direct tile selection leaves both deferred cursor-selection arms live — [#1702]
 - [ ] PRR-2. Nested structure content can stamp beyond a location's authoritative bounds
 - [ ] PRR-3. Neutral legacy placeholders become permanent local settings on every first boot
 - [ ] PRR-4. Partial notification overrides migrate successfully by turning omitted fields off
 
 ## 1. Direct tile selection versus deferred cursor arms
 
-### PRR-1. Direct tile selection leaves both deferred cursor-selection arms live
+### [#1702] PRR-1. Direct tile selection leaves both deferred cursor-selection arms live
 
 > **Captured note:** Give direct tile selection the same authoritative disarm rule as direct chunk selection. A synchronous `world.selectTile` should clear both old render-time selection arms before either renderer can retarget or erase the tile it just committed.
 
