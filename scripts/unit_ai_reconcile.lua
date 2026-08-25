@@ -20,7 +20,12 @@
 -- allocators, and the live Lua queries that could answer "does this id
 -- exist?" resolve through the ACTIVE page (craft.getBill,
 -- item.listGround) while the mutating verb they would authorize
--- resolves through the OWNING unit's page (item.pickupGround). Asking
+-- resolves through the OWNING unit's page (item.pickupGround). #1666
+-- has since given the ground-item half an owning-page read of its own,
+-- item.getGroundForUnit(uid, gid), which is what unit_ai_pickup.lua's
+-- own order now uses; craft.getBill still has no counterpart, and
+-- reconciliation takes the engine's authoritative restored sets either
+-- way rather than interrogating live pages at all. Asking
 -- the active page about another page's id is exactly the wrong-entity
 -- match World.Save.Integrity.luaEdgeResolves refuses to make, so the
 -- engine hands the restored session's real sets to onSaveLoaded
