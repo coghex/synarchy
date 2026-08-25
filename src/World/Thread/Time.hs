@@ -14,6 +14,7 @@ import World.Flora.Harvest (tickFloraHarvests)
 import World.Thread.ItemTemp (tickItemTemperatures)
 import World.Thread.Power (tickPowerNetworks)
 import World.Thread.Discovery (tickLocationDiscovery)
+import World.Thread.CraftBills (tickCraftBillOwners)
 
 -- | Advance time for all visible worlds, write sun angle to the shared ref.
 tickWorldTime ∷ EngineEnv → Float → IO ()
@@ -102,10 +103,21 @@ tickWorldTime env dt = do
     -- loadInProgress goes false the moment its outcome is set, so the
     -- freshly-published session's own immediate-discovery-while-paused
     -- behavior (the whole point of the paragraph above) is untouched.
+    -- Craft-bill ownership reconciliation (#1680) shares this band for
+    -- the same two reasons, spelled out in full on
+    -- 'World.Thread.CraftBills': a stale claim on a hidden page keeps
+    -- its station drawing power just as a visible page's would, and a
+    -- freshly loaded save comes up PAUSED carrying whatever dangling
+    -- claim it was written with, so the repair must not wait for an
+    -- unpause. The load gate applies for the same reason it does to
+    -- discovery: a tick landing in World.Load.Stage's unlocked staging
+    -- window must not mutate the still-live pre-load session, which
+    -- #763 requires a failed load to leave completely unchanged.
     loading ← loadInProgress (loadStatusRef env)
     unless loading $
-        forM_ (wmWorlds manager) $ \(pageId, worldState) →
+        forM_ (wmWorlds manager) $ \(pageId, worldState) → do
             tickLocationDiscovery env pageId worldState
+            tickCraftBillOwners env pageId worldState
 
     case wmVisible manager of
         (pageId:_) → case lookup pageId (wmWorlds manager) of

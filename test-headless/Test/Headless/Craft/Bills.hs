@@ -7,11 +7,17 @@
 --   verbs → craft AI → executeAt), incl. the live ground-stock
 --   re-evaluation that gates an until-stock bill's claim/completion,
 --   is gated by tools/craft_bill_probe.py.
+--
+--   The #1680 dead-claimant sweep's PURE transition
+--   ('Craft.Bills.reconcileBillClaimants') is covered here; that
+--   production actually RUNS it, on every loaded page and while paused,
+--   is 'Test.Headless.Craft.BillReconcile'.
 module Test.Headless.Craft.Bills (spec) where
 
 import UPrelude
 import Test.Hspec
 import qualified Data.Serialize as S
+import Data.List (sort)
 import Craft.Bills
 import Building.Types (BuildingId(..))
 import Unit.Types (UnitId(..))
@@ -376,6 +382,113 @@ spec = do
                                       emptyCraftBills
                 (b1, _) = claimBill 12.5 30 everyoneAlive bid worker1 b0
             S.decode (S.encode b1) `shouldBe` Right b1
+
+    describe "dead-claimant reconciliation (#1680)" $ do
+        let deadWorker1 = (≢ worker1)
+
+        it "an UNPAUSED bill with a dead claimant is disowned and stops \
+           \working" $ do
+            let (bills, bid) = oneBill
+                (b1, _) = claimBill 10 30 everyoneAlive bid worker1 bills
+                (b2, _) = setBillWorking bid True b1
+                (b3, cleared) = reconcileBillClaimants deadWorker1 b2
+            cleared `shouldBe` [bid]
+            cbClaimant ⊚ lookupBill bid b3 `shouldBe` Just Nothing
+            cbWorking  ⊚ lookupBill bid b3 `shouldBe` Just False
+
+        it "a PAUSED bill with a dead claimant is disowned too \
+           \(the case no takeover could ever reach)" $ do
+            let (bills, bid) = oneBill
+                (b1, _) = claimBill 10 30 everyoneAlive bid worker1 bills
+                (b2, _) = setBillWorking bid True b1
+                (b3, _) = setBillPaused bid True b2
+                -- The pre-#1680 state of the world: while paused, even
+                -- a live rival is refused the dead claimant's bill, so
+                -- nothing could repair it.
+                (_, takeover) = claimBill 11 30 deadWorker1 bid worker2 b3
+                (b4, cleared) = reconcileBillClaimants deadWorker1 b3
+            takeover `shouldBe` False
+            cleared `shouldBe` [bid]
+            cbClaimant ⊚ lookupBill bid b4 `shouldBe` Just Nothing
+            cbWorking  ⊚ lookupBill bid b4 `shouldBe` Just False
+
+        it "progress, remaining, pause and station all survive the \
+           \reconciliation" $ do
+            let (bills, bid) = oneBill
+                (b1, _) = claimBill 10 30 everyoneAlive bid worker1 bills
+                (b2, _) = setBillWorking bid True b1
+                (b3, _) = addBillProgress bid 0.4 b2
+                (b4, _) = setBillPaused bid True b3
+                (b5, _) = reconcileBillClaimants deadWorker1 b4
+            cbProgress  ⊚ lookupBill bid b5 `shouldBe` Just 0.4
+            cbRemaining ⊚ lookupBill bid b5 `shouldBe` Just 3
+            cbPaused    ⊚ lookupBill bid b5 `shouldBe` Just True
+            cbStation   ⊚ lookupBill bid b5 `shouldBe` Just station1
+            cbRecipe    ⊚ lookupBill bid b5
+                `shouldBe` Just "smelt_steel_anthracite"
+
+        it "a resumed cycle picks up from the retained progress" $ do
+            let (bills, bid) = oneBill
+                (b1, _) = claimBill 10 30 everyoneAlive bid worker1 bills
+                (b2, _) = addBillProgress bid 0.4 b1
+                (b3, _) = reconcileBillClaimants deadWorker1 b2
+                (b4, ok) = claimBill 20 30 deadWorker1 bid worker2 b3
+                (_, p)  = addBillProgress bid 0.6 b4
+            ok `shouldBe` True
+            p `shouldBe` Just 1.0
+
+        it "a LIVE claimant mid-cycle (cbWorking True) is untouched" $ do
+            let (bills, bid) = oneBill
+                (b1, _) = claimBill 10 30 everyoneAlive bid worker1 bills
+                (b2, _) = setBillWorking bid True b1
+                (b3, _) = setBillPaused bid True b2
+                (b4, cleared) = reconcileBillClaimants everyoneAlive b3
+            cleared `shouldBe` []
+            cbClaimant ⊚ lookupBill bid b4 `shouldBe` Just (Just worker1)
+            cbWorking  ⊚ lookupBill bid b4 `shouldBe` Just True
+
+        it "a LIVE claimant still fetching/walking (cbWorking False) is \
+           \untouched" $ do
+            let (bills, bid) = oneBill
+                (b1, _) = claimBill 10 30 everyoneAlive bid worker1 bills
+                (b2, _) = setBillPaused bid True b1
+                (b3, cleared) = reconcileBillClaimants everyoneAlive b2
+            cleared `shouldBe` []
+            cbClaimant ⊚ lookupBill bid b3 `shouldBe` Just (Just worker1)
+            cbWorking  ⊚ lookupBill bid b3 `shouldBe` Just False
+
+        it "clearing ownership never grants a claim: the disowned PAUSED \
+           \bill is still unclaimable" $ do
+            let (bills, bid) = oneBill
+                (b1, _) = claimBill 10 30 everyoneAlive bid worker1 bills
+                (b2, _) = setBillWorking bid True b1
+                (b3, _) = setBillPaused bid True b2
+                (b4, _) = reconcileBillClaimants deadWorker1 b3
+                (_, ok) = claimBill 20 30 deadWorker1 bid worker2 b4
+            ok `shouldBe` False
+
+        it "an unclaimed bill and a nothing-to-do queue are returned \
+           \unchanged" $ do
+            let (bills, _) = oneBill
+            reconcileBillClaimants (const False) bills `shouldBe` (bills, [])
+            reconcileBillClaimants (const False) emptyCraftBills
+                `shouldBe` (emptyCraftBills, [])
+
+        it "only the dead claimants' bills are touched, and every one \
+           \of them is" $ do
+            let (b0, i1) = addBill station1 "a" 3 emptyCraftBills
+                (b1, i2) = addBill station2 "b" 3 b0
+                (b2, i3) = addBill station1 "c" 3 b1
+                (b3, _)  = claimBill 10 30 everyoneAlive i1 worker1 b2
+                (b4, _)  = claimBill 10 30 everyoneAlive i2 worker2 b3
+                (b5, _)  = claimBill 10 30 everyoneAlive i3 worker1 b4
+                (b6, _)  = setBillWorking i3 True b5
+                (b7, cleared) = reconcileBillClaimants deadWorker1 b6
+            cleared `shouldBe` sort [i1, i3]
+            cbClaimant ⊚ lookupBill i1 b7 `shouldBe` Just Nothing
+            cbClaimant ⊚ lookupBill i2 b7 `shouldBe` Just (Just worker2)
+            cbClaimant ⊚ lookupBill i3 b7 `shouldBe` Just Nothing
+            cbWorking  ⊚ lookupBill i3 b7 `shouldBe` Just False
 
     describe "reorder (#330)" $ do
         it "moving a bill up swaps cbSeq with its predecessor" $ do
