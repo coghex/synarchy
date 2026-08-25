@@ -2216,6 +2216,70 @@ def test_a_generated_directory_name_names_a_real_instant_and_process() -> None:
                         f"an invocation directory with {label}")
 
 
+def test_a_malformed_record_is_refused_rather_than_crashing() -> None:
+    """A validator that raises on its own input has refused nothing.
+
+    `int(digits)` reads naturally and is a liveness bug on both paths
+    that once used it: CPython caps integer-from-string conversion at
+    4,300 digits and raises `ValueError` past it, so a version component
+    or a pid of five thousand digits escaped as a traceback out of the
+    very code that exists to refuse it. Both are compared without
+    converting now, so an absurd digit run gets the controlled answer.
+    """
+    absurd = "9" * 6000
+    problem = dd.interpreter_problem(f"python3.{absurd}")
+    expect(problem is None,
+           f"an absurdly long version is above the floor, not a crash: "
+           f"{problem}")
+    problem = dd.interpreter_problem(f"python3.{'0' * 5999}9")
+    expect(problem is not None and "is not a Python 3 interpreter token"
+           in problem,
+           f"and a leading-zero one is malformed, not a crash: {problem}")
+
+    name = f"{PROBE}-20260821T120000Z-{absurd}-abcdef12"
+    expect(dd.invocation_name_problem(name, PROBE) is None,
+           "an absurdly long pid is a positive one, not a crash")
+    name = f"{PROBE}-20260821T120000Z-{'0' * 6000}-abcdef12"
+    problem = dd.invocation_name_problem(name, PROBE)
+    expect(problem is not None and "is not a process id" in problem,
+           f"and an all-zero one is refused, not a crash: {problem}")
+
+    # End to end, because the value of this is that `evaluate` answers.
+    document = diagnosis_document()
+    for batch in ("baseline", "verification"):
+        recorded = document[batch]["invocation"]
+        recorded["command"] = [f"python3.{'0' * 20}1"] + recorded["command"][1:]
+    expect_rejected(lambda d=document: evaluate(d),
+                    "is not a Python 3 interpreter token",
+                    "a controlled command with an absurd version token")
+
+
+def test_only_ascii_digits_spell_a_generated_directory() -> None:
+    """`\\d` in a `str` pattern matches every Unicode decimal digit.
+
+    The harness writes this name from `strftime` and an f-string over
+    `os.getpid()`, both of which emit ASCII and nothing else, so a name
+    carrying Arabic-Indic or fullwidth digits was not written by the
+    measurement it claims to describe — and `\\d+` accepted one while
+    `int()` happily read it as a number.
+    """
+    for label, name in (
+            ("an Arabic-Indic pid",
+             f"{PROBE}-20260821T120000Z-\u0664\u0667-abcdef12"),
+            ("a fullwidth pid",
+             f"{PROBE}-20260821T120000Z-\uff14\uff17-abcdef12"),
+            ("an Arabic-Indic stamp",
+             f"{PROBE}-\u0662\u0660\u0662\u0666\u0660\u0668\u0662\u0661"
+             f"T120000Z-4711-abcdef12")):
+        expect(dd.invocation_name_problem(name, PROBE) is not None,
+               f"{label} is not a generated name: {name!r}")
+
+    expect(dd.INVOCATION_PID_RE.pattern == "[0-9]+"
+           and dd.INVOCATION_STAMP_RE.pattern == "[0-9]{8}T[0-9]{6}Z",
+           f"both patterns are ASCII-only: {dd.INVOCATION_PID_RE.pattern}, "
+           f"{dd.INVOCATION_STAMP_RE.pattern}")
+
+
 def test_the_generated_name_is_split_from_the_right() -> None:
     """The three generated fields come off the END; the probe stays whole.
 
@@ -4094,7 +4158,8 @@ def test_the_interpreter_floor_is_what_refuses_an_old_interpreter() -> None:
     check_mutation(
         "the 3.10 syntax floor",
         "below this lab's 3.10 syntax floor",
-        "    if minor is not None and int(minor) < INTERPRETER_MINOR_FLOOR:",
+        "    if minor is not None and _below(minor, "
+        "INTERPRETER_MINOR_FLOOR):",
         "    if False:",
         lambda: _relaunched("python3.9"))
 

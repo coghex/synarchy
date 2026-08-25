@@ -468,6 +468,29 @@ INTERPRETER_RE = re.compile(
     rf"(?:\.(?P<patch>{_VERSION_COMPONENT}))?)?")
 
 
+def _below(digits: str, floor: int) -> bool:
+    """Is the ASCII digit run `digits` below `floor`, without converting it?
+
+    `int(digits)` would be the obvious spelling and is a LIVENESS bug
+    here: since 3.11 CPython caps integer-from-string conversion at
+    4,300 digits and raises `ValueError` past it, so a recorded
+    `python3.` followed by five thousand nines would escape this
+    module's controlled refusal as a traceback — a malformed input
+    crashing the validator that exists to refuse it. Bounding the
+    grammar to "a plausible version" instead would be inventing a limit
+    no producer states.
+
+    The comparison needs no conversion at all. `_VERSION_COMPONENT`
+    admits no leading zero, so a longer digit run is always the larger
+    number and two of equal length compare lexicographically exactly as
+    they compare numerically.
+    """
+    reference = str(floor)
+    if len(digits) != len(reference):
+        return len(digits) < len(reference)
+    return digits < reference
+
+
 def interpreter_problem(program: str):
     """Why `program` is not a permitted interpreter token, or `None`.
 
@@ -486,7 +509,7 @@ def interpreter_problem(program: str):
                 f"the right shape (`/bin/echo .../probe_flake.py --probe "
                 f"role --runs 10`) measures nothing")
     minor = matched["minor"]
-    if minor is not None and int(minor) < INTERPRETER_MINOR_FLOOR:
+    if minor is not None and _below(minor, INTERPRETER_MINOR_FLOOR):
         return (f"{program!r} names Python 3.{minor}, below this lab's 3."
                 f"{INTERPRETER_MINOR_FLOOR} syntax floor; the shipped tools "
                 f"annotate with `X | None`, so an interpreter below the "
@@ -818,9 +841,14 @@ TOOLS_DIR = "tools"
 # The STAMP and the PID are checked for MEANING as well as shape:
 # `\d{8}T\d{6}Z` alone matches `99999999T999999Z`, which no clock ever
 # produced, and `\d+` matches a pid of 0, which no process ever has.
+#
+# `[0-9]`, never `\d`: a `str` pattern's `\d` also matches every Unicode
+# decimal digit, so `\d+` accepted an Arabic-Indic pid the harness — an
+# f-string over `os.getpid()` — could not have written, and handed
+# `datetime.strptime` a stamp in digits `strftime` never emits.
 INVOCATION_GENERATED_FIELDS = 3
-INVOCATION_STAMP_RE = re.compile(r"\d{8}T\d{6}Z")
-INVOCATION_PID_RE = re.compile(r"\d+")
+INVOCATION_STAMP_RE = re.compile(r"[0-9]{8}T[0-9]{6}Z")
+INVOCATION_PID_RE = re.compile(r"[0-9]+")
 INVOCATION_UNIQUE_RE = re.compile(r"[0-9a-f]{8}")
 INVOCATION_STAMP_FORMAT = "%Y%m%dT%H%M%SZ"
 
@@ -848,7 +876,12 @@ def invocation_name_problem(name: str, probe: str):
         datetime.strptime(stamp, INVOCATION_STAMP_FORMAT)
     except ValueError:
         return f"{stamp!r} is not a real UTC instant"
-    if int(pid) <= 0:
+    # `int(pid) <= 0` would read the same and raise `ValueError` on a
+    # five-thousand-digit run (CPython's 4,300-digit conversion cap), so
+    # a forged name would crash this refusal instead of receiving it.
+    # A `[0-9]+` run carries no sign, so it is non-positive exactly when
+    # every digit is a zero.
+    if set(pid) == {"0"}:
         return f"{pid!r} is not a process id"
     return None
 
