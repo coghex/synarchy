@@ -9,7 +9,7 @@ PR #938's non-regular-file animation discovery is already PRR-3 in `docs/project
 ## Status
 
 - [x] PRR-1. Pickup orders inspect the active page but commit against the carrier's page — [#1666]
-- [ ] PRR-2. An empty location table can restore an allocator below its first valid id
+- [x] PRR-2. An empty location table can restore an allocator below its first valid id — [#1667]
 - [ ] PRR-3. Persisted location geometry bypasses component validation
 - [ ] PRR-4. The authoritative EngineEnv inventory reports the wrong field total
 
@@ -41,7 +41,7 @@ PR #938's non-regular-file animation discovery is already PRR-3 in `docs/project
 
 ## 2. Location-instance allocator validation
 
-### PRR-2. An empty location table can restore an allocator below its first valid id
+### [#1667] PRR-2. An empty location table can restore an allocator below its first valid id
 
 > **Captured note:** Validate `lisNextId` itself, even when a saved page has no location instances. The #911 allocator check validates each existing key against the cursor but treats every empty map as well formed, so a decoded cursor of zero or less survives and the next dynamic allocation violates the engine-wide positive-id contract.
 
