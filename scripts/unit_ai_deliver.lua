@@ -90,7 +90,7 @@ local function findDeliveryTarget(uid, fromX, fromY, params)
                                        count, delivered, uid)
                 if remaining > 0 then
                     local have = inventoryCountOf(uid, matType)
-                    local groundHave = groundCountOf(fromX, fromY, matType,
+                    local groundHave = groundCountOf(uid, fromX, fromY, matType,
                                            params.deliver_scan_range)
                     local muleHave = mule
                         and inventoryCountOf(mule.uid, matType) or 0

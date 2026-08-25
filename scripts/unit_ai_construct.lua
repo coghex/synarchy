@@ -138,7 +138,7 @@ local function constructMaterialsAvailable(uid, fromX, fromY, mats, params)
     for matType, need in pairs(mats or {}) do
         local have = inventoryCountOf(uid, matType)
         if have < need then
-            local ground = groundCountOf(fromX, fromY, matType,
+            local ground = groundCountOf(uid, fromX, fromY, matType,
                                          params.construct_scan_range)
             if have + ground < need then
                 local mule = findTechnomule(uid, fromX, fromY)
@@ -331,7 +331,7 @@ local function constructExecute(uid, s, params)
                     local short = need - have
                     if short > 0 then
                         local ground = math.min(short,
-                            groundCountOf(info.gridX, info.gridY, matType,
+                            groundCountOf(uid, info.gridX, info.gridY, matType,
                                           params.construct_scan_range))
                         if ground > 0 then cand.fromGround[matType] = ground end
                         if short - ground > 0 and mule then

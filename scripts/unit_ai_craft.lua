@@ -92,7 +92,7 @@ local function craftMaterialsAvailable(uid, fromX, fromY, demands, params)
     for item, need in pairs(demands) do
         local have = inventoryCountOf(uid, item)
         if have < need then
-            local ground = groundCountOf(fromX, fromY, item,
+            local ground = groundCountOf(uid, fromX, fromY, item,
                                          params.craft_scan_range)
             if have + ground < need then
                 local mule = findTechnomule(uid, fromX, fromY)
@@ -226,7 +226,7 @@ local function craftExecute(uid, s, params)
             local short = count - have
             if short > 0 then
                 local ground = math.min(short,
-                    groundCountOf(info.gridX, info.gridY, item,
+                    groundCountOf(uid, info.gridX, info.gridY, item,
                                   params.craft_scan_range))
                 if ground > 0 then fromGround[item] = ground end
                 local muleTake = 0

@@ -164,8 +164,23 @@ prelude = lns
     , "    return { gridX = b.x, gridY = b.y, tileW = 1, tileH = 1,"
     , "             page = b.page } end }"
     , "PICKUPS = 0"
+    -- listGround is the ACTIVE page's listing; getGroundForUnit answers
+    -- for the page the NAMED UNIT stands on, and returns (nil, true)
+    -- when that page genuinely holds no such id. Rows carry a page and
+    -- a per-page id, so the same gid can name a different item on each
+    -- page — the exact shape #1666's owning-page reader exists for.
+    , "GROUND_BY_PAGE = {}"
     , "item = {"
     , "  listGround = function() return GROUND end,"
+    , "  getGroundForUnit = function(uid, gid)"
+    , "    local u = UNITS[uid]"
+    , "    if not u then return nil, false end"
+    , "    local rows = GROUND_BY_PAGE[u.page]"
+    , "    if not rows then return nil, false end"
+    , "    for _, r in ipairs(rows) do"
+    , "      if r.id == gid then return r, true end"
+    , "    end"
+    , "    return nil, true end,"
     , "  pickupGround = function() PICKUPS = PICKUPS + 1; return true end,"
     , "  listDefs = function() return { { name = 'plate_steel', weight = 1 } } end }"
     , "craft = {"
@@ -285,6 +300,7 @@ spec = describe "AI page pairing" $ do
                 , "        { { defName = 'plate_steel', category = 'Materials' } })"
                 , "GROUND = { { id = 1, defName = 'plate_steel', x = 0, y = 0,"
                 , "             weight = 1 } }"
+                , "GROUND_BY_PAGE = { [HOME] = GROUND }"
                 , "local s = newState()"
                 , "s.deliveryClaim = { bid = 55, materials = { plate_steel = 2 },"
                 , "                    fromGround = { plate_steel = 1 },"
@@ -398,6 +414,7 @@ spec = describe "AI page pairing" $ do
                 , "        { { defName = 'plate_steel', category = 'Materials' } })"
                 , "GROUND = { { id = 1, defName = 'plate_steel', x = 0, y = 0,"
                 , "             weight = 1 } }"
+                , "GROUND_BY_PAGE = { [HOME] = GROUND }"
                 , "BILLS = { { id = 1, station = 42, recipe = 'r', mode = 'count' } }"
                 , "local s = newState()"
                 , "s.craftJob = { billId = 1, bid = 42, recipeId = 'r', work = 0,"
@@ -444,6 +461,67 @@ spec = describe "AI page pairing" $ do
                 , "assert(s.craftJob == nil,"
                 , "  'an off-page craft job must be released')"
                 , "assert(MOVES == 0, 'an off-page station must not steer a walk')"
+                ]
+
+    describe "the ground rung of the sourcing ladder" $ do
+        it "counts and fetches only rows on the actor's own page" $
+            runsOk $ lns
+                [ prelude
+                -- ONE gid, TWO pages, two different items. item.listGround
+                -- shows the ACTIVE page's row; item.pickupGround commits on
+                -- the CARRIER's page. A count or a walk taken off the
+                -- listing alone would promise the actor stock it cannot
+                -- reach and then hand that gid to a pickup that moves
+                -- something else entirely.
+                , "local away = { id = 1, defName = 'plate_steel', x = 3, y = 0,"
+                , "               weight = 1 }"
+                , "GROUND = { away }                 -- AWAY is 'active' here"
+                , "GROUND_BY_PAGE = { [AWAY] = { away } }"
+                , "assert(fetch.groundCountOf(1, 0, 0, 'plate_steel', 50) == 0,"
+                , "  'an off-page ground row must not be counted')"
+                , "local busy = fetch.fetchWantsFromGround("
+                , "  1, { plate_steel = 1 }, PARAMS, 50)"
+                , "assert(MOVES == 0 and PICKUPS == 0,"
+                , "  'an off-page ground row must draw neither a walk nor a pickup')"
+                , "assert(busy == false, 'nothing reachable means the fetch is done')"
+                , "-- The SAME gid, now naming a row on the actor's own page."
+                , "local home = { id = 1, defName = 'plate_steel', x = 3, y = 0,"
+                , "               weight = 1 }"
+                , "GROUND_BY_PAGE = { [AWAY] = { away }, [HOME] = { home } }"
+                , "assert(fetch.groundCountOf(1, 0, 0, 'plate_steel', 50) == 1,"
+                , "  'a same-page ground row must still be counted')"
+                , "local busy2 = fetch.fetchWantsFromGround("
+                , "  1, { plate_steel = 1 }, PARAMS, 50)"
+                , "assert(busy2 == true and MOVES == 1,"
+                , "  'a distant same-page row must still be walked to')"
+                ]
+
+        it "counts nothing for an actor whose page cannot be resolved" $
+            runsOk $ lns
+                [ prelude
+                , "local home = { id = 1, defName = 'plate_steel', x = 1, y = 0,"
+                , "               weight = 1 }"
+                , "GROUND = { home }"
+                , "GROUND_BY_PAGE = { [HOME] = { home } }"
+                -- uid 99 is no unit, so getGroundForUnit answers
+                -- (nil, false): nothing determined. Fail closed rather
+                -- than falling back to the active page.
+                , "assert(fetch.groundCountOf(99, 0, 0, 'plate_steel', 50) == 0,"
+                , "  'an unresolvable actor must count no ground stock')"
+                ]
+
+        it "leaves the until-stock tally on the ACTIVE page, as #795 specifies" $
+            runsOk $ lns
+                [ prelude
+                -- groundStockCountOf answers about the world the player
+                -- is looking at (it must equal crafting_panel.lua's
+                -- groundStockTally), so it deliberately does NOT join
+                -- the per-actor resolution above.
+                , "GROUND = { { id = 1, defName = 'widget', x = 9, y = 9 } }"
+                , "GROUND_BY_PAGE = {}"
+                , "local bill = { mode = 'until', outputItem = 'widget', target = 1 }"
+                , "assert(fetch.untilStockSatisfied(bill) == true,"
+                , "  'the until-stock tally must still read the active page')"
                 ]
 
     describe "unit-to-unit item targets" $ do

@@ -106,10 +106,13 @@ local function findTechnomule(uid, fromX, fromY)
     return best
 end
 
--- Count ground items of a def within `range` tiles of (fromX, fromY).
--- The middle rung of the sourcing ladder (inventory → ground → mule):
--- loose materials near the site get hauled before the mule is tapped.
-local function groundCountOf(fromX, fromY, defName, range)
+-- Ground rows on the ACTIVE page, unresolved. Only groundStockCountOf
+-- below may use this: its count is specified (#795) to be the whole
+-- ACTIVE world's ground stock, matching crafting_panel.lua's
+-- groundStockTally() exactly, and re-owning it per unit would break
+-- that documented identity. Every ACTOR-facing count goes through
+-- groundCountOf instead.
+local function activeGroundCountOf(fromX, fromY, defName, range)
     local n = 0
     for _, g in ipairs(item.listGround() or {}) do
         if g.defName == defName
@@ -120,14 +123,44 @@ local function groundCountOf(fromX, fromY, defName, range)
     return n
 end
 
+-- Count ground items of a def within `range` tiles of (fromX, fromY),
+-- on the ACTING unit's own page. The middle rung of the sourcing ladder
+-- (inventory → ground → mule): loose materials near the site get hauled
+-- before the mule is tapped.
+--
+-- #1673: item.listGround is ACTIVE-page scoped while item.pickupGround
+-- commits on the CARRIER's page (#1208), so a same-numbered gid on
+-- another page is a different item entirely — counting the active
+-- page's rows would promise this actor stock it can never pick up, and
+-- a pickup keyed on one of those ids would move something else. Every
+-- enumerated id is therefore re-resolved through
+-- item.getGroundForUnit(uid, gid) — #1666's owning-page reader — and
+-- every predicate below reads the RESOLVED row, never the listed one.
+-- Failing closed: an id that does not resolve is not counted, and an
+-- actor with no live page counts nothing.
+local function groundCountOf(uid, fromX, fromY, defName, range)
+    local n = 0
+    for _, g in ipairs(item.listGround() or {}) do
+        local owned = item.getGroundForUnit(uid, g.id)
+        if owned and owned.defName == defName
+           and distance(fromX, fromY, owned.x, owned.y) <= range then
+            n = n + 1
+        end
+    end
+    return n
+end
+
 -- Ground stock of a defName across the WHOLE active world, no range
 -- limit (#795) — the one authoritative scope an until-stock craft
 -- bill's target counts against: ground-only, unbounded, same as
 -- crafting_panel.lua's groundStockTally(). A thin unbounded-range call
--- into groundCountOf so the craft AI (unit_ai_craft.lua) and the #330
--- panel compute the identical count from the identical formula.
+-- into activeGroundCountOf so the craft AI (unit_ai_craft.lua) and the
+-- #330 panel compute the identical count from the identical formula --
+-- which is why this one stays ACTIVE-page scoped rather than joining
+-- #1673's per-actor resolution: it answers a question about the world
+-- the player is looking at, not about any particular unit's reach.
 local function groundStockCountOf(defName)
-    return groundCountOf(0, 0, defName, math.huge)
+    return activeGroundCountOf(0, 0, defName, math.huge)
 end
 
 -- Is an UNTIL-STOCK craft bill (#795, Craft.Bills.BillMode) already at
@@ -160,11 +193,19 @@ local function fetchWantsFromGround(uid, wants, params, range)
     local info = unit.getInfo(uid)
     if not info then return false end
 
+    -- #1673: same owning-page resolution as groundCountOf, and for the
+    -- sharper reason -- this loop's winner is both WALKED TO and PICKED
+    -- UP. A page-B row selected off the active listing would send the
+    -- actor to another world's coordinates and then hand its gid to
+    -- item.pickupGround, which resolves on the actor's OWN page and so
+    -- would move a different item. Ranking, arrival and pickup all read
+    -- the resolved row.
     local best, bestD = nil, range or math.huge
     for _, g in ipairs(item.listGround() or {}) do
-        if g.defName == mat then
-            local d = distance(info.gridX, info.gridY, g.x, g.y)
-            if d <= bestD then best, bestD = g, d end
+        local owned = item.getGroundForUnit(uid, g.id)
+        if owned and owned.defName == mat then
+            local d = distance(info.gridX, info.gridY, owned.x, owned.y)
+            if d <= bestD then best, bestD = owned, d end
         end
     end
     if not best then
