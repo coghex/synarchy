@@ -10,7 +10,7 @@ PRs #873 and #870 retain their codec/apply crash-recovery contracts in the curre
 
 - [x] PRR-1. Whole-session load assigns the active page's zoom atlas to every page — [#1670]
 - [x] PRR-2. A no-payload load retains the replaced session's transient GPU textures — [no-issue]
-- [ ] PRR-3. Defaults rebuilds drop keyboard control focus on both configuration screens
+- [x] PRR-3. Defaults rebuilds drop keyboard control focus on both configuration screens — [#1671]
 
 ## 1. Per-page zoom-atlas ownership
 
@@ -69,7 +69,7 @@ PRs #873 and #870 retain their codec/apply crash-recovery contracts in the curre
 
 ## 3. Defaults-action keyboard focus
 
-### PRR-3. Defaults rebuilds drop keyboard control focus on both configuration screens
+### [#1671] PRR-3. Defaults rebuilds drop keyboard control focus on both configuration screens
 
 > **Captured note:** Snapshot keyboard control focus by name before the Settings and Create World Defaults actions destroy their pages, then restore it after the rebuilt page is shown. Resetting pending configuration is intentional; clearing the user's keyboard navigation position is a separate side effect of page recreation.
 
