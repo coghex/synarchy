@@ -10,7 +10,7 @@ PR #237's tile/chunk source tags, #235's debug-overlay lifecycle, #233/#234/#231
 
 - [x] PRR-1. Soft terrain bank slopes ignore wet neighbours across chunk seams — [#1685]
 - [x] PRR-2. A portal tick can outlive its active-page snapshot — [#1686]
-- [ ] PRR-3. Portal spawn failures are truthy and consume the roster
+- [x] PRR-3. Portal spawn failures are truthy and consume the roster — [#1687]
 
 ## 1. Cross-chunk slope ownership
 
@@ -61,7 +61,7 @@ PR #237's tile/chunk source tags, #235's debug-overlay lifecycle, #233/#234/#231
 - **Scope and constraints:** Preserve global entity-id uniqueness, explicit building-page ownership, target-page surface-Z lookup, spawn retry/cooldown behavior, asynchronous world-thread lifecycle commands, and normal hidden-world persistence. Do not solve this by reverting to active-page destination lookup or by holding a shared lock across Lua execution.
 - **Remaining uncertainty:** The race window is narrow and was not reproduced under ordinary scheduling. A deterministic fixture should pause after `building.getActiveIds`, apply `WorldHide`/`WorldShow` on the world thread, then resume a roster-ready portal tick and assert no roster consumption or unit creation on either page. The worker-construction path may self-suppress after a switch because its worker query is active-page-scoped; the portal path has no equivalent late eligibility check.
 
-### PRR-3. Portal spawn failures are truthy and consume the roster
+### [#1687] PRR-3. Portal spawn failures are truthy and consume the roster
 
 > **Captured note:** `unit.spawn` returns `-1` on failure, but the portal tests only `if not newUid`, so its failure path is unreachable for the API's defined sentinel.
 
