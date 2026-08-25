@@ -233,10 +233,17 @@ buildSessionSnapshot globals pages = SessionSnapshot
 --   folded into 'captureSessionSnapshot' itself, since
 --   "World.Save.Integrity" imports THIS module for 'SessionSnapshot' —
 --   folding the call in here would be a cycle).
---   Likewise tile-coordinate bounds are not re-validated (the inventory
---   already records this as a pre-existing, accepted gap, not a #758
---   requirement). What IS checked below are invariants that should
---   ALWAYS hold by construction; a violation means real corruption.
+--   Likewise tile-coordinate bounds are not re-validated HERE (the
+--   inventory already records this as a pre-existing, accepted gap, not
+--   a #758 requirement) — with one exception that is not this
+--   function's either: since #1668 a persisted location instance's
+--   stored 'Location.Bounds.AbsBounds' IS checked for axis inversion,
+--   at the component boundary by
+--   "World.Save.Component.Page" 's @validatePages@, because the save
+--   decode path builds that box from unrestricted wire integers rather
+--   than downstream of the YAML loader's gate. What IS checked below
+--   are invariants that should ALWAYS hold by construction; a violation
+--   means real corruption.
 --
 --   Lua-owned state is not represented in this type at all (issue #761,
 --   save-overhaul B3 — previously an opaque @snapLuaModules@ blob map):

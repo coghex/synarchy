@@ -180,8 +180,14 @@ handleWorldPreview = do
 
 -- | Poll for pending zoom atlas pixel data and upload to GPU.
 --   Called every frame.  When the world thread produces atlas data,
---   this creates a GPU texture and stores the ZoomAtlasInfo on all
---   visible world states.
+--   this creates a GPU texture and stores the 'ZoomAtlasInfo' on
+--   exactly the 'WorldState's the producer captured alongside the
+--   pixels -- the page(s) whose OWN zoom cache built this atlas, and no
+--   other (issue #1670). That list is authoritative here: this handler
+--   never widens it to "every visible page", because
+--   'World.Render.Zoom.Bake' indexes a page's own cache using whatever
+--   atlas is assigned to it, so a page holding an atlas it did not
+--   produce bakes against another world's pixels.
 handleZoomAtlasUpload ∷ EngineM σ ()
 handleZoomAtlasUpload = do
     env ← ask
