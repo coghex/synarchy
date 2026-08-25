@@ -8,13 +8,13 @@ PR #792's probe reclassification has since been superseded accurately where late
 
 ## Status
 
-- [ ] PRR-1. Persistence inventory CI stops at manager pointer fields
+- [x] PRR-1. Persistence inventory CI stops at manager pointer fields — [#1703]
 - [ ] PRR-2. Catatonia can freeze a standing unit in mid-air
 - [ ] PRR-3. The lunge landing strike is unreachable through the AI dispatcher
 
 ## 1. Persistence inventory audit depth
 
-### PRR-1. Persistence inventory CI stops at manager pointer fields
+### [#1703] PRR-1. Persistence inventory CI stops at manager pointer fields
 
 > **Captured note:** Extend the persistence-inventory drift gate through the state-bearing records behind `unitManagerRef`, `buildingManagerRef`, and `utsRef`. Classifying only each pointer as `Rebuild` does not force a persistence decision when an existing manager or unit-sim record gains a new field.
 
