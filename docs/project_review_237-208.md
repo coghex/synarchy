@@ -8,13 +8,13 @@ PR #237's tile/chunk source tags, #235's debug-overlay lifecycle, #233/#234/#231
 
 ## Status
 
-- [ ] PRR-1. Soft terrain bank slopes ignore wet neighbours across chunk seams
+- [x] PRR-1. Soft terrain bank slopes ignore wet neighbours across chunk seams — [#1685]
 - [ ] PRR-2. A portal tick can outlive its active-page snapshot
 - [ ] PRR-3. Portal spawn failures are truthy and consume the roster
 
 ## 1. Cross-chunk slope ownership
 
-### PRR-1. Soft terrain bank slopes ignore wet neighbours across chunk seams
+### [#1685] PRR-1. Soft terrain bank slopes ignore wet neighbours across chunk seams
 
 > **Captured note:** Soft terrain at a chunk edge can still slope into a wet neighbour because the bank rule only sees the current chunk's fluid map.
 
