@@ -8,13 +8,13 @@ PR #736's tri-state playtest step, #735's action-outcome oracle key, #732's sequ
 
 ## Status
 
-- [ ] PRR-1. The F4 coverage report falsely marks six Tier-1 routes as gaps
+- [x] PRR-1. The F4 coverage report falsely marks six Tier-1 routes as gaps — [#1704]
 - [ ] PRR-2. Value-only event-log deltas can lose repeated rows at ring rollover
 - [ ] PRR-3. The add-only concept catalogue has no compatibility ratchet
 
 ## 1. Action-outcome coverage after the input-thread split
 
-### PRR-1. The F4 coverage report falsely marks six Tier-1 routes as gaps
+### [#1704] PRR-1. The F4 coverage report falsely marks six Tier-1 routes as gaps
 
 > **Captured note:** Update the action-outcome coverage map when an instrumented implementation is split or extracted, and give the checker a real-tree regression so synthetic unit fixtures cannot stay green while the repository report becomes false.
 
