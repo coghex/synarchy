@@ -68,6 +68,7 @@ registerItemAPI env = do
   registerLuaFunction "deselect"     (itemDeselectFn env)
   registerLuaFunction "getSelected"  (itemGetSelectedFn env)
   registerLuaFunction "pickupGround" (itemPickupGroundFn env)
+  registerLuaFunction "getGroundForUnit" (itemGetGroundForUnitFn env)
   registerLuaFunction "getFood"      (itemGetFoodFn env)
   registerLuaFunction "debugQuads"   (itemDebugQuadsFn env)
   Lua.setglobal (Lua.Name "item")
