@@ -9,7 +9,7 @@ PR #237's tile/chunk source tags, #235's debug-overlay lifecycle, #233/#234/#231
 ## Status
 
 - [x] PRR-1. Soft terrain bank slopes ignore wet neighbours across chunk seams — [#1685]
-- [ ] PRR-2. A portal tick can outlive its active-page snapshot
+- [x] PRR-2. A portal tick can outlive its active-page snapshot — [#1686]
 - [ ] PRR-3. Portal spawn failures are truthy and consume the roster
 
 ## 1. Cross-chunk slope ownership
@@ -38,7 +38,7 @@ PR #237's tile/chunk source tags, #235's debug-overlay lifecycle, #233/#234/#231
 
 ## 2. Active-page action ownership
 
-### PRR-2. A portal tick can outlive its active-page snapshot
+### [#1686] PRR-2. A portal tick can outlive its active-page snapshot
 
 > **Captured note:** The active-page building list is a snapshot; a portal can finish its tick after its page has been hidden and spawn into that hidden page.
 
