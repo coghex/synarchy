@@ -1,0 +1,1534 @@
+{
+  "probes": [
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "action_outcome",
+      "protocol": "legacy",
+      "script": "action_outcome_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "blood_decal",
+      "protocol": "legacy",
+      "script": "blood_decal_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "blood_impact",
+      "protocol": "legacy",
+      "script": "blood_impact_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "blood_gpu_lifecycle",
+      "protocol": "legacy",
+      "script": "blood_gpu_lifecycle_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "bleeding_trail",
+      "protocol": "legacy",
+      "script": "bleeding_trail_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "ci-eligible",
+      "key": "canteen_instance",
+      "protocol": "legacy",
+      "script": "canteen_instance_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "ci-eligible",
+      "key": "cargo_capacity",
+      "protocol": "legacy",
+      "script": "cargo_capacity_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "chop",
+      "protocol": "legacy",
+      "script": "chop_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "circadian",
+      "protocol": "legacy",
+      "script": "circadian_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "circadian_species",
+      "protocol": "legacy",
+      "script": "circadian_species_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "collapse_crawl",
+      "protocol": "legacy",
+      "script": "collapse_crawl_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "combat_anim",
+      "protocol": "legacy",
+      "script": "combat_anim_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "concussion_revive",
+      "protocol": "legacy",
+      "script": "concussion_revive_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "config_migration",
+      "protocol": "legacy",
+      "script": "config_migration_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "config_state",
+      "protocol": "legacy",
+      "script": "config_state_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "construction",
+      "protocol": "legacy",
+      "script": "construction_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "construction_blueprint_footprint",
+      "protocol": "legacy",
+      "script": "construction_blueprint_footprint_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "ci-eligible",
+      "key": "content_registry",
+      "protocol": "legacy",
+      "script": "content_registry_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "ci-eligible",
+      "key": "consumable_effects",
+      "protocol": "legacy",
+      "script": "consumable_effects_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "ci-eligible",
+      "key": "cooking",
+      "protocol": "legacy",
+      "script": "cooking_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "ci-eligible",
+      "key": "craft",
+      "protocol": "legacy",
+      "script": "craft_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "craft_bill",
+      "protocol": "legacy",
+      "script": "craft_bill_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "crop",
+      "protocol": "legacy",
+      "script": "crop_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "ci-eligible",
+      "key": "debug_console_boot",
+      "protocol": "legacy",
+      "script": "debug_console_boot_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "disarm",
+      "protocol": "legacy",
+      "script": "disarm_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "expedition_loop",
+      "protocol": "legacy",
+      "script": "expedition_loop_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "expedition_retrieval",
+      "protocol": "legacy",
+      "script": "expedition_retrieval_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "farm_ai",
+      "protocol": "legacy",
+      "script": "farm_ai_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "flora_growth",
+      "protocol": "legacy",
+      "script": "flora_growth_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "follow_command_priority",
+      "protocol": "legacy",
+      "script": "follow_command_priority_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "foraging",
+      "protocol": "legacy",
+      "script": "foraging_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "ci-eligible",
+      "key": "infection",
+      "protocol": "legacy",
+      "script": "infection_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "injury_log",
+      "protocol": "legacy",
+      "script": "injury_log_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "item_instance",
+      "protocol": "legacy",
+      "script": "item_instance_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "item_temp",
+      "protocol": "legacy",
+      "script": "item_temp_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "location_content",
+      "protocol": "legacy",
+      "script": "location_content_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "location_embark",
+      "protocol": "legacy",
+      "script": "location_embark_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "location_overlay",
+      "protocol": "legacy",
+      "script": "location_overlay_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "location_stamp_idempotent",
+      "protocol": "legacy",
+      "script": "location_stamp_idempotent_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "lua_orphan_prune",
+      "protocol": "legacy",
+      "script": "lua_orphan_prune_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "lua_strict_msg",
+      "protocol": "legacy",
+      "script": "lua_strict_msg_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "machine_shop",
+      "protocol": "legacy",
+      "script": "machine_shop_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "meal_waste",
+      "protocol": "legacy",
+      "script": "meal_waste_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "ci-eligible",
+      "key": "medic_coord",
+      "protocol": "legacy",
+      "script": "medic_coord_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "mental_efficiency",
+      "protocol": "legacy",
+      "script": "mental_efficiency_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "mental_state",
+      "protocol": "legacy",
+      "script": "mental_state_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "movement",
+      "protocol": "legacy",
+      "script": "movement_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "multiworld_save",
+      "protocol": "legacy",
+      "script": "multiworld_save_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "offscreen",
+      "protocol": "legacy",
+      "script": "offscreen_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "ci-eligible",
+      "key": "persistence_contract",
+      "protocol": "legacy",
+      "script": "persistence_contract_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "persistence_contract_sweep",
+      "protocol": "legacy",
+      "script": "persistence_contract_sweep.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "persistence_integrity",
+      "protocol": "legacy",
+      "script": "persistence_integrity_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "physiology",
+      "protocol": "legacy",
+      "script": "physiology_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "plant",
+      "protocol": "legacy",
+      "script": "plant_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "portal_ghost",
+      "protocol": "legacy",
+      "script": "portal_ghost_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "portal_location",
+      "protocol": "legacy",
+      "script": "portal_location_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "power",
+      "protocol": "legacy",
+      "script": "power_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "power_workshop",
+      "protocol": "legacy",
+      "script": "power_workshop_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "preview",
+      "protocol": "legacy",
+      "script": "preview_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "ci-eligible",
+      "key": "preview_cli",
+      "protocol": "legacy",
+      "script": "preview_cli_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "remote_warning_page_guard",
+      "protocol": "legacy",
+      "script": "remote_warning_page_guard_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "ci-eligible",
+      "key": "repair_item",
+      "protocol": "legacy",
+      "script": "repair_item_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "ci-eligible",
+      "key": "repair",
+      "protocol": "legacy",
+      "script": "repair_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "etymology",
+      "protocol": "legacy",
+      "script": "etymology_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "repair_ai",
+      "protocol": "legacy",
+      "script": "repair_ai_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "resource_root",
+      "protocol": "legacy",
+      "script": "resource_root_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "river_naming",
+      "protocol": "legacy",
+      "script": "river_naming_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "role",
+      "protocol": "probe-result/v1",
+      "script": "role_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "save_compat_migration",
+      "protocol": "legacy",
+      "script": "save_compat_migration_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "autosave",
+      "protocol": "legacy",
+      "script": "autosave_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "save_pause",
+      "protocol": "legacy",
+      "script": "save_pause_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "save_barrier",
+      "protocol": "legacy",
+      "script": "save_barrier_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "save_storage",
+      "protocol": "legacy",
+      "script": "save_storage_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "sleep",
+      "protocol": "legacy",
+      "script": "sleep_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "state_of_mind",
+      "protocol": "legacy",
+      "script": "state_of_mind_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "text_encoding",
+      "protocol": "legacy",
+      "script": "text_encoding_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "thermo_altitude",
+      "protocol": "probe-result/v1",
+      "script": "thermo_altitude_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "thought",
+      "protocol": "legacy",
+      "script": "thought_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "till",
+      "protocol": "legacy",
+      "script": "till_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "tutorial",
+      "protocol": "legacy",
+      "script": "tutorial_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "tutorial_hud",
+      "protocol": "legacy",
+      "script": "tutorial_hud_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "item_list_widget",
+      "protocol": "legacy",
+      "script": "item_list_widget_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "transactional_load",
+      "protocol": "legacy",
+      "script": "transactional_load_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "transfer_order",
+      "protocol": "legacy",
+      "script": "transfer_order_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "unified_transfer",
+      "protocol": "legacy",
+      "script": "unified_transfer_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "transfer_context_menu",
+      "protocol": "legacy",
+      "script": "transfer_context_menu_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "wire",
+      "protocol": "legacy",
+      "script": "wire_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [
+          {
+            "accepted": true,
+            "commit_sha": "9e36ab5fa53f5442aec20080425ab9c4410c4672",
+            "completed_runs": 10,
+            "error": null,
+            "requested_runs": 10,
+            "retained_artifacts": [],
+            "status": "ok",
+            "timestamp_utc": "2026-08-25T00:53:44Z"
+          }
+        ],
+        "claims": [
+          {
+            "commit_sha": "9e36ab5fa53f5442aec20080425ab9c4410c4672",
+            "host": "Vincents-MacBook-Pro.local",
+            "lease_seconds": 3600.0,
+            "owner": "vincentcoghlan@Vincents-MacBook-Pro.local:62621",
+            "pid": 62621,
+            "requested_runs": 10,
+            "timestamp_utc": "2026-08-25T00:53:44Z",
+            "token": "2d39b13c46974e729affc1cdf0a07210"
+          }
+        ],
+        "current": {
+          "commit_sha": "9e36ab5fa53f5442aec20080425ab9c4410c4672",
+          "samples": [
+            {
+              "check_counts": {
+                "command_supersedes": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "control_autonomous": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "control_never_holds": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "control_works": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "hold_created": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "hold_sustained": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "internal_move_no_hold": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "interrupt_displaces": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "release_verb": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "return_to_anchor": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "work_resumes": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "work_suppressed": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                }
+              },
+              "commit_sha": "9e36ab5fa53f5442aec20080425ab9c4410c4672",
+              "completed_runs": 10,
+              "failure_count": 0,
+              "failure_rate": 0.0,
+              "peak_concurrency": 1,
+              "requested_runs": 10,
+              "retained_artifacts": [],
+              "rts_capabilities": 4,
+              "runs": [
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 152.807,
+                  "index": 1,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 151.179,
+                  "index": 2,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 164.716,
+                  "index": 3,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 159.201,
+                  "index": 4,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 170.831,
+                  "index": 5,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 152.337,
+                  "index": 6,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 141.737,
+                  "index": 7,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 166.211,
+                  "index": 8,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 173.815,
+                  "index": 9,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 141.881,
+                  "index": 10,
+                  "outcome": "PASS"
+                }
+              ],
+              "timeout_count": 0,
+              "timestamp_utc": "2026-08-25T00:53:44Z",
+              "total_elapsed_seconds": 1574.715,
+              "worst_elapsed_seconds": 173.815
+            }
+          ]
+        },
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "position_hold",
+      "protocol": "probe-result/v1",
+      "script": "position_hold_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "wander_hazard",
+      "protocol": "legacy",
+      "script": "wander_hazard_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "retaliation_swap",
+      "protocol": "legacy",
+      "script": "retaliation_swap_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": []
+      },
+      "classification": "manual-only",
+      "key": "pause_speed",
+      "protocol": "legacy",
+      "script": "pause_speed_probe.py"
+    }
+  ],
+  "schema": "probe-census/v3"
+}
