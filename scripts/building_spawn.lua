@@ -133,6 +133,32 @@ local function ensureState(bid, params)
     return s
 end
 
+-- Normalizes unit.spawn's return into "the id of a unit that was
+-- actually created", or nil when the spawn was rejected (#1687).
+--
+-- Every synchronous rejection branch in
+-- Engine.Scripting.Lua.API.Units.Spawn -- missing name, unknown def,
+-- no target world -- returns the Lua NUMBER -1, never nil and never
+-- false, and -1 is truthy in Lua. So the bare `if not newUid` this
+-- replaces could not see a rejection at all: the tick ran its whole
+-- success path against id -1, handing items to a unit that does not
+-- exist, consuming a roster entry per failed cycle until the roster
+-- was spent, and parking `lastUid = -1` where the component's own
+-- checkWrappedRef rejects it -- which fails engine.saveWorld for the
+-- entire session, since building_spawn is a REQUIRED component.
+--
+-- Framed as "is this a well-formed unit id?" rather than "is this
+-- -1?" on purpose: it keeps the pre-existing nil/false handling, and
+-- the shape it accepts is exactly the shape checkWrappedRef accepts
+-- below, so s.lastUid cannot come to hold a value that refuses the
+-- save. scripts/locations.lua:394 is the sibling caller that already
+-- tested the sentinel explicitly.
+local function spawnedUid(v)
+    if type(v) ~= "number" then return nil end
+    if v ~= math.floor(v) or v < 1 then return nil end
+    return v
+end
+
 -----------------------------------------------------------
 -- Per-building tick
 -----------------------------------------------------------
@@ -183,8 +209,8 @@ local function tickOne(bid, info)
     -- (info.page) so the unit lands in the building's world even if the
     -- active page changes between the active-page scan and this call
     -- (#196) — unit.spawn otherwise stamps the active page.
-    local newUid = unit.spawn(unitType, spawnX, spawnY,
-                              nil, "player", info.page)
+    local newUid = spawnedUid(unit.spawn(unitType, spawnX, spawnY,
+                                         nil, "player", info.page))
     if not newUid then
         -- Throttle retries: stamp lastSpawnedAt so the spawn_interval
         -- cooldown gate at the top of tickOne rate-limits the next
