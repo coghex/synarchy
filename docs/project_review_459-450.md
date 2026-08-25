@@ -8,7 +8,7 @@ The construction-job flow, ruins and structure variants, script teardown, legacy
 
 ## Status
 
-- [ ] PRR-1. Foraging discovery remains planar at the cylindrical seam
+- [x] PRR-1. Foraging discovery remains planar at the cylindrical seam — [#1707]
 - [ ] PRR-2. Flora YAML can opt into zero-time repeat harvesting
 - [ ] PRR-3. Food YAML does not enforce one positive nutrition mode
 - [ ] PRR-4. Fresh and loaded arenas use different base vegetation seeds
@@ -17,7 +17,7 @@ The construction-job flow, ruins and structure variants, script teardown, legacy
 
 ## 1. Seam-aware foraging discovery
 
-### PRR-1. Foraging discovery remains planar at the cylindrical seam
+### [#1707] PRR-1. Foraging discovery remains planar at the cylindrical seam
 
 > **Captured note:** Make forage lookup, harvestability search, and distance ordering use the same cylindrical coordinate contract as the harvest action. The action now canonicalizes wrap aliases, but discovery still scans raw chunk keys and compares raw planar coordinates, so a hungry unit near a world seam can fail to see physically adjacent food across that seam.
 
