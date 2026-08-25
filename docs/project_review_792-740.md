@@ -8,13 +8,13 @@ PR #792's probe reclassification has since been superseded accurately where late
 
 ## Status
 
-- [ ] PRR-1. Persistence inventory CI stops at manager pointer fields
-- [ ] PRR-2. Catatonia can freeze a standing unit in mid-air
-- [ ] PRR-3. The lunge landing strike is unreachable through the AI dispatcher
+- [x] PRR-1. Persistence inventory CI stops at manager pointer fields — [#1703]
+- [x] PRR-2. Catatonia can freeze a standing unit in mid-air — [#1709]
+- [x] PRR-3. The lunge landing strike is unreachable through the AI dispatcher — [#1713]
 
 ## 1. Persistence inventory audit depth
 
-### PRR-1. Persistence inventory CI stops at manager pointer fields
+### [#1703] PRR-1. Persistence inventory CI stops at manager pointer fields
 
 > **Captured note:** Extend the persistence-inventory drift gate through the state-bearing records behind `unitManagerRef`, `buildingManagerRef`, and `utsRef`. Classifying only each pointer as `Rebuild` does not force a persistence decision when an existing manager or unit-sim record gains a new field.
 
@@ -41,7 +41,7 @@ PR #792's probe reclassification has since been superseded accurately where late
 
 ## 2. Catatonia during a leap
 
-### PRR-2. Catatonia can freeze a standing unit in mid-air
+### [#1709] PRR-2. Catatonia can freeze a standing unit in mid-air
 
 > **Captured note:** Give mental-break entry a transition-safe way to stop locomotion. Turning a live jump into `Idle` while preserving its interpolated `realZ` and jump endpoints makes catatonia hold a nominally standing unit visibly above the ground for the whole episode.
 
@@ -67,7 +67,7 @@ PR #792's probe reclassification has since been superseded accurately where late
 
 ## 3. Lash-out and shared lunge completion
 
-### PRR-3. The lunge landing strike is unreachable through the AI dispatcher
+### [#1713] PRR-3. The lunge landing strike is unreachable through the AI dispatcher
 
 > **Captured note:** Let the combat lunge state machine observe its airborne phase independently of the dispatcher's general "do not run AI while transitioning" guard. Otherwise short-reach lash-out units leap, time out, and discard the reach/impact strike the lunge exists to deliver.
 

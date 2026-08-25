@@ -813,6 +813,19 @@ jobs:
           python3 tools/test_location_embark_probe.py
           python3 tools/test_movement_probe.py
 
+      # The decision `.github/workflows/review-gate.yml` makes on every
+      # synchronize push: keep `reviewed:approve` only when the push left
+      # this PR's own patch identical (#1679). That job runs on a
+      # different event from this workflow and mutates a label rather
+      # than producing a check, so nothing here would ever notice it
+      # regressing; its policy is only observable through this
+      # self-test. Engine-free and network-free -- it builds throwaway
+      # commit graphs in a temporary directory and runs in about a
+      # second.
+      - name: Review-gate decision self-test
+        run: |
+          python3 tools/review_gate_decision.py --self-test
+
       # Cheap, no-engine guard (#1355): fails if a `python3 tools/*.py`
       # check runs in this job and not in tools/ci-local.sh, or the other
       # way round, outside the audit's hard-coded exemption list (CI's

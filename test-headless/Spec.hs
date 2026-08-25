@@ -226,6 +226,7 @@ import qualified Test.Headless.Lua.UnitAiLogisticsTargets as LuaUnitAiLogisticsT
 import qualified Test.Headless.Lua.UnitAiLoadReset as LuaUnitAiLoadReset
 import qualified Test.Headless.Lua.UnitAiReconcile as LuaUnitAiReconcile
 import qualified Test.Headless.Lua.SessionTeardown as LuaSessionTeardown
+import qualified Test.Headless.Lua.BuildingSpawnSentinel as LuaBuildingSpawnSentinel
 import qualified Test.Headless.Lua.WorkClaimCapacity as LuaWorkClaimCapacity
 import qualified Test.Headless.Lua.Faction as LuaFaction
 import qualified Test.Headless.Unit.Faction as UnitFaction
@@ -475,6 +476,7 @@ main = hspec $ do
     LuaUnitAiLoadReset.spec
     LuaUnitAiReconcile.spec
     LuaSessionTeardown.spec
+    LuaBuildingSpawnSentinel.spec
     LuaWorkClaimCapacity.spec
     LuaFaction.spec
     describe "World.CursorInfo" CursorInfo.spec

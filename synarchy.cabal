@@ -1280,6 +1280,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.UnitAiReconcile
                    Test.Headless.Lua.UnitAiPickupPage
                    Test.Headless.Lua.SessionTeardown
+                   Test.Headless.Lua.BuildingSpawnSentinel
                    Test.Headless.Lua.WorkClaimCapacity
                    Test.Headless.Capability.Building
                    Test.Headless.Capability.Events

@@ -8,9 +8,9 @@ The settings-log gating, production warning policy, algorithm-comment numbering,
 
 ## Status
 
-- [ ] PRR-1. The texture-path guard is absent from CI and currently rejects prose
-- [ ] PRR-2. Structure quads do not follow the cylindrical render alias
-- [ ] PRR-3. Front-wall handling is fixed to the FaceSouth edge pair
+- [x] PRR-1. The texture-path guard is absent from CI and currently rejects prose — [#1705]
+- [x] PRR-2. Structure quads do not follow the cylindrical render alias — [#1706]
+- [x] PRR-3. Front-wall handling is fixed to the FaceSouth edge pair — [#1712]
 - [ ] PRR-4. Hidden walls can still lift visible flora and vegetation
 - [ ] PRR-5. Guaranteed placement can bypass the location water-safety rule
 - [ ] PRR-6. A partial location stamp is permanently recorded as complete
@@ -18,7 +18,7 @@ The settings-log gating, production warning policy, algorithm-comment numbering,
 
 ## 1. Texture-reference enforcement
 
-### PRR-1. The texture-path guard is absent from CI and currently rejects prose
+### [#1705] PRR-1. The texture-path guard is absent from CI and currently rejects prose
 
 > **Captured note:** Make the all-reference texture-path check an enforced, syntax-aware contract. PR #430 introduced it as the mandatory guard against silent magenta assets, but neither CI nor `make ci` runs it, and its raw line regex currently treats a Haddock counterexample as a real path and fails on `assets/textures/iconsEvil/x.png`.
 
@@ -42,7 +42,7 @@ The settings-log gating, production warning policy, algorithm-comment numbering,
 
 ## 2. Structure rendering at the cylindrical seam
 
-### PRR-2. Structure quads do not follow the cylindrical render alias
+### [#1706] PRR-2. Structure quads do not follow the cylindrical render alias
 
 > **Captured note:** Route structure pieces through the same facing-aware nearest-wrap placement used by terrain, flora, ground items, blood, spoil, cursors, and their hit tests. `Structure.Render` enumerates stored canonical coordinates and projects them directly, so a room beside a camera parked on the opposite seam alias can render a whole world away or disappear while the terrain beneath it is correctly wrapped into view.
 
@@ -66,7 +66,7 @@ The settings-log gating, production warning policy, algorithm-comment numbering,
 
 ## 3. Rotated front-wall policy
 
-### PRR-3. Front-wall handling is fixed to the FaceSouth edge pair
+### [#1712] PRR-3. Front-wall handling is fixed to the FaceSouth edge pair
 
 > **Captured note:** Rotate structure edge identity together with the camera before deciding which walls are front-facing, which art they use, which walls receive depth strips, and which walls lift overlapping billboards. The current code rotates sort coordinates but always treats authored `wall_se`/`wall_sw` as the front pair, so the #415/#418 protections do not follow the visible front of a room after rotation.
 
