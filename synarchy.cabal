@@ -1105,6 +1105,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.Transfer
                    Test.Headless.Unit.TransferApi
                    Test.Headless.Unit.TransferOrderApi
+                   Test.Headless.Unit.CargoApi
                    Test.Headless.Unit.NightPerception
                    Test.Headless.Unit.LineOfSight
                    Test.Headless.Item.GroundPageOwnership
@@ -1274,6 +1275,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.UnitAiStall
                    Test.Headless.Lua.UnitAiHarvest
                    Test.Headless.Lua.UnitAiLogisticsTargets
+                   Test.Headless.Lua.UnitAiPageTargets
                    Test.Headless.Lua.UnitAiLoadReset
                    Test.Headless.Lua.UnitAiReconcile
                    Test.Headless.Lua.UnitAiPickupPage

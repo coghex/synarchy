@@ -36,6 +36,7 @@ import qualified Test.Headless.Unit.SpawnShed as SpawnShedTest
 import qualified Test.Headless.Unit.Transfer as UnitTransfer
 import qualified Test.Headless.Unit.TransferApi as UnitTransferApi
 import qualified Test.Headless.Unit.TransferOrderApi as UnitTransferOrderApi
+import qualified Test.Headless.Unit.CargoApi as UnitCargoApi
 import qualified Test.Headless.Unit.NightPerception as NightPerception
 import qualified Test.Headless.Unit.LineOfSight as LineOfSightTest
 import qualified Test.Headless.World.TimeLocal as TimeLocal
@@ -222,6 +223,7 @@ import qualified Test.Headless.Lua.UnitAiHold as LuaUnitAiHold
 import qualified Test.Headless.Lua.UnitAiStall as LuaUnitAiStall
 import qualified Test.Headless.Lua.UnitAiHarvest as LuaUnitAiHarvest
 import qualified Test.Headless.Lua.UnitAiLogisticsTargets as LuaUnitAiLogisticsTargets
+import qualified Test.Headless.Lua.UnitAiPageTargets as LuaUnitAiPageTargets
 import qualified Test.Headless.Lua.UnitAiLoadReset as LuaUnitAiLoadReset
 import qualified Test.Headless.Lua.UnitAiReconcile as LuaUnitAiReconcile
 import qualified Test.Headless.Lua.SessionTeardown as LuaSessionTeardown
@@ -339,6 +341,11 @@ main = hspec $ do
     -- Its describe begins "Unit transfer Lua API" so that --match reaches
     -- the contract verbs and the order verbs in one gate.
     aroundAll withHeadlessEngine UnitTransferOrderApi.spec
+    -- Own engine (#1673): the four LAX cargo verbs WRITE the unit and
+    -- building manager refs and install their own two-page world
+    -- manager, so like the two specs above they cannot share the
+    -- worldgen engine.
+    aroundAll withHeadlessEngine UnitCargoApi.spec
     -- Own engine (#1205): the live power.placeNode path WRITES the
     -- unit/building manager refs and installs its own two-page world
     -- manager, so it cannot share the worldgen engine above.
@@ -464,6 +471,7 @@ main = hspec $ do
     LuaUnitAiStall.spec
     LuaUnitAiHarvest.spec
     LuaUnitAiLogisticsTargets.spec
+    LuaUnitAiPageTargets.spec
     LuaUnitAiLoadReset.spec
     LuaUnitAiReconcile.spec
     LuaSessionTeardown.spec

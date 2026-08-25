@@ -1,15 +1,22 @@
 -- Unit AI materials-sourcing ladder (#538 split from unit_ai.lua).
 --
--- Shared "inventory → nearby ground → technomule" fetch helpers used
--- by deliver_to_build_site, construct_job, craft_job, and repair_job.
--- Not on its own an "action" — no utility/execute pair, just the
--- sourcing primitives those actions' phase machines call into.
+-- Shared "inventory → nearby ground → technomule → cargo storage" fetch
+-- helpers used by deliver_to_build_site, construct_job, craft_job, and
+-- repair_job. Not on its own an "action" — no utility/execute pair,
+-- just the sourcing primitives those actions' phase machines call into.
+--
+-- The cargo rung (cargoCountOf / fetchWantsFromCargo, plus the shared
+-- moveBesideBuilding walk) moved here from unit_ai_craft.lua with
+-- #1673: it is the fourth rung of the SAME ladder the other three
+-- already live on, and craft_job was its only caller.
 
 local unitAi = package.loaded["scripts.unit_ai"]
 local core = require("scripts.unit_ai_core")
 local distance = core.distance
+local chebToFootprint = core.chebToFootprint
 
 local mv = require("scripts.movement_speed")
+local page = require("scripts.unit_ai_page")
 
 local M = {}
 
@@ -74,11 +81,21 @@ end
 -- Nearest technomule, or nil. The colony's construction stock rides
 -- on it; deliverers fetch their shortfall from here. No range limit —
 -- materials are worth the walk.
-local function findTechnomule(fromX, fromY)
+--
+-- `uid` is the ASKING unit, and the mule must stand on that unit's own
+-- page (#1673): unit.getAllIds snapshots the ACTIVE page independently
+-- of whatever page the actor was selected from, so an interleaved
+-- world.show would otherwise hand a deliverer a mule in another world
+-- to walk to and pull items off. An actor whose own page cannot be
+-- read selects no mule at all.
+local function findTechnomule(uid, fromX, fromY)
+    local myPage = page.ofUnit(uid)
+    if not myPage then return nil end
     local best, bestD = nil, math.huge
     for _, otherUid in ipairs(unit.getAllIds() or {}) do
         local info = unit.getInfo(otherUid)
-        if info and info.defName == "technomule" then
+        if info and info.defName == "technomule"
+           and page.same(myPage, info.page) then
             local d = distance(fromX, fromY, info.gridX, info.gridY)
             if d < bestD then
                 best, bestD = { uid = otherUid, gridX = info.gridX,
@@ -182,6 +199,121 @@ local function fetchWantsFromGround(uid, wants, params, range)
     return next(wants) ~= nil
 end
 
+-- Count of defName across BUILT storage buildings (cargo holds) on
+-- the acting unit's OWN page — the stockpile rung of the sourcing
+-- ladder. No range limit, same rationale as the mule: stored materials
+-- are worth the walk.
+--
+-- #1673: building.getActiveIds takes its own ACTIVE-page snapshot, so
+-- every row is re-checked against `myPage` before it can be counted;
+-- an unknown actor page counts nothing rather than counting the
+-- active world's stock.
+local function cargoCountOf(defName, myPage)
+    if not myPage then return 0 end
+    local total = 0
+    for _, bid in ipairs(building.getActiveIds() or {}) do
+        if bid and building.getActivity(bid) == "built"
+           and page.same(myPage, page.ofBuilding(bid)) then
+            for _, it in ipairs(building.getStorage(bid) or {}) do
+                if it.defName == defName then total = total + 1 end
+            end
+        end
+    end
+    return total
+end
+
+-- Walk toward the nearest border tile of a building's footprint.
+-- Returns true while still walking (Chebyshev > 1 → moveTo issued),
+-- false once the unit stands on or beside the footprint. Shared by
+-- the craft walking phase and the cargo fetch (same approach as
+-- deliver / build_nearby).
+local function moveBesideBuilding(uid, info, binfo)
+    local tw, th = binfo.tileW or 1, binfo.tileH or 1
+    local utx, uty = math.floor(info.gridX), math.floor(info.gridY)
+    if chebToFootprint(utx, uty, binfo.gridX, binfo.gridY, tw, th) <= 1 then
+        return false
+    end
+    local bestX, bestY, bestD = nil, nil, math.huge
+    for dx = -1, tw do
+        for dy = -1, th do
+            if dx == -1 or dx == tw or dy == -1 or dy == th then
+                local nx = binfo.gridX + dx + 0.5
+                local ny = binfo.gridY + dy + 0.5
+                local d = distance(info.gridX, info.gridY, nx, ny)
+                if d < bestD then bestX, bestY, bestD = nx, ny, d end
+            end
+        end
+    end
+    if bestX then
+        unit.moveTo(uid, bestX, bestY, mv.comfort(uid))
+    end
+    return true
+end
+
+-- Fetch loop against cargo storage: walk beside the nearest BUILT
+-- store holding any wanted def and withdraw everything wanted from it
+-- in one visit (unit.withdrawFromCargo preserves the instances;
+-- adjacency is this walk, per the API contract). Entries clear even
+-- on shortfall, like the mule fetch — raced withdrawals and split
+-- stock resolve by the caller reconciling against inventory (a
+-- release + re-plan reaches the next store). Returns true while
+-- still busy (walking).
+--
+-- #1673: `info` is the ACTOR's own unit.getInfo table, so info.page is
+-- the actor's page; every candidate store must match it. An actor with
+-- no readable page reaches no store (page.same is false on nil).
+local function fetchWantsFromCargo(uid, wants, info, params)
+    if not next(wants) then return false end
+    local best, bestD = nil, math.huge
+    for _, bid in ipairs(building.getActiveIds() or {}) do
+        if bid and building.getActivity(bid) == "built" then
+            local has = false
+            for _, it in ipairs(building.getStorage(bid) or {}) do
+                if wants[it.defName] then has = true; break end
+            end
+            if has then
+                local binfo = building.getInfo(bid)
+                if binfo and page.same(info.page, binfo.page) then
+                    local d = distance(info.gridX, info.gridY,
+                        binfo.gridX + (binfo.tileW or 1) / 2,
+                        binfo.gridY + (binfo.tileH or 1) / 2)
+                    if d < bestD then
+                        binfo.bid = bid
+                        best, bestD = binfo, d
+                    end
+                end
+            end
+        end
+    end
+    if not best then
+        -- Nothing stored anywhere (someone else withdrew it).
+        for k in pairs(wants) do wants[k] = nil end
+        return false
+    end
+    if moveBesideBuilding(uid, info, best) then return true end
+    unit.stop(uid)
+    local carried = unit.getCarryingWeight(uid) or 0
+    local maxW    = unit.getStat(uid, "carrying_capacity") or math.huge
+    for defName, count in pairs(wants) do
+        for _ = 1, count do
+            local w = deliverItemWeight(defName)
+            if carried + w > maxW then
+                engine.logWarn("fetch: unit " .. tostring(uid)
+                    .. " at capacity (" .. string.format("%.1f", carried + w)
+                    .. " > " .. string.format("%.1f", maxW)
+                    .. " kg) — leaving rest of " .. defName .. " in cargo")
+                break
+            end
+            if not unit.withdrawFromCargo(uid, best.bid, defName) then
+                break    -- store ran out (raced another claimant)
+            end
+            carried = carried + w
+        end
+        wants[defName] = nil
+    end
+    return false
+end
+
 -- Fetch loop against the technomule's stock: walk to the mule, then
 -- take everything wanted in one go (unit.transferItemToUnit preserves
 -- the instances). Entries are cleared even on shortfall — raced
@@ -189,7 +321,7 @@ end
 -- inventory. Returns true while still busy (walking).
 local function fetchWantsFromMule(uid, wants, info, params)
     if not next(wants) then return false end
-    local mule = findTechnomule(info.gridX, info.gridY)
+    local mule = findTechnomule(uid, info.gridX, info.gridY)
     if not mule then
         for k in pairs(wants) do wants[k] = nil end
         return false
@@ -232,5 +364,8 @@ M.groundCountOf          = groundCountOf
 M.untilStockSatisfied    = untilStockSatisfied
 M.fetchWantsFromGround   = fetchWantsFromGround
 M.fetchWantsFromMule     = fetchWantsFromMule
+M.fetchWantsFromCargo    = fetchWantsFromCargo
+M.cargoCountOf           = cargoCountOf
+M.moveBesideBuilding     = moveBesideBuilding
 
 return M

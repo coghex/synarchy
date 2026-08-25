@@ -35,6 +35,7 @@ local fetchWantsFromGround = fetch.fetchWantsFromGround
 local fetchWantsFromMule   = fetch.fetchWantsFromMule
 
 local mv = require("scripts.movement_speed")
+local page = require("scripts.unit_ai_page")
 local roles = require("scripts.unit_roles")
 -- The #1329 load reset: both tables below are transient session
 -- coordination state, emptied in place whenever a load replaces the
@@ -116,7 +117,7 @@ end
 local function abortRepairJob(uid, s, info)
     local job = s.repairJob
     if job and job.itemFetched and info then
-        local mule = findTechnomule(info.gridX, info.gridY)
+        local mule = findTechnomule(uid, info.gridX, info.gridY)
         if mule then
             -- Targeted by instanceId: without it, a defName-only
             -- transfer could pop a DIFFERENT axe_steel this unit
@@ -211,7 +212,7 @@ local function findRepairCandidate(uid, info, params)
     local now = engine.gameTime()
     local best = scanHeldItems(uid, uid, false, now, params)
     if best then return best end
-    local mule = findTechnomule(info.gridX, info.gridY)
+    local mule = findTechnomule(uid, info.gridX, info.gridY)
     if not mule then return nil end
     return scanHeldItems(mule.uid, uid, true, now, params)
 end
@@ -305,7 +306,7 @@ function repairExecute(uid, s, params)
     repairClaims[job.instanceId] = { uid = uid, at = now }
 
     if s.repairPhase == "fetch_item" then
-        local mule = findTechnomule(info.gridX, info.gridY)
+        local mule = findTechnomule(uid, info.gridX, info.gridY)
         if not mule then releaseRepairJob(s, uid); return end
         if distance(info.gridX, info.gridY, mule.gridX, mule.gridY)
            > params.mule_fetch_arrival then
@@ -378,7 +379,12 @@ function repairExecute(uid, s, params)
             if not job.bid then abortRepairJob(uid, s, info); return end
         end
         local binfo = building.getInfo(job.bid)
-        if not binfo then abortRepairJob(uid, s, info); return end
+        -- #1673: job.bid is a PERSISTED building reference and
+        -- building.findStation resolves against the ACTIVE page, not
+        -- necessarily this unit's. Revalidate before the walk.
+        if not binfo or not page.same(info.page, binfo.page) then
+            abortRepairJob(uid, s, info); return
+        end
         local utx, uty = math.floor(info.gridX), math.floor(info.gridY)
         local tw, th = binfo.tileW or 1, binfo.tileH or 1
         local cheb = chebToFootprint(utx, uty, binfo.gridX, binfo.gridY, tw, th)

@@ -28,6 +28,7 @@ import Unit.Types
 import Building.Types (BuildingId(..), BuildingInstance(..), BuildingDef(..), BuildingManager(..))
 import Item.Types (itemMatches, itemTotalWeight)
 import Engine.Scripting.Lua.API.Units.Inventory (popFirstByNameIx, insertAt, popFirstWhereIx)
+import World.Page.Types (WorldPageId)
 
 -- | #1087: the narrow live view a container-knowledge reveal needs,
 --   projected from this module's existing capability records.
@@ -35,6 +36,35 @@ observerFor ∷ EngineEnv → ContainerObserver
 observerFor env = containerObserver
     (toBuildingCapability env) (toWorldSimCapability env)
     (toContentRegistriesCapability env)
+
+-- | #1673: the page floor these four verbs enforce. Laxity here has
+--   always meant "no adjacency check, no receiver-eligibility check" —
+--   it never meant permission to move an exact 'Item.Types.ItemInstance'
+--   between two WORLDS. 'Unit.Transfer.reachable' requires identical
+--   pages on the strict surface even where adjacency is deliberately
+--   deferred, and #1205 / #1208 / #1593 put every other engine verb on
+--   the entity's OWN page rather than the active one.
+--
+--   True when the counterpart is KNOWN to sit on another page. A
+--   'Nothing' counterpart is a vanished endpoint, not a cross-page
+--   one: those already have their own all-or-nothing rollback path
+--   below, and answering "cross-page" for them would change what a
+--   same-page caller sees when its destination dies mid-call.
+crossPage ∷ Maybe WorldPageId → WorldPageId → Bool
+crossPage (Just there) here = there ≢ here
+crossPage Nothing      _    = False
+
+-- | The page a live building sits on, or 'Nothing' if it is gone.
+buildingPage ∷ EngineEnv → BuildingId → IO (Maybe WorldPageId)
+buildingPage env bid = do
+    bm ← readIORef (bcBuildingManagerRef (toBuildingCapability env))
+    pure (biPage <$> HM.lookup bid (bmInstances bm))
+
+-- | The page a live unit stands on, or 'Nothing' if it is gone.
+unitPage ∷ EngineEnv → UnitId → IO (Maybe WorldPageId)
+unitPage env uid = do
+    um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
+    pure (uiPage <$> HM.lookup uid (umInstances um))
 
 -- | unit.transferItemToBuilding(uid, bid, defName) → bool. Atomic
 --   move of one ItemInstance from the unit's inventory to the
@@ -47,6 +77,9 @@ observerFor env = containerObserver
 --   the building has vanished between pop and deliver, returns false
 --   and logs a warning (the latter case is a tiny race window — the
 --   AI just queried the building one tick prior).
+--
+--   #1673: also returns false, mutating nothing, when the unit and the
+--   building sit on different world pages. See 'crossPage'.
 unitTransferItemToBuildingFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitTransferItemToBuildingFn env = do
     uidArg  ← Lua.tointeger 1
@@ -57,9 +90,14 @@ unitTransferItemToBuildingFn env = do
             let uid     = UnitId (fromIntegral nU)
                 bid     = BuildingId (fromIntegral nB)
                 defName = TE.decodeUtf8Lenient nameBS
+            -- #1673: refuse a cross-page pair BEFORE the pop, inside the
+            -- same transaction that would perform it, so nothing is
+            -- popped, spliced or duplicated on the way out.
+            mBPage ← Lua.liftIO $ buildingPage env bid
             mItem ← Lua.liftIO $ atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                 case HM.lookup uid (umInstances um) of
                     Nothing → (um, Nothing)
+                    Just u | crossPage mBPage (uiPage u) → (um, Nothing)
                     Just u →
                         case popFirstByNameIx defName (uiInventory u) of
                             Nothing → (um, Nothing)
@@ -137,7 +175,8 @@ unitTransferItemToBuildingFn env = do
 --   also be carrying. Absent/0 → first defName match (legacy/AI callers
 --   moving fungible materials, where any matching instance will do).
 --   Returns false if either unit is missing or the source lacks a
---   matching item; the transfer is all-or-nothing.
+--   matching item; the transfer is all-or-nothing. #1673: false too
+--   when the two units stand on different world pages ('crossPage').
 unitTransferItemToUnitFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitTransferItemToUnitFn env = do
     fromArg ← Lua.tointeger 1
@@ -153,6 +192,11 @@ unitTransferItemToUnitFn env = do
             ok ← Lua.liftIO $ atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                 case (HM.lookup fromUid (umInstances um),
                       HM.lookup toUid   (umInstances um)) of
+                    -- #1673: both units live in this one manager, so the
+                    -- page comparison happens INSIDE the same atomic
+                    -- modify as the move — a cross-page pair can never
+                    -- observe a half-applied state.
+                    (Just uF, Just uT) | uiPage uF ≢ uiPage uT → (um, False)
                     (Just uF, Just uT) →
                         case popFirstWhereIx (itemMatches wantId defName)
                                              (uiInventory uF) of
@@ -180,11 +224,15 @@ unitTransferItemToUnitFn env = do
 --   lives in the Lua caller (AI walks the unit close first; the
 --   right-click menu only enables when the unit is adjacent).
 --
+--   #1673: refuses, mutating nothing, when the unit and the building
+--   are on different world pages ('crossPage'). Adjacency stays the
+--   caller's business; the PAGE never was latitude.
+--
 --   #1087: a SUCCESSFUL deposit by a player-commandable unit also
 --   reveals the container's contents to the player, so the AI's own
 --   hauling keeps the remembered view current. A refusal (no room, no
---   matching item) or a rolled-back deposit reveals nothing — the call
---   below is reached only on the committed path.
+--   matching item, a cross-page pair) or a rolled-back deposit reveals
+--   nothing — the call below is reached only on the committed path.
 unitDepositToCargoFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitDepositToCargoFn env = do
     uidArg  ← Lua.tointeger 1
@@ -225,9 +273,16 @@ unitDepositToCargoFn env = do
                 Lua.pushboolean False
                 return 1
             else do
+                -- #1673: as in transferItemToBuilding, the refusal is the
+                -- pop's own guard. Answering Nothing here returns false
+                -- without mutating either side AND without reaching the
+                -- #1087 container reveal below, which is committed-path
+                -- only.
+                mBPage ← Lua.liftIO $ buildingPage env bid
                 mItem ← Lua.liftIO $ atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                     case HM.lookup uid (umInstances um) of
                         Nothing → (um, Nothing)
+                        Just u | crossPage mBPage (uiPage u) → (um, Nothing)
                         Just u →
                             case popFirstWhereIx (itemMatches wantId defName)
                                                  (uiInventory u) of
@@ -296,6 +351,9 @@ unitDepositToCargoFn env = do
 --   penalties handled elsewhere). Adjacency check lives in the Lua
 --   caller, same as deposit.
 --
+--   #1673: refuses, mutating nothing and revealing nothing, when the
+--   unit and the building are on different world pages ('crossPage').
+--
 --   #1087: like deposit, a SUCCESSFUL withdrawal by a player-commandable
 --   unit reveals the container's remaining contents.
 unitWithdrawFromCargoFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
@@ -314,9 +372,14 @@ unitWithdrawFromCargoFn env = do
                 bid     = BuildingId (fromIntegral nB)
                 defName = TE.decodeUtf8Lenient nameBS
                 wantId  = maybe 0 fromIntegral instArg
+            -- #1673: the mirror of deposit — here the BUILDING is popped
+            -- first, so the unit's page is what gets captured and the
+            -- guard rides the building transaction. No pop, no reveal.
+            mUPage ← Lua.liftIO $ unitPage env uid
             mItem ← Lua.liftIO $ atomicModifyIORef' (bcBuildingManagerRef (toBuildingCapability env)) $ \bm →
                 case HM.lookup bid (bmInstances bm) of
                     Nothing → (bm, Nothing)
+                    Just inst | crossPage mUPage (biPage inst) → (bm, Nothing)
                     Just inst →
                         case popFirstWhereIx (itemMatches wantId defName)
                                              (biStorage inst) of

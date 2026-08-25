@@ -141,7 +141,7 @@ local function constructMaterialsAvailable(uid, fromX, fromY, mats, params)
             local ground = groundCountOf(fromX, fromY, matType,
                                          params.construct_scan_range)
             if have + ground < need then
-                local mule = findTechnomule(fromX, fromY)
+                local mule = findTechnomule(uid, fromX, fromY)
                 local muleHave = mule and inventoryCountOf(mule.uid, matType) or 0
                 if have + ground + muleHave < need then return false end
             end
@@ -324,7 +324,7 @@ local function constructExecute(uid, s, params)
             -- A durably-paid job (#799) needs nothing fetched — cand.need
             -- stays empty so the walking phase's payment loop no-ops.
             if not cand.paid then
-                local mule = findTechnomule(info.gridX, info.gridY)
+                local mule = findTechnomule(uid, info.gridX, info.gridY)
                 for matType, need in pairs(cand.build.materials or {}) do
                     cand.need[matType] = need
                     local have = inventoryCountOf(uid, matType)
