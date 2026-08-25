@@ -9,7 +9,7 @@ PR #846's unbound-key outcome, #845's unified wheel routing, #843's remote-porta
 ## Status
 
 - [x] PRR-1. Deferred mouse outcomes lose their press-time framebuffer coordinate contract — [#1676]
-- [ ] PRR-2. Construction cancellation and claim state identify jobs by coordinate without their world page
+- [x] PRR-2. Construction cancellation and claim state identify jobs by coordinate without their world page — [no-issue]
 - [ ] PRR-3. A full-file revert can retain a stale `reviewed:approve` label
 - [ ] PRR-4. A paused craft bill keeps drawing power forever when its working claimant dies
 - [ ] PRR-5. The location-anchor validator and matcher duplicate the vocabulary and retain an unconstrained fallback
@@ -43,7 +43,9 @@ PR #846's unbound-key outcome, #845's unified wheel routing, #843's remote-porta
 
 ## 2. Construction job page identity
 
-### PRR-2. Construction cancellation and claim state identify jobs by coordinate without their world page
+### [no-issue] PRR-2. Construction cancellation and claim state identify jobs by coordinate without their world page
+
+> **Disposition:** No issue — fixed after this report was captured. Commit `9d946e2a` (PR #1346 / issue #1329) replaced the bare `"x,y"` construct-claim key with `scripts/unit_ai_claims.lua`'s page-qualified `key(wid, x, y)`, and gave `abandonClaim`, `releaseConstructJob` and `sweepConstructClaims` an explicit `wid`; `scripts/build_tool.lua:1207,1219` now passes the same page id to both the engine cancellation and the claimant interrupt. Covered by `test-headless/Test/Headless/Lua/UnitAiLoadReset.hs:349` ("keeps the same coordinate on two pages as two distinct claims").
 
 > **Captured note:** Include `WorldPageId` in construction claim keys and cached jobs, and pass it through cancellation/abandon/release operations. The engine-side cancellation is correctly page-scoped, but the Lua-side claimant interruption immediately drops that page identity and can clear a worker belonging to a different page at the same `(x,y)`.
 
