@@ -205,7 +205,8 @@ import World.Save.Component.WorldGen
     , EtymologySourceDTO(..)
     , toEtymologySourceDTO, fromEtymologySourceDTO
     , RiverNameDTO(..), RiverNamesDTO(..) )
-import Location.Instance (locationInstanceAllocatorErrors)
+import Location.Instance
+    ( locationInstanceAllocatorErrors, locationInstanceBoundsErrors )
 import World.Generate.Types (WorldGenParams(..))
 import World.Generate.Coordinates (canonicalTile)
 import World.Chunk.Types (ChunkCoord)
@@ -1031,11 +1032,19 @@ validatePages wp
                       (HM.fromListWith (+) [ (p, 1 ∷ Int) | p ← wpPageIds wp ])
         , n > 1 ]
         -- #911: the page-local location-instance allocator, mirroring
-        -- @world-activity@'s own ground-item allocator check.
+        -- @world-activity@'s own ground-item allocator check. #1668
+        -- adds the table's GEOMETRY beside its ids: the save decode
+        -- path is the one place an 'Location.Bounds.AbsBounds' is built
+        -- from unrestricted wire 'Int's rather than downstream of the
+        -- YAML loader's inverted-bounds gate, so an inverted stored
+        -- footprint is rejected HERE -- in ValidatePhase, after every
+        -- accepted version has migrated into this one canonical value
+        -- -- rather than being published as spatial authority.
         ⧺ [ err ("page '" <> tshow (pgsPageId p) <> "': " <> msg)
           | p   ← HM.elems (wpBase wp)
-          , msg ← locationInstanceAllocatorErrors
-                      (wgpLocationInstances (pgsGenParams p))
+          , let lis = wgpLocationInstances (pgsGenParams p)
+          , msg ← locationInstanceAllocatorErrors lis
+                    ⧺ locationInstanceBoundsErrors lis
           ]
   where err = ComponentError worldPagesComponentId 7 ValidatePhase
 
