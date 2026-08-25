@@ -23,14 +23,18 @@
 --   'emptyWorldState's, so two live worlds cost no worldgen.
 --
 --   Page A is ACTIVE throughout, and the carrier stands on live,
---   NON-active page B. Only three things are replaced, none of them on
+--   NON-active page B. Only two things are replaced, neither of them on
 --   the page path: @scripts.movement_speed@ (the real one reaches four
---   physiology modules to answer one walking pace),
---   @engine.emitEventForUnit@ (recorded, so "which refusal was that"
---   is answerable without a configured notification catalogue) and the
---   @scripts.unit_ai@ singleton table the submodule attaches itself
---   to. The ground reads, the capacity reads, the position read, the
---   move command and the commit are all the engine's own.
+--   physiology modules to answer one walking pace) and the
+--   @scripts.unit_ai@ singleton table the submodule attaches itself to.
+--   The ground reads, the capacity reads, the position read, the move
+--   command, the commit and the emitted events are all the engine's
+--   own: move targets come off the engine's unit command queue and
+--   events off the real event ring, so an assertion cannot pass against
+--   a recording seam this fixture installed. The two notification
+--   categories the order emits under are PINNED in the fixture, so the
+--   log assertions do not depend on the developer's
+--   @config/notifications.local.yaml@.
 --
 --   Run just this gate: @cabal test synarchy-test-headless
 --   --test-options='--match "pickup order page ownership"'@.
@@ -41,13 +45,18 @@ import Test.Hspec
 import qualified Data.Map.Strict as Map
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
+import qualified Data.Sequence as Seq
 import qualified Engine.Core.Queue as Q
+import Control.Concurrent.STM (atomically)
+import Control.Concurrent.STM.TVar (writeTVar)
 import Data.List (sortOn)
 import Data.IORef (newIORef, readIORef, writeIORef, atomicModifyIORef')
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Thread (ThreadControl(..))
 import Engine.Scripting.Lua.API (registerLuaAPI)
+import Engine.PlayerEvent (CategoryCfg(..))
+import Engine.PlayerEvent.Emit (PlayerEvent(..), readEventLog)
 import Engine.Scripting.Lua.Thread (createLuaBackendState)
 import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
@@ -155,6 +164,15 @@ mkUnit page (gx, gy) capacity = UnitInstance
     , uiClimbDest = Nothing, uiTrailState = Nothing
     }
 
+-- | A notification category that only ever reaches the log ring, with
+--   both coalescing windows off.
+logOnlyCategory ∷ Text → CategoryCfg
+logOnlyCategory cid = CategoryCfg
+    { ccId = cid, ccDisplayName = cid, ccDescription = ""
+    , ccTextColor = (1, 1, 1, 1)
+    , ccLog = True, ccPopup = False, ccPause = False
+    , ccPopupCoalesceWindow = 0, ccLogCoalesceWindow = 0 }
+
 data Scene = Scene
     { scActive ∷ WorldState
     , scOwned  ∷ WorldState
@@ -183,6 +201,14 @@ resetScene env activeGround ownedGround carrierPage carrierAt capacity = do
         { wmWorlds  = [(pageActive, wsA), (pageOwned, wsO)]
         , wmVisible = [pageActive] }
     writeIORef (itemManagerRef env) emptyItemManager
+    -- The two categories this order emits under, pinned to log-only, so
+    -- a local notifications override cannot decide whether an assertion
+    -- about the event ring can see anything. Coalescing is off for the
+    -- same reason: unit_warning ships a 1 s game-time log window, and
+    -- every example here emits at game time 0.
+    writeIORef (notificationCfgRef env) $ HM.fromList
+        [ (c, logOnlyCategory c) | c ← ["unit_event", "unit_warning"] ]
+    atomically $ writeTVar (eventStoreRef env) Seq.empty
     writeIORef (unitManagerRef env) emptyUnitManager
         { umDefs = HM.singleton "acolyte" (minimalDef "acolyte")
         , umInstances = HM.singleton carrierUid
@@ -227,6 +253,18 @@ unloadOwnedPage env =
     atomicModifyIORef' (worldManagerRef env) $ \wm →
         ( wm { wmWorlds = filter ((≢ pageOwned) . fst) (wmWorlds wm) }, () )
 
+-- | The REAL event ring, as @(category, text, uid, coords, page)@ —
+--   including 'peSourcePage', which is the whole point: a unit event's
+--   coordinates are in the frame of the page that unit stands on, and
+--   an event that named the ACTIVE page instead would offer to pan the
+--   wrong world (#1588's click rule, #1666's page).
+eventRows ∷ EngineEnv
+          → IO [(Text, Text, Maybe Word32, Maybe (Int, Int), Maybe Text)]
+eventRows env = do
+    evs ← readEventLog env
+    pure [ (peCategory e, peText e, peUid e, peCoords e, peSourcePage e)
+         | e ← evs ]
+
 -- | Every @unit.moveTo@ the engine actually received, as
 --   @(uid, x, y)@. Read from the engine's own command queue rather than
 --   from a Lua spy, so the assertion is about what crossed the
@@ -268,14 +306,14 @@ q ∷ Text → Text
 q t = "\"" <> t <> "\""
 
 
--- | Load the production pickup module against this backend and open a
---   recording seam on the ONE player-facing sink the refusal contract
---   is stated in terms of.
+-- | Load the production pickup module against this backend.
 --
 --   @scripts.movement_speed@ is replaced at @package.loaded@ for the
 --   reason 'Test.Headless.Lua.UnitAiHold' replaces it: the pace a walk
 --   picks is not what this gate is about, and the real module reaches
 --   four physiology modules' worth of stats to answer one number.
+--   Nothing on the event path is replaced — @engine.emitEventForUnit@
+--   is the engine's own, and the assertions read the ring it writes.
 loadPickup ∷ LuaBackendState → IO ()
 loadPickup ls = do
     _ ← runOk ls $ luaLines
@@ -285,10 +323,6 @@ loadPickup ls = do
         , "    ordered = function() return 1.15 end,"
         , "    meander = function() return 0.5 end,"
         , "    sprint  = function() return 2.0 end };"
-        , "_G.EVENTS = {};"
-        , "engine.emitEventForUnit = function(cat, msg, u, gx, gy)"
-        , "  EVENTS[#EVENTS + 1] = { cat = cat, msg = msg, uid = u,"
-        , "                          gx = gx, gy = gy } end;"
         , "_G.PICKUP = require('scripts.unit_ai_pickup');"
         , "_G.CORE = require('scripts.unit_ai_core');"
         , "_G.UNITAI = package.loaded['scripts.unit_ai'];"
@@ -302,9 +336,6 @@ loadPickup ls = do
 orderGid ∷ LuaBackendState → IO Text
 orderGid ls = runOk ls
     "local s = CORE.aiState[1]; return tostring(s and s.pickupOrder and s.pickupOrder.gid)"
-
-eventCount ∷ LuaBackendState → IO Text
-eventCount ls = runOk ls "return tostring(#EVENTS)"
 
 -- * The spec
 
@@ -332,7 +363,7 @@ spec = describe "pickup order page ownership" $ do
             r ← runOk ls "return UNITAI.commandPickup(1, 1)"
             r `shouldBe` "false"
             orderGid ls `shouldReturn` q "nil"
-            eventCount ls `shouldReturn` q "0"
+            eventRows env `shouldReturn` []
             groundRows (scActive scene) `shouldReturn` beforeA
             groundRows (scOwned scene) `shouldReturn` beforeO
             invOf env carrierUid `shouldReturn` []
@@ -354,7 +385,7 @@ spec = describe "pickup order page ownership" $ do
             loadPickup ls
             r ← runOk ls "return UNITAI.commandPickup(1, 1)"
             r `shouldBe` "false"
-            eventCount ls `shouldReturn` q "0"
+            eventRows env `shouldReturn` []
             orderGid ls `shouldReturn` q "nil"
 
         it "leaves a position hold and nextActionAt exactly as it found \
@@ -390,7 +421,7 @@ spec = describe "pickup order page ownership" $ do
             r ← runOk ls "return UNITAI.commandPickup(1, 0)"
             r `shouldBe` "false"
             orderGid ls `shouldReturn` q "nil"
-            eventCount ls `shouldReturn` q "0"
+            eventRows env `shouldReturn` []
 
     describe "an accepted order resolves the same (page, id) throughout" $ do
 
@@ -440,15 +471,15 @@ spec = describe "pickup order page ownership" $ do
             orderGid ls `shouldReturn` q "nil"
 
             -- Requirement 4: the success event names the instance that
-            -- was committed, at the coordinates it was committed at.
-            ev ← runOk ls $ luaLines
-                [ "local e = EVENTS[#EVENTS];"
-                , "return tostring(#EVENTS) .. '|' .. e.cat .. '|' .. e.msg"
-                , "  .. '|' .. tostring(e.uid) .. '|' .. tostring(e.gx)"
-                , "  .. ',' .. tostring(e.gy)" ]
-            ev `shouldBe` q ("1|unit_event|Nael picked up page_b_radio|1|"
-                             <> tshow (floor (fst targetAt) ∷ Int) <> ","
-                             <> tshow (floor (snd targetAt) ∷ Int))
+            -- was committed, at the coordinates it was committed at —
+            -- AND in the page frame those coordinates are indexed in.
+            -- Page A is still the active one here, so an event that
+            -- named the active page would be offering to pan the wrong
+            -- world (#1588).
+            eventRows env `shouldReturn`
+                [ ( "unit_event", "Nael picked up page_b_radio", Just 1
+                  , Just ( floor (fst targetAt), floor (snd targetAt) )
+                  , Just (unWorldPageId pageOwned) ) ]
 
         it "measures the ARRIVAL capacity gate against the carrier's \
            \own page, not the active page's collision" $ \env → do
@@ -488,7 +519,7 @@ spec = describe "pickup order page ownership" $ do
                     , "PICKUP.pickupUtility(1, s, PARAMS);"
                     , "return tostring(s.pickupOrder)" ]
                 u `shouldBe` q "nil"
-                eventCount ls `shouldReturn` q "0"
+                eventRows env `shouldReturn` []
 
         it "holds the order when that page cannot be resolved, even \
            \though the ACTIVE page has the same id" $ \env → do
@@ -533,7 +564,13 @@ spec = describe "pickup order page ownership" $ do
                 groundRows (scActive scene) `shouldReturn` []
                 groundRows (scOwned scene) `shouldReturn`
                     [(0, "page_b_bar", 200, decoyAt)]
-                eventCount ls `shouldReturn` q "1"
+                -- Same page, so the attribution the off-page case
+                -- corrects is a no-op here: still the active page,
+                -- because that is the page the carrier is on.
+                eventRows env `shouldReturn`
+                    [ ( "unit_event", "Nael picked up page_a_radio", Just 1
+                      , Just ( floor (fst targetAt), floor (snd targetAt) )
+                      , Just (unWorldPageId pageActive) ) ]
 
         it "still refuses an over-capacity order with the player-facing \
            \warning that names the carrier and the item" $ \env → do
@@ -546,9 +583,14 @@ spec = describe "pickup order page ownership" $ do
             r ← runOk ls "return UNITAI.commandPickup(1, 0)"
             r `shouldBe` "false"
             orderGid ls `shouldReturn` q "nil"
-            ev ← runOk ls $ luaLines
-                [ "local e = EVENTS[1];"
-                , "return tostring(#EVENTS) .. '|' .. e.cat .. '|'"
-                , "  .. tostring(string.find(e.msg, 'page_a_anvil', 1, true) ~= nil)"
-                , "  .. '|' .. tostring(string.find(e.msg, 'Nael', 1, true) ~= nil)" ]
-            ev `shouldBe` q "1|unit_warning|true|true"
+            rows ← eventRows env
+            case rows of
+                [(cat, text, uid, coords, page)] → do
+                    cat `shouldBe` "unit_warning"
+                    uid `shouldBe` Just 1
+                    coords `shouldBe` Just (floor (fst startAt), floor (snd startAt))
+                    page `shouldBe` Just (unWorldPageId pageActive)
+                    text `shouldSatisfy` T.isInfixOf "page_a_anvil"
+                    text `shouldSatisfy` T.isInfixOf "Nael"
+                _ → expectationFailure
+                        ("expected one unit_warning, got " <> show rows)

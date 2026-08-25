@@ -67,9 +67,12 @@ emitEventAtFn env = do
 
 -- | @engine.emitEventForUnit(category, text, uid [, gx, gy])@ — fire an
 --   event tagged with the UNIT it concerns, so the per-unit log panel
---   can filter it. @gx@/@gy@ are optional (same location payload —
---   and the same automatic page attribution — as 'emitEventAt'). Used
---   by unit-attributable emitters (survival warnings/criticals, unit
+--   can filter it. @gx@/@gy@ are optional; when they are given, the
+--   event's page is the NAMED UNIT's own page rather than the active
+--   one (#1666, 'emitEventFull'), because a unit event's coordinates
+--   are in the frame of the page that unit stands on — which is not
+--   always the page the player is looking at. Used by
+--   unit-attributable emitters (survival warnings/criticals, unit
 --   events) that already know the uid.
 emitEventForUnitFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 emitEventForUnitFn env = do
