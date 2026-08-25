@@ -69,7 +69,19 @@ data StagedSession = StagedSession
     , ssTexPalette    ∷ !TexPalette
     , ssNextItemId    ∷ !Word64
     , ssCamera        ∷ !Camera2D
-    , ssZoomAtlas     ∷ !(Maybe (Int, Int, ByteString))
+    , ssZoomAtlas     ∷ !(Maybe (WorldPageId, Int, Int, ByteString))
+      -- ^ The ONE staged page whose own zoom cache produced these
+      --   pixels, paired with them (issue #1670). Staging builds a
+      --   separate 'World.Types.wsZoomCacheRef' for EVERY non-arena
+      --   page but atlas pixels for only one of them, so the owner id
+      --   is what lets "World.Load.Publish" hand the payload to that
+      --   page alone: 'World.Render.Zoom.Bake' indexes a page's own
+      --   cache using its ASSIGNED atlas's layout, so a page holding
+      --   another page's atlas bakes its quads against the wrong
+      --   world's pixels. A page with no atlas of its own keeps
+      --   'wsZoomAtlasRef' at 'Nothing' and renders through
+      --   'World.Render.Zoom.Bake.ensureBakedAtlas''s existing
+      --   per-material fallback.
     , ssPreview       ∷ !(Maybe (Int, Int, ByteString))
     , ssReconcile     ∷ !LoadReconcileContext
       -- ^ The restored session's item-instance / unit-page /

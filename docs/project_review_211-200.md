@@ -11,7 +11,7 @@ PR #211's click/box-select domain exclusion, #210's ordinary gameplay-key gate, 
 - [x] PRR-1. Escape leaves a hidden page's unit selection alive — [#1672]
 - [x] PRR-2. Unit AI can combine actor and building snapshots from different pages — [#1673]
 - [x] PRR-3. Chunk eviction can turn an accepted structure placement into a staged phantom — [#1674]
-- [ ] PRR-4. Rejected structure placements still grow the persistent texture palette
+- [x] PRR-4. Rejected structure placements still grow the persistent texture palette — [#1675]
 
 ## 1. Selection cancellation ownership
 
@@ -90,7 +90,7 @@ PR #211's click/box-select domain exclusion, #210's ordinary gameplay-key gate, 
 
 ## 4. Failed-placement side effects
 
-### PRR-4. Rejected structure placements still grow the persistent texture palette
+### [#1675] PRR-4. Rejected structure placements still grow the persistent texture palette
 
 > **Captured note:** `structure.place` advertises “false and does nothing” for a missing world or unloaded chunk, but it interns and registers both texture paths before discovering either rejection.
 

@@ -428,9 +428,11 @@ spec = do
             ident ← readIORef (wsIdentityRef ws)
             ident `shouldBe` Nothing
 
-    -- Runs LAST (issue #763, round 11 review): 'publishStagedSession' is
-    -- a REAL publish -- it replaces the complete session, so nothing
-    -- after it in this file could assume any earlier page still exists.
+    -- From here on, every example performs a REAL publish -- it replaces
+    -- the complete session, so nothing after one of these may assume any
+    -- page created EARLIER in this file still exists. Each such example
+    -- therefore creates the pages it needs itself (issue #763, round 11
+    -- review; issue #1670).
     describe "publishStagedSession invalidates in-flight preview uploads \
              \on EVERY publish, even one with no preview data at all \
              \(round 11 review, issue #763)" $
@@ -480,6 +482,112 @@ spec = do
             genAfter ← readIORef (worldPreviewGenerationRef env)
             genAfter `shouldSatisfy` (> genBefore)
 
+    -- Runs LAST (issue #1670): another REAL publish, and the one that
+    -- replaces the session for good.
+    --
+    -- 'World.Load.Stage' builds a separate wsZoomCacheRef for EVERY
+    -- non-arena staged page but atlas PIXELS for only the active one, so
+    -- pairing that single payload with every published page (which is
+    -- what World.Load.Publish did before #1670) handed a second visible
+    -- page an atlas its own cache did not produce. That is not cosmetic:
+    -- World.Render.Zoom.Bake computes col/row from the ASSIGNED atlas's
+    -- chunksPerRow over the PAGE'S OWN cache index, so such a page bakes
+    -- its quads from another world's pixels, and indexes past the
+    -- texture entirely whenever its own cache is the longer one.
+    describe "a whole-session load attaches the zoom atlas ONLY to the \
+             \page whose own cache produced it (issue #1670)" $
+        it "publishing a staged session with two visible non-arena pages \
+           \hands zoomAtlasDataRef exactly one target state -- the \
+           \active page's own -- and never the other visible generated \
+           \page's, which keeps wsZoomAtlasRef at Nothing and renders \
+           \through ensureBakedAtlas's per-material fallback" $ \env →
+            let slotD = "id_spec_atlas_owner"
+                cleanup = do
+                    removePathForcibly ("saves/" <> slotD)
+                    writeIORef (enginePausedRef env) False
+            in (`finally` cleanup) $ do
+            removePathForcibly ("saves/" <> slotD)
+
+            -- Two fresh generated (non-arena) pages, BOTH visible, so
+            -- the save records a genuine multi-visible-page session.
+            -- Distinct seeds keep their zoom caches independently built.
+            sendWorldCommand env
+                (WorldInit (WorldPageId "id_atlas_owner_w8") 61 8 3 Nothing)
+            _ ← waitForWorldInit env (WorldPageId "id_atlas_owner_w8") 120
+            sendWorldCommand env
+                (WorldInit (WorldPageId "id_atlas_other_w8") 62 8 3 Nothing)
+            _ ← waitForWorldInit env (WorldPageId "id_atlas_other_w8") 120
+            sendWorldCommand env (WorldShow (WorldPageId "id_atlas_other_w8"))
+            sendWorldCommand env (WorldShow (WorldPageId "id_atlas_owner_w8"))
+
+            sendWorldCommand env
+                (WorldSave (WorldPageId "id_atlas_owner_w8") slotD
+                           "2026-08-25T00:00:00.000000Z" [] [] Nothing)
+            waitForFile ("saves/" <> slotD <> "/world.synworld")
+
+            logger ← readIORef (loggerRef env)
+            (sdD, _, _) ← loadWorld logger slotD HS.empty HS.empty ⌦ either
+                (\(_, e) → expectationFailure (T.unpack e)
+                        ≫ error "unreachable")
+                pure
+            -- The premise this example exists for: the save really does
+            -- carry more than one visible non-arena page. Without this
+            -- the target-count assertion below could pass vacuously on a
+            -- single-page session.
+            sdVisiblePages sdD `shouldContain` [WorldPageId "id_atlas_owner_w8"]
+            sdVisiblePages sdD `shouldContain` [WorldPageId "id_atlas_other_w8"]
+
+            matReg ← readIORef (materialRegistryRef env)
+            staged ← stageSession env logger sdD matReg ⌦ either
+                (\e → expectationFailure (T.unpack (renderStageError e))
+                        ≫ error "unreachable")
+                pure
+            ssActivePage staged `shouldBe` WorldPageId "id_atlas_owner_w8"
+
+            -- Staging names the owner, and it is the page whose own
+            -- cache built the pixels (today, the active one).
+            case ssZoomAtlas staged of
+                Nothing → expectationFailure
+                    "staged session carries no zoom atlas at all -- the \
+                    \publish assertions below would be vacuous"
+                Just (ownerPid, _, _, _) →
+                    ownerPid `shouldBe` ssActivePage staged
+
+            ownerState ← stagedState staged "id_atlas_owner_w8"
+            otherState ← stagedState staged "id_atlas_other_w8"
+
+            -- Clear the handoff slot first: a WorldInit above already
+            -- wrote an atlas into it, so reading a Just afterwards would
+            -- prove nothing about THIS publish.
+            writeIORef (zoomAtlasDataRef env) Nothing
+            publishStagedSession env logger 999998 staged
+
+            enqueued ← readIORef (zoomAtlasDataRef env)
+            case enqueued of
+                Nothing → expectationFailure
+                    "publish enqueued no zoom atlas payload at all"
+                Just (_, _, _, targets) → do
+                    -- WorldState has neither Eq nor Show; a page's own
+                    -- private IORef IS its identity, and IORef's Eq is
+                    -- pointer equality, so compare through that.
+                    length targets `shouldBe` 1
+                    map (isSamePage ownerState) targets `shouldBe` [True]
+                    map (isSamePage otherState) targets `shouldBe` [False]
+
+            -- Requirement 2: the excluded page renders through the
+            -- existing Maybe-Nothing per-material fallback rather than
+            -- another page's atlas. (Nothing ever uploads it here --
+            -- headless runs no handleZoomAtlasUpload -- so this is the
+            -- state the render path would actually see.)
+            readIORef (wsZoomAtlasRef otherState) `shouldReturn` Nothing
+
+-- | Whether two 'WorldState' handles are the same page. 'WorldState'
+--   derives neither 'Eq' nor 'Show', but each page's own private
+--   'Data.IORef.IORef's are its identity and 'Data.IORef.IORef''s 'Eq'
+--   is pointer equality, so one field settles it.
+isSamePage ∷ WorldState → WorldState → Bool
+isSamePage a b = wsZoomCacheRef a ≡ wsZoomCacheRef b
+
 -- | The stored identity of the page saved under @pid@, or Nothing when
 --   the page is absent or unnamed.
 pageIdentity ∷ SaveData → Text → Maybe WorldIdentity
@@ -497,6 +605,18 @@ stagedIdentity staged pid =
     case find ((≡ WorldPageId pid) . spPageId) (ssPages staged) of
         Nothing → pure Nothing
         Just p  → readIORef (wsIdentityRef (spWorldState p))
+
+-- | The 'WorldState' a 'stageSession' result staged for saved page
+--   @pid@. Fails the example when that page is absent, which for the
+--   #1670 atlas-ownership assertions would otherwise silently compare
+--   against a state nothing produced.
+stagedState ∷ StagedSession → Text → IO WorldState
+stagedState staged pid =
+    case find ((≡ WorldPageId pid) . spPageId) (ssPages staged) of
+        Nothing → expectationFailure
+                      ("staged session has no page " ⧺ T.unpack pid)
+                  ≫ error "unreachable"
+        Just p  → pure (spWorldState p)
 
 -- | Poll until the world thread has written the save file. Fails after
 --   ~30 s.
