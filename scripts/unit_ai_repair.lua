@@ -305,6 +305,23 @@ function repairExecute(uid, s, params)
     -- Keep the claim fresh while the job is held.
     repairClaims[job.instanceId] = { uid = uid, at = now }
 
+    -- #1673: job.bid is a PERSISTED building reference, so a save
+    -- written before this check (or a page switch mid-job) can name a
+    -- station on another world. Revalidate it ahead of EVERY phase --
+    -- fetch_item and fetch_consumable below issue their own moveTo /
+    -- transferItemToUnit / pickupGround calls, so the walking-phase
+    -- check alone is too late, exactly as it was for deliverExecute
+    -- and craftExecute. A job that has not resolved a station yet is
+    -- untouched: job.bid stays nil until the walking phase calls
+    -- building.findStation, and that fresh selection is validated
+    -- there.
+    if job.bid then
+        local binfo = building.getInfo(job.bid)
+        if not binfo or not page.same(info.page, binfo.page) then
+            abortRepairJob(uid, s, info); return
+        end
+    end
+
     if s.repairPhase == "fetch_item" then
         local mule = findTechnomule(uid, info.gridX, info.gridY)
         if not mule then releaseRepairJob(s, uid); return end

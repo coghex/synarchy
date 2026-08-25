@@ -195,6 +195,8 @@ prelude = lns
     , "  completeBillCycle = function() return 0 end,"
     , "  executeAt = function() return true, {} end }"
     , "power = { isStationPoweredForRecipe = function() return true end }"
+    , "repair = { get = function(rid) return { id = rid } end,"
+    , "           repairAt = function() return true end }"
     , "local PARAMS = require('scripts.unit_ai_tunables').acolyte"
     , "local page      = require('scripts.unit_ai_page')"
     , "local fetch     = require('scripts.unit_ai_fetch')"
@@ -202,6 +204,7 @@ prelude = lns
     , "local deliver   = require('scripts.unit_ai_deliver')"
     , "local craftAi   = require('scripts.unit_ai_craft')"
     , "local medic     = require('scripts.unit_ai_medic')"
+    , "local repairAi  = require('scripts.unit_ai_repair')"
     , "-- The acting unit: uid 1, on HOME, at the origin."
     , "local ACTOR = unitRow(1, 'acolyte', 0, 0, HOME,"
     , "                      { { defName = 'plate_steel', category = 'Materials' } })"
@@ -522,6 +525,75 @@ spec = describe "AI page pairing" $ do
                 , "local bill = { mode = 'until', outputItem = 'widget', target = 1 }"
                 , "assert(fetch.untilStockSatisfied(bill) == true,"
                 , "  'the until-stock tally must still read the active page')"
+                ]
+
+    describe "repair_job" $ do
+        it "checks the station's page BEFORE the fetch phases run" $
+            runsOk $ lns
+                [ prelude
+                -- The third instance of the same hazard: repairJob.bid
+                -- is a PERSISTED building reference, and the fetch_item
+                -- / fetch_consumable phases issue their own moveTo,
+                -- transferItemToUnit and pickupGround before the
+                -- walking phase ever looks at the station's page.
+                , "buildingRow('store', 42, 5, AWAY)"
+                , "unitRow(2, 'technomule', 1, 0, HOME,"
+                , "        { { defName = 'whetstone', category = 'Materials' } })"
+                , "GROUND = { { id = 1, defName = 'whetstone', x = 0, y = 0,"
+                , "             weight = 1 } }"
+                , "GROUND_BY_PAGE = { [HOME] = GROUND }"
+                , "local s = newState()"
+                , "s.repairPhase = 'fetch_consumable'"
+                , "s.repairJob = { instanceId = 7, defName = 'axe_steel',"
+                , "                axis = 'sharpness', recipeId = 'r',"
+                , "                consumable = 'whetstone', consumableCount = 1,"
+                , "                bid = 42, itemFetched = false }"
+                , "repairAi.execute(1, s, PARAMS)"
+                , "assert(s.repairJob == nil,"
+                , "  'an off-page repair job must be dropped before sourcing')"
+                , "assert(MOVES == 0 and PICKUPS == 0 and TO_UNIT == 0,"
+                , "  'an off-page repair job must neither walk nor move items')"
+                , "-- Control: the same job at a same-page station is"
+                , "-- untouched by the check and advances normally. The"
+                , "-- actor already holds the consumable here, so the"
+                , "-- phase machine moves straight on rather than"
+                , "-- re-testing the ground rung the cases above own."
+                , "BUILDINGS = {}"
+                , "buildingRow('store', 42, 5, HOME)"
+                , "UNITS[1].inv = { { defName = 'whetstone', category = 'Materials' } }"
+                , "local t = newState()"
+                , "t.repairPhase = 'fetch_consumable'"
+                , "t.repairJob = { instanceId = 7, defName = 'axe_steel',"
+                , "                axis = 'sharpness', recipeId = 'r',"
+                , "                consumable = 'whetstone', consumableCount = 1,"
+                , "                bid = 42, itemFetched = false }"
+                , "repairAi.execute(1, t, PARAMS)"
+                , "assert(t.repairJob ~= nil,"
+                , "  'a same-page repair job must survive')"
+                , "assert(t.repairPhase == 'walking',"
+                , "  'a same-page repair job must advance, got '"
+                , "  .. tostring(t.repairPhase))"
+                ]
+
+        it "leaves a job that has not resolved a station yet alone" $
+            runsOk $ lns
+                [ prelude
+                -- job.bid stays nil until the walking phase calls
+                -- building.findStation, so the hoisted check must not
+                -- touch a fresh job just because no station is named.
+                , "UNITS[1].inv = { { defName = 'whetstone', category = 'Materials' } }"
+                , "local s = newState()"
+                , "s.repairPhase = 'fetch_consumable'"
+                , "s.repairJob = { instanceId = 7, defName = 'axe_steel',"
+                , "                axis = 'sharpness', recipeId = 'r',"
+                , "                consumable = 'whetstone', consumableCount = 1,"
+                , "                itemFetched = false }"
+                , "repairAi.execute(1, s, PARAMS)"
+                , "assert(s.repairJob ~= nil,"
+                , "  'a station-less repair job must not be dropped')"
+                , "assert(s.repairPhase == 'walking',"
+                , "  'a station-less repair job must advance, got '"
+                , "  .. tostring(s.repairPhase))"
                 ]
 
     describe "unit-to-unit item targets" $ do
