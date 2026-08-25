@@ -1696,7 +1696,8 @@ this tool's input.
 surface is not tracked in this repository (`.gitignore` ignores `.claude/`), so
 a repository test cannot cover prose. The MECHANICAL half lives here so
 `tools/test_deflake_diagnosis.py` can hold it: the entry gate and one-probe
-enforcement, X-out-of-10 arithmetic, the configuration manifest including
+enforcement, the closed producer-provenance contract (#1661),
+X-out-of-10 arithmetic, the configuration manifest including
 confirmed absence, MISSING evaluation and stable check identity,
 same-environment verification and the no-retry rule, the required diagnosis
 evidence and preservation attestations, and the one-PR limit. Whether a
@@ -1727,10 +1728,17 @@ while relabelling one to describe a different assertion has changed what it
 measures and said so nowhere. A repair's `changed_paths` are normalised
 repository-relative paths before the `tools/` scope check is applied, since
 `tools/../src/Engine/Core/Init.hs` begins with `tools/` and changes production
-code — and a repair may not touch the measurement APPARATUS at all
-(`HARNESS_MODULES`), because `measure`'s timeout and starting port are module
-constants and lengthening one would buy a calmer verification while both command
-records still compared equal.
+code — and a repair may not touch the measurement APPARATUS at all, because
+`measure`'s timeout and starting port are module constants and lengthening one
+would buy a calmer verification while both command records still compared
+equal. That apparatus is a CLOSED inventory of eleven paths
+(`HARNESS_MODULES`), pinned exactly by the self-test rather than spot-checked:
+`probe_flake`, `probe_protocol`, `probe_census`, `probe_claim`,
+`probe_resource_lock`, `probe_select`, `probe_engine`, `probelib`,
+`run_probes`, `deflake` and `deflake_diagnosis`, each of which owns probe
+selection, launch, port or resource leasing, protocol reconciliation,
+measurement timing and construction, result recording or census intake, or
+diagnosis semantics.
 
 **The producer's spelling is the contract, down to the argv FORM.**
 `deflake.build_handoff` writes `invocation.argv`, `cwd` and `timeout`, and a
@@ -1844,18 +1852,26 @@ argparse would read it (`--runs` and `--rts-caps` are `type=int`, so `--runs
 10.0` is refused rather than compared as ten), `--result` required of
 `probe_flake.py` and optional for `/deflake`, order-sensitive argv (interpreter,
 then script, then options — Python rejects an unknown option before the script
-runs), exactly `python3` as the interpreter — not bare `python`, which is whichever
-of the two the machine means; nor `python2`, which cannot parse these programs;
-nor one given by path, since a document cannot show which binary sits at
-`/tmp/counterfeit/python3`; and nor a VERSIONED `python3.9`, because every
-tracked invocation of either launcher spells it bare (both CI files, this file,
-and `probe_flake.py`'s own `--describe` subprocess), so a versioned spelling
-names a path no tracked caller could have taken. That rule is deliberately not
-a minimum-version floor: this repository declares no minimum, and every one of
-these sources opens with `from __future__ import annotations`, so a floor
-written here would be invented rather than derived. Also a script RESOLVED FROM THE DIRECTORY THE
-COMMAND RAN IN (which is what Python does with a relative script path) and
-required to be the tool the declared checkout ships — `<worktree>/tools/probe_flake.py`
+runs), no duplicate option — `--runs 10 --runs 3` reads as three to
+argparse and as ten to anyone scanning the record, so diagnosis evidence
+gets one unambiguous spelling rather than a last-value-wins resolution — and
+a PERMITTED PYTHON INTERPRETER TOKEN, which is `python3` or a version-qualified
+`python3.<minor>[.<patch>]` at or above the 3.10 floor. Not bare `python`,
+which is whichever of the two the machine means; nor `python2`, which cannot
+parse these programs; nor one given by path, since a document cannot show which
+binary sits at `/tmp/counterfeit/python3`; nor `python3.9`, which names a
+version that could not have run the program whose document quotes it. A
+version-qualified spelling names the SAME interpreter more precisely — a
+machine with several Python 3 installations spells the one it means
+`python3.12` — so it is admitted, while the floor is what keeps it honest: the
+shipped tools annotate with `X | None`, and although `from __future__ import
+annotations` defers the ones in signatures, nothing defers a type evaluated at
+runtime, so 3.10 is where these sources stop being runnable rather than merely
+parseable. The version is a dotted run of digits with no leading zero, so
+`python3.010`, `python3.` and `python3.x` are refused as malformed. Also a
+script RESOLVED FROM THE DIRECTORY THE COMMAND RAN IN (which is what Python
+does with a relative script path) and required to be the tool the declared
+checkout ships — `<worktree>/tools/probe_flake.py`
 for a controlled batch, `<directory>/tools/deflake.py` for the handoff, since
 matching only the file name would admit `/tmp/counterfeit/probe_flake.py` —
 and the handoff's directory must be the PRIMARY checkout rather than any path
@@ -1872,7 +1888,12 @@ a trailing slash or an unresolved symlink. A lexical check alone would accept
 directly under that root and GENERATES its name,
 `{probe}-{%Y%m%dT%H%M%SZ}-{pid}-{uuid8}`, whose stamp must be a real UTC instant
 and whose pid must be a real process — the shape alone matches
-`99999999T999999Z` and a pid of 0. And every run directory is `invocation_dir /
+`99999999T999999Z` and a pid of 0. That name is split from the RIGHT, so the
+three generated fields come off the end and the probe segment is left whole
+before being required to EQUAL the document's own probe; every registered probe
+key is hyphen-free today, so a left-to-right split happens to agree, but it
+would misattribute part of a hyphenated key the day one were registered.
+And every run directory is `invocation_dir /
 f"run-{index:03d}"` — three recorded values determine the whole layout, so a
 failed run's directory cannot be swapped for an unrelated path, and the run
 directories are unique by construction. The containment sweep over the paths a
@@ -1921,10 +1942,14 @@ reports.
 **Artifacts are paired with outcomes, and handed on.** `probe_flake` deletes a
 run's directory the moment it passes and retains every unsuccessful one, so
 `artifact_dir` pairs with the outcome exactly and `retained_artifacts` is the
-list of the non-null ones — checked in both directions, because "no
-successful-run raw artifacts remain" is one of verification's success
-conditions and a failing run whose logs are gone is a failure nobody can
-diagnose. An emitted outcome then names the retained artifacts of EVERY batch
+ORDERED list of the non-null ones — the completed runs in index order, then the
+error run — compared as a list rather than as a set, since a shuffled list
+names the same directories in an order no producer ever wrote. Checked in both
+directions, because "no successful-run raw artifacts remain" is one of
+verification's success conditions and a failing run whose logs are gone is a
+failure nobody can diagnose; a present `error_run` is the one record whose logs
+say why the stream broke, so its own directory is required rather than merely
+permitted. An emitted outcome then names the retained artifacts of EVERY batch
 the invocation ran, not just the handoff's: the batch that went wrong is
 usually the verification.
 
@@ -1937,6 +1962,14 @@ retained. A gate rejection would describe an invocation that got nowhere and
 lose the artifacts it did keep. What stays a rejection is a document that is
 not a `probe-flake-result/v1` at all, and a descriptor whose identities
 changed.
+
+**Identities are the census's own grammars, not second copies.** A
+`commit_sha` goes through `probe_census.require_commit_identity` and a
+`timestamp_utc` through `probe_census.parse_timestamp`, so both are matched
+full-string — a trailing newline or a suffix is refused — and the literal
+`unknown` that `probe_flake` writes when `git rev-parse` could not be consulted
+is refused BY NAME. A `CensusError` from either is caught and reported as this
+module's own malformed-input rejection, never allowed to escape as a traceback.
 
 **The repair is frozen before it is verified.** `probe_flake` records only
 `git rev-parse HEAD` and cannot see uncommitted source, so a declared repair
@@ -1966,6 +1999,23 @@ rereview amendment scopes this lab's own self-test to manual invocation — so
 run it by hand when touching `tools/deflake_diagnosis.py`. It takes seconds and
 boots nothing. (`tools/test_deflake.py`, the #1436 orchestrator's self-test,
 IS in both; the two issues scoped their gates differently.)
+
+Every provenance invariant above is asserted TWICE (#1661). A rejection test
+supplies a fixture violating it and pins the message; a mutation case then
+NEUTRALISES exactly that one rule in a private compiled copy of the module and
+proves the same fixture is no longer refused for that reason. The second half
+is what makes the first half evidence: a rejection test passes just as happily
+when some other rule is what did the rejecting, and then the invariant it
+claims to cover could be deleted without a single test turning red — which is
+not hypothetical, since the retained-artifact ORDER rule is caught by its
+mutation case alone. The bypass is a textual edit to the module source, never a
+hook in the shipped module, and an anchor that no longer matches exactly once
+is a loud failure rather than a quiet pass. A rule that cannot be isolated this
+way is redundant or untestable and does not belong in the module. Where one
+invariant genuinely nests inside a broader one — two batches sharing an
+invocation directory are also, necessarily, each writing inside the other's —
+the bypassed module refuses for the other reason and the case records that
+outcome distinctly.
 
 What stays out of everything, exactly as for `deflake.py`, is the REAL
 engine-booting measurement: a diagnosis consumes twenty ten-run batches' worth
