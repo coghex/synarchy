@@ -28,7 +28,7 @@ Next direct-commit cursor: `f753927e5af535379050dfc30150b3a3ef91fc62`.
 ## Status
 
 - [x] PRR-7. Framebuffer resize events do not request swapchain recreation — [#1693]
-- [ ] PRR-8. UI attachment can create multiple owners and stale descendant page ownership
+- [x] PRR-8. UI attachment can create multiple owners and stale descendant page ownership — [#1694]
 - [ ] PRR-9. Lua tick intervals can busy-spin or permanently stall the scheduler
 
 ## Historical observations
@@ -101,7 +101,7 @@ Remaining uncertainty:
 
 ## 2. UI hierarchy ownership
 
-### PRR-8. UI attachment can create multiple owners and stale descendant page ownership
+### [#1694] PRR-8. UI attachment can create multiple owners and stale descendant page ownership
 
 > Captured note: The UI hierarchy’s attachment functions append structural references without enforcing one-owner membership, and cross-page subtree attachment updates only the subtree root’s page.
 
