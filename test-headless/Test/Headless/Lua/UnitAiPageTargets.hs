@@ -108,9 +108,15 @@ prelude = lns
     , "           logInfo = function() end, logDebug = function() end,"
     , "           emitEvent = function() end, emitEventAt = function() end,"
     , "           emitEventForUnit = function() end }"
-    , "world = { getActiveWorldId = function() return 1 end }"
+    , "world = { getActiveWorldId = function() return 1 end,"
+    , "          findHarvestableFlora = function() return nil end }"
     , "debug = debug or {}"
     , "debug.recordOutcome = function() end"
+    -- A hungry unit: forage only scores below forage_max_fraction of a
+    -- full stomach, so the flat 1.0 every other stat gets would gate
+    -- the whole action out.
+    , "STATS = { carrying_capacity = 100, hunger = 1, max_hunger = 100,"
+    , "          calories = 1, max_calories = 100 }"
     , "unit = {"
     , "  exists = function(uid) return UNITS[uid] ~= nil end,"
     , "  getAllIds = function()"
@@ -129,7 +135,7 @@ prelude = lns
     -- tell "cached and scored" from "found nothing".
     , "  getCarryingWeight = function() return 50 end,"
     , "  getStat = function(_, k)"
-    , "    if k == 'carrying_capacity' then return 100 end"
+    , "    if STATS[k] ~= nil then return STATS[k] end"
     , "    return 1.0 end,"
     , "  getSkill = function() return 25.0 end,"
     , "  getKnowledge = function() return true end,"
@@ -182,6 +188,8 @@ prelude = lns
     , "    end"
     , "    return nil, true end,"
     , "  pickupGround = function() PICKUPS = PICKUPS + 1; return true end,"
+    , "  getFood = function(defName)"
+    , "    if defName == 'berry' then return { calories = 100 } end end,"
     , "  listDefs = function() return { { name = 'plate_steel', weight = 1 } } end }"
     , "craft = {"
     , "  getBills = function() return BILLS end,"
@@ -195,8 +203,18 @@ prelude = lns
     , "  completeBillCycle = function() return 0 end,"
     , "  executeAt = function() return true, {} end }"
     , "power = { isStationPoweredForRecipe = function() return true end }"
-    , "repair = { get = function(rid) return { id = rid } end,"
+    , "repair = { get = function(rid)"
+    , "             return { id = rid,"
+    , "                      inputs = { { item = 'whetstone', count = 1 } } } end,"
     , "           repairAt = function() return true end }"
+    , "equipment = { getLoadout = function() return {} end,"
+    , "              getAccessories = function() return {} end }"
+    -- findStation ranks over the ACTIVE page; STATION is whatever that
+    -- listing would hand back, page and all.
+    , "STATION = nil"
+    , "building.findStation = function()"
+    , "  if not STATION then return nil end"
+    , "  return STATION.bid, STATION.x, STATION.y end"
     , "local PARAMS = require('scripts.unit_ai_tunables').acolyte"
     , "local page      = require('scripts.unit_ai_page')"
     , "local fetch     = require('scripts.unit_ai_fetch')"
@@ -205,6 +223,7 @@ prelude = lns
     , "local craftAi   = require('scripts.unit_ai_craft')"
     , "local medic     = require('scripts.unit_ai_medic')"
     , "local repairAi  = require('scripts.unit_ai_repair')"
+    , "local needs     = require('scripts.unit_ai_needs')"
     , "-- The acting unit: uid 1, on HOME, at the origin."
     , "local ACTOR = unitRow(1, 'acolyte', 0, 0, HOME,"
     , "                      { { defName = 'plate_steel', category = 'Materials' } })"
@@ -528,6 +547,36 @@ spec = describe "AI page pairing" $ do
                 ]
 
     describe "repair_job" $ do
+        it "refuses to score a FRESH job against an off-page station" $
+            runsOk $ lns
+                [ prelude
+                -- The fresh-job path carries no bid until it is scored,
+                -- so the persisted-target guard cannot see it.
+                -- building.findStation ranks over the ACTIVE page, so
+                -- the station it names has to be checked here or the
+                -- job starts and its fetch phases run first.
+                , "local away = buildingRow('store', 42, 5, AWAY)"
+                , "STATION = { bid = 42, x = 5, y = 0 }"
+                , "UNITS[1].inv = { { defName = 'axe_steel', instanceId = 9,"
+                , "                   sharpness = 1, condition = 100 } }"
+                , "local s = newState()"
+                , "local u = repairAi.utility(1, s, PARAMS)"
+                , "assert(u == -math.huge,"
+                , "  'an off-page station must not score a repair job, got '"
+                , "  .. tostring(u))"
+                , "-- The SAME station on the actor's page does score,"
+                , "-- and the vetted id is retained for execute."
+                , "BUILDINGS = {}"
+                , "buildingRow('store', 42, 5, HOME)"
+                , "local t = newState()"
+                , "local v = repairAi.utility(1, t, PARAMS)"
+                , "assert(v > 0,"
+                , "  'a same-page station must still score, got ' .. tostring(v))"
+                , "assert(t.repairCandidate and t.repairCandidate.bid == 42,"
+                , "  'the vetted station must be retained on the candidate, got '"
+                , "  .. tostring(t.repairCandidate and t.repairCandidate.bid))"
+                ]
+
         it "checks the station's page BEFORE the fetch phases run" $
             runsOk $ lns
                 [ prelude
@@ -594,6 +643,49 @@ spec = describe "AI page pairing" $ do
                 , "assert(s.repairPhase == 'walking',"
                 , "  'a station-less repair job must advance, got '"
                 , "  .. tostring(s.repairPhase))"
+                ]
+
+    describe "foraging for ground food" $ do
+        it "never selects, walks to, or picks up a row on another page" $
+            runsOk $ lns
+                [ prelude
+                -- Same one-gid-two-pages shape as the sourcing ladder,
+                -- on the OTHER path that reaches item.pickupGround.
+                , "local away = { id = 1, defName = 'berry', x = 3, y = 0 }"
+                , "GROUND = { away }"
+                , "GROUND_BY_PAGE = { [AWAY] = { away } }"
+                , "UNITS[1].hunger = 0"
+                , "local s = newState()"
+                , "local u = needs.forageUtility(1, s, PARAMS)"
+                , "assert(u == -math.huge,"
+                , "  'off-page ground food must not score, got ' .. tostring(u))"
+                , "assert(s.forageTarget == nil,"
+                , "  'off-page ground food must leave no target')"
+                , "-- The SAME gid naming a row on the actor's own page."
+                , "local home = { id = 1, defName = 'berry', x = 3, y = 0 }"
+                , "GROUND_BY_PAGE = { [AWAY] = { away }, [HOME] = { home } }"
+                , "local t = newState()"
+                , "local v = needs.forageUtility(1, t, PARAMS)"
+                , "assert(v > -math.huge,"
+                , "  'same-page ground food must still score, got ' .. tostring(v))"
+                , "assert(t.forageTarget and t.forageTarget.gid == 1,"
+                , "  'same-page ground food must be targeted')"
+                ]
+
+        it "drops a PERSISTED target whose row is not on the carrier's page" $
+            runsOk $ lns
+                [ prelude
+                -- The shape a save written before this check restores.
+                , "local away = { id = 1, defName = 'berry', x = 3, y = 0 }"
+                , "GROUND = { away }"
+                , "GROUND_BY_PAGE = { [AWAY] = { away } }"
+                , "local s = newState()"
+                , "s.forageTarget = { kind = 'ground', gid = 1, x = 3, y = 0 }"
+                , "needs.forageExecute(1, s, PARAMS)"
+                , "assert(s.forageTarget == nil,"
+                , "  'an off-page forage target must be dropped')"
+                , "assert(MOVES == 0 and PICKUPS == 0,"
+                , "  'an off-page forage target must draw neither a walk nor a pickup')"
                 ]
 
     describe "unit-to-unit item targets" $ do

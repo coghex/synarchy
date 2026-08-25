@@ -234,10 +234,23 @@ function repairUtility(uid, s, params)
     -- fails to parse, and it falls back to "no distance info" (lowest
     -- building id wins, ignoring proximity entirely). Floor first.
     local recipeId = "repair_" .. cand.axis
-    if not building.findStation(recipeId, math.floor(info.gridX),
-                                math.floor(info.gridY)) then
+    -- #1673: findStation ranks over the ACTIVE page, which is not
+    -- necessarily this unit's, so the station it names is checked
+    -- against the ACTOR's own page before the job may be scored at all
+    -- — otherwise a fresh job starts against a foreign station and its
+    -- fetch phases walk and move items before the walking phase finally
+    -- rejects it. The id is RETAINED on the candidate rather than
+    -- re-resolved in execute: a second findStation call would take its
+    -- own, independent active-page snapshot and could answer
+    -- differently from the one this gate approved.
+    local stationBid = building.findStation(recipeId, math.floor(info.gridX),
+                                            math.floor(info.gridY))
+    if not stationBid then return -math.huge end
+    local sinfo = building.getInfo(stationBid)
+    if not sinfo or not page.same(info.page, sinfo.page) then
         return -math.huge
     end
+    cand.bid = stationBid
 
     local recipe = repair.get(recipeId)
     local input = recipe and recipe.inputs and recipe.inputs[1]
@@ -289,6 +302,10 @@ function repairExecute(uid, s, params)
             axis = cand.axis, recipeId = cand.recipeId,
             consumable = cand.consumable, consumableCount = cand.consumableCount,
             onMule = cand.onMule,
+            -- #1673: the station repairUtility already vetted against
+            -- this unit's page. Carried in so the guard below covers
+            -- the job from its first tick, fetch phases included.
+            bid = cand.bid,
         }
         s.repairPhase = cand.onMule and "fetch_item" or "fetch_consumable"
         -- Cancel any in-flight moveTo the PREVIOUS action left running
