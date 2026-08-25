@@ -29,7 +29,7 @@ Next direct-commit cursor: `f753927e5af535379050dfc30150b3a3ef91fc62`.
 
 - [x] PRR-7. Framebuffer resize events do not request swapchain recreation — [#1693]
 - [x] PRR-8. UI attachment can create multiple owners and stale descendant page ownership — [#1694]
-- [ ] PRR-9. Lua tick intervals can busy-spin or permanently stall the scheduler
+- [x] PRR-9. Lua tick intervals can busy-spin or permanently stall the scheduler — [#1695]
 
 ## Historical observations
 
@@ -169,7 +169,7 @@ Remaining uncertainty:
 
 ## 3. Lua scheduler timing
 
-### PRR-9. Lua tick intervals can busy-spin or permanently stall the scheduler
+### [#1695] PRR-9. Lua tick intervals can busy-spin or permanently stall the scheduler
 
 > Captured note: Lua tick intervals accept zero, negative, NaN, and infinite values, but the scheduler assumes a usable finite interval.
 
