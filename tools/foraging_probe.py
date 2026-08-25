@@ -12,7 +12,11 @@ worldgen; the arena has no plants), then checks:
   3. Regrowth: at a cranked time scale the timer counts down and the
      tile returns to harvestable.
   4. Save/load: a fresh harvest's regrowth timer survives
-     save → loadSave (world-page map wpsFloraHarvests, v66).
+     save → loadSave (world-page map wpsFloraHarvests, v66). The engine
+     runs on a throwaway resource root under a slot named for this
+     invocation, and both halves of the round trip are tied to their own
+     request ids, so the reloaded tile can only be this run's save and
+     the developer's saves/ is never read, written or rotated (#1618).
   5. AI: an acolyte with an empty stomach and no carried food forages a
      nearby plant autonomously (real unit_ai stack, not neutralised)
      and ends up with food eaten or in hand.
@@ -20,10 +24,125 @@ worldgen; the arena has no plants), then checks:
 Usage: python3 tools/foraging_probe.py [--port 9173] [--seed 42]
        [--size 64] [--plates 3]
 """
-import argparse, glob, socket, subprocess, sys, time
-from probelib import quit_engine, boot, send, send_json, wait_load_published
+import argparse, glob, os, shutil, socket, subprocess, sys
+import tempfile, time, uuid
+from probelib import (boot, capture_request_id, quit_engine, send, send_json,
+                      wait_load_published, wait_save_complete)
 
 SPROOT = "/tmp"
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def make_isolated_root(base: str) -> str:
+    """A throwaway resource root for one invocation (#1618): the
+    read-only content families symlinked, `config/` COPIED without the
+    developer's `*.local.yaml` overrides, and its OWN empty `saves/`.
+
+    `app/App/ResourceRoot.hs` chdirs the engine into this directory and
+    `World.Save.Serialize` resolves `saves` relative to it, so stage 4's
+    round trip writes here instead of the developer's live `saves/` —
+    which is gitignored and therefore accumulates abandoned slots
+    silently. Copying `config/` rather than symlinking it keeps a
+    personal `config/save.local.yaml` out of the run: `scripts/init.lua`
+    loads the autosave scheduler, so a local autosave interval could
+    otherwise fire a competing save while stage 3 has the clock cranked
+    to 3000x and rotate slots underneath the probe.
+
+    Only the SAVE slot moves here; `bootstrap` still feeds the engine
+    repo-relative `data/**.yaml` paths, which resolve through the
+    symlinked `data/` exactly as before, and the engine log stays under
+    `SPROOT`.
+    """
+    root = os.path.join(base, "root")
+    os.makedirs(root, exist_ok=True)
+    for family in ("scripts", "assets", "data"):
+        target = os.path.join(root, family)
+        if not os.path.exists(target):
+            os.symlink(os.path.join(REPO, family), target)
+    config_dst = os.path.join(root, "config")
+    if not os.path.exists(config_dst):
+        shutil.copytree(os.path.join(REPO, "config"), config_dst,
+                        ignore=shutil.ignore_patterns("*.local.yaml"))
+    os.makedirs(os.path.join(root, "saves"), exist_ok=True)
+    return root
+
+
+def remove_run_root(base: str) -> bool:
+    """Delete this invocation's own throwaway tree, save artifacts and
+    all, and say whether it is really gone.
+
+    Only ever removes the directory THIS process made with
+    `tempfile.mkdtemp`, so nothing pre-existing is at risk — in
+    particular the abandoned slots already sitting in the developer's
+    `saves/` are neither read nor touched. `rmtree` unlinks the
+    symlinked content families rather than recursing into them, so the
+    real `scripts/`, `assets/` and `data/` are never followed. A
+    survivor makes the run non-zero: a green result sitting beside
+    leftover saves is precisely the outcome this isolation exists to
+    prevent, so it must not be reported as a pass.
+    """
+    try:
+        shutil.rmtree(base)
+    except OSError as exc:
+        print(f"  [FAIL] could not remove this run's resource root "
+              f"{base}: {exc}")
+        return False
+    if os.path.exists(base):
+        print(f"  [FAIL] this run's resource root survived removal: {base}")
+        return False
+    return True
+
+
+def save_and_reload(port, page, slot):
+    """The persistence round trip, tied at every step to THIS run's own
+    requests (#1618).
+
+    `engine.saveWorld` and `engine.loadSave` only ACCEPT synchronously
+    (`src/Engine/Scripting/Lua/API/Save.hs`), so neither return value
+    means the work finished and no fixed sleep can stand in for one.
+    Each half therefore asserts acceptance, captures that request's own
+    id, and waits for a terminal status carrying it. A missing id is
+    itself a failure rather than something to wait past: without one the
+    wait falls back to accepting whichever terminal status it sees
+    first, which is the stale-status hole the request ids exist to
+    close. A terminal FAILED save returns here without issuing the load,
+    so a rejected or broken save is never mistaken for a round trip.
+
+    Returns None on success, or a message naming the step that broke.
+    """
+    saved = send(port, f"return engine.saveWorld('{page}', '{slot}')")
+    if saved.strip() != "true":
+        return (f"engine.saveWorld('{page}', '{slot}') was not accepted "
+                f"(got {saved!r}); the engine log carries the validation "
+                f"reason, which the Boolean itself does not")
+    save_id = capture_request_id(port, "return engine.getSaveStatus()")
+    if save_id is None:
+        return (f"engine.getSaveStatus() never reported a request id for "
+                f"saveWorld('{slot}')")
+    ok, save_status = wait_save_complete(port, save_id)
+    print(f"  save '{slot}' request {save_id} -> {save_status}")
+    if not ok:
+        return (f"save '{slot}' (request {save_id}) did not reach "
+                f"SaveCaptureComplete: {save_status}")
+    if not isinstance(save_status, dict) or save_status.get("id") != save_id:
+        return (f"save '{slot}' reported terminal status {save_status!r}, "
+                f"which does not carry this run's request id {save_id}")
+
+    loaded = send(port, f"return engine.loadSave('{slot}')")
+    if loaded.strip() != "true":
+        return f"engine.loadSave('{slot}') was not accepted (got {loaded!r})"
+    load_id = capture_request_id(port, "return engine.getLoadStatus()")
+    if load_id is None:
+        return (f"engine.getLoadStatus() never reported a request id for "
+                f"loadSave('{slot}')")
+    published, load_status = wait_load_published(port, 200, request_id=load_id)
+    print(f"  load '{slot}' request {load_id} -> {load_status}")
+    if not published:
+        return f"load transaction {load_id} did not publish: {load_status}"
+    if not isinstance(load_status, dict) or load_status.get("id") != load_id:
+        return (f"load '{slot}' reported terminal status {load_status!r}, "
+                f"which does not carry this run's request id {load_id}")
+    return None
 
 
 def bootstrap(port):
@@ -61,8 +180,28 @@ def main():
     port = args.port
     passed = True
 
-    proc = boot(port, f"{SPROOT}/foraging_probe_engine.log")
+    # This invocation owns its resource root and therefore its saves/
+    # (#1618): stage 4 writes a slot that no ordinary `cabal run` can
+    # reach, and the whole tree goes away below.
+    base = tempfile.mkdtemp(prefix="synarchy_foraging_")
+    root = make_isolated_root(base)
+    # Unique per invocation as well as per root, so the slot NAME alone
+    # identifies this run even in a log shared with another.
+    slot = f"foraging_v66_check_{uuid.uuid4().hex[:8]}"
+    print(f"isolated resource root: {root}", flush=True)
+    print(f"save slot: {slot}", flush=True)
+
+    # `boot` exits the probe outright when the engine dies before READY
+    # or never prints it, so it belongs INSIDE the try: otherwise that
+    # failure path leaves this run's root — the one thing the cleanup
+    # below exists to remove — sitting in the temp directory. A None
+    # handle is what `quit_engine` already expects when there is no live
+    # process to shut down.
+    proc = None
+    rc = 1
     try:
+        proc = boot(port, f"{SPROOT}/foraging_probe_engine.log",
+                    args=["--resource-root", root])
         bootstrap(port)
         send(port, f"world.init('probe', {args.seed}, {args.size}, {args.plates}); return 'ok'")
         send(port, "return world.waitForInit(300)", timeout=310)
@@ -114,12 +253,9 @@ def main():
         if not isinstance(yields2, list):
             print("  [FAIL] re-harvest for the save test failed")
             passed = False
-        send(port, "engine.saveWorld('probe', 'foraging_v66_check'); return 'ok'")
-        time.sleep(3.0)
-        send(port, "engine.loadSave('foraging_v66_check'); return 'ok'")
-        published, load_status = wait_load_published(port, 200)
-        if not published:
-            print(f"  [FAIL] load transaction did not publish: {load_status}")
+        problem = save_and_reload(port, "probe", slot)
+        if problem:
+            print(f"  [FAIL] {problem}")
             return 1
         send(port, "world.show('probe'); return 'ok'")
         # A loaded world comes up PAUSED (auto-pause-on-save) with only
@@ -181,9 +317,24 @@ def main():
               f"tile_harvested={foraged} food_acquired={eaten}")
 
         print("\n" + ("ALL FORAGING CHECKS PASSED" if passed else "SOME FAILED"))
-        return 0 if passed else 1
+        rc = 0 if passed else 1
     finally:
-        quit_engine(port, proc)
+        # Orderly shutdown FIRST: the root must still exist while the
+        # engine is closing its own files, and only then does this run's
+        # tree (with every save artifact it created) go away — on the
+        # failing path exactly as on the passing one.
+        #
+        # Shut down ONLY an engine this run actually launched. `boot`
+        # already disposes of the process it started on either of its own
+        # failure paths, and leaves `proc` None — so a None here means
+        # the port belongs to somebody else (an instance that was already
+        # listening is exactly why a boot fails on a busy port), and
+        # `engine.quit()` would be aimed at their engine. Cleanup of the
+        # root stays unconditional: that directory is ours either way.
+        if proc is not None:
+            quit_engine(port, proc)
+        cleaned = remove_run_root(base)
+    return rc if cleaned else 1
 
 
 if __name__ == "__main__":
