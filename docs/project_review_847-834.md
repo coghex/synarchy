@@ -13,7 +13,7 @@ PR #846's unbound-key outcome, #845's unified wheel routing, #843's remote-porta
 - [x] PRR-3. A full-file revert can retain a stale `reviewed:approve` label — [#1679]
 - [x] PRR-4. A paused craft bill keeps drawing power forever when its working claimant dies — [#1680]
 - [x] PRR-5. The location-anchor validator and matcher duplicate the vocabulary and retain an unconstrained fallback — [#1681]
-- [ ] PRR-6. The flora-growth probe shares fixed fixture paths and never cleans them
+- [x] PRR-6. The flora-growth probe shares fixed fixture paths and never cleans them — [#1682]
 
 ## 1. Deferred input-coordinate ownership
 
@@ -148,7 +148,7 @@ PR #846's unbound-key outcome, #845's unified wheel routing, #843's remote-porta
 
 ## 6. Flora probe fixture ownership
 
-### PRR-6. The flora-growth probe shares fixed fixture paths and never cleans them
+### [#1682] PRR-6. The flora-growth probe shares fixed fixture paths and never cleans them
 
 > **Captured note:** Give each flora-growth probe invocation an isolated temporary resource/fixture directory and remove it in an outer `finally`. `probe_berry.yaml` and the new `probe_clover.yaml` are written to fixed shared `/tmp` names, so concurrent runs overwrite one another's inputs and every success/failure leaves stale fixtures behind.
 
