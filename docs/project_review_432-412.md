@@ -9,7 +9,7 @@ The settings-log gating, production warning policy, algorithm-comment numbering,
 ## Status
 
 - [x] PRR-1. The texture-path guard is absent from CI and currently rejects prose — [#1705]
-- [ ] PRR-2. Structure quads do not follow the cylindrical render alias
+- [x] PRR-2. Structure quads do not follow the cylindrical render alias — [#1706]
 - [ ] PRR-3. Front-wall handling is fixed to the FaceSouth edge pair
 - [ ] PRR-4. Hidden walls can still lift visible flora and vegetation
 - [ ] PRR-5. Guaranteed placement can bypass the location water-safety rule
@@ -42,7 +42,7 @@ The settings-log gating, production warning policy, algorithm-comment numbering,
 
 ## 2. Structure rendering at the cylindrical seam
 
-### PRR-2. Structure quads do not follow the cylindrical render alias
+### [#1706] PRR-2. Structure quads do not follow the cylindrical render alias
 
 > **Captured note:** Route structure pieces through the same facing-aware nearest-wrap placement used by terrain, flora, ground items, blood, spoil, cursors, and their hit tests. `Structure.Render` enumerates stored canonical coordinates and projects them directly, so a room beside a camera parked on the opposite seam alias can render a whole world away or disappear while the terrain beneath it is correctly wrapped into view.
 
