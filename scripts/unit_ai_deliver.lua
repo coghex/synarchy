@@ -172,6 +172,22 @@ local function deliverExecute(uid, s, params)
     local info = unit.getInfo(uid)
     if not info then return end
 
+    -- #1673: deliveryClaim.bid is a PERSISTED building reference, so it
+    -- can outlive the page it was chosen on (a save written before this
+    -- check, or a page switch between claim and arrival). Revalidate it
+    -- against the deliverer's own page HERE, ahead of everything else
+    -- this function can do: the sourcing phases below issue their own
+    -- moveTo / pickupGround / transferItemToUnit calls, so a check
+    -- placed after them would already have let an off-page claim walk
+    -- the unit and move items. Re-runs every tick, since each fetch
+    -- phase returns early while busy.
+    local binfo = building.getInfo(s.deliveryClaim.bid)
+    if not binfo or not page.same(info.page, binfo.page) then
+        -- Building destroyed, or on another world. Release.
+        s.deliveryClaim = nil
+        return
+    end
+
     -- Source the shortfall before heading to the build site: own
     -- inventory first, then nearby ground items, then the technomule
     -- (#96 sourcing ladder).
@@ -202,18 +218,6 @@ local function deliverExecute(uid, s, params)
 
     -- Fetch may have emptied the claim entirely (sources gone / raced).
     if not next(claim.materials) then
-        s.deliveryClaim = nil
-        return
-    end
-
-    local binfo = building.getInfo(s.deliveryClaim.bid)
-    -- #1673: deliveryClaim.bid is a PERSISTED building reference, so it
-    -- can outlive the page it was chosen on (a save written before this
-    -- check, or a page switch between claim and arrival). Revalidate it
-    -- against the deliverer's own page BEFORE it can steer a walk or
-    -- reach unit.transferItemToBuilding.
-    if not binfo or not page.same(info.page, binfo.page) then
-        -- Building destroyed, or on another world. Release.
         s.deliveryClaim = nil
         return
     end

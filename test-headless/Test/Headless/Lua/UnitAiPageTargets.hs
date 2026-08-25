@@ -163,9 +163,11 @@ prelude = lns
     , "    if not b then return nil end"
     , "    return { gridX = b.x, gridY = b.y, tileW = 1, tileH = 1,"
     , "             page = b.page } end }"
+    , "PICKUPS = 0"
     , "item = {"
     , "  listGround = function() return GROUND end,"
-    , "  listDefs = function() return {} end }"
+    , "  pickupGround = function() PICKUPS = PICKUPS + 1; return true end,"
+    , "  listDefs = function() return { { name = 'plate_steel', weight = 1 } } end }"
     , "craft = {"
     , "  getBills = function() return BILLS end,"
     , "  getBill = function(id)"
@@ -267,6 +269,49 @@ spec = describe "AI page pairing" $ do
                 , "  'a same-page site must still be planned')"
                 ]
 
+        it "checks the claim's page BEFORE the sourcing phases run" $
+            runsOk $ lns
+                [ prelude
+                -- The sourcing phases issue their own moveTo /
+                -- pickupGround / transferItemToUnit, so a claim whose
+                -- page is only checked at the arrival branch has
+                -- already walked the unit and moved items by then. The
+                -- claim carries BOTH ground and mule work, and both a
+                -- reachable ground item and a reachable mule exist on
+                -- the actor's page, so a check that ran too late would
+                -- demonstrably fire them.
+                , "buildingRow('site', 55, 5, AWAY, { need = { plate_steel = 1 } })"
+                , "unitRow(2, 'technomule', 1, 0, HOME,"
+                , "        { { defName = 'plate_steel', category = 'Materials' } })"
+                , "GROUND = { { id = 1, defName = 'plate_steel', x = 0, y = 0,"
+                , "             weight = 1 } }"
+                , "local s = newState()"
+                , "s.deliveryClaim = { bid = 55, materials = { plate_steel = 2 },"
+                , "                    fromGround = { plate_steel = 1 },"
+                , "                    fromMule = { plate_steel = 1 } }"
+                , "deliver.deliverExecute(1, s, PARAMS)"
+                , "assert(s.deliveryClaim == nil,"
+                , "  'an off-page claim must be released before sourcing')"
+                , "assert(PICKUPS == 0,"
+                , "  'an off-page claim must never pick a ground item up')"
+                , "assert(TO_UNIT == 0,"
+                , "  'an off-page claim must never pull from the mule')"
+                , "assert(MOVES == 0 and STOPS == 0,"
+                , "  'an off-page claim must not steer a walk during sourcing')"
+                , "-- Control: the SAME claim on the actor's page does"
+                , "-- reach the ground rung, so the assertions above are"
+                , "-- about the page and not about an inert fixture."
+                , "BUILDINGS = {}"
+                , "buildingRow('site', 55, 5, HOME, { need = { plate_steel = 1 } })"
+                , "local t = newState()"
+                , "t.deliveryClaim = { bid = 55, materials = { plate_steel = 2 },"
+                , "                    fromGround = { plate_steel = 1 },"
+                , "                    fromMule = { plate_steel = 1 } }"
+                , "deliver.deliverExecute(1, t, PARAMS)"
+                , "assert(PICKUPS == 1,"
+                , "  'a same-page claim must still source from the ground')"
+                ]
+
         it "releases a PERSISTED claim naming a building on another page" $
             runsOk $ lns
                 [ prelude
@@ -337,6 +382,53 @@ spec = describe "AI page pairing" $ do
                 , "assert(v > 0, 'a same-page station must still score, got ' .. tostring(v))"
                 , "assert(t.craftCandidate and t.craftCandidate.bill.id == 1,"
                 , "  'a same-page station must still be nominated')"
+                ]
+
+        it "checks the station's page BEFORE the fetch phase runs" $
+            runsOk $ lns
+                [ prelude
+                -- Same hazard as the delivery claim: craftExecute's
+                -- fetch phase sources from ground, mule and cargo, all
+                -- of which move the unit and items. A station checked
+                -- only at the walking phase is checked too late.
+                , "buildingRow('store', 42, 5, AWAY)"
+                , "buildingRow('store', 43, 6, HOME,"
+                , "  { storage = { { defName = 'plate_steel' } } })"
+                , "unitRow(2, 'technomule', 1, 0, HOME,"
+                , "        { { defName = 'plate_steel', category = 'Materials' } })"
+                , "GROUND = { { id = 1, defName = 'plate_steel', x = 0, y = 0,"
+                , "             weight = 1 } }"
+                , "BILLS = { { id = 1, station = 42, recipe = 'r', mode = 'count' } }"
+                , "local s = newState()"
+                , "s.craftJob = { billId = 1, bid = 42, recipeId = 'r', work = 0,"
+                , "               skill = 'smithing',"
+                , "               need = { plate_steel = 3 },"
+                , "               fromGround = { plate_steel = 1 },"
+                , "               fromMule = { plate_steel = 1 },"
+                , "               fromCargo = { plate_steel = 1 },"
+                , "               phase = 'fetch' }"
+                , "craftAi.craftExecute(1, s, PARAMS)"
+                , "assert(s.craftJob == nil,"
+                , "  'an off-page craft job must be released before sourcing')"
+                , "assert(PICKUPS == 0 and TO_UNIT == 0 and WITHDRAWS == 0,"
+                , "  'an off-page craft job must move no items while sourcing')"
+                , "assert(MOVES == 0 and STOPS == 0,"
+                , "  'an off-page craft job must not steer a walk while sourcing')"
+                , "-- Control: the same job at a same-page station does"
+                , "-- reach the ground rung."
+                , "BUILDINGS = {}"
+                , "buildingRow('store', 42, 5, HOME)"
+                , "local t = newState()"
+                , "t.craftJob = { billId = 1, bid = 42, recipeId = 'r', work = 0,"
+                , "               skill = 'smithing',"
+                , "               need = { plate_steel = 3 },"
+                , "               fromGround = { plate_steel = 1 },"
+                , "               fromMule = { plate_steel = 1 },"
+                , "               fromCargo = { plate_steel = 1 },"
+                , "               phase = 'fetch' }"
+                , "craftAi.craftExecute(1, t, PARAMS)"
+                , "assert(PICKUPS == 1,"
+                , "  'a same-page craft job must still source from the ground')"
                 ]
 
         it "releases a PERSISTED job naming a station on another page" $

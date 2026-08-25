@@ -275,6 +275,19 @@ local function craftExecute(uid, s, params)
         releaseCraftJob(s, uid, true)
         return
     end
+    -- #1673: job.bid is a PERSISTED building reference, so a save
+    -- written before this check (or a page switch mid-job) can name a
+    -- station on another world. Revalidate it against the crafter's own
+    -- page HERE, ahead of every phase: the fetch phase below issues its
+    -- own moveTo / pickupGround / transferItemToUnit / withdrawFromCargo
+    -- calls, so a check placed at the walking phase would already have
+    -- let an off-page job walk the unit and move items. Re-runs every
+    -- tick, since each fetch phase returns early while busy.
+    local binfo = building.getInfo(job.bid)
+    if not binfo or not page.same(info.page, binfo.page) then
+        releaseCraftJob(s, uid, true)   -- demolished or off-page
+        return
+    end
     -- Keep the claim fresh (claimBill by the holder is a refresh).
     craft.claimBill(job.billId, uid, params.craft_claim_timeout)
 
@@ -305,15 +318,8 @@ local function craftExecute(uid, s, params)
     -- Phase 2: stand beside the station — nearest border tile, same
     -- walk as deliver (craft.executeAt requires Chebyshev ≤ 1).
     if job.phase == "walking" then
-        local binfo = building.getInfo(job.bid)
-        -- #1673: job.bid is a PERSISTED building reference, so a save
-        -- written before this check (or a page switch mid-job) can name
-        -- a station on another world. Revalidate it against the
-        -- crafter's own page BEFORE it can cause a walk or a craft.
-        if not binfo or not page.same(info.page, binfo.page) then
-            releaseCraftJob(s, uid, true)   -- demolished or off-page
-            return
-        end
+        -- Station identity and page were revalidated above, ahead of
+        -- the fetch phase; binfo is that same live lookup.
         if moveBesideBuilding(uid, info, binfo) then return end
         unit.stop(uid)
         job.phase = "working"
