@@ -9,7 +9,7 @@ PRs #873 and #870 retain their codec/apply crash-recovery contracts in the curre
 ## Status
 
 - [x] PRR-1. Whole-session load assigns the active page's zoom atlas to every page — [#1670]
-- [ ] PRR-2. A no-payload load retains the replaced session's transient GPU textures
+- [x] PRR-2. A no-payload load retains the replaced session's transient GPU textures — [no-issue]
 - [ ] PRR-3. Defaults rebuilds drop keyboard control focus on both configuration screens
 
 ## 1. Per-page zoom-atlas ownership
@@ -41,7 +41,9 @@ PRs #873 and #870 retain their codec/apply crash-recovery contracts in the curre
 
 ## 2. No-payload load teardown
 
-### PRR-2. A no-payload load retains the replaced session's transient GPU textures
+### [no-issue] PRR-2. A no-payload load retains the replaced session's transient GPU textures
+
+> **Disposition:** No issue — verified but inconsequential. Publication's `Just`-only writes (`src/World/Load/Publish.hs:137-138`, `:152-153`) do leave the replaced session's preview and zoom-atlas textures registered, but nothing renders from `previewTexture`/`zoomAtlasTexture` — their only readers are the disposal sites in `Engine/Scripting/Lua/Message/WorldTexture.hs` and `Engine/Loop/Shutdown.hs:80-81` — at most one generation of each is retained rather than accumulating, and the path is reachable only through a save whose ACTIVE page is an arena (`src/World/Load/Stage.hs:311-312`), which `CLAUDE.md` already directs developers not to create.
 
 > **Captured note:** Give a successful load an explicit render-thread teardown result when the replacement session has no zoom atlas or preview. Treating `Nothing` as "perform no write" leaves both the old single-slot payload and the already-uploaded texture alive even though issue #763 requires old-session resources to be disposed after commit.
 
