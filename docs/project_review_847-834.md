@@ -8,7 +8,7 @@ PR #846's unbound-key outcome, #845's unified wheel routing, #843's remote-porta
 
 ## Status
 
-- [ ] PRR-1. Deferred mouse outcomes lose their press-time framebuffer coordinate contract
+- [x] PRR-1. Deferred mouse outcomes lose their press-time framebuffer coordinate contract — [#1676]
 - [ ] PRR-2. Construction cancellation and claim state identify jobs by coordinate without their world page
 - [ ] PRR-3. A full-file revert can retain a stale `reviewed:approve` label
 - [ ] PRR-4. A paused craft bill keeps drawing power forever when its working claimant dies
@@ -17,7 +17,7 @@ PR #846's unbound-key outcome, #845's unified wheel routing, #843's remote-porta
 
 ## 1. Deferred input-coordinate ownership
 
-### PRR-1. Deferred mouse outcomes lose their press-time framebuffer coordinate contract
+### [#1676] PRR-1. Deferred mouse outcomes lose their press-time framebuffer coordinate contract
 
 > **Captured note:** Store a deferred gesture's framebuffer-space press position, or store the window/framebuffer geometry that interpreted the press, and use that durable value on every resolution path. The current tuple retains only raw window coordinates: an ordinary release reconverts them using release-time dimensions, while focus-loss/minimize writes them without any conversion at all.
 
