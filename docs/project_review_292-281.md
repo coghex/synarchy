@@ -8,12 +8,12 @@ PR #291's location definitions have since grown validated spatial, icon, content
 
 ## Status
 
-- [ ] PRR-1. Texture handle zero is both the undefined sentinel and the first allocated asset
+- [x] PRR-1. Texture handle zero is both the undefined sentinel and the first allocated asset — [#1696]
 - [ ] PRR-2. The fixed handle table silently expires after 65,536 allocations
 
 ## 1. Texture-handle zero ownership
 
-### PRR-1. Texture handle zero is both the undefined sentinel and the first allocated asset
+### [#1696] PRR-1. Texture handle zero is both the undefined sentinel and the first allocated asset
 
 > **Captured note:** Reserve texture-handle id 0 exclusively for the undefined/no-texture sentinel, or replace it with another representation that cannot be allocated to a real asset. Shader-side indirection must preserve the existing `TextureHandle 0` contracts instead of allowing the first uploaded texture to redefine what every zero handle means.
 
