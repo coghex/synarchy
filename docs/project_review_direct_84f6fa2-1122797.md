@@ -32,7 +32,7 @@ from older direct history remain here until their owning batches are reviewed.
 ## Status
 
 - [x] PRR-1. Devices below 16,384 descriptors pass a gate their fixed-size shaders cannot satisfy — [#1689]
-- [ ] PRR-2. Descriptor-slot exhaustion is published as successful texture loading
+- [x] PRR-2. Descriptor-slot exhaustion is published as successful texture loading — [#1690]
 - [ ] PRR-3. Loaded disk-texture cleanup closures are unreachable from runtime and shutdown
 
 ## 1. Bindless shader/layout capacity
@@ -108,7 +108,7 @@ failure was not reproduced. The invalid interface is not driver-dependent.
 
 ## 2. Slot-exhaustion outcome
 
-### PRR-2. Descriptor-slot exhaustion is published as successful texture loading
+### [#1690] PRR-2. Descriptor-slot exhaustion is published as successful texture loading
 
 > **Captured note:** The bindless allocator reports capacity exhaustion as
 > `Nothing`, but three live upload paths continue as if registration succeeded.
