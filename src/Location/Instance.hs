@@ -476,19 +476,30 @@ locationInstanceAllocatorErrors lis =
 --   axes, @abMinX ≤ abMaxX@ and @abMinY ≤ abMaxY@. Empty ⇒ every box is
 --   well-formed.
 --
---   No engine constructor can produce an inverted one:
---   'newLocationInstance' builds the box as
---   @translateBounds anchor (ldBounds def)@, and
---   'Location.Bounds.translateBounds' offsets both ends by the same
---   amount, so it preserves the ordering of a 'Location.Bounds.RelBounds'
---   that "Engine.Asset.YamlLocations" has already refused to load if
---   inverted (#777). The SAVE decode path is the construction site that
---   gate does not cover:
+--   The SAVE decode path is the construction site the authored-bounds
+--   gate does not cover at all:
 --   'World.Save.Component.WorldGen.fromAbsBoundsDTO' copies four
 --   unrestricted 'Int's straight off the wire, so a corrupt or
---   hand-edited payload reaches an 'AbsBounds' without passing the
---   loader — which is why this rule needs a second implementation here
---   rather than being left to #1151's single YAML-side one.
+--   hand-edited payload reaches an 'AbsBounds' without passing
+--   "Engine.Asset.YamlLocations" 's inverted-bounds rejection (#777) —
+--   which is why this rule needs a second implementation here rather
+--   than being left to #1151's single YAML-side one.
+--
+--   Decode is the DOMINANT source but not provably the only one.
+--   'newLocationInstance' builds the box as
+--   @translateBounds anchor (ldBounds def)@ from an already-loaded
+--   'Location.Bounds.RelBounds', and 'Location.Bounds.translateBounds'
+--   offsets both ends by the same amount — so for any authored box
+--   whose translation does not overflow, ordering is preserved and the
+--   engine cannot invert one. That qualifier is load-bearing: the
+--   translation is unchecked 'Int' addition and the YAML loader
+--   constrains ORDERING but imposes no coordinate RANGE, so extreme
+--   authored coordinates at a nonzero anchor can wrap and come out
+--   inverted. Defining an authored-coordinate range is a separate
+--   decision (#1668 explicitly leaves it out of scope), and this check
+--   is the right behaviour either way: a wrapped box is not a usable
+--   footprint, so refusing to publish it is correct whichever site
+--   produced it.
 --
 --   An inverted box fails SILENTLY rather than loudly, differently in
 --   each consumer: 'Location.Bounds.boundsContainsPoint' is false at

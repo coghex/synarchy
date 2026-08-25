@@ -185,13 +185,16 @@ spec = describe "Location instance identity" $ do
                     , lisPendingLegacy = Nothing }
             locationInstanceAllocatorErrors broken `shouldSatisfy` (not . null)
 
-    -- #1668: the table's GEOMETRY, beside its ids. No engine
-    -- constructor can invert a stored box -- 'newLocationInstance'
-    -- translates an already-loader-validated 'RelBounds', and
-    -- 'translateBounds' offsets both ends alike -- but the save decode
-    -- path rebuilds an 'AbsBounds' from four unrestricted wire 'Int's,
-    -- so a corrupt payload can. Rejecting it is silent-failure
-    -- prevention: an inverted box contains no point at any wrap image
+    -- #1668: the table's GEOMETRY, beside its ids. The save decode path
+    -- rebuilds an 'AbsBounds' from four unrestricted wire 'Int's,
+    -- entirely outside the YAML loader's inverted-bounds gate, so a
+    -- corrupt payload can carry one. Engine placement normally cannot:
+    -- 'newLocationInstance' translates an already-loader-validated
+    -- 'RelBounds' and 'translateBounds' offsets both ends alike -- but
+    -- only for translations that do not overflow, the addition being
+    -- unchecked 'Int' arithmetic over a loader that constrains ordering
+    -- and not range. Either way rejecting the box is right: an inverted
+    -- one fails silently, containing no point at any wrap image
     -- (discovery can never fire) while still reporting intersection
     -- with unrelated terrain (placement blocks valid ground).
     describe "stored-bounds validation" $ do

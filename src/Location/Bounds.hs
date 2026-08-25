@@ -54,12 +54,20 @@ import World.Plate (worldWidthTiles)
 --   run by "World.Save.Component.Page" 's @validatePages@. A persisted
 --   location instance's box is rebuilt by
 --   'World.Save.Component.WorldGen.fromAbsBoundsDTO' from four
---   unrestricted wire 'Int's, which is the one 'AbsBounds' construction
---   site NOT downstream of the loader gate above, so the save boundary
---   must state the rule itself. That is not a duplicate that drifted
---   from this one — the two guard different types at different
---   boundaries — and it is not #1151's deleted shared @validRelBounds@
---   predicate reinstated.
+--   unrestricted wire 'Int's — the one 'AbsBounds' construction site
+--   entirely outside the loader gate above — so the save boundary must
+--   state the rule itself. That is not a duplicate that drifted from
+--   this one: the two guard different types at different boundaries,
+--   and it is not #1151's deleted shared @validRelBounds@ predicate
+--   reinstated.
+--
+--   Being downstream of the gate is not by itself a PROOF of ordering
+--   either. 'translateBounds' below is unchecked 'Int' addition and the
+--   loader constrains ordering without constraining RANGE, so an
+--   extreme authored box at a nonzero anchor can wrap and invert. That
+--   is a known, deliberately unaddressed edge (#1668 leaves defining an
+--   authored-coordinate range out of scope); it is noted here so the
+--   save-side check is not read as covering only corrupt payloads.
 data RelBounds = RelBounds
     { rbMinX ∷ !Int
     , rbMinY ∷ !Int
