@@ -31,13 +31,13 @@ from older direct history remain here until their owning batches are reviewed.
 
 ## Status
 
-- [ ] PRR-1. Devices below 16,384 descriptors pass a gate their fixed-size shaders cannot satisfy
+- [x] PRR-1. Devices below 16,384 descriptors pass a gate their fixed-size shaders cannot satisfy — [#1689]
 - [ ] PRR-2. Descriptor-slot exhaustion is published as successful texture loading
 - [ ] PRR-3. Loaded disk-texture cleanup closures are unreachable from runtime and shutdown
 
 ## 1. Bindless shader/layout capacity
 
-### PRR-1. Devices below 16,384 descriptors pass a gate their fixed-size shaders cannot satisfy
+### [#1689] PRR-1. Devices below 16,384 descriptors pass a gate their fixed-size shaders cannot satisfy
 
 > **Captured note:** The capability gate accepts a device with a post-reservation
 > descriptor count as low as 256 and sizes the descriptor-set
