@@ -8,13 +8,13 @@ PRs #873 and #870 retain their codec/apply crash-recovery contracts in the curre
 
 ## Status
 
-- [ ] PRR-1. Whole-session load assigns the active page's zoom atlas to every page
+- [x] PRR-1. Whole-session load assigns the active page's zoom atlas to every page — [#1670]
 - [ ] PRR-2. A no-payload load retains the replaced session's transient GPU textures
 - [ ] PRR-3. Defaults rebuilds drop keyboard control focus on both configuration screens
 
 ## 1. Per-page zoom-atlas ownership
 
-### PRR-1. Whole-session load assigns the active page's zoom atlas to every page
+### [#1670] PRR-1. Whole-session load assigns the active page's zoom atlas to every page
 
 > **Captured note:** Keep a loaded zoom atlas attached only to the page whose zoom cache and pixels produced it. The whole-session loader currently stages one atlas for the active page, then writes that atlas metadata into every staged `WorldState`, including pages whose independently built caches describe different worlds.
 
