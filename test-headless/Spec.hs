@@ -52,6 +52,7 @@ import qualified Test.Headless.Item.Materialize as ItemMaterialize
 import qualified Test.Headless.Item.BulkStorage as ItemBulkStorage
 import qualified Test.Headless.Item.Discovery as ItemDiscovery
 import qualified Test.Headless.Asset.TextureFallback as TextureFallback
+import qualified Test.Headless.Asset.FloraContent as FloraContent
 import qualified Test.Headless.Asset.UnitInventory as AssetUnitInventory
 import qualified Test.Headless.Asset.Types as AssetTypes
 import qualified Test.Headless.Asset.YamlList as AssetYamlList
@@ -427,6 +428,7 @@ main = hspec $ do
     describe "WorldGen.BedDepth" BedDepth.spec
     describe "WorldGen.FluidSurfaceFold" FluidSurfaceFold.spec
     describe "Asset.Types" AssetTypes.spec
+    describe "Asset.FloraContent" FloraContent.spec
     describe "Asset.UnitInventory" AssetUnitInventory.spec
     describe "Asset.YamlList" AssetYamlList.spec
     describe "Preview.Discovery" PreviewDiscovery.spec
