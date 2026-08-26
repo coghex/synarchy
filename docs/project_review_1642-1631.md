@@ -8,12 +8,12 @@ PRs #1642, #1641, #1640, #1638, #1636, #1635, #1633, #1624, #1634, and #1631 ret
 
 ## Status
 
-- [ ] PRR-1. Auto-harvest cannot collect the last ripe plant's yields
-- [ ] PRR-2. A raced coffee drain still grants the sip's effects
+- [x] PRR-1. Auto-harvest cannot collect the last ripe plant's yields — [#1743]
+- [x] PRR-2. A raced coffee drain still grants the sip's effects — [#1744]
 
 ## 1. Auto-harvest collection arbitration
 
-### PRR-1. Auto-harvest cannot collect the last ripe plant's yields
+### [#1743] PRR-1. Auto-harvest cannot collect the last ripe plant's yields
 
 > **Captured note:** Make PR #1639's `collecting` phase independently eligible for arbitration. The action currently asks for another harvestable plant before it can execute the already-completed harvest's one-item-per-tick collection work.
 
@@ -39,7 +39,7 @@ PRs #1642, #1641, #1640, #1638, #1636, #1635, #1633, #1624, #1634, and #1631 ret
 
 ## 2. Exact-instance coffee consumption
 
-### PRR-2. A raced coffee drain still grants the sip's effects
+### [#1744] PRR-2. A raced coffee drain still grants the sip's effects
 
 > **Captured note:** Make PR #1637's exact-instance sip conditional on the amount the engine actually drains. `applySip` currently commits every stat and animation side effect before calling the atomic fill mutation, then ignores its `nil`, zero, or short-drain result.
 
