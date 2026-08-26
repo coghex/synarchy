@@ -10,7 +10,7 @@ PR #71's pause-menu Save now reaches the registered save transaction; its adjace
 
 - [x] PRR-1. Pending-chunk dedup treats wrap aliases as different chunks — [#1723]
 - [x] PRR-2. The determinism contract self-test is outside every maintained gate — [#1724]
-- [ ] PRR-3. Copilot guidance still directs new shared state into EngineEnv
+- [x] PRR-3. Copilot guidance still directs new shared state into EngineEnv — [no-issue]
 
 ## 1. Chunk queue canonical identity
 
@@ -61,7 +61,9 @@ PR #71's pause-menu Save now reaches the registered save transaction; its adjace
 
 ## 3. Agent guidance drift
 
-### PRR-3. Copilot guidance still directs new shared state into EngineEnv
+### [no-issue] PRR-3. Copilot guidance still directs new shared state into EngineEnv
+
+> **Disposition:** No issue — fixed by commit `b9bd3637` (2026-08-18), three days after capture. The Copilot summary was replaced by a pointer to `CLAUDE.md`; the STM-backed `EngineM` description, the `debug-console.sh` reference, the pre-split `EngineEnv`/`EngineState` summary, and the "wire new shared state through `EngineEnv` and `Engine.Core.Init`" instruction were all deleted. `AGENTS.md` is a symlink to `CLAUDE.md`, so all three agent surfaces now read one document.
 
 > **Captured note:** Direct commit `9c3a61a` introduced `.github/copilot-instructions.md`, and its surviving architecture guidance now conflicts with the completed EngineEnv capability split. It tells an agent adding shared state to wire it through `EngineEnv`, omitting the mandatory ownership/capability decision that usually says the state belongs somewhere else.
 
