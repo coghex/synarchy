@@ -27,6 +27,11 @@
 --     'World.Load.Publish.resetTransientState' is what a load publish
 --     actually runs; a test-local @writeTVar ... empty@ would prove
 --     only that the test preserves the counter, which is not the claim.
+--   * __The high-water mark is read in the SAME Lua line as the
+--     rows.__ Sampled separately the two could straddle a mutation, and
+--     the whole reason the pair exists is that they disagree in exactly
+--     one direction — a load publish empties the ring while the counter
+--     keeps counting.
 --   * __Coalescing is configured per case__, by installing a
 --     purpose-built category rather than borrowing a shipped one, so a
 --     later edit to @data/notification_categories.yaml@ cannot silently
@@ -120,9 +125,13 @@ evalJSON env code = do
 --   inferred from a successful JSON decode (Lua numbers serialize
 --   indistinguishably once they reach JSON).
 data SeqProbe = SeqProbe
-    { spCount ∷ Int
-    , spSeqs  ∷ [Int]
-    , spTypes ∷ [Text]
+    { spCount   ∷ Int
+    , spSeqs    ∷ [Int]
+    , spTypes   ∷ [Text]
+    , spHighest ∷ Int
+      -- ^ @engine.getEventLogSequence()@, read in the SAME console line
+      --   as the rows — the pair the oracle actually observes.
+    , spHighestType ∷ Text
     } deriving Show
 
 -- | Lua has one table type, so an EMPTY list serializes as @{}@ — a
@@ -141,15 +150,20 @@ instance FromJSON SeqProbe where
         <$> o .: "n"
         <*> (unLuaList <$> o .: "seqs")
         <*> (unLuaList <$> o .: "types")
+        <*> o .: "highest"
+        <*> o .: "highestType"
 
 seqProbeLua ∷ Text
 seqProbeLua = T.intercalate " "
     [ "local log = engine.getEventLog();"
+    , "local highest = engine.getEventLogSequence();"
     , "local seqs, types = {}, {};"
     , "for i, r in ipairs(log) do"
     , "  seqs[i] = r.sequence;"
     , "  types[i] = math.type(r.sequence) or type(r.sequence) end;"
-    , "return { n = #log, seqs = seqs, types = types }"
+    , "return { n = #log, seqs = seqs, types = types,"
+    , "         highest = highest,"
+    , "         highestType = math.type(highest) or type(highest) }"
     ]
 
 readSeqs ∷ EngineEnv → IO SeqProbe
@@ -214,8 +228,13 @@ spec = around withHeadlessEngine $ describe "Player event progress" $ do
         spCount probe `shouldBe` 3
         spSeqs probe `shouldBe` [base, base + 1, base + 2]
         shouldBeStrictlyIncreasing (spSeqs probe)
-        -- Requirement 2's wire form: a Lua INTEGER on every row.
+        -- Requirement 2's wire form: a Lua INTEGER on every row, and on
+        -- the high-water mark beside them.
         spTypes probe `shouldBe` replicate 3 "integer"
+        spHighestType probe `shouldBe` "integer"
+        -- With rows present the two agree; the case below is the one
+        -- where they must not.
+        spHighest probe `shouldBe` base + 2
         map lrText <$> readRows env ≫= (`shouldBe` replicate 3 "same")
 
     it "gives a coalesced replacement a fresh sequence and moves it to \
@@ -249,6 +268,9 @@ spec = around withHeadlessEngine $ describe "Player event progress" $ do
         spCount probe `shouldBe` eventStoreCap
         spSeqs probe `shouldBe` [base + extra .. base + total - 1]
         shouldBeStrictlyIncreasing (spSeqs probe)
+        -- Eviction removes rows without touching the counter, so the
+        -- high-water mark still names the newest mutation.
+        spHighest probe `shouldBe` base + total - 1
 
     it "keeps the counter across the production load-publish reset, so \
        \post-reset rows outrank a pre-reset cursor" $ \env → do
@@ -265,12 +287,30 @@ spec = around withHeadlessEngine $ describe "Player event progress" $ do
         spCount emptied `shouldBe` 0
 
         emitEvent env probeCat "Test" "after"
-        afterSeqs ← spSeqs <$> readSeqs env
-        afterSeqs `shouldBe` [base + 2]
+        afterProbe ← readSeqs env
+        spSeqs afterProbe `shouldBe` [base + 2]
         -- The whole point: a cursor retained from before the load is
         -- OLDER than the post-load row, so the row is reported rather
         -- than suppressed as already-seen.
-        all (> maximum beforeSeqs) afterSeqs `shouldBe` True
+        all (> maximum beforeSeqs) (spSeqs afterProbe) `shouldBe` True
+        spHighest afterProbe `shouldBe` base + 2
+
+    it "keeps reporting the high-water mark after the reset even with an \
+       \empty ring, so discarded mutations stay visible" $ \env → do
+        -- The round-1 review blocker: rows alone cannot distinguish
+        -- "nothing has happened" from "everything that happened was
+        -- discarded". Two mutations commit, the production reset throws
+        -- their rows away, and NOTHING is emitted afterwards — the only
+        -- surviving evidence that they existed is the counter.
+        base ← prepare env 0
+        emitEvent env probeCat "Test" "doomed one"
+        emitEvent env probeCat "Test" "doomed two"
+        resetTransientState env
+        emptied ← readSeqs env
+        spCount emptied `shouldBe` 0
+        spSeqs emptied `shouldBe` []
+        spHighest emptied `shouldBe` base + 1
+        spHighestType emptied `shouldBe` "integer"
 
     it "leaves every pre-existing Lua row field intact beside the \
        \sequence" $ \env → do

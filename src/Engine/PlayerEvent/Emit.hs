@@ -8,6 +8,7 @@ module Engine.PlayerEvent.Emit
     , emitEventFull
     , emitEventFullOnPage
     , readEventLog
+    , readEventLogSequence
       -- * The one page-attribution rule
     , resolveEventPage
     ) where
@@ -320,3 +321,15 @@ pushBounded window ref ev = modifyTVar' ref $ \st →
 readEventLog ∷ EngineEnv → IO [StoredEvent]
 readEventLog env =
     toList ∘ esRows <$> readTVarIO (ecEventStoreRef (toEventsCapability env))
+
+-- | The highest sequence the store has COMMITTED, whether or not the
+--   row it named is still in the ring ('eventStoreHighWater', #1714).
+--
+--   Deliberately separate from 'readEventLog': after a load publish the
+--   ring is empty while the counter has kept counting, so this is the
+--   only way an observer can tell \"nothing has happened\" from
+--   \"everything that happened was discarded\".
+readEventLogSequence ∷ EngineEnv → IO Int
+readEventLogSequence env =
+    eventStoreHighWater
+        <$> readTVarIO (ecEventStoreRef (toEventsCapability env))

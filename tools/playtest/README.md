@@ -320,11 +320,16 @@ gitignored):
   interval `{"first_sequence", "last_sequence", "missing_count"}`.
   A gap object asserts ABSENCE only and never a cause — eviction, a
   coalesce, and a load-publish reset are indistinguishable from the
-  snapshot. The first observation is an explicit baseline (the whole
-  current log, no gap), and the cursor never moves backwards, so an
-  emptied ring neither re-reports delivered rows nor manufactures a gap
-  back to sequence 1. A row that arrives WITHOUT a usable `sequence` is
-  a hard error, never a fall back to matching rows by value. `visual_change` (bool) and
+  snapshot. The intervals run up to the store's own
+  `engine.getEventLogSequence()` high-water mark, read in the SAME
+  console line as the rows, not up to the newest surviving row: a load
+  publish empties the ring without resetting the counter, so the rows
+  alone would report a whole discarded interval as no change at all.
+  The first observation is an explicit baseline (the whole current log,
+  no gap, adopting the high-water mark as its cursor), and the cursor
+  never moves backwards. A row that arrives WITHOUT a usable
+  `sequence`, and a read whose high-water mark is missing or unusable,
+  are hard errors — never a fall back to matching rows by value. `visual_change` (bool) and
   `post_screenshot` (path, or null) are this turn's own before/after
   comparison and post-step frame — populated only when a step ran, so
   never for a `done`/stuck terminal turn, but always for an ordinary

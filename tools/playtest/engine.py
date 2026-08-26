@@ -93,8 +93,29 @@ def _row_sequence(event) -> int:
     return sequence
 
 
-def _event_log_progress(cursor: int | None,
-                        current: list) -> tuple[list, list, int | None]:
+def _event_log_high_water(value) -> int:
+    """`engine.getEventLogSequence()`'s reply: how far the store has
+    committed, whatever it still holds (#1714).
+
+    Loud on anything else, for the same reason `_row_sequence` is: this
+    is the ONLY thing that can tell an emptied ring apart from a store
+    where nothing happened, so a harness that silently accepted a
+    missing or unusable value would go back to reporting a load
+    publication's discarded mutations as "no change".
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise OracleContractError(
+            "engine.getEventLogSequence() must return an integer, got "
+            f"{value!r} ({type(value).__name__})")
+    if value < 0:
+        raise OracleContractError(
+            "engine.getEventLogSequence() must not be negative, got "
+            f"{value}")
+    return value
+
+
+def _event_log_progress(cursor: int | None, current: list,
+                        high_water: int) -> tuple[list, list, int]:
     """Advance the event-log cursor over one snapshot (#1714).
 
     Returns ``(new_rows, gaps, next_cursor)``.
@@ -106,41 +127,47 @@ def _event_log_progress(cursor: int | None,
     arithmetic on those numbers, never a comparison of row values, so
     byte-identical rows are no longer indistinguishable.
 
+    `high_water` is the store's own count of committed mutations, read
+    in the SAME console line as the rows. It is not derivable from them:
+    a load publish empties the ring without resetting the counter, so
+    the rows can say "nothing here" while every mutation since the last
+    read has in fact been committed and discarded. Taking the ceiling
+    from the rows instead would report that as no change at all --
+    permanently, if no later row happens to arrive.
+
     `cursor` is the highest sequence any previous observation has seen.
     `None` means this is the BASELINE observation: it reports the whole
     current log and no gap, because nothing before it was claimed to be
-    observed. An EMPTY baseline stays a baseline -- a first read taken
-    before any event exists claims nothing, so it must not seed a cursor
-    of 0 and turn the next read's ordinary rows into a gap back to
-    sequence 1.
+    observed. It still adopts `high_water` as its cursor, so mutations
+    that predate the baseline are treated as never-claimed rather than
+    as a loss the next read must report.
 
     `gaps` names every committed sequence newer than `cursor` that is
-    NOT in this snapshot, grouped into maximal intervals. The store is
-    bounded, so such sequences genuinely exist and genuinely cannot be
-    recovered -- front eviction drops them, and a coalesced replacement
-    retires the sequence it superseded. A gap object asserts ABSENCE
-    only and never attributes a cause: from the snapshot the two are
-    indistinguishable, and so is a row discarded by a load-publish
-    reset.
+    NOT in this snapshot, grouped into maximal intervals -- up to
+    `high_water`, so an interval whose entire tail is missing is
+    reported rather than truncated at the last surviving row. The store
+    is bounded, so such sequences genuinely exist and genuinely cannot
+    be recovered: front eviction drops them, a coalesced replacement
+    retires the sequence it superseded, and a load publish discards
+    whatever it held. A gap object asserts ABSENCE only and never
+    attributes a cause -- from the snapshot the three are
+    indistinguishable.
 
-    The cursor is monotonic: it never moves backwards, and an EMPTY
-    snapshot leaves it exactly where it was. That matters because a load
-    publish empties the ring; lowering the cursor there would either
-    re-report rows already delivered or manufacture a gap starting at
-    sequence 1.
+    The cursor is monotonic and never moves backwards.
     """
     sequences = [_row_sequence(event) for event in current]
-    highest = max(sequences) if sequences else None
+    ceiling = max([high_water] + sequences)
 
     if cursor is None:
-        return current[:], [], highest
+        return current[:], [], ceiling
 
     new_rows = [event for event, sequence in zip(current, sequences)
                 if sequence > cursor]
     # Walk the sequences PRESENT rather than the range between them: an
     # arbitrarily long interval can be missing (a burst far larger than
-    # the ring), and enumerating every absent number to group it would
-    # allocate proportionally to the loss instead of to the snapshot.
+    # the ring, or a whole ring discarded by a load), and enumerating
+    # every absent number to group it would allocate proportionally to
+    # the loss instead of to the snapshot.
     gaps = []
     expected = cursor + 1
     for sequence in sorted(set(sequences)):
@@ -151,8 +178,37 @@ def _event_log_progress(cursor: int | None,
                          "last_sequence": sequence - 1,
                          "missing_count": sequence - expected})
         expected = max(expected, sequence + 1)
-    next_cursor = cursor if highest is None else max(cursor, highest)
-    return new_rows, gaps, next_cursor
+    # The tail: everything committed after the newest surviving row.
+    # This is the load-publish case in its pure form -- an empty ring
+    # with a high-water mark ahead of the cursor is ALL tail.
+    if ceiling >= expected:
+        gaps.append({"first_sequence": expected,
+                     "last_sequence": ceiling,
+                     "missing_count": ceiling - expected + 1})
+    return new_rows, gaps, max(cursor, ceiling)
+
+
+# One console line for both halves of an event-log observation
+# (#1714): the surviving rows, and how far the store has committed. Two
+# separate reads could be split by a mutation, and the pair only means
+# anything when both describe the same instant.
+EVENT_LOG_PROGRESS_LUA = ("return {rows = engine.getEventLog(), "
+                          "highest = engine.getEventLogSequence()}")
+
+
+def _lua_array(value) -> list:
+    """A Lua sequence as a Python list.
+
+    Lua has one table type, so an EMPTY array serializes as `{}` -- a
+    JSON object. That is exactly the shape a load publication produces,
+    so it is a case to handle, never one to reject.
+    """
+    if isinstance(value, list):
+        return value
+    if isinstance(value, dict) and not value:
+        return []
+    raise OracleContractError(
+        f"engine.getEventLog() must return an array of rows, got {value!r}")
 
 
 def _lua_str(text: str) -> str:
@@ -376,13 +432,19 @@ class PlaytestEngine:
 
     def oracle_events(self) -> dict:
         snap: dict = {}
-        log = self.lua("return engine.getEventLog()")
-        if isinstance(log, list):
-            # A LIST that violates the row contract raises
-            # (`_row_sequence`); a non-list reply is a transport
+        # Rows and high-water mark in ONE console line (#1714): sampled
+        # separately they could straddle a mutation, and the whole point
+        # of the pair is that they disagree only in the direction a load
+        # publish creates.
+        progress = self.lua(EVENT_LOG_PROGRESS_LUA)
+        if isinstance(progress, dict) and "rows" in progress:
+            # A well-shaped reply that violates the row or high-water
+            # contract raises; a reply of the wrong SHAPE is a transport
             # hiccup, handled below as "no evidence this read".
             new_rows, gaps, cursor = _event_log_progress(
-                self._event_log_cursor, log)
+                self._event_log_cursor,
+                _lua_array(progress["rows"]),
+                _event_log_high_water(progress.get("highest")))
             snap["event_log_new"] = new_rows
             snap["event_log_gaps"] = gaps
             self._event_log_cursor = cursor

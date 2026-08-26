@@ -4,6 +4,7 @@ module Engine.Scripting.Lua.API.PlayerEvent
     , emitEventAtFn
     , emitEventForUnitFn
     , getEventLogFn
+    , getEventLogSequenceFn
     , getNotificationCfgFn
     , setNotificationOverridesFn
     ) where
@@ -22,7 +23,8 @@ import Engine.Core.State (EngineEnv)
 import Engine.PlayerEvent (CategoryCfg(..))
 import Engine.PlayerEvent.Emit (PlayerEvent(..), StoredEvent(..)
                                , emitEvent, emitEventAt
-                               , emitEventFull, readEventLog)
+                               , emitEventFull, readEventLog
+                               , readEventLogSequence)
 
 -- | @engine.emitEvent(category, text)@ — fire a player-visible event
 --   from Lua. Returns nothing. Unknown categories drop with a dev
@@ -181,6 +183,25 @@ getEventLogFn env = do
         Lua.setfield (-2) "page"
 
         Lua.rawseti (-2) i
+    return 1
+
+-- | @engine.getEventLogSequence()@ — the highest event-log mutation
+--   sequence the store has COMMITTED this process, as a Lua integer
+--   (@0@ before the first one). Independent of which rows survive
+--   (#1714).
+--
+--   The pair with @engine.getEventLog()@ is the point: rows tell an
+--   observer what it can still see, this tells it how far the store has
+--   actually got. They disagree in exactly one direction — a load
+--   publish empties the ring without resetting the counter — so an
+--   observer reading rows alone would see an empty log after a load and
+--   conclude nothing had happened, when in fact every mutation since
+--   its last read was discarded. Read both in one console line to keep
+--   them from being sampled across a mutation.
+getEventLogSequenceFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+getEventLogSequenceFn env = do
+    highest ← Lua.liftIO $ readEventLogSequence env
+    Lua.pushinteger (fromIntegral highest)
     return 1
 
 -- | @engine.getNotificationCfg()@ — return all categories in

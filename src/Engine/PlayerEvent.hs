@@ -5,6 +5,7 @@ module Engine.PlayerEvent
     , EventStore(..)
     , emptyEventStore
     , clearEventStoreRows
+    , eventStoreHighWater
     , CategoryCfg(..)
     , NotificationCfg
     , eventStoreCap
@@ -150,6 +151,19 @@ data EventStore = EventStore
 -- | A fresh store: no rows, and the first mutation will be sequence 1.
 emptyEventStore ∷ EventStore
 emptyEventStore = EventStore { esRows = Seq.empty, esNextSequence = 1 }
+
+-- | The highest sequence this store has ever COMMITTED, independent of
+--   which rows it still holds (0 before the first mutation).
+--
+--   Read separately from the rows because the two can disagree, and
+--   only in one direction: 'clearEventStoreRows' removes rows without
+--   touching the counter, so after a load publish the ring can be empty
+--   while mutations newer than an observer's cursor have genuinely been
+--   committed. An observer that inferred the high-water mark from the
+--   rows alone would see \"nothing here\" and report no loss at all —
+--   permanently, if no later row happens to arrive.
+eventStoreHighWater ∷ EventStore → Int
+eventStoreHighWater st = esNextSequence st - 1
 
 -- | Discard every row but KEEP the sequence counter — the load-publish
 --   reset ('World.Load.Publish.resetTransientState'). Resetting the

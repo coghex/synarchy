@@ -1342,13 +1342,45 @@ def selftest() -> int:
         # arithmetic on identities rather than a guess from row values.
         # Exercised through the real oracle state tracker, not only the
         # pure helper.
+        from engine import EVENT_LOG_PROGRESS_LUA
+
         class EventLogEngine(RealEngine):
+            """Replays a scripted series of event-log observations.
+
+            Each entry is either a list of rows -- whose own highest
+            sequence is then the store's high-water mark, which is what
+            an un-reset ring always reports -- or an explicit
+            `(rows, high_water)` pair, for the load-publish shape where
+            the counter has run ahead of the surviving rows.
+            """
+
             def __init__(self, logs):
+                self.logs = iter([self._shape(entry) for entry in logs])
                 super().__init__(0, os.devnull)
-                self.logs = iter(logs)
+
+            @staticmethod
+            def _shape(entry):
+                if isinstance(entry, tuple):
+                    rows, high_water = entry
+                else:
+                    rows = entry
+                    # Only well-formed sequences count: the malformed-row
+                    # cases below deliberately ship rows the contract
+                    # rejects, and shaping them must not raise before
+                    # the oracle gets its chance to.
+                    high_water = max([0] + [r["sequence"] for r in rows
+                                            if isinstance(r, dict)
+                                            and isinstance(r.get("sequence"),
+                                                           int)
+                                            and not isinstance(
+                                                r.get("sequence"), bool)])
+                # An empty Lua array serializes as `{}`, and the empty
+                # ring is the case that matters most here, so the
+                # fixture reproduces that shape rather than smoothing it.
+                return {"rows": rows if rows else {}, "highest": high_water}
 
             def lua(self, code, timeout=0):
-                if code == "return engine.getEventLog()":
+                if code == EVENT_LOG_PROGRESS_LUA:
                     return next(self.logs)
                 if code == "return debug.drainActionOutcomes()":
                     return []
@@ -1466,15 +1498,16 @@ def selftest() -> int:
                   {"first_sequence": 5, "last_sequence": 6, "missing_count": 2}],
               str(reads[1]["event_log_gaps"]))
 
-        # 7d. An EMPTY snapshot (what a load publish leaves behind) must
-        # not lower the cursor: rows delivered before it stay delivered,
-        # and the post-reset row is reported once with no invented gap
-        # back to sequence 1. The engine's counter keeps counting across
-        # that reset, which is what makes the comparison meaningful.
+        # 7d. A load publish empties the ring WITHOUT resetting the
+        # store's counter, so an emptied snapshot means one of two
+        # different things and the high-water mark is the only thing
+        # that tells them apart. Nothing committed since the last read:
+        # nothing to report, and no invented gap.
         reads = observe([[row(1, "before"), row(2, "before two")],
-                         [],
+                         ([], 2),
                          [row(3, "after")]])
-        check("an emptied ring reports nothing and manufactures no gap",
+        check("an emptied ring with nothing committed since the last read "
+              "reports nothing and manufactures no gap",
               reads[1]["event_log_new"] == []
               and reads[1]["event_log_gaps"] == [], str(reads[1]))
         check("a row emitted after the ring was emptied is reported once, "
@@ -1482,16 +1515,56 @@ def selftest() -> int:
               reads[2]["event_log_new"] == [row(3, "after")]
               and reads[2]["event_log_gaps"] == [], str(reads[2]))
 
-        # The same rule at the other end: a baseline read taken before
-        # any event exists claims nothing, so the NEXT read is still the
-        # baseline rather than a cursor-0 read that would report the
-        # whole log as a gap back to sequence 1.
+        # ...and the case that makes the high-water mark necessary
+        # (round-1 review): mutations 3-4 are committed between two
+        # reads and then discarded by the load publish, leaving an EMPTY
+        # ring. Inferring the ceiling from the surviving rows would find
+        # none, report no change at all, and hide those two mutations
+        # PERMANENTLY if no later row happened to arrive. The gap is
+        # reported at the very next read, exactly once, and the read
+        # after it — still empty, still high-water 4 — adds nothing.
+        reads = observe([[row(1, "a"), row(2, "b")], ([], 4), ([], 4)])
+        check("an emptied ring whose counter ran ahead reports the "
+              "discarded mutations as a gap",
+              reads[1]["event_log_new"] == []
+              and reads[1]["event_log_gaps"] == [
+                  {"first_sequence": 3, "last_sequence": 4,
+                   "missing_count": 2}],
+              str(reads[1]))
+        check("that gap is reported exactly once, not on every later "
+              "empty read",
+              reads[2]["event_log_new"] == []
+              and reads[2]["event_log_gaps"] == [], str(reads[2]))
+
+        # A partial tail: rows survive, but the store committed further
+        # than the newest of them. Truncating the gap at the last
+        # surviving row would silently drop the tail.
+        reads = observe([[row(1, "a")], ([row(2, "b")], 5)])
+        check("a gap whose tail runs past the newest surviving row is "
+              "reported to the high-water mark",
+              reads[1]["event_log_new"] == [row(2, "b")]
+              and reads[1]["event_log_gaps"] == [
+                  {"first_sequence": 3, "last_sequence": 5,
+                   "missing_count": 3}],
+              str(reads[1]))
+
+        # The same rule at the other end: a BASELINE claims nothing was
+        # observed before it, so it reports no gap however far the
+        # counter has already run — it simply adopts the high-water mark
+        # and reports ordinary rows from there.
         reads = observe([[], [row(1, "first"), row(2, "second")]])
-        check("an empty baseline read stays a baseline instead of seeding "
-              "a zero cursor",
+        check("an empty baseline reports no gap and lets the next read "
+              "report ordinary rows",
               reads[0]["event_log_new"] == []
+              and reads[0]["event_log_gaps"] == []
               and reads[1]["event_log_new"] == [row(1, "first"),
                                                 row(2, "second")]
+              and reads[1]["event_log_gaps"] == [], str(reads))
+        reads = observe([([], 5), [row(6, "after")]])
+        check("a baseline taken on an already-emptied ring adopts the "
+              "high-water mark instead of reporting a pre-baseline gap",
+              reads[0]["event_log_gaps"] == []
+              and reads[1]["event_log_new"] == [row(6, "after")]
               and reads[1]["event_log_gaps"] == [], str(reads))
 
         # 7e. A row without a usable sequence is a LOUD failure. Falling
@@ -1511,6 +1584,30 @@ def selftest() -> int:
                 raised = False
             check(f"an event-log row with {label} raises instead of "
                   "falling back to value matching", raised, str(bad))
+
+        # The high-water mark gets the same treatment, and for the same
+        # reason: it is the ONLY thing that distinguishes an emptied ring
+        # from a store where nothing happened, so a missing or unusable
+        # one must fail loudly rather than let a load publication's
+        # discarded mutations read as "no change".
+        for high_water, label in ((None, "a missing high-water mark"),
+                                  ("3", "a string high-water mark"),
+                                  (-1, "a negative high-water mark")):
+            try:
+                EventLogEngine([([row(1, "a")], high_water)]).oracle_events()
+            except OracleContractError:
+                raised = True
+            else:
+                raised = False
+            check(f"an event-log read with {label} raises", raised,
+                  str(high_water))
+        try:
+            EventLogEngine([("not a table", 1)]).oracle_events()
+        except OracleContractError:
+            raised = True
+        else:
+            raised = False
+        check("an event-log read whose rows are not an array raises", raised)
 
         # 7f. A gap must SURVIVE the whole evidence path: both of a
         # turn's oracle reads (#775's pre-step and post-step drains) are

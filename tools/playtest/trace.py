@@ -118,9 +118,10 @@ Per-turn record (turns.jsonl):
                     `event_log_gaps` (#1714) names the committed event
                     rows each read could NOT see, as maximal missing
                     `sequence` intervals
-                    (`{first_sequence, last_sequence, missing_count}`);
-                    it asserts absence only and never a cause, and is
-                    absent entirely from traces recorded before #1714.
+                    (`{first_sequence, last_sequence, missing_count}`)
+                    up to the store's own high-water mark; it asserts
+                    absence only and never a cause, and is absent
+                    entirely from traces recorded before #1714.
                     `visual_change` (bool) and `post_screenshot` (path,
                     relative to the trace dir, or null) are this turn's
                     OWN before/after comparison and post-step frame;
