@@ -321,10 +321,12 @@ gitignored):
   A gap object asserts ABSENCE only and never a cause — eviction, a
   coalesce, and a load-publish reset are indistinguishable from the
   snapshot. The intervals run up to the store's own
-  `engine.getEventLogSequence()` high-water mark, read in the SAME
-  console line as the rows, not up to the newest surviving row: a load
-  publish empties the ring without resetting the counter, so the rows
-  alone would report a whole discarded interval as no change at all.
+  high-water mark, taken from the SAME engine-side snapshot as the rows
+  (`engine.getEventLogProgress()` — one verb, one `readTVarIO`, so no
+  emitter can commit between the two halves), not up to the newest
+  surviving row: a load publish empties the ring without resetting the
+  counter, so the rows alone would report a whole discarded interval as
+  no change at all.
   The first observation is an explicit baseline (the whole current log,
   no gap, adopting the high-water mark as its cursor), and the cursor
   never moves backwards. A row that arrives WITHOUT a usable

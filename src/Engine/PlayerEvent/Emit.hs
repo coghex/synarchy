@@ -8,7 +8,7 @@ module Engine.PlayerEvent.Emit
     , emitEventFull
     , emitEventFullOnPage
     , readEventLog
-    , readEventLogSequence
+    , readEventLogProgress
       -- * The one page-attribution rule
     , resolveEventPage
     ) where
@@ -322,14 +322,24 @@ readEventLog ∷ EngineEnv → IO [StoredEvent]
 readEventLog env =
     toList ∘ esRows <$> readTVarIO (ecEventStoreRef (toEventsCapability env))
 
--- | The highest sequence the store has COMMITTED, whether or not the
---   row it named is still in the ring ('eventStoreHighWater', #1714).
+-- | The rows AND the highest sequence the store has committed, from
+--   ONE read of the store (#1714).
 --
---   Deliberately separate from 'readEventLog': after a load publish the
---   ring is empty while the counter has kept counting, so this is the
---   only way an observer can tell \"nothing has happened\" from
---   \"everything that happened was discarded\".
-readEventLogSequence ∷ EngineEnv → IO Int
-readEventLogSequence env =
-    eventStoreHighWater
-        <$> readTVarIO (ecEventStoreRef (toEventsCapability env))
+--   The high-water mark is not derivable from the rows: after a load
+--   publish the ring is empty while the counter has kept counting, so
+--   this is the only way an observer can tell \"nothing has happened\"
+--   from \"everything that happened was discarded\".
+--
+--   The single 'readTVarIO' is the contract, not an optimisation.
+--   Reading rows and counter separately lets an emitter commit BETWEEN
+--   them, and the resulting pair is a lie in the one direction that
+--   matters: the mark names a mutation the rows do not show, so an
+--   observer reports the still-retained row as lost, advances its
+--   cursor past it, and then suppresses it on every later read — the
+--   row is gone from the trace permanently. Callers that need both must
+--   come through here rather than pairing 'readEventLog' with a second
+--   read.
+readEventLogProgress ∷ EngineEnv → IO ([StoredEvent], Int)
+readEventLogProgress env = do
+    st ← readTVarIO (ecEventStoreRef (toEventsCapability env))
+    pure (toList (esRows st), eventStoreHighWater st)

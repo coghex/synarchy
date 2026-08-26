@@ -27,11 +27,11 @@
 --     'World.Load.Publish.resetTransientState' is what a load publish
 --     actually runs; a test-local @writeTVar ... empty@ would prove
 --     only that the test preserves the counter, which is not the claim.
---   * __The high-water mark is read in the SAME Lua line as the
---     rows.__ Sampled separately the two could straddle a mutation, and
---     the whole reason the pair exists is that they disagree in exactly
---     one direction — a load publish empties the ring while the counter
---     keeps counting.
+--   * __The high-water mark comes from the same engine-side snapshot
+--     as the rows.__ Sampled separately the two can straddle a commit,
+--     and the whole reason the pair exists is that they disagree in
+--     exactly one direction — a load publish empties the ring while the
+--     counter keeps counting.
 --   * __Coalescing is configured per case__, by installing a
 --     purpose-built category rather than borrowing a shipped one, so a
 --     later edit to @data/notification_categories.yaml@ cannot silently
@@ -44,7 +44,10 @@ import Data.Aeson (FromJSON(..), Value(..), decode, withObject, (.:), (.:?))
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
-import Data.IORef (newIORef, writeIORef)
+import Control.Concurrent (forkIO)
+import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
+import Control.Exception (finally)
+import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import qualified Data.HashMap.Strict as HM
 import Control.Concurrent.STM (atomically, readTVarIO)
 import Control.Concurrent.STM.TVar (modifyTVar')
@@ -106,15 +109,17 @@ newBareLuaBackend env = do
     registerLuaAPI (lbsLuaState ls) env ls stateRef
     pure ls
 
-evalJSON ∷ FromJSON α ⇒ EngineEnv → Text → IO α
-evalJSON env code = do
-    ls ← newBareLuaBackend env
-    t  ← executeDebugLua (lbsLuaState ls) code
+evalJSONOn ∷ FromJSON α ⇒ LuaBackendState → Text → IO α
+evalJSONOn ls code = do
+    t ← executeDebugLua (lbsLuaState ls) code
     when ("error:" `T.isPrefixOf` t ∨ "syntax error:" `T.isPrefixOf` t) $
         expectationFailure ("Lua error: " ⧺ T.unpack t)
     case decode (BL.fromStrict (TE.encodeUtf8 t)) of
         Just v  → pure v
         Nothing → fail ("failed to decode Lua result: " ⧺ T.unpack t)
+
+evalJSON ∷ FromJSON α ⇒ EngineEnv → Text → IO α
+evalJSON env code = newBareLuaBackend env ≫= (`evalJSONOn` code)
 
 -- | Just the sequences, in the order @engine.getEventLog()@ returns
 --   them, plus the row count — the shape the ordering and rollover
@@ -129,8 +134,8 @@ data SeqProbe = SeqProbe
     , spSeqs    ∷ [Int]
     , spTypes   ∷ [Text]
     , spHighest ∷ Int
-      -- ^ @engine.getEventLogSequence()@, read in the SAME console line
-      --   as the rows — the pair the oracle actually observes.
+      -- ^ @engine.getEventLogProgress()@'s @highest@, from the same
+      --   snapshot as the rows — the pair the oracle actually observes.
     , spHighestType ∷ Text
     } deriving Show
 
@@ -155,8 +160,8 @@ instance FromJSON SeqProbe where
 
 seqProbeLua ∷ Text
 seqProbeLua = T.intercalate " "
-    [ "local log = engine.getEventLog();"
-    , "local highest = engine.getEventLogSequence();"
+    [ "local p = engine.getEventLogProgress();"
+    , "local log, highest = p.rows, p.highest;"
     , "local seqs, types = {}, {};"
     , "for i, r in ipairs(log) do"
     , "  seqs[i] = r.sequence;"
@@ -168,6 +173,30 @@ seqProbeLua = T.intercalate " "
 
 readSeqs ∷ EngineEnv → IO SeqProbe
 readSeqs env = evalJSON env seqProbeLua
+
+-- | The one invariant the atomicity case hammers, and nothing else:
+--   how many rows the snapshot held, its newest row's sequence, and the
+--   high-water mark that came with it. Deliberately tiny — the case
+--   takes hundreds of reads while an emitter runs flat out, and hauling
+--   a thousand full rows through JSON each time would slow it to the
+--   point of never interleaving.
+data PairProbe = PairProbe
+    { ppCount    ∷ Int
+    , ppLastSeq  ∷ Int   -- ^ 0 when the ring is empty.
+    , ppHighest  ∷ Int
+    } deriving (Show, Eq)
+
+instance FromJSON PairProbe where
+    parseJSON = withObject "PairProbe" $ \o → PairProbe
+        <$> o .: "n" <*> o .: "last" <*> o .: "highest"
+
+pairProbeLua ∷ Text
+pairProbeLua = T.intercalate " "
+    [ "local p = engine.getEventLogProgress();"
+    , "local n = #p.rows;"
+    , "return { n = n, highest = p.highest,"
+    , "         last = (n > 0) and p.rows[n].sequence or 0 }"
+    ]
 
 -- | Every field of one row, read back through Lua exactly as a consumer
 --   would. Optional fields use '.:?' so an absent @coords@\/@page@\/
@@ -199,6 +228,19 @@ instance FromJSON LogRow where
 -- | The whole log as rows. Used only by the small cases.
 readRows ∷ EngineEnv → IO [LogRow]
 readRows env = unLuaList <$> evalJSON env "return engine.getEventLog()"
+
+-- | Emit as fast as the store will take it until told to stop. Runs on
+--   its own thread so the atomicity case reads a store that is actually
+--   being written, which is the only condition under which a torn pair
+--   is observable.
+emitUntilStopped ∷ EngineEnv → IORef Bool → IO ()
+emitUntilStopped env stop = go (1 ∷ Int)
+  where
+    go i = do
+        halt ← readIORef stop
+        unless halt $ do
+            emitEvent env probeCat "Test" ("concurrent " <> tshow i)
+            go (i + 1)
 
 -----------------------------------------------------------
 -- Assertions shared by several cases
@@ -334,6 +376,40 @@ spec = around withHeadlessEngine $ describe "Player event progress" $ do
                 lrGameTime row `shouldSatisfy` (>= 0)
             other → expectationFailure
                 ("expected exactly one row, got " ⧺ show (length other))
+
+    it "takes the rows and the high-water mark from ONE snapshot, so a \
+       \concurrent emitter can never make the mark name an unseen row" $
+      \env → do
+        -- Round-2 review blocker. Read separately, the two halves can
+        -- straddle a commit: the mark names a mutation the rows do not
+        -- show, so an observer reports a still-RETAINED row as lost,
+        -- advances its cursor past it, and suppresses it on every later
+        -- read — the row never reaches the trace.
+        --
+        -- The shape is production's own: a non-Lua thread emitting
+        -- while the Lua thread reads. Nothing here is timing-tolerant —
+        -- one atomic read makes the invariant hold on every sample, so
+        -- a single violation in hundreds is a real failure, not a flake.
+        _ ← prepare env 0
+        ls ← newBareLuaBackend env
+        stop ← newIORef False
+        done ← newEmptyMVar
+        _ ← forkIO $ emitUntilStopped env stop `finally` putMVar done ()
+        probes ← mapM (const (evalJSONOn ls pairProbeLua))
+                      [1 .. 400 ∷ Int]
+        writeIORef stop True
+        takeMVar done
+
+        -- With rows present, the newest row IS the last committed
+        -- mutation: every commit appends at the tail, and rows only
+        -- leave from the front or all at once.
+        let torn = [ p | p ← probes, ppCount p > 0
+                   , ppHighest p ≢ ppLastSeq p ]
+        torn `shouldBe` []
+        -- ...and the emitter really did run alongside the reads, or the
+        -- case above proves nothing at all.
+        let marks = map ppHighest probes
+        (foldr max 0 marks > foldr min maxBound marks) `shouldBe` True
 
     it "keeps a coords-free, unit-free emit's nil fields nil" $ \env → do
         -- The other half of requirement 7: additive means the ABSENT

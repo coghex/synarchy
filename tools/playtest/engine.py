@@ -94,7 +94,7 @@ def _row_sequence(event) -> int:
 
 
 def _event_log_high_water(value) -> int:
-    """`engine.getEventLogSequence()`'s reply: how far the store has
+    """`engine.getEventLogProgress()`'s `highest`: how far the store has
     committed, whatever it still holds (#1714).
 
     Loud on anything else, for the same reason `_row_sequence` is: this
@@ -105,11 +105,11 @@ def _event_log_high_water(value) -> int:
     """
     if isinstance(value, bool) or not isinstance(value, int):
         raise OracleContractError(
-            "engine.getEventLogSequence() must return an integer, got "
+            "engine.getEventLogProgress().highest must be an integer, got "
             f"{value!r} ({type(value).__name__})")
     if value < 0:
         raise OracleContractError(
-            "engine.getEventLogSequence() must not be negative, got "
+            "engine.getEventLogProgress().highest must not be negative, got "
             f"{value}")
     return value
 
@@ -127,8 +127,8 @@ def _event_log_progress(cursor: int | None, current: list,
     arithmetic on those numbers, never a comparison of row values, so
     byte-identical rows are no longer indistinguishable.
 
-    `high_water` is the store's own count of committed mutations, read
-    in the SAME console line as the rows. It is not derivable from them:
+    `high_water` is the store's own count of committed mutations, taken
+    from the SAME engine-side snapshot as the rows. It is not derivable from them:
     a load publish empties the ring without resetting the counter, so
     the rows can say "nothing here" while every mutation since the last
     read has in fact been committed and discarded. Taking the ceiling
@@ -188,12 +188,14 @@ def _event_log_progress(cursor: int | None, current: list,
     return new_rows, gaps, max(cursor, ceiling)
 
 
-# One console line for both halves of an event-log observation
-# (#1714): the surviving rows, and how far the store has committed. Two
-# separate reads could be split by a mutation, and the pair only means
-# anything when both describe the same instant.
-EVENT_LOG_PROGRESS_LUA = ("return {rows = engine.getEventLog(), "
-                          "highest = engine.getEventLogSequence()}")
+# Both halves of an event-log observation in one engine call (#1714):
+# the surviving rows, and how far the store has committed. It is ONE
+# verb rather than two composed in Lua because the two halves have to
+# come from a single read of the store -- an emitter committing between
+# them would produce a high-water mark naming a row the snapshot does
+# not show, and the oracle would report a still-retained row as lost and
+# then suppress it forever.
+EVENT_LOG_PROGRESS_LUA = "return engine.getEventLogProgress()"
 
 
 def _lua_array(value) -> list:
@@ -208,7 +210,8 @@ def _lua_array(value) -> list:
     if isinstance(value, dict) and not value:
         return []
     raise OracleContractError(
-        f"engine.getEventLog() must return an array of rows, got {value!r}")
+        "engine.getEventLogProgress().rows must be an array of rows, got "
+        f"{value!r}")
 
 
 def _lua_str(text: str) -> str:
@@ -432,10 +435,10 @@ class PlaytestEngine:
 
     def oracle_events(self) -> dict:
         snap: dict = {}
-        # Rows and high-water mark in ONE console line (#1714): sampled
-        # separately they could straddle a mutation, and the whole point
-        # of the pair is that they disagree only in the direction a load
-        # publish creates.
+        # Rows and high-water mark from ONE engine-side snapshot
+        # (#1714): sampled separately they could straddle a mutation,
+        # and the whole point of the pair is that they disagree only in
+        # the direction a load publish creates.
         progress = self.lua(EVENT_LOG_PROGRESS_LUA)
         if isinstance(progress, dict) and "rows" in progress:
             # A well-shaped reply that violates the row or high-water
