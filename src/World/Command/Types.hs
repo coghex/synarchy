@@ -12,6 +12,7 @@ import qualified Data.Vector.Unboxed as VU
 import Control.Concurrent.MVar (MVar)
 import Engine.Asset.Handle (TextureHandle(..))
 import Location.Instance (LocationInstanceId, LocationLifecycle)
+import Structure.Types (StructureStageToken(..))
 import World.Chunk.Types (ChunkCoord(..))
 import World.Material.Id (MaterialId(..))
 import World.Material (MaterialRegistry)
@@ -323,12 +324,20 @@ data WorldCommand
         --   cell via the WeSetCell edit path — the locations primitive for
         --   carving interior air, walls, ceilings, staircases. Grows the
         --   column up to reach z; z below the column floor is a no-op.
-    | WorldSetStructure WorldPageId Int Int Word8 Int Int Int
+    | WorldSetStructure WorldPageId Int Int Word8 Int Int Int StructureStageToken
         -- ^ worldId, gx, gy, slot-tag, texture palette id, facemap palette
-        --   id, z. Places a structure piece via the WeSetStructure edit path
-        --   (per-chunk overlay; persists). The palette ids are interned Lua-
-        --   side before queueing; the resolved cap variant is already baked
-        --   into facePaletteId (the BUILDER picks it, not this handler).
+        --   id, z, staging token. Places a structure piece via the
+        --   WeSetStructure edit path (per-chunk overlay; persists). The
+        --   palette ids are interned Lua-side before queueing; the resolved
+        --   cap variant is already baked into facePaletteId (the BUILDER
+        --   picks it, not this handler).
+        --
+        --   The token (#1674) names the ONE 'structure.place' attempt that
+        --   staged this piece in 'wsStructureStageRef'. It is what lets the
+        --   handler retract exactly that staged entry when it declines the
+        --   commit (target chunk not loaded) — the tuple above cannot, since
+        --   a later placement at the same tile and slot can carry an
+        --   identical one.
     | WorldClearStructure WorldPageId Int Int Word8
         -- ^ worldId, gx, gy, slot-tag. Removes a structure piece.
     | WorldClearAllStructures WorldPageId
