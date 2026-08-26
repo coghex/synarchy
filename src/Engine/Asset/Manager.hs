@@ -57,6 +57,10 @@ import Engine.Graphics.Vulkan.Texture.Release
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem)
 import qualified Vulkan.Core10 as Vk
 
+-- | Allocate the next texture handle: dense and monotonic, and never
+--   'missingTextureHandle' — the counter is seeded at
+--   'firstAllocatableTextureHandle', so a fresh pool's first result is
+--   @TextureHandle 1@ (#1696).
 generateTextureHandle ∷ AssetPool → IO TextureHandle
 generateTextureHandle pool =
   atomicModifyIORef' (apNextTextureHandle pool) $ \n →

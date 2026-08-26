@@ -24,7 +24,8 @@ import Engine.Graphics.Camera (CameraFacing(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..)
                                           , QuadUV(..), QuadPayload(..)
                                           , quadVertices, rectCorners
-                                          , renderFlagSelected, packWorldUV)
+                                          , renderFlagSelected, packWorldUV
+                                          , noFaceMapVertexId)
 import World.Grid (tileWidth, tileHeight, tileSideHeight
                   , tileHalfWidth, tileHalfDiamondHeight
                   , worldLayer, applyFacing, applyFacingF
@@ -154,11 +155,11 @@ renderUnitQuads env facing zSlice effDepth tileAlpha = do
                 Nothing → return V.empty
                 Just _bts → do
                     -- Bake a STABLE texture-handle id; the bindless shader
-                    -- resolves it to a live slot at draw time (#286). -1 =
-                    -- "use the default face map" (units have no directional
-                    -- face map) — the shader maps it to the default slot.
+                    -- resolves it to a live slot at draw time (#286).
+                    -- Units have no directional face map of their own, so
+                    -- the shader maps this to the default slot (#1696).
                     let lookupSlot h = fromIntegral (toInt h) ∷ Word32
-                        defFmSlot = -1 ∷ Float
+                        defFmSlot = noFaceMapVertexId
                         quads = V.fromList
                             $ HM.foldlWithKey' (\acc uid inst →
                                 let isSel = HS.member uid selected

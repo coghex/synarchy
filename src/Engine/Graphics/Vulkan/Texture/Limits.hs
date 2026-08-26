@@ -32,8 +32,10 @@ maxBindlessTextures = 16384
 -- | Number of entries in the handle→slot table. The fragment shader
 --   indexes it with a STABLE texture-handle id (not a recyclable slot),
 --   so this MUST cover the handle-id space. Handle ids are dense and
---   monotonic from 0 ('Engine.Graphics.Vulkan.Texture.Handle.generateTextureHandle');
---   world-tile material / facemap handles are allocated at startup (low
+--   monotonic from 1 ('Engine.Asset.Manager.generateTextureHandle');
+--   entry 0 belongs to 'Engine.Asset.Handle.missingTextureHandle' and is
+--   held at slot 0 for the whole process lifetime (#1696).
+--   World-tile material / facemap handles are allocated at startup (low
 --   ids), so they are always in range. A handle id beyond this cap
 --   resolves to slot 0 (undefined) in the shader — a graceful degrade
 --   that can only bite a transient texture in an extremely long session,

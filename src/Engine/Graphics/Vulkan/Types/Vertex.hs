@@ -36,6 +36,26 @@ vertexWorldUVOffset = 44
 vertexTotalSize ∷ Int
 vertexTotalSize = 48
 
+-- | The ONE value a quad's 'faceMapId' \/ 'qpFaceMap' carries when its
+-- producer has NO directional face map of its own (#1696).
+--
+-- The bindless fragment shader resolves a vertex's face-map id through
+-- the handle→slot table and falls back to @fragDefaultFaceMapSlot@ —
+-- the 1x1 neutral map published through the UBO — whenever that
+-- resolves to slot 0. Any id outside the table resolves to slot 0 by
+-- the shader's own bounds check, which is what makes @-1@ mean "use the
+-- default" unconditionally, independent of what any texture handle is
+-- registered as.
+--
+-- Use this rather than spelling the meaning locally: generic scene
+-- sprites, buildings, units, blood decals, ground items, the zoom
+-- map\/its icons\/its cursor, and flora all mean the same thing by it.
+-- It is NOT the missing-ASSET sentinel — that is
+-- 'Engine.Asset.Handle.missingTextureHandle', a texture handle, and a
+-- different axis.
+noFaceMapVertexId ∷ Float
+noFaceMapVertexId = -1
+
 -- | Bit 0 of renderFlags: when set, the fragment shader emits a 1-pixel
 -- white outline around alpha-cutout sprite edges. Used by selected units.
 renderFlagSelected ∷ Word32

@@ -266,7 +266,7 @@ renderWorldQuads env worldState zoomAlpha snap = do
                                       absDay inst'
                     , actualZ > minBound  -- skip empty columns
                     , texHandle ≢ TextureHandle 0
-                    , Just fq ← [floraToQuad lookupSlot lookupFmSlot textures facing
+                    , Just fq ← [floraToQuad lookupSlot textures facing
                                      gx gy inst' texHandle zSlice effectiveDepth
                                      zoomAlpha wrapOff texSizes]
                     ]

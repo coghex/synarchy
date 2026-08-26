@@ -15,6 +15,7 @@ import Engine.Scene.Batch.Visibility (isNodeVisible, isUILayer)
 import Engine.Scene.Batch.Vertex (generateQuadVertices)
 import Engine.Asset.Handle (toInt)
 import Engine.Graphics.Camera (Camera2D)
+import Engine.Graphics.Vulkan.Types.Vertex (noFaceMapVertexId)
 import Engine.Core.Monad
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logDebugSM)
@@ -38,10 +39,10 @@ nodeToDrawable node = do
     textureHandle ← nodeTexture node
 
     -- Bake the STABLE texture-handle id; the bindless shader resolves it
-    -- to a live slot at draw time (#286). -1 = default face map (generic
-    -- scene sprites have no directional face map).
+    -- to a live slot at draw time (#286). Generic scene sprites carry no
+    -- directional face map of their own (#1696).
     let atlasId = fromIntegral (toInt textureHandle) ∷ Float
-        fmSlot  = -1 ∷ Float
+        fmSlot  = noFaceMapVertexId
 
     let (v0,v1,v2,v3) = generateQuadVertices node atlasId fmSlot
 
