@@ -10,7 +10,7 @@ PR #736's tri-state playtest step, #735's action-outcome oracle key, #732's sequ
 
 - [x] PRR-1. The F4 coverage report falsely marks six Tier-1 routes as gaps — [#1704]
 - [x] PRR-2. Value-only event-log deltas can lose repeated rows at ring rollover — [#1714]
-- [ ] PRR-3. The add-only concept catalogue has no compatibility ratchet
+- [x] PRR-3. The add-only concept catalogue has no compatibility ratchet — [#1717]
 
 ## 1. Action-outcome coverage after the input-thread split
 
@@ -66,7 +66,7 @@ PR #736's tri-state playtest step, #735's action-outcome oracle key, #732's sequ
 
 ## 3. Semantic catalogue compatibility
 
-### PRR-3. The add-only concept catalogue has no compatibility ratchet
+### [#1717] PRR-3. The add-only concept catalogue has no compatibility ratchet
 
 > **Captured note:** Pin the shipped semantic concept inventory—and whichever authored fields are compatibility-significant—in a checked manifest, golden, or audit. Count and shape tests permit an existing ID to be removed, renamed, or repurposed while replacement entries keep every current test green.
 
