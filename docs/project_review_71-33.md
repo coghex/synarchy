@@ -9,7 +9,7 @@ PR #71's pause-menu Save now reaches the registered save transaction; its adjace
 ## Status
 
 - [x] PRR-1. Pending-chunk dedup treats wrap aliases as different chunks — [#1723]
-- [ ] PRR-2. The determinism contract self-test is outside every maintained gate
+- [x] PRR-2. The determinism contract self-test is outside every maintained gate — [#1724]
 - [ ] PRR-3. Copilot guidance still directs new shared state into EngineEnv
 
 ## 1. Chunk queue canonical identity
@@ -38,7 +38,7 @@ PR #71's pause-menu Save now reaches the registered save transaction; its adjace
 
 ## 2. Determinism-tool regression coverage
 
-### PRR-2. The determinism contract self-test is outside every maintained gate
+### [#1724] PRR-2. The determinism contract self-test is outside every maintained gate
 
 > **Captured note:** PR #34 added `tools/test_determinism.py` to pin the deliberate content-identity semantics, but the test is not invoked by CI, `make ci`, Hspec, or another maintained aggregate. The exact array/key-order contract that justified the PR can silently drift while all normal gates stay green.
 
