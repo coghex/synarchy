@@ -1,0 +1,85 @@
+flora:
+  - name: saguaro
+    type: cactus
+    texDir: "assets/textures/flora/saguaro"
+    lifecycle: perennial
+    minLife: 18000
+    maxLife: 54000
+    deathChance: 0.01
+    phases:
+      - tag: sprout
+        texture: "sprout.png"
+        age: 0
+      - tag: matured
+        texture: "matured.png"
+        age: 1800
+      - tag: dead
+        texture: "dead.png"
+        age: 54000
+    annualCycle:
+      - tag: dormant
+        startDay: 0
+        texture: "matured.png"
+      - tag: budding
+        startDay: 90
+        texture: "matured.png"
+      - tag: flowering
+        startDay: 120
+        texture: "matured_flowering.png"
+      - tag: fruiting
+        startDay: 150
+        texture: "matured_fruiting.png"
+      - tag: senescing
+        startDay: 240
+        texture: "matured.png"
+    cycleOverrides:
+      - phase: sprout
+        cycle: dormant
+        texture: "sprout.png"
+      - phase: sprout
+        cycle: budding
+        texture: "sprout.png"
+      - phase: sprout
+        cycle: flowering
+        texture: "sprout.png"
+      - phase: sprout
+        cycle: fruiting
+        texture: "sprout.png"
+      - phase: sprout
+        cycle: senescing
+        texture: "sprout.png"
+      - phase: dead
+        cycle: dormant
+        texture: "dead.png"
+      - phase: dead
+        cycle: budding
+        texture: "dead.png"
+      - phase: dead
+        cycle: flowering
+        texture: "dead.png"
+      - phase: dead
+        cycle: fruiting
+        texture: "dead.png"
+      - phase: dead
+        cycle: senescing
+        texture: "dead.png"
+    # Decorative initially. Harvestable fruit and its item content are a
+    # separate gameplay decision from making the species part of worldgen.
+    worldGen:
+      category: cactus
+      minTemp: 18
+      maxTemp: 45
+      idealTemp: 30
+      minPrecip: 0.02
+      maxPrecip: 0.30
+      idealPrecip: 0.10
+      minAlt: -20
+      maxAlt: 500
+      idealAlt: 120
+      minHumidity: 0.02
+      maxHumidity: 0.55
+      idealHumidity: 0.18
+      maxSlope: 3
+      density: 0.08
+      footprint: 14
+      soils: [sand, loamy_sand, sandy_loam, light_gravel, heavy_gravel]
