@@ -56,6 +56,20 @@ machinery, then checks:
      rising to target IN BETWEEN the scan that picked a candidate and
      the later claim attempt must still refuse the claim.
 
+  7. Dead-claimant reconciliation (#1680), AI off, real power grid: a
+     PAUSED bill for a positive-power recipe, claimed and marked
+     working, keeps its station drawing the recipe's wattage; destroying
+     the claimant then drops the claim and the working flag on their own
+     -- nothing releases the bill, and while paused no live rival can
+     take it over either -- and the network's drain returns to zero and
+     STAYS there across an observation window, with the bill's progress
+     and remaining count preserved for a later crafter.
+
+     Paused deliberately: an UNPAUSED stale bill can be repaired
+     incidentally by an ordinary dead-claimant takeover
+     (Craft.Bills.claimAvailable), which would let this phase pass
+     without the reconciliation existing at all.
+
      Not covered here: a real save/quit/restart/load round-trip for an
      until-stock bill — this probe's fixture is an ARENA world, which
      per CLAUDE.md's #365 note hangs the world thread on load, so
@@ -102,7 +116,19 @@ recipes:
     outputs:
       - item: bronze_bar
         count: 2
+  - id: bill_probe_powered
+    station: smelt
+    inputs:
+      - item: steel_bar
+    work: 30
+    outputs:
+      - item: granite_chunk
+    power_draw: 150
 """
+
+# The #1680 phase's recipe wattage, mirrored from TEST_RECIPES above so
+# the drain assertions name one number.
+POWERED_DRAW_W = 150.0
 
 
 def bootstrap(port):
@@ -244,6 +270,27 @@ def ground_stock(port, name):
         f"if g.defName=='{name}' then n=n+1 end end; return n")))
 
 
+def first_network(port):
+    """The (only) network this probe ever wires up -- power.listNetworks()
+    on the active page, or None before anything is wired. Keyed off
+    array position, not a building id: an idle station with no actively
+    worked bill never appears in consumerIds at all (#590), which is
+    exactly the state the #1680 phase ends in."""
+    nets = send_json(port, "return power.listNetworks()")
+    if isinstance(nets, list) and nets and isinstance(nets[0], dict):
+        return nets[0]
+    return None
+
+
+def drain_of(port):
+    net = first_network(port)
+    return net.get("drainW") if isinstance(net, dict) else None
+
+
+def unit_exists(port, uid):
+    return send(port, f"return unit.exists({uid})").strip('"') == "true"
+
+
 def check(passed, ok, label, detail=""):
     print(f"  [{'PASS' if ok else 'FAIL'}] {label}"
           + (f": {detail}" if detail else ""))
@@ -277,7 +324,7 @@ def main():
         with open(TEST_YAML, "w") as f:
             f.write(TEST_RECIPES)
         n = int(float(send(port, f"return engine.loadRecipeYaml('{TEST_YAML}')")))
-        passed = check(passed, n == 3, "probe recipes loaded", f"count={n}")
+        passed = check(passed, n == 4, "probe recipes loaded", f"count={n}")
 
         # Backend phase runs with the AI off so no acolyte races the
         # scripted claim/progress calls.
@@ -752,6 +799,120 @@ def main():
                        "the bill itself was never actually claimed engine-side",
                        after)
         send(port, f"craft.cancelBill({bill_u5}); return 'ok'")
+
+        # --- 7. Dead-claimant reconciliation (#1680) ---
+        #
+        # Nothing in the engine or the Lua AI used to reconcile a bill
+        # against its claimant's liveness: every clearing path
+        # (releaseBill / completeBillCycle) runs inside the claimant's
+        # OWN tick, so a destroyed crafter left the bill claimed and
+        # cbWorking = True forever and the grid kept billing the station
+        # the recipe's full wattage.
+        ai_off(port)
+
+        # A real grid: one wire tile bridging the already-built furnace
+        # at (6,2) to a solar panel at (8,2), so power.listNetworks()
+        # reports a network the furnace's craft draw attaches to. The
+        # panel's own generation is irrelevant here -- drainW is the
+        # consumer sum, independent of whether the network can meet it.
+        # A FRESH carrier for the panel: the acolyte the earlier phases
+        # used has been loaded and unloaded repeatedly, and placeNode
+        # refuses outright if the item never made it into the inventory.
+        uid_pw = spawn_acolyte(port, 5, 3)
+        send(port, f"unit.addItem({uid_pw}, 'solar_panel'); return 'ok'")
+        carried = int(float(send(port,
+            f"local n=0; for _,it in ipairs(unit.getInventory({uid_pw}) or {{}}) "
+            f"do if it.defName=='solar_panel' then n=n+1 end end; return n")))
+        passed = check(passed, carried == 1,
+                       "fixture: the placer carries the solar panel",
+                       f"carried={carried}")
+        # placeNode returns (nodeId, buildingId) on success and
+        # (nil, reason) on refusal -- key the check off the NODE id, not
+        # the second value, which is the reason string on failure.
+        panel_node = send(port,
+            f"local nid, b = power.placeNode({uid_pw}, 'solar_panel', 8, 2); "
+            f"return nid and ('ID:'..nid) or ('ERR:'..tostring(b))").strip('"')
+        passed = check(passed, panel_node.startswith("ID:"),
+                       "solar panel placed for the reconciliation phase",
+                       panel_node)
+        send(port, "require('scripts.wire').place(7, 2); return 'ok'")
+        # wire.place queues a world command applied on the world thread's
+        # own next iteration -- poll rather than reading the instant
+        # after the send.
+        wired = poll(port, 10,
+                     lambda: len((first_network(port) or {}).get("nodeIds", []))
+                             == 1,
+                     interval=0.2)
+        passed = check(passed, wired, "panel + wire settle into one network",
+                       first_network(port))
+        passed = check(passed, drain_of(port) == 0,
+                       "drainW starts at 0 (no bill worked yet)",
+                       drain_of(port))
+
+        uid_dead = spawn_acolyte(port, 5, 2)
+        bill_pw, msg = add_bill(port, bid_f, "bill_probe_powered", 3)
+        passed = check(passed, bill_pw is not None,
+                       "powered bill queued at the furnace", msg)
+        claimed = send(port,
+            f"return craft.claimBill({bill_pw}, {uid_dead}, 600)").strip('"')
+        passed = check(passed, claimed == "true",
+                       "the soon-to-die crafter claims it", claimed)
+        send(port, f"craft.setBillWorking({bill_pw}, true); return 'ok'")
+        send(port, f"craft.addBillProgress({bill_pw}, 0.4); return 'ok'")
+        # PAUSED on purpose: while paused, claimAvailable refuses even a
+        # dead-claimant takeover, so nothing but the #1680 sweep can
+        # repair this bill. An unpaused one could be cleared by an
+        # ordinary rival claim and pass vacuously.
+        send(port, f"craft.setBillPaused({bill_pw}, true); return 'ok'")
+        passed = check(passed, drain_of(port) == POWERED_DRAW_W,
+                       f"drainW == {POWERED_DRAW_W}W while the (paused) "
+                       f"claimant is working", drain_of(port))
+
+        send(port, f"unit.destroy({uid_dead}); return 'ok'")
+        gone = poll(port, 20, lambda: not unit_exists(port, uid_dead),
+                    interval=0.2)
+        passed = check(passed, gone,
+                       "the claimant is actually gone from the unit registry")
+
+        def reconciled():
+            b = send_json(port, f"return craft.getBill({bill_pw})")
+            return (isinstance(b, dict) and b.get("claimant") is None
+                    and b.get("working") is False and drain_of(port) == 0)
+
+        passed = check(passed, poll(port, 30, reconciled, interval=0.5),
+                       "the orphaned bill is disowned and the station's "
+                       "draw returns to 0",
+                       send_json(port, f"return craft.getBill({bill_pw})"))
+
+        # ... and STAYS there: nothing re-claims it, and no drain creeps
+        # back over an observation window.
+        drains = []
+        for _ in range(6):
+            time.sleep(0.5)
+            drains.append(drain_of(port))
+        passed = check(passed, all(d == 0 for d in drains),
+                       "drain stays at 0 across the observation window",
+                       drains)
+        after = send_json(port, f"return craft.getBill({bill_pw})")
+        passed = check(passed,
+                       isinstance(after, dict) and after.get("claimant") is None
+                       and after.get("working") is False,
+                       "the bill is still unclaimed and not working", after)
+        # Ownership only: the queued cycle survives for a later crafter,
+        # and clearing the claim never granted one -- the bill is still
+        # paused, and still refuses a fresh claim.
+        passed = check(passed,
+                       isinstance(after, dict) and after.get("paused") is True
+                       and after.get("remaining") == 3
+                       and abs(float(after.get("progress", -1)) - 0.4) < 1e-6,
+                       "progress/remaining/pause survive the reconciliation",
+                       after)
+        refused = send(port,
+            f"return craft.claimBill({bill_pw}, {uid}, 600)").strip('"')
+        passed = check(passed, refused == "false",
+                       "the disowned PAUSED bill still refuses a fresh claim "
+                       "(#796 unchanged)", refused)
+        send(port, f"craft.cancelBill({bill_pw}); return 'ok'")
 
         print("\n" + ("ALL CRAFT BILL CHECKS PASSED" if passed
                       else "SOME FAILED"))
