@@ -52,6 +52,8 @@ import Engine.Graphics.Vulkan.Sampler.Cache (acquireSampler)
 import Engine.Graphics.Vulkan.Sampler.Types (SamplerKind(..))
 import Engine.Graphics.Vulkan.Texture.Bindless (registerPinnedTexture
                                                , registerTexture
+                                               , checkRegistrableHandle
+                                               , registrationFailureMessage
                                                , writeHandleSlotEntry)
 import Engine.Graphics.Vulkan.Texture.Handle (BindlessTextureHandle(..))
 import Engine.Graphics.Vulkan.Texture.Slot (TextureSlot(..))
@@ -89,47 +91,63 @@ invalidateAllWorldRenderCaches env = do
         writeIORef (wsZoomQuadCacheRef ws) Nothing
         writeIORef (wsBgQuadCacheRef ws) Nothing
 
+-- | The cached-atlas ALIAS fast path: a second handle naming a texture
+--   that is already resident, wired straight into 'btsHandleMap' and the
+--   shader table without going through
+--   'Engine.Graphics.Vulkan.Texture.Bindless.registerTexture'.
+--
+--   Because it owns its own insertion it also owns the sentinel guard
+--   (#1696): a zero handle is refused HERE, before the handle map, the
+--   handle→slot table, the asset-pool refcount, the texture-size map and
+--   the @LuaAssetLoaded@ notification — otherwise this path would point
+--   @handleToSlot[0]@ at a real slot exactly as an unguarded
+--   registration would.
 duplicateCachedTextureHandle ∷ EngineEnv → TextureHandle → AssetId
                            → TextureAtlas → EngineM σ ()
-duplicateCachedTextureHandle env handle assetId atlas = do
-    poolRef ← asks (rcAssetPoolRef . toRenderCapability)
-    pool ← liftIO $ readIORef poolRef
-    mBindless ← liftIO $ readIORef (rcTextureSystemRef (toRenderCapability env))
-    case mBindless of
-        Just bindless →
-            case Map.lookup (taTextureHandle atlas) (btsHandleMap bindless) of
-                Just existingBindlessHandle → do
-                    let rc = toRenderCapability env
-                    liftIO $ writeIORef (rcTextureSystemRef rc) (Just bindless
-                        { btsHandleMap =
-                            Map.insert handle existingBindlessHandle
-                                (btsHandleMap bindless)
-                        })
-                    -- Atlas-share path: sync the shader handle→slot table
-                    -- too (the ptr is shared across the immutable copy) (#286).
-                    liftIO $ writeHandleSlotEntry bindless (toInt handle)
-                        (tsIndex (bthSlot existingBindlessHandle))
-                Nothing → logWarnM CatAsset $
-                    "Cached texture missing bindless slot for "
-                        <> taPath atlas
-        Nothing →
-            logWarnM CatAsset "No bindless system available for cached texture reuse"
+duplicateCachedTextureHandle env handle assetId atlas =
+  case checkRegistrableHandle handle of
+    Left failure →
+      logWarnM CatTexture
+        (registrationFailureMessage failure handle (taPath atlas))
+    Right () → do
+      poolRef ← asks (rcAssetPoolRef . toRenderCapability)
+      pool ← liftIO $ readIORef poolRef
+      mBindless ← liftIO $ readIORef (rcTextureSystemRef (toRenderCapability env))
+      case mBindless of
+          Just bindless →
+              case Map.lookup (taTextureHandle atlas) (btsHandleMap bindless) of
+                  Just existingBindlessHandle → do
+                      let rc = toRenderCapability env
+                      liftIO $ writeIORef (rcTextureSystemRef rc) (Just bindless
+                          { btsHandleMap =
+                              Map.insert handle existingBindlessHandle
+                                  (btsHandleMap bindless)
+                          })
+                      -- Atlas-share path: sync the shader handle→slot table
+                      -- too (the ptr is shared across the immutable copy) (#286).
+                      liftIO $ writeHandleSlotEntry bindless (toInt handle)
+                          (tsIndex (bthSlot existingBindlessHandle))
+                  Nothing → logWarnM CatAsset $
+                      "Cached texture missing bindless slot for "
+                          <> taPath atlas
+          Nothing →
+              logWarnM CatAsset "No bindless system available for cached texture reuse"
 
-    liftIO $ do
-        updateTextureState handle (AssetReady assetId []) pool
-        atomicModifyIORef' poolRef $ \p →
-            ( p { apTextureAtlases =
-                    Map.adjust (\a → a { taRefCount = taRefCount a + 1 })
-                        assetId (apTextureAtlases p)
-              }
-            , ()
-            )
-        let (w, h) = amDimensions (taMetadata atlas)
-            (TextureHandle rawHandle) = handle
-        atomicModifyIORef' (rcTextureSizeRef (toRenderCapability env)) $ \m →
-            (HM.insert handle (fromIntegral w, fromIntegral h) m, ())
-        Q.writeQueue (luaQueue env)
-            (LuaAssetLoaded "texture" (fromIntegral rawHandle) (taPath atlas))
+      liftIO $ do
+          updateTextureState handle (AssetReady assetId []) pool
+          atomicModifyIORef' poolRef $ \p →
+              ( p { apTextureAtlases =
+                      Map.adjust (\a → a { taRefCount = taRefCount a + 1 })
+                          assetId (apTextureAtlases p)
+                }
+              , ()
+              )
+          let (w, h) = amDimensions (taMetadata atlas)
+              (TextureHandle rawHandle) = handle
+          atomicModifyIORef' (rcTextureSizeRef (toRenderCapability env)) $ \m →
+              (HM.insert handle (fromIntegral w, fromIntegral h) m, ())
+          Q.writeQueue (luaQueue env)
+              (LuaAssetLoaded "texture" (fromIntegral rawHandle) (taPath atlas))
 
 prepareTextureUpload ∷ AssetPool → Device → PhysicalDevice
                      → (TextureHandle, FilePath)
@@ -317,6 +335,7 @@ handleLoadTextureBatchWith samplerPolicy requests = do
                             FORMAT_R8G8B8A8_UNORM IMAGE_ASPECT_COLOR_BIT
                         (mbHandle, bindless') ← case samplerPolicy of
                             UploadGlobalSampler → registerTexture dev (tupHandle prep)
+                                (T.pack (tupPath prep))
                                 imageView (btsTextureSampler bindless) bindless
                             UploadPinnedNearest → do
                                 -- Acquired from the shared refcounted
@@ -328,12 +347,14 @@ handleLoadTextureBatchWith samplerPolicy requests = do
                                     (rcSamplerCacheRef (toRenderCapability env))
                                     SamplerTextureNearest
                                 registerPinnedTexture dev (tupHandle prep)
+                                    (T.pack (tupPath prep))
                                     imageView nearest bindless
-                        when (isNothing mbHandle) $
-                            logWarnM CatTexture $
-                                "Failed to allocate bindless slot for texture: "
-                                    <> T.pack (tupPath prep)
-                        let bindlessSlot = fmap (tsIndex ∘ bthSlot) mbHandle
+                        -- No caller-side diagnostic: 'registerTextureImpl'
+                        -- logs every failure itself, naming the handle and
+                        -- this path (#1696), so a refused sentinel can
+                        -- never be reported here as slot exhaustion.
+                        let bindlessSlot =
+                                either (const Nothing) (Just ∘ tsIndex ∘ bthSlot) mbHandle
                             atlas = TextureAtlas
                                 { taId = tupAssetId prep
                                 , taName = T.pack (takeBaseName (tupPath prep))
