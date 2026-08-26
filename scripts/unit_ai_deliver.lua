@@ -35,6 +35,7 @@ local groundCountOf        = fetch.groundCountOf
 
 local mv = require("scripts.movement_speed")
 local roles = require("scripts.unit_roles")
+local page = require("scripts.unit_ai_page")
 
 local M = {}
 
@@ -59,8 +60,13 @@ end
 local function findDeliveryTarget(uid, fromX, fromY, params)
     -- Active-world buildings only — building.list() is global across every
     -- live world page, so off-world buildings used to leak in as delivery
-    -- targets (#197). building.getActiveIds() is page-scoped, matching the
-    -- active-world unit.getAllIds the actors come from.
+    -- targets (#197). building.getActiveIds() is page-scoped, but it takes
+    -- its OWN active-page snapshot, separate from the one unit.getAllIds
+    -- took when the actors were listed, and the active page can move
+    -- between them. So #1673 checks every candidate against the ACTOR's
+    -- own page rather than assuming the two snapshots agreed.
+    local myPage = page.ofUnit(uid)
+    if not myPage then return nil end
     local ids = building.getActiveIds()
     if not ids or #ids == 0 then return nil end
     local best, bestD = nil, params.deliver_scan_range
@@ -76,7 +82,7 @@ local function findDeliveryTarget(uid, fromX, fromY, params)
             -- mule stock — the pickup/transfer fails gracefully for the
             -- loser and the next utility pass re-claims what's still
             -- needed, so the race resolves itself.)
-            local mule = findTechnomule(fromX, fromY)
+            local mule = findTechnomule(uid, fromX, fromY)
             local claim, fromGround, fromMule = {}, {}, {}
             local anyClaim, anyFromGround, anyFromMule = false, false, false
             for matType, count in pairs(need) do
@@ -84,7 +90,7 @@ local function findDeliveryTarget(uid, fromX, fromY, params)
                                        count, delivered, uid)
                 if remaining > 0 then
                     local have = inventoryCountOf(uid, matType)
-                    local groundHave = groundCountOf(fromX, fromY, matType,
+                    local groundHave = groundCountOf(uid, fromX, fromY, matType,
                                            params.deliver_scan_range)
                     local muleHave = mule
                         and inventoryCountOf(mule.uid, matType) or 0
@@ -110,7 +116,7 @@ local function findDeliveryTarget(uid, fromX, fromY, params)
             end
             if anyClaim then
                 local info = building.getInfo(bid)
-                if info then
+                if info and page.same(myPage, info.page) then
                     local tw = info.tileW or 1
                     local th = info.tileH or 1
                     local cx = info.gridX + tw / 2
@@ -166,6 +172,22 @@ local function deliverExecute(uid, s, params)
     local info = unit.getInfo(uid)
     if not info then return end
 
+    -- #1673: deliveryClaim.bid is a PERSISTED building reference, so it
+    -- can outlive the page it was chosen on (a save written before this
+    -- check, or a page switch between claim and arrival). Revalidate it
+    -- against the deliverer's own page HERE, ahead of everything else
+    -- this function can do: the sourcing phases below issue their own
+    -- moveTo / pickupGround / transferItemToUnit calls, so a check
+    -- placed after them would already have let an off-page claim walk
+    -- the unit and move items. Re-runs every tick, since each fetch
+    -- phase returns early while busy.
+    local binfo = building.getInfo(s.deliveryClaim.bid)
+    if not binfo or not page.same(info.page, binfo.page) then
+        -- Building destroyed, or on another world. Release.
+        s.deliveryClaim = nil
+        return
+    end
+
     -- Source the shortfall before heading to the build site: own
     -- inventory first, then nearby ground items, then the technomule
     -- (#96 sourcing ladder).
@@ -196,13 +218,6 @@ local function deliverExecute(uid, s, params)
 
     -- Fetch may have emptied the claim entirely (sources gone / raced).
     if not next(claim.materials) then
-        s.deliveryClaim = nil
-        return
-    end
-
-    local binfo = building.getInfo(s.deliveryClaim.bid)
-    if not binfo then
-        -- Building destroyed between claim and arrival. Release.
         s.deliveryClaim = nil
         return
     end

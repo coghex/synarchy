@@ -27,6 +27,7 @@ local distance        = core.distance
 local reportFailure   = core.reportFailure
 
 local mv = require("scripts.movement_speed")
+local page = require("scripts.unit_ai_page")
 
 local M = {}
 
@@ -229,13 +230,18 @@ local function ownKitDefName(uid)
 end
 
 -- Nearest unit carrying a usable kit (the technomule), to fetch from.
-local function findKitHolder(fromX, fromY)
+-- Page-qualified against the asking medic (#1673), same rule and same
+-- reason as fetch.findTechnomule: unit.getAllIds reads the ACTIVE page,
+-- which is not necessarily the medic's own.
+local function findKitHolder(medicUid, fromX, fromY)
+    local myPage = page.ofUnit(medicUid)
+    if not myPage then return nil end
     local best, bestD = nil, math.huge
     for _, uid in ipairs(unit.getAllIds() or {}) do
         local kit = ownKitDefName(uid)
         if kit then
             local info = unit.getInfo(uid)
-            if info then
+            if info and page.same(myPage, info.page) then
                 local d = distance(fromX, fromY, info.gridX, info.gridY)
                 if d < bestD then
                     best = { uid = uid, gridX = info.gridX,
@@ -279,7 +285,7 @@ local function treatExecute(uid, s, params)
     -- makeshift tourniquet there (the treatBleeding fallback). Better a
     -- crude stopgap than letting them bleed.
     if not ownKitDefName(uid) then
-        local holder = findKitHolder(info.gridX, info.gridY)
+        local holder = findKitHolder(uid, info.gridX, info.gridY)
         if holder then
             if distance(info.gridX, info.gridY, holder.gridX, holder.gridY)
                > params.mule_fetch_arrival then
@@ -341,5 +347,9 @@ end
 
 M.treatAllyUtility = treatAllyUtility
 M.treatExecute     = treatExecute
+-- Exported for the #1673 page-pairing gate, which asserts directly on
+-- what a kit-holder scan selects rather than reconstructing a whole
+-- wounded-patient scenario to observe it second-hand.
+M.findKitHolder    = findKitHolder
 
 return M

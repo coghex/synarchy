@@ -309,15 +309,24 @@ local function forageNeed(uid)
     return math.max((1 - hungerFrac) * 0.6, storeNeed), hungerFrac
 end
 
-local function findGroundFood(ux, uy, radius)
+-- #1673: item.listGround is ACTIVE-page scoped while item.pickupGround
+-- commits on the CARRIER's page, so a same-numbered gid on another page
+-- is a different item entirely. Every listed id is re-resolved on the
+-- ACTING unit's own page through item.getGroundForUnit (#1666's
+-- owning-page reader) and every predicate below reads the RESOLVED row,
+-- so a forager can neither be sent to another world's coordinates nor
+-- hand a foreign gid to a pickup that would move something else.
+-- Failing closed: an id that does not resolve is not a candidate.
+local function findGroundFood(uid, ux, uy, radius)
     local ground = item.listGround()
     if not ground then return nil end
     local best, bestD2 = nil, radius * radius + 1
     for _, g in ipairs(ground) do
-        if isFoodDef(g.defName) then
-            local dx, dy = g.x - ux, g.y - uy
+        local owned = item.getGroundForUnit(uid, g.id)
+        if owned and isFoodDef(owned.defName) then
+            local dx, dy = owned.x - ux, owned.y - uy
             local d2 = dx * dx + dy * dy
-            if d2 < bestD2 then best, bestD2 = g, d2 end
+            if d2 < bestD2 then best, bestD2 = owned, d2 end
         end
     end
     return best
@@ -339,7 +348,7 @@ local function forageUtility(uid, s, params)
     if plant then
         s.forageTarget = { kind = "flora", x = plant.gx, y = plant.gy }
     else
-        local g = findGroundFood(info.gridX, info.gridY,
+        local g = findGroundFood(uid, info.gridX, info.gridY,
                                  params.forage_search_radius)
         if not g then
             s.forageTarget = nil
@@ -372,6 +381,17 @@ local function forageExecute(uid, s, params)
     if not tgt then return end
     local info = unit.getInfo(uid)
     if not info then return end
+    -- #1673: forageTarget.gid is a PERSISTED ground reference, picked
+    -- off the ACTIVE-page listing, so a save (or a page switch between
+    -- utility and execute) can leave it naming another world's row.
+    -- Re-resolve it on the carrier's own page BEFORE it steers the walk
+    -- below or reaches item.pickupGround, and take the approach
+    -- coordinates from the resolved row rather than the listed one.
+    if tgt.kind == "ground" then
+        local owned = item.getGroundForUnit(uid, tgt.gid)
+        if not owned then s.forageTarget = nil; return end
+        tgt.x, tgt.y = math.floor(owned.x), math.floor(owned.y)
+    end
     local utx = math.floor(info.gridX)
     local uty = math.floor(info.gridY)
     local cheb = math.max(math.abs(utx - tgt.x), math.abs(uty - tgt.y))

@@ -250,10 +250,14 @@ unitAiReconcilePrelude =
     , "  logWarn = function() end, logError = function() end,"
     , "  emitEventForUnit = function() end, loadYaml = function() return nil end }"
     , "unit = { exists = function() return true end,"
+    -- #1673: the AI pairs every candidate with the ACTING unit's own
+    -- page, so the stub world needs one; everyone shares it here.
     , "  getInfo = function(u)"
     , "    if u == 77 then"
-    , "      return { gridX = 0, gridY = 0, defName = 'technomule' } end"
-    , "    return { gridX = 0, gridY = 0, defName = 'acolyte' } end,"
+    , "      return { gridX = 0, gridY = 0, defName = 'technomule',"
+    , "               page = 'stub_page' } end"
+    , "    return { gridX = 0, gridY = 0, defName = 'acolyte',"
+    , "             page = 'stub_page' } end,"
     , "  getAllIds = function() return { 77 } end,"
     , "  getStat = function() return 1.0 end, getSkill = function() return 25.0 end,"
     , "  getInventory = function() return {} end,"

@@ -25,6 +25,11 @@ local buildings = {}  -- bid -> {defName, activity, gridX, gridY, tileW, tileH,
                       --         need, delivered, buildRequired}
 local transferLog = {}
 
+-- #1673: the AI now pairs every candidate with the ACTING unit's own
+-- world page, so the stub world has to have one. This harness models a
+-- single page, which is what it always implicitly assumed.
+local PAGE = "mule_harness_page"
+
 local ITEM_DEFS = {
     { name = "steel_plate",     weight = 1.2 },
     { name = "steel_bar",       weight = 0.5 },
@@ -72,7 +77,11 @@ unit = {
         table.sort(ids)
         return ids
     end,
-    getInfo = function(uid) return units[uid] end,
+    getInfo = function(uid)
+        local u = units[uid]
+        if u then u.page = u.page or PAGE end
+        return u
+    end,
     exists = function(uid) return units[uid] ~= nil end,
     getPose = function(uid) return units[uid] and "standing" end,
     getActivity = function(uid) return units[uid] and "idle" end,
@@ -142,7 +151,11 @@ building = {
         if #lines == 0 then return "No buildings placed" end
         return table.concat(lines, "\n")
     end,
-    getInfo = function(bid) return buildings[bid] end,
+    getInfo = function(bid)
+        local b = buildings[bid]
+        if b then b.page = b.page or PAGE end
+        return b
+    end,
     getActivity = function(bid)
         local b = buildings[bid]
         return b and b.activity

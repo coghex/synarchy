@@ -93,7 +93,12 @@ prelude = lns
     , "    ordered = function() return 1.0 end,"
     , "    sprint  = function() return 1.0 end }"
     , "NOW = 0"
-    , "POS = { gridX = 0, gridY = 0 }"
+    -- #1673: every candidate is now page-qualified against the actor,
+    -- so the stub world has to HAVE a page. One page throughout —
+    -- cross-page rejection is Test.Headless.Lua.UnitAiPageTargets'
+    -- subject, and this gate is still only about the cached ids.
+    , "PAGE = 'stub_page'"
+    , "POS = { gridX = 0, gridY = 0, page = PAGE }"
     , "BUILDINGS = {}"
     , "INV = { { defName = 'plate_steel', category = 'Materials' } }"
     , "CARRIED, CAPACITY = 50, 100"
@@ -121,7 +126,8 @@ prelude = lns
     , "  getInfo = function(bid)"
     , "    local b = row(bid)"
     , "    if not b then return nil end"
-    , "    return { gridX = b.x, gridY = b.y, tileW = 1, tileH = 1 } end }"
+    , "    return { gridX = b.x, gridY = b.y, tileW = 1, tileH = 1,"
+    , "             page = PAGE } end }"
     , "unit = {"
     , "  exists = function() return true end,"
     , "  getAllIds = function() return {} end,"
