@@ -55,7 +55,7 @@ import Engine.Graphics.Vulkan.Buffer (createVulkanBuffer)
 import Engine.Graphics.Vulkan.Command (runCommandsOnce)
 import Engine.Graphics.Vulkan.Texture (transitionImageLayout
                                       , ImageLayoutTransition(..))
-import Engine.Graphics.Vulkan.Sampler.Cache (acquireSampler)
+import Engine.Graphics.Vulkan.Sampler.Cache (acquireSampler, releaseSampler)
 import Engine.Graphics.Vulkan.Sampler.Types (SamplerKind(..))
 import Engine.Graphics.Vulkan.Texture.Bindless (registerPinnedTexture
                                                , registerTexture
@@ -64,6 +64,10 @@ import Engine.Graphics.Vulkan.Texture.Bindless (registerPinnedTexture
                                                , TextureRegistrationFailure(..)
                                                , writeHandleSlotEntry)
 import Engine.Graphics.Vulkan.Texture.Handle (BindlessTextureHandle(..))
+import Engine.Graphics.Vulkan.Texture.Publish
+  (UploadSampler(..), TexturePublish(..), GpuCleanupStep(..)
+  , classifyRegistration, cachedAliasPublish, aliasPublish, publishedSlot
+  , publishFailureReason, publishRegisteredEntries, failedUploadCleanup)
 import Engine.Graphics.Vulkan.Texture.Slot (TextureSlot(..))
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
 import Engine.Graphics.Types (DevQueues(..))
@@ -99,6 +103,34 @@ invalidateAllWorldRenderCaches env = do
         writeIORef (wsZoomQuadCacheRef ws) Nothing
         writeIORef (wsBgQuadCacheRef ws) Nothing
 
+-- | Settle a texture request on its TERMINAL FAILURE (#1690).
+--
+--   The counterpart of the success publication below, and deliberately
+--   the only other way a request can end. It writes 'AssetFailed' —
+--   until #1690 that state had no producer anywhere in the tree — and
+--   announces the failure on its OWN queue message. It must never route
+--   through 'LuaAssetLoaded', which is the success-only protocol Lua
+--   sees as @onAssetLoaded@: a waiter that treated a failure as a load
+--   would then read a handle resolving to the undefined texture.
+--
+--   Nothing a success writes is written: no @apTextureAtlases@ entry, no
+--   @apAssetPaths@ entry (so the path is NOT poisoned and a later
+--   request re-uploads instead of taking a lying cache hit), and no
+--   texture size entry.
+--
+--   Deliberately silent: the reason is always
+--   'registrationFailureMessage' or a message its caller has already
+--   logged (#1696 made 'registerTextureImpl' log every refusal itself),
+--   so logging again here would double every failure.
+publishTextureFailure ∷ EngineEnv → AssetPool → TextureHandle → Text → Text
+                      → EngineM σ ()
+publishTextureFailure env pool handle path reason =
+    liftIO $ do
+        updateTextureState handle (AssetFailed reason) pool
+        let (TextureHandle rawHandle) = handle
+        Q.writeQueue (luaQueue env)
+            (LuaAssetFailed "texture" (fromIntegral rawHandle) path reason)
+
 -- | The cached-atlas ALIAS fast path: a second handle naming a texture
 --   that is already resident, wired straight into 'btsHandleMap' and the
 --   shader table without going through
@@ -110,10 +142,19 @@ invalidateAllWorldRenderCaches env = do
 --   the @LuaAssetLoaded@ notification — otherwise this path would point
 --   @handleToSlot[0]@ at a real slot exactly as an unguarded
 --   registration would.
+--   Its OTHER way of failing is #1690's: an atlas the pool holds but
+--   the bindless system has no mapping for — or no bindless system at
+--   all. Publishing @AssetReady@ for one of those is the poisoned cache
+--   hit #1690 removes, because the handle resolves to slot 0, the
+--   undefined texture, and reporting it loaded is a lie no later request
+--   can correct. 'cachedAliasPublish' answers both refusals.
 duplicateCachedTextureHandle ∷ EngineEnv → TextureHandle → AssetId
                            → TextureAtlas → EngineM σ ()
 duplicateCachedTextureHandle env handle assetId atlas =
   case checkRegistrableHandle handle of
+    -- #1696's refusal, dropped outright: nothing observable is written,
+    -- not even #1690's terminal failure. A zero handle names no real
+    -- request, so there is nothing to settle.
     Left failure →
       logWarnM CatTexture
         (registrationFailureMessage failure handle (taPath atlas))
@@ -121,41 +162,45 @@ duplicateCachedTextureHandle env handle assetId atlas =
       poolRef ← asks (rcAssetPoolRef . toRenderCapability)
       pool ← liftIO $ readIORef poolRef
       mBindless ← liftIO $ readIORef (rcTextureSystemRef (toRenderCapability env))
-      case mBindless of
-          Just bindless →
-              case Map.lookup (taTextureHandle atlas) (btsHandleMap bindless) of
-                  Just existingBindlessHandle → do
-                      let rc = toRenderCapability env
-                      liftIO $ writeIORef (rcTextureSystemRef rc) (Just bindless
-                          { btsHandleMap =
-                              Map.insert handle existingBindlessHandle
-                                  (btsHandleMap bindless)
-                          })
-                      -- Atlas-share path: sync the shader handle→slot table
-                      -- too (the ptr is shared across the immutable copy) (#286).
-                      liftIO $ writeHandleSlotEntry bindless (toInt handle)
-                          (tsIndex (bthSlot existingBindlessHandle))
-                  Nothing → logWarnM CatAsset $
-                      "Cached texture missing bindless slot for "
-                          <> taPath atlas
-          Nothing →
-              logWarnM CatAsset "No bindless system available for cached texture reuse"
+      -- Both ways THIS resolution can come up empty — no bindless system
+      -- at all, or an atlas with no @btsHandleMap@ entry — mean the same
+      -- thing to whoever samples this handle, and unlike the sentinel
+      -- above they belong to a real request that has to settle (#1690).
+      let resolved = mBindless ⌦ \bindless →
+              (\existing → (bindless, existing))
+                ⊚ Map.lookup (taTextureHandle atlas) (btsHandleMap bindless)
+      case cachedAliasPublish (taPath atlas) (snd ⊚ resolved) of
+        PublishFailed reason → do
+          logWarnM CatTexture reason
+          publishTextureFailure env pool handle (taPath atlas) reason
+        PublishRegistered _ → do
+          forM_ resolved $ \(bindless, existingBindlessHandle) → do
+              let rc = toRenderCapability env
+              liftIO $ writeIORef (rcTextureSystemRef rc) (Just bindless
+                  { btsHandleMap =
+                      Map.insert handle existingBindlessHandle
+                          (btsHandleMap bindless)
+                  })
+              -- Atlas-share path: sync the shader handle→slot table
+              -- too (the ptr is shared across the immutable copy) (#286).
+              liftIO $ writeHandleSlotEntry bindless (toInt handle)
+                  (tsIndex (bthSlot existingBindlessHandle))
 
-      liftIO $ do
-          updateTextureState handle (AssetReady assetId []) pool
-          atomicModifyIORef' poolRef $ \p →
-              ( p { apTextureAtlases =
-                      Map.adjust (\a → a { taRefCount = taRefCount a + 1 })
-                          assetId (apTextureAtlases p)
-                }
-              , ()
-              )
-          let (w, h) = amDimensions (taMetadata atlas)
-              (TextureHandle rawHandle) = handle
-          atomicModifyIORef' (rcTextureSizeRef (toRenderCapability env)) $ \m →
-              (HM.insert handle (fromIntegral w, fromIntegral h) m, ())
-          Q.writeQueue (luaQueue env)
-              (LuaAssetLoaded "texture" (fromIntegral rawHandle) (taPath atlas))
+          liftIO $ do
+              updateTextureState handle (AssetReady assetId []) pool
+              atomicModifyIORef' poolRef $ \p →
+                  ( p { apTextureAtlases =
+                          Map.adjust (\a → a { taRefCount = taRefCount a + 1 })
+                              assetId (apTextureAtlases p)
+                    }
+                  , ()
+                  )
+              let (w, h) = amDimensions (taMetadata atlas)
+                  (TextureHandle rawHandle) = handle
+              atomicModifyIORef' (rcTextureSizeRef (toRenderCapability env)) $ \m →
+                  (HM.insert handle (fromIntegral w, fromIntegral h) m, ())
+              Q.writeQueue (luaQueue env)
+                  (LuaAssetLoaded "texture" (fromIntegral rawHandle) (taPath atlas))
 
 prepareTextureUpload ∷ AssetPool → Device → PhysicalDevice
                      → (TextureHandle, FilePath)
@@ -190,22 +235,6 @@ prepareTextureUpload pool dev pdev (handle, path) = do
         , tupImage = image
         , tupCleanImage = cleanImage
         }
-
--- | Which sampler a freshly uploaded slot is registered with.
---
---   The two policies are mutually exclusive per batch, which is why
---   'Engine.Scripting.Lua.Message' bursts atlas requests separately
---   from ordinary ones.
-data UploadSampler
-    = UploadGlobalSampler
-      -- ^ Follow the shared global sampler: the slot is repainted by a
-      --   runtime 'setTextureFilter' toggle. Every ordinary texture.
-    | UploadPinnedNearest
-      -- ^ Pinned to NEAREST regardless of the global filter (D-6).
-      --   Compiled unit-animation atlases (#1259): a filter toggle must
-      --   not start bilinearly resampling unit art, and on a sheet it
-      --   would additionally bleed neighbouring cells across every
-      --   frame edge.
 
 -- | May a cached texture entry be reused for a request under this
 --   upload policy?
@@ -259,6 +288,10 @@ handleLoadTextureBatchWith samplerPolicy incoming = do
     -- 'generateTextureHandle' should already make this unreachable; the
     -- filter is what keeps it unreachable if a producer ever synthesises
     -- a literal zero handle.
+    -- Dropped OUTRIGHT, not settled with #1690's terminal failure: a
+    -- zero handle is a producer defect in a handle no request ever
+    -- legitimately names, not a request whose upload refused, and
+    -- nothing is waiting on it to report anything.
     let (reserved, requests) = partition (isMissingTextureHandle ∘ fst) incoming
     forM_ reserved $ \(handle, path) →
         logWarnM CatTexture $
@@ -307,13 +340,14 @@ handleLoadTextureBatchWith samplerPolicy incoming = do
                                     | otherwise → case Map.lookup key seen of
                                         Just canonical →
                                             (cached, fresh,
-                                             (handle, canonical) : aliases, seen)
+                                             (handle, path, canonical) : aliases, seen)
                                         Nothing → asFresh
                                 Nothing → asFresh
                         Nothing →
                             case Map.lookup key seen of
                                 Just canonical →
-                                    (cached, fresh, (handle, canonical) : aliases, seen)
+                                    (cached, fresh,
+                                     (handle, path, canonical) : aliases, seen)
                                 Nothing → asFresh
                 )
                 ([], [], [], Map.empty)
@@ -354,102 +388,173 @@ handleLoadTextureBatchWith samplerPolicy incoming = do
                             transitionImageLayout (tupImage prep) FORMAT_R8G8B8A8_UNORM
                                 TransDst_ShaderRO 1 cmdBuf
 
-                (loaded, bindlessN) ← foldM
+                -- One entry per prep, in batch order: its path, its
+                -- would-be asset id, and the TERMINAL outcome its
+                -- registration reached. Failures stay in this list on
+                -- purpose — 'publishRegisteredEntries' is what proves
+                -- they contribute nothing to the path cache below.
+                (results, bindlessN) ← foldM
                     (\(acc, bindless) prep → do
                         let VulkanImage image imageMemory = tupImage prep
+                            pathText = T.pack (tupPath prep)
                         (imageView, cleanView) ← createVulkanImageView' dev (tupImage prep)
                             FORMAT_R8G8B8A8_UNORM IMAGE_ASPECT_COLOR_BIT
-                        (mbHandle, bindless') ← case samplerPolicy of
-                            UploadGlobalSampler → registerTexture dev (tupHandle prep)
-                                (T.pack (tupPath prep))
-                                imageView (btsTextureSampler bindless) bindless
+                        (mbHandle, bindless', releasePinnedSampler) ← case samplerPolicy of
+                            UploadGlobalSampler → do
+                                -- 'btsTextureSampler' belongs to the
+                                -- bindless system and outlives every
+                                -- request, so this path acquires no
+                                -- reference of its own to hand back.
+                                (mbH, bl) ← registerTexture dev (tupHandle prep)
+                                    pathText
+                                    imageView (btsTextureSampler bindless) bindless
+                                pure (mbH, bl, pure ())
                             UploadPinnedNearest → do
                                 -- Acquired from the shared refcounted
-                                -- cache and deliberately never
-                                -- released: an atlas slot lives for the
-                                -- whole session, exactly like the unit
-                                -- textures it replaces.
-                                nearest ← liftIO $ acquireSampler dev
-                                    (rcSamplerCacheRef (toRenderCapability env))
+                                -- cache. A slot that REGISTERS keeps its
+                                -- reference for the whole session,
+                                -- exactly like the unit textures it
+                                -- replaces; only a registration that
+                                -- FAILED hands it back (#1690), because
+                                -- nothing will ever sample through it.
+                                let cacheRef = rcSamplerCacheRef (toRenderCapability env)
+                                nearest ← liftIO $ acquireSampler dev cacheRef
                                     SamplerTextureNearest
-                                registerPinnedTexture dev (tupHandle prep)
-                                    (T.pack (tupPath prep))
+                                (mbH, bl) ← registerPinnedTexture dev (tupHandle prep)
+                                    pathText
                                     imageView nearest bindless
+                                pure ( mbH, bl
+                                     , releaseSampler dev cacheRef SamplerTextureNearest )
                         -- No caller-side diagnostic: 'registerTextureImpl'
                         -- logs every failure itself, naming the handle and
                         -- this path (#1696), so a refused sentinel can
-                        -- never be reported here as slot exhaustion.
-                        let bindlessSlot =
-                                either (const Nothing) (Just ∘ tsIndex ∘ bthSlot) mbHandle
-                            atlas = TextureAtlas
-                                { taId = tupAssetId prep
-                                , taName = T.pack (takeBaseName (tupPath prep))
-                                , taPath = T.pack (tupPath prep)
-                                , taMetadata = AtlasMetadata
-                                    (tupWidth prep, tupHeight prep)
-                                    FORMAT_R8G8B8A8_UNORM
-                                    Map.empty
-                                , taInfo = Just TextureInfo
-                                    { tiImage = image
-                                    , tiView = imageView
-                                    , tiMemory = imageMemory
-                                    , tiLayout = IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                                    }
-                                , taRefCount = 1
-                                , taCleanup = Just (cleanView >> tupCleanImage prep)
-                                , taBindlessSlot = bindlessSlot
-                                , taTextureHandle = tupHandle prep
-                                }
-                            (TextureHandle rawHandle) = tupHandle prep
-                        liftIO $ do
-                            updateTextureState (tupHandle prep)
-                                (AssetReady (tupAssetId prep) []) pool
-                            atomicModifyIORef' poolRef $ \p →
-                                ( p { apTextureAtlases =
-                                        Map.insert (tupAssetId prep) atlas
-                                            (apTextureAtlases p)
-                                    , apAssetPaths =
-                                        Map.insert (T.pack (tupPath prep))
-                                            (tupAssetId prep) (apAssetPaths p)
-                                    }
-                                , ()
-                                )
-                            atomicModifyIORef' (rcTextureSizeRef (toRenderCapability env)) $ \m →
-                                ( HM.insert (tupHandle prep)
-                                    (fromIntegral (tupWidth prep), fromIntegral (tupHeight prep)) m
-                                , ()
-                                )
-                            Q.writeQueue (luaQueue env)
-                                (LuaAssetLoaded "texture" (fromIntegral rawHandle)
-                                    (T.pack (tupPath prep)))
-                        pure (((tupHandle prep, tupAssetId prep, atlas) : acc), bindless'))
+                        -- never be reported here as slot exhaustion — and
+                        -- 'classifyRegistration' carries that same wording
+                        -- into the state and the notification.
+                        let outcome = classifyRegistration (tupHandle prep)
+                                        pathText mbHandle
+                        case publishFailureReason outcome of
+                            -- #1690: the registration refused, so nothing
+                            -- sampling this handle could ever see this
+                            -- image. The request ends HERE — the GPU
+                            -- objects go back in 'failedUploadCleanup'
+                            -- order and the handle settles on
+                            -- 'AssetFailed'.
+                            Just reason → do
+                                forM_ (failedUploadCleanup samplerPolicy) $ \case
+                                    CleanupImageView     → liftIO cleanView
+                                    CleanupImage         → liftIO (tupCleanImage prep)
+                                    ReleasePinnedSampler → liftIO releasePinnedSampler
+                                publishTextureFailure env pool (tupHandle prep)
+                                    pathText reason
+                                pure ( (tupHandle prep, pathText, tupAssetId prep
+                                       , outcome, Left reason) : acc
+                                     , bindless' )
+                            Nothing → do
+                                let atlas = TextureAtlas
+                                        { taId = tupAssetId prep
+                                        , taName = T.pack (takeBaseName (tupPath prep))
+                                        , taPath = pathText
+                                        , taMetadata = AtlasMetadata
+                                            (tupWidth prep, tupHeight prep)
+                                            FORMAT_R8G8B8A8_UNORM
+                                            Map.empty
+                                        , taInfo = Just TextureInfo
+                                            { tiImage = image
+                                            , tiView = imageView
+                                            , tiMemory = imageMemory
+                                            , tiLayout = IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                                            }
+                                        , taRefCount = 1
+                                        , taCleanup = Just (cleanView >> tupCleanImage prep)
+                                        , taBindlessSlot = publishedSlot outcome
+                                        , taTextureHandle = tupHandle prep
+                                        }
+                                    (TextureHandle rawHandle) = tupHandle prep
+                                liftIO $ do
+                                    updateTextureState (tupHandle prep)
+                                        (AssetReady (tupAssetId prep) []) pool
+                                    atomicModifyIORef' poolRef $ \p →
+                                        ( p { apTextureAtlases =
+                                                Map.insert (tupAssetId prep) atlas
+                                                    (apTextureAtlases p)
+                                            }
+                                        , ()
+                                        )
+                                    atomicModifyIORef' (rcTextureSizeRef (toRenderCapability env)) $ \m →
+                                        ( HM.insert (tupHandle prep)
+                                            (fromIntegral (tupWidth prep), fromIntegral (tupHeight prep)) m
+                                        , ()
+                                        )
+                                    Q.writeQueue (luaQueue env)
+                                        (LuaAssetLoaded "texture" (fromIntegral rawHandle)
+                                            pathText)
+                                pure ( (tupHandle prep, pathText, tupAssetId prep
+                                       , outcome, Right (tupAssetId prep, atlas)) : acc
+                                     , bindless' )
+                        )
                     ([], bindless0)
                     preps
 
                 liftIO $ writeIORef (rcTextureSystemRef (toRenderCapability env)) (Just bindlessN)
 
-                let loadedMap = Map.fromList
-                        [ (handle, (assetId, atlas))
-                        | (handle, assetId, atlas) ← loaded
+                -- The path cache is the poisoning surface #1690 closes,
+                -- so every request's outcome goes through the one funnel
+                -- that decides it. A failed request neither inserts nor
+                -- overwrites — and, just as load-bearing, does not
+                -- DELETE: a same-path entry left by the OPPOSITE sampler
+                -- policy is valid, is exactly why this request was a
+                -- fresh upload rather than a cache hit, and must survive
+                -- so that policy keeps working and this one can retry.
+                let batchResults = reverse results
+                liftIO $ atomicModifyIORef' poolRef $ \p →
+                    ( p { apAssetPaths = publishRegisteredEntries
+                            [ (path, assetId, outcome)
+                            | (_, path, assetId, outcome, _) ← batchResults
+                            ]
+                            (apAssetPaths p)
+                        }
+                    , ()
+                    )
+
+                let canonicalResults = Map.fromList
+                        [ (handle, result)
+                        | (handle, _, _, _, result) ← batchResults
                         ]
-                forM_ (reverse aliasReqs) $ \(handle, canonical) →
-                    case Map.lookup canonical loadedMap of
-                        Just (assetId, atlas) →
+                forM_ (reverse aliasReqs) $ \(handle, path, canonical) →
+                    case aliasPublish (T.pack path)
+                             (Map.lookup canonical canonicalResults) of
+                        Right (assetId, atlas) →
                             duplicateCachedTextureHandle env handle assetId atlas
-                        Nothing →
-                            logWarnM CatTexture $
-                                "Missing canonical texture for deduped alias: "
-                                    <> tshow handle
+                        -- An alias is a request like any other: when the
+                        -- canonical upload it was folded into failed, it
+                        -- inherits that failure instead of being left in
+                        -- 'AssetLoading' with only a log line (#1690).
+                        Left reason →
+                            publishTextureFailure env pool handle
+                                (T.pack path) reason
                 invalidateRenderCaches
 
+            -- No device, command pool, queue or bindless system at
+            -- all: nothing in this batch was uploaded or even
+            -- attempted. Deliberately unchanged by #1690, which is
+            -- about the outcome of a registration that RAN and refused.
+            -- This branch is also the normal, expected state of
+            -- --headless (no GPU), where announcing a terminal failure
+            -- per request would invent a failure protocol for a mode
+            -- that never renders.
             _ → logWarnM CatTexture "Cannot batch-load textures: Vulkan not ready"
 
 handleLoadTexture ∷ TextureHandle → FilePath → EngineM σ ()
 handleLoadTexture handle path = do
     logDebugM CatLua $ "Loading texture from Lua: " <> T.pack path
                     <> " (handle: " <> tshow handle <> ")"
+    -- No "loaded successfully" line here: this returns once the batch
+    -- has been PROCESSED, which since #1690 can equally mean the request
+    -- terminally failed. 'publishTextureFailure' and the LuaAssetLoaded
+    -- queue message are the outcome-bearing reports.
     handleLoadTextureBatch [(handle, path)]
-    logDebugM CatLua $ "Texture loaded successfully: " <> T.pack path
+    logDebugM CatLua $ "Texture load request processed: " <> T.pack path
 
 handleLoadFont ∷ FontHandle → FilePath → Int → EngineM σ ()
 handleLoadFont handle path _size = do

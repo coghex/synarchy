@@ -230,6 +230,19 @@ processLuaMsg env ls stateRef msg = case msg of
       , ScriptNumber (fromIntegral handle)
       , ScriptString path
       ]
+  LuaAssetFailed assetType handle path reason → do
+    -- #1690: the terminal counterpart of onAssetLoaded, on its own
+    -- callback so no waiter can mistake one for the other.
+    logger ← readIORef (loggerRef env)
+    logWarn logger CatAsset $
+        "Asset load failed (" <> assetType <> ", handle " <> tshow handle
+          <> "): " <> path <> " -- " <> reason
+    broadcastToModules ls "onAssetFailed"
+      [ ScriptString assetType
+      , ScriptNumber (fromIntegral handle)
+      , ScriptString path
+      , ScriptString reason
+      ]
   LuaCharInput fid c →
     broadcastToModules ls "onCharInput"
       [ScriptNumber (fromIntegral fid), ScriptString (T.singleton c)]

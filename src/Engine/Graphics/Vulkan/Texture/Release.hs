@@ -60,17 +60,25 @@ data TextureReleasePlan = TextureReleasePlan
 --   ('Engine.Asset.Types.taTextureHandle') plus every handle the POOL
 --   records as belonging to one of them.
 --
---   That second half is not redundant with the slot sweep below.
---   @duplicateCachedTextureHandle@
---   ("Engine.Scripting.Lua.Message.Texture") writes an alias's
---   @AssetReady@ state, its size entry and its refcount bump
---   UNCONDITIONALLY; only the @btsHandleMap@ insertion is conditional on
---   the canonical owner actually holding a slot. So a cache hit against
---   an atlas whose registration ran out of bindless slots — or one taken
---   with no bindless system at all — produces a POOL-ONLY alias: real in
---   @apTextureHandles@ and the texture size map, absent from
---   @btsHandleMap@, and therefore invisible to any slot-derived sweep.
---   @AssetReady@ carries the atlas's 'AssetId', which names it anyway.
+--   That second half is not redundant with the slot sweep below. A
+--   POOL-ONLY alias — real in @apTextureHandles@ and the texture size
+--   map, absent from @btsHandleMap@, and therefore invisible to any
+--   slot-derived sweep — is swept in here because @AssetReady@ carries
+--   the atlas's 'AssetId', which names it whether or not a slot does.
+--
+--   Until #1690 the loader MADE such aliases: @duplicateCachedTextureHandle@
+--   ("Engine.Scripting.Lua.Message.Texture") wrote an alias's
+--   @AssetReady@ state, size entry and refcount bump unconditionally,
+--   so a cache hit against an atlas whose registration had run out of
+--   bindless slots published one. #1690 stopped that at the source —
+--   such an atlas is never published in the first place, and a cache hit
+--   that cannot resolve a slot now FAILS
+--   ("Engine.Graphics.Vulkan.Texture.Publish") instead of reporting a
+--   load. This asset-id sweep stays regardless, and is not dead weight:
+--   it is what keeps the release decision independent of whether a
+--   handle ever held a slot, so an owner the bindless half finds nothing
+--   to do for still has its pool-side bookkeeping purged rather than
+--   silently kept.
 --
 --   Only @AssetReady@ names an asset; a handle still loading or failed
 --   carries no id to match, so neither is swept in.

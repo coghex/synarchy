@@ -256,6 +256,21 @@ function worldView.onAssetLoaded(assetType, handle, path)
     end
 end
 
+-- A texture request that TERMINALLY FAILED (#1690 -- the bindless slot
+-- allocator was full, so nothing can ever sample that handle). It
+-- counts toward the same gate a load does, because this gate asks "is
+-- every request I am waiting on finished?", not "did every request
+-- succeed": a failure that counted for nothing would leave
+-- texturesLoadedCount short of texturesNeeded forever and the world
+-- would never be created. The missing texture draws as the undefined
+-- texture; a boot that never finishes is strictly worse.
+function worldView.onAssetFailed(assetType, handle, path, reason)
+    if assetType ~= "texture" then return end
+    engine.logWarn("World texture failed to load: " .. tostring(path)
+        .. " (" .. tostring(reason) .. ")")
+    worldView.onAssetLoaded(assetType, handle, path)
+end
+
 -----------------------------------------------------------
 -- Start Generation (called from create_world_menu)
 -----------------------------------------------------------

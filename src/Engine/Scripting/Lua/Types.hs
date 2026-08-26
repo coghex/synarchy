@@ -190,6 +190,16 @@ data LuaMsg = LuaTextureLoaded TextureHandle AssetId
             | LuaWindowResize Int Int
             | LuaFramebufferResize Int Int
             | LuaAssetLoaded Text Int Text
+            | LuaAssetFailed Text Int Text Text
+              -- ^ A load request reached its TERMINAL FAILURE (#1690):
+              --   (assetType, handle, path, reason). Deliberately its
+              --   own message rather than a flag on 'LuaAssetLoaded',
+              --   which is the success-only protocol Lua sees as
+              --   @onAssetLoaded@ — a waiter that mistook a failure for
+              --   a load would read a handle resolving to the undefined
+              --   texture. Broadcast as @onAssetFailed@, so a module
+              --   holding a pending handle settles it instead of waiting
+              --   forever for a load that is never coming.
             | LuaArenaReady Text
             | LuaStampLocation Text Text Int Int
               -- ^ A just-loaded chunk hosts a placed location (#89):

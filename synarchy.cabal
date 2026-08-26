@@ -228,6 +228,7 @@ library
                      Engine.Graphics.Vulkan.Texture.Handle
                      Engine.Graphics.Vulkan.Texture.Rebind
                      Engine.Graphics.Vulkan.Texture.Release
+                     Engine.Graphics.Vulkan.Texture.Publish
                      Engine.Graphics.Vulkan.Texture.Bindless
                      Engine.Graphics.Vulkan.Uniform.Layout
                      Engine.Graphics.Vulkan.Vertex
@@ -1306,6 +1307,8 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.InjuryNarration
                    Test.Headless.Graphics.BindlessRebind
                    Test.Headless.Graphics.BindlessRelease
+                   Test.Headless.Graphics.BindlessPublish
+                   Test.Headless.Lua.AssetFailure
     build-depends: base >=4.20 && <5
                 , base-unicode-symbols
                 -- Test.Headless.Core.Queue's two-thread FIFO case uses

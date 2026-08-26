@@ -279,12 +279,17 @@ spec = do
       HM.member canonicalA sizes' `shouldBe` False
 
   describe "an atlas whose registration never got a bindless slot" $ do
-    -- @duplicateCachedTextureHandle@ writes an alias's @AssetReady@
-    -- state, size entry and refcount bump UNCONDITIONALLY; only the
-    -- @btsHandleMap@ insertion is conditional on the canonical owner
-    -- holding a slot. So a cache hit against a slot-exhausted atlas (or
-    -- one taken with no bindless system at all) leaves POOL-ONLY
-    -- aliases, which no slot-derived sweep can see.
+    -- A POOL-ONLY alias is real in @apTextureHandles@ and the texture
+    -- size map but absent from @btsHandleMap@, so no slot-derived sweep
+    -- can see it. Until #1690 the loader made them:
+    -- @duplicateCachedTextureHandle@ wrote an alias's @AssetReady@
+    -- state, size entry and refcount bump UNCONDITIONALLY, so a cache
+    -- hit against a slot-exhausted atlas (or one taken with no bindless
+    -- system at all) published one. #1690 stopped that at the source,
+    -- and this coverage is deliberately unchanged by it: the release
+    -- decision must stay independent of whether an owner ever held a
+    -- slot, so that an owner the bindless half finds nothing to do for
+    -- still has its pool-side bookkeeping purged.
     let -- Neither the canonical nor its aliases ever reached the
         -- bindless map; only atlas B is registered.
         starvedMap = Map.fromList
