@@ -208,6 +208,12 @@ PROBES = [
      "and the stamped 5x5 footprint really materialized level (#1575)"),
     ("lua_orphan_prune", "lua_orphan_prune_probe.py",
      "Lua per-id AI state pruned (not inherited) after a save load (#195)"),
+    ("lunge", "lunge_probe.py",
+     "combat lunge leap -> land -> strike on a short-reach species (#1713): "
+     "the landing strike fires once with the launched target and the "
+     "lunge's own stored reach/impact speed rather than timing out, and a "
+     "replaced target, an aged-out timeout and a launch the engine never "
+     "lifts each cancel it with all seven lunge fields cleared"),
     ("lua_strict_msg", "lua_strict_msg_probe.py",
      "a Haskell exception embedded in a LuaToEngineMsg/LuaMsg field must not escape and crash the engine (#622)"),
     ("machine_shop", "machine_shop_probe.py",

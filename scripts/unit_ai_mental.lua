@@ -24,6 +24,7 @@ local needs        = require("scripts.unit_ai_needs")
 local mv           = require("scripts.movement_speed")
 local core         = require("scripts.unit_ai_core")
 local combatAttack = require("scripts.unit_ai_combat_attack")
+local lunge        = require("scripts.unit_ai_combat_lunge")
 
 local M = {}
 
@@ -116,9 +117,19 @@ end
 -- the ordinary attack_target candidate never gets a chance to fire on
 -- its own — drive its swing/pursuit logic directly instead. Target
 -- state rides the same s.attackTargetUid / s.activeGoal fields
--- commandAttack uses, so the shared combat plumbing (cooldowns, lunge,
--- anim) just works; episode-end cleanup (in shortCircuit) clears them
--- the same way once the episode ends.
+-- commandAttack uses, so the shared combat plumbing (cooldowns, anim)
+-- is reached identically; episode-end cleanup (in shortCircuit) clears
+-- them the same way once the episode ends.
+--
+-- THE LUNGE IS SHARED TOO, but it was never plumbing this path could
+-- take for granted (#1713). Its leap→land→strike sequence spans several
+-- ticks and is airborne for most of them, so it only resolves because
+-- unit_ai.lua's tickOne observes the leap before its transition
+-- short-circuit returns — a hook outside this module and outside the
+-- attack execute. Until that landed, a short-reach lasher (the red
+-- squirrel PR #737 routed through here) leapt, landed, and timed out
+-- without ever striking. Episode-end cleanup below clears the lunge's
+-- own bookkeeping along with the rest of the episode's state.
 local function lashOutExecute(uid, s, params)
     local me = unit.getInfo(uid)
     if not me then return end
@@ -198,6 +209,12 @@ function M.shortCircuit(uid, s, params, activity, actList)
         s.attackTargetUid = nil
         s.committed        = nil
         s.mentalLashoutActive = nil
+        -- The episode's lunge dies with the episode (#1713). Same reason
+        -- the target/goal are dropped above: once the episode ends, the
+        -- attack execute that owns the lunge's own terminal paths is no
+        -- longer driven, so its persisted lungeTarget reference would
+        -- otherwise leak into ordinary AI and into a save.
+        lunge.clear(s)
         core.markGoalAccomplished(s, "attack")
         unit.clearAnimOverride(uid)
         -- Stop any in-flight pursuit (an out-of-range target has one:

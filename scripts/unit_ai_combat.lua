@@ -3,9 +3,10 @@
 -- Who to fight, when to flee, and when to break off. follow_command's
 -- utility/execute live here too (the priority-ladder comment applies
 -- to both) since they're the baseline retreat/engage compare against.
--- Swing mechanics (anim, lunge, cooldown math consumers) live in
--- unit_ai_combat_attack.lua, which requires this file for the attack-
--- mode helpers (staminaPct/chooseAttackMode/computeAttackCooldown).
+-- Swing mechanics (anim, cooldown math consumers) live in
+-- unit_ai_combat_attack.lua and the leap→land→strike lunge in
+-- unit_ai_combat_lunge.lua (#1713); both require this file for the
+-- attack-mode helpers (staminaPct/chooseAttackMode/computeAttackCooldown).
 -- follow_command's adaptive-pacing internals (#999) live in
 -- unit_ai_pace.lua (split out to stay under the 500-line budget);
 -- staminaPct is re-exported from there so this file's own public
@@ -164,6 +165,14 @@ local function retreatExecute(uid, s, params)
         s.retreatThreatUid = s.attackTargetUid
         s.attackTargetUid  = nil
         s.committed        = nil   -- broke despite the order; drop commitment
+        -- Breaking off abandons any lunge with the attack goal (#1713).
+        -- Required here rather than left to the lunge's own timeout: the
+        -- attack execute that owns the phase-2 gate never runs again once
+        -- the goal flips, so its persisted lungeTarget reference would
+        -- otherwise ride out the whole retreat and into a save. Reached by
+        -- require to keep unit_ai_combat_lunge.lua's dependency on this
+        -- module (the shared cooldown math) one-directional.
+        require("scripts.unit_ai_combat_lunge").clear(s)
         markGoalAccomplished(s, "attack")
         setGoal(s, "retreat")
         unit.clearAnimOverride(uid)

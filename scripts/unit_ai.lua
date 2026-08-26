@@ -82,6 +82,10 @@ local needs        = require("scripts.unit_ai_needs")
 local water         = require("scripts.unit_ai_water")
 local combat        = require("scripts.unit_ai_combat")
 local combatAttack  = require("scripts.unit_ai_combat_attack")
+-- The lunge state machine (#1713). Required HERE and not only through
+-- the attack module because tickOne calls its airborne observer before
+-- the transition short-circuit returns; see the note at that call.
+local lunge         = require("scripts.unit_ai_combat_lunge")
 local notify        = require("scripts.unit_ai_notify")
 local deliver       = require("scripts.unit_ai_deliver")
 local logistics     = require("scripts.unit_ai_logistics")
@@ -252,6 +256,19 @@ local function tickOne(uid, defName)
     -- swallowed interval, however brief, is charged to a pending order.
     local pose     = unit.getPose(uid)
     local activity = unit.getActivity(uid)
+    -- Lunge BOOKKEEPING, and nothing else, runs before those returns
+    -- (#1713): a leap spends its whole airborne life on the
+    -- `transitioning` path below (`activityLabel (TransitioningTo _)`,
+    -- src/Unit/Thread.hs), so with no hook here no tick ever observes it
+    -- and the landing strike's gate is unreachable by construction. NOT a
+    -- widened execution window -- observeTick reads pose/activity and
+    -- writes unit_ai_combat_lunge.lua's own `lunge*` fields, scoring no
+    -- actions, issuing no commands and never calling combat.attack; the
+    -- strike still fires only from an ordinary grounded execute tick, so
+    -- the clobber protection these returns exist for is untouched. Run on
+    -- EVERY tick so a lunge interrupted onto any path still reaches its
+    -- terminal cleanup. Detail: that module's header.
+    lunge.observeTick(uid, pose, activity)
     if pose == "collapsed" or pose == "dead" then return core.suspendOrders(uid) end
     if activity == "drinking" or activity == "eating" or activity == "pickup"
        or activity == "transitioning" then return core.suspendOrders(uid) end
