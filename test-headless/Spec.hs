@@ -142,6 +142,7 @@ import qualified Test.Headless.UI.FocusNavigation as UIFocusNavigation
 import qualified Test.Headless.UI.Clipping as UIClipping
 import qualified Test.Headless.UI.InteractiveBounds as UIInteractiveBounds
 import qualified Test.Headless.UI.PopupPlacement as UIPopupPlacement
+import qualified Test.Headless.Event.PlayerEventProgress as PlayerEventProgress
 import qualified Test.Headless.Event.PopupCoordPage as PopupCoordPage
 import qualified Test.Headless.UI.PopupQueueTeardown as UIPopupQueueTeardown
 import qualified Test.Headless.UI.ResponsiveMenus as UIResponsiveMenus
@@ -558,6 +559,11 @@ main = hspec $ do
     describe "UI.Clipping" UIClipping.spec
     describe "UI.InteractiveBounds" UIInteractiveBounds.spec
     describe "UI.PopupPlacement" UIPopupPlacement.spec
+    -- #1714: its own engine per example (the event store's sequence
+    -- counter is process-lifetime, and one case drives the real
+    -- load-publish reset), so it registers here rather than under the
+    -- shared-worlds aroundAll above.
+    PlayerEventProgress.spec
     -- #1588: its own engine per example (each case installs its own
     -- WorldManager and asserts on the event ring), so it registers
     -- here rather than under the shared-worlds aroundAll above.

@@ -117,7 +117,7 @@ the affected fields as unclassified.
 | `locationDefsRef` | global | Rebuild | `data/*.yaml` location content | see §9 | `tools/location_content_probe.py` |
 | `lootTableRegistryRef` | global | Rebuild | `data/*.yaml` loot content | see §9 | none yet |
 | `tutorialRegistryRef` | global | Rebuild | `data/tutorials/*.yaml` | see §9 | hspec `--match "Tutorial definitions"` |
-| `eventStoreRef` | global | Exclude | — | player-event ring buffer, explicitly session-only | `tools/injury_log_probe.py` (stream behavior) |
+| `eventStoreRef` | global | Exclude | — | player-event ring buffer plus its session mutation-sequence counter (#1714), explicitly session-only | `tools/injury_log_probe.py` (stream behavior) |
 | `notificationCfgRef` | global | Exclude | — | local runtime config (`config/notifications.local.yaml`, #638/#786) | `tools/config_state_probe.py` |
 | `notificationOrder` | global | Exclude | — | local runtime config, derived ordering | `tools/config_state_probe.py` |
 | `popupQueueRef` | global | Exclude | — | transient popup event queue | none yet |

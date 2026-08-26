@@ -8,6 +8,7 @@ module Engine.PlayerEvent.Emit
     , emitEventFull
     , emitEventFullOnPage
     , readEventLog
+    , readEventLogProgress
       -- * The one page-attribution rule
     , resolveEventPage
     ) where
@@ -24,7 +25,7 @@ import Engine.Core.Capability.UnitCombat
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.HashMap.Strict as HM
-import Data.Sequence (Seq, (|>))
+import Data.Sequence ((|>))
 import qualified Data.Sequence as Seq
 import Data.Foldable (toList)
 import Data.IORef (readIORef)
@@ -262,30 +263,83 @@ resolveEventPage wsc (Just _) Nothing   =
 --   Outside the window, or when @window <= 0@, every emit keeps its own
 --   history row. Oldest entries are dropped when the buffer exceeds
 --   'eventStoreCap'.
-pushBounded ∷ Double → TVar (Seq PlayerEvent) → PlayerEvent → STM ()
-pushBounded window ref ev = modifyTVar' ref $ \s →
-    let coalesced = case findCoalescedIndex s of
+--
+--   Every COMMITTED mutation — a plain append and a coalesced
+--   replacement alike — takes the store's next sequence, stamped here
+--   inside the very 'STM' transaction that writes the row (#1714).
+--   That is the whole point of holding rows and counter in one 'TVar':
+--   two concurrent emitters cannot be handed the same number, and a
+--   number can never name a mutation that did not commit. Rows the
+--   transaction leaves alone — the untouched prefix, and everything the
+--   coalesce hit did not move — keep the sequences they already had.
+--
+--   An eviction is NOT a mutation and consumes no sequence: dropping
+--   the overflowing prefix only removes rows, so the sequences it takes
+--   with it stay permanently absent, which is exactly the evidence an
+--   observer needs to notice the loss instead of reading it as "nothing
+--   happened".
+pushBounded ∷ Double → TVar EventStore → PlayerEvent → STM ()
+pushBounded window ref ev = modifyTVar' ref $ \st →
+    let s   = esRows st
+        n   = esNextSequence st
+        row = StoredEvent { seSequence = n, seEvent = ev }
+        coalesced = case findCoalescedIndex s of
             Just i  →
-                let old = Seq.index s i
-                in Seq.deleteAt i s |> ev { peCount = peCount old + 1 }
-            Nothing → s |> ev
+                let old = seEvent (Seq.index s i)
+                in Seq.deleteAt i s
+                     |> row { seEvent = ev { peCount = peCount old + 1 } }
+            Nothing → s |> row
         excess = Seq.length coalesced - eventStoreCap
-    in if excess > 0 then Seq.drop excess coalesced else coalesced
+    in st { esRows = if excess > 0 then Seq.drop excess coalesced
+                                   else coalesced
+          , esNextSequence = n + 1 }
   where
     findCoalescedIndex s
         | window <= 0 = Nothing
-        | otherwise   = Seq.findIndexR (sameEntryWithin ev) s
+        | otherwise   = Seq.findIndexR (sameEntryWithin ev ∘ seEvent) s
 
     sameEntryWithin a b =
         let dt = peGameTime a - peGameTime b
         in sameEntry a b ∧ dt >= 0 ∧ dt <= window
 
+    -- The coalescing key is spelled out over 'PlayerEvent' fields
+    -- rather than derived, so #1714's sequence metadata — which lives
+    -- on the 'StoredEvent' wrapper, not on the event — is structurally
+    -- unable to join it.
     sameEntry a b = peCategory a ≡ peCategory b
                   ∧ peText a ≡ peText b
                   ∧ peUid a ≡ peUid b
                   ∧ peSourcePage a ≡ peSourcePage b
 
--- | Snapshot of the event log. Returns events oldest-first; the Lua
---   side reverses if it wants newest-on-top.
-readEventLog ∷ EngineEnv → IO [PlayerEvent]
-readEventLog env = toList <$> readTVarIO (ecEventStoreRef (toEventsCapability env))
+-- | Snapshot of the event log. Returns rows oldest-first, each carrying
+--   the store's mutation sequence ('seSequence', #1714) alongside the
+--   event; the Lua side reverses if it wants newest-on-top.
+--
+--   There is deliberately no sequence-free variant: a reader that threw
+--   the sequence away would be back to identifying rows by value, which
+--   is the ambiguity #1714 removed.
+readEventLog ∷ EngineEnv → IO [StoredEvent]
+readEventLog env =
+    toList ∘ esRows <$> readTVarIO (ecEventStoreRef (toEventsCapability env))
+
+-- | The rows AND the highest sequence the store has committed, from
+--   ONE read of the store (#1714).
+--
+--   The high-water mark is not derivable from the rows: after a load
+--   publish the ring is empty while the counter has kept counting, so
+--   this is the only way an observer can tell \"nothing has happened\"
+--   from \"everything that happened was discarded\".
+--
+--   The single 'readTVarIO' is the contract, not an optimisation.
+--   Reading rows and counter separately lets an emitter commit BETWEEN
+--   them, and the resulting pair is a lie in the one direction that
+--   matters: the mark names a mutation the rows do not show, so an
+--   observer reports the still-retained row as lost, advances its
+--   cursor past it, and then suppresses it on every later read — the
+--   row is gone from the trace permanently. Callers that need both must
+--   come through here rather than pairing 'readEventLog' with a second
+--   read.
+readEventLogProgress ∷ EngineEnv → IO ([StoredEvent], Int)
+readEventLogProgress env = do
+    st ← readTVarIO (ecEventStoreRef (toEventsCapability env))
+    pure (toList (esRows st), eventStoreHighWater st)

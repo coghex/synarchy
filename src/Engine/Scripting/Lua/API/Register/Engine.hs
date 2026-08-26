@@ -54,6 +54,7 @@ import Engine.Scripting.Lua.API.Save
 import Engine.Scripting.Lua.API.PlayerEvent (emitEventFn, emitEventAtFn
                                             , emitEventForUnitFn
                                             , getEventLogFn
+                                            , getEventLogProgressFn
                                             , getNotificationCfgFn
                                             , setNotificationOverridesFn)
 import Engine.Scripting.Lua.API.Units (loadUnitYamlFn)
@@ -212,6 +213,7 @@ registerEngineAPI env backendState = do
   registerLuaFunction "emitEventAt" (emitEventAtFn env)
   registerLuaFunction "emitEventForUnit" (emitEventForUnitFn env)
   registerLuaFunction "getEventLog" (getEventLogFn env)
+  registerLuaFunction "getEventLogProgress" (getEventLogProgressFn env)
   registerLuaFunction "getNotificationCfg"      (getNotificationCfgFn env)
   registerLuaFunction "setNotificationOverrides"
     (setNotificationOverridesFn env)

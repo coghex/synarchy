@@ -45,18 +45,17 @@ import Test.Hspec
 import qualified Data.Map.Strict as Map
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
-import qualified Data.Sequence as Seq
 import qualified Engine.Core.Queue as Q
 import Control.Concurrent.STM (atomically)
-import Control.Concurrent.STM.TVar (writeTVar)
+import Control.Concurrent.STM.TVar (modifyTVar')
 import Data.List (sortOn)
 import Data.IORef (newIORef, readIORef, writeIORef, atomicModifyIORef')
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Thread (ThreadControl(..))
 import Engine.Scripting.Lua.API (registerLuaAPI)
-import Engine.PlayerEvent (CategoryCfg(..))
-import Engine.PlayerEvent.Emit (PlayerEvent(..), readEventLog)
+import Engine.PlayerEvent (CategoryCfg(..), clearEventStoreRows)
+import Engine.PlayerEvent.Emit (PlayerEvent(..), StoredEvent(..), readEventLog)
 import Engine.Scripting.Lua.Thread (createLuaBackendState)
 import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
@@ -208,7 +207,7 @@ resetScene env activeGround ownedGround carrierPage carrierAt capacity = do
     -- every example here emits at game time 0.
     writeIORef (notificationCfgRef env) $ HM.fromList
         [ (c, logOnlyCategory c) | c ← ["unit_event", "unit_warning"] ]
-    atomically $ writeTVar (eventStoreRef env) Seq.empty
+    atomically $ modifyTVar' (eventStoreRef env) clearEventStoreRows
     writeIORef (unitManagerRef env) emptyUnitManager
         { umDefs = HM.singleton "acolyte" (minimalDef "acolyte")
         , umInstances = HM.singleton carrierUid
@@ -261,7 +260,7 @@ unloadOwnedPage env =
 eventRows ∷ EngineEnv
           → IO [(Text, Text, Maybe Word32, Maybe (Int, Int), Maybe Text)]
 eventRows env = do
-    evs ← readEventLog env
+    evs ← map seEvent ⊚ readEventLog env
     pure [ (peCategory e, peText e, peUid e, peCoords e, peSourcePage e)
          | e ← evs ]
 

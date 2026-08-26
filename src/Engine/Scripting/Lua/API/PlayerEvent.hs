@@ -4,6 +4,7 @@ module Engine.Scripting.Lua.API.PlayerEvent
     , emitEventAtFn
     , emitEventForUnitFn
     , getEventLogFn
+    , getEventLogProgressFn
     , getNotificationCfgFn
     , setNotificationOverridesFn
     ) where
@@ -20,8 +21,10 @@ import Engine.Core.Capability.Events (EventsCapability(..), toEventsCapability)
 import Engine.Core.Log (LogCategory(..), logWarn)
 import Engine.Core.State (EngineEnv)
 import Engine.PlayerEvent (CategoryCfg(..))
-import Engine.PlayerEvent.Emit (PlayerEvent(..), emitEvent, emitEventAt
-                               , emitEventFull, readEventLog)
+import Engine.PlayerEvent.Emit (PlayerEvent(..), StoredEvent(..)
+                               , emitEvent, emitEventAt
+                               , emitEventFull, readEventLog
+                               , readEventLogProgress)
 
 -- | @engine.emitEvent(category, text)@ — fire a player-visible event
 --   from Lua. Returns nothing. Unknown categories drop with a dev
@@ -96,10 +99,24 @@ emitEventForUnitFn env = do
     return 0
 
 -- | @engine.getEventLog()@ — return the event-log ring buffer as a
---   Lua array of @{category, text, gameTime, source, uid, count,
---   coords, page}@ tables, oldest-first. @coords@ is either @{x, y}@ or
---   @nil@. @page@ is the source world-page id string, or @nil@ when the
---   event names no page at all.
+--   Lua array of @{sequence, category, text, gameTime, source, uid,
+--   count, coords, page}@ tables, oldest-first. @coords@ is either
+--   @{x, y}@ or @nil@. @page@ is the source world-page id string, or
+--   @nil@ when the event names no page at all.
+--
+--   @sequence@ (#1714) is the store's own mutation number for the row:
+--   a Lua INTEGER, never a decimal string, positive, assigned
+--   consecutively from 1 in commit order for the lifetime of one engine
+--   process, and increasing across the returned array. It is present on
+--   every row without exception, which is what lets an observer say
+--   \"rows 11-14 were committed and are gone\" instead of guessing from
+--   row values; the playtest oracle
+--   (@tools\/playtest\/engine.py@) treats a row that lacks it as a
+--   contract violation rather than falling back to value matching.
+--   Purely additive: every field above keeps its previous value and
+--   meaning, and the sequence takes no part in log coalescing (whose
+--   key is spelled out over 'PlayerEvent' fields in
+--   'Engine.PlayerEvent.Emit').
 --
 --   The two travel together (#1588): every coords-carrying event also
 --   carries the page those coordinates are indexed in, so a row click
@@ -115,10 +132,27 @@ emitEventForUnitFn env = do
 --   makes that replay carry the same metadata a live popup does.
 getEventLogFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 getEventLogFn env = do
-    events ← Lua.liftIO $ readEventLog env
+    rows ← Lua.liftIO $ readEventLog env
+    pushEventRows rows
+    return 1
+
+-- | Push one 'StoredEvent' list as the Lua row array both event-log
+--   verbs return.
+--
+--   Shared rather than duplicated: @getEventLog@ and
+--   @getEventLogProgress@ must hand a consumer byte-identical rows, and
+--   a second copy of this is exactly where a field would go missing
+--   from one of them.
+pushEventRows ∷ [StoredEvent] → Lua.LuaE Lua.Exception ()
+pushEventRows rows = do
     Lua.newtable
-    forM_ (zip [1..] events) $ \(i, ev) → do
+    forM_ (zip [1..] rows) $ \(i, row) → do
+        let ev = seEvent row
         Lua.newtable
+        -- sequence: the store's mutation number for this row (#1714).
+        -- Pushed FIRST so a row can never be built without it.
+        Lua.pushinteger (fromIntegral (seSequence row))
+        Lua.setfield (-2) "sequence"
         Lua.pushstring (TE.encodeUtf8 (peCategory ev))
         Lua.setfield (-2) "category"
         Lua.pushstring (TE.encodeUtf8 (peText ev))
@@ -161,6 +195,41 @@ getEventLogFn env = do
         Lua.setfield (-2) "page"
 
         Lua.rawseti (-2) i
+
+-- | @engine.getEventLogProgress()@ — the event log and how far the
+--   store has got, from ONE snapshot: @{rows = <getEventLog() array>,
+--   highest = <integer>}@ (#1714).
+--
+--   @highest@ is the highest mutation sequence the store has COMMITTED
+--   this process (@0@ before the first one), independent of which rows
+--   survive. That independence is the point: a load publish empties the
+--   ring without resetting the counter, so an observer reading rows
+--   alone sees an empty log after a load and concludes nothing
+--   happened, when in fact every mutation since its last read was
+--   discarded.
+--
+--   __Why this is one verb and not two.__ Pairing @getEventLog()@ with
+--   a separate high-water read lets an emitter commit BETWEEN them, and
+--   the resulting pair lies in the one direction that matters: @highest@
+--   names a mutation the rows do not show. An observer then reports the
+--   still-retained row as lost, advances its cursor past it, and
+--   suppresses it on every later read — the row never reaches the
+--   trace. 'Engine.PlayerEvent.Emit.readEventLogProgress' takes both
+--   from a single read of the store, so the pair is always internally
+--   consistent: with rows present, @highest@ IS the last row's
+--   @sequence@.
+--
+--   @rows@ is byte-identical to @engine.getEventLog()@'s array — the
+--   same builder produces both — so a consumer needing only rows can
+--   keep using the simpler verb.
+getEventLogProgressFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+getEventLogProgressFn env = do
+    (rows, highest) ← Lua.liftIO $ readEventLogProgress env
+    Lua.newtable
+    pushEventRows rows
+    Lua.setfield (-2) "rows"
+    Lua.pushinteger (fromIntegral highest)
+    Lua.setfield (-2) "highest"
     return 1
 
 -- | @engine.getNotificationCfg()@ — return all categories in

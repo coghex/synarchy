@@ -75,13 +75,18 @@ SAVE_NOTES = {
 WIDGETS = [PLACE_MARKER, SAVE_NOTES]
 
 
-def _oracle(events=None, action_outcomes=None, visual_change=False):
+def _oracle(events=None, action_outcomes=None, visual_change=False,
+            event_log_gaps=None):
     return {
         "player_invisible": True,
         "widgets": WIDGETS,
         "current_menu": "world_view",
         "paused": True,
         "event_log_new": events or [],
+        # #1714: committed event rows this read could not see. A live
+        # trace always carries the key (empty when nothing was lost),
+        # so the fixture does too.
+        "event_log_gaps": event_log_gaps or [],
         "world_seed": 123,
         "action_outcomes": action_outcomes or [],
         # #775: this turn's OWN post-step evidence — every turn below

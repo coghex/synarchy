@@ -27,6 +27,11 @@
 --   pair, and @tools/engine_env_capability_audit.py@ needs no import
 --   boundary for it beyond the SS6 ratchet.
 --
+--   #1714's event-log sequence counter is progress state, but it is
+--   NOT a fifth field: it rides inside 'ecEventStoreRef'\'s own value,
+--   which is what keeps sequence assignment and the store mutation one
+--   atomic STM write.
+--
 --   == Concurrency contract these handles carry (SS5)
 --
 --   The two 'TVar's are genuinely multi-writer and are only ever
@@ -40,9 +45,11 @@
 --   == Lifecycle (SS5, and @World.Load.Publish.resetTransientState@)
 --
 --   'ecEventStoreRef' and 'ecPopupQueueRef' are @session-replaced@ and
---   ARE reset to empty by a load publish (@World.Load.Publish:294-295@)
---   — a loaded session starts with no event history and no pending
---   popups. 'ecNotificationCfgRef' and 'ecNotificationOrder' are
+--   ARE emptied of rows by a load publish
+--   (@World.Load.Publish.resetTransientState@) — a loaded session
+--   starts with no event history and no pending popups. The event
+--   store's sequence counter deliberately survives that reset (#1714),
+--   so a post-load row still outranks any pre-load cursor. 'ecNotificationCfgRef' and 'ecNotificationOrder' are
 --   @boot-process@: both come from the boot-time notification registry
 --   merge and survive a load untouched (the player's per-category
 --   preferences are a setting, not session state).
@@ -61,7 +68,7 @@ import UPrelude
 import Data.IORef (IORef)
 import Data.Sequence (Seq)
 import Control.Concurrent.STM.TVar (TVar)
-import Engine.PlayerEvent (PlayerEvent, NotificationCfg)
+import Engine.PlayerEvent (PlayerEvent, EventStore, NotificationCfg)
 import Engine.Core.State
   ( EngineEnv
   , eventStoreRef, notificationCfgRef, notificationOrder, popupQueueRef
@@ -75,11 +82,15 @@ import Engine.Core.State
 data EventsCapability = EventsCapability
   { -- | Ring buffer of player-facing events, capped at
     --   'Engine.PlayerEvent.eventStoreCap' (~1000 entries; oldest
-    --   dropped). Multi-writer STM: @WorldThread@ and @LuaThread@
-    --   push through 'Engine.PlayerEvent.Emit'; @LuaThread@ reads it
-    --   for @engine.getEventLog()@. @session-replaced@ — a load
-    --   publish resets it to empty. Never serialized to a save.
-    ecEventStoreRef      ∷ TVar (Seq PlayerEvent)
+    --   dropped), carried together with the mutation-sequence counter
+    --   in one 'Engine.PlayerEvent.EventStore' (#1714). Multi-writer
+    --   STM: @WorldThread@ and @LuaThread@ push through
+    --   'Engine.PlayerEvent.Emit'; @LuaThread@ reads it for
+    --   @engine.getEventLog()@. @session-replaced@ — a load publish
+    --   clears its ROWS ('Engine.PlayerEvent.clearEventStoreRows')
+    --   while the counter keeps counting, so no sequence is reissued
+    --   within one engine process. Never serialized to a save.
+    ecEventStoreRef      ∷ TVar EventStore
     -- | Resolved notification settings keyed by category id, merged
     --   at boot from @data/notification_categories.yaml@ +
     --   @config/notifications.local.yaml@ (#786). Read on

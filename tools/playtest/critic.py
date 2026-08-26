@@ -115,8 +115,9 @@ model — a mismatch between it and observed behavior is a doc-mismatch \
 or a manual gap);
 - a per-turn session digest: the player's observation / action / \
 EXPECTATION / note, the exact injected inputs, and the ORACLE the \
-player never saw (widget dump with bounds+labels, event-log deltas, \
-action-outcome records where available, pause/menu state), plus \
+player never saw (widget dump with bounds+labels, event-log rows plus \
+any gaps in them, action-outcome records where available, pause/menu \
+state), plus \
 harness-computed signals and joins;
 - screenshots of the friction turns (you must actually look at them \
 to judge visual clarity and whether feedback was visible);
@@ -284,6 +285,13 @@ def build_signals(trace_dir: str, turns: list[dict]) -> list[dict]:
         action = player.get("action") or {}
         oracle = t.get("oracle") or {}
         events = oracle.get("event_log_new") or []
+        # #1714: committed event rows the oracle could NOT observe at
+        # this turn's read — each entry a maximal missing sequence
+        # interval. Optional on the READ side: a trace recorded before
+        # #1714 carries no such key, and an absent key means "no gap
+        # was reported", never "gaps unknown" (the same tolerance the
+        # legacy `outcomes` and pre-#775 `visual_change` keys get).
+        event_log_gaps = oracle.get("event_log_gaps") or []
         # F4 (#646) action outcomes. The live producer
         # (PlaytestEngine.oracle_events) writes them under
         # `action_outcomes`; only the pre-live canned fixture ever used
@@ -329,6 +337,7 @@ def build_signals(trace_dir: str, turns: list[dict]) -> list[dict]:
             "injected": t.get("injected") or [],
             "acks": acks,
             "events": events,
+            "event_log_gaps": event_log_gaps,
             "outcomes": outcomes,
             "bad_outcomes": bad,
             "ack_errors": ack_errors,
@@ -370,9 +379,42 @@ def friction_candidates(meta: dict, signals: list[dict]) -> list[dict]:
         feedback = ("; ".join(feedback_bits)
                     if feedback_bits else "NO feedback of any kind "
                     "(no events, frame byte-identical after the step)")
+        # #1714: the event evidence for this turn is INCOMPLETE — some
+        # committed rows were evicted, or superseded by a coalesced
+        # replacement, before the oracle could read them. Every claim
+        # below that leans on "no events" has to be qualified, or a real
+        # silent failure hides behind lost evidence.
+        missing_events = sum(int(g.get("missing_count") or 0)
+                             for g in s["event_log_gaps"]
+                             if isinstance(g, dict))
+        if s["event_log_gaps"]:
+            feedback += (f" — CAUTION: {missing_events} committed event row(s) "
+                         "were NOT observable at this turn's read "
+                         f"({json.dumps(s['event_log_gaps'])}), so the event "
+                         "evidence here is incomplete")
+        # A gap becomes a candidate on its own ONLY when the turn shows
+        # no retained rows either: that is the case the sequence exists
+        # to expose, an empty `events` list that is a LOSS rather than a
+        # quiet log. A gap alongside retained rows is ordinary
+        # coalescing traffic — a burst of identical events supersedes
+        # its own sequences every turn — so it qualifies the reasoning
+        # (above, and in the digest) without manufacturing friction.
+        if s["event_log_gaps"] and not s["events"]:
+            reasons.append(
+                f"event-log-gap: {missing_events} committed event row(s) were "
+                "lost before the oracle could read them "
+                f"({json.dumps(s['event_log_gaps'])}), and NO row survived to "
+                "be reported — an empty event list on this turn is evidence "
+                "loss, not evidence the log was unchanged")
         if s["bad_outcomes"]:
             kind = s["bad_outcomes"][0].get("outcome")
-            if not feedback_bits:
+            # A gap disqualifies the silent-failure claim: "no
+            # user-facing event" is an assertion about the event log,
+            # and with rows missing the oracle cannot make it (#1714).
+            # The turn still becomes a candidate — through the join that
+            # SHOWS the incomplete evidence and asks the critic to judge
+            # it, rather than the one that states an absence as fact.
+            if not feedback_bits and not s["event_log_gaps"]:
                 reasons.append(f"silent-failure-join: action outcome {kind!r} "
                                "with no user-facing event and no visible "
                                "frame change")
@@ -411,6 +453,7 @@ def friction_candidates(meta: dict, signals: list[dict]) -> list[dict]:
         if reasons:
             add(s["turn"], reasons, {
                 "events": s["events"], "outcomes": s["outcomes"],
+                "event_log_gaps": s["event_log_gaps"],
                 "clicked_widget": s["clicked_widget"],
                 "visual_change": s["visual_change"],
             }, player_note=s["note"],
@@ -465,8 +508,15 @@ def build_digest(meta: dict, signals: list[dict],
         else:
             lines.append(f"  widgets: {key}")
             prev_widgets_key = key
+        # #1714: only rendered when non-empty. An ordinary turn's
+        # oracle line is unchanged, so the absence anchors below
+        # ("events=[]") keep their exact spelling; a lossy turn gets an
+        # extra, impossible-to-miss field.
+        gaps = (f"event_log_gaps={json.dumps(s['event_log_gaps'])} "
+                if s["event_log_gaps"] else "")
         lines.append(f"  oracle: menu={s['current_menu']!r} paused={s['paused']} "
                      f"events={json.dumps(s['events'])} "
+                     f"{gaps}"
                      f"outcomes={json.dumps(s['outcomes'])} "
                      f"clicked_widget={json.dumps(s['clicked_widget'])} "
                      f"visual_change={s['visual_change']} "
@@ -1292,7 +1342,8 @@ def selftest() -> int:
             "turn": 1, "observation": "", "note": "", "expectation": "",
             "action": {"do": "click", "x": 5, "y": 5},
             "injected": ["return input.click(5.0, 5.0)"],
-            "acks": [{"ok": True}], "events": [], "outcomes": [],
+            "acks": [{"ok": True}], "events": [], "event_log_gaps": [],
+            "outcomes": [],
             "bad_outcomes": [], "ack_errors": [],
             "visual_change": True, "clicked_widget": None,
             "widgets": [], "current_menu": "world_view", "paused": True,
