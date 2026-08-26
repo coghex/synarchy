@@ -92,13 +92,22 @@ createDefaultFaceMap pdev dev cmdPool cmdQueue bindless = do
   let rc = toRenderCapability env
   sampler ← liftIO $ acquireSampler dev (rcSamplerCacheRef rc) SamplerTextureNearest
 
-  -- High handle value to avoid collisions with normal texture handles
+  -- A handle id deliberately PAST the end of the handle→slot table
+  -- ('handleSlotTableSize'), so it can never collide with an ordinary
+  -- allocated handle. Its table write is therefore dropped by
+  -- 'writeHandleSlotEntry's range guard — which costs nothing, because
+  -- the default face map's slot never travels through the table: it is
+  -- published to the shader as 'fragDefaultFaceMapSlot' through the UBO
+  -- ('Engine.Graphics.Vulkan.Init' → 'Engine.Graphics.Vulkan.ShaderCode'),
+  -- which is where every quad carrying 'noFaceMapVertexId' picks it up
+  -- (#286, #1696).
   let faceMapTexHandle = TextureHandle 999999
-  (mbHandle, newBindless) ← registerTexture dev faceMapTexHandle imageView sampler bindless
+  (mbHandle, newBindless) ← registerTexture dev faceMapTexHandle
+                              "default face map" imageView sampler bindless
 
   let slot = case mbHandle of
-        Just bHandle → tsIndex (bthSlot bHandle)
-        Nothing      → 0  -- fallback to undefined
+        Right bHandle → tsIndex (bthSlot bHandle)
+        Left _        → 0  -- fallback to undefined
 
   pure ( DefaultFaceMap
            { dfmImage     = image

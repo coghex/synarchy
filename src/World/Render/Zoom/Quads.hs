@@ -18,7 +18,8 @@ import Engine.Asset.Handle (TextureHandle(..), toInt)
 import Engine.Scene.Base (LayerId(..))
 import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..))
-import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..))
+import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..)
+                                           , noFaceMapVertexId)
 import World.Types
 import World.Render.Zoom.Types (BakedZoomEntry(..), ZoomMapMode(..))
 import World.Grid (zoomMapLayer, zoomFadeStart, zoomFadeEnd)
@@ -69,10 +70,10 @@ renderFromBaked env worldState camera fbW fbH alpha texturePicker bakedRef layer
     mapMode ← readIORef (wsMapModeRef worldState)
     (winW, winH) ← readIORef (rvWindowSizeRef (toRenderViewCapability env))
     mAtlas ← readIORef (wsZoomAtlasRef worldState)
-    -- Stable handle id resolved in the shader (#286); -1 = default face
-    -- map (the flat zoom map has no directional face map).
+    -- Stable handle id resolved in the shader (#286); the flat zoom map
+    -- has no directional face map of its own (#1696).
     let lookupSlot texHandle = fromIntegral (toInt texHandle)
-        defFmSlot = -1 ∷ Float
+        defFmSlot = noFaceMapVertexId
         facing = camFacing camera
     case mParams of
         Nothing → return V.empty

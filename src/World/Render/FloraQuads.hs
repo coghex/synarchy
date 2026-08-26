@@ -9,15 +9,23 @@ import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (CameraFacing(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..), mkVertexWorld
-                                           , packWorldUV)
+                                           , packWorldUV, noFaceMapVertexId)
 import World.Grid (gridToScreen, tileWidth, tileHeight, tileSideHeight
                   , tileHalfWidth, tileHalfDiamondHeight
                   , worldLayer, applyFacing, baseTileW, baseTileH)
 import World.Types
 
+-- | One flora instance's world quad.
+--
+--   Flora has no directional face map of its own, so every vertex it
+--   emits carries 'noFaceMapVertexId' and the shader shades it with
+--   @fragDefaultFaceMapSlot@. It deliberately takes no face-map lookup:
+--   the id it used to pass — a literal zero handle through the identity
+--   'lookupFmSlot' — resolved to whatever bindless slot the FIRST
+--   texture allocated in the process happened to take, because handle 0
+--   was an ordinary allocatable id (#1696).
 floraToQuad
     ∷ (TextureHandle → Int)
-    → (TextureHandle → Float)
     → WorldTextures
     → CameraFacing
     → Int → Int
@@ -28,7 +36,7 @@ floraToQuad
     → (Float, Float)
     → HM.HashMap TextureHandle (Int, Int)
     → Maybe SortableQuad
-floraToQuad lookupSlot lookupFmSlot _textures facing
+floraToQuad lookupSlot _textures facing
             gx gy inst texHandle zSlice effDepth tileAlpha wrapOff texSizes =
     let floraZ = fiZ inst
         relativeZ = floraZ - zSlice
@@ -79,7 +87,7 @@ floraToQuad lookupSlot lookupFmSlot _textures facing
                     + fiOffV inst * 0.00005
 
             actualSlot = lookupSlot texHandle
-            fmSlot = lookupFmSlot (TextureHandle 0)
+            fmSlot = noFaceMapVertexId
 
             depth = zSlice - floraZ
             fadeRange = max 1 effDepth

@@ -34,7 +34,8 @@ import Engine.Graphics.Viewport (windowDegenerate)
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..)
                                            , QuadPayload(..), quadVertices
                                            , rectCorners, fullQuadUV
-                                           , renderFlagSelected, packWorldUV)
+                                           , renderFlagSelected, packWorldUV
+                                           , noFaceMapVertexId)
 import Engine.Scene.Types (SortableQuad(..))
 import Item.Ground (GroundItem(..), GroundItems(..))
 import Item.Types (ItemManager(..), ItemDef(..), ItemInstance(..))
@@ -179,12 +180,13 @@ renderGroundItemQuads env worldState tileAlpha = do
         let mBrokenTex = lookupTextureName "broken_equipment" nameReg
 
         -- Bake the STABLE texture-handle id; the bindless shader resolves
-        -- it to a live slot at draw time (#286). -1 = default face map:
-        -- the world-layer shader masks every quad by its face-map sample,
-        -- so this routes to the neutral default (the value units / flora
-        -- pass) instead of whatever lives at bindless index 0.
+        -- it to a live slot at draw time (#286). Ground items have no
+        -- directional face map of their own, and the world-layer shader
+        -- masks every quad by its face-map sample, so this routes to the
+        -- neutral default (the value units / flora pass) instead of
+        -- whatever lives at bindless index 0 (#1696).
         let lookupSlot texHandle = fromIntegral (toInt texHandle)
-            defFmSlot = -1 ∷ Float
+            defFmSlot = noFaceMapVertexId
             facing  = camFacing camera
             zoom    = camZoom camera
             zSlice  = camZSlice camera

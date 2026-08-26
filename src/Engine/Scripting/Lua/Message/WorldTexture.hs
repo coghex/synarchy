@@ -128,7 +128,7 @@ handleWorldPreview = do
                     let cleanSampler = releaseSampler dev cacheRef SamplerTextureNearest
 
                     (_, newBindless) ← registerPinnedTexture dev texHandle
-                        imageView sampler bindless
+                        "world preview" imageView sampler bindless
                     let rc = toRenderCapability env
                     liftIO $ writeIORef (rcTextureSystemRef rc) (Just newBindless)
 
@@ -256,7 +256,7 @@ handleZoomAtlasUpload = do
                     let cleanSampler = releaseSampler dev cacheRef SamplerTextureLinear
 
                     (_, newBindless) ← registerPinnedTexture dev texHandle
-                        imageView sampler bindless
+                        "zoom atlas" imageView sampler bindless
                     let rc = toRenderCapability env
                     liftIO $ writeIORef (rcTextureSystemRef rc) (Just newBindless)
 
