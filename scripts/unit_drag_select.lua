@@ -18,6 +18,15 @@
 -- other place that needs framebuffer coords — see toFbCoords below —
 -- so they share F1/F2/F3's oracle coordinate space.
 --
+-- WHEN that conversion happens is load-bearing (#1676). A gesture
+-- resolved at its own event (a drag's release) converts live. A
+-- DEFERRED one — a pending click, or a drag cancelled by a view
+-- transition, both of which resolve arbitrarily later than the press
+-- they report — converts at PRESS and stores the result
+-- (startFbX/startFbY, pendingClick.fbX/fbY), because the
+-- window→framebuffer ratio can change during the hold and converting
+-- afterwards would report the press under a ratio it never had.
+--
 -- The module self-registers in package.loaded so engine.loadScript
 -- and require see the same instance — same reason as scripts/debug.lua.
 
@@ -29,6 +38,18 @@ local hud = require("scripts.hud")
 dragSelect.state    = "idle"
 dragSelect.startX   = 0
 dragSelect.startY   = 0
+-- F4 (#1676): the press's location in FRAMEBUFFER pixels, captured
+-- from the window/framebuffer ratio live when the gesture began. The
+-- window-space startX/startY above are what the drag threshold and the
+-- rect visual use and stay untouched; these two exist because a DPI
+-- change or a window/framebuffer resize DURING the hold moves that
+-- ratio, so converting startX/startY at resolution time would report
+-- the press under a ratio it never happened at. Degenerate-viewport
+-- fallback is baked in at capture (see toFbCoords), so a press taken
+-- while the viewport was unusable keeps its raw window coordinate
+-- however the geometry later recovers.
+dragSelect.startFbX = 0
+dragSelect.startFbY = 0
 dragSelect.currX    = 0
 dragSelect.currY    = 0
 dragSelect.page     = nil
@@ -57,6 +78,11 @@ dragSelect.boxSelectArmed = false
 dragSelect.rightState        = "idle"
 dragSelect.rightStartX       = 0
 dragSelect.rightStartY       = 0
+-- #1676: the right-button gesture keeps its OWN press-time framebuffer
+-- capture, for the same reason as startFbX/startFbY above — the two
+-- buttons track independent gestures with independent start points.
+dragSelect.rightStartFbX     = 0
+dragSelect.rightStartFbY     = 0
 dragSelect.rightPendingClick = nil
 -- 4 thin sprites for the rect outline (top / bottom / left / right).
 -- Filled center stays transparent so units underneath remain visible.
@@ -248,6 +274,10 @@ function dragSelect.handleMouseDown(button, x, y)
         dragSelect.state  = "pressed"
         dragSelect.startX = x
         dragSelect.startY = y
+        -- #1676: the drag's origin in framebuffer space, captured with
+        -- the ratio live at press — what a "cancelled (view
+        -- transition)" record reports later.
+        dragSelect.startFbX, dragSelect.startFbY = toFbCoords(x, y)
         dragSelect.currX  = x
         dragSelect.currY  = y
         dragSelect.pendingClick    = nil
@@ -256,6 +286,7 @@ function dragSelect.handleMouseDown(button, x, y)
         dragSelect.rightState        = "pressed"
         dragSelect.rightStartX       = x
         dragSelect.rightStartY       = y
+        dragSelect.rightStartFbX, dragSelect.rightStartFbY = toFbCoords(x, y)
         dragSelect.rightPendingClick = nil
     end
 end
@@ -280,8 +311,9 @@ end
 -- second, misleading "input.click" record (review: exactly one
 -- primary Layer A record per H1 action). Only fires once the drag
 -- actually reached "dragging" (crossed DRAG_THRESHOLD).
-local function recordDragOutcome(outcome, x, y, requested, applied, reason)
-    local fx, fy = toFbCoords(x, y)
+-- #1676: takes an ALREADY-framebuffer-space location, for the callers
+-- that hold a press-time capture rather than a live coordinate.
+local function recordDragOutcomeFb(outcome, fx, fy, requested, applied, reason)
     debug.recordOutcome{
         kind = "input.drag",
         outcome = outcome,
@@ -293,17 +325,28 @@ local function recordDragOutcome(outcome, x, y, requested, applied, reason)
     }
 end
 
+-- A drag that RESOLVES at its release point: the location is the live
+-- release coordinate, so converting it with the geometry live now is
+-- correct (#1676 changes nothing here — it is the same event).
+local function recordDragOutcome(outcome, x, y, requested, applied, reason)
+    local fx, fy = toFbCoords(x, y)
+    recordDragOutcomeFb(outcome, fx, fy, requested, applied, reason)
+end
+
 -- F4 (#730): mirrors init_mouse.lua's own recordClick shape exactly,
 -- so a deferred click reads identically to one recorded immediately —
 -- only ever called with a real dragSelect.pendingClick, once the
 -- gesture is known to have stayed a plain click (never reached
 -- "dragging").
 local function recordDeferredClick(pc)
-    local fx, fy = toFbCoords(pc.x, pc.y)
     debug.recordOutcome{
         kind = "input.click",
         outcome = pc.outcome or "accepted",
-        where = { x = fx, y = fy },
+        -- #1676: the press's OWN press-time framebuffer position,
+        -- captured by deferClick — never a conversion of the retained
+        -- window coordinate under whatever ratio happens to be live at
+        -- this (arbitrarily later) resolution.
+        where = { x = pc.fbX, y = pc.fbY },
         handler = pc.handler,
         reason = pc.reason,
     }
@@ -320,7 +363,12 @@ end
 -- — it still runs immediately in init_mouse.lua, at press, exactly as
 -- before; only the F4 record's timing/existence moves.
 function dragSelect.deferClick(button, handler, outcome, x, y, reason)
-    local pc = { handler = handler, outcome = outcome, x = x, y = y, reason = reason }
+    -- #1676: capture the framebuffer position NOW, at press. Every
+    -- resolution path below (onMouseUp, cancel) spends this stored
+    -- value instead of reconverting x/y later.
+    local fbX, fbY = toFbCoords(x, y)
+    local pc = { handler = handler, outcome = outcome, x = x, y = y,
+                 fbX = fbX, fbY = fbY, reason = reason }
     if button == 1 then
         dragSelect.pendingClick = pc
     elseif button == 2 then
@@ -453,8 +501,8 @@ end
 function dragSelect.cancel()
     if dragSelect.state ~= "idle" then
         if dragSelect.state == "dragging" then
-            recordDragOutcome("noop", dragSelect.startX, dragSelect.startY, 0, 0,
-                "cancelled (view transition)")
+            recordDragOutcomeFb("noop", dragSelect.startFbX, dragSelect.startFbY,
+                0, 0, "cancelled (view transition)")
         elseif dragSelect.pendingClick then
             recordDeferredClick(dragSelect.pendingClick)
         end
@@ -469,8 +517,8 @@ function dragSelect.cancel()
     -- contract as the left-button case above.
     if dragSelect.rightState ~= "idle" then
         if dragSelect.rightState == "dragging" then
-            recordDragOutcome("noop", dragSelect.rightStartX, dragSelect.rightStartY, 0, 0,
-                "cancelled (view transition)")
+            recordDragOutcomeFb("noop", dragSelect.rightStartFbX,
+                dragSelect.rightStartFbY, 0, 0, "cancelled (view transition)")
         elseif dragSelect.rightPendingClick then
             recordDeferredClick(dragSelect.rightPendingClick)
         end

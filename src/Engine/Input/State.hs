@@ -114,14 +114,21 @@ releaseHeldButtons ∷ EngineEnv → InputState → IO ()
 releaseHeldButtons env inpSt = do
     forM_ (heldButtonReleases inpSt) $ \(btn, mx, my, route) →
         Q.writeQueue (ivLuaQueue (toInputViewCapability env)) (LuaMouseUpEvent btn mx my route)
-    forM_ (Map.toList (inpPendingUIClick inpSt)) $ \(_btn, (kind, callback, px, py)) → do
+    forM_ (Map.elems (inpPendingUIClick inpSt)) $ \pc → do
         gt ← readIORef (wsGameTimeRef (toWorldSimCapability env))
         pushActionOutcome (ucActionOutcomeRef (toUnitCombatCapability env)) ActionOutcome
-            { aoTs = gt, aoKind = kind, aoOutcome = "noop"
-            , aoWhereX = Just px, aoWhereY = Just py, aoTarget = Nothing
+            { aoTs = gt, aoKind = pucKind pc, aoOutcome = "noop"
+            -- #1676: the press's own PRESS-TIME framebuffer position
+            -- (#774's oracle space). This resolver reads no
+            -- window/framebuffer geometry at all — it cannot, and a
+            -- focus loss is exactly when a DPI/monitor change is most
+            -- likely to have moved the ratio since the press — so the
+            -- conversion has to have happened at capture.
+            , aoWhereX = Just (pucPressFbX pc)
+            , aoWhereY = Just (pucPressFbY pc), aoTarget = Nothing
             , aoRequested = Nothing, aoApplied = Nothing, aoDropped = Nothing
             , aoReason = Just "release swallowed (focus loss / minimize)"
-            , aoHandler = Just callback
+            , aoHandler = Just (pucCallback pc)
             }
 
 -- | The synthetic releases 'releaseHeldButtons' should emit: one per
