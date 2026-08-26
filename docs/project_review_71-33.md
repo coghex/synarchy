@@ -8,13 +8,13 @@ PR #71's pause-menu Save now reaches the registered save transaction; its adjace
 
 ## Status
 
-- [ ] PRR-1. Pending-chunk dedup treats wrap aliases as different chunks
+- [x] PRR-1. Pending-chunk dedup treats wrap aliases as different chunks — [#1723]
 - [ ] PRR-2. The determinism contract self-test is outside every maintained gate
 - [ ] PRR-3. Copilot guidance still directs new shared state into EngineEnv
 
 ## 1. Chunk queue canonical identity
 
-### PRR-1. Pending-chunk dedup treats wrap aliases as different chunks
+### [#1723] PRR-1. Pending-chunk dedup treats wrap aliases as different chunks
 
 > **Captured note:** PR #50 deduplicates `world.loadChunksInRegion` in raw `ChunkCoord` space, while the current queue consumer canonicalizes coordinates only after dequeue. Two wrap aliases of one physical chunk are therefore still accepted and reported as two newly queued chunks.
 
