@@ -174,6 +174,7 @@ import qualified Test.Headless.River.InlandSources as RiverInlandSources
 import qualified Test.Headless.World.Render.FrontWallLift as FrontWallLift
 import qualified Test.Headless.World.Render.GroundItemSeam as GroundItemSeam
 import qualified Test.Headless.World.Render.PickSeam as PickSeam
+import qualified Test.Headless.World.Render.QuadSnapshot as QuadSnapshot
 import qualified Test.Headless.World.DesignationSeam as DesignationSeam
 import qualified Test.Headless.World.StructureStage as StructureStage
 import qualified Test.Headless.World.Render.SideFace as RenderSideFace
@@ -598,6 +599,11 @@ main = hspec $ do
     describe "World.Render.GroundItemSeam" GroundItemSeam.spec
     describe "World.Render.GroundItemSeam (engine)" GroundItemSeam.engineSpec
     describe "World.Render.PickSeam" PickSeam.spec
+
+    -- #1720: its own headless engine (no worker threads), so the live
+    -- camera can be rewritten between capture and build the way the
+    -- main thread's pan integration does under the world thread.
+    describe "World.Render.QuadSnapshot" QuadSnapshot.spec
     describe "World.DesignationSeam" DesignationSeam.spec
     describe "World.DesignationSeam (engine)" DesignationSeam.engineSpec
 

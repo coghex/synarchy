@@ -17,7 +17,7 @@ import Engine.Core.Capability.RenderView
   (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Asset.Handle (TextureHandle(..), toInt)
 import Engine.Scene.Types (SortableQuad(..))
-import Engine.Graphics.Camera (Camera2D(..), CameraFacing)
+import Engine.Graphics.Camera (CameraFacing)
 import World.Types
 import World.Flora.Render (resolveFloraTexture)
 import World.Flora.CropPlot (cropPlotElapsedDays, cropPlotInstance)
@@ -25,7 +25,7 @@ import World.Generate (chunkToGlobal, viewDepth)
 import World.Generate.Coordinates (canonicalTileFrame)
 import World.Grid (gridToScreen, tileSideHeight, applyFacing)
 import Structure.Types (StructureSlot(..), ChunkStructures, spdGridZ)
-import World.Render.ViewBounds (computeViewBounds, expandViewBounds, isTileVisible)
+import World.Render.ViewBounds (viewBoundsAt, expandViewBounds, isTileVisible)
 import World.Render.Camera (quadCacheMargins)
 import World.Render.ChunkCulling (isChunkRelevantForSlice, isChunkVisibleWrapped)
 import World.Render.FloraQuads (floraToQuad)
@@ -41,13 +41,30 @@ import World.Render.TileQuads
 
 -- * Render World Quads
 
+-- | Build one page's cached tile quads for the camera state described by
+--   @snap@.
+--
+--   __Every camera-derived value comes from that snapshot (#1720)__ —
+--   facing, z-slice, zoom, effective depth, position and the view bounds
+--   the margins expand. This function does NOT read 'rvCameraRef': its
+--   caller stamps the cache entry with the same snapshot, and the camera
+--   has concurrent writers (the main thread's pan integration rewrites it
+--   at frame rate while this runs on the world thread), so a second live
+--   read here would let the geometry describe one camera while the stamp
+--   describes another. That mismatch does not repair itself for position:
+--   'World.Render.Camera.cameraChanged' licenses reuse within the STAMP's
+--   margin, so quads built around a different centre leave an uncovered
+--   strip that no rebuild is triggered for. Only the snapshot decides.
+--
+--   The dynamic per-frame passes (cursor, ground items, spoil, blood) are
+--   the deliberate opposite and still read the live camera: they are
+--   rebuilt every frame, so responding to input immediately is the point.
 renderWorldQuads ∷ EngineEnv → WorldState → Float → WorldCameraSnapshot
   → IO (V.Vector SortableQuad)
 renderWorldQuads env worldState zoomAlpha snap = do
     tileData ← readIORef (wsTilesRef worldState)
     textures ← readIORef (wsTexturesRef worldState)
     paramsM ← readIORef (wsGenParamsRef worldState)
-    camera ← readIORef (rvCameraRef (toRenderViewCapability env))
     floraCat ← readIORef (wsFloraCatalogRef (toWorldSimCapability env))
     worldDate ← readIORef (wsDateRef worldState)
     texSizes ← readIORef (rvTextureSizeRef (toRenderViewCapability env))
@@ -55,7 +72,7 @@ renderWorldQuads env worldState zoomAlpha snap = do
     cropPlots ← readIORef (wsCropPlotsRef worldState)
 
     let (fbW, fbH) = wcsFbSize snap
-        facing = camFacing camera
+        facing = wcsFacing snap
         -- Flora growth is derived from the absolute world day (#332):
         -- the annual cycle takes its year-relative ordinal day from it,
         -- and the life phase its derived age. Convert through the world
@@ -74,8 +91,8 @@ renderWorldQuads env worldState zoomAlpha snap = do
         worldSize = case paramsM of
                       Nothing → 128
                       Just params → wgpWorldSize params
-    let zSlice = camZSlice camera
-        zoom   = camZoom camera
+    let zSlice = wcsZSlice snap
+        zoom   = wcsZoom snap
         -- Caught by the #1135 audit's search, but not a coordinate
         -- lookup: this ENUMERATES the stored LoadedChunk values and
         -- accepts no caller coord, so there is no key to canonicalise.
@@ -84,7 +101,7 @@ renderWorldQuads env worldState zoomAlpha snap = do
         -- World.Tile.Types.insertChunk), and consumers below read each
         -- chunk's own lcCoord rather than reconstructing one.
         chunks = HM.elems (wtdChunks tileData)
-        (camX, camY) = camPosition camera
+        (camX, camY) = wcsPosition snap
 
         effectiveDepth = min viewDepth (max 8 (round (zoom * 80.0 + 8.0 ∷ Float)))
 
@@ -121,10 +138,11 @@ renderWorldQuads env worldState zoomAlpha snap = do
 
         -- Cached pass: widen the bounds by the pan margin so the camera
         -- can travel that far before cameraChanged forces a rebuild
-        -- (#447). The margins come from the SAME snapshot the cache is
-        -- stamped with, pairing coverage with invalidation.
+        -- (#447). Both halves come from the SAME snapshot the cache is
+        -- stamped with — the margins AND the bounds they expand (#1720)
+        -- — pairing coverage with invalidation.
         vb = expandViewBounds (quadCacheMargins snap) $
-                 computeViewBounds camera fbW fbH effectiveDepth
+                 viewBoundsAt (wcsPosition snap) zoom fbW fbH effectiveDepth
 
         visibleChunksWithOffset =
             [ (lc, offset)

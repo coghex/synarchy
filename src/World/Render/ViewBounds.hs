@@ -2,6 +2,7 @@
 module World.Render.ViewBounds
     ( ViewBounds(..)
     , computeViewBounds
+    , viewBoundsAt
     , expandViewBounds
     , isTileVisible
     ) where
@@ -21,11 +22,20 @@ data ViewBounds = ViewBounds
     , vbBottom ∷ !Float
     } deriving (Show)
 
-computeViewBounds ∷ Camera2D → Int → Int → Int → ViewBounds
-computeViewBounds camera fbW fbH effDepth =
-    let (cx, cy) = camPosition camera
-        zoom     = camZoom camera
-        -- Guard against a zero-size framebuffer (minimize): a raw
+-- | The bounds a viewport covers, taken from the only two camera
+--   fields that decide them — position and zoom. 'computeViewBounds'
+--   is this over a LIVE 'Camera2D'; the cached tile pass reaches it
+--   through the 'World.Render.Camera.Types.WorldCameraSnapshot' its
+--   cache entry is stamped with instead (#1720), so the geometry and
+--   the stamp can never come from two different reads of a camera
+--   other threads are concurrently rewriting.
+viewBoundsAt ∷ (Float, Float)   -- ^ camera position
+             → Float            -- ^ camera zoom (viewport half-height)
+             → Int → Int        -- ^ framebuffer width, height
+             → Int              -- ^ effective view depth
+             → ViewBounds
+viewBoundsAt (cx, cy) zoom fbW fbH effDepth =
+    let -- Guard against a zero-size framebuffer (minimize): a raw
         -- fbW/fbH would feed Infinity/NaN into the culling bounds.
         aspect   = safeAspect fbW fbH
         halfW    = zoom * aspect
@@ -39,6 +49,10 @@ computeViewBounds camera fbW fbH effDepth =
         , vbTop    = cy - halfH - padY
         , vbBottom = cy + halfH + padY
         }
+
+computeViewBounds ∷ Camera2D → Int → Int → Int → ViewBounds
+computeViewBounds camera =
+    viewBoundsAt (camPosition camera) (camZoom camera)
 
 -- | Widen bounds by per-axis margins. The cached tile pass uses this
 --   with 'World.Render.Camera.quadCacheMargins' so a pan can travel
