@@ -122,6 +122,8 @@ local pendingPath = nil
 -- in flight at once and drive their own readiness off
 -- engine.getTextureSize instead of a single-slot onAssetLoaded
 -- handshake.
+local viewHandles = {}
+
 local function acquireTexture(path)
     if not path then return nil end
     local cached = textureCache[path]
@@ -129,6 +131,23 @@ local function acquireTexture(path)
     local handle = engine.loadTexture(path)
     textureCache[path] = handle
     table.insert(loadedPaths, path)
+    return handle
+end
+
+-- The handles the CURRENT panel view is actually showing, and nothing
+-- else (#1690). Reset on every genuine selection and repopulated by the
+-- view itself, which re-requests each frame it applies — so it always
+-- describes the live selection rather than everything the session has
+-- ever loaded. That distinction is what stops a failure queued for an
+-- abandoned selection from blanking the preview the user is looking at
+-- now; textureCache is session-wide and deliberately never says this.
+--
+-- List-row THUMBNAILS go through bare acquireTexture instead, so a
+-- failed thumbnail leaves the panel alone: the list waits on no
+-- handshake and simply draws that row without an icon.
+local function requestViewTexture(path)
+    local handle = acquireTexture(path)
+    if handle then viewHandles[handle] = true end
     return handle
 end
 
@@ -153,6 +172,11 @@ end
 -- and aspect ratio preserved (Requirement 3).
 function previewManager.applyTexture(handle, path)
     textureCache[path] = handle
+    -- List/item mode's panel shows exactly ONE texture, so this handle
+    -- REPLACES whatever the view was showing rather than joining it
+    -- (#1690). Selecting a second entry therefore stops the first one's
+    -- in-flight request from being able to settle this view.
+    viewHandles = { [handle] = true }
     if not panelBounds then return end
     local size = engine.getTextureSize(handle)
     -- Shouldn't happen: onAssetLoaded only fires once the upload (and
@@ -283,6 +307,9 @@ local function onAnimSelected(value, _label, _index)
     local anim = findAnim(value)
     if not anim or not animViewId then return end
     selectedAnim = value
+    -- The previous selection's handles stop being this view's concern
+    -- the moment a new one is chosen (#1690).
+    viewHandles = {}
     -- "loading" until the frames actually upload; previewManager.update
     -- promotes it, so `state` means the same thing here as in list/item
     -- mode rather than reporting ready before anything is on screen.
@@ -341,7 +368,7 @@ local function buildUnitUI(unit, fbW, fbH, restoreAnim, restoreScroll, restoreDi
             page = page,
             font = labelFont,
             panel = panelBounds,
-            requestTexture = acquireTexture,
+            requestTexture = requestViewTexture,
             chromeTexture = list.getChromeTexture(),
         })
     else
@@ -387,6 +414,8 @@ local function onBuildingEntrySelected(value, _label, _index)
     local entry = findBuildingEntry(value)
     if not entry or not buildingViewId then return end
     selectedEntry = value
+    -- As above: a new selection owns a new handle set (#1690).
+    viewHandles = {}
     -- "loading" until the frames actually upload; previewManager.update
     -- promotes it, so `state` means the same thing here as in every
     -- other mode.
@@ -434,7 +463,7 @@ local function buildBuildingUI(building, fbW, fbH, restoreEntry, restoreScroll)
         buildingViewId = buildingAssetView.new({
             page = page,
             panel = panelBounds,
-            requestTexture = acquireTexture,
+            requestTexture = requestViewTexture,
         })
     else
         buildingAssetView.setPanel(buildingViewId, panelBounds)
@@ -503,7 +532,7 @@ function previewManager.onAssetLoaded(assetType, handle, path)
 end
 
 -- #1690: a texture request that TERMINALLY FAILED, because the bindless
--- slot allocator was full. Before #1690 this arrived as onAssetLoaded
+-- registration refused it. Before #1690 this arrived as onAssetLoaded
 -- and the viewer showed the undefined texture believing it had the real
 -- one; now it arrives here and the session has to SETTLE on it, because
 -- both of this module's readiness mechanisms would otherwise wait
@@ -511,29 +540,45 @@ end
 -- onAssetLoaded, and unit/building mode polls engine.getTextureSize,
 -- which a failed request never populates.
 --
+-- Only a failure the CURRENT view is waiting on settles it. A texture
+-- request outlives the selection that made it, so a failure can arrive
+-- after the user has moved to a different, perfectly resident asset —
+-- and because "empty" is terminal by design, blanking the preview on
+-- that stale news would be unrecoverable. So the test is the live
+-- pendingHandle or the live viewHandles set, never the session-wide
+-- textureCache, which says only that some earlier selection asked for
+-- this path.
+--
 -- "empty" rather than a new state value: it is the existing terminal
 -- state for "there is nothing to show here", it is what previewManager.
 -- dump() already reports to a probe, and update() deliberately never
 -- overwrites it — so this settles once and stays settled.
 function previewManager.onAssetFailed(assetType, handle, path, reason)
     if assetType ~= "texture" then return end
-    -- Only a texture THIS session asked for: the single in-flight
-    -- list/item request (pendingHandle, which requestTexture does not
-    -- cache until it succeeds), or a unit/building path acquireTexture
-    -- already cached. A stray failure from elsewhere must not blank a
-    -- viewer that is showing its own art fine.
-    if handle ~= pendingHandle and not textureCache[path] then return end
+    local isPending = (pendingHandle ~= nil) and handle == pendingHandle
+    local isInView = viewHandles[handle] == true
+    local wasCached = textureCache[path] == handle
+    if not (isPending or isInView or wasCached) then return end
+
     engine.logWarn("Preview texture failed to load: " .. tostring(path)
         .. " (" .. tostring(reason) .. ")")
-    -- Drop the dead handle so a later selection of this entry issues a
-    -- fresh request rather than reusing a handle that resolves to the
-    -- undefined texture.
-    textureCache[path] = nil
-    if handle == pendingHandle then
+
+    -- The handle is dead whoever was waiting on it. Drop it from both
+    -- records so a later selection of this path issues a fresh request
+    -- rather than reusing a handle that resolves to the undefined
+    -- texture. Guarded on identity: a newer request for the same path
+    -- must not be evicted by an older failure.
+    if wasCached then textureCache[path] = nil end
+    viewHandles[handle] = nil
+    if isPending then
         pendingHandle = nil
         pendingPath = nil
     end
-    readyState = "empty"
+
+    -- ...but only a CURRENT waiter settles the view.
+    if isPending or isInView then
+        readyState = "empty"
+    end
 end
 
 -- Playback is driven off a WALL clock (engine.realTime), not an
@@ -591,6 +636,7 @@ function previewManager.shutdown()
     buildingData = nil
     selectedEntry = nil
     textureCache = {}
+    viewHandles = {}
     loadedPaths = {}
     pendingHandle = nil
     pendingPath = nil

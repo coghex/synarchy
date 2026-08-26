@@ -191,6 +191,61 @@ spec = do
       , "  'the second delivery must be a harmless no-op')"
       ]
 
+    -- A texture request outlives the selection that made it, and
+    -- "empty" is terminal BY DESIGN -- update() never restores it. So a
+    -- failure that arrives after the user has moved on must not settle
+    -- anything, or one abandoned request permanently blanks a preview
+    -- that is rendering perfectly.
+    it "an obsolete failure cannot blank the preview the user is on now"
+      $ runsOk $ lns
+      [ engineStub
+      , previewStubs
+      , "dofile('scripts/preview_manager.lua')"
+      , "local pm = package.loaded['scripts.preview_manager']"
+      , "local stale = 'assets/textures/units/nomad/animations/walk/s/0.png'"
+      , "-- The abandoned selection asked for this path and got a handle."
+      , "pm.applyTexture(5, stale)"
+      , "-- The user then selects something else, which loads fine; the"
+      , "-- previous selection's handle is no longer this view's concern."
+      , "pm.applyTexture(6, 'assets/textures/units/nomad/animations/idle/s/0.png')"
+      , "-- ...and only NOW does the abandoned request's failure land."
+      , "pm.onAssetFailed('texture', 5, stale, 'full')"
+      , "assert(pm.dump().state ~= 'empty',"
+      , "  'a failure for an abandoned selection must not settle the live"
+        <> " view; got ' .. tostring(pm.dump().state))"
+      ]
+
+    it "still forgets the dead handle even when it settles nothing"
+      $ runsOk $ lns
+      [ engineStub
+      , previewStubs
+      , "dofile('scripts/preview_manager.lua')"
+      , "local pm = package.loaded['scripts.preview_manager']"
+      , "local stale = 'assets/textures/icons/gone.png'"
+      , "pm.applyTexture(5, stale)"
+      , "pm.onAssetFailed('texture', 5, stale, 'full')"
+      , "-- Delivered twice: the first drops the cache entry, so the"
+      , "-- second finds nothing of this session's and returns early."
+      , "pm.onAssetFailed('texture', 5, stale, 'full')"
+      , "assert(pm.dump().state ~= nil, 'the module survives both')"
+      ]
+
+    it "a newer request for the same path outlives an older failure"
+      $ runsOk $ lns
+      [ engineStub
+      , previewStubs
+      , "dofile('scripts/preview_manager.lua')"
+      , "local pm = package.loaded['scripts.preview_manager']"
+      , "local path = 'assets/textures/icons/foo.png'"
+      , "pm.applyTexture(5, path)"
+      , "-- A retry of the SAME path got its own, live handle."
+      , "pm.applyTexture(6, path)"
+      , "-- The first attempt's failure must not evict the retry."
+      , "pm.onAssetFailed('texture', 5, path, 'full')"
+      , "assert(pm.dump().state ~= 'empty',"
+      , "  'an older failure must not settle a live retry')"
+      ]
+
   describe "ui_manager forwards the failure to the modules it owns" $
     -- worldView and testArena are reached through uiManager's manual
     -- forward, not the engine's own broadcast (they are submodules of
