@@ -72,7 +72,7 @@ flora:
       idealTemp: 30
       minPrecip: 0.02
       maxPrecip: 0.30
-      idealPrecip: 0.10
+      idealPrecip: 0.22
       minAlt: -20
       maxAlt: 500
       idealAlt: 120
@@ -82,4 +82,6 @@ flora:
       maxSlope: 3
       density: 0.08
       footprint: 14
-      soils: [sand, loamy_sand, sandy_loam, light_gravel, heavy_gravel]
+      # Pure dune sand is intentionally barren. Gravel is omitted until
+      # worldgen produces it inside the hot habitat this species requires.
+      soils: [sandy_loam, sandy_clay_loam, loamy_sand]
