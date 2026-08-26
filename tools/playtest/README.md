@@ -165,7 +165,7 @@ record the pre-step oracle context → unpause for a wall-clock `dt` →
 re-pause → record the post-step oracle evidence.** Splitting the oracle
 capture around the step (#775) matters: the widgets/menu/pause state a
 click actually acted on has to be read BEFORE the step (a step can
-change the UI underneath it), while the event-log delta, F4 action
+change the UI underneath it), while the event-log progress, F4 action
 outcomes, and visible-change comparison the step itself produces have
 to be read AFTER it — otherwise they get drained onto the FOLLOWING
 turn's pre-step read instead (or, on the session's last turn, lost
@@ -304,12 +304,27 @@ gitignored):
   assembled from two reads: `widgets`/`current_menu`/`paused`/
   `world_seed` are the PRE-step affordance context (the state the
   player actually acted on, read once after inject+settle);
-  `event_log_new`/`action_outcomes` are the union of that same
-  pre-step read (whatever the action produced synchronously, while
-  still paused) and — when the turn's sim step actually ran — a SECOND
-  read taken right after it (whatever the unpaused `dt` interval
+  `event_log_new`/`event_log_gaps`/`action_outcomes` are the union of
+  that same pre-step read (whatever the action produced synchronously,
+  while still paused) and — when the turn's sim step actually ran — a
+  SECOND read taken right after it (whatever the unpaused `dt` interval
   itself produced), both credited to this turn's action rather than
-  the next turn's pre-step read. `visual_change` (bool) and
+  the next turn's pre-step read. `event_log_new` is driven by the
+  store-assigned `sequence` every `engine.getEventLog()` row carries
+  (#1714) — a positive integer taken consecutively from 1 in mutation
+  commit order — so byte-identical rows are distinguishable and each
+  retained mutation is reported exactly once. The ring is bounded, so
+  a mutation can be committed and then evicted (or superseded by a
+  coalesced replacement) before the oracle reads it; every such
+  sequence is reported in `event_log_gaps` as a maximal missing
+  interval `{"first_sequence", "last_sequence", "missing_count"}`.
+  A gap object asserts ABSENCE only and never a cause — eviction, a
+  coalesce, and a load-publish reset are indistinguishable from the
+  snapshot. The first observation is an explicit baseline (the whole
+  current log, no gap), and the cursor never moves backwards, so an
+  emptied ring neither re-reports delivered rows nor manufactures a gap
+  back to sequence 1. A row that arrives WITHOUT a usable `sequence` is
+  a hard error, never a fall back to matching rows by value. `visual_change` (bool) and
   `post_screenshot` (path, or null) are this turn's own before/after
   comparison and post-step frame — populated only when a step ran, so
   never for a `done`/stuck terminal turn, but always for an ordinary

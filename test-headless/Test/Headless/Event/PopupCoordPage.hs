@@ -51,7 +51,8 @@ import qualified Engine.Core.Queue as Q
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Thread (ThreadControl(..))
 import Engine.PlayerEvent.Emit
-  (PlayerEvent(..), emitEvent, emitEventAt, emitEventFullOnPage)
+  (PlayerEvent(..), StoredEvent(..), EventStore(..)
+  , emitEvent, emitEventAt, emitEventFullOnPage)
 import Engine.Scripting.Lua.API (registerLuaAPI)
 import Engine.Scripting.Lua.Thread (createLuaBackendState)
 import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
@@ -101,18 +102,22 @@ installNoPages env =
 -- Engine-side helpers
 -----------------------------------------------------------
 
--- | The newest entry in the event ring.
+-- | The newest entry in the event ring. Unwraps the #1714
+--   'StoredEvent' row: every assertion here is about the EVENT, and
+--   the sequence metadata is 'Test.Headless.Event.PlayerEventProgress'
+--   business.
 newestEvent ∷ EngineEnv → IO PlayerEvent
-newestEvent env = lastOf "event log" =≪ readTVarIO (eventStoreRef env)
+newestEvent env =
+    seEvent <$> (lastOf "event log" =≪ (esRows <$> readTVarIO (eventStoreRef env)))
 
 -- | The newest entry in the popup queue. A separate container from the
---   log ring — they are the same TYPE, which is exactly why
---   'Test.Headless.Capability.Events' pins them distinct — so it gets
---   its own assertion instead of riding on the ring's.
+--   log ring — and a separate TYPE since #1714 gave the ring its own
+--   'EventStore' wrapper, so it gets its own assertion instead of
+--   riding on the ring's.
 newestQueuedPopup ∷ EngineEnv → IO PlayerEvent
 newestQueuedPopup env = lastOf "popup queue" =≪ readTVarIO (popupQueueRef env)
 
-lastOf ∷ String → Seq PlayerEvent → IO PlayerEvent
+lastOf ∷ String → Seq α → IO α
 lastOf what s = case Seq.viewr s of
     Seq.EmptyR   → fail (what ⧺ " is empty — nothing was emitted")
     _ Seq.:> ev  → pure ev

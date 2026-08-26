@@ -17,6 +17,8 @@
 --   after the new session is already live (requirement 15).
 module World.Load.Publish
     ( publishStagedSession
+      -- * The load-publish transient reset, exported for its gate
+    , resetTransientState
     ) where
 
 import UPrelude
@@ -25,8 +27,9 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Sequence as Seq
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
-import Control.Concurrent.STM (atomically, writeTVar)
+import Control.Concurrent.STM (atomically, writeTVar, modifyTVar')
 import Engine.Core.State (EngineEnv(..))
+import Engine.PlayerEvent (clearEventStoreRows)
 import Engine.Core.Log (logInfo, logWarn, LogCategory(..), LoggerState)
 import qualified Engine.Core.Queue as Q
 import Sim.Command.Types (SimCommand(..))
@@ -344,5 +347,9 @@ resetTransientState env = do
     writeIORef (injuryEventsRef env) Seq.empty
     writeIORef (thoughtEventsRef env) Seq.empty
     writeIORef (actionOutcomeRef env) Seq.empty
-    atomically $ writeTVar (eventStoreRef env) Seq.empty
+    -- Rows only: 'clearEventStoreRows' deliberately keeps the event
+    -- store's sequence counter, so a row emitted after this load still
+    -- outranks any cursor an observer retained from before it and no
+    -- sequence is ever reissued in one engine process (#1714).
+    atomically $ modifyTVar' (eventStoreRef env) clearEventStoreRows
     atomically $ writeTVar (popupQueueRef env) Seq.empty

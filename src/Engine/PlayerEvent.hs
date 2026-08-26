@@ -1,6 +1,10 @@
 {-# LANGUAGE Strict, DeriveGeneric #-}
 module Engine.PlayerEvent
     ( PlayerEvent(..)
+    , StoredEvent(..)
+    , EventStore(..)
+    , emptyEventStore
+    , clearEventStoreRows
     , CategoryCfg(..)
     , NotificationCfg
     , eventStoreCap
@@ -9,6 +13,8 @@ module Engine.PlayerEvent
 import UPrelude
 import GHC.Generics (Generic)
 import qualified Data.HashMap.Strict as HM
+import Data.Sequence (Seq)
+import qualified Data.Sequence as Seq
 
 -- | A player-visible event. Routed to up-to-three surfaces (log,
 --   popup, pause) by 'Engine.PlayerEvent.emitEvent', gated on the
@@ -96,6 +102,61 @@ data PlayerEvent = PlayerEvent
                                   --   flooding the log.
     } deriving (Show, Eq, Generic)
 -- No Serialize derivation: events are per-session and never saved.
+
+-- | One row of the log ring: a 'PlayerEvent' plus the store's own
+--   mutation sequence (#1714).
+--
+--   The sequence is metadata ABOUT the mutation that produced this row,
+--   not part of the event, so it lives in this wrapper rather than on
+--   'PlayerEvent'. That placement is the contract, not a style
+--   preference: the coalescing key
+--   ('Engine.PlayerEvent.Emit.pushBounded'\'s @sameEntry@) compares
+--   'PlayerEvent' fields, the popup queue and the @LuaShowPopup@
+--   broadcast carry bare 'PlayerEvent's, and none of them can grow a
+--   sequence dependency by accident when the sequence is not a field
+--   they can see.
+data StoredEvent = StoredEvent
+    { seSequence ∷ !Int
+      -- ^ The store's mutation sequence for THIS row. Positive,
+      --   assigned consecutively from 1 in commit order, and stamped
+      --   inside the same STM transaction that writes the row, so a
+      --   multi-writer race cannot interleave two rows onto one number
+      --   or leave a number unaccounted for. A coalesced replacement is
+      --   a fresh mutation and takes a fresh sequence; an untouched row
+      --   keeps the one it already had.
+    , seEvent    ∷ !PlayerEvent
+      -- ^ The player-visible event, byte-for-byte what it always was.
+    } deriving (Show, Eq, Generic)
+
+-- | The whole log-ring container: the bounded rows plus the counter
+--   that names the next mutation (#1714).
+--
+--   Rows and counter share ONE 'Control.Concurrent.STM.TVar.TVar' so
+--   that assignment and the store mutation are the same atomic write,
+--   and so that the counter survives operations that discard rows.
+--   'World.Load.Publish.resetTransientState' clears the rows on a load
+--   publish ('clearEventStoreRows'); the counter deliberately keeps
+--   counting, so a row emitted after that load is still NEWER than any
+--   cursor an observer retained from before it, and no sequence is ever
+--   handed out twice in one engine process.
+data EventStore = EventStore
+    { esRows         ∷ !(Seq StoredEvent)
+      -- ^ Oldest-first, capped at 'eventStoreCap'; oldest dropped.
+    , esNextSequence ∷ !Int
+      -- ^ The sequence the next committed mutation will take. Starts
+      --   at 1 and only ever increases.
+    } deriving (Show, Eq, Generic)
+
+-- | A fresh store: no rows, and the first mutation will be sequence 1.
+emptyEventStore ∷ EventStore
+emptyEventStore = EventStore { esRows = Seq.empty, esNextSequence = 1 }
+
+-- | Discard every row but KEEP the sequence counter — the load-publish
+--   reset ('World.Load.Publish.resetTransientState'). Resetting the
+--   counter here would reissue sequences an observer had already seen,
+--   which is exactly the silent-loss failure #1714 exists to remove.
+clearEventStoreRows ∷ EventStore → EventStore
+clearEventStoreRows st = st { esRows = Seq.empty }
 
 -- | One row of the notification registry, with the player's three
 --   per-category switches resolved on top of the YAML defaults.

@@ -20,7 +20,8 @@ import Engine.Core.Capability.Events (EventsCapability(..), toEventsCapability)
 import Engine.Core.Log (LogCategory(..), logWarn)
 import Engine.Core.State (EngineEnv)
 import Engine.PlayerEvent (CategoryCfg(..))
-import Engine.PlayerEvent.Emit (PlayerEvent(..), emitEvent, emitEventAt
+import Engine.PlayerEvent.Emit (PlayerEvent(..), StoredEvent(..)
+                               , emitEvent, emitEventAt
                                , emitEventFull, readEventLog)
 
 -- | @engine.emitEvent(category, text)@ — fire a player-visible event
@@ -96,10 +97,24 @@ emitEventForUnitFn env = do
     return 0
 
 -- | @engine.getEventLog()@ — return the event-log ring buffer as a
---   Lua array of @{category, text, gameTime, source, uid, count,
---   coords, page}@ tables, oldest-first. @coords@ is either @{x, y}@ or
---   @nil@. @page@ is the source world-page id string, or @nil@ when the
---   event names no page at all.
+--   Lua array of @{sequence, category, text, gameTime, source, uid,
+--   count, coords, page}@ tables, oldest-first. @coords@ is either
+--   @{x, y}@ or @nil@. @page@ is the source world-page id string, or
+--   @nil@ when the event names no page at all.
+--
+--   @sequence@ (#1714) is the store's own mutation number for the row:
+--   a Lua INTEGER, never a decimal string, positive, assigned
+--   consecutively from 1 in commit order for the lifetime of one engine
+--   process, and increasing across the returned array. It is present on
+--   every row without exception, which is what lets an observer say
+--   \"rows 11-14 were committed and are gone\" instead of guessing from
+--   row values; the playtest oracle
+--   (@tools\/playtest\/engine.py@) treats a row that lacks it as a
+--   contract violation rather than falling back to value matching.
+--   Purely additive: every field above keeps its previous value and
+--   meaning, and the sequence takes no part in log coalescing (whose
+--   key is spelled out over 'PlayerEvent' fields in
+--   'Engine.PlayerEvent.Emit').
 --
 --   The two travel together (#1588): every coords-carrying event also
 --   carries the page those coordinates are indexed in, so a row click
@@ -117,8 +132,13 @@ getEventLogFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 getEventLogFn env = do
     events ← Lua.liftIO $ readEventLog env
     Lua.newtable
-    forM_ (zip [1..] events) $ \(i, ev) → do
+    forM_ (zip [1..] events) $ \(i, row) → do
+        let ev = seEvent row
         Lua.newtable
+        -- sequence: the store's mutation number for this row (#1714).
+        -- Pushed FIRST so a row can never be built without it.
+        Lua.pushinteger (fromIntegral (seSequence row))
+        Lua.setfield (-2) "sequence"
         Lua.pushstring (TE.encodeUtf8 (peCategory ev))
         Lua.setfield (-2) "category"
         Lua.pushstring (TE.encodeUtf8 (peText ev))

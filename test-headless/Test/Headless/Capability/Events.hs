@@ -7,13 +7,19 @@
 --   carries — never a copy, never a snapshot. That property is what
 --   makes the record safe to re-project inline at every call site (E7b
 --   does exactly that), and it is precisely what a refactor can
---   silently break: a projection that bound 'ecPopupQueueRef' to
---   @eventStoreRef env@ (the two are the SAME type,
---   @TVar (Seq PlayerEvent)@, so the compiler cannot object), or
---   copied a container with @newTVarIO =<< readTVarIO@, would still
---   typecheck, still pass the SS6 ratchet, and still look right in a
---   diff — while quietly detaching the event log the world thread
---   pushes to from the one @engine.getEventLog()@ reads.
+--   silently break: a projection that copied a container with
+--   @newTVarIO =<< readTVarIO@ would still typecheck, still pass the
+--   SS6 ratchet, and still look right in a diff — while quietly
+--   detaching the event log the world thread pushes to from the one
+--   @engine.getEventLog()@ reads.
+--
+--   Transposing 'ecEventStoreRef' and 'ecPopupQueueRef' used to be the
+--   other silent break: both were @TVar (Seq PlayerEvent)@, so the
+--   compiler could not object. #1714 gave the log ring its own
+--   @TVar EventStore@ (rows plus the mutation-sequence counter), which
+--   makes that swap a TYPE ERROR rather than a test-caught mistake —
+--   the check below is kept as the standing proof that the two stay
+--   distinct containers, not merely distinct names.
 --
 --   Three of the four fields are 'Control.Concurrent.STM.TVar.TVar' or
 --   'Data.IORef.IORef' (pointer 'Eq'), so "same live container" is
@@ -74,14 +80,14 @@ spec = do
       sameContainer (ecPopupQueueRef a) (ecPopupQueueRef b)
       ecNotificationOrder a `shouldBe` ecNotificationOrder b
 
-    it "keeps the two same-typed event TVars distinct" $ \env → do
+    it "keeps the two event TVars pinned to their own counterparts" $ \env → do
       -- `eventStoreRef` (the log ring, read back by
       -- engine.getEventLog()) and `popupQueueRef` (popup-enabled
-      -- events, write-only today) are both `TVar (Seq PlayerEvent)`:
-      -- transposing them in the projection would typecheck silently.
-      -- Each is pinned to its own named counterpart, and the two are
-      -- asserted to be different containers outright.
+      -- events, write-only today) were both `TVar (Seq PlayerEvent)`
+      -- until #1714, so transposing them in the projection typechecked
+      -- silently. Each is still pinned to its own named counterpart
+      -- here; what changed is that the log ring is now
+      -- `TVar EventStore`, so the swap no longer compiles at all.
       let cap = toEventsCapability env
       sameContainer (ecEventStoreRef cap) (eventStoreRef env)
       sameContainer (ecPopupQueueRef cap) (popupQueueRef env)
-      (ecEventStoreRef cap == ecPopupQueueRef cap) `shouldBe` False

@@ -4,11 +4,11 @@ Owns the launched game instance — windowed (the original substrate,
 steals focus) or offscreen (#650: GPU on, window off, unattended /
 parallel-safe) — and every debug-console interaction the lockstep
 loop needs: pause control, F1 screenshots, F2 input injection, and the
-oracle reads (F3 widgets, event-log delta, menu state) that are
+oracle reads (F3 widgets, event-log progress, menu state) that are
 recorded in the trace but NEVER shown to the player agent. The oracle
 is split into `oracle_context()` (widgets/menu/pause/seed — cheap,
 non-destructive, safe to call once per turn) and `oracle_events()`
-(event-log delta + F4 action-outcome drain — cursor/destructive reads
+(event-log progress + F4 action-outcome drain — cursor/destructive reads
 the runner calls once after settle and again after a sim step, so a
 turn's action gets credit for both what it produced synchronously and
 what the step itself produced, #775). Both render modes serve the
@@ -59,31 +59,100 @@ SCREENSHOT_TIMEOUT = 20.0
 RENDER_MODES = ("windowed", "offscreen")
 
 
-def _event_log_delta(previous: list | None, current: list) -> list:
-    """Return rows that were appended or updated since ``previous``.
+class OracleContractError(RuntimeError):
+    """The engine answered an oracle read in a shape the oracle cannot
+    trust. Raised, never swallowed: silently degrading here is exactly
+    the failure mode #1714 removed."""
 
-    The event store preserves the order of unchanged rows. New rows are
-    appended, while a coalesced row is removed, updated, and appended; ring
-    rollover only removes rows from the front. Thus the unchanged part of the
-    current snapshot is its longest prefix that is also a subsequence of the
-    previous snapshot, and everything after that prefix is new or updated.
 
-    There is no preceding snapshot on the first observation, so its explicit
-    baseline behaviour is to report the full current log (matching the old
-    length-cursor implementation).
+def _row_sequence(event) -> int:
+    """The store's mutation sequence for one `engine.getEventLog()` row.
+
+    Loud on anything else (#1714). A row without a usable sequence used
+    to be handled by falling back to matching rows by VALUE, which is
+    ambiguous the moment two rows are byte-identical and is what let the
+    trace lose rows without saying so. If the engine ever stops
+    publishing the field, the harness must fail visibly rather than
+    quietly restore that behaviour.
     """
-    if previous is None:
-        return current[:]
+    if not isinstance(event, dict) or "sequence" not in event:
+        raise OracleContractError(
+            "engine.getEventLog() row has no `sequence` field "
+            f"({event!r}); the oracle cannot track event-log progress "
+            "without it and will not fall back to value matching")
+    sequence = event["sequence"]
+    # bool is an int subclass; a boolean sequence is a contract break,
+    # not a 0/1 row number.
+    if isinstance(sequence, bool) or not isinstance(sequence, int):
+        raise OracleContractError(
+            "engine.getEventLog() row `sequence` must be an integer, got "
+            f"{sequence!r} ({type(sequence).__name__})")
+    if sequence < 1:
+        raise OracleContractError(
+            f"engine.getEventLog() row `sequence` must be positive, got {sequence}")
+    return sequence
 
-    previous_index = 0
-    for current_index, event in enumerate(current):
-        while (previous_index < len(previous)
-               and previous[previous_index] != event):
-            previous_index += 1
-        if previous_index == len(previous):
-            return current[current_index:]
-        previous_index += 1
-    return []
+
+def _event_log_progress(cursor: int | None,
+                        current: list) -> tuple[list, list, int | None]:
+    """Advance the event-log cursor over one snapshot (#1714).
+
+    Returns ``(new_rows, gaps, next_cursor)``.
+
+    Rows carry a store-assigned `sequence`: a positive integer taken
+    consecutively from 1, in mutation commit order, for the lifetime of
+    one engine process. Both halves of that -- consecutive AND
+    commit-ordered -- are load-bearing here. Progress is therefore
+    arithmetic on those numbers, never a comparison of row values, so
+    byte-identical rows are no longer indistinguishable.
+
+    `cursor` is the highest sequence any previous observation has seen.
+    `None` means this is the BASELINE observation: it reports the whole
+    current log and no gap, because nothing before it was claimed to be
+    observed. An EMPTY baseline stays a baseline -- a first read taken
+    before any event exists claims nothing, so it must not seed a cursor
+    of 0 and turn the next read's ordinary rows into a gap back to
+    sequence 1.
+
+    `gaps` names every committed sequence newer than `cursor` that is
+    NOT in this snapshot, grouped into maximal intervals. The store is
+    bounded, so such sequences genuinely exist and genuinely cannot be
+    recovered -- front eviction drops them, and a coalesced replacement
+    retires the sequence it superseded. A gap object asserts ABSENCE
+    only and never attributes a cause: from the snapshot the two are
+    indistinguishable, and so is a row discarded by a load-publish
+    reset.
+
+    The cursor is monotonic: it never moves backwards, and an EMPTY
+    snapshot leaves it exactly where it was. That matters because a load
+    publish empties the ring; lowering the cursor there would either
+    re-report rows already delivered or manufacture a gap starting at
+    sequence 1.
+    """
+    sequences = [_row_sequence(event) for event in current]
+    highest = max(sequences) if sequences else None
+
+    if cursor is None:
+        return current[:], [], highest
+
+    new_rows = [event for event, sequence in zip(current, sequences)
+                if sequence > cursor]
+    # Walk the sequences PRESENT rather than the range between them: an
+    # arbitrarily long interval can be missing (a burst far larger than
+    # the ring), and enumerating every absent number to group it would
+    # allocate proportionally to the loss instead of to the snapshot.
+    gaps = []
+    expected = cursor + 1
+    for sequence in sorted(set(sequences)):
+        if sequence <= cursor:
+            continue
+        if sequence > expected:
+            gaps.append({"first_sequence": expected,
+                         "last_sequence": sequence - 1,
+                         "missing_count": sequence - expected})
+        expected = max(expected, sequence + 1)
+    next_cursor = cursor if highest is None else max(cursor, highest)
+    return new_rows, gaps, next_cursor
 
 
 def _lua_str(text: str) -> str:
@@ -188,7 +257,9 @@ class PlaytestEngine:
         self.render_mode = render_mode
         self.proc = None
         self.fb_size: tuple[int, int] | None = None
-        self._event_log_snapshot: list | None = None
+        # Highest event-log sequence any observation has seen
+        # (#1714). `None` until the baseline read.
+        self._event_log_cursor: int | None = None
 
     # -- lifecycle ---------------------------------------------------
 
@@ -281,8 +352,9 @@ class PlaytestEngine:
     #     with (widgets/menu/pause/seed). Read-only, non-destructive,
     #     safe to call once per turn regardless of whether a sim step
     #     follows.
-    #   oracle_events() — the event-log delta + F4 action-outcome
-    #     drain. Both are cursor/destructive reads, so calling this
+    #   oracle_events() — the event-log progress read (#1714:
+    #     `event_log_new` plus `event_log_gaps`) + the F4
+    #     action-outcome drain. Both advance state, so calling this
     #     TWICE in one turn (once after settle, once after the step)
     #     yields two disjoint slices that the caller concatenates —
     #     never a double-count, never a drop.
@@ -306,11 +378,17 @@ class PlaytestEngine:
         snap: dict = {}
         log = self.lua("return engine.getEventLog()")
         if isinstance(log, list):
-            snap["event_log_new"] = _event_log_delta(
-                self._event_log_snapshot, log)
-            self._event_log_snapshot = log
+            # A LIST that violates the row contract raises
+            # (`_row_sequence`); a non-list reply is a transport
+            # hiccup, handled below as "no evidence this read".
+            new_rows, gaps, cursor = _event_log_progress(
+                self._event_log_cursor, log)
+            snap["event_log_new"] = new_rows
+            snap["event_log_gaps"] = gaps
+            self._event_log_cursor = cursor
         else:
             snap["event_log_new"] = []
+            snap["event_log_gaps"] = []
         # F4 (#646): drains the action-outcome ring — a destructive read,
         # like combat.drainEvents/injury.drainEvents, so no "_seen" index
         # is needed the way event_log_new above needs one; whatever
@@ -364,7 +442,8 @@ class FakeEngine(PlaytestEngine):
                 "paused": self.paused, "world_seed": 4242}
 
     def oracle_events(self) -> dict:
-        return {"event_log_new": [], "action_outcomes": []}
+        return {"event_log_new": [], "event_log_gaps": [],
+                "action_outcomes": []}
 
     def lua(self, code: str, timeout: float = 0):
         return {"ok": True}

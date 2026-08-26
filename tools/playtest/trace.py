@@ -106,7 +106,8 @@ Per-turn record (turns.jsonl):
                     `widgets`/`current_menu`/`paused`/`world_seed` are
                     the pre-step affordance context (the state the
                     player actually acted on, captured once after
-                    inject+settle). `event_log_new`/`action_outcomes`
+                    inject+settle).
+                    `event_log_new`/`event_log_gaps`/`action_outcomes`
                     are the UNION of two drains — one taken at that
                     same pre-step point (whatever the action produced
                     synchronously while still paused) and, when the
@@ -114,6 +115,12 @@ Per-turn record (turns.jsonl):
                     after it (whatever the unpaused `dt` interval
                     itself produced) — both credited to THIS turn's
                     action, never deferred to the next turn (#775).
+                    `event_log_gaps` (#1714) names the committed event
+                    rows each read could NOT see, as maximal missing
+                    `sequence` intervals
+                    (`{first_sequence, last_sequence, missing_count}`);
+                    it asserts absence only and never a cause, and is
+                    absent entirely from traces recorded before #1714.
                     `visual_change` (bool) and `post_screenshot` (path,
                     relative to the trace dir, or null) are this turn's
                     OWN before/after comparison and post-step frame;

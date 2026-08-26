@@ -30,7 +30,7 @@ import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
 import Engine.Core.State (EngineEnv(..))
 import Engine.Load.Status (beginLoad, failLoad)
 import Engine.PlayerEvent (PlayerEvent(..))
-import Engine.PlayerEvent.Emit (readEventLog)
+import Engine.PlayerEvent.Emit (StoredEvent(..), readEventLog)
 import Location.Types
     ( LocationDef(..), LocationNaming(..), LocationRegistry
     , emptyLocationRegistry, registerLocation
@@ -233,7 +233,8 @@ initEnv = do
     pure env
 
 eventsFor ∷ EngineEnv → Word32 → IO [PlayerEvent]
-eventsFor env uid = filter ((≡ Just uid) . peUid) ⊚ readEventLog env
+eventsFor env uid =
+    filter ((≡ Just uid) . peUid) ∘ map seEvent ⊚ readEventLog env
 
 spec ∷ Spec
 spec = beforeAll initEnv $

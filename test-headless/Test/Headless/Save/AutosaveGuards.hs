@@ -63,7 +63,7 @@ import Engine.Core.Capability.WorldSim
 import Control.Concurrent.STM (readTVarIO)
 import Data.Foldable (toList)
 import Engine.Core.State (EngineEnv(..))
-import Engine.PlayerEvent (PlayerEvent(..))
+import Engine.PlayerEvent (PlayerEvent(..), StoredEvent(..), EventStore(..))
 import Test.Headless.Harness (sendWorldCommand)
 import World.Page.Types (WorldPageId(..))
 import World.Save.Types (AutosaveRequest(..))
@@ -82,8 +82,9 @@ probeAutosaveRequest = AutosaveRequest
 
 saveLoadTexts ∷ EngineEnv → IO [Text]
 saveLoadTexts env = do
-    events ← readTVarIO (eventStoreRef env)
-    pure [ peText e | e ← toList events, peCategory e ≡ "save_load" ]
+    events ← esRows <$> readTVarIO (eventStoreRef env)
+    pure [ peText e | row ← toList events, let e = seEvent row
+                    , peCategory e ≡ "save_load" ]
 
 -- | Queue a save for a page that does not exist and wait for the
 --   world thread's report to land in the event log. The page id is

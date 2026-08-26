@@ -27,6 +27,7 @@ import qualified Combat.Types
 import Engine.ActionOutcome (emptyActionOutcomeQueue)
 import Engine.Asset.Types (defaultAssetPool)
 import Engine.Asset.YamlNotifications (loadNotificationCfg, OverridesFile)
+import Engine.PlayerEvent (emptyEventStore)
 import Engine.Asset.TextureNameRegistry (emptyTextureNameRegistry)
 import Engine.Core.Defaults
 import Engine.Core.Log (initLogger, defaultLogConfig, LogConfig(..)
@@ -265,7 +266,7 @@ initializeEngineWith logBackend = do
                         "data/notification_categories.yaml"
                         "config/notifications.local.yaml"
   notificationCfgRef ← newIORef notificationCfg0
-  eventStoreRef ← newTVarIO Seq.empty
+  eventStoreRef ← newTVarIO emptyEventStore
   popupQueueRef ← newTVarIO Seq.empty
   engineStateRef ← newIORef defaultEngineState
   let env = EngineEnv

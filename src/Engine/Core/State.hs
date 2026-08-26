@@ -16,7 +16,7 @@ import Engine.Asset.TextureNameRegistry (TextureNameRegistry)
 import Engine.Core.Log
 import Engine.Core.Types
 import Engine.Core.Queue as Q
-import Engine.PlayerEvent (PlayerEvent, NotificationCfg)
+import Engine.PlayerEvent (PlayerEvent, EventStore, NotificationCfg)
 import qualified Combat.Types
 import Engine.ActionOutcome (ActionOutcome)
 import Engine.Scripting.Lua.Types
@@ -410,14 +410,21 @@ data EngineEnv = EngineEnv
     --   one call writes this field exactly once — the validated tree,
     --   or the explicit empty state on any failure — so it is never
     --   partial and never depends on directory read order.
-  , eventStoreRef      ∷ TVar (Seq PlayerEvent)
+  , eventStoreRef      ∷ TVar EventStore
     -- ^ Ring buffer of player-facing events (~1000 entries; oldest
-    --   dropped). Per-session only — not serialized to save files.
+    --   dropped), together with the counter naming the next mutation
+    --   ('Engine.PlayerEvent.EventStore', #1714). Per-session only —
+    --   not serialized to save files.
     --   An STM TVar, so pushes from any thread are safe; the call
     --   sites that actually exist today are the world thread and the
     --   Lua thread, both via 'Engine.PlayerEvent.emitEvent' (no unit-
     --   or combat-thread emitter exists). Read atomically by Lua-side
     --   queries (e.g. the event-log panel).
+    --
+    --   Rows and counter share this ONE ref so a sequence is assigned
+    --   in the same atomic write that commits the row it names, and so
+    --   the counter outlives the load-publish row reset — see
+    --   'Engine.PlayerEvent.clearEventStoreRows'.
   , notificationCfgRef ∷ IORef NotificationCfg
     -- ^ Resolved notification settings keyed by category id. Loaded
     --   at boot from 'data/notification_categories.yaml' merged with
