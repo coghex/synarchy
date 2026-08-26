@@ -10,7 +10,7 @@ The four capability refactors (#909, #906, #905, and #902) retain live-container
 
 - [x] PRR-1. Persisted borderless mode boots as a decorated window while reporting borderless — [#1731]
 - [ ] PRR-2. A fullscreen boot forgets its configured windowed geometry — [deferred]: behind #1731
-- [ ] PRR-3. Stale simple-preview completions can create unbounded texture aliases
+- [x] PRR-3. Stale simple-preview completions can create unbounded texture aliases — [no-issue]
 - [ ] PRR-4. NaN XP can escape the mental-effectiveness clamps and corrupt combat and crafting
 
 ## 1. Persisted borderless startup
@@ -76,7 +76,17 @@ The four capability refactors (#909, #906, #905, and #902) retain live-container
 
 ## 3. Simple-preview texture request identity
 
-### PRR-3. Stale simple-preview completions can create unbounded texture aliases
+### [no-issue] PRR-3. Stale simple-preview completions can create unbounded texture aliases
+
+> **Disposition:** No issue — the mechanism is real (`requestTexture` at
+> `scripts/preview_manager.lua:136-146` never caches the path, and the callback at `:497`
+> drops any completion whose handle is not the current `pendingHandle`), but its cost is a
+> few bookkeeping entries per lost race in a developer-only preview session that already
+> documents never unloading textures as an accepted trade-off (`:25-28`). No second image
+> upload, no display defect, and the handle table's 65,536-entry ceiling — whose silent
+> overflow is separately owned by #1699 — is unreachable by hand. The one-line consistency
+> fix (cache at request time, as `acquireTexture` at `:126-132` already does) remains
+> welcome inside any future preview change; it does not warrant its own issue.
 
 > **Captured note:** Track simple-browser texture requests by path independently of the currently selected row. A stale completion should populate the loaded-path cache without changing the displayed sprite; otherwise revisiting an abandoned selection allocates another handle alias for the same already-loaded texture every time the callback loses the selection race.
 
