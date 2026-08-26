@@ -1236,6 +1236,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Render.FrontWallLift
                    Test.Headless.World.Render.GroundItemSeam
                    Test.Headless.World.Render.PickSeam
+                   Test.Headless.World.Render.QuadSnapshot
                    Test.Headless.World.Render.SideFace
                    Test.Headless.World.Render.ZTrackSeam
                    Test.Headless.World.Render.SlopeBit

@@ -38,7 +38,9 @@ quadCacheMargins snap =
 
 -- | The position threshold pairs exactly with the coverage built at
 --   'old': quads were culled to viewport(old) + camEpsilon pad
---   (computeViewBounds) + quadCacheMargins(old) (renderWorldQuads), so
+--   ('World.Render.ViewBounds.viewBoundsAt', taken since #1720 from the
+--   position and zoom of that same 'old' snapshot rather than from a
+--   second live camera read) + quadCacheMargins(old) (renderWorldQuads), so
 --   the true viewport stays inside the built coverage for any pan up
 --   to camEpsilon + margin per axis.
 cameraChanged ∷ WorldCameraSnapshot → WorldCameraSnapshot → Bool
