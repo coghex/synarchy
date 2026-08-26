@@ -203,7 +203,12 @@ commonPrelude sh = lns
     , "NOW, WARNS, EVENTS = 0, 0, 0"
     , "INV, GROUND = {}, {}"
     , "CARRIED, CAPACITY = 0, math.huge"
-    , "POS = { gridX = 0, gridY = 0 }"
+    -- #1673: the AI pairs every candidate with the ACTING unit's own
+    -- page, so the stub world needs one. A single page throughout —
+    -- cross-page rejection is Test.Headless.Lua.UnitAiPageTargets'
+    -- subject, and this gate is still only about the capacity gate.
+    , "PAGE = 'stub_page'"
+    , "POS = { gridX = 0, gridY = 0, page = PAGE }"
     , "ITEM_DEFS = " <> luaValue (shItemDefs sh)
     , "RECIPES = " <> luaValue (shRecipes sh)
     , "PACK = " <> luaValue (shPack sh)
@@ -298,7 +303,8 @@ craftPrelude ∷ Shipped → Text
 craftPrelude sh = lns
     [ commonPrelude sh
     , "BILLS = {}"
-    , "STATIONS = { [7] = { gridX = 20, gridY = 0, tileW = 1, tileH = 1 } }"
+    , "STATIONS = { [7] = { gridX = 20, gridY = 0, tileW = 1, tileH = 1,"
+    , "                      page = PAGE } }"
     , "CLAIMS = {}"
     , "building = {"
     , "  getActiveIds = function() return {} end,"

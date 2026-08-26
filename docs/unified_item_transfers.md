@@ -279,6 +279,26 @@ The player unequips first, as A1 has it.
 fetch, deliver, repair, and medic ladders depend on exactly that — see
 `Unit.Transfer`'s module header. Only the *player-facing* paths retire.
 
+**Amended 2026-08-25 (#1673): laxity has never included the world page.**
+Latitude here means *no adjacency check and limited eligibility/capacity
+checks* — never permission to move an exact `ItemInstance` between two worlds.
+All four verbs now refuse, mutating nothing and revealing nothing, when their
+two endpoints sit on different pages, matching the floor the strict surface
+already holds even where it defers adjacency (`Unit.Transfer.reachable` requires
+equal pages under both `ReachRequired` and `ReachDeferred`) and the rule #1205 /
+#1208 / #1593 put every other engine verb on: resolve against the entity's OWN
+page, never the active one. Same-page behaviour is unchanged in every other
+respect, and nothing in the fetch, deliver, repair or medic ladders wanted a
+cross-world move.
+
+The caller side is the other half. `unit.getAllIds`, `building.getActiveIds`
+and `craft.getBills` each snapshot the active page independently, so those
+ladders now pair every candidate with the *acting unit's* page
+(`scripts/unit_ai_page.lua`) rather than assuming the snapshots agreed — and
+the persisted building references they cache (`buildTarget`, `storeTarget`,
+`deliveryClaim.bid`, `craftJob.bid`, `repairJob.bid`) are revalidated before
+they can steer a walk or reach a verb.
+
 ### D-8. Nearest-of-N, with a tiebreak
 
 Multiple selected units are allowed; the nearest goes. Exact distance ties break

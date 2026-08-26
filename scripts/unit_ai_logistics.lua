@@ -13,6 +13,7 @@ local chebToFootprint = core.chebToFootprint
 
 local mv = require("scripts.movement_speed")
 local roles = require("scripts.unit_roles")
+local page = require("scripts.unit_ai_page")
 
 local M = {}
 
@@ -46,8 +47,12 @@ end
 -- Nearest built building with non-zero storage capacity AND room for
 -- at least one more item (current weight < capacity). Returns
 -- {bid, gridX, gridY, tileW, tileH, distance} or nil.
-local function findStorageTarget(fromX, fromY, maxRange)
+local function findStorageTarget(fromX, fromY, maxRange, myPage)
     -- Active-world buildings only (#197); see findDeliveryTarget.
+    -- getActiveIds takes its OWN active-page snapshot, so every row is
+    -- re-checked against the ACTOR's page before it can be chosen
+    -- (#1673) -- no page, no target.
+    if not myPage then return nil end
     local ids = building.getActiveIds()
     if not ids or #ids == 0 then return nil end
     local best, bestD = nil, maxRange
@@ -57,7 +62,7 @@ local function findStorageTarget(fromX, fromY, maxRange)
             local used = building.getStorageWeight(bid) or 0
             if cap and cap > 0 and used < cap then
                 local info = building.getInfo(bid)
-                if info then
+                if info and page.same(myPage, info.page) then
                     local tw = info.tileW or 1
                     local th = info.tileH or 1
                     local cx = info.gridX + tw / 2
@@ -84,7 +89,7 @@ local function storeMaterialsUtility(uid, s, params)
     if not info then return -math.huge end
 
     local target = findStorageTarget(info.gridX, info.gridY,
-                                     params.store_scan_range)
+                                     params.store_scan_range, info.page)
     -- No target resolves: drop the cached bid rather than leaving the
     -- last one behind (#1484). The field is a PERSISTED building
     -- reference (scripts/unit_ai_save_refs.lua's
@@ -113,7 +118,7 @@ local function storeMaterialsExecute(uid, s, params)
     -- Re-resolve target each tick we execute; cheap and self-heals
     -- if the cached cargo got destroyed or filled up.
     local target = findStorageTarget(info.gridX, info.gridY,
-                                     params.store_scan_range)
+                                     params.store_scan_range, info.page)
     if not target then s.storeTarget = nil; return end   -- #1484, as above
     s.storeTarget = target.bid
 
@@ -185,8 +190,10 @@ end
 -- nearest Appearing building with bdBuildWork > 0 within maxRange,
 -- or nil. Uses building.getActiveIds() / getActivity / getBuildRequired /
 -- getInfo — all cheap on a small N of placed buildings.
-local function findNearestUnbuilt(fromX, fromY, maxRange)
+local function findNearestUnbuilt(fromX, fromY, maxRange, myPage)
     -- Active-world buildings only (#197); see findDeliveryTarget.
+    -- Page-qualified against the actor, same as findStorageTarget (#1673).
+    if not myPage then return nil end
     local ids = building.getActiveIds()
     if not ids or #ids == 0 then return nil end
     local best, bestD = nil, maxRange
@@ -196,7 +203,8 @@ local function findNearestUnbuilt(fromX, fromY, maxRange)
             local required = building.getBuildRequired(bid)
             if activity == "appearing" and required and required > 0 then
                 local info = building.getInfo(bid)
-                if info and info.gridX and info.gridY then
+                if info and info.gridX and info.gridY
+                   and page.same(myPage, info.page) then
                     local tw = info.tileW or 1
                     local th = info.tileH or 1
                     -- Building center for distance ranking.
@@ -242,7 +250,7 @@ local function buildNearbyUtility(uid, s, params)
     local info = unit.getInfo(uid)
     if not info then return -math.huge end
     local target = findNearestUnbuilt(info.gridX, info.gridY,
-                                      params.build_scan_range)
+                                      params.build_scan_range, info.page)
     -- No site resolves: drop the cached bid (#1484). Same persisted-
     -- reference hazard as storeTarget above, plus a live one --
     -- countBuildersAt above and scripts/unit_ai_core.lua both compare
@@ -280,7 +288,7 @@ local function buildNearbyExecute(uid, s, params)
     if not info then return end
 
     local target = findNearestUnbuilt(info.gridX, info.gridY,
-                                      params.build_scan_range)
+                                      params.build_scan_range, info.page)
     if not target then s.buildTarget = nil; return end   -- #1484, as above
     s.buildTarget = target.bid
 

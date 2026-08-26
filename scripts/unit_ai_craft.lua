@@ -22,7 +22,6 @@
 
 local core = require("scripts.unit_ai_core")
 local distance        = core.distance
-local chebToFootprint = core.chebToFootprint
 local grantWorkXP     = core.grantWorkXP
 
 local fetch = require("scripts.unit_ai_fetch")
@@ -32,11 +31,13 @@ local untilStockSatisfied  = fetch.untilStockSatisfied
 local findTechnomule       = fetch.findTechnomule
 local fetchWantsFromGround = fetch.fetchWantsFromGround
 local fetchWantsFromMule   = fetch.fetchWantsFromMule
-local deliverItemWeight    = fetch.deliverItemWeight
+local fetchWantsFromCargo  = fetch.fetchWantsFromCargo
+local cargoCountOf         = fetch.cargoCountOf
+local moveBesideBuilding   = fetch.moveBesideBuilding
 local loadFeasible         = fetch.loadFeasible
 
-local mv = require("scripts.movement_speed")
 local roles = require("scripts.unit_roles")
+local page = require("scripts.unit_ai_page")
 
 local M = {}
 
@@ -81,126 +82,23 @@ local function billPausedForUs(bill, uid)
     return bill.paused and bill.claimant ~= uid
 end
 
--- Count of defName across BUILT storage buildings (cargo holds) on
--- the active world — the stockpile rung of the craft sourcing ladder.
--- No range limit, same rationale as the mule: stored materials are
--- worth the walk.
-local function cargoCountOf(defName)
-    local total = 0
-    for _, bid in ipairs(building.getActiveIds() or {}) do
-        if bid and building.getActivity(bid) == "built" then
-            for _, it in ipairs(building.getStorage(bid) or {}) do
-                if it.defName == defName then total = total + 1 end
-            end
-        end
-    end
-    return total
-end
-
--- Walk toward the nearest border tile of a building's footprint.
--- Returns true while still walking (Chebyshev > 1 → moveTo issued),
--- false once the unit stands on or beside the footprint. Shared by
--- the craft walking phase and the cargo fetch (same approach as
--- deliver / build_nearby).
-local function moveBesideBuilding(uid, info, binfo)
-    local tw, th = binfo.tileW or 1, binfo.tileH or 1
-    local utx, uty = math.floor(info.gridX), math.floor(info.gridY)
-    if chebToFootprint(utx, uty, binfo.gridX, binfo.gridY, tw, th) <= 1 then
-        return false
-    end
-    local bestX, bestY, bestD = nil, nil, math.huge
-    for dx = -1, tw do
-        for dy = -1, th do
-            if dx == -1 or dx == tw or dy == -1 or dy == th then
-                local nx = binfo.gridX + dx + 0.5
-                local ny = binfo.gridY + dy + 0.5
-                local d = distance(info.gridX, info.gridY, nx, ny)
-                if d < bestD then bestX, bestY, bestD = nx, ny, d end
-            end
-        end
-    end
-    if bestX then
-        unit.moveTo(uid, bestX, bestY, mv.comfort(uid))
-    end
-    return true
-end
-
--- Fetch loop against cargo storage: walk beside the nearest BUILT
--- store holding any wanted def and withdraw everything wanted from it
--- in one visit (unit.withdrawFromCargo preserves the instances;
--- adjacency is this walk, per the API contract). Entries clear even
--- on shortfall, like the mule fetch — raced withdrawals and split
--- stock resolve by the caller reconciling against inventory (a
--- release + re-plan reaches the next store). Returns true while
--- still busy (walking).
-local function fetchWantsFromCargo(uid, wants, info, params)
-    if not next(wants) then return false end
-    local best, bestD = nil, math.huge
-    for _, bid in ipairs(building.getActiveIds() or {}) do
-        if bid and building.getActivity(bid) == "built" then
-            local has = false
-            for _, it in ipairs(building.getStorage(bid) or {}) do
-                if wants[it.defName] then has = true; break end
-            end
-            if has then
-                local binfo = building.getInfo(bid)
-                if binfo then
-                    local d = distance(info.gridX, info.gridY,
-                        binfo.gridX + (binfo.tileW or 1) / 2,
-                        binfo.gridY + (binfo.tileH or 1) / 2)
-                    if d < bestD then
-                        binfo.bid = bid
-                        best, bestD = binfo, d
-                    end
-                end
-            end
-        end
-    end
-    if not best then
-        -- Nothing stored anywhere (someone else withdrew it).
-        for k in pairs(wants) do wants[k] = nil end
-        return false
-    end
-    if moveBesideBuilding(uid, info, best) then return true end
-    unit.stop(uid)
-    local carried = unit.getCarryingWeight(uid) or 0
-    local maxW    = unit.getStat(uid, "carrying_capacity") or math.huge
-    for defName, count in pairs(wants) do
-        for _ = 1, count do
-            local w = deliverItemWeight(defName)
-            if carried + w > maxW then
-                engine.logWarn("fetch: unit " .. tostring(uid)
-                    .. " at capacity (" .. string.format("%.1f", carried + w)
-                    .. " > " .. string.format("%.1f", maxW)
-                    .. " kg) — leaving rest of " .. defName .. " in cargo")
-                break
-            end
-            if not unit.withdrawFromCargo(uid, best.bid, defName) then
-                break    -- store ran out (raced another claimant)
-            end
-            carried = carried + w
-        end
-        wants[defName] = nil
-    end
-    return false
-end
-
 -- Can this unit source every demand right now (inventory + nearby
 -- ground + mule stock + cargo storage) AND carry the shortfall it would
 -- have to fetch (#1326)? Races lose gracefully at fetch time; this is
 -- only the "worth claiming" filter, same as construction's.
 local function craftMaterialsAvailable(uid, fromX, fromY, demands, params)
     if not loadFeasible(uid, demands) then return false end
+    local myPage = page.ofUnit(uid)      -- #1673: the actor's own page
     for item, need in pairs(demands) do
         local have = inventoryCountOf(uid, item)
         if have < need then
-            local ground = groundCountOf(fromX, fromY, item,
+            local ground = groundCountOf(uid, fromX, fromY, item,
                                          params.craft_scan_range)
             if have + ground < need then
-                local mule = findTechnomule(fromX, fromY)
+                local mule = findTechnomule(uid, fromX, fromY)
                 local muleHave = mule and inventoryCountOf(mule.uid, item) or 0
                 local off = have + ground + muleHave
-                if off < need and off + cargoCountOf(item) < need then
+                if off < need and off + cargoCountOf(item, myPage) < need then
                     return false
                 end
             end
@@ -212,6 +110,11 @@ end
 -- Nearest workable bill within craft_scan_range, or nil (station alive + Built,
 -- unclaimed, stock target not met (#795), knowledge cleared, demands sourceable).
 local function findCraftBill(uid, fromX, fromY, params)
+    -- #1673: craft.getBills reads the ACTIVE page's bill store on its
+    -- own, independently of the page the actor was selected from, so
+    -- every station is re-checked against the ACTOR's page below.
+    local myPage = page.ofUnit(uid)
+    if not myPage then return nil end
     local bills = craft.getBills()
     if not bills or #bills == 0 then return nil end
     local now = engine.gameTime()
@@ -221,7 +124,8 @@ local function findCraftBill(uid, fromX, fromY, params)
            and not billClaimedByOther(bill, uid, now, params.craft_claim_timeout)
            and not untilStockSatisfied(bill) then
             local binfo = building.getInfo(bill.station)
-            if binfo and building.getActivity(bill.station) == "built" then
+            if binfo and page.same(myPage, binfo.page)
+               and building.getActivity(bill.station) == "built" then
                 local recipe = craft.get(bill.recipe)
                 if recipe
                    and (not recipe.knowledge
@@ -315,14 +219,14 @@ local function craftExecute(uid, s, params)
         -- ground → mule → cargo). Reconciled against real inventory
         -- after the fetch phases run.
         local need, fromGround, fromMule, fromCargo = {}, {}, {}, {}
-        local mule = findTechnomule(info.gridX, info.gridY)
+        local mule = findTechnomule(uid, info.gridX, info.gridY)
         for item, count in pairs(cand.demands) do
             need[item] = count
             local have = inventoryCountOf(uid, item)
             local short = count - have
             if short > 0 then
                 local ground = math.min(short,
-                    groundCountOf(info.gridX, info.gridY, item,
+                    groundCountOf(uid, info.gridX, info.gridY, item,
                                   params.craft_scan_range))
                 if ground > 0 then fromGround[item] = ground end
                 local muleTake = 0
@@ -371,6 +275,19 @@ local function craftExecute(uid, s, params)
         releaseCraftJob(s, uid, true)
         return
     end
+    -- #1673: job.bid is a PERSISTED building reference, so a save
+    -- written before this check (or a page switch mid-job) can name a
+    -- station on another world. Revalidate it against the crafter's own
+    -- page HERE, ahead of every phase: the fetch phase below issues its
+    -- own moveTo / pickupGround / transferItemToUnit / withdrawFromCargo
+    -- calls, so a check placed at the walking phase would already have
+    -- let an off-page job walk the unit and move items. Re-runs every
+    -- tick, since each fetch phase returns early while busy.
+    local binfo = building.getInfo(job.bid)
+    if not binfo or not page.same(info.page, binfo.page) then
+        releaseCraftJob(s, uid, true)   -- demolished or off-page
+        return
+    end
     -- Keep the claim fresh (claimBill by the holder is a refresh).
     craft.claimBill(job.billId, uid, params.craft_claim_timeout)
 
@@ -401,11 +318,8 @@ local function craftExecute(uid, s, params)
     -- Phase 2: stand beside the station — nearest border tile, same
     -- walk as deliver (craft.executeAt requires Chebyshev ≤ 1).
     if job.phase == "walking" then
-        local binfo = building.getInfo(job.bid)
-        if not binfo then          -- station demolished mid-job
-            releaseCraftJob(s, uid, true)
-            return
-        end
+        -- Station identity and page were revalidated above, ahead of
+        -- the fetch phase; binfo is that same live lookup.
         if moveBesideBuilding(uid, info, binfo) then return end
         unit.stop(uid)
         job.phase = "working"

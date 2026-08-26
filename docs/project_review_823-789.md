@@ -9,7 +9,7 @@ PR #821's input-thread split, #820's ordered immutable CI-image publication, #81
 ## Status
 
 - [x] PRR-1. Direct tile selection leaves both deferred cursor-selection arms live — [#1702]
-- [ ] PRR-2. Nested structure content can stamp beyond a location's authoritative bounds
+- [x] PRR-2. Nested structure content can stamp beyond a location's authoritative bounds — [#1708]
 - [ ] PRR-3. Neutral legacy placeholders become permanent local settings on every first boot
 - [ ] PRR-4. Partial notification overrides migrate successfully by turning omitted fields off
 
@@ -42,7 +42,7 @@ PR #821's input-thread split, #820's ordered immutable CI-image publication, #81
 
 ## 2. Nested location geometry
 
-### PRR-2. Nested structure content can stamp beyond a location's authoritative bounds
+### [#1708] PRR-2. Nested structure content can stamp beyond a location's authoritative bounds
 
 > **Captured note:** Validate the full footprint of nested structure content, not only its anchor offset. Passing the outer definition's bounds to a builder relocated within those same bounds translates the entire outer-sized footprint a second time.
 

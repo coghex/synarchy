@@ -35,6 +35,7 @@ local fetchWantsFromGround = fetch.fetchWantsFromGround
 local fetchWantsFromMule   = fetch.fetchWantsFromMule
 
 local mv = require("scripts.movement_speed")
+local page = require("scripts.unit_ai_page")
 local roles = require("scripts.unit_roles")
 -- The #1329 load reset: both tables below are transient session
 -- coordination state, emptied in place whenever a load replaces the
@@ -116,7 +117,7 @@ end
 local function abortRepairJob(uid, s, info)
     local job = s.repairJob
     if job and job.itemFetched and info then
-        local mule = findTechnomule(info.gridX, info.gridY)
+        local mule = findTechnomule(uid, info.gridX, info.gridY)
         if mule then
             -- Targeted by instanceId: without it, a defName-only
             -- transfer could pop a DIFFERENT axe_steel this unit
@@ -211,7 +212,7 @@ local function findRepairCandidate(uid, info, params)
     local now = engine.gameTime()
     local best = scanHeldItems(uid, uid, false, now, params)
     if best then return best end
-    local mule = findTechnomule(info.gridX, info.gridY)
+    local mule = findTechnomule(uid, info.gridX, info.gridY)
     if not mule then return nil end
     return scanHeldItems(mule.uid, uid, true, now, params)
 end
@@ -233,10 +234,23 @@ function repairUtility(uid, s, params)
     -- fails to parse, and it falls back to "no distance info" (lowest
     -- building id wins, ignoring proximity entirely). Floor first.
     local recipeId = "repair_" .. cand.axis
-    if not building.findStation(recipeId, math.floor(info.gridX),
-                                math.floor(info.gridY)) then
+    -- #1673: findStation ranks over the ACTIVE page, which is not
+    -- necessarily this unit's, so the station it names is checked
+    -- against the ACTOR's own page before the job may be scored at all
+    -- — otherwise a fresh job starts against a foreign station and its
+    -- fetch phases walk and move items before the walking phase finally
+    -- rejects it. The id is RETAINED on the candidate rather than
+    -- re-resolved in execute: a second findStation call would take its
+    -- own, independent active-page snapshot and could answer
+    -- differently from the one this gate approved.
+    local stationBid = building.findStation(recipeId, math.floor(info.gridX),
+                                            math.floor(info.gridY))
+    if not stationBid then return -math.huge end
+    local sinfo = building.getInfo(stationBid)
+    if not sinfo or not page.same(info.page, sinfo.page) then
         return -math.huge
     end
+    cand.bid = stationBid
 
     local recipe = repair.get(recipeId)
     local input = recipe and recipe.inputs and recipe.inputs[1]
@@ -288,6 +302,10 @@ function repairExecute(uid, s, params)
             axis = cand.axis, recipeId = cand.recipeId,
             consumable = cand.consumable, consumableCount = cand.consumableCount,
             onMule = cand.onMule,
+            -- #1673: the station repairUtility already vetted against
+            -- this unit's page. Carried in so the guard below covers
+            -- the job from its first tick, fetch phases included.
+            bid = cand.bid,
         }
         s.repairPhase = cand.onMule and "fetch_item" or "fetch_consumable"
         -- Cancel any in-flight moveTo the PREVIOUS action left running
@@ -304,8 +322,25 @@ function repairExecute(uid, s, params)
     -- Keep the claim fresh while the job is held.
     repairClaims[job.instanceId] = { uid = uid, at = now }
 
+    -- #1673: job.bid is a PERSISTED building reference, so a save
+    -- written before this check (or a page switch mid-job) can name a
+    -- station on another world. Revalidate it ahead of EVERY phase --
+    -- fetch_item and fetch_consumable below issue their own moveTo /
+    -- transferItemToUnit / pickupGround calls, so the walking-phase
+    -- check alone is too late, exactly as it was for deliverExecute
+    -- and craftExecute. A job that has not resolved a station yet is
+    -- untouched: job.bid stays nil until the walking phase calls
+    -- building.findStation, and that fresh selection is validated
+    -- there.
+    if job.bid then
+        local binfo = building.getInfo(job.bid)
+        if not binfo or not page.same(info.page, binfo.page) then
+            abortRepairJob(uid, s, info); return
+        end
+    end
+
     if s.repairPhase == "fetch_item" then
-        local mule = findTechnomule(info.gridX, info.gridY)
+        local mule = findTechnomule(uid, info.gridX, info.gridY)
         if not mule then releaseRepairJob(s, uid); return end
         if distance(info.gridX, info.gridY, mule.gridX, mule.gridY)
            > params.mule_fetch_arrival then
@@ -378,7 +413,12 @@ function repairExecute(uid, s, params)
             if not job.bid then abortRepairJob(uid, s, info); return end
         end
         local binfo = building.getInfo(job.bid)
-        if not binfo then abortRepairJob(uid, s, info); return end
+        -- #1673: job.bid is a PERSISTED building reference and
+        -- building.findStation resolves against the ACTIVE page, not
+        -- necessarily this unit's. Revalidate before the walk.
+        if not binfo or not page.same(info.page, binfo.page) then
+            abortRepairJob(uid, s, info); return
+        end
         local utx, uty = math.floor(info.gridX), math.floor(info.gridY)
         local tw, th = binfo.tileW or 1, binfo.tileH or 1
         local cheb = chebToFootprint(utx, uty, binfo.gridX, binfo.gridY, tw, th)

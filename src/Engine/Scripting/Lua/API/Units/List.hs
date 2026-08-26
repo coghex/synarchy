@@ -26,6 +26,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef)
 import Engine.Core.State (EngineEnv, activeWorldPageFrom)
+import World.Page.Types (WorldPageId(..))
 import Unit.Types
 import Unit.Direction (Direction(..))
 import Unit.Render (pickFrame)
@@ -136,6 +137,13 @@ unitListAnimationsFn env = do
 
 -- | unit.getInfo(id) — returns a Lua table with the unit's render-visible
 --   attributes, or nil if the unit doesn't exist. Used by the info panel.
+--
+--   Resolves GLOBALLY, not on the active page: the table it answers with
+--   describes the unit named, wherever it lives. Since #1673 that
+--   includes a @page@ field carrying the instance's own @uiPage@, the
+--   counterpart to @building.getInfo@'s (#76/#196), so a caller can pair
+--   an actor with a candidate on the ACTOR'S page instead of trusting
+--   whichever page was active when some other query ran.
 unitGetInfoFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitGetInfoFn env = do
     idArg ← Lua.tointeger 1
@@ -204,6 +212,17 @@ unitGetInfoFn env = do
                         (fromMaybe (prettifyDefName (uiDefName inst))
                                    (mDef ⌦ udDisplayName)))
                     Lua.setfield (-2) "displayName"
+                    -- The world page this unit lives on (#1673),
+                    -- read off the instance's own uiPage — the same
+                    -- ownership field building.getInfo reports as
+                    -- "page" (#76/#196). Additive: it lets a caller
+                    -- pair an actor with a candidate on the ACTOR's
+                    -- page instead of trusting the active one, which
+                    -- unit.getAllIds / building.getActiveIds /
+                    -- craft.getBills each snapshot independently.
+                    Lua.pushstring (TE.encodeUtf8 (case uiPage inst of
+                        WorldPageId p → p))
+                    Lua.setfield (-2) "page"
                     Lua.pushnumber (Lua.Number (realToFrac (uiGridX inst)))
                     Lua.setfield (-2) "gridX"
                     Lua.pushnumber (Lua.Number (realToFrac (uiGridY inst)))

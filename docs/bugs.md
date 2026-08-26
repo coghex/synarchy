@@ -37,6 +37,7 @@ No GitHub duplicate search was performed; that belongs to `process-report`.
 - [x] BUG-3. Headless boot survives without its only control listener — [#1190]
 - [x] BUG-4. Dump CLI silently substitutes defaults for malformed arguments — [#1191]
 - [x] BUG-5. Action-outcome audit fails strict Python warning compilation — [#1192]
+- [ ] BUG-6. Adding a concept id can change an existing concept's generated root
 
 ---
 
@@ -256,3 +257,80 @@ warning before normal output. `python3 -W error::SyntaxWarning -m compileall
 - **Scope and constraints:** Keep the regex documentation readable and run the
   tool's own checks plus strict-warning compilation after the change.
 - **Remaining uncertainty:** None at draft time.
+
+## Generated languages and naming
+
+### BUG-6. Adding a concept id can change an existing concept's generated root
+
+> **Captured note:** Adding a new concept id to data/language/concepts.yaml can change an EXISTING concept's generated native root, because Language.Generated.Root.assignRoots folds over `sort ids` and resolves collisions against roots already placed. A newly added id that sorts earlier can claim a root an existing concept would have taken, forcing that existing concept to reroll to attempt+1. Reproduced via `cabal repl lib:synarchy`: on language seed 1337 (currentGeneratorVersion 5, 151 shipped concepts), adding one probe id changed GATE's root from "jyk" to "lhirav", and another changed ENVY's from "vra" to "jha" — 2 of 60 single-id probe additions; 0 of 60 on seeds 42, 7, 99 and 2718. Consequence: a previously persisted EtymologySource naming that concept no longer rebuilds to the stored name, so Language.Etymology's surface check (`rebuilt ≢ storedName`) reports EtySurfaceMismatch and the etymology reads as unavailable. Names themselves are unaffected — they are write-once (#1101). This contradicts src/Language/Semantic/Types.hs:8-12, which says ids "may be added, never renamed or reused" — i.e. ADDITION is presented as the safe operation, and it is not root-stable. Not ready to be an issue: the fix needs a design decision between (1) making assignment order-independent, which changes roots for existing seeds and needs a currentGeneratorVersion bump 5→6; (2) detecting rather than fixing, via a check that recomputes roots across a fixed seed panel before/after a catalogue change and fails when an existing concept's root moves; or (3) accepting and documenting additions as best-effort for etymology, which contradicts the stated contract. Related: #710 (root derivation), #713 (add-only rule), #1104 (persisted EtymologySource), #1717 (inventory ratchet — explicitly out of scope there), #1383/#1385 (pinned name vectors, a partial backstop covering only 6 of 151 concepts on one provenance).
+
+**Verification:** Verified — root assignment is order-dependent, and a single
+added concept id demonstrably re-roots an existing concept on at least one
+language seed.
+
+**Evidence:**
+
+- `src/Language/Generated/Root.hs:38` — `assignRoots` is
+  `foldl' place M.empty (sort ids)`, so each concept is placed in sorted-id
+  order against the roots already assigned.
+- `src/Language/Generated/Root.hs:41` — `usedLower` is built from `M.elems acc`,
+  the roots placed *so far*, which is what makes the outcome depend on which
+  ids preceded this one.
+- `src/Language/Generated/Root.hs:45-48` — on a collision `resolve` recurses
+  with `attempt + 1`, and `Hash.hs`'s seed folds that attempt in, so a rerolled
+  concept gets an entirely different root rather than a nearby variant.
+- `src/Language/Generated/Hash.hs:53-57` — `conceptSeed` derives from the
+  generator version, language seed, `conceptIdText`, and the attempt counter.
+  Nothing else. An id inserted earlier in sort order can therefore only affect
+  another concept through the collision path above.
+- `src/Language/Etymology.hs:373` — `explain` recomputes
+  `assignLanguageRoots prof (conceptIds cat)` from the *current* catalogue, not
+  from anything stored, so a re-rooted concept is re-derived at read time.
+- `src/Language/Etymology.hs:361-362` — the rebuilt native surface is compared
+  against the authoritative stored name; a mismatch yields
+  `EtyUnavailable (EtySurfaceMismatch storedName rebuilt)`.
+- `src/Language/Semantic/Types.hs:9-12` — the stated contract: concept ids are
+  "LOAD-BEARING", and "Ids may be added, never renamed or reused." Addition is
+  the operation this defect makes unsafe.
+- `src/Language/Generated/Types.hs:97` — `currentGeneratorVersion = 5`, the
+  version any change to assignment would have to advance.
+- `test-headless/Test/Headless/Location/Naming.hs:155` — the pinned name vector
+  `["Leraj-yroeb", "Jdyebto-efbne", "Fyąyn-fkofbe"]`, whose comment names the
+  shipped `data/language/concepts.yaml` as a cause to investigate before
+  re-blessing. It is a partial backstop: it covers only the six concepts those
+  three names use, on one provenance, out of 151.
+
+Reproduced against the real library in `cabal repl lib:synarchy`, comparing
+`lrFree (assignLanguageRoots prof ids)` with
+`lrFree (assignLanguageRoots prof (probe : ids))` for 60 synthetic probe ids per
+seed, over the shipped 151-entry catalogue at `currentGeneratorVersion`. Seed
+1337 produced two re-rootings — `GATE` from `jyk` to `lhirav`, and `ENVY` from
+`vra` to `jha`. Seeds 42, 7, 99 and 2718 produced none. No engine, world, or
+window was involved.
+
+**Handoff context:**
+
+- **Current behavior:** Expanding the concept catalogue — the one change the
+  contract calls safe — can silently change an existing concept's native root
+  in some languages. Any name persisted from a world using that concept then
+  fails the etymology surface check and reads as unavailable. The stored name
+  text is unaffected, being write-once (#1101), so the world still reads
+  correctly and only the etymology degrades.
+- **Expected behavior:** Adding a concept id leaves every previously assigned
+  root unchanged, so a persisted `EtymologySource` keeps decomposing — or, if
+  that guarantee is deliberately not offered, the contract says so and the
+  limitation is detectable rather than silent.
+- **Scope and constraints:** Preserve deterministic, seed-reproducible
+  generation and the existing collision-freedom property (roots stay unique
+  case-insensitively within a language). Any change to assignment changes roots
+  for existing seeds, so it needs a `currentGeneratorVersion` bump and must
+  leave already-persisted names decodable under their own recorded version.
+  Bound forms are not implicated: `Root.hs`'s `assignLanguageRoots` layers
+  `assignBoundForms` strictly on top of the finished free-root map and cannot
+  reroll it.
+- **Remaining uncertainty:** Which of three directions to take is an open
+  design decision, not an implementation detail — (1) make assignment
+  order-independent, (2) detect drift with a fixed seed panel rather than fix
+  it, or (3) accept and document additions as best-effort for etymology. The
+  measured rate (2 of 60 probe additions on one of five seeds) is a sample from
+  synthetic ids, not a prediction for a real catalogue expansion.
