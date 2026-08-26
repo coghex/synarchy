@@ -12,7 +12,7 @@ The current fabrication recipes, craft-bill backend, slope traversal, location s
 - [x] PRR-2. Repair AI still cannot claim degraded ground items — [#1737]
 - [x] PRR-3. A non-exhaustive quality-tier override silently removes the tier — [#1739]
 - [x] PRR-4. Injury icon mappings sit outside the asset audit and document the wrong fallback — [#1740]
-- [ ] PRR-5. The direct unit-asset commit leaves 485 frames outside gameplay manifests
+- [x] PRR-5. The direct unit-asset commit leaves 485 frames outside gameplay manifests — [no-issue]
 
 ## 1. Combat stat coherence
 
@@ -117,7 +117,17 @@ The current fabrication recipes, craft-bill backend, slope traversal, location s
 
 ## 5. Direct asset inventory
 
-### PRR-5. The direct unit-asset commit leaves 485 frames outside gameplay manifests
+### [no-issue] PRR-5. The direct unit-asset commit leaves 485 frames outside gameplay manifests
+
+> **Disposition:** No issue — resolved by #1257 and #1261. All 485 frames are now
+> declared: `data/units/white_tailed_deer.yaml` is a real `units:` entry covering
+> its 465 frames (promoted from #1257's inventory-only `asset_units:` form by the
+> owner decision of 2026-08-11), and `data/units/technomule.yaml:342` declares the
+> 20 `hit_react` frames; both trees carry compiled `atlas/` output. Since #1257,
+> `tools/pack_atlas.py --validate-only --strict` makes an undeclared committed
+> animation PNG impossible. The deer's YAML explicitly records that gameplay role,
+> state mappings, body and combat design remain separate future decisions — which
+> is the durable ownership signal this finding asked for.
 
 > **Captured note:** Decide the lifecycle of the 485 PNGs added by direct commit `d9ce2f82`. The complete white-tailed-deer animation set has no unit definition, and the technomule's added `hit_react` frames are absent from its YAML animation map, so the ordinary unit renderer cannot select any of them.
 

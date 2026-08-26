@@ -9,11 +9,11 @@ PR #858's active-world remote-warning guard, #855's per-page location-map icons,
 ## Status
 
 - [x] PRR-1. The embark probe overwrites fixed save slots and never cleans its artifacts — [#1569]
-- [ ] PRR-2. The embark probe restarts before its asynchronous saves are durable
-- [ ] PRR-3. The clipping regression fixtures inherit the user's local UI scale
-- [ ] PRR-4. Changing a page's modal exclusivity does not invalidate a pending activation
-- [ ] PRR-5. F3 click correlation sees controls below modal and pointer-blocking surfaces
-- [ ] PRR-6. A post-step screenshot failure discards already-drained oracle evidence
+- [x] PRR-2. The embark probe restarts before its asynchronous saves are durable — [#1746]
+- [x] PRR-3. The clipping regression fixtures inherit the user's local UI scale — [#1747]
+- [x] PRR-4. Changing a page's modal exclusivity does not invalidate a pending activation — [#1748]
+- [x] PRR-5. F3 click correlation sees controls below modal and pointer-blocking surfaces — [#1750]
+- [x] PRR-6. A post-step screenshot failure discards already-drained oracle evidence — [#1752]
 
 ## 1. Embark-probe artifact ownership
 
@@ -44,7 +44,7 @@ PR #858's active-world remote-warning guard, #855's per-page location-map icons,
 
 ## 2. Embark-probe save completion
 
-### PRR-2. The embark probe restarts before its asynchronous saves are durable
+### [#1746] PRR-2. The embark probe restarts before its asynchronous saves are durable
 
 > **Captured note:** Capture the request id from each `engine.saveWorld` call and wait for that exact request to reach `SaveCaptureComplete` before quitting or loading it in the next session. A fixed sleep after queue acceptance is not a durability boundary, and returning a literal string after the Lua call does not even verify that the request was accepted.
 
@@ -71,7 +71,7 @@ PR #858's active-world remote-warning guard, #855's per-page location-map icons,
 
 ## 3. Clipping-test configuration isolation
 
-### PRR-3. The clipping regression fixtures inherit the user's local UI scale
+### [#1747] PRR-3. The clipping regression fixtures inherit the user's local UI scale
 
 > **Captured note:** Pin `uiscale = 1` in the #747 Lua widget fixtures, or derive every assertion from the scale they intentionally select. These headless tests hard-code 1× geometry while the production widgets default to `engine.getUIScale()`, so a normal gitignored video preference makes the committed suite fail.
 
@@ -100,7 +100,7 @@ PR #858's active-world remote-warning guard, #855's per-page location-map icons,
 
 ## 4. Pending-activation invalidation
 
-### PRR-4. Changing a page's modal exclusivity does not invalidate a pending activation
+### [#1748] PRR-4. Changing a page's modal exclusivity does not invalidate a pending activation
 
 > **Captured note:** Treat a real change to `upInputExclusive` as a page-level route mutation for release activation. If a visible page becomes an exclusive modal boundary and then pass-through again during one press, the final route looks restored and the current epoch checks allow the old press to activate even though the route was interrupted in between.
 
@@ -127,7 +127,7 @@ PR #858's active-world remote-warning guard, #855's per-page location-map icons,
 
 ## 5. F3 routing parity
 
-### PRR-5. F3 click correlation sees controls below modal and pointer-blocking surfaces
+### [#1750] PRR-5. F3 click correlation sees controls below modal and pointer-blocking surfaces
 
 > **Captured note:** Export enough routing-scope and blocker information for the F3 oracle to answer “which control could this click actually reach,” not merely “which reported control paints highest.” A lower HUD button under empty exclusive-modal space or a callback-less pointer blocker is currently correlated even though the real router consumes the gesture before that button.
 
@@ -154,7 +154,7 @@ PR #858's active-world remote-warning guard, #855's per-page location-map icons,
 
 ## 6. Post-step evidence crash recovery
 
-### PRR-6. A post-step screenshot failure discards already-drained oracle evidence
+### [#1752] PRR-6. A post-step screenshot failure discards already-drained oracle evidence
 
 > **Captured note:** Merge post-step event/outcome evidence into the turn record immediately after draining it, before attempting the screenshot. If screenshot capture then fails, preserve those destructive-read results and record the missing post frame separately instead of falling back to the pre-step-only oracle.
 
