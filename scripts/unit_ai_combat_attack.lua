@@ -1,10 +1,11 @@
 -- Unit AI attack-target combat swings (#538 split from unit_ai.lua).
 --
 -- Combat animation naming/injury detection plus the attack_target
--- action: closing distance, the lunge sequence for short-reach
--- attackers, swing timing, and mode selection. Requires
+-- action: closing distance, swing timing, and mode selection. Requires
 -- unit_ai_combat.lua for the attack-mode helpers (stamina/mode/
--- cooldown) shared with the lunge decision.
+-- cooldown). The lunge sequence for short-reach attackers is DISPATCHED
+-- from this action but owned by unit_ai_combat_lunge.lua (#1713) --
+-- it needs a hook in unit_ai.lua's tickOne that no execute can provide.
 
 local unitAi = package.loaded["scripts.unit_ai"]
 local core = require("scripts.unit_ai_core")
@@ -140,145 +141,24 @@ local function clearAttackAnim(uid)
     unit.clearAnimOverride(uid)
 end
 
--- Only very-short-reach attackers lunge (slice 2a: the squirrel, reach
--- ~0.11). Normal melee units (reach ≥ this) just close and swing. The
--- general "skilled/unintelligent fighters also lunge" gating is later (2e).
--- Abort a lunge that never resolves (e.g. interrupted mid-air) after this.
-local LUNGE_TIMEOUT_SEC = 3.0
+-- The lunge — a short-reach attacker's leap→land→strike sequence — lives
+-- in scripts/unit_ai_combat_lunge.lua (#1713). It spans several ticks and
+-- spends most of them AIRBORNE, where the dispatcher suppresses execution
+-- entirely, so its bookkeeping needs an observer on unit_ai.lua's
+-- short-circuit paths as well as this execute; that module owns both
+-- halves and the seven-field cleanup they share.
+local lunge = require("scripts.unit_ai_combat_lunge")
 
--- ----- Lunge decision (2e: rarity, split by intelligence + skill) -----
--- A lunge is a deliberate, committed move — not something a unit does every
--- time it's out of reach. WHO lunges, and how readily, depends on the mind:
---   * Unintelligent creatures (intelligence < LUNGE_INSTINCT_INTEL — squirrels,
---     bears, mules) lunge on INSTINCT. For a short-reach predator/prey it's
---     often the ONLY way to reach a tall target, so the propensity is high;
---     the leap's REACH is still naturally bounded by the jumping skill (the
---     engine's getJumpReach), so a clumsy animal simply can't leap far.
---   * Intelligent fighters (acolytes) treat the lunge as a trained TECHNIQUE,
---     gated by the `jumping` skill — a novice (skill 10) almost never lunges;
---     a skilled one occasionally does to close a gap. Otherwise they walk in
---     and fight normally.
--- Either way it costs commitment, so it's gated on stamina.
-local LUNGE_INSTINCT_INTEL    = 0.7   -- below = instinct regime (animals)
-local LUNGE_INSTINCT_P        = 0.85  -- animal propensity when out of reach
-local LUNGE_TECH_MAX_P        = 0.5   -- ceiling for a trained lunger
-local LUNGE_TECH_SKILL_K      = 0.6   -- jumping/100 × this = technique chance
-local LUNGE_MIN_STAMINA_FRAC  = 0.25  -- too winded to commit below this
-
--- Decide whether an out-of-reach unit commits to a lunge THIS attempt.
--- Rolled only when already eligible (out of reach, off cooldown), so the
--- attack cooldown spaces the rolls — a "no" just means the unit pursues on
--- foot this cycle and may roll again next time it's off cooldown.
-local function shouldLunge(uid, s)
-    -- Stamina gate — a leap is a big spend.
-    local stam = unit.getStat(uid, "stamina")
-    if stam then
-        local maxStam = require("scripts.unit_stats").get(uid, "max_stamina")
-        if maxStam and maxStam > 0 and stam / maxStam < LUNGE_MIN_STAMINA_FRAC then
-            return false
-        end
-    end
-    local intel = unit.getStat(uid, "intelligence") or 1.0
-    local p
-    if intel < LUNGE_INSTINCT_INTEL then
-        p = LUNGE_INSTINCT_P                       -- instinct: readily
-    else
-        local jumping = unit.getSkill(uid, "jumping") or 0.0
-        p = math.min(LUNGE_TECH_MAX_P, (jumping / 100.0) * LUNGE_TECH_SKILL_K)
-    end
-    return math.random() < p
-end
-
--- The lunge: a short-reach unit leaps to land ADJACENT to a target it
--- can't otherwise reach, then strikes on arrival with a reach BONUS equal
--- to the leap's strike-reach — so the engine's height-gated part picker
--- can select the now-reachable high parts (neck/throat). Multi-tick:
--- issue the leap, wait for the airborne→land transition, then strike.
--- Returns true if it handled this tick (caller skips normal attack/pursue).
-local function tryLunge(uid, s, target, me, you, chebyshev)
-    local range = unit.getAttackRange(uid) or 1.0
-    local now = engine.gameTime()
-
-    -- Phase 2: airborne — wait until we've actually left the ground and
-    -- come back down, then deliver the strike.
-    if s.lungePhase == "air" then
-        if now - (s.lungeStartAt or now) > LUNGE_TIMEOUT_SEC then
-            s.lungePhase = nil; return false        -- bail; resume normal logic
-        end
-        local pose = unit.getPose(uid)
-        if pose == "falling" then s.lungeSawAir = true end
-        if s.lungeSawAir and pose == "standing"
-           and unit.getActivity(uid) ~= "transitioning" then
-            if unit.exists(target) and unit.getPose(target) ~= "dead" then
-                unit.setAnimOverride(uid, "attack_quick")
-                -- reach bonus lets the strike hit a high part; impact speed
-                -- folds the leap's full-body momentum into the damage.
-                combat.attack(uid, target, s.lungeMode or "quick",
-                              s.lungeReach or 0, s.lungeImpactSpeed or 0)
-                s.attackSwingUntil  = now + (unit.getAnimDuration(uid, "attack_quick") or 0.4)
-                s.attackLastSwingAt = now
-                s.attackLastMode    = s.lungeMode or "quick"
-            end
-            s.lungePhase = nil; s.lungeSawAir = nil
-            s.lungeTarget = nil; s.lungeReach = nil; s.lungeImpactSpeed = nil
-        end
-        return true   -- consume the tick while leaping / landing
-    end
-
-    -- Phase 1: decide to leap. Must be out of melee reach, off cooldown,
-    -- and the mind/skill check (2e) must elect to commit — otherwise fall
-    -- through to normal pursue (walk closer and fight).
-    if chebyshev <= range then return false end
-    local last = s.attackLastSwingAt or 0
-    if now - last < computeAttackCooldown(uid, s.attackLastMode or "quick") then
-        return false
-    end
-    if not shouldLunge(uid, s) then return false end
-    local jr = unit.getJumpReach(uid)
-    if not jr or not jr.dist or jr.dist <= 0 then return false end
-
-    -- Land one tile from the target, on our side. getInfo gridX/Y are
-    -- CONTINUOUS positions, so floor to integer TILE coords (unit.jump
-    -- needs integers, or its tointeger silently rejects the command).
-    local mtx, mty = math.floor(me.gridX),  math.floor(me.gridY)
-    local ttx, tty = math.floor(you.gridX), math.floor(you.gridY)
-    local sgx = (mtx > ttx and 1) or (mtx < ttx and -1) or 0
-    local sgy = (mty > tty and 1) or (mty < tty and -1) or 0
-    local landX, landY = ttx + sgx, tty + sgy
-    local ldx, ldy = landX - mtx, landY - mty
-    local d = math.sqrt(ldx * ldx + ldy * ldy)
-
-    if d < 0.5 then
-        -- Already adjacent: a vertical pounce in place — full strike-reach,
-        -- no horizontal leap (which the engine would refuse at d≈0).
-        unit.setAnimOverride(uid, "attack_quick")
-        combat.attack(uid, target, "quick", jr.height or 0,
-                      unit.lungeImpactSpeed(uid, 0))
-        s.attackSwingUntil  = now + (unit.getAnimDuration(uid, "attack_quick") or 0.4)
-        s.attackLastSwingAt = now
-        s.attackLastMode    = "quick"
-        return true
-    end
-    if d > jr.dist then return false end
-
-    -- Strike-reach envelope at this leap distance.
-    local frac  = d / jr.dist
-    local reach = (jr.height or 0) * (1 - frac * frac)
-    if unit.jump(uid, landX, landY) then
-        s.lungePhase        = "air"
-        s.lungeSawAir       = false
-        s.lungeStartAt      = now
-        s.lungeTarget       = target
-        s.lungeMode         = "quick"
-        s.lungeReach        = reach
-        s.lungeImpactSpeed  = unit.lungeImpactSpeed(uid, d)
-    end
-    return true
-end
 
 local function attackTargetExecute(uid, s, params)
     local target = s.attackTargetUid
+    -- Abandoning the attack goal ends any lunge with it (#1713): these
+    -- three returns are terminal for the whole engagement, and the phase-2
+    -- gate below -- the only other place that would notice -- is never
+    -- reached again once the goal is gone. Leaving the bookkeeping behind
+    -- would strand the persisted lungeTarget reference.
     if not target then
+        lunge.clear(s)
         markGoalAccomplished(s, "attack")
         clearAttackAnim(uid)
         return
@@ -289,6 +169,7 @@ local function attackTargetExecute(uid, s, params)
     if not unit.exists(target) then
         engine.logDebug("attack: target " .. tostring(target)
                         .. " gone, clearing goal")
+        lunge.clear(s)
         s.attackTargetUid = nil
         markGoalAccomplished(s, "attack")
         clearAttackAnim(uid)
@@ -297,6 +178,7 @@ local function attackTargetExecute(uid, s, params)
     if unit.getPose(target) == "dead" then
         engine.logDebug("attack: target " .. tostring(target)
                         .. " is dead, clearing goal")
+        lunge.clear(s)
         s.attackTargetUid = nil
         markGoalAccomplished(s, "attack")
         clearAttackAnim(uid)
@@ -348,7 +230,7 @@ local function attackTargetExecute(uid, s, params)
     -- Short-reach units (the squirrel) lunge instead of futilely closing to
     -- a melee range they can never reach. Handles the whole leap→land→strike
     -- sequence over several ticks; if it acted, skip the normal path.
-    if tryLunge(uid, s, target, me, you, chebyshev) then return end
+    if lunge.tryLunge(uid, s, target, me, you, chebyshev) then return end
 
     if chebyshev <= range then
         -- In range. If we were mid-walk, stop so the next AI tick

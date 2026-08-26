@@ -275,6 +275,18 @@ MANUAL_ONLY_REASONS: dict[str, tuple[Reason, ...]] = {
     "disarm": (Reason(TARGETED, "narrow #193 disabled-hand auto-drop regression"),),
     "injury_log": (Reason(TARGETED, "injury-log backend plumbing, narrower than the combat subsystem"),),
     "lua_strict_msg": (Reason(TARGETED, "narrow #622 LuaToEngineMsg/LuaMsg strictness crash regression"),),
+    "lunge": (Reason(TARGETED, "narrow #1713 combat-lunge reachability regression: one "
+                               "leap -> land -> strike state machine and the four ways "
+                               "it can end. combat_anim remains the general "
+                               "unit-animation/combat gate and mental_state the general "
+                               "#352/#717 lash-out one; neither species reaches the "
+                               "lunge path at all"),
+              Reason(SCENARIO_HEAVY, "four staged scenarios, each re-staging a "
+                                     "probability-rolled launch until it takes and then "
+                                     "waiting out a real leap flight and a multi-second "
+                                     "settle window. What it GRADES rides on AI "
+                                     "arbitration and leap timing, which is the class "
+                                     "#722's disarm lesson keeps off the blocking gate")),
     "machine_shop": (Reason(TARGETED, "electric furnace + machine_shop content regression, narrower "
                                       "than the generic #590 power-draw mechanism probe"),),
     "meal_waste": (Reason(TARGETED, "narrow #1219 stop-before-waste meal-policy regression; "
