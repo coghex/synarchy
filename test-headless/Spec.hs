@@ -182,6 +182,8 @@ import qualified Test.Headless.Render.ViewportGuard as ViewportGuard
 import qualified Test.Headless.Render.QuadVertices as QuadVertices
 import qualified Test.Headless.Graphics.BindlessRebind as BindlessRebind
 import qualified Test.Headless.Graphics.BindlessRelease as BindlessRelease
+import qualified Test.Headless.Graphics.BindlessPublish as BindlessPublish
+import qualified Test.Headless.Lua.AssetFailure as LuaAssetFailure
 import qualified Test.Headless.Core.ConfigState as ConfigState
 import qualified Test.Headless.Core.Queue as CoreQueue
 import qualified Test.Headless.Core.LogMonad as LogMonad
@@ -431,6 +433,9 @@ main = hspec $ do
     describe "Preview.Building" PreviewBuilding.spec
     describe "Bindless texture filter rebinding" BindlessRebind.spec
     describe "Bindless texture release" BindlessRelease.spec
+    describe "bindless registration failure" $ do
+        BindlessPublish.spec
+        LuaAssetFailure.spec
     describe "Unit.Pathing.Cost" PathingCost.spec
     PathingHazard.spec
     describe "Unit.Pathing.AStar" PathingAStar.spec

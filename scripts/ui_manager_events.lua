@@ -8,6 +8,8 @@ local uiManager = package.loaded["scripts.ui_manager"]
 
 local createWorldMenu = require("scripts.create_world_menu")
 local hud              = require("scripts.hud")
+local worldView        = require("scripts.world_view")
+local testArena        = require("scripts.test_arena")
 
 -----------------------------------------------------------
 -- World Generation Log (forwarded from world thread)
@@ -53,4 +55,25 @@ end
 
 function uiManager.onClearInfo()
     if uiManager.moduleReady.hud then hud.clearInfo() end
+end
+
+-----------------------------------------------------------
+-- Terminal asset failures (#1690)
+--
+-- onAssetLoaded's twin: a texture request that FAILED, because the
+-- bindless slot allocator was full and nothing can ever sample that
+-- handle. worldView and testArena are reached through ui_manager's
+-- manual forward rather than the engine's own broadcast, so this
+-- callback has to be handed on the same way its success twin
+-- (ui_manager_boot.lua) is -- otherwise a failed request never settles
+-- the readiness gate they wait on and boot stalls.
+-----------------------------------------------------------
+
+function uiManager.onAssetFailed(assetType, handle, path, reason)
+    if worldView.onAssetFailed then
+        worldView.onAssetFailed(assetType, handle, path, reason)
+    end
+    if testArena.onAssetFailed then
+        testArena.onAssetFailed(assetType, handle, path, reason)
+    end
 end

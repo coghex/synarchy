@@ -502,6 +502,40 @@ function previewManager.onAssetLoaded(assetType, handle, path)
     end
 end
 
+-- #1690: a texture request that TERMINALLY FAILED, because the bindless
+-- slot allocator was full. Before #1690 this arrived as onAssetLoaded
+-- and the viewer showed the undefined texture believing it had the real
+-- one; now it arrives here and the session has to SETTLE on it, because
+-- both of this module's readiness mechanisms would otherwise wait
+-- forever: list/item mode holds a single pendingHandle waiting for its
+-- onAssetLoaded, and unit/building mode polls engine.getTextureSize,
+-- which a failed request never populates.
+--
+-- "empty" rather than a new state value: it is the existing terminal
+-- state for "there is nothing to show here", it is what previewManager.
+-- dump() already reports to a probe, and update() deliberately never
+-- overwrites it — so this settles once and stays settled.
+function previewManager.onAssetFailed(assetType, handle, path, reason)
+    if assetType ~= "texture" then return end
+    -- Only a texture THIS session asked for: the single in-flight
+    -- list/item request (pendingHandle, which requestTexture does not
+    -- cache until it succeeds), or a unit/building path acquireTexture
+    -- already cached. A stray failure from elsewhere must not blank a
+    -- viewer that is showing its own art fine.
+    if handle ~= pendingHandle and not textureCache[path] then return end
+    engine.logWarn("Preview texture failed to load: " .. tostring(path)
+        .. " (" .. tostring(reason) .. ")")
+    -- Drop the dead handle so a later selection of this entry issues a
+    -- fresh request rather than reusing a handle that resolves to the
+    -- undefined texture.
+    textureCache[path] = nil
+    if handle == pendingHandle then
+        pendingHandle = nil
+        pendingPath = nil
+    end
+    readyState = "empty"
+end
+
 -- Playback is driven off a WALL clock (engine.realTime), not an
 -- accumulated dt: the tick rate only controls smoothness, never which
 -- frame is correct, so a slow or bursty tick can't desynchronize the

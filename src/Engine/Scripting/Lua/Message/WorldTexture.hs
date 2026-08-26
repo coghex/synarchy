@@ -33,6 +33,9 @@ import Engine.Graphics.Vulkan.Texture (transitionImageLayout
 import Engine.Graphics.Vulkan.Sampler.Cache ( acquireSampler, releaseSampler
                                             , SamplerKind(..))
 import Engine.Graphics.Vulkan.Texture.Bindless (registerPinnedTexture, unregisterTexture)
+import Engine.Graphics.Vulkan.Texture.Publish
+  (UploadSampler(..), TransientPublish(..), GpuCleanupStep(..)
+  , classifyTransientRegistration, failedUploadCleanup)
 import Engine.Graphics.Types (DevQueues(..))
 import Engine.Scripting.Lua.Types
 import World.ZoomMap.Types (zoomTileSize)
@@ -127,53 +130,70 @@ handleWorldPreview = do
                     sampler ← liftIO $ acquireSampler dev cacheRef SamplerTextureNearest
                     let cleanSampler = releaseSampler dev cacheRef SamplerTextureNearest
 
-                    (_, newBindless) ← registerPinnedTexture dev texHandle
-                        imageView sampler bindless
-                    let rc = toRenderCapability env
-                    liftIO $ writeIORef (rcTextureSystemRef rc) (Just newBindless)
-
-                    -- Dispose the previous preview generation (slot
-                    -- recycled, GPU objects destroyed) and record this
-                    -- one. View before image: the view references it.
-                    forM_ (previewTexture gs) (disposeTransientTexture dev)
+                    (mbBindlessHandle, newBindless) ← registerPinnedTexture dev
+                        texHandle imageView sampler bindless
                     let cleanupAll = cleanView >> cleanImage >> cleanSampler
-                    modifyGraphicsState $ \gs' → gs'
-                            { previewTexture =
-                                Just (TransientTexture texHandle cleanupAll) }
+                    case classifyTransientRegistration "the world preview"
+                             mbBindlessHandle of
+                      -- #1690: the registration got no slot, so nothing
+                      -- can sample this image. Disposing the PREVIOUS
+                      -- generation for it would destroy a texture that
+                      -- is still being drawn and leave the preview
+                      -- resolving to the undefined texture, so keep the
+                      -- old generation and hand this upload's own GPU
+                      -- objects back instead. Nothing is published.
+                      TransientRetain reason → do
+                          logWarnM CatWorld $ "World preview texture not \
+                              \published: " <> reason
+                          forM_ (failedUploadCleanup UploadPinnedNearest) $ \case
+                              CleanupImageView     → liftIO cleanView
+                              CleanupImage         → liftIO cleanImage
+                              ReleasePinnedSampler → liftIO cleanSampler
+                      TransientReplace _ → do
+                        let rc = toRenderCapability env
+                        liftIO $ writeIORef (rcTextureSystemRef rc) (Just newBindless)
 
-                    -- Staleness here can NOT be decided at
-                    -- upload-completion time (this point). Re-reading
-                    -- 'worldPreviewRef' here, or comparing
-                    -- 'worldPreviewGenerationRef' here, would
-                    -- still race a publish that hasn't happened
-                    -- YET: 'World.Load.Publish.publishStagedSession'
-                    -- runs asynchronously on the WORLD thread, so this
-                    -- upload can reach this point and see nothing newer
-                    -- had been enqueued SO FAR, while the actual publish
-                    -- (which WILL invalidate it) is still in flight and
-                    -- lands moments later. There is no live-ref check at
-                    -- upload-completion time that can rule that out.
-                    --
-                    -- Instead, carry 'myGen' in the message
-                    -- itself and validate it at DELIVERY instead —
-                    -- 'Engine.Scripting.Lua.Thread.Dispatch's handling
-                    -- of every queued 'LuaMsg' (this one included) only
-                    -- ever runs while the save barrier's capture lock is
-                    -- open, which a load transaction holds for its ENTIRE
-                    -- duration (handleLoadStaged through the matching
-                    -- WorldLoadPublish) — so by the time this message is
-                    -- actually processed, ANY publish that was racing
-                    -- this upload has unconditionally already completed
-                    -- (see 'World.Load.Publish.publishStagedSession',
-                    -- which now bumps the generation on EVERY publish,
-                    -- not just one that carries its own new preview).
-                    -- Always enqueue; never decide staleness here.
-                    let (TextureHandle h) = texHandle
-                    liftIO $ Q.writeQueue (luaQueue env)
-                        (LuaWorldPreviewReady (fromIntegral h) myGen)
+                        -- Dispose the previous preview generation (slot
+                        -- recycled, GPU objects destroyed) and record this
+                        -- one. View before image: the view references it.
+                        forM_ (previewTexture gs) (disposeTransientTexture dev)
+                        modifyGraphicsState $ \gs' → gs'
+                                { previewTexture =
+                                    Just (TransientTexture texHandle cleanupAll) }
 
-                    logInfoM CatWorld $ "World preview texture created: handle="
-                        <> tshow h
+                        -- Staleness here can NOT be decided at
+                        -- upload-completion time (this point). Re-reading
+                        -- 'worldPreviewRef' here, or comparing
+                        -- 'worldPreviewGenerationRef' here, would
+                        -- still race a publish that hasn't happened
+                        -- YET: 'World.Load.Publish.publishStagedSession'
+                        -- runs asynchronously on the WORLD thread, so this
+                        -- upload can reach this point and see nothing newer
+                        -- had been enqueued SO FAR, while the actual publish
+                        -- (which WILL invalidate it) is still in flight and
+                        -- lands moments later. There is no live-ref check at
+                        -- upload-completion time that can rule that out.
+                        --
+                        -- Instead, carry 'myGen' in the message
+                        -- itself and validate it at DELIVERY instead —
+                        -- 'Engine.Scripting.Lua.Thread.Dispatch's handling
+                        -- of every queued 'LuaMsg' (this one included) only
+                        -- ever runs while the save barrier's capture lock is
+                        -- open, which a load transaction holds for its ENTIRE
+                        -- duration (handleLoadStaged through the matching
+                        -- WorldLoadPublish) — so by the time this message is
+                        -- actually processed, ANY publish that was racing
+                        -- this upload has unconditionally already completed
+                        -- (see 'World.Load.Publish.publishStagedSession',
+                        -- which now bumps the generation on EVERY publish,
+                        -- not just one that carries its own new preview).
+                        -- Always enqueue; never decide staleness here.
+                        let (TextureHandle h) = texHandle
+                        liftIO $ Q.writeQueue (luaQueue env)
+                            (LuaWorldPreviewReady (fromIntegral h) myGen)
+
+                        logInfoM CatWorld $ "World preview texture created: handle="
+                            <> tshow h
 
                 _ → logWarnM CatWorld
                         "Cannot create preview texture: Vulkan not ready"
@@ -255,51 +275,67 @@ handleZoomAtlasUpload = do
                     sampler ← liftIO $ acquireSampler dev cacheRef SamplerTextureLinear
                     let cleanSampler = releaseSampler dev cacheRef SamplerTextureLinear
 
-                    (_, newBindless) ← registerPinnedTexture dev texHandle
-                        imageView sampler bindless
-                    let rc = toRenderCapability env
-                    liftIO $ writeIORef (rcTextureSystemRef rc) (Just newBindless)
-
-                    -- Dispose the previous atlas generation (slot
-                    -- recycled, GPU objects destroyed) and record this
-                    -- one. View before image: the view references it.
-                    forM_ (zoomAtlasTexture gs) (disposeTransientTexture dev)
+                    (mbBindlessHandle, newBindless) ← registerPinnedTexture dev
+                        texHandle imageView sampler bindless
                     let cleanupAll = cleanView >> cleanImage >> cleanSampler
-                    modifyGraphicsState $ \gs' → gs'
-                            { zoomAtlasTexture =
-                                Just (TransientTexture texHandle cleanupAll) }
+                    case classifyTransientRegistration "the zoom atlas"
+                             mbBindlessHandle of
+                      -- #1690: same as the preview above. A page whose
+                      -- 'ZoomAtlasInfo' named an unregistered handle
+                      -- would bake its whole zoom map against the
+                      -- undefined texture, and the previous atlas it
+                      -- replaced would already have been destroyed. Keep
+                      -- the old generation; publish no new atlas info.
+                      TransientRetain reason → do
+                          logWarnM CatWorld $ "Zoom atlas not published: "
+                              <> reason
+                          forM_ (failedUploadCleanup UploadPinnedNearest) $ \case
+                              CleanupImageView     → liftIO cleanView
+                              CleanupImage         → liftIO cleanImage
+                              ReleasePinnedSampler → liftIO cleanSampler
+                      TransientReplace _ → do
+                        let rc = toRenderCapability env
+                        liftIO $ writeIORef (rcTextureSystemRef rc) (Just newBindless)
 
-                    let chunksPerRow = w `div` zoomTileSize
-                        atlasInfo = ZoomAtlasInfo
-                            { zaiTexture     = texHandle
-                            , zaiWidth       = w
-                            , zaiHeight      = h
-                            , zaiChunksPerRow = chunksPerRow
-                            }
+                        -- Dispose the previous atlas generation (slot
+                        -- recycled, GPU objects destroyed) and record this
+                        -- one. View before image: the view references it.
+                        forM_ (zoomAtlasTexture gs) (disposeTransientTexture dev)
+                        modifyGraphicsState $ \gs' → gs'
+                                { zoomAtlasTexture =
+                                    Just (TransientTexture texHandle cleanupAll) }
 
-                    -- Issue #763: this upload is
-                    -- async and can take multiple frames (staging
-                    -- buffer + Vulkan copy above), so re-reading
-                    -- 'worldManagerRef' HERE to find "every current
-                    -- world" would race a load publish that swaps it
-                    -- in the meantime — a peek-then-act check on
-                    -- 'zoomAtlasDataRef' narrows that window but can't
-                    -- close it: any such attempt is itself
-                    -- non-atomic. Writing to 'targetStates'
-                    -- — the EXACT 'WorldState's captured back when this
-                    -- atlas was enqueued (see 'EngineEnv.zoomAtlasDataRef'
-                    -- and 'World.Load.Publish'/'World.Thread.Command.Init')
-                    -- — needs no live ref re-read at all, so there is no
-                    -- window left to race: whichever session enqueued
-                    -- this atlas is exactly who receives it, regardless
-                    -- of what 'worldManagerRef' holds by the time the
-                    -- upload finishes.
-                    forM_ targetStates $ \ws →
-                        liftIO $ writeIORef (wsZoomAtlasRef ws) (Just atlasInfo)
+                        let chunksPerRow = w `div` zoomTileSize
+                            atlasInfo = ZoomAtlasInfo
+                                { zaiTexture     = texHandle
+                                , zaiWidth       = w
+                                , zaiHeight      = h
+                                , zaiChunksPerRow = chunksPerRow
+                                }
 
-                    logInfoM CatWorld $ "Zoom atlas uploaded: handle="
-                        <> tshow texHandle <> ", chunksPerRow="
-                        <> tshow chunksPerRow
+                        -- Issue #763: this upload is
+                        -- async and can take multiple frames (staging
+                        -- buffer + Vulkan copy above), so re-reading
+                        -- 'worldManagerRef' HERE to find "every current
+                        -- world" would race a load publish that swaps it
+                        -- in the meantime — a peek-then-act check on
+                        -- 'zoomAtlasDataRef' narrows that window but can't
+                        -- close it: any such attempt is itself
+                        -- non-atomic. Writing to 'targetStates'
+                        -- — the EXACT 'WorldState's captured back when this
+                        -- atlas was enqueued (see 'EngineEnv.zoomAtlasDataRef'
+                        -- and 'World.Load.Publish'/'World.Thread.Command.Init')
+                        -- — needs no live ref re-read at all, so there is no
+                        -- window left to race: whichever session enqueued
+                        -- this atlas is exactly who receives it, regardless
+                        -- of what 'worldManagerRef' holds by the time the
+                        -- upload finishes.
+                        forM_ targetStates $ \ws →
+                            liftIO $ writeIORef (wsZoomAtlasRef ws) (Just atlasInfo)
+
+                        logInfoM CatWorld $ "Zoom atlas uploaded: handle="
+                            <> tshow texHandle <> ", chunksPerRow="
+                            <> tshow chunksPerRow
 
                 _ → logWarnM CatWorld
                         "Cannot upload zoom atlas: Vulkan not ready"
