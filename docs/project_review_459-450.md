@@ -13,7 +13,7 @@ The construction-job flow, ruins and structure variants, script teardown, legacy
 - [x] PRR-3. Food YAML does not enforce one positive nutrition mode — [#1716]
 - [x] PRR-4. Fresh and loaded arenas use different base vegetation seeds — [#1718]
 - [x] PRR-5. The quad cache can pair one camera stamp with another camera's geometry — [#1720]
-- [ ] PRR-6. Optional ntfy requests have retries but no repository-defined time bound
+- [x] PRR-6. Optional ntfy requests have retries but no repository-defined time bound — [#1722]
 
 ## 1. Seam-aware foraging discovery
 
@@ -140,7 +140,7 @@ The construction-job flow, ruins and structure variants, script teardown, legacy
 
 ## 6. Notification workflow time bounds
 
-### PRR-6. Optional ntfy requests have retries but no repository-defined time bound
+### [#1722] PRR-6. Optional ntfy requests have retries but no repository-defined time bound
 
 > **Captured note:** Put an explicit short deadline around each optional ntfy delivery, and preferably the notification job as a whole. The workflow retries errors and tolerates a completed failure, but `continue-on-error` cannot release a runner when a connected endpoint stops producing a response and `curl` has no connect or total timeout.
 
