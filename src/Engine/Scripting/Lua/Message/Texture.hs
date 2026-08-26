@@ -11,6 +11,12 @@ module Engine.Scripting.Lua.Message.Texture
     , cacheEntryReusable
     , handleLoadTexture
     , handleLoadFont
+      -- * Exposed for regression coverage
+      --
+      --   The alias fast path is one of only two places that can insert
+      --   into 'btsHandleMap', so #1696's sentinel guard has to be proven
+      --   HERE and not merely on the registration side.
+    , duplicateCachedTextureHandle
     ) where
 
 import UPrelude
@@ -22,6 +28,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector.Storable as Vec
 import Control.Monad (foldM)
 import Data.IORef (readIORef, atomicModifyIORef', writeIORef)
+import Data.List (partition)
 import Foreign.ForeignPtr (ForeignPtr)
 import Foreign.Marshal.Utils (copyBytes)
 import System.FilePath (takeBaseName)
@@ -52,12 +59,15 @@ import Engine.Graphics.Vulkan.Sampler.Cache (acquireSampler, releaseSampler)
 import Engine.Graphics.Vulkan.Sampler.Types (SamplerKind(..))
 import Engine.Graphics.Vulkan.Texture.Bindless (registerPinnedTexture
                                                , registerTexture
+                                               , checkRegistrableHandle
+                                               , registrationFailureMessage
+                                               , TextureRegistrationFailure(..)
                                                , writeHandleSlotEntry)
+import Engine.Graphics.Vulkan.Texture.Handle (BindlessTextureHandle(..))
 import Engine.Graphics.Vulkan.Texture.Publish
   (UploadSampler(..), TexturePublish(..), GpuCleanupStep(..)
   , classifyRegistration, cachedAliasPublish, aliasPublish, publishedSlot
   , publishFailureReason, publishRegisteredEntries, failedUploadCleanup)
-import Engine.Graphics.Vulkan.Texture.Handle (BindlessTextureHandle(..))
 import Engine.Graphics.Vulkan.Texture.Slot (TextureSlot(..))
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
 import Engine.Graphics.Types (DevQueues(..))
@@ -107,61 +117,90 @@ invalidateAllWorldRenderCaches env = do
 --   @apAssetPaths@ entry (so the path is NOT poisoned and a later
 --   request re-uploads instead of taking a lying cache hit), and no
 --   texture size entry.
+--
+--   Deliberately silent: the reason is always
+--   'registrationFailureMessage' or a message its caller has already
+--   logged (#1696 made 'registerTextureImpl' log every refusal itself),
+--   so logging again here would double every failure.
 publishTextureFailure ∷ EngineEnv → AssetPool → TextureHandle → Text → Text
                       → EngineM σ ()
-publishTextureFailure env pool handle path reason = do
-    logWarnM CatTexture $ "Texture request failed for " <> path
-        <> ": " <> reason
+publishTextureFailure env pool handle path reason =
     liftIO $ do
         updateTextureState handle (AssetFailed reason) pool
         let (TextureHandle rawHandle) = handle
         Q.writeQueue (luaQueue env)
             (LuaAssetFailed "texture" (fromIntegral rawHandle) path reason)
 
+-- | The cached-atlas ALIAS fast path: a second handle naming a texture
+--   that is already resident, wired straight into 'btsHandleMap' and the
+--   shader table without going through
+--   'Engine.Graphics.Vulkan.Texture.Bindless.registerTexture'.
+--
+--   Because it owns its own insertion it also owns the sentinel guard
+--   (#1696): a zero handle is refused HERE, before the handle map, the
+--   handle→slot table, the asset-pool refcount, the texture-size map and
+--   the @LuaAssetLoaded@ notification — otherwise this path would point
+--   @handleToSlot[0]@ at a real slot exactly as an unguarded
+--   registration would.
+--   Its OTHER way of failing is #1690's: an atlas the pool holds but
+--   the bindless system has no mapping for — or no bindless system at
+--   all. Publishing @AssetReady@ for one of those is the poisoned cache
+--   hit #1690 removes, because the handle resolves to slot 0, the
+--   undefined texture, and reporting it loaded is a lie no later request
+--   can correct. 'cachedAliasPublish' answers both refusals.
 duplicateCachedTextureHandle ∷ EngineEnv → TextureHandle → AssetId
                            → TextureAtlas → EngineM σ ()
-duplicateCachedTextureHandle env handle assetId atlas = do
-    poolRef ← asks (rcAssetPoolRef . toRenderCapability)
-    pool ← liftIO $ readIORef poolRef
-    mBindless ← liftIO $ readIORef (rcTextureSystemRef (toRenderCapability env))
-    -- Both ways this resolution can come up empty — no bindless system
-    -- at all, or an atlas with no @btsHandleMap@ entry — mean the same
-    -- thing to the caller of this handle: it would resolve to slot 0,
-    -- the undefined texture. #1690 stopped reporting that as a load.
-    let resolved = mBindless ⌦ \bindless →
-            (\existing → (bindless, existing))
-              ⊚ Map.lookup (taTextureHandle atlas) (btsHandleMap bindless)
-    case cachedAliasPublish (taPath atlas) (snd ⊚ resolved) of
-        PublishFailed reason →
-            publishTextureFailure env pool handle (taPath atlas) reason
+duplicateCachedTextureHandle env handle assetId atlas =
+  case checkRegistrableHandle handle of
+    -- #1696's refusal, dropped outright: nothing observable is written,
+    -- not even #1690's terminal failure. A zero handle names no real
+    -- request, so there is nothing to settle.
+    Left failure →
+      logWarnM CatTexture
+        (registrationFailureMessage failure handle (taPath atlas))
+    Right () → do
+      poolRef ← asks (rcAssetPoolRef . toRenderCapability)
+      pool ← liftIO $ readIORef poolRef
+      mBindless ← liftIO $ readIORef (rcTextureSystemRef (toRenderCapability env))
+      -- Both ways THIS resolution can come up empty — no bindless system
+      -- at all, or an atlas with no @btsHandleMap@ entry — mean the same
+      -- thing to whoever samples this handle, and unlike the sentinel
+      -- above they belong to a real request that has to settle (#1690).
+      let resolved = mBindless ⌦ \bindless →
+              (\existing → (bindless, existing))
+                ⊚ Map.lookup (taTextureHandle atlas) (btsHandleMap bindless)
+      case cachedAliasPublish (taPath atlas) (snd ⊚ resolved) of
+        PublishFailed reason → do
+          logWarnM CatTexture reason
+          publishTextureFailure env pool handle (taPath atlas) reason
         PublishRegistered _ → do
-            forM_ resolved $ \(bindless, existingBindlessHandle) → do
-                let rc = toRenderCapability env
-                liftIO $ writeIORef (rcTextureSystemRef rc) (Just bindless
-                    { btsHandleMap =
-                        Map.insert handle existingBindlessHandle
-                            (btsHandleMap bindless)
-                    })
-                -- Atlas-share path: sync the shader handle→slot table
-                -- too (the ptr is shared across the immutable copy) (#286).
-                liftIO $ writeHandleSlotEntry bindless (toInt handle)
-                    (tsIndex (bthSlot existingBindlessHandle))
+          forM_ resolved $ \(bindless, existingBindlessHandle) → do
+              let rc = toRenderCapability env
+              liftIO $ writeIORef (rcTextureSystemRef rc) (Just bindless
+                  { btsHandleMap =
+                      Map.insert handle existingBindlessHandle
+                          (btsHandleMap bindless)
+                  })
+              -- Atlas-share path: sync the shader handle→slot table
+              -- too (the ptr is shared across the immutable copy) (#286).
+              liftIO $ writeHandleSlotEntry bindless (toInt handle)
+                  (tsIndex (bthSlot existingBindlessHandle))
 
-            liftIO $ do
-                updateTextureState handle (AssetReady assetId []) pool
-                atomicModifyIORef' poolRef $ \p →
-                    ( p { apTextureAtlases =
-                            Map.adjust (\a → a { taRefCount = taRefCount a + 1 })
-                                assetId (apTextureAtlases p)
-                      }
-                    , ()
-                    )
-                let (w, h) = amDimensions (taMetadata atlas)
-                    (TextureHandle rawHandle) = handle
-                atomicModifyIORef' (rcTextureSizeRef (toRenderCapability env)) $ \m →
-                    (HM.insert handle (fromIntegral w, fromIntegral h) m, ())
-                Q.writeQueue (luaQueue env)
-                    (LuaAssetLoaded "texture" (fromIntegral rawHandle) (taPath atlas))
+          liftIO $ do
+              updateTextureState handle (AssetReady assetId []) pool
+              atomicModifyIORef' poolRef $ \p →
+                  ( p { apTextureAtlases =
+                          Map.adjust (\a → a { taRefCount = taRefCount a + 1 })
+                              assetId (apTextureAtlases p)
+                    }
+                  , ()
+                  )
+              let (w, h) = amDimensions (taMetadata atlas)
+                  (TextureHandle rawHandle) = handle
+              atomicModifyIORef' (rcTextureSizeRef (toRenderCapability env)) $ \m →
+                  (HM.insert handle (fromIntegral w, fromIntegral h) m, ())
+              Q.writeQueue (luaQueue env)
+                  (LuaAssetLoaded "texture" (fromIntegral rawHandle) (taPath atlas))
 
 prepareTextureUpload ∷ AssetPool → Device → PhysicalDevice
                      → (TextureHandle, FilePath)
@@ -234,8 +273,30 @@ handleLoadAtlasTextureBatch = handleLoadTextureBatchWith UploadPinnedNearest
 handleLoadTextureBatchWith
     ∷ UploadSampler → [(TextureHandle, FilePath)] → EngineM σ ()
 handleLoadTextureBatchWith _ [] = pure ()
-handleLoadTextureBatchWith samplerPolicy requests = do
+handleLoadTextureBatchWith samplerPolicy incoming = do
     env ← ask
+    -- #1696: a request naming the missing-texture sentinel is dropped
+    -- HERE, ahead of cache classification, the GPU upload and every
+    -- asset-pool write. Leaving it to 'registerTexture' to refuse would
+    -- come too late: the fold below records an 'AssetReady' state, an
+    -- atlas refcount, a texture-size entry and a 'LuaAssetLoaded' event
+    -- for any prep whose registration produced no handle, so the
+    -- sentinel would end up owning real asset bookkeeping anyway. That
+    -- treatment stays as it is for a genuinely exhausted slot allocator
+    -- (#1690), which is a capacity outcome, not an invalid handle.
+    --
+    -- 'generateTextureHandle' should already make this unreachable; the
+    -- filter is what keeps it unreachable if a producer ever synthesises
+    -- a literal zero handle.
+    -- Dropped OUTRIGHT, not settled with #1690's terminal failure: a
+    -- zero handle is a producer defect in a handle no request ever
+    -- legitimately names, not a request whose upload refused, and
+    -- nothing is waiting on it to report anything.
+    let (reserved, requests) = partition (isMissingTextureHandle ∘ fst) incoming
+    forM_ reserved $ \(handle, path) →
+        logWarnM CatTexture $
+            registrationFailureMessage TextureHandleReserved handle (T.pack path)
+
     poolRef ← asks (rcAssetPoolRef . toRenderCapability)
     pool ← liftIO $ readIORef poolRef
     mCacheBindless ← liftIO $ readIORef (rcTextureSystemRef (toRenderCapability env))
@@ -345,6 +406,7 @@ handleLoadTextureBatchWith samplerPolicy requests = do
                                 -- request, so this path acquires no
                                 -- reference of its own to hand back.
                                 (mbH, bl) ← registerTexture dev (tupHandle prep)
+                                    pathText
                                     imageView (btsTextureSampler bindless) bindless
                                 pure (mbH, bl, pure ())
                             UploadPinnedNearest → do
@@ -359,17 +421,25 @@ handleLoadTextureBatchWith samplerPolicy requests = do
                                 nearest ← liftIO $ acquireSampler dev cacheRef
                                     SamplerTextureNearest
                                 (mbH, bl) ← registerPinnedTexture dev (tupHandle prep)
+                                    pathText
                                     imageView nearest bindless
                                 pure ( mbH, bl
                                      , releaseSampler dev cacheRef SamplerTextureNearest )
-                        let outcome = classifyRegistration pathText mbHandle
+                        -- No caller-side diagnostic: 'registerTextureImpl'
+                        -- logs every failure itself, naming the handle and
+                        -- this path (#1696), so a refused sentinel can
+                        -- never be reported here as slot exhaustion — and
+                        -- 'classifyRegistration' carries that same wording
+                        -- into the state and the notification.
+                        let outcome = classifyRegistration (tupHandle prep)
+                                        pathText mbHandle
                         case publishFailureReason outcome of
-                            -- #1690: the bindless allocator is out of
-                            -- slots. Nothing sampling this handle could
-                            -- ever see this image, so the request ends
-                            -- HERE — the GPU objects go back in
-                            -- 'failedUploadCleanup' order and the handle
-                            -- settles on 'AssetFailed'.
+                            -- #1690: the registration refused, so nothing
+                            -- sampling this handle could ever see this
+                            -- image. The request ends HERE — the GPU
+                            -- objects go back in 'failedUploadCleanup'
+                            -- order and the handle settles on
+                            -- 'AssetFailed'.
                             Just reason → do
                                 forM_ (failedUploadCleanup samplerPolicy) $ \case
                                     CleanupImageView     → liftIO cleanView
@@ -468,8 +538,8 @@ handleLoadTextureBatchWith samplerPolicy requests = do
             -- No device, command pool, queue or bindless system at
             -- all: nothing in this batch was uploaded or even
             -- attempted. Deliberately unchanged by #1690, which is
-            -- about the outcome of a registration that RAN and found no
-            -- slot. This branch is also the normal, expected state of
+            -- about the outcome of a registration that RAN and refused.
+            -- This branch is also the normal, expected state of
             -- --headless (no GPU), where announcing a terminal failure
             -- per request would invent a failure protocol for a mode
             -- that never renders.

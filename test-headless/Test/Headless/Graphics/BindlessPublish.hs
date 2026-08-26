@@ -30,11 +30,13 @@ module Test.Headless.Graphics.BindlessPublish (spec) where
 
 import UPrelude
 import qualified Data.Map.Strict as Map
+import qualified Data.Text as T
 import Test.Hspec
 import Engine.Asset.Base (AssetId(..))
-import Engine.Asset.Handle (TextureHandle(..))
+import Engine.Asset.Handle (TextureHandle(..), missingTextureHandle)
 import Engine.Graphics.Vulkan.Texture.Handle
-  (BindlessTextureHandle, toBindlessHandle)
+  (BindlessTextureHandle, toBindlessHandle
+  , TextureRegistrationFailure(..), registrationFailureMessage)
 import Engine.Graphics.Vulkan.Texture.Slot
   (TextureSlot(..), TextureSlotAllocator, createSlotAllocator, allocateSlot)
 import Engine.Graphics.Vulkan.Texture.Publish
@@ -90,12 +92,14 @@ runBatch policy allocator0 paths0 atlases0 requests = BatchResult
     step (acc, allocator) request =
       case allocateSlot allocator of
         Just (slot, allocator') →
-          ( (request, classifyRegistration (reqPath request)
-                        (Just (toBindlessHandle slot (reqHandle request)))) : acc
+          ( (request, classify
+                        (Right (toBindlessHandle slot (reqHandle request)))) : acc
           , allocator' )
         Nothing →
-          ( (request, classifyRegistration (reqPath request) Nothing) : acc
+          ( (request, classify (Left TextureSlotsExhausted)) : acc
           , allocator )
+      where
+        classify = classifyRegistration (reqHandle request) (reqPath request)
 
 -- | The pool holds ONE allocatable slot: slot 0 is the reserved
 --   undefined texture, so a two-slot allocator hands out exactly one.
@@ -130,10 +134,16 @@ spec = do
     it "reaches a terminal FAILURE rather than reporting a load" $
       map snd (brOutcomes result) `shouldSatisfy` all isFailure
 
-    it "names the path in the reason, so the log and the AssetFailed \
-       \state say WHICH request died" $
+    it "carries #1696's own diagnostic verbatim, so the log line, the \
+       \AssetFailed state and the Lua notification all read alike" $
       map snd (brOutcomes result) `shouldBe`
-        [PublishFailed "no bindless slot available to register wall.png"]
+        [ PublishFailed (registrationFailureMessage TextureSlotsExhausted
+                           (TextureHandle 1) "wall.png") ]
+
+    it "says slots ran out, naming the handle and the path" $
+      map snd (brOutcomes result) `shouldBe`
+        [ PublishFailed "Failed to allocate bindless slot for texture \
+                        \handle 1: wall.png" ]
 
     it "publishes no atlas" $
       brAtlases result `shouldBe` Map.empty
@@ -184,8 +194,10 @@ spec = do
     it "registers the requests that fit and fails only the rest" $
       map snd (brOutcomes result) `shouldBe`
         [ PublishRegistered 1
-        , PublishFailed "no bindless slot available to register second.png"
-        , PublishFailed "no bindless slot available to register third.png"
+        , PublishFailed (registrationFailureMessage TextureSlotsExhausted
+                           (TextureHandle 2) "second.png")
+        , PublishFailed (registrationFailureMessage TextureSlotsExhausted
+                           (TextureHandle 3) "third.png")
         ]
 
     it "gives every request in the batch exactly one outcome" $
@@ -285,24 +297,46 @@ spec = do
       publishFailureReason (cachedAliasPublish "wall.png" Nothing)
         `shouldSatisfy` isJust
 
+    it "is reached only by a handle #1696's guard already admitted" $ do
+      -- The sentinel is refused UPSTREAM of this seam, in
+      -- 'duplicateCachedTextureHandle' itself, and dropped outright
+      -- rather than settled -- that refusal writes nothing at all, which
+      -- is #1696's own contract ("Asset.TextureFallback"). This seam's
+      -- failure is the different one: a real request whose atlas holds
+      -- no slot, which DOES settle.
+      registrationFailureMessage TextureHandleReserved
+        missingTextureHandle "wall.png"
+          `shouldSatisfy` T.isInfixOf "handleToSlot[0]"
+      publishFailureReason (cachedAliasPublish "wall.png" Nothing)
+        `shouldSatisfy` maybe False (not ∘ T.isInfixOf "handleToSlot[0]")
+
   describe "a transient upload that fails while a generation is live" $ do
     it "retains the previous generation instead of replacing it" $
-      classifyTransientRegistration "the world preview" Nothing
-        `shouldBe` TransientRetain
-          "no bindless slot available to register the world preview; \
-          \keeping the previous generation"
+      classifyTransientRegistration (TextureHandle 12) "world preview"
+        (Left TextureSlotsExhausted) `shouldBe` TransientRetain
+          "Failed to allocate bindless slot for texture handle 12: \
+          \world preview"
 
     it "replaces it when the registration really took a slot" $
-      classifyTransientRegistration "the world preview"
-        (Just registeredMapping) `shouldBe` TransientReplace 4
+      classifyTransientRegistration (TextureHandle 12) "world preview"
+        (Right registeredMapping) `shouldBe` TransientReplace 4
 
     it "decides the zoom atlas the same way" $ do
-      classifyTransientRegistration "the zoom atlas"
-        (Just registeredMapping) `shouldBe` TransientReplace 4
-      classifyTransientRegistration "the zoom atlas" Nothing
-        `shouldBe` TransientRetain
-          "no bindless slot available to register the zoom atlas; \
-          \keeping the previous generation"
+      classifyTransientRegistration (TextureHandle 13) "zoom atlas"
+        (Right registeredMapping) `shouldBe` TransientReplace 4
+      classifyTransientRegistration (TextureHandle 13) "zoom atlas"
+        (Left TextureSlotsExhausted) `shouldBe` TransientRetain
+          (registrationFailureMessage TextureSlotsExhausted
+             (TextureHandle 13) "zoom atlas")
+
+    it "retains just the same when the refusal is #1696's sentinel" $
+      -- Both refusals leave identical wreckage — an unsampleable image
+      -- and a live previous generation — so both retain. Only the
+      -- diagnosis differs.
+      classifyTransientRegistration missingTextureHandle "zoom atlas"
+        (Left TextureHandleReserved) `shouldBe` TransientRetain
+          (registrationFailureMessage TextureHandleReserved
+             missingTextureHandle "zoom atlas")
 
     it "releases the failed upload's own GPU objects, sampler included" $
       -- Both transients register pinned (preview NEAREST, zoom LINEAR),

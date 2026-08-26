@@ -23,7 +23,8 @@ import Engine.Graphics.Camera (CameraFacing(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..)
                                           , QuadPayload(..), quadVertices
                                           , rectCorners, fullQuadUV
-                                          , renderFlagSelected, packWorldUV)
+                                          , renderFlagSelected, packWorldUV
+                                          , noFaceMapVertexId)
 import World.Grid (tileWidth, tileHeight, tileSideHeight
                   , tileHalfWidth, tileHalfDiamondHeight
                   , worldLayer, applyFacingF, baseTileW, baseTileH)
@@ -111,9 +112,9 @@ renderBuildingQuads env facing zSlice effDepth tileAlpha = do
                 Nothing → return V.empty
                 Just _bts → do
                     -- Stable handle id resolved in the shader (#286);
-                    -- -1 = default face map (no directional face map).
+                    -- buildings carry no directional face map (#1696).
                     let lookupSlot h = fromIntegral (toInt h) ∷ Word32
-                        defFmSlot = -1 ∷ Float
+                        defFmSlot = noFaceMapVertexId
                         quads = V.fromList
                             $ HM.foldlWithKey' (\acc bid inst →
                                 let mDef  = HM.lookup (biDefName inst) defs
@@ -267,9 +268,9 @@ renderGhostQuad env facing zSlice = do
                         Nothing → return V.empty
                         Just _bts →
                             -- Stable handle id resolved in the shader (#286);
-                            -- -1 = default face map.
+                            -- buildings carry no directional face map (#1696).
                             let lookupSlot h = fromIntegral (toInt h) ∷ Word32
-                                defFmSlot = -1 ∷ Float
+                                defFmSlot = noFaceMapVertexId
                                 texHandle = bdTexture def
                                 (texW, texH) = case HM.lookup texHandle texSizes of
                                     Just (w, h) → (fromIntegral w, fromIntegral h)

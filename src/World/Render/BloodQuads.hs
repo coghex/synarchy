@@ -54,7 +54,7 @@ import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..)
                                            , QuadCorners(..), QuadPayload(..)
                                            , quadVertices, fullQuadUV
-                                           , packWorldUV)
+                                           , packWorldUV, noFaceMapVertexId)
 import Blood.Types
 import Blood.Texture (generateBloodTexture, btiWidth, btiHeight, btiPixels)
 import Blood.Render (BloodRenderRecord(..), bloodRenderRecords)
@@ -190,14 +190,14 @@ uploadOne dev pdev cmdPool queue (bl, known) d = do
     texHandle ← liftIO $ generateTextureHandle ap
     ((_image, imageView), cleanupImg) ← createTextureFromRGBABytes
         pdev dev cmdPool queue (btiWidth img, btiHeight img) (btiPixels img)
-    (mBindlessHandle, bl') ← registerTexture dev texHandle imageView
-                                (btsTextureSampler bl) bl
+    (mBindlessHandle, bl') ← registerTexture dev texHandle "blood decal atlas"
+                                imageView (btsTextureSampler bl) bl
     case mBindlessHandle of
-        Just _  → do
+        Right _ → do
             liftIO $ atomicModifyIORef' (rvTextureSizeRef (toRenderViewCapability env)) $ \m →
                 (HM.insert texHandle (btiWidth img, btiHeight img) m, ())
             pure (bl', HM.insert (btdId d) (texHandle, cleanupImg) known)
-        Nothing → do
+        Left _ → do
             -- Bindless system full — drop the GPU resource we just made;
             -- this decal's texture simply isn't uploaded yet and its
             -- render pass is skipped until a slot frees up.
@@ -245,7 +245,8 @@ renderBloodDecalQuads env pageId worldState tileAlpha = do
 
         let recs = bloodRenderRecords now pageId store
             lookupSlot texHandle = toInt texHandle
-            defFmSlot = -1 ∷ Float
+            -- Blood decals carry no directional face map (#1696).
+            defFmSlot = noFaceMapVertexId
             facing  = camFacing camera
             zoom    = camZoom camera
             zSlice  = camZSlice camera

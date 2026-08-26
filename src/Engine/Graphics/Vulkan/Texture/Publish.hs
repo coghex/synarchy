@@ -2,10 +2,14 @@
 --   texture (#1690).
 --
 --   "Engine.Graphics.Vulkan.Texture.Bindless"'s @registerTexture@ /
---   @registerPinnedTexture@ answer 'Nothing' when
+--   @registerPinnedTexture@ answer @Left TextureSlotsExhausted@ when
 --   "Engine.Graphics.Vulkan.Texture.Slot" is out of slots: no descriptor
 --   write, no @btsHandleMap@ entry, no handle→slot table entry. The
---   upload's GPU objects exist and nothing samples them.
+--   upload's GPU objects exist and nothing samples them. #1696's
+--   @Left TextureHandleReserved@ leaves exactly the same wreckage, so
+--   both refusals are decided here identically — what differs between
+--   them is only the diagnosis a reader is handed, which
+--   'registrationFailureMessage' already owns.
 --
 --   Continuing from that as though registration had succeeded is worse
 --   than a missing texture, because the bookkeeping a success writes is
@@ -53,7 +57,10 @@ module Engine.Graphics.Vulkan.Texture.Publish
 
 import UPrelude
 import qualified Data.Map.Strict as Map
-import Engine.Graphics.Vulkan.Texture.Handle (BindlessTextureHandle(..))
+import Engine.Asset.Handle (TextureHandle)
+import Engine.Graphics.Vulkan.Texture.Handle
+  (BindlessTextureHandle(..), TextureRegistrationFailure
+  , registrationFailureMessage)
 import Engine.Graphics.Vulkan.Texture.Slot (TextureSlot(..))
 
 -- | Which sampler a freshly uploaded slot is registered with.
@@ -89,11 +96,22 @@ data TexturePublish
   deriving (Show, Eq)
 
 -- | Decide the outcome of a FRESH upload's registration.
-classifyRegistration ∷ Text → Maybe BindlessTextureHandle → TexturePublish
-classifyRegistration path = \case
-  Just bindlessHandle → PublishRegistered (tsIndex (bthSlot bindlessHandle))
-  Nothing → PublishFailed
-      ("no bindless slot available to register " <> path)
+--
+--   The failure reason is 'registrationFailureMessage' verbatim — the
+--   SAME text
+--   'Engine.Graphics.Vulkan.Texture.Bindless.registerTextureImpl'
+--   already logged for this refusal (#1696). So the state a handle
+--   settles on, the message Lua is told, and the line in the log all
+--   read alike, and a refused sentinel is never restated here as slot
+--   exhaustion.
+classifyRegistration
+  ∷ TextureHandle
+  → Text  -- ^ Caller provenance: a path, or a stable source label
+  → Either TextureRegistrationFailure BindlessTextureHandle
+  → TexturePublish
+classifyRegistration handle source = \case
+  Right bindlessHandle → PublishRegistered (tsIndex (bthSlot bindlessHandle))
+  Left failure → PublishFailed (registrationFailureMessage failure handle source)
 
 -- | Decide the outcome of a CACHE HIT: a second stable handle for an
 --   atlas the pool already holds, resolved through the CANONICAL
@@ -105,7 +123,20 @@ classifyRegistration path = \case
 --   slot is precisely the poisoned cache hit #1690 removes: the handle
 --   resolves to slot 0 (the undefined texture) on the shader read path,
 --   so reporting it loaded is a lie that no later request can correct.
-cachedAliasPublish ∷ Text → Maybe BindlessTextureHandle → TexturePublish
+--
+--   Scope: this decides only what a hit that PASSED #1696's
+--   'checkRegistrableHandle' guard does. That guard runs first, in
+--   'Engine.Scripting.Lua.Message.Texture.duplicateCachedTextureHandle'
+--   itself, because this path owns its own @btsHandleMap@ insertion
+--   rather than going through @registerTexture@ — and a refused
+--   sentinel is dropped there outright rather than settled here: it is
+--   a producer defect in a handle that no request ever legitimately
+--   names, not a request whose upload failed.
+cachedAliasPublish
+  ∷ Text  -- ^ the cached atlas's path
+  → Maybe BindlessTextureHandle
+     -- ^ the CANONICAL owner's @btsHandleMap@ mapping, if it has one
+  → TexturePublish
 cachedAliasPublish path = \case
   Just bindlessHandle → PublishRegistered (tsIndex (bthSlot bindlessHandle))
   Nothing → PublishFailed
@@ -205,11 +236,13 @@ data TransientPublish
     --   world init or load regenerates it.
   deriving (Show, Eq)
 
--- | Decide a transient upload's outcome.
+-- | Decide a transient upload's outcome. Like 'classifyRegistration',
+--   the reason is 'registrationFailureMessage' verbatim.
 classifyTransientRegistration
-  ∷ Text → Maybe BindlessTextureHandle → TransientPublish
-classifyTransientRegistration label = \case
-  Just bindlessHandle → TransientReplace (tsIndex (bthSlot bindlessHandle))
-  Nothing → TransientRetain
-      ("no bindless slot available to register " <> label
-        <> "; keeping the previous generation")
+  ∷ TextureHandle
+  → Text  -- ^ Caller provenance: the transient's stable source label
+  → Either TextureRegistrationFailure BindlessTextureHandle
+  → TransientPublish
+classifyTransientRegistration handle source = \case
+  Right bindlessHandle → TransientReplace (tsIndex (bthSlot bindlessHandle))
+  Left failure → TransientRetain (registrationFailureMessage failure handle source)

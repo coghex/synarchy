@@ -23,6 +23,12 @@ module Engine.Graphics.Vulkan.Texture.Bindless
   , setTextureFilter
   , handleSlotTableSize
   , writeHandleSlotEntry
+  , writeHandleSlotEntryPtr
+    -- * Registration validation (re-exported for callers that own their
+    --   own 'btsHandleMap' insertion)
+  , TextureRegistrationFailure(..)
+  , checkRegistrableHandle
+  , registrationFailureMessage
   ) where
 
 import UPrelude
@@ -35,7 +41,7 @@ import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logWarnM)
 import Engine.Core.Capability.Render
   (RenderCapability(..), toRenderCapability)
-import Engine.Asset.Handle (TextureHandle(..), toInt)
+import Engine.Asset.Handle (TextureHandle(..), missingTextureHandle, toInt)
 import Engine.Graphics.Config (textureFilterToVulkan)
 import Engine.Graphics.Vulkan.Sampler.Cache
 import Engine.Graphics.Vulkan.Texture.Slot
@@ -307,9 +313,28 @@ writeHandleSlotDescriptor dev descSet buf = do
 --   'Engine.Scripting.Lua.Message'). Out-of-range ids are dropped (they
 --   stay at the zero-initialised slot 0 = undefined). #286.
 writeHandleSlotEntry ∷ BindlessTextureSystem → Int → Word32 → IO ()
-writeHandleSlotEntry sys hid slot
-  | hid < 0 ∨ hid ≥ handleSlotTableSize = pure ()
-  | otherwise = pokeElemOff (btsHandleSlotPtr sys) hid slot
+writeHandleSlotEntry sys = writeHandleSlotEntryPtr (btsHandleSlotPtr sys)
+
+-- | 'writeHandleSlotEntry' against the table pointer directly — the
+--   whole of that function's body, so every production write in the
+--   engine goes through this one guard.
+--
+--   Two ids are refused rather than written:
+--
+--   * an id outside the table (#286, as above);
+--   * a NONZERO slot for 'missingTextureHandle' (#1696). Entry 0 belongs
+--     to the missing-texture sentinel and must resolve to the undefined
+--     slot for the whole process lifetime, so this low-level mutation
+--     boundary preserves @handleToSlot[0] == 0@ independently of
+--     'checkRegistrableHandle' upstream. A ZERO write to entry 0 is
+--     allowed: clearing it is what 'unregisterTexture' and
+--     'releaseTextureHandles' do, and it lands on the value the entry
+--     already holds.
+writeHandleSlotEntryPtr ∷ Ptr Word32 → Int → Word32 → IO ()
+writeHandleSlotEntryPtr ptr hid slot
+  | hid < 0 ∨ hid ≥ handleSlotTableSize          = pure ()
+  | hid ≡ toInt missingTextureHandle ∧ slot ≢ 0  = pure ()
+  | otherwise = pokeElemOff ptr hid slot
 
 -- | Register a texture in the bindless system, following the GLOBAL
 --   filter: the slot is repainted by 'setTextureFilter' on a toggle.
@@ -317,10 +342,12 @@ writeHandleSlotEntry sys hid slot
 --   survive that toggle uses 'registerPinnedTexture' instead.
 registerTexture ∷ Device
                 → TextureHandle
+                → Text          -- ^ Caller provenance for diagnostics
                 → ImageView
                 → Sampler
                 → BindlessTextureSystem
-                → EngineM σ (Maybe BindlessTextureHandle, BindlessTextureSystem)
+                → EngineM σ ( Either TextureRegistrationFailure BindlessTextureHandle
+                            , BindlessTextureSystem )
 registerTexture = registerTextureImpl False
 
 -- | Register a texture pinned to a SPECIFIC sampler that must survive a
@@ -329,48 +356,69 @@ registerTexture = registerTextureImpl False
 --   of the new global one, so it keeps its intended look.
 registerPinnedTexture ∷ Device
                       → TextureHandle
+                      → Text        -- ^ Caller provenance for diagnostics
                       → ImageView
                       → Sampler
                       → BindlessTextureSystem
-                      → EngineM σ (Maybe BindlessTextureHandle, BindlessTextureSystem)
+                      → EngineM σ ( Either TextureRegistrationFailure BindlessTextureHandle
+                                  , BindlessTextureSystem )
 registerPinnedTexture = registerTextureImpl True
 
+-- | Both registration paths' shared body. A refusal logs the failure
+--   with the handle id and the caller's provenance, and returns the
+--   bindless state completely UNTOUCHED — no slot allocated, no
+--   descriptor written, no table entry poked, no bookkeeping inserted
+--   (#1696).
 registerTextureImpl ∷ Bool          -- ^ pin this slot's sampler?
                     → Device
                     → TextureHandle
+                    → Text          -- ^ Caller provenance for diagnostics
                     → ImageView
                     → Sampler
                     → BindlessTextureSystem
-                    → EngineM σ (Maybe BindlessTextureHandle, BindlessTextureSystem)
-registerTextureImpl pinned dev texHandle imageView sampler system = do
-  case Map.lookup texHandle (btsHandleMap system) of
-    Just existingHandle → pure (Just existingHandle, system)
-    Nothing → do
-      case allocateSlot (btsSlotAllocator system) of
-        Nothing → pure (Nothing, system)
-        Just (slot, newAllocator) → do
-          writeDescriptorSlot dev (btsDescriptorSet system) (btsConfig system)
-            (tsIndex slot) imageView sampler
-          -- Record the handle→slot mapping for the shader (#286). The
-          -- table pointer persists across the immutable system copy, so
-          -- writing through 'system' is correct.
-          let TextureHandle hid = texHandle
-          liftIO $ writeHandleSlotEntry system hid (tsIndex slot)
+                    → EngineM σ ( Either TextureRegistrationFailure BindlessTextureHandle
+                                , BindlessTextureSystem )
+registerTextureImpl pinned dev texHandle source imageView sampler system =
+  -- The sentinel guard runs FIRST, ahead of every mutation below: a
+  -- refused handle allocates no slot, writes no descriptor, pokes no
+  -- table entry and inserts no bookkeeping.
+  case checkRegistrableHandle texHandle of
+    Left failure → refuse failure
+    Right ()     → allocate
+  where
+    refuse failure = do
+      logWarnM CatTexture
+        (registrationFailureMessage failure texHandle source)
+      pure (Left failure, system)
 
-          let bindlessHandle = toBindlessHandle slot texHandle
-              newHandleMap = Map.insert texHandle bindlessHandle (btsHandleMap system)
-              newImageViews = Map.insert texHandle imageView (btsImageViews system)
-              newPinned
-                | pinned    = Map.insert texHandle sampler (btsPinned system)
-                | otherwise = btsPinned system
-              newSystem = system
-                { btsSlotAllocator = newAllocator
-                , btsHandleMap = newHandleMap
-                , btsImageViews = newImageViews
-                , btsPinned = newPinned
-                }
+    allocate = case Map.lookup texHandle (btsHandleMap system) of
+      Just existingHandle → pure (Right existingHandle, system)
+      Nothing →
+        case allocateSlot (btsSlotAllocator system) of
+          Nothing → refuse TextureSlotsExhausted
+          Just (slot, newAllocator) → do
+            writeDescriptorSlot dev (btsDescriptorSet system) (btsConfig system)
+              (tsIndex slot) imageView sampler
+            -- Record the handle→slot mapping for the shader (#286). The
+            -- table pointer persists across the immutable system copy, so
+            -- writing through 'system' is correct.
+            let TextureHandle hid = texHandle
+            liftIO $ writeHandleSlotEntry system hid (tsIndex slot)
 
-          pure (Just bindlessHandle, newSystem)
+            let bindlessHandle = toBindlessHandle slot texHandle
+                newHandleMap = Map.insert texHandle bindlessHandle (btsHandleMap system)
+                newImageViews = Map.insert texHandle imageView (btsImageViews system)
+                newPinned
+                  | pinned    = Map.insert texHandle sampler (btsPinned system)
+                  | otherwise = btsPinned system
+                newSystem = system
+                  { btsSlotAllocator = newAllocator
+                  , btsHandleMap = newHandleMap
+                  , btsImageViews = newImageViews
+                  , btsPinned = newPinned
+                  }
+
+            pure (Right bindlessHandle, newSystem)
 
 -- | Unregister a texture from the bindless system
 unregisterTexture ∷ Device

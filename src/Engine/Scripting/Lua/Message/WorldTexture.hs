@@ -131,20 +131,22 @@ handleWorldPreview = do
                     let cleanSampler = releaseSampler dev cacheRef SamplerTextureNearest
 
                     (mbBindlessHandle, newBindless) ← registerPinnedTexture dev
-                        texHandle imageView sampler bindless
+                        texHandle "world preview" imageView sampler bindless
                     let cleanupAll = cleanView >> cleanImage >> cleanSampler
-                    case classifyTransientRegistration "the world preview"
+                    case classifyTransientRegistration texHandle "world preview"
                              mbBindlessHandle of
-                      -- #1690: the registration got no slot, so nothing
-                      -- can sample this image. Disposing the PREVIOUS
+                      -- #1690: the registration refused, so nothing can
+                      -- sample this image. Disposing the PREVIOUS
                       -- generation for it would destroy a texture that
-                      -- is still being drawn and leave the preview
+                      -- is still being drawn and leave this surface
                       -- resolving to the undefined texture, so keep the
                       -- old generation and hand this upload's own GPU
                       -- objects back instead. Nothing is published.
+                      -- 'registerTextureImpl' already logged the reason
+                      -- (#1696); this says what was done about it.
                       TransientRetain reason → do
-                          logWarnM CatWorld $ "World preview texture not \
-                              \published: " <> reason
+                          logWarnM CatWorld $ "World preview not published, keeping \
+                              \the previous generation: " <> reason
                           forM_ (failedUploadCleanup UploadPinnedNearest) $ \case
                               CleanupImageView     → liftIO cleanView
                               CleanupImage         → liftIO cleanImage
@@ -276,19 +278,22 @@ handleZoomAtlasUpload = do
                     let cleanSampler = releaseSampler dev cacheRef SamplerTextureLinear
 
                     (mbBindlessHandle, newBindless) ← registerPinnedTexture dev
-                        texHandle imageView sampler bindless
+                        texHandle "zoom atlas" imageView sampler bindless
                     let cleanupAll = cleanView >> cleanImage >> cleanSampler
-                    case classifyTransientRegistration "the zoom atlas"
+                    case classifyTransientRegistration texHandle "zoom atlas"
                              mbBindlessHandle of
-                      -- #1690: same as the preview above. A page whose
-                      -- 'ZoomAtlasInfo' named an unregistered handle
-                      -- would bake its whole zoom map against the
-                      -- undefined texture, and the previous atlas it
-                      -- replaced would already have been destroyed. Keep
-                      -- the old generation; publish no new atlas info.
+                      -- #1690: the registration refused, so nothing can
+                      -- sample this image. Disposing the PREVIOUS
+                      -- generation for it would destroy a texture that
+                      -- is still being drawn and leave this surface
+                      -- resolving to the undefined texture, so keep the
+                      -- old generation and hand this upload's own GPU
+                      -- objects back instead. Nothing is published.
+                      -- 'registerTextureImpl' already logged the reason
+                      -- (#1696); this says what was done about it.
                       TransientRetain reason → do
-                          logWarnM CatWorld $ "Zoom atlas not published: "
-                              <> reason
+                          logWarnM CatWorld $ "Zoom atlas not published, keeping \
+                              \the previous generation: " <> reason
                           forM_ (failedUploadCleanup UploadPinnedNearest) $ \case
                               CleanupImageView     → liftIO cleanView
                               CleanupImage         → liftIO cleanImage

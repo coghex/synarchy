@@ -35,7 +35,9 @@ data GlyphInfo = GlyphInfo
 defaultAssetPool ∷ IO AssetPool
 defaultAssetPool = do
   nextAssetIdRef ← newIORef 0
-  nextTextureHandleRef ← newIORef 0
+  -- Texture ids start at 'firstAllocatableTextureHandle', never 0:
+  -- handle 0 is the reserved missing-texture sentinel (#1696).
+  nextTextureHandleRef ← newIORef firstAllocatableTextureHandle
   nextFontHandleRef ← newIORef 0
   textureHandlesRef ← newIORef Map.empty
   fontHandlesRef ← newIORef Map.empty
