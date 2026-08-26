@@ -222,8 +222,8 @@ handleWorldCommand env logger (WorldSetSlope pageId gx gy z bits)
   = handleWorldSetSlopeCommand env logger pageId gx gy z bits
 handleWorldCommand env logger (WorldSetCell pageId gx gy z mat)
   = handleWorldSetCellCommand env logger pageId gx gy z mat
-handleWorldCommand env logger (WorldSetStructure pageId gx gy slotTag texId faceId z)
-  = handleWorldSetStructureCommand (toWorldSimCapability env) logger pageId gx gy slotTag texId faceId z
+handleWorldCommand env logger (WorldSetStructure pageId gx gy slotTag texId faceId z tok)
+  = handleWorldSetStructureCommand (toWorldSimCapability env) logger pageId gx gy slotTag texId faceId z tok
 handleWorldCommand env logger (WorldClearStructure pageId gx gy slotTag)
   = handleWorldClearStructureCommand (toWorldSimCapability env) logger pageId gx gy slotTag
 handleWorldCommand env logger (WorldClearAllStructures pageId)

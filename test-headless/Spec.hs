@@ -175,6 +175,7 @@ import qualified Test.Headless.World.Render.FrontWallLift as FrontWallLift
 import qualified Test.Headless.World.Render.GroundItemSeam as GroundItemSeam
 import qualified Test.Headless.World.Render.PickSeam as PickSeam
 import qualified Test.Headless.World.DesignationSeam as DesignationSeam
+import qualified Test.Headless.World.StructureStage as StructureStage
 import qualified Test.Headless.World.Render.SideFace as RenderSideFace
 import qualified Test.Headless.World.Render.ZTrackSeam as ZTrackSeam
 import qualified Test.Headless.World.Render.SlopeBit as RenderSlopeBit
@@ -599,6 +600,11 @@ main = hspec $ do
     describe "World.Render.PickSeam" PickSeam.spec
     describe "World.DesignationSeam" DesignationSeam.spec
     describe "World.DesignationSeam (engine)" DesignationSeam.engineSpec
+
+    -- #1674: its own headless engine (no worker threads), so the
+    -- WorldSetStructure structure.place emits waits to be dequeued and
+    -- dispatched by the example rather than by a racing drainer.
+    StructureStage.spec
 
     -- #1602: its own headless engine (no worker threads), so a queued
     -- BuildingSpawn / WorldDesignateConstruct stays in its queue and

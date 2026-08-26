@@ -42,7 +42,7 @@ import World.Tool.Types (ToolMode(..))
 import World.Generate.Types (WorldGenParams(..))
 import World.Time.Types (WorldTime(..), WorldDate(..), defaultWorldTime, defaultWorldDate)
 import World.Edit.Types (WorldEdit, WorldEdits, emptyWorldEdits)
-import Structure.Types (ChunkStructures, emptyChunkStructures)
+import Structure.Types (StructureStage, emptyStructureStage)
 import World.Mine.Types (MineDesignations)
 import World.Construct.Types (ConstructDesignations)
 import World.Chop.Types (ChopDesignations)
@@ -176,7 +176,7 @@ data WorldState = WorldState
       --   World.Spoil.Types). Written by the world thread's dig
       --   handler; read by the spoil render pass. Persisted in
       --   saves (sdSpoilPiles, v34).
-    , wsStructureStageRef ∷ IORef ChunkStructures
+    , wsStructureStageRef ∷ IORef StructureStage
       -- ^ Lua-thread write-ahead staging for THIS world's structure
       --   placements. The authoritative structure state is the per-chunk
       --   'lcStructures' overlay (rendered + persisted), but those writes
@@ -188,6 +188,12 @@ data WorldState = WorldState
       --   read-your-writes without a second authority. Per-world so it can't
       --   leak across worlds (it dies with the WorldState, and a reloaded
       --   world gets a fresh empty one); never saved.
+      --
+      --   #1674: each staged entry carries the token of the
+      --   'structure.place' attempt that wrote it, and the queued
+      --   WorldSetStructure carries the same token, so the world thread
+      --   can undo exactly the attempt it declines (an unloaded target
+      --   chunk) without touching a newer placement at the same key.
     , wsConstructDesignationsRef ∷ IORef ConstructDesignations
       -- ^ Construction-designation set: tile (gx, gy) → designation
       --   (surface z, build target, status, progress; see
@@ -349,7 +355,7 @@ emptyWorldState = do
     wsMineDesignationsRef ← newIORef HM.empty
     wsGroundItemsRef ← newIORef emptyGroundItems
     wsSpoilRef ← newIORef emptySpoilPiles
-    wsStructureStageRef ← newIORef emptyChunkStructures
+    wsStructureStageRef ← newIORef emptyStructureStage
     wsConstructDesignationsRef ← newIORef HM.empty
     wsFloraHarvestsRef ← newIORef emptyFloraHarvests
     wsChopDesignationsRef ← newIORef HM.empty

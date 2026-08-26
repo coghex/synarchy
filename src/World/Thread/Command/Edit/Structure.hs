@@ -19,7 +19,8 @@ import World.Types
 import World.Generate.Coordinates (globalToChunk)
 import World.Edit.Types (WorldEdit(..), appendEdit)
 import World.Edit.Apply (applyEdit)
-import Structure.Types (emptyChunkStructures)
+import Structure.Types
+    (StructureStageToken, dropStagedAttempt, emptyChunkStructures)
 
 -- | Place a structure piece (floor/wall/post/ceiling) at (gx,gy,slot-tag) via
 --   the WeSetStructure edit path: live-apply to the loaded chunk's structure
@@ -28,9 +29,21 @@ import Structure.Types (emptyChunkStructures)
 --   variant is already baked into facePaletteId (the BUILDER chose it). No
 --   terrain is touched — but it shares the ordered log with terrain edits, so
 --   a dig recorded before this lands before it on replay.
+--
+--   __Declining is a retraction, not just a refusal (#1674).__ The chunk can
+--   evict between @structure.place@'s own residency check and this one (a
+--   load pass inserts and evicts in one atomic 'wsTilesRef' update), and the
+--   caller has already written its read-your-writes entry into
+--   'wsStructureStageRef'. Dropping the edit alone would leave that entry as
+--   a phantom every structure query reports as real, absent from the edit log
+--   and gone after a save/load. So the unloaded branch retracts the staged
+--   entry for the attempt this command names — matched by TOKEN, so a newer
+--   placement staged at the same tile and slot (even a byte-identical one)
+--   survives its predecessor's decline. A commit that SUCCEEDS leaves the
+--   stage alone: it agrees with the overlay there.
 handleWorldSetStructureCommand ∷ WorldSimCapability → LoggerState → WorldPageId
-    → Int → Int → Word8 → Int → Int → Int → IO ()
-handleWorldSetStructureCommand wsc logger pageId gx gy slotTag texId faceId z = do
+    → Int → Int → Word8 → Int → Int → Int → StructureStageToken → IO ()
+handleWorldSetStructureCommand wsc logger pageId gx gy slotTag texId faceId z tok = do
     mgr ← readIORef (wsWorldManagerRef wsc)
     case lookup pageId (wmWorlds mgr) of
         Nothing →
@@ -41,7 +54,9 @@ handleWorldSetStructureCommand wsc logger pageId gx gy slotTag texId faceId z = 
                 edit = WeSetStructure gx gy slotTag texId faceId z
             td ← readIORef (wsTilesRef ws)
             case lookupChunk coord td of
-                Nothing →
+                Nothing → do
+                    atomicModifyIORef' (wsStructureStageRef ws) $ \st →
+                        (dropStagedAttempt (gx, gy, slotTag) tok st, ())
                     logWarn logger CatWorld $
                         "Chunk not loaded for set structure at "
                           <> tshow gx <> "," <> tshow gy

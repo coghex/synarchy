@@ -1151,6 +1151,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.ActionOutcome
                    Test.Headless.World.ChunkQueueFrame
                    Test.Headless.World.DesignationSeam
+                   Test.Headless.World.StructureStage
                    Test.Headless.World.Spoil
                    Test.Headless.World.RenderedSurface
                    Test.Headless.World.IslandColumns

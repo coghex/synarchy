@@ -29,7 +29,7 @@ module Engine.Scripting.Lua.API.Structure
     ) where
 
 import UPrelude
-import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
+import Data.IORef (readIORef, atomicModifyIORef')
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text.Encoding as TE
 import qualified HsLua as Lua
@@ -72,6 +72,9 @@ resolveStructurePage env Nothing = activeWorldPage env
 --   does nothing) when the paths are omitted, there is no active world, or the
 --   target chunk isn't loaded — the last because the world thread drops a
 --   structure edit for an unloaded chunk, so staging one would be a phantom.
+--   The chunk can still evict between that check and the world thread's own,
+--   so the staged entry is tagged with this attempt's token and the command
+--   carries it: a declined commit retracts exactly that entry (#1674).
 structurePlaceFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 structurePlaceFn env = do
     gxA   ← Lua.tointeger 1
@@ -143,13 +146,17 @@ structurePlaceFn env = do
                                                 -- the same Lua call (floors→posts→
                                                 -- walls) before the world thread has
                                                 -- applied it. (See wsStructureStageRef.)
-                                                atomicModifyIORef' (wsStructureStageRef ws) $ \st →
-                                                    ( HM.insert (cgx, cgy, slotTag)
-                                                                (StructurePieceData texId faceId z) st
-                                                    , () )
+                                                -- The token this attempt takes rides
+                                                -- the command, so a decline retracts
+                                                -- THIS staged entry and no other
+                                                -- (#1674).
+                                                tok ← atomicModifyIORef' (wsStructureStageRef ws) $
+                                                    stageStructurePlacement
+                                                        (cgx, cgy, slotTag)
+                                                        (StructurePieceData texId faceId z)
                                                 Q.writeQueue (wsWorldQueue (toWorldSimCapability env))
                                                     (WorldSetStructure pageId cgx cgy
-                                                                       slotTag texId faceId z)
+                                                                       slotTag texId faceId z tok)
                                                 pure True
                                     Nothing → pure False
                             _ → pure False   -- no paths → nothing placed
@@ -186,7 +193,7 @@ structureClearFn env = do
                                 -- drop any staged add (no-op if not staged) so a
                                 -- re-query doesn't surface the just-cleared piece
                                 atomicModifyIORef' (wsStructureStageRef ws) $ \st →
-                                    (HM.delete (cgx, cgy, slotTag) st, ())
+                                    (clearStagedKey (cgx, cgy, slotTag) st, ())
                                 Q.writeQueue (wsWorldQueue (toWorldSimCapability env))
                                     (WorldClearStructure pageId cgx cgy slotTag)
                                 pure True
@@ -204,7 +211,11 @@ structureClearAllFn env = do
         mActive ← activeWorldPage env
         case mActive of
             Just (pageId, ws) → do
-                writeIORef (wsStructureStageRef ws) emptyChunkStructures
+                -- entries only: the attempt counter stays where it is, so a
+                -- token retired by this wipe is never reissued and a decline
+                -- for it cannot match a placement staged after it (#1674).
+                atomicModifyIORef' (wsStructureStageRef ws) $ \st →
+                    (clearStagedAll st, ())
                 Q.writeQueue (wsWorldQueue (toWorldSimCapability env))
                     (WorldClearAllStructures pageId)
             Nothing → pure ()
@@ -222,7 +233,7 @@ structureCountFn env = do
             st ← readIORef (wsStructureStageRef ws)
             td ← readIORef (wsTilesRef ws)
             let lcMap = HM.unions [ lcStructures lc | lc ← HM.elems (wtdChunks td) ]
-            pure $ HM.size (HM.union st lcMap)
+            pure $ HM.size (HM.union (stagedPieces st) lcMap)
         Nothing → pure 0
     Lua.pushinteger (fromIntegral n)
     return 1
@@ -393,8 +404,8 @@ lookupStructure env mPage rawGX rawGY slot = do
                 key = ( rawGX + dgx, rawGY + dgy
                       , fromIntegral (fromEnum slot) ∷ Word8 )
             st ← readIORef (wsStructureStageRef ws)
-            case HM.lookup key st of
-                Just spd → pure (Just spd)
+            case HM.lookup key (ssEntries st) of
+                Just staged → pure (Just (stgPiece staged))
                 Nothing  → do
                     td ← readIORef (wsTilesRef ws)
                     pure $ lookupChunk coord td ⌦ HM.lookup key . lcStructures
