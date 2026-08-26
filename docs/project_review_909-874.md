@@ -8,14 +8,14 @@ The four capability refactors (#909, #906, #905, and #902) retain live-container
 
 ## Status
 
-- [ ] PRR-1. Persisted borderless mode boots as a decorated window while reporting borderless
+- [x] PRR-1. Persisted borderless mode boots as a decorated window while reporting borderless — [#1731]
 - [ ] PRR-2. A fullscreen boot forgets its configured windowed geometry
 - [ ] PRR-3. Stale simple-preview completions can create unbounded texture aliases
 - [ ] PRR-4. NaN XP can escape the mental-effectiveness clamps and corrupt combat and crafting
 
 ## 1. Persisted borderless startup
 
-### PRR-1. Persisted borderless mode boots as a decorated window while reporting borderless
+### [#1731] PRR-1. Persisted borderless mode boots as a decorated window while reporting borderless
 
 > **Captured note:** Apply the persisted borderless request during graphical startup, or immediately after window creation, and keep the reported mode synchronized with what GLFW actually applied. PR #908 deliberately repaired later mode transitions without closing the already-documented startup mismatch.
 
