@@ -8,14 +8,14 @@ The color-name correction, z-preserving tile selection, heterogeneous multi-worl
 
 ## Status
 
-- [ ] PRR-1. `unit.repairItem` turns NaN deltas into total wear
+- [x] PRR-1. `unit.repairItem` turns NaN deltas into total wear — [#1732]
 - [ ] PRR-2. Non-finite material movement costs can freeze traversal
 - [ ] PRR-3. The follow-command priority probe confounds capacity rejection with arbitration
 - [ ] PRR-4. `ItemInstance.iiWeight` still documents the obsolete mass model
 
 ## 1. Repair-delta numeric validity
 
-### PRR-1. `unit.repairItem` turns NaN deltas into total wear
+### [#1732] PRR-1. `unit.repairItem` turns NaN deltas into total wear
 
 > **Captured note:** Reject non-finite `unit.repairItem` deltas before mutating an item. The public Lua primitive accepts `0/0` as a number, and its bare `max`/`min` clamp incidentally maps that NaN to zero, so a malformed repair calculation can break both wear axes rather than failing or leaving the item unchanged.
 
