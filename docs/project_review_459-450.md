@@ -10,7 +10,7 @@ The construction-job flow, ruins and structure variants, script teardown, legacy
 
 - [x] PRR-1. Foraging discovery remains planar at the cylindrical seam — [#1707]
 - [x] PRR-2. Flora YAML can opt into zero-time repeat harvesting — [#1711]
-- [ ] PRR-3. Food YAML does not enforce one positive nutrition mode
+- [x] PRR-3. Food YAML does not enforce one positive nutrition mode — [#1716]
 - [ ] PRR-4. Fresh and loaded arenas use different base vegetation seeds
 - [ ] PRR-5. The quad cache can pair one camera stamp with another camera's geometry
 - [ ] PRR-6. Optional ntfy requests have retries but no repository-defined time bound
@@ -66,7 +66,7 @@ The construction-job flow, ruins and structure variants, script teardown, legacy
 
 ## 3. Food nutrition schema validity
 
-### PRR-3. Food YAML does not enforce one positive nutrition mode
+### [#1716] PRR-3. Food YAML does not enforce one positive nutrition mode
 
 > **Captured note:** Require each food definition to select exactly one valid nutrition mode: positive discrete calories, or positive calories-per-kilogram on a compatible bulk/container item. The current defaults admit neither mode and also admit both; direct feeding then consumes a zero-calorie item as success, can reduce hunger for a negative value, or silently chooses the bulk branch when both are present.
 
