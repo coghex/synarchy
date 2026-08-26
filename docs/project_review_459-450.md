@@ -12,7 +12,7 @@ The construction-job flow, ruins and structure variants, script teardown, legacy
 - [x] PRR-2. Flora YAML can opt into zero-time repeat harvesting — [#1711]
 - [x] PRR-3. Food YAML does not enforce one positive nutrition mode — [#1716]
 - [x] PRR-4. Fresh and loaded arenas use different base vegetation seeds — [#1718]
-- [ ] PRR-5. The quad cache can pair one camera stamp with another camera's geometry
+- [x] PRR-5. The quad cache can pair one camera stamp with another camera's geometry — [#1720]
 - [ ] PRR-6. Optional ntfy requests have retries but no repository-defined time bound
 
 ## 1. Seam-aware foraging discovery
@@ -116,7 +116,7 @@ The construction-job flow, ruins and structure variants, script teardown, legacy
 
 ## 5. Camera snapshot consistency
 
-### PRR-5. The quad cache can pair one camera stamp with another camera's geometry
+### [#1720] PRR-5. The quad cache can pair one camera stamp with another camera's geometry
 
 > **Captured note:** Build and stamp a cached world-quad pass from one immutable camera snapshot. The world render loop decides to rebuild from `currentSnap`, but the quad builder rereads the live camera reference and uses that second value for facing, zoom, z slice, position, and bounds; a concurrent camera update can therefore produce geometry for camera B stored under camera A's cache stamp.
 
