@@ -14,7 +14,7 @@ The settings-log gating, production warning policy, algorithm-comment numbering,
 - [x] PRR-4. Hidden walls can still lift visible flora and vegetation — [#1715]
 - [ ] PRR-5. Guaranteed placement can bypass the location water-safety rule — [deferred]: no measured wet-footprint case
 - [x] PRR-6. A partial location stamp is permanently recorded as complete — [#1719]
-- [ ] PRR-7. Non-positive location-content counts become successful empty spawns
+- [x] PRR-7. Non-positive location-content counts become successful empty spawns — [#1721]
 
 ## 1. Texture-reference enforcement
 
@@ -166,7 +166,7 @@ The settings-log gating, production warning policy, algorithm-comment numbering,
 
 ## 7. Location-content numeric validity
 
-### PRR-7. Non-positive location-content counts become successful empty spawns
+### [#1721] PRR-7. Non-positive location-content counts become successful empty spawns
 
 > **Captured note:** Validate `count` and `rolls` according to the content kind before a location definition registers. Zero or negative unit/item/building counts and loot-table roll counts currently execute zero loop iterations, emit no warning, and are followed by the same permanent contents-spawned marker as a real successful spawn.
 
