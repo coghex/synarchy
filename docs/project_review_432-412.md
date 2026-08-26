@@ -13,7 +13,7 @@ The settings-log gating, production warning policy, algorithm-comment numbering,
 - [x] PRR-3. Front-wall handling is fixed to the FaceSouth edge pair — [#1712]
 - [x] PRR-4. Hidden walls can still lift visible flora and vegetation — [#1715]
 - [ ] PRR-5. Guaranteed placement can bypass the location water-safety rule — [deferred]: no measured wet-footprint case
-- [ ] PRR-6. A partial location stamp is permanently recorded as complete
+- [x] PRR-6. A partial location stamp is permanently recorded as complete — [#1719]
 - [ ] PRR-7. Non-positive location-content counts become successful empty spawns
 
 ## 1. Texture-reference enforcement
@@ -141,7 +141,7 @@ The settings-log gating, production warning policy, algorithm-comment numbering,
 
 ## 6. Atomic location materialization
 
-### PRR-6. A partial location stamp is permanently recorded as complete
+### [#1719] PRR-6. A partial location stamp is permanently recorded as complete
 
 > **Captured note:** Mark generated-location geometry complete only after the entire declared footprint has materialized successfully, or make failed pieces retryable. The Lua builder ignores individual terrain/structure placement failures and reports success once it has called the builder; the stamper ignores even that result and persists the completion marker unconditionally.
 
