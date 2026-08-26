@@ -28,6 +28,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector.Storable as Vec
 import Control.Monad (foldM)
 import Data.IORef (readIORef, atomicModifyIORef', writeIORef)
+import Data.List (partition)
 import Foreign.ForeignPtr (ForeignPtr)
 import Foreign.Marshal.Utils (copyBytes)
 import System.FilePath (takeBaseName)
@@ -60,6 +61,7 @@ import Engine.Graphics.Vulkan.Texture.Bindless (registerPinnedTexture
                                                , registerTexture
                                                , checkRegistrableHandle
                                                , registrationFailureMessage
+                                               , TextureRegistrationFailure(..)
                                                , writeHandleSlotEntry)
 import Engine.Graphics.Vulkan.Texture.Handle (BindlessTextureHandle(..))
 import Engine.Graphics.Vulkan.Texture.Slot (TextureSlot(..))
@@ -242,8 +244,26 @@ handleLoadAtlasTextureBatch = handleLoadTextureBatchWith UploadPinnedNearest
 handleLoadTextureBatchWith
     ∷ UploadSampler → [(TextureHandle, FilePath)] → EngineM σ ()
 handleLoadTextureBatchWith _ [] = pure ()
-handleLoadTextureBatchWith samplerPolicy requests = do
+handleLoadTextureBatchWith samplerPolicy incoming = do
     env ← ask
+    -- #1696: a request naming the missing-texture sentinel is dropped
+    -- HERE, ahead of cache classification, the GPU upload and every
+    -- asset-pool write. Leaving it to 'registerTexture' to refuse would
+    -- come too late: the fold below records an 'AssetReady' state, an
+    -- atlas refcount, a texture-size entry and a 'LuaAssetLoaded' event
+    -- for any prep whose registration produced no handle, so the
+    -- sentinel would end up owning real asset bookkeeping anyway. That
+    -- treatment stays as it is for a genuinely exhausted slot allocator
+    -- (#1690), which is a capacity outcome, not an invalid handle.
+    --
+    -- 'generateTextureHandle' should already make this unreachable; the
+    -- filter is what keeps it unreachable if a producer ever synthesises
+    -- a literal zero handle.
+    let (reserved, requests) = partition (isMissingTextureHandle ∘ fst) incoming
+    forM_ reserved $ \(handle, path) →
+        logWarnM CatTexture $
+            registrationFailureMessage TextureHandleReserved handle (T.pack path)
+
     poolRef ← asks (rcAssetPoolRef . toRenderCapability)
     pool ← liftIO $ readIORef poolRef
     mCacheBindless ← liftIO $ readIORef (rcTextureSystemRef (toRenderCapability env))

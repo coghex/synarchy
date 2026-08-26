@@ -67,7 +67,8 @@ import Engine.Graphics.Vulkan.Texture.Slot
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
 import Engine.Graphics.Vulkan.Texture.Undefined (undefinedTextureData)
 import Engine.Graphics.Vulkan.Types.Texture (UndefinedTexture(..), VulkanImage(..))
-import Engine.Scripting.Lua.Message.Texture (duplicateCachedTextureHandle)
+import Engine.Scripting.Lua.Message.Texture
+    (duplicateCachedTextureHandle, handleLoadTextureBatch)
 import qualified Engine.Core.Queue as Q
 import qualified Vulkan.Core10 as Vk
 import Vulkan.Zero (zero)
@@ -338,7 +339,6 @@ sentinelHandleSpec = do
         it "...while an ordinary alias handle DOES take the slot and all \
            \the bookkeeping, so the case above is a real refusal" $ \_env →
             withRegistrationFixture $ \fx → do
-                let aliasHandle = TextureHandle 77
                 entries ← runAlias fx aliasHandle
                 map leMessage entries `shouldBe` []
                 mSystem ← readIORef (textureSystemRef (rfEnv fx))
@@ -354,6 +354,57 @@ sentinelHandleSpec = do
                 pool ← readIORef (assetPoolRef (rfEnv fx))
                 Map.member aliasHandle <$> readIORef (apTextureHandles pool)
                     `shouldReturn` True
+                queued ← Q.flushQueue (luaQueue (rfEnv fx))
+                length queued `shouldBe` 1
+
+        -- Layer 2d: the public entry point both registration paths sit
+        -- behind. Refusing at registration alone is too late -- the
+        -- upload fold records asset bookkeeping for any prep that
+        -- produced no bindless handle.
+        it "the batch upload entry point drops a sentinel request before \
+           \any upload or asset bookkeeping, and still serves the rest \
+           \of the batch" $ \_env →
+            withRegistrationFixture $ \fx → do
+                seedPathCache fx
+                -- The sentinel deliberately names an UNCACHED path, so
+                -- without the entry-point filter it would be classified
+                -- as a fresh upload rather than caught downstream by the
+                -- alias path's own guard. That is what makes this case
+                -- the filter's own discriminator: headless there is no
+                -- Vulkan device, so an unfiltered sentinel reaches the
+                -- "Cannot batch-load textures" branch and the single
+                -- WARN below stops naming handle 0 at all.
+                let freshPath = "assets/textures/ui/not_in_the_cache.png"
+                    action ∷ EngineM' ()
+                    action = handleLoadTextureBatch
+                        [ (missingTextureHandle, freshPath)
+                        , (aliasHandle,          T.unpack cachedAtlasPath)
+                        ]
+                _ ← either (fail ∘ show) pure
+                        =≪ runEngineM action (rfEnv fx) pure
+                entries ← drainLog fx
+
+                -- The sentinel is refused, named, and left with nothing.
+                message ← soleWarning entries
+                message `shouldSatisfy` T.isInfixOf "handle 0"
+                message `shouldSatisfy` T.isInfixOf (T.pack freshPath)
+                message `shouldNotSatisfy` T.isInfixOf "Vulkan not ready"
+                pool ← readIORef (assetPoolRef (rfEnv fx))
+                states ← readIORef (apTextureHandles pool)
+                Map.member missingTextureHandle states `shouldBe` False
+                sizes ← readIORef (textureSizeRef (rfEnv fx))
+                HM.member missingTextureHandle sizes `shouldBe` False
+                peekTable fx (toInt missingTextureHandle) `shouldReturn` 0
+                mSystem ← readIORef (textureSystemRef (rfEnv fx))
+                (Map.member missingTextureHandle ∘ btsHandleMap)
+                    <$> mSystem `shouldBe` Just False
+
+                -- The ordinary handle beside it was served in full, so
+                -- the drop is targeted rather than a batch-wide bail-out.
+                Map.member aliasHandle states `shouldBe` True
+                HM.member aliasHandle sizes `shouldBe` True
+                (Map.member aliasHandle ∘ btsHandleMap) <$> mSystem
+                    `shouldBe` Just True
                 queued ← Q.flushQueue (luaQueue (rfEnv fx))
                 length queued `shouldBe` 1
 
@@ -443,6 +494,21 @@ withRegistrationFixture action = withHandleSlotTable $ \table → do
             Map.insert cachedAssetId cachedAtlas (apTextureAtlases pool) }
     action RegistrationFixture
         { rfEnv = env, rfTable = table, rfLogRef = logRef }
+
+-- | An ordinary handle that shares 'cachedAtlasPath', so a batch can
+--   carry it beside the sentinel and prove the drop is targeted.
+aliasHandle ∷ TextureHandle
+aliasHandle = TextureHandle 77
+
+-- | Point the asset pool's path cache at 'cachedAtlas', so a batch
+--   request for its path takes the CACHED lane and needs no Vulkan
+--   device to complete.
+seedPathCache ∷ RegistrationFixture → IO ()
+seedPathCache fx = do
+    pool ← readIORef (assetPoolRef (rfEnv fx))
+    writeIORef (assetPoolRef (rfEnv fx)) pool
+        { apAssetPaths = Map.insert cachedAtlasPath cachedAssetId
+                             (apAssetPaths pool) }
 
 cachedAssetId ∷ AssetId
 cachedAssetId = AssetId 1
