@@ -11,7 +11,7 @@ The settings-log gating, production warning policy, algorithm-comment numbering,
 - [x] PRR-1. The texture-path guard is absent from CI and currently rejects prose — [#1705]
 - [x] PRR-2. Structure quads do not follow the cylindrical render alias — [#1706]
 - [x] PRR-3. Front-wall handling is fixed to the FaceSouth edge pair — [#1712]
-- [ ] PRR-4. Hidden walls can still lift visible flora and vegetation
+- [x] PRR-4. Hidden walls can still lift visible flora and vegetation — [#1715]
 - [ ] PRR-5. Guaranteed placement can bypass the location water-safety rule
 - [ ] PRR-6. A partial location stamp is permanently recorded as complete
 - [ ] PRR-7. Non-positive location-content counts become successful empty spawns
@@ -91,7 +91,7 @@ The settings-log gating, production warning policy, algorithm-comment numbering,
 
 ## 4. Z-slice-aware billboard lifting
 
-### PRR-4. Hidden walls can still lift visible flora and vegetation
+### [#1715] PRR-4. Hidden walls can still lift visible flora and vegetation
 
 > **Captured note:** Restrict the #418 billboard lift to wall pieces that participate in the active structure render slice. `structureFrontWallClear` reads a wall's z only to manufacture a key; it does not reject a wall above `zSlice` or below `zSlice - effectiveDepth`, so an invisible wall can still reorder visible flora/vegetation.
 
