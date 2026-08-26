@@ -1360,6 +1360,13 @@ def selftest() -> int:
 
             @staticmethod
             def _shape(entry):
+                if not isinstance(entry, (list, tuple)):
+                    # A raw reply, passed through verbatim: the
+                    # malformed-shape cases below need the engine to
+                    # answer with a Lua nil, an error string or a
+                    # partial table, none of which this fixture should
+                    # tidy up on the way past.
+                    return entry
                 if isinstance(entry, tuple):
                     rows, high_water = entry
                 else:
@@ -1608,6 +1615,58 @@ def selftest() -> int:
         else:
             raised = False
         check("an event-log read whose rows are not an array raises", raised)
+
+        # The REPLY shape gets the same treatment (round-3 review). The
+        # console is already known reachable -- `lua()` raises
+        # EngineCrash otherwise -- so a reply that comes back and is not
+        # a progress table means the API is missing or broken. Reading
+        # any of these as "no events, no gaps" would leave the cursor
+        # untouched and erase the turn's evidence silently, which is the
+        # failure this whole change removes.
+        for reply, label in ((None, "a nil reply (no such API)"),
+                             ("error: attempt to call a nil value",
+                              "a Lua error string"),
+                             ({"highest": 2}, "a reply with no rows"),
+                             ({"rows": []},
+                              "a reply with no high-water mark")):
+            try:
+                EventLogEngine([reply]).oracle_events()
+            except OracleContractError:
+                raised = True
+            else:
+                raised = False
+            check(f"an event-log progress read returning {label} raises "
+                  "instead of reporting an empty observation", raised,
+                  repr(reply))
+
+        # An ARRAY reply cannot be scripted through the fixture (a list
+        # entry IS its rows-list shorthand), so the unpacker takes it
+        # directly.
+        from engine import _event_log_reply
+        try:
+            _event_log_reply([])
+        except OracleContractError:
+            raised = True
+        else:
+            raised = False
+        check("an event-log progress read returning a bare array raises",
+              raised)
+
+        # ...and a malformed reply must not quietly advance or reset the
+        # cursor either: the read failed, so the next successful one
+        # still reports everything since the last GOOD read.
+        recovering = EventLogEngine([[row(1, "a")], None, [row(2, "b")]])
+        first = recovering.oracle_events()
+        try:
+            recovering.oracle_events()
+        except OracleContractError:
+            pass
+        after = recovering.oracle_events()
+        check("a failed progress read leaves the cursor untouched, so the "
+              "next good read still reports the row it missed",
+              first["event_log_new"] == [row(1, "a")]
+              and after["event_log_new"] == [row(2, "b")]
+              and after["event_log_gaps"] == [], str(after))
 
         # 7f. A gap must SURVIVE the whole evidence path: both of a
         # turn's oracle reads (#775's pre-step and post-step drains) are

@@ -198,6 +198,38 @@ def _event_log_progress(cursor: int | None, current: list,
 EVENT_LOG_PROGRESS_LUA = "return engine.getEventLogProgress()"
 
 
+def _event_log_reply(reply) -> tuple[list, int]:
+    """Unpack one `engine.getEventLogProgress()` reply into
+    `(rows, high_water)` (#1714).
+
+    Strict on every shape, with no tolerant branch. `self.lua()` already
+    raises `EngineCrash` when the console is unreachable, so a reply
+    that comes BACK and is not a well-formed progress table means the
+    API is missing or broken -- `send_json` hands back `None` for a Lua
+    `nil` and a string for a Lua error, and a partial table such as
+    `{"highest": 2}` is just as broken. Reading any of those as "no
+    events and no gaps this turn" would leave the cursor untouched and
+    silently erase the turn's event evidence, which is the exact failure
+    this change exists to remove.
+
+    Raising ends the session the way any unhandled harness fault does:
+    `run.py`'s driver still writes a finished trace (its `finally`
+    always runs `trace.finish`), so the partial evidence and the engine
+    log survive for diagnosis -- what does not survive is a run that
+    looks clean while reporting nothing.
+    """
+    if not isinstance(reply, dict):
+        raise OracleContractError(
+            "engine.getEventLogProgress() must return a table of "
+            f"{{rows, highest}}, got {reply!r} ({type(reply).__name__})")
+    missing = [key for key in ("rows", "highest") if key not in reply]
+    if missing:
+        raise OracleContractError(
+            "engine.getEventLogProgress() reply is missing "
+            f"{', '.join(missing)}: {reply!r}")
+    return _lua_array(reply["rows"]), _event_log_high_water(reply["highest"])
+
+
 def _lua_array(value) -> list:
     """A Lua sequence as a Python list.
 
@@ -439,21 +471,15 @@ class PlaytestEngine:
         # (#1714): sampled separately they could straddle a mutation,
         # and the whole point of the pair is that they disagree only in
         # the direction a load publish creates.
-        progress = self.lua(EVENT_LOG_PROGRESS_LUA)
-        if isinstance(progress, dict) and "rows" in progress:
-            # A well-shaped reply that violates the row or high-water
-            # contract raises; a reply of the wrong SHAPE is a transport
-            # hiccup, handled below as "no evidence this read".
-            new_rows, gaps, cursor = _event_log_progress(
-                self._event_log_cursor,
-                _lua_array(progress["rows"]),
-                _event_log_high_water(progress.get("highest")))
-            snap["event_log_new"] = new_rows
-            snap["event_log_gaps"] = gaps
-            self._event_log_cursor = cursor
-        else:
-            snap["event_log_new"] = []
-            snap["event_log_gaps"] = []
+        # Every failure here raises rather than degrading: a malformed
+        # or missing reply read as "nothing happened" is the silent loss
+        # this whole change removes.
+        rows, high_water = _event_log_reply(self.lua(EVENT_LOG_PROGRESS_LUA))
+        new_rows, gaps, cursor = _event_log_progress(
+            self._event_log_cursor, rows, high_water)
+        snap["event_log_new"] = new_rows
+        snap["event_log_gaps"] = gaps
+        self._event_log_cursor = cursor
         # F4 (#646): drains the action-outcome ring — a destructive read,
         # like combat.drainEvents/injury.drainEvents, so no "_seen" index
         # is needed the way event_log_new above needs one; whatever

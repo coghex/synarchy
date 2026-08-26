@@ -329,9 +329,11 @@ gitignored):
   no change at all.
   The first observation is an explicit baseline (the whole current log,
   no gap, adopting the high-water mark as its cursor), and the cursor
-  never moves backwards. A row that arrives WITHOUT a usable
-  `sequence`, and a read whose high-water mark is missing or unusable,
-  are hard errors — never a fall back to matching rows by value. `visual_change` (bool) and
+  never moves backwards. The read is strict end to end: a reply that is
+  not a `{rows, highest}` table, a row without a usable `sequence`, and
+  a missing or unusable high-water mark are each hard errors — never a
+  fall back to matching rows by value, and never an empty observation
+  that would leave the cursor untouched and erase the turn's evidence. `visual_change` (bool) and
   `post_screenshot` (path, or null) are this turn's own before/after
   comparison and post-step frame — populated only when a step ran, so
   never for a `done`/stuck terminal turn, but always for an ordinary
