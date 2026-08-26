@@ -50,6 +50,7 @@ import qualified Test.Headless.Item.ContentsSignature as ItemContentsSig
 import qualified Test.Headless.Item.Condition as ItemCondition
 import qualified Test.Headless.Item.Materialize as ItemMaterialize
 import qualified Test.Headless.Item.BulkStorage as ItemBulkStorage
+import qualified Test.Headless.Item.FoodNutrition as ItemFoodNutrition
 import qualified Test.Headless.Item.Discovery as ItemDiscovery
 import qualified Test.Headless.Asset.TextureFallback as TextureFallback
 import qualified Test.Headless.Asset.FloraContent as FloraContent
@@ -452,6 +453,10 @@ main = hspec $ do
 
     aroundAll withHeadlessEngine ItemDiscovery.spec
     aroundAll withHeadlessEngineNoWorld ItemCondition.spec
+    -- Own engine (#1716): the live unit.feed gate WRITES the item and
+    -- unit manager refs, so it cannot share the worldgen engine. It
+    -- needs no world at all -- unit.feed reads neither.
+    aroundAll withHeadlessEngineNoWorld ItemFoodNutrition.feedSpec
     describe "Unit.Anim" AnimTest.spec
     describe "Unit.Injury" InjuryTest.spec
     describe "Unit.InjurySpeed" InjurySpeedTest.spec
@@ -468,6 +473,7 @@ main = hspec $ do
     describe "Item.QualityTier" ItemQualityTier.spec
     describe "Item.ContentsSignature" ItemContentsSig.spec
     describe "Item.BulkStorage" ItemBulkStorage.spec
+    describe "Item.FoodNutrition" ItemFoodNutrition.spec
     describe "Item.Materialize" ItemMaterialize.spec
     describe "World.Save.Sanitize" SaveSanitize.spec
     describe "World.Save.Serialize" SaveSerialize.spec
