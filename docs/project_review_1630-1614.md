@@ -8,12 +8,12 @@ PRs #1630, #1629, #1628, #1626, #1623, #1625, #1622, #1619, #1615, and #1614 ret
 
 ## Status
 
-- [ ] PRR-1. Four isolated location probes still share the live config tree
-- [ ] PRR-2. An autosave restore can erase a notification pause that arrived while it ran
+- [x] PRR-1. Four isolated location probes still share the live config tree — [#1729]
+- [x] PRR-2. An autosave restore can erase a notification pause that arrived while it ran — [#1730]
 
 ## 1. Location-probe configuration isolation
 
-### PRR-1. Four isolated location probes still share the live config tree
+### [#1729] PRR-1. Four isolated location probes still share the live config tree
 
 > **Captured note:** Isolate mutable configuration as well as save slots in the four location persistence probes. Their temporary resource roots symlink the checkout's real `config/`, so developer-local overrides affect probe behavior and engine initialization can write a new local override through the link into the checkout.
 
@@ -40,7 +40,7 @@ PRs #1630, #1629, #1628, #1626, #1623, #1625, #1622, #1619, #1615, and #1614 ret
 
 ## 2. Pause-source ownership during autosave
 
-### PRR-2. An autosave restore can erase a notification pause that arrived while it ran
+### [#1730] PRR-2. An autosave restore can erase a notification pause that arrived while it ran
 
 > **Captured note:** Make autosave release only the pause it imposed. A later `pause: true` notification that lands before the save finishes currently joins the same Boolean epoch without acquiring ownership, and the successful autosave then closes that epoch and resumes simulation.
 

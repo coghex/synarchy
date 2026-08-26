@@ -9,9 +9,9 @@ The color-name correction, z-preserving tile selection, heterogeneous multi-worl
 ## Status
 
 - [x] PRR-1. `unit.repairItem` turns NaN deltas into total wear — [#1732]
-- [ ] PRR-2. Non-finite material movement costs can freeze traversal
-- [ ] PRR-3. The follow-command priority probe confounds capacity rejection with arbitration
-- [ ] PRR-4. `ItemInstance.iiWeight` still documents the obsolete mass model
+- [x] PRR-2. Non-finite material movement costs can freeze traversal — [#1734]
+- [x] PRR-3. The follow-command priority probe confounds capacity rejection with arbitration — [#1736]
+- [x] PRR-4. `ItemInstance.iiWeight` still documents the obsolete mass model — [#1738]
 
 ## 1. Repair-delta numeric validity
 
@@ -41,7 +41,7 @@ The color-name correction, z-preserving tile selection, heterogeneous multi-worl
 
 ## 2. Material movement-cost numeric validity
 
-### PRR-2. Non-finite material movement costs can freeze traversal
+### [#1734] PRR-2. Non-finite material movement costs can freeze traversal
 
 > **Captured note:** Validate or normalize every material `move_cost` before it reaches the shared registry. `Data.Yaml` accepts an oversized scalar such as `1e999` as positive infinity; route costs cap that value to a finite penalty, but live traversal divides step length by the uncapped infinity, so the planner can return a route that the mover can never advance along.
 
@@ -68,7 +68,7 @@ The color-name correction, z-preserving tile selection, heterogeneous multi-worl
 
 ## 3. Follow-command probe staging
 
-### PRR-3. The follow-command priority probe confounds capacity rejection with arbitration
+### [#1736] PRR-3. The follow-command priority probe confounds capacity rejection with arbitration
 
 > **Captured note:** Make the pickup-vs-move phase establish that `commandPickup` actually queued an order before it judges AI utility. The probe calls a 10 kg granite chunk “light,” ignores the command's Boolean result, and uses a randomly bodied acolyte; after the command-time capacity gate was added, valid low-capacity rolls now remain in `follow_command` and are reported as a priority-ladder failure.
 
@@ -96,7 +96,7 @@ The color-name correction, z-preserving tile selection, heterogeneous multi-worl
 
 ## 4. Canonical item-mass documentation
 
-### PRR-4. `ItemInstance.iiWeight` still documents the obsolete mass model
+### [#1738] PRR-4. `ItemInstance.iiWeight` still documents the obsolete mass model
 
 > **Captured note:** Correct the load-bearing `ItemInstance.iiWeight` field comment along with the public weight APIs. PR #340 removed the misleading universal “1 L = 1 kg” gloss from four comments after `itemTotalWeight` gained per-container fill density and recursion, but the canonical instance type still says carried weight is only `iiWeight + iiCurrentFill` at 1 kg per litre.
 

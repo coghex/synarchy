@@ -8,15 +8,15 @@ The current fabrication recipes, craft-bill backend, slope traversal, location s
 
 ## Status
 
-- [ ] PRR-1. Haskell combat ignores modifiers when resolving max stamina
-- [ ] PRR-2. Repair AI still cannot claim degraded ground items
-- [ ] PRR-3. A non-exhaustive quality-tier override silently removes the tier
-- [ ] PRR-4. Injury icon mappings sit outside the asset audit and document the wrong fallback
+- [x] PRR-1. Haskell combat ignores modifiers when resolving max stamina — [#1735]
+- [x] PRR-2. Repair AI still cannot claim degraded ground items — [#1737]
+- [x] PRR-3. A non-exhaustive quality-tier override silently removes the tier — [#1739]
+- [x] PRR-4. Injury icon mappings sit outside the asset audit and document the wrong fallback — [#1740]
 - [ ] PRR-5. The direct unit-asset commit leaves 485 frames outside gameplay manifests
 
 ## 1. Combat stat coherence
 
-### PRR-1. Haskell combat ignores modifiers when resolving max stamina
+### [#1735] PRR-1. Haskell combat ignores modifiers when resolving max stamina
 
 > **Captured note:** Make Haskell combat resolve `max_stamina` with the same effective-stat semantics as Lua's canonical `stats.get`. `maxStaminaFor` reads raw `uiStats`, so an active modifier on either an explicit `max_stamina` attribute or its derived `endurance` input changes the pool reported to Lua without changing combat's stamina cost or stamina-fraction denominator.
 
@@ -42,7 +42,7 @@ The current fabrication recipes, craft-bill backend, slope traversal, location s
 
 ## 2. Repair source coverage
 
-### PRR-2. Repair AI still cannot claim degraded ground items
+### [#1737] PRR-2. Repair AI still cannot claim degraded ground items
 
 > **Captured note:** Complete the repair target sourcing ladder promised by #302. A degraded weapon or armor instance dropped on the ground is invisible to `repair_job`; ground pickup is used only for repair consumables, even though `item.pickupGround` preserves the exact target instance and `item.listGround` now exposes its condition.
 
@@ -68,7 +68,7 @@ The current fabrication recipes, craft-bill backend, slope traversal, location s
 
 ## 3. Quality-tier authoring
 
-### PRR-3. A non-exhaustive quality-tier override silently removes the tier
+### [#1739] PRR-3. A non-exhaustive quality-tier override silently removes the tier
 
 > **Captured note:** Validate each authored `quality_tiers` table as a total, unambiguous mapping over the supported quality range. Any non-empty override replaces the safe default table wholesale, but YAML loading accepts a lowest threshold above zero; instances below it then receive no `qualityTier` field and silently lose the suffix instead of rejecting malformed content.
 
@@ -93,7 +93,7 @@ The current fabrication recipes, craft-bill backend, slope traversal, location s
 
 ## 4. Injury icon integrity
 
-### PRR-4. Injury icon mappings sit outside the asset audit and document the wrong fallback
+### [#1740] PRR-4. Injury icon mappings sit outside the asset audit and document the wrong fallback
 
 > **Captured note:** Put the bare-name injury icon map under a deterministic asset-integrity check and update its fallback contract. #496 manually verified every mapped file, but the repository's texture audits explicitly exclude these runtime-resolved names; deleting or misspelling `severed.png` can therefore pass while the panel quietly shows `injury_unknown`, despite `injuries.lua` still saying the row degrades to dim text.
 

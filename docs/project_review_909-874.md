@@ -11,7 +11,7 @@ The four capability refactors (#909, #906, #905, and #902) retain live-container
 - [x] PRR-1. Persisted borderless mode boots as a decorated window while reporting borderless — [#1731]
 - [ ] PRR-2. A fullscreen boot forgets its configured windowed geometry — [deferred]: behind #1731
 - [x] PRR-3. Stale simple-preview completions can create unbounded texture aliases — [no-issue]
-- [ ] PRR-4. NaN XP can escape the mental-effectiveness clamps and corrupt combat and crafting
+- [x] PRR-4. NaN XP can escape the mental-effectiveness clamps and corrupt combat and crafting — [#1733]
 
 ## 1. Persisted borderless startup
 
@@ -114,7 +114,7 @@ The four capability refactors (#909, #906, #905, and #902) retain live-container
 
 ## 4. Non-finite mental effectiveness
 
-### PRR-4. NaN XP can escape the mental-effectiveness clamps and corrupt combat and crafting
+### [#1733] PRR-4. NaN XP can escape the mental-effectiveness clamps and corrupt combat and crafting
 
 > **Captured note:** Reject or sanitize non-finite values at the stat/XP boundary and guarantee that mental effectiveness and output quality are finite. Haskell's ordinary comparison-based `clamp` does not contain NaN, so one accepted NaN concentration value defeats issue #353's promised bounds and reaches both combat decisions and persisted crafted-item quality.
 
