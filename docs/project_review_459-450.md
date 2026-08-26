@@ -11,7 +11,7 @@ The construction-job flow, ruins and structure variants, script teardown, legacy
 - [x] PRR-1. Foraging discovery remains planar at the cylindrical seam — [#1707]
 - [x] PRR-2. Flora YAML can opt into zero-time repeat harvesting — [#1711]
 - [x] PRR-3. Food YAML does not enforce one positive nutrition mode — [#1716]
-- [ ] PRR-4. Fresh and loaded arenas use different base vegetation seeds
+- [x] PRR-4. Fresh and loaded arenas use different base vegetation seeds — [#1718]
 - [ ] PRR-5. The quad cache can pair one camera stamp with another camera's geometry
 - [ ] PRR-6. Optional ntfy requests have retries but no repository-defined time bound
 
@@ -91,7 +91,7 @@ The construction-job flow, ruins and structure variants, script teardown, legacy
 
 ## 4. Arena base-world persistence
 
-### PRR-4. Fresh and loaded arenas use different base vegetation seeds
+### [#1718] PRR-4. Fresh and loaded arenas use different base vegetation seeds
 
 > **Captured note:** Give a debug arena one stable base-world identity across creation and load. Fresh arenas generate their grass variants from `newStdGen`, but their synthetic persisted parameters record seed zero and the load path rebuilds from `mkStdGen 0`; because the save stores edits rather than the complete base tile grid, untouched vegetation can change after a save/load round trip.
 
