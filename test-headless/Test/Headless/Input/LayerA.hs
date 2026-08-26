@@ -496,6 +496,175 @@ spec = do
                     aoWhereY r `shouldBe` Just 400
                 _ → expectationFailure ("expected one record, got " ⧺ show recs)
 
+        -- #1676: everything above holds the ratio CONSTANT for the
+        -- whole gesture, which is the one case where converting a
+        -- retained window coordinate at resolution time happens to
+        -- agree with converting it at press time. These pin the two
+        -- resolution paths where it does not: a focus-loss/minimize
+        -- resolver that reads no geometry at all, and an ordinary
+        -- release whose window→framebuffer ratio moved during the hold.
+        describe "a deferred gesture's press location is captured at PRESS time (#1676)" $ do
+            it "a focus-loss mid-press records the press's framebuffer point, not its raw window coordinate" $ \env → do
+                resetAll env
+                writeIORef (windowSizeRef env) (1280, 720)
+                writeIORef (framebufferSizeRef env) (2560, 1440)
+                -- Window (75, 32) is framebuffer (150, 64), inside
+                -- focusedUIElement's framebuffer-space rect.
+                _ ← focusedUIElement env
+                push env [InputMouseEvent GLFW.MouseButton'1 (75, 32) GLFW.MouseButtonState'Pressed]
+                inputTick env
+                _ ← drainOutcomes env
+                push env [InputWindowEvent (WindowFocus False)]
+                inputTick env
+                recs ← drainOutcomes env
+                case recs of
+                    [r] → do
+                        aoKind r `shouldBe` "input.click"
+                        aoOutcome r `shouldBe` "noop"
+                        aoHandler r `shouldBe` Just "onFieldClick"
+                        aoReason r `shouldBe` Just "release swallowed (focus loss / minimize)"
+                        -- 'Engine.Input.State.releaseHeldButtons' reads
+                        -- no window/framebuffer geometry whatsoever, so
+                        -- the only way this can be right is for the
+                        -- conversion to have happened at capture.
+                        aoWhereX r `shouldBe` Just 150
+                        aoWhereY r `shouldBe` Just 64
+                    _ → expectationFailure ("expected one record, got " ⧺ show recs)
+
+            it "a window-minimize mid-press records a pending camera-drag's framebuffer point the same way" $ \env → do
+                resetAll env
+                writeIORef (windowSizeRef env) (1280, 720)
+                writeIORef (framebufferSizeRef env) (2560, 1440)
+                push env [InputMouseEvent GLFW.MouseButton'3 (450, 300) GLFW.MouseButtonState'Pressed]
+                inputTick env
+                _ ← drainOutcomes env
+                push env [InputWindowEvent (WindowMinimize True)]
+                inputTick env
+                recs ← drainOutcomes env
+                case recs of
+                    [r] → do
+                        aoKind r `shouldBe` "input.click"
+                        aoOutcome r `shouldBe` "noop"
+                        aoHandler r `shouldBe` Just "camera_drag"
+                        aoWhereX r `shouldBe` Just 900
+                        aoWhereY r `shouldBe` Just 600
+                    _ → expectationFailure ("expected one record, got " ⧺ show recs)
+
+            it "a below-threshold release records the PRESS-time framebuffer point after the ratio changes mid-gesture" $ \env → do
+                resetAll env
+                writeIORef (windowSizeRef env) (1280, 720)
+                writeIORef (framebufferSizeRef env) (2560, 1440)
+                -- Middle button: the camera-drag route defers exactly
+                -- like a ClickUI press but carries no #745 activation,
+                -- so the release-time hit-test can't colour the
+                -- outcome and this stays a pure coordinate assertion.
+                push env [InputMouseEvent GLFW.MouseButton'3 (450, 300) GLFW.MouseButtonState'Pressed]
+                inputTick env
+                _ ← drainOutcomes env
+                -- The display drops out of HiDPI (or the framebuffer is
+                -- resized) while the button is still down.
+                writeIORef (framebufferSizeRef env) (1280, 720)
+                -- 2.24 window pixels of movement: still a click.
+                push env [InputMouseEvent GLFW.MouseButton'3 (452, 301) GLFW.MouseButtonState'Released]
+                inputTick env
+                recs ← drainOutcomes env
+                case recs of
+                    [r] → do
+                        aoKind r `shouldBe` "input.click"
+                        aoHandler r `shouldBe` Just "camera_drag"
+                        -- The press's own framebuffer point. Converting
+                        -- the retained window coordinate (450, 300) with
+                        -- the now-1:1 release geometry would report
+                        -- (450, 300) — a place the press never was.
+                        aoWhereX r `shouldBe` Just 900
+                        aoWhereY r `shouldBe` Just 600
+                    _ → expectationFailure ("expected one record, got " ⧺ show recs)
+
+            it "an above-threshold release still records the RELEASE point under release-time geometry" $ \env → do
+                -- Preservation, not a defect: requirement 3's other
+                -- branch selects the release location, whose live
+                -- conversion is the correct one. Asserted because the
+                -- existing drag cases never look at aoWhereX/aoWhereY,
+                -- so nothing else would notice this branch being
+                -- "fixed" into using the press capture too.
+                resetAll env
+                writeIORef (windowSizeRef env) (1280, 720)
+                writeIORef (framebufferSizeRef env) (2560, 1440)
+                push env [InputMouseEvent GLFW.MouseButton'3 (450, 300) GLFW.MouseButtonState'Pressed]
+                inputTick env
+                _ ← drainOutcomes env
+                writeIORef (framebufferSizeRef env) (1280, 720)
+                push env [InputMouseEvent GLFW.MouseButton'3 (500, 300) GLFW.MouseButtonState'Released]
+                inputTick env
+                recs ← drainOutcomes env
+                case recs of
+                    [r] → do
+                        aoKind r `shouldBe` "input.drag"
+                        aoHandler r `shouldBe` Just "camera_drag"
+                        -- The release point at the release-time 1:1
+                        -- ratio — neither the press capture (900, 600)
+                        -- nor the release point under the press-time 2x
+                        -- ratio (1000, 600).
+                        aoWhereX r `shouldBe` Just 500
+                        aoWhereY r `shouldBe` Just 300
+                    _ → expectationFailure ("expected one record, got " ⧺ show recs)
+
+            it "a degenerate viewport swallows the press outright, so nothing is deferred to reinterpret" $ \env → do
+                -- The engine half of requirement 6's first clause. The
+                -- press routing's own guard fires before any of the
+                -- three deferral sites, so a degenerate press cannot
+                -- reach 'inpPendingUIClick' at all — the live
+                -- capture-under-degenerate path that CAN is Lua's, and
+                -- "Test.Headless.Lua.DragSelectDeferred" covers it.
+                resetAll env
+                writeIORef (framebufferSizeRef env) (0, 0)
+                _ ← focusedUIElement env
+                push env [InputMouseEvent GLFW.MouseButton'1 (75, 32) GLFW.MouseButtonState'Pressed]
+                inputTick env
+                recs ← drainOutcomes env
+                case recs of
+                    [r] → do
+                        aoOutcome r `shouldBe` "noop"
+                        aoHandler r `shouldBe` Just "degenerate_viewport"
+                        aoWhereX r `shouldBe` Just 75
+                        aoWhereY r `shouldBe` Just 32
+                    _ → expectationFailure ("expected one record, got " ⧺ show recs)
+                afterState ← readIORef (inputStateRef env)
+                inpPendingUIClick afterState `shouldBe` Map.empty
+
+            it "a press captured under the degenerate fallback keeps its raw window coordinate through a later, healthy resolution" $ \env → do
+                -- Requirement 6's second clause. The capture is seeded
+                -- rather than produced, because the case above is why
+                -- no live engine press can produce it; what is under
+                -- test here is that resolution spends the stored value
+                -- verbatim instead of rescaling it once the ratio
+                -- recovers.
+                resetAll env
+                st ← readIORef (inputStateRef env)
+                writeIORef (inputStateRef env) st
+                    { inpMouseBtns   = Map.insert GLFW.MouseButton'3 True (inpMouseBtns st)
+                    , inpMouseRoutes = Map.insert GLFW.MouseButton'3 ClickGame (inpMouseRoutes st)
+                    , inpPendingUIClick = Map.insert GLFW.MouseButton'3 PendingUIClick
+                        { pucKind = "input.click", pucCallback = "camera_drag"
+                        , pucPressX = 450, pucPressY = 300
+                        -- What 'windowToFbOrRaw' yields on a degenerate
+                        -- viewport: the raw window coordinate.
+                        , pucPressFbX = 450, pucPressFbY = 300
+                        } (inpPendingUIClick st)
+                    }
+                writeIORef (windowSizeRef env) (1280, 720)
+                writeIORef (framebufferSizeRef env) (2560, 1440)
+                push env [InputMouseEvent GLFW.MouseButton'3 (451, 301) GLFW.MouseButtonState'Released]
+                inputTick env
+                recs ← drainOutcomes env
+                case recs of
+                    [r] → do
+                        aoKind r `shouldBe` "input.click"
+                        aoHandler r `shouldBe` Just "camera_drag"
+                        aoWhereX r `shouldBe` Just 450
+                        aoWhereY r `shouldBe` Just 300
+                    _ → expectationFailure ("expected one record, got " ⧺ show recs)
+
         it "a deferred UI click's recorded location converts to framebuffer while the drag threshold stays in window pixels" $ \env → do
             resetAll env
             writeIORef (windowSizeRef env) (1280, 720)

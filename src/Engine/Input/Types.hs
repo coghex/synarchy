@@ -15,10 +15,9 @@ data InputState = InputState
       -- ^ Where each button's most recent press was routed, so the
       --   matching release can tell Lua what its down did
     , inpWindowFocused ∷ Bool            -- ^ Is window currently focused
-    , inpPendingUIClick ∷ Map.Map GLFW.MouseButton (Text, Text, Double, Double)
-      -- ^ F4 (#730): a ClickUI-routed press's (F4 kind
-      --   — "input.click"/"input.rightClick", callback name, press-x,
-      --   press-y), held until the matching release so
+    , inpPendingUIClick ∷ Map.Map GLFW.MouseButton PendingUIClick
+      -- ^ F4 (#730): a ClickUI-routed press's deferred record (see
+      --   'PendingUIClick'), held until the matching release so
       --   Engine.Input.Thread can classify the WHOLE gesture as a
       --   plain click or a UI-widget drag exactly once — the same
       --   defer-to-release pattern 'CharBatch' below uses for
@@ -29,7 +28,7 @@ data InputState = InputState
       -- ^ #745: present only for a DISCRETE (non-'ueDragActivation')
       --   'UI.InputOwnership.RouteElement' press — the click callback
       --   has NOT fired yet ('inpPendingUIClick' above still records
-      --   the F4 bookkeeping tuple exactly as before #745, but no
+      --   the F4 bookkeeping exactly as before #745, but no
       --   Lua event rides with it any more for this route). The
       --   matching release resolves this via
       --   'UI.ControlActivation.resolveActivation' and fires
@@ -66,6 +65,35 @@ data InputState = InputState
       --   on a freshly-consumed press, consulted (in addition to that
       --   dispatch's own fresh consumption) on every dispatch for the
       --   same key, and removed on release regardless of outcome.
+    } deriving (Show, Eq)
+
+-- | F4 (#730): a ClickUI-routed (or middle-button camera-drag) press
+--   whose ONE action-outcome record is deferred until the matching
+--   release can classify the whole gesture — see 'inpPendingUIClick'.
+--
+--   #1676: the press position is retained in BOTH coordinate spaces
+--   because neither is recoverable from the other later.
+--   'pucPressX'/'pucPressY' are the WINDOW pixels the click/drag
+--   threshold compares against; 'pucPressFbX'/'pucPressFbY' are the
+--   framebuffer-pixel oracle position (#774) captured from the
+--   window/framebuffer geometry live at PRESS dispatch. A DPI change
+--   or a window/framebuffer resize during the hold moves that ratio,
+--   so reconverting the retained window coordinate at resolution time
+--   reports the press under a ratio it never happened at. The
+--   framebuffer pair falls back to the raw window coordinate when the
+--   press-time viewport is degenerate (the same all-four-dimensions
+--   guard 'Engine.Input.Inject.windowToFb' applies), and stays that
+--   raw value however the geometry later recovers.
+data PendingUIClick = PendingUIClick
+    { pucKind     ∷ !Text
+      -- ^ F4 kind to record if the gesture resolves as a CLICK:
+      --   @"input.click"@ or @"input.rightClick"@. A gesture past
+      --   the drag threshold records @"input.drag"@ instead.
+    , pucCallback ∷ !Text   -- ^ Handler name, recorded as @aoHandler@.
+    , pucPressX   ∷ !Double -- ^ Press x, WINDOW pixels.
+    , pucPressY   ∷ !Double -- ^ Press y, WINDOW pixels.
+    , pucPressFbX ∷ !Double -- ^ Press x, FRAMEBUFFER pixels at press time.
+    , pucPressFbY ∷ !Double -- ^ Press y, FRAMEBUFFER pixels at press time.
     } deriving (Show, Eq)
 
 -- | One in-flight aggregate of 'InputCharEvent' outcomes — see

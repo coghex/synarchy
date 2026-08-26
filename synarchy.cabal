@@ -255,6 +255,7 @@ library
                      Engine.Input.Thread.Char
                      Engine.Input.Thread.Mouse
                      Engine.Input.Thread.Mouse.Activation
+                     Engine.Input.Thread.Mouse.Deferred
                      Engine.Input.Thread.Scroll
                      Engine.Scripting.Lua.Debug
                      Engine.Scripting.Lua.DebugServer
@@ -1303,6 +1304,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.PreviewGeneration
                    Test.Headless.Lua.PauseGate
                    Test.Headless.Lua.ScriptState
+                   Test.Headless.Lua.DragSelectDeferred
                    Test.Headless.Lua.TextWrapping
                    Test.Headless.Lua.TextTruncation
                    Test.Headless.Lua.WidthTruncation

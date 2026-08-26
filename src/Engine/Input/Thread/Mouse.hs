@@ -25,24 +25,16 @@ import Engine.Input.Types
 import Engine.Scripting.Lua.Types
 import Engine.ActionOutcome (ActionOutcome(..), pushActionOutcome)
 import Engine.Graphics.Viewport (viewportDegenerate)
-import Engine.Input.Inject (windowToFb)
 import qualified Engine.Core.Queue as Q
 import UI.Tooltip (isTooltipLocked, isTooltipVisible, isPointInLockedTooltip, clearTooltipLock, toggleTooltipLock)
 import UI.InputOwnership (PointerKind(..), InputRoute(..), routePointer, isPointerSurfaceBlocked)
 import UI.Manager.Query (isElementDragActivation)
-import UI.ControlActivation (PendingActivation(..), ActivationOutcome(..), activationOutcomeName, beginActivation)
+import UI.ControlActivation (PendingActivation(..), beginActivation)
 import Engine.Input.Thread.Mouse.Activation (resolvePendingActivation)
+import Engine.Input.Thread.Mouse.Deferred
+    (windowToFbOrRaw, capturePendingUIClick, resolveDeferredUIClick)
 import UI.FocusNavigation (isEligibleControl)
 import UI.Manager (setControlFocus, clearControlFocus, getControlFocus)
-
--- | F4 (#730): window-pixel movement between a
---   ClickUI-routed press and its release beyond which the gesture
---   reads as a UI-widget drag rather than a plain click — matches
---   scripts/unit_drag_select.lua's own DRAG_THRESHOLD for the
---   game-world case (both operate in the same window-coordinate
---   space).
-uiDragThresholdPx ∷ Double
-uiDragThresholdPx = 4
 
 -- | The real per-event dispatch for 'InputMouseEvent' — split out of
 --   'dispatchInput' the same way 'Engine.Input.Thread.Keyboard.dispatchKeyEvent'
@@ -63,9 +55,7 @@ dispatchMouseEvent env inpSt btn pos state = do
     -- coordinate on a degenerate viewport, same as every other
     -- degenerate-guarded conversion in this module.
     let toFb ∷ (Double, Double) → (Double, Double)
-        toFb wp = case windowToFb (winW, winH) (fbW, fbH) wp of
-            Just fb → fb
-            Nothing → wp
+        toFb = windowToFbOrRaw (winW, winH) (fbW, fbH)
 
     -- F4 (#646, #730) Layer A: routes that consume a
     -- press WITHOUT ever queuing a Lua event (ClickSwallowed, and a
@@ -79,12 +69,18 @@ dispatchMouseEvent env inpSt btn pos state = do
     -- easily as on game-world empty space, and whether the whole
     -- gesture is really a plain click or a widget drag can only be
     -- known once the matching release arrives. 'pendingUIClickRef'
-    -- carries that route's (callback, press-x, press-y) forward to
+    -- carries that route's 'PendingUIClick' forward to
     -- the release handling below, which records EXACTLY ONE
     -- "input.click" or "input.drag" outcome for it — never both,
     -- mirroring scripts/unit_drag_select.lua's own defer-to-release
     -- fix for game-world drags.
-    pendingUIClickRef ← newIORef (Nothing ∷ Maybe (Text, Text, Double, Double))
+    pendingUIClickRef ← newIORef (Nothing ∷ Maybe PendingUIClick)
+    -- #1676: a deferred press captures its FRAMEBUFFER position here,
+    -- from the geometry live at THIS press's dispatch — see
+    -- 'Engine.Input.Thread.Mouse.Deferred.capturePendingUIClick'.
+    let deferPress ∷ Text → Text → IO ()
+        deferPress kind callback = writeIORef pendingUIClickRef $ Just $
+            capturePendingUIClick kind callback (winW, winH) (fbW, fbH) (x, y)
     -- #745: a DISCRETE (non-drag-activation) ClickUI press's activation
     -- decision, deferred to the matching release — see
     -- 'UI.ControlActivation'. 'Nothing' for a drag-activation control
@@ -199,8 +195,7 @@ dispatchMouseEvent env inpSt btn pos state = do
                     -- leave it permanently misclassified as
                     -- "input.click" even when the camera actually panned.
                     Q.writeQueue lq (LuaMouseDownEvent btn x y)
-                    writeIORef pendingUIClickRef
-                        (Just ("input.click", "camera_drag", x, y))
+                    deferPress "input.click" "camera_drag"
                     return ClickGame
 
           -- All other buttons: if a tooltip is locked, intercept the
@@ -275,8 +270,7 @@ dispatchMouseEvent env inpSt btn pos state = do
                                         beginActivation PointerLeftClick elemHandle uiMgr'
                             logDebug logger CatUI $
                                 "UI element left-clicked: " <> callback
-                            writeIORef pendingUIClickRef
-                                (Just ("input.click", callback, x, y))
+                            deferPress "input.click" callback
                             return ClickUI
                         -- #743: a pointer-blocking element with no
                         -- left-click callback of its own (e.g. a
@@ -324,8 +318,7 @@ dispatchMouseEvent env inpSt btn pos state = do
                                         beginActivation PointerRightClick elemHandle uiMgr'
                             logDebug logger CatUI $
                                 "UI element right-clicked: " <> callback
-                            writeIORef pendingUIClickRef
-                                (Just ("input.rightClick", callback, x, y))
+                            deferPress "input.rightClick" callback
                             return ClickUI
                         -- No right-click handler under the cursor
                         -- (within the modal-scoped search), but an
@@ -435,41 +428,13 @@ dispatchMouseEvent env inpSt btn pos state = do
         -- 'downRoute' — the only two producers (the ClickUI
         -- branches and the middle-button camera_drag branch above)
         -- are the only routes that ever populate it.
-        case Map.lookup btn (inpPendingUIClick inpSt) of
-                Nothing → return ()
-                Just (clickKind, callback, px, py) → do
-                    gt ← readIORef (wsGameTimeRef (toWorldSimCapability env))
-                    -- The threshold compare stays in window pixels
-                    -- (dx/dy/movedPx) — uiDragThresholdPx is defined
-                    -- to match scripts/unit_drag_select.lua's window-
-                    -- space DRAG_THRESHOLD; only the chosen location is
-                    -- converted to framebuffer space (#774) for the
-                    -- recorded outcome.
-                    let dx = x - px
-                        dy = y - py
-                        movedPx = sqrt (dx * dx + dy * dy)
-                        (kind, whereXWin, whereYWin) =
-                            if movedPx ≥ uiDragThresholdPx
-                                then ("input.drag", x, y)
-                                else (clickKind, px, py)
-                        (whereX, whereY) = toFb (whereXWin, whereYWin)
-                        -- #745: a deferred discrete control's F4
-                        -- outcome truthfully reflects whether it
-                        -- actually activated; every other route (drag-
-                        -- activation control, camera-drag) has no
-                        -- 'mActivationOutcome' and keeps recording
-                        -- "accepted" exactly as before #745.
-                        outcomeName = maybe "accepted" activationOutcomeName mActivationOutcome
-                        cancelReason = case mActivationOutcome of
-                            Just (Cancel reason) → Just reason
-                            _                    → Nothing
-                    pushActionOutcome (actionOutcomeRef env) ActionOutcome
-                        { aoTs = gt, aoKind = kind, aoOutcome = outcomeName
-                        , aoWhereX = Just whereX, aoWhereY = Just whereY
-                        , aoTarget = Nothing
-                        , aoRequested = Nothing, aoApplied = Nothing, aoDropped = Nothing
-                        , aoReason = cancelReason, aoHandler = Just callback
-                        }
+        -- The threshold compare stays in window pixels, and only the
+        -- CHOSEN location is framebuffer space (#774): a click spends
+        -- the press's OWN press-time capture, a drag converts its
+        -- release point with the geometry read above (#1676).
+        forM_ (Map.lookup btn (inpPendingUIClick inpSt)) $
+            resolveDeferredUIClick env (x, y) (winW, winH) (fbW, fbH)
+                                   mActivationOutcome
 
     mPendingUIClick ← readIORef pendingUIClickRef
     mPendingActivation ← readIORef pendingActivationRef

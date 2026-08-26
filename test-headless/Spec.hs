@@ -153,6 +153,7 @@ import qualified Test.Headless.UI.SettingsRevert
     as UISettingsRevert
 import qualified Test.Headless.UI.TutorialHud as UITutorialHud
 import qualified Test.Headless.UI.UnicodeTextEditing as UIUnicodeTextEditing
+import qualified Test.Headless.Lua.DragSelectDeferred as LuaDragSelectDeferred
 import qualified Test.Headless.Lua.TextWrapping as LuaTextWrapping
 import qualified Test.Headless.Lua.TextTruncation as LuaTextTruncation
 import qualified Test.Headless.Lua.WidthTruncation as LuaWidthTruncation
@@ -584,6 +585,7 @@ main = hspec $ do
     UITransferSession.spec
     describe "Tutorial HUD" UITutorialHud.spec
     describe "UI.UnicodeTextEditing" UIUnicodeTextEditing.spec
+    LuaDragSelectDeferred.spec
     describe "Lua.TextWrapping" LuaTextWrapping.spec
     describe "Lua.TextTruncation" LuaTextTruncation.spec
     describe "Lua.WidthTruncation" LuaWidthTruncation.spec
