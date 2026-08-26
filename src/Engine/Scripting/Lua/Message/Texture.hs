@@ -11,6 +11,12 @@ module Engine.Scripting.Lua.Message.Texture
     , cacheEntryReusable
     , handleLoadTexture
     , handleLoadFont
+      -- * Exposed for regression coverage
+      --
+      --   The alias fast path is one of only two places that can insert
+      --   into 'btsHandleMap', so #1696's sentinel guard has to be proven
+      --   HERE and not merely on the registration side.
+    , duplicateCachedTextureHandle
     ) where
 
 import UPrelude

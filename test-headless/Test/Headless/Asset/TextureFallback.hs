@@ -24,8 +24,9 @@ module Test.Headless.Asset.TextureFallback (spec) where
 import UPrelude
 import Test.Hspec
 import Control.Exception (finally)
-import Data.IORef (newIORef, readIORef)
+import Data.IORef (IORef, newIORef, readIORef, writeIORef, modifyIORef')
 import qualified Data.HashMap.Strict as HM
+import qualified Data.Map.Strict as Map
 import System.Directory
     ( getTemporaryDirectory, createDirectoryIfMissing, removeDirectoryRecursive
     , doesFileExist )
@@ -34,7 +35,8 @@ import qualified Data.Text as T
 import qualified Data.Vector.Storable as Vec
 import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
 import Engine.Core.State (EngineEnv, floraCatalogRef, luaToEngineQueue, luaQueue
-    , assetPoolRef, nextObjectIdRef, inputStateRef, loggerRef)
+    , assetPoolRef, nextObjectIdRef, inputStateRef, loggerRef
+    , textureSystemRef, textureSizeRef)
 import Engine.Core.Thread (ThreadControl(..))
 import Engine.Scripting.Lua.API (registerLuaAPI)
 import Engine.Scripting.Lua.API.YamlTextures (resolveTexturePath)
@@ -42,15 +44,33 @@ import Engine.Scripting.Lua.API.Units (unknownUnitTexture)
 import Engine.Scripting.Lua.Thread (createLuaBackendState)
 import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
+import Engine.Asset.Base (AssetId(..))
 import Engine.Asset.Handle (TextureHandle(..), missingTextureHandle
     , firstAllocatableTextureHandle, isMissingTextureHandle, toInt)
 import Engine.Asset.Manager (generateTextureHandle)
-import Engine.Asset.Types (defaultAssetPool)
+import Engine.Asset.Types (AssetPool(..), AtlasMetadata(..), TextureAtlas(..)
+    , defaultAssetPool)
+import Engine.Core.Log
+    ( LogBackend(..), LogConfig(..), LogEntry(..), LogLevel(..)
+    , defaultLogConfig, initLogger )
+import Engine.Core.Monad (EngineM', runEngineM)
 import Engine.Graphics.Camera (CameraFacing(..))
+import Engine.Graphics.Vulkan.Sampler.Types (SamplerKind(..))
 import Engine.Graphics.Vulkan.Texture.Bindless
     ( TextureRegistrationFailure(..), checkRegistrableHandle
-    , registrationFailureMessage, writeHandleSlotEntryPtr, handleSlotTableSize )
+    , defaultBindlessConfig, registerPinnedTexture, registerTexture
+    , writeHandleSlotEntryPtr, handleSlotTableSize )
+import Engine.Graphics.Vulkan.Texture.Handle
+    (BindlessTextureHandle(..), toBindlessHandle)
+import Engine.Graphics.Vulkan.Texture.Slot
+    (TextureSlot(..), TextureSlotAllocator(..), createSlotAllocator)
+import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
 import Engine.Graphics.Vulkan.Texture.Undefined (undefinedTextureData)
+import Engine.Graphics.Vulkan.Types.Texture (UndefinedTexture(..), VulkanImage(..))
+import Engine.Scripting.Lua.Message.Texture (duplicateCachedTextureHandle)
+import qualified Engine.Core.Queue as Q
+import qualified Vulkan.Core10 as Vk
+import Vulkan.Zero (zero)
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), noFaceMapVertexId)
 import Engine.Scene.Types (SortableQuad(..))
 import World.Render.FloraQuads (floraToQuad)
@@ -225,32 +245,56 @@ sentinelHandleSpec = do
             map toInt handles `shouldBe` [1 .. 8]
             any isMissingTextureHandle handles `shouldBe` False
 
-        -- Layer 2a: the guard both registration paths share.
-        it "the shared registration guard refuses the sentinel and admits \
-           \every allocatable handle" $ \_env → do
-            checkRegistrableHandle missingTextureHandle
-                `shouldBe` Left TextureHandleReserved
+        -- Layer 2a: the guard both registration paths share, exercised
+        -- BY those paths.
+        it "the shared registration guard admits every handle the \
+           \allocator hands out" $ \_env → do
             pool ← defaultAssetPool
             handles ← replicateM 8 (generateTextureHandle pool)
             map checkRegistrableHandle handles `shouldBe` replicate 8 (Right ())
 
-        it "the refusal it logs names the zero handle and the caller's \
-           \provenance, and does not read as slot exhaustion" $ \_env → do
-            -- This is the exact Text 'registerTextureImpl' and
-            -- 'duplicateCachedTextureHandle' hand to 'logWarnM' -- the
-            -- rejection log line itself, not a restatement of it.
-            let refusal = registrationFailureMessage TextureHandleReserved
-                              missingTextureHandle "assets/textures/ui/blank.png"
-            refusal `shouldSatisfy` T.isInfixOf "handle 0"
-            refusal `shouldSatisfy` T.isInfixOf "assets/textures/ui/blank.png"
-            refusal `shouldSatisfy` T.isInfixOf "handleToSlot[0]"
-            -- Distinguishable from the OTHER reason a registration
-            -- produces no handle, which is what #1690 is about.
-            refusal `shouldSatisfy` (not ∘ T.isInfixOf "Failed to allocate bindless slot")
-            let exhausted = registrationFailureMessage TextureSlotsExhausted
-                                (TextureHandle 42) "assets/textures/ui/blank.png"
-            exhausted `shouldSatisfy` T.isInfixOf "Failed to allocate bindless slot"
-            exhausted `shouldSatisfy` T.isInfixOf "handle 42"
+        it "registerTexture refuses the sentinel, logging the zero handle \
+           \and the caller's provenance, and mutates NOTHING" $ \_env →
+            withRegistrationFixture $ \fx → do
+                (outcome, entries) ← runRegistration fx $ \system →
+                    registerTexture zero missingTextureHandle
+                        "assets/textures/ui/blank.png" zero zero system
+                expectSentinelRefusal fx outcome entries
+                    "assets/textures/ui/blank.png"
+
+        it "registerPinnedTexture refuses it on the same terms -- a \
+           \pinned sampler is no way past the guard" $ \_env →
+            withRegistrationFixture $ \fx → do
+                (outcome, entries) ← runRegistration fx $ \system →
+                    registerPinnedTexture zero missingTextureHandle
+                        "zoom atlas" zero zero system
+                expectSentinelRefusal fx outcome entries "zoom atlas"
+
+        it "a handle already registered still short-circuits to its \
+           \existing bindless handle, silently" $ \_env →
+            withRegistrationFixture $ \fx → do
+                (outcome, entries) ← runRegistration fx $ \system →
+                    registerTexture zero residentHandle "already resident"
+                        zero zero system
+                fst outcome `shouldBe` Right residentBindlessHandle
+                map leMessage entries `shouldBe` []
+
+        it "a genuinely exhausted slot allocator reports EXHAUSTION, not \
+           \a reserved handle -- the two diagnostics never merge" $ \_env →
+            withRegistrationFixture $ \fx → do
+                -- maxSlots 1 leaves nextSlot 1 with nothing to hand out,
+                -- so this reaches 'refuse' through the allocator rather
+                -- than through the sentinel guard -- Vulkan-free, like
+                -- the refusals above.
+                (outcome, entries) ← runRegistrationWith fx
+                    (\sys → sys { btsSlotAllocator = createSlotAllocator 1 })
+                    (\system → registerTexture zero (TextureHandle 42)
+                        "assets/textures/ui/blank.png" zero zero system)
+                fst outcome `shouldBe` Left TextureSlotsExhausted
+                message ← soleWarning entries
+                message `shouldSatisfy` T.isInfixOf "Failed to allocate bindless slot"
+                message `shouldSatisfy` T.isInfixOf "handle 42"
+                message `shouldNotSatisfy` T.isInfixOf "sentinel"
 
         -- Layer 2b: the low-level table mutation every path funnels through.
         it "the handle->slot table keeps entry 0 on the undefined slot, \
@@ -274,6 +318,44 @@ sentinelHandleSpec = do
                 writeHandleSlotEntryPtr table (-1) 9
                 peekElemOff table 0 `shouldReturn` 0
                 peekElemOff table 1 `shouldReturn` 7
+
+        -- Layer 2c: the OTHER path that can insert into btsHandleMap.
+        it "the cached-alias fast path refuses the sentinel, logging the \
+           \zero handle and the atlas path, and mutates NOTHING" $ \_env →
+            withRegistrationFixture $ \fx → do
+                before ← aliasObservables fx
+                entries ← runAlias fx missingTextureHandle
+                after ← aliasObservables fx
+                after `shouldBe` before
+                message ← soleWarning entries
+                message `shouldSatisfy` T.isInfixOf "handle 0"
+                message `shouldSatisfy` T.isInfixOf cachedAtlasPath
+                message `shouldSatisfy` T.isInfixOf "handleToSlot[0]"
+                message `shouldNotSatisfy`
+                    T.isInfixOf "Failed to allocate bindless slot"
+                peekTable fx (toInt missingTextureHandle) `shouldReturn` 0
+
+        it "...while an ordinary alias handle DOES take the slot and all \
+           \the bookkeeping, so the case above is a real refusal" $ \_env →
+            withRegistrationFixture $ \fx → do
+                let aliasHandle = TextureHandle 77
+                entries ← runAlias fx aliasHandle
+                map leMessage entries `shouldBe` []
+                mSystem ← readIORef (textureSystemRef (rfEnv fx))
+                case mSystem of
+                    Nothing → expectationFailure "the bindless system vanished"
+                    Just system →
+                        Map.lookup aliasHandle (btsHandleMap system)
+                            `shouldBe` Just residentBindlessHandle
+                peekTable fx (toInt aliasHandle)
+                    `shouldReturn` tsIndex (bthSlot residentBindlessHandle)
+                sizes ← readIORef (textureSizeRef (rfEnv fx))
+                HM.lookup aliasHandle sizes `shouldBe` Just (4, 4)
+                pool ← readIORef (assetPoolRef (rfEnv fx))
+                Map.member aliasHandle <$> readIORef (apTextureHandles pool)
+                    `shouldReturn` True
+                queued ← Q.flushQueue (luaQueue (rfEnv fx))
+                length queued `shouldBe` 1
 
         -- Layer 3: the producer that made the defect visible.
         it "every vertex floraToQuad emits carries the canonical \
@@ -303,6 +385,213 @@ sentinelHandleSpec = do
                     -- that the shader resolves through the table, which is
                     -- exactly how flora ended up shaded by a stranger.
                     fms `shouldNotBe` replicate 4 (0 ∷ Float)
+
+-- | Everything the two 'btsHandleMap' insertion paths need in order to
+--   run for real in a headless process.
+data RegistrationFixture = RegistrationFixture
+    { rfEnv    ∷ EngineEnv
+    , rfTable  ∷ Ptr Word32
+    , rfLogRef ∷ IORef [LogEntry]
+    }
+
+-- | The atlas the alias path duplicates, and the handle already resident
+--   in the fixture's bindless system.
+cachedAtlasPath ∷ Text
+cachedAtlasPath = "assets/textures/ui/cached_atlas.png"
+
+residentHandle ∷ TextureHandle
+residentHandle = TextureHandle 9
+
+residentSlot ∷ TextureSlot
+residentSlot = TextureSlot 5 0
+
+residentBindlessHandle ∷ BindlessTextureHandle
+residentBindlessHandle = toBindlessHandle residentSlot residentHandle
+
+-- | A headless engine with a capturing logger, plus a bindless system
+--   whose ONLY real resource is its handle->slot table.
+--
+--   Every Vulkan handle in it is @VK_NULL_HANDLE@, and that is sound for
+--   exactly the reason under test: a REFUSED registration returns before
+--   it reaches 'writeDescriptorSlot' or any other Vulkan call, so these
+--   cases never touch the null device.
+--
+--   That is also what makes them mutation-proof rather than merely
+--   green. Neutralising 'checkRegistrableHandle' was measured against
+--   this fixture: the two registration cases fail with @vulkan@'s own
+--   "The function pointer for vkUpdateDescriptorSets is null" (a clean
+--   'IOException', not a crash) because the sentinel now reaches the
+--   descriptor write, and the alias case fails on its bookkeeping
+--   comparison. Dropping the log line alone fails 'soleWarning'.
+--
+--   The two positive controls -- an already-resident handle, and a
+--   genuinely exhausted allocator -- reach 'refuse' and the map lookup
+--   without any Vulkan call, so they prove the production function
+--   really runs here rather than short-circuiting somewhere harmless.
+withRegistrationFixture ∷ (RegistrationFixture → IO α) → IO α
+withRegistrationFixture action = withHandleSlotTable $ \table → do
+    EngineInitResult env ← initializeEngineHeadless
+    logRef ← newIORef []
+    logger ← initLogger defaultLogConfig
+        { lcBackend = LogToCallback (\e → modifyIORef' logRef (e :)) }
+    writeIORef (loggerRef env) logger
+    writeIORef (textureSystemRef env) (Just (bareBindlessSystem table))
+    -- The atlas the alias path reads, resident in the asset pool.
+    pool ← readIORef (assetPoolRef env)
+    writeIORef (assetPoolRef env) pool
+        { apTextureAtlases =
+            Map.insert cachedAssetId cachedAtlas (apTextureAtlases pool) }
+    action RegistrationFixture
+        { rfEnv = env, rfTable = table, rfLogRef = logRef }
+
+cachedAssetId ∷ AssetId
+cachedAssetId = AssetId 1
+
+cachedAtlas ∷ TextureAtlas
+cachedAtlas = TextureAtlas
+    { taId            = cachedAssetId
+    , taName          = "cached_atlas"
+    , taPath          = cachedAtlasPath
+    , taMetadata      = AtlasMetadata (4, 4) Vk.FORMAT_R8G8B8A8_UNORM Map.empty
+    , taInfo          = Nothing
+    , taRefCount      = 1
+    , taCleanup       = Nothing
+    , taBindlessSlot  = Just (tsIndex residentSlot)
+    , taTextureHandle = residentHandle
+    }
+
+-- | A 'BindlessTextureSystem' carrying one already-registered handle and
+--   a real table pointer; every Vulkan field is null (see above).
+bareBindlessSystem ∷ Ptr Word32 → BindlessTextureSystem
+bareBindlessSystem table = BindlessTextureSystem
+    { btsConfig           = defaultBindlessConfig
+    , btsDescriptorPool   = zero
+    , btsDescriptorLayout = zero
+    , btsDescriptorSet    = zero
+    , btsSlotAllocator    = createSlotAllocator 64
+    , btsUndefinedTexture = UndefinedTexture (VulkanImage zero zero) zero
+    , btsHandleMap        = Map.singleton residentHandle residentBindlessHandle
+    , btsImageViews       = Map.singleton residentHandle zero
+    , btsTextureSampler   = zero
+    , btsTextureKind      = SamplerTextureNearest
+    , btsPinned           = Map.empty
+    , btsHandleSlotBuffer = zero
+    , btsHandleSlotMemory = zero
+    , btsHandleSlotPtr    = table
+    }
+
+-- | Drive one registration against the fixture's system, returning its
+--   result and whatever it logged.
+runRegistration ∷ RegistrationFixture
+                → (BindlessTextureSystem
+                   → EngineM' ( Either TextureRegistrationFailure BindlessTextureHandle
+                              , BindlessTextureSystem ))
+                → IO ( ( Either TextureRegistrationFailure BindlessTextureHandle
+                       , BindlessTextureSystem )
+                     , [LogEntry] )
+runRegistration fx = runRegistrationWith fx id
+
+runRegistrationWith ∷ RegistrationFixture
+                    → (BindlessTextureSystem → BindlessTextureSystem)
+                    → (BindlessTextureSystem
+                       → EngineM' ( Either TextureRegistrationFailure BindlessTextureHandle
+                                  , BindlessTextureSystem ))
+                    → IO ( ( Either TextureRegistrationFailure BindlessTextureHandle
+                           , BindlessTextureSystem )
+                         , [LogEntry] )
+runRegistrationWith fx tweak act = do
+    mSystem ← readIORef (textureSystemRef (rfEnv fx))
+    system ← case mSystem of
+        Nothing → fail "the fixture's bindless system vanished"
+        Just s  → pure (tweak s)
+    result ← runEngineM (act system) (rfEnv fx) pure
+    outcome ← either (fail ∘ show) pure result
+    entries ← drainLog fx
+    pure (outcome, entries)
+
+-- | Drive the cached-alias fast path for one handle.
+runAlias ∷ RegistrationFixture → TextureHandle → IO [LogEntry]
+runAlias fx handle = do
+    let action ∷ EngineM' ()
+        action = duplicateCachedTextureHandle (rfEnv fx) handle
+                     cachedAssetId cachedAtlas
+    result ← runEngineM action (rfEnv fx) pure
+    either (fail ∘ show) pure result
+    drainLog fx
+
+-- | Everything the alias path is supposed to leave alone when it
+--   refuses: the bindless handle map, the shader table entry, the
+--   asset-pool handle states and atlas refcounts, the texture-size map,
+--   and the notification queue.
+aliasObservables ∷ RegistrationFixture
+                 → IO ( Map.Map TextureHandle BindlessTextureHandle
+                      , Word32
+                      , [TextureHandle]
+                      , [Word32]
+                      , Int
+                      , Int )
+aliasObservables fx = do
+    let env = rfEnv fx
+    mSystem ← readIORef (textureSystemRef env)
+    entry0 ← peekTable fx (toInt missingTextureHandle)
+    pool ← readIORef (assetPoolRef env)
+    states ← readIORef (apTextureHandles pool)
+    sizes ← readIORef (textureSizeRef env)
+    queued ← Q.flushQueue (luaQueue env)
+    -- Put the drained messages back: flushQueue is the only read, and a
+    -- "before" snapshot must not itself change what "after" observes.
+    mapM_ (Q.writeQueue (luaQueue env)) queued
+    pure ( maybe Map.empty btsHandleMap mSystem
+         , entry0
+         , Map.keys states
+         , map taRefCount (Map.elems (apTextureAtlases pool))
+         , HM.size sizes
+         , length queued )
+
+peekTable ∷ RegistrationFixture → Int → IO Word32
+peekTable fx = peekElemOff (rfTable fx)
+
+drainLog ∷ RegistrationFixture → IO [LogEntry]
+drainLog fx = do
+    entries ← reverse ⊚ readIORef (rfLogRef fx)
+    writeIORef (rfLogRef fx) []
+    pure entries
+
+-- | Exactly one WARN was emitted; return its message.
+soleWarning ∷ HasCallStack ⇒ [LogEntry] → IO Text
+soleWarning entries = case filter ((≡ LevelWarn) ∘ leLevel) entries of
+    [entry] → pure (leMessage entry)
+    other   → do
+        expectationFailure $
+            "expected exactly one WARN log entry, got " ⧺ show (length other)
+        pure ""
+
+-- | A refused registration: the failure, an untouched system, an
+--   untouched table entry 0, and one log line naming both the zero
+--   handle and the provenance the caller passed.
+expectSentinelRefusal
+    ∷ HasCallStack
+    ⇒ RegistrationFixture
+    → ( Either TextureRegistrationFailure BindlessTextureHandle
+      , BindlessTextureSystem )
+    → [LogEntry]
+    → Text
+    → Expectation
+expectSentinelRefusal fx (outcome, system) entries source = do
+    outcome `shouldBe` Left TextureHandleReserved
+    -- Nothing allocated, nothing recorded: the returned system is the
+    -- one that went in.
+    btsHandleMap system `shouldBe` Map.singleton residentHandle residentBindlessHandle
+    btsImageViews system `shouldBe` Map.singleton residentHandle zero
+    btsPinned system `shouldBe` Map.empty
+    tsaNextSlot (btsSlotAllocator system) `shouldBe` 1
+    peekTable fx (toInt missingTextureHandle) `shouldReturn` 0
+    message ← soleWarning entries
+    message `shouldSatisfy` T.isInfixOf "handle 0"
+    message `shouldSatisfy` T.isInfixOf source
+    message `shouldSatisfy` T.isInfixOf "handleToSlot[0]"
+    -- Never the OTHER reason a registration yields no handle (#1690).
+    message `shouldNotSatisfy` T.isInfixOf "Failed to allocate bindless slot"
 
 -- | A real, zero-initialised handle->slot table of the production size,
 --   so 'writeHandleSlotEntryPtr' is exercised against the same memory
