@@ -48,13 +48,14 @@ import Engine.Asset.Base (AssetId(..))
 import Engine.Asset.Handle (AssetState(..), TextureHandle(..)
     , missingTextureHandle, firstAllocatableTextureHandle
     , isMissingTextureHandle, toInt)
-import Engine.Asset.Manager (generateTextureHandle, textureHandleNamespaceSpent)
+import Engine.Asset.Manager (TextureHandleAvailability(..)
+    , checkTextureHandleAvailability, generateTextureHandle)
 import Engine.Asset.Types (AssetPool(..), AtlasMetadata(..), TextureAtlas(..)
     , defaultAssetPool)
 import Engine.Core.Log
     ( LogBackend(..), LogConfig(..), LogEntry(..), LogLevel(..)
     , defaultLogConfig, initLogger )
-import Engine.Core.Monad (EngineM', runEngineM)
+import Engine.Core.Monad (EngineM', modifyGraphicsState, runEngineM)
 import Engine.Graphics.Camera (CameraFacing(..))
 import Engine.Graphics.Vulkan.Sampler.Types (SamplerKind(..))
 import Engine.Graphics.Vulkan.Texture.Bindless
@@ -73,6 +74,15 @@ import Engine.Graphics.Vulkan.Types.Texture (UndefinedTexture(..), VulkanImage(.
 import Engine.Scripting.Lua.Message.Texture
     (duplicateCachedTextureHandle, handleLoadTextureBatch)
 import Engine.Scripting.Lua.Types (LuaMsg(..))
+import Blood.Types (BloodStore(..), BloodStyle(..), BloodTextureRequest(..)
+    , SeverityBucket(..), FootprintBucket(..), AnisotropyBucket(..)
+    , EdgeBucket(..), emptyBloodStore, requestTexture)
+import Engine.Core.State (GraphicsState(..), worldManagerRef)
+import Engine.Graphics.Types (DevQueues(..))
+import World.Page.Types (WorldPageId(..))
+import World.Render.BloodQuads (bloodTextureSource, uploadBloodTextures)
+import World.State.Types (WorldState(..), WorldManager(..)
+    , emptyWorldState, emptyWorldManager)
 import qualified Engine.Core.Queue as Q
 import qualified Vulkan.Core10 as Vk
 import Vulkan.Zero (zero)
@@ -488,15 +498,25 @@ unrepresentableHandleSpec = do
             checkRegistrableHandle ShaderAddressable firstPast
                 `shouldBe` Left TextureHandleUnrepresentable
 
-        it "reports the namespace spent exactly when the NEXT id would be \
-           \refused, and never un-spends it" $ \_env → do
+        it "reports the namespace spent exactly when the NEXT id would \
+           \be refused, hands the report to ONE claimant, and never \
+           \un-spends it" $ \_env → do
             pool ← defaultAssetPool
             writeIORef (apNextTextureHandle pool) (handleSlotTableSize - 1)
-            textureHandleNamespaceSpent pool `shouldReturn` False
+            checkTextureHandleAvailability pool
+                `shouldReturn` TextureHandlesAvailable
             _ ← generateTextureHandle pool
-            textureHandleNamespaceSpent pool `shouldReturn` True
+            -- The first caller past the boundary is handed the id that
+            -- would have been allocated, so its report can name it.
+            checkTextureHandleAvailability pool `shouldReturn`
+                TextureHandlesSpent (Just (TextureHandle handleSlotTableSize))
+            -- Everyone after it is told the same permanent answer with
+            -- nothing to say about it.
+            checkTextureHandleAvailability pool
+                `shouldReturn` TextureHandlesSpent Nothing
             _ ← generateTextureHandle pool
-            textureHandleNamespaceSpent pool `shouldReturn` True
+            checkTextureHandleAvailability pool
+                `shouldReturn` TextureHandlesSpent Nothing
 
         it "refuses an out-of-table id only where the SHADER reads the \
            \table, never for a slot-only registration" $ \_env → do
@@ -573,6 +593,49 @@ unrepresentableHandleSpec = do
                 message ← soleWarning entries
                 message `shouldSatisfy`
                     T.isInfixOf "Failed to allocate bindless slot"
+
+        -- The PER-FRAME registration path, whose diff would otherwise
+        -- repeat the whole upload-and-refuse cycle forever.
+        it "reports a spent namespace ONCE from the blood upload path, \
+           \and uploads, registers and records nothing" $ \_env →
+            withRegistrationFixture $ \fx → do
+                let env = rfEnv fx
+                ws ← seedBloodWorld env
+                spendTextureHandles fx
+
+                -- Two frames. The device handles are all null, which is
+                -- exactly the point: the refusal must return before
+                -- 'createTextureFromRGBABytes' or 'registerTexture'
+                -- touches any of them, so reaching either one fails this
+                -- case rather than passing it.
+                runFrame fx
+                first ← drainLog fx
+                runFrame fx
+                second ← drainLog fx
+
+                -- Reported once, naming the kind, the refused id and the
+                -- cap -- a procedural texture has no requested path.
+                message ← soleWarning first
+                message `shouldSatisfy` T.isInfixOf bloodTextureSource
+                message `shouldSatisfy`
+                    namesHandle (TextureHandle handleSlotTableSize)
+                message `shouldSatisfy` T.isInfixOf (T.pack (show handleSlotTableSize))
+                message `shouldSatisfy` T.isInfixOf "#1699"
+                -- ...and never again, however many frames run.
+                map leMessage (filter ((≡ LevelWarn) ∘ leLevel) second)
+                    `shouldBe` []
+
+                -- Nothing recorded for it, either frame: no handle entry
+                -- (so nothing draws it) and no size entry.
+                HM.null <$> readIORef (wsBloodTextureHandlesRef ws)
+                    `shouldReturn` True
+                sizes ← readIORef (textureSizeRef env)
+                HM.null sizes `shouldBe` True
+                -- The namespace was not advanced either: a refusal that
+                -- allocated per frame would still be spending ids.
+                pool ← readIORef (assetPoolRef env)
+                readIORef (apNextTextureHandle pool)
+                    `shouldReturn` handleSlotTableSize
 
         -- The OTHER 'btsHandleMap' insertion path.
         it "the cached-alias fast path refuses an unrepresentable id, \
@@ -766,6 +829,57 @@ expectUnrepresentableRefusal fx (outcome, system) entries source = do
     -- Never either OTHER reason a registration yields no handle.
     message `shouldNotSatisfy` T.isInfixOf "Failed to allocate bindless slot"
     message `shouldNotSatisfy` T.isInfixOf "sentinel"
+
+-- | One loaded world page holding exactly one blood-texture descriptor
+--   and nothing uploaded yet, registered with the engine's world
+--   manager so 'uploadBloodTextures' reaches it.
+seedBloodWorld ∷ EngineEnv → IO WorldState
+seedBloodWorld env = do
+    ws ← emptyWorldState
+    let (pool, _tid, _isNew, _evicted) =
+            requestTexture bloodRequest (bstPool (emptyBloodStore 8))
+    writeIORef (wsBloodStoreRef ws) (BloodStore pool (bstDecals (emptyBloodStore 8)))
+    writeIORef (worldManagerRef env) emptyWorldManager
+        { wmWorlds = [(WorldPageId "blood_page", ws)] }
+    pure ws
+
+bloodRequest ∷ BloodTextureRequest
+bloodRequest = BloodTextureRequest
+    { btrStyle      = StylePool
+    , btrWoundKind  = "stab"
+    , btrSeverity   = SeverityModerate
+    , btrFootprint  = FootprintSmall
+    , btrAnisotropy = AnisotropyNone
+    , btrEdge       = EdgeSmooth
+    , btrSeed       = 7
+    }
+
+-- | Push the pool's counter one past the last id the shader's table can
+--   resolve, the state a long-lived process reaches on its own.
+spendTextureHandles ∷ RegistrationFixture → IO ()
+spendTextureHandles fx = do
+    pool ← readIORef (assetPoolRef (rfEnv fx))
+    writeIORef (apNextTextureHandle pool) handleSlotTableSize
+
+-- | Run one frame's blood upload sync against ALL-NULL Vulkan handles.
+--
+--   Sound for the same reason the registration cases above are: the
+--   refusal returns before any of them is used. A regression that
+--   uploaded or registered anyway fails on the null device instead of
+--   passing quietly.
+runFrame ∷ RegistrationFixture → IO ()
+runFrame fx = do
+    let action ∷ EngineM' ()
+        action = do
+            modifyGraphicsState $ \gs → gs
+                { vulkanDevice  = Just zero
+                , vulkanPDevice = Just zero
+                , vulkanCmdPool = Just zero
+                , deviceQueues  = Just (DevQueues zero zero 0 0)
+                }
+            uploadBloodTextures
+    result ← runEngineM action (rfEnv fx) pure
+    either (fail ∘ show) pure result
 
 -- | Does this diagnostic name THIS handle as the one it is about?
 --

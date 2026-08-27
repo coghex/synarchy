@@ -25,7 +25,8 @@
 --   GPU-resource-lifetime question.
 module Engine.Asset.Manager
   ( generateTextureHandle
-  , textureHandleNamespaceSpent
+  , TextureHandleAvailability(..)
+  , checkTextureHandleAvailability
   , generateFontHandle
   , generateAssetId
   , updateTextureState
@@ -68,28 +69,44 @@ generateTextureHandle pool =
   atomicModifyIORef' (apNextTextureHandle pool) $ \n →
     (n + 1, TextureHandle n)
 
--- | Would the NEXT id 'generateTextureHandle' hands out already be one
---   the shader's handle→slot table cannot resolve (#1699)?
+-- | Can 'generateTextureHandle' still hand out an id the shader's
+--   handle→slot table can resolve (#1699)?
+data TextureHandleAvailability
+  = TextureHandlesAvailable
+    -- ^ The next id is representable; allocate as normal.
+  | TextureHandlesSpent !(Maybe TextureHandle)
+    -- ^ The next id is not, and never will be. 'Just' the id that would
+    --   have been handed out for the ONE caller that claims the single
+    --   report, 'Nothing' for every caller after it.
+  deriving (Show, Eq)
+
+-- | Answer that question, claiming the report if this is the first
+--   caller to see the namespace spent.
 --
 --   The counter is monotonic and has no reset anywhere in the tree, so
---   once this answers 'True' it answers 'True' for the rest of the
---   process: every further shader-addressable registration is refused,
---   permanently. It reads the SAME guard those registrations run
---   ('checkRegistrableHandle'), so there is one definition of the
---   boundary rather than a second copy that could drift.
+--   once it is spent it stays spent: every further shader-addressable
+--   registration is refused, permanently. It reads the SAME guard those
+--   registrations run ('checkRegistrableHandle'), so there is one
+--   definition of the boundary rather than a second copy that could
+--   drift, and it names the refused id so the report reads like every
+--   other refusal ('registrationFailureMessage').
 --
---   Only a caller that would otherwise repeat futile work every frame
---   needs to ask — 'World.Render.BloodQuads', whose per-frame diff
---   would re-upload and re-refuse the same decal forever. A one-shot
---   request has no reason to: refusing at the registration boundary is
---   already terminal, and asking first would only duplicate it.
-textureHandleNamespaceSpent ∷ AssetPool → IO Bool
-textureHandleNamespaceSpent pool =
-  isRefused ⊚ readIORef (apNextTextureHandle pool)
-  where
-    isRefused n = case checkRegistrableHandle ShaderAddressable (TextureHandle n) of
-      Left _   → True
-      Right () → False
+--   The claim is what makes a PER-FRAME caller safe to ask —
+--   'World.Render.BloodQuads', whose diff would otherwise re-upload,
+--   re-refuse and re-log the same decal every frame for the rest of the
+--   session. A one-shot request has no reason to ask at all: refusing
+--   at the registration boundary is already terminal, and asking first
+--   would only duplicate it.
+checkTextureHandleAvailability ∷ AssetPool → IO TextureHandleAvailability
+checkTextureHandleAvailability pool = do
+  next ← readIORef (apNextTextureHandle pool)
+  let handle = TextureHandle next
+  case checkRegistrableHandle ShaderAddressable handle of
+    Right () → pure TextureHandlesAvailable
+    Left _   → do
+      reported ← atomicModifyIORef' (apHandlesSpentReported pool)
+                     (\r → (True, r))
+      pure (TextureHandlesSpent (if reported then Nothing else Just handle))
 
 generateFontHandle ∷ AssetPool → IO FontHandle
 generateFontHandle pool =

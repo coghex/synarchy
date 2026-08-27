@@ -30,6 +30,7 @@ module World.Render.BloodQuads
     ( uploadBloodTextures
     , disposeQueuedBloodTextures
     , renderBloodDecalQuads
+    , bloodTextureSource
     ) where
 
 import UPrelude
@@ -47,7 +48,13 @@ import Engine.Core.State (EngineEnv, EngineState(..), GraphicsState(..)
 import Engine.Core.Capability.RenderView
   (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Asset.Handle (TextureHandle, toInt)
-import Engine.Asset.Manager (generateTextureHandle, textureHandleNamespaceSpent)
+import Engine.Asset.Manager
+    (TextureHandleAvailability(..), checkTextureHandleAvailability
+    , generateTextureHandle)
+import Engine.Core.Log (LogCategory(..))
+import Engine.Core.Log.Monad (logWarnM)
+import Engine.Graphics.Vulkan.Texture.Handle
+    (TextureRegistrationFailure(..), registrationFailureMessage)
 import Engine.Graphics.Types (DevQueues(..))
 import Engine.Graphics.Camera (Camera2D(..))
 import Engine.Graphics.Vulkan.Texture (createTextureFromRGBABytes)
@@ -70,6 +77,17 @@ import World.Render.ChunkCulling (isChunkVisibleWrapped)
 import World.Render.ViewBounds (computeViewBounds)
 import World.Blood.Teardown (drainBloodDisposalRecords)
 import World.Types
+
+-- | The provenance label every blood-decal texture registration and
+--   refusal is reported under (#606, #1699).
+--
+--   A procedural texture has no requested path, so this stands in for
+--   one wherever a file-backed upload would name its file: the
+--   registration diagnostic 'registerTexture' logs, and the one-shot
+--   report 'uploadOne' makes when the texture-handle namespace is
+--   spent. Spelled once so the two always agree.
+bloodTextureSource ∷ Text
+bloodTextureSource = "blood decal atlas"
 
 -- * GPU upload / eviction sync (EngineM, once per frame)
 
@@ -196,22 +214,36 @@ uploadOne dev pdev cmdPool queue (bl, known) d = do
     -- this check the same descriptor would generate a handle, upload a
     -- texture, be refused, log a warning and destroy the texture again
     -- every frame for the rest of the session. Ask before doing any of
-    -- that; the decal is simply not uploaded, exactly as this module
-    -- already handles an upload that has not caught up yet.
-    spent ← liftIO $ textureHandleNamespaceSpent ap
-    if spent then pure (bl, known) else do
-      let img = generateBloodTexture d
-      texHandle ← liftIO $ generateTextureHandle ap
-      ((_image, imageView), cleanupImg) ← createTextureFromRGBABytes
-          pdev dev cmdPool queue (btiWidth img, btiHeight img) (btiPixels img)
-      (mBindlessHandle, bl') ← registerTexture dev texHandle "blood decal atlas"
-                                  imageView (btsTextureSampler bl) bl
-      case mBindlessHandle of
-        Right _ → do
+    -- that.
+    --
+    -- The refusal is still REPORTED — a procedural texture has no
+    -- requested path, so it names its kind, the id that was refused and
+    -- the cap — but the pool hands that report to exactly one claimant,
+    -- so a permanent condition is stated once instead of every frame.
+    -- Afterwards the decal is simply not uploaded and has no entry in
+    -- 'wsBloodTextureHandlesRef', exactly as this module already handles
+    -- an upload that has not caught up yet.
+    availability ← liftIO $ checkTextureHandleAvailability ap
+    case availability of
+      TextureHandlesSpent report → do
+        forM_ report $ \refused →
+          logWarnM CatTexture $ registrationFailureMessage
+              TextureHandleUnrepresentable refused bloodTextureSource
+        pure (bl, known)
+      TextureHandlesAvailable → do
+        let img = generateBloodTexture d
+        texHandle ← liftIO $ generateTextureHandle ap
+        ((_image, imageView), cleanupImg) ← createTextureFromRGBABytes
+            pdev dev cmdPool queue (btiWidth img, btiHeight img) (btiPixels img)
+        (mBindlessHandle, bl') ← registerTexture dev texHandle
+                                    bloodTextureSource
+                                    imageView (btsTextureSampler bl) bl
+        case mBindlessHandle of
+          Right _ → do
             liftIO $ atomicModifyIORef' (rvTextureSizeRef (toRenderViewCapability env)) $ \m →
                 (HM.insert texHandle (btiWidth img, btiHeight img) m, ())
             pure (bl', HM.insert (btdId d) (texHandle, cleanupImg) known)
-        Left _ → do
+          Left _ → do
             -- Bindless system full, or this id crossed the handle cap
             -- between the check above and the allocation — drop the GPU
             -- resource we just made, record no size entry and no handle
