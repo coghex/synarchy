@@ -33,8 +33,10 @@ import Engine.Graphics.Vulkan.Capability
 import Engine.Graphics.Vulkan.Device (bindlessCapableBonus, scoreDevice)
 import Engine.Graphics.Vulkan.Texture.Limits (maxBindlessTextures)
 import Engine.Graphics.Vulkan.Texture.Requirements
-  (BindlessCapacity(..), BindlessFeature(..), bindlessCapacityApplies
-  ,bindlessCapacityField, bindlessCapacityRequirement, bindlessFeatureField
+  (BindlessCapacity(..), BindlessFeature(..), CapacityScope(..)
+  ,bindlessCapacityApplies, bindlessCapacityField
+  ,bindlessCapacityRequirement, bindlessCapacityScope, bindlessFeatureField
+  ,layoutDescriptorsInScope
   ,bindlessTextureBindingFlags, bindlessTextureBindingRequirements
   ,enableBindlessFeature, missingBindlessFeatures, readBindlessFeature
   ,reportedBindlessCapacities, requiredBindlessCapacities
@@ -443,15 +445,28 @@ spec = describe "Vulkan bindless feature requirements" $ do
         (cap, deviceBindlessFailureMessage support) `shouldSatisfy`
           (T.isInfixOf (expectedShortfallClause cap short) . snd)
 
-    it "the ordinary limits never see the bindless texture array" $
-      -- Not a stylistic preference for two checks over one: the bindless
-      -- texture layout is created WITH
-      -- UPDATE_AFTER_BIND_POOL_BIT, and an ordinary limit counts "only
-      -- descriptors in descriptor set layouts created WITHOUT" that bit. Its
-      -- statement therefore counts ZERO of the array's descriptors, so no
-      -- value of it — not even maxBound, as below — can make the layout
-      -- valid. Reading the larger of the pair would accept a device whose
-      -- pipeline layout Vulkan rejects.
+    it "puts zero of the texture array against the ordinary statements" $
+      -- The fact the whole split rests on, asserted directly rather than
+      -- inferred from behaviour: the bindless texture layout is created WITH
+      -- UPDATE_AFTER_BIND_POOL_BIT, and an ordinary statement counts "only
+      -- descriptors in descriptor set layouts created WITHOUT" that bit. So
+      -- the array contributes NOTHING to an ordinary sampler or
+      -- sampled-image limit — there is no reported value of one that could
+      -- supply the array's 16384 descriptors, because it does not range over
+      -- them.
+      forM_ [CapPerStageSamplers, CapSetSamplers
+            ,CapPerStageSampledImages, CapSetSampledImages] $ \cap → do
+        (cap, layoutDescriptorsInScope ScopeWithoutUpdateAfterBind cap)
+          `shouldBe` (cap, 0)
+        (cap, layoutDescriptorsInScope ScopeAllSets cap)
+          `shouldBe` (cap, maxBindlessTextures)
+        (cap, bindlessCapacityScope cap) `shouldBe` (cap, ScopeAllSets)
+
+    it "the ordinary limits never rescue an update-after-bind shortfall" $
+      -- The behavioural consequence of the row above. Reading the larger of
+      -- the pair would accept a device whose pipeline layout Vulkan rejects,
+      -- so every update-after-bind shortfall must survive every ordinary
+      -- limit being raised to maxBound.
       forM_ capacityFields $ \(cap, setField) → do
         let support = supportReportingBase generousFeatures
                         (zero ∷ PhysicalDeviceLimits)

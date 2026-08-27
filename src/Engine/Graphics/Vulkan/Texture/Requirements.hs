@@ -37,6 +37,9 @@ module Engine.Graphics.Vulkan.Texture.Requirements
   , bindlessTextureBindingFlags
     -- * The descriptor capacities that layout consumes
   , BindlessCapacity(..)
+  , CapacityScope(..)
+  , bindlessCapacityScope
+  , layoutDescriptorsInScope
   , requiredBindlessCapacities
   , handleTableDescriptors
   , pipelineUniformBufferDescriptors
@@ -209,6 +212,92 @@ bindlessPipelineSetCount = 2
 bindlessColorAttachments ∷ Word32
 bindlessColorAttachments = 1
 
+-- | Which descriptors of the bindless pipeline layout a limit's Valid Usage
+--   statement counts. This is the whole reason an ordinary limit and its
+--   update-after-bind counterpart are not interchangeable: they range over
+--   different populations, so neither can stand in for the other and there
+--   is no combined \"effective\" limit to compute.
+data CapacityScope
+  = -- | Counts ONLY descriptors in set layouts created WITHOUT
+    --   @UPDATE_AFTER_BIND_POOL_BIT@ (VUIDs 03016-03018, 03028-03029, and
+    --   @maxPerStageResources@, each of whose limit text says exactly that).
+    --   Set 0 is such a layout; the bindless texture layout is NOT.
+    ScopeWithoutUpdateAfterBind
+  | -- | Counts descriptors in EVERY set layout, whether or not it carries
+    --   the bit (VUIDs 03022-03027, 03036-03043 — their limit text reads
+    --   \"with or without\").
+    ScopeAllSets
+  deriving (Show, Eq, Ord, Enum, Bounded)
+
+-- | How many descriptors of one class THIS renderer's pipeline layout puts
+--   against a statement of the given scope.
+--
+--   Read the sampler and sampled-image rows: under
+--   'ScopeWithoutUpdateAfterBind' the answer is ZERO. The 16,384-entry
+--   texture array lives in a layout created WITH
+--   @UPDATE_AFTER_BIND_POOL_BIT@ ('createBindlessDescriptorSetLayout'), so
+--   an ordinary sampler or sampled-image statement counts none of it — at
+--   ANY reported value. That is why 'bindlessCapacityRequirement' never
+--   consults an ordinary limit for a texture capacity: not because the
+--   update-after-bind limit is assumed smaller, but because the ordinary
+--   statement does not range over those descriptors at all. A device
+--   \"whose ordinary sampler limit supplies 16,384 descriptors\" cannot
+--   exist for this layout; that limit supplies the array nothing.
+--
+--   The converse is why the ordinary limits are still gated on: set 0's one
+--   vertex-stage uniform buffer and the two bound sets DO fall in the
+--   without-update-after-bind scope, and no update-after-bind headroom
+--   covers them either.
+layoutDescriptorsInScope ∷ CapacityScope → BindlessCapacity → Word32
+layoutDescriptorsInScope scope cap = case (scope, cap) of
+  -- The texture array: in the update-after-bind set layout, so invisible to
+  -- the ordinary statements.
+  (ScopeWithoutUpdateAfterBind, CapPerStageSamplers)       → 0
+  (ScopeWithoutUpdateAfterBind, CapSetSamplers)            → 0
+  (ScopeWithoutUpdateAfterBind, CapPerStageSampledImages)  → 0
+  (ScopeWithoutUpdateAfterBind, CapSetSampledImages)       → 0
+  (ScopeAllSets, CapPerStageSamplers)                      → maxBindlessTextures
+  (ScopeAllSets, CapSetSamplers)                           → maxBindlessTextures
+  (ScopeAllSets, CapPerStageSampledImages)                 → maxBindlessTextures
+  (ScopeAllSets, CapSetSampledImages)                      → maxBindlessTextures
+  -- The handle→slot table: same set layout, same story.
+  (ScopeWithoutUpdateAfterBind, CapPerStageStorageBuffers) → 0
+  (ScopeWithoutUpdateAfterBind, CapSetStorageBuffers)      → 0
+  (ScopeAllSets, CapPerStageStorageBuffers)                → handleTableDescriptors
+  (ScopeAllSets, CapSetStorageBuffers)                     → handleTableDescriptors
+  -- Set 0's uniform buffer: an ORDINARY layout, so it counts in both scopes.
+  (_, CapPerStageUniformBuffers)     → pipelineUniformBufferDescriptors
+  (_, CapSetUniformBuffers)          → pipelineUniformBufferDescriptors
+  (_, CapBasePerStageUniformBuffers) → pipelineUniformBufferDescriptors
+  (_, CapBaseSetUniformBuffers)      → pipelineUniformBufferDescriptors
+  -- Set count and the pool ceiling are not per-descriptor-class at all.
+  (_, CapBoundDescriptorSets)        → bindlessPipelineSetCount
+  (_, CapDescriptorsInAllPools)      →
+    maxBindlessTextures + handleTableDescriptors
+  -- The fragment stage's aggregate, colour attachment included.
+  (ScopeWithoutUpdateAfterBind, CapPerStageResources) →
+    bindlessColorAttachments
+  (ScopeAllSets, CapPerStageResources) →
+    maxBindlessTextures + handleTableDescriptors + bindlessColorAttachments
+
+-- | The scope of the statement each capacity's limit belongs to, and
+--   therefore which descriptors 'bindlessCapacityRequirement' counts for it.
+bindlessCapacityScope ∷ BindlessCapacity → CapacityScope
+bindlessCapacityScope = \case
+  CapPerStageSampledImages      → ScopeAllSets
+  CapPerStageSamplers           → ScopeAllSets
+  CapPerStageStorageBuffers     → ScopeAllSets
+  CapPerStageUniformBuffers     → ScopeAllSets
+  CapPerStageResources          → ScopeAllSets
+  CapSetSampledImages           → ScopeAllSets
+  CapSetSamplers                → ScopeAllSets
+  CapSetStorageBuffers          → ScopeAllSets
+  CapSetUniformBuffers          → ScopeAllSets
+  CapDescriptorsInAllPools      → ScopeAllSets
+  CapBoundDescriptorSets        → ScopeWithoutUpdateAfterBind
+  CapBasePerStageUniformBuffers → ScopeWithoutUpdateAfterBind
+  CapBaseSetUniformBuffers      → ScopeWithoutUpdateAfterBind
+
 -- | One update-after-bind descriptor capacity the concrete bindless
 --   descriptor set consumes, named as @VkPhysicalDeviceVulkan12Properties@
 --   reports it.
@@ -360,26 +449,15 @@ bindlessCapacityField = \case
   CapBaseSetUniformBuffers →
     "maxDescriptorSetUniformBuffers"
 
--- | How many descriptors the bindless set needs from one capacity. Every
---   texture figure is 'maxBindlessTextures' itself — #975's single
---   definition, the same one both fragment shaders interpolate — so the
---   requirement and the shader array size cannot drift apart.
+-- | How many descriptors the bindless pipeline layout puts against one
+--   capacity's statement — derived from that statement's own scope, so a
+--   requirement can never count descriptors the statement does not range
+--   over. Every texture figure bottoms out in 'maxBindlessTextures' itself,
+--   #975's single definition and the one both fragment shaders interpolate,
+--   so the requirement and the shader array size cannot drift apart.
 bindlessCapacityRequirement ∷ BindlessCapacity → Word32
-bindlessCapacityRequirement = \case
-  CapPerStageSampledImages  → maxBindlessTextures
-  CapPerStageSamplers       → maxBindlessTextures
-  CapPerStageStorageBuffers → handleTableDescriptors
-  CapPerStageUniformBuffers → pipelineUniformBufferDescriptors
-  CapPerStageResources      → maxBindlessTextures + handleTableDescriptors
-                                + bindlessColorAttachments
-  CapSetSampledImages       → maxBindlessTextures
-  CapSetSamplers            → maxBindlessTextures
-  CapSetStorageBuffers      → handleTableDescriptors
-  CapSetUniformBuffers      → pipelineUniformBufferDescriptors
-  CapDescriptorsInAllPools  → maxBindlessTextures + handleTableDescriptors
-  CapBoundDescriptorSets        → bindlessPipelineSetCount
-  CapBasePerStageUniformBuffers → pipelineUniformBufferDescriptors
-  CapBaseSetUniformBuffers      → pipelineUniformBufferDescriptors
+bindlessCapacityRequirement cap =
+  layoutDescriptorsInScope (bindlessCapacityScope cap) cap
 
 -- | Whether one capacity's Valid Usage statement applies to a device at
 --   all. Each update-after-bind pipeline-layout limit binds only when the
