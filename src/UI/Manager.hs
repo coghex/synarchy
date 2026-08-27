@@ -76,6 +76,7 @@ module UI.Manager
   , getElementChildren
   , findElementAt
   , findElementAtExcept
+  , hitsAtPointBy
   , elementBlocksPointer
   , elementCapturesScroll
   , isElementPointerBlocking

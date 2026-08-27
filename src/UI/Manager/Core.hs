@@ -60,9 +60,12 @@ modifyPage handle mgr f =
 
 -- | #745: bump ONE element's 'UI.Types.ueRouteEpoch'
 --   — called by 'UI.Manager.Property.setElementVisible'/
---   'setElementClickable' and 'UI.Manager.Hierarchy.removeElement'/
---   'removeFromPage' (detach only — see 'UI.Types.ueRouteEpoch' for
---   why (re)attach must not bump anything). Deliberately scoped to
+--   'setElementClickable', 'UI.Manager.Hierarchy.removeElement'/
+--   'removeFromPage' (every detach), and
+--   'UI.Manager.Hierarchy.addElementToPage'/'addChildElement' on an
+--   attachment that actually changes the element's structural owner
+--   (#1694 — a fresh or same-owner attachment stays neutral;
+--   see 'UI.Types.ueRouteEpoch'). Deliberately scoped to
 --   THIS element only, not global: 'UI.ControlActivation.
 --   resolveActivation' walks the pressed element's ancestor chain and
 --   compares each ancestor's own epoch, so an unrelated element's

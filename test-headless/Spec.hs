@@ -32,6 +32,7 @@ import qualified Test.Headless.Unit.InjurySpeed as InjurySpeedTest
 import qualified Test.Headless.Unit.Fall as FallTest
 import qualified Test.Headless.Unit.StopTransition as StopTransition
 import qualified Test.Headless.Unit.Stats as StatsTest
+import qualified Test.Headless.Unit.AddXpApi as UnitAddXpApi
 import qualified Test.Headless.Unit.AccessoryUnequip as AccessoryUnequip
 import qualified Test.Headless.Unit.SpawnShed as SpawnShedTest
 import qualified Test.Headless.Unit.Transfer as UnitTransfer
@@ -141,6 +142,7 @@ import qualified Test.Headless.UI.Tooltip as UITooltip
 import qualified Test.Headless.UI.InputOwnership as UIInputOwnership
 import qualified Test.Headless.UI.ElementInputPolicy as UIElementInputPolicy
 import qualified Test.Headless.UI.ControlActivation as UIControlActivation
+import qualified Test.Headless.UI.HierarchyOwnership as UIHierarchyOwnership
 import qualified Test.Headless.UI.FocusNavigation as UIFocusNavigation
 import qualified Test.Headless.UI.Clipping as UIClipping
 import qualified Test.Headless.UI.InteractiveBounds as UIInteractiveBounds
@@ -349,6 +351,10 @@ main = hspec $ do
     -- mutation paths, which would corrupt the shared-worlds engine
     -- above (same precedent as World identity / autosave guards).
     aroundAll withHeadlessEngine UnitTransferApi.spec
+    -- Own engine (#1733): the live unit.addXP boundary WRITES the
+    -- unit manager ref (and seeds a deliberately corrupt stat map),
+    -- so it cannot share the worldgen engine above.
+    aroundAll withHeadlessEngine UnitAddXpApi.spec
     -- Own engine (#1605): the live unit.moveTo boundary swaps the
     -- engine's logger to capture the warning it emits and drains the
     -- unit command queue, so it cannot share the worldgen engine.
@@ -573,6 +579,7 @@ main = hspec $ do
     describe "UI.InputOwnership" UIInputOwnership.spec
     describe "UI.ElementInputPolicy" UIElementInputPolicy.spec
     describe "UI.ControlActivation" UIControlActivation.spec
+    describe "UI hierarchy structural ownership" UIHierarchyOwnership.spec
     describe "UI.FocusNavigation" UIFocusNavigation.spec
     describe "UI.Clipping" UIClipping.spec
     describe "UI.InteractiveBounds" UIInteractiveBounds.spec

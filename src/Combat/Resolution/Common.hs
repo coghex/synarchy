@@ -78,17 +78,27 @@ maxStaminaFor inst = case HM.lookup "max_stamina" (uiStats inst) of
 --   Normal concentration without euphoria is neutral at 1.00; zero
 --   concentration bottoms out at a 25% penalty; euphoria is the sole
 --   above-baseline bonus (capped at 1.10).
+--
+--   #1733: both clamps are 'clampFinite', so a stat map already
+--   carrying a non-finite @concentration@ — from any route, not only
+--   @unit.addXP@ — is CONTAINED here rather than passed on. A bare
+--   'clamp' lets a NaN through untouched, and combat then reads
+--   @roll > pHit@ and @dodgeRoll < pDodge@ as 'False', landing every
+--   strike and disabling the active dodge. Finite inputs are unchanged.
 mentalEffectiveness ∷ UnitInstance → Float
 mentalEffectiveness inst =
-    let concentration = clamp 0.0 1.0 (statOr "concentration" 1.0 inst)
+    let concentration = clampFinite 0.0 1.0 (statOr "concentration" 1.0 inst)
         -- 3.0 = EUPHORIC. Mirrors the mental.STABLE/STRESSED/BREAK/
         -- EUPHORIC = 0,1,2,3 ordering in scripts/mental_state.lua —
         -- change both in lockstep; the Lua side carries the matching
-        -- cross-reference on its own definition.
+        -- cross-reference on its own definition. An equality TEST needs
+        -- no finiteness guard of its own: a non-finite mental_state is
+        -- unequal to 3.0 and reads as non-euphoric, which is already
+        -- the conservative answer.
         euphoric       = statOr "mental_state" 0.0 inst ≡ 3.0
         base           = 0.75 + 0.25 * concentration
         withEuphoria   = if euphoric then base * 1.10 else base
-    in clamp 0.75 1.10 withEuphoria
+    in clampFinite 0.75 1.10 withEuphoria
 
 weightedReachFactor ∷ Float → Float
 weightedReachFactor bladeCm = clamp 0.0 1.0 (bladeCm / 100.0)
