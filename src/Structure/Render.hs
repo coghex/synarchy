@@ -38,6 +38,7 @@
 --   facing's own depth axis instead, so the gap is the same at all four.
 module Structure.Render
     ( renderStructureQuads
+    , structureChunkQuads
     , structurePieceQuads
     , isScreenFrontWall
     , wallTieBreak
@@ -55,8 +56,8 @@ import Engine.Core.Capability.RenderHandoff
   (RenderHandoffCapability(..), toRenderHandoffCapability)
 import Engine.Asset.Handle (TextureHandle(..), toInt)
 import Engine.Scene.Types (SortableQuad(..))
-import Engine.Graphics.Camera (CameraFacing(..))
-import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..)
+import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..))
+import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..)
                                            , QuadCorners(..), QuadUV(..)
                                            , QuadPayload(..), quadVertices
                                            , rectCorners, fullQuadUV
@@ -70,7 +71,10 @@ import World.Grid (tileWidth
                    , applyFacingF
                    , unapplyFacingF
                    , gridToScreen)
-import World.Types (WorldState, wsTilesRef)
+import World.Render.ChunkCulling (isChunkVisibleWrapped)
+import World.Render.ViewBounds (ViewBounds, computeViewBounds)
+import World.Types (WorldState, wsTilesRef, wsGenParamsRef
+                   , WorldGenParams(..))
 import World.Tile.Types (WorldTileData(..))
 import World.Chunk.Types (LoadedChunk(..))
 import Structure.Facing
@@ -83,6 +87,22 @@ import Structure.WallCatalog (StructureWallCatalog, rotatedWallArt)
 --   spoil passes) rather than this picking a world itself — historically it
 --   grabbed the head of @wmWorlds@ and could render a hidden world's
 --   structures over the visible one (#72).
+--
+--   SEAM-AWARE since #1706. Chunks are stored u-wrapped, so a chunk whose
+--   nearest image is across the cylindrical seam has to be drawn through
+--   that image — the same nearest u-alias
+--   'World.Render.ChunkCulling.isChunkVisibleWrapped' hands the terrain,
+--   spoil, blood, cursor, ground-item and hit-test passes. This pass used
+--   to make no wrap decision at all and no visibility test either, so it
+--   emitted every loaded chunk's pieces at their raw canonical position:
+--   the floor wrapped into view and the walls standing on it stayed a
+--   whole world away (76.8 screen-world units in X at south/north, 38.4
+--   in Y at west/east, for a 64-chunk world).
+--
+--   The culling inputs are read HERE rather than taken from the caller,
+--   matching the per-frame ground-item pass: the camera and framebuffer
+--   off 'EngineEnv', and the wrap period's world size off THIS page's own
+--   'wsGenParamsRef' so two visible pages can never borrow each other's.
 renderStructureQuads ∷ EngineEnv → WorldState → CameraFacing → Int → Int → Float
                      → IO (V.Vector SortableQuad)
 renderStructureQuads env ws facing zSlice effDepth tileAlpha = do
@@ -91,25 +111,89 @@ renderStructureQuads env ws facing zSlice effDepth tileAlpha = do
             handles ← readIORef (rhTexPaletteHandlesRef handoff)
             palette ← readIORef (rhTexPaletteRef handoff)
             catalog ← readIORef (rhStructureWallCatalogRef handoff)
-            let entries =
-                    [ ( gx, gy, toEnum (fromIntegral slotTag) ∷ StructureSlot, spd )
-                    | lc ← HM.elems (wtdChunks td)
-                    , ((gx, gy, slotTag), spd) ← HM.toList (lcStructures lc) ]
-            if null entries then return V.empty else do
-                texSizes ← readIORef (rvTextureSizeRef (toRenderViewCapability env))
-                mBts ← readIORef (rvTextureSystemRef (toRenderViewCapability env))
+            -- Chunks that hold no piece at all cost nothing further; the
+            -- early-out also keeps a world with no structures off the
+            -- camera / view-bounds reads entirely, as before.
+            let chunks = [ lc | lc ← HM.elems (wtdChunks td)
+                             , not (HM.null (lcStructures lc)) ]
+            if null chunks then return V.empty else do
+                let rv = toRenderViewCapability env
+                texSizes ← readIORef (rvTextureSizeRef rv)
+                camera   ← readIORef (rvCameraRef rv)
+                (fbW, fbH) ← readIORef (rvFramebufferSizeRef rv)
+                paramsM  ← readIORef (wsGenParamsRef ws)
+                mBts ← readIORef (rvTextureSystemRef rv)
                 case mBts of
                     Nothing → return V.empty
                     Just _bts →
                         -- Bake stable handle ids (tile + its own face map);
                         -- resolved to live slots in the shader (#286).
                         let lookupSlot h = fromIntegral (toInt h) ∷ Word32
-                        in return $ V.fromList
-                            [ sq
-                            | (gx, gy, slot, spd) ← entries
-                            , sq ← structurePieceQuads catalog palette handles
-                                       lookupSlot texSizes facing zSlice effDepth
-                                       tileAlpha gx gy slot spd ]
+                            worldSize = maybe 128 wgpWorldSize paramsM
+                            vb = computeViewBounds camera fbW fbH effDepth
+                            (camX, camY) = camPosition camera
+                        in return $ V.fromList $
+                            structureChunkQuads catalog palette handles
+                                lookupSlot texSizes facing zSlice effDepth
+                                tileAlpha worldSize vb camX camY chunks
+
+-- | The seam-aware per-chunk half of the pass, pure so a headless spec can
+--   drive the real geometry (the IO pass above deliberately emits nothing
+--   until the texture system exists, and headless never has one).
+--
+--   ONE decision per chunk, taken from the chunk's OWN 'lcCoord' — the
+--   owner 'HM.elems' used to discard while flattening straight to pieces.
+--   'isChunkVisibleWrapped' judges visibility against bounds already
+--   translated by the offset it returns, so a chunk is drawn at exactly
+--   the alias that made it visible and is skipped entirely otherwise; a
+--   piece can never be emitted through two aliases, because only one is
+--   ever chosen.
+--
+--   The offset is applied as a pure SCREEN translation of the emitted
+--   vertices — never fed into the producers' grid arithmetic — so UVs,
+--   @qpWorldUV@, texture and facemap payloads, layers and above all
+--   'sqSortKey' are exactly what they were. Painter depth stays
+--   grid-derived (that is what keeps 'World.Render.Quads.structureFrontWallClear'
+--   reproducible), and the @(0, 0)@ case skips the translation outright so
+--   an interior chunk's vertices are bit-identical, not merely equal.
+structureChunkQuads
+    ∷ StructureWallCatalog
+    → TexPalette
+    → HM.HashMap Int TextureHandle             -- ^ palette id → runtime handle
+    → (TextureHandle → Word32)                 -- ^ handle → bindless slot id
+    → HM.HashMap TextureHandle (Int, Int)      -- ^ texture pixel sizes
+    → CameraFacing → Int → Int → Float
+    → Int                                      -- ^ world size in chunks
+    → ViewBounds
+    → Float → Float                            -- ^ camera screen position
+    → [LoadedChunk]
+    → [SortableQuad]
+structureChunkQuads catalog palette handles lookupSlot texSizes
+                    facing zSlice effDepth tileAlpha worldSize vb
+                    camX camY chunks =
+    [ shifted
+    | lc ← chunks
+    , Just off ← [isChunkVisibleWrapped facing worldSize vb camX camY
+                                        (lcCoord lc)]
+    , ((gx, gy, slotTag), spd) ← HM.toList (lcStructures lc)
+    , sq ← structurePieceQuads catalog palette handles lookupSlot texSizes
+               facing zSlice effDepth tileAlpha gx gy
+               (toEnum (fromIntegral slotTag) ∷ StructureSlot) spd
+    , let shifted = translateQuad off sq
+    ]
+
+-- | Move a quad's four vertex POSITIONS by a screen-space offset, leaving
+--   every other field — UVs, tint, atlas/facemap slots, flags, packed
+--   world UV, texture, layer and sort key — untouched. The identity
+--   offset returns the quad itself so nothing is rebuilt away from the
+--   seam.
+translateQuad ∷ (Float, Float) → SortableQuad → SortableQuad
+translateQuad (offX, offY) sq
+    | offX ≡ 0 ∧ offY ≡ 0 = sq
+    | otherwise = sq { sqV0 = move (sqV0 sq), sqV1 = move (sqV1 sq)
+                     , sqV2 = move (sqV2 sq), sqV3 = move (sqV3 sq) }
+  where
+    move v = let Vec2 x y = pos v in v { pos = Vec2 (x + offX) (y + offY) }
 
 -- | The whole per-piece pipeline, pure: resolve the piece's palette ids to
 --   runtime handles, rotate a wall's art onto the sprite its edge is drawn
