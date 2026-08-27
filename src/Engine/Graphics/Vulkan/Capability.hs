@@ -37,7 +37,10 @@ data BindlessSupport = BindlessSupport
   --   UPDATE_AFTER_BIND limits governing the bindless pipeline layout and
   --   pool. These are gates, not budgets: the texture array is fixed-size,
   --   so a device supplies every applicable one in full or cannot run this
-  --   renderer at all (#1689). A capacity whose Valid Usage statement the
+  --   renderer at all (#1689). Both families are here: the ordinary
+  --   'Vulkan.Core10.PhysicalDeviceLimits' statements that govern the
+  --   layout's non-update-after-bind set, and the update-after-bind ones
+  --   that govern all of it. A capacity whose Valid Usage statement the
   --   device's features do not activate is ABSENT here rather than zero
   --   ('bindlessCapacityApplies'), so it cannot refuse a device Vulkan
   --   would accept.
@@ -79,7 +82,7 @@ queryBindlessSupport pDevice = do
       PhysicalDeviceFeatures2 { next = (vk12Feats :& ()) }
         ← getPhysicalDeviceFeatures2 pDevice
           ∷ IO (PhysicalDeviceFeatures2 '[PhysicalDeviceVulkan12Features])
-      pure ( reportedBindlessCapacities vk12Feats vk12Props
+      pure ( reportedBindlessCapacities vk12Feats deviceLimits vk12Props
            , missingBindlessFeatures vk12Feats )
     else return (unqueriedCapacities, requiredBindlessFeatures)
 

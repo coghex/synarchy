@@ -40,6 +40,7 @@ module Engine.Graphics.Vulkan.Texture.Requirements
   , requiredBindlessCapacities
   , handleTableDescriptors
   , pipelineUniformBufferDescriptors
+  , bindlessPipelineSetCount
   , bindlessCapacityField
   , bindlessCapacityRequirement
   , bindlessCapacityApplies
@@ -49,6 +50,7 @@ module Engine.Graphics.Vulkan.Texture.Requirements
 
 import UPrelude
 import Engine.Graphics.Vulkan.Texture.Limits (maxBindlessTextures)
+import Vulkan.Core10.DeviceInitialization (PhysicalDeviceLimits(..))
 import Vulkan.Core12
   (PhysicalDeviceVulkan12Features(..), PhysicalDeviceVulkan12Properties(..))
 import Vulkan.Core12.Enums.DescriptorBindingFlagBits
@@ -185,6 +187,12 @@ handleTableDescriptors = 1
 pipelineUniformBufferDescriptors ∷ Word32
 pipelineUniformBufferDescriptors = 1
 
+-- | Descriptor sets in the bindless pipeline layout: set 0's uniform layout
+--   and set 1's bindless texture layout
+--   ("Engine.Graphics.Vulkan.Pipeline.Bindless").
+bindlessPipelineSetCount ∷ Word32
+bindlessPipelineSetCount = 2
+
 -- | One update-after-bind descriptor capacity the concrete bindless
 --   descriptor set consumes, named as @VkPhysicalDeviceVulkan12Properties@
 --   reports it.
@@ -219,8 +227,19 @@ pipelineUniformBufferDescriptors = 1
 --   excluded from them entirely — which is why only the
 --   update-after-bind side is gated on below.
 --
---   Each of those statements is nevertheless CONDITIONAL on the device
---   SUPPORTING the matching @descriptorBinding…UpdateAfterBind@ feature
+--   The ordinary statements ARE gated on below, as the @Cap…Base…@ and
+--   'CapBoundDescriptorSets' entries — but only where they count something.
+--   Set 0's single vertex-stage uniform buffer is the layout's ONLY
+--   non-update-after-bind descriptor, so the ordinary sampler
+--   (03016/03028), sampled-image and storage-buffer (03018) statements
+--   count zero here and have no entry; @maxPerStageResources@ is
+--   non-update-after-bind-only in the same way (its own limit text says so),
+--   leaving that one uniform buffer plus the fragment stage's colour
+--   attachments against a guaranteed minimum of 128.
+--
+--   Each update-after-bind statement is nevertheless CONDITIONAL on the
+--   device SUPPORTING the matching @descriptorBinding…UpdateAfterBind@
+--   feature
 --   ('bindlessCapacityApplies'). This renderer requires only the
 --   sampled-image one, so the uniform- and storage-buffer capacities bind
 --   only on a device that advertises their features; requiring them
@@ -270,6 +289,18 @@ data BindlessCapacity
     --   @VK_ERROR_FRAGMENTATION@; it is a property of creating such a pool
     --   at all, so no feature conditions it.
     CapDescriptorsInAllPools
+  | -- | @maxBoundDescriptorSets@ — the pipeline layout binds exactly
+    --   'bindlessPipelineSetCount' sets
+    --   (VUID-VkPipelineLayoutCreateInfo-setLayoutCount-00286).
+    CapBoundDescriptorSets
+  | -- | @maxPerStageDescriptorUniformBuffers@ — the ORDINARY per-stage
+    --   statement (03017), which counts only set layouts created WITHOUT
+    --   @UPDATE_AFTER_BIND_POOL_BIT@: here, set 0's vertex-stage uniform
+    --   buffer alone.
+    CapBasePerStageUniformBuffers
+  | -- | @maxDescriptorSetUniformBuffers@ — the same descriptor under the
+    --   ordinary all-stages statement (03029).
+    CapBaseSetUniformBuffers
   deriving (Show, Eq, Ord, Enum, Bounded)
 
 -- | Every capacity a device must supply before the bindless renderer will
@@ -303,6 +334,12 @@ bindlessCapacityField = \case
     "maxDescriptorSetUpdateAfterBindUniformBuffers"
   CapDescriptorsInAllPools →
     "maxUpdateAfterBindDescriptorsInAllPools"
+  CapBoundDescriptorSets →
+    "maxBoundDescriptorSets"
+  CapBasePerStageUniformBuffers →
+    "maxPerStageDescriptorUniformBuffers"
+  CapBaseSetUniformBuffers →
+    "maxDescriptorSetUniformBuffers"
 
 -- | How many descriptors the bindless set needs from one capacity. Every
 --   texture figure is 'maxBindlessTextures' itself — #975's single
@@ -320,6 +357,9 @@ bindlessCapacityRequirement = \case
   CapSetStorageBuffers      → handleTableDescriptors
   CapSetUniformBuffers      → pipelineUniformBufferDescriptors
   CapDescriptorsInAllPools  → maxBindlessTextures + handleTableDescriptors
+  CapBoundDescriptorSets        → bindlessPipelineSetCount
+  CapBasePerStageUniformBuffers → pipelineUniformBufferDescriptors
+  CapBaseSetUniformBuffers      → pipelineUniformBufferDescriptors
 
 -- | Whether one capacity's Valid Usage statement applies to a device at
 --   all. Each update-after-bind pipeline-layout limit binds only when the
@@ -348,6 +388,11 @@ bindlessCapacityApplies feats = \case
   CapSetStorageBuffers      → storageBuffers
   CapSetUniformBuffers      → uniformBuffers
   CapDescriptorsInAllPools  → True
+  -- The ordinary statements are unconditional: they hold on every device,
+  -- for the descriptors in the layout's non-update-after-bind set.
+  CapBoundDescriptorSets        → True
+  CapBasePerStageUniformBuffers → True
+  CapBaseSetUniformBuffers      → True
   where
     -- The one this renderer REQUIRES, so these four always apply on a
     -- device it accepts at all (VUIDs 03022, 03025, 03036, 03041).
@@ -358,9 +403,16 @@ bindlessCapacityApplies feats = \case
     -- Not required: set 0 is an ordinary layout (VUIDs 03023, 03037).
     uniformBuffers = descriptorBindingUniformBufferUpdateAfterBind feats
 
--- | What a reported properties struct advertises for one capacity.
-readBindlessCapacity ∷ PhysicalDeviceVulkan12Properties → BindlessCapacity → Word32
-readBindlessCapacity props = \case
+-- | What a device's reported limits advertise for one capacity. Takes both
+--   structs because the two families are genuinely different limits, not
+--   two spellings of one: 'PhysicalDeviceLimits' carries the ordinary
+--   statements' limits and 'PhysicalDeviceVulkan12Properties' the
+--   update-after-bind ones. They are never combined — see 'BindlessCapacity'
+--   for which descriptors each counts.
+readBindlessCapacity ∷ PhysicalDeviceLimits
+                     → PhysicalDeviceVulkan12Properties
+                     → BindlessCapacity → Word32
+readBindlessCapacity base props = \case
   CapPerStageSampledImages →
     maxPerStageDescriptorUpdateAfterBindSampledImages props
   CapPerStageSamplers →
@@ -381,6 +433,12 @@ readBindlessCapacity props = \case
     maxDescriptorSetUpdateAfterBindUniformBuffers props
   CapDescriptorsInAllPools →
     maxUpdateAfterBindDescriptorsInAllPools props
+  CapBoundDescriptorSets →
+    maxBoundDescriptorSets base
+  CapBasePerStageUniformBuffers →
+    maxPerStageDescriptorUniformBuffers base
+  CapBaseSetUniformBuffers →
+    maxDescriptorSetUniformBuffers base
 
 -- | Every capacity that APPLIES to this device, paired with what it
 --   reports, in declaration order. A capacity whose Valid Usage statement
@@ -388,9 +446,10 @@ readBindlessCapacity props = \case
 --   constrains nothing, so it must not be able to produce a shortfall.
 reportedBindlessCapacities
   ∷ PhysicalDeviceVulkan12Features
+  → PhysicalDeviceLimits
   → PhysicalDeviceVulkan12Properties
   → [(BindlessCapacity, Word32)]
-reportedBindlessCapacities feats props =
-  [ (cap, readBindlessCapacity props cap)
+reportedBindlessCapacities feats base props =
+  [ (cap, readBindlessCapacity base props cap)
   | cap ← requiredBindlessCapacities
   , bindlessCapacityApplies feats cap ]
