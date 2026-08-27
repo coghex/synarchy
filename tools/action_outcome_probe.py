@@ -416,6 +416,11 @@ def main():
         # discarded structure.place's own result and always reported
         # "accepted"; round 8 asked for an automated regression, not just
         # a live check).
+        # 0.0 is the EVENT-ONLY interval (#1695): the module is loaded
+        # and broadcast-reachable, but never driven on the update timer.
+        # wire.lua defines no update at all; build_tool and
+        # unit_drag_select below DO, and this is what keeps their
+        # per-tick preview work out of these checks.
         send(port, 'engine.loadScript("scripts/wire.lua", 0.0); return "ok"')
         send(port, "return debug.drainActionOutcomes()")  # clear noise
         send(port, 'require("scripts.wire").place(0, 0); return "ok"')
