@@ -195,6 +195,39 @@ variantCatalog =
         <> [ WallArtEntry e (Just c) (facePath e c) (faceHandle e c) False
            | e ← allEdges, c ← allCaps ]
 
+-- | The nastier partial variant: it declares one SPRITE (NE) and one
+--   edge's worth of cap FACEMAPS (NW), inheriting everything else. A wall
+--   placed from it therefore stores its own NE sprite next to an
+--   INHERITED NE facemap, so the sprite is the only thing naming the
+--   variant — and rotating that wall onto screen NW has to reach the
+--   variant's own NW masks, not the default's.
+maskTexPath ∷ Text
+maskTexPath = "pack/fancy/wall_ne.png"
+
+maskTexHandle ∷ TextureHandle
+maskTexHandle = TextureHandle 410
+
+maskFacePath ∷ WallCaps → Text
+maskFacePath c = "pack/fancy/face_nw_" <> wallCapsCode c <> ".png"
+
+maskFaceHandle ∷ WallCaps → TextureHandle
+maskFaceHandle c = TextureHandle (420 + capIx c)
+
+maskCatalog ∷ StructureWallCatalog
+maskCatalog =
+    fromMaybe (error "fixture mask-variant family is incomplete")
+              (registerWallFamily maskEntries catalog)
+  where
+    maskEntries =
+        [ if e ≡ WallNE
+            then WallArtEntry e Nothing maskTexPath maskTexHandle True
+            else WallArtEntry e Nothing (texPath e) (texHandle e) False
+        | e ← allEdges ]
+        <> [ if e ≡ WallNW
+               then WallArtEntry e (Just c) (maskFacePath c) (maskFaceHandle c) True
+               else WallArtEntry e (Just c) (facePath e c) (faceHandle e c) False
+           | e ← allEdges, c ← allCaps ]
+
 -- | Every fixture path interned, plus the non-wall art, so
 --   'structurePieceQuads' can resolve each piece's ids back to paths.
 paletteAndIds ∷ (TexPalette, HM.HashMap Text Int)
@@ -507,11 +540,41 @@ spec = do
                                facing e (texPath e) (facePath e placedCaps)
                     `shouldBe` Just (expectedArt facing e)
 
-        it "refuses to rotate a path two families both CLAIM to own" $ do
-            -- Contradictory pack data: nothing in a placement says which
-            -- family was meant, so the path stops rotating instead of the
-            -- registration ORDER deciding. This second family declares
-            -- wall_ne.png as its own while the default already does.
+        it "takes BOTH rotated assets from the variant a wall's SPRITE \
+           \names, even where the placed facemap is inherited" $
+            -- The #1794 round-2 case: this variant owns the NE sprite but
+            -- inherits the NE masks, so a wall it placed stores an
+            -- inherited facemap. Rotating it onto screen NW must reach the
+            -- variant's OWN NW masks — resolving the facemap through the
+            -- family that happens to own the placed one would silently
+            -- fall back to the default's.
+            forM_ allFacings $ \facing → do
+                let s = expectScreenEdge facing WallNE
+                    expectCaps | expectCapSwap facing WallNE = WallCaps False True
+                               | otherwise                   = WallCaps True False
+                    expectTex | s ≡ WallNE = maskTexHandle
+                              | otherwise  = texHandle s
+                    expectFace | s ≡ WallNW = maskFaceHandle expectCaps
+                               | otherwise  = faceHandle s expectCaps
+                rotatedWallArt maskCatalog facing WallNE
+                    maskTexPath (facePath WallNE placedCaps)
+                    `shouldBe` Just (expectTex, expectFace)
+
+        it "leaves a DEFAULT wall alone when a variant overrides only masks" $
+            -- The other side of the same fixture: the default's own NW
+            -- wall still resolves to the default's NW masks at every
+            -- facing, even though a variant declares masks for that edge.
+            forM_ allFacings $ \facing →
+                forM_ [WallNW, WallSE, WallSW] $ \e →
+                    rotatedWallArt maskCatalog facing e
+                        (texPath e) (facePath e placedCaps)
+                        `shouldBe` Just (expectedArt facing e)
+
+        it "refuses a placed pair two families both carry AND both own" $ do
+            -- Contradictory pack data: this second family declares the
+            -- default's NE sprite AND the default's NE masks as its own,
+            -- so nothing in the placement says which was meant. The pair
+            -- stops rotating instead of registration ORDER deciding.
             let clashing =
                     [ WallArtEntry e Nothing
                           (if e ≡ WallNE
@@ -519,17 +582,20 @@ spec = do
                              else "pack/clash/wall_" <> edgeName e <> ".png")
                           (TextureHandle (500 + edgeIx e)) True
                     | e ← allEdges ]
-                    <> [ WallArtEntry e (Just c)
-                             ("pack/clash/face_" <> edgeName e <> "_"
-                                                <> wallCapsCode c <> ".png")
-                             (TextureHandle (600 + edgeIx e * 4 + capIx c)) True
+                    <> [ if e ≡ WallNE
+                           then WallArtEntry e (Just c) (facePath e c)
+                                    (faceHandle e c) True
+                           else WallArtEntry e (Just c)
+                                    ("pack/clash/face_" <> edgeName e <> "_"
+                                                        <> wallCapsCode c <> ".png")
+                                    (TextureHandle (600 + edgeIx e * 4 + capIx c)) True
                        | e ← allEdges, c ← allCaps ]
                 clashCat = fromMaybe (error "clashing fixture is incomplete")
                                (registerWallFamily clashing catalog)
             rotatedWallArt clashCat FaceWest WallNE
                 (texPath WallNE) (facePath WallNE placedCaps)
                 `shouldBe` Nothing
-            -- A path only ONE family owns is untouched by that.
+            -- A pair only ONE family carries is untouched by that.
             rotatedWallArt clashCat FaceWest WallNW
                 (texPath WallNW) (facePath WallNW placedCaps)
                 `shouldBe` Just (expectedArt FaceWest WallNW)

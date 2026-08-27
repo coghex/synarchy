@@ -126,7 +126,7 @@ consumer coupling:
 
 The `world-sim-render-handoff` split is the one that is not a §3.1
 thread-privacy split: neither half carries a thread-private field, and
-it exists because the seven render-handoff fields' consumers straddle
+it exists because the render-handoff fields' consumers straddle
 this group and `render-gpu-asset` (§7.4).
 
 **The capability-record convention (canonical statement).** Every
@@ -466,12 +466,14 @@ the nine **world/sim** fields — `worldManagerRef`, `worldQueue`,
 `worldGenConfigRef`, `gameTimeRef`, `enginePausedRef`, `simQueue` — are
 reached through
 `Engine.Core.Capability.WorldSim.WorldSimCapability` rather than an
-`EngineEnv` field; since #894 (E5b) the remaining seven —
+`EngineEnv` field; since #894 (E5b) the rest —
 `worldPreviewRef`, `worldPreviewGenerationRef`, `zoomAtlasDataRef`,
 `worldQuadsRef`, `bloodDisposeQueue`, `texPaletteRef`,
-`texPaletteHandlesRef`, the **coupled render-handoff** half (the world
+`texPaletteHandlesRef` and, since #1712, `structureWallCatalogRef`, the
+**coupled render-handoff** half (the world
 thread's staging surface for `MainRender` GPU uploads plus the
-structure-palette translation table) — are reached through
+structure-palette translation table and the packs' directional wall
+art) — are reached through
 `Engine.Core.Capability.RenderHandoff.RenderHandoffCapability`. Both
 hold for every reader and writer below EXCEPT the §6.1 permanent
 orchestration modules, which keep whole-environment access by job
@@ -681,9 +683,9 @@ grep -rl "import Engine.Core.State" src app | wc -l                    # 205
 #        `EngineEnv(..)`)
 #   1  × `Engine.Core.Capability.RenderHandoff` (new by #894 — the
 #        coupled render-handoff half of the same projection; bare
-#        `EngineEnv` type plus its seven field accessors, never
+#        `EngineEnv` type plus its own field accessors, never
 #        `EngineEnv(..)`. One record, not a §3.1-style full/view pair:
-#        none of its seven fields is private to a single thread the way
+#        none of its fields is private to a single thread the way
 #        `engineStateRef` is to `MainRender` — every one is a deliberate
 #        cross-thread handoff)
 #   4  × the #894-narrowed `world-sim-render-handoff` modules — the E5b
@@ -1451,10 +1453,11 @@ change, no behaviour change.
 
 **What landed in E5b (#894):**
 `Engine.Core.Capability.RenderHandoff` exports `RenderHandoffCapability`
-over exactly the seven coupled render-handoff fields
+over exactly the seven coupled render-handoff fields E5b found
 (`worldPreviewRef`, `worldPreviewGenerationRef`, `zoomAtlasDataRef`,
 `worldQuadsRef`, `bloodDisposeQueue`, `texPaletteRef`,
-`texPaletteHandlesRef`) plus the total one-way projection
+`texPaletteHandlesRef`; #1712 later added an eighth,
+`structureWallCatalogRef`) plus the total one-way projection
 `toRenderHandoffCapability`, following the same §7.1/#889 convention
 E5a did (same live `IORef`s/`Queue`, never a copy; no import of a
 consumer). It is a pure refactor — no `EngineEnv` field-set change, no
@@ -1467,7 +1470,7 @@ through a projected field instead of an `EngineEnv` one.
   full/view pair because `engineStateRef` is `MainRender`-private, and
   `input-lua-transport` needed one because two of its fields are
   `LuaThread`-private. Nothing here is private to a single thread:
-  every one of the seven is a deliberate cross-thread handoff, which is
+  every one of them is a deliberate cross-thread handoff, which is
   the whole point of the group, so a second interface would carve a
   boundary the §5 contracts do not have. `texPaletteHandlesRef` makes
   that concrete — it has `LuaThread` readers

@@ -43,19 +43,23 @@
 --       AMBIGUOUS and stops rotating rather than picking a winner. That
 --       makes the catalogue independent of registration ORDER, which
 --       nothing guarantees.
---     * 'rotatedWallArt' rotates the sprite and its cap facemap TOGETHER
---       or not at all, and only when BOTH stored assets are registered
---       under the wall's own authored edge. Art from outside any
---       registered pack (a hand-placed arbitrary path) is left exactly
---       as placed, which is also why 'FaceSouth' is the identity for
---       every input.
---     * Variant is preserved because it is the TEXTURE's family that
---       picks the rotated sprite: @damaged/wall_ne.png@ is a different
---       path in a different family from @wall_ne.png@. The facemap is
---       resolved through its OWN family for the same reason — a variant
---       that inherits the default masks (as @dungeon_1@'s @damaged@
---       does) shares those paths with the default family, and both
---       families answer identically for them.
+--     * 'rotatedWallArt' identifies ONE family for the placed pair and
+--       takes BOTH rotated assets from it, so a wall can never be drawn
+--       with a sprite from one variant and a mask from another. The
+--       family is the one whose own art at this edge IS the pair that was
+--       placed and which OWNS at least one of the two paths — ownership
+--       is what separates a variant from the default it inherits from, and
+--       requiring the pair to match is what stops a variant answering for
+--       art it does not actually carry. No such family, or more than one,
+--       means the piece is left exactly as placed. Art from outside any
+--       registered pack (a hand-placed arbitrary path) is likewise left
+--       alone, which is also why 'FaceSouth' is the identity for every
+--       input.
+--     * Variant is therefore preserved through BOTH halves:
+--       @damaged/wall_ne.png@ identifies @dungeon_1@'s @damaged@ family,
+--       and that family's own table then supplies the rotated sprite AND
+--       the rotated cap facemap — including where it merely inherits the
+--       default masks, which is what @damaged@ actually does.
 module Structure.WallCatalog
     ( WallFamily(..)
     , StructureWallCatalog(..)
@@ -90,15 +94,15 @@ data WallFamily = WallFamily
 data StructureWallCatalog = StructureWallCatalog
     { swcFamilies ∷ !(IM.IntMap WallFamily)
       -- ^ Families by allocation index.
-    , swcTexEdge  ∷ !(HM.HashMap Text (Maybe (Int, WallEdge)))
-      -- ^ Sprite path → the family that OWNS it and the AUTHORED edge it
-      --   draws. 'Nothing' is a path two families claim ownership of,
-      --   which is contradictory pack data: it never rotates.
-    , swcFaceEdge ∷ !(HM.HashMap Text (Maybe (Int, WallEdge, WallCaps)))
-      -- ^ Cap-facemap path → the family that OWNS it, its authored edge
-      --   and cap state, with the same ambiguity rule. A path a variant
-      --   merely INHERITS makes no claim here at all, so it keeps
-      --   resolving through the family that declared it.
+    , swcTexOwner  ∷ !(HM.HashMap Text (Maybe Int))
+      -- ^ Sprite path → the family that DECLARES it. 'Nothing' is a path
+      --   two families both claim, which is contradictory pack data: it
+      --   never rotates.
+    , swcFaceOwner ∷ !(HM.HashMap Text (Maybe Int))
+      -- ^ Cap-facemap path → the family that declares it, same ambiguity
+      --   rule. A path a variant merely INHERITS makes no claim in
+      --   either map, so it keeps resolving through the family that
+      --   declared it.
     , swcHandles  ∷ !(HM.HashMap Text TextureHandle)
       -- ^ Runtime handle per registered path. The rotated art is a
       --   DIFFERENT path from the placed one, which the palette's
@@ -139,11 +143,11 @@ registerWallFamily entries cat
     | family `elem` IM.elems (swcFamilies cat)   = Just cat
     | otherwise = Just cat
         { swcFamilies   = IM.insert fi family (swcFamilies cat)
-        , swcTexEdge    = foldr (\e → claim (waePath e) (fi, waeEdge e))
-                                (swcTexEdge cat)
+        , swcTexOwner   = foldr (\e → claim (waePath e) fi)
+                                (swcTexOwner cat)
                                 [ e | e ← texEntries, waeOwned e ]
-        , swcFaceEdge   = foldr (\(e, c) → claim (waePath e) (fi, waeEdge e, c))
-                                (swcFaceEdge cat)
+        , swcFaceOwner  = foldr (\(e, _) → claim (waePath e) fi)
+                                (swcFaceOwner cat)
                                 [ (e, c) | (e, c) ← faceEntries, waeOwned e ]
         , swcHandles    = foldr (\e m → HM.insert (waePath e) (waeHandle e) m)
                                 (swcHandles cat) entries
@@ -158,7 +162,7 @@ registerWallFamily entries cat
     facemaps    = M.fromList [ ((waeEdge e, c), waePath e) | (e, c) ← faceEntries ]
     -- A second, DIFFERENT owner for one path is contradictory pack data:
     -- mark it ambiguous instead of letting registration order decide.
-    claim ∷ Eq α ⇒ Text → α → HM.HashMap Text (Maybe α) → HM.HashMap Text (Maybe α)
+    claim ∷ Text → Int → HM.HashMap Text (Maybe Int) → HM.HashMap Text (Maybe Int)
     claim path v = HM.insertWith merge path (Just v)
       where merge new old | old ≡ new = old
                           | otherwise = Nothing
@@ -166,23 +170,39 @@ registerWallFamily entries cat
 -- | The sprite and cap facemap a wall on AUTHORED edge @edge@, placed
 --   with @texPath@\/@facePath@, is drawn with at @facing@.
 --
---   'Nothing' means "draw exactly what was placed": either asset
---   unregistered or ambiguously owned, the two disagreeing about the
---   wall's authored edge (which is the only way a texture from one
---   direction could be paired with a facemap from another — refused
---   rather than rendered), or a target the family does not hold. At
---   'FaceSouth' the screen edge and cap order are both the identity, so a
---   registered pair resolves back to its own two paths and the result is
---   the placed art unchanged.
+--   'Nothing' means "draw exactly what was placed": no family carries
+--   this exact pair at this edge, or several do and none is singled out
+--   by ownership, or either path is ambiguously owned, or the resolved
+--   family has no art for the target. A pair whose facemap belongs to a
+--   different authored edge than its sprite matches no family at all, so
+--   a texture from one direction can never be paired with a mask from
+--   another. At 'FaceSouth' the screen edge and cap order are both the
+--   identity, so the resolved family answers with the placed pair's own
+--   two paths and the result is the placed art unchanged.
 rotatedWallArt ∷ StructureWallCatalog → CameraFacing → WallEdge → Text → Text
                → Maybe (TextureHandle, TextureHandle)
-rotatedWallArt cat facing edge texPath facePath = do
-    (texFam, texEdge)          ← join (HM.lookup texPath  (swcTexEdge cat))
-    (faceFam, faceEdge, caps)  ← join (HM.lookup facePath (swcFaceEdge cat))
-    if texEdge ≢ edge ∨ faceEdge ≢ edge then Nothing else do
-        famT ← IM.lookup texFam  (swcFamilies cat)
-        famF ← IM.lookup faceFam (swcFamilies cat)
+rotatedWallArt cat facing edge texPath facePath = case matches of
+    [(fam, caps)] → do
         let screen = screenWallEdge facing edge
-        tPath ← M.lookup screen (wfTextures famT)
-        fPath ← M.lookup (screen, rotateWallCaps facing edge caps) (wfFacemaps famF)
+        tPath ← M.lookup screen (wfTextures fam)
+        fPath ← M.lookup (screen, rotateWallCaps facing edge caps) (wfFacemaps fam)
         (,) <$> HM.lookup tPath (swcHandles cat) <*> HM.lookup fPath (swcHandles cat)
+    _ → Nothing
+  where
+    -- The families this placement could have come from: their own art at
+    -- @edge@ is exactly the pair that was placed. A variant that inherits
+    -- both halves is indistinguishable from the default here, which is
+    -- what ownership below settles.
+    carriers =
+        [ (i, fam, caps)
+        | (i, fam) ← IM.toList (swcFamilies cat)
+        , M.lookup edge (wfTextures fam) ≡ Just texPath
+        , caps ← [ c | ((e, c), path) ← M.toList (wfFacemaps fam)
+                     , e ≡ edge, path ≡ facePath ] ]
+    -- ...narrowed to the ones that DECLARE one of the two paths rather
+    -- than inheriting both. An owner recorded as ambiguous (two families
+    -- claiming one path) contributes nothing, so the pair stops rotating
+    -- instead of a contested claim deciding.
+    owners = catMaybes [ HM.lookup texPath  (swcTexOwner cat)
+                       , HM.lookup facePath (swcFaceOwner cat) ]
+    matches = [ (fam, caps) | (i, fam, caps) ← carriers, Just i `elem` owners ]
