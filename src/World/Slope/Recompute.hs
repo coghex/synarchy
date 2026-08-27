@@ -76,8 +76,10 @@ recomputeNeighborSlopes seed worldSize registry changedCoords wtd =
         neighborLookup coord = case HM.lookup (wrap coord) chunks of
             Just lc → Just (lcTerrainSurfaceMap lc)
             Nothing → Nothing
-        -- Parallel fluid lookup so the dry-rock bank rule (jagged path)
-        -- can see a wet neighbour ACROSS a chunk seam, not just in-chunk.
+        -- Parallel fluid lookup so the dry bank rule can see a wet
+        -- neighbour ACROSS a chunk seam, not just in-chunk. Both slope
+        -- paths consume it: the hard-rock jagged masks (#224) and, since
+        -- #1685, the soft terrace rule in 'World.Slope.Compute.slopeBit'.
         fluidNeighborLookup coord = case HM.lookup (wrap coord) chunks of
             Just lc → Just (lcFluidMap lc)
             Nothing → Nothing

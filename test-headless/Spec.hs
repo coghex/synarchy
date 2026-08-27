@@ -51,6 +51,7 @@ import qualified Test.Headless.Item.BuffYaml as ItemBuffYaml
 import qualified Test.Headless.Item.QualityTier as ItemQualityTier
 import qualified Test.Headless.Item.ContentsSignature as ItemContentsSig
 import qualified Test.Headless.Item.Condition as ItemCondition
+import qualified Test.Headless.Item.RepairFinite as ItemRepairFinite
 import qualified Test.Headless.Item.Materialize as ItemMaterialize
 import qualified Test.Headless.Item.BulkStorage as ItemBulkStorage
 import qualified Test.Headless.Item.FoodNutrition as ItemFoodNutrition
@@ -88,6 +89,7 @@ import qualified Test.Headless.World.RenderedSurface as RenderedSurface
 import qualified Test.Headless.World.IslandColumns as IslandColumns
 import qualified Test.Headless.World.ChunkCoordinates as ChunkCoordinates
 import qualified Test.Headless.Combat.Damage as CombatDamage
+import qualified Test.Headless.Combat.MaxStamina as CombatMaxStamina
 import qualified Test.Headless.Combat.MentalEffectiveness as CombatMentalEffectiveness
 import qualified Test.Headless.Combat.Severing as CombatSevering
 import qualified Test.Headless.Combat.Wounds as CombatWounds
@@ -189,6 +191,7 @@ import qualified Test.Headless.World.Render.PickSeam as PickSeam
 import qualified Test.Headless.World.Render.QuadSnapshot as QuadSnapshot
 import qualified Test.Headless.World.DesignationSeam as DesignationSeam
 import qualified Test.Headless.World.StructureStage as StructureStage
+import qualified Test.Headless.World.StructurePaletteResidue as StructurePaletteResidue
 import qualified Test.Headless.World.Render.SideFace as RenderSideFace
 import qualified Test.Headless.World.Render.ZTrackSeam as ZTrackSeam
 import qualified Test.Headless.World.Render.SlopeBit as RenderSlopeBit
@@ -555,6 +558,7 @@ main = hspec $ do
     describe "WorldGen.SoilShed" SoilShed.spec
     describe "WorldGen.SoilRedistribution" SoilRedistribution.spec
     describe "Combat.Damage" CombatDamage.spec
+    CombatMaxStamina.spec
     CombatMentalEffectiveness.spec
     describe "Combat.Severing" CombatSevering.spec
     describe "Combat.Wounds" CombatWounds.spec
@@ -586,6 +590,7 @@ main = hspec $ do
     describe "Construct.Footprint" ConstructFootprint.spec
     describe "Construct.PendingRefusal" ConstructPendingRefusal.spec
     describe "Craft.Execute" CraftExecute.spec
+    ItemRepairFinite.spec
     describe "Craft.Bills" CraftBills.spec
     describe "Power.Types" PowerTypes.spec
     describe "Power.Network" PowerNetwork.spec
@@ -662,6 +667,11 @@ main = hspec $ do
     -- WorldSetStructure structure.place emits waits to be dequeued and
     -- dispatched by the example rather than by a racing drainer.
     StructureStage.spec
+
+    -- #1675: the same shape, for the palette residue a REJECTED
+    -- structure.place used to leave behind — its own engine so the
+    -- "nothing was queued" half is an assertion on an undrained queue.
+    StructurePaletteResidue.spec
 
     -- #1602: its own headless engine (no worker threads), so a queued
     -- BuildingSpawn / WorldDesignateConstruct stays in its queue and
