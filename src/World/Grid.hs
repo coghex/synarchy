@@ -33,6 +33,7 @@ module World.Grid
     -- * Float-precision versions of facing and coordinate conversions
     , worldToGridF
     , applyFacingF
+    , unapplyFacingF
     ) where
 
 import UPrelude

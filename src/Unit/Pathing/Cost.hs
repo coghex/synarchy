@@ -326,9 +326,19 @@ lookupSurfaceMaterial wtd gx gy =
 -- | Movement-cost multiplier of a tile's surface material (#312).
 --   1.0 for firm ground, an unknown material, or an unloaded/empty
 --   column (so missing data is a no-op); >1.0 for loose, soft terrain
---   authored via @move_cost@ in @data/materials/*.yaml@. Clamped to a
---   positive minimum so a stray @move_cost: 0@ can't zero out the
---   horizontal cost or divide-by-zero the speed scaling at the call site.
+--   authored via @move_cost@ in @data/materials/*.yaml@.
+--
+--   Finite and strictly positive for every YAML-authored material, which
+--   is what lets the planner here and the mover in
+--   @Unit.Thread.Movement.PathAdvance@ (which DIVIDES its step length by
+--   this) agree: 'Engine.Asset.YamlMaterials.normalizeMaterialDef'
+--   establishes that domain at the one decode boundary both registration
+--   paths share (#1734). The @max 0.1@ floor below is therefore no longer
+--   what stands between authored content and a zeroed or negative cost;
+--   it remains as the fallback for a registry built by calling
+--   'World.Material.registerMaterial' with directly-constructed
+--   'World.Material.MaterialProps' — which tests do, and which nothing
+--   validates.
 materialFactor ∷ MaterialRegistry → WorldTileData → Int → Int → Float
 materialFactor reg wtd gx gy =
     case lookupSurfaceMaterial wtd gx gy of

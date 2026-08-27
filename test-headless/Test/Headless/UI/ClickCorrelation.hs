@@ -21,6 +21,15 @@
 --      control=false, a shown-but-disabled control stays control=true,
 --      and overlapping controls on different pages/layers carry
 --      paintKeys that rank the same way topHitBy would.
+--
+--   #1750 extends half 2 with the ROUTING facts the offline join needs
+--   to reproduce 'UI.InputOwnership.routePointer' for a left click:
+--   that a HUD control under an EMPTY exclusive modal is reported out
+--   of pointer scope, that scope/blocking survive the widget-module
+--   @known@ dedup path, that a callback-less raw pointer blocker is
+--   admitted (as @control=false@ occlusion evidence) while a purely
+--   visual element still is not, and that the four routing shapes
+--   requirement 5's precedence turns on carry distinct state.
 module Test.Headless.UI.ClickCorrelation (spec) where
 
 import UPrelude
@@ -194,6 +203,126 @@ spec = do
                     \return firstKey == secondKey and secondOrder ~= nil and firstOrder ~= nil and secondOrder > firstOrder"
                 out `shouldBe` "true"
 
+            -- #1750: the routing facts the offline click join needs to
+            -- reproduce routePointer's LEFT-click outcome.
+
+            it "records a HUD control below an exclusive modal as out of scope, even when the modal has no element at all" $ \env → do
+                ls ← newBareLuaBackend env
+                setup ← evalDebug ls
+                    "local hud = UI.newPage('t_scope_hud', 'hud'); UI.showPage(hud); \
+                    \local button = require('scripts.ui.button'); button.init(); \
+                    \_G.__scopeBtn = button.new({name='under_modal_btn', page=hud, textureSet=1, x=0, y=0, width=50, height=50}); \
+                    \_G.__scopeModal = UI.newPage('t_scope_modal', 'modal')"
+                setup `shouldNotSatisfy` isLuaError
+                -- Before the modal is shown the button is in scope.
+                before' ← evalDebug ls (scopeOfLua "_G.__scopeBtn")
+                before' `shouldBe` "true"
+                -- Showing the EMPTY modal establishes the boundary: the
+                -- HUD button below it is out of pointer scope even
+                -- though the modal has nothing at the click point. This
+                -- is the empty-modal case the offline join used to
+                -- mis-correlate to the unreachable control.
+                shown ← evalDebug ls "UI.showPage(_G.__scopeModal)"
+                shown `shouldNotSatisfy` isLuaError
+                after' ← evalDebug ls (scopeOfLua "_G.__scopeBtn")
+                after' `shouldBe` "false"
+
+            it "carries pointerBlocking and scope facts through the widget-module (known) path" $ \env → do
+                ls ← newBareLuaBackend env
+                setup ← evalDebug ls dumpFixtureLua
+                setup `shouldNotSatisfy` isLuaError
+                out ← evalDebug ls
+                    "local ui=require('scripts.ui.registry'); local widgets=ui.dumpWidgets(); \
+                    \local btn=nil; \
+                    \for _,w in ipairs(widgets) do \
+                    \  if w.id=='button:'..tostring(_G.__btnId) then btn=w end \
+                    \end; \
+                    \return btn ~= nil and btn.inScope == true and btn.pointerBlocking == true \
+                    \  and btn.leftClickTarget == true and btn.leftClickAffordance == true"
+                out `shouldBe` "true"
+
+            it "keeps a callback-less raw pointer blocker in the dump, as control=false occlusion evidence" $ \env → do
+                ls ← newBareLuaBackend env
+                setup ← evalDebug ls rawFixtureLua
+                setup `shouldNotSatisfy` isLuaError
+                out ← evalDebug ls
+                    "local ui=require('scripts.ui.registry'); local widgets=ui.dumpWidgets(); \
+                    \local blocker=nil; \
+                    \for _,w in ipairs(widgets) do \
+                    \  if w.handle == _G.__rawBlocker then blocker=w end \
+                    \end; \
+                    \return blocker ~= nil and blocker.control == false \
+                    \  and blocker.type == 'blocker' \
+                    \  and blocker.pointerBlocking == true and blocker.inScope == true \
+                    \  and blocker.leftClickTarget == false and blocker.leftClickAffordance == false"
+                out `shouldBe` "true"
+
+            it "does not start admitting purely visual, non-blocking raw elements" $ \env → do
+                ls ← newBareLuaBackend env
+                setup ← evalDebug ls rawFixtureLua
+                setup `shouldNotSatisfy` isLuaError
+                out ← evalDebug ls
+                    "local ui=require('scripts.ui.registry'); local widgets=ui.dumpWidgets(); \
+                    \local decor=false; \
+                    \for _,w in ipairs(widgets) do \
+                    \  if w.handle == _G.__rawDecor then decor=true end \
+                    \end; \
+                    \return decor == false"
+                out `shouldBe` "true"
+
+            it "keeps a raw left control admitted as before, with control=true and the routing facts" $ \env → do
+                ls ← newBareLuaBackend env
+                setup ← evalDebug ls rawFixtureLua
+                setup `shouldNotSatisfy` isLuaError
+                out ← evalDebug ls
+                    "local ui=require('scripts.ui.registry'); local widgets=ui.dumpWidgets(); \
+                    \local ctrl=nil; \
+                    \for _,w in ipairs(widgets) do \
+                    \  if w.handle == _G.__rawCtrl then ctrl=w end \
+                    \end; \
+                    \return ctrl ~= nil and ctrl.control == true and ctrl.type == 'button' \
+                    \  and ctrl.inScope == true \
+                    \  and ctrl.pointerBlocking == true and ctrl.leftClickTarget == true \
+                    \  and ctrl.leftClickAffordance == true"
+                out `shouldBe` "true"
+
+            it "gives active, passive, disabled and explicitly-blocking-disabled records distinct routing state" $ \env → do
+                ls ← newBareLuaBackend env
+                setup ← evalDebug ls rawFixtureLua
+                setup `shouldNotSatisfy` isLuaError
+                -- The four cases requirement 5's precedence turns on,
+                -- as (pointerBlocking, leftClickTarget,
+                -- leftClickAffordance) triples read off ONE dump:
+                --   active                 -> true , true , true
+                --   passive blocker        -> true , false, false
+                --   disabled, non-blocking -> false, false, true
+                --   disabled, opted-in     -> true , false, true
+                out ← evalDebug ls
+                    "local ui=require('scripts.ui.registry'); local widgets=ui.dumpWidgets(); \
+                    \local by={}; \
+                    \for _,w in ipairs(widgets) do if w.handle then by[w.handle]=w end end; \
+                    \local function trip(h) local w=by[h]; if not w then return 'missing' end; \
+                    \  return tostring(w.pointerBlocking)..','..tostring(w.leftClickTarget)..','..tostring(w.leftClickAffordance) end; \
+                    \return trip(_G.__rawCtrl)..'|'..trip(_G.__rawBlocker)..'|'..trip(_G.__rawDisabled)..'|'..trip(_G.__rawDisabledBlocking)"
+                -- a string reply comes back JSON-quoted, unlike the
+                -- bare booleans the checks above return
+                out `shouldBe`
+                    "\"true,true,true|true,false,false|false,false,true|true,false,true\""
+
+            it "reports a right-click-only control as pointer-blocking but never a left target" $ \env → do
+                ls ← newBareLuaBackend env
+                setup ← evalDebug ls rawFixtureLua
+                setup `shouldNotSatisfy` isLuaError
+                -- `interactive` conflates the two callbacks, which is
+                -- exactly why the join needs leftClickTarget: this
+                -- element blocks a LEFT click (RouteBlocked) without
+                -- ever activating on one.
+                out ← evalDebug ls
+                    "local info = UI.getElementInfo(_G.__rawRightOnly); \
+                    \return info.interactive == true and info.pointerBlocking == true \
+                    \  and info.leftClickTarget == false and info.leftClickAffordance == false"
+                out `shouldBe` "true"
+
 -- | One page with a real button, panel, and label — the three module
 --   kinds whose dump() records this issue distinguishes. Literal `1`
 --   integer handles stand in for textureSet/font (UI.newBox/UI.newText
@@ -210,6 +339,68 @@ dumpFixtureLua = T.concat
     , "local label = require('scripts.ui.label'); "
     , "_G.__labelId = label.new({name='ctx_label', page=page, font=1, text='hi', x=200, y=100})"
     ]
+
+-- | #1750: five RAW engine elements (no widget module) on one visible
+--   HUD page, covering every distinct routing shape requirement 5's
+--   precedence turns on. Raw rather than widget-module records
+--   deliberately: this is the second 'ui.dumpWidgets' pass, the one
+--   whose admission filter #1750 widens, and a widget module could
+--   never produce a callback-less blocker.
+--
+--     * __rawCtrl            — clickable + onClick: an ACTIVE left
+--                              target, and pointer-blocking by the
+--                              pre-existing implicit rule.
+--     * __rawBlocker         — no callback at all, explicit
+--                              'UI.setPointerBlocking': the
+--                              callback-less occlusion surface a left
+--                              click stops dead at. Previously omitted
+--                              from the dump entirely.
+--     * __rawDisabled        — onClick registered but
+--                              @setClickable(false)@: NOT pointer-
+--                              blocking (the implicit rule needs
+--                              clickable), so it is #783's lone
+--                              disabled affordance.
+--     * __rawDisabledBlocking— the same, plus the explicit blocking
+--                              opt-in: it consumes the click AND is
+--                              still the affordance that explains it.
+--     * __rawDecor           — a plain box, no callback, no opt-in:
+--                              the purely visual element the widened
+--                              filter must still leave out.
+--     * __rawRightOnly       — clickable + onRightClick only: reads as
+--                              @interactive@ and blocks a left click
+--                              without ever being a left target.
+--
+--   Box texture/tileSize/overflow are literal integers for the same
+--   reason 'dumpFixtureLua' uses @textureSet=1@: headless has no
+--   render pass to validate a handle against.
+rawFixtureLua ∷ Text
+rawFixtureLua = T.concat
+    [ "local page = UI.newPage('t_raw_routing', 'hud'); UI.showPage(page); "
+    , "local function box(name) "
+    , "  local h = UI.newBox(name, 50, 50, 1, 4, 1.0, 1.0, 1.0, 1.0, 0, page); "
+    , "  UI.addToPage(page, h, 0, 0); return h end; "
+    , "_G.__rawCtrl = box('raw_ctrl'); "
+    , "UI.setClickable(_G.__rawCtrl, true); UI.setOnClick(_G.__rawCtrl, 'noop'); "
+    , "_G.__rawBlocker = box('raw_blocker'); "
+    , "UI.setPointerBlocking(_G.__rawBlocker, true); "
+    , "_G.__rawDisabled = box('raw_disabled'); "
+    , "UI.setOnClick(_G.__rawDisabled, 'noop'); UI.setClickable(_G.__rawDisabled, false); "
+    , "_G.__rawDisabledBlocking = box('raw_disabled_blocking'); "
+    , "UI.setOnClick(_G.__rawDisabledBlocking, 'noop'); "
+    , "UI.setClickable(_G.__rawDisabledBlocking, false); "
+    , "UI.setPointerBlocking(_G.__rawDisabledBlocking, true); "
+    , "_G.__rawDecor = box('raw_decor'); "
+    , "_G.__rawRightOnly = box('raw_right_only'); "
+    , "UI.setClickable(_G.__rawRightOnly, true); "
+    , "UI.setOnRightClick(_G.__rawRightOnly, 'noop')"
+    ]
+
+-- | @UI.getElementInfo(<handle>).inScope@ as a @"true"@/@"false"@
+--   console reply, for the empty-modal scope case.
+scopeOfLua ∷ Text → Text
+scopeOfLua handleExpr = T.concat
+    [ "local info = UI.getElementInfo(require('scripts.ui.button')"
+    , ".getElementHandle(", handleExpr, ")); return info.inScope == true" ]
 
 -- * Real-Lua-backend helper (mirrors Test.Headless.UI.Slider)
 

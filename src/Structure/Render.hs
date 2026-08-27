@@ -5,7 +5,7 @@
 --   (wall sun-shading) and a per-slot sort key so near-edge walls draw in
 --   front and far-edge walls behind.
 --
---   FRONT walls (SE/SW) are an exception: a single billboard quad collapses
+--   FRONT walls are an exception: a single billboard quad collapses
 --   a wall's whole iso-depth RANGE to one sort key, which makes it draw in
 --   front of higher terrain it should sit behind (a dug room's rim — #415).
 --   A vertical wall has the handy property that screen-x maps to position
@@ -16,21 +16,43 @@
 --   behind a high side rim while the near (south) strips still cover their
 --   own footing. See 'frontWallStrips'.
 --
---   Rotation: sort anchors are world-space grid coords rotated by applyFacingF
---   (depth stays correct at any facing), but the per-direction SPRITE is not
---   yet remapped on rotation — a wall keeps its authored face. That remap is
---   a separate follow-up.
+--   Rotation (#1712): a piece's stored slot is its PHYSICAL world edge
+--   and never moves, but the screen position that edge occupies does.
+--   "Structure.Facing" holds the one mapping from an authored edge (or
+--   post corner) to the screen edge (corner) it occupies at the current
+--   facing, and EVERY decision here reads it: which sprite and cap
+--   facemap are drawn ("Structure.WallCatalog"), whether the #415 strip
+--   path applies ('isScreenFrontWall'), the sort anchors, the tie-breaks,
+--   and where a post stands. At 'FaceSouth' the mapping is the identity,
+--   so the output is what it has always been.
+--
+--   Sort anchors rotate too, and NOT by rotating a fixed grid point:
+--   see 'depthAnchor'. A structure's key has to sit a fixed number of
+--   painter-depth steps in front of the depth the TERRAIN pass keys the
+--   same tile at, and that pass keys every tile from its raw grid coords
+--   ('World.Render.TileQuads' — @applyFacing facing gx gy@). Feeding a
+--   fixed offset like the tile centre through 'applyFacingF' does not
+--   preserve that gap: (+0.5,+0.5) is one step in FRONT at 'FaceSouth'
+--   and one step BEHIND at 'FaceNorth', which is why a rotated floor used
+--   to vanish under its own terrain tile. 'depthAnchor' offsets along the
+--   facing's own depth axis instead, so the gap is the same at all four.
 module Structure.Render
     ( renderStructureQuads
+    , structurePieceQuads
+    , isScreenFrontWall
+    , wallTieBreak
+    , frontWallDepthSteps
     ) where
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import Data.IORef (readIORef)
-import Engine.Core.State (EngineEnv, texPaletteHandlesRef)
+import Engine.Core.State (EngineEnv)
 import Engine.Core.Capability.RenderView
   (RenderViewCapability(..), toRenderViewCapability)
+import Engine.Core.Capability.RenderHandoff
+  (RenderHandoffCapability(..), toRenderHandoffCapability)
 import Engine.Asset.Handle (TextureHandle(..), toInt)
 import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (CameraFacing(..))
@@ -46,11 +68,15 @@ import World.Grid (tileWidth
                    , baseTileW
                    , baseTileH
                    , applyFacingF
+                   , unapplyFacingF
                    , gridToScreen)
 import World.Types (WorldState, wsTilesRef)
 import World.Tile.Types (WorldTileData(..))
 import World.Chunk.Types (LoadedChunk(..))
+import Structure.Facing
+import Structure.Palette (TexPalette, lookupPath)
 import Structure.Types
+import Structure.WallCatalog (StructureWallCatalog, rotatedWallArt)
 
 -- | Gather structure quads for ONE world's state. The caller iterates the
 --   visible-world list (same source of truth as the terrain / ground-item /
@@ -61,47 +87,86 @@ renderStructureQuads ∷ EngineEnv → WorldState → CameraFacing → Int → I
                      → IO (V.Vector SortableQuad)
 renderStructureQuads env ws facing zSlice effDepth tileAlpha = do
             td      ← readIORef (wsTilesRef ws)
-            handles ← readIORef (texPaletteHandlesRef env)
-            -- Gather structures across ALL loaded chunks' overlays, resolving
-            -- each piece's texture/facemap PALETTE IDs → runtime handles. A
-            -- piece whose id isn't resolved yet (e.g. just after a load,
-            -- before the Lua re-resolve) is skipped — it draws once resolved.
-            let pieces =
-                    [ ( gx, gy, toEnum (fromIntegral slotTag) ∷ StructureSlot
-                      , StructurePiece th fh (spdGridZ spd) )
+            let handoff = toRenderHandoffCapability env
+            handles ← readIORef (rhTexPaletteHandlesRef handoff)
+            palette ← readIORef (rhTexPaletteRef handoff)
+            catalog ← readIORef (rhStructureWallCatalogRef handoff)
+            let entries =
+                    [ ( gx, gy, toEnum (fromIntegral slotTag) ∷ StructureSlot, spd )
                     | lc ← HM.elems (wtdChunks td)
-                    , ((gx, gy, slotTag), spd) ← HM.toList (lcStructures lc)
-                    , Just th ← [HM.lookup (spdTexId spd) handles]
-                    , Just fh ← [HM.lookup (spdFaceId spd) handles] ]
-            if null pieces then return V.empty else do
+                    , ((gx, gy, slotTag), spd) ← HM.toList (lcStructures lc) ]
+            if null entries then return V.empty else do
                 texSizes ← readIORef (rvTextureSizeRef (toRenderViewCapability env))
                 mBts ← readIORef (rvTextureSystemRef (toRenderViewCapability env))
                 case mBts of
                     Nothing → return V.empty
-                    Just _bts → do
+                    Just _bts →
                         -- Bake stable handle ids (tile + its own face map);
                         -- resolved to live slots in the shader (#286).
                         let lookupSlot h = fromIntegral (toInt h) ∷ Word32
-                            defFmSlot = -1 ∷ Float  -- posts ignore this
-                            -- Corner posts anchor at a tile VERTEX (small sprite,
-                            -- inset toward the centre); the rest at the tile face.
-                            isPost s = s ≡ SPostN ∨ s ≡ SPostE ∨ s ≡ SPostS ∨ s ≡ SPostW
-                            -- Front walls slice into depth-sorted strips (#415);
-                            -- everything else is a single quad.
-                            isFrontWall s = s ≡ SWallSE ∨ s ≡ SWallSW
-                            toList = maybe [] (:[])
-                            mkQuads gx gy slot piece
-                                | isPost slot      = toList $ postToQuad lookupSlot defFmSlot
-                                        facing zSlice effDepth tileAlpha gx gy slot piece texSizes
-                                | isFrontWall slot = frontWallStrips lookupSlot facing zSlice
-                                        effDepth tileAlpha gx gy slot piece texSizes
-                                | otherwise        = toList $ structureToQuad lookupSlot facing
-                                        zSlice effDepth tileAlpha gx gy slot piece texSizes
-                            quads = V.fromList
-                                [ sq
-                                | (gx, gy, slot, piece) ← pieces
-                                , sq ← mkQuads gx gy slot piece ]
-                        return quads
+                        in return $ V.fromList
+                            [ sq
+                            | (gx, gy, slot, spd) ← entries
+                            , sq ← structurePieceQuads catalog palette handles
+                                       lookupSlot texSizes facing zSlice effDepth
+                                       tileAlpha gx gy slot spd ]
+
+-- | The whole per-piece pipeline, pure: resolve the piece's palette ids to
+--   runtime handles, rotate a wall's art onto the sprite its edge is drawn
+--   with at this facing, then emit the quad(s) the slot calls for — a
+--   corner post, a front wall's depth strips, or a single quad.
+--
+--   Emits nothing when either palette id has no runtime handle yet (right
+--   after a load, before Lua's re-resolve tick): the piece simply draws
+--   once its handles exist, which is not an error.
+structurePieceQuads
+    ∷ StructureWallCatalog
+    → TexPalette
+    → HM.HashMap Int TextureHandle             -- ^ palette id → runtime handle
+    → (TextureHandle → Word32)                 -- ^ handle → bindless slot id
+    → HM.HashMap TextureHandle (Int, Int)      -- ^ texture pixel sizes
+    → CameraFacing → Int → Int → Float
+    → Int → Int → StructureSlot → StructurePieceData
+    → [SortableQuad]
+structurePieceQuads catalog palette handles lookupSlot texSizes
+                    facing zSlice effDepth tileAlpha gx gy slot spd =
+    case ( HM.lookup (spdTexId spd) handles
+         , HM.lookup (spdFaceId spd) handles ) of
+        (Just th, Just fh) →
+            let (th', fh') = rotatedArt th fh
+                piece = StructurePiece th' fh' (spdGridZ spd)
+            in if isPost slot
+               then toList $ postToQuad lookupSlot facing zSlice effDepth
+                                        tileAlpha gx gy slot piece texSizes
+               else if isScreenFrontWall facing slot
+               then frontWallStrips lookupSlot facing zSlice effDepth
+                                    tileAlpha gx gy slot piece texSizes
+               else toList $ structureToQuad lookupSlot facing zSlice effDepth
+                                             tileAlpha gx gy slot piece texSizes
+        _ → []
+  where
+    isPost s = s ≡ SPostN ∨ s ≡ SPostE ∨ s ≡ SPostS ∨ s ≡ SPostW
+    toList = maybe [] (:[])
+    -- A wall's sprite + cap facemap travel together onto the screen edge
+    -- its authored edge occupies (#1712). Anything the catalogue does not
+    -- recognise — a non-wall slot, art from outside a registered pack, or
+    -- a texture/facemap pair that disagrees about the authored edge —
+    -- keeps exactly the handles it was placed with.
+    rotatedArt th fh = fromMaybe (th, fh) $ do
+        edge  ← wallEdgeOfSlot slot
+        tPath ← lookupPath (spdTexId spd) palette
+        fPath ← lookupPath (spdFaceId spd) palette
+        rotatedWallArt catalog facing edge (tPath, th) (fPath, fh)
+
+-- | Does this slot's edge sit at the SCREEN front (the SE/SW pair) at
+--   this facing, and so take the #415 depth-strip path? At 'FaceSouth'
+--   exactly 'SWallSE' and 'SWallSW', as it always was. Also the candidate
+--   test 'World.Render.Quads.structureFrontWallClear' searches with, so
+--   the #418 billboard lift and the strips cannot disagree about which
+--   walls are in front.
+isScreenFrontWall ∷ CameraFacing → StructureSlot → Bool
+isScreenFrontWall facing slot =
+    maybe False (isScreenFrontEdge . screenWallEdge facing) (wallEdgeOfSlot slot)
 
 -- | A non-front-wall structure piece (floor / ceiling / back wall) as a
 --   single iso-sorted quad. Front walls go through 'frontWallStrips' instead.
@@ -135,21 +200,22 @@ structureToQuad lookupSlot facing zSlice effDepth tileAlpha gx gy slot piece tex
             heightOffset = fromIntegral relativeZ * tileSideHeight
             -- Per-slot vertical offset (tileSideHeight=16px → /4 = 4px, the
             -- floor's lift/thickness):
-            --   • a back wall RISES 4px to sit on TOP of the floor instead of
+            --   • a wall RISES 4px to sit on TOP of the floor instead of
             --     at ground level (the wall art isn't drawn lifted like the
-            --     floor's), so −4px (up on screen). (Front walls do the same in
-            --     'frontWallStrips'.)
+            --     floor's), so −4px (up on screen). This is the SAME lift
+            --     'frontWallStrips' applies, so it is screen-role
+            --     INDEPENDENT: all four edges take it, and only the
+            --     back pair reaches this function at any given facing.
             --   • a ceiling DROPS ~8px (+0.5·tileSideHeight) to rest on the
             --     wall tops without cutting them off. (The ceiling art's
             --     diamond sits 12px HIGHER in its 96×64 canvas — apex y0 vs the
             --     floor's y12 — so it needs a drop at all; tuned between 12px
             --     which buried the tops and 6px which floated ~2px high.)
             floorLift = tileSideHeight * 0.25
-            slotVOffset = case slot of
-                SCeiling → tileSideHeight * 0.5
-                SWallNE  → negate floorLift
-                SWallNW  → negate floorLift
-                _        → 0
+            slotVOffset
+                | slot ≡ SCeiling              = tileSideHeight * 0.5
+                | isJust (wallEdgeOfSlot slot) = negate floorLift
+                | otherwise                    = 0
             drawX = rawX
             drawY = rawY - heightOffset + slotVOffset
 
@@ -157,11 +223,11 @@ structureToQuad lookupSlot facing zSlice effDepth tileAlpha gx gy slot piece tex
             -- position. Floors/ceilings anchor at the tile centre; a back wall
             -- at the tile centre so it stays behind the floor. applyFacingF
             -- keeps it rotation-aware.
-            (saX, saY) = sortAnchor slot gx gy
+            (saX, saY) = sortAnchor facing slot gx gy
             (faS, fbS) = applyFacingF facing saX saY
             sortKey = (faS + fbS)
                     + fromIntegral relativeZ * 0.001
-                    + tieBreak slot   -- break wall-pair ties + beat terrain ties
+                    + wallTieBreak facing slot   -- break wall-pair ties + beat terrain ties
 
             actualSlot = lookupSlot texHandle
             faceSlot   = fromIntegral (lookupSlot (spFaceMap piece))
@@ -197,7 +263,7 @@ structureToQuad lookupSlot facing zSlice effDepth tileAlpha gx gy slot piece tex
 wallStripCount ∷ Int
 wallStripCount = 16
 
--- | A FRONT wall (SE/SW) sliced into 'wallStripCount' vertical strips, each
+-- | A SCREEN-front wall sliced into 'wallStripCount' vertical strips, each
 --   carrying its own depth-sort key (#415). A vertical wall projects so that
 --   a given screen-x is a fixed position along its edge — and so a fixed
 --   iso-depth — at every height. So strip @i@ (UV-x @[i/k,(i+1)/k]@, full
@@ -206,14 +272,20 @@ wallStripCount = 16
 --   is needed: a low tile in front loses on z (wall covers footing) and a
 --   high rim wins (it occludes that strip), each at its own depth.
 --
---   Edge → depth map (from the wall art, both sprites 96×64). The edge runs
---   only over the S half of the sprite (S corner at UV-x 0.5), so the param
---   is clamped to [0,1] = its endpoints; art overhanging the S vertex must
---   sort AT it (depth gx+gy+2), not past it:
---     • SE: edge E(gx+1,gy)→S(gx+1,gy+1); depth = (gx+gy+1) + clamp01(2·(1−u)).
---     • SW: edge W(gx,gy+1)→S(gx+1,gy+1); depth = (gx+gy+1) + clamp01(2·u).
---   (applyFacingF rotates the grid anchor, so the depth stays correct at any
---   facing.) Strips outside the art's UV range are transparent.
+--   Edge → depth map. The strip's UV-x follows the SPRITE it is drawn with
+--   — the screen edge — and its sort anchor follows the same screen edge,
+--   in the facing-independent depth-step units 'depthAnchor' defines: the
+--   end at the sprite's canvas CENTRE is the screen-bottom one and sorts
+--   at 'frontWallDepthSteps' (2, the tile's front corner), the outer end
+--   one step behind it at 1 (the tile centre's depth). An edge's art runs
+--   over only HALF the 96×64 canvas (N/S at UV-x 0.5, W at 0, E at 1), so
+--   the along-edge parameter is CLAMPED to [0,1] = its endpoints: the wall
+--   art overhangs the canvas-centre vertex by a few px of wall thickness
+--   (se bbox x41..95 vs S corner x48), and that sliver must NOT sort past
+--   it or it punches forward again. At 'FaceSouth' this reproduces the
+--   original two cases exactly — SE: E(gx+1,gy)→S(gx+1,gy+1),
+--   SW: W(gx,gy+1)→S(gx+1,gy+1) — key for key. Strips outside the art's UV
+--   range are transparent.
 frontWallStrips
     ∷ (TextureHandle → Word32)
     → CameraFacing → Int → Int → Float
@@ -248,16 +320,18 @@ frontWallStrips lookupSlot facing zSlice effDepth tileAlpha gx gy slot piece tex
             flags = 0
             wuv   = packWorldUV gx gy
 
-            gxf = fromIntegral gx ∷ Float
-            gyf = fromIntegral gy ∷ Float
-            -- grid edge position (→ sort depth) at UV-x u, per direction. The
-            -- edge param is CLAMPED to [0,1] (edge endpoints E/W .. S): the
-            -- wall art overhangs the S vertex by a few px of wall thickness
-            -- (se bbox x41..95 vs S corner x48), and that sliver must NOT sort
-            -- PAST the S vertex (depth gx+gy+2) or it punches forward again.
-            anchorAt u = case slot of
-                SWallSE → (gxf + 1.0,                gyf + clamp01 (2.0 * (1.0 - u)))
-                _       → (gxf + clamp01 (2.0 * u),  gyf + 1.0)        -- SWallSW
+            -- The screen edge this wall is drawn on and its art's canvas-x
+            -- span. The end at canvas CENTRE (u 0.5) is the screen-bottom
+            -- one, so it takes the deepest step; the outer end takes 1.
+            screen     = screenWallEdge facing (fromMaybe WallSE (wallEdgeOfSlot slot))
+            (u0, u1)   = wallEdgeCanvasSpan screen
+            centreAtU1 = u1 ≡ 0.5   -- NW/SW: canvas-RIGHT end is the centre
+            (kL, kR)   = if centreAtU1
+                         then (1.0, fromIntegral frontWallDepthSteps)
+                         else (fromIntegral frontWallDepthSteps, 1.0)
+            anchorAt u =
+                let t = clamp01 ((u - u0) / (u1 - u0))
+                in depthAnchor facing (kL + t * (kR - kL)) gx gy
 
             k = wallStripCount
             strip i =
@@ -270,7 +344,7 @@ frontWallStrips lookupSlot facing zSlice effDepth tileAlpha gx gy slot piece tex
                     (faS, fbS) = applyFacingF facing saX saY
                     sortKey = (faS + fbS)
                             + fromIntegral relativeZ * 0.001
-                            + tieBreak slot
+                            + wallTieBreak facing slot
                     -- The strip's positions and its U range move
                     -- together: [xa,xb] of the sprite's width samples
                     -- exactly [ua,ub] of its texture.
@@ -310,18 +384,19 @@ postInset = 0.0
 
 -- | A corner POST: a small sprite at one of the tile's four VERTICES
 --   (N/E/S/W of the diamond), inset toward the centre, capping the wall
---   junction at that corner. Positioned at its inset vertex; sorted to
---   match the walls it caps (NOT the vertex, since back walls sort at the
---   tile centre while front walls sort at the front corner). No bespoke
---   facemap → its own facemap slot.
+--   junction at that corner. Positioned at the vertex its authored corner
+--   OCCUPIES at this facing (#1712 — a post keeps standing on its own
+--   physical corner as the camera turns); sorted to match the walls it
+--   caps (NOT the vertex, since back walls sort at the tile centre while
+--   front walls sort at the front corner). No bespoke facemap → its own
+--   facemap slot.
 postToQuad
     ∷ (TextureHandle → Word32)
-    → Float
     → CameraFacing → Int → Int → Float
     → Int → Int → StructureSlot → StructurePiece
     → HM.HashMap TextureHandle (Int, Int)
     → Maybe SortableQuad
-postToQuad lookupSlot _defFmSlot facing zSlice effDepth tileAlpha gx gy slot piece texSizes =
+postToQuad lookupSlot facing zSlice effDepth tileAlpha gx gy slot piece texSizes =
     let gridZ     = spGridZ piece
         relativeZ = gridZ - zSlice
     in if gridZ > zSlice ∨ gridZ < (zSlice - effDepth)
@@ -345,7 +420,7 @@ postToQuad lookupSlot _defFmSlot facing zSlice effDepth tileAlpha gx gy slot pie
             -- measured from the floor art — see postCornerOffset).
             (rawX, rawY) = gridToScreen facing gx gy
             tileTopY     = rawY - heightOffset
-            (cornOffX, cornOffY) = postCornerOffset slot
+            (cornOffX, cornOffY) = postCornerOffset facing slot
             cornX = rawX + cornOffX
             cornY = tileTopY + cornOffY
             -- inset toward the floor diamond's real centre (48,35 in the
@@ -363,14 +438,14 @@ postToQuad lookupSlot _defFmSlot facing zSlice effDepth tileAlpha gx gy slot pie
             drawY = baseY - quadH * postBaseAnchorY
 
             -- Sort relative to the walls this corner caps. The bias is PER
-            -- CORNER because back and front need opposite treatment (see
-            -- postBias): the back (N) post nestles BEHIND its NE/NW walls, the
-            -- front (S) post stands IN FRONT of its SE/SW walls. All biases
+            -- SCREEN CORNER because back and front need opposite treatment
+            -- (see postBias): the back post nestles BEHIND its back walls,
+            -- the front post stands IN FRONT of its front walls. All biases
             -- stay above the floor (0.0002) so the post sits on the floor, and
             -- below the z-step (0.001) so they never cross a level.
-            (psX, psY) = postSortAnchor slot gx gy
+            (psX, psY) = postSortAnchor facing slot gx gy
             (faS, fbS) = applyFacingF facing psX psY
-            sortKey = (faS + fbS) + fromIntegral relativeZ * 0.001 + postBias slot
+            sortKey = (faS + fbS) + fromIntegral relativeZ * 0.001 + postBias facing slot
 
             actualSlot = lookupSlot texHandle
             faceSlot   = fromIntegral (lookupSlot (spFaceMap piece))  -- postface
@@ -399,7 +474,9 @@ postToQuad lookupSlot _defFmSlot facing zSlice effDepth tileAlpha gx gy slot pie
 postPx ∷ Float
 postPx = tileWidth / baseTileW
 
--- | Base position of each corner post within the 96×64 floor sprite, in PIXELS.
+-- | Base position of each corner post within the 96×64 floor sprite, in PIXELS
+--   — keyed by the SCREEN corner the post's authored corner occupies at this
+--   facing, since these offsets are canvas positions (#1712).
 --   The floor diamond (48px tall, drawn 12px down the canvas for the 4px lift)
 --   has vertices apex(48,12) E(96,36) S(48,60) W(0,36). Each post is then inset
 --   toward the centre by HALF its own footprint *along that axis* — the post is
@@ -408,82 +485,122 @@ postPx = tileWidth / baseTileW
 --   (no overhang) and, where four floors meet at a node, makes the four
 --   footprints meet edge-to-edge → the touching 2×2. Result: N–S 41px apart,
 --   E–W 82px apart.
-postCornerOffset ∷ StructureSlot → (Float, Float)
-postCornerOffset slot = case slot of
-    SPostN → (48 * postPx, 15.5 * postPx)   -- apex y12 + 3.5
-    SPostE → (89 * postPx, 36   * postPx)   -- E    x96 − 7
-    SPostS → (48 * postPx, 56.5 * postPx)   -- S    y60 − 3.5
-    SPostW → ( 7 * postPx, 36   * postPx)   -- W    x0  + 7
-    _      → (48 * postPx, 36   * postPx)   -- diamond centre
+postCornerOffset ∷ CameraFacing → StructureSlot → (Float, Float)
+postCornerOffset facing slot = case screenPostCorner facing <$> postCornerOfSlot slot of
+    Just CornerN → (48 * postPx, 15.5 * postPx)   -- apex y12 + 3.5
+    Just CornerE → (89 * postPx, 36   * postPx)   -- E    x96 − 7
+    Just CornerS → (48 * postPx, 56.5 * postPx)   -- S    y60 − 3.5
+    Just CornerW → ( 7 * postPx, 36   * postPx)   -- W    x0  + 7
+    Nothing      → (48 * postPx, 36   * postPx)   -- diamond centre
 
 -- | The floor diamond's centre within the sprite (px).
 postDiamondCentre ∷ (Float, Float)
 postDiamondCentre = (48 * postPx, 36 * postPx)
 
--- | Per-corner sort bias (all in (floor 0.0002 .. z-step 0.001)). A post fills
---   its walls' notch; whether it draws in front of or behind those walls
---   depends on which corner it is:
---     • N (back) post → BEHIND its NE/NW walls (tieBreak 0.0003/0.0004), so
---       bias below those → 0.00025 (still above the floor).
---     • S (front) post → IN FRONT of its SE/SW walls (tieBreak 0.0005/0.0006),
---       so bias above those → 0.00065.
---     • E/W posts cap a back wall (depth d) AND a front wall (d+1); their own
---       anchor depth already lands between the two, so the bias only needs to
---       beat the floor — 0.00045.
-postBias ∷ StructureSlot → Float
-postBias s = case s of
-    SPostN → 0.00025
-    SPostS → 0.00065
-    SPostE → 0.00045
-    SPostW → 0.00045
-    _      → 0.00025
+-- | Per-corner sort bias (all in (floor 0.0002 .. z-step 0.001)), keyed by the
+--   post's SCREEN corner. A post fills its walls' notch; whether it draws in
+--   front of or behind those walls depends on which screen corner it is:
+--     • the BACK (screen-N) post → BEHIND its back walls (tie-breaks
+--       0.0003/0.0004), so bias below those → 0.00025 (still above the floor).
+--     • the FRONT (screen-S) post → IN FRONT of its front walls (tie-breaks
+--       0.0005/0.0006), so bias above those → 0.00065.
+--     • the screen-E/W posts cap a back wall (depth d) AND a front wall (d+1);
+--       their own anchor depth already lands between the two, so the bias only
+--       needs to beat the floor — 0.00045.
+postBias ∷ CameraFacing → StructureSlot → Float
+postBias facing slot = case screenPostCorner facing <$> postCornerOfSlot slot of
+    Just CornerN → 0.00025
+    Just CornerS → 0.00065
+    Just CornerE → 0.00045
+    Just CornerW → 0.00045
+    Nothing      → 0.00025
 
--- | Depth-sort anchor for a post — matches the walls it caps (back walls
---   sort at the tile centre, front walls at the front corner).
-postSortAnchor ∷ StructureSlot → Int → Int → (Float, Float)
-postSortAnchor slot gx gy =
-    let gxf = fromIntegral gx; gyf = fromIntegral gy
-    in case slot of
-        SPostN → (gxf + 0.5, gyf + 0.5)   -- over the back (NE/NW) walls
-        SPostS → (gxf + 1.0, gyf + 1.0)   -- over the front (SE/SW) walls
-        SPostE → (gxf + 1.0, gyf + 0.5)
-        SPostW → (gxf + 0.5, gyf + 1.0)
-        _      → (gxf + 0.5, gyf + 0.5)
+-- | Depth-sort anchor for a post, in 'depthAnchor' steps and keyed by the
+--   post's SCREEN corner — it matches the walls it caps, and the back and
+--   front walls sort one step apart. The screen-E/W posts cap one of each,
+--   so they sit half a step between them. At 'FaceSouth' these reproduce
+--   the original (gx+.5,gy+.5) / (gx+1,gy+1) / (gx+1,gy+.5) / (gx+.5,gy+1)
+--   key for key.
+postSortAnchor ∷ CameraFacing → StructureSlot → Int → Int → (Float, Float)
+postSortAnchor facing slot gx gy =
+    depthAnchor facing k gx gy
+  where
+    k = case screenPostCorner facing <$> postCornerOfSlot slot of
+        Just CornerN → 1.0   -- over the back walls (the tile centre's depth)
+        Just CornerS → fromIntegral frontWallDepthSteps   -- over the front walls
+        Just CornerE → 1.5   -- between a back wall and a front wall
+        Just CornerW → 1.5
+        Nothing      → 1.0
+
+-- | Painter-depth steps in front of a tile's own grid origin that a front
+--   wall's DEEPEST strip sorts at — the tile's front corner, two steps
+--   ahead of the terrain quad keyed at that origin. Facing-INDEPENDENT by
+--   construction (see 'depthAnchor'), which is the whole point: it is the
+--   same two steps at every facing. 'World.Render.Quads.structureFrontWallClear'
+--   reproduces a wall's maximum strip key from it, so the #418 lift and the
+--   #415 strips cannot disagree about how far forward a front wall reaches.
+frontWallDepthSteps ∷ Int
+frontWallDepthSteps = 2
+
+-- | A grid-space sort anchor @k@ painter-depth steps in front of the
+--   tile's own grid ORIGIN — the point every other world pass keys that
+--   tile from ('World.Render.TileQuads', 'World.Render.FloraQuads' and
+--   friends all sort at @applyFacing facing gx gy@).
+--
+--   One depth step is @unapplyFacingF facing 0.5 0.5@, so by construction
+--   @applyFacingF@ of the result sums to the tile's own depth plus exactly
+--   @k@ — at EVERY facing. That invariance is the reason this exists: the
+--   obvious alternative, a fixed grid offset like the tile centre run
+--   through 'applyFacingF', changes its depth gap as the camera turns
+--   (+1 at 'FaceSouth', 0 at 'FaceWest'/'FaceEast', −1 at 'FaceNorth'),
+--   which sank a rotated floor beneath its own terrain tile.
+--
+--   At 'FaceSouth' it is literally the familiar geometry: @k = 1@ is the
+--   tile centre @(gx+0.5, gy+0.5)@ and @k = 2@ the front corner
+--   @(gx+1, gy+1)@.
+depthAnchor ∷ CameraFacing → Float → Int → Int → (Float, Float)
+depthAnchor facing k gx gy =
+    let (dx, dy) = unapplyFacingF facing 0.5 0.5
+    in (fromIntegral gx + k * dx, fromIntegral gy + k * dy)
 
 -- | Grid-space anchor used for DEPTH SORTING (not rendering) of non-front
---   pieces. The BACK walls (NE/NW) anchor at the tile centre so they stay
---   BEHIND the floor; floors anchor at the tile centre; the ceiling at the
---   front corner so its +1 z beats the walls beneath and it draws OVER them.
+--   pieces, in 'depthAnchor' steps. Floors and BACK walls sit at the tile
+--   centre's depth (1 step), which is what keeps a back wall behind the
+--   floor and both in front of their own terrain tile; the ceiling at the
+--   front corner (2 steps) so its +1 z beats the walls beneath and it draws
+--   OVER them. Both are the same number of steps at every facing (#1712).
 --   (Front walls are sorted per-strip in 'frontWallStrips', not here.)
---   applyFacingF keeps these rotation-aware.
-sortAnchor ∷ StructureSlot → Int → Int → (Float, Float)
-sortAnchor slot gx gy =
-    let gxf = fromIntegral gx
-        gyf = fromIntegral gy
-    in case slot of
-        SWallNW → (gxf + 0.5, gyf + 0.5)   -- back walls anchor at centre so
-        SWallNE → (gxf + 0.5, gyf + 0.5)   --   they draw OVER the floor
-        SCeiling → (gxf + 1.0, gyf + 1.0)  -- front corner: its +1 z then beats
-                                           --   the walls beneath so the ceiling
-                                           --   draws OVER all of them
-        _       → (gxf + 0.5, gyf + 0.5)   -- floor: tile centre
-                                           --   (front walls handled elsewhere)
+sortAnchor ∷ CameraFacing → StructureSlot → Int → Int → (Float, Float)
+sortAnchor facing slot gx gy = case slot of
+    SCeiling → depthAnchor facing (fromIntegral frontWallDepthSteps) gx gy
+    _        → depthAnchor facing 1.0 gx gy
 
 -- | Tiny per-slot offset (all < the 0.001 z-step, so they never cross a
 --   z-level). Two purposes: break exact sort TIES between a wall pair that
---   share an anchor — the front pair (SE/SW) would z-flicker on zoom, the
---   back pair (NE/NW) renders an unstable corner joint — and beat exact
---   ties with the terrain tile underneath. Higher = drawn later = on top;
---   within each corner the higher value's wall overlaps the other. Flip the
---   two numbers in a pair if a joint's overlap reads backwards.
-tieBreak ∷ StructureSlot → Float
-tieBreak s = case s of
-    SFloor   → 0.00020
-    SWire    → 0.00015   -- flat like a floor, but tie-loses to one if both
-                          -- ever occupy the same tile
-    SWallNW  → 0.00030
-    SWallNE  → 0.00040   -- NE overlaps NW at the back corner
-    SWallSW  → 0.00050
-    SWallSE  → 0.00060   -- SE overlaps SW at the front corner
-    SCeiling → 0.00070
-    _        → 0.0       -- posts compute their own sort in postToQuad
+--   share an anchor — the front pair would z-flicker on zoom, the back pair
+--   renders an unstable corner joint — and beat exact ties with the terrain
+--   tile underneath. Higher = drawn later = on top; within each corner the
+--   higher value's wall overlaps the other. Flip the two numbers in a pair if
+--   a joint's overlap reads backwards.
+--
+--   A wall's value is keyed by its SCREEN edge (#1712), so the pairing is
+--   always between the two walls that actually share a screen corner, and the
+--   front pair always outranks the back pair. At 'FaceSouth' this is the
+--   original per-slot table. Exported because
+--   'World.Render.Quads.structureFrontWallClear' has to reproduce a front
+--   wall's exact strip key.
+wallTieBreak ∷ CameraFacing → StructureSlot → Float
+wallTieBreak facing s = case wallEdgeOfSlot s of
+    Just e  → screenEdgeTieBreak (screenWallEdge facing e)
+    Nothing → case s of
+        SFloor   → 0.00020
+        SWire    → 0.00015   -- flat like a floor, but tie-loses to one if both
+                             -- ever occupy the same tile
+        SCeiling → 0.00070
+        _        → 0.0       -- posts compute their own sort in postToQuad
+  where
+    screenEdgeTieBreak e = case e of
+        WallNW → 0.00030
+        WallNE → 0.00040   -- NE overlaps NW at the back corner
+        WallSW → 0.00050
+        WallSE → 0.00060   -- SE overlaps SW at the front corner
