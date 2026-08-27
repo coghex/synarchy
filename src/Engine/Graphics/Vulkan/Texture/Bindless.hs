@@ -1,13 +1,16 @@
 -- | Bindless texture system using UPDATE_AFTER_BIND descriptors.
 --
---   The texture array this module allocates is sized by 'bcMaxTextures' in
---   the 'BindlessConfig' passed in — production derives that value from the
---   device's bindless capability, capped at 'maxBindlessTextures'
---   ("Engine.Graphics.Vulkan.Texture.System"), not the much larger
---   update-after-bind sampled-image ceiling
---   "Engine.Graphics.Vulkan.Capability" queries from the device and caps
---   further — that figure is UPDATE_AFTER_BIND's device/technique limit,
---   distinct from what this module actually allocates.
+--   The texture array this module allocates is always 'maxBindlessTextures'
+--   descriptors — the size both bindless fragment shaders declare
+--   @textures[]@ at ("Engine.Graphics.Vulkan.ShaderCode"). It is not
+--   configurable and is never derived from the device: without
+--   @runtimeDescriptorArray@ the Vulkan descriptor-set interface rule needs
+--   the binding to hold at least as many descriptors as the statically-used
+--   array, so a device that cannot supply the whole binding is REJECTED
+--   before reaching this module rather than allocated a smaller one
+--   ("Engine.Graphics.Vulkan.Capability", #1689). The much larger
+--   update-after-bind ceilings that capability module queries are what it
+--   checks that requirement against, not a size to allocate.
 module Engine.Graphics.Vulkan.Texture.Bindless
   ( -- * Types (re-exported from Types module)
     BindlessTextureSystem(..)
@@ -66,13 +69,13 @@ import Vulkan.Core12
 import Vulkan.Zero
 import Vulkan.CStruct.Extends
 
--- | Sensible defaults for bindless config. The array size is
---   'maxBindlessTextures' ("Engine.Graphics.Vulkan.Texture.Limits"), the
---   single definition the bindless fragment shaders interpolate too.
+-- | Sensible defaults for bindless config. The array size is not among
+--   them: it is always 'maxBindlessTextures'
+--   ("Engine.Graphics.Vulkan.Texture.Limits"), the single definition the
+--   bindless fragment shaders interpolate too.
 defaultBindlessConfig ∷ BindlessConfig
 defaultBindlessConfig = BindlessConfig
-  { bcMaxTextures    = maxBindlessTextures
-  , bcTextureBinding = 0
+  { bcTextureBinding = 0
   , bcDescriptorSet  = 1
   }
 
@@ -97,13 +100,16 @@ createBindlessTextureSystem ∷ PhysicalDevice
 createBindlessTextureSystem pdev dev cmdPool cmdQueue config = do
   undefinedTex ← createUndefinedTexture pdev dev cmdPool cmdQueue
 
-  descriptorPool ← createBindlessDescriptorPool dev config
+  descriptorPool ← createBindlessDescriptorPool dev
 
   descriptorLayout ← createBindlessDescriptorSetLayout dev config
 
   descriptorSet ← allocateBindlessDescriptorSet dev descriptorPool descriptorLayout
 
-  let slotAllocator = createSlotAllocator (bcMaxTextures config)
+  -- Every index of the fixed binding, slot 0 included: the allocator holds
+  -- index 0 back for the undefined texture from INSIDE that range, which is
+  -- why the reservation never shrinks the descriptor count (#1689).
+  let slotAllocator = createSlotAllocator maxBindlessTextures
 
   -- Acquire the shared texture sampler matching the current global
   -- filter. Every UNPINNED slot (and the undefined fallback) points at
@@ -160,7 +166,7 @@ createBindlessTextureSystem pdev dev cmdPool cmdQueue config = do
 initializeAllSlots ∷ Device → DescriptorSet → BindlessConfig 
                    → ImageView → Sampler → EngineM σ ()
 initializeAllSlots dev descSet config imageView sampler = do
-  let maxSlots = bcMaxTextures config
+  let maxSlots = maxBindlessTextures
       imageInfo = zero
         { imageLayout = IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
         , imageView = imageView
@@ -179,12 +185,13 @@ initializeAllSlots dev descSet config imageView sampler = do
 
   updateDescriptorSets dev (V.singleton $ SomeStruct write) V.empty
 
--- | Create descriptor pool with UPDATE_AFTER_BIND support
-createBindlessDescriptorPool ∷ Device → BindlessConfig → EngineM σ DescriptorPool
-createBindlessDescriptorPool dev config = do
+-- | Create descriptor pool with UPDATE_AFTER_BIND support. Sized from
+--   'maxBindlessTextures', never from the config or the device (#1689).
+createBindlessDescriptorPool ∷ Device → EngineM σ DescriptorPool
+createBindlessDescriptorPool dev = do
   let poolSize = zero
         { type' = DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
-        , descriptorCount = bcMaxTextures config
+        , descriptorCount = maxBindlessTextures
         }
       -- One storage buffer for the handle→slot table (#286, binding 1).
       tablePoolSize = zero
@@ -221,7 +228,7 @@ createBindlessDescriptorSetLayout dev config = do
       textureBinding = zero
         { binding = bcTextureBinding config
         , descriptorType = DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
-        , descriptorCount = bcMaxTextures config
+        , descriptorCount = maxBindlessTextures
         , stageFlags = SHADER_STAGE_FRAGMENT_BIT
         , immutableSamplers = V.empty
         }

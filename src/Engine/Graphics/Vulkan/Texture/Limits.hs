@@ -10,10 +10,10 @@
 --   read the same definition: a divergence between them cannot be written
 --   down, rather than merely being discouraged by a comment (#975).
 --
---   These are the fixed upper bounds. The number of texture slots actually
---   allocated is separately clamped down by what the device reports
---   ("Engine.Graphics.Vulkan.Texture.System"), which may legitimately be
---   lower.
+--   These are exact sizes, not upper bounds to clamp down from. Nothing
+--   allocates a smaller bindless binding than the shaders declare: a device
+--   that cannot supply the whole descriptor count is rejected before the
+--   texture system is built ("Engine.Graphics.Vulkan.Capability", #1689).
 module Engine.Graphics.Vulkan.Texture.Limits
   ( maxBindlessTextures
   , handleSlotTableSize
@@ -23,9 +23,16 @@ import UPrelude
 
 -- | Size of the bindless texture array: the descriptor count of the
 --   combined-image-sampler binding, and the @textures[]@ array length in
---   both bindless fragment shaders. An upper bound — 'createTextureSystem'
---   allocates the minimum of this and the device's usable
---   update-after-bind capacity.
+--   both bindless fragment shaders. Those two are the SAME number by
+--   requirement, not by coincidence — both shaders index the array with
+--   @nonuniformEXT@, so it is statically used at its declared size, and
+--   without @runtimeDescriptorArray@ (which
+--   "Engine.Graphics.Vulkan.Texture.Requirements" deliberately does not
+--   require) the descriptor-set interface rule admits no binding smaller
+--   than that. 'createTextureSystem' therefore builds this many descriptors
+--   on every device it accepts, and a device that cannot supply them is
+--   refused (#1689). Reserved slots — index 0, the undefined texture — are
+--   indices INSIDE this count, not a subtraction from it.
 maxBindlessTextures ∷ Word32
 maxBindlessTextures = 16384
 
