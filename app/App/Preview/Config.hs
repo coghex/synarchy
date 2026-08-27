@@ -22,8 +22,13 @@ previewWindowConfig ∷ Bool → VideoConfig → WindowConfig
 previewWindowConfig hidden videoConfig =
   let config = defaultWindowConfig videoConfig
   in if hidden
+       -- A hidden probe window must stay the ordinary decorated window
+       -- the automated presentation is about, so BOTH monitor-sized
+       -- requests are suppressed here (#1731 extends the carve-out
+       -- `wcFullscreen` already had).
        then config
          { wcFullscreen = False
+         , wcBorderless = False
          , wcVisible = False
          , wcFocused = False
          }

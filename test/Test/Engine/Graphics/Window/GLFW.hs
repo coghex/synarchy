@@ -70,15 +70,23 @@ import Engine.Scripting.Lua.Types (LuaMsg(..))
 import qualified Graphics.UI.GLFW as GLFW
 
 -- | The window 'withCreatedWindow' asks 'createWindow' for. Deliberately
---   NOT fullscreen (requirement: the applied mode must come out
---   'Windowed'), and deliberately not a size any video config would
---   produce, so it cannot be confused with the geometry
+--   NEITHER fullscreen nor borderless (requirement: the applied mode
+--   must come out 'Windowed'), and deliberately not a size any video
+--   config would produce, so it cannot be confused with the geometry
 --   'Engine.Core.Init' seeded the refs with.
+--
+--   Both monitor-sized modes are excluded for the same reason: this
+--   suite runs attached to a human's desktop, and asking for either
+--   would resize and undecorate a real window mid-run. The pure
+--   creation-outcome policy — including #1731's borderless branch and
+--   its windowed-cache seed — is covered GPU-free by
+--   'Test.Headless.Graphics.WindowMode'.
 createWindowConfig ∷ WindowConfig
 createWindowConfig = WindowConfig
   { wcWidth      = 641
   , wcHeight     = 481
   , wcFullscreen = False
+  , wcBorderless = False
   , wcTitle      = T.pack "Synarchy createWindow coverage"
   , wcResizable  = True
   , wcVisible    = True
@@ -94,9 +102,10 @@ sentinelWindowSize      = (-9001, -9002)
 sentinelFramebufferSize = (-9003, -9004)
 sentinelWindowPos       = (-9005, -9006)
 
--- | Pre-call sentinel for @wsAppliedMode@. Distinct from BOTH modes
---   'appliedModeAtCreation' can produce, so a deleted update and a
---   wrong-branch update both fail.
+-- | Pre-call sentinel for @wsAppliedMode@. Distinct from the mode
+--   'appliedModeAtCreation' gives for THIS config, so a deleted update
+--   fails; the assertion below additionally pins the exact expected
+--   outcome, so a wrong-branch update fails too.
 sentinelAppliedMode ∷ WindowMode
 sentinelAppliedMode = BorderlessWindowed
 
@@ -224,15 +233,16 @@ createWindowSpec createObservation =
                 cwoLiveWindowPos obs `shouldNotBe` sentinelWindowPos
                 cwoRefWindowPos obs `shouldBe` cwoLiveWindowPos obs
 
-        -- The config asks for a plain window, so the outcome
-        -- 'createWindow' records must be the one 'appliedModeAtCreation'
-        -- gives for a fullscreen request that was not applied.
-        it "records Windowed as the applied mode for a non-fullscreen config" $
+        -- The config asks for a plain window — neither fullscreen nor
+        -- borderless — so the outcome 'createWindow' records must be the
+        -- one 'appliedModeAtCreation' gives for 'CreatedPlain'.
+        it "records Windowed as the applied mode for a plain config" $
             withObservation $ \obs → do
                 wcFullscreen createWindowConfig `shouldBe` False
+                wcBorderless createWindowConfig `shouldBe` False
                 cwoAppliedMode obs `shouldNotBe` sentinelAppliedMode
                 cwoAppliedMode obs `shouldBe` Windowed
-                cwoAppliedMode obs `shouldBe` appliedModeAtCreation False
+                cwoAppliedMode obs `shouldBe` appliedModeAtCreation CreatedPlain
 
         -- The queue was drained immediately before the call, so this
         -- attributes both messages -- and their absence -- to this
