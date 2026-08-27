@@ -32,7 +32,12 @@ short-circuit (scripts/unit_ai_mental.lua) to confirm:
   8. Forced catatonia (#717): stops an already-moving unit in place,
      produces no displacement or replacement action for the whole
      episode, leaves it standing and physiologically lucid, and exits
-     through the normal cooldown path.
+     through the normal cooldown path. Then (#1709) the same break
+     forced MID-POSE-TRANSITION — on a real one-tile leap, on both the
+     airborne arc and the chained landing step that follows it — must
+     leave the unit grounded rather than suspended above its grid layer:
+     once its activity stops reading "transitioning", realZ equals
+     gridZ and the pose is standing.
   9. Forced lash-out (#717): prefers a recent eligible attacker (staged
      via a real landed hit — there's no Lua setter for the last-attacker
      memory, so this uses combat_anim_probe.py's spawn-adjacent +
@@ -124,6 +129,131 @@ def lash_ai_flags(port, uid):
         f"return {{tgt = (s and s.attackTargetUid) or false, "
         f"goal = (s and s.activeGoal) or false, "
         f"committed = (s and s.committed) or false}}"))
+
+
+# Vertical-agreement tolerance for #1709. usRealZ is a Float widened to
+# a Lua double, so a landed unit's continuous Z reads as its integer grid
+# Z exactly; this only absorbs that widening. It is nowhere near a real
+# arc — a one-tile leap peaks 0.8 z above the launch.
+Z_EPS = 1e-4
+
+
+def leap_sample(port, uid):
+    """One reading of the four fields #1709 is about.
+
+    ACTIVITY IS READ FIRST and the position LAST, deliberately. The unit
+    thread publishes to the render mirror asynchronously, so if the reads
+    straddle a tick the position is the LATER of the two: a unit that has
+    genuinely finished its transition can then only look MORE settled,
+    never less. An interpolated realZ reported against a
+    non-transitioning activity is therefore the defect, not the sampling.
+    """
+    return json.loads(send(port,
+        f"local a = unit.getActivity({uid}); local p = unit.getPose({uid}); "
+        f"local i = unit.getInfo({uid}); "
+        f"return {{activity = a, pose = p, gridZ = i.gridZ, realZ = i.realZ}}"))
+
+
+def z_agrees(sample):
+    return abs(sample["realZ"] - sample["gridZ"]) <= Z_EPS
+
+
+def leap_break_case(port, uid, leg):
+    """Force catatonia partway through a REAL leap and report the outcome.
+
+    `leg` selects where the break lands:
+
+      "airborne" -- the Standing->Falling arc. The unit is genuinely off
+        its grid layer here (usRealZ arcs above usGridZ, which does not
+        move until the landing snap), which is the state the pre-#1709
+        `unit.stop` froze forever.
+      "landing"  -- the chained Falling->Standing step that starts once
+        the arc touches down. Position is already snapped by then, but it
+        is a SECOND transition with its own timer, and clearing it left
+        the unit stuck in the falling pose. Told apart from the arc by
+        the pose: the arc keeps `standing`, the chain reads `falling`.
+
+    Returns (detail, samples); detail is None when the case passed.
+    """
+    ready = poll_until(10, lambda: (lambda smp: smp if (
+        smp["pose"] == "standing" and smp["activity"] != "transitioning"
+    ) else None)(leap_sample(port, uid)))
+    if not ready:
+        return ("unit never reached a standing, non-transitioning state "
+                "to leap from"), []
+
+    # Stop and leap in ONE console line, off ONE position read: the AI is
+    # free to wander between round trips, and the target must stay inside
+    # the unit's own reach (jumpMaxTiles). The unit thread consumes the
+    # two commands in order, so the leap always launches from a stopped
+    # unit at the tile that read named.
+    target = send(port,
+        f"local i = unit.getInfo({uid}); unit.stop({uid}); "
+        f"local tx = math.floor(i.gridX) + 1; local ty = math.floor(i.gridY); "
+        f"unit.jump({uid}, tx, ty); return tx .. ',' .. ty")
+
+    # `unit.jump` only reports that the command was ENQUEUED — the unit
+    # thread refuses an out-of-reach or non-standing leap silently — so
+    # the run is only meaningful once a coherent sample shows the leap
+    # actually in the requested leg.
+    if leg == "airborne":
+        def wanted(smp):
+            return (smp["activity"] == "transitioning"
+                    and smp["pose"] == "standing"
+                    and smp["realZ"] > smp["gridZ"] + 0.05)
+    else:
+        def wanted(smp):
+            return (smp["activity"] == "transitioning"
+                    and smp["pose"] == "falling")
+    entered = poll_until(10, lambda: (lambda smp: smp if wanted(smp) else None)(
+        leap_sample(port, uid)), interval=0.02)
+    if not entered:
+        return (f"leap toward {target} never reached its {leg} leg "
+                f"(unit.jump only enqueues; the unit thread refuses an "
+                f"out-of-reach leap)"), []
+
+    send(port, f"require('scripts.mental_state').forceBreak({uid},'catatonia'); "
+               f"return 'ok'")
+
+    # Every sample from break entry onward: while the arc is still in
+    # flight the activity reads "transitioning" and an interpolated realZ
+    # is correct; the moment it does not, realZ must agree with gridZ.
+    samples = [entered]
+    settled = None
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        smp = leap_sample(port, uid)
+        samples.append(smp)
+        if smp["activity"] != "transitioning":
+            settled = smp
+            break
+        time.sleep(0.05)
+    if settled is None:
+        return "never left the transition after the break", samples
+    floating = [smp for smp in samples
+                if smp["activity"] != "transitioning" and not z_agrees(smp)]
+    if floating:
+        return f"suspended above its grid layer: {floating[0]}", samples
+
+    # The issue's own repro sampled again 1.5 s later, where the original
+    # defect was still visible.
+    time.sleep(1.5)
+    later = leap_sample(port, uid)
+    samples.append(later)
+    if later["activity"] == "transitioning":
+        return f"still transitioning 1.5 s after the break: {later}", samples
+    if not z_agrees(later):
+        return f"still suspended 1.5 s after the break: {later}", samples
+    if later["pose"] != "standing":
+        return f"never reached the grounded standing pose: {later}", samples
+
+    # Catatonia freezes the unit, so nothing walked it back onto its grid
+    # layer (a walk step rewrites usRealZ, PathAdvance.hs) -- but only
+    # while the episode is live. Prove it still was.
+    if mstate(port, uid) != "break":
+        return ("episode ended before the check landed, so a resumed walk "
+                "could have normalised realZ on its own"), samples
+    return None, samples
 
 
 def main():
@@ -468,6 +598,41 @@ def main():
         else:
             ok = False
             print("  [FAIL] catatonia episode never ended")
+
+        # ---- 8b. A break entered MID-POSE-TRANSITION (#1709). The walk
+        # setup above is deliberately left intact as its own scenario:
+        # it proves immediate preemption, which is what must NOT change.
+        # This one proves the other half — a leap that the break must not
+        # cancel partway through, leaving the unit rendered above its
+        # grid layer for the rest of the episode (and saved that way).
+        #
+        # An episode long enough to outlast the whole arc plus the
+        # samples: stage 3 pinned it at 6 s, and once the episode ends
+        # the AI resumes and the first walk step rewrites usRealZ
+        # (PathAdvance.hs), which would turn the defect into a pass.
+        # Restored afterwards — stage 9 relies on the short duration.
+        tune(P, EPISODE_MIN=60.0, EPISODE_MAX=60.0)
+        # Acolyte stats are ROLLED per spawn and leap reach is derived
+        # from agility/strength/fat (jumpMaxTiles), so pin the one input
+        # that decides whether a one-tile leap is even accepted. uid is
+        # not used past this stage.
+        send(P, f"unit.setStat({uid},'agility',2.0); return 'ok'")
+
+        for leg, what in (("airborne", "the airborne arc"),
+                          ("landing", "the chained landing step")):
+            send(P, f"unit.setStat({uid},'mental_until',0); return 'ok'")
+            poll_until(5, lambda: mstate(P, uid) != "break")
+            detail, samples = leap_break_case(P, leg=leg, uid=uid)
+            if detail is None:
+                print(f"  [pass] catatonia forced during {what} lands the "
+                      f"unit grounded and standing ({len(samples)} samples)")
+            else:
+                ok = False
+                print(f"  [FAIL] catatonia during {what}: {detail}")
+
+        send(P, f"unit.setStat({uid},'mental_until',0); return 'ok'")
+        poll_until(5, lambda: mstate(P, uid) != "break")
+        tune(P, EPISODE_MIN=6.0, EPISODE_MAX=6.0)
 
         # ---- 9. Lash-out (#717): target policy, exclusions, target
         # loss/replacement, no-target wander, real attack behavior, and

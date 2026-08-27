@@ -30,6 +30,7 @@ import qualified Test.Headless.Unit.Anim as AnimTest
 import qualified Test.Headless.Unit.Injury as InjuryTest
 import qualified Test.Headless.Unit.InjurySpeed as InjurySpeedTest
 import qualified Test.Headless.Unit.Fall as FallTest
+import qualified Test.Headless.Unit.StopTransition as StopTransition
 import qualified Test.Headless.Unit.Stats as StatsTest
 import qualified Test.Headless.Unit.AccessoryUnequip as AccessoryUnequip
 import qualified Test.Headless.Unit.SpawnShed as SpawnShedTest
@@ -468,6 +469,7 @@ main = hspec $ do
     describe "Unit.Injury" InjuryTest.spec
     describe "Unit.InjurySpeed" InjurySpeedTest.spec
     describe "Unit.Fall" FallTest.spec
+    describe "Unit.StopTransition" StopTransition.spec
     describe "Unit.Stats" StatsTest.spec
     AccessoryUnequip.spec
     SpawnShedTest.spec

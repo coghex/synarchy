@@ -1103,6 +1103,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.Injury
                    Test.Headless.Unit.InjurySpeed
                    Test.Headless.Unit.Fall
+                   Test.Headless.Unit.StopTransition
                    Test.Headless.Unit.Stats
                    Test.Headless.Unit.AccessoryUnequip
                    Test.Headless.Unit.SpawnShed
