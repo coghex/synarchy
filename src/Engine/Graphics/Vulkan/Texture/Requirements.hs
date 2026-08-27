@@ -1,7 +1,8 @@
 -- | The descriptor-indexing contract the bindless renderer runs under
---   (#1282): exactly which Vulkan 1.2 features its shaders and its
---   descriptor-set layout require, written down once and independently of
---   any device.
+--   (#1282, extended in #1689): exactly which Vulkan 1.2 features its
+--   shaders and its descriptor-set layout require, and how many descriptors
+--   that layout and its pool consume — written down once and independently
+--   of any device.
 --
 --   This module exists for the same reason
 --   "Engine.Graphics.Vulkan.Texture.Limits" does — several places have to
@@ -18,9 +19,9 @@
 --   the definitions here, so the same divergence cannot be written down
 --   again.
 --
---   Everything below is a pure value or a pure function of a feature
---   struct: no 'Vulkan.Core10.PhysicalDevice', no GPU, so a headless test
---   can pin the whole contract.
+--   Everything below is a pure value or a pure function of a reported
+--   feature or properties struct: no 'Vulkan.Core10.PhysicalDevice', no
+--   GPU, so a headless test can pin the whole contract.
 module Engine.Graphics.Vulkan.Texture.Requirements
   ( -- * The required features
     BindlessFeature(..)
@@ -34,10 +35,20 @@ module Engine.Graphics.Vulkan.Texture.Requirements
     -- * The layout flags those features justify
   , bindlessTextureBindingRequirements
   , bindlessTextureBindingFlags
+    -- * The descriptor capacities that layout consumes
+  , BindlessCapacity(..)
+  , requiredBindlessCapacities
+  , handleTableDescriptors
+  , bindlessCapacityField
+  , bindlessCapacityRequirement
+  , readBindlessCapacity
+  , reportedBindlessCapacities
   ) where
 
 import UPrelude
-import Vulkan.Core12 (PhysicalDeviceVulkan12Features(..))
+import Engine.Graphics.Vulkan.Texture.Limits (maxBindlessTextures)
+import Vulkan.Core12
+  (PhysicalDeviceVulkan12Features(..), PhysicalDeviceVulkan12Properties(..))
 import Vulkan.Core12.Enums.DescriptorBindingFlagBits
   ( DescriptorBindingFlagBits(..)
   , DescriptorBindingFlags
@@ -50,9 +61,11 @@ import Vulkan.Zero (zero)
 --   without it. @runtimeDescriptorArray@,
 --   @descriptorBindingUpdateUnusedWhilePending@ and
 --   @descriptorBindingVariableDescriptorCount@ were requested before #1282
---   and are absent for that reason — the bindless arrays are fixed-size
---   ('Engine.Graphics.Vulkan.Texture.Limits.maxBindlessTextures'), the
---   descriptors are never rewritten while pending, and
+--   and are absent for that reason — the bindless arrays are fixed-size at
+--   'Engine.Graphics.Vulkan.Texture.Limits.maxBindlessTextures' on every
+--   accepted device, which 'requiredBindlessCapacities' below is what makes
+--   true rather than assumed (#1689); the descriptors are never rewritten
+--   while pending, and
 --   @VARIABLE_DESCRIPTOR_COUNT@ is deliberately avoided for MoltenVK. The
 --   aggregate @descriptorIndexing@ boolean is absent too: per
 --   @VkPhysicalDeviceVulkan12Features@ it is roll-up metadata and does not
@@ -152,3 +165,127 @@ bindlessTextureBindingRequirements =
 bindlessTextureBindingFlags ∷ DescriptorBindingFlags
 bindlessTextureBindingFlags =
   foldr ((⌄) . fst) zero bindlessTextureBindingRequirements
+
+-- | Descriptors the bindless set's storage-buffer binding consumes: the one
+--   handle→slot table (#286, binding 1).
+handleTableDescriptors ∷ Word32
+handleTableDescriptors = 1
+
+-- | One update-after-bind descriptor capacity the concrete bindless
+--   descriptor set consumes, named as @VkPhysicalDeviceVulkan12Properties@
+--   reports it.
+--
+--   The renderer's texture array is FIXED-SIZE: both bindless fragment
+--   shaders declare @textures[maxBindlessTextures]@ and index it with
+--   @nonuniformEXT@, so the array is statically used at its declared size,
+--   and the Vulkan descriptor-set interface rule is that the binding must
+--   hold at least that many descriptors. Without @runtimeDescriptorArray@
+--   (deliberately not required — see 'BindlessFeature') there is no
+--   exception to that rule, so a device is only usable when it can supply
+--   the WHOLE binding. That makes each entry below a hard acceptance gate
+--   rather than a figure to clamp the allocation down to (#1689).
+--
+--   The set holds two bindings — a combined-image-sampler array and the
+--   handle→slot storage buffer — so the gate cannot be the sampled-image
+--   limit alone. A @DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER@ descriptor
+--   counts against the SAMPLER limits as well as the sampled-image ones,
+--   both per-stage and per-set; the aggregate per-stage resource limit and
+--   the update-after-bind pool ceiling govern the two bindings together.
+data BindlessCapacity
+  = -- | @maxPerStageDescriptorUpdateAfterBindSampledImages@ — the texture
+    --   array, in the fragment stage that declares it.
+    CapPerStageSampledImages
+  | -- | @maxPerStageDescriptorUpdateAfterBindSamplers@ — the same
+    --   descriptors again: a combined image sampler is a sampler too.
+    CapPerStageSamplers
+  | -- | @maxPerStageDescriptorUpdateAfterBindStorageBuffers@ — the
+    --   handle→slot table.
+    CapPerStageStorageBuffers
+  | -- | @maxPerStageUpdateAfterBindResources@ — both bindings together.
+    --   Samplers are excluded from this aggregate (as they are from
+    --   @maxPerStageResources@), so the array counts once.
+    CapPerStageResources
+  | -- | @maxDescriptorSetUpdateAfterBindSampledImages@ — the texture array
+    --   within its own descriptor set.
+    CapSetSampledImages
+  | -- | @maxDescriptorSetUpdateAfterBindSamplers@ — the same, as samplers.
+    CapSetSamplers
+  | -- | @maxDescriptorSetUpdateAfterBindStorageBuffers@ — the handle→slot
+    --   table within that set.
+    CapSetStorageBuffers
+  | -- | @maxUpdateAfterBindDescriptorsInAllPools@ — the descriptor pool
+    --   this set is allocated from is the renderer's only
+    --   @UPDATE_AFTER_BIND@ pool, so both bindings' descriptors sit inside
+    --   this one ceiling.
+    CapDescriptorsInAllPools
+  deriving (Show, Eq, Ord, Enum, Bounded)
+
+-- | Every capacity a device must supply before the bindless renderer will
+--   accept it. Derived from the type for the same reason
+--   'requiredBindlessFeatures' is: a constructor added above is required by
+--   construction.
+requiredBindlessCapacities ∷ [BindlessCapacity]
+requiredBindlessCapacities = [minBound .. maxBound]
+
+-- | The @VkPhysicalDeviceVulkan12Properties@ field name, for diagnostics
+--   that have to name which limit a device came up short on.
+bindlessCapacityField ∷ BindlessCapacity → Text
+bindlessCapacityField = \case
+  CapPerStageSampledImages →
+    "maxPerStageDescriptorUpdateAfterBindSampledImages"
+  CapPerStageSamplers →
+    "maxPerStageDescriptorUpdateAfterBindSamplers"
+  CapPerStageStorageBuffers →
+    "maxPerStageDescriptorUpdateAfterBindStorageBuffers"
+  CapPerStageResources →
+    "maxPerStageUpdateAfterBindResources"
+  CapSetSampledImages →
+    "maxDescriptorSetUpdateAfterBindSampledImages"
+  CapSetSamplers →
+    "maxDescriptorSetUpdateAfterBindSamplers"
+  CapSetStorageBuffers →
+    "maxDescriptorSetUpdateAfterBindStorageBuffers"
+  CapDescriptorsInAllPools →
+    "maxUpdateAfterBindDescriptorsInAllPools"
+
+-- | How many descriptors the bindless set needs from one capacity. Every
+--   texture figure is 'maxBindlessTextures' itself — #975's single
+--   definition, the same one both fragment shaders interpolate — so the
+--   requirement and the shader array size cannot drift apart.
+bindlessCapacityRequirement ∷ BindlessCapacity → Word32
+bindlessCapacityRequirement = \case
+  CapPerStageSampledImages  → maxBindlessTextures
+  CapPerStageSamplers       → maxBindlessTextures
+  CapPerStageStorageBuffers → handleTableDescriptors
+  CapPerStageResources      → maxBindlessTextures + handleTableDescriptors
+  CapSetSampledImages       → maxBindlessTextures
+  CapSetSamplers            → maxBindlessTextures
+  CapSetStorageBuffers      → handleTableDescriptors
+  CapDescriptorsInAllPools  → maxBindlessTextures + handleTableDescriptors
+
+-- | What a reported properties struct advertises for one capacity.
+readBindlessCapacity ∷ PhysicalDeviceVulkan12Properties → BindlessCapacity → Word32
+readBindlessCapacity props = \case
+  CapPerStageSampledImages →
+    maxPerStageDescriptorUpdateAfterBindSampledImages props
+  CapPerStageSamplers →
+    maxPerStageDescriptorUpdateAfterBindSamplers props
+  CapPerStageStorageBuffers →
+    maxPerStageDescriptorUpdateAfterBindStorageBuffers props
+  CapPerStageResources →
+    maxPerStageUpdateAfterBindResources props
+  CapSetSampledImages →
+    maxDescriptorSetUpdateAfterBindSampledImages props
+  CapSetSamplers →
+    maxDescriptorSetUpdateAfterBindSamplers props
+  CapSetStorageBuffers →
+    maxDescriptorSetUpdateAfterBindStorageBuffers props
+  CapDescriptorsInAllPools →
+    maxUpdateAfterBindDescriptorsInAllPools props
+
+-- | Every required capacity paired with what the device reports for it, in
+--   declaration order.
+reportedBindlessCapacities
+  ∷ PhysicalDeviceVulkan12Properties → [(BindlessCapacity, Word32)]
+reportedBindlessCapacities props =
+  [ (cap, readBindlessCapacity props cap) | cap ← requiredBindlessCapacities ]

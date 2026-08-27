@@ -9,40 +9,131 @@
 --   because it never read a feature boolean at all.
 --
 --   These specs pin the whole contract without a GPU: the exact field set
---   the device enables, the feature/version/limit gates that classify a
+--   the device enables, the feature/version/capacity gates that classify a
 --   device unsupported, the layout flags each required feature justifies,
 --   and the selection rule that keeps a capable candidate ahead of an
 --   incapable one whatever their device types.
+--
+--   Since #1689 the capacity gate is part of that contract. The bindless
+--   texture array is FIXED-SIZE — both fragment shaders declare
+--   @textures[maxBindlessTextures]@ and index it with @nonuniformEXT@ — so
+--   a device is accepted only when it can supply the WHOLE descriptor
+--   binding, and the binding is that size on every accepted device. The
+--   boundary specs below sit one descriptor either side of each capacity
+--   the concrete layout and pool consume.
 module Test.Headless.Graphics.BindlessFeatures (spec) where
 
 import UPrelude
 import qualified Data.Text as T
 import Test.Hspec
 import Engine.Graphics.Vulkan.Capability
-  (BindlessSupport(..), TextureSystemCapability(..), bindlessShortfalls
-  ,determineTextureCapability, isBindlessSupported, unsupportedBindlessMessage)
+  (BindlessSupport(..), TextureSystemCapability(..), bindlessCapacityShortfalls
+  ,bindlessShortfalls, determineTextureCapability, deviceBindlessFailureMessage
+  ,isBindlessSupported, minimumUsableSlots, unsupportedBindlessMessage)
 import Engine.Graphics.Vulkan.Device (bindlessCapableBonus, scoreDevice)
+import Engine.Graphics.Vulkan.Texture.Limits (maxBindlessTextures)
 import Engine.Graphics.Vulkan.Texture.Requirements
-  (BindlessFeature(..), bindlessFeatureField, bindlessTextureBindingFlags
-  ,bindlessTextureBindingRequirements, enableBindlessFeature
-  ,missingBindlessFeatures, readBindlessFeature, requiredBindlessFeatures
-  ,requiredVulkan12Features)
+  (BindlessCapacity(..), BindlessFeature(..), bindlessCapacityField
+  ,bindlessCapacityRequirement, bindlessFeatureField
+  ,bindlessTextureBindingFlags, bindlessTextureBindingRequirements
+  ,enableBindlessFeature, missingBindlessFeatures, readBindlessFeature
+  ,reportedBindlessCapacities, requiredBindlessCapacities
+  ,requiredBindlessFeatures, requiredVulkan12Features)
+import Engine.Graphics.Vulkan.Texture.System
+  (TextureSystemConfig(..), planBindlessDescriptorCount)
 import Vulkan.Core10.Enums.PhysicalDeviceType (PhysicalDeviceType(..))
-import Vulkan.Core12 (PhysicalDeviceVulkan12Features(..))
+import Vulkan.Core12
+  (PhysicalDeviceVulkan12Features(..), PhysicalDeviceVulkan12Properties(..))
 import Vulkan.Core12.Enums.DescriptorBindingFlagBits
   (DescriptorBindingFlagBits(..))
 import Vulkan.Zero (zero)
 
+-- | An update-after-bind properties report that clears every capacity gate
+--   with room to spare — the figures the development GPU's MoltenVK driver
+--   actually reports, so the baseline is a real device rather than an
+--   invented one.
+generousProperties ∷ PhysicalDeviceVulkan12Properties
+generousProperties = (zero ∷ PhysicalDeviceVulkan12Properties)
+  { maxPerStageDescriptorUpdateAfterBindSampledImages  = 1000000
+  , maxPerStageDescriptorUpdateAfterBindSamplers       = 500000
+  , maxPerStageDescriptorUpdateAfterBindStorageBuffers = 1000000
+  , maxPerStageUpdateAfterBindResources                = 1000000
+  , maxDescriptorSetUpdateAfterBindSampledImages       = 1000000
+  , maxDescriptorSetUpdateAfterBindSamplers            = 500000
+  , maxDescriptorSetUpdateAfterBindStorageBuffers      = 1000000
+  , maxUpdateAfterBindDescriptorsInAllPools            = 1073741824
+  }
+
+-- | Each required capacity paired with a setter for the
+--   @VkPhysicalDeviceVulkan12Properties@ field it names. Written out
+--   longhand for the same reason 'absentOne' is: this is the test's own
+--   independent statement of the mapping, so a production-side reshuffle
+--   has to be reflected here deliberately. The completeness spec below
+--   checks the table still covers 'requiredBindlessCapacities' exactly.
+capacityFields
+  ∷ [( BindlessCapacity
+     , Word32 → PhysicalDeviceVulkan12Properties
+              → PhysicalDeviceVulkan12Properties )]
+capacityFields =
+  [ ( CapPerStageSampledImages
+    , \n p → p { maxPerStageDescriptorUpdateAfterBindSampledImages = n } )
+  , ( CapPerStageSamplers
+    , \n p → p { maxPerStageDescriptorUpdateAfterBindSamplers = n } )
+  , ( CapPerStageStorageBuffers
+    , \n p → p { maxPerStageDescriptorUpdateAfterBindStorageBuffers = n } )
+  , ( CapPerStageResources
+    , \n p → p { maxPerStageUpdateAfterBindResources = n } )
+  , ( CapSetSampledImages
+    , \n p → p { maxDescriptorSetUpdateAfterBindSampledImages = n } )
+  , ( CapSetSamplers
+    , \n p → p { maxDescriptorSetUpdateAfterBindSamplers = n } )
+  , ( CapSetStorageBuffers
+    , \n p → p { maxDescriptorSetUpdateAfterBindStorageBuffers = n } )
+  , ( CapDescriptorsInAllPools
+    , \n p → p { maxUpdateAfterBindDescriptorsInAllPools = n } )
+  ]
+
 -- | A device that clears every bindless gate: the baseline each spec below
 --   spoils in exactly one way.
 capableSupport ∷ BindlessSupport
-capableSupport = BindlessSupport
-  { bsVulkan12OrHigher                = True
-  , bsMaxSampledImagesPerStage        = 128
-  , bsMaxDescriptorSetSampledImages   = 640
-  , bsMaxUpdateAfterBindSampledImages = 1000000
-  , bsMissingFeatures                 = []
+capableSupport = supportReporting generousProperties
+
+-- | 'capableSupport' with its capacities taken from a specific report.
+supportReporting ∷ PhysicalDeviceVulkan12Properties → BindlessSupport
+supportReporting props = BindlessSupport
+  { bsVulkan12OrHigher              = True
+  , bsMaxSampledImagesPerStage      = 128
+  , bsMaxDescriptorSetSampledImages = 640
+  , bsCapacities                    = reportedBindlessCapacities props
+  , bsMissingFeatures               = []
   }
+
+-- | 'generousProperties' with one capacity's field lowered.
+reportingOnly ∷ (Word32 → PhysicalDeviceVulkan12Properties
+                        → PhysicalDeviceVulkan12Properties)
+              → Word32 → BindlessSupport
+reportingOnly setField n = supportReporting (setField n generousProperties)
+
+-- | The diagnostic clause a capacity shortfall must produce, stated here
+--   independently of the production wording: the reported count, the field
+--   the device reported it for, and the count the renderer requires.
+expectedShortfallClause ∷ BindlessCapacity → Word32 → Text
+expectedShortfallClause cap reported =
+  "the device reports " <> tshow reported <> " " <> bindlessCapacityField cap
+    <> ", but the bindless texture array requires "
+    <> tshow (bindlessCapacityRequirement cap)
+
+-- | The sampled-image setter, named so the version/limit specs can spoil
+--   that one capacity without re-deriving the table.
+setSampledImages ∷ Word32 → PhysicalDeviceVulkan12Properties
+                          → PhysicalDeviceVulkan12Properties
+setSampledImages n p =
+  p { maxPerStageDescriptorUpdateAfterBindSampledImages = n }
+
+-- | The one production configuration: slot 0 held back for the undefined
+--   texture ("Engine.Graphics.Vulkan.Init").
+productionTextureConfig ∷ TextureSystemConfig
+productionTextureConfig = TextureSystemConfig { tscReservedSlots = 1 }
 
 -- | Each required feature paired with a feature struct in which ONLY that
 --   field is off. Written out longhand on purpose: this is the test's own
@@ -155,8 +246,7 @@ spec = describe "Vulkan bindless feature requirements" $ do
         `shouldBe` False
 
     it "still rejects a device with no update-after-bind sampled images" $
-      isBindlessSupported capableSupport { bsMaxUpdateAfterBindSampledImages = 0 }
-        `shouldBe` False
+      isBindlessSupported (reportingOnly setSampledImages 0) `shouldBe` False
 
     it "reports a pre-1.2 device on the version alone" $
       -- Below Vulkan 1.2 nothing chains a 1.2 feature struct, so the
@@ -165,15 +255,112 @@ spec = describe "Vulkan bindless feature requirements" $ do
       bindlessShortfalls capableSupport
         { bsVulkan12OrHigher = False
         , bsMissingFeatures  = requiredBindlessFeatures
-        , bsMaxUpdateAfterBindSampledImages = 0
+        , bsCapacities       = reportedBindlessCapacities zero
         } `shouldBe` ["Vulkan 1.2 or higher is required"]
 
     it "reports nothing at all for a device that clears every gate" $
       bindlessShortfalls capableSupport `shouldBe` []
 
-    it "still allocates the device-reported slot count when supported" $
+    it "allocates the shader's array size, not the device-reported ceiling" $
+      -- The device report is a gate, never a size: an accepted device gets
+      -- the binding both shaders declare, whatever headroom it advertises
+      -- above it (#1689).
       determineTextureCapability capableSupport 64
-        `shouldBe` BindlessTextures (1000000 - 64)
+        `shouldBe` BindlessTextures maxBindlessTextures
+
+  describe "the descriptor-capacity gate" $ do
+    it "covers every required capacity in the field table" $
+      map fst capacityFields `shouldBe` requiredBindlessCapacities
+
+    it "requires exactly the array size both fragment shaders declare" $
+      -- #975's single definition, still single: the texture capacities are
+      -- 'maxBindlessTextures' itself, not a number that could drift from it.
+      forM_ [CapPerStageSampledImages, CapPerStageSamplers
+            ,CapSetSampledImages, CapSetSamplers] $ \cap →
+        (cap, bindlessCapacityRequirement cap)
+          `shouldBe` (cap, maxBindlessTextures)
+
+    it "accepts a device reporting exactly what every capacity requires" $ do
+      -- The threshold itself, on every capacity at once: the accepted side
+      -- of the boundary.
+      let atThreshold = foldr
+            (\(cap, setField) props →
+               setField (bindlessCapacityRequirement cap) props)
+            generousProperties capacityFields
+          support = supportReporting atThreshold
+      bindlessCapacityShortfalls support `shouldBe` []
+      isBindlessSupported support `shouldBe` True
+      planBindlessDescriptorCount support productionTextureConfig
+        `shouldBe` Right maxBindlessTextures
+
+    it "rejects a device one descriptor below any single capacity" $
+      -- The rejected side of the same boundary, one capacity at a time, so
+      -- a gate silently dropped from the predicate fails here.
+      forM_ capacityFields $ \(cap, setField) → do
+        let short   = bindlessCapacityRequirement cap - 1
+            support = reportingOnly setField short
+        (cap, isBindlessSupported support) `shouldBe` (cap, False)
+        (cap, determineTextureCapability support 1)
+          `shouldBe` (cap, BoundedTextureArray minimumUsableSlots)
+
+    it "never plans a binding smaller than the shader array size" $
+      -- Requirement 1 stated directly: whatever an accepted device reports,
+      -- and whatever the reservations are, the planned descriptor count is
+      -- never below what the shaders index.
+      forM_ [0, 1, 64, maxBindlessTextures - minimumUsableSlots] $ \reserved →
+        case planBindlessDescriptorCount capableSupport
+               (TextureSystemConfig { tscReservedSlots = reserved }) of
+          Left failure → expectationFailure $
+            "a capable device was refused at " <> show reserved
+              <> " reserved slots: " <> T.unpack failure
+          Right count → (reserved, count) `shouldSatisfy`
+            \(_, n) → n ≥ maxBindlessTextures
+
+    it "names the reported and required counts of whichever capacity fell short" $
+      -- #1055's descriptive contract, extended to the capacity gate: device
+      -- selection has to say WHICH limit came up short and by how much.
+      forM_ capacityFields $ \(cap, setField) → do
+        let short   = bindlessCapacityRequirement cap - 1
+            support = reportingOnly setField short
+        (cap, deviceBindlessFailureMessage support) `shouldSatisfy`
+          (T.isInfixOf (expectedShortfallClause cap short) . snd)
+
+    it "names the same counts on the texture-system failure path" $
+      -- The two sites describe one shortfall identically (#1282), so the
+      -- capacity refusal reads the same wherever it is hit.
+      forM_ capacityFields $ \(cap, setField) → do
+        let short   = bindlessCapacityRequirement cap - 1
+            support = reportingOnly setField short
+        case planBindlessDescriptorCount support productionTextureConfig of
+          Right count → expectationFailure $
+            "a device short on " <> T.unpack (bindlessCapacityField cap)
+              <> " was accepted with " <> show count <> " descriptors"
+          Left failure → (cap, failure) `shouldSatisfy`
+            (T.isInfixOf (expectedShortfallClause cap short) . snd)
+
+  describe "reserved slots and the fixed binding" $ do
+    it "reserves indices inside the binding rather than shrinking it" $
+      -- The defect #1689 fixed: production reserves slot 0, and that used to
+      -- subtract a descriptor from a binding the shaders index in full.
+      forM_ [0, 1, 64, maxBindlessTextures - minimumUsableSlots] $ \reserved →
+        (reserved, determineTextureCapability capableSupport reserved)
+          `shouldBe` (reserved, BindlessTextures maxBindlessTextures)
+
+    it "still refuses when the reservations leave too few application slots" $
+      determineTextureCapability capableSupport
+        (maxBindlessTextures - minimumUsableSlots + 1)
+          `shouldBe` BoundedTextureArray minimumUsableSlots
+
+    it "describes a reservation refusal instead of leaving it unexplained" $ do
+      -- A device that clears every capability gate has no shortfall to name,
+      -- which used to leave this rejection with a bare message.
+      let reserved   = maxBindlessTextures - minimumUsableSlots + 1
+          capability = determineTextureCapability capableSupport reserved
+          message    = unsupportedBindlessMessage capableSupport capability
+      bindlessShortfalls capableSupport `shouldBe` []
+      message `shouldSatisfy` T.isInfixOf "slot reservations"
+      message `shouldSatisfy` T.isInfixOf (tshow minimumUsableSlots)
+      message `shouldSatisfy` T.isInfixOf (tshow maxBindlessTextures)
 
   describe "layout flags and enabled features" $ do
     it "sets exactly the two flags the bindless texture binding needs" $
