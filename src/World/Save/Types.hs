@@ -214,6 +214,19 @@ data AutosaveRequest = AutosaveRequest
         --   still matches: any player pause/resume or time-scale
         --   request during the window wins outright, even when the
         --   final boolean happens to equal the pre-save one.
+    , arEnginePauseGen ∷ !Word64
+        -- ^ #1730: 'Engine.Core.State.enginePauseGenRef' at acceptance,
+        --   read under the same lock as 'arIntentGen' and serving the
+        --   same purpose for the pause sources the player does not
+        --   drive. A @pause: true@ notification landing during the
+        --   window is a complete no-op on an already-paused session, so
+        --   this counter is the ONLY evidence that someone other than
+        --   this save still wants the game paused; a restore that finds
+        --   it moved leaves the pause alone.
+        --
+        --   The save's own re-assertion on the world thread
+        --   ('World.Pause.reassertSavePause') deliberately does not move
+        --   it — otherwise every real autosave would decline.
     } deriving (Show, Eq)
 
 -- | Per-world-page save payload. Everything scoped to a single world

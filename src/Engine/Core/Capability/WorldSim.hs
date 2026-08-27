@@ -61,7 +61,7 @@ import Engine.Core.State
   ( EngineEnv
   , worldManagerRef, worldQueue, sunAngleRef, floraCatalogRef
   , materialRegistryRef, worldGenConfigRef, gameTimeRef, enginePausedRef
-  , playerIntentGenRef, simQueue
+  , playerIntentGenRef, enginePauseGenRef, simQueue
   )
 
 -- | The world\/sim\/time slice of @world-sim-render-handoff@: the world
@@ -127,6 +127,20 @@ data WorldSimCapability = WorldSimCapability
     --   restore — see 'withPlayerIntent' \/ 'restoreIfPlayerIdle' and
     --   'Engine.Core.State's field haddock (which also covers why
     --   engine-internal pause\/scale writes must NOT bump it).
+  , wsEnginePauseGenRef   ∷ IORef Word64
+    -- ^ #1730's engine-pause generation: how many times a pause source
+    --   INDEPENDENT of any running save has asserted a pause. Bumped by
+    --   @WorldThread@ and @LuaThread@ alike through
+    --   'World.Pause.imposePause' (a @pause: true@ notification
+    --   category, an @engine.loadSave@ acceptance); read by @LuaThread@
+    --   at an autosave's acceptance and by @WorldThread@ at its restore.
+    --   Never touched outside the 'wsPlayerIntentGenRef' critical
+    --   section — every epoch transition and both of those sites hold
+    --   that mutex — which is what makes \"has anyone else paused since
+    --   acceptance?\" linearizable against the restore that asks it.
+    --   Deliberately NOT bumped by the save's own pause or by the
+    --   player's, so a declined restore can name its real reason. See
+    --   'Engine.Core.State's field haddock.
   , wsSimQueue            ∷ Q.Queue SimCommand
     -- ^ Drained by @SimThread@ only; produced by @WorldThread@ (chunk
     --   loading, basic\/sync\/UI commands, and the load publish's stale
@@ -146,6 +160,7 @@ toWorldSimCapability env = WorldSimCapability
   , wsGameTimeRef         = gameTimeRef env
   , wsEnginePausedRef     = enginePausedRef env
   , wsPlayerIntentGenRef  = playerIntentGenRef env
+  , wsEnginePauseGenRef   = enginePauseGenRef env
   , wsSimQueue            = simQueue env
   }
 
@@ -179,10 +194,20 @@ withPlayerIntentHeld wsc = withMVar (wsPlayerIntentGenRef wsc)
 -- | Run @act@ only if NO player-intent transition has been recorded
 --   since @expected@, holding the same lock those transitions take —
 --   so one can neither slip in unseen after the comparison nor be lost
---   to a write that follows it. Reports whether @act@ ran.
-restoreIfPlayerIdle ∷ WorldSimCapability → Word64 → IO () → IO Bool
+--   to a write that follows it.
+--
+--   'Nothing' means the player won and @act@ never ran; 'Just' carries
+--   whatever @act@ decided. The result is deliberately the ACTION's
+--   rather than a bare \"it ran\" flag: #1730 gave the autosave restore
+--   a SECOND reason to decline (an independent engine pause source
+--   asserted one during the window, 'wsEnginePauseGenRef'), and that
+--   comparison has to happen inside this same critical section — a
+--   caller that read the counter outside it could be overtaken by the
+--   very pause it is checking for. Keeping the two reasons distinct in
+--   the result is what lets the caller report the right one.
+restoreIfPlayerIdle ∷ WorldSimCapability → Word64 → IO α → IO (Maybe α)
 restoreIfPlayerIdle wsc expected act =
   modifyMVar (wsPlayerIntentGenRef wsc) $ \g →
     if g ≢ expected
-      then pure (g, False)
-      else act ≫ pure (g, True)
+      then pure (g, Nothing)
+      else (\r → (g, Just r)) ⊚ act
