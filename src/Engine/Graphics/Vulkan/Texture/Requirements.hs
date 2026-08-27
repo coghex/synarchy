@@ -39,6 +39,7 @@ module Engine.Graphics.Vulkan.Texture.Requirements
   , BindlessCapacity(..)
   , requiredBindlessCapacities
   , handleTableDescriptors
+  , pipelineUniformBufferDescriptors
   , bindlessCapacityField
   , bindlessCapacityRequirement
   , readBindlessCapacity
@@ -171,6 +172,18 @@ bindlessTextureBindingFlags =
 handleTableDescriptors ∷ Word32
 handleTableDescriptors = 1
 
+-- | Uniform-buffer descriptors the OTHER set in the bindless pipeline
+--   layout consumes: set 0's single vertex-stage uniform buffer
+--   ("Engine.Graphics.Vulkan.Descriptor"'s @createUniformDescriptorSetLayout@,
+--   paired with the bindless texture layout in
+--   "Engine.Graphics.Vulkan.Pipeline.Bindless"). Set 0 is an ordinary
+--   layout, but the update-after-bind limits are scoped to the PIPELINE
+--   LAYOUT: once any set in it carries
+--   @UPDATE_AFTER_BIND_POOL_BIT@, every set's descriptors are measured
+--   against the update-after-bind limits, so this one counts.
+pipelineUniformBufferDescriptors ∷ Word32
+pipelineUniformBufferDescriptors = 1
+
 -- | One update-after-bind descriptor capacity the concrete bindless
 --   descriptor set consumes, named as @VkPhysicalDeviceVulkan12Properties@
 --   reports it.
@@ -185,12 +198,20 @@ handleTableDescriptors = 1
 --   the WHOLE binding. That makes each entry below a hard acceptance gate
 --   rather than a figure to clamp the allocation down to (#1689).
 --
---   The set holds two bindings — a combined-image-sampler array and the
---   handle→slot storage buffer — so the gate cannot be the sampled-image
---   limit alone. A @DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER@ descriptor
---   counts against the SAMPLER limits as well as the sampled-image ones,
---   both per-stage and per-set; the aggregate per-stage resource limit and
---   the update-after-bind pool ceiling govern the two bindings together.
+--   The gate cannot be the sampled-image limit alone. The set holds two
+--   bindings — a combined-image-sampler array and the handle→slot storage
+--   buffer — and a @DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER@ descriptor
+--   counts against the SAMPLER limits as well as the sampled-image ones.
+--
+--   The scope is the whole PIPELINE LAYOUT, not this set: once any set in a
+--   pipeline layout was created with @UPDATE_AFTER_BIND_POOL_BIT@, every
+--   set's descriptors are measured against the update-after-bind limits.
+--   Set 0's vertex-stage uniform buffer therefore counts too
+--   ('pipelineUniformBufferDescriptors'). The @maxDescriptorSet…@ family is
+--   a pipeline-layout total in the same way; @maxPerStage…@ and
+--   @maxPerStageUpdateAfterBindResources@ are per SHADER STAGE, so the
+--   vertex-stage uniform buffer and the fragment-stage bindings never share
+--   a per-stage budget.
 data BindlessCapacity
   = -- | @maxPerStageDescriptorUpdateAfterBindSampledImages@ — the texture
     --   array, in the fragment stage that declares it.
@@ -201,9 +222,14 @@ data BindlessCapacity
   | -- | @maxPerStageDescriptorUpdateAfterBindStorageBuffers@ — the
     --   handle→slot table.
     CapPerStageStorageBuffers
-  | -- | @maxPerStageUpdateAfterBindResources@ — both bindings together.
-    --   Samplers are excluded from this aggregate (as they are from
-    --   @maxPerStageResources@), so the array counts once.
+  | -- | @maxPerStageDescriptorUpdateAfterBindUniformBuffers@ — set 0's
+    --   uniform buffer, in the vertex stage that declares it.
+    CapPerStageUniformBuffers
+  | -- | @maxPerStageUpdateAfterBindResources@ — the fragment stage's two
+    --   bindings together, the busiest stage in the layout. Samplers are
+    --   excluded from this aggregate (as they are from
+    --   @maxPerStageResources@), so the array counts once; the uniform
+    --   buffer is a different stage and does not add to it.
     CapPerStageResources
   | -- | @maxDescriptorSetUpdateAfterBindSampledImages@ — the texture array
     --   within its own descriptor set.
@@ -211,8 +237,11 @@ data BindlessCapacity
   | -- | @maxDescriptorSetUpdateAfterBindSamplers@ — the same, as samplers.
     CapSetSamplers
   | -- | @maxDescriptorSetUpdateAfterBindStorageBuffers@ — the handle→slot
-    --   table within that set.
+    --   table within the pipeline layout.
     CapSetStorageBuffers
+  | -- | @maxDescriptorSetUpdateAfterBindUniformBuffers@ — set 0's uniform
+    --   buffer within that same pipeline-layout total.
+    CapSetUniformBuffers
   | -- | @maxUpdateAfterBindDescriptorsInAllPools@ — the descriptor pool
     --   this set is allocated from is the renderer's only
     --   @UPDATE_AFTER_BIND@ pool, so both bindings' descriptors sit inside
@@ -237,6 +266,8 @@ bindlessCapacityField = \case
     "maxPerStageDescriptorUpdateAfterBindSamplers"
   CapPerStageStorageBuffers →
     "maxPerStageDescriptorUpdateAfterBindStorageBuffers"
+  CapPerStageUniformBuffers →
+    "maxPerStageDescriptorUpdateAfterBindUniformBuffers"
   CapPerStageResources →
     "maxPerStageUpdateAfterBindResources"
   CapSetSampledImages →
@@ -245,6 +276,8 @@ bindlessCapacityField = \case
     "maxDescriptorSetUpdateAfterBindSamplers"
   CapSetStorageBuffers →
     "maxDescriptorSetUpdateAfterBindStorageBuffers"
+  CapSetUniformBuffers →
+    "maxDescriptorSetUpdateAfterBindUniformBuffers"
   CapDescriptorsInAllPools →
     "maxUpdateAfterBindDescriptorsInAllPools"
 
@@ -257,10 +290,12 @@ bindlessCapacityRequirement = \case
   CapPerStageSampledImages  → maxBindlessTextures
   CapPerStageSamplers       → maxBindlessTextures
   CapPerStageStorageBuffers → handleTableDescriptors
+  CapPerStageUniformBuffers → pipelineUniformBufferDescriptors
   CapPerStageResources      → maxBindlessTextures + handleTableDescriptors
   CapSetSampledImages       → maxBindlessTextures
   CapSetSamplers            → maxBindlessTextures
   CapSetStorageBuffers      → handleTableDescriptors
+  CapSetUniformBuffers      → pipelineUniformBufferDescriptors
   CapDescriptorsInAllPools  → maxBindlessTextures + handleTableDescriptors
 
 -- | What a reported properties struct advertises for one capacity.
@@ -272,6 +307,8 @@ readBindlessCapacity props = \case
     maxPerStageDescriptorUpdateAfterBindSamplers props
   CapPerStageStorageBuffers →
     maxPerStageDescriptorUpdateAfterBindStorageBuffers props
+  CapPerStageUniformBuffers →
+    maxPerStageDescriptorUpdateAfterBindUniformBuffers props
   CapPerStageResources →
     maxPerStageUpdateAfterBindResources props
   CapSetSampledImages →
@@ -280,6 +317,8 @@ readBindlessCapacity props = \case
     maxDescriptorSetUpdateAfterBindSamplers props
   CapSetStorageBuffers →
     maxDescriptorSetUpdateAfterBindStorageBuffers props
+  CapSetUniformBuffers →
+    maxDescriptorSetUpdateAfterBindUniformBuffers props
   CapDescriptorsInAllPools →
     maxUpdateAfterBindDescriptorsInAllPools props
 

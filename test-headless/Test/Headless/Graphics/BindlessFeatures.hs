@@ -57,10 +57,12 @@ generousProperties = (zero ∷ PhysicalDeviceVulkan12Properties)
   { maxPerStageDescriptorUpdateAfterBindSampledImages  = 1000000
   , maxPerStageDescriptorUpdateAfterBindSamplers       = 500000
   , maxPerStageDescriptorUpdateAfterBindStorageBuffers = 1000000
+  , maxPerStageDescriptorUpdateAfterBindUniformBuffers = 1000000
   , maxPerStageUpdateAfterBindResources                = 1000000
   , maxDescriptorSetUpdateAfterBindSampledImages       = 1000000
   , maxDescriptorSetUpdateAfterBindSamplers            = 500000
   , maxDescriptorSetUpdateAfterBindStorageBuffers      = 1000000
+  , maxDescriptorSetUpdateAfterBindUniformBuffers      = 1000000
   , maxUpdateAfterBindDescriptorsInAllPools            = 1073741824
   }
 
@@ -81,6 +83,8 @@ capacityFields =
     , \n p → p { maxPerStageDescriptorUpdateAfterBindSamplers = n } )
   , ( CapPerStageStorageBuffers
     , \n p → p { maxPerStageDescriptorUpdateAfterBindStorageBuffers = n } )
+  , ( CapPerStageUniformBuffers
+    , \n p → p { maxPerStageDescriptorUpdateAfterBindUniformBuffers = n } )
   , ( CapPerStageResources
     , \n p → p { maxPerStageUpdateAfterBindResources = n } )
   , ( CapSetSampledImages
@@ -89,6 +93,8 @@ capacityFields =
     , \n p → p { maxDescriptorSetUpdateAfterBindSamplers = n } )
   , ( CapSetStorageBuffers
     , \n p → p { maxDescriptorSetUpdateAfterBindStorageBuffers = n } )
+  , ( CapSetUniformBuffers
+    , \n p → p { maxDescriptorSetUpdateAfterBindUniformBuffers = n } )
   , ( CapDescriptorsInAllPools
     , \n p → p { maxUpdateAfterBindDescriptorsInAllPools = n } )
   ]
@@ -129,6 +135,15 @@ setSampledImages ∷ Word32 → PhysicalDeviceVulkan12Properties
                           → PhysicalDeviceVulkan12Properties
 setSampledImages n p =
   p { maxPerStageDescriptorUpdateAfterBindSampledImages = n }
+
+-- | 'generousProperties' with one of the two uniform-buffer capacities set
+--   to @n@, looked up through the same table the boundary specs use.
+uniformBuffersAt ∷ Word32 → BindlessCapacity
+                 → PhysicalDeviceVulkan12Properties
+uniformBuffersAt n cap =
+  case lookup cap capacityFields of
+    Just setField → setField n generousProperties
+    Nothing       → generousProperties
 
 -- | The one production configuration: slot 0 held back for the undefined
 --   texture ("Engine.Graphics.Vulkan.Init").
@@ -279,6 +294,17 @@ spec = describe "Vulkan bindless feature requirements" $ do
             ,CapSetSampledImages, CapSetSamplers] $ \cap →
         (cap, bindlessCapacityRequirement cap)
           `shouldBe` (cap, maxBindlessTextures)
+
+    it "covers the uniform buffer set 0 contributes to the same pipeline layout" $ do
+      -- The update-after-bind limits are scoped to the PIPELINE LAYOUT, and
+      -- 'Engine.Graphics.Vulkan.Pipeline.Bindless' pairs the bindless
+      -- texture layout with set 0's vertex-stage uniform buffer — so a
+      -- device reporting zero update-after-bind uniform buffers would pass a
+      -- texture-only predicate and then fail pipeline-layout creation.
+      forM_ [CapPerStageUniformBuffers, CapSetUniformBuffers] $ \cap → do
+        (cap, bindlessCapacityRequirement cap) `shouldBe` (cap, 1)
+        (cap, isBindlessSupported (supportReporting (uniformBuffersAt 0 cap)))
+          `shouldBe` (cap, False)
 
     it "accepts a device reporting exactly what every capacity requires" $ do
       -- The threshold itself, on every capacity at once: the accepted side
