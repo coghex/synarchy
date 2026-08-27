@@ -399,9 +399,11 @@ spec = describe "commanded order stall budget" $ do
                 , "tick(10, 'follow_command')"
                 -- unit_ai.lua's watchdog stops the unit, files its own
                 -- `Stuck — can't reach destination` warning on this same
-                -- surface, and records that it did.
+                -- surface, and records that it did. Its last-progress
+                -- stamp is 6 s back — after this order was issued, so
+                -- the motionless stretch was this order's own walk.
                 , "s.currentAction = 'follow_command'"
-                , "stall.noteStuckReport(1, s)"
+                , "stall.noteStuckReport(1, s, NOW - 6)"
                 , "tick(60, 'follow_command')"
                 , "assert(s.commandedTask == nil, 'the order still expires')"
                 , "assert(#EVENTS == 0,"
@@ -418,12 +420,43 @@ spec = describe "commanded order stall budget" $ do
                 , "                    player = true }"
                 , "tick(10, 'treat_ally')"
                 , "s.currentAction = 'treat_ally'"
-                , "stall.noteStuckReport(1, s)"
+                , "stall.noteStuckReport(1, s, NOW - 6)"
                 , "tick(70, 'follow_command')"
                 , "assert(s.commandedTask == nil, 'the order expires')"
                 , "assert(#EVENTS == 1,"
                 , "  'and reports, since the stuck walk was not its own: '"
                 , "  .. tostring(#EVENTS))"
+                ]
+
+        it "still reports for a REPLACEMENT order the watchdog was \
+           \never about: the watchdog runs after maintainTask on the \
+           \same tick, so a commandMove issued while the unit was \
+           \already motionless is the current task by the time the \
+           \predecessor's walk is reported" $
+            runsOk $ lns
+                [ prelude
+                , "EVENTS = {}"
+                , "s.commandedTask = { x = 40, y = 0, startedAt = NOW,"
+                , "                    player = true }"
+                -- The unit goes motionless under the first order: its
+                -- last-progress stamp stops advancing here.
+                , "local movingAt = NOW"
+                , "tick(10, 'follow_command')"
+                -- The player commands somewhere else. maintainTask sees
+                -- the replacement first...
+                , "s.commandedTask = { x = 80, y = 0, startedAt = NOW,"
+                , "                    player = true }"
+                , "tick(0.25, 'follow_command')"
+                -- ...and only then does the watchdog report the walk
+                -- the FIRST order was doing.
+                , "s.currentAction = 'follow_command'"
+                , "stall.noteStuckReport(1, s, movingAt)"
+                , "tick(70, 'follow_command')"
+                , "assert(s.commandedTask == nil,"
+                , "  'the replacement expires on its own budget')"
+                , "assert(#EVENTS == 1,"
+                , "  'and reports, since the watchdog never spoke about '"
+                , "  .. 'it: ' .. tostring(#EVENTS))"
                 ]
 
         it "reports a SECOND stall after a genuine closest approach — \
@@ -436,7 +469,7 @@ spec = describe "commanded order stall budget" $ do
                 , "                    player = true }"
                 , "tick(10, 'follow_command')"
                 , "s.currentAction = 'follow_command'"
-                , "stall.noteStuckReport(1, s)"
+                , "stall.noteStuckReport(1, s, NOW - 6)"
                 , "place(10, 0)   -- 30 tiles closer: a real approach"
                 , "tick(10, 'follow_command')"
                 , "assert(s.commandedTask.bestDist < 31,"

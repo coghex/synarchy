@@ -126,14 +126,29 @@ end
 -- branch below that ends or refreshes the order it names.
 local stuckReported = {}
 
--- Called by the stuck-walk watchdog when it reports a unit that is not
--- moving at all. Only meaningful while the commanded move's own action
--- is the one in control -- that is when the stuck walk IS this order's
--- walk, and so when the watchdog's report and a later stall expiry
--- would be two reports of one event (#1769 requirement 5).
-function M.noteStuckReport(uid, s)
+-- Called by the stuck-walk watchdog when it reports a unit that has
+-- not moved since `movingAt` (its own last-progress stamp). Two things
+-- must BOTH hold before that report may silence a later stall expiry,
+-- or the wrong order is the one silenced:
+--
+--   * the commanded move's own action was in control over the interval
+--     just judged, so the stuck walk IS this order's walk rather than
+--     some other action's; and
+--   * this order was already live at `movingAt`, so the motionless
+--     stretch just reported is its own walk rather than its
+--     predecessor's. The watchdog runs AFTER maintainTask on the same
+--     tick, so a commandMove issued while the unit was already
+--     motionless makes the REPLACEMENT the current task by the time
+--     the watchdog reports the order it replaced -- and `startedAt` is
+--     what tells the two apart. Nothing is lost when the check
+--     refuses: the replacement then reports for itself if it goes on
+--     to stall, which is the direction this issue exists to fix.
+function M.noteStuckReport(uid, s, movingAt)
     if not s or s.currentAction ~= "follow_command" then return end
-    if s.commandedTask then stuckReported[uid] = s.commandedTask end
+    local task = s.commandedTask
+    if not task then return end
+    if movingAt and (task.startedAt or 0) > movingAt then return end
+    stuckReported[uid] = task
 end
 
 -- Charge the interval ending at `now` against `order`'s stall budget

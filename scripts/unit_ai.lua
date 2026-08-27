@@ -327,9 +327,11 @@ local function tickOne(uid, defName)
                         .. tostring(uid))
                     unit.stop(uid)
                     core.reportFailure(uid, "Stuck — can't reach destination")
-                    -- The same order's later stall expiry must not
-                    -- report this failure a second time (#1769).
-                    stall.noteStuckReport(uid, s)
+                    -- Silence this order's own later stall expiry, but
+                    -- only if it was already live when the unit was
+                    -- last seen moving -- the stamp below still holds
+                    -- that moment (#1769).
+                    stall.noteStuckReport(uid, s, s.lastProgressAt)
                     s.watchX, s.watchY = wi.gridX, wi.gridY
                     s.lastProgressAt = engine.gameTime()
                 end
