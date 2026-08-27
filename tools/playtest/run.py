@@ -154,9 +154,18 @@ def _merge_oracle(pre_ctx: dict, pre_events: dict, post_events: dict | None,
     `dt` interval itself produced) — concatenating rather than
     replacing keeps BOTH attributed to this turn: nothing synchronous
     is lost, and nothing step-produced leaks onto the next turn. `None`
-    for `post_events`/`post_screenshot` (a terminal turn with no step)
-    leaves the merge as pre-only, matching there being no post-step
-    evidence to report.
+    for `post_events` (a terminal turn with no step) leaves the merge
+    as pre-only, matching there being no post-step evidence to report.
+
+    `post_screenshot` is `None` (with `visual_change` False) whenever
+    there is no post frame to name — either because no step ran, or
+    because the frame could not be taken. #1752 makes the second case
+    reachable: the caller merges the drained post-step events the
+    moment it has them and only then attempts the screenshot, so a
+    screenshot that raises still leaves the turn holding every event
+    and outcome the destructive drain already consumed, with the
+    missing frame stated as a null rather than as a turn that looks
+    like it never stepped.
 
     `event_log_gaps` (#1714) concatenates the same way and for the same
     reason: each read reports the committed event rows it could NOT see,
@@ -437,6 +446,22 @@ def run_session(eng: PlaytestEngine, player, trace: SessionTrace, *,
                 # to do the deferred capture at all).
                 post_events = eng.oracle_events()
                 _count_f4_outcomes(trace, post_events)
+                # The drain above is DESTRUCTIVE — the engine's cursor
+                # has already advanced past those rows and no later
+                # call can return them — so the merge happens HERE,
+                # before the fallible screenshot, for exactly the
+                # reason the pre-step merge does (#1752). Taking the
+                # frame first meant a screenshot crash recorded the
+                # pre-only merge over evidence the runner had already
+                # consumed, while `_count_f4_outcomes` had ALREADY
+                # counted those outcomes into the session total — a
+                # reader saw counted outcomes with nothing behind them.
+                # `post_screenshot=None`/`visual_change=False` is
+                # _merge_oracle's existing "no post frame to report"
+                # representation; it is upgraded in place below once
+                # the frame is actually on disk and hashed.
+                oracle = _merge_oracle(pre_ctx, pre_events, post_events,
+                                       None, False, route_ctx)
                 post_frame = trace.post_frame_path(turn)
                 eng.screenshot(post_frame)
                 visual_change = _file_hash(post_frame) != frame_hash
@@ -585,6 +610,13 @@ def run_replay(eng: PlaytestEngine, source_dir: str, trace: SessionTrace,
                 # run_session.
                 post_events = eng.oracle_events()
                 _count_f4_outcomes(trace, post_events)
+                # Merged before the screenshot for the same reason as
+                # run_session (#1752) — see its comment there: replay
+                # drains the same destructive cursor, so a failing post
+                # frame must not cost this turn its own drained
+                # evidence either.
+                oracle = _merge_oracle(pre_ctx, pre_events, post_events,
+                                       None, False, route_ctx)
                 post_frame = trace.post_frame_path(turn)
                 eng.screenshot(post_frame)
                 visual_change = _file_hash(post_frame) != frame_hash
@@ -1975,6 +2007,107 @@ def selftest() -> int:
         # trace already built in step 1/2 above).
         check("replay's own final turn also retains post-step evidence",
               load_turns(rdir)[-1]["oracle"].get("post_screenshot") is not None)
+
+        # 9b. #1752: the post-step drain is DESTRUCTIVE, so a post frame
+        # that raises must not cost the turn the evidence the runner
+        # already consumed. Before the fix the merge happened only
+        # after the screenshot, so a crash there persisted the pre-only
+        # merge — while `_count_f4_outcomes` had already counted the
+        # dropped outcomes into the session total, leaving the trace
+        # internally inconsistent as well as lossy. The engine below
+        # plants post-only evidence on turn 1's SECOND oracle_events()
+        # call (the post-step drain) and then dies on turn 1's SECOND
+        # screenshot() call (the post frame), in both the session and
+        # the replay path.
+        POST_FRAME_DEATH = "console died taking the post frame"
+        POST_EVIDENCE = [{"cat": "world", "text": "step landed"}]
+        POST_OUTCOMES = [{"kind": "probe", "outcome": "accepted"}]
+
+        class CrashOnPostFrameEngine(FakeEngine):
+            def __init__(self):
+                super().__init__()
+                self._events_calls = 0
+                self._shots = 0
+
+            def oracle_events(self):
+                self._events_calls += 1
+                if self._events_calls == 2:
+                    return {"event_log_new": [{"cat": "world",
+                                               "text": "step landed"}],
+                            "event_log_gaps": [],
+                            "action_outcomes": [{"kind": "probe",
+                                                 "outcome": "accepted"}]}
+                return {"event_log_new": [], "event_log_gaps": [],
+                        "action_outcomes": []}
+
+            def screenshot(self, path, timeout=None):
+                self._shots += 1
+                if self._shots == 2:
+                    raise EngineCrash(POST_FRAME_DEATH)
+                return super().screenshot(path)
+
+        def check_retained_post_evidence(label, turns, meta, raised):
+            """The one contract both paths hold (#1752): the drained
+            evidence survives, the absent frame is stated as a null
+            rather than as a turn that never stepped, the original
+            crash is what propagated and ended the session, and the F4
+            running total matches what the turn actually retained."""
+            oracle = (turns[0].get("oracle") or {}) if turns else {}
+            step_phase = turns[0].get("step_phase") if turns else None
+            check(f"{label}: a failed post frame keeps the turn's drained "
+                  "events and outcomes",
+                  len(turns) == 1
+                  and oracle.get("event_log_new") == POST_EVIDENCE
+                  and oracle.get("action_outcomes") == POST_OUTCOMES,
+                  str(oracle))
+            check(f"{label}: the missing post frame is represented, and the "
+                  "step still reads as completed",
+                  oracle.get("post_screenshot") is None
+                  and oracle.get("visual_change") is False
+                  and step_phase == "completed",
+                  f"{oracle}; step_phase {step_phase!r}")
+            check(f"{label}: the original EngineCrash propagates and the "
+                  "session ends as engine_crash",
+                  isinstance(raised, EngineCrash)
+                  and str(raised) == POST_FRAME_DEATH
+                  and meta.get("stop_reason") == "engine_crash",
+                  f"{raised!r}; {meta.get('stop_reason')!r}")
+            check(f"{label}: the F4 running total equals the outcomes the "
+                  "turn record actually retains",
+                  meta.get("f4_outcomes_total")
+                  == len(oracle.get("action_outcomes") or []),
+                  f"{meta.get('f4_outcomes_total')} counted vs "
+                  f"{len(oracle.get('action_outcomes') or [])} retained")
+
+        pfdir = os.path.join(tmp, "crash_post_frame")
+        pftrace = SessionTrace(pfdir, {"mode": "selftest-crash-post-frame"})
+        pfraised = None
+        try:
+            run_session(CrashOnPostFrameEngine(), agent_mod.ScriptedAgent(
+                [{"do": "wait"}, {"do": "wait"}]), pftrace,
+                turns=2, dt=0.0, max_seconds=None, memory_turns=4,
+                stuck_k=99, settle=0.0)
+        except EngineCrash as e:
+            pfraised = e
+        pftrace.finish("engine_crash")
+        check_retained_post_evidence("session", load_turns(pfdir),
+                                     load_meta(pfdir), pfraised)
+
+        # The same for replay, driven from the session trace just
+        # recorded above: its one turn is "completed", so replay steps
+        # and takes its own post frame — and dies on it the same way.
+        rpfdir = os.path.join(tmp, "crash_post_frame_replay")
+        rpftrace = SessionTrace(rpfdir,
+                                {"mode": "selftest-crash-post-frame-replay"})
+        rpfraised = None
+        try:
+            run_replay(CrashOnPostFrameEngine(), pfdir, rpftrace,
+                       dt=0.0, settle=0.0)
+        except EngineCrash as e:
+            rpfraised = e
+        rpftrace.finish("engine_crash")
+        check_retained_post_evidence("replay", load_turns(rpfdir),
+                                     load_meta(rpfdir), rpfraised)
 
         # ------------------------------------------------------------
         # 8. the player-ready boundary and the setup/session split
