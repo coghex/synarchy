@@ -1253,6 +1253,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Render.FrontWallLift
                    Test.Headless.World.Render.StructureRotation
                    Test.Headless.World.Render.GroundItemSeam
+                   Test.Headless.World.Render.StructureSeam
                    Test.Headless.World.Render.PickSeam
                    Test.Headless.World.Render.QuadSnapshot
                    Test.Headless.World.Render.SideFace

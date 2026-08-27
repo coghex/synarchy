@@ -184,6 +184,7 @@ import qualified Test.Headless.River.InlandSources as RiverInlandSources
 import qualified Test.Headless.World.Render.FrontWallLift as FrontWallLift
 import qualified Test.Headless.World.Render.StructureRotation as StructureRotation
 import qualified Test.Headless.World.Render.GroundItemSeam as GroundItemSeam
+import qualified Test.Headless.World.Render.StructureSeam as StructureSeam
 import qualified Test.Headless.World.Render.PickSeam as PickSeam
 import qualified Test.Headless.World.Render.QuadSnapshot as QuadSnapshot
 import qualified Test.Headless.World.DesignationSeam as DesignationSeam
@@ -646,6 +647,8 @@ main = hspec $ do
     describe "World.Render.StructureRotation" StructureRotation.spec
     describe "World.Render.GroundItemSeam" GroundItemSeam.spec
     describe "World.Render.GroundItemSeam (engine)" GroundItemSeam.engineSpec
+    describe "World.Render.StructureSeam" StructureSeam.spec
+    describe "World.Render.StructureSeam (engine)" StructureSeam.engineSpec
     describe "World.Render.PickSeam" PickSeam.spec
 
     -- #1720: its own headless engine (no worker threads), so the live

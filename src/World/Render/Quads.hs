@@ -491,12 +491,13 @@ structureFrontWallClear facing worldSize zSlice structLookup gx gy =
             -- needs the two ends to share a translated sort key, which
             -- is a change to the depth frame, not to placement.
             --
-            -- (Structure quads carry no wrap offset at ALL — see
-            -- 'Structure.Render', which is not one of the six
-            -- 'isChunkVisibleWrapped' consumers — so a wall's own
-            -- screen position across the seam is separately unfixed.
-            -- That is out of #1176's scope and does not change this
-            -- guard's verdict, which rests on the key alone.)
+            -- (Structure quads DO carry the wrap offset since #1706 —
+            -- 'Structure.Render' resolves each chunk's nearest alias
+            -- through the same 'isChunkVisibleWrapped' — so a wall now
+            -- lands beside the sprite on screen. That still does not
+            -- change this guard's verdict, which rests on the key
+            -- alone: the offset is a screen translation and leaves
+            -- 'sqSortKey' grid-derived, exactly as reasoned above.)
             -- A front wall's clamped strips all land 'frontWallDepthSteps'
             -- in front of its own tile's depth (the tile's front corner,
             -- (wgx+1,wgy+1) at FaceSouth), at every facing.
