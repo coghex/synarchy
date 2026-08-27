@@ -41,10 +41,9 @@ import World.Types
 import World.Load.Types (StagedPage(..), StagedSession(..))
 import Structure.Types (emptyChunkStructures)
 import World.Generate (generateChunk, cameraChunkCoord)
-import World.Generate.Arena (generateArenaChunks)
+import World.Generate.Arena (generateArenaChunks, arenaGenForSeed)
 import World.Grid (worldToGrid)
 import World.Chunk.Queue (chunkQueueCanon, initialChunkQueue)
-import System.Random (mkStdGen)
 import World.Plate (elevationAtGlobal)
 import World.Preview (buildPreviewFromPixels, PreviewImage(..))
 import World.Render (surfaceHeadroom)
@@ -323,9 +322,15 @@ stagePage logger registry palette catalog buildingDefs unitDefs
           edits   ← readIORef (wsEditsRef worldState)
           desigs  ← readIORef (wsMineDesignationsRef worldState)
           cdesigs ← readIORef (wsConstructDesignationsRef worldState)
+          -- #1718: the base comes from the LOADED page's own recorded
+          -- seed, never a constant written in here. The save stores gen
+          -- params and the edit overlay, not the base tile grid, so an
+          -- untouched surface tile's grass variant is RECONSTRUCTED —
+          -- generating it from any other value re-rolls every one of
+          -- them on load.
           let arenaChunks = map ( applyConstructSlopes cdesigs
                                 . applyDigSlopes desigs . replayEdits edits)
-                                (generateArenaChunks (mkStdGen 0))
+                                (generateArenaChunks (arenaGenForSeed seed))
               chunkMap = HM.fromList [ (lcCoord c, c) | c ← arenaChunks ]
           _ ← evaluate (force arenaChunks)
           atomicModifyIORef' (wsTilesRef worldState) $ \_ →

@@ -77,8 +77,28 @@ local PASSIVE_MODULES = { [label] = true, [panel] = true }
 -- (UI.getVisibleElements walks the element's own text-render children,
 -- e.g. "Create World" for the main menu's create_world_box) and falls
 -- back to the engine-side name (e.g. "create_world_box") only when no
--- text child exists (an icon-only control). Every such element is a
--- genuine control (filtered to el.interactive above), so control=true.
+-- text child exists (an icon-only control).
+--
+-- #1750 widens that second pass by exactly one predicate: an element
+-- that is POINTER-BLOCKING (UI.getElementInfo's effective
+-- `pointerBlocking` — UI.Manager.Query.elementBlocksPointer) without
+-- being interactive is admitted too. That is the callback-less
+-- blocking surface a real left click stops dead at (RouteBlocked); it
+-- was previously omitted from the dump entirely, so the offline join
+-- happily correlated the click to a lower control the router could
+-- never have reached. It is admitted as OCCLUSION EVIDENCE only:
+-- `control` follows el.interactive, so such a record is control=false
+-- and can never satisfy a click join itself. The widened predicate
+-- admits nothing purely visual — a decorative box that neither opted
+-- into ueBlocksPointer nor carries a clickable callback is
+-- pointerBlocking=false and stays out, exactly as before.
+--
+-- Both passes also carry the #1750 routing facts through
+-- (`inScope`/`pointerBlocking`/`leftClickTarget`/
+-- `leftClickAffordance`), so the offline consumer reproduces
+-- UI.InputOwnership.routePointer's LEFT-click outcome — modal scope
+-- first, then the topmost blocking surface — without re-deriving page
+-- scope from layer names or z-order.
 function registry.dumpWidgets()
     local out = {}
     local known = {}
@@ -108,6 +128,19 @@ function registry.dumpWidgets()
             -- unset only when there's no live handle to consult.
             if info then
                 widget.interactiveBounds = info.interactiveBounds or false
+                -- #1750: the engine-owned routing facts the offline
+                -- click join needs to reproduce routePointer's LEFT-
+                -- click outcome. Copied here, centrally, for the same
+                -- reason paintKey/paintOrder/controlFocused are: every
+                -- widget family gets them without a per-family dump()
+                -- change. They must be copied on THIS pass — a
+                -- widget-module handle enters `known` below, which
+                -- stops the raw engine pass from ever contributing the
+                -- element's own record to restore an omitted field.
+                widget.inScope = info.inScope
+                widget.pointerBlocking = info.pointerBlocking
+                widget.leftClickTarget = info.leftClickTarget
+                widget.leftClickAffordance = info.leftClickAffordance
             end
             table.insert(out, widget)
             if widget.handle then known[widget.handle] = true end
@@ -115,11 +148,18 @@ function registry.dumpWidgets()
     end
 
     for _, el in ipairs(UI.getVisibleElements()) do
-        if el.interactive and el.visible and not known[el.handle] then
+        if (el.interactive or el.pointerBlocking) and el.visible
+                and not known[el.handle] then
             table.insert(out, {
                 id = "element:" .. el.handle,
                 name = el.name,
-                type = "button",
+                -- #1750: an element admitted only by pointerBlocking is
+                -- an occlusion surface, not a control — give it its own
+                -- type so no `type == "button"` consumer (the GPU
+                -- probes' find_widget helpers, say) can mistake a panel
+                -- backdrop for a clickable one. An interactive element
+                -- keeps "button" exactly as before.
+                type = el.interactive and "button" or "blocker",
                 bounds = { x = el.x, y = el.y, w = el.width, h = el.height },
                 -- #749: effective interactive rect, or the distinct
                 -- `false` non-hittable marker (see the first pass above)
@@ -134,9 +174,19 @@ function registry.dumpWidgets()
                 controlFocused = el.controlFocused,
                 screen = el.page,
                 handle = el.handle,
-                control = true,
+                -- #1750: an element admitted only by pointerBlocking
+                -- (no click callback of its own) is a callback-less
+                -- occlusion surface, not a control — it is retained as
+                -- routing evidence and must never satisfy a click
+                -- join. An interactive element keeps control=true
+                -- exactly as before.
+                control = el.interactive and true or false,
                 paintKey = el.paintKey or 0,
                 paintOrder = el.paintOrder or 0,
+                inScope = el.inScope,
+                pointerBlocking = el.pointerBlocking,
+                leftClickTarget = el.leftClickTarget,
+                leftClickAffordance = el.leftClickAffordance,
             })
         end
     end

@@ -130,9 +130,36 @@ end
 -- The shared effect body: apply one sip of `cfg` from the resolved live
 -- item `it`. Both entry points below end here, so the arithmetic,
 -- curves, clamps and result summary exist exactly once.
+--
+-- DRAIN FIRST, then credit (#1744). `eligibleInstance`/`findFirstWithFill`
+-- read a COPY of the inventory (unit.getInventory is a plain read), and
+-- the drain below is a separate transaction, so `it.currentFill` is only
+-- ever a request. The engine's answer is the authority on whether — and
+-- how much of — a sip actually happened, and every effect is computed
+-- from it. Crediting first and draining afterwards let a refused drain
+-- (the unit destroyed on the unit thread between the two) leave three
+-- committed stat gains and a drink animation behind having removed
+-- nothing. This is the same ordering unit_ai_needs.lua's canteen path
+-- has used since #1220.
 local function applySip(uid, it, cfg)
-    local sip = math.min(cfg.sip_litres, it.currentFill)
-    if sip <= 0 then return nil, "empty" end
+    local requested = math.min(cfg.sip_litres, it.currentFill)
+    if requested <= 0 then return nil, "empty" end
+
+    -- The EXACT instance, never unit.modifyItemFill's first-match by
+    -- defName: that drains the wrong instance whenever an earlier,
+    -- already-empty same-def container precedes the one the selection
+    -- picked (it would clamp at zero on the empty one, leaving the
+    -- sipped pot untouched and re-drinkable for free).
+    local applied = unit.modifyItemFillById(uid, it.instanceId, -requested)
+    -- nil = no such unit, or no such loose instance any more.
+    if type(applied) ~= "number" then return nil, "drain failed" end
+    -- SIGNED delta: adjustFillById reports `newFill - oldFill`, so a
+    -- successful drain is NEGATIVE and its magnitude is what left the
+    -- container — possibly less than `requested`, if the fill moved
+    -- since the snapshot. Negate rather than abs(): an unexpected fill
+    -- INCREASE is not consumption and must refuse, not be credited.
+    local sip = -applied
+    if sip <= 0 then return nil, "nothing drained" end
 
     local quality = it.quality or cfg.quality_mid
     local temp    = unit.getItemTemp(uid, it.instanceId)
@@ -163,13 +190,6 @@ local function applySip(uid, it, cfg)
     if mood == nil then mood = 1.0 end
     unit.setStat(uid, "mood", clamp(mood + moodDelta, 0, 1))
 
-    -- Drain the EXACT instance the effects above were computed from —
-    -- unit.modifyItemFill drains the first item matching defName, which
-    -- is the wrong instance whenever an earlier, already-empty same-def
-    -- container precedes the one findFirstWithFill picked (it would
-    -- clamp at zero on the empty one, leaving the sipped pot untouched
-    -- and re-drinkable for free).
-    unit.modifyItemFillById(uid, it.instanceId, -sip)
     unit.drink(uid)
 
     return {
@@ -185,8 +205,11 @@ end
 -- Drink one sip of `defName` (a container registered in EFFECTS) from
 -- uid's inventory. Returns a summary table on success:
 --   { sip, quality, warmth, hydration, caffeine, mood }
--- (the actual deltas applied, so a caller can verify they vary with the
--- source instance's quality/temperature), or nil + a reason string.
+-- where `sip` is the volume the engine ACTUALLY removed (#1744) and the
+-- other three are this call's computed contributions to their stats,
+-- before the max_hydration / 0..1 clamps applied above — so a caller can
+-- verify they vary with the source instance's quality/temperature. Or
+-- nil + a reason string.
 --
 -- FIRST-NON-EMPTY-BY-defName selection, unchanged: this is the
 -- mechanism call tools/consumable_effects_probe.py drives, and its

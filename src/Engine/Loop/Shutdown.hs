@@ -1,14 +1,24 @@
 module Engine.Loop.Shutdown
   ( ShutdownTargets(..)
   , shutdownEngine
+  , shutdownEngineWith
+  , AtlasRelease(..)
+  , atlasReleaseDecision
+  , releaseLoadedAtlases
+  , releaseLoadedAtlasesWith
   , checkStatus
   ) where
 
 import UPrelude
+import Control.Exception (SomeAsyncException, SomeException, catch
+                         , displayException, fromException, throwIO)
 import Data.IORef (writeIORef, readIORef)
+import qualified Data.Text as T
 import qualified Data.Vector as V
+import System.Exit (ExitCode)
+import Engine.Asset.Manager (cleanupAssetManager)
 import Engine.Core.Log (shutdownLogger, LogCategory(..))
-import Engine.Core.Log.Monad (logDebugM, logInfoM)
+import Engine.Core.Log.Monad (logDebugM, logInfoM, logWarnM)
 import Engine.Core.Monad
 import Engine.Core.State
 import Engine.Core.Capability.Core (CoreCapability(..), toCoreCapability)
@@ -47,7 +57,18 @@ data ShutdownTargets = ShutdownTargets
 --   belongs to which phase and in what order, so this and the
 --   fatal-error tail cannot drift apart.
 shutdownEngine ∷ ShutdownTargets → EngineM σ ()
-shutdownEngine targets = do
+shutdownEngine = shutdownEngineWith releaseLoadedAtlases
+
+-- | 'shutdownEngine' with its loaded-atlas release step supplied
+--   rather than fixed (#1691).
+--
+--   Exported for the sake of that step's ORDER, which is the part the
+--   real one cannot demonstrate without a GPU: the release sits after
+--   the device-idle barrier and before 'runAllCleanups', and every
+--   phase below it still runs when the release fails. Production has
+--   exactly one caller and it passes 'releaseLoadedAtlases'.
+shutdownEngineWith ∷ EngineM σ () → ShutdownTargets → EngineM σ ()
+shutdownEngineWith releaseAtlases targets = do
     logInfoM CatSystem "Starting engine shutdown..."
 
     stopWorkers announceStop (preRenderWorkers (stWorkers targets))
@@ -79,6 +100,17 @@ shutdownEngine targets = do
     logDebugM CatSystem "Destroying transient textures..."
     forM_ (previewTexture state)   $ \tt → liftIO (ttCleanup tt)
     forM_ (zoomAtlasTexture state) $ \tt → liftIO (ttCleanup tt)
+
+    -- Release every atlas loaded from disk (#1691). These are the
+    -- OTHER explicitly-cleaned GPU images: unlike the transient pair
+    -- above they are owned by 'apTextureAtlases', and until this call
+    -- existed nothing ever ran their stored 'taCleanup' closures, so
+    -- their VkImage/VkImageView/VkDeviceMemory were still alive when
+    -- the device was destroyed. Here, and not later: the release
+    -- invalidates bindless handles through the descriptor set, so it
+    -- has to precede the sweep below, and it needs the device idle,
+    -- which the wait above has already made it.
+    releaseAtlases
 
     -- run manual cleanup actions
     logDebugM CatSystem "Running Vulkan cleanup actions..."
@@ -130,6 +162,92 @@ shutdownEngine targets = do
   where
     announceStop name =
       logDebugM CatSystem $ "Shutting down " <> name <> " thread..."
+
+-- | Whether shutdown may release the loaded texture atlases (#1691).
+data AtlasRelease
+  = ReleaseAtlases
+    -- ^ A device and its queues are both live, which is what the
+    --   teardown requires before it will touch an atlas.
+  | SkipAtlasRelease !Text
+    -- ^ One of them is absent, so this boot mode never uploaded an
+    --   atlas either. The text names which, for the debug line.
+  deriving (Eq, Show)
+
+-- | Decide from presence alone.
+--
+--   'Engine.Asset.Manager.cleanupAssetManager' fails loudly when
+--   either @vulkanDevice@ or @deviceQueues@ is 'Nothing', and it
+--   checks both BEFORE looking at whether the pool holds anything — so
+--   a mode without them must not reach it at all, or a shutdown that
+--   has nothing to release becomes a shutdown that reports an error
+--   (requirement 4).
+--
+--   Generic in both payloads because only the 'Maybe' is consulted:
+--   nothing here inspects a device or a queue, and that is what makes
+--   the decision drivable in a test with no Vulkan at all.
+atlasReleaseDecision ∷ Maybe device → Maybe queues → AtlasRelease
+atlasReleaseDecision device queues = case (device, queues) of
+  (Just _ , Just _ ) → ReleaseAtlases
+  (Nothing, Just _ ) → SkipAtlasRelease "no Vulkan device"
+  (Just _ , Nothing) → SkipAtlasRelease "no device queues"
+  (Nothing, Nothing) → SkipAtlasRelease "no Vulkan device or queues"
+
+-- | Release every atlas in @apTextureAtlases@ through the alias-safe
+--   teardown, or skip it in a boot mode that has no device.
+--
+--   The release goes through 'cleanupAssetManager' rather than a fresh
+--   loop over the stored closures: that entry point invalidates every
+--   stable handle naming a slot being freed — canonical owner and
+--   cached-atlas alias alike — before any image is destroyed, which is
+--   exactly what #1281 fixed and what a private loop would undo.
+releaseLoadedAtlases ∷ EngineM σ ()
+releaseLoadedAtlases = do
+    state ← gets graphicsState
+    releaseLoadedAtlasesWith
+      (atlasReleaseDecision (vulkanDevice state) (deviceQueues state))
+      cleanupAssetManager
+
+-- | 'releaseLoadedAtlases' with its decision and its release action
+--   supplied, so both halves are drivable without a Vulkan device.
+--
+--   Containment is the point (#1691). The release has two independent
+--   failure channels and neither may skip the phases after it — the
+--   generic cleanup sweep, the sampler cache and cached buffers, the
+--   GLFW teardown, the post-render workers, the logger flush, the
+--   'EngineStopped' transition. 'cleanupAssetManager' reports through
+--   the CPS error channel (@logAndThrowM@), which surfaces here as a
+--   'Left'; the Vulkan bindings beneath it throw native IO exceptions,
+--   which bypass that channel entirely. Both are reported and
+--   contained, so a release that cannot complete costs the atlases and
+--   nothing else.
+--
+--   The two that still propagate are not release failures: an
+--   asynchronous exception is the caller killing this thread, and an
+--   'ExitCode' is an explicit exit — swallowing either would be the
+--   new way to fail to exit that requirement 6 forbids.
+releaseLoadedAtlasesWith ∷ AtlasRelease → EngineM' () → EngineM σ ()
+releaseLoadedAtlasesWith decision release = case decision of
+    SkipAtlasRelease why →
+      logDebugM CatSystem $ "Skipping loaded-atlas release: " <> why
+    ReleaseAtlases → do
+      logDebugM CatSystem "Releasing loaded texture atlases..."
+      env ← ask
+      outcome ← liftIO $ guardRelease (runEngineM release env pure)
+      case outcome of
+        Right (Right ()) →
+          logDebugM CatSystem "Loaded texture atlases released"
+        Right (Left ex)  → report (tshow ex)
+        Left  ex         → report (T.pack (displayException ex))
+  where
+    report why = logWarnM CatSystem $
+      "Failed to release the loaded texture atlases, continuing shutdown: "
+        <> why
+    guardRelease act = (Right ⊚ act) `catch` \(e ∷ SomeException) →
+      case (fromException e ∷ Maybe ExitCode) of
+        Just _  → throwIO e
+        Nothing → case (fromException e ∷ Maybe SomeAsyncException) of
+          Just _  → throwIO e
+          Nothing → pure (Left e)
 
 -- | Flush the logger and mark the engine lifecycle stopped -- the
 --   'core-init'-only tail of 'shutdownEngine', narrowed to

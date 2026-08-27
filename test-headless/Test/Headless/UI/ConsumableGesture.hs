@@ -274,7 +274,14 @@ luaLines = T.intercalate " "
 --   loose inventory alone and can never produce an equipped row.
 sceneLua ∷ Text
 sceneLua = luaLines
-    [ "package.loaded['scripts.unit_info_v2'] ="
+    -- Undo any drain stub a previous case installed (#1744). This runs
+    -- on EVERY reset, so a case that fails part-way cannot leave the
+    -- engine's real primitives replaced for the next one.
+    [ "if _G.__origDrain then"
+    , "  unit.modifyItemFillById = _G.__origDrain; _G.__origDrain = nil end;"
+    , "if _G.__origDrink then"
+    , "  unit.drink = _G.__origDrink; _G.__origDrink = nil end;"
+    , "package.loaded['scripts.unit_info_v2'] ="
     , "  { activeUid = 1, equipSlots = {}, accessoryRows = {} };"
     , "package.loaded['scripts.unit_info_v2_inventory'] ="
     , "  { invalidate = function() end };"
@@ -335,6 +342,21 @@ sceneLua = luaLines
     , "    if it.instanceId == iid then"
     , "      return string.format('%.4f', it.currentFill or 0) end end;"
     , "  return '-1' end;"
+    -- #1744: answer the authoritative drain with `result` — nil (the
+    -- engine found no such unit or no such loose instance) or a SIGNED
+    -- applied delta, negative for a real drain. Records the arguments
+    -- it was asked for, and counts unit.drink so "no animation queued"
+    -- is asserted against a number. The originals are restored by the
+    -- next resetFixture, above.
+    , "_G.__stubDrain = function(result)"
+    , "  _G.__origDrain = _G.__origDrain or unit.modifyItemFillById;"
+    , "  _G.__origDrink = _G.__origDrink or unit.drink;"
+    , "  _G.__drainArgs = 'none'; _G.__drains = 0; _G.__drinks = 0;"
+    , "  unit.modifyItemFillById = function(uid, iid, delta)"
+    , "    _G.__drains = _G.__drains + 1;"
+    , "    _G.__drainArgs = string.format('%d|%d|%.4f', uid, iid, delta);"
+    , "    return result end;"
+    , "  unit.drink = function() _G.__drinks = _G.__drinks + 1 end end;"
     , "return true"
     ]
 
@@ -523,6 +545,105 @@ spec = aroundAll withSharedFixture $
             chosen `shouldBe` "\"1.0000\""
             stats ← evalOk ls "return _G.__stats(1)"
             stats `shouldBe` pristineStats
+
+    describe "the engine's own drain decides the sip (#1744)" $ do
+
+        it "refuses when the authoritative drain answers nil, committing \
+           \no stat and queueing no animation" $ \(env, ls) → do
+            resetFixture env ls
+            -- Every eligibility check PASSES here — 302 is loose, of a
+            -- registered def, and full. Only the drain itself refuses,
+            -- which is the unit-destroyed-between-snapshot-and-mutation
+            -- window the ordering fix exists for.
+            r ← evalOk ls
+                "_G.__stubDrain(nil); \
+                \local c = require('scripts.consumable'); \
+                \local s, why = c.drinkInstance(1, 302); \
+                \return tostring(s) .. '|' .. tostring(why) .. '|' \
+                \    .. _G.__drinks .. '|' .. _G.__drainArgs"
+            -- Failure return, no unit.drink, and the drain was asked for
+            -- the FULL requested sip as a negative delta.
+            r `shouldBe` "\"nil|drain failed|0|1|302|-0.2500\""
+            stats ← evalOk ls "return _G.__stats(1)"
+            stats `shouldBe` pristineStats
+
+        it "the same refusal reaches the player through the shipped \
+           \click path, so the gesture's no-fill-no-stat promise covers \
+           \the drain and not only the eligibility check" $
+           \(env, ls) → do
+            resetFixture env ls
+            fired ← evalOk ls
+                "_G.__stubDrain(nil); \
+                \return tostring(_G.__fire(_G.__menu(1, 'coffee_pot', 1.0), \
+                \  'Drink', '26°C')) .. '|' .. _G.__drains \
+                \  .. '|' .. _G.__drinks"
+            -- The callback ran and did reach the drain — it just got
+            -- nothing back, so nothing was credited.
+            fired `shouldBe` "\"true|1|0\""
+            stats ← evalOk ls "return _G.__stats(1)"
+            stats `shouldBe` pristineStats
+
+        it "a SHORT drain re-derives every effect from the magnitude the \
+           \engine returned, never from the snapshot's requested sip" $
+           \(env, ls) → do
+            resetFixture env ls
+            -- -0.10 against a requested -0.25: a clamped partial drain,
+            -- signed the way adjustFillById reports one. Every stat has
+            -- headroom, so a clamp cannot hide which amount was used.
+            r ← evalOk ls
+                "_G.__stubDrain(-0.10); \
+                \local c = require('scripts.consumable'); \
+                \local s = c.drinkInstance(1, 302); \
+                \return string.format('%.4f|%.4f|%.4f|%.4f|%d|%s', \
+                \  s.sip, s.hydration, s.caffeine, s.mood, \
+                \  _G.__drinks, _G.__drainArgs)"
+            -- sip       = 0.10 (the returned magnitude, not 0.25)
+            -- hydration = 0.10*11*0.9         = 0.9900
+            -- caffeine  = 0.10*1*0.9*0.32     = 0.0288 at 26°C
+            -- mood      = 0.10*0.3*(90-50)/50 = 0.0240
+            r `shouldBe`
+                "\"0.1000|0.9900|0.0288|0.0240|1|1|302|-0.2500\""
+            -- And the committed stats moved by exactly those amounts:
+            -- 10 + 0.99, 0.1 + 0.0288, 0.5 + 0.024. Had the stale 0.25
+            -- survived anywhere these would read 12.4750|0.1720|0.5600.
+            stats ← evalOk ls "return _G.__stats(1)"
+            stats `shouldBe` "\"10.9900|0.1288|0.5240\""
+
+        it "an unexpected fill INCREASE is not consumption: a positive \
+           \applied delta refuses rather than crediting its magnitude" $
+           \(env, ls) → do
+            resetFixture env ls
+            r ← evalOk ls
+                "_G.__stubDrain(0.10); \
+                \local c = require('scripts.consumable'); \
+                \local s, why = c.drinkInstance(1, 302); \
+                \return tostring(s) .. '|' .. tostring(why) \
+                \    .. '|' .. _G.__drinks"
+            r `shouldBe` "\"nil|nothing drained|0\""
+            stats ← evalOk ls "return _G.__stats(1)"
+            stats `shouldBe` pristineStats
+
+        it "the legacy defName entry point gets the same behaviour from \
+           \the one shared body (requirement 5)" $ \(env, ls) → do
+            resetFixture env ls
+            refused ← evalOk ls
+                "_G.__stubDrain(nil); \
+                \local c = require('scripts.consumable'); \
+                \local s, why = c.drink(1, 'coffee_pot'); \
+                \return tostring(s) .. '|' .. tostring(why) .. '|' \
+                \    .. _G.__drinks .. '|' .. _G.__drainArgs"
+            -- 301 is the first non-empty pot, so the legacy selection
+            -- policy is unchanged — only the ordering it feeds is.
+            refused `shouldBe` "\"nil|drain failed|0|1|301|-0.2500\""
+            stats ← evalOk ls "return _G.__stats(1)"
+            stats `shouldBe` pristineStats
+            short ← evalOk ls
+                "_G.__stubDrain(-0.10); \
+                \local c = require('scripts.consumable'); \
+                \local s = c.drink(1, 'coffee_pot'); \
+                \return string.format('%.4f|%.4f', s.sip, s.caffeine)"
+            -- 301 is at 80°C, so warmth is 1.0: 0.10*1*0.9*1.0.
+            short `shouldBe` "\"0.1000|0.0900\""
 
     describe "the legacy mechanism call is untouched (requirement 8)" $
 
