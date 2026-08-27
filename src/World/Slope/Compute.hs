@@ -111,21 +111,24 @@ computeTileSlope seed coord lx ly z registry surfMap fluidMap tiles
         neighS = neighborElev coord lx (ly + 1) surfMap neighborLookup
         neighW = neighborElev coord (lx - 1) ly surfMap neighborLookup
 
-        bitN = slopeBit myHasFluid z neighN lx (ly - 1) coord fluidMap neighborLookup
-        bitE = slopeBit myHasFluid z neighE (lx + 1) ly coord fluidMap neighborLookup
-        bitS = slopeBit myHasFluid z neighS lx (ly + 1) coord fluidMap neighborLookup
-        bitW = slopeBit myHasFluid z neighW (lx - 1) ly coord fluidMap neighborLookup
-
         -- Is each cardinal neighbour a WET tile? Resolves across chunk
-        -- boundaries via 'fluidNeighborLookup' (the jagged path can fire on
-        -- a multi-level drop, so it must check the bank rule at seams too,
-        -- not just in-chunk). The dry-rock jagged path must never slope a
-        -- dry tile into a water neighbour — it would read as rock dipping
-        -- into the river/lake/sea.
+        -- boundaries via 'fluidNeighborLookup'. BOTH slope paths consult
+        -- these: the soft terrace rule below (via 'slopeBit') and the
+        -- dry-rock jagged rule must never slope a dry tile into a water
+        -- neighbour — it would read as land dipping into the
+        -- river/lake/sea — and a wet neighbour one coordinate across a
+        -- loaded chunk boundary is exactly as wet as an in-chunk one
+        -- (issue #1685). Resolving them once here is what keeps the two
+        -- paths from disagreeing at a seam.
         wetN = neighborHasFluidAt coord lx (ly - 1) fluidMap fluidNeighborLookup
         wetE = neighborHasFluidAt coord (lx + 1) ly fluidMap fluidNeighborLookup
         wetS = neighborHasFluidAt coord lx (ly + 1) fluidMap fluidNeighborLookup
         wetW = neighborHasFluidAt coord (lx - 1) ly fluidMap fluidNeighborLookup
+
+        bitN = slopeBit myHasFluid z neighN wetN
+        bitE = slopeBit myHasFluid z neighE wetE
+        bitS = slopeBit myHasFluid z neighS wetS
+        bitW = slopeBit myHasFluid z neighW wetW
 
         rawSlope = (if bitN then 1 else 0)
                ⌄ (if bitE then 2 else 0)
@@ -158,11 +161,20 @@ computeTileSlope seed coord lx ly z registry surfMap fluidMap tiles
             else rockJaggedSlope seed coord lx ly hardness z maxDrop rawSlope
                                  neighN neighE neighS neighW wetN wetE wetS wetW
 
-slopeBit ∷ Bool → Int → Int → Int → Int → ChunkCoord
-         → V.Vector (Maybe FluidCell)
-         → (ChunkCoord → Maybe (VU.Vector Int))
-         → Bool
-slopeBit myHasFluid myZ neighborZ nlx nly coord fluidMap _neighborLookup =
+-- | The per-side slope decision: should this tile's surface tip toward
+--   the cardinal neighbour whose surface z is @neighborZ@?
+--
+--   @neighborHasFluid@ is the caller's already-resolved answer to whether
+--   that neighbour is a WET tile — 'neighborHasFluidAt' in 'computeTileSlope',
+--   which reads this chunk's own fluid map in-chunk and the loaded
+--   neighbour's map across a chunk boundary (seam wrap included). Taking
+--   it as a plain 'Bool' rather than re-deriving it here is what fixed
+--   issue #1685: the bank rule used to see fluid only inside the tile's
+--   own chunk, so a soft dry bank one level above a river/lake/sea just
+--   across a loaded chunk boundary still got a slope bit and rendered
+--   dipping into the water.
+slopeBit ∷ Bool → Int → Int → Bool → Bool
+slopeBit myHasFluid myZ neighborZ neighborHasFluid =
     let diff = myZ - neighborZ
 
         -- An absent neighbour (not-yet-loaded chunk, or beyond the world
@@ -188,14 +200,7 @@ slopeBit myHasFluid myZ neighborZ nlx nly coord fluidMap _neighborLookup =
             | myHasFluid = neighborLoaded ∧ diff ≥ 1
             | otherwise  = diff ≡ 1
 
-        (normLx, normLy, neighborCoord) = normalizeCoord coord nlx nly
-        hasFluid = case neighborCoord of
-            c | c ≡ coord ->
-                case fluidMap V.! columnIndex normLx normLy of
-                    Just _  → True
-                    Nothing → False
-            _ → False
-    in validDiff ∧ (myHasFluid ∨ not hasFluid)
+    in validDiff ∧ (myHasFluid ∨ not neighborHasFluid)
 
 neighborElev ∷ ChunkCoord → Int → Int
              → VU.Vector Int
@@ -217,11 +222,6 @@ normalizeToChunk (ChunkCoord cx cy) lx ly =
         lx' = floorMod' lx chunkSize
         ly' = floorMod' ly chunkSize
     in (ChunkCoord cx' cy', (lx', ly'))
-
-normalizeCoord ∷ ChunkCoord → Int → Int → (Int, Int, ChunkCoord)
-normalizeCoord coord lx ly =
-    let (c, (lx', ly')) = normalizeToChunk coord lx ly
-    in (lx', ly', c)
 
 -- | Does the cardinal neighbour at local (nlx, nly) hold a fluid cell?
 --   In-chunk neighbours read this chunk's 'fluidMap'; out-of-chunk
