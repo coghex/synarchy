@@ -29,7 +29,8 @@ import Engine.Core.Capability.WorldSim
 import Engine.Core.Log (logInfo, logError, logWarn, LogCategory(..), LoggerState)
 import Engine.Graphics.Camera (Camera2D(..))
 import World.Types
-import World.Pause (imposePause, releasePauseHeld, setPauseResumeScale)
+import World.Pause
+    (reassertSavePause, releasePauseHeld, setPauseResumeScale)
 import World.Save.Serialize (encodeSessionSnapshot, writeSaveFiles)
 import World.Save.Snapshot
 import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotSaveMetadata)
@@ -98,13 +99,18 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
             --
             -- Almost always a RE-assertion: the Lua acceptance
             -- ('Engine.Scripting.Lua.API.Save.acceptSaveRequest')
-            -- already opened this save's pause epoch, so 'imposePause'
-            -- finds the session paused and deliberately changes nothing
-            -- — in particular it does not re-capture the clock it
-            -- already zeroed, which would replace the player's speed
-            -- with 0 (#1599). For a 'WorldSave' that reached this
-            -- thread another way it is the epoch's real start.
-            imposePause (toWorldSimCapability env)
+            -- already opened this save's pause epoch, so this finds the
+            -- session paused and deliberately changes nothing — in
+            -- particular it does not re-capture the clock it already
+            -- zeroed, which would replace the player's speed with 0
+            -- (#1599). For a 'WorldSave' that reached this thread
+            -- another way it is the epoch's real start.
+            --
+            -- 'reassertSavePause' rather than 'imposePause' because this
+            -- pause is the SAVE's own (#1730): counting it as an
+            -- independent source would make every autosave observe a
+            -- pause it imposed itself and decline to restore.
+            reassertSavePause (toWorldSimCapability env)
             -- Globals: read once, shared across every page (we're on the
             -- world thread, so no races with worldTick writes).
             cam        ← readIORef (cameraRef env)
@@ -439,7 +445,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
 --   Restores onto 'World.Save.Types.arPausedPage', the page the request
 --   recorded at acceptance, rather than whatever is visible by now.
 --
---   Three ways this deliberately does nothing:
+--   FOUR ways this deliberately does nothing:
 --
 --     * a MANUAL save ('Nothing') — the save path's pause is the
 --       long-standing DF-style contract and is not this issue's to
@@ -451,7 +457,16 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
 --       is exactly why this compares a generation rather than values;
 --     * the autosave began from an already-PAUSED world — there is
 --       nothing to resume, and resuming would be the autosave changing
---       gameplay.
+--       gameplay;
+--     * #1730: an ENGINE pause source independent of this save asserted
+--       a pause during the window ('arEnginePauseGen' no longer matches
+--       'Engine.Core.State.enginePauseGenRef'). A @pause: true@
+--       notification landing here is a complete no-op on the flag — the
+--       epoch is already open and records no owner — so without that
+--       counter this restore closed the epoch out from under it and left
+--       the popup announcing the pause standing over a running game. The
+--       save's OWN re-assertion above does not move the counter, so a
+--       plain autosave still restores.
 --
 --   A FAILED transaction never reaches here at all, so the existing
 --   one-way "a failed save leaves you paused" safety ratchet is
@@ -469,8 +484,17 @@ restoreAfterAutosave env logger (Just ar)
         -- anyway by a value that was already stale when it was read.
         -- 'restoreIfPlayerIdle' holds that lock across the action, which
         -- is also the epoch mutex — hence the @…Held@ variants below.
-        restored ← restoreIfPlayerIdle (toWorldSimCapability env)
-                                       (arIntentGen ar) $ do
+        outcome ← restoreIfPlayerIdle (toWorldSimCapability env)
+                                      (arIntentGen ar) $ do
+          -- #1730: the SECOND reason to decline, read inside the same
+          -- critical section as the generation comparison above. An
+          -- engine pause and this restore both take the epoch mutex, so
+          -- the two orderings are the only two there are: a pause that
+          -- wins the lock is seen here and declines the restore, and one
+          -- that loses it opens a fresh epoch over the speed this
+          -- restore just handed back.
+          engineGen ← readIORef (enginePauseGenRef env)
+          if engineGen ≢ arEnginePauseGen ar then pure False else do
             -- The pre-request scale is handed to the pause epoch this
             -- save opened rather than written straight onto the page, so
             -- 'releasePauseHeld' installs it in the same scale-then-flag
@@ -491,11 +515,19 @@ restoreAfterAutosave env logger (Just ar)
                 forM_ (lookup vid (wmWorlds mgr)) $ \ws →
                     setPauseResumeScale ws (arPreTimeScale ar)
             releasePauseHeld (toWorldSimCapability env)
-        unless restored $
-            logInfo logger CatWorld
+            pure True
+        -- Each decline names its OWN reason: attributing an engine
+        -- pause to the player would be a false statement in the log the
+        -- player reads (#1730).
+        case outcome of
+            Nothing → logInfo logger CatWorld
                 "Autosave finished, but the player changed pause or time \
                 \scale while it ran -- leaving their choice in place"
-        pure restored
+            Just False → logInfo logger CatWorld
+                "Autosave finished, but the game was paused again while \
+                \it ran -- leaving that pause in place"
+            Just True → pure ()
+        pure (outcome ≡ Just True)
 
 -- | #758: release the barrier so state owners resume WITHOUT declaring
 --   the transaction terminally complete yet — see 'releaseCaptureLock'.

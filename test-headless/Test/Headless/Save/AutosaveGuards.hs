@@ -74,10 +74,11 @@ import World.Types (WorldCommand(..))
 --   reaches the restoration those values feed.
 probeAutosaveRequest ∷ AutosaveRequest
 probeAutosaveRequest = AutosaveRequest
-    { arPrePaused    = False
-    , arPreTimeScale = 1
-    , arPausedPage   = Nothing
-    , arIntentGen    = 0
+    { arPrePaused      = False
+    , arPreTimeScale   = 1
+    , arPausedPage     = Nothing
+    , arIntentGen      = 0
+    , arEnginePauseGen = 0
     }
 
 saveLoadTexts ∷ EngineEnv → IO [Text]
@@ -235,7 +236,10 @@ spec = do
             -- @gen0 + 1@ differs from @gen0@ for every 'Word64',
             -- overflow included.
             baseline ← restoreIfPlayerIdle wsc (gen0 + 1) (pure ())
-            baseline `shouldBe` False
+            -- 'Nothing' is the player-won verdict: the action never ran.
+            -- (#1730 gave the action its own say, so a 'Just' now
+            -- carries whatever the action itself decided.)
+            baseline `shouldBe` Nothing
 
             -- Hold the lock inside a player transition...
             _ ← forkIO $ do
@@ -277,6 +281,9 @@ spec = do
             -- transition lands, the restore that was waiting on it
             -- finds the generation advanced and declines, leaving the
             -- player's write standing.
-            ranRestore `shouldBe` Just False
+            -- The outer 'Just' is 'awaitSignal' -- the racer did finish;
+            -- the inner 'Nothing' is its verdict: the generation had
+            -- advanced, so the action never ran.
+            ranRestore `shouldBe` Just Nothing
             final `shouldBe` "player"
             holderFinished `shouldBe` Just ()   -- nothing left wedged
