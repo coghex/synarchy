@@ -146,6 +146,8 @@ def main() -> int:
     # any Lua module ends up subscribed to the broadcast), but the
     # #730 text-entry checks read the fixture's OWN onUICharInput-driven
     # state, which does need it.
+    # 0.0 is the EVENT-ONLY interval (#1695): broadcast-reachable, never
+    # put on the update timer. See tools/input_check.py's note.
     send(PORT,
          'if not package.loaded["scripts.input_check_fixture"] then '
          'engine.loadScript("scripts/input_check_fixture.lua", 0.0) end',
