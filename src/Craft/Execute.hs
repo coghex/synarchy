@@ -52,9 +52,15 @@ craftQuality skill mKnow = clamp 0 100 $ case mKnow of
 --   departure from the neutral 1.00, clamped to ±10 quality points; the
 --   result is float-valued and deliberately unrounded. effectiveness =
 --   1.00 leaves @baseQuality@ unchanged.
+--
+--   #1733: both clamps are 'clampFinite', so neither a non-finite
+--   @effectiveness@ nor a non-finite @baseQuality@ can escape 0..100
+--   and persist as an item's @iiQuality@. A bare 'clamp' passes a NaN
+--   straight through. Finite inputs are unchanged.
 applyMentalQuality ∷ Float → Float → Float
 applyMentalQuality effectiveness baseQuality =
-    clamp 0 100 (baseQuality + clamp (-10) 10 (100 * (effectiveness - 1.0)))
+    clampFinite 0 100
+        (baseQuality + clampFinite (-10) 10 (100 * (effectiveness - 1.0)))
 
 -- | Consume everything a recipe demands (inputs + fuel) from an
 --   inventory. Right = the inventory after consumption; Left = a
