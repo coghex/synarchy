@@ -42,6 +42,7 @@ import Engine.Graphics.Vulkan.Pipeline.Bindless (createBindlessPipeline
                                                 , createBindlessUIPipeline)
 import Engine.Graphics.Vulkan.MSAA (createMSAAColorImage)
 import Engine.Graphics.Vulkan.Offscreen (createOffscreenTarget)
+import Engine.Graphics.Vulkan.ResizeRequest (recordSwapchainFramebufferSize)
 import Engine.Graphics.Vulkan.Swapchain
 import Engine.Graphics.Vulkan.Sync (createRenderFinishedSemaphores)
 import Engine.Graphics.Vulkan.Texture.Limits (maxBindlessTextures)
@@ -102,6 +103,11 @@ initializeVulkan window = do
   fbSize ← GLFW.getFramebufferSize glfwWin
   swapInfo0 ← createVulkanSwapchain physicalDevice device queues surface
                vsyncEnabled fbSize
+  -- Seed the resize record (#1693) from the RAW size this swapchain was
+  -- built from, so the windowed loop's very first comparison is against
+  -- a real value. Windowed only: 'initializeVulkanOffscreen' has no
+  -- window to resize and must never gain a recreation path.
+  recordSwapchainFramebufferSize fbSize
   imageViews ← createSwapchainImageViews device swapInfo0
   let swapInfo = swapInfo0 { siSwapImgViews = imageViews }
 

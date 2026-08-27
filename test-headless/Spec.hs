@@ -100,6 +100,7 @@ import qualified Test.Headless.Lua.PreviewGeneration as LuaPreviewGeneration
 import qualified Test.Headless.Lua.PauseGate as LuaPauseGate
 import qualified Test.Headless.World.PauseSpeed as PauseSpeed
 import qualified Test.Headless.Lua.ScriptState as LuaScriptState
+import qualified Test.Headless.Graphics.SwapchainResize as GraphicsSwapchainResize
 import qualified Test.Headless.Input.LayerA as InputLayerA
 import qualified Test.Headless.Input.WheelPolicy as InputWheelPolicy
 import qualified Test.Headless.Graphics.VideoConfig as VideoConfig
@@ -289,6 +290,12 @@ main = hspec $ do
         -- non-click producers live inside Engine.Input.Thread's real
         -- processInputs, driven directly against the live EngineEnv.
         describe "Input.LayerA" InputLayerA.spec
+        -- Same technique again (#1693): the framebuffer-resize →
+        -- swapchain-recreation request is decided entirely from the
+        -- live env's framebufferSizeRef and the main-thread
+        -- GraphicsState record, so the whole contract is provable with
+        -- no GPU.
+        describe "swapchain resize request" GraphicsSwapchainResize.spec
         describe "River.InlandSources" RiverInlandSources.spec
         -- Capability-projection aliasing (#891): pure handle-equality
         -- checks against the already-booted env — no worldgen, no

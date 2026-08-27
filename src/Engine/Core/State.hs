@@ -523,6 +523,22 @@ data GraphicsState = GraphicsState
     --   per-image semaphore (image count ≠ frames in flight).
     --   (Re)created with the swapchain; destroyed via vulkanCleanup.
   , swapchainInfo      ∷ Maybe SwapchainInfo
+  , swapchainFbSize    ∷ Maybe (Int, Int)
+    -- ^ The RAW framebuffer size the live swapchain state corresponds
+    --   to (#1693) — seeded from the size passed to the initial
+    --   'Engine.Graphics.Vulkan.Swapchain.createVulkanSwapchain' and
+    --   rewritten by every successful 'recreateSwapchain', from the
+    --   exact sample that recreation built with. @Just (0,0)@ records a
+    --   minimized window, and 'Nothing' means no swapchain has been
+    --   built (headless\/offscreen, or before Vulkan init).
+    --
+    --   Deliberately the RAW framebuffer size and never
+    --   @siSwapExtent@: 'Engine.Graphics.Vulkan.Swapchain.chooseSwapExtent'
+    --   honours the surface's @currentExtent@ and otherwise clamps into
+    --   @min\/maxImageExtent@, so the extent can legitimately differ
+    --   from the size that was requested. Comparing against the extent
+    --   would re-request a recreation forever
+    --   ("Engine.Graphics.Vulkan.ResizeRequest").
   , msaaColorImage     ∷ Maybe (Vk.Image, Vk.DeviceMemory, Vk.ImageView)
   , uniformBuffers     ∷ Maybe (V.Vector (Vk.Buffer, Vk.DeviceMemory))
   -- textureSystem + defaultFaceMapSlot moved to EngineEnv

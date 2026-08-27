@@ -87,6 +87,7 @@ defaultEngineState = EngineState
     , currentFrame           = 0
     , framebuffers           = Nothing
     , swapchainInfo          = Nothing
+    , swapchainFbSize        = Nothing
     , msaaColorImage         = Nothing
     , renderFinishedSems     = V.empty
     , uniformBuffers         = Nothing

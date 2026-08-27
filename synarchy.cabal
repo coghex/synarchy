@@ -206,6 +206,7 @@ library
                      Engine.Graphics.Vulkan.Offscreen
                      Engine.Graphics.Vulkan.Pipeline.Bindless
                      Engine.Graphics.Vulkan.Recreate
+                     Engine.Graphics.Vulkan.ResizeRequest
                      Engine.Graphics.Vulkan.Sampler.Types
                      Engine.Graphics.Vulkan.Sampler.Cache
                      Engine.Graphics.Vulkan.Screenshot
@@ -1170,6 +1171,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Input.State
                    Test.Headless.Input.Inject
                    Test.Headless.Input.Followup
+                   Test.Headless.Graphics.SwapchainResize
                    Test.Headless.Input.LayerA
                    Test.Headless.Input.WheelPolicy
                    Test.Headless.Graphics.VideoConfig
