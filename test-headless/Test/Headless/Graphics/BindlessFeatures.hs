@@ -205,13 +205,6 @@ baseLoweredTo n cap =
     setField : _ → setField n generousBaseLimits
     []           → generousBaseLimits
 
--- | Every ordinary limit at 'maxBound': the report that would rescue an
---   update-after-bind shortfall if the two were ever combined.
-unboundedBaseLimits ∷ PhysicalDeviceLimits
-unboundedBaseLimits = foldr
-  (\(_, setField, _) limits → maybe limits (\f → f maxBound limits) setField)
-  generousBaseLimits capacityFields
-
 -- | The diagnostic clause a shortfall must produce, stated here
 --   independently of the production wording: the reported count, the field
 --   the device reported it for, and the count the renderer requires.
@@ -455,11 +448,17 @@ spec = describe "Vulkan bindless feature requirements" $ do
     it "rejects a device one descriptor below any single rule" $
       -- The rejected side of the same boundary, one rule at a time — both
       -- families — so a gate silently dropped from the predicate fails here.
+      -- The all-layout rule is spoiled on BOTH of its limits, since either
+      -- one alone can supply that total.
       forM_ capacityFields $ \(cap, base, uab) → do
         forM_ uab $ \_ → do
           let required = layoutDescriptorsInScope ScopeAllSets cap
           when (required > 0) $ do
-            let support = supportReporting (loweredTo (required - 1) cap)
+            let short   = required - 1
+                limits  = maybe generousBaseLimits
+                            (\f → f short generousBaseLimits) base
+                support = supportReportingBase generousFeatures limits
+                            (loweredTo short cap)
             (cap, isBindlessSupported support) `shouldBe` (cap, False)
         forM_ base $ \_ → do
           let required =
@@ -485,25 +484,35 @@ spec = describe "Vulkan bindless feature requirements" $ do
     it "names the reported and required counts of whichever rule fell short" $
       -- #1055's descriptive contract, extended to the capacity gate: device
       -- selection has to say WHICH limit came up short and by how much.
-      forM_ capacityFields $ \(cap, _, uab) →
+      forM_ capacityFields $ \(cap, base, uab) →
         forM_ uab $ \_ → do
           let required = layoutDescriptorsInScope ScopeAllSets cap
           when (required > 0) $ do
             let short   = required - 1
-                support = supportReporting (loweredTo short cap)
-                field   = fromMaybe "" (updateAfterBindCapacityField cap)
+                limits  = maybe generousBaseLimits
+                            (\f → f short generousBaseLimits) base
+                props   = loweredTo short cap
+                support = supportReportingBase generousFeatures limits props
+                field   = maybe "" ccField (listToMaybe
+                            [ c | c ← bindlessCapacityChecks limits props cap
+                                , ccScope c ≡ ScopeAllSets ])
             (cap, deviceBindlessFailureMessage support) `shouldSatisfy`
               (T.isInfixOf (expectedShortfallClause field short required) . snd)
 
     it "names the same counts on the texture-system failure path" $
       -- The two sites describe one shortfall identically (#1282).
-      forM_ capacityFields $ \(cap, _, uab) →
+      forM_ capacityFields $ \(cap, base, uab) →
         forM_ uab $ \_ → do
           let required = layoutDescriptorsInScope ScopeAllSets cap
           when (required > 0) $ do
             let short   = required - 1
-                support = supportReporting (loweredTo short cap)
-                field   = fromMaybe "" (updateAfterBindCapacityField cap)
+                limits  = maybe generousBaseLimits
+                            (\f → f short generousBaseLimits) base
+                props   = loweredTo short cap
+                support = supportReportingBase generousFeatures limits props
+                field   = maybe "" ccField (listToMaybe
+                            [ c | c ← bindlessCapacityChecks limits props cap
+                                , ccScope c ≡ ScopeAllSets ])
             case planBindlessDescriptorCount support productionTextureConfig of
               Right count → expectationFailure $
                 "a device short on " <> T.unpack field <> " was accepted with "
@@ -511,17 +520,46 @@ spec = describe "Vulkan bindless feature requirements" $ do
               Left failure → (cap, failure) `shouldSatisfy`
                 (T.isInfixOf (expectedShortfallClause field short required) . snd)
 
-    it "the ordinary limits never rescue an update-after-bind shortfall" $
-      -- The behavioural consequence of the zero-contribution row above.
-      -- Reading the larger of a pair would accept a device whose pipeline
-      -- layout Vulkan rejects, so every update-after-bind shortfall must
-      -- survive every ordinary limit being raised to maxBound.
-      forM_ capacityFields $ \(cap, _, uab) →
-        forM_ uab $ \_ → do
-          let required = layoutDescriptorsInScope ScopeAllSets cap
+    it "lets ordinary headroom supply the all-layout total" $
+      -- The all-layout total is measured against the EFFECTIVE capacity —
+      -- the greater of a paired class's two limits — so an update-after-bind
+      -- figure one below the requirement is not on its own a refusal when
+      -- the ordinary limit covers it.
+      forM_ capacityFields $ \(cap, base, uab) →
+        case (base, uab) of
+          (Just setBase, Just setUab) → do
+            let required = layoutDescriptorsInScope ScopeAllSets cap
+                support  = supportReportingBase generousFeatures
+                             (setBase required generousBaseLimits)
+                             (setUab (required - 1) generousProperties)
+            (cap, isBindlessSupported support) `shouldBe` (cap, True)
+          _ → pure ()
+
+    it "still refuses when neither of a pair supplies the total" $
+      -- The rejected side of that same rule: ordinary headroom rescues a
+      -- shortfall, absent headroom does not.
+      forM_ capacityFields $ \(cap, base, uab) →
+        case (base, uab) of
+          (Just setBase, Just setUab) → do
+            let required = layoutDescriptorsInScope ScopeAllSets cap
+                short    = required - 1
+                support  = supportReportingBase generousFeatures
+                             (setBase short generousBaseLimits)
+                             (setUab short generousProperties)
+            (cap, isBindlessSupported support) `shouldBe` (cap, False)
+          _ → pure ()
+
+    it "keeps the ordinary-only check on its own smaller population" $
+      -- Retained rather than folded into the maximum: it constrains the
+      -- layout's non-update-after-bind set, and no update-after-bind
+      -- headroom answers for it.
+      forM_ capacityFields $ \(cap, base, _) →
+        forM_ base $ \setBase → do
+          let required = layoutDescriptorsInScope ScopeWithoutUpdateAfterBind cap
           when (required > 0) $ do
             let support = supportReportingBase generousFeatures
-                            unboundedBaseLimits (loweredTo (required - 1) cap)
+                            (setBase (required - 1) generousBaseLimits)
+                            generousProperties
             (cap, isBindlessSupported support) `shouldBe` (cap, False)
 
   describe "update-after-bind limits and device features" $ do
@@ -535,7 +573,9 @@ spec = describe "Vulkan bindless feature requirements" $ do
             ,CapPerStageStorageBuffers, CapSetStorageBuffers] $ \cap →
         forM_ [zero ∷ PhysicalDeviceVulkan12Features
               ,requiredVulkan12Features, generousFeatures] $ \feats → do
-          let support = supportReportingBase feats generousBaseLimits
+          -- Both limits at zero, so the effective capacity cannot be
+          -- supplied from either side and only the feature report varies.
+          let support = supportReportingBase feats (baseLoweredTo 0 cap)
                           (loweredTo 0 cap)
           (cap, isBindlessSupported support) `shouldBe` (cap, False)
 

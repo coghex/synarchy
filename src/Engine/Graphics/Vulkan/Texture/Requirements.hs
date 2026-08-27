@@ -423,12 +423,24 @@ bindlessCapacityChecks base props cap = ordinary <> updateAfterBind
       | Just field ← [ordinaryCapacityField cap] ]
     updateAfterBind =
       [ CapacityCheck
-          { ccField    = field
+          { ccField    = effectiveField field
           , ccScope    = ScopeAllSets
           , ccRequired = layoutDescriptorsInScope ScopeAllSets cap
-          , ccReported = readUpdateAfterBindLimit props cap
+          , ccReported = effectiveCapacity
           }
       | Just field ← [updateAfterBindCapacityField cap] ]
+    -- The all-layout total is measured against the EFFECTIVE capacity: the
+    -- greater of the update-after-bind limit and its ordinary counterpart
+    -- where a pair exists, so ordinary headroom can supply it. The ordinary
+    -- check above is retained rather than folded in — it constrains a
+    -- different, smaller population (the layout's non-update-after-bind set)
+    -- and no update-after-bind headroom answers for it.
+    effectiveCapacity = case ordinaryCapacityField cap of
+      Just _  → max (readUpdateAfterBindLimit props cap) (readOrdinaryLimit base cap)
+      Nothing → readUpdateAfterBindLimit props cap
+    effectiveField field = case ordinaryCapacityField cap of
+      Just ordinaryName → ordinaryName <> " / " <> field <> " (effective maximum)"
+      Nothing           → field
 
 -- | Every rule the device must satisfy, across every descriptor class, in
 --   declaration order.
