@@ -25,8 +25,8 @@
 --   GPU-resource-lifetime question.
 module Engine.Asset.Manager
   ( generateTextureHandle
-  , TextureHandleAvailability(..)
-  , checkTextureHandleAvailability
+  , TextureHandleReservation(..)
+  , reserveTextureHandle
   , generateFontHandle
   , generateAssetId
   , updateTextureState
@@ -69,44 +69,62 @@ generateTextureHandle pool =
   atomicModifyIORef' (apNextTextureHandle pool) $ \n →
     (n + 1, TextureHandle n)
 
--- | Can 'generateTextureHandle' still hand out an id the shader's
---   handle→slot table can resolve (#1699)?
-data TextureHandleAvailability
-  = TextureHandlesAvailable
-    -- ^ The next id is representable; allocate as normal.
+-- | The outcome of reserving a SHADER-ADDRESSABLE texture handle
+--   (#1699).
+data TextureHandleReservation
+  = TextureHandleAllocated !TextureHandle
+    -- ^ This id was allocated and the shader's handle→slot table can
+    --   resolve it. Nobody else can be handed it.
   | TextureHandlesSpent !(Maybe TextureHandle)
-    -- ^ The next id is not, and never will be. 'Just' the id that would
-    --   have been handed out for the ONE caller that claims the single
-    --   report, 'Nothing' for every caller after it.
+    -- ^ The namespace has run past the table and never recovers, so
+    --   NOTHING was allocated and the counter did not move. 'Just' the
+    --   id that would have been handed out, for the ONE caller that
+    --   claims the single report; 'Nothing' for every caller after it.
   deriving (Show, Eq)
 
--- | Answer that question, claiming the report if this is the first
---   caller to see the namespace spent.
+-- | Allocate the next texture handle for a caller that needs the SHADER
+--   to resolve it, or report that the namespace is spent.
 --
---   The counter is monotonic and has no reset anywhere in the tree, so
---   once it is spent it stays spent: every further shader-addressable
---   registration is refused, permanently. It reads the SAME guard those
---   registrations run ('checkRegistrableHandle'), so there is one
---   definition of the boundary rather than a second copy that could
---   drift, and it names the refused id so the report reads like every
---   other refusal ('registrationFailureMessage').
+--   The decision and the allocation are ONE 'atomicModifyIORef'' on the
+--   counter, which is what makes them trustworthy: 'generateTextureHandle'
+--   is a shared allocator that the Lua worker, the transients and this
+--   caller all draw from concurrently, so a separate "is there room?"
+--   read could be overtaken between answering and allocating — handing
+--   back an id past the cap that the caller had already decided was
+--   safe.
 --
---   The claim is what makes a PER-FRAME caller safe to ask —
+--   The boundary is 'checkRegistrableHandle', the same guard every
+--   bindless registration runs, so there is one definition of it rather
+--   than a second copy that could drift. A spent namespace advances
+--   nothing: there is no point burning ids nobody can use.
+--
+--   The report claim is deliberately separate and is NOT part of that
+--   atomic step. It only decides who prints a line about a condition
+--   that is already permanent, and it is a monotone one-way flag, so
+--   exactly one caller wins it however the two interleave.
+--
+--   Only a PER-FRAME caller needs this at all —
 --   'World.Render.BloodQuads', whose diff would otherwise re-upload,
 --   re-refuse and re-log the same decal every frame for the rest of the
---   session. A one-shot request has no reason to ask at all: refusing
---   at the registration boundary is already terminal, and asking first
---   would only duplicate it.
-checkTextureHandleAvailability ∷ AssetPool → IO TextureHandleAvailability
-checkTextureHandleAvailability pool = do
-  next ← readIORef (apNextTextureHandle pool)
-  let handle = TextureHandle next
-  case checkRegistrableHandle ShaderAddressable handle of
-    Right () → pure TextureHandlesAvailable
-    Left _   → do
-      reported ← atomicModifyIORef' (apHandlesSpentReported pool)
-                     (\r → (True, r))
-      pure (TextureHandlesSpent (if reported then Nothing else Just handle))
+--   session. A one-shot request keeps using 'generateTextureHandle' and
+--   lets the registration boundary refuse it terminally; asking first
+--   would only duplicate that. Fonts must keep using it too: they take
+--   a handle purely as an atlas identity and bind through their own
+--   descriptor set, so a spent table is not their failure.
+reserveTextureHandle ∷ AssetPool → IO TextureHandleReservation
+reserveTextureHandle pool = do
+  reserved ← atomicModifyIORef' (apNextTextureHandle pool) $ \n →
+    let handle = TextureHandle n
+    in case checkRegistrableHandle ShaderAddressable handle of
+         Right () → (n + 1, Right handle)
+         Left _   → (n, Left handle)
+  case reserved of
+    Right handle → pure (TextureHandleAllocated handle)
+    Left handle  → do
+      alreadyReported ← atomicModifyIORef' (apHandlesSpentReported pool)
+                            (\r → (True, r))
+      pure (TextureHandlesSpent
+              (if alreadyReported then Nothing else Just handle))
 
 generateFontHandle ∷ AssetPool → IO FontHandle
 generateFontHandle pool =

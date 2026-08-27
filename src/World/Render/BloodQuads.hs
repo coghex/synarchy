@@ -49,8 +49,7 @@ import Engine.Core.Capability.RenderView
   (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Asset.Handle (TextureHandle, toInt)
 import Engine.Asset.Manager
-    (TextureHandleAvailability(..), checkTextureHandleAvailability
-    , generateTextureHandle)
+    (TextureHandleReservation(..), reserveTextureHandle)
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logWarnM)
 import Engine.Graphics.Vulkan.Texture.Handle
@@ -211,10 +210,15 @@ uploadOne dev pdev cmdPool queue (bl, known) d = do
     -- (#1699): the counter is monotonic with no reset, so every id from
     -- here on is one the shader's table cannot resolve. This diff runs
     -- once per FRAME against a decal that stays in the FIFO, so without
-    -- this check the same descriptor would generate a handle, upload a
+    -- this the same descriptor would generate a handle, upload a
     -- texture, be refused, log a warning and destroy the texture again
-    -- every frame for the rest of the session. Ask before doing any of
-    -- that.
+    -- every frame for the rest of the session.
+    --
+    -- 'reserveTextureHandle' answers and allocates in ONE atomic step,
+    -- which matters because the allocator is shared: a separate "is
+    -- there room?" read could be overtaken by the Lua worker between
+    -- answering and allocating, and hand this frame an id past the cap
+    -- it had already decided was safe.
     --
     -- The refusal is still REPORTED — a procedural texture has no
     -- requested path, so it names its kind, the id that was refused and
@@ -223,16 +227,15 @@ uploadOne dev pdev cmdPool queue (bl, known) d = do
     -- Afterwards the decal is simply not uploaded and has no entry in
     -- 'wsBloodTextureHandlesRef', exactly as this module already handles
     -- an upload that has not caught up yet.
-    availability ← liftIO $ checkTextureHandleAvailability ap
-    case availability of
+    reservation ← liftIO $ reserveTextureHandle ap
+    case reservation of
       TextureHandlesSpent report → do
         forM_ report $ \refused →
           logWarnM CatTexture $ registrationFailureMessage
               TextureHandleUnrepresentable refused bloodTextureSource
         pure (bl, known)
-      TextureHandlesAvailable → do
+      TextureHandleAllocated texHandle → do
         let img = generateBloodTexture d
-        texHandle ← liftIO $ generateTextureHandle ap
         ((_image, imageView), cleanupImg) ← createTextureFromRGBABytes
             pdev dev cmdPool queue (btiWidth img, btiHeight img) (btiPixels img)
         (mBindlessHandle, bl') ← registerTexture dev texHandle
@@ -244,13 +247,12 @@ uploadOne dev pdev cmdPool queue (bl, known) d = do
                 (HM.insert texHandle (btiWidth img, btiHeight img) m, ())
             pure (bl', HM.insert (btdId d) (texHandle, cleanupImg) known)
           Left _ → do
-            -- Bindless system full, or this id crossed the handle cap
-            -- between the check above and the allocation — drop the GPU
-            -- resource we just made, record no size entry and no handle
+            -- Bindless system full: the id itself is representable (the
+            -- reservation above is atomic, so it cannot be anything
+            -- else), but there is no slot for it. Drop the GPU resource
+            -- we just made and record no size entry and no handle
             -- entry; this decal's texture simply isn't uploaded and its
-            -- render pass is skipped until a slot frees up. A crossing
-            -- reaches here at most once, because the check above answers
-            -- for every frame after it.
+            -- render pass is skipped until a slot frees up.
             liftIO cleanupImg
             pure (bl', known)
 

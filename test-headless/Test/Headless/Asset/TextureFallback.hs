@@ -23,7 +23,10 @@ module Test.Headless.Asset.TextureFallback (spec) where
 
 import UPrelude
 import Test.Hspec
+import Control.Concurrent (forkIO)
+import Control.Concurrent.MVar (newEmptyMVar, putMVar, readMVar, takeMVar)
 import Control.Exception (finally)
+import Data.List (sort)
 import Data.IORef (IORef, newIORef, readIORef, writeIORef, modifyIORef')
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as Map
@@ -48,8 +51,8 @@ import Engine.Asset.Base (AssetId(..))
 import Engine.Asset.Handle (AssetState(..), TextureHandle(..)
     , missingTextureHandle, firstAllocatableTextureHandle
     , isMissingTextureHandle, toInt)
-import Engine.Asset.Manager (TextureHandleAvailability(..)
-    , checkTextureHandleAvailability, generateTextureHandle)
+import Engine.Asset.Manager (TextureHandleReservation(..)
+    , generateTextureHandle, reserveTextureHandle)
 import Engine.Asset.Types (AssetPool(..), AtlasMetadata(..), TextureAtlas(..)
     , defaultAssetPool)
 import Engine.Core.Log
@@ -498,25 +501,85 @@ unrepresentableHandleSpec = do
             checkRegistrableHandle ShaderAddressable firstPast
                 `shouldBe` Left TextureHandleUnrepresentable
 
-        it "reports the namespace spent exactly when the NEXT id would \
-           \be refused, hands the report to ONE claimant, and never \
-           \un-spends it" $ \_env → do
+        it "reserves the last representable id, then reports the \
+           \namespace spent to ONE claimant and never un-spends it" $ \_env → do
             pool ← defaultAssetPool
             writeIORef (apNextTextureHandle pool) (handleSlotTableSize - 1)
-            checkTextureHandleAvailability pool
-                `shouldReturn` TextureHandlesAvailable
-            _ ← generateTextureHandle pool
+            reserveTextureHandle pool `shouldReturn`
+                TextureHandleAllocated (TextureHandle (handleSlotTableSize - 1))
             -- The first caller past the boundary is handed the id that
-            -- would have been allocated, so its report can name it.
-            checkTextureHandleAvailability pool `shouldReturn`
+            -- WOULD have been allocated, so its report can name it.
+            reserveTextureHandle pool `shouldReturn`
                 TextureHandlesSpent (Just (TextureHandle handleSlotTableSize))
             -- Everyone after it is told the same permanent answer with
-            -- nothing to say about it.
-            checkTextureHandleAvailability pool
+            -- nothing to say about it, however many times they ask.
+            reserveTextureHandle pool
                 `shouldReturn` TextureHandlesSpent Nothing
-            _ ← generateTextureHandle pool
-            checkTextureHandleAvailability pool
+            reserveTextureHandle pool
                 `shouldReturn` TextureHandlesSpent Nothing
+            -- A refusal allocates nothing: the counter stopped at the
+            -- first id it could not hand out.
+            readIORef (apNextTextureHandle pool)
+                `shouldReturn` handleSlotTableSize
+
+        it "refuses an id another allocator took first, rather than \
+           \handing back one it had already judged safe" $ \_env → do
+            -- The shared allocator: the Lua texture worker, the two
+            -- transients and the blood diff all draw from this one
+            -- pool. With one id left, whoever gets there first takes it
+            -- and everyone else must be refused.
+            pool ← defaultAssetPool
+            writeIORef (apNextTextureHandle pool) (handleSlotTableSize - 1)
+            stolen ← generateTextureHandle pool
+            stolen `shouldBe` TextureHandle (handleSlotTableSize - 1)
+            reserveTextureHandle pool `shouldReturn`
+                TextureHandlesSpent (Just (TextureHandle handleSlotTableSize))
+
+        it "hands out every representable id exactly ONCE under real \
+           \contention, and never one past the cap" $ \_env → do
+            -- The interleaving the atomicity exists for, run for real
+            -- rather than argued: the decision and the allocation are
+            -- one 'atomicModifyIORef'', so no two claimants racing
+            -- across the boundary can both be told the same id is free.
+            -- A reserve that read the counter and then allocated
+            -- separately can be overtaken in that window and hand back
+            -- a duplicate, or an id past the cap it had already judged
+            -- safe -- either of which breaks the first assertion here.
+            -- Rounds, not one shot: the window a non-atomic reserve
+            -- leaves open is a handful of instructions wide, so a
+            -- single race can miss it. Each round is a fresh pool with
+            -- exactly ONE id left and many askers, which is the maximum
+            -- pressure on the boundary.
+            forM_ [1 .. 200 ∷ Int] $ \_round → do
+                pool ← defaultAssetPool
+                let room   = 1
+                    askers = 24
+                writeIORef (apNextTextureHandle pool)
+                    (handleSlotTableSize - room)
+                start ← newEmptyMVar
+                slots ← replicateM askers newEmptyMVar
+                forM_ slots $ \slot → forkIO $ do
+                    () ← readMVar start
+                    putMVar slot =≪ reserveTextureHandle pool
+                putMVar start ()
+                results ← mapM takeMVar slots
+
+                let allocated = [ h | TextureHandleAllocated h ← results ]
+                    claimed   = [ h | TextureHandlesSpent (Just h) ← results ]
+                -- Exactly the representable ids, each to exactly one
+                -- asker -- so none was double-issued, and none was past
+                -- the cap.
+                sort (map toInt allocated) `shouldBe`
+                    [handleSlotTableSize - room .. handleSlotTableSize - 1]
+                map (checkRegistrableHandle ShaderAddressable) allocated
+                    `shouldBe` replicate room (Right ())
+                -- Everyone else was refused, and the counter stopped
+                -- dead at the first id it could not hand out.
+                length results - length allocated `shouldBe` askers - room
+                readIORef (apNextTextureHandle pool)
+                    `shouldReturn` handleSlotTableSize
+                -- One report between all of them, whoever won it.
+                length claimed `shouldBe` 1
 
         it "refuses an out-of-table id only where the SHADER reads the \
            \table, never for a slot-only registration" $ \_env → do
@@ -601,7 +664,7 @@ unrepresentableHandleSpec = do
             withRegistrationFixture $ \fx → do
                 let env = rfEnv fx
                 ws ← seedBloodWorld env
-                spendTextureHandles fx
+                spendTextureHandles fx 0
 
                 -- Two frames. The device handles are all null, which is
                 -- exactly the point: the refusal must return before
@@ -634,6 +697,37 @@ unrepresentableHandleSpec = do
                 -- The namespace was not advanced either: a refusal that
                 -- allocated per frame would still be spending ids.
                 pool ← readIORef (assetPoolRef env)
+                readIORef (apNextTextureHandle pool)
+                    `shouldReturn` handleSlotTableSize
+
+        it "...and reports it once even when a concurrent allocator \
+           \takes the last id out from under the frame" $ \_env →
+            withRegistrationFixture $ \fx → do
+                let env = rfEnv fx
+                ws ← seedBloodWorld env
+                -- One id left, and the Lua texture worker -- which draws
+                -- from this same pool -- takes it before the frame runs.
+                spendTextureHandles fx 1
+                pool ← readIORef (assetPoolRef env)
+                stolen ← generateTextureHandle pool
+                stolen `shouldBe` TextureHandle (handleSlotTableSize - 1)
+
+                runFrame fx
+                first ← drainLog fx
+                runFrame fx
+                second ← drainLog fx
+
+                -- A non-atomic reserve would have seen room, taken the
+                -- id past the cap, uploaded it against the null device
+                -- and then reported AGAIN the next frame.
+                message ← soleWarning first
+                message `shouldSatisfy` T.isInfixOf bloodTextureSource
+                message `shouldSatisfy`
+                    namesHandle (TextureHandle handleSlotTableSize)
+                map leMessage (filter ((≡ LevelWarn) ∘ leLevel) second)
+                    `shouldBe` []
+                HM.null <$> readIORef (wsBloodTextureHandlesRef ws)
+                    `shouldReturn` True
                 readIORef (apNextTextureHandle pool)
                     `shouldReturn` handleSlotTableSize
 
@@ -854,12 +948,13 @@ bloodRequest = BloodTextureRequest
     , btrSeed       = 7
     }
 
--- | Push the pool's counter one past the last id the shader's table can
---   resolve, the state a long-lived process reaches on its own.
-spendTextureHandles ∷ RegistrationFixture → IO ()
-spendTextureHandles fx = do
+-- | Leave the pool's counter @headroom@ ids short of the point past
+--   which the shader's table can resolve nothing — the state a
+--   long-lived process reaches on its own.
+spendTextureHandles ∷ RegistrationFixture → Int → IO ()
+spendTextureHandles fx headroom = do
     pool ← readIORef (assetPoolRef (rfEnv fx))
-    writeIORef (apNextTextureHandle pool) handleSlotTableSize
+    writeIORef (apNextTextureHandle pool) (handleSlotTableSize - headroom)
 
 -- | Run one frame's blood upload sync against ALL-NULL Vulkan handles.
 --
