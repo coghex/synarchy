@@ -66,19 +66,27 @@ local function handles(variant)
         h[slot] = { tex = engine.loadTexture(texPath), texPath = texPath,
                     face = engine.loadTexture(facePath), facePath = facePath }
     end
-    -- walls: one sprite + the 4 cap facemap variants (handles + paths)
+    -- walls: one sprite + the 4 cap facemap variants (handles + paths).
+    -- `own*` records whether THIS variant declared the path or inherited
+    -- it from the default art — the wall-rotation catalogue (#1712) must
+    -- not let a variant claim art it merely inherited, or a DEFAULT wall
+    -- rotates into the variant's sprite.
     for _, e in ipairs(WALL_DIRS) do
         local w = pack.walls[e]
         local o = over.walls[e] or {}
         local texPath = o.texture or w.texture
-        local faces, facePaths = {}, {}
+        local faces, facePaths, ownFace = {}, {}, {}
         for _, c in ipairs(WALL_CAPS) do
-            local fp = (o.facemaps and o.facemaps[c]) or w.facemaps[c]
+            local own = (o.facemaps and o.facemaps[c]) ~= nil
+            local fp = (own and o.facemaps[c]) or w.facemaps[c]
             faces[c]     = engine.loadTexture(fp)
             facePaths[c] = fp
+            ownFace[c]   = (variant == nil) or own
         end
         h.walls[e] = { tex = engine.loadTexture(texPath), texPath = texPath,
-                       face = faces, facePath = facePaths }
+                       face = faces, facePath = facePaths,
+                       ownTex = (variant == nil) or (o.texture ~= nil),
+                       ownFace = ownFace }
     end
     registerWallFamily(h, key)
     cache[key] = h
@@ -100,10 +108,12 @@ function registerWallFamily(h, key)
         -- the engine refuses a short family outright — so collect what
         -- there is and let the one warning below report it.
         if w then
-            entries[#entries + 1] = { dir = e, path = w.texPath, handle = w.tex }
+            entries[#entries + 1] = { dir = e, path = w.texPath, handle = w.tex,
+                                      owned = w.ownTex }
             for _, c in ipairs(WALL_CAPS) do
                 entries[#entries + 1] = { dir = e, cap = c,
-                                          path = w.facePath[c], handle = w.face[c] }
+                                          path = w.facePath[c], handle = w.face[c],
+                                          owned = w.ownFace[c] }
             end
         end
     end

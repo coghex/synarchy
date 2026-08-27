@@ -159,13 +159,41 @@ postTex   = TextureHandle 304 ; postFace  = TextureHandle 305
 
 familyEntries ∷ [WallArtEntry]
 familyEntries =
-    [ WallArtEntry e Nothing (texPath e) (texHandle e) | e ← allEdges ]
-    <> [ WallArtEntry e (Just c) (facePath e c) (faceHandle e c)
+    [ WallArtEntry e Nothing (texPath e) (texHandle e) True | e ← allEdges ]
+    <> [ WallArtEntry e (Just c) (facePath e c) (faceHandle e c) True
        | e ← allEdges, c ← allCaps ]
 
 catalog ∷ StructureWallCatalog
 catalog = fromMaybe (error "fixture family is incomplete")
                     (registerWallFamily familyEntries emptyStructureWallCatalog)
+
+-- * A PARTIAL variant, the shape a pack is explicitly allowed to author
+--
+--   @data/structure_packs/*.yaml@'s @variants@ may override any SUBSET of
+--   the wall art; whatever it omits it INHERITS. This variant declares one
+--   new sprite (NE) and inherits the other three plus every cap facemap,
+--   so it shares fifteen of its twenty paths with the default family.
+
+variantTexPath ∷ Text
+variantTexPath = "pack/worn/wall_ne.png"
+
+variantTexHandle ∷ TextureHandle
+variantTexHandle = TextureHandle 400
+
+-- | The variant registered SECOND, which is the order that used to let it
+--   overwrite the default family's claim on the paths it merely inherits.
+variantCatalog ∷ StructureWallCatalog
+variantCatalog =
+    fromMaybe (error "fixture variant family is incomplete")
+              (registerWallFamily variantEntries catalog)
+  where
+    variantEntries =
+        [ if e ≡ WallNE
+            then WallArtEntry e Nothing variantTexPath variantTexHandle True
+            else WallArtEntry e Nothing (texPath e) (texHandle e) False
+        | e ← allEdges ]
+        <> [ WallArtEntry e (Just c) (facePath e c) (faceHandle e c) False
+           | e ← allEdges, c ← allCaps ]
 
 -- | Every fixture path interned, plus the non-wall art, so
 --   'structurePieceQuads' can resolve each piece's ids back to paths.
@@ -442,6 +470,69 @@ spec = do
                              , not (isFrontScreenEdge (expectScreenEdge facing e)) ]
                 frontPost `shouldSatisfy` (> maximum fronts)
                 backPost  `shouldSatisfy` (< minimum backs)
+
+    describe "a partial pack variant (#1794 review)" $ do
+        it "leaves a DEFAULT wall rotating through the DEFAULT family" $
+            -- The variant inherits wall_nw.png/wall_se.png/wall_sw.png, so
+            -- a wall placed with one of them is indistinguishable from a
+            -- default wall. It must keep resolving to the default art at
+            -- every facing, never the variant's own NE sprite.
+            forM_ allFacings $ \facing →
+                forM_ [WallNW, WallSE, WallSW] $ \e →
+                    rotatedWallArt variantCatalog facing e
+                        (texPath e) (facePath e placedCaps)
+                        `shouldBe` Just (expectedArt facing e)
+
+        it "rotates the variant's OWN wall through the variant family, \
+           \inherited art included" $
+            forM_ allFacings $ \facing → do
+                let s = expectScreenEdge facing WallNE
+                    expectCaps | expectCapSwap facing WallNE = WallCaps False True
+                               | otherwise                   = WallCaps True False
+                    -- Its own sprite when the screen edge is still NE, the
+                    -- INHERITED default sprite otherwise — which is exactly
+                    -- what a variant that authored only NE art has.
+                    expectTex | s ≡ WallNE = variantTexHandle
+                              | otherwise  = texHandle s
+                rotatedWallArt variantCatalog facing WallNE
+                    variantTexPath (facePath WallNE placedCaps)
+                    `shouldBe` Just (expectTex, faceHandle s expectCaps)
+
+        it "registering the same family twice changes nothing" $
+            -- Idempotent, so a second registration cannot make a variant's
+            -- own paths look contradictory.
+            forM_ allFacings $ \facing → forM_ allEdges $ \e →
+                rotatedWallArt (fromMaybe variantCatalog
+                                   (registerWallFamily familyEntries variantCatalog))
+                               facing e (texPath e) (facePath e placedCaps)
+                    `shouldBe` Just (expectedArt facing e)
+
+        it "refuses to rotate a path two families both CLAIM to own" $ do
+            -- Contradictory pack data: nothing in a placement says which
+            -- family was meant, so the path stops rotating instead of the
+            -- registration ORDER deciding. This second family declares
+            -- wall_ne.png as its own while the default already does.
+            let clashing =
+                    [ WallArtEntry e Nothing
+                          (if e ≡ WallNE
+                             then texPath WallNE
+                             else "pack/clash/wall_" <> edgeName e <> ".png")
+                          (TextureHandle (500 + edgeIx e)) True
+                    | e ← allEdges ]
+                    <> [ WallArtEntry e (Just c)
+                             ("pack/clash/face_" <> edgeName e <> "_"
+                                                <> wallCapsCode c <> ".png")
+                             (TextureHandle (600 + edgeIx e * 4 + capIx c)) True
+                       | e ← allEdges, c ← allCaps ]
+                clashCat = fromMaybe (error "clashing fixture is incomplete")
+                               (registerWallFamily clashing catalog)
+            rotatedWallArt clashCat FaceWest WallNE
+                (texPath WallNE) (facePath WallNE placedCaps)
+                `shouldBe` Nothing
+            -- A path only ONE family owns is untouched by that.
+            rotatedWallArt clashCat FaceWest WallNW
+                (texPath WallNW) (facePath WallNW placedCaps)
+                `shouldBe` Just (expectedArt FaceWest WallNW)
 
     describe "unresolved art" $
         it "emits nothing until both palette ids have a runtime handle" $

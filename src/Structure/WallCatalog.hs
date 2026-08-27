@@ -27,6 +27,22 @@
 --       sixteen cap facemaps, or the registration is refused. A partial
 --       family would silently rotate some of a wall's directions and not
 --       others.
+--     * A family's TABLE holds every path it renders, but only the paths
+--       it OWNS claim it in the reverse index. A pack variant may override
+--       any SUBSET of the wall art (@data/structure_packs/*.yaml@'s
+--       @variants@) and INHERITS the default's paths for the rest — so a
+--       variant overriding only @wall_ne@ shares @wall_nw.png@ with the
+--       default family, and a piece placed with that shared path is
+--       indistinguishable from a default wall in the stored data. Letting
+--       the variant claim it would rotate a DEFAULT wall into the
+--       VARIANT's art. Ownership is what the pack YAML actually states, so
+--       the shared path stays the default family's while the variant still
+--       resolves its own inherited art through its own table.
+--     * Two families OWNING one path is contradictory pack data — nothing
+--       in a placement can say which was meant — so the path is marked
+--       AMBIGUOUS and stops rotating rather than picking a winner. That
+--       makes the catalogue independent of registration ORDER, which
+--       nothing guarantees.
 --     * 'rotatedWallArt' rotates the sprite and its cap facemap TOGETHER
 --       or not at all, and only when BOTH stored assets are registered
 --       under the wall's own authored edge. Art from outside any
@@ -74,14 +90,15 @@ data WallFamily = WallFamily
 data StructureWallCatalog = StructureWallCatalog
     { swcFamilies ∷ !(IM.IntMap WallFamily)
       -- ^ Families by allocation index.
-    , swcTexEdge  ∷ !(HM.HashMap Text (Int, WallEdge))
-      -- ^ Sprite path → its family and the AUTHORED edge it draws.
-    , swcFaceEdge ∷ !(HM.HashMap Text (Int, WallEdge, WallCaps))
-      -- ^ Cap-facemap path → its family, authored edge and cap state.
-      --   A path shared by several families (a variant inheriting the
-      --   default masks) keeps its FIRST registration; every family
-      --   holding it answers identically for it, so which one wins does
-      --   not change the result.
+    , swcTexEdge  ∷ !(HM.HashMap Text (Maybe (Int, WallEdge)))
+      -- ^ Sprite path → the family that OWNS it and the AUTHORED edge it
+      --   draws. 'Nothing' is a path two families claim ownership of,
+      --   which is contradictory pack data: it never rotates.
+    , swcFaceEdge ∷ !(HM.HashMap Text (Maybe (Int, WallEdge, WallCaps)))
+      -- ^ Cap-facemap path → the family that OWNS it, its authored edge
+      --   and cap state, with the same ambiguity rule. A path a variant
+      --   merely INHERITS makes no claim here at all, so it keeps
+      --   resolving through the family that declared it.
     , swcHandles  ∷ !(HM.HashMap Text TextureHandle)
       -- ^ Runtime handle per registered path. The rotated art is a
       --   DIFFERENT path from the placed one, which the palette's
@@ -101,50 +118,67 @@ data WallArtEntry = WallArtEntry
     , waeCaps   ∷ !(Maybe WallCaps)
     , waePath   ∷ !Text
     , waeHandle ∷ !TextureHandle
+    , waeOwned  ∷ !Bool
+      -- ^ Does this family DECLARE the path, or merely inherit it from
+      --   the pack's default art? Only a declared path claims the family
+      --   in the reverse index — see the module header.
     } deriving (Show, Eq)
 
 -- | Register one complete directional family. Returns 'Nothing' — the
 --   catalogue unchanged — when the entries do not cover all four edges
 --   and all sixteen (edge, cap) facemaps, so a mis-registration is a
 --   loud no-op rather than a half-rotating pack.
+--
+--   Registering a family the catalogue already holds is an idempotent
+--   no-op, so a second call for the same pack variant cannot make that
+--   variant's own paths look contradictory.
 registerWallFamily ∷ [WallArtEntry] → StructureWallCatalog
                    → Maybe StructureWallCatalog
 registerWallFamily entries cat
     | M.size textures ≢ 4 ∨ M.size facemaps ≢ 16 = Nothing
+    | family `elem` IM.elems (swcFamilies cat)   = Just cat
     | otherwise = Just cat
-        { swcFamilies   = IM.insert fi (WallFamily textures facemaps) (swcFamilies cat)
-        , swcTexEdge    = foldr (\e m → HM.insert (waePath e) (fi, waeEdge e) m)
-                                (swcTexEdge cat) texEntries
-        , swcFaceEdge   = foldr (\(e, c) m →
-                                    HM.insertWith (\_new old → old)
-                                                  (waePath e) (fi, waeEdge e, c) m)
-                                (swcFaceEdge cat) faceEntries
+        { swcFamilies   = IM.insert fi family (swcFamilies cat)
+        , swcTexEdge    = foldr (\e → claim (waePath e) (fi, waeEdge e))
+                                (swcTexEdge cat)
+                                [ e | e ← texEntries, waeOwned e ]
+        , swcFaceEdge   = foldr (\(e, c) → claim (waePath e) (fi, waeEdge e, c))
+                                (swcFaceEdge cat)
+                                [ (e, c) | (e, c) ← faceEntries, waeOwned e ]
         , swcHandles    = foldr (\e m → HM.insert (waePath e) (waeHandle e) m)
                                 (swcHandles cat) entries
         , swcNextFamily = fi + 1
         }
   where
     fi          = swcNextFamily cat
+    family      = WallFamily textures facemaps
     texEntries  = [ e | e ← entries, isNothing (waeCaps e) ]
     faceEntries = [ (e, c) | e ← entries, Just c ← [waeCaps e] ]
     textures    = M.fromList [ (waeEdge e, waePath e) | e ← texEntries ]
     facemaps    = M.fromList [ ((waeEdge e, c), waePath e) | (e, c) ← faceEntries ]
+    -- A second, DIFFERENT owner for one path is contradictory pack data:
+    -- mark it ambiguous instead of letting registration order decide.
+    claim ∷ Eq α ⇒ Text → α → HM.HashMap Text (Maybe α) → HM.HashMap Text (Maybe α)
+    claim path v = HM.insertWith merge path (Just v)
+      where merge new old | old ≡ new = old
+                          | otherwise = Nothing
 
 -- | The sprite and cap facemap a wall on AUTHORED edge @edge@, placed
 --   with @texPath@\/@facePath@, is drawn with at @facing@.
 --
 --   'Nothing' means "draw exactly what was placed": either asset
---   unregistered, the two disagreeing about the wall's authored edge
---   (which is the only way a texture from one direction could be paired
---   with a facemap from another — refused rather than rendered), or a
---   target the family does not hold. At 'FaceSouth' the screen edge and
---   cap order are both the identity, so a registered pair resolves back
---   to its own two paths and the result is the placed art unchanged.
+--   unregistered or ambiguously owned, the two disagreeing about the
+--   wall's authored edge (which is the only way a texture from one
+--   direction could be paired with a facemap from another — refused
+--   rather than rendered), or a target the family does not hold. At
+--   'FaceSouth' the screen edge and cap order are both the identity, so a
+--   registered pair resolves back to its own two paths and the result is
+--   the placed art unchanged.
 rotatedWallArt ∷ StructureWallCatalog → CameraFacing → WallEdge → Text → Text
                → Maybe (TextureHandle, TextureHandle)
 rotatedWallArt cat facing edge texPath facePath = do
-    (texFam, texEdge)          ← HM.lookup texPath  (swcTexEdge cat)
-    (faceFam, faceEdge, caps)  ← HM.lookup facePath (swcFaceEdge cat)
+    (texFam, texEdge)          ← join (HM.lookup texPath  (swcTexEdge cat))
+    (faceFam, faceEdge, caps)  ← join (HM.lookup facePath (swcFaceEdge cat))
     if texEdge ≢ edge ∨ faceEdge ≢ edge then Nothing else do
         famT ← IM.lookup texFam  (swcFamilies cat)
         famF ← IM.lookup faceFam (swcFamilies cat)

@@ -304,16 +304,25 @@ structureSetPaletteHandleFn env = do
 --   can draw a wall with the sprite its edge occupies once the camera has
 --   rotated. @entries@ is a dense array of
 --   @{dir = "ne"|"nw"|"se"|"sw", cap = "00"|"10"|"01"|"11" or nil,
---     path = "...", handle = engine.loadTexture(path)}@ — the sprite for
---   each direction (no @cap@) plus that direction's four cap facemaps.
+--   path = "...", handle = engine.loadTexture(path), owned = true|false}@
+--   — the sprite for each direction (no @cap@) plus that direction's four
+--   cap facemaps.
 --
---   All twenty must be present: a partial family would rotate some of a
---   wall's directions and not others, so an incomplete or malformed call
---   returns false and registers NOTHING. Registration is keyed by PATH,
---   not by palette id, so it survives the wholesale palette replacement a
---   load performs and never needs redoing; re-registering a variant is
---   harmless. Nothing here places a piece or touches the palette — the
---   catalogue is pure art metadata, read only at render time.
+--   @owned@ is MANDATORY and says whether this family DECLARES the path or
+--   merely inherits it from the pack's default art: a variant may override
+--   any subset of the wall art, and claiming an inherited path would
+--   rotate a DEFAULT wall into the variant's sprite (see
+--   "Structure.WallCatalog"). It is required rather than defaulted so a
+--   caller cannot reintroduce that silently.
+--
+--   All twenty must be present and well-formed: a partial family would
+--   rotate some of a wall's directions and not others, so an incomplete or
+--   malformed call returns false and registers NOTHING. Registration is
+--   keyed by PATH, not by palette id, so it survives the wholesale palette
+--   replacement a load performs and never needs redoing; re-registering a
+--   variant is an idempotent no-op. Nothing here places a piece or touches
+--   the palette — the catalogue is pure art metadata, read only at render
+--   time.
 structureRegisterWallFamilyFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 structureRegisterWallFamilyFn env = do
     isT ← Lua.istable 1
@@ -348,18 +357,24 @@ structureRegisterWallFamilyFn env = do
 
     readEntry ∷ Lua.LuaE Lua.Exception (Maybe WallArtEntry)
     readEntry = do
-        mDir  ← strField "dir"
-        mPath ← strField "path"
-        mCap  ← strField "cap"
-        _     ← Lua.getfield (-1) "handle"
-        mH    ← Lua.tointeger (-1)
+        mDir   ← strField "dir"
+        mPath  ← strField "path"
+        mCap   ← strField "cap"
+        _      ← Lua.getfield (-1) "handle"
+        mH     ← Lua.tointeger (-1)
+        Lua.pop 1
+        ownTy  ← Lua.getfield (-1) "owned"
+        owned  ← Lua.toboolean (-1)
         Lua.pop 1
         pure $ do
             dir  ← mDir ⌦ wallEdgeFromText
             path ← mPath
             caps ← readCaps mCap
             h    ← mH
-            pure (WallArtEntry dir caps path (TextureHandle (fromIntegral h)))
+            -- Absent or non-boolean `owned` is a malformed entry, never a
+            -- silent default: see this function's header.
+            guard (ownTy ≡ Lua.TypeBoolean)
+            pure (WallArtEntry dir caps path (TextureHandle (fromIntegral h)) owned)
 
     -- An ABSENT cap names the direction's sprite; a PRESENT one must be a
     -- valid "<left><right>" suffix, never silently treated as absent.
