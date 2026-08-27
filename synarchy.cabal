@@ -274,6 +274,7 @@ library
                      Engine.Scripting.Lua.Util
                      Engine.Scripting.Lua.API
                      Engine.Scripting.Lua.API.Internal
+                     Engine.Scripting.Lua.API.PageBinding
                      Engine.Scripting.Lua.API.Register.Debug
                      Engine.Scripting.Lua.API.Register.Engine
                      Engine.Scripting.Lua.API.Register.Input
@@ -498,6 +499,8 @@ library
                      Building.Placement
                      Building.HitTest
                      Structure.Types
+                     Structure.Facing
+                     Structure.WallCatalog
                      Structure.Render
                      Engine.Asset.YamlBuildings
                      Engine.Scripting.Lua.API.Buildings
@@ -1196,6 +1199,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Craft.Execute
                    Test.Headless.Craft.Bills
                    Test.Headless.Craft.BillReconcile
+                   Test.Headless.Craft.OutputIdentity
                    Test.Headless.Power.Types
                    Test.Headless.Power.Placement
                    Test.Headless.Power.Demolition
@@ -1245,6 +1249,7 @@ test-suite synarchy-test-headless
                    Test.Headless.River.CalderaHazard
                    Test.Headless.River.InlandSources
                    Test.Headless.World.Render.FrontWallLift
+                   Test.Headless.World.Render.StructureRotation
                    Test.Headless.World.Render.GroundItemSeam
                    Test.Headless.World.Render.PickSeam
                    Test.Headless.World.Render.QuadSnapshot
@@ -1283,6 +1288,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Building.Knowledge
                    Test.Headless.Item.NestedContents
                    Test.Headless.Building.PageBinding
+                   Test.Headless.Building.PortalSpawnBinding
                    Test.Headless.Building.Placement
                    Test.Headless.Building.RemoteWarning
                    Test.Headless.Lua.SaveModules

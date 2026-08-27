@@ -25,6 +25,7 @@ import World.Generate (chunkToGlobal, viewDepth)
 import World.Generate.Coordinates (canonicalTileFrame)
 import World.Grid (gridToScreen, tileSideHeight, applyFacing)
 import Structure.Types (StructureSlot(..), ChunkStructures, spdGridZ)
+import Structure.Render (isScreenFrontWall, wallTieBreak, frontWallDepthSteps)
 import World.Render.ViewBounds (viewBoundsAt, expandViewBounds, isTileVisible)
 import World.Render.Camera (quadCacheMargins)
 import World.Render.ChunkCulling (isChunkRelevantForSlice, isChunkVisibleWrapped)
@@ -421,12 +422,19 @@ renderWorldQuads env worldState zoomAlpha snap = do
 --   clears the entire strip range as one unit. Returns Nothing when no
 --   such wall is near (the sprite keeps its normal key).
 --
---   The strip-key formula mirrors 'frontWallStrips'/'tieBreak' in
---   Structure.Render (SE 0.0006, SW 0.0005; the clamped south strip
---   anchors at the S vertex (wgx+1,wgy+1)) — keep them in sync. The
---   applyFacing depth test keeps it rotation-correct. Wall lookups cross
---   chunks; the per-chunk gate at the call site keeps it free where
---   there are none.
+--   The strip-key formula is not restated here: the candidate slots, the
+--   tie-break each gets and how far in front of its own tile a wall's
+--   clamped strips reach all come from "Structure.Render" itself
+--   ('isScreenFrontWall', 'wallTieBreak', 'frontWallDepthSteps'), so the
+--   lift and the strips cannot drift apart. The first two are
+--   facing-DEPENDENT since #1712 — which walls are screen-front, and
+--   which tie-break their rotated sprite takes — while the depth reach is
+--   deliberately facing-INVARIANT, measured in painter-depth steps from
+--   the tile's own grid origin rather than from a rotating vertex. All
+--   three are the historical SE 0.0006 / SW 0.0005 / (wgx+1,wgy+1) at
+--   'FaceSouth'. The applyFacing depth test keeps the comparison
+--   rotation-correct. Wall lookups cross chunks; the per-chunk gate at
+--   the call site keeps it free where there are none.
 --
 --   Seam-aware (#423): loaded chunks are keyed by canonical (u-wrapped)
 --   coords ('World.Thread.ChunkLoading'), and a chunk's structures are
@@ -444,8 +452,13 @@ structureFrontWallClear
 structureFrontWallClear facing worldSize zSlice structLookup gx gy =
     let (fa, fb) = applyFacing facing gx gy
         spriteDepth = fa + fb
-        seTag = fromIntegral (fromEnum SWallSE) ∷ Word8
-        swTag = fromIntegral (fromEnum SWallSW) ∷ Word8
+        -- The walls whose edge is drawn at the SCREEN front right now,
+        -- each with the tie-break its rotated sprite gets — the same two
+        -- answers Structure.Render gives, from the same functions.
+        frontCands =
+            [ (fromIntegral (fromEnum slot) ∷ Word8, wallTieBreak facing slot)
+            | slot ← [SWallNE, SWallNW, SWallSE, SWallSW]
+            , isScreenFrontWall facing slot ]
         wallKeyAt wgx wgy tag tieB = do
             let (cc, _, (dgx, dgy)) = canonicalTileFrame worldSize wgx wgy
                 -- Tile key in the stored (canonical) chunk's frame. The
@@ -484,10 +497,13 @@ structureFrontWallClear facing worldSize zSlice structLookup gx gy =
             -- screen position across the seam is separately unfixed.
             -- That is out of #1176's scope and does not change this
             -- guard's verdict, which rests on the key alone.)
-            let (sa, sb) = applyFacing facing (sgx + 1) (sgy + 1)
-                scDepth  = sa + sb
-                (la, lb) = applyFacing facing (wgx + 1) (wgy + 1)
-                localDepth = la + lb
+            -- A front wall's clamped strips all land 'frontWallDepthSteps'
+            -- in front of its own tile's depth (the tile's front corner,
+            -- (wgx+1,wgy+1) at FaceSouth), at every facing.
+            let (sa, sb) = applyFacing facing sgx sgy
+                scDepth  = sa + sb + frontWallDepthSteps
+                (la, lb) = applyFacing facing wgx wgy
+                localDepth = la + lb + frontWallDepthSteps
             if spriteDepth < localDepth   -- sprite is NOT fully in front
                ∨ scDepth ≢ localDepth     -- frames disagree (E/W seam)
                then Nothing
@@ -496,7 +512,7 @@ structureFrontWallClear facing worldSize zSlice structLookup gx gy =
                           + tieB)
         cands = [ wallKeyAt (gx + dx) (gy + dy) tag tieB
                 | dx ← [-2 .. 2], dy ← [-2 .. 2], (dx, dy) ≢ (0, 0)
-                , (tag, tieB) ← [(seTag, 0.0006 ∷ Float), (swTag, 0.0005)] ]
+                , (tag, tieB) ← frontCands ]
     in case [ k | Just k ← cands ] of
          [] → Nothing
          ks → Just (maximum ks)

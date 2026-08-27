@@ -26,6 +26,28 @@ machinery, then checks:
      already carried stays carried, the bill is removed when its count
      runs out, and the crafter earns trade-skill XP ("smithing" for
      untagged recipes).
+
+     The carried-item half of that needs two fixture preconditions
+     established first (#1772), because without them there is no run in
+     which the assertion can both be reached AND pass. The fixture chunk
+     weighs 10 kg against an acolyte's ~16 kg carrying_capacity on top
+     of a ~12 kg loadout, so (a) it leaves the crafter overweight and
+     unit_ai_fetch's loadFeasible (#1326) refuses every input fetch,
+     and (b) at that fill store_materials outranks wander and hauls the
+     overload into the furnace's own storage. On master those were the
+     SAME event: the craft could only proceed BECAUSE the auto-haul
+     took the fixture item away. So the phase now grants the crafter
+     headroom to carry the chunk and its input together, suspends
+     store_materials by pulling storage targets out of scan range, and
+     asserts both preconditions — plus the pre-suppression evidence
+     that the auto-haul really does outrank wander at the fixture's own
+     load — before restoring everything it changed. Nothing in
+     production moves: the #1326 gate and the auto-store policy are
+     untouched, the fixture just stops violating one and racing the
+     other. The identity contract itself — a craft never consumes or
+     replaces a same-def instance the crafter already held — is pinned
+     without any AI timing at all by
+     Test.Headless.Craft.OutputIdentity.
   3. Knowledge gate: a knowledge-gated bill draws no worker while the
      acolyte doesn't know the theory, and is worked once
      unit.setKnowledge grants it.
@@ -85,6 +107,9 @@ import argparse, glob, json, socket, subprocess, sys, time
 from probelib import clear_find_water, quit_engine, boot, send, send_json
 
 SPROOT = "/tmp"
+# Owner tag for the identity window's temporary carrying-capacity
+# modifier, so unit.removeModifier can take back exactly it.
+CAPACITY_MOD_SOURCE = "craft_bill_probe_identity_window"
 TEST_YAML = f"{SPROOT}/craft_bill_probe_recipes.yaml"
 
 # Probe recipes: tiny work values so a cycle completes in seconds
@@ -229,6 +254,68 @@ def inv_instance_ids(port, uid, name):
         return ids if isinstance(ids, list) else []
     except json.JSONDecodeError:
         return []
+
+
+def account_instance(port, iid):
+    """Where instance `iid` actually is: a unit's inventory, the ground,
+    or a building's storage. #1772's fixture failed with a bare
+    `kept=[]`, which reads as "destroyed" while the instance was in fact
+    sitting in the furnace's storage -- so a failure here names the
+    holder instead of leaving the next reader to rebuild the trace."""
+    found = send_json(port,
+        f"local want={iid}; local out={{}}; "
+        f"for _,u in ipairs(unit.getAllIds() or {{}}) do "
+        f"for _,it in ipairs(unit.getInventory(u) or {{}}) do "
+        f"if it.instanceId==want then out[#out+1]='unit:'..u end end end; "
+        f"for _,g in ipairs(item.listGround() or {{}}) do "
+        f"if g.instanceId==want then out[#out+1]='ground' end end; "
+        f"for _,b in ipairs(building.getActiveIds() or {{}}) do "
+        f"for _,it in ipairs(building.getStorage(b) or {{}}) do "
+        f"if it.instanceId==want then out[#out+1]='building:'..b end end end; "
+        f"return out")
+    if isinstance(found, list) and found:
+        return ",".join(str(x) for x in found)
+    return "unaccounted"
+
+
+def acolyte_tunable(port, name):
+    """One live acolyte tunable, so the window below compares against
+    and restores what it actually found rather than a literal copy that
+    would go stale if a default moved."""
+    return float(send(port,
+        f"return require('scripts.unit_ai_tunables').acolyte.{name}"))
+
+
+def unit_load(port, uid):
+    """(carrying weight, effective carrying_capacity) for `uid` -- the
+    two numbers unit_ai_fetch's loadFeasible (#1326) compares."""
+    raw = send(port,
+        f"return string.format('%.4f,%.4f', "
+        f"unit.getCarryingWeight({uid}) or -1, "
+        f"unit.getStat({uid}, 'carrying_capacity') or -1)").strip('"')
+    carried, cap = raw.split(",")
+    return float(carried), float(cap)
+
+
+def set_store_scan_range(port, value):
+    """store_materials' scan range on the LIVE acolyte tunables --
+    unit_ai.tickOne re-reads config[defName] every tick, so this takes
+    effect on the next decision."""
+    send(port, "require('scripts.unit_ai_tunables').acolyte"
+               f".store_scan_range = {value}; return 'ok'")
+
+
+def store_materials_utility(port, uid):
+    """storeMaterialsUtility for `uid` under the live tunables, against a
+    throwaway state table so the unit's real AI state is untouched.
+    Returns the string 'ineligible' for -math.huge (JSON has no
+    infinity), else the numeric utility as text."""
+    return send(port,
+        "local lg=require('scripts.unit_ai_logistics'); "
+        "local p=require('scripts.unit_ai_tunables').acolyte; "
+        f"local u=lg.storeMaterialsUtility({uid}, {{}}, p); "
+        "return (u == -math.huge) and 'ineligible' or tostring(u)"
+        ).strip('"')
 
 
 def add_bill(port, bid, recipe, count=None):
@@ -441,6 +528,101 @@ def main():
         passed = check(passed, len(keep_ids) == 1,
                        "identity fixture: crafter carries one granite chunk",
                        keep_ids)
+        # Two things about that one 10 kg chunk have to be established
+        # before the AI runs, or this phase cannot test what it claims
+        # to (#1772).
+        #
+        # (a) It puts the crafter OVER capacity. A spawned acolyte
+        #     carries ~12 kg of loadout against a body-derived
+        #     carrying_capacity of ~16 kg, so the fixture chunk lands it
+        #     ~35 % overweight -- and unit_ai_fetch's loadFeasible
+        #     (#1326) then refuses every input fetch, leaving the bill
+        #     silently unclaimed. The phase only ever got moving on
+        #     master because store_materials hauled the overload away,
+        #     which is the very deposit that ate the fixture instance.
+        #     So the craft "working" and the item "vanishing" were the
+        #     SAME event: there was no run in which the assertion could
+        #     both be reached and pass.
+        #
+        # (b) store_materials is a legitimate rival for it either way.
+        #     granite_chunk is category Materials
+        #     (data/items/granite_chunk.yaml) and the furnace declares
+        #     100 kg of ordinary storage (data/buildings/furnace.yaml),
+        #     so the crafter ends the bill standing adjacent to a valid
+        #     target, and the action deliberately deposits EVERY carried
+        #     Materials item (scripts/unit_ai_logistics.lua). That is
+        #     intended hauling, not a bug -- it just must not be racing
+        #     the assertion.
+        #
+        # Evidence for (b) first: with the chunk carried, a storage
+        # target really does resolve, so the suspension below is doing
+        # real work rather than disabling something already inert.
+        #
+        # ELIGIBILITY only -- deliberately not "and it outranks wander".
+        # The utility is base * fill^3, and fill is carried/capacity
+        # against a carrying_capacity rolled per spawn from body
+        # composition (~16-39 kg observed across runs). So how far the
+        # action clears the wander floor is spawn-roll dependent, and
+        # asserting a margin here would just be a NEW flaky check in a
+        # probe this change exists to make deterministic. The margin is
+        # reported for the record; only eligibility is required.
+        wander = acolyte_tunable(port, "base_wander_utility")
+        crowded_util = store_materials_utility(port, uid)
+        passed = check(passed, crowded_util != "ineligible",
+                       "the auto-haul that took the chunk is eligible at "
+                       "the fixture's own load",
+                       f"store={crowded_util} wander={wander}")
+
+        # (a): give the crafter headroom, so the craft can run with the
+        # chunk still carried instead of needing it hauled away first.
+        #
+        # A MODIFIER, not unit.setStat: carrying_capacity is body-derived
+        # (Unit.Thread.Command.Body recomputes it from lean mass and
+        # strength), so a written base is liable to be recomputed away,
+        # while a modifier is applied on TOP of whatever the base
+        # currently is. +80 kg clears the whole cycle -- the ~12 kg
+        # loadout, the 10 kg chunk, a 0.5 kg steel_bar input and the two
+        # 10 kg fresh outputs held between executeAt and the drop --
+        # from any spawn roll, and unit.removeModifier takes it back off
+        # by source at the end of the window. The #1326 gate itself is
+        # untouched; the fixture just stops violating it.
+        _, cap_before = unit_load(port, uid)
+        send(port, f"unit.addModifier({uid}, 'carrying_capacity', 80.0, "
+                   f"'{CAPACITY_MOD_SOURCE}'); return 'ok'")
+        carried, cap = unit_load(port, uid)
+        # Prove the boost LANDED. Without this the check below would
+        # pass on any spawn that happened to roll enough capacity on its
+        # own, which is exactly the luck this fixture exists to remove.
+        passed = check(passed, cap >= cap_before + 79.0,
+                       "precondition: the identity window's capacity "
+                       "headroom actually applied",
+                       f"cap {cap_before} -> {cap}")
+        bar_w = float(send(port,
+            "for _,d in ipairs(item.listDefs() or {}) do "
+            "if d.name=='steel_bar' then return d.weight or -1 end end; "
+            "return -1"))
+        passed = check(passed, bar_w > 0 and carried + bar_w <= cap,
+                       "precondition: the crafter can carry the fixture "
+                       "chunk AND the recipe's input (loadFeasible, #1326)",
+                       f"carried={carried} + bar={bar_w} <= cap={cap}")
+
+        # (b): suspend the rival for the length of the window, and assert
+        # that precondition rather than assume it.
+        #
+        # NEGATIVE, not zero: findStorageTarget seeds bestD = maxRange
+        # and accepts `d <= bestD`, so a range of 0 still matches a
+        # target the unit is standing exactly on -- and the crafter is
+        # allowed to stand ON a 1x1 station's footprint (executeAt gates
+        # at Chebyshev <= 1). A negative range no distance can satisfy
+        # closes that, rather than relying on the AI happening to pick a
+        # perimeter tile.
+        shipped_store_range = acolyte_tunable(port, "store_scan_range")
+        set_store_scan_range(port, -1.0)
+        supp_util = store_materials_utility(port, uid)
+        passed = check(passed, supp_util == "ineligible",
+                       "precondition: store_materials suspended for the "
+                       "identity window (no storage target in range)",
+                       f"utility={supp_util}")
         xp0 = float(send(port, f"return unit.getSkill({uid}, 'smithing') or 0"))
         bill3, msg = add_bill(port, bid_f, "bill_probe_smelt", 2)
         passed = check(passed, bill3 is not None, "AI bill queued", msg)
@@ -469,9 +651,15 @@ def main():
                        "outputs laid down at the station (≥4 granite chunks)",
                        f"found={outs}")
         kept = inv_instance_ids(port, uid, "granite_chunk")
+        held_by = account_instance(port, keep_ids[0]) if keep_ids else "n/a"
         passed = check(passed, kept == keep_ids,
                        "carried same-def item kept; only fresh outputs dropped",
-                       f"kept={kept} expected={keep_ids}")
+                       f"kept={kept} expected={keep_ids} held_by={held_by}")
+        # Window closed: hand back both fixture adjustments so every
+        # later phase runs default behaviour.
+        set_store_scan_range(port, shipped_store_range)
+        send(port, f"unit.removeModifier({uid}, '{CAPACITY_MOD_SOURCE}'); "
+                   f"return 'ok'")
         xp1 = float(send(port, f"return unit.getSkill({uid}, 'smithing') or 0"))
         passed = check(passed, xp1 > xp0,
                        "crafter earned smithing XP", f"{xp0} → {xp1}")

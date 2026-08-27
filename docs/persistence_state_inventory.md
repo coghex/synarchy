@@ -95,6 +95,7 @@ the affected fields as unclassified.
 | `buildingManagerRef` | global | Rebuild | see §5 (`BuildingManager` fields classified individually) | the IORef itself is always freshly allocated at boot; the interesting classification decisions live on `BuildingManager`'s own fields (§5) | none yet |
 | `texPaletteRef` | global | Persist exactly | — | `sdTexPalette` | `tools/persistence_contract_probe.py` (see §12) |
 | `texPaletteHandlesRef` | global | Exclude | `texPaletteRef` | runtime GPU translation table rebuilt from `texPaletteRef` | none yet |
+| `structureWallCatalogRef` | global | Rebuild | `data/structure_packs/*.yaml` wall art | directional wall sprites/cap facemaps per pack variant (#1712), re-registered from the pack YAML by `scripts/structures.lua` at every boot; keyed by texture PATH so it stays valid across the palette replacement a load performs | none yet |
 | `buildingQueue` | global | Exclude | — | transport queue; see contract §3 | none yet |
 | `combatQueue` | global | Exclude | — | transport queue; see contract §3 | none yet |
 | `combatEventsRef` | global | Exclude | — | explicitly not-persisted event stream to Lua | none yet |

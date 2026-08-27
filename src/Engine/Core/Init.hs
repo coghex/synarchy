@@ -53,6 +53,7 @@ import Unit.Types (emptyUnitManager)
 import Unit.Sim.Types (emptyUnitThreadState)
 import Building.Types (emptyBuildingManager)
 import Structure.Palette (emptyTexPalette)
+import Structure.WallCatalog (emptyStructureWallCatalog)
 import Item.Types (emptyItemManager)
 import Equipment.Types (emptyEquipmentClassManager)
 import Substance.Types (emptySubstanceManager)
@@ -223,6 +224,7 @@ initializeEngineWith logBackend = do
   statRNGRef ← Random.newStdGen ⌦ newIORef
   buildingManagerRef ← newIORef emptyBuildingManager
   texPaletteRef ← newIORef emptyTexPalette
+  structureWallCatalogRef ← newIORef emptyStructureWallCatalog
   texPaletteHandlesRef ← newIORef HM.empty
   buildingQueue ← Q.newQueue
   buildingGhostRef ← newIORef Nothing
@@ -330,6 +332,7 @@ initializeEngineWith logBackend = do
         , statRNGRef         = statRNGRef
         , buildingManagerRef = buildingManagerRef
         , texPaletteRef      = texPaletteRef
+        , structureWallCatalogRef = structureWallCatalogRef
         , texPaletteHandlesRef = texPaletteHandlesRef
         , buildingQueue      = buildingQueue
         , combatQueue        = combatQueue

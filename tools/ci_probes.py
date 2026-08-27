@@ -351,6 +351,14 @@ MANUAL_ONLY_REASONS: dict[str, tuple[Reason, ...]] = {
                                   "screenshot diffing (#807) — no GPU on the CI runner"),),
     "portal_ghost": (Reason(NEEDS_GPU, "offscreen boot: verifies the build-tool ghost's "
                                        "rendered tint via real screenshots — no GPU on the CI runner (#778)"),),
+    "structure_rotation": (Reason(NEEDS_GPU, "offscreen boot: captures one stamped "
+                                  "room at all four camera facings so the rotated "
+                                  "wall art, the terrain interleave and the billboard "
+                                  "lift can be eyeballed (#1712) — no GPU on the CI "
+                                  "runner. The rotation arithmetic itself is proven "
+                                  "exhaustively by the pure hspec groups "
+                                  "World.Render.StructureRotation and "
+                                  "World.Render.FrontWallLift, which DO gate on CI"),),
     "tutorial_hud": (Reason(NEEDS_GPU, "offscreen boot: verifies the tutorial checklist "
                                        "HUD's rendered overlay, real toggle clicks, wheel "
                                        "scrolling and click-through via screenshots — no "
