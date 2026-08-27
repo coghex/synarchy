@@ -30,7 +30,7 @@ import Engine.Scripting.Lua.Types (LuaMsg(..), LuaBackendState(..))
 import Test.Headless.Harness (withHeadlessEngine)
 import UI.ShellFocus (createFocusManager)
 import UI.ControlActivation
-import UI.InputOwnership (PointerKind(..))
+import UI.InputOwnership (PointerKind(..), InputRoute(..), routePointer)
 import UI.Manager
 import UI.Types
 
@@ -115,6 +115,68 @@ spec = do
                 (modalH, m3) = page "modal" LayerModal m2
                 (_modalEh, m4) = clickableAt "modalBg" (0, 0) (400, 400) "modalClick" modalH m3
             resolveActivation (15, 15) m4 pending `shouldSatisfy` isCancel
+
+        -- #1748: 'setPageInputExclusive' is the one OTHER page-scope
+        -- routing change besides show/hide, and it needs the same
+        -- epoch treatment under the same only-on-a-real-change
+        -- discipline — plus a visibility guard, since exclusivity is
+        -- invisible to routing until the page is shown. Each fixture
+        -- below toggles a SEPARATE overlay page that paints above the
+        -- pressed control's HUD page (so it really is the modal
+        -- boundary while exclusive), never the pressed page itself.
+        it "cancels when a separate visible page's exclusivity round-trips false → true → false during the press (#1748)" $ do
+            let (hudH, m1) = basePage
+                (eh, m2) = clickableAt "btn" pt (100, 100) "btnClick" hudH m1
+                -- Pass-through by default (only LayerModal defaults
+                -- exclusive) and painted above LayerHUD.
+                (overH, m3) = page "overlay" LayerOverlay m2
+                pending = beginActivation PointerLeftClick eh m3
+                m4 = setPageInputExclusive overH True m3
+                m5 = setPageInputExclusive overH False m4
+            -- The interruption is real: while the overlay is exclusive
+            -- it owns the modal boundary, so 'pagesInScope' drops the
+            -- HUD page and the pressed control is off-route entirely.
+            routePointer PointerLeftClick (15, 15) m4
+                `shouldNotBe` RouteElement eh "btnClick"
+            -- …and it is fully reverted by release: same exclusivity
+            -- value, same final route, same ancestor chain.
+            (upInputExclusive ⊚ getPage overH m5) `shouldBe` Just False
+            routePointer PointerLeftClick (15, 15) m5
+                `shouldBe` routePointer PointerLeftClick (15, 15) m3
+            paChain (beginActivation PointerLeftClick eh m5)
+                `shouldBe` paChain pending
+            -- Only the page epoch remembers it — and that is what
+            -- must cancel.
+            upmPageEpoch m5 `shouldNotBe` upmPageEpoch m3
+            resolveActivation (15, 15) m5 pending `shouldSatisfy` isCancel
+
+        it "a NO-OP exclusivity assignment on a VISIBLE page leaves the pending activation intact (#1748)" $ do
+            let (hudH, m1) = basePage
+                (eh, m2) = clickableAt "btn" pt (100, 100) "btnClick" hudH m1
+                (overH, m3) = page "overlay" LayerOverlay m2
+                pending = beginActivation PointerLeftClick eh m3
+                -- Already False (LayerOverlay's default): visible, but
+                -- nothing actually changes, so nothing was interrupted.
+                m4 = setPageInputExclusive overH False m3
+            upmPageEpoch m4 `shouldBe` upmPageEpoch m3
+            resolveActivation (15, 15) m4 pending `shouldBe` Activate eh "btnClick"
+
+        it "a REAL exclusivity change on a HIDDEN page leaves the pending activation intact (#1748)" $ do
+            let (hudH, m1) = basePage
+                (eh, m2) = clickableAt "btn" pt (100, 100) "btnClick" hudH m1
+                -- Created but never shown — this is the shape all three
+                -- tracked callers use (popup.lua x2,
+                -- input_check_fixture.lua), including popup.init's
+                -- genuine True → False opt-out on a LayerModal page.
+                (hiddenH, m3) = createPage "pending-modal" LayerModal m2
+                pending = beginActivation PointerLeftClick eh m3
+                m4 = setPageInputExclusive hiddenH False m3
+            -- A genuine value change (LayerModal defaults exclusive)…
+            (upInputExclusive ⊚ getPage hiddenH m3) `shouldBe` Just True
+            (upInputExclusive ⊚ getPage hiddenH m4) `shouldBe` Just False
+            -- …but invisible to routing, so it must not cancel.
+            upmPageEpoch m4 `shouldBe` upmPageEpoch m3
+            resolveActivation (15, 15) m4 pending `shouldBe` Activate eh "btnClick"
 
         it "activates the freshly re-resolved callback when it was reassigned mid-press" $ do
             let (hudH, m1) = basePage

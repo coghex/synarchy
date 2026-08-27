@@ -36,7 +36,13 @@
 --       modal/menu page appearing then disappearing over the point,
 --       both cancel even when reverted by release. Deliberately
 --       GLOBAL: page-level visibility is route-affecting everywhere,
---       not just for controls the page owns.
+--       not just for controls the page owns. #1748 adds the one other
+--       page-scope routing change there is:
+--       'UI.Manager.Page.setPageInputExclusive' bumps it when a REAL
+--       exclusivity change lands on a page that is currently VISIBLE,
+--       so a modal boundary inserted and removed during one press
+--       cancels too — on a hidden page it bumps nothing, since
+--       'UI.InputOwnership.inputBoundaryPage' never sees it.
 --     * 'paChain'/'UI.Types.ueRouteEpoch' — a snapshot of the pressed
 --       element's own epoch AND every ANCESTOR's epoch (walking
 --       'UI.Types.ueParent' pointers), taken at press time and

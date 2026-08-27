@@ -699,7 +699,14 @@ control records `UI.ControlActivation.PendingActivation` (firing
 `LuaUIPressBeginEvent`); the release re-runs `routePointer` and only
 activates if it still resolves to the same element. Interruptions
 reverted before release are caught by epochs: global `upmPageEpoch`
-(bumped ONLY by `hidePage`/`showPage`) + per-element `ueRouteEpoch`
+(bumped by `hidePage`/`showPage`, each only on a REAL visibility
+transition, and — #1748 — by `setPageInputExclusive`, only when the
+assignment really changes `upInputExclusive` on a page that is CURRENTLY
+VISIBLE: a modal boundary inserted and removed during one press is
+route-affecting at page scope via `inputBoundaryPage`/`pagesInScope`,
+while exclusivity on a hidden page is invisible to routing, which is
+what keeps `popup.init`'s genuine `true → false` opt-out from cancelling
+an unrelated in-flight click) + per-element `ueRouteEpoch`
 (bumped by `setVisible`/`setClickable` on THAT element, only on a real
 value change; by every detach; and — #1694 — by an
 `addToPage`/`addChild` that actually CHANGES that element's structural
