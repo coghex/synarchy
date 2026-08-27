@@ -298,7 +298,11 @@ def active_building_ids(port):
     exist before", which a count alone cannot state: a simultaneous
     retire and spawn leaves the count unchanged, and a count also
     can't say WHICH id is new."""
-    ids = send_json(port, "return building.getActiveIds()")
+    # Parenthesised so Lua truncates to the ids alone: getActiveIds also
+    # reports the page-selection generation its scan was scoped under
+    # (#1686), and the debug console tab-joins every returned value into
+    # one reply, which is not JSON.
+    ids = send_json(port, "return (building.getActiveIds())")
     if not isinstance(ids, list):
         return set()
     return {int(i) for i in ids

@@ -210,6 +210,7 @@ import qualified Test.Headless.Scene.BatchMerge as BatchMerge
 import qualified Test.Headless.Render.PanMargin as PanMargin
 import qualified Test.Headless.Location.Bounds as LocationBounds
 import qualified Test.Headless.Building.PageBinding as BuildingPageBinding
+import qualified Test.Headless.Building.PortalSpawnBinding as BuildingPortalSpawnBinding
 import qualified Test.Headless.Building.Placement as BuildingPlacement
 import qualified Test.Headless.Building.RemoteWarning as BuildingRemoteWarning
 import qualified Test.Headless.Save.AutosaveGuards as AutosaveGuards
@@ -642,6 +643,7 @@ main = hspec $ do
     -- BuildingSpawn / WorldDesignateConstruct stays in its queue and
     -- "nothing was committed" is asserted on the queue itself.
     BuildingPageBinding.spec
+    BuildingPortalSpawnBinding.spec
     describe "World.Render.ZTrackSeam" ZTrackSeam.spec
     describe "World.Render.SideFace" RenderSideFace.spec
     describe "World.Slope.slopeBit" RenderSlopeBit.spec
