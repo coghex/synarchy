@@ -39,29 +39,29 @@ changed.
 
 ## Status
 
-- [ ] AP-1. Thermo comparison drops the live world's plate configuration
-- [ ] AP-2. Power brownout timeout loses the state needed to classify it
-- [ ] AP-3. Thought probe accepts any environmental thought as evidence of cold
-- [ ] AP-4. Farm capstone requires harvested yield to remain transiently grounded
-- [ ] AP-5. State-of-mind guard never samples a value that distinguishes the gates
-- [ ] AP-6. Plant probe does not assert a nonzero preferred-soil baseline
-- [ ] AP-7. Multi-boot probes overwrite earlier engine logs
-- [ ] AP-8. Offscreen type-icon check can be satisfied by the discovery popup
-- [ ] AP-9. Foraging's default fixture can contain no harvestable target
-- [ ] AP-10. Pickup-priority fixture fails its carrying-capacity precondition
-- [ ] AP-11. Repair-priority oracle samples the competing item too late
-- [ ] AP-12. Persistence sweep can exhaust 900 seconds without phase diagnostics
-- [ ] AP-13. An accepted expedition return order is silently abandoned
-- [ ] AP-14. Construction stake phase stops before portal roster delivery
-- [ ] AP-15. Location embark continues after exact-unit selection fails
-- [ ] AP-16. Tutorial pre-latched branch lacks deterministic sight controls
-- [ ] AP-17. Crafting removes an unrelated same-definition inventory item
+- [x] AP-1. Thermo comparison drops the live world's plate configuration — [#1757]
+- [x] AP-2. Power brownout timeout loses the state needed to classify it — [#1758]
+- [x] AP-3. Thought probe accepts any environmental thought as evidence of cold — [#1759]
+- [x] AP-4. Farm capstone requires harvested yield to remain transiently grounded — [#1760]
+- [x] AP-5. State-of-mind guard never samples a value that distinguishes the gates — [#1761]
+- [x] AP-6. Plant probe does not assert a nonzero preferred-soil baseline — [#1762]
+- [x] AP-7. Multi-boot probes overwrite earlier engine logs — [#1763]
+- [x] AP-8. Offscreen type-icon check can be satisfied by the discovery popup — [#1765]
+- [x] AP-9. Foraging's default fixture can contain no harvestable target — [#1766]
+- [x] AP-10. Pickup-priority fixture fails its carrying-capacity precondition — [#1736]
+- [x] AP-11. Repair-priority oracle samples the competing item too late — [#1767]
+- [x] AP-12. Persistence sweep can exhaust 900 seconds without phase diagnostics — [#1768]
+- [x] AP-13. An accepted expedition return order is silently abandoned — [#1769]
+- [x] AP-14. Construction stake phase stops before portal roster delivery — [no-issue]
+- [x] AP-15. Location embark continues after exact-unit selection fails — [#1770]
+- [x] AP-16. Tutorial pre-latched branch lacks deterministic sight controls — [#1771]
+- [x] AP-17. Crafting removes an unrelated same-definition inventory item — [#1772]
 
 ---
 
 ## Behavioral oracle validity
 
-### AP-1. Thermo comparison drops the live world's plate configuration
+### [#1757] AP-1. Thermo comparison drops the live world's plate configuration
 
 The thermo-altitude probe's ice-agreement phase compares positions generated
 with different tectonic-plate counts. Its live console world uses five plates,
@@ -91,7 +91,7 @@ ambient values from another.
 - **Remaining uncertainty:** The observation does not indicate any defect in
   ice generation or ambient-temperature calculation.
 
-### AP-2. Power brownout timeout loses the state needed to classify it
+### [#1758] AP-2. Power brownout timeout loses the state needed to classify it
 
 The powered-workshop probe polls only the bill's `working` flag while waiting
 for the AI to reach the browned-out station. When that poll expires, the
@@ -122,7 +122,7 @@ distinguish power policy, job planning, pathing, or sampling failures.
 - **Remaining uncertainty:** The retained run does not determine whether any
   product subsystem caused the missed working state.
 
-### AP-3. Thought probe accepts any environmental thought as evidence of cold
+### [#1759] AP-3. Thought probe accepts any environmental thought as evidence of cold
 
 The arctic-ambient phase stops at the first thought whose display category is
 `environmental`. That category also contains daylight, heat, and night
@@ -151,7 +151,7 @@ was eligible or selected. The observed run passed on the daylight thought.
 - **Remaining uncertainty:** None material about the false-positive path; the
   run does not judge whether cold thoughts work in production.
 
-### AP-4. Farm capstone requires harvested yield to remain transiently grounded
+### [#1760] AP-4. Farm capstone requires harvested yield to remain transiently grounded
 
 The farm-AI capstone advances the world at 50,000x while AI remains active,
 polling crop ripeness once per second. Afterward it requires both a cleared plot
@@ -180,7 +180,7 @@ successful autonomous handling can fail the asserted ground-state snapshot.
 - **Remaining uncertainty:** The retained artifact does not say where the
   missing grain went; that question is separate from the oracle defect.
 
-### AP-5. State-of-mind guard never samples a value that distinguishes the gates
+### [#1761] AP-5. State-of-mind guard never samples a value that distinguishes the gates
 
 The regression guard is intended to prove that psychological
 `state_of_mind` does not replace consciousness in collapse, delirium,
@@ -212,7 +212,7 @@ still produce the same standing and alert result.
   not a request to retune thresholds.
 - **Remaining uncertainty:** None material about the non-discriminating fixture.
 
-### AP-6. Plant probe does not assert a nonzero preferred-soil baseline
+### [#1762] AP-6. Plant probe does not assert a nonzero preferred-soil baseline
 
 The plant probe claims to prove that preferred soil permits a nonzero overall
 suitability score and non-preferred soil reduces that same crop to zero. Its
@@ -246,7 +246,7 @@ granite zero score mandatory.
 
 ## Execution artifacts and isolation
 
-### AP-7. Multi-boot probes overwrite earlier engine logs
+### [#1763] AP-7. Multi-boot probes overwrite earlier engine logs
 
 The preview and offscreen probes launch multiple fresh engine processes but
 reuse log paths. The shared launcher opens every selected path in truncating
@@ -279,7 +279,7 @@ session.
 - **Remaining uncertainty:** Existing passing assertions remain valid; the lost
   data affects retrospective inspection and failure diagnosis.
 
-### AP-8. Offscreen type-icon check can be satisfied by the discovery popup
+### [#1765] AP-8. Offscreen type-icon check can be satisfied by the discovery popup
 
 The offscreen location-icon phase compares full screenshots before and after a
 ruin becomes discovered. Discovery opens a popup over the same central region
@@ -313,7 +313,7 @@ while obscuring the type icon the assertion names.
 
 ## Fixtures and asynchronous state
 
-### AP-9. Foraging's default fixture can contain no harvestable target
+### [#1766] AP-9. Foraging's default fixture can contain no harvestable target
 
 The foraging probe depends on natural raspberry or clover generated by its
 default seed and region. It scans for a target and exits when none exists, so
@@ -342,7 +342,7 @@ skipped by a deterministic fixture that lacks the required subject.
 - **Remaining uncertainty:** Target absence does not indicate a defect in
   foraging queries or AI.
 
-### AP-10. Pickup-priority fixture fails its carrying-capacity precondition
+### [#1736] AP-10. Pickup-priority fixture fails its carrying-capacity precondition
 
 The follow-command-priority probe stages a 10 kg granite chunk, invokes
 `commandPickup`, ignores the returned boolean, and then waits for
@@ -373,7 +373,7 @@ contest may never exist.
 - **Remaining uncertainty:** The run does not test whether an accepted pickup
   correctly outranks a move.
 
-### AP-11. Repair-priority oracle samples the competing item too late
+### [#1767] AP-11. Repair-priority oracle samples the competing item too late
 
 The repair-priority phase waits until the prioritized gambeson reaches full
 condition and only then performs a separate console request for the broken
@@ -405,7 +405,7 @@ incorrect ordering.
 - **Remaining uncertainty:** The retained run cannot establish which item was
   repaired first.
 
-### AP-12. Persistence sweep can exhaust 900 seconds without phase diagnostics
+### [#1768] AP-12. Persistence sweep can exhaust 900 seconds without phase diagnostics
 
 The broad persistence sweep is registered under the aggregate runner's
 900-second default. The runner captures its stdout in a pipe and waits for
@@ -444,7 +444,7 @@ was advancing or stalled.
 
 ## Integrated gameplay scenarios
 
-### AP-13. An accepted expedition return order is silently abandoned
+### [#1769] AP-13. An accepted expedition return order is silently abandoned
 
 A carrier successfully traversed the outbound route, picked up the exact
 retrieval item, accepted a return command, and retained that command while
@@ -483,7 +483,16 @@ surfaced failure.
   terrain stamping, task cancellation, persistence, or another transition as
   the implementation cause.
 
-### AP-14. Construction stake phase stops before portal roster delivery
+### [no-issue] AP-14. Construction stake phase stops before portal roster delivery
+
+> **Disposition:** No issue — the stake phase's subject is staking, not portal
+> delivery (`tools/construction_probe.py:467` — "A building designation gets
+> staked into a real Appearing building"), and its `PHASES` comment (`:850-853`)
+> shows the roster spawn was a known side-effect the phase is ordered last to
+> contain rather than to assert on. Roster delivery is already gated by
+> `tools/expedition_loop_probe.py:945-965`, which waits on the portal's own
+> spawn sequencer for five acolytes and the technomule — the "existing
+> expedition integration apparatus" this finding names as an acceptable home.
 
 The focused construction stake phase proves that an `acolyte_portal`
 designation becomes an active building and then immediately destroys the
@@ -514,7 +523,7 @@ intended to cover.
 - **Remaining uncertainty:** The run neither confirms nor contradicts current
   portal roster behavior.
 
-### AP-15. Location embark continues after exact-unit selection fails
+### [#1770] AP-15. Location embark continues after exact-unit selection fails
 
 The location-embark scenario checks whether a real click selected one chosen
 portal-roster unit but treats a false result as an ordinary failed assertion
@@ -551,7 +560,7 @@ allowing one selection miss to mix several unit identities across the phase.
 - **Remaining uncertainty:** The original click miss may be overlap, movement,
   hit testing, or another input condition; this artifact cannot classify it.
 
-### AP-16. Tutorial pre-latched branch lacks deterministic sight controls
+### [#1771] AP-16. Tutorial pre-latched branch lacks deterministic sight controls
 
 The tutorial's main water-discovery phase pins daylight, controls unit
 positions, and checks whether the recipient can see water. Its third-boot
@@ -593,7 +602,7 @@ depends on all of those conditions.
 
 ## Item identity
 
-### AP-17. Crafting removes an unrelated same-definition inventory item
+### [#1772] AP-17. Crafting removes an unrelated same-definition inventory item
 
 A focused identity trace followed a pre-existing granite instance through two
 real AI craft cycles whose recipe consumes steel and produces granite. The old
