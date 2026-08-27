@@ -33,8 +33,8 @@ import Engine.Graphics.Vulkan.Capability
 import Engine.Graphics.Vulkan.Device (bindlessCapableBonus, scoreDevice)
 import Engine.Graphics.Vulkan.Texture.Limits (maxBindlessTextures)
 import Engine.Graphics.Vulkan.Texture.Requirements
-  (BindlessCapacity(..), BindlessFeature(..), bindlessCapacityField
-  ,bindlessCapacityRequirement, bindlessFeatureField
+  (BindlessCapacity(..), BindlessFeature(..), bindlessCapacityApplies
+  ,bindlessCapacityField, bindlessCapacityRequirement, bindlessFeatureField
   ,bindlessTextureBindingFlags, bindlessTextureBindingRequirements
   ,enableBindlessFeature, missingBindlessFeatures, readBindlessFeature
   ,reportedBindlessCapacities, requiredBindlessCapacities
@@ -99,6 +99,17 @@ capacityFields =
     , \n p → p { maxUpdateAfterBindDescriptorsInAllPools = n } )
   ]
 
+-- | A feature report advertising every @descriptorBinding…UpdateAfterBind@
+--   feature, so every capacity's Valid Usage statement is active and the
+--   boundary sweep below covers all ten. The renderer itself requires only
+--   the sampled-image one — the other two are the device's own support,
+--   which is what conditions VUIDs 03023/03024 and 03037/03039.
+generousFeatures ∷ PhysicalDeviceVulkan12Features
+generousFeatures = requiredVulkan12Features
+  { descriptorBindingUniformBufferUpdateAfterBind = True
+  , descriptorBindingStorageBufferUpdateAfterBind = True
+  }
+
 -- | A device that clears every bindless gate: the baseline each spec below
 --   spoils in exactly one way.
 capableSupport ∷ BindlessSupport
@@ -106,12 +117,18 @@ capableSupport = supportReporting generousProperties
 
 -- | 'capableSupport' with its capacities taken from a specific report.
 supportReporting ∷ PhysicalDeviceVulkan12Properties → BindlessSupport
-supportReporting props = BindlessSupport
+supportReporting = supportReportingWith generousFeatures
+
+-- | 'supportReporting' for a device advertising a specific feature set, so
+--   a spec can spoil which capacities apply as well as what they report.
+supportReportingWith ∷ PhysicalDeviceVulkan12Features
+                     → PhysicalDeviceVulkan12Properties → BindlessSupport
+supportReportingWith feats props = BindlessSupport
   { bsVulkan12OrHigher              = True
   , bsMaxSampledImagesPerStage      = 128
   , bsMaxDescriptorSetSampledImages = 640
-  , bsCapacities                    = reportedBindlessCapacities props
-  , bsMissingFeatures               = []
+  , bsCapacities                    = reportedBindlessCapacities feats props
+  , bsMissingFeatures               = missingBindlessFeatures feats
   }
 
 -- | 'generousProperties' with one capacity's field lowered.
@@ -136,11 +153,10 @@ setSampledImages ∷ Word32 → PhysicalDeviceVulkan12Properties
 setSampledImages n p =
   p { maxPerStageDescriptorUpdateAfterBindSampledImages = n }
 
--- | 'generousProperties' with one of the two uniform-buffer capacities set
---   to @n@, looked up through the same table the boundary specs use.
-uniformBuffersAt ∷ Word32 → BindlessCapacity
-                 → PhysicalDeviceVulkan12Properties
-uniformBuffersAt n cap =
+-- | 'generousProperties' with one named capacity's field set to @n@,
+--   looked up through the same table the boundary specs sweep.
+loweredTo ∷ Word32 → BindlessCapacity → PhysicalDeviceVulkan12Properties
+loweredTo n cap =
   case lookup cap capacityFields of
     Just setField → setField n generousProperties
     Nothing       → generousProperties
@@ -270,7 +286,7 @@ spec = describe "Vulkan bindless feature requirements" $ do
       bindlessShortfalls capableSupport
         { bsVulkan12OrHigher = False
         , bsMissingFeatures  = requiredBindlessFeatures
-        , bsCapacities       = reportedBindlessCapacities zero
+        , bsCapacities       = reportedBindlessCapacities generousFeatures zero
         } `shouldBe` ["Vulkan 1.2 or higher is required"]
 
     it "reports nothing at all for a device that clears every gate" $
@@ -296,14 +312,16 @@ spec = describe "Vulkan bindless feature requirements" $ do
           `shouldBe` (cap, maxBindlessTextures)
 
     it "covers the uniform buffer set 0 contributes to the same pipeline layout" $ do
-      -- The update-after-bind limits are scoped to the PIPELINE LAYOUT, and
+      -- Every update-after-bind pipeline-layout statement counts descriptors
+      -- across ALL of pSetLayouts, and
       -- 'Engine.Graphics.Vulkan.Pipeline.Bindless' pairs the bindless
-      -- texture layout with set 0's vertex-stage uniform buffer — so a
-      -- device reporting zero update-after-bind uniform buffers would pass a
-      -- texture-only predicate and then fail pipeline-layout creation.
+      -- texture layout with set 0's vertex-stage uniform buffer — so on a
+      -- device that supports descriptorBindingUniformBufferUpdateAfterBind,
+      -- a zero update-after-bind uniform limit would pass a texture-only
+      -- predicate and then fail pipeline-layout creation (VUID 03023/03037).
       forM_ [CapPerStageUniformBuffers, CapSetUniformBuffers] $ \cap → do
         (cap, bindlessCapacityRequirement cap) `shouldBe` (cap, 1)
-        (cap, isBindlessSupported (supportReporting (uniformBuffersAt 0 cap)))
+        (cap, isBindlessSupported (supportReporting (loweredTo 0 cap)))
           `shouldBe` (cap, False)
 
     it "accepts a device reporting exactly what every capacity requires" $ do
@@ -363,6 +381,61 @@ spec = describe "Vulkan bindless feature requirements" $ do
               <> " was accepted with " <> show count <> " descriptors"
           Left failure → (cap, failure) `shouldSatisfy`
             (T.isInfixOf (expectedShortfallClause cap short) . snd)
+
+  describe "capacities the device's features leave inactive" $ do
+    -- Each update-after-bind pipeline-layout statement is conditional on the
+    -- device SUPPORTING the matching descriptorBinding…UpdateAfterBind
+    -- feature. A limit whose statement is inactive constrains nothing this
+    -- renderer builds, so gating on it would refuse a device whose pipeline
+    -- layout Vulkan accepts.
+    it "drops a capacity whose feature the device does not advertise" $ do
+      let withoutBuffers = requiredVulkan12Features
+          reported = map fst
+            (reportedBindlessCapacities withoutBuffers generousProperties)
+      forM_ [CapPerStageUniformBuffers, CapSetUniformBuffers
+            ,CapPerStageStorageBuffers, CapSetStorageBuffers] $ \cap →
+        (cap, cap `elem` reported) `shouldBe` (cap, False)
+      -- The texture capacities ride the one feature the renderer requires,
+      -- so they are never dropped on a device it would accept at all.
+      forM_ [CapPerStageSampledImages, CapPerStageSamplers
+            ,CapSetSampledImages, CapSetSamplers
+            ,CapPerStageResources, CapDescriptorsInAllPools] $ \cap →
+        (cap, cap `elem` reported) `shouldBe` (cap, True)
+
+    it "accepts a zero buffer limit exactly when its statement is inactive" $
+      -- The whole rule in one comparison: identical properties, and only the
+      -- device's own feature support decides whether the limit binds.
+      forM_ [ (CapPerStageUniformBuffers
+              ,requiredVulkan12Features
+                 { descriptorBindingUniformBufferUpdateAfterBind = True })
+            , (CapSetUniformBuffers
+              ,requiredVulkan12Features
+                 { descriptorBindingUniformBufferUpdateAfterBind = True })
+            , (CapPerStageStorageBuffers
+              ,requiredVulkan12Features
+                 { descriptorBindingStorageBufferUpdateAfterBind = True })
+            , (CapSetStorageBuffers
+              ,requiredVulkan12Features
+                 { descriptorBindingStorageBufferUpdateAfterBind = True })
+            ] $ \(cap, withFeature) → do
+        let props = loweredTo 0 cap
+        (cap, isBindlessSupported
+                (supportReportingWith requiredVulkan12Features props))
+          `shouldBe` (cap, True)
+        (cap, isBindlessSupported (supportReportingWith withFeature props))
+          `shouldBe` (cap, False)
+
+    it "keeps the two unconditional capacities binding whatever the features" $
+      -- The aggregate governs any pipeline layout holding an
+      -- update-after-bind set, and the pool ceiling governs creating that
+      -- pool at all; neither is conditioned on a feature.
+      forM_ [CapPerStageResources, CapDescriptorsInAllPools] $ \cap → do
+        (cap, bindlessCapacityApplies (zero ∷ PhysicalDeviceVulkan12Features) cap)
+          `shouldBe` (cap, True)
+        (cap, isBindlessSupported
+                (supportReportingWith requiredVulkan12Features
+                   (loweredTo (bindlessCapacityRequirement cap - 1) cap)))
+          `shouldBe` (cap, False)
 
   describe "reserved slots and the fixed binding" $ do
     it "reserves indices inside the binding rather than shrinking it" $

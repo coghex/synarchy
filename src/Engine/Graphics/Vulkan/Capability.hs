@@ -7,7 +7,6 @@ module Engine.Graphics.Vulkan.Capability
   , determineTextureCapability
   , isBindlessSupported
   , minimumUsableSlots
-  , reportedCapacity
   , bindlessCapacityShortfalls
   , bindlessShortfalls
   , unsupportedBindlessMessage
@@ -34,11 +33,14 @@ data BindlessSupport = BindlessSupport
   { bsVulkan12OrHigher                    ∷ Bool
   , bsMaxSampledImagesPerStage            ∷ Word32  -- Base limit (128)
   , bsMaxDescriptorSetSampledImages       ∷ Word32  -- Base limit (640)
-  -- | What the device reports for each of 'requiredBindlessCapacities' —
-  --   the UPDATE_AFTER_BIND limits that govern the bindless descriptor
-  --   set's two bindings and its pool. These are gates, not budgets: the
-  --   texture array is fixed-size, so a device supplies every one of them
-  --   in full or cannot run this renderer at all (#1689).
+  -- | What the device reports for each capacity that APPLIES to it — the
+  --   UPDATE_AFTER_BIND limits governing the bindless pipeline layout and
+  --   pool. These are gates, not budgets: the texture array is fixed-size,
+  --   so a device supplies every applicable one in full or cannot run this
+  --   renderer at all (#1689). A capacity whose Valid Usage statement the
+  --   device's features do not activate is ABSENT here rather than zero
+  --   ('bindlessCapacityApplies'), so it cannot refuse a device Vulkan
+  --   would accept.
   , bsCapacities                          ∷ [(BindlessCapacity, Word32)]
   -- | Which of 'requiredBindlessFeatures' the device does NOT advertise
   --   (#1282). Empty on a device that can run the bindless renderer.
@@ -77,7 +79,7 @@ queryBindlessSupport pDevice = do
       PhysicalDeviceFeatures2 { next = (vk12Feats :& ()) }
         ← getPhysicalDeviceFeatures2 pDevice
           ∷ IO (PhysicalDeviceFeatures2 '[PhysicalDeviceVulkan12Features])
-      pure ( reportedBindlessCapacities vk12Props
+      pure ( reportedBindlessCapacities vk12Feats vk12Props
            , missingBindlessFeatures vk12Feats )
     else return (unqueriedCapacities, requiredBindlessFeatures)
 
@@ -90,25 +92,26 @@ queryBindlessSupport pDevice = do
     }
 
 -- | Every required capacity at zero: what a pre-1.2 device reports, in the
---   sense that nothing was measured, so nothing is available.
+--   sense that nothing was measured, so nothing is available. Listing them
+--   all is the fail-closed choice; the version gate refuses such a device
+--   before any capacity is consulted either way.
 unqueriedCapacities ∷ [(BindlessCapacity, Word32)]
 unqueriedCapacities = [ (cap, 0) | cap ← requiredBindlessCapacities ]
 
--- | What a device reported for one capacity. A capacity missing from the
---   report reads as 0 for the same reason 'unqueriedCapacities' is zero.
-reportedCapacity ∷ BindlessSupport → BindlessCapacity → Word32
-reportedCapacity support cap = fromMaybe 0 (lookup cap (bsCapacities support))
-
--- | Every update-after-bind capacity the device reports below what the
---   fixed-size bindless layout consumes, each naming the reported count and
---   the count the renderer requires (#1689). Empty on a device that can
---   build the binding at its declared size.
+-- | Every APPLICABLE update-after-bind capacity the device reports below
+--   what the fixed-size bindless pipeline layout consumes, each naming the
+--   reported count and the count the renderer requires (#1689). Empty on a
+--   device that can build the binding at its declared size.
+--
+--   Driven by 'bsCapacities' rather than 'requiredBindlessCapacities': a
+--   capacity whose Valid Usage statement this device's features leave
+--   inactive is absent from that list precisely so it cannot produce a
+--   shortfall here.
 bindlessCapacityShortfalls ∷ BindlessSupport → [Text]
 bindlessCapacityShortfalls support =
   [ "the device reports " <> tshow reported <> " " <> bindlessCapacityField cap
       <> ", but the bindless texture array requires " <> tshow required
-  | cap ← requiredBindlessCapacities
-  , let reported = reportedCapacity support cap
+  | (cap, reported) ← bsCapacities support
   , let required = bindlessCapacityRequirement cap
   , reported < required
   ]
