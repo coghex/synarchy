@@ -176,6 +176,19 @@ unitGetKnowledgeListFn env = do
 --   accumulator. Returns the new value, or nil if the unit doesn't
 --   have a stat or skill by that name.
 --
+--   #1733: a NON-FINITE amount is refused outright — nothing is
+--   written and the call reports the verb's existing nil failure. The
+--   finiteness test is on the STORED 'Float', after the conversion, so
+--   a merely large Lua double (@1e40@) that overflows to Infinity on
+--   the way in fails the same way an explicit @0/0@ does.
+--   'applySkillXP' would otherwise write a non-finite level or stat
+--   into the unit, and @concentration@ is a stat, so the corruption
+--   would reach 'Combat.Resolution.Common.mentalEffectiveness' and,
+--   through it, hit chance, active dodge and crafted item quality.
+--   The neighbouring setters (unit.setSkill, unit.setKnowledge,
+--   unit.setStat) keep their own @max 0@ policy; this verb was the one
+--   numeric-mutation boundary here with none.
+--
 --   Phase F: this used to be addSkillXP and required the name to be
 --   in skills. Now stats can grow this way too — a unit performing
 --   manual labour can @unit.addXP(uid, \"strength\", 0.01)@ to slowly
@@ -189,8 +202,12 @@ unitAddXPFn env = do
         (Just n, Just nameBS, Just (Lua.Number amt)) → do
             let uid    = UnitId (fromIntegral n)
                 name   = TE.decodeUtf8Lenient nameBS
-                amount = realToFrac amt
-            mVal ← Lua.liftIO $
+                amount = realToFrac amt ∷ Float
+            -- The refusal short-circuits BEFORE the manager update, so
+            -- the atomic modify never runs and neither map is touched.
+            mVal ← if isNaN amount ∨ isInfinite amount
+              then pure Nothing
+              else Lua.liftIO $
                 atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                     case HM.lookup uid (umInstances um) of
                         Nothing → (um, Nothing)

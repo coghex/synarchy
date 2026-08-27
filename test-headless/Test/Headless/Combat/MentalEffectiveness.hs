@@ -88,6 +88,21 @@ concEuph conc euphoric = mkInst
 near ∷ Float → Float → Bool
 near expect x = abs (x - expect) < 0.0005
 
+-- | #1733: within [lo, hi] AND finite. Written as an explicit
+--   isNaN/isInfinite test rather than a bare @lo ≤ x ∧ x ≤ hi@, because
+--   the very bug under test is that every comparison against NaN is
+--   'False' — a range predicate built from comparisons alone reports a
+--   NaN as out of band only by accident of which way it is written, and
+--   reports nothing at all about an infinity that happens to satisfy
+--   one side.
+finiteWithin ∷ Float → Float → Float → Bool
+finiteWithin lo hi x =
+    not (isNaN x) ∧ not (isInfinite x) ∧ x ≥ lo ∧ x ≤ hi
+
+-- | The three non-finite Floats, each labelled for a failure message.
+nonFinites ∷ [(String, Float)]
+nonFinites = [("NaN", 0 / 0), ("+Infinity", 1 / 0), ("-Infinity", -1 / 0)]
+
 -- Every (hi, lo) pair from a list where hi > lo — used to sweep
 -- "decreasing effectiveness" across a whole scalar range at once.
 descendingPairs ∷ [Float] → [(Float, Float)]
@@ -130,6 +145,53 @@ spec = describe "Mental effectiveness" $ do
         it "the final result never leaves the 0.75..1.10 band" $ do
             mentalEffectiveness (concEuph 1.0 True) `shouldSatisfy` (≤ 1.10)
             mentalEffectiveness (concEuph 0.0 False) `shouldSatisfy` (≥ 0.75)
+
+    -- ---- #1733: containment of an ALREADY-corrupt stat map ----
+    -- Requirement 2 is a containment guarantee, not an ingress one: a
+    -- non-finite concentration or mental_state that reached uiStats by
+    -- ANY route (a save written before unit.addXP was guarded, a future
+    -- writer, a Lua verb this issue does not touch) must not leave this
+    -- function. Combat reads `roll > pHit` and `dodgeRoll < pDodge`,
+    -- both 'False' against a NaN, so an escaped NaN lands every strike
+    -- and disables the active dodge.
+    describe "mentalEffectiveness contains a non-finite stat (#1733)" $ do
+        it "a non-finite concentration still yields a finite 0.75..1.10 result" $
+            forM_ nonFinites $ \(label, bad) → do
+                let got = mentalEffectiveness (concEuph bad False)
+                (label, finiteWithin 0.75 1.10 got) `shouldBe` (label, True)
+
+        it "…and with euphoria layered on top as well" $
+            forM_ nonFinites $ \(label, bad) → do
+                let got = mentalEffectiveness (concEuph bad True)
+                (label, finiteWithin 0.75 1.10 got) `shouldBe` (label, True)
+
+        it "a non-finite mental_state reads as non-euphoric, not as a bonus" $
+            forM_ nonFinites $ \(label, bad) → do
+                let inst = mkInst (HM.fromList [ ("concentration", 1.0)
+                                               , ("mental_state", bad) ])
+                                  HM.empty
+                (label, mentalEffectiveness inst) `shouldBe` (label, 1.00)
+
+        it "both stats corrupt at once is still contained" $
+            forM_ nonFinites $ \(label, bad) → do
+                let inst = mkInst (HM.fromList [ ("concentration", bad)
+                                               , ("mental_state", bad) ])
+                                  HM.empty
+                    got  = mentalEffectiveness inst
+                (label, finiteWithin 0.75 1.10 got) `shouldBe` (label, True)
+
+        it "a NaN concentration takes the FLOOR, not the neutral default" $
+            -- The distinction matters: mapping NaN to the missing-stat
+            -- default (1.0) would hand a corrupt unit full effectiveness.
+            mentalEffectiveness (concEuph (0 / 0) False) `shouldBe` 0.75
+
+        it "every FINITE concentration is bit-identical to the old clamp chain" $
+            -- Requirement 4. Spans both bounds and the interior, so an
+            -- accidental change of policy for ordinary inputs fails here
+            -- rather than only in the examples above.
+            forM_ [-5.0, -1.0, 0.0, 0.25, 0.5, 0.75, 1.0, 2.0, 5.0] $ \c → do
+                let expect = clamp 0.75 1.10 (0.75 + 0.25 * clamp 0.0 1.0 c)
+                mentalEffectiveness (concEuph c False) `shouldBe` expect
 
     -- ---- 3: sign-safe hit/dodge monotonicity ----
     describe "attacker hit chance (Combat.Resolution.Strike.hitChance)" $ do
@@ -338,3 +400,42 @@ spec = describe "Mental effectiveness" $ do
             base `shouldSatisfy` near 87.0
             applyMentalQuality 1.10 base `shouldSatisfy` near 97.0
             applyMentalQuality 0.75 base `shouldSatisfy` near 77.0
+
+        -- ---- #1733 ----
+        -- Requirement 3 says "every input", and applyMentalQuality has
+        -- TWO Float inputs: an untagged recipe's rolled base quality is
+        -- as much an input as the effectiveness multiplier, and its
+        -- result is what persists as an item's iiQuality.
+        it "a non-finite EFFECTIVENESS still yields a finite 0..100 quality" $
+            forM_ nonFinites $ \(label, bad) →
+                forM_ [0.0, 5.0, 50.0, 95.0, 100.0] $ \base → do
+                    let got = applyMentalQuality bad base
+                    (label, base, finiteWithin 0 100 got)
+                        `shouldBe` (label, base, True)
+
+        it "a non-finite BASE QUALITY still yields a finite 0..100 quality" $
+            forM_ nonFinites $ \(label, bad) →
+                forM_ [0.75, 1.00, 1.10] $ \eff → do
+                    let got = applyMentalQuality eff bad
+                    (label, eff, finiteWithin 0 100 got)
+                        `shouldBe` (label, eff, True)
+
+        it "both inputs non-finite at once is still contained" $
+            forM_ nonFinites $ \(le, be) →
+                forM_ nonFinites $ \(lb, bb) → do
+                    let got = applyMentalQuality be bb
+                    ((le, lb), finiteWithin 0 100 got) `shouldBe` ((le, lb), True)
+
+        it "a NaN effectiveness takes the -10 delta floor, not a free pass" $
+            -- 50 + (-10): the corrupt multiplier is treated as the worst
+            -- case the band admits rather than as neutral.
+            applyMentalQuality (0 / 0) 50.0 `shouldBe` 40.0
+
+        it "every FINITE pair is bit-identical to the old clamp chain" $
+            -- Requirement 4, including the deliberately unrounded float.
+            forM_ [0.5, 0.75, 0.95, 1.0, 1.033, 1.10, 1.5] $ \eff →
+                forM_ [0.0, 5.0, 42.5, 95.0, 100.0] $ \base →
+                    applyMentalQuality eff base
+                        `shouldBe`
+                        clamp 0 100 (base + clamp (-10) 10
+                                              (100 * (eff - 1.0)))
