@@ -123,11 +123,14 @@ rockJaggedSlope seed (ChunkCoord cx cy) lx ly hardness z maxDrop rawSlope
                                         , (8, neighW, wetW) ]
                        , nz ≢ minBound, nz ≤ z, not wet ]
             -- Clean-flank fallback: rawSlope with any wet directions
-            -- cleared. rawSlope is built by 'World.Slope.Compute.slopeBit',
-            -- whose bank check is IN-CHUNK only, so a 1-z lower wet neighbour
-            -- across a chunk seam would otherwise survive in rawSlope and
-            -- ramp into water. (15 `xor` wetMask) is the 4-bit complement of
-            -- the wet mask.
+            -- cleared. Since #1685 'World.Slope.Compute.slopeBit' is fed
+            -- these very 'wet*' flags, so its own bank check already
+            -- excludes a seam-crossing wet neighbour and this mask is
+            -- redundant for the terrace bits — it is kept because rawSlope
+            -- is an input this function does not own, and a slope bit that
+            -- ramps hard rock into water is the one outcome the jagged path
+            -- must never emit. (15 `xor` wetMask) is the 4-bit complement
+            -- of the wet mask.
             dryFlank = rawSlope ⌃ (15 `xor` wetMask)
             -- The non-jagged result: the clean terrace flank, or flat (0)
             -- when it is empty or the degenerate all-four (15 renders as a
