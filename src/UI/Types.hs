@@ -144,10 +144,15 @@ data UIElement = UIElement
   , ueRouteEpoch ∷ Int
     -- ^ #745: bumped ONLY by a route-affecting
     --   mutation to THIS specific element — 'UI.setVisible',
-    --   'UI.setClickable', or detach ('UI.removeElement'/
-    --   'removeFromPage') — never by (re)attach ('UI.addToPage'/
-    --   'addChild', which never bumps anything at all)
-    --   and never by an unrelated element's own mutation.
+    --   'UI.setClickable', detach ('UI.removeElement'/
+    --   'removeFromPage'), or an attachment ('UI.addToPage'/
+    --   'addChild') that actually CHANGES this element's structural
+    --   owner (#1694) — and never by an unrelated element's
+    --   own mutation. Attaching a fresh (or already detached) element,
+    --   and re-attaching to the owner it already had, both stay
+    --   neutral, which is what keeps the focus-ring churn below from
+    --   poisoning the click that caused it; see
+    --   'UI.Manager.Hierarchy.addElementToPage'.
     --   'UI.ControlActivation.resolveActivation' walks the pressed
     --   element's ANCESTOR chain (via 'ueParent') at press time and
     --   again at release, comparing each ancestor's (including the

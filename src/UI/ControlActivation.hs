@@ -41,10 +41,12 @@
 --       element's own epoch AND every ANCESTOR's epoch (walking
 --       'UI.Types.ueParent' pointers), taken at press time and
 --       re-derived at release. Hiding/disabling/detaching the pressed
---       element OR any real ancestor changes one of those epochs and
---       so cancels, even when reverted — but an UNRELATED element's
---       own mutation (a decorative hover-highlight sibling, say) is
---       invisible to this chain and never poisons the activation.
+--       element OR any real ancestor — or (#1694)
+--       RELOCATING one of them to a different structural owner —
+--       changes one of those epochs and so cancels, even when
+--       reverted or re-routed back to the same hit. An UNRELATED
+--       element's own mutation (a decorative hover-highlight sibling,
+--       say) is invisible to this chain and never poisons it.
 --       Deliberately scoped to the ONE chain, not global: an earlier
 --       attempt at a single manager-wide epoch covering every
 --       element mutation broke real production hover-highlight code
