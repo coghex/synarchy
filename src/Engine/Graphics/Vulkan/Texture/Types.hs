@@ -15,10 +15,15 @@ import Engine.Graphics.Vulkan.Types.Texture (UndefinedTexture)
 import Engine.Graphics.Vulkan.Sampler.Types (SamplerKind)
 import Vulkan.Core10 (DescriptorPool, DescriptorSetLayout, DescriptorSet, ImageView, Sampler, Buffer, DeviceMemory)
 
--- | Configuration for the bindless texture system
+-- | Configuration for the bindless texture system.
+--
+--   Deliberately carries no array size: the texture binding is always
+--   'Engine.Graphics.Vulkan.Texture.Limits.maxBindlessTextures' descriptors,
+--   the size both bindless fragment shaders declare @textures[]@ at, so a
+--   binding smaller than that array cannot be configured into existence
+--   (#1689).
 data BindlessConfig = BindlessConfig
-  { bcMaxTextures     ∷ !Word32  -- ^ Maximum number of texture slots
-  , bcTextureBinding  ∷ !Word32  -- ^ Binding index for texture array in shader
+  { bcTextureBinding  ∷ !Word32  -- ^ Binding index for texture array in shader
   , bcDescriptorSet   ∷ !Word32  -- ^ Which descriptor set to use
   } deriving (Show, Eq)
 
@@ -69,8 +74,9 @@ data BindlessTextureSystem = BindlessTextureSystem
     --   'Device' or a map/unmap round-trip (#286).
   } deriving (Show)
 
--- | Configuration for the texture system
+-- | Configuration for the texture system. Like 'BindlessConfig' it names no
+--   array size — 'tscReservedSlots' counts indices held back INSIDE the
+--   fixed binding, and never shrinks it (#1689).
 data TextureSystemConfig = TextureSystemConfig
-  { tscMaxTextures    ∷ Word32   -- ^ Max textures (for bindless)
-  , tscReservedSlots  ∷ Word32   -- ^ Reserved slots (slot 0 = undefined)
+  { tscReservedSlots  ∷ Word32   -- ^ Reserved slots (slot 0 = undefined)
   } deriving (Show, Eq)

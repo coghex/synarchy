@@ -142,6 +142,7 @@ import qualified Test.Headless.UI.Tooltip as UITooltip
 import qualified Test.Headless.UI.InputOwnership as UIInputOwnership
 import qualified Test.Headless.UI.ElementInputPolicy as UIElementInputPolicy
 import qualified Test.Headless.UI.ControlActivation as UIControlActivation
+import qualified Test.Headless.UI.HierarchyOwnership as UIHierarchyOwnership
 import qualified Test.Headless.UI.FocusNavigation as UIFocusNavigation
 import qualified Test.Headless.UI.Clipping as UIClipping
 import qualified Test.Headless.UI.InteractiveBounds as UIInteractiveBounds
@@ -225,6 +226,7 @@ import qualified Test.Headless.Location.Naming as LocationNaming
 import qualified Test.Headless.River.Naming as RiverNaming
 import qualified Test.Headless.Location.LootDeterminism as LocationLootDeterminism
 import qualified Test.Headless.Location.MapIcons as LocationMapIcons
+import qualified Test.Headless.Location.Stamping as LocationStamping
 import qualified Test.Headless.Tutorial.Definitions as TutorialDefinitions
 import qualified Test.Headless.Lua.SaveModules as LuaSaveModules
 import qualified Test.Headless.Lua.SharedHelpers as LuaSharedHelpers
@@ -579,6 +581,7 @@ main = hspec $ do
     describe "UI.InputOwnership" UIInputOwnership.spec
     describe "UI.ElementInputPolicy" UIElementInputPolicy.spec
     describe "UI.ControlActivation" UIControlActivation.spec
+    describe "UI hierarchy structural ownership" UIHierarchyOwnership.spec
     describe "UI.FocusNavigation" UIFocusNavigation.spec
     describe "UI.Clipping" UIClipping.spec
     describe "UI.InteractiveBounds" UIInteractiveBounds.spec
@@ -668,6 +671,7 @@ main = hspec $ do
     RiverNaming.spec
     LocationLootDeterminism.spec
     LocationMapIcons.spec
+    LocationStamping.spec
     TutorialDefinitions.spec
     BuildingPlacement.spec
     BuildingRemoteWarning.spec

@@ -55,9 +55,11 @@ handleWorldSetLocationLifecycleCommand wsc pageId iid lifecycle =
 
 -- | One-time geometry-stamp flag (#424) — see
 --   'World.Command.Types.WorldMarkLocationStamped'. Deliberately still
---   CHUNK-keyed (#911 left it alone): "has this chunk had geometry
---   written into it" is genuinely about the chunk, and that is what
---   makes stamping idempotent under player edits.
+--   CHUNK-keyed (#911 left it alone): "has this chunk had its location's
+--   geometry written into it IN FULL" (#1719) is genuinely about the
+--   chunk, and that is what makes stamping idempotent under player edits.
+--   Only a stamp whose every attempted placement succeeded queues this;
+--   a partial one is left unmarked to be retried on the next load.
 handleWorldMarkLocationStampedCommand
     ∷ WorldSimCapability → WorldPageId → Int → Int → IO ()
 handleWorldMarkLocationStampedCommand wsc pageId gx gy =

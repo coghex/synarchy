@@ -1215,6 +1215,7 @@ test-suite synarchy-test-headless
                    Test.Headless.UI.InputOwnership
                    Test.Headless.UI.ElementInputPolicy
                    Test.Headless.UI.ControlActivation
+                   Test.Headless.UI.HierarchyOwnership
                    Test.Headless.UI.FocusNavigation
                    Test.Headless.UI.Clipping
                    Test.Headless.UI.InteractiveBounds
@@ -1276,6 +1277,7 @@ test-suite synarchy-test-headless
                    Test.Headless.River.Naming
                    Test.Headless.Location.LootDeterminism
                    Test.Headless.Location.MapIcons
+                   Test.Headless.Location.Stamping
                    Test.Headless.Tutorial.Definitions
                    Test.Headless.Building.Knowledge
                    Test.Headless.Item.NestedContents

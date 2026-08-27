@@ -8,13 +8,13 @@ PRs #1684, #1683, #1677, #1663, #1652, #1662, and #1657 retain their intended co
 
 ## Status
 
-- [ ] PRR-1. Foraging probe setup failure can leak its isolated resource root
+- [x] PRR-1. Foraging probe setup failure can leak its isolated resource root — [#1791]
 - [ ] PRR-2. The till probe can select a fluid tile as its dry control
 - [ ] PRR-3. Authored location bounds can overflow into inverted live geometry
 
 ## 1. Foraging probe setup cleanup
 
-### PRR-1. Foraging probe setup failure can leak its isolated resource root
+### [#1791] PRR-1. Foraging probe setup failure can leak its isolated resource root
 
 > **Captured note:** Extend PR #1665's failure-path cleanup around creation of the isolated resource root itself. Its `finally` covers engine boot and every later phase, but a staging error after `mkdtemp` and before entry to that `try` leaves the invocation-owned tree behind.
 
