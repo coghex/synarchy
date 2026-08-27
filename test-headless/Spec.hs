@@ -120,6 +120,7 @@ import qualified Test.Headless.Construct.Footprint as ConstructFootprint
 import qualified Test.Headless.Construct.PendingRefusal as ConstructPendingRefusal
 import qualified Test.Headless.Craft.Execute as CraftExecute
 import qualified Test.Headless.Craft.Bills as CraftBills
+import qualified Test.Headless.Craft.OutputIdentity as CraftOutputIdentity
 import qualified Test.Headless.Craft.BillReconcile as CraftBillReconcile
 import qualified Test.Headless.Power.Types as PowerTypes
 import qualified Test.Headless.Power.Placement as PowerPlacement
@@ -467,6 +468,11 @@ main = hspec $ do
 
     aroundAll withHeadlessEngine ItemDiscovery.spec
     aroundAll withHeadlessEngineNoWorld ItemCondition.spec
+    -- Own engine (#1772): the craft-identity gate installs its own
+    -- single-page world manager and rewrites the item, recipe and unit
+    -- manager refs, exactly like the ItemCondition gate above. It needs
+    -- no world -- craft.execute reads none.
+    aroundAll withHeadlessEngineNoWorld CraftOutputIdentity.spec
     -- Own engine (#1716): the live unit.feed gate WRITES the item and
     -- unit manager refs, so it cannot share the worldgen engine. It
     -- needs no world at all -- unit.feed reads neither.
