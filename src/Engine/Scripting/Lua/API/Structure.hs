@@ -72,9 +72,21 @@ resolveStructurePage env Nothing = activeWorldPage env
 --   palette + queued as a WeSetStructure edit (the persistent, per-chunk,
 --   evict-survivable path, and the only path that actually places a piece).
 --   Omit the paths and nothing is placed. z defaults to 0. Returns false (and
---   does nothing) when the paths are omitted, there is no active world, or the
---   target chunk isn't loaded — the last because the world thread drops a
---   structure edit for an unloaded chunk, so staging one would be a phantom.
+--   does nothing) when the paths are omitted, there is no active world, the
+--   named page does not exist, or the target chunk isn't loaded — the last
+--   because the world thread drops a structure edit for an unloaded chunk, so
+--   staging one would be a phantom.
+--
+--   "Does nothing" is literal (#1675): every one of those rejections is decided
+--   BEFORE the first mutation, so a false return leaves the texture palette,
+--   the palette→handle map, the structure stage, the edit log and the world
+--   queue all byte-identical. It has to be — the palette is a REQUIRED
+--   persistent component whose unreferenced entries are deliberately never
+--   pruned ('World.Save.Snapshot' checks only that every edit's ids exist), so
+--   a path interned by a rejected call would ride into every later save. The
+--   ids are needed only for the queued edit, so nothing before validation
+--   depends on them; the order is validate → intern → stage → queue.
+--
 --   The chunk can still evict between that check and the world thread's own,
 --   so the staged entry is tagged with this attempt's token and the command
 --   carries it: a declined commit retracts exactly that entry (#1674).
@@ -102,26 +114,24 @@ structurePlaceFn env = do
                     placed ← Lua.liftIO $
                         -- The per-chunk overlay (lcStructures), reached via the
                         -- WeSetStructure edit, is the SINGLE source of truth that
-                        -- rendering + persistence read. Intern the PATHS → palette
-                        -- ids and queue the edit. Omitting the paths places
-                        -- nothing — there is no separate in-memory debug store.
+                        -- rendering + persistence read. VALIDATE the target, then
+                        -- intern the PATHS → palette ids and queue the edit.
+                        -- Omitting the paths places nothing — there is no separate
+                        -- in-memory debug store.
+                        --
+                        -- #1675: validate BEFORE interning. The palette ids exist
+                        -- only to ride the WeSetStructure edit, so nothing ahead of
+                        -- the rejection branches needs them — and the palette is a
+                        -- REQUIRED persistent component (texture-palette) whose
+                        -- unreferenced entries are deliberately never pruned, so a
+                        -- path interned by a call that then returns False would ride
+                        -- into every later save. Ordering is validate → intern →
+                        -- stage → queue so a False return mutates nothing at all.
                         case (texPathA, facePathA) of
                             (Just tp, Just fp) → do
-                                texId  ← atomicModifyIORef' (rhTexPaletteRef handoff) $ \pal →
-                                    let (i, pal') = internPath (TE.decodeUtf8Lenient tp) pal
-                                    in (pal', i)
-                                faceId ← atomicModifyIORef' (rhTexPaletteRef handoff) $ \pal →
-                                    let (i, pal') = internPath (TE.decodeUtf8Lenient fp) pal
-                                    in (pal', i)
-                                -- record paletteId → handle so the renderer can
-                                -- resolve this piece immediately (the handle is
-                                -- already loaded — passed in by the builder)
-                                atomicModifyIORef' (rhTexPaletteHandlesRef handoff) $ \m →
-                                    ( HM.insert texId  (TextureHandle (fromIntegral tex))
-                                    $ HM.insert faceId (TextureHandle (fromIntegral face)) m
-                                    , () )
                                 mActive ← resolveStructurePage env (TE.decodeUtf8Lenient <$> pageA)
                                 case mActive of
+                                    Nothing → pure False
                                     Just (pageId, ws) → do
                                         -- #1175: place through the same
                                         -- canonical key hasAt/floorZAt read,
@@ -144,6 +154,23 @@ structurePlaceFn env = do
                                         case lookupChunk coord td of
                                             Nothing → pure False
                                             Just _  → do
+                                                -- The target is real: NOW intern the
+                                                -- paths, which is the first mutation
+                                                -- this call performs (#1675).
+                                                texId  ← atomicModifyIORef' (rhTexPaletteRef handoff) $ \pal →
+                                                    let (i, pal') = internPath (TE.decodeUtf8Lenient tp) pal
+                                                    in (pal', i)
+                                                faceId ← atomicModifyIORef' (rhTexPaletteRef handoff) $ \pal →
+                                                    let (i, pal') = internPath (TE.decodeUtf8Lenient fp) pal
+                                                    in (pal', i)
+                                                -- record paletteId → handle so the
+                                                -- renderer can resolve this piece
+                                                -- immediately (the handle is already
+                                                -- loaded — passed in by the builder)
+                                                atomicModifyIORef' (rhTexPaletteHandlesRef handoff) $ \m →
+                                                    ( HM.insert texId  (TextureHandle (fromIntegral tex))
+                                                    $ HM.insert faceId (TextureHandle (fromIntegral face)) m
+                                                    , () )
                                                 -- staged for read-your-writes: the
                                                 -- builder queries this tile within
                                                 -- the same Lua call (floors→posts→
@@ -161,7 +188,6 @@ structurePlaceFn env = do
                                                     (WorldSetStructure pageId cgx cgy
                                                                        slotTag texId faceId z tok)
                                                 pure True
-                                    Nothing → pure False
                             _ → pure False   -- no paths → nothing placed
                     Lua.pushboolean placed
                     return 1

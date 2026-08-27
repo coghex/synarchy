@@ -28,9 +28,11 @@ import World.Flora.Growth (FloraGrowth(..), floraGrowth, harvestOpen,
                            lifePhaseText, annualStageText)
 import World.Flora.CropPlot (CropPlot(..), cropPlotElapsedDays,
                              cropPlotInstance)
-import World.Generate.Coordinates (globalToChunk, chunkToGlobal)
+import World.Generate.Coordinates (globalToChunk, chunkToGlobal,
+                                  chunkInSeamRegion, seamTileDist2)
 import Item.Types (ItemDef(..), ItemFood(..), lookupItemDef)
-import Engine.Scripting.Lua.API.Forage.Lookup (floraAt, growthClock)
+import Engine.Scripting.Lua.API.Forage.Lookup
+    (canonicalPageTile, floraAt, growthClock)
 
 -- | world.getFloraAt(gx, gy) → {id, harvestable, regrowthRemaining,
 --   tags} | nil
@@ -51,19 +53,30 @@ import Engine.Scripting.Lua.API.Forage.Lookup (floraAt, growthClock)
 --   @regrowthRemaining@ + @tags@, so a designated tree stays choppable
 --   as a sprout or standing dead. Per-instance gated state is
 --   world.getFloraGrowthAt.
+--
+--   Accepts any u-alias of the tile (#1707) and reports the state the
+--   CANONICAL coord reports — species, @harvestable@, @regrowthRemaining@
+--   and @tags@ alike. Identity inland.
 worldGetFloraAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldGetFloraAtFn env = do
     mGx ← Lua.tointeger 1
     mGy ← Lua.tointeger 2
     case (mGx, mGy) of
         (Just gx', Just gy') → do
-            let gx = fromIntegral gx'
-                gy = fromIntegral gy'
+            let rawGX = fromIntegral gx'
+                rawGY = fromIntegral gy'
             mResult ← Lua.liftIO $ do
                 mWs ← activeWorldStateFrom (wsWorldManagerRef (toWorldSimCapability env))
                 case mWs of
                     Nothing → pure Nothing
                     Just ws → do
+                        -- #1707: the regrowth-timer map is canonical-keyed
+                        -- like every other tile-keyed forage map, so the
+                        -- timer must be read under the SAME name 'floraAt'
+                        -- resolved the instances under — canonicalising
+                        -- only one of the two reports a seam tile's flora
+                        -- with the wrong (default) timer. Identity inland.
+                        (gx, gy) ← canonicalPageTile ws rawGX rawGY
                         insts ← floraAt (toWorldSimCapability env) ws gx gy
                         harvests ← readIORef (wsFloraHarvestsRef ws)
                         (doy, absDay) ← growthClock ws
@@ -112,19 +125,24 @@ worldGetFloraAtFn env = do
 --   whether a harvest would yield right now. nil when the tile has no
 --   flora or its chunk isn't loaded. Poke the state by moving the
 --   clock: world.setDate / world.setTime / world.setTimeScale.
+--
+--   Alias-accepting on the same terms as world.getFloraAt (#1707).
 worldGetFloraGrowthAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldGetFloraGrowthAtFn env = do
     mGx ← Lua.tointeger 1
     mGy ← Lua.tointeger 2
     case (mGx, mGy) of
         (Just gx', Just gy') → do
-            let gx = fromIntegral gx'
-                gy = fromIntegral gy'
+            let rawGX = fromIntegral gx'
+                rawGY = fromIntegral gy'
             entries ← Lua.liftIO $ do
                 mWs ← activeWorldStateFrom (wsWorldManagerRef (toWorldSimCapability env))
                 case mWs of
                     Nothing → pure []
                     Just ws → do
+                        -- #1707: alias parity covers the WHOLE reported
+                        -- state, timer included — see world.getFloraAt.
+                        (gx, gy) ← canonicalPageTile ws rawGX rawGY
                         insts ← floraAt (toWorldSimCapability env) ws gx gy
                         harvests ← readIORef (wsFloraHarvestsRef ws)
                         (doy, absDay) ← growthClock ws
@@ -192,6 +210,17 @@ worldGetFloraGrowthAtFn env = do
 --   the #332 growth window — off-season berry bushes don't distract
 --   the forager from the clover that still yields. nil when nothing
 --   matching is in range.
+--
+--   Seam-aware (#1707): the search origin may be any u-alias, a tile is
+--   in range when it is PHYSICALLY within @radius@ (its nearest alias,
+--   via 'seamTileDist2'), and the scan reaches a chunk whose stored key
+--   is an alias of one the raw box names ('chunkInSeamRegion') — the
+--   wild-flora and crop-plot branches share both, so they rank on one
+--   geometry. @gx@/@gy@ come back CANONICAL (ready for
+--   world.harvestFlora) and @dist@ is that same physical distance, which
+--   is what the auto-harvest action divides into its utility. Ties keep
+--   their historical order: distance, then canonical gx, gy, species
+--   name. Identity inland and on a non-wrapping page.
 worldFindHarvestableFloraFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldFindHarvestableFloraFn env = do
     mGx ← Lua.tointeger 1
@@ -200,8 +229,8 @@ worldFindHarvestableFloraFn env = do
     mTag ← Lua.tostring 4
     case (mGx, mGy) of
         (Just gx', Just gy') → do
-            let gx = fromIntegral gx' ∷ Int
-                gy = fromIntegral gy' ∷ Int
+            let rawGX = fromIntegral gx' ∷ Int
+                rawGY = fromIntegral gy' ∷ Int
                 radius = min 64 (max 1 (maybe 24 fromIntegral mRad)) ∷ Int
                 tagFilter = TE.decodeUtf8Lenient <$> mTag
             mBest ← Lua.liftIO $ do
@@ -215,11 +244,36 @@ worldFindHarvestableFloraFn env = do
                         cropPlots ← readIORef (wsCropPlotsRef ws)
                         (doy, absDay) ← growthClock ws
                         itemMgr ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
+                        worldSize ← pageWrapWorldSize ws
+                        -- Resolve the ORIGIN into the stored frame before
+                        -- stepping the box outward from it: a caller may
+                        -- pass any u-alias, and an alias origin would put
+                        -- the far side of the seam two alias steps from
+                        -- the box, past the one step 'chunkInSeamRegion'
+                        -- covers. Canonical here, canonical everywhere.
+                        (gx, gy) ← canonicalPageTile ws rawGX rawGY
                         let (cLo, _) = globalToChunk (gx - radius) (gy - radius)
                             (cHi, _) = globalToChunk (gx + radius) (gy + radius)
                             ChunkCoord cx0 cy0 = cLo
                             ChunkCoord cx1 cy1 = cHi
-                            r2 = radius * radius
+                            r2 = fromIntegral (radius * radius) ∷ Float
+                            -- #1707: the box is stepped outward in the
+                            -- origin's own frame, so near the seam it
+                            -- steps PAST the canonical u range and names
+                            -- ALIASES of the keys the tile store holds —
+                            -- a raw lookupChunk per box key therefore
+                            -- misses the wrapped neighbour entirely.
+                            -- Containment counts those aliases (the same
+                            -- test construction.getPendingJobs uses), and
+                            -- every distance below is measured through the
+                            -- tile's nearest alias so the radius cutoff
+                            -- and the ordering agree with the geometry a
+                            -- worker actually walks. Identity inland and
+                            -- on a non-wrapping page.
+                            dist2 = seamTileDist2 worldSize
+                                        (fromIntegral gx, fromIntegral gy)
+                            inRange coord = chunkInSeamRegion worldSize
+                                                (cx0, cy0) (cx1, cy1) coord
                             edibleYield fh = or
                                 [ isJust (idFood def)
                                 | (yName, _, _) ← fhYield fh
@@ -228,10 +282,18 @@ worldFindHarvestableFloraFn env = do
                             wanted fh = case tagFilter of
                                 Just tg → tg `elem` fhTags fh
                                 Nothing → edibleYield fh
+                            -- Scanning the STORED keys (and testing each
+                            -- for alias containment) rather than looking
+                            -- up each raw box key is what makes the
+                            -- wrapped neighbour reachable; the coords
+                            -- derived from a stored key are canonical, so
+                            -- the harvest-timer skip and the reported
+                            -- gx/gy stay in the frame every other verb
+                            -- accepts.
                             candidates =
                                 [ (d2, tgx, tgy, fsName sp)
-                                | cx ← [cx0 .. cx1], cy ← [cy0 .. cy1]
-                                , Just lc ← [lookupChunk (ChunkCoord cx cy) tileData]
+                                | (coord, lc) ← HM.toList (wtdChunks tileData)
+                                , inRange coord
                                 , i ← fcdInstances (lcFlora lc)
                                 , Just sp ← [lookupSpecies (fiSpecies i) cat]
                                 , Just fh ← [fsHarvest sp]
@@ -242,11 +304,10 @@ worldFindHarvestableFloraFn env = do
                                     Just _  → True
                                     Nothing → harvestOpen sp doy
                                                   (floraGrowth sp absDay i)
-                                , let (tgx, tgy) = chunkToGlobal (ChunkCoord cx cy)
+                                , let (tgx, tgy) = chunkToGlobal coord
                                         (fromIntegral (fiTileX i))
                                         (fromIntegral (fiTileY i))
-                                      d2 = (tgx - gx) * (tgx - gx)
-                                         + (tgy - gy) * (tgy - gy)
+                                      d2 = dist2 (tgx, tgy)
                                 , d2 ≤ r2
                                 , not (HM.member (tgx, tgy) harvests)
                                 ]
@@ -282,8 +343,12 @@ worldFindHarvestableFloraFn env = do
                                     -- season, not on an elapsed-day clock
                                     -- that drifts away from the calendar.
                                     , harvestOpen sp doy g
-                                    , let d2 = (tgx - gx) * (tgx - gx)
-                                             + (tgy - gy) * (tgy - gy)
+                                    -- Seam-aware like the wild-flora
+                                    -- branch above (#1707): the two must
+                                    -- agree, or a bare call ranks a plot
+                                    -- and a wild plant on different
+                                    -- geometries.
+                                    , let d2 = dist2 (tgx, tgy)
                                     , d2 ≤ r2
                                     ]
                         pure $ case candidates ⧺ cropCandidates of
@@ -299,8 +364,7 @@ worldFindHarvestableFloraFn env = do
                     Lua.setfield (-2) "gy"
                     Lua.pushstring (TE.encodeUtf8 name)
                     Lua.setfield (-2) "id"
-                    Lua.pushnumber (Lua.Number
-                        (realToFrac (sqrt (fromIntegral d2 ∷ Float))))
+                    Lua.pushnumber (Lua.Number (realToFrac (sqrt d2)))
                     Lua.setfield (-2) "dist"
             return 1
         _ → Lua.pushnil >> return 1

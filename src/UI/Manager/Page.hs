@@ -117,11 +117,49 @@ getPage handle mgr = Map.lookup handle (upmPages mgr)
 
 -- | Override a page's default input-exclusivity (#742). See
 --   'UI.Types.upInputExclusive'.
+--
+--   #1748: also bumps 'UI.Types.upmPageEpoch', but only when the
+--   assignment REALLY changes 'upInputExclusive' on a page that is
+--   CURRENTLY VISIBLE. Inserting or removing a modal boundary on a
+--   visible page is route-affecting at page scope in exactly the way
+--   'showPage'/'hidePage' are — 'UI.InputOwnership.inputBoundaryPage'
+--   picks the topmost visible exclusive page and
+--   'UI.InputOwnership.pagesInScope' drops everything below it — so a
+--   @False → True → False@ round trip during one press must cancel the
+--   pending activation it interrupted, even though the final route,
+--   the exclusivity value and the pressed element's ancestor chain are
+--   all restored to their press-time state by release.
+--
+--   BOTH guards are load-bearing, and neither is stylistic:
+--
+--     * The no-op guard mirrors 'showPage'/'hidePage''s (#745): an
+--       assignment that does not change the value interrupted nothing
+--       and must not poison an in-flight activation.
+--     * The visibility guard is what keeps this precise. Exclusivity
+--       is invisible to routing until the page is shown, because
+--       'inputBoundaryPage' filters 'getVisiblePages'. Bumping on
+--       every real change regardless of visibility would cancel an
+--       unrelated in-flight click every time @scripts/popup.lua@'s
+--       @popup.init@ runs, since a 'LayerModal' page defaults
+--       exclusive and the notification page opts back out — a genuine
+--       @True → False@ transition. All three tracked call sites
+--       (@scripts/popup.lua@ x2, @scripts/input_check_fixture.lua@)
+--       configure a freshly created, not-yet-shown page, so this
+--       stays neutral for each of them; the 'showPage' that follows
+--       bumps on its own, as it always did.
+--
+--   This deliberately remains a generally callable mutation rather
+--   than a construction-only one: the Lua binding
+--   ('Engine.Scripting.Lua.API.UI.Page') exposes it unrestricted, so
+--   the invariant holds by construction here instead of by caller
+--   discipline.
 setPageInputExclusive ∷ PageHandle → Bool → UIPageManager → UIPageManager
 setPageInputExclusive handle exclusive mgr =
     case Map.lookup handle (upmPages mgr) of
         Nothing → mgr
         Just page →
+            (if upInputExclusive page ≢ exclusive ∧ upVisible page
+                then bumpPageEpoch else id) $
             mgr { upmPages = Map.insert handle
                     (page { upInputExclusive = exclusive }) (upmPages mgr) }
 

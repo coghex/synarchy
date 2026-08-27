@@ -108,6 +108,32 @@ function unitAi.harvest.bindProgress(s, tx, ty)
 end
 
 function unitAi.harvest.utility(uid, s, params)
+    -- Pending collection is eligible on its own (#1743). A completed
+    -- harvest leaves its yields lying on the ground and only execute's
+    -- collecting branch below can pull them in, so the action has to be
+    -- SELECTABLE with no living plant left anywhere in range -- which
+    -- is exactly the state one ripe plant produces. Scoring -math.huge
+    -- here stranded the phase indefinitely, because arbitration
+    -- (scripts/unit_ai.lua) selects on `u > bestScore` from a
+    -- -math.huge seed and so can never pick it.
+    --
+    -- Gated on the PHASE alone, never on harvestLoot being non-empty:
+    -- the terminal tick that clears the phase is the one where
+    -- table.remove has already returned nil, so gating on the list
+    -- would strand precisely that cleanup.
+    --
+    -- No scan runs and no target is set on this path (requirement 5):
+    -- execute takes the collecting branch before it reads
+    -- s.harvestTarget, so finishing a collection needs no second plant
+    -- found, preselected, or searched for. The score is the ordinary
+    -- role-weighted band at full proximity -- the yields are underfoot
+    -- -- which beats idle's registered 0 while staying finite, so
+    -- every higher-priority need, order and combat response still
+    -- preempts it.
+    if s.harvestPhase == "collecting" then
+        return params.harvest_base_utility
+             * roles.weight(s, "auto_harvest")
+    end
     if not world.findHarvestableFlora then return -math.huge end
     local info = unit.getInfo(uid)
     if not info then return -math.huge end
@@ -128,7 +154,10 @@ end
 function unitAi.harvest.execute(uid, s, params)
     -- Collecting: pull the harvested yield off the ground, one item
     -- per tick (mirrors forageExecute's collecting phase). No work
-    -- accrues here — the plant is already picked.
+    -- accrues here — the plant is already picked. Reached under
+    -- ordinary arbitration since #1743: utility above scores this same
+    -- phase rather than returning -math.huge, so the branch no longer
+    -- depends on some other ripe plant keeping auto_harvest alive.
     if s.harvestPhase == "collecting" then
         s.lastHarvestAt = nil
         local loot = s.harvestLoot or {}
