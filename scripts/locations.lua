@@ -19,9 +19,15 @@
 -- locations.spawnContents(id, gx, gy, worldId) once per chunk load,
 -- independent of whether the geometry was (re)built this call. It
 -- dispatches each `contents` entry to unit.spawn / item.spawnGround /
--- building.spawn / loot.rollFor / a builder (for nested "structure"
--- content), gated by its own one-time engine flag
+-- building.spawn / loot.rollFor, gated by its own one-time engine flag
 -- (world.hasSpawnedLocationContents) so contents are never re-spawned.
+-- Those four kinds are the whole vocabulary, and it is CLOSED at the
+-- YAML boundary (#1708): Engine.Asset.YamlLocations' validContentKinds
+-- fails the file's load on anything else, so a def that reaches here
+-- can only carry kinds dispatchContent handles. The nested "structure"
+-- kind was removed there — it re-translated the outer def's bounds
+-- around a shifted anchor, stamping geometry outside the box #777 made
+-- authoritative.
 -- The loot draw is seed-stable per placed instance (#948) — see the
 -- "Content spawning" section below — so a ruin's rewards are as
 -- reproducible from the world seed as its geometry already was.
@@ -495,24 +501,6 @@ local function spawnBuildingContent(def, entry, gx, gy, worldId)
     end
 end
 
--- A "structure" content entry nests another builder's geometry at an
--- offset from the anchor — `id` names a scripts.locations builder
--- (the same names LocationDef.builder uses), not a location id.
-local function spawnStructureContent(def, entry, gx, gy, worldId)
-    local b = builders[entry.id]
-    if not b then
-        engine.logWarn("locations: content structure names unknown builder '" ..
-            tostring(entry.id) .. "'")
-        return
-    end
-    local ox, oy = contentOffset(def, entry)
-    -- The nested builder has no LocationDef of its own (`id` here names a
-    -- builder function, not a registered location) — its `bounds`-driven
-    -- geometry uses the OUTER def's, the only bounds in scope at a nested
-    -- content entry.
-    b(worldId, gx + ox, gy + oy, def)
-end
-
 local function dispatchContent(def, entry, gx, gy, worldId, rollCtx)
     local kind = entry.kind
     if kind == "unit" then
@@ -523,9 +511,12 @@ local function dispatchContent(def, entry, gx, gy, worldId, rollCtx)
         spawnLootTableContent(def, entry, gx, gy, worldId, rollCtx)
     elseif kind == "building" then
         spawnBuildingContent(def, entry, gx, gy, worldId)
-    elseif kind == "structure" then
-        spawnStructureContent(def, entry, gx, gy, worldId)
     else
+        -- Unreachable from authored data: every def here came through
+        -- engine.loadLocationYaml, whose closed validContentKinds
+        -- vocabulary already failed the file (#1708). Kept as the
+        -- backstop for a def injected some other way — warning and
+        -- skipping one entry beats a nil-index crash mid-stamp.
         engine.logWarn("locations: unknown content kind '" ..
             tostring(kind) .. "'")
     end

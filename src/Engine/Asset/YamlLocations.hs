@@ -94,6 +94,29 @@ relBoundsContains ∷ LocationYamlBounds → Int → Int → Bool
 relBoundsContains b x y =
     x ≥ lybMinX b ∧ x ≤ lybMaxX b ∧ y ≥ lybMinY b ∧ y ≤ lybMaxY b
 
+-- | The authoritative content-kind vocabulary (#1708): the four kinds
+--   'scripts/locations.lua' can actually spawn. Closed here, at the
+--   same entry point that already validates bounds, fixed content
+--   positions, and anchor tags below, so an unrecognized kind fails
+--   the whole file's load rather than reaching a stamp-time warning
+--   after the definition is already registered.
+--
+--   @structure@ — a nested content entry naming another Lua builder —
+--   is deliberately absent. A nested entry has no definition of its
+--   own, so the builder received the OUTER def and translated its
+--   whole 'lydBounds' box a second time around the shifted anchor:
+--   every nonzero offset stamped geometry outside the box #777 made
+--   authoritative for placement separation, discovery, portal
+--   blocking, and map annotation. On tracked repository evidence no
+--   definition ever authored it — no shipped data file, test, probe, or
+--   commit in history does. Externally authored YAML is outside what
+--   this tree can establish either way, so treat the removal as a
+--   schema break, not a no-op.
+--   Reintroducing nested content needs its own relative-bounds model,
+--   not a re-listing here.
+validContentKinds ∷ [Text]
+validContentKinds = [ "unit", "item", "loot_table", "building" ]
+
 -- | The authoritative anchor-tag vocabulary (#801): terrain/height
 --   (flat/mountain/highland/lowland), ocean-distance
 --   (coast/coastal/inland), and the #414 water-proximity opt-out
@@ -196,13 +219,23 @@ instance FromJSON LocationYamlDef where
             fail (T.unpack ("location '" <> lid <> "': bounds.min_y ("
                 <> tshow (lybMinY bounds) <> ") > bounds.max_y ("
                 <> tshow (lybMaxY bounds) <> ")"))
-        forM_ contents $ \c → forM_ (lycPosition c) $ \p →
-            unless (relBoundsContains bounds (lypX p) (lypY p)) $
-                fail (T.unpack ("location '" <> lid <> "': content '"
-                    <> lycId c <> "' fixed position ("
-                    <> tshow (lypX p) <> ","
-                    <> tshow (lypY p)
-                    <> ") lies outside declared bounds"))
+        forM_ contents $ \c → do
+            -- The kind is checked BEFORE the position: an entry naming
+            -- a kind nothing spawns has no meaningful footprint to
+            -- contain, so reporting the unsupported kind is the
+            -- actionable diagnostic (#1708).
+            unless (lycKind c `elem` validContentKinds) $
+                fail (T.unpack ("location '" <> lid
+                    <> "': unsupported content kind '" <> lycKind c
+                    <> "' (expected one of: "
+                    <> T.intercalate ", " validContentKinds <> ")"))
+            forM_ (lycPosition c) $ \p →
+                unless (relBoundsContains bounds (lypX p) (lypY p)) $
+                    fail (T.unpack ("location '" <> lid <> "': content '"
+                        <> lycId c <> "' fixed position ("
+                        <> tshow (lypX p) <> ","
+                        <> tshow (lypY p)
+                        <> ") lies outside declared bounds"))
         forM_ anchor $ \tag →
             unless (tag `elem` validAnchorTags) $
                 fail (T.unpack ("location '" <> lid <> "': unsupported anchor tag '"
