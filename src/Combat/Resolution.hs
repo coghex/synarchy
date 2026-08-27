@@ -265,7 +265,7 @@ runResolution env logger im sm gt atkRaw tgtRaw mode reachBonus lungeSpeed atk a
                         [("slash", 0.85), ("blunt", 0.70), ("stab", 0.20)]
                     | otherwise = [(kind, 1.0)]
                 results =
-                    [ (k, computeSeverity sm im atk tdef mEquipped natW
+                    [ (k, computeSeverity sm im gt atk tdef mEquipped natW
                                 tgt partId k mode allocRoll w lungeSpeed)
                     | (k, w) ← components ]
                 sevOf (_, (s,_,_,_,_,_,_)) = s
@@ -424,8 +424,11 @@ runResolution env logger im sm gt atkRaw tgtRaw mode reachBonus lungeSpeed atk a
     -- Drain stamina on EVERY swing (hit or miss). The motion costs
     -- the same; landing the blow is a separate roll. Cost is a
     -- fraction of max_stamina so endurance drives absolute capacity
-    -- without changing the per-swing fraction.
-    applyStaminaDrain env atkRaw mode
+    -- without changing the per-swing fraction. `gt` is this
+    -- resolution's own game-time sample (#1735), shared with
+    -- computeSeverity's stamina fraction so both size the pool — and
+    -- resolve every modifier expiry on it — at the same instant.
+    applyStaminaDrain env gt atkRaw mode
 
 -- ----- Helpers -----
 

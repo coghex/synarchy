@@ -43,6 +43,7 @@ module Engine.Scripting.Lua.API.Repair
     ( repairGetFn
     , repairGetNamesFn
     , repairAtFn
+    , applyRepairAt
     ) where
 
 import UPrelude
@@ -60,7 +61,8 @@ import Engine.Scripting.Lua.API.Craft (pushRecipe, validateStation)
 import Item.Types (ItemInstance(..), ItemManager)
 import Unit.Types (UnitId(..), UnitInstance(..), UnitManager(..))
 import Building.Types (BuildingId(..))
-import Engine.Scripting.Lua.API.Units (applyRepairToUnit, findHeldItemById)
+import Engine.Scripting.Lua.API.Units
+    (applyRepairToUnit, findHeldItemById, repairDeltasFinite)
 
 -- | repair.get(id) → table | nil. Same shape as craft.get, restricted
 --   to recipes tagged with a repair axis.
@@ -102,7 +104,8 @@ repairGetNamesFn regs = do
 --   all-or-nothing and restores the axis fully to 100, returning the
 --   same { defName, condition, sharpness, conditionApplied,
 --   sharpnessApplied } shape as unit.repairItem. On refusal, returns
---   nil plus a reason and touches nothing.
+--   nil plus a reason and touches nothing — including the #1732 case
+--   where the axis restoration this verb DERIVES is not finite.
 repairAtFn ∷ ContentRegistriesCapability → IORef UnitManager → EngineEnv
            → Lua.LuaE Lua.Exception Lua.NumResults
 repairAtFn regs umRef env = do
@@ -165,10 +168,22 @@ runRepairAt regs umRef env uid rid iid bid = do
                             applyRepairAt axis recipe iid itemMgr uid um
 
 -- | The pure atomic step: find the targeted instance, refuse if
---   already full on the recipe's axis, consume the recipe's demands
---   all-or-nothing, then restore that axis to 100. All three checks
---   run before any mutation, so a refusal at any stage leaves the unit
+--   already full on the recipe's axis, refuse if the restoration this
+--   step DERIVES is not finite, consume the recipe's demands
+--   all-or-nothing, then restore that axis to 100. All four checks run
+--   before any mutation, so a refusal at any stage leaves the unit
 --   manager untouched.
+--
+--   The finiteness check (#1732) is the shared core's rule reaching
+--   this entry point too, and it is stated HERE rather than left to
+--   'applyRepairToUnit' for two reasons. It must run BEFORE
+--   'consumeIngredients', so a refusal costs the unit nothing; and it
+--   names what actually went wrong, where the core's 'Nothing' is
+--   indistinguishable from a missing instance. @delta@ is @100 -
+--   current@, so it is non-finite exactly when the stored axis is —
+--   @current ≥ 100@ is False for NaN, which is what lets such a value
+--   reach this point at all. This validates the DERIVED delta only; no
+--   other stored item scalar is inspected here.
 applyRepairAt ∷ RepairAxis → RecipeDef → Word64 → ItemManager → UnitId
               → UnitManager
               → (UnitManager, Either Text (Text, Float, Float, Float, Float))
@@ -178,16 +193,19 @@ applyRepairAt axis recipe iid itemMgr uid um = case HM.lookup uid (umInstances u
         Nothing → (um, Left "no such item instance")
         Just it →
             let current = axisValue axis it
+                delta   = 100 - current
+                (condD, sharpD) = case axis of
+                    RepairCondition → (delta, 0)
+                    RepairSharpness → (0, delta)
             in if current ≥ 100
                 then (um, Left ("already at full " <> repairAxisName axis))
-                else case consumeIngredients recipe (uiInventory u) of
+                else if not (repairDeltasFinite condD sharpD)
+                  then (um, Left ("non-finite " <> repairAxisName axis
+                                  <> " repair delta"))
+                  else case consumeIngredients recipe (uiInventory u) of
                     Left err → (um, Left err)
                     Right inv' →
                         let u1 = u { uiInventory = inv' }
-                            delta = 100 - current
-                            (condD, sharpD) = case axis of
-                                RepairCondition → (delta, 0)
-                                RepairSharpness → (0, delta)
                         in case applyRepairToUnit iid condD sharpD itemMgr u1 of
                             Nothing → (um, Left "no such item instance")
                             Just (u2, r) →
