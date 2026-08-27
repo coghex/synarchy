@@ -123,25 +123,37 @@ end
 -- format). Dropped whole on every branch below that ends the order it
 -- describes.
 --
---   pending  -- the task the CURRENT maintainTask call is servicing.
---   walking  -- the task the PREVIOUS call was servicing, promoted
---               from `pending` at the top of each call. This is the
---               order whose walk the interval the watchdog judges
---               belonged to, and it is not necessarily the current
---               one: the watchdog runs AFTER maintainTask on the same
---               tick, so a commandMove issued while the unit was
---               already motionless is ALREADY current by the time the
---               order it replaced is the one being reported.
+--   walking  -- the task the ENGINE was last given a destination for,
+--               recorded by M.noteWalk from unit_ai_combat.lua's
+--               followCommandExecute. That is the only place a
+--               commanded task reaches unit.moveTo, and it is the only
+--               honest answer to "whose walk is this?": commandMove
+--               replaces `s.commandedTask` alone, and unit_ai.lua's
+--               switch-or-idle execute gate does NOT re-run an action
+--               that is already running, so a replacement issued mid-
+--               walk can stay un-issued for many ticks while the
+--               engine is still walking its predecessor's destination.
 --   reported -- the task the watchdog has already reported for, held
 --               as the TABLE rather than a flag, so a replacement is
 --               never covered by a report about its predecessor.
 --
--- Two slots rather than comparing the watchdog's last-progress stamp
--- against the order's `startedAt`: game time need not advance between
--- a player command and the tick that first sees it, so the two stamps
--- can tie and a timestamp test cannot separate those orders at all.
--- Table identity always can.
+-- Identity rather than a timestamp comparison: game time need not
+-- advance between a player command and the tick that first sees it, so
+-- an order's `startedAt` can tie the watchdog's last-progress stamp and
+-- no comparison of the two numbers could separate those orders at all.
 local watchdog = {}
+
+-- Called by followCommandExecute when it hands a commanded task to the
+-- engine. Until that happens the task is merely PENDING, however long
+-- it has been current.
+function M.noteWalk(uid, task)
+    local w = watchdog[uid]
+    if not w then
+        w = {}
+        watchdog[uid] = w
+    end
+    w.walking = task
+end
 
 -- Called by the stuck-walk watchdog when it reports a unit that has
 -- stopped moving. Two things must BOTH hold before that report may
@@ -149,7 +161,7 @@ local watchdog = {}
 -- silenced: the commanded move's own action was in control over the
 -- interval just judged (so the stuck walk IS a commanded walk rather
 -- than some other action's), and the order still current is the one
--- that was actually walking it. Nothing is lost when the check
+-- the engine was actually walking. Nothing is lost when the check
 -- refuses -- the order then reports for itself if it goes on to stall,
 -- which is the direction this issue exists to fix.
 function M.noteStuckReport(uid, s)
@@ -246,16 +258,9 @@ local function maintainTask(uid, s)
         return
     end
 
-    -- Promote last call's task to `walking` before anything else, so a
-    -- watchdog report later on THIS tick is attributed to the order
-    -- that was walking over the interval it judged (see `watchdog`).
+    -- This unit's watchdog record, if its commanded move has reached
+    -- the engine at all yet -- M.noteWalk is what creates one.
     local w = watchdog[uid]
-    if w then
-        w.walking, w.pending = w.pending, task
-    else
-        w = { pending = task }
-        watchdog[uid] = w
-    end
 
     local info = unit.getInfo(uid)
     if not info then
@@ -323,11 +328,11 @@ local function maintainTask(uid, s)
     if eligible and (not task.bestDist
                      or d < task.bestDist - TASK_PROGRESS_TILES) then
         task.bestDist = d
-        w.reported = nil
+        if w then w.reported = nil end
         M.reset(task, now)
     end
     if M.charge(task, eligible, now) > TASK_TIMEOUT_SEC then
-        local alreadyReported = w.reported == task
+        local alreadyReported = w ~= nil and w.reported == task
         watchdog[uid] = nil
         if task.player and not alreadyReported then
             engine.emitEventForUnit("unit_warning", string.format(

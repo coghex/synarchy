@@ -179,6 +179,48 @@ pickupPrelude = lns
     , "end"
     ]
 
+-- | The commanded-move ACTION itself, reached through the real
+--   @scripts/unit_ai_combat.lua@ — the one place a commanded task is
+--   handed to @unit.moveTo@, and therefore the one place the stall
+--   module's walk attribution (#1769) is recorded from. An
+--   explicit-@speed@ task takes @followCommandExecute@'s early-return
+--   branch, so @unit.moveTo@ is the only global it reaches at call
+--   time. @MOVES@ records what the engine was actually told to walk.
+combatPrelude ∷ Text
+combatPrelude = lns
+    [ "package.loaded['scripts.unit_ai'] = {}"
+    , "NOW = 0"
+    , "POS = { gridX = 0, gridY = 0, name = 'Dorian Kessler' }"
+    , "MOVES = {}"
+    , "EVENTS = {}"
+    , "engine = { gameTime = function() return NOW end,"
+    , "           logWarn = function() end, logInfo = function() end,"
+    , "           emitEventForUnit = function(cat, msg, uid)"
+    , "             EVENTS[#EVENTS + 1] ="
+    , "               { cat = cat, msg = msg, uid = uid } end }"
+    , "unit = { getInfo = function() return POS end,"
+    , "         moveTo = function(_, x, y)"
+    , "           MOVES[#MOVES + 1] = { x = x, y = y } end }"
+    , "local combat = require('scripts.unit_ai_combat')"
+    , "local stall = require('scripts.unit_ai_stall')"
+    , "local s = { commandedTask = nil, currentAction = nil }"
+    , "local STEP = 0.25"
+    , "local function tick(seconds, action)"
+    , "  local left = seconds"
+    , "  while left > 1e-9 do"
+    , "    local dt = math.min(STEP, left)"
+    , "    NOW = NOW + dt"
+    , "    s.currentAction = action"
+    , "    stall.maintainTask(1, s)"
+    , "    left = left - dt"
+    , "  end"
+    , "end"
+    , "local function command(tx)"
+    , "  s.commandedTask = { x = tx, y = 0, speed = 1.0,"
+    , "                      startedAt = NOW, player = true }"
+    , "end"
+    ]
+
 -- | The real @lua.unit_ai@ component, registered against a fake
 --   @aiState@ the case fills in. @unit.exists@ is the only global its
 --   snapshot path reaches for a state table carrying no job/claim
@@ -396,12 +438,13 @@ spec = describe "commanded order stall budget" $ do
                 , "EVENTS = {}"
                 , "s.commandedTask = { x = 40, y = 0, startedAt = NOW,"
                 , "                    player = true }"
+                -- followCommandExecute hands this task to the engine.
+                , "stall.noteWalk(1, s.commandedTask)"
                 , "tick(10, 'follow_command')"
                 -- unit_ai.lua's watchdog stops the unit, files its own
                 -- `Stuck — can't reach destination` warning on this same
                 -- surface, and records that it did. This order is the
-                -- one maintainTask has been servicing all along, so it
-                -- is the one that was walking.
+                -- one the engine was walking.
                 , "s.currentAction = 'follow_command'"
                 , "stall.noteStuckReport(1, s)"
                 , "tick(60, 'follow_command')"
@@ -418,6 +461,7 @@ spec = describe "commanded order stall budget" $ do
                 , "EVENTS = {}"
                 , "s.commandedTask = { x = 40, y = 0, startedAt = NOW,"
                 , "                    player = true }"
+                , "stall.noteWalk(1, s.commandedTask)"
                 , "tick(10, 'treat_ally')"
                 , "s.currentAction = 'treat_ally'"
                 , "stall.noteStuckReport(1, s)"
@@ -429,23 +473,28 @@ spec = describe "commanded order stall budget" $ do
                 ]
 
         it "still reports for a REPLACEMENT order the watchdog was \
-           \never about: the watchdog runs after maintainTask on the \
-           \same tick, so a commandMove issued while the unit was \
-           \already motionless is the current task by the time the \
-           \predecessor's walk is reported" $
+           \never about: a commandMove issued mid-walk does not re-run \
+           \the already-running action, so the engine keeps walking \
+           \the predecessor's destination and a watchdog report in \
+           \that window belongs to the predecessor" $
             runsOk $ lns
                 [ prelude
                 , "EVENTS = {}"
                 , "s.commandedTask = { x = 40, y = 0, startedAt = NOW,"
                 , "                    player = true }"
+                , "stall.noteWalk(1, s.commandedTask)"
                 , "tick(10, 'follow_command')"
-                -- The player commands somewhere else. maintainTask sees
-                -- the replacement first...
+                -- The player commands somewhere else. `follow_command`
+                -- is already the running action and the unit is not
+                -- idle, so unit_ai.lua's switch-or-idle execute gate
+                -- does NOT re-run followCommandExecute: no noteWalk,
+                -- and the engine is still walking the FIRST
+                -- destination. Ticked long past the watchdog's own
+                -- deadline, so this is not a one-tick window.
                 , "s.commandedTask = { x = 80, y = 0, startedAt = NOW,"
                 , "                    player = true }"
-                , "tick(0.25, 'follow_command')"
-                -- ...and only then does the watchdog report the walk
-                -- the FIRST order was doing.
+                , "tick(20, 'follow_command')"
+                -- Only now does the watchdog report that stalled walk.
                 , "s.currentAction = 'follow_command'"
                 , "stall.noteStuckReport(1, s)"
                 , "tick(70, 'follow_command')"
@@ -454,6 +503,32 @@ spec = describe "commanded order stall budget" $ do
                 , "assert(#EVENTS == 1,"
                 , "  'and reports, since the watchdog never spoke about '"
                 , "  .. 'it: ' .. tostring(#EVENTS))"
+                ]
+
+        it "does silence the replacement once the engine is actually \
+           \walking IT — the binding is to the issued walk, not a \
+           \blanket exemption for anything that replaced something" $
+            runsOk $ lns
+                [ prelude
+                , "EVENTS = {}"
+                , "s.commandedTask = { x = 40, y = 0, startedAt = NOW,"
+                , "                    player = true }"
+                , "stall.noteWalk(1, s.commandedTask)"
+                , "tick(10, 'follow_command')"
+                , "s.commandedTask = { x = 80, y = 0, startedAt = NOW,"
+                , "                    player = true }"
+                -- The watchdog's unit.stop leaves the unit idle, so the
+                -- execute gate DOES re-run and the replacement reaches
+                -- the engine.
+                , "stall.noteWalk(1, s.commandedTask)"
+                , "tick(20, 'follow_command')"
+                , "s.currentAction = 'follow_command'"
+                , "stall.noteStuckReport(1, s)"
+                , "tick(70, 'follow_command')"
+                , "assert(s.commandedTask == nil, 'the replacement expires')"
+                , "assert(#EVENTS == 0,"
+                , "  'silently, because the watchdog reported ITS walk: '"
+                , "  .. tostring(#EVENTS))"
                 ]
 
         it "makes that distinction by task IDENTITY, not by comparing \
@@ -466,12 +541,12 @@ spec = describe "commanded order stall budget" $ do
                 , "EVENTS = {}"
                 , "s.commandedTask = { x = 40, y = 0, startedAt = NOW,"
                 , "                    player = true }"
+                , "stall.noteWalk(1, s.commandedTask)"
                 , "tick(10, 'follow_command')"
                 -- The clock does not move: NOW is the last instant the
                 -- watchdog would have stamped, AND the replacement's
                 -- own issue time. A > / >= test on those two numbers
-                -- cannot separate these orders; the two-slot record
-                -- does.
+                -- cannot separate these orders; identity does.
                 , "local tie = NOW"
                 , "s.commandedTask = { x = 80, y = 0, startedAt = tie,"
                 , "                    player = true }"
@@ -486,6 +561,41 @@ spec = describe "commanded order stall budget" $ do
                 , "  'and still reports for itself: ' .. tostring(#EVENTS))"
                 ]
 
+        it "takes its walk attribution from the REAL \
+           \followCommandExecute: a task that action handed to the \
+           \engine is silenced by a watchdog report, and one it never \
+           \did is not" $
+            runsOk $ lns
+                [ combatPrelude
+                -- The action runs, so the engine is walking THIS task.
+                , "command(40)"
+                , "combat.followCommandExecute(1, s, {})"
+                , "assert(#MOVES == 1 and MOVES[1].x == 40,"
+                , "  'the engine was given this walk: ' .. tostring(#MOVES))"
+                , "tick(10, 'follow_command')"
+                , "s.currentAction = 'follow_command'"
+                , "stall.noteStuckReport(1, s)"
+                , "tick(70, 'follow_command')"
+                , "assert(s.commandedTask == nil, 'the order expires')"
+                , "assert(#EVENTS == 0,"
+                , "  'silently, because the watchdog reported ITS walk: '"
+                , "  .. tostring(#EVENTS))"
+                -- A replacement the action never re-ran for: the engine
+                -- is still walking the previous destination.
+                , "command(80)"
+                , "tick(20, 'follow_command')"
+                , "assert(#MOVES == 1,"
+                , "  'the replacement never reached the engine: '"
+                , "  .. tostring(#MOVES))"
+                , "s.currentAction = 'follow_command'"
+                , "stall.noteStuckReport(1, s)"
+                , "tick(70, 'follow_command')"
+                , "assert(s.commandedTask == nil, 'the replacement expires')"
+                , "assert(#EVENTS == 1,"
+                , "  'and reports, since that walk was not its own: '"
+                , "  .. tostring(#EVENTS))"
+                ]
+
         it "reports a SECOND stall after a genuine closest approach — \
            \the approach that refreshes the budget retires the \
            \watchdog record along with it" $
@@ -494,6 +604,7 @@ spec = describe "commanded order stall budget" $ do
                 , "EVENTS = {}"
                 , "s.commandedTask = { x = 40, y = 0, startedAt = NOW,"
                 , "                    player = true }"
+                , "stall.noteWalk(1, s.commandedTask)"
                 , "tick(10, 'follow_command')"
                 , "s.currentAction = 'follow_command'"
                 , "stall.noteStuckReport(1, s)"

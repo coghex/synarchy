@@ -21,6 +21,10 @@ local ensureState         = core.ensureState
 
 local mv = require("scripts.movement_speed")
 local pace = require("scripts.unit_ai_pace")
+-- #1769: the order stall accounting, so followCommandExecute below can
+-- record which task the engine is actually walking. A leaf module (no
+-- requires at all), so this is not a cycle.
+local stall = require("scripts.unit_ai_stall")
 local staminaPct = pace.staminaPct
 
 local M = {}
@@ -70,6 +74,14 @@ end
 local function followCommandExecute(uid, s, params)
     local task = s.commandedTask
     if not task then return end
+    -- This is the one place a commanded task reaches unit.moveTo, so it
+    -- is where the stuck-walk watchdog's report attribution is bound
+    -- (#1769). unit_ai_core's commandMove replaces `s.commandedTask`
+    -- alone and unit_ai.lua does not re-run an already-running action,
+    -- so a replacement can be current for many ticks while the engine
+    -- is still walking its predecessor's destination -- and a watchdog
+    -- report in that window belongs to the predecessor, not to it.
+    stall.noteWalk(uid, task)
     if task.speed then
         -- Explicit-speed command: respect it as-is, no adaptive pacing.
         task.paceMode = nil
