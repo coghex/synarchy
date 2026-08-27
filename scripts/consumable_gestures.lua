@@ -137,7 +137,10 @@ function M.drinkEntries(uid, row)
                 -- had this very pot emptied by something else.
                 -- consumable.drinkInstance re-checks the instance itself
                 -- and refuses rather than falling back, so a failure
-                -- here changes no fill and no stat.
+                -- here changes no fill and no stat. That covers the
+                -- authoritative drain too since #1744: it runs BEFORE
+                -- any stat is credited, and a refused or short one
+                -- decides what the sip was rather than being ignored.
                 if not commandableIdle(uid) then return end
                 consumable.drinkInstance(uid, iid)
             end,

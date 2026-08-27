@@ -13,6 +13,7 @@ module Engine.Scripting.Lua.Thread
   , createLuaBackendState
   , processLuaMsg
   , processLuaMsgs
+  , runDueScripts
   ) where
 
 import UPrelude
@@ -21,6 +22,8 @@ import Engine.Scripting.Lua.API (registerLuaAPI)
 import Engine.Scripting.Lua.API.Shell (setupShellSandbox)
 import Engine.Scripting.Lua.Script (callModuleFunction, loadModuleRef)
 import Engine.Scripting.Lua.Util (isValidRef, nowSeconds)
+import Engine.Scripting.Lua.TickPolicy
+    (schedulerSleepMicros, scriptIsDue, advanceTick)
 import Engine.Scripting.Lua.DebugServer
     ( DebugCommand(..), startDebugServer, pollDebugCommand
     , DebugListenerFailure(..), ListenerAction(..), listenerAction
@@ -354,22 +357,20 @@ luaTick env lls = do
 
             currentSecs ← nowSeconds
             scriptsMap ← readTVarIO (lbsScripts ls)
-            let scripts = Map.elems scriptsMap
-                -- Paused scripts never advance their nextTick;
-                -- including them would pin sleeptime at the floor
-                -- and busy-spin the loop at ~1 kHz.
-                nextWakeTimes = map scriptNextTick
-                                    (filter (not ∘ scriptPaused) scripts)
-                nextWakeTime = if null nextWakeTimes
-                               then currentSecs + 1.0
-                               else minimum nextWakeTimes
-                sleeptime = max 0.001 (nextWakeTime - currentSecs)
-            let maxSleepMicros = min 16666 (floor (sleeptime * 1000000))
+            -- Sleep only as long as the next TIMED script allows.
+            -- Paused scripts never advance their nextTick and
+            -- event-only scripts (interval 0, #1695) never tick at
+            -- all; including either would pin the sleep at the floor
+            -- and busy-spin the loop at ~1 kHz. Both exclusions, the
+            -- floor, the ~60 Hz cap and the overflow-safe microsecond
+            -- conversion live in "Engine.Scripting.Lua.TickPolicy".
+            let sleepMicros = schedulerSleepMicros currentSecs
+                                                   (Map.elems scriptsMap)
                 (_, etlq) = lbsMsgQueues ls
             -- readQueueTimeout, NOT System.Timeout around readQueue:
             -- the timeout exception can land after the STM dequeue
             -- commits, silently dropping the message.
-            mMsg ← Q.readQueueTimeout maxSleepMicros etlq
+            mMsg ← Q.readQueueTimeout sleepMicros etlq
             case mMsg of
               Just msg → do
                   processLuaMsg env ls stateRef msg
@@ -377,13 +378,26 @@ luaTick env lls = do
                   pure (Just lls)
               Nothing → do
                   currentSecs' ← nowSeconds
-                  scriptsMap' ← readTVarIO (lbsScripts ls)
-                  forM_ (Map.toList scriptsMap') $ \(sid, script) → do
-                    when (not (scriptPaused script) ∧ currentSecs' ≥ scriptNextTick script) $ do
-                      when (isValidRef (scriptModuleRef script)) $ do
-                        let dt = scriptTickRate script
-                        _ ← callModuleFunction ls (scriptModuleRef script) "update" [ScriptNumber dt]
-                        return ()
-                      atomically $ modifyTVar' (lbsScripts ls) $
-                        Map.adjust (\s → s { scriptNextTick = scriptNextTick s + scriptTickRate s }) sid
+                  runDueScripts ls currentSecs'
                   pure (Just lls)
+
+-- | One scheduler pass over the loaded scripts: call @update@ on every
+--   script that is DUE and reschedule it.
+--
+--   Which scripts those are is 'scriptIsDue''s answer and nothing else,
+--   so a paused or event-only script (interval @0@, #1695) is skipped
+--   here for exactly the reason it was skipped when the sleep above was
+--   computed — the two can't drift. The @dt@ handed to @update@ is the
+--   script's own accepted interval, unchanged.
+--
+--   Exported so "Test.Headless.Lua.TickInterval" can drive the real
+--   pass against a bare backend rather than reproducing it.
+runDueScripts ∷ LuaBackendState → Double → IO ()
+runDueScripts ls now = do
+    scriptsMap ← readTVarIO (lbsScripts ls)
+    forM_ (Map.toList scriptsMap) $ \(sid, script) →
+      when (scriptIsDue now script) $ do
+        when (isValidRef (scriptModuleRef script)) $
+          void $ callModuleFunction ls (scriptModuleRef script) "update"
+                     [ScriptNumber (scriptTickRate script)]
+        atomically $ modifyTVar' (lbsScripts ls) $ Map.adjust advanceTick sid
