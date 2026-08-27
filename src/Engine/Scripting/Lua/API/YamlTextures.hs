@@ -31,13 +31,13 @@ import Engine.Asset.Handle (TextureHandle(..), AssetState(..))
 import Engine.Asset.Types (AssetPool)
 import Engine.Asset.Manager (generateTextureHandle, updateTextureState)
 import Engine.Asset.TextureNameRegistry (lookupTextureName, registerTextureName)
-import Engine.Asset.YamlMaterials (MaterialDef(..), loadMaterialYaml)
+import Engine.Asset.YamlMaterials
+    (MaterialDef(..), loadMaterialYaml, materialPropsFromDef)
 import Engine.Asset.YamlVegetation (VegetationDef(..), loadVegetationYaml)
 import Engine.Asset.YamlFlora
 import qualified Engine.Core.Queue as Q
 import World.Flora.Types
-import World.Material (MaterialProps(..), MaterialId(..), registerMaterial,
-                       materialIdByName)
+import World.Material (MaterialId(..), registerMaterial, materialIdByName)
 
 -- | If a yaml-declared texture path doesn't exist on disk, substitute the
 --   given subset fallback so 'loadAndRegister' has something to queue,
@@ -109,21 +109,15 @@ loadMaterialYamlFn env backendState = do
                 -- info-tool readout falls back to "unknown" for every
                 -- tile, since the registry stays at defaults.
                 atomicModifyIORef' (wsMaterialRegistryRef (toWorldSimCapability env)) $ \reg →
+                    -- Through the SAME conversion
+                    -- 'loadPopulatedMaterialRegistry' uses, over defs the
+                    -- SAME 'loadMaterialYaml' already brought inside the
+                    -- documented field domains (#1734): a custom material
+                    -- registered from Lua cannot enter the registry
+                    -- validated differently from a shipped one.
                     let reg' = foldl' (\r def →
                             registerMaterial (mdId def)
-                                (MaterialProps (mdName def)
-                                               (mdHardness def)
-                                               (mdDensity def)
-                                               (mdAlbedo def)
-                                               (mdDrainage def)
-                                               (mdPickSpeed def)
-                                               (mdShovelSpeed def)
-                                               (mdDigSpoil def)
-                                               (mdDigBulking def)
-                                               (mdDigChunk def)
-                                               (mdDigGems def)
-                                               (mdMoveCost def))
-                                r
+                                (materialPropsFromDef def) r
                             ) reg defs
                     in (reg', ())
 

@@ -1131,6 +1131,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Asset.FloraContent
                    Test.Headless.Asset.Types
                    Test.Headless.Asset.UnitInventory
+                   Test.Headless.Asset.MaterialMoveCost
                    Test.Headless.Asset.YamlList
                    Test.Headless.Preview.Discovery
                    Test.Headless.Preview.UnitAnimation
