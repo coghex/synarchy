@@ -22,10 +22,12 @@ import qualified HsLua as Lua
 import Data.List (minimumBy)
 import Data.Ord (comparing)
 import Data.IORef (readIORef)
-import Engine.Core.State (EngineEnv, activeWorldPageFrom)
+import Engine.Core.State
+    (EngineEnv, activeWorldPageFrom, resolveActiveWorld)
 import World.Page.Types (WorldPageId(..))
 import Building.Types
 import Engine.Asset.Handle (TextureHandle(..))
+import World.Types (WorldManager(..))
 
 -- | building.getStartingBuildings() — Lua array of def names where
 --   is_starting is true. Used by the build tool's popup.
@@ -195,25 +197,46 @@ buildingListFn env = do
     Lua.pushstring (TE.encodeUtf8 (T.pack result))
     return 1
 
--- | building.getActiveIds() — Lua array of every live building's integer
---   id, scoped to the ACTIVE world page. The world-scoping boundary for
---   per-tick iteration so a building in another live world never leaks
---   into the current one (#198), mirroring unit.getAllIds (#78). Empty
---   when no world is active. Scripts should prefer this over parsing the
---   global, page-agnostic building.list when they iterate gameplay.
+-- | building.getActiveIds() → @ids, bindGen@. A Lua array of every live
+--   building's integer id, scoped to the ACTIVE world page, plus the
+--   page-selection generation that scoping was resolved under. The
+--   world-scoping boundary for per-tick iteration so a building in
+--   another live world never leaks into the current one (#198),
+--   mirroring unit.getAllIds (#78). Empty when no world is active.
+--   Scripts should prefer this over parsing the global, page-agnostic
+--   building.list when they iterate gameplay.
+--
+--   The second return value is the SNAPSHOT half of #1686's binding.
+--   Scoping the scan alone is not enough: the active page can change
+--   while the caller is still working through the ids it got, and every
+--   per-building verb after this one is page-agnostic, so a building
+--   enumerated here can still be committed into a page that has since
+--   been hidden. A caller that commits work per building hands this
+--   generation back to the verb that commits it (today
+--   @unit.spawn@'s slot 7), which refuses a snapshot selection has
+--   moved out from under.
+--
+--   Both values come from ONE 'World.Types.WorldManager' read, which is
+--   the whole point: sampling the ids and the generation separately
+--   would leave exactly the window the binding exists to close. Extra
+--   return values are inert for every caller that wants only the ids —
+--   @building.getActiveIds() or {}@ truncates to the first.
 buildingGetActiveIdsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 buildingGetActiveIdsFn env = do
-    ids ← Lua.liftIO $ do
+    (ids, gen) ← Lua.liftIO $ do
         bm ← readIORef (bcBuildingManagerRef (toBuildingCapability env))
-        mActive ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
-        pure $ case mActive of
-            Just (pid, _) → HM.keys (buildingsOnPage pid (bmInstances bm))
-            Nothing       → []
+        wm ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
+        pure $ case resolveActiveWorld wm of
+            Just (pid, _) →
+                ( HM.keys (buildingsOnPage pid (bmInstances bm))
+                , wmSelectionGen wm )
+            Nothing → ([], wmSelectionGen wm)
     Lua.newtable
     forM_ (zip [1 ∷ Int ..] ids) $ \(i, bid) → do
         Lua.pushinteger (fromIntegral (unBuildingId bid))
         Lua.rawseti (-2) (fromIntegral i)
-    return 1
+    Lua.pushinteger (fromIntegral gen)
+    return 2
 
 -- | building.existsWithDef(defName) → bool. True iff at least one live
 --   building instance carries this def name, on ANY live world page.

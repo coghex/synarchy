@@ -17,7 +17,7 @@ import Engine.Graphics.Vulkan.Buffer
 import Engine.Graphics.Vulkan.Command
 import Engine.Graphics.Vulkan.Sampler.Cache (acquireSampler, SamplerKind(..))
 import Engine.Graphics.Vulkan.Texture (transitionImageLayout, ImageLayoutTransition(..))
-import Engine.Graphics.Vulkan.Texture.Bindless (registerTexture)
+import Engine.Graphics.Vulkan.Texture.Bindless (registerSlotOnlyTexture)
 import Engine.Graphics.Vulkan.Texture.Slot (TextureSlot(..))
 import Engine.Graphics.Vulkan.Texture.Handle (BindlessTextureHandle(..))
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
@@ -101,8 +101,14 @@ createDefaultFaceMap pdev dev cmdPool cmdQueue bindless = do
   -- ('Engine.Graphics.Vulkan.Init' → 'Engine.Graphics.Vulkan.ShaderCode'),
   -- which is where every quad carrying 'noFaceMapVertexId' picks it up
   -- (#286, #1696).
+  --
+  -- That is exactly why this registration is 'SlotOnly' (#1699): an
+  -- out-of-table id is a refusal for anything the shader reaches
+  -- THROUGH the table, and refusing this one would drop 'dfmSlot' to
+  -- the undefined slot 0 — regressing the fallback rather than
+  -- protecting it. Nothing else in the tree registers this way.
   let faceMapTexHandle = TextureHandle 999999
-  (mbHandle, newBindless) ← registerTexture dev faceMapTexHandle
+  (mbHandle, newBindless) ← registerSlotOnlyTexture dev faceMapTexHandle
                               "default face map" imageView sampler bindless
 
   let slot = case mbHandle of

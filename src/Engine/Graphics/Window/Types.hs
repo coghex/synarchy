@@ -13,6 +13,8 @@ data WindowConfig = WindowConfig
   , wcFullscreen ∷ Bool
   , wcTitle      ∷ Text
   , wcResizable  ∷ Bool
+  , wcVisible    ∷ Bool
+  , wcFocused    ∷ Bool
   }
 
 -- | Opaque window type

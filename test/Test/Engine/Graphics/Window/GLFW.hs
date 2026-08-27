@@ -81,6 +81,8 @@ createWindowConfig = WindowConfig
   , wcFullscreen = False
   , wcTitle      = T.pack "Synarchy createWindow coverage"
   , wcResizable  = True
+  , wcVisible    = True
+  , wcFocused    = True
   }
 
 -- | Pre-call sentinels. Each observer gets its own so that a write
