@@ -60,6 +60,7 @@ import qualified Test.Headless.Asset.FloraContent as FloraContent
 import qualified Test.Headless.Asset.UnitInventory as AssetUnitInventory
 import qualified Test.Headless.Asset.Types as AssetTypes
 import qualified Test.Headless.Asset.YamlList as AssetYamlList
+import qualified Test.Headless.Asset.MaterialMoveCost as AssetMaterialMoveCost
 import qualified Test.Headless.Preview.Discovery as PreviewDiscovery
 import qualified Test.Headless.Unit.Atlas as UnitAtlas
 import qualified Test.Headless.Unit.Atlas.Loader as UnitAtlasLoader
@@ -121,6 +122,7 @@ import qualified Test.Headless.Construct.Footprint as ConstructFootprint
 import qualified Test.Headless.Construct.PendingRefusal as ConstructPendingRefusal
 import qualified Test.Headless.Craft.Execute as CraftExecute
 import qualified Test.Headless.Craft.Bills as CraftBills
+import qualified Test.Headless.Craft.OutputIdentity as CraftOutputIdentity
 import qualified Test.Headless.Craft.BillReconcile as CraftBillReconcile
 import qualified Test.Headless.Power.Types as PowerTypes
 import qualified Test.Headless.Power.Placement as PowerPlacement
@@ -179,6 +181,7 @@ import qualified Test.Headless.World.FloraGrowth as FloraGrowth
 import qualified Test.Headless.River.CalderaHazard as RiverCalderaHazard
 import qualified Test.Headless.River.InlandSources as RiverInlandSources
 import qualified Test.Headless.World.Render.FrontWallLift as FrontWallLift
+import qualified Test.Headless.World.Render.StructureRotation as StructureRotation
 import qualified Test.Headless.World.Render.GroundItemSeam as GroundItemSeam
 import qualified Test.Headless.World.Render.PickSeam as PickSeam
 import qualified Test.Headless.World.Render.QuadSnapshot as QuadSnapshot
@@ -211,6 +214,7 @@ import qualified Test.Headless.Scene.BatchMerge as BatchMerge
 import qualified Test.Headless.Render.PanMargin as PanMargin
 import qualified Test.Headless.Location.Bounds as LocationBounds
 import qualified Test.Headless.Building.PageBinding as BuildingPageBinding
+import qualified Test.Headless.Building.PortalSpawnBinding as BuildingPortalSpawnBinding
 import qualified Test.Headless.Building.Placement as BuildingPlacement
 import qualified Test.Headless.Building.RemoteWarning as BuildingRemoteWarning
 import qualified Test.Headless.Save.AutosaveGuards as AutosaveGuards
@@ -459,6 +463,7 @@ main = hspec $ do
     describe "Asset.FloraContent" FloraContent.spec
     describe "Asset.UnitInventory" AssetUnitInventory.spec
     describe "Asset.YamlList" AssetYamlList.spec
+    describe "material move_cost validation" AssetMaterialMoveCost.spec
     describe "Preview.Discovery" PreviewDiscovery.spec
     describe "Preview.UnitAnimation" PreviewUnitAnimation.spec
     describe "Preview.Building" PreviewBuilding.spec
@@ -477,6 +482,11 @@ main = hspec $ do
 
     aroundAll withHeadlessEngine ItemDiscovery.spec
     aroundAll withHeadlessEngineNoWorld ItemCondition.spec
+    -- Own engine (#1772): the craft-identity gate installs its own
+    -- single-page world manager and rewrites the item, recipe and unit
+    -- manager refs, exactly like the ItemCondition gate above. It needs
+    -- no world -- craft.execute reads none.
+    aroundAll withHeadlessEngineNoWorld CraftOutputIdentity.spec
     -- Own engine (#1716): the live unit.feed gate WRITES the item and
     -- unit manager refs, so it cannot share the worldgen engine. It
     -- needs no world at all -- unit.feed reads neither.
@@ -630,6 +640,7 @@ main = hspec $ do
     describe "World.FloraGrowth" FloraGrowth.spec
     describe "River.CalderaHazard" RiverCalderaHazard.spec
     describe "World.Render.FrontWallLift" FrontWallLift.spec
+    describe "World.Render.StructureRotation" StructureRotation.spec
     describe "World.Render.GroundItemSeam" GroundItemSeam.spec
     describe "World.Render.GroundItemSeam (engine)" GroundItemSeam.engineSpec
     describe "World.Render.PickSeam" PickSeam.spec
@@ -650,6 +661,7 @@ main = hspec $ do
     -- BuildingSpawn / WorldDesignateConstruct stays in its queue and
     -- "nothing was committed" is asserted on the queue itself.
     BuildingPageBinding.spec
+    BuildingPortalSpawnBinding.spec
     describe "World.Render.ZTrackSeam" ZTrackSeam.spec
     describe "World.Render.SideFace" RenderSideFace.spec
     describe "World.Slope.slopeBit" RenderSlopeBit.spec

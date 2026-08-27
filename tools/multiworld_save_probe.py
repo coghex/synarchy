@@ -532,7 +532,11 @@ def main() -> int:
         chk.ok(wait_active(args.port, "main_world"),
                "main_world is the active page after load")
         mw_units = id_list(args.port, "return unit.getAllIds()")
-        mw_bldgs = id_list(args.port, "return building.getActiveIds()")
+        # Parenthesised so Lua truncates to the ids alone: getActiveIds
+        # also reports the page-selection generation its scan was scoped
+        # under (#1686), and the debug console tab-joins every returned
+        # value into one reply.
+        mw_bldgs = id_list(args.port, "return (building.getActiveIds())")
         chk.ok(u_mw in mw_units,
                f"main_world unit #{u_mw} is on main_world ({mw_units})")
         chk.ok(u_sw not in mw_units,
@@ -545,7 +549,7 @@ def main() -> int:
         chk.ok(wait_active(args.port, "second_world"),
                "second_world restored and can be shown")
         sw_units = id_list(args.port, "return unit.getAllIds()")
-        sw_bldgs = id_list(args.port, "return building.getActiveIds()")
+        sw_bldgs = id_list(args.port, "return (building.getActiveIds())")
         chk.ok(u_sw in sw_units,
                f"second_world unit #{u_sw} is on second_world ({sw_units})")
         chk.ok(u_mw not in sw_units,
