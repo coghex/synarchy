@@ -148,7 +148,12 @@ spec = do
             -- Only the page epoch remembers it — and that is what
             -- must cancel.
             upmPageEpoch m5 `shouldNotBe` upmPageEpoch m3
-            resolveActivation (15, 15) m5 pending `shouldSatisfy` isCancel
+            -- The reason travels to F4's aoReason
+            -- ('Engine.Input.Thread.Mouse.Deferred'), so it must name
+            -- the change that really happened — no page appeared or
+            -- disappeared here.
+            resolveActivation (15, 15) m5 pending `shouldBe`
+                Cancel "a page appeared, disappeared, or changed input exclusivity during the press"
 
         it "a NO-OP exclusivity assignment on a VISIBLE page leaves the pending activation intact (#1748)" $ do
             let (hudH, m1) = basePage
