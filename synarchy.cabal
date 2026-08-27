@@ -499,6 +499,8 @@ library
                      Building.Placement
                      Building.HitTest
                      Structure.Types
+                     Structure.Facing
+                     Structure.WallCatalog
                      Structure.Render
                      Engine.Asset.YamlBuildings
                      Engine.Scripting.Lua.API.Buildings
@@ -1245,6 +1247,7 @@ test-suite synarchy-test-headless
                    Test.Headless.River.CalderaHazard
                    Test.Headless.River.InlandSources
                    Test.Headless.World.Render.FrontWallLift
+                   Test.Headless.World.Render.StructureRotation
                    Test.Headless.World.Render.GroundItemSeam
                    Test.Headless.World.Render.PickSeam
                    Test.Headless.World.Render.QuadSnapshot
