@@ -274,6 +274,7 @@ library
                      Engine.Scripting.Lua.Util
                      Engine.Scripting.Lua.API
                      Engine.Scripting.Lua.API.Internal
+                     Engine.Scripting.Lua.API.PageBinding
                      Engine.Scripting.Lua.API.Register.Debug
                      Engine.Scripting.Lua.API.Register.Engine
                      Engine.Scripting.Lua.API.Register.Input
@@ -1277,6 +1278,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Building.Knowledge
                    Test.Headless.Item.NestedContents
                    Test.Headless.Building.PageBinding
+                   Test.Headless.Building.PortalSpawnBinding
                    Test.Headless.Building.Placement
                    Test.Headless.Building.RemoteWarning
                    Test.Headless.Lua.SaveModules
