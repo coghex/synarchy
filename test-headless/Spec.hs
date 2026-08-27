@@ -41,6 +41,7 @@ import qualified Test.Headless.Unit.TransferOrderApi as UnitTransferOrderApi
 import qualified Test.Headless.Unit.CargoApi as UnitCargoApi
 import qualified Test.Headless.Unit.NightPerception as NightPerception
 import qualified Test.Headless.Unit.LineOfSight as LineOfSightTest
+import qualified Test.Headless.World.ArenaSeed as ArenaSeed
 import qualified Test.Headless.World.TimeLocal as TimeLocal
 import qualified Test.Headless.World.Climate as Climate
 import qualified Test.Headless.Item.GroundPageOwnership as GroundPageOwnership
@@ -329,6 +330,12 @@ main = hspec $ do
     -- of re-restoring the shared worlds.
     aroundAll withHeadlessEngine $
         describe "World identity (#707)" WorldIdentity.spec
+    -- Own engine (#1718): creates an arena page, which the shared-worlds
+    -- engine above must not gain. Its describe names "Arena" so the
+    -- issue's `--match "Arena"` acceptance command selects it alongside
+    -- the pure contract below.
+    aroundAll withHeadlessEngine $
+        describe "Arena base seeding (#1718)" ArenaSeed.engineSpec
     -- Own engine (#1246): writes a populated transfer-order store into a
     -- live page's WorldState and saves it, which the shared-worlds
     -- engine above must not see. Registered under the SAME describe as
@@ -448,6 +455,7 @@ main = hspec $ do
     aroundAll withHeadlessEngine SelectChunk.sharedSpec
     HarnessWorkerHealth.spec
     describe "Wrap Seam" WrapSeam.spec
+    describe "Arena base seeding (#1718)" ArenaSeed.pureSpec
     describe "WorldGen.CoastBreach" CoastBreach.spec
     describe "WorldGen.BedDepth" BedDepth.spec
     describe "WorldGen.FluidSurfaceFold" FluidSurfaceFold.spec

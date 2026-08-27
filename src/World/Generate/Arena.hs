@@ -2,12 +2,13 @@
 module World.Generate.Arena
     ( generateFlatChunk
     , generateArenaChunks
+    , arenaGenForSeed
     ) where
 
 import UPrelude
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
-import System.Random (StdGen, randomR)
+import System.Random (StdGen, mkStdGen, randomR)
 import World.Types
 import World.Material
 import World.Vegetation
@@ -41,6 +42,17 @@ generateFlatChunk coord =
         , lcStructures        = emptyChunkStructures
         }
 
+-- | The generator an arena page's base is built from, derived from the
+--   seed that page RECORDS in its own 'WorldGenParams' (#1718). Fresh
+--   creation and the save-load restore path both go through this one
+--   derivation, so the base a loaded arena is rebuilt with is the base
+--   its recorded seed actually produced. Kept here, beside the only
+--   consumer, so neither caller can invent its own mapping; 'wgpSeed' is
+--   a 'Word64' and 'mkStdGen' takes an 'Int', and the truncation is
+--   irrelevant because the canonical arena seed is 0.
+arenaGenForSeed ∷ Word64 → StdGen
+arenaGenForSeed seed = mkStdGen (fromIntegral seed)
+
 -- | Arena footprint: (2r+1)² chunks centred on the origin (5×5).
 arenaRadius ∷ Int
 arenaRadius = 2
@@ -51,6 +63,13 @@ arenaRadius = 2
 --   running the real generator on the arena's synthetic gen params (which
 --   wedges the world thread). The StdGen only varies the surface grass
 --   sprites; every chunk shares one column layout.
+--
+--   A pure function of its generator, deliberately (#1718): the base is
+--   never persisted, so a loaded arena is reconstructed rather than
+--   restored. Both callers must therefore pass 'arenaGenForSeed' applied
+--   to the page's OWN recorded 'wgpSeed' — passing anything else (an
+--   ambient 'newStdGen', a hardcoded constant) re-rolls every surface
+--   tile's grass variant across a save/load round trip.
 generateArenaChunks ∷ StdGen → [LoadedChunk]
 generateArenaChunks gen =
     let MaterialId loamId    = matLoam

@@ -15,7 +15,6 @@ import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import World.Blood.Teardown (enqueueBloodDisposalForPage)
 import Control.DeepSeq (force)
 import Control.Exception (evaluate)
-import System.Random
 import Engine.Asset.YamlMaterials (loadPopulatedMaterialRegistry)
 import Engine.Core.State (EngineEnv)
 import Engine.Core.Capability.ContentRegistries
@@ -34,7 +33,7 @@ import Engine.Scripting.Lua.Types (LuaMsg(..))
 import World.Types
 import Structure.Types (emptyChunkStructures)
 import World.Generate (generateChunk)
-import World.Generate.Arena (generateArenaChunks)
+import World.Generate.Arena (generateArenaChunks, arenaGenForSeed)
 import World.Chunk.Queue (chunkQueueCanon, initialChunkQueue)
 import World.Geology (buildTimeline)
 import World.Geology.Log (formatPlatesSummary)
@@ -427,7 +426,6 @@ handleWorldInitArenaCommand env logger pageId = do
     logInfo logger CatWorld $ "Initializing test arena: " <> unWorldPageId pageId
 
     worldState ← emptyWorldState
-    gen ← newStdGen
 
     -- Replacing an existing page id orphans its old WorldState; reclaim
     -- its blood-texture GPU resources (#788) before it drops out below.
@@ -448,10 +446,22 @@ handleWorldInitArenaCommand env logger pageId = do
             { wmWorlds = (pageId, worldState)
                        : filter ((≢ pageId) . fst) (wmWorlds mgr) }, ())
 
+    -- Minimal WorldGenParams so the render pipeline doesn't bail on
+    -- Nothing. Built BEFORE the chunks (#1718) because the base is
+    -- generated from the seed recorded here, not the other way round:
+    -- 'isArenaParams' recognises an arena by an empty timeline and
+    -- wgpSeed 0, so 0 stays the canonical arena seed and the base has to
+    -- be the base that seed produces.
+    let arenaParams = defaultWorldGenParams
+            { wgpSeed      = 0
+            , wgpWorldSize = 100000 -- arena is very big
+            }
+
     -- Arena chunk set: shared with the save-load restore path (#365) so a
-    -- loaded arena page is rebuilt exactly like a fresh one.
+    -- loaded arena page is rebuilt exactly like a fresh one — which needs
+    -- the SAME generator on both sides (#1718), hence the recorded seed.
     let arenaZ    = seaLevel    -- z = 0 (surface)
-        allChunks = generateArenaChunks gen
+        allChunks = generateArenaChunks (arenaGenForSeed (wgpSeed arenaParams))
         chunkMap  = HM.fromList [ (lcCoord c, c) | c ← allChunks ]
 
     -- Write tile data
@@ -462,11 +472,6 @@ handleWorldInitArenaCommand env logger pageId = do
     -- contract as the progressive loader). Tiny 5×5 arena, negligible cost.
     _ ← evaluate (force allChunks)
 
-    -- Minimal WorldGenParams so the render pipeline doesn't bail on Nothing
-    let arenaParams = defaultWorldGenParams
-            { wgpSeed      = 0
-            , wgpWorldSize = 100000 -- arena is very big
-            }
     writeIORef (wsGenParamsRef worldState) (Just arenaParams)
 
     -- Mark as fully loaded immediately (no progressive loading needed)
