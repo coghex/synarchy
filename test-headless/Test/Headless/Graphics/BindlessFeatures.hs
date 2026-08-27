@@ -33,14 +33,14 @@ import Engine.Graphics.Vulkan.Capability
 import Engine.Graphics.Vulkan.Device (bindlessCapableBonus, scoreDevice)
 import Engine.Graphics.Vulkan.Texture.Limits (maxBindlessTextures)
 import Engine.Graphics.Vulkan.Texture.Requirements
-  (BindlessCapacity(..), BindlessFeature(..), CapacityScope(..)
-  ,bindlessCapacityApplies, bindlessCapacityField
-  ,bindlessCapacityRequirement, bindlessCapacityScope, bindlessFeatureField
-  ,layoutDescriptorsInScope
+  (BindlessCapacity(..), BindlessFeature(..), CapacityCheck(..)
+  ,CapacityScope(..), bindlessCapacityApplies, bindlessFeatureField
   ,bindlessTextureBindingFlags, bindlessTextureBindingRequirements
-  ,enableBindlessFeature, missingBindlessFeatures, readBindlessFeature
-  ,reportedBindlessCapacities, requiredBindlessCapacities
-  ,requiredBindlessFeatures, requiredVulkan12Features)
+  ,enableBindlessFeature, layoutDescriptorsInScope, missingBindlessFeatures
+  ,bindlessCapacityChecks, ordinaryCapacityField, readBindlessFeature
+  ,reportedBindlessCapacities
+  ,requiredBindlessCapacities, requiredBindlessFeatures
+  ,requiredVulkan12Features, updateAfterBindCapacityField)
 import Engine.Graphics.Vulkan.Texture.System
   (TextureSystemConfig(..), planBindlessDescriptorCount)
 import Vulkan.Core10.DeviceInitialization (PhysicalDeviceLimits(..))
@@ -69,14 +69,25 @@ generousProperties = (zero ∷ PhysicalDeviceVulkan12Properties)
   , maxUpdateAfterBindDescriptorsInAllPools            = 1073741824
   }
 
--- | The ordinary limits a conformant device is guaranteed to clear: these
---   are Vulkan's own required minima for the three statements that count
---   the bindless pipeline layout's non-update-after-bind set.
+-- | Vulkan's REQUIRED MINIMA for every ordinary limit the bindless pipeline
+--   layout is measured against — the weakest report a conformant device may
+--   give. Using the minima rather than generous figures makes a real
+--   property visible: the renderer's ordinary-statement requirements are
+--   satisfiable by the feeblest conformant Vulkan device, so the only limits
+--   that can ever refuse it are the update-after-bind ones the fixed texture
+--   array actually strains.
 generousBaseLimits ∷ PhysicalDeviceLimits
 generousBaseLimits = (zero ∷ PhysicalDeviceLimits)
-  { maxBoundDescriptorSets             = 4
+  { maxBoundDescriptorSets              = 4
+  , maxPerStageDescriptorSamplers       = 16
   , maxPerStageDescriptorUniformBuffers = 12
-  , maxDescriptorSetUniformBuffers     = 72
+  , maxPerStageDescriptorStorageBuffers = 4
+  , maxPerStageDescriptorSampledImages  = 16
+  , maxPerStageResources                = 128
+  , maxDescriptorSetSamplers            = 96
+  , maxDescriptorSetUniformBuffers      = 72
+  , maxDescriptorSetStorageBuffers      = 24
+  , maxDescriptorSetSampledImages       = 96
   }
 
 -- | Each required capacity paired with a setter for the
@@ -85,54 +96,60 @@ generousBaseLimits = (zero ∷ PhysicalDeviceLimits)
 --   independent statement of the mapping, so a production-side reshuffle
 --   has to be reflected here deliberately. The completeness spec below
 --   checks the table still covers 'requiredBindlessCapacities' exactly.
+-- | Each capacity paired with setters for BOTH of its limits — the ordinary
+--   one on 'PhysicalDeviceLimits' and the update-after-bind one on
+--   'PhysicalDeviceVulkan12Properties'. Written out longhand for the same
+--   reason 'absentOne' is: this is the test's own independent statement of
+--   which struct field each side names, so a production-side reshuffle has
+--   to be reflected here deliberately. The completeness spec below checks
+--   the table still covers 'requiredBindlessCapacities' exactly, and that
+--   each row supplies exactly the sides production says that capacity has.
 capacityFields
   ∷ [( BindlessCapacity
-     , Word32 → PhysicalDeviceVulkan12Properties
-              → PhysicalDeviceVulkan12Properties )]
+     , Maybe (Word32 → PhysicalDeviceLimits → PhysicalDeviceLimits)
+     , Maybe (Word32 → PhysicalDeviceVulkan12Properties
+                     → PhysicalDeviceVulkan12Properties) )]
 capacityFields =
   [ ( CapPerStageSampledImages
-    , \n p → p { maxPerStageDescriptorUpdateAfterBindSampledImages = n } )
+    , Just (\n l → l { maxPerStageDescriptorSampledImages = n })
+    , Just (\n p → p { maxPerStageDescriptorUpdateAfterBindSampledImages = n }) )
   , ( CapPerStageSamplers
-    , \n p → p { maxPerStageDescriptorUpdateAfterBindSamplers = n } )
+    , Just (\n l → l { maxPerStageDescriptorSamplers = n })
+    , Just (\n p → p { maxPerStageDescriptorUpdateAfterBindSamplers = n }) )
   , ( CapPerStageStorageBuffers
-    , \n p → p { maxPerStageDescriptorUpdateAfterBindStorageBuffers = n } )
+    , Just (\n l → l { maxPerStageDescriptorStorageBuffers = n })
+    , Just (\n p → p { maxPerStageDescriptorUpdateAfterBindStorageBuffers = n }) )
   , ( CapPerStageUniformBuffers
-    , \n p → p { maxPerStageDescriptorUpdateAfterBindUniformBuffers = n } )
+    , Just (\n l → l { maxPerStageDescriptorUniformBuffers = n })
+    , Just (\n p → p { maxPerStageDescriptorUpdateAfterBindUniformBuffers = n }) )
   , ( CapPerStageResources
-    , \n p → p { maxPerStageUpdateAfterBindResources = n } )
+    , Just (\n l → l { maxPerStageResources = n })
+    , Just (\n p → p { maxPerStageUpdateAfterBindResources = n }) )
   , ( CapSetSampledImages
-    , \n p → p { maxDescriptorSetUpdateAfterBindSampledImages = n } )
+    , Just (\n l → l { maxDescriptorSetSampledImages = n })
+    , Just (\n p → p { maxDescriptorSetUpdateAfterBindSampledImages = n }) )
   , ( CapSetSamplers
-    , \n p → p { maxDescriptorSetUpdateAfterBindSamplers = n } )
+    , Just (\n l → l { maxDescriptorSetSamplers = n })
+    , Just (\n p → p { maxDescriptorSetUpdateAfterBindSamplers = n }) )
   , ( CapSetStorageBuffers
-    , \n p → p { maxDescriptorSetUpdateAfterBindStorageBuffers = n } )
+    , Just (\n l → l { maxDescriptorSetStorageBuffers = n })
+    , Just (\n p → p { maxDescriptorSetUpdateAfterBindStorageBuffers = n }) )
   , ( CapSetUniformBuffers
-    , \n p → p { maxDescriptorSetUpdateAfterBindUniformBuffers = n } )
+    , Just (\n l → l { maxDescriptorSetUniformBuffers = n })
+    , Just (\n p → p { maxDescriptorSetUpdateAfterBindUniformBuffers = n }) )
+  , ( CapBoundDescriptorSets
+    , Just (\n l → l { maxBoundDescriptorSets = n })
+    , Nothing )
   , ( CapDescriptorsInAllPools
-    , \n p → p { maxUpdateAfterBindDescriptorsInAllPools = n } )
-  ]
-
--- | The same, for the three ORDINARY statements, whose limits live on a
---   different struct entirely. Kept apart from 'capacityFields' on purpose:
---   the separation is the contract — Vulkan never combines an ordinary limit
---   with its update-after-bind counterpart, and a table that could set
---   either through one setter would blur exactly that.
-baseCapacityFields
-  ∷ [(BindlessCapacity, Word32 → PhysicalDeviceLimits → PhysicalDeviceLimits)]
-baseCapacityFields =
-  [ ( CapBoundDescriptorSets
-    , \n l → l { maxBoundDescriptorSets = n } )
-  , ( CapBasePerStageUniformBuffers
-    , \n l → l { maxPerStageDescriptorUniformBuffers = n } )
-  , ( CapBaseSetUniformBuffers
-    , \n l → l { maxDescriptorSetUniformBuffers = n } )
+    , Nothing
+    , Just (\n p → p { maxUpdateAfterBindDescriptorsInAllPools = n }) )
   ]
 
 -- | A feature report advertising every @descriptorBinding…UpdateAfterBind@
---   feature, so every capacity's Valid Usage statement is active and the
---   boundary sweep below covers all ten. The renderer itself requires only
---   the sampled-image one — the other two are the device's own support,
---   which is what conditions VUIDs 03023/03024 and 03037/03039.
+--   feature, so every update-after-bind statement is active and the boundary
+--   sweep below covers all of them. The renderer itself requires only the
+--   sampled-image one — the other two are the device's own support, which is
+--   what conditions VUIDs 03023/03024 and 03037/03039.
 generousFeatures ∷ PhysicalDeviceVulkan12Features
 generousFeatures = requiredVulkan12Features
   { descriptorBindingUniformBufferUpdateAfterBind = True
@@ -144,12 +161,12 @@ generousFeatures = requiredVulkan12Features
 capableSupport ∷ BindlessSupport
 capableSupport = supportReporting generousProperties
 
--- | 'capableSupport' with its capacities taken from a specific report.
+-- | 'capableSupport' with its update-after-bind report replaced.
 supportReporting ∷ PhysicalDeviceVulkan12Properties → BindlessSupport
 supportReporting = supportReportingWith generousFeatures
 
--- | 'supportReporting' for a device advertising a specific feature set, so
---   a spec can spoil which capacities apply as well as what they report.
+-- | 'supportReporting' for a device advertising a specific feature set, so a
+--   spec can spoil which statements apply as well as what they report.
 supportReportingWith ∷ PhysicalDeviceVulkan12Features
                      → PhysicalDeviceVulkan12Properties → BindlessSupport
 supportReportingWith feats = supportReportingBase feats generousBaseLimits
@@ -166,40 +183,42 @@ supportReportingBase feats base props = BindlessSupport
   , bsMissingFeatures               = missingBindlessFeatures feats
   }
 
--- | 'generousProperties' with one capacity's field lowered.
-reportingOnly ∷ (Word32 → PhysicalDeviceVulkan12Properties
-                        → PhysicalDeviceVulkan12Properties)
-              → Word32 → BindlessSupport
-reportingOnly setField n = supportReporting (setField n generousProperties)
-
--- | The diagnostic clause a capacity shortfall must produce, stated here
---   independently of the production wording: the reported count, the field
---   the device reported it for, and the count the renderer requires.
-expectedShortfallClause ∷ BindlessCapacity → Word32 → Text
-expectedShortfallClause cap reported =
-  "the device reports " <> tshow reported <> " " <> bindlessCapacityField cap
-    <> ", but the bindless texture array requires "
-    <> tshow (bindlessCapacityRequirement cap)
-
--- | The sampled-image setter, named so the version/limit specs can spoil
---   that one capacity without re-deriving the table.
+-- | The sampled-image update-after-bind setter, named so the version gates
+--   can spoil that one statement without re-deriving the table.
 setSampledImages ∷ Word32 → PhysicalDeviceVulkan12Properties
                           → PhysicalDeviceVulkan12Properties
 setSampledImages n p =
   p { maxPerStageDescriptorUpdateAfterBindSampledImages = n }
 
--- | 'generousProperties' with one named capacity's field set to @n@,
---   looked up through the same table the boundary specs sweep.
+-- | 'generousProperties' with one capacity's UPDATE-AFTER-BIND field set to
+--   @n@, looked up through the same table the boundary specs sweep.
 loweredTo ∷ Word32 → BindlessCapacity → PhysicalDeviceVulkan12Properties
 loweredTo n cap =
-  case lookup cap capacityFields of
-    Just setField → setField n generousProperties
-    Nothing       → generousProperties
+  case [setField | (c, _, Just setField) ← capacityFields, c ≡ cap] of
+    setField : _ → setField n generousProperties
+    []           → generousProperties
 
--- | The one production configuration: slot 0 held back for the undefined
---   texture ("Engine.Graphics.Vulkan.Init").
-productionTextureConfig ∷ TextureSystemConfig
-productionTextureConfig = TextureSystemConfig { tscReservedSlots = 1 }
+-- | 'generousBaseLimits' with one capacity's ORDINARY field set to @n@.
+baseLoweredTo ∷ Word32 → BindlessCapacity → PhysicalDeviceLimits
+baseLoweredTo n cap =
+  case [setField | (c, Just setField, _) ← capacityFields, c ≡ cap] of
+    setField : _ → setField n generousBaseLimits
+    []           → generousBaseLimits
+
+-- | Every ordinary limit at 'maxBound': the report that would rescue an
+--   update-after-bind shortfall if the two were ever combined.
+unboundedBaseLimits ∷ PhysicalDeviceLimits
+unboundedBaseLimits = foldr
+  (\(_, setField, _) limits → maybe limits (\f → f maxBound limits) setField)
+  generousBaseLimits capacityFields
+
+-- | The diagnostic clause a shortfall must produce, stated here
+--   independently of the production wording: the reported count, the field
+--   the device reported it for, and the count the renderer requires.
+expectedShortfallClause ∷ Text → Word32 → Word32 → Text
+expectedShortfallClause field reported required =
+  "the device reports " <> tshow reported <> " " <> field
+    <> ", but the bindless texture array requires " <> tshow required
 
 -- | Each required feature paired with a feature struct in which ONLY that
 --   field is off. Written out longhand on purpose: this is the test's own
@@ -230,6 +249,11 @@ allDeviceTypes =
   , PHYSICAL_DEVICE_TYPE_CPU
   , PHYSICAL_DEVICE_TYPE_OTHER
   ]
+
+-- | The one production configuration: slot 0 held back for the undefined
+--   texture ("Engine.Graphics.Vulkan.Init").
+productionTextureConfig ∷ TextureSystemConfig
+productionTextureConfig = TextureSystemConfig { tscReservedSlots = 1 }
 
 spec ∷ Spec
 spec = describe "Vulkan bindless feature requirements" $ do
@@ -312,7 +336,9 @@ spec = describe "Vulkan bindless feature requirements" $ do
         `shouldBe` False
 
     it "still rejects a device with no update-after-bind sampled images" $
-      isBindlessSupported (reportingOnly setSampledImages 0) `shouldBe` False
+      isBindlessSupported
+        (supportReporting (setSampledImages 0 generousProperties))
+          `shouldBe` False
 
     it "reports a pre-1.2 device on the version alone" $
       -- Below Vulkan 1.2 nothing chains a 1.2 feature struct, so the
@@ -335,63 +361,91 @@ spec = describe "Vulkan bindless feature requirements" $ do
       determineTextureCapability capableSupport 64
         `shouldBe` BindlessTextures maxBindlessTextures
 
-  describe "the descriptor-capacity gate" $ do
-    it "covers every required capacity across the two field tables" $
-      (map fst capacityFields <> map fst baseCapacityFields)
-        `shouldBe` requiredBindlessCapacities
+  describe "the descriptor-count rules" $ do
+    it "covers every capacity, on exactly the sides production declares" $ do
+      map (\(cap, _, _) → cap) capacityFields `shouldBe` requiredBindlessCapacities
+      -- A row that offers a setter production says has no statement (or
+      -- omits one it does have) would silently stop testing a rule.
+      forM_ capacityFields $ \(cap, base, uab) → do
+        (cap, isJust base) `shouldBe` (cap, isJust (ordinaryCapacityField cap))
+        (cap, isJust uab)
+          `shouldBe` (cap, isJust (updateAfterBindCapacityField cap))
+
+    it "checks BOTH statements of every paired capacity" $
+      -- The contract in one assertion: an ordinary limit and its
+      -- update-after-bind counterpart are simultaneous rules over different
+      -- populations, so both are emitted and both are enforced. Neither is
+      -- skipped, and neither is folded into the other.
+      forM_ capacityFields $ \(cap, _, _) → do
+        let scopes = map ccScope
+              (bindlessCapacityChecks generousFeatures generousBaseLimits
+                 generousProperties cap)
+            expected = catMaybes
+              [ ScopeWithoutUpdateAfterBind <$ ordinaryCapacityField cap
+              , ScopeAllSets <$ updateAfterBindCapacityField cap ]
+        (cap, scopes) `shouldBe` (cap, expected)
+
+    it "puts zero of the texture array against the ordinary statements" $
+      -- The fact the whole split rests on. The bindless texture layout is
+      -- created WITH UPDATE_AFTER_BIND_POOL_BIT, and an ordinary statement
+      -- counts "only descriptors in descriptor set layouts created WITHOUT"
+      -- that bit. The array therefore contributes NOTHING to an ordinary
+      -- sampler or sampled-image limit: that rule is still checked, and is
+      -- satisfied by zero at any reported value. So no ordinary limit can
+      -- supply the array's 16384 descriptors — it does not range over them.
+      forM_ [CapPerStageSamplers, CapSetSamplers
+            ,CapPerStageSampledImages, CapSetSampledImages] $ \cap → do
+        (cap, layoutDescriptorsInScope ScopeWithoutUpdateAfterBind cap)
+          `shouldBe` (cap, 0)
+        (cap, layoutDescriptorsInScope ScopeAllSets cap)
+          `shouldBe` (cap, maxBindlessTextures)
+
+    it "counts set 0's uniform buffer under BOTH scopes" $
+      -- The converse, so the split is visibly not one-directional: set 0 is
+      -- an ordinary layout, so its descriptor is counted by the ordinary
+      -- statement AND by the update-after-bind one.
+      forM_ [CapPerStageUniformBuffers, CapSetUniformBuffers] $ \cap →
+        forM_ [ScopeWithoutUpdateAfterBind, ScopeAllSets] $ \scope →
+          ((cap, scope), layoutDescriptorsInScope scope cap)
+            `shouldBe` ((cap, scope), 1)
 
     it "requires exactly the array size both fragment shaders declare" $
-      -- #975's single definition, still single: the texture capacities are
+      -- #975's single definition, still single: the texture rules are
       -- 'maxBindlessTextures' itself, not a number that could drift from it.
       forM_ [CapPerStageSampledImages, CapPerStageSamplers
             ,CapSetSampledImages, CapSetSamplers] $ \cap →
-        (cap, bindlessCapacityRequirement cap)
+        (cap, layoutDescriptorsInScope ScopeAllSets cap)
           `shouldBe` (cap, maxBindlessTextures)
 
     it "counts the fragment stage's colour attachment in the aggregate" $ do
       -- maxPerStageResources counts, in its own words, "for the fragment
       -- shader stage the framebuffer color attachments also"; the
-      -- update-after-bind form is that same limit re-scoped. The fragment
-      -- stage therefore puts the array, the handle→slot buffer AND the
-      -- pipeline's one colour attachment against it. Stated as arithmetic
-      -- rather than by re-deriving it, so an omitted term fails here.
-      bindlessCapacityRequirement CapPerStageResources
+      -- update-after-bind form is that same limit re-scoped. Stated as
+      -- arithmetic rather than by re-deriving it, so an omitted term fails.
+      layoutDescriptorsInScope ScopeAllSets CapPerStageResources
         `shouldBe` maxBindlessTextures + 1 + 1
-      -- A device one short of that is refused; the general sweep below tests
-      -- the same boundary for every capacity, this pins WHICH number it is.
       isBindlessSupported
-        (supportReporting
-           (loweredTo (maxBindlessTextures + 1) CapPerStageResources))
+        (supportReporting (loweredTo (maxBindlessTextures + 1) CapPerStageResources))
         `shouldBe` False
       isBindlessSupported
-        (supportReporting
-           (loweredTo (maxBindlessTextures + 2) CapPerStageResources))
+        (supportReporting (loweredTo (maxBindlessTextures + 2) CapPerStageResources))
         `shouldBe` True
 
-    it "covers the uniform buffer set 0 contributes to the same pipeline layout" $ do
-      -- Every update-after-bind pipeline-layout statement counts descriptors
-      -- across ALL of pSetLayouts, and
-      -- 'Engine.Graphics.Vulkan.Pipeline.Bindless' pairs the bindless
-      -- texture layout with set 0's vertex-stage uniform buffer — so on a
-      -- device that supports descriptorBindingUniformBufferUpdateAfterBind,
-      -- a zero update-after-bind uniform limit would pass a texture-only
-      -- predicate and then fail pipeline-layout creation (VUID 03023/03037).
-      forM_ [CapPerStageUniformBuffers, CapSetUniformBuffers] $ \cap → do
-        (cap, bindlessCapacityRequirement cap) `shouldBe` (cap, 1)
-        (cap, isBindlessSupported (supportReporting (loweredTo 0 cap)))
-          `shouldBe` (cap, False)
-
-    it "accepts a device reporting exactly what every capacity requires" $ do
-      -- The threshold itself, on every capacity at once: the accepted side
-      -- of the boundary.
+    it "accepts a device reporting exactly what every rule requires" $ do
+      -- The threshold itself, on every rule at once: the accepted side of
+      -- the boundary.
       let atThreshold = foldr
-            (\(cap, setField) props →
-               setField (bindlessCapacityRequirement cap) props)
+            (\(cap, _, uab) props → case uab of
+               Nothing       → props
+               Just setField →
+                 setField (layoutDescriptorsInScope ScopeAllSets cap) props)
             generousProperties capacityFields
           baseAtThreshold = foldr
-            (\(cap, setField) limits →
-               setField (bindlessCapacityRequirement cap) limits)
-            generousBaseLimits baseCapacityFields
+            (\(cap, base, _) limits → case base of
+               Nothing       → limits
+               Just setField → setField
+                 (layoutDescriptorsInScope ScopeWithoutUpdateAfterBind cap) limits)
+            generousBaseLimits capacityFields
           support = supportReportingBase generousFeatures
                       baseAtThreshold atThreshold
       bindlessCapacityShortfalls support `shouldBe` []
@@ -399,15 +453,22 @@ spec = describe "Vulkan bindless feature requirements" $ do
       planBindlessDescriptorCount support productionTextureConfig
         `shouldBe` Right maxBindlessTextures
 
-    it "rejects a device one descriptor below any single capacity" $
-      -- The rejected side of the same boundary, one capacity at a time, so
-      -- a gate silently dropped from the predicate fails here.
-      forM_ capacityFields $ \(cap, setField) → do
-        let short   = bindlessCapacityRequirement cap - 1
-            support = reportingOnly setField short
-        (cap, isBindlessSupported support) `shouldBe` (cap, False)
-        (cap, determineTextureCapability support 1)
-          `shouldBe` (cap, BoundedTextureArray minimumUsableSlots)
+    it "rejects a device one descriptor below any single rule" $
+      -- The rejected side of the same boundary, one rule at a time — both
+      -- families — so a gate silently dropped from the predicate fails here.
+      forM_ capacityFields $ \(cap, base, uab) → do
+        forM_ uab $ \_ → do
+          let required = layoutDescriptorsInScope ScopeAllSets cap
+          when (required > 0) $ do
+            let support = supportReporting (loweredTo (required - 1) cap)
+            (cap, isBindlessSupported support) `shouldBe` (cap, False)
+        forM_ base $ \_ → do
+          let required =
+                layoutDescriptorsInScope ScopeWithoutUpdateAfterBind cap
+          when (required > 0) $ do
+            let support = supportReportingBase generousFeatures
+                            (baseLoweredTo (required - 1) cap) generousProperties
+            (cap, isBindlessSupported support) `shouldBe` (cap, False)
 
     it "never plans a binding smaller than the shader array size" $
       -- Requirement 1 stated directly: whatever an accepted device reports,
@@ -422,104 +483,66 @@ spec = describe "Vulkan bindless feature requirements" $ do
           Right count → (reserved, count) `shouldSatisfy`
             \(_, n) → n ≥ maxBindlessTextures
 
-    it "names the reported and required counts of whichever capacity fell short" $
+    it "names the reported and required counts of whichever rule fell short" $
       -- #1055's descriptive contract, extended to the capacity gate: device
       -- selection has to say WHICH limit came up short and by how much.
-      forM_ capacityFields $ \(cap, setField) → do
-        let short   = bindlessCapacityRequirement cap - 1
-            support = reportingOnly setField short
-        (cap, deviceBindlessFailureMessage support) `shouldSatisfy`
-          (T.isInfixOf (expectedShortfallClause cap short) . snd)
-
-    it "rejects a device one below any ORDINARY limit the layout needs" $
-      -- The other half of the split. These count only the layout's
-      -- non-update-after-bind set — set 0's one uniform buffer, and the two
-      -- sets the layout binds — and no update-after-bind headroom
-      -- substitutes for them, exactly as none of them substitutes for an
-      -- update-after-bind limit.
-      forM_ baseCapacityFields $ \(cap, setField) → do
-        let short   = bindlessCapacityRequirement cap - 1
-            support = supportReportingBase generousFeatures
-                        (setField short generousBaseLimits) generousProperties
-        (cap, isBindlessSupported support) `shouldBe` (cap, False)
-        (cap, deviceBindlessFailureMessage support) `shouldSatisfy`
-          (T.isInfixOf (expectedShortfallClause cap short) . snd)
-
-    it "puts zero of the texture array against the ordinary statements" $
-      -- The fact the whole split rests on, asserted directly rather than
-      -- inferred from behaviour: the bindless texture layout is created WITH
-      -- UPDATE_AFTER_BIND_POOL_BIT, and an ordinary statement counts "only
-      -- descriptors in descriptor set layouts created WITHOUT" that bit. So
-      -- the array contributes NOTHING to an ordinary sampler or
-      -- sampled-image limit — there is no reported value of one that could
-      -- supply the array's 16384 descriptors, because it does not range over
-      -- them.
-      forM_ [CapPerStageSamplers, CapSetSamplers
-            ,CapPerStageSampledImages, CapSetSampledImages] $ \cap → do
-        (cap, layoutDescriptorsInScope ScopeWithoutUpdateAfterBind cap)
-          `shouldBe` (cap, 0)
-        (cap, layoutDescriptorsInScope ScopeAllSets cap)
-          `shouldBe` (cap, maxBindlessTextures)
-        (cap, bindlessCapacityScope cap) `shouldBe` (cap, ScopeAllSets)
-
-    it "the ordinary limits never rescue an update-after-bind shortfall" $
-      -- The behavioural consequence of the row above. Reading the larger of
-      -- the pair would accept a device whose pipeline layout Vulkan rejects,
-      -- so every update-after-bind shortfall must survive every ordinary
-      -- limit being raised to maxBound.
-      forM_ capacityFields $ \(cap, setField) → do
-        let support = supportReportingBase generousFeatures
-                        (zero ∷ PhysicalDeviceLimits)
-                          { maxBoundDescriptorSets              = maxBound
-                          , maxPerStageDescriptorUniformBuffers = maxBound
-                          , maxDescriptorSetUniformBuffers      = maxBound
-                          , maxPerStageDescriptorSamplers       = maxBound
-                          , maxDescriptorSetSamplers            = maxBound
-                          , maxPerStageDescriptorSampledImages  = maxBound
-                          , maxDescriptorSetSampledImages       = maxBound
-                          , maxPerStageDescriptorStorageBuffers = maxBound
-                          , maxDescriptorSetStorageBuffers      = maxBound
-                          , maxPerStageResources                = maxBound
-                          }
-                        (setField (bindlessCapacityRequirement cap - 1)
-                                  generousProperties)
-        (cap, isBindlessSupported support) `shouldBe` (cap, False)
+      forM_ capacityFields $ \(cap, _, uab) →
+        forM_ uab $ \_ → do
+          let required = layoutDescriptorsInScope ScopeAllSets cap
+          when (required > 0) $ do
+            let short   = required - 1
+                support = supportReporting (loweredTo short cap)
+                field   = fromMaybe "" (updateAfterBindCapacityField cap)
+            (cap, deviceBindlessFailureMessage support) `shouldSatisfy`
+              (T.isInfixOf (expectedShortfallClause field short required) . snd)
 
     it "names the same counts on the texture-system failure path" $
-      -- The two sites describe one shortfall identically (#1282), so the
-      -- capacity refusal reads the same wherever it is hit.
-      forM_ capacityFields $ \(cap, setField) → do
-        let short   = bindlessCapacityRequirement cap - 1
-            support = reportingOnly setField short
-        case planBindlessDescriptorCount support productionTextureConfig of
-          Right count → expectationFailure $
-            "a device short on " <> T.unpack (bindlessCapacityField cap)
-              <> " was accepted with " <> show count <> " descriptors"
-          Left failure → (cap, failure) `shouldSatisfy`
-            (T.isInfixOf (expectedShortfallClause cap short) . snd)
+      -- The two sites describe one shortfall identically (#1282).
+      forM_ capacityFields $ \(cap, _, uab) →
+        forM_ uab $ \_ → do
+          let required = layoutDescriptorsInScope ScopeAllSets cap
+          when (required > 0) $ do
+            let short   = required - 1
+                support = supportReporting (loweredTo short cap)
+                field   = fromMaybe "" (updateAfterBindCapacityField cap)
+            case planBindlessDescriptorCount support productionTextureConfig of
+              Right count → expectationFailure $
+                "a device short on " <> T.unpack field <> " was accepted with "
+                  <> show count <> " descriptors"
+              Left failure → (cap, failure) `shouldSatisfy`
+                (T.isInfixOf (expectedShortfallClause field short required) . snd)
 
-  describe "capacities the device's features leave inactive" $ do
-    -- Each update-after-bind pipeline-layout statement is conditional on the
-    -- device SUPPORTING the matching descriptorBinding…UpdateAfterBind
-    -- feature. A limit whose statement is inactive constrains nothing this
-    -- renderer builds, so gating on it would refuse a device whose pipeline
-    -- layout Vulkan accepts.
-    it "drops a capacity whose feature the device does not advertise" $ do
+    it "the ordinary limits never rescue an update-after-bind shortfall" $
+      -- The behavioural consequence of the zero-contribution row above.
+      -- Reading the larger of a pair would accept a device whose pipeline
+      -- layout Vulkan rejects, so every update-after-bind shortfall must
+      -- survive every ordinary limit being raised to maxBound.
+      forM_ capacityFields $ \(cap, _, uab) →
+        forM_ uab $ \_ → do
+          let required = layoutDescriptorsInScope ScopeAllSets cap
+          when (required > 0) $ do
+            let support = supportReportingBase generousFeatures
+                            unboundedBaseLimits (loweredTo (required - 1) cap)
+            (cap, isBindlessSupported support) `shouldBe` (cap, False)
+
+  describe "statements the device's features leave inactive" $ do
+    -- Each update-after-bind statement is conditional on the device
+    -- SUPPORTING the matching descriptorBinding…UpdateAfterBind feature. One
+    -- whose statement is inactive constrains nothing this renderer builds,
+    -- so gating on it would refuse a device whose pipeline layout Vulkan
+    -- accepts. The ordinary statements are never conditional.
+    it "drops an update-after-bind rule whose feature is unadvertised" $ do
       let withoutBuffers = requiredVulkan12Features
-          reported = map fst (reportedBindlessCapacities withoutBuffers
-                                generousBaseLimits generousProperties)
+          fields = map ccField (reportedBindlessCapacities withoutBuffers
+                                  generousBaseLimits generousProperties)
       forM_ [CapPerStageUniformBuffers, CapSetUniformBuffers
-            ,CapPerStageStorageBuffers, CapSetStorageBuffers] $ \cap →
-        (cap, cap `elem` reported) `shouldBe` (cap, False)
-      -- The texture capacities ride the one feature the renderer requires,
-      -- and the ordinary statements are unconditional, so neither group is
-      -- ever dropped on a device the renderer would accept at all.
-      forM_ [CapPerStageSampledImages, CapPerStageSamplers
-            ,CapSetSampledImages, CapSetSamplers
-            ,CapPerStageResources, CapDescriptorsInAllPools
-            ,CapBoundDescriptorSets, CapBasePerStageUniformBuffers
-            ,CapBaseSetUniformBuffers] $ \cap →
-        (cap, cap `elem` reported) `shouldBe` (cap, True)
+            ,CapPerStageStorageBuffers, CapSetStorageBuffers] $ \cap → do
+        -- The update-after-bind side is gone…
+        (cap, fromMaybe "" (updateAfterBindCapacityField cap) `elem` fields)
+          `shouldBe` (cap, False)
+        -- …while the ordinary side of the same capacity stays.
+        (cap, fromMaybe "" (ordinaryCapacityField cap) `elem` fields)
+          `shouldBe` (cap, True)
 
     it "accepts a zero buffer limit exactly when its statement is inactive" $
       -- The whole rule in one comparison: identical properties, and only the
@@ -544,17 +567,14 @@ spec = describe "Vulkan bindless feature requirements" $ do
         (cap, isBindlessSupported (supportReportingWith withFeature props))
           `shouldBe` (cap, False)
 
-    it "keeps the two unconditional capacities binding whatever the features" $
+    it "keeps the unconditional rules binding whatever the features" $
       -- The aggregate governs any pipeline layout holding an
-      -- update-after-bind set, and the pool ceiling governs creating that
-      -- pool at all; neither is conditioned on a feature.
-      forM_ [CapPerStageResources, CapDescriptorsInAllPools] $ \cap → do
+      -- update-after-bind set, the pool ceiling governs creating that pool
+      -- at all, and the bound-set count is ordinary; none is feature-gated.
+      forM_ [CapPerStageResources, CapDescriptorsInAllPools
+            ,CapBoundDescriptorSets] $ \cap →
         (cap, bindlessCapacityApplies (zero ∷ PhysicalDeviceVulkan12Features) cap)
           `shouldBe` (cap, True)
-        (cap, isBindlessSupported
-                (supportReportingWith requiredVulkan12Features
-                   (loweredTo (bindlessCapacityRequirement cap - 1) cap)))
-          `shouldBe` (cap, False)
 
   describe "reserved slots and the fixed binding" $ do
     it "reserves indices inside the binding rather than shrinking it" $

@@ -17,9 +17,8 @@ import UPrelude
 import qualified Data.Text as T
 import Engine.Graphics.Vulkan.Texture.Limits (maxBindlessTextures)
 import Engine.Graphics.Vulkan.Texture.Requirements
-  (BindlessCapacity, BindlessFeature, bindlessCapacityField
-  ,bindlessCapacityRequirement, bindlessFeatureField, missingBindlessFeatures
-  ,reportedBindlessCapacities, requiredBindlessCapacities
+  (BindlessFeature, CapacityCheck(..), bindlessFeatureField
+  ,capacityCheckHolds, missingBindlessFeatures, reportedBindlessCapacities
   ,requiredBindlessFeatures)
 import Vulkan.Core10
 import Vulkan.Core11 (getPhysicalDeviceProperties2, getPhysicalDeviceFeatures2)
@@ -37,14 +36,15 @@ data BindlessSupport = BindlessSupport
   --   UPDATE_AFTER_BIND limits governing the bindless pipeline layout and
   --   pool. These are gates, not budgets: the texture array is fixed-size,
   --   so a device supplies every applicable one in full or cannot run this
-  --   renderer at all (#1689). Both families are here: the ordinary
-  --   'Vulkan.Core10.PhysicalDeviceLimits' statements that govern the
-  --   layout's non-update-after-bind set, and the update-after-bind ones
-  --   that govern all of it. A capacity whose Valid Usage statement the
-  --   device's features do not activate is ABSENT here rather than zero
-  --   ('bindlessCapacityApplies'), so it cannot refuse a device Vulkan
-  --   would accept.
-  , bsCapacities                          ∷ [(BindlessCapacity, Word32)]
+  --   renderer at all (#1689). BOTH families are here and both are
+  --   enforced: each ordinary 'Vulkan.Core10.PhysicalDeviceLimits'
+  --   statement against the descriptors in the layout's
+  --   non-update-after-bind set, and each update-after-bind statement
+  --   against every set's. They are simultaneous @must@s over different
+  --   populations, never alternatives, so a check is skipped only when the
+  --   device's own features leave that statement inactive
+  --   ('bindlessCapacityApplies').
+  , bsCapacities                          ∷ [CapacityCheck]
   -- | Which of 'requiredBindlessFeatures' the device does NOT advertise
   --   (#1282). Empty on a device that can run the bindless renderer.
   , bsMissingFeatures                     ∷ [BindlessFeature]
@@ -94,12 +94,11 @@ queryBindlessSupport pDevice = do
     , bsMissingFeatures = missing
     }
 
--- | Every required capacity at zero: what a pre-1.2 device reports, in the
---   sense that nothing was measured, so nothing is available. Listing them
---   all is the fail-closed choice; the version gate refuses such a device
---   before any capacity is consulted either way.
-unqueriedCapacities ∷ [(BindlessCapacity, Word32)]
-unqueriedCapacities = [ (cap, 0) | cap ← requiredBindlessCapacities ]
+-- | What a pre-1.2 device reports: nothing was measured, so there is no
+--   rule to check. The version gate refuses such a device before any
+--   capacity is consulted either way.
+unqueriedCapacities ∷ [CapacityCheck]
+unqueriedCapacities = []
 
 -- | Every APPLICABLE update-after-bind capacity the device reports below
 --   what the fixed-size bindless pipeline layout consumes, each naming the
@@ -112,11 +111,11 @@ unqueriedCapacities = [ (cap, 0) | cap ← requiredBindlessCapacities ]
 --   shortfall here.
 bindlessCapacityShortfalls ∷ BindlessSupport → [Text]
 bindlessCapacityShortfalls support =
-  [ "the device reports " <> tshow reported <> " " <> bindlessCapacityField cap
-      <> ", but the bindless texture array requires " <> tshow required
-  | (cap, reported) ← bsCapacities support
-  , let required = bindlessCapacityRequirement cap
-  , reported < required
+  [ "the device reports " <> tshow (ccReported check) <> " " <> ccField check
+      <> ", but the bindless texture array requires "
+      <> tshow (ccRequired check)
+  | check ← bsCapacities support
+  , not (capacityCheckHolds check)
   ]
 
 -- | Check if full bindless is supported. The capacity gate is an exact
