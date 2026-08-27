@@ -84,6 +84,26 @@ isCancel ∷ ActivationOutcome → Bool
 isCancel (Cancel _) = True
 isCancel _          = False
 
+-- | 'UI.Manager.Hierarchy.maxHierarchyDepth', restated independently:
+--   the deepest parent chain one 'addChildElement' call will build, in
+--   EDGES. A chain of this many edges is legal; one more is refused.
+maxDepth ∷ Int
+maxDepth = 64
+
+-- | A page root plus @n@ nested descendants: its root, its deepest
+--   element, and every level in order, so a boundary case can assert
+--   on all of them without a partial list function.
+chainOn ∷ Int → PageHandle → UIPageManager
+        → (ElementHandle, ElementHandle, [ElementHandle], UIPageManager)
+chainOn n pageH mgr0 =
+    let (r, m0) = rootOn "chain0" pageH mgr0
+    in go r [r] r 1 m0
+  where
+    go root acc deepest i mgr | i > n = (root, deepest, reverse acc, mgr)
+    go root acc prev i mgr =
+        let (h, m) = childOf "chainN" prev pageH mgr
+        in go root (h : acc) h (i + 1) m
+
 -- | Two visible pages plus a spare page-root element on the first.
 twoPages ∷ (PageHandle, PageHandle, UIPageManager)
 twoPages =
@@ -270,6 +290,44 @@ spec = do
                 m5 = hidePage p1 m4
             upmGlobalFocus m5 `shouldBe` Just c
             upmControlFocus m5 `shouldBe` Just c
+
+    describe "the depth boundary" $ do
+        it "builds a maximum-depth chain and refuses exactly one more" $ do
+            let (p1, _, m0) = twoPages
+                (_, deepest, chain, m1) = chainOn maxDepth p1 m0
+                (extra, m2) = elemOn "extra" p1 m1
+                m3 = addChildElement deepest extra 0 0 m2
+            length chain `shouldBe` maxDepth + 1
+            kids deepest m1 `shouldBe` []
+            hierarchy m3 `shouldBe` hierarchy m2
+            kids deepest m3 `shouldBe` []
+
+        it "reassigns the page through EVERY level of a maximum-depth subtree" $ do
+            let (p1, p2, m0) = twoPages
+                (root, _, chain, m1) = chainOn maxDepth p1 m0
+                m2 = addElementToPage p2 root 0 0 m1
+            map (`pageOf` m1) chain `shouldBe` map (const (Just p1)) chain
+            map (`pageOf` m2) chain `shouldBe` map (const (Just p2)) chain
+            -- The whole chain survives the old page's deletion, which
+            -- is what a stale descendant page would have broken.
+            let m3 = deletePage p1 m2
+            map (`alive` m3) chain `shouldBe` map (const True) chain
+
+        it "accepts relocating a maximum-depth subtree under an unrelated parent" $ do
+            let (p1, p2, m0) = twoPages
+                (root, _, chain, m1) = chainOn maxDepth p1 m0
+                (host, m2) = rootOn "host" p2 m1
+                m3 = addChildElement host root 0 0 m2
+            kids host m3 `shouldBe` [root]
+            parentOf root m3 `shouldBe` Just host
+            roots p1 m3 `shouldBe` []
+            map (`pageOf` m3) chain `shouldBe` map (const (Just p2)) chain
+
+        it "still refuses a cycle inside a maximum-depth subtree" $ do
+            let (p1, _, m0) = twoPages
+                (root, deepest, _, m1) = chainOn maxDepth p1 m0
+                m2 = addChildElement deepest root 0 0 m1
+            hierarchy m2 `shouldBe` hierarchy m1
 
     describe "deleting the old page (requirement 5)" $
         it "leaves the moved root and its descendants alive" $ do

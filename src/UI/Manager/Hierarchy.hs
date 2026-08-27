@@ -8,6 +8,7 @@ module UI.Manager.Hierarchy
 
 import UPrelude
 import qualified Data.Map.Strict as Map
+import qualified Data.Set as Set
 import UI.Types
 import UI.Manager.Core (modifyElement, modifyPage, removeElementReference, bumpElementRouteEpoch)
 
@@ -66,19 +67,26 @@ detachFromOwners handle owners mgr0 = foldr step mgr0 owners
 --   'UI.Manager.Query.getPageElements' reaches descendants through the
 --   NEW owner, so a stale descendant page is directly observable.
 --
---   The depth cap mirrors 'addChildElement's cycle guard: parent
---   chains here are kept acyclic and shallow, so it is only a
---   defensive backstop.
+--   Termination is by VISITED SET, deliberately not by a depth budget.
+--   'maxHierarchyDepth' bounds the chain 'addChildElement' will BUILD
+--   in one step, but relocating a subtree under a deeper parent can
+--   legitimately produce a tree taller than that, so any fixed budget
+--   here would eventually stop short and leave the deepest elements
+--   reporting a stale page — the exact defect this function exists to
+--   prevent. The visited set is exact for every legal shape and still
+--   terminates on a malformed one.
 setSubtreePage ∷ PageHandle → ElementHandle → UIPageManager → UIPageManager
-setSubtreePage pageHandle root mgr0 = go (64 ∷ Int) root mgr0
+setSubtreePage pageHandle root mgr0 = go Set.empty [root] mgr0
   where
-    go depth handle mgr
-        | depth ≤ 0 = mgr
-        | otherwise = case Map.lookup handle (upmElements mgr) of
-            Nothing → mgr
-            Just el →
-                let mgr' = modifyElement handle mgr $ \e → e { uePage = pageHandle }
-                in foldr (go (depth - 1)) mgr' (ueChildren el)
+    go _ [] mgr = mgr
+    go seen (handle : rest) mgr
+        | handle `Set.member` seen = go seen rest mgr
+        | otherwise =
+            let seen' = Set.insert handle seen
+            in case Map.lookup handle (upmElements mgr) of
+                Nothing → go seen' rest mgr
+                Just el → go seen' (ueChildren el ⧺ rest) $
+                    modifyElement handle mgr $ \e → e { uePage = pageHandle }
 
 -- | Did this attachment actually change the element's structural
 --   owner? The case split is total over membership (#1694 requirement
@@ -88,6 +96,19 @@ setSubtreePage pageHandle root mgr0 = go (64 ∷ Int) root mgr0
 ownerChanges ∷ [StructuralOwner] → StructuralOwner → Bool
 ownerChanges owners destination =
     not (null owners) ∧ owners ≢ [destination]
+
+-- | The longest parent chain 'addChildElement' will BUILD in one step,
+--   in edges: the destination parent may already have this many minus
+--   one ancestors, so the attached child lands at most this deep. It
+--   is a pathological-depth backstop for the upward walks
+--   ('UI.Manager.Query.getElementAbsolutePosition',
+--   'UI.ControlActivation.ancestorChain'), NOT an invariant on total
+--   tree height — relocating an existing subtree under a deeper parent
+--   can exceed it, which is why the two subtree walks in this module
+--   terminate on a visited set instead of on a budget derived from
+--   here.
+maxHierarchyDepth ∷ Int
+maxHierarchyDepth = 64
 
 -- * Hierarchy
 
@@ -203,9 +224,11 @@ addChildElement parentHandle childHandle x y mgr
     -- 'structuralOwners'), so a child whose own structural descendant
     -- had its 'ueParent' cleared by 'removeFromPage' would pass the
     -- up-walk while closing a real 'ueChildren' loop.
-    wouldCycle = walkUp (64 ∷ Int) parentHandle ∨ walkDown (64 ∷ Int) childHandle
+    wouldCycle = walkUp maxHierarchyDepth parentHandle ∨ parentInChildSubtree
 
-    -- Is the child already an ancestor of the parent?
+    -- Is the child already an ancestor of the parent? Keeps the
+    -- pre-existing depth budget: it IS the policy 'maxHierarchyDepth'
+    -- states, and exceeding it is refused rather than followed.
     walkUp depth h
         | depth ≤ 0 = True          -- pathological depth: refuse too
         | h ≡ childHandle = True
@@ -214,12 +237,18 @@ addChildElement parentHandle childHandle x y mgr
             Nothing → False
 
     -- Is the parent already inside the child's structural subtree?
-    walkDown depth h
-        | depth ≤ 0 = True          -- pathological depth: refuse too
-        | h ≡ parentHandle = True
-        | otherwise = case Map.lookup h (upmElements mgr) of
-            Nothing → False
-            Just el → any (walkDown (depth - 1)) (ueChildren el)
+    -- Visited-set termination, NOT a depth budget: a subtree that is
+    -- merely at (or past) 'maxHierarchyDepth' is a legal thing to
+    -- relocate, and a budget would refuse it as if it were a cycle.
+    parentInChildSubtree = descend Set.empty [childHandle]
+      where
+        descend _ [] = False
+        descend seen (h : rest)
+            | h ≡ parentHandle    = True
+            | h `Set.member` seen = descend seen rest
+            | otherwise = case Map.lookup h (upmElements mgr) of
+                Nothing → descend (Set.insert h seen) rest
+                Just el → descend (Set.insert h seen) (ueChildren el ⧺ rest)
 
 -- | #745: also bumps this element's OWN
 --   'UI.Types.ueRouteEpoch' — a pending pointer activation on this
