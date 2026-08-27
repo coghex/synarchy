@@ -33,7 +33,7 @@ import Structure.Palette (TexPalette, emptyTexPalette, internPath)
 import Structure.Render (structurePieceQuads)
 import Structure.Types (StructureSlot(..), StructurePieceData(..))
 import Structure.WallCatalog
-    ( StructureWallCatalog, WallArtEntry(..)
+    ( StructureWallCatalog(..), WallArtEntry(..)
     , emptyStructureWallCatalog, registerWallFamily, rotatedWallArt )
 
 -- * Independent restatement of the rotation contract
@@ -348,13 +348,15 @@ spec = do
         it "resolves a registered wall's art to its screen edge's sprite" $
             forM_ allFacings $ \facing → forM_ allEdges $ \e →
                 rotatedWallArt catalog facing e
-                    (texPath e) (facePath e placedCaps)
+                    (texPath e, texHandle e) (facePath e placedCaps, faceHandle e placedCaps)
                     `shouldBe` Just (expectedArt facing e)
 
         it "keeps a wall's texture and cap facemap on the SAME edge" $
             forM_ allFacings $ \facing → forM_ allEdges $ \e → do
                 let s = expectScreenEdge facing e
-                rotatedWallArt catalog facing e (texPath e) (facePath e placedCaps)
+                rotatedWallArt catalog facing e
+                        (texPath e, texHandle e)
+                        (facePath e placedCaps, faceHandle e placedCaps)
                     `shouldSatisfy` \r → case r of
                         Just (th, fh) →
                             th ≡ texHandle s
@@ -368,26 +370,30 @@ spec = do
                     expectCaps | expectCapSwap facing e = WallCaps False True
                                | otherwise              = WallCaps True False
                 snd (expectedArt facing e) `shouldBe` faceHandle s expectCaps
-                rotatedWallArt catalog facing e (texPath e) (facePath e placedCaps)
+                rotatedWallArt catalog facing e
+                        (texPath e, texHandle e)
+                        (facePath e placedCaps, faceHandle e placedCaps)
                     `shouldBe` Just (texHandle s, faceHandle s expectCaps)
 
         it "refuses a texture/facemap pair from DIFFERENT authored edges" $
             -- Never a sprite from one direction with a mask from another:
             -- the mismatched pair rotates not at all.
             rotatedWallArt catalog FaceWest WallNE
-                (texPath WallNE) (facePath WallSW placedCaps)
+                (texPath WallNE, texHandle WallNE)
+                (facePath WallSW placedCaps, faceHandle WallSW placedCaps)
                 `shouldBe` Nothing
 
         it "leaves art from outside any registered pack exactly as placed" $
             rotatedWallArt catalog FaceWest WallNE
-                "somewhere/else.png" (facePath WallNE placedCaps)
+                ("somewhere/else.png", TextureHandle 999)
+                (facePath WallNE placedCaps, faceHandle WallNE placedCaps)
                 `shouldBe` Nothing
 
     describe "FaceSouth is unchanged" $ do
         it "resolves every wall back to the art it was placed with" $
             forM_ allEdges $ \e →
                 rotatedWallArt catalog FaceSouth e
-                    (texPath e) (facePath e placedCaps)
+                    (texPath e, texHandle e) (facePath e placedCaps, faceHandle e placedCaps)
                     `shouldBe` Just (texHandle e, faceHandle e placedCaps)
 
         it "strips exactly the authored SE/SW pair, single-quads NE/NW" $ do
@@ -513,7 +519,8 @@ spec = do
             forM_ allFacings $ \facing →
                 forM_ [WallNW, WallSE, WallSW] $ \e →
                     rotatedWallArt variantCatalog facing e
-                        (texPath e) (facePath e placedCaps)
+                        (texPath e, texHandle e)
+                        (facePath e placedCaps, faceHandle e placedCaps)
                         `shouldBe` Just (expectedArt facing e)
 
         it "rotates the variant's OWN wall through the variant family, \
@@ -528,7 +535,8 @@ spec = do
                     expectTex | s ≡ WallNE = variantTexHandle
                               | otherwise  = texHandle s
                 rotatedWallArt variantCatalog facing WallNE
-                    variantTexPath (facePath WallNE placedCaps)
+                    (variantTexPath, variantTexHandle)
+                    (facePath WallNE placedCaps, faceHandle WallNE placedCaps)
                     `shouldBe` Just (expectTex, faceHandle s expectCaps)
 
         it "registering the same family twice changes nothing" $
@@ -537,7 +545,9 @@ spec = do
             forM_ allFacings $ \facing → forM_ allEdges $ \e →
                 rotatedWallArt (fromMaybe variantCatalog
                                    (registerWallFamily familyEntries variantCatalog))
-                               facing e (texPath e) (facePath e placedCaps)
+                               facing e
+                               (texPath e, texHandle e)
+                               (facePath e placedCaps, faceHandle e placedCaps)
                     `shouldBe` Just (expectedArt facing e)
 
         it "takes BOTH rotated assets from the variant a wall's SPRITE \
@@ -557,7 +567,8 @@ spec = do
                     expectFace | s ≡ WallNW = maskFaceHandle expectCaps
                                | otherwise  = faceHandle s expectCaps
                 rotatedWallArt maskCatalog facing WallNE
-                    maskTexPath (facePath WallNE placedCaps)
+                    (maskTexPath, maskTexHandle)
+                    (facePath WallNE placedCaps, faceHandle WallNE placedCaps)
                     `shouldBe` Just (expectTex, expectFace)
 
         it "leaves a DEFAULT wall alone when a variant overrides only masks" $
@@ -567,8 +578,51 @@ spec = do
             forM_ allFacings $ \facing →
                 forM_ [WallNW, WallSE, WallSW] $ \e →
                     rotatedWallArt maskCatalog facing e
-                        (texPath e) (facePath e placedCaps)
+                        (texPath e, texHandle e)
+                        (facePath e placedCaps, faceHandle e placedCaps)
                         `shouldBe` Just (expectedArt facing e)
+
+        it "keeps the placed pair's OWN handles when a variant re-loads the \
+           \art it inherits" $ do
+            -- @engine.loadTexture@ mints a fresh handle per call and does
+            -- not dedupe by path, so a variant re-loading an inherited
+            -- facemap really does hand over a SECOND handle for a path the
+            -- default already registered. A default wall must keep the
+            -- handle its own palette entry resolved to — not the
+            -- duplicate, whose GPU upload may not even have landed.
+            let dupHandle e c = TextureHandle (700 + edgeIx e * 4 + capIx c)
+                reloading =
+                    [ if e ≡ WallNE
+                        then WallArtEntry e Nothing variantTexPath variantTexHandle True
+                        else WallArtEntry e Nothing (texPath e) (texHandle e) False
+                    | e ← allEdges ]
+                    <> [ WallArtEntry e (Just c) (facePath e c) (dupHandle e c) False
+                       | e ← allEdges, c ← allCaps ]
+                dupCat = fromMaybe (error "re-loading fixture is incomplete")
+                             (registerWallFamily reloading catalog)
+            forM_ allFacings $ \facing → forM_ allEdges $ \e →
+                rotatedWallArt dupCat facing e
+                    (texPath e, texHandle e)
+                    (facePath e placedCaps, faceHandle e placedCaps)
+                    `shouldBe` Just (expectedArt facing e)
+            -- ...and the catalogue itself kept the FIRST handle, so even a
+            -- rotation that does change the art never reaches the
+            -- duplicate.
+            forM_ [ (e, c) | e ← allEdges, c ← allCaps ] $ \(e, c) →
+                HM.lookup (facePath e c) (swcHandles dupCat)
+                    `shouldBe` Just (faceHandle e c)
+            -- And a piece REPLAYED from a save resolves its palette id
+            -- through engine.loadTexture a THIRD time, matching neither
+            -- registration. FaceSouth must still render exactly what that
+            -- palette entry resolved to, so the rotation that changes
+            -- nothing changes nothing.
+            let replayedTex  e = TextureHandle (800 + edgeIx e)
+                replayedFace e = TextureHandle (900 + edgeIx e)
+            forM_ allEdges $ \e →
+                rotatedWallArt dupCat FaceSouth e
+                    (texPath e, replayedTex e)
+                    (facePath e placedCaps, replayedFace e)
+                    `shouldBe` Just (replayedTex e, replayedFace e)
 
         it "refuses a placed pair two families both carry AND both own" $ do
             -- Contradictory pack data: this second family declares the
@@ -593,11 +647,13 @@ spec = do
                 clashCat = fromMaybe (error "clashing fixture is incomplete")
                                (registerWallFamily clashing catalog)
             rotatedWallArt clashCat FaceWest WallNE
-                (texPath WallNE) (facePath WallNE placedCaps)
+                (texPath WallNE, texHandle WallNE)
+                (facePath WallNE placedCaps, faceHandle WallNE placedCaps)
                 `shouldBe` Nothing
             -- A pair only ONE family carries is untouched by that.
             rotatedWallArt clashCat FaceWest WallNW
-                (texPath WallNW) (facePath WallNW placedCaps)
+                (texPath WallNW, texHandle WallNW)
+                (facePath WallNW placedCaps, faceHandle WallNW placedCaps)
                 `shouldBe` Just (expectedArt FaceWest WallNW)
 
     describe "unresolved art" $

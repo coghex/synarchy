@@ -156,7 +156,7 @@ structurePieceQuads catalog palette handles lookupSlot texSizes
         edge  ← wallEdgeOfSlot slot
         tPath ← lookupPath (spdTexId spd) palette
         fPath ← lookupPath (spdFaceId spd) palette
-        rotatedWallArt catalog facing edge tPath fPath
+        rotatedWallArt catalog facing edge (tPath, th) (fPath, fh)
 
 -- | Does this slot's edge sit at the SCREEN front (the SE/SW pair) at
 --   this facing, and so take the #415 depth-strip path? At 'FaceSouth'

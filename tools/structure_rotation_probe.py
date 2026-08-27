@@ -71,6 +71,22 @@ def structures_call(port: int, lua: str, timeout: float = 10.0):
                 timeout=timeout)
 
 
+def active_page(port: int) -> str | None:
+    """The active world page id, or None while there is not one yet.
+
+    NEVER `tostring(world.getActiveWorldId())`: that turns "no world" into
+    the truthy string "nil", which a poll accepts — and every later
+    world-scoped command then targets a page that does not exist and is
+    silently dropped, leaving a scene that still screenshots fine.
+    """
+    got = send_json(port, "local id = world.getActiveWorldId();"
+                          " return id and {page = tostring(id)} or nil")
+    if not isinstance(got, dict):
+        return None
+    page = str(got.get("page", "")).strip()
+    return page if page and page != "nil" else None
+
+
 def wait_content_loaded(port: int, seconds: float = 90.0) -> bool:
     """READY precedes the startup loader: unit/building defs are EMPTY for
     the first ~10-20 s while the menu phase loads content. Opening the
@@ -178,10 +194,10 @@ def main() -> int:
         print("phase 2: gameplay view on the flat arena")
         send(args.port, "package.loaded['scripts.ui_manager'].onOpenArena();"
                         " return 'ok'", timeout=20.0)
-        page = "test_arena"
-        got = poll_until(90.0, lambda: send(
-            args.port, "return tostring(world.getActiveWorldId())"))
-        page = (got or page).strip() or page
+        page = poll_until(90.0, lambda: active_page(args.port))
+        if not check(bool(page), "a real arena page is active",
+                     f"world.getActiveWorldId() never named one (got {page!r})"):
+            return 1
         vp = viewport(args.port, fallback=(1280, 720))
         cx = int(vp.get("win_w", 1280)) // 2
         cy = int(vp.get("win_h", 720)) // 2
@@ -202,6 +218,30 @@ def main() -> int:
         ax, ay = int(anchor["gx"]) - 2, int(anchor["gy"]) - 2
         print(f"        anchor tile ({ax}, {ay}) on page '{page}'")
         stamp_scene(args.port, ax, ay, page)
+        # Terrain and vegetation edits are QUEUED world commands, so the
+        # read-backs below have to wait for the world thread to apply them.
+        poll_until(30.0, lambda: (send_json(
+            args.port, "return {z = (world.getTerrainAt(%d, %d))}" % (ax + 2, ay - 2))
+            or {}).get("z", 0) >= 2)
+        rim = send_json(args.port,
+                        "local a = (world.getTerrainAt(%d, %d));"
+                        " local b = (world.getTerrainAt(%d, %d));"
+                        " return {a = a, b = b}" % (ax + 2, ay - 2, ax + 6, ay + 2))
+        check(isinstance(rim, dict)
+              and (rim.get("a") or 0) >= 2 and (rim.get("b") or 0) >= 2,
+              "the terrain rim rose on both sides of the room",
+              f"world.getTerrainAt on the two rim tiles = {rim!r}")
+        veg = send_json(args.port,
+                        "local n = 0;"
+                        " for d = 0, 4 do"
+                        "   if (world.getVegAt(%d + d, %d - 1) or 0) > 0 then n = n + 1 end;"
+                        "   if (world.getVegAt(%d + d, %d + 5) or 0) > 0 then n = n + 1 end;"
+                        "   if (world.getVegAt(%d - 1, %d + d) or 0) > 0 then n = n + 1 end;"
+                        "   if (world.getVegAt(%d + 5, %d + d) or 0) > 0 then n = n + 1 end;"
+                        " end return n" % ((ax, ay) * 4))
+        check(isinstance(veg, int) and veg == 20,
+              "a billboard stands outside all four walls",
+              f"{veg!r} of 20 flora tiles took")
         placed = send_json(args.port, "return structure.count()")
         check(isinstance(placed, int) and placed >= 45,
               "the room stamped (floors + 4 wall sides + posts)",

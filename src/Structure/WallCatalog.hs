@@ -109,6 +109,14 @@ data StructureWallCatalog = StructureWallCatalog
       --   id→handle table need not have resolved (nothing placed it), so
       --   the registration carries the handles Lua already loaded rather
       --   than relying on that table.
+      --
+      --   FIRST registration wins. @engine.loadTexture@ mints a fresh
+      --   handle on every call and does not dedupe by path, so a variant
+      --   re-loading a facemap it INHERITS hands over a second, duplicate
+      --   handle for a path the default already registered — and a later
+      --   overwrite would swap a live, uploaded handle for one whose
+      --   upload may not have landed. A path's handle is a property of
+      --   the path, so the first one is kept.
     , swcNextFamily ∷ !Int
     } deriving (Show, Eq)
 
@@ -149,7 +157,8 @@ registerWallFamily entries cat
         , swcFaceOwner  = foldr (\(e, _) → claim (waePath e) fi)
                                 (swcFaceOwner cat)
                                 [ (e, c) | (e, c) ← faceEntries, waeOwned e ]
-        , swcHandles    = foldr (\e m → HM.insert (waePath e) (waeHandle e) m)
+        , swcHandles    = foldr (\e → HM.insertWith (\_new old → old)
+                                                    (waePath e) (waeHandle e))
                                 (swcHandles cat) entries
         , swcNextFamily = fi + 1
         }
@@ -170,25 +179,38 @@ registerWallFamily entries cat
 -- | The sprite and cap facemap a wall on AUTHORED edge @edge@, placed
 --   with @texPath@\/@facePath@, is drawn with at @facing@.
 --
+--   Each side is given as the placed PATH together with the runtime
+--   handle that path already resolved to (the palette's own id→handle
+--   entry, which is what the piece would otherwise be drawn with). A
+--   resolved target that IS the placed path keeps that handle rather
+--   than the catalogue's, so a rotation that changes nothing changes
+--   nothing — including at 'FaceSouth', where the screen edge and cap
+--   order are both the identity and the answer is always the placed pair.
+--
 --   'Nothing' means "draw exactly what was placed": no family carries
 --   this exact pair at this edge, or several do and none is singled out
 --   by ownership, or either path is ambiguously owned, or the resolved
 --   family has no art for the target. A pair whose facemap belongs to a
 --   different authored edge than its sprite matches no family at all, so
 --   a texture from one direction can never be paired with a mask from
---   another. At 'FaceSouth' the screen edge and cap order are both the
---   identity, so the resolved family answers with the placed pair's own
---   two paths and the result is the placed art unchanged.
-rotatedWallArt ∷ StructureWallCatalog → CameraFacing → WallEdge → Text → Text
+--   another.
+rotatedWallArt ∷ StructureWallCatalog → CameraFacing → WallEdge
+               → (Text, TextureHandle)   -- ^ placed sprite: path + its live handle
+               → (Text, TextureHandle)   -- ^ placed cap facemap: path + its live handle
                → Maybe (TextureHandle, TextureHandle)
-rotatedWallArt cat facing edge texPath facePath = case matches of
+rotatedWallArt cat facing edge (texPath, texHandle) (facePath, faceHandle) =
+  case matches of
     [(fam, caps)] → do
         let screen = screenWallEdge facing edge
         tPath ← M.lookup screen (wfTextures fam)
         fPath ← M.lookup (screen, rotateWallCaps facing edge caps) (wfFacemaps fam)
-        (,) <$> HM.lookup tPath (swcHandles cat) <*> HM.lookup fPath (swcHandles cat)
+        (,) <$> resolve texPath texHandle tPath
+            <*> resolve facePath faceHandle fPath
     _ → Nothing
   where
+    resolve placedPath placedHandle target
+        | target ≡ placedPath = Just placedHandle
+        | otherwise           = HM.lookup target (swcHandles cat)
     -- The families this placement could have come from: their own art at
     -- @edge@ is exactly the pair that was placed. A variant that inherits
     -- both halves is indistinguishable from the default here, which is
