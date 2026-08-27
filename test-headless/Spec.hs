@@ -88,6 +88,7 @@ import qualified Test.Headless.World.RenderedSurface as RenderedSurface
 import qualified Test.Headless.World.IslandColumns as IslandColumns
 import qualified Test.Headless.World.ChunkCoordinates as ChunkCoordinates
 import qualified Test.Headless.Combat.Damage as CombatDamage
+import qualified Test.Headless.Combat.MaxStamina as CombatMaxStamina
 import qualified Test.Headless.Combat.MentalEffectiveness as CombatMentalEffectiveness
 import qualified Test.Headless.Combat.Severing as CombatSevering
 import qualified Test.Headless.Combat.Wounds as CombatWounds
@@ -555,6 +556,7 @@ main = hspec $ do
     describe "WorldGen.SoilShed" SoilShed.spec
     describe "WorldGen.SoilRedistribution" SoilRedistribution.spec
     describe "Combat.Damage" CombatDamage.spec
+    CombatMaxStamina.spec
     CombatMentalEffectiveness.spec
     describe "Combat.Severing" CombatSevering.spec
     describe "Combat.Wounds" CombatWounds.spec
