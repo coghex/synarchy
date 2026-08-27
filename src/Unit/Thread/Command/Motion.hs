@@ -4,6 +4,7 @@ module Unit.Thread.Command.Motion
     , handleUnitSetMoveSpeedCommand
     , handleUnitJumpCommand
     , handleUnitStopCommand
+    , stopUnitSimState
     ) where
 
 import UPrelude
@@ -149,6 +150,72 @@ handleUnitJumpCommand env utsRef uid tgx tgy = do
                        else let ss' = startJump now ss tgx tgy
                             in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
 
+-- | The pure core of 'handleUnitStopCommand': drop whatever the unit is
+--   doing and return it to Idle — EXCEPT when it is mid-pose-transition,
+--   in which case the transition is left to finish on its own.
+--
+--   Why the exception (#1709). A pose transition — a leap, a fall, a
+--   climb — interpolates the CONTINUOUS position
+--   (@usRealX@/@usRealY@/@usRealZ@) between two grid anchors, and only
+--   'Unit.Thread.Movement.Timers.handleTransitionExpiry' reconciles it
+--   back to the grid (the landing snap that sets
+--   @usRealZ = fromIntegral usGridZ@). Clearing @usState@ /
+--   @usTransitionUntil@ partway through that arc strands the unit at the
+--   interpolated position permanently: both
+--   'Unit.Thread.Movement.Fall.tickFallZ' and @handleTransitionExpiry@
+--   match on the very state the stop erased, so nothing finishes the arc
+--   and nothing snaps the position. The unit renders above its grid
+--   layer for good ('Unit.Render' derives the sprite offset from the
+--   continuous @uiRealZ@ that 'Unit.Thread' mirrors from @usRealZ@), and
+--   the @unit-sim@ save component round-trips that inconsistent pair
+--   verbatim. It reached this handler because a mental break
+--   (@scripts/mental_state.lua@'s @enterBreak@) calls @unit.stop@ from
+--   the physiology tick, which — unlike @unit_ai.lua@'s @tickOne@ — has
+--   no mid-transition guard of its own.
+--
+--   So a stop that lands mid-transition keeps exactly the fields the
+--   in-flight arc owns — @usState@, @usTransitionUntil@,
+--   @usPostTransition@ (already untouched here, so the landing's
+--   stand-up / collapse chain still runs), @usGetUpAt@ (the knockdown
+--   timer a landed fall stamps on during its chained Collapsed step),
+--   and the leap/fall/climb endpoints this handler never touched — and
+--   clears only what the caller actually wants dropped: the move target,
+--   the local path, and the drink/eat/pickup timers. The arc lands on
+--   its own tick with position snapped to the grid and its normal
+--   outcome intact (a fall's @usPendingFallDrop@ + knockdown + injury
+--   pass, a leap's stand-up chain), leaving the unit Idle and stationary
+--   — no target to walk out, because the stop already took it.
+--
+--   Nothing else changes. A walking, running, working, drinking, eating,
+--   or fighting unit is preempted on the same tick it always was, which
+--   is what every other @unit.stop@ caller observes: they all reach it
+--   through @tickOne@, which refuses to dispatch mid-transition, so this
+--   branch is unreachable for them.
+stopUnitSimState ∷ UnitSimState → UnitSimState
+stopUnitSimState ss
+    -- The guard reads the AUTHORITATIVE unit-thread state, in the same
+    -- transaction that applies the stop. It deliberately does NOT trust
+    -- an activity the caller observed earlier: `unit.stop` only ENQUEUES
+    -- `UnitStop`, and `unit.getActivity` reads the render mirror, so the
+    -- unit could have entered (or left) a transition between the two.
+    | isTransitioning (usState ss) =
+        ss { usTarget      = Nothing
+           , usLocalPath   = []
+           , usDrinkUntil  = Nothing
+           , usEatUntil    = Nothing
+           , usPickupUntil = Nothing
+           }
+    | otherwise =
+        ss { usTarget    = Nothing
+           , usState     = Idle
+           , usLocalPath = []
+           , usDrinkUntil      = Nothing
+           , usEatUntil        = Nothing
+           , usPickupUntil     = Nothing
+           , usTransitionUntil = Nothing
+           , usGetUpAt         = Nothing
+           }
+
 handleUnitStopCommand ∷ IORef UnitThreadState → UnitId → IO ()
 handleUnitStopCommand utsRef uid = do
     atomicModifyIORef' utsRef $ \uts →
@@ -156,13 +223,5 @@ handleUnitStopCommand utsRef uid = do
         in case HM.lookup uid simStates of
             Nothing → (uts, ())
             Just ss →
-                let ss' = ss { usTarget    = Nothing
-                             , usState     = Idle
-                             , usLocalPath = []
-                             , usDrinkUntil      = Nothing
-                             , usEatUntil        = Nothing
-                             , usPickupUntil     = Nothing
-                             , usTransitionUntil = Nothing
-                             , usGetUpAt         = Nothing
-                             }
-                in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
+                (uts { utsSimStates =
+                         HM.insert uid (stopUnitSimState ss) simStates }, ())
