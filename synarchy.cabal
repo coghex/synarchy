@@ -1167,12 +1167,14 @@ test-suite synarchy-test-headless
                    Test.Headless.World.ChunkQueueFrame
                    Test.Headless.World.DesignationSeam
                    Test.Headless.World.StructureStage
+                   Test.Headless.World.StructurePaletteResidue
                    Test.Headless.World.Spoil
                    Test.Headless.World.RenderedSurface
                    Test.Headless.World.IslandColumns
                    Test.Headless.World.ChunkCoordinates
                    Test.Headless.World.LocationDiscovery
                    Test.Headless.Combat.Damage
+                   Test.Headless.Combat.MaxStamina
                    Test.Headless.Combat.MentalEffectiveness
                    Test.Headless.Combat.Severing
                    Test.Headless.Combat.Wounds

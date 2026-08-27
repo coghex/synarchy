@@ -223,6 +223,7 @@ swingKinematics work wMass wLen wCoM armLen armMass dexterity mode =
 --   @weaponHardness@ the attacker material's hardness (feeds armour wear).
 computeSeverity
     ∷ SubstanceManager → ItemManager
+    → Double   -- ^ the resolution's captured game-time sample (#1735)
     → UnitInstance → UnitDef
     → Maybe (ItemInstance, ItemDef, ItemWeapon) → Maybe NaturalWeapon
     → UnitInstance → Text → Text → AttackMode → Float → Float → Float
@@ -234,7 +235,7 @@ computeSeverity
 -- a combo "paw" splits across slash/blunt/stab components that each call in),
 -- and `lungeSpeed` (m/s of the attacker's body at impact — 0 for a normal
 -- swing; a lunge adds its full-body momentum on top of the swing).
-computeSeverity sm im atk tdef mEquipped natW tgt partId kind mode allocRoll kindWeight lungeSpeed =
+computeSeverity sm im now atk tdef mEquipped natW tgt partId kind mode allocRoll kindWeight lungeSpeed =
     let -- Muscular work committed to the swing (J).
         str      = statOr "strength" 1.0 atk
         wepClass = case mEquipped of
@@ -243,9 +244,13 @@ computeSeverity sm im atk tdef mEquipped natW tgt partId kind mode allocRoll kin
         skill    = skillOr wepClass 0.0 atk
         skillEff = 0.6 + 0.4 * clamp 0.0 1.0 (skill / 100.0)
         -- A winded fighter still hits (floor 0.3); absent stamina ⇒ full.
+        -- The denominator is the EFFECTIVE pool at @now@ (#1735) — the
+        -- same 'maxStaminaFor' value, at the same instant, that
+        -- 'Combat.Resolution.Wear.staminaDrainStats' sizes this swing's
+        -- drain against, so the two can't disagree within one attack.
         staminaFrac = case HM.lookup "stamina" (uiStats atk) of
             Nothing → 1.0
-            Just s  → let maxS = maxStaminaFor atk
+            Just s  → let maxS = maxStaminaFor now atk
                       in if maxS ≤ 0 then 1.0 else clamp 0.3 1.0 (s / maxS)
         pain     = painFor atk
         work     = eHuman * str * modeWork mode * skillEff * staminaFrac

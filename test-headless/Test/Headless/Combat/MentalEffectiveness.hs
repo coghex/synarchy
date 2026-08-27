@@ -313,7 +313,7 @@ spec = describe "Mental effectiveness" $ do
                     HM.empty
                 tgt = mkInst (HM.fromList [("body_mass", 70.0)]) HM.empty
                 severityOf atk = computeSeverity emptySubstanceManager emptyItemManager
-                    atk targetDef Nothing Nothing tgt "torso" "blunt" Quick 0.5 1.0 0.0
+                    0 atk targetDef Nothing Nothing tgt "torso" "blunt" Quick 0.5 1.0 0.0
             severityOf calm `shouldBe` severityOf distracted
 
         -- The Haskell-side resource-cost analogue of "recovery": the
@@ -332,7 +332,7 @@ spec = describe "Mental effectiveness" $ do
                     (HM.insert "mental_state" 3.0
                         (HM.insert "concentration" 1.0 base))
                     HM.empty
-            maxStaminaFor calm `shouldBe` maxStaminaFor euphoric
+            maxStaminaFor 0 calm `shouldBe` maxStaminaFor 0 euphoric
 
         -- Combat.Resolution.Wear.applyStaminaDrain's actual post-swing
         -- stamina/stance UPDATE (not just the max_stamina pool it draws
@@ -354,8 +354,8 @@ spec = describe "Mental effectiveness" $ do
                 -- concentration/mental_state entries — project onto
                 -- the two keys the swing actually updates.
                 drained mode inst =
-                    ( HM.lookup "stamina" (staminaDrainStats mode inst)
-                    , HM.lookup "stance"  (staminaDrainStats mode inst) )
+                    ( HM.lookup "stamina" (staminaDrainStats 0 mode inst)
+                    , HM.lookup "stance"  (staminaDrainStats 0 mode inst) )
             drained Quick calm `shouldBe` drained Quick distracted
             drained Heavy calm `shouldBe` drained Heavy distracted
 

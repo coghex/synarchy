@@ -76,9 +76,11 @@ bumpElementRouteEpoch handle mgr =
     modifyElement handle mgr $ \el → el { ueRouteEpoch = ueRouteEpoch el + 1 }
 
 -- | #745: bump the manager-wide 'UI.Types.upmPageEpoch'
---   — called by 'UI.Manager.Page.hidePage'/'showPage' for ANY page.
+--   — called by 'UI.Manager.Page.hidePage'/'showPage' for ANY page,
+--   and (#1748) by 'UI.Manager.Page.setPageInputExclusive' when a real
+--   exclusivity change lands on a page that is currently VISIBLE.
 --   Deliberately GLOBAL (unlike 'bumpElementRouteEpoch'): see
---   'UI.Types.upmPageEpoch' for why page-level visibility needs to
---   invalidate every pending activation regardless of which page.
+--   'UI.Types.upmPageEpoch' for why a page-level routing change needs
+--   to invalidate every pending activation regardless of which page.
 bumpPageEpoch ∷ UIPageManager → UIPageManager
 bumpPageEpoch mgr = mgr { upmPageEpoch = upmPageEpoch mgr + 1 }
