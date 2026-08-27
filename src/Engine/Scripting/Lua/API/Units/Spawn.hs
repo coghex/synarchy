@@ -29,7 +29,8 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv, activeWorldPageFrom, loggerRef)
+import Engine.Core.State
+    (EngineEnv, loggerRef, resolveActiveWorld)
 import World.Page.Types (WorldPageId(..))
 import Engine.Core.Log (LogCategory(..), logWarn)
 import qualified Engine.Core.Queue as Q
@@ -42,13 +43,16 @@ import Unit.Sim.Types (Pose(..))
 import Unit.Pathing.Hazard
     (defaultMoveHazardPolicy, parseMoveHazardPolicy)
 import World.Types (WorldManager(..))
+import Engine.Scripting.Lua.API.PageBinding
+    (bindingStale, pageBindingStaleReason)
 import Engine.Scripting.Lua.API.Units.Yaml (surfaceZInWorld)
 
 
 -- | Spawn a unit. If gridZ is omitted, looks up surface elevation.
 --   Falls back to Z=0 if chunk isn't loaded. Returns unit ID or -1.
 --
---   Signature: unit.spawn(defName, gx, gy, [gz], [factionId], [pageId])
+--   Signature:
+--   unit.spawn(defName, gx, gy, [gz], [factionId], [pageId], [bindGen])
 --   factionId is the spawn-time faction tag — one of the canonical
 --   'Unit.Faction.factionTag' values ("player", "wildlife", "hostile",
 --   "neutral", "debug"). This is the ingress boundary (#912): the tag is
@@ -72,6 +76,27 @@ import Engine.Scripting.Lua.API.Units.Yaml (surfaceZInWorld)
 --   queued world.show/hide on the world thread) between the scan and
 --   this call, which would otherwise route the unit into the wrong
 --   world (#196). Omitted → the active world, as before.
+--
+--   @bindGen@ (slot 7, #1686) is the page-selection generation the
+--   caller captured when it decided this spawn was eligible —
+--   @building.getActiveIds@ reports it alongside the ids it enumerates.
+--   #196 fixed the DESTINATION but left the ELIGIBILITY window open: a
+--   portal enumerated while its page was active can still reach this
+--   call after the page has been hidden, and an explicit pageId is
+--   accepted for any live page, hidden or not. When a binding is
+--   present it is checked — generation freshness AND the target page
+--   still being the active one — inside the SAME manager read that
+--   resolves the page, BEFORE any id is allocated or any command is
+--   queued, and a stale one answers @(nil, "page binding stale")@.
+--
+--   That refusal is deliberately a DISTINCT Lua-visible outcome rather
+--   than the @-1@ every other rejection here pushes: @-1@ is truthy in
+--   Lua, so a caller's @if not uid@ guard cannot see it, and the tick
+--   that owns the binding must branch on the refusal BEFORE it hands
+--   out items, commands a walk, or consumes a roster entry. Omitting
+--   the binding — location content spawning, AI staking, debug spawns,
+--   world-gen animals — keeps the @-1@ contract exactly (#1687 owns
+--   that convention).
 unitSpawnFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitSpawnFn env = do
     nameArg     ← Lua.tostring 1
@@ -91,6 +116,17 @@ unitSpawnFn env = do
         _              → return Nothing
     factionArg5 ← Lua.tostring 5
     pageArg6    ← Lua.tostring 6
+    -- Discriminate slot 7 by Lua type for the same reason slot 4 is
+    -- discriminated, but with the opposite failure direction in mind: a
+    -- binding that fails to parse must NOT quietly degrade to an
+    -- UNBOUND spawn, because unbound is precisely the behaviour the
+    -- binding exists to stop. Only a real Lua number is a binding;
+    -- absent is unbound; anything else is a malformed binding, and
+    -- 'boundSpawnStale' refuses it.
+    slot7Ty     ← Lua.ltype 7
+    bindArg7    ← case slot7Ty of
+        Lua.TypeNumber → Lua.tointeger 7
+        _              → return Nothing
 
     case nameArg of
         Nothing → do
@@ -114,25 +150,30 @@ unitSpawnFn env = do
             result ← Lua.liftIO $ do
                 -- Check def exists
                 um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
+                -- ONE manager read serves the binding check AND the
+                -- target resolution (#1686): re-reading for the second
+                -- would reopen the very window the binding closes.
+                wm ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
                 -- Resolve the world the unit will belong to. An explicit
                 -- pageId (slot 6) pins it to that live page; otherwise it
                 -- defaults to the active world (#78). A unit needs a world
                 -- to live in, so reject the spawn when the target page
                 -- doesn't resolve to a live world.
-                mActive ← case pageArg6 of
-                    Just pbs → do
-                        let pid = WorldPageId (TE.decodeUtf8Lenient pbs)
-                        wm ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
-                        pure $ (\ws → (pid, ws)) <$> lookup pid (wmWorlds wm)
-                    Nothing  → activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
-                case (HM.lookup name (umDefs um), mActive) of
-                    (Nothing, _) → return (-1)
-                    (_, Nothing) → do
+                let mActive = case pageArg6 of
+                        Just pbs →
+                            let pid = WorldPageId (TE.decodeUtf8Lenient pbs)
+                            in (\ws → (pid, ws)) <$> lookup pid (wmWorlds wm)
+                        Nothing → resolveActiveWorld wm
+                    stale = boundSpawnStale slot7Ty bindArg7 mActive wm
+                case (stale, HM.lookup name (umDefs um), mActive) of
+                    (True, _, _) → return (Left pageBindingStaleReason)
+                    (_, Nothing, _) → return (Right (-1))
+                    (_, _, Nothing) → do
                         logger ← readIORef (loggerRef env)
                         logWarn logger CatAsset
                             "unit.spawn: no world to spawn into"
-                        return (-1)
-                    (Just _, Just (pageId, ws)) → do
+                        return (Right (-1))
+                    (_, Just _, Just (pageId, ws)) → do
                         -- Resolve Z from the SAME page the unit is stamped
                         -- into (ws), not whatever world happens to be
                         -- visible — otherwise an explicit pageId could be
@@ -181,10 +222,56 @@ unitSpawnFn env = do
                         Q.writeQueue (ucUnitQueue (toUnitCombatCapability env)) $
                             UnitSpawn uid name gx gy gz faction pageId
 
-                        return (fromIntegral (unUnitId uid) ∷ Int)
+                        return (Right (fromIntegral (unUnitId uid) ∷ Int))
 
-            Lua.pushnumber (Lua.Number (fromIntegral result))
-            return 1
+            case result of
+                -- A refused binding answers (nil, reason) — the shape
+                -- building.spawn already uses for the same refusal —
+                -- so the caller can branch on it without going near
+                -- the truthy -1 sentinel.
+                Left reason → do
+                    Lua.pushnil
+                    Lua.pushstring (TE.encodeUtf8 reason)
+                    return 2
+                Right n → do
+                    Lua.pushnumber (Lua.Number (fromIntegral n))
+                    return 1
+
+-- | Is a bound spawn's binding no longer good (#1686)? Both halves are
+--   answered from the ONE 'WorldManager' snapshot the caller already
+--   took, so nothing can move between them.
+--
+--   * The GENERATION half ('bindingStale') is what an A→B→A sequence
+--     needs: the page id ends up the same, and only the generation can
+--     tell the caller its snapshot is a session old. Its projected
+--     component also catches a @world.hide@ that is enqueued but not
+--     yet applied, so a tick racing an in-flight change is refused
+--     rather than optimistically accepted.
+--   * The PAGE half is the redundant one that keeps a supplied page id
+--     from being accepted and then quietly ignored — an explicit page
+--     is otherwise honoured for ANY live page, hidden included.
+--
+--   The page half deliberately compares against 'resolveActiveWorld'
+--   rather than the strict visible-list head that
+--   "Engine.Scripting.Lua.API.Buildings.Spawn" uses. That is the same
+--   resolution @building.getActiveIds@ performs when it enumerates the
+--   tick, fallback included, so "still the active page" means exactly
+--   what the snapshot meant by it — a session with nothing visible
+--   still ticks the page it always ticked instead of silently going
+--   quiet.
+--
+--   A slot 7 that is present but is not a Lua number is a MALFORMED
+--   binding: refused, never degraded to unbound.
+boundSpawnStale ∷ Lua.Type → Maybe Lua.Integer
+                → Maybe (WorldPageId, ws) → WorldManager → Bool
+boundSpawnStale ty bind mTarget wm = case ty of
+    Lua.TypeNil  → False
+    Lua.TypeNone → False
+    _            → case bind of
+        Nothing → True
+        Just _  →
+            bindingStale bind wm
+            ∨ fmap fst mTarget ≢ fmap fst (resolveActiveWorld wm)
 
 unitDestroyFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitDestroyFn env = do

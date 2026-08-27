@@ -10,6 +10,7 @@ module Unit.Thread.Movement.PathAdvance
     , MoveWorld(..)
     , moveWorldFor
     , maxProtectedStep
+    , rawStepLength
     ) where
 
 import UPrelude
@@ -34,6 +35,23 @@ import Unit.Thread.Movement.Fall (tickFallZ, startFall)
 import Unit.Thread.Movement.Timers
     (handleGetUp, handleTransitionExpiry, handlePickupExpiry
     , handleEatExpiry, handleDrinkExpiry)
+
+-- | The raw distance one tick advances a mover, before the
+--   protected-step clamp: the commanded speed, scaled by the slope grade
+--   under the unit's feet and DIVIDED by that ground's
+--   'Unit.Pathing.Cost.materialFactor', over @dt@ seconds.
+--
+--   Split out of 'stepTowardSubGoal' so the runtime half of the
+--   @move_cost@ domain (#1734) can be asserted against the exact
+--   arithmetic the mover runs rather than a restatement of it. Note what
+--   that arithmetic does and does not promise: with a positive finite
+--   @effSpeed@ and @dt@, a FINITE POSITIVE @matSlow@ is what keeps the
+--   result positive — but a caller-supplied zero or invalid speed or
+--   @dt@ zeroes it independently of any material, which is why the
+--   material invariant is stated over the factor, not over every tick.
+rawStepLength ∷ PathingConfig → Float → Float → Float → Double → Float
+rawStepLength pc effSpeed grade matSlow dt =
+    (effSpeed * slopeSpeedFactor pc grade / matSlow) * realToFrac dt
 
 -- | Distance below which the unit is considered arrived at a
 --   waypoint or target. Larger than one tick of motion (≈ 0.066) so
@@ -191,8 +209,7 @@ stepTowardSubGoal pc reg now dt mw stats us mt (gx, gy) =
                 slopeGrade wtd (floor (usRealX us)) (floor (usRealY us))
                            (usGridZ us) (dx / dist, dy / dist)
             _ → 0
-        rawStep = (effSpeed * slopeSpeedFactor pc grade / matSlow)
-                * realToFrac dt
+        rawStep = rawStepLength pc effSpeed grade matSlow dt
         -- A protected tick may not span more than one tile boundary —
         -- see `maxProtectedStep`. Fall-permitted movement keeps its exact
         -- uncapped speed.
