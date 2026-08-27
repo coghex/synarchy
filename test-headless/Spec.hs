@@ -32,6 +32,7 @@ import qualified Test.Headless.Unit.InjurySpeed as InjurySpeedTest
 import qualified Test.Headless.Unit.Fall as FallTest
 import qualified Test.Headless.Unit.StopTransition as StopTransition
 import qualified Test.Headless.Unit.Stats as StatsTest
+import qualified Test.Headless.Unit.AddXpApi as UnitAddXpApi
 import qualified Test.Headless.Unit.AccessoryUnequip as AccessoryUnequip
 import qualified Test.Headless.Unit.SpawnShed as SpawnShedTest
 import qualified Test.Headless.Unit.Transfer as UnitTransfer
@@ -349,6 +350,10 @@ main = hspec $ do
     -- mutation paths, which would corrupt the shared-worlds engine
     -- above (same precedent as World identity / autosave guards).
     aroundAll withHeadlessEngine UnitTransferApi.spec
+    -- Own engine (#1733): the live unit.addXP boundary WRITES the
+    -- unit manager ref (and seeds a deliberately corrupt stat map),
+    -- so it cannot share the worldgen engine above.
+    aroundAll withHeadlessEngine UnitAddXpApi.spec
     -- Own engine (#1605): the live unit.moveTo boundary swaps the
     -- engine's logger to capture the warning it emits and drains the
     -- unit command queue, so it cannot share the worldgen engine.

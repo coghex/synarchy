@@ -620,6 +620,7 @@ library
                      World.Constants
                      World.Command.Types
                      World.Chunk.Types
+                     World.Chunk.Queue
                      World.Cursor.Types
                      World.Edit.Types
                      World.Edit.Apply
@@ -1105,6 +1106,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.Fall
                    Test.Headless.Unit.StopTransition
                    Test.Headless.Unit.Stats
+                   Test.Headless.Unit.AddXpApi
                    Test.Headless.Unit.AccessoryUnequip
                    Test.Headless.Unit.SpawnShed
                    Test.Headless.Unit.Transfer
