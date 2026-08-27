@@ -274,6 +274,24 @@ data ItemDef = ItemDef
       --   YAML), e.g. 90→"excellent" so a 95%-quality coffee reads
       --   "coffee (excellent)". Empty ⇒ fall back to
       --   'defaultQualityTiers'.
+      --
+      --   A NON-EMPTY table replaces 'defaultQualityTiers' wholesale —
+      --   'qualityTierLabel' never mixes the two — so it has to be
+      --   self-sufficient, and since #1739
+      --   'Engine.Asset.YamlItems.parseItemYamlQualityTiers' refuses to
+      --   load one that is not. Every non-empty value reaching this
+      --   field therefore satisfies all four invariants:
+      --
+      --     * exactly one band has @qtMin ≡ 0@, so the table has its own
+      --       floor and no quality in 0..100 falls through it;
+      --     * every 'qtMin' is finite and within 0..100 inclusive;
+      --     * no two bands share a 'qtMin', so the highest-band-wins
+      --       rule below is never decided by author order;
+      --     * every 'qtLabel' is non-blank, so no accepted band renders
+      --       as an absent tier.
+      --
+      --   The empty case is unconstrained, because it selects
+      --   'defaultQualityTiers', which satisfies the same four.
     , idContainer   ∷ !(Maybe ItemContainer)
     , idDefaultContents ∷ ![ItemContentEntry]
       -- ^ For ITEM-containers (a first-aid kit, a toolbox): the contents a
@@ -516,6 +534,14 @@ itemTotalWeight im it =
 -- | One band of a quality→label mapping (#345). `qtMin` is the
 --   inclusive lower bound (0..100) of the band; 'qualityTierLabel'
 --   resolves a quality value to the highest band whose bound it clears.
+--
+--   A band is only ever meaningful as part of a TABLE, and the
+--   invariants live there rather than on this pair: see
+--   'ItemDef'\'s 'idQualityTiers' for the four an authored table must
+--   satisfy, and 'Engine.Asset.YamlItems.parseItemYamlQualityTiers'
+--   (#1739) for where they are enforced. In particular a bare
+--   @QualityTier 80 \"masterwork\"@ is a perfectly well-typed value that
+--   would be REJECTED as a whole table, because it has no 0 floor.
 data QualityTier = QualityTier
     { qtMin   ∷ !Float
     , qtLabel ∷ !Text
@@ -537,6 +563,19 @@ defaultQualityTiers =
 --   table when it declares one (idQualityTiers), else
 --   'defaultQualityTiers'. Picks the highest-qtMin band the value
 --   clears.
+--
+--   The override REPLACES the default table; the default's 0-floor band
+--   is deliberately not supplied as a fallback, so this returns
+--   'Nothing' for any quality clearing no band of the table in force.
+--   That is not a gap to paper over here — 'Nothing' is what the four
+--   reader sites turn into an OMITTED tier field, so a repair at this
+--   level would keep a malformed table loadable and merely relabel its
+--   symptom. #1739 puts the fix at the authoring boundary instead: an
+--   accepted non-empty 'idQualityTiers' carries its own @qtMin ≡ 0@
+--   band, so for any def that loaded, every finite quality in 0..100
+--   resolves to exactly one non-blank label. (A quality OUTSIDE that
+--   domain still has no promise: a negative one clears no band, and
+--   'Item.Roll.rollGroundQuality' takes an explicit value verbatim.)
 qualityTierLabel ∷ ItemDef → Float → Maybe Text
 qualityTierLabel def q = qtLabel ⊚ find (\t → q ≥ qtMin t) sorted
   where

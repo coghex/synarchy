@@ -17,7 +17,9 @@ module Engine.Asset.YamlItems
 
 import UPrelude
 import GHC.Generics (Generic)
+import Data.List (sort)
 import qualified Data.Text as T
+import qualified Data.Vector as V
 import Data.Aeson (FromJSON(..), (.:), (.:?), (.!=), withObject)
 import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.Key as Key
@@ -341,6 +343,198 @@ instance FromJSON ItemYamlQualityTier where
         ⊚ v .: "min"
         ⊛ v .: "label"
 
+-- | Parse and VALIDATE an item definition's optional @quality_tiers:@
+--   override (#1739), against the OWNING definition — which is why
+--   there is no 'FromJSON' instance doing this and why the instance
+--   above stays exactly the bare field decoder it always was. Two
+--   things reachable only from out here are load-bearing: the
+--   definition's @name@, so every rejection is findable without
+--   counting entries in the file (#1233 requirement 2), and whether the
+--   definition authors a @quality:@ spec, which decides whether the
+--   table can ever take effect at all.
+--
+--   'Item.Types.qualityTierLabel' replaces 'Item.Types.defaultQualityTiers'
+--   WHOLESALE for any non-empty override — the default's 0-floor band
+--   is never supplied as a fallback — so an override that cannot label
+--   every quality resolves to 'Nothing' over the rest of the range.
+--   'Nothing' means "omit the field" at all four reader sites, so a
+--   malformed table is indistinguishable from an item that has no tiers
+--   at all: the suffix simply disappears, with no error anywhere. Five
+--   authoring faults produced exactly that symptom and each is rejected
+--   here:
+--
+--     * __No zero floor.__ @[{min: 80, label: masterwork}]@ labels only
+--       the top of the range; quality 50 resolves to nothing.
+--     * __A non-finite @min@.__ Two genuinely different spellings, both
+--       diagnosed here BY DEFINITION NAME. YAML's @.nan@ / @.inf@
+--       resolve to STRINGS (the yaml package's scalar resolver only
+--       recognizes ordinary numeric syntax), so they never reach a
+--       number at all and are rejected as the non-numeric @min@ they
+--       are; a perfectly ordinary @1.0e+100@ is a valid 'Scientific'
+--       that becomes 'Infinity' only once narrowed to @iyqtMin@'s
+--       32-bit 'Float', and poisons both the resolver's @sortBy@ and
+--       its @find@. That is why finiteness is tested AFTER narrowing,
+--       exactly as 'requirePositiveQuantity' and 'parseNutritionValue'
+--       record — and why this parser decodes a band's fields itself
+--       rather than delegating to the 'FromJSON' instance above, whose
+--       bare type error would name neither the definition nor the
+--       offending value.
+--     * __A @min@ outside 0..100.__ 'Item.Types.QualityTier' calls
+--       @qtMin@ the inclusive lower bound (0..100) and nothing checked it.
+--     * __Duplicate minima.__ @sortBy@ is stable, so two bands sharing a
+--       @min@ resolve by AUTHOR ORDER, contradicting the documented
+--       highest-band-wins rule that exists to make author order
+--       irrelevant. Identity is tested on the NARROWED 'Float' too:
+--       @50@ and @50.0000001@ are distinct YAML numbers that collapse to
+--       one 'Float' and would tie just as arbitrarily.
+--     * __An empty label.__ @label: \"\"@ parsed, resolved to @Just \"\"@,
+--       and @scripts\/ui\/quality_tier.lua@ then suppresses the suffix on
+--       @it.qualityTier ~= \"\"@ — a second silent path to the same
+--       missing suffix. Whitespace-only is the same thing, so the test
+--       is on the TRIMMED label.
+--
+--   An absent key, an explicit @null@, and an explicit @[]@ all mean
+--   "no override" and stay exactly as permissive as they have always
+--   been — including on a definition with no @quality:@ spec, since
+--   there is then no table whose effect could be lost. @null@ is read
+--   as absent here rather than rejected the way @storage:@ and @food:@
+--   are: those two are CAPABILITY blocks, where silently reading a
+--   written key as absent quietly drops a capability, whereas an empty
+--   quality-tier override selects the very same default table the key's
+--   absence does.
+parseItemYamlQualityTiers
+    ∷ Text          -- ^ the definition's @name@, for the diagnostic
+    → Bool          -- ^ does the definition author a @quality:@ spec?
+    → Aeson.Object
+    → Aeson.Parser [ItemYamlQualityTier]
+parseItemYamlQualityTiers defName hasQuality v =
+    case KM.lookup "quality_tiers" v of
+        Nothing         → pure []
+        Just Aeson.Null → pure []
+        Just val        → do
+            raws ← case val of
+                Aeson.Array arr → pure (V.toList arr)
+                _ → bad ("quality tier table (key 'quality_tiers') must \
+                         \be a list of { min, label } bands, got "
+                         <> tshow val)
+            case raws of
+                [] → pure []
+                _  → do
+                    let total = length raws
+                    bands ← traverse (parseBand total)
+                                     (zip [1 ..] raws)
+                    unless hasQuality $ bad
+                        ("quality tier table authors " <> tshow total
+                         <> " bands, but the definition has no quality: \
+                            \spec. Every reader resolves a tier only for an \
+                            \item that rolls a quality, so this table could \
+                            \never take effect. Author a quality: \
+                            \{ min, max } block, or delete the \
+                            \quality_tiers: list.")
+                    let mins = map iyqtMin bands
+                    case firstDuplicate mins of
+                        Just m → bad
+                            ("quality tier bands share the min " <> tshow m
+                             <> " — two bands at one threshold resolve by \
+                                \AUTHOR ORDER, and tier resolution is \
+                                \defined to pick the highest min a quality \
+                                \clears, so the winning label would be \
+                                \arbitrary. Give every band a distinct min.")
+                        Nothing → pure ()
+                    unless (any (≡ 0) mins) $ bad
+                        ("quality tier table authors no band with min 0, so \
+                         \every quality below its lowest band ("
+                         <> tshow (minimum mins) <> ") resolves to NO label \
+                            \at all. A non-empty override replaces the \
+                            \default table wholesale, so it must carry its \
+                            \own floor: author a band with min: 0.")
+                    pure bands
+  where
+    -- Polymorphic in its result so the same helper can abort a
+    -- @Parser [Aeson.Value]@, a @Parser Float@ and a @Parser ()@ alike.
+    bad ∷ ∀ α. Text → Aeson.Parser α
+    bad why = fail ∘ T.unpack $
+        "item definition '" <> defName <> "': " <> why
+
+    -- Decoded field by field rather than through the 'FromJSON'
+    -- instance above, so that a band's SHAPE faults are diagnosed the
+    -- same way its CONTENT faults are. Delegating would surface
+    -- @min: .nan@ as a bare aeson type error naming neither the
+    -- definition nor the offending value — and @.nan@ / @.inf@ are
+    -- precisely the spellings that arrive here as STRINGS, so they are
+    -- the ones that need it most. The instance itself stays exactly the
+    -- bare decoder it always was; it is a public part of this module's
+    -- schema surface and nothing about it changed.
+    parseBand ∷ Int → (Int, Aeson.Value) → Aeson.Parser ItemYamlQualityTier
+    parseBand total (i, raw) = case raw of
+        Aeson.Object o → do
+            m ← bandMin o
+            l ← bandLabel m o
+            pure (ItemYamlQualityTier m l)
+        _ → badBand ("must be a { min, label } block, got " <> tshow raw)
+      where
+        badBand ∷ ∀ α. Text → Aeson.Parser α
+        badBand why = bad $
+            "quality tier band " <> tshow i <> " of " <> tshow total
+            <> " (key 'quality_tiers') " <> why
+
+        -- Finiteness and range are tested AFTER narrowing to the
+        -- engine's 32-bit 'Float', exactly as 'requirePositiveQuantity'
+        -- and 'parseNutritionValue' record. The two hazards are
+        -- genuinely different and both are named here: @.nan@ / @.inf@
+        -- never reach a number at all, while an ordinary @1.0e+100@
+        -- reaches one and becomes 'Infinity' only on the way in.
+        bandMin o = case KM.lookup "min" o of
+            Nothing → badBand
+                "authors no min — every band needs an inclusive lower \
+                \bound, a quality percentage in 0..100"
+            Just val@(Aeson.Number s) →
+                let f = realToFrac s ∷ Float
+                in if isNaN f ∨ isInfinite f
+                     then badBand ("must author a FINITE min, got "
+                         <> tshow val <> " which narrows to " <> tshow f
+                         <> " — an ordinary YAML number that large \
+                            \overflows the engine's 32-bit float, and a \
+                            \non-finite threshold poisons tier \
+                            \resolution's own sort and search")
+                     else if f < 0 ∨ f > 100
+                       then badBand ("must author a min within 0..100 \
+                            \inclusive — it is a quality percentage — got "
+                            <> tshow f <> " instead")
+                       else pure f
+            Just other → badBand ("must author a NUMERIC min, got "
+                <> tshow other <> " — YAML's scalar resolver reads the \
+                \not-a-number and infinity spellings as STRINGS rather \
+                \than numbers, so neither is a way to author an \
+                \unbounded band; a min is a quality percentage in \
+                \0..100")
+
+        -- The min is threaded in only so a blank label — which prints
+        -- as nothing and so cannot identify its own band — is still
+        -- reported against a findable threshold.
+        bandLabel m o = case KM.lookup "label" o of
+            Nothing → badBand ("with min " <> tshow m <> " authors no \
+                \label — every band needs the text its quality range \
+                \renders as")
+            Just (Aeson.String t)
+                | T.null (T.strip t) → badBand ("with min " <> tshow m
+                    <> " must author a non-empty label. A blank label \
+                       \renders as no tier at all, which is exactly what \
+                       \an item with no tiers looks like")
+                | otherwise → pure t
+            Just other → badBand ("with min " <> tshow m <> " must author \
+                \a textual label, got " <> tshow other)
+
+    -- Identity on the NARROWED Float, which is the value the runtime
+    -- will actually compare; `sort` is safe here because `parseBand`
+    -- has already rejected every NaN.
+    firstDuplicate ∷ [Float] → Maybe Float
+    firstDuplicate = go ∘ sort
+      where
+        go (a:b:rest) | a ≡ b     = Just a
+                      | otherwise = go (b:rest)
+        go _                      = Nothing
+
 -- | One stat-modifier conferred by equipping an item.
 --   YAML shape: `{ stat: perception, amount: 1, scales_with_condition: true }`.
 --   `percent` is fractional and matches the unit-level modifiers block
@@ -435,7 +629,13 @@ data ItemYamlDef = ItemYamlDef
     , iydQuality     ∷ !(Maybe ItemYamlRollSpec)   -- ^ quality roll range
     , iydQualityTiers ∷ ![ItemYamlQualityTier]     -- ^ quality→label
                                                    --   overrides (#345);
-                                                   --   [] ⇒ default set
+                                                   --   [] ⇒ default set.
+                                                   --   A non-empty list is
+                                                   --   validated against
+                                                   --   'parseItemYamlQualityTiers'
+                                                   --   (#1739), so every value
+                                                   --   here labels the whole
+                                                   --   0..100 range
     , iydContainer   ∷ !(Maybe ItemYamlContainer)
     , iydContents    ∷ ![ItemYamlContent]            -- ^ item-container defaults
     , iydStorage     ∷ !(Maybe ItemYamlStorage)      -- ^ portable item-storage
@@ -482,6 +682,12 @@ data ItemYamlDef = ItemYamlDef
 --   definition's own name for the diagnostic and its sibling
 --   @container:@ field for the correlation — neither of which an
 --   instance can reach.
+--
+--   @quality_tiers:@ is likewise parsed by
+--   'parseItemYamlQualityTiers' and monadically AFTER @quality:@,
+--   because #1739's requirement 5 is a correlation between those two
+--   sibling keys. An absent, null, or empty list still decodes to @[]@
+--   exactly as @.:? \"quality_tiers\" .!= []@ did.
 --
 --   @condition:@ is REJECTED outright for every value, @null@ included
 --   (#1421). Condition stopped being authorable when it became pure
@@ -537,6 +743,16 @@ instance FromJSON ItemYamlDef where
                 \positive; omit the key entirely for an item that is \
                 \not edible"
             Just val → Just <$> parseItemYamlFood name (isJust container) val
+        -- `quality:` is read HERE, monadically and before
+        -- `quality_tiers:`, for the same reason `container:` is read
+        -- before `food:`: #1739's requirement 5 is a CORRELATION
+        -- between two sibling keys, and the applicative chain below
+        -- cannot express one. `.:?` is the right reading of a null
+        -- `quality:` because `iydQuality` is the field the runtime
+        -- sees, so a table authored beside `quality: null` must fail
+        -- as a table with no quality spec — naming the real problem.
+        quality ← v .:? "quality"
+        qualityTiers ← parseItemYamlQualityTiers name (isJust quality) v
         ItemYamlDef name
             ⊚ v .:? "display_name" .!= ""
             ⊛ v .:  "sprite"
@@ -546,8 +762,8 @@ instance FromJSON ItemYamlDef where
             ⊛ v .:? "category"     .!= "Misc"
             ⊛ v .:? "make"         .!= ""
             ⊛ v .:? "material"     .!= ""
-            ⊛ v .:? "quality"
-            ⊛ v .:? "quality_tiers" .!= []
+            ⊛ pure quality
+            ⊛ pure qualityTiers
             ⊛ pure container
             ⊛ v .:? "contents"     .!= []
             ⊛ pure storage
