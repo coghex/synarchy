@@ -41,9 +41,9 @@ data BindlessSupport = BindlessSupport
   --   statement against the descriptors in the layout's
   --   non-update-after-bind set, and each update-after-bind statement
   --   against every set's. They are simultaneous @must@s over different
-  --   populations, never alternatives, so a check is skipped only when the
-  --   device's own features leave that statement inactive
-  --   ('bindlessCapacityApplies').
+  --   populations, never alternatives, and no device feature relaxes
+  --   either: the layout puts descriptors of each class against its limit
+  --   whatever the device advertises.
   , bsCapacities                          ∷ [CapacityCheck]
   -- | Which of 'requiredBindlessFeatures' the device does NOT advertise
   --   (#1282). Empty on a device that can run the bindless renderer.
@@ -82,7 +82,7 @@ queryBindlessSupport pDevice = do
       PhysicalDeviceFeatures2 { next = (vk12Feats :& ()) }
         ← getPhysicalDeviceFeatures2 pDevice
           ∷ IO (PhysicalDeviceFeatures2 '[PhysicalDeviceVulkan12Features])
-      pure ( reportedBindlessCapacities vk12Feats deviceLimits vk12Props
+      pure ( reportedBindlessCapacities deviceLimits vk12Props
            , missingBindlessFeatures vk12Feats )
     else return (unqueriedCapacities, requiredBindlessFeatures)
 
