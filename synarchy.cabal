@@ -267,6 +267,7 @@ library
                      Engine.Scripting.Lua.Message.Texture
                      Engine.Scripting.Lua.Message.Scene
                      Engine.Scripting.Lua.Message.WorldTexture
+                     Engine.Scripting.Lua.TickPolicy
                      Engine.Scripting.Lua.Thread
                      Engine.Scripting.Lua.Thread.Console
                      Engine.Scripting.Lua.Thread.Dispatch
@@ -1127,6 +1128,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Item.QualityTier
                    Test.Headless.Item.ContentsSignature
                    Test.Headless.Item.Condition
+                   Test.Headless.Item.RepairFinite
         Test.Headless.Item.BulkStorage
                    Test.Headless.Item.FoodNutrition
                    Test.Headless.Item.Discovery
@@ -1253,6 +1255,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Render.FrontWallLift
                    Test.Headless.World.Render.StructureRotation
                    Test.Headless.World.Render.GroundItemSeam
+                   Test.Headless.World.Render.StructureSeam
                    Test.Headless.World.Render.PickSeam
                    Test.Headless.World.Render.QuadSnapshot
                    Test.Headless.World.Render.SideFace
@@ -1271,6 +1274,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Core.LogMonad
                    Test.Headless.Core.LogParity
                    Test.Headless.Core.LoopStartup
+                   Test.Headless.Core.ShutdownAtlasRelease
                    Test.Headless.Core.WorkerLifecycle
                    Test.Headless.Camera.GotoClamp
                    Test.Headless.Camera.ZoomScroll
@@ -1324,6 +1328,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.PreviewGeneration
                    Test.Headless.Lua.PauseGate
                    Test.Headless.Lua.ScriptState
+                   Test.Headless.Lua.TickInterval
                    Test.Headless.Lua.DragSelectDeferred
                    Test.Headless.Lua.TextWrapping
                    Test.Headless.Lua.TextTruncation

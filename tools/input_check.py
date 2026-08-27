@@ -107,9 +107,14 @@ def main() -> int:
 
     # Load once per engine lifetime: a second loadScript would create a
     # second broadcast-receiving instance sharing the same singleton
-    # state table, double-counting every event. The tick rate is
-    # REQUIRED — without it loadScript silently no-ops and the fixture
-    # never registers for broadcasts (require() alone doesn't).
+    # state table, double-counting every event. The tick rate argument
+    # is REQUIRED — without it loadScript silently no-ops and the
+    # fixture never registers for broadcasts (require() alone doesn't).
+    # 0.0 is the EVENT-ONLY interval (#1695): the fixture is reached by
+    # broadcast and never put on the update timer, which is exactly what
+    # this check wants. It is not a "no rate" placeholder — a negative,
+    # NaN, infinite or sub-millisecond rate would be REFUSED and load
+    # nothing at all.
     send(PORT,
          'if not package.loaded["scripts.input_check_fixture"] then '
          'engine.loadScript("scripts/input_check_fixture.lua", 0.0) end',

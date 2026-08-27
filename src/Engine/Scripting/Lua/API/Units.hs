@@ -108,6 +108,7 @@ module Engine.Scripting.Lua.API.Units
     , unitModifyItemFillByIdFn
     , unitRepairItemFn
     , applyRepairToUnit
+    , repairDeltasFinite
     , findHeldItemById
     , unitAddItemFn
     , unitGetItemTempFn

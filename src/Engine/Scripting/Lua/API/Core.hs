@@ -21,6 +21,9 @@ import UPrelude
 import Engine.Scripting.Lua.Types
 import Engine.Scripting.Lua.Script (callModuleFunction, loadModuleRef)
 import Engine.Scripting.Lua.Util (isValidRef, nowSeconds)
+import Engine.Scripting.Lua.TickPolicy
+    (TickInterval(..), classifyTickInterval, tickIntervalSeconds
+    , describeTickRefusal)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability, withPlayerIntent)
 import Engine.Core.Capability.Core
@@ -342,20 +345,46 @@ gameTimeFn env = do
   Lua.pushnumber (Lua.Number t)
   return 1
 
+-- | @engine.setTickInterval(scriptId, seconds)@.
+--
+--   @seconds@ obeys the shared tick-interval policy in
+--   "Engine.Scripting.Lua.TickPolicy" (#1695), identically to
+--   'loadScriptFn': @0@ means EVENT-ONLY (the script keeps receiving
+--   broadcasts, messages and direct calls, but its @update@ is never
+--   called on a timer and it no longer takes part in scheduling), a
+--   finite value of at least 'minTickInterval' schedules as it always
+--   has, and a negative, @NaN@, infinite or sub-'minTickInterval' value
+--   is REFUSED.
+--
+--   A refusal leaves BOTH 'scriptTickRate' and 'scriptNextTick' exactly
+--   as they were — nothing is clamped and nothing bad is stored — and
+--   reports itself through 'logWarn' naming the offending value rather
+--   than raising. The Lua return convention is unchanged: this verb has
+--   always returned no values, so the log entry is the signal.
 setTickIntervalFn ∷ EngineEnv → LuaBackendState → Lua.LuaE Lua.Exception Lua.NumResults
 setTickIntervalFn env backendState = do
    scriptIdNum ← Lua.tointeger 1
    interval ← Lua.tonumber 2
    case (scriptIdNum, interval) of
        (Just sid, Just (Lua.Number seconds)) → Lua.liftIO $ do
-           currentSecs ← nowSeconds
-           atomically $ modifyTVar' (lbsScripts backendState) $
-               Map.adjust (\s → s { scriptTickRate = seconds
-                                  , scriptNextTick = currentSecs + seconds
-                                  }) (fromIntegral sid)
            logger ← readIORef (ccLoggerRef (toCoreCapability env))
-           logInfo logger CatLua $ T.pack $
-               "Tick interval for script " ⧺ show sid ⧺ " set to " ⧺ show seconds ⧺ " seconds."
+           case classifyTickInterval seconds of
+             Left refusal →
+               logWarn logger CatLua $
+                   "setTickInterval refused for script " <> tshow sid <> ": "
+                   <> describeTickRefusal refusal seconds
+             Right accepted → do
+               let rate = tickIntervalSeconds accepted
+               currentSecs ← nowSeconds
+               atomically $ modifyTVar' (lbsScripts backendState) $
+                   Map.adjust (\s → s { scriptTickRate = rate
+                                      , scriptNextTick = currentSecs + rate
+                                      }) (fromIntegral sid)
+               logInfo logger CatLua $ case accepted of
+                   TickEventOnly → "Tick interval for script " <> tshow sid
+                                   <> " set to 0 seconds (event-only: no timed update)."
+                   TickEvery _   → "Tick interval for script " <> tshow sid
+                                   <> " set to " <> tshow rate <> " seconds."
        _ → Lua.liftIO $ do
            logger ← readIORef (ccLoggerRef (toCoreCapability env))
            logInfo logger CatLua
@@ -363,6 +392,23 @@ setTickIntervalFn env backendState = do
    return 0
 
 -- | @engine.loadScript(path, tickRate)@.
+--
+--   @tickRate@ obeys the shared tick-interval policy in
+--   "Engine.Scripting.Lua.TickPolicy" (#1695), identically to
+--   'setTickIntervalFn': @0@ means EVENT-ONLY (the module is loaded,
+--   initialised and reachable by broadcast, message and direct call, but
+--   its @update@ is never called on a timer and it takes no part in
+--   scheduling), a finite value of at least 'minTickInterval' ticks as
+--   it always has, and a negative, @NaN@, infinite or
+--   sub-'minTickInterval' value is REFUSED.
+--
+--   The interval is validated FIRST, before the dedup-by-path lookup and
+--   before any chunk runs: a refused rate returns @nil@, logs the
+--   refusal naming the value, executes neither the chunk nor @init@,
+--   allocates no script id, and — when the path happens to be loaded
+--   already — leaves that existing script's interval untouched. A valid
+--   duplicate still returns its existing id without changing its
+--   interval, exactly as before.
 --
 --   The chunk runs on the backend's own canonical 'Lua.State'
 --   ('lbsLuaState'), NOT on whatever state this handler happens to be
@@ -380,11 +426,22 @@ loadScriptFn env backendState = do
     let lst = lbsLuaState backendState
     path ← Lua.tostring 1
     tickRate ← Lua.tonumber 2
-    case (path, tickRate) of
-        (Just pathBS, Just rate) → do
+    scriptId ← case (path, tickRate) of
+        (Just pathBS, Just (Lua.Number rate)) → do
             logger ← Lua.liftIO $ readIORef (ccLoggerRef (toCoreCapability env))
-            scriptId ← Lua.liftIO $ do
-                let pathStr = TE.decodeUtf8Lenient pathBS
+            let pathStr = TE.decodeUtf8Lenient pathBS
+            -- Validate the interval BEFORE the dedup lookup and before
+            -- any chunk runs, so a refusal cannot half-load a module or
+            -- disturb an already-loaded one (#1695).
+            case classifyTickInterval rate of
+              Left refusal → Lua.liftIO $ do
+                logWarn logger CatLua $
+                    "loadScript refused for " <> pathStr <> ": "
+                    <> describeTickRefusal refusal rate
+                    <> " The script was not loaded."
+                return Nothing
+              Right accepted → Lua.liftIO $ do
+                let tickSeconds = tickIntervalSeconds accepted
 
                 -- Dedup by path: loading the same script twice would
                 -- create a second tickable instance (update/broadcast
@@ -419,8 +476,8 @@ loadScriptFn env backendState = do
                             let script = LuaScript
                                     { scriptId        = sid
                                     , scriptPath      = T.unpack pathStr
-                                    , scriptTickRate  = realToFrac rate
-                                    , scriptNextTick  = currentSecs + realToFrac rate
+                                    , scriptTickRate  = tickSeconds
+                                    , scriptNextTick  = currentSecs + tickSeconds
                                     , scriptModuleRef = modRef
                                     , scriptPaused    = False
                                     }
@@ -439,11 +496,10 @@ loadScriptFn env backendState = do
                             logWarn logger CatLua $ "Failed to load Lua script: " <> pathStr
                                            <> " - " <> errMsg
                             return Nothing
-            
-            case scriptId of
-                Just sid → Lua.pushinteger (Lua.Integer $ fromIntegral sid)
-                Nothing  → Lua.pushnil
-        _ → Lua.pushnil
+        _ → pure Nothing
+    case scriptId of
+        Just sid → Lua.pushinteger (Lua.Integer $ fromIntegral sid)
+        Nothing  → Lua.pushnil
     return 1
 
 -- | @engine.killScript(id)@. Unrefs on the backend's own canonical

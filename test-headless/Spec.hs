@@ -51,6 +51,7 @@ import qualified Test.Headless.Item.BuffYaml as ItemBuffYaml
 import qualified Test.Headless.Item.QualityTier as ItemQualityTier
 import qualified Test.Headless.Item.ContentsSignature as ItemContentsSig
 import qualified Test.Headless.Item.Condition as ItemCondition
+import qualified Test.Headless.Item.RepairFinite as ItemRepairFinite
 import qualified Test.Headless.Item.Materialize as ItemMaterialize
 import qualified Test.Headless.Item.BulkStorage as ItemBulkStorage
 import qualified Test.Headless.Item.FoodNutrition as ItemFoodNutrition
@@ -104,6 +105,7 @@ import qualified Test.Headless.Lua.PreviewGeneration as LuaPreviewGeneration
 import qualified Test.Headless.Lua.PauseGate as LuaPauseGate
 import qualified Test.Headless.World.PauseSpeed as PauseSpeed
 import qualified Test.Headless.Lua.ScriptState as LuaScriptState
+import qualified Test.Headless.Lua.TickInterval as LuaTickInterval
 import qualified Test.Headless.Graphics.SwapchainResize as GraphicsSwapchainResize
 import qualified Test.Headless.Input.LayerA as InputLayerA
 import qualified Test.Headless.Input.WheelPolicy as InputWheelPolicy
@@ -183,6 +185,7 @@ import qualified Test.Headless.River.InlandSources as RiverInlandSources
 import qualified Test.Headless.World.Render.FrontWallLift as FrontWallLift
 import qualified Test.Headless.World.Render.StructureRotation as StructureRotation
 import qualified Test.Headless.World.Render.GroundItemSeam as GroundItemSeam
+import qualified Test.Headless.World.Render.StructureSeam as StructureSeam
 import qualified Test.Headless.World.Render.PickSeam as PickSeam
 import qualified Test.Headless.World.Render.QuadSnapshot as QuadSnapshot
 import qualified Test.Headless.World.DesignationSeam as DesignationSeam
@@ -204,6 +207,7 @@ import qualified Test.Headless.Core.Queue as CoreQueue
 import qualified Test.Headless.Core.LogMonad as LogMonad
 import qualified Test.Headless.Core.LogParity as LogParity
 import qualified Test.Headless.Core.LoopStartup as LoopStartup
+import qualified Test.Headless.Core.ShutdownAtlasRelease as ShutdownAtlasRelease
 import qualified Test.Headless.Core.WorkerLifecycle as WorkerLifecycle
 import qualified Test.Headless.Core.DebugListener as DebugListener
 import qualified Test.Headless.App.Cli as AppCli
@@ -297,6 +301,7 @@ main = hspec $ do
         describe "Lua.PreviewGeneration" LuaPreviewGeneration.spec
         describe "Lua.PauseGate" LuaPauseGate.spec
         describe "Lua.ScriptState" LuaScriptState.spec
+        LuaTickInterval.spec
         -- Same technique as Input.Followup above: F4 (#730) Layer A's
         -- non-click producers live inside Engine.Input.Thread's real
         -- processInputs, driven directly against the live EngineEnv.
@@ -583,6 +588,7 @@ main = hspec $ do
     describe "Construct.Footprint" ConstructFootprint.spec
     describe "Construct.PendingRefusal" ConstructPendingRefusal.spec
     describe "Craft.Execute" CraftExecute.spec
+    ItemRepairFinite.spec
     describe "Craft.Bills" CraftBills.spec
     describe "Power.Types" PowerTypes.spec
     describe "Power.Network" PowerNetwork.spec
@@ -644,6 +650,8 @@ main = hspec $ do
     describe "World.Render.StructureRotation" StructureRotation.spec
     describe "World.Render.GroundItemSeam" GroundItemSeam.spec
     describe "World.Render.GroundItemSeam (engine)" GroundItemSeam.engineSpec
+    describe "World.Render.StructureSeam" StructureSeam.spec
+    describe "World.Render.StructureSeam (engine)" StructureSeam.engineSpec
     describe "World.Render.PickSeam" PickSeam.spec
 
     -- #1720: its own headless engine (no worker threads), so the live
@@ -679,6 +687,7 @@ main = hspec $ do
     LogMonad.spec
     LogParity.spec
     LoopStartup.spec
+    ShutdownAtlasRelease.spec
     WorkerLifecycle.spec
     DebugListener.spec
     AppCli.spec

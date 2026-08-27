@@ -4,6 +4,7 @@ module Engine.Scripting.Lua.API.Units.Equipment
   , unitModifyItemFillByIdFn
   , unitRepairItemFn
   , applyRepairToUnit
+  , repairDeltasFinite
   )
     where
 
@@ -121,10 +122,21 @@ unitModifyItemFillByIdFn env = do
 --   mapping, broken-item rules, and resource cost all live above it
 --   (#301). It just moves the numbers and reports what actually changed.
 --
+--   A NON-FINITE delta is refused outright (#1732): NaN, +Infinity and
+--   -Infinity are all rejected by the shared core below, so this verb
+--   returns its existing nil failure shape and mutates nothing. The
+--   check runs on the narrowed 'Float', not the incoming 'Lua.Number',
+--   because an ordinary finite double like @1.0e300@ becomes +Infinity
+--   in the engine's 32-bit field — the same post-narrowing rule
+--   'Engine.Asset.YamlItems.requirePositiveQuantity' applies to authored
+--   scalars. A MISSING or non-numeric argument still reads as 0, exactly
+--   as before; only a value that narrows to a non-finite 'Float' fails.
+--
 --   Returns a table { defName, condition, sharpness, conditionApplied,
 --   sharpnessApplied } with the post-clamp axis values and the actual
 --   applied deltas (0 when an axis is already at a bound), or nil if the
---   unit doesn't exist or holds no instance with that id.
+--   unit doesn't exist, holds no instance with that id, or either delta
+--   is non-finite.
 unitRepairItemFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitRepairItemFn env = do
     idArg    ← Lua.tointeger 1
@@ -213,14 +225,38 @@ repairInEquip iid condD sharpD eq =
             in Just (HM.insert slot it' eq, it', r)
         [] → Nothing
 
+-- | Both wear deltas must be finite before the repair core will touch
+--   an item (#1732). Shared by the primitive's own guard below and by
+--   'Engine.Scripting.Lua.API.Repair'\'s derived-delta check, so the two
+--   entry points cannot disagree about what \"finite\" means.
+repairDeltasFinite ∷ Float → Float → Bool
+repairDeltasFinite condD sharpD = finite condD ∧ finite sharpD
+  where finite x = not (isNaN x ∨ isInfinite x)
+
 -- | The pure core of unit.repairItem (#300) and the repair.repairAt
 --   policy layer (#301): search inventory, then equipment, then worn
 --   accessories for `iid` and apply the deltas there, refreshing
 --   condition-scaled accessory buffs same as above. Nothing if the unit
---   holds no instance with that id.
+--   holds no instance with that id, OR if either delta is non-finite.
+--
+--   The finiteness guard lives HERE, at the one boundary both entry
+--   points share, so no caller can reach the clamp with a NaN or an
+--   infinity (#1732). 'applyRepair'\'s @max 0 (min 100 x)@ does not
+--   define a policy for either: @max 0 NaN@ collapses to @0.0@ only as
+--   an accident of derived @Ord Float@\'s @<=@-based @max@\/@min@, and
+--   @max 0 Infinity@ bounds nothing at all — so NaN would silently
+--   destroy an axis and report the destruction as a repair, while
+--   @math.huge@ would be a free full restore. Refusing the whole call
+--   is what makes a MIXED call (one finite axis, one not) reject as a
+--   unit instead of half-applying. Same rule as
+--   'Unit.Pathing.Config.finiteOr' and #1603, differing only in the
+--   remedy: a config knob has a historical default to fall back to, a
+--   caller-supplied delta has none, so this refuses instead.
 applyRepairToUnit ∷ Word64 → Float → Float → ItemManager → UnitInstance
                   → Maybe (UnitInstance, (Text, Float, Float, Float, Float))
-applyRepairToUnit iid condD sharpD itemMgr inst =
+applyRepairToUnit iid condD sharpD itemMgr inst
+  | not (repairDeltasFinite condD sharpD) = Nothing
+  | otherwise =
     case repairInList iid condD sharpD (uiInventory inst) of
         Just (inv', _, r) → Just (inst { uiInventory = inv' }, r)
         Nothing →

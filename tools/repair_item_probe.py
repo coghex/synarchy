@@ -23,6 +23,11 @@ This verifies, headless and without a GPU:
   4. IDENTITY/MISS — repair targets the exact instance by id (a second
                      same-def item is untouched); a bad id or bad uid returns
                      nil and mutates nothing.
+  5. NON-FINITE    — NaN, +/-math.huge, and a finite Lua double that only
+                     becomes infinite once narrowed to the engine's 32-bit
+                     Float are all REFUSED on either axis and in both mixed
+                     orientations (#1732), each returning nil and leaving both
+                     axes exactly where they were on an independent re-read.
 
 Exit 0 = all checks passed.
 
@@ -91,13 +96,34 @@ def inventory(port: int, uid: int) -> list[dict]:
     return data if isinstance(data, list) else []
 
 
-def repair(port: int, uid: int, iid, cond_d, sharp_d=None) -> dict | None:
-    """Call unit.repairItem and parse its result table, or None on nil."""
+def repair_raw(port: int, uid: int, iid, cond_d, sharp_d=None) -> str:
+    """The console's raw reply to one unit.repairItem call.
+
+    The deltas are interpolated as Lua SOURCE, not as Python floats, so a
+    caller can pass an expression like `0/0` or `math.huge` — the exact
+    thing a Lua arithmetic slip would produce at a real call site.
+    """
     args = f"{uid}, {iid}, {cond_d}"
     if sharp_d is not None:
         args += f", {sharp_d}"
-    raw = send(port, f"return unit.repairItem({args})").strip()
-    if not raw or raw == "nil" or raw.strip('"') == "nil":
+    return send(port, f"return unit.repairItem({args})").strip()
+
+
+def is_nil(raw: str) -> bool:
+    """True when the console reply is the verb's nil failure shape.
+
+    The debug console serializes a returned Lua nil as JSON `null`; the
+    bare `nil` and empty spellings are accepted too so this stays a
+    faithful "not a result table" test rather than a pin on one
+    serializer.
+    """
+    return raw.strip().strip('"') in ("", "nil", "null")
+
+
+def repair(port: int, uid: int, iid, cond_d, sharp_d=None) -> dict | None:
+    """Call unit.repairItem and parse its result table, or None on nil."""
+    raw = repair_raw(port, uid, iid, cond_d, sharp_d)
+    if is_nil(raw):
         return None
     try:
         data = json.loads(raw)
@@ -203,6 +229,57 @@ def main() -> int:
         check("getInventory re-read confirms restored condition (~55)",
               after is not None and approx(after["condition"], 55),
               f"condition={after and after['condition']}")
+
+        print("\n== NON-FINITE deltas are refused (#1732) ==")
+        # The target sits at 55/60 here: nonzero and mid-range on BOTH
+        # axes, so a call that partly applied would be visible in either
+        # direction. Every case below must return nil and leave both
+        # axes exactly there, re-read through getInventory rather than
+        # trusted from repairItem's own reply. The CLAMP block that
+        # follows still expects 55/60, so a leak here also fails there.
+        def target_axes() -> tuple[float, float] | None:
+            it = next((i for i in picks(inventory(args.port, uid))
+                       if i["instanceId"] == iid), None)
+            return None if it is None else (it["condition"], it["sharpness"])
+
+        base_axes = target_axes()
+        check("non-finite baseline is 55/60",
+              base_axes is not None and approx(base_axes[0], 55)
+              and approx(base_axes[1], 60), f"{base_axes}")
+
+        nonfinite = [
+            ("NaN", "0/0"),
+            ("+Infinity", "math.huge"),
+            ("-Infinity", "-math.huge"),
+            # Finite in LUA (a double) but infinite once narrowed to the
+            # engine's 32-bit Float, so the guard has to run at the
+            # engine's representation boundary rather than on the
+            # incoming Lua number.
+            ("narrowed +Infinity (1e300)", "1e300"),
+            ("narrowed -Infinity (-1e300)", "-1e300"),
+        ]
+        # The mixed rows pair the bad axis with a NONZERO finite sibling
+        # in BOTH orientations: a -20 that stayed put is a real
+        # observation, where a 0 sibling would pass on any implementation.
+        for label, expr in nonfinite:
+            for what, cond_d, sharp_d in (
+                    ("condition", expr, "0"),
+                    ("sharpness", "0", expr),
+                    ("condition + finite -20 sharpness", expr, "-20"),
+                    ("sharpness + finite -20 condition", "-20", expr)):
+                raw = repair_raw(args.port, uid, iid, cond_d, sharp_d)
+                check(f"{label} {what} returns nil", is_nil(raw), f"{raw!r}")
+                now = target_axes()
+                check(f"{label} {what} left both axes at 55/60",
+                      now is not None and approx(now[0], 55)
+                      and approx(now[1], 60), f"re-read {now}")
+
+        # Control: the very next finite call still works, so the guard
+        # rejects non-finite deltas rather than wedging the verb.
+        ok = repair(args.port, uid, iid, 0, 0)
+        check("a finite delta still succeeds after the refusals",
+              ok is not None and approx(ok["condition"], 55)
+              and approx(ok["sharpness"], 60), f"{ok}")
 
         print("\n== CLAMP at 0 and 100 ==")
         hi = repair(args.port, uid, iid, 1000, 1000)
