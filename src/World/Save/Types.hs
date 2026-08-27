@@ -60,7 +60,8 @@ import qualified Data.List as L
 import qualified Data.Text as T
 import Structure.Palette (TexPalette)
 import Location.Instance
-    ( LocationInstance(..), instancesToList, resolveLegacyLocationInstances )
+    ( LocationGeometryError, LocationInstance(..), instancesToList
+    , resolveLegacyLocationInstances )
 import Location.Types (LocationRegistry)
 import World.Generate.Types (WorldGenParams(..))
 import World.Page.Types (WorldPageId(..), WorldIdentity(..))
@@ -1240,20 +1241,30 @@ missingLocationDefReferences locationDefs pages = concatMap pageRefs pages
 --   (#1230 removed the margin that used to sit between them). Called by the load path AFTER content validation and BEFORE
 --   staging/publication ('Engine.Scripting.Lua.API.Save.loadSaveFn'):
 --   the pure component decoders have no registry to resolve against.
-resolveLegacyLocations ∷ LocationRegistry → WorldPageSave → WorldPageSave
+--
+--   #1796: reconstruction goes through the checked geometry
+--   construction, so a legacy payload whose saved overlay names a chunk
+--   coordinate outside the representable envelope yields a
+--   'LocationGeometryError' here and the caller rejects the load —
+--   again, before anything is staged or published.
+resolveLegacyLocations
+    ∷ LocationRegistry → WorldPageSave
+    → Either LocationGeometryError WorldPageSave
 resolveLegacyLocations registry w =
-    w { wpsGenParams = resolveLegacyLocationParams registry (wpsGenParams w) }
+    (\params → w { wpsGenParams = params })
+        ⊚ resolveLegacyLocationParams registry (wpsGenParams w)
 
 -- | 'resolveLegacyLocations' at the gen-params level — the actual work,
 --   exposed separately so any other stage holding a page's params (and
 --   the migration gates) applies the SAME resolution rather than
 --   re-deriving it.
 resolveLegacyLocationParams
-    ∷ LocationRegistry → WorldGenParams → WorldGenParams
-resolveLegacyLocationParams registry params = params
-    { wgpLocationInstances =
-        resolveLegacyLocationInstances registry
-            (wgpLocationOverlay params) (wgpLocationInstances params) }
+    ∷ LocationRegistry → WorldGenParams
+    → Either LocationGeometryError WorldGenParams
+resolveLegacyLocationParams registry params =
+    (\instances → params { wgpLocationInstances = instances })
+        ⊚ resolveLegacyLocationInstances registry
+              (wgpLocationOverlay params) (wgpLocationInstances params)
 
 -- Infection-definition validation (issue #763) -----------------------
 
