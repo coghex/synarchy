@@ -68,13 +68,13 @@ detachFromOwners handle owners mgr0 = foldr step mgr0 owners
 --   NEW owner, so a stale descendant page is directly observable.
 --
 --   Termination is by VISITED SET, deliberately not by a depth budget.
---   'maxHierarchyDepth' bounds the chain 'addChildElement' will BUILD
---   in one step, but relocating a subtree under a deeper parent can
---   legitimately produce a tree taller than that, so any fixed budget
---   here would eventually stop short and leave the deepest elements
---   reporting a stale page — the exact defect this function exists to
---   prevent. The visited set is exact for every legal shape and still
---   terminates on a malformed one.
+--   The root of a moved subtree can itself sit at any depth, so a
+--   budget would have to encode where the walk STARTS as well as how
+--   tall the subtree is; getting that wrong stops short and leaves the
+--   deepest elements reporting a stale page — the exact defect this
+--   function exists to prevent. The visited set needs neither number,
+--   is exact for every legal shape, and still terminates on a
+--   malformed one.
 setSubtreePage ∷ PageHandle → ElementHandle → UIPageManager → UIPageManager
 setSubtreePage pageHandle root mgr0 = go Set.empty [root] mgr0
   where
@@ -96,19 +96,6 @@ setSubtreePage pageHandle root mgr0 = go Set.empty [root] mgr0
 ownerChanges ∷ [StructuralOwner] → StructuralOwner → Bool
 ownerChanges owners destination =
     not (null owners) ∧ owners ≢ [destination]
-
--- | The longest parent chain 'addChildElement' will BUILD in one step,
---   in edges: the destination parent may already have this many minus
---   one ancestors, so the attached child lands at most this deep. It
---   is a pathological-depth backstop for the upward walks
---   ('UI.Manager.Query.getElementAbsolutePosition',
---   'UI.ControlActivation.ancestorChain'), NOT an invariant on total
---   tree height — relocating an existing subtree under a deeper parent
---   can exceed it, which is why the two subtree walks in this module
---   terminate on a visited set instead of on a budget derived from
---   here.
-maxHierarchyDepth ∷ Int
-maxHierarchyDepth = 64
 
 -- * Hierarchy
 
@@ -179,8 +166,9 @@ addElementToPage pageHandle elemHandle x y mgr
 --   Rejection stays atomic in both of its forms. An unknown child or
 --   parent handle, and a refused cycle, each return the manager
 --   untouched: in particular a refused attachment never detaches the
---   child from the owner it already had. The cycle guard covers BOTH
---   edge directions this call adds — see 'wouldCycle' below.
+--   child from the owner it already had. The guard covers BOTH edge
+--   directions this call adds, and the resulting DEPTH of the whole
+--   moved subtree — see 'refuseAttach' below.
 addChildElement ∷ ElementHandle → ElementHandle → Float → Float
                 → UIPageManager → UIPageManager
 addChildElement parentHandle childHandle x y mgr
@@ -188,15 +176,17 @@ addChildElement parentHandle childHandle x y mgr
     | otherwise = case Map.lookup parentHandle (upmElements mgr) of
         Nothing → mgr
         Just parent
-            -- Refuse to create a cycle (child already an ancestor of
-            -- the parent, or child ≡ parent). A cycle would hang every
-            -- tree walk (absolute position, accumulated z-index,
-            -- rendering, hit testing, deletion) on the render and
-            -- input threads forever. This is the only site that adds
-            -- either kind of edge, so the check here keeps the forest
-            -- acyclic globally. Evaluated against the PRE-detach
-            -- hierarchy, which is the one the move has to be legal in.
-            | wouldCycle → mgr
+            -- Refuse a cycle (child already an ancestor of the
+            -- parent, or child ≡ parent) or an over-deep result. A
+            -- cycle would hang every tree walk (absolute position,
+            -- accumulated z-index, rendering, hit testing, deletion)
+            -- on the render and input threads forever; excess depth
+            -- truncates those same walks instead. This is the only
+            -- site that adds either kind of edge, so the checks here
+            -- keep the forest acyclic and bounded globally. Evaluated
+            -- against the PRE-detach hierarchy, which is the one the
+            -- move has to be legal in.
+            | refuseAttach → mgr
             | otherwise →
                 let owners = structuralOwners childHandle mgr
                     mgr1   = detachFromOwners childHandle owners mgr
@@ -224,7 +214,8 @@ addChildElement parentHandle childHandle x y mgr
     -- 'structuralOwners'), so a child whose own structural descendant
     -- had its 'ueParent' cleared by 'removeFromPage' would pass the
     -- up-walk while closing a real 'ueChildren' loop.
-    wouldCycle = walkUp maxHierarchyDepth parentHandle ∨ parentInChildSubtree
+    refuseAttach = walkUp maxHierarchyDepth parentHandle
+                 ∨ parentInChildSubtree ∨ tooDeep
 
     -- Is the child already an ancestor of the parent? Keeps the
     -- pre-existing depth budget: it IS the policy 'maxHierarchyDepth'
@@ -237,9 +228,9 @@ addChildElement parentHandle childHandle x y mgr
             Nothing → False
 
     -- Is the parent already inside the child's structural subtree?
-    -- Visited-set termination, NOT a depth budget: a subtree that is
-    -- merely at (or past) 'maxHierarchyDepth' is a legal thing to
-    -- relocate, and a budget would refuse it as if it were a cycle.
+    -- Visited-set termination, NOT a depth budget: a subtree standing
+    -- exactly at 'UI.Types.maxHierarchyDepth' is a legal shape, and a
+    -- budget sized to that would refuse it as if it were a cycle.
     parentInChildSubtree = descend Set.empty [childHandle]
       where
         descend _ [] = False
@@ -249,6 +240,44 @@ addChildElement parentHandle childHandle x y mgr
             | otherwise = case Map.lookup h (upmElements mgr) of
                 Nothing → descend (Set.insert h seen) rest
                 Just el → descend (Set.insert h seen) (ueChildren el ⧺ rest)
+
+    -- Would the move push some element past 'UI.Types.maxHierarchyDepth'
+    -- ancestors? Every upward walk in the UI is sized to exactly that
+    -- many edges, so a deeper chain does not merely look odd: it
+    -- truncates absolute position, accumulated z-index, effective
+    -- clip, effective visibility and — worst — the pending-activation
+    -- ancestor snapshot, each silently and each on the render or input
+    -- thread. The subject is the whole moved SUBTREE, not just the
+    -- child: attaching a leaf is bounded by the parent's own depth,
+    -- but relocating a tall subtree adds its full height.
+    tooDeep = parentDepth + 1 + childHeight > maxHierarchyDepth
+
+    -- Edges above the destination parent. 'walkUp' has already refused
+    -- anything deeper, so this is exact wherever it is reached; the
+    -- budget is only a backstop for a malformed chain.
+    parentDepth = countUp maxHierarchyDepth parentHandle
+      where
+        countUp budget h
+            | budget ≤ 0 = maxHierarchyDepth
+            | otherwise = case Map.lookup h (upmElements mgr) ⌦ ueParent of
+                Just p  → 1 + countUp (budget - 1) p
+                Nothing → 0
+
+    -- Edges below the child, over the same 'ueChildren' membership
+    -- graph 'parentInChildSubtree' walks and with the same visited-set
+    -- termination.
+    childHeight = descend Set.empty [(childHandle, 0 ∷ Int)] 0
+      where
+        descend _ [] best = best
+        descend seen ((h, d) : rest) best
+            | h `Set.member` seen = descend seen rest best
+            | otherwise =
+                let seen' = Set.insert h seen
+                    best' = max best d
+                in case Map.lookup h (upmElements mgr) of
+                    Nothing → descend seen' rest best'
+                    Just el → descend seen'
+                        ([ (c, d + 1) | c ← ueChildren el ] ⧺ rest) best'
 
 -- | #745: also bumps this element's OWN
 --   'UI.Types.ueRouteEpoch' — a pending pointer activation on this

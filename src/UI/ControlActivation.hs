@@ -115,12 +115,19 @@ activationOutcomeName (Cancel _)     = "rejected"
 -- | Walk from 'h' up through 'UI.Types.ueParent' pointers, collecting
 --   each ancestor's (including 'h' itself, first) handle and
 --   'UI.Types.ueRouteEpoch' — see 'resolveActivation'. Stops at the
---   root (no parent) or a dangling/deleted handle (an empty tail, same
---   as 'UI.Manager.Hierarchy.addChildElement's own cycle guard depth
---   cap — this manager's parent chains are always kept acyclic and
---   shallow, so the cap is only a defensive backstop here).
+--   root (no parent) or a dangling/deleted handle (an empty tail).
+--
+--   The budget is 'UI.Types.maxHierarchyDepth' EDGES, i.e. that many
+--   plus one handles, so a chain at the deepest depth
+--   'UI.Manager.Hierarchy.addChildElement' will build is captured
+--   whole. Sizing it one short would drop the page ROOT's epoch from
+--   the deepest element's snapshot, and #1694's
+--   relocation cancellation is stated for the relocated root or any of
+--   its descendants — a truncated chain would silently exempt the
+--   deepest one. Beyond that it is a defensive backstop only: parent
+--   chains are kept acyclic by the same attachment guard.
 ancestorChain ∷ ElementHandle → UIPageManager → [(ElementHandle, Int)]
-ancestorChain h0 mgr = go (64 ∷ Int) h0
+ancestorChain h0 mgr = go (maxHierarchyDepth + 1) h0
   where
     go depth h
         | depth ≤ 0 = []

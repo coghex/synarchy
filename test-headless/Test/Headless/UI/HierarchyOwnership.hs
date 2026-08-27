@@ -84,9 +84,11 @@ isCancel ∷ ActivationOutcome → Bool
 isCancel (Cancel _) = True
 isCancel _          = False
 
--- | 'UI.Manager.Hierarchy.maxHierarchyDepth', restated independently:
---   the deepest parent chain one 'addChildElement' call will build, in
---   EDGES. A chain of this many edges is legal; one more is refused.
+-- | 'UI.Types.maxHierarchyDepth', restated independently so an edit
+--   to the policy has to be made deliberately in both places: the
+--   deepest parent chain the UI tree supports, in EDGES. A chain of
+--   this many edges is legal; anything that would exceed it — a fresh
+--   child OR a relocated subtree — is refused.
 maxDepth ∷ Int
 maxDepth = 64
 
@@ -313,9 +315,21 @@ spec = do
             let m3 = deletePage p1 m2
             map (`alive` m3) chain `shouldBe` map (const True) chain
 
-        it "accepts relocating a maximum-depth subtree under an unrelated parent" $ do
+        it "refuses a relocation that would push the subtree past the limit" $ do
+            -- The moved SUBTREE's height counts, not just the child:
+            -- a maximum-depth chain re-rooted one level down would
+            -- exceed every ancestor walk's budget at once.
             let (p1, p2, m0) = twoPages
-                (root, _, chain, m1) = chainOn maxDepth p1 m0
+                (root, _, _, m1) = chainOn maxDepth p1 m0
+                (host, m2) = rootOn "host" p2 m1
+                m3 = addChildElement host root 0 0 m2
+            hierarchy m3 `shouldBe` hierarchy m2
+            kids host m3 `shouldBe` []
+            roots p1 m3 `shouldBe` [root]
+
+        it "accepts a relocation that lands exactly at the limit" $ do
+            let (p1, p2, m0) = twoPages
+                (root, _, chain, m1) = chainOn (maxDepth - 1) p1 m0
                 (host, m2) = rootOn "host" p2 m1
                 m3 = addChildElement host root 0 0 m2
             kids host m3 `shouldBe` [root]
@@ -396,6 +410,19 @@ spec = do
                 m4 = addElementToPage p2 r 0 0 m3
             resolveActivation (50, 50) m3 pending `shouldBe` Activate ch "cb"
             resolveActivation (50, 50) m4 pending `shouldSatisfy` isCancel
+
+        it "cancels a press on the DEEPEST descendant of a maximum-depth chain" $ do
+            -- The pressed element's ancestor snapshot has to reach the
+            -- page root even at the deepest supported depth, or
+            -- relocating that root would go unnoticed by exactly the
+            -- element furthest from it.
+            let (p1, p2, m0) = twoPages
+                (root, deepest, _, m1) = chainOn maxDepth p1 m0
+                m2 = setElementOnClick deepest "cb" (setElementClickable deepest True m1)
+                pending = beginActivation PointerLeftClick deepest m2
+                m3 = addElementToPage p2 root 0 0 m2
+            resolveActivation (50, 50) m2 pending `shouldBe` Activate deepest "cb"
+            resolveActivation (50, 50) m3 pending `shouldSatisfy` isCancel
 
         it "fresh focus-ring churn on the pressed element does NOT cancel" $ do
             let (p1, _, m0) = twoPages

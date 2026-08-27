@@ -28,6 +28,7 @@ module UI.Types
     -- * Manager
   , UIPageManager(..)
   , emptyUIPageManager
+  , maxHierarchyDepth
   ) where
 
 import UPrelude
@@ -492,6 +493,26 @@ data UIPageManager = UIPageManager
     --   return-inside gesture. Defaults to @0@; the exact numeric
     --   value carries no meaning beyond "changed since press".
   } deriving (Show)
+
+-- | #1694: the deepest parent chain this UI tree
+--   supports, in EDGES from a page root.
+--
+--   It is one number because six walks depend on it agreeing:
+--   'UI.Manager.Hierarchy.addChildElement' refuses any attachment
+--   whose result would exceed it (including RELOCATING an existing
+--   subtree under a deeper parent), and every upward walk is sized to
+--   cover exactly this many edges —
+--   'UI.Manager.Query.getElementAbsolutePosition',
+--   'isEffectivelyVisible', 'elementPaintKey',
+--   'UI.Clipping.absolutePosition'/'effectiveClip',
+--   'UI.InteractiveBounds.absolutePosition', and
+--   'UI.ControlActivation.ancestorChain'. Those caps exist to keep the
+--   render and input threads from freezing on a malformed tree; a walk
+--   sized SHORTER than the depth attachment permits would instead
+--   silently truncate a legal one, which for 'ancestorChain' means a
+--   pending activation that fails to see its own root change.
+maxHierarchyDepth ∷ Int
+maxHierarchyDepth = 64
 
 emptyUIPageManager ∷ UIPageManager
 emptyUIPageManager = UIPageManager
