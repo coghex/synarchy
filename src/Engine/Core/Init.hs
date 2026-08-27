@@ -190,6 +190,7 @@ initializeEngineWith logBackend = do
   -- applied at creation at all (#907).
   windowStateRef ← newIORef defaultWindowState
   framebufferSizeRef ← newIORef (vcWidth videoConfig, vcHeight videoConfig)
+  framebufferMinimizeGenRef ← newIORef 0
   brightnessRef ← newIORef (vcBrightness videoConfig)
   pixelSnapRef ← newIORef (vcPixelSnap videoConfig)
   textureFilterRef ← newIORef (vcTextureFilter videoConfig)
@@ -277,6 +278,7 @@ initializeEngineWith logBackend = do
         , windowPosRef       = windowPosRef
         , windowStateRef     = windowStateRef
         , framebufferSizeRef = framebufferSizeRef
+        , framebufferMinimizeGenRef = framebufferMinimizeGenRef
         , fpsRef             = fpsRef
         , brightnessRef      = brightnessRef
         , pixelSnapRef       = pixelSnapRef

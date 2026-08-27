@@ -20,7 +20,8 @@ import Engine.Graphics.Types
 import Engine.Graphics.Window.Types (Window(..))
 import qualified Engine.Graphics.Window.GLFW as GLFW
 import Engine.Graphics.Vulkan.ResizeRequest
-  (noteMinimizedFramebuffer, recordSwapchainFramebufferSize)
+  ( currentMinimizeGeneration, noteMinimizedFramebuffer
+  , recordSwapchainFramebufferState )
 import Engine.Graphics.Vulkan.Swapchain
 import Engine.Graphics.Vulkan.Framebuffer
 import Engine.Graphics.Vulkan.Pipeline
@@ -38,37 +39,44 @@ import Vulkan.Extensions.VK_KHR_surface (SurfaceKHR)
 --   framebuffer size the window has right now.
 --
 --   The entry point for the callers that are not reacting to a size
---   change and so have no size of their own to name: VSync, MSAA, and
+--   change and so have no state of their own to name: VSync, MSAA, and
 --   the three exceptional-status paths in "Engine.Loop.Frame".
+--
+--   The minimize generation is read BEFORE the size, so the pair this
+--   records can lag reality but never lead it — a minimize landing
+--   between the two reads is seen again on the next tick rather than
+--   swallowed (see "Engine.Graphics.Vulkan.ResizeRequest").
 recreateSwapchain ∷ Window → EngineM σ ()
 recreateSwapchain window = do
     let Window glfwWin = window
+    gen ← currentMinimizeGeneration
     fbSize ← GLFW.getFramebufferSize glfwWin
-    recreateSwapchainFor window fbSize
+    recreateSwapchainFor window (FramebufferState gen fbSize)
 
 -- | Recreate the swapchain and all dependent resources for an explicit
---   raw framebuffer size.
+--   framebuffer state.
 --
---   That size is used for the zero check, handed to
---   'createVulkanSwapchain', and stored by
---   'recordSwapchainFramebufferSize' — one value, three uses, no
+--   That state's size is used for the zero check, handed to
+--   'createVulkanSwapchain', and — with its paired generation — stored
+--   by 'recordSwapchainFramebufferState': one value, three uses, no
 --   second sample (#1693). This is what makes the resize request
 --   terminate: 'Engine.Loop.applyPendingFramebufferResize' passes the
---   very size it saw outstanding, so serving a request always records
---   exactly the size that was requested. Sampling GLFW again in here
---   instead would let the swapchain be built from one size and the
---   request judged against another.
+--   very state it saw outstanding, so serving a request always records
+--   exactly the request that was served. Re-sampling in here instead
+--   would let the swapchain be built from one state and the request
+--   judged against another.
 --
 --   It is equally what keeps a resize arriving DURING a recreation
---   alive: the record names the size this rebuild used, never a later
---   read, so a newer framebuffer size is still a disagreement when
+--   alive: the record names the state this rebuild used, never a later
+--   read, so a newer framebuffer state is still a disagreement when
 --   this returns and gets its own recreation.
 --
 --   Every recreation path in the engine ends up here, so any of them
---   satisfies a pending request for the same framebuffer size and one
+--   satisfies a pending request for the same framebuffer state and one
 --   window change can never cost two recreations.
-recreateSwapchainFor ∷ Window → (Int, Int) → EngineM σ ()
-recreateSwapchainFor window fbSize@(width, height) = do
+recreateSwapchainFor ∷ Window → FramebufferState → EngineM σ ()
+recreateSwapchainFor window fbState = do
+    let fbSize@(width, height) = fbsSize fbState
     state ← gets graphicsState
     
     device ← getDeviceOrFail state
@@ -76,25 +84,28 @@ recreateSwapchainFor window fbSize@(width, height) = do
     surface ← getSurfaceOrFail state
     queues ← getQueuesOrFail state
     
-    -- The window is checked as well as the requested size, and the
+    -- The window is checked as well as the requested state, and the
     -- check comes BEFORE deviceWaitIdle.
     --
     -- Before, because a minimized window has nothing to rebuild and
     -- stalling the whole device to find that out is pure cost.
     --
-    -- As well, because @fbSize@ can be a moment out of date: the caller
-    -- reacting to a resize passes the size the input thread last
-    -- recorded, and the window may have been minimized since. Building
-    -- a swapchain for a stale nonzero size against a now-zero surface
-    -- is a Vulkan error, and the surface is the authority on whether
-    -- there is anything to build at all. On success the RECORD is still
-    -- @fbSize@ and never this sample — see the note above.
+    -- As well, because @fbState@ can be a moment out of date: the
+    -- caller reacting to a resize passes the state the input thread
+    -- last published, and the window may have been minimized since.
+    -- Building a swapchain for a stale nonzero size against a now-zero
+    -- surface is a Vulkan error, and the surface is the authority on
+    -- whether there is anything to build at all. On success the RECORD
+    -- is still @fbState@ and never this sample — see the note above.
     let Window glfwWin = window
     (liveWidth, liveHeight) ← GLFW.getFramebufferSize glfwWin
     if width ≡ 0 ∨ height ≡ 0 ∨ liveWidth ≡ 0 ∨ liveHeight ≡ 0
         then do
             logDebugM CatSwapchain "Window minimized, skipping swapchain recreation"
-            noteMinimizedFramebuffer
+            -- Record a ZERO size whatever @fbState@ said, so a restore
+            -- is a disagreement even when the requested size was the
+            -- stale nonzero one the live-window check just rejected.
+            noteMinimizedFramebuffer fbState { fbsSize = (0, 0) }
         else do
             liftIO $ deviceWaitIdle device
             -- Old resources must be destroyed before new ones are created
@@ -114,7 +125,7 @@ recreateSwapchainFor window fbSize@(width, height) = do
             modifyGraphicsState $ \gs → gs {
                 currentFrame = 0
             }
-            recordSwapchainFramebufferSize fbSize
+            recordSwapchainFramebufferState fbState
 
             env ← ask
             liftIO $ writeIORef (rcUiCameraRef (toRenderCapability env)) $ 

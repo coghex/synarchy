@@ -17,7 +17,7 @@ module Engine.Input.Thread.Dispatch
 import UPrelude
 import Control.Concurrent.STM (atomically)
 import Control.Concurrent.STM.TVar (modifyTVar')
-import Data.IORef (readIORef, writeIORef)
+import Data.IORef (atomicModifyIORef', readIORef, writeIORef)
 import Engine.Core.Log (logDebug, LogCategory(..))
 -- #892 (E4): this module's own four input fields (`inputQueue`,
 -- `inputStateRef`, `inputBarrierRef`, `luaQueue`) come from the input
@@ -133,6 +133,19 @@ dispatchInput env inpSt event = case event of
             Q.writeQueue (ivLuaQueue (toInputViewCapability env)) (LuaWindowResize w h)
           FramebufferResize w h → do
             logDebug logger CatInput $ "Framebuffer resize event: width=" <> tshow w <> ", height=" <> tshow h
+            -- The minimize EDGE, bumped before the size is published
+            -- (#1693). The render thread rebuilds the swapchain when
+            -- the framebuffer it was built for no longer matches, but
+            -- a size alone cannot express a minimize: this drain may
+            -- carry the 0x0 AND the restore to the pre-minimize size,
+            -- which would leave 'rvFramebufferSizeRef' exactly where
+            -- it started. This counter is the only trace that survives
+            -- that coalescing, and this thread is the only one that
+            -- sees both events.
+            when (w ≡ 0 ∨ h ≡ 0) $
+              atomicModifyIORef'
+                (rvFramebufferMinimizeGenRef (toRenderViewCapability env))
+                (\gen → (gen + 1, ()))
             writeIORef (rvFramebufferSizeRef (toRenderViewCapability env)) (w, h)
             Q.writeQueue (ivLuaQueue (toInputViewCapability env)) (LuaFramebufferResize w h)
           WindowFocus focused → do

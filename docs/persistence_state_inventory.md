@@ -44,6 +44,7 @@ the affected fields as unclassified.
 | `windowPosRef` | global | Exclude | — | OS/window-owned | none yet |
 | `windowStateRef` | global | Exclude | — | OS/window-owned | none yet |
 | `framebufferSizeRef` | global | Exclude | — | OS/window-owned | none yet |
+| `framebufferMinimizeGenRef` | global | Exclude | — | OS/window-owned (a live minimize counter, meaningless across processes) | none yet |
 | `fpsRef` | global | Exclude | — | display setting (`video.local.yaml`) | `tools/config_state_probe.py` |
 | `brightnessRef` | global | Exclude | — | display setting (`video.local.yaml`) | `tools/config_state_probe.py` |
 | `pixelSnapRef` | global | Exclude | — | display setting (`video.local.yaml`) | `tools/config_state_probe.py` |

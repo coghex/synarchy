@@ -102,7 +102,7 @@ spec = do
       (windowSizeRef env == windowPosRef env) `shouldBe` False
       (framebufferSizeRef env == windowPosRef env) `shouldBe` False
 
-  describe "toRenderViewCapability (the 14 worker-visible fields)" $ do
+  describe "toRenderViewCapability (the 15 worker-visible fields)" $ do
     let aliases name project field =
           it (name <> " aliases the live EngineEnv container") $ \env →
             sameContainer (project (toRenderViewCapability env)) (field env)
@@ -111,6 +111,10 @@ spec = do
     aliases "rvWindowSizeRef"          rvWindowSizeRef          windowSizeRef
     aliases "rvWindowPosRef"           rvWindowPosRef           windowPosRef
     aliases "rvFramebufferSizeRef"     rvFramebufferSizeRef     framebufferSizeRef
+    -- Added to the view by #1693: the InputThread writer that publishes
+    -- the minimize edge reaches it through this same projection.
+    aliases "rvFramebufferMinimizeGenRef" rvFramebufferMinimizeGenRef
+                                          framebufferMinimizeGenRef
     aliases "rvPixelSnapRef"           rvPixelSnapRef           pixelSnapRef
     -- Added to the view by #893 (E5a): engine.getFPS is the
     -- LuaThread reader SS5 names, and API.Core is now narrowed.

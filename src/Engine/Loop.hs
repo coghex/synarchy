@@ -17,6 +17,7 @@ import Engine.Graphics.Vulkan.Recreate (recreateSwapchainFor)
 import Engine.Graphics.Vulkan.ResizeRequest
   (FramebufferResizeAction(..), noteMinimizedFramebuffer
   , pendingFramebufferResize)
+import Engine.Graphics.Types (FramebufferState(..))
 import Engine.Loop.Timing (updateFrameTiming)
 import Engine.Loop.Frame (drawFrame)
 import Engine.Loop.Camera (updateCameraPanning, updateCameraMouseDrag
@@ -102,18 +103,19 @@ applyPendingFramebufferResize ∷ EngineM σ ()
 applyPendingFramebufferResize = do
     action ← pendingFramebufferResize
     case action of
-        ResizeUpToDate     → pure ()
-        ResizeMinimized    → noteMinimizedFramebuffer
-        ResizeRecreate w h → do
+        ResizeUpToDate        → pure ()
+        ResizeMinimized  fbSt → noteMinimizedFramebuffer fbSt
+        ResizeRecreate   fbSt → do
+            let (w, h) = fbsSize fbSt
             logDebugM CatSwapchain $
                 "Framebuffer resized to " <> tshow w <> "x" <> tshow h
                 <> ", recreating swapchain"
-            -- The size that was REQUESTED, not a fresh GLFW sample:
-            -- serving a request must record exactly the size it was
+            -- The state that was REQUESTED, not a fresh sample:
+            -- serving a request must record exactly the state it was
             -- judged against, or a request could outlive its own
             -- recreation and repeat forever.
             window ← requireWindow
-            recreateSwapchainFor window (w, h)
+            recreateSwapchainFor window fbSt
 
 -- | The per-tick camera integration both rendering modes run, on an
 --   unlocked tick only (see @Engine.Loop.Mode.runGatedByCaptureLock@).

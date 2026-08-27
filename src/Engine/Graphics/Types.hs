@@ -8,6 +8,23 @@ import Vulkan.Core10
 import Vulkan.Extensions.VK_KHR_surface
 import Vulkan.Extensions.VK_KHR_swapchain
 
+-- | The framebuffer state a swapchain is (or would be) built for
+--   (#1693): the raw framebuffer size, paired with the minimize
+--   generation ('Engine.Core.State.framebufferMinimizeGenRef') current
+--   when that size was sampled.
+--
+--   Both halves matter. The size is what the swapchain is dimensioned
+--   from; the generation is what distinguishes "unchanged" from
+--   "minimized and restored to the same dimensions", which a size
+--   cannot express on its own. The whole mechanism lives in
+--   "Engine.Graphics.Vulkan.ResizeRequest"; the type lives here
+--   because 'Engine.Core.State.GraphicsState' stores it and this
+--   module is the local-dependency-free one it already imports.
+data FramebufferState = FramebufferState
+  { fbsMinimizeGen ∷ !Word64
+  , fbsSize        ∷ !(Int, Int)
+  } deriving (Show, Eq)
+
 -- | Device Queue Information
 data DevQueues = DevQueues
   { dqGraphicsQueue  ∷ Queue

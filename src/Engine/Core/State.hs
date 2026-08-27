@@ -89,6 +89,23 @@ data EngineEnv = EngineEnv
     --   drive a publish first; see 'tools/video_window_check.py'.
   , windowStateRef      ∷ IORef WindowState
   , framebufferSizeRef  ∷ IORef (Int, Int)
+  , framebufferMinimizeGenRef ∷ IORef Word64
+    -- ^ How many times the framebuffer has been observed at zero area
+    --   (#1693). Monotonic, never reset, wrap irrelevant at one bump
+    --   per minimize.
+    --
+    --   'framebufferSizeRef' alone cannot express a minimize, because
+    --   it holds a LEVEL and a minimize is an EDGE: a @0x0@ event and a
+    --   restore to the pre-minimize size can both be drained before the
+    --   render thread next looks, leaving the ref exactly where it
+    --   started with no trace that the swapchain was ever invalidated.
+    --   Only the input thread sees every event, so only the input
+    --   thread can record that edge — which is why this is shared
+    --   state and not 'Engine.Core.State.GraphicsState'.
+    --
+    --   Read together with 'framebufferSizeRef' by
+    --   "Engine.Graphics.Vulkan.ResizeRequest"; the two reads are not
+    --   atomic, and deliberately need not be — see that module.
   , fpsRef              ∷ IORef Double
   , brightnessRef       ∷ IORef Int
   , pixelSnapRef        ∷ IORef Bool
@@ -523,22 +540,25 @@ data GraphicsState = GraphicsState
     --   per-image semaphore (image count ≠ frames in flight).
     --   (Re)created with the swapchain; destroyed via vulkanCleanup.
   , swapchainInfo      ∷ Maybe SwapchainInfo
-  , swapchainFbSize    ∷ Maybe (Int, Int)
-    -- ^ The RAW framebuffer size the live swapchain state corresponds
-    --   to (#1693) — seeded from the size passed to the initial
-    --   'Engine.Graphics.Vulkan.Swapchain.createVulkanSwapchain' and
-    --   rewritten by every successful 'recreateSwapchain', from the
-    --   exact sample that recreation built with. @Just (0,0)@ records a
-    --   minimized window, and 'Nothing' means no swapchain has been
-    --   built (headless\/offscreen, or before Vulkan init).
+  , swapchainFbState   ∷ Maybe FramebufferState
+    -- ^ The framebuffer state the live swapchain corresponds to
+    --   (#1693) — seeded from the state the initial
+    --   'Engine.Graphics.Vulkan.Swapchain.createVulkanSwapchain' was
+    --   given, and rewritten by every successful
+    --   @recreateSwapchainFor@ from the exact state that recreation
+    --   decided on. 'Nothing' means no swapchain has been built
+    --   (headless\/offscreen, or before Vulkan init), and a zero-area
+    --   size records a minimized window.
     --
     --   Deliberately the RAW framebuffer size and never
     --   @siSwapExtent@: 'Engine.Graphics.Vulkan.Swapchain.chooseSwapExtent'
     --   honours the surface's @currentExtent@ and otherwise clamps into
     --   @min\/maxImageExtent@, so the extent can legitimately differ
     --   from the size that was requested. Comparing against the extent
-    --   would re-request a recreation forever
-    --   ("Engine.Graphics.Vulkan.ResizeRequest").
+    --   would re-request a recreation forever. The paired minimize
+    --   generation is what makes a restore to the PRE-MINIMIZE
+    --   dimensions distinguishable from no change at all — see
+    --   "Engine.Graphics.Vulkan.ResizeRequest".
   , msaaColorImage     ∷ Maybe (Vk.Image, Vk.DeviceMemory, Vk.ImageView)
   , uniformBuffers     ∷ Maybe (V.Vector (Vk.Buffer, Vk.DeviceMemory))
   -- textureSystem + defaultFaceMapSlot moved to EngineEnv
