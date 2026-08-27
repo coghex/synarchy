@@ -468,7 +468,17 @@ data UIPageManager = UIPageManager
     --   Page-level visibility is a genuinely route-affecting event
     --   REGARDLESS of which page it is: a page appearing changes
     --   'UI.InputOwnership' hit-test/modal-boundary order everywhere,
-    --   not just for controls it owns. 'UI.ControlActivation.
+    --   not just for controls it owns.
+    --
+    --   #1748: 'UI.Manager.Page.setPageInputExclusive' bumps it too,
+    --   for the same reason and under the same
+    --   only-on-a-real-change discipline, plus one extra guard —
+    --   the page must be CURRENTLY VISIBLE. Inserting or removing a
+    --   modal boundary on a visible page moves
+    --   'UI.InputOwnership.pagesInScope' exactly as a page appearing
+    --   or disappearing does; on a HIDDEN page it moves nothing,
+    --   because 'UI.InputOwnership.inputBoundaryPage' only ever looks
+    --   at 'getVisiblePages'. 'UI.ControlActivation.
     --   PendingActivation' captures this at press time alongside the
     --   pressed element's ancestor-chain epoch snapshot (see
     --   'UIElement.ueRouteEpoch'); 'resolveActivation' cancels if

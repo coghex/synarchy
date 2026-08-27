@@ -36,7 +36,13 @@
 --       modal/menu page appearing then disappearing over the point,
 --       both cancel even when reverted by release. Deliberately
 --       GLOBAL: page-level visibility is route-affecting everywhere,
---       not just for controls the page owns.
+--       not just for controls the page owns. #1748 adds the one other
+--       page-scope routing change there is:
+--       'UI.Manager.Page.setPageInputExclusive' bumps it when a REAL
+--       exclusivity change lands on a page that is currently VISIBLE,
+--       so a modal boundary inserted and removed during one press
+--       cancels too — on a hidden page it bumps nothing, since
+--       'UI.InputOwnership.inputBoundaryPage' never sees it.
 --     * 'paChain'/'UI.Types.ueRouteEpoch' — a snapshot of the pressed
 --       element's own epoch AND every ANCESTOR's epoch (walking
 --       'UI.Types.ueParent' pointers), taken at press time and
@@ -171,7 +177,16 @@ beginActivation kind h mgr =
 resolveActivation ∷ (Float, Float) → UIPageManager → PendingActivation → ActivationOutcome
 resolveActivation releasePos mgr (PendingActivation h kind pageEpoch chain)
     | upmPageEpoch mgr ≢ pageEpoch =
-        Cancel "a page appeared or disappeared during the press"
+        -- One reason covers every 'UI.Types.upmPageEpoch' bump,
+        -- because the epoch is a bare counter: by release time it is
+        -- no longer knowable WHICH page-scope change moved it, only
+        -- that one did. #1748 added the exclusivity source, so the
+        -- reason names it rather than reporting a visibility
+        -- transition that may not have happened — this string is F4's
+        -- @aoReason@ for the rejected outcome
+        -- ('Engine.Input.Thread.Mouse.Deferred'), i.e. player-visible
+        -- diagnostics, not an internal label.
+        Cancel "a page appeared, disappeared, or changed input exclusivity during the press"
     | ancestorChain h mgr ≢ chain =
         Cancel "control was invalidated during the press"
     | otherwise =
