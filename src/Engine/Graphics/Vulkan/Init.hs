@@ -43,7 +43,7 @@ import Engine.Graphics.Vulkan.Pipeline.Bindless (createBindlessPipeline
 import Engine.Graphics.Vulkan.MSAA (createMSAAColorImage)
 import Engine.Graphics.Vulkan.Offscreen (createOffscreenTarget)
 import Engine.Graphics.Vulkan.ResizeRequest
-  (currentMinimizeGeneration, recordSwapchainFramebufferState)
+  (recordSwapchainFramebufferState, sampleFramebufferState)
 import Engine.Graphics.Vulkan.Swapchain
 import Engine.Graphics.Vulkan.Sync (createRenderFinishedSemaphores)
 import Engine.Graphics.Vulkan.Texture.Limits (maxBindlessTextures)
@@ -62,8 +62,6 @@ import Vulkan.CStruct.Extends (SomeStruct(..))
 -- | Initialize all Vulkan resources for the windowed (swapchain) path.
 initializeVulkan ∷ Window → EngineM σ CommandPool
 initializeVulkan window = do
-  let Window glfwWin = window
-
   logDebugM CatVulkan "Creating Vulkan instance"
   -- Registered for destruction at engine unwind: the messenger and
   -- instance are destroyed after the device and surface (LIFO).
@@ -101,17 +99,20 @@ initializeVulkan window = do
   logDebugSM CatVulkan "Creating swapchain"
     [("vsync", if vsyncEnabled then "enabled" else "disabled")]
   logDebugM CatGraphics "Creating swapchain"
-  fbMinimizeGen ← currentMinimizeGeneration
-  fbSize ← GLFW.getFramebufferSize glfwWin
-  swapInfo0 ← createVulkanSwapchain physicalDevice device queues surface
-               vsyncEnabled fbSize
-  -- Seed the resize record (#1693) from the RAW size this swapchain was
-  -- built from, so the windowed loop's very first comparison is against
-  -- a real value. The generation is read BEFORE that size, for the
-  -- reason "Engine.Graphics.Vulkan.ResizeRequest" gives. Windowed only:
+  -- ONE source for every windowed swapchain build (#1693): the same
+  -- @framebufferSizeRef@ reading the loop judges a pending resize
+  -- against, which 'Engine.Graphics.Window.GLFW.createWindow' has
+  -- already seeded from this very window, and which every other
+  -- renderer consumer computes its projections from. Sampling GLFW
+  -- separately here would seed the record with a value the loop might
+  -- immediately disagree with. Windowed only:
   -- 'initializeVulkanOffscreen' has no window to resize and must never
   -- gain a recreation path.
-  recordSwapchainFramebufferState (FramebufferState fbMinimizeGen fbSize)
+  fbState ← sampleFramebufferState
+  let fbSize = fbsSize fbState
+  swapInfo0 ← createVulkanSwapchain physicalDevice device queues surface
+               vsyncEnabled fbSize
+  recordSwapchainFramebufferState fbState
   imageViews ← createSwapchainImageViews device swapInfo0
   let swapInfo = swapInfo0 { siSwapImgViews = imageViews }
 

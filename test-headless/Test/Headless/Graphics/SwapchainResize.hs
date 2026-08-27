@@ -94,6 +94,14 @@ requested env =
 liveState ∷ EngineEnv → IO FramebufferState
 liveState env = runE env (sampleFramebufferState ∷ EngineM' FramebufferState)
 
+-- | The state a DIRECT recreation (VSync, MSAA, or one of the three
+--   exceptional-status paths) builds for. 'recreateSwapchain' has no
+--   requested state of its own and calls exactly this, which is the
+--   whole point: the direct and pending paths read ONE source, so a
+--   direct rebuild cannot disagree with a pending request.
+directRecreationState ∷ EngineEnv → IO FramebufferState
+directRecreationState = liveState
+
 -- | Model a SUCCESSFUL recreation — the exact call
 --   'Engine.Graphics.Vulkan.Recreate.recreateSwapchainFor' makes with
 --   the state it built for.
@@ -205,6 +213,38 @@ spec = do
         let restored = settled { fbsMinimizeGen = fbsMinimizeGen settled + 3 }
         requested env `shouldReturn` ResizeRecreate restored
         recreated env restored
+        requested env `shouldReturn` ResizeUpToDate
+
+    -- A VSync/MSAA change landing while a resize callback has fired
+    -- but the ~60 Hz input worker has not drained it yet. Sampling
+    -- GLFW directly in 'recreateSwapchain' would build and record the
+    -- undrained size B, leave the same tick's pending check looking at
+    -- the ref's stale A and rebuild for A, then rebuild a third time
+    -- once the drain moved the ref to B. Reading one source costs two
+    -- rebuilds — the pre-existing one the setting asked for, and the
+    -- one the resize asked for.
+    it "a direct VSync/MSAA recreation racing an undrained resize costs one further rebuild, not two" $ \env → do
+        settled ← settledAt env (1280, 720)
+
+        -- The callback has fired; the input thread has not run yet.
+        queueResizes env [(1600, 900)]
+
+        -- The settings message is processed on this tick. It builds
+        -- for the state the pending check can also see, never a size
+        -- only GLFW knows about yet.
+        direct ← directRecreationState env
+        direct `shouldBe` settled
+        recreated env direct
+        -- No redundant rebuild: the direct recreation satisfied the
+        -- state the pending check compares against.
+        requested env `shouldReturn` ResizeUpToDate
+
+        -- The input thread drains, and the resize gets its own single
+        -- recreation.
+        drainInput env
+        let expected = settled { fbsSize = (1600, 900) }
+        requested env `shouldReturn` ResizeRecreate expected
+        recreated env expected
         requested env `shouldReturn` ResizeUpToDate
 
     it "keys on the RAW framebuffer size, so a surface that clamps the swapchain extent cannot loop" $ \env → do

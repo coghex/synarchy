@@ -20,8 +20,8 @@ import Engine.Graphics.Types
 import Engine.Graphics.Window.Types (Window(..))
 import qualified Engine.Graphics.Window.GLFW as GLFW
 import Engine.Graphics.Vulkan.ResizeRequest
-  ( currentMinimizeGeneration, noteMinimizedFramebuffer
-  , recordSwapchainFramebufferState )
+  ( noteMinimizedFramebuffer, recordSwapchainFramebufferState
+  , sampleFramebufferState )
 import Engine.Graphics.Vulkan.Swapchain
 import Engine.Graphics.Vulkan.Framebuffer
 import Engine.Graphics.Vulkan.Pipeline
@@ -42,16 +42,20 @@ import Vulkan.Extensions.VK_KHR_surface (SurfaceKHR)
 --   change and so have no state of their own to name: VSync, MSAA, and
 --   the three exceptional-status paths in "Engine.Loop.Frame".
 --
---   The minimize generation is read BEFORE the size, so the pair this
---   records can lag reality but never lead it — a minimize landing
---   between the two reads is seen again on the next tick rather than
---   swallowed (see "Engine.Graphics.Vulkan.ResizeRequest").
+--   The state comes from 'sampleFramebufferState' — the SAME reading
+--   'Engine.Loop.applyPendingFramebufferResize' judges a pending
+--   request against — and deliberately not from a fresh
+--   @GLFW.getFramebufferSize@. Sampling GLFW here instead would make
+--   the direct and pending paths disagree whenever a resize callback
+--   has fired but the input thread has not drained it yet: this
+--   recreation would build for and record the newer size B, the same
+--   tick's pending check would then see the ref still at A and rebuild
+--   AGAIN for A, and the drain would rebuild a third time back to B.
+--   One source, one coherent answer, so a direct recreation always
+--   satisfies a pending request for the state it recorded.
 recreateSwapchain ∷ Window → EngineM σ ()
-recreateSwapchain window = do
-    let Window glfwWin = window
-    gen ← currentMinimizeGeneration
-    fbSize ← GLFW.getFramebufferSize glfwWin
-    recreateSwapchainFor window (FramebufferState gen fbSize)
+recreateSwapchain window =
+    recreateSwapchainFor window =≪ sampleFramebufferState
 
 -- | Recreate the swapchain and all dependent resources for an explicit
 --   framebuffer state.

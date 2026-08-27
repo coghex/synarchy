@@ -99,7 +99,6 @@ module Engine.Graphics.Vulkan.ResizeRequest
   , decideFramebufferResize
   , sampleFramebufferState
   , pendingFramebufferResize
-  , currentMinimizeGeneration
   , noteMinimizedFramebuffer
   , recordSwapchainFramebufferState
   ) where
@@ -159,6 +158,15 @@ decideFramebufferResize (Just live) current
 --   conservative: the recorded generation can then lag reality but
 --   never lead it, and a lagging generation costs an extra comparison
 --   next tick rather than swallowing a minimize.
+--
+--   This is the ONE reading every windowed swapchain build is keyed
+--   on — the initial build in 'Engine.Graphics.Vulkan.Init', every
+--   'Engine.Graphics.Vulkan.Recreate.recreateSwapchain' caller
+--   (VSync, MSAA, the exceptional-status paths), and the loop's
+--   pending check alike. Reading @GLFW.getFramebufferSize@ instead in
+--   any one of them would let the direct and pending paths disagree
+--   while a resize callback sits undrained, turning one window change
+--   into three rebuilds.
 sampleFramebufferState ∷ EngineM σ FramebufferState
 sampleFramebufferState = do
     env ← ask
@@ -166,16 +174,6 @@ sampleFramebufferState = do
     gen ← liftIO $ readIORef (rvFramebufferMinimizeGenRef rv)
     size ← liftIO $ readIORef (rvFramebufferSizeRef rv)
     pure (FramebufferState gen size)
-
--- | Just the minimize generation, for a caller that already has a
---   framebuffer size of its own to pair it with
---   ('Engine.Graphics.Vulkan.Recreate.recreateSwapchain'). Read it
---   BEFORE that size, for the reason 'sampleFramebufferState' gives.
-currentMinimizeGeneration ∷ EngineM σ Word64
-currentMinimizeGeneration = do
-    env ← ask
-    liftIO $ readIORef
-      (rvFramebufferMinimizeGenRef (toRenderViewCapability env))
 
 -- | 'decideFramebufferResize' against the live engine state. Read-only:
 --   asking does not consume the request, so a caller that fails to act
