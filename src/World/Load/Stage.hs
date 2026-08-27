@@ -43,7 +43,7 @@ import Structure.Types (emptyChunkStructures)
 import World.Generate (generateChunk, cameraChunkCoord)
 import World.Generate.Arena (generateArenaChunks)
 import World.Grid (worldToGrid)
-import World.Generate.Constants (chunkLoadRadius)
+import World.Chunk.Queue (chunkQueueCanon, initialChunkQueue)
 import System.Random (mkStdGen)
 import World.Plate (elevationAtGlobal)
 import World.Preview (buildPreviewFromPixels, PreviewImage(..))
@@ -371,7 +371,7 @@ stagePage logger registry palette catalog buildingDefs unitDefs
             else pure (Nothing, Nothing)
 
           when isActive $ writeIORef phaseRef (LoadPhase1 3 totalSteps)
-          let centerCoord@(ChunkCoord camCX camCY) =
+          let centerCoord =
                   cameraChunkCoord (wpsCameraFacing wps)
                                    (wpsCameraX wps)
                                    (wpsCameraY wps)
@@ -407,14 +407,15 @@ stagePage logger registry palette catalog buildingDefs unitDefs
                         , lcTerrainSurfaceMap centerChunk) ]
               stamps = locationStampsFor params [centerChunk]
 
-          let remainingCoords =
-                  [ ChunkCoord cx cy
-                  | cx ← [camCX - chunkLoadRadius .. camCX + chunkLoadRadius]
-                  , cy ← [camCY - chunkLoadRadius .. camCY + chunkLoadRadius]
-                  , not (cx ≡ camCX ∧ cy ≡ camCY)
-                  ]
-              totalInitialChunks =
-                  (2 * chunkLoadRadius + 1) * (2 * chunkLoadRadius + 1)
+          -- The load-radius box around the SAVED camera chunk, counted
+          -- as PHYSICAL chunks — a session saved near the seam restores
+          -- a box that names one chunk twice, and this total is what
+          -- LoadPhase2 progresses towards (#1723). Shared with fresh
+          -- world init so the two seed the queue identically; the
+          -- synchronously generated centre is excluded from the queue
+          -- and counted once in the total.
+          let (remainingCoords, totalInitialChunks) =
+                  initialChunkQueue (chunkQueueCanon params) centerCoord
           when isActive $ writeIORef phaseRef (LoadPhase1 4 totalSteps)
           writeIORef (wsInitQueueRef worldState) remainingCoords
           writeIORef phaseRef (LoadPhase2 (length remainingCoords) totalInitialChunks)

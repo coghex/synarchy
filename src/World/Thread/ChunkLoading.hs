@@ -26,6 +26,7 @@ import World.Types
 import World.Generate (generateLoadedChunk, cameraChunkCoord)
 import World.Generate.Arena (generateFlatChunk)
 import World.Generate.Constants (chunkLoadRadius)
+import World.Chunk.Queue (chunkQueueCanon)
 import World.Grid (zoomFadeEnd)
 import World.Slope (recomputeNeighborSlopes
                     , slopeRecomputeAffected
@@ -266,9 +267,15 @@ drainInitQueues env logger = do
                             -- aliases of the same canonical chunk; generating it
                             -- twice would emit a duplicate SimChunkLoaded and
                             -- reset its sim state. Batches are maxChunksPerTick
-                            -- long, so the quadratic scan is free.
-                            batchCanon = nub (map (wrapChunkCoordU
-                                                     (wgpWorldSize params)) batch)
+                            -- long, so the quadratic scan is free. The producers
+                            -- now dedup under the SAME identity before appending
+                            -- (#1723), which is what keeps this queue's length an
+                            -- honest count of remaining physical chunks; this
+                            -- defence stays regardless, and has to canonicalise
+                            -- exactly the way they do — 'chunkQueueCanon', not a
+                            -- bare 'wrapChunkCoordU', so an arena's sentinel
+                            -- wgpWorldSize is identity on both sides.
+                            batchCanon = nub (map (chunkQueueCanon params) batch)
                         -- Skip coords already in wsTilesRef. The camera-visible
                         -- loader (updateChunkLoading) loads chunks straight into
                         -- wsTilesRef without going through this queue, so a coord
@@ -387,8 +394,22 @@ drainInitQueues env logger = do
                                 "Initial chunk loading complete for: "
                                 <> unWorldPageId pageId
 
-                        -- Update phase 2 progress
-                        let totalChunks = (2 * chunkLoadRadius + 1) * (2 * chunkLoadRadius + 1)
+                        -- Update phase 2 progress. The total is the one
+                        -- the page's producer recorded — the unique
+                        -- PHYSICAL chunks of its initial box, counting
+                        -- the synchronously loaded centre once (#1723).
+                        -- Recomputing the raw (2r+1)^2 formula here
+                        -- would put an alias-inflated total back on a
+                        -- seam-crossing page and leave the bar unable to
+                        -- reach it. Only a queue refilled AFTER the
+                        -- initial load (a later loadChunksInRegion, so
+                        -- the phase is no longer LoadPhase2) has no
+                        -- recorded total to keep.
+                        phaseBefore ← readIORef (wsLoadPhaseRef worldState)
+                        let totalChunks = case phaseBefore of
+                                LoadPhase2 _ recorded → recorded
+                                _ → (2 * chunkLoadRadius + 1)
+                                      * (2 * chunkLoadRadius + 1)
                         writeIORef (wsLoadPhaseRef worldState)
                             (if null rest
                              then LoadDone
