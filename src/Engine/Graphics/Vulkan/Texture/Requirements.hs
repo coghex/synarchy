@@ -404,11 +404,49 @@ bindlessCapacityApplies feats = \case
     uniformBuffers = descriptorBindingUniformBufferUpdateAfterBind feats
 
 -- | What a device's reported limits advertise for one capacity. Takes both
---   structs because the two families are genuinely different limits, not
---   two spellings of one: 'PhysicalDeviceLimits' carries the ordinary
---   statements' limits and 'PhysicalDeviceVulkan12Properties' the
---   update-after-bind ones. They are never combined — see 'BindlessCapacity'
---   for which descriptors each counts.
+--   structs because an ordinary limit and its update-after-bind counterpart
+--   are different limits over DIFFERENT DESCRIPTOR POPULATIONS, not two
+--   spellings of one quantity.
+--
+--   === Why an ordinary limit is never consulted for a bindless capacity
+--
+--   The tempting shortcut is to treat the pair as interchangeable ceilings
+--   and take whichever is larger. Vulkan defines no such combination, and
+--   the limits' own text is what rules it out. On
+--   @maxPerStageDescriptorSamplers@:
+--
+--   > Only descriptors in descriptor set layouts created WITHOUT the
+--   > VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT bit set
+--   > count against this limit.
+--
+--   and on @maxPerStageDescriptorUpdateAfterBindSamplers@:
+--
+--   > counts descriptors from descriptor sets created WITH OR WITHOUT the
+--   > VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT bit set.
+--
+--   'createBindlessDescriptorSetLayout' creates the texture layout WITH that
+--   bit. So the 16,384-descriptor array is not merely governed by the
+--   smaller of two ceilings — it is INVISIBLE to the ordinary one. No value
+--   of @maxPerStageDescriptorSamplers@, however large, can make the layout
+--   valid, because that statement counts zero of our samplers. The ordinary
+--   statements still bind on the descriptors they DO count, which is why
+--   'CapBoundDescriptorSets' and the two @Cap…Base…@ entries exist; they
+--   just never see the array.
+--
+--   The two are separate @must@ statements over disjoint populations and
+--   both hold at once (03016 and 03022 for samplers; 03017 and 03023 for
+--   uniform buffers; and so on). Taking a maximum would not relax a
+--   redundant check, it would ADMIT LAYOUTS THE SPEC FORBIDS. A device
+--   reporting @maxPerStageDescriptorUpdateAfterBindSamplers = 8192@ and
+--   @maxPerStageDescriptorSamplers = 65536@ fails VUID 03022 outright
+--   (16384 > 8192), yet @max@ would read 65536 and accept it — reinstating
+--   #1689's defect one level up, with the invalid interface now caught by
+--   @vkCreatePipelineLayout@ instead of by the descriptive diagnostic
+--   requirement 2 asks for.
+--
+--   The headless spec \"the ordinary limits never see the bindless texture
+--   array\" pins exactly that: every update-after-bind shortfall is still
+--   refused with every ordinary limit raised to 'maxBound'.
 readBindlessCapacity ∷ PhysicalDeviceLimits
                      → PhysicalDeviceVulkan12Properties
                      → BindlessCapacity → Word32

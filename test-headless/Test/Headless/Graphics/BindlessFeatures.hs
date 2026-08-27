@@ -423,12 +423,15 @@ spec = describe "Vulkan bindless feature requirements" $ do
         (cap, deviceBindlessFailureMessage support) `shouldSatisfy`
           (T.isInfixOf (expectedShortfallClause cap short) . snd)
 
-    it "keeps the ordinary and update-after-bind limits strictly separate" $
-      -- Vulkan defines no combined limit: an ordinary statement counts only
-      -- the sets created WITHOUT the update-after-bind bit, an
-      -- update-after-bind statement counts all of them. Generous headroom on
-      -- one side therefore never rescues a shortfall on the other, in EITHER
-      -- direction — which is what would break if the two were ever maxed.
+    it "the ordinary limits never see the bindless texture array" $
+      -- Not a stylistic preference for two checks over one: the bindless
+      -- texture layout is created WITH
+      -- UPDATE_AFTER_BIND_POOL_BIT, and an ordinary limit counts "only
+      -- descriptors in descriptor set layouts created WITHOUT" that bit. Its
+      -- statement therefore counts ZERO of the array's descriptors, so no
+      -- value of it — not even maxBound, as below — can make the layout
+      -- valid. Reading the larger of the pair would accept a device whose
+      -- pipeline layout Vulkan rejects.
       forM_ capacityFields $ \(cap, setField) → do
         let support = supportReportingBase generousFeatures
                         (zero ∷ PhysicalDeviceLimits)
