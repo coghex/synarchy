@@ -614,6 +614,79 @@ unrepresentableHandleSpec = do
                 queued ← Q.flushQueue (luaQueue (rfEnv fx))
                 map assetEvent queued `shouldBe` [Just (True, toInt handle)]
 
+        -- The in-batch DEDUP lane, which is where a refused request
+        -- could inherit another handle's diagnostic.
+        it "settles two FRESH same-path requests separately, each on the \
+           \handle it names" $ \_env →
+            withRegistrationFixture $ \fx → do
+                -- Deliberately an UNCACHED path, so without the
+                -- entry-point judgement the first request becomes the
+                -- canonical fresh upload and the second is folded into
+                -- it as an in-batch alias -- the alias then taking the
+                -- canonical's reason, which names the canonical's id.
+                -- Judged per request, neither ever reaches that lane.
+                let freshPath = "assets/textures/ui/not_in_the_cache.png"
+                    canonical = TextureHandle handleSlotTableSize
+                    alias     = TextureHandle (handleSlotTableSize + 1)
+                    action ∷ EngineM' ()
+                    action = handleLoadTextureBatch
+                        [ (canonical, freshPath), (alias, freshPath) ]
+                _ ← either (fail ∘ show) pure
+                        =≪ runEngineM action (rfEnv fx) pure
+                entries ← drainLog fx
+
+                -- Two refusals, two diagnostics, each naming its own id
+                -- and neither naming the other's.
+                let warnings = map leMessage
+                        (filter ((≡ LevelWarn) ∘ leLevel) entries)
+                    canonicalId = namesHandle canonical
+                    aliasId     = namesHandle alias
+                length warnings `shouldBe` 2
+                case warnings of
+                    [first, second] → do
+                        first `shouldSatisfy` canonicalId
+                        first `shouldNotSatisfy` aliasId
+                        second `shouldSatisfy` aliasId
+                        second `shouldNotSatisfy` canonicalId
+                        -- Never mistaken for the batch giving up: with
+                        -- no request left, no upload was attempted.
+                        map (T.isInfixOf "Vulkan not ready") warnings
+                            `shouldBe` [False, False]
+                    _ → expectationFailure "expected exactly two warnings"
+
+                -- Both settle terminally, on their own reason.
+                expectTerminalFailure fx canonical (T.pack freshPath)
+                expectTerminalFailure fx alias (T.pack freshPath)
+                pool ← readIORef (assetPoolRef (rfEnv fx))
+                states ← readIORef (apTextureHandles pool)
+                case (Map.lookup canonical states, Map.lookup alias states) of
+                    (Just (AssetFailed a), Just (AssetFailed b)) → do
+                        a `shouldSatisfy` canonicalId
+                        a `shouldNotSatisfy` aliasId
+                        b `shouldSatisfy` aliasId
+                        b `shouldNotSatisfy` canonicalId
+                    other → expectationFailure $
+                        "expected both requests to settle, got " ⧺ show other
+
+                -- Each Lua notification carries its own handle AND its
+                -- own reason: this is the pairing that had drifted.
+                queued ← Q.flushQueue (luaQueue (rfEnv fx))
+                let failures = [ (h, reason)
+                               | LuaAssetFailed _ h _ reason ← queued ]
+                map fst failures
+                    `shouldBe` [toInt canonical, toInt alias]
+                forM_ failures $ \(h, reason) →
+                    reason `shouldSatisfy` namesHandle (TextureHandle h)
+                map assetEvent queued `shouldBe`
+                    [ Just (False, toInt canonical), Just (False, toInt alias) ]
+
+                -- Nothing else was written for either of them.
+                sizes ← readIORef (textureSizeRef (rfEnv fx))
+                HM.member canonical sizes `shouldBe` False
+                HM.member alias sizes `shouldBe` False
+                Map.member (T.pack freshPath) (apAssetPaths pool)
+                    `shouldBe` False
+
         -- The public entry point Lua reaches, end to end.
         it "the batch entry point settles an unrepresentable request and \
            \still serves the rest of the batch" $ \_env →
@@ -693,6 +766,17 @@ expectUnrepresentableRefusal fx (outcome, system) entries source = do
     -- Never either OTHER reason a registration yields no handle.
     message `shouldNotSatisfy` T.isInfixOf "Failed to allocate bindless slot"
     message `shouldNotSatisfy` T.isInfixOf "sentinel"
+
+-- | Does this diagnostic name THIS handle as the one it is about?
+--
+--   Deliberately positional rather than a bare substring: the message
+--   also states the CAP, and the first refused id IS the cap, so
+--   @T.isInfixOf "65536"@ matches every unrepresentable handle's
+--   message including @65537@'s. The @handle N for@ slot is the one
+--   place the id under discussion appears.
+namesHandle ∷ TextureHandle → Text → Bool
+namesHandle handle =
+    T.isInfixOf ("handle " <> T.pack (show (toInt handle)) <> " for")
 
 -- | #1690's terminal outcome: the handle settles on 'AssetFailed' and
 --   the failure reaches Lua on its OWN message, never 'LuaAssetLoaded'.

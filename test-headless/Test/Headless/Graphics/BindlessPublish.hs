@@ -33,7 +33,7 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
 import Test.Hspec
 import Engine.Asset.Base (AssetId(..))
-import Engine.Asset.Handle (TextureHandle(..), missingTextureHandle)
+import Engine.Asset.Handle (TextureHandle(..), missingTextureHandle, toInt)
 import Engine.Graphics.Vulkan.Texture.Handle
   (BindlessTextureHandle, toBindlessHandle
   , TextureRegistrationFailure(..), registrationFailureMessage)
@@ -425,11 +425,16 @@ spec = do
              alias "wall.png"))
 
     it "never lets one of them speak about the other's handle" $ do
-      let canonicalId = T.pack (show handleSlotTableSize)
-          aliasId     = T.pack (show (handleSlotTableSize + 1))
-      reasonOf canonical `shouldSatisfy` T.isInfixOf canonicalId
-      reasonOf canonical `shouldNotSatisfy` T.isInfixOf aliasId
-      reasonOf alias `shouldSatisfy` T.isInfixOf aliasId
+      -- Positional, not a bare substring: the message also states the
+      -- CAP, and the first refused id IS the cap, so "65536" appears in
+      -- 65537's message too. The "handle N for" slot is the one place
+      -- the id under discussion appears.
+      let namesHandle h = T.isInfixOf
+            ("handle " <> T.pack (show (toInt h)) <> " for")
+      reasonOf canonical `shouldSatisfy` namesHandle canonical
+      reasonOf canonical `shouldNotSatisfy` namesHandle alias
+      reasonOf alias `shouldSatisfy` namesHandle alias
+      reasonOf alias `shouldNotSatisfy` namesHandle canonical
       reasonOf canonical `shouldNotBe` reasonOf alias
 
     it "is what stops the alias inheriting the canonical's reason, \

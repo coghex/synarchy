@@ -26,9 +26,8 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector.Storable as Vec
-import Control.Monad (foldM)
+import Control.Monad (filterM, foldM)
 import Data.IORef (readIORef, atomicModifyIORef', writeIORef)
-import Data.List (partition)
 import Foreign.ForeignPtr (ForeignPtr)
 import Foreign.Marshal.Utils (copyBytes)
 import System.FilePath (takeBaseName)
@@ -59,8 +58,6 @@ import Engine.Graphics.Vulkan.Sampler.Cache (acquireSampler, releaseSampler)
 import Engine.Graphics.Vulkan.Sampler.Types (SamplerKind(..))
 import Engine.Graphics.Vulkan.Texture.Bindless (registerPinnedTexture
                                                , registerTexture
-                                               , registrationFailureMessage
-                                               , TextureRegistrationFailure(..)
                                                , writeHandleSlotEntry)
 import Engine.Graphics.Vulkan.Texture.Handle (BindlessTextureHandle(..))
 import Engine.Graphics.Vulkan.Texture.Publish
@@ -309,30 +306,42 @@ handleLoadTextureBatchWith
 handleLoadTextureBatchWith _ [] = pure ()
 handleLoadTextureBatchWith samplerPolicy incoming = do
     env ← ask
-    -- #1696: a request naming the missing-texture sentinel is dropped
-    -- HERE, ahead of cache classification, the GPU upload and every
-    -- asset-pool write. Leaving it to 'registerTexture' to refuse would
-    -- come too late: the fold below records an 'AssetReady' state, an
-    -- atlas refcount, a texture-size entry and a 'LuaAssetLoaded' event
-    -- for any prep whose registration produced no handle, so the
-    -- sentinel would end up owning real asset bookkeeping anyway. That
-    -- treatment stays as it is for a genuinely exhausted slot allocator
-    -- (#1690), which is a capacity outcome, not an invalid handle.
-    --
-    -- 'generateTextureHandle' should already make this unreachable; the
-    -- filter is what keeps it unreachable if a producer ever synthesises
-    -- a literal zero handle.
-    -- Dropped OUTRIGHT, not settled with #1690's terminal failure: a
-    -- zero handle is a producer defect in a handle no request ever
-    -- legitimately names, not a request whose upload refused, and
-    -- nothing is waiting on it to report anything.
-    let (reserved, requests) = partition (isMissingTextureHandle ∘ fst) incoming
-    forM_ reserved $ \(handle, path) →
-        logWarnM CatTexture $
-            registrationFailureMessage TextureHandleReserved handle (T.pack path)
-
     poolRef ← asks (rcAssetPoolRef . toRenderCapability)
     pool ← liftIO $ readIORef poolRef
+
+    -- Every request is judged on ITS OWN handle HERE, ahead of cache
+    -- classification, the GPU upload and every asset-pool write
+    -- ('classifyRequestHandle'; #1696, #1699). Leaving it to
+    -- 'registerTexture' to refuse would come too late: the fold below
+    -- records an 'AssetReady' state, an atlas refcount, a texture-size
+    -- entry and a 'LuaAssetLoaded' event for any prep whose
+    -- registration produced no handle, so a refused handle would end up
+    -- owning real asset bookkeeping anyway.
+    --
+    -- Per REQUEST, never per batch, because one batch can carry two
+    -- refused handles for one path — the second folded into the first
+    -- as an in-batch alias — and each must be told about the id it
+    -- itself names. Doing it here also means neither a fresh upload nor
+    -- an alias can be built from a handle already known to be unusable,
+    -- so nothing downstream inherits a verdict about someone else's
+    -- handle.
+    --
+    -- The two refusals part company on what they leave behind. A
+    -- sentinel is dropped outright — a producer defect in a handle no
+    -- request ever legitimately names, which 'generateTextureHandle'
+    -- should already make unreachable, and nothing is waiting on it to
+    -- report anything. An unrepresentable id settles on #1690's
+    -- terminal failure — a real request, permanently unusable, that
+    -- something IS waiting on.
+    --
+    -- Neither treatment extends to a genuinely exhausted slot allocator
+    -- (#1690), which is a capacity outcome a later request can still
+    -- win, decided at registration where it belongs.
+    requests ← filterM
+        (\(handle, path) →
+            not ⊚ refuseUnregistrableRequest env pool handle (T.pack path))
+        incoming
+
     mCacheBindless ← liftIO $ readIORef (rcTextureSystemRef (toRenderCapability env))
 
     -- The path cache is not policy-aware on its own: 'apAssetPaths' is
@@ -555,17 +564,13 @@ handleLoadTextureBatchWith samplerPolicy incoming = do
                         [ (handle, result)
                         | (handle, _, _, _, result) ← batchResults
                         ]
-                forM_ (reverse aliasReqs) $ \(handle, path, canonical) → do
-                    -- An alias names an id of its OWN, so it is judged
-                    -- on that id FIRST (#1699) — one batch can carry two
-                    -- unrepresentable requests for one path, and the
-                    -- second must not be told about the first's handle.
-                    -- Only the canonical's UPLOAD outcome is inherited.
-                    refused ← refuseUnregistrableRequest env pool handle
-                                  (T.pack path)
-                    unless refused $
-                      case aliasPublish (T.pack path)
-                               (Map.lookup canonical canonicalResults) of
+                -- Only the canonical's UPLOAD outcome is inherited. An
+                -- alias's own handle was judged at the entry point
+                -- above, so nothing refused ever became an alias and no
+                -- request is told about an id it does not name (#1699).
+                forM_ (reverse aliasReqs) $ \(handle, path, canonical) →
+                    case aliasPublish (T.pack path)
+                             (Map.lookup canonical canonicalResults) of
                         Right (assetId, atlas) →
                             duplicateCachedTextureHandle env handle assetId atlas
                         -- An alias is a request like any other: when the
