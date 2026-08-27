@@ -182,6 +182,29 @@ end
 
 local builders = {}
 
+-- Placement-result aggregation (#1719). `structures.lua`'s floor / post /
+-- wall / ceiling wrappers each return `structure.place`'s own bool, which
+-- can be false for four independent reasons (unparseable slot, omitted
+-- texture/facemap paths, no resolvable page, target chunk not loaded).
+-- A builder threads every one of those through this counter so
+-- `buildAt` can report whether the geometry it just issued actually
+-- materialized, instead of reporting that it bothered to call.
+--
+-- `attempt` deliberately does NOT short-circuit: an earlier false must
+-- not skip a later piece, because the success path's byte-for-byte
+-- compatibility and the partial progress a retry builds on both depend
+-- on the existing call sequence being issued in full every attempt.
+-- A piece a builder deliberately omits (a damaged room's collapsed wall)
+-- is never an attempt, so it never counts.
+local function attemptCounter()
+    local failed = 0
+    local function attempt(ok)
+        if not ok then failed = failed + 1 end
+        return ok
+    end
+    return attempt, function() return failed end
+end
+
 -- A small rectangular room built from the STRUCTURE pieces (floor / wall /
 -- post / ceiling — the RCT-style edge subsystem), NOT terrain voxels. The
 -- click tile is the room CENTRE. Order matters: floors first (posts gate on a
@@ -194,11 +217,15 @@ local builders = {}
 -- always supplies one — this is only ever reached through locations.build/
 -- stamp); its `bounds` (#777) gives the footprint, so a 5x5 room is simply
 -- whatever bounds the def declares, not a hardcoded radius.
+--
+-- Returns the number of ATTEMPTED placements that failed (#1719) — see
+-- `attemptCounter` for why a failure never short-circuits the rest.
 function builders.room_small(worldId, gx, gy, def)
     local S = require("scripts.structures")
     local b = def.bounds
     local x0, x1 = gx + b.min_x, gx + b.max_x
     local y0, y1 = gy + b.min_y, gy + b.max_y
+    local attempt, failedCount = attemptCounter()
 
     -- 0. level the ground so the room is flat: flatten the footprint to its
     --    lowest base elevation and build every piece at that explicit z. (The
@@ -208,29 +235,30 @@ function builders.room_small(worldId, gx, gy, def)
 
     -- 1. floor across the whole footprint at the levelled height
     for x = x0, x1 do
-        for y = y0, y1 do S.floor(x, y, worldId, baseZ) end
+        for y = y0, y1 do attempt(S.floor(x, y, worldId, baseZ)) end
     end
 
     -- 2. corner posts (cap the two perimeter walls that meet at each)
-    S.post(x0, y0, "n", worldId, baseZ)   -- nw + ne meet
-    S.post(x1, y0, "e", worldId, baseZ)   -- ne + se meet
-    S.post(x1, y1, "s", worldId, baseZ)   -- se + sw meet
-    S.post(x0, y1, "w", worldId, baseZ)   -- sw + nw meet
+    attempt(S.post(x0, y0, "n", worldId, baseZ))   -- nw + ne meet
+    attempt(S.post(x1, y0, "e", worldId, baseZ))   -- ne + se meet
+    attempt(S.post(x1, y1, "s", worldId, baseZ))   -- se + sw meet
+    attempt(S.post(x0, y1, "w", worldId, baseZ))   -- sw + nw meet
 
     -- 3. perimeter walls (after posts so they cap to them)
     for y = y0, y1 do
-        S.wall(x0, y, "nw", worldId, baseZ)   -- −gx side
-        S.wall(x1, y, "se", worldId, baseZ)   -- +gx side
+        attempt(S.wall(x0, y, "nw", worldId, baseZ))   -- −gx side
+        attempt(S.wall(x1, y, "se", worldId, baseZ))   -- +gx side
     end
     for x = x0, x1 do
-        S.wall(x, y0, "ne", worldId, baseZ)   -- −gy side
-        S.wall(x, y1, "sw", worldId, baseZ)   -- +gy side
+        attempt(S.wall(x, y0, "ne", worldId, baseZ))   -- −gy side
+        attempt(S.wall(x, y1, "sw", worldId, baseZ))   -- +gy side
     end
 
     -- No ceiling by default, so the interior stays visible while iterating.
 
     engine.logInfo(string.format("locations: room_small %dx%d at %d,%d",
         x1 - x0 + 1, y1 - y0 + 1, gx, gy))
+    return failedCount()
 end
 
 -- A partially-collapsed room_small (#91): same 5×5 footprint and piece
@@ -259,25 +287,32 @@ end
 -- `bounds` (#777) is this ruin's authoritative footprint — the same box
 -- reported by engine.listLocationDefs / world.listPlacedLocations, not
 -- a second, independently-tracked radius.
+--
+-- Returns the number of ATTEMPTED placements that failed (#1719). The
+-- pieces the collapse pattern omits were never attempted, so a fully
+-- successful ruin still reports zero however much of it fell down.
 function builders.room_small_damaged(worldId, gx, gy, def)
     local S = require("scripts.structures")
     local b = def.bounds
     local x0, x1 = gx + b.min_x, gx + b.max_x
     local y0, y1 = gy + b.min_y, gy + b.max_y
     local rand = collapseRng(gx, gy)
+    local attempt, failedCount = attemptCounter()
     local baseZ = locations.flattenFootprint(worldId, x0, y0, x1, y1)
 
     -- 1. floor across the whole footprint (damaged art, none missing)
     for x = x0, x1 do
-        for y = y0, y1 do S.floor(x, y, worldId, baseZ, "damaged") end
+        for y = y0, y1 do attempt(S.floor(x, y, worldId, baseZ, "damaged")) end
     end
 
-    -- 2. corner posts, minus one collapsed corner (1=n 2=e 3=s 4=w)
+    -- 2. corner posts, minus one collapsed corner (1=n 2=e 3=s 4=w).
+    --    The collapsed corner is never issued, so it is not an attempt
+    --    and cannot count as a failure.
     local lostPost = rand(4)
     local posts = { { x0, y0, "n" }, { x1, y0, "e" },
                     { x1, y1, "s" }, { x0, y1, "w" } }
     for i, p in ipairs(posts) do
-        if i ~= lostPost then S.post(p[1], p[2], p[3], worldId, baseZ, "damaged") end
+        if i ~= lostPost then attempt(S.post(p[1], p[2], p[3], worldId, baseZ, "damaged")) end
     end
 
     -- 3. perimeter walls, minus the breach + strays. Sides are indexed
@@ -299,40 +334,49 @@ function builders.room_small_damaged(worldId, gx, gy, def)
         return false
     end
     for y = y0, y1 do
-        if not collapsed(1, y - y0) then S.wall(x0, y, "nw", worldId, baseZ, "damaged") end
-        if not collapsed(2, y - y0) then S.wall(x1, y, "se", worldId, baseZ, "damaged") end
+        if not collapsed(1, y - y0) then attempt(S.wall(x0, y, "nw", worldId, baseZ, "damaged")) end
+        if not collapsed(2, y - y0) then attempt(S.wall(x1, y, "se", worldId, baseZ, "damaged")) end
     end
     for x = x0, x1 do
-        if not collapsed(3, x - x0) then S.wall(x, y0, "ne", worldId, baseZ, "damaged") end
-        if not collapsed(4, x - x0) then S.wall(x, y1, "sw", worldId, baseZ, "damaged") end
+        if not collapsed(3, x - x0) then attempt(S.wall(x, y0, "ne", worldId, baseZ, "damaged")) end
+        if not collapsed(4, x - x0) then attempt(S.wall(x, y1, "sw", worldId, baseZ, "damaged")) end
     end
     -- no ceiling — the roof fell in long ago
 
     engine.logInfo(string.format(
         "locations: room_small_damaged %dx%d at %d,%d (breach side %d len %d)",
         x1 - x0 + 1, y1 - y0 + 1, gx, gy, breachSide, breachLen))
+    return failedCount()
 end
 
 -- Resolve location `id` to its def, then call the builder it names.
--- Returns true if the id was recognised and built.
+--
+-- Returns (ok, failedPlacementCount). `ok` is true only when the def
+-- resolved, the builder ran, AND every placement it attempted succeeded
+-- (#1719) — the durable "this location's geometry is complete" answer
+-- scripts/location_stamper.lua gates world.markLocationStamped on. An
+-- unknown id or an unknown builder still returns false, with a count of
+-- zero: nothing was attempted, and each of those paths logs its own
+-- warning here, so the stamper must not summarise them a second time.
 local function buildAt(id, gx, gy, worldId)
     local def = locations.getDef(id)
     if not def then
         engine.logWarn("locations: unknown location '" .. tostring(id) .. "'")
-        return false
+        return false, 0
     end
     local b = builders[def.builder]
     if not b then
         engine.logWarn("locations: location '" .. id ..
             "' names unknown builder '" .. tostring(def.builder) .. "'")
-        return false
+        return false, 0
     end
-    b(worldId, math.floor(gx), math.floor(gy), def)
-    return true
+    local failed = tonumber(b(worldId, math.floor(gx), math.floor(gy), def)) or 0
+    return failed == 0, failed
 end
 
 -- locations.build(id, gx, gy) — look up the def by id and call its
--- builder, stamping on the active world page (#88).
+-- builder, stamping on the active world page (#88). Returns buildAt's
+-- (ok, failedPlacementCount) pair unchanged.
 function locations.build(id, gx, gy)
     local hud = require("scripts.hud")
     local worldId = (hud and hud.worldId) or "test_arena"
@@ -341,6 +385,8 @@ end
 
 -- Stamp location `id`, anchored at tile (gx, gy) on an explicit page
 -- `worldId`. The debug-overlay entry point (it knows the page).
+-- Returns buildAt's (ok, failedPlacementCount) pair unchanged (#1719):
+-- `ok` is the completion answer, not a call-happened flag.
 function locations.stamp(id, gx, gy, worldId)
     return buildAt(id, gx, gy, worldId)
 end
