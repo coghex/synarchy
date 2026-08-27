@@ -153,13 +153,18 @@ staminaCostFraction Heavy = 0.25
 --   this never reads) leaves it untouched.
 --
 --   max_stamina comes from 'Combat.Resolution.Common.maxStaminaFor' (the
---   mirror of Lua's unit_stats derivation), computed from the live stats
---   so a unit with a fresh buff or wound to endurance pays the right
---   fraction.
-staminaDrainStats ∷ AttackMode → UnitInstance → HM.HashMap Text Float
-staminaDrainStats mode inst =
+--   mirror of Lua's unit_stats derivation), resolved at @now@ — the
+--   ATTACK's captured game-time sample. Since #1735 that mirror is the
+--   EFFECTIVE pool, so an equipped accessory's buff or a unit def's
+--   innate modifier on max_stamina/endurance changes what a swing
+--   costs by exactly what Lua reports. A WOUND does not: nothing in
+--   the wound path writes uiModifiers, so wounds leave the pool alone
+--   (they cost the swing through pain and severity instead). Neither
+--   concentration nor mental_state is read anywhere here.
+staminaDrainStats ∷ Double → AttackMode → UnitInstance → HM.HashMap Text Float
+staminaDrainStats now mode inst =
     let stamina   = HM.lookupDefault 0.0 "stamina" (uiStats inst)
-        maxStam   = maxStaminaFor inst
+        maxStam   = maxStaminaFor now inst
         cost      = staminaCostFraction mode * maxStam
         new       = max 0.0 (stamina - cost)
         -- Stance spent on the swing (absent ⇒ full 1.0).
@@ -169,14 +174,16 @@ staminaDrainStats mode inst =
     in HM.insert "stance" stance' $ HM.insert "stamina" new (uiStats inst)
 
 -- | Drain the attacker's stamina + stance from one swing (hit or
---   miss). See 'staminaDrainStats' for the pure formula.
-applyStaminaDrain ∷ EngineEnv → Word32 → AttackMode → IO ()
-applyStaminaDrain env atkRaw mode =
+--   miss). See 'staminaDrainStats' for the pure formula. @now@ is the
+--   resolution's own game-time sample, not a fresh read, so this and
+--   damage's stamina fraction size the pool against the same instant.
+applyStaminaDrain ∷ EngineEnv → Double → Word32 → AttackMode → IO ()
+applyStaminaDrain env now atkRaw mode =
     atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
         let uid = UnitId atkRaw
         in case HM.lookup uid (umInstances um) of
             Nothing → (um, ())
             Just inst →
-                let inst' = inst { uiStats = staminaDrainStats mode inst }
+                let inst' = inst { uiStats = staminaDrainStats now mode inst }
                     ins   = HM.insert uid inst' (umInstances um)
                 in (um { umInstances = ins }, ())

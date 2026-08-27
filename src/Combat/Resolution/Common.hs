@@ -20,6 +20,7 @@ import UPrelude
 import qualified Data.HashMap.Strict as HM
 import Unit.Types (UnitInstance(..), UnitDef(..), BodyPart(..), Wound(..)
                   , woundEffSeverity)
+import Unit.Stats (effectiveStat)
 import Combat.Resolution.Constants (kindPainFactor, painCeiling)
 
 -- Pain eases as a wound heals (and floors on necrosis): drive it off
@@ -55,16 +56,43 @@ statOr name def inst = HM.lookupDefault def name (uiStats inst)
 skillOr ∷ Text → Float → UnitInstance → Float
 skillOr name def inst = HM.lookupDefault def name (uiSkills inst)
 
--- | The unit's stamina pool size. max_stamina is canonically a DERIVED
---   stat in Lua's @scripts/unit_stats.lua@ (@stats.get@: an explicit
---   per-unit \"max_stamina\" attribute wins, else @endurance × 10@) and
---   is never written back into uiStats, so the combat thread can't just
---   read it — this helper mirrors that dispatch exactly. If the Lua
---   formula changes, change this in lockstep.
-maxStaminaFor ∷ UnitInstance → Float
-maxStaminaFor inst = case HM.lookup "max_stamina" (uiStats inst) of
-    Just m  → m
-    Nothing → statOr "endurance" 1.0 inst * 10.0
+-- | The unit's stamina pool size at game time @now@. max_stamina is
+--   canonically a DERIVED stat in Lua's @scripts/unit_stats.lua@
+--   (@stats.get@: an explicit per-unit \"max_stamina\" attribute wins,
+--   else @endurance × 10@) and is never written back into uiStats, so
+--   the combat thread can't just read it — this helper mirrors that
+--   dispatch exactly. If the Lua formula changes, change this in
+--   lockstep.
+--
+--   #1735: the mirror covers the EFFECTIVE value, not just the
+--   dispatch. Lua reads each input through @unit.getStat@, which is
+--   base plus this unit's active 'uiModifiers' — so both arms here
+--   resolve through 'Unit.Stats.effectiveStat', the same
+--   @(base + Σdelta) × (1 + Σpercent)@ composition (clamped at 0) that
+--   @unit.getStat@ applies. An equipped accessory's @buffs:@
+--   (idBuffs) or a unit def's innate @modifiers:@ (udModifiers) on
+--   \"max_stamina\" or \"endurance\" therefore moves combat's pool by
+--   exactly what every Lua consumer sees. The explicit attribute still
+--   wins outright: when it is present, an @endurance@ modifier is
+--   irrelevant, exactly as in Lua.
+--
+--   @now@ is the ATTACK's captured game-time sample (read once in
+--   'Combat.Resolution.resolveAttack'), so a modifier's expiry
+--   boundary — active iff @now < smExpiry@, matching
+--   'Unit.Stats.effectiveStat' — cannot resolve differently for the
+--   two stamina consumers within one resolution.
+--
+--   What does NOT move the pool: wounds (nothing in the wound path
+--   writes uiModifiers), concentration, and mental_state. A unit with
+--   no modifier on either input gets exactly the pre-#1735 value.
+maxStaminaFor ∷ Double → UnitInstance → Float
+maxStaminaFor now inst = case HM.lookup "max_stamina" (uiStats inst) of
+    Just m  → effectiveStat now m (modsOn "max_stamina")
+    Nothing → effectiveStat now (statOr "endurance" 1.0 inst)
+                                (modsOn "endurance")
+                * 10.0
+  where
+    modsOn name = HM.lookupDefault [] name (uiModifiers inst)
 
 -- | The #353 canonical mental-effectiveness multiplier — the ONE
 --   authoritative calculation every combat (hit chance, active dodge),
