@@ -1127,6 +1127,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Item.QualityTier
                    Test.Headless.Item.ContentsSignature
                    Test.Headless.Item.Condition
+                   Test.Headless.Item.RepairFinite
         Test.Headless.Item.BulkStorage
                    Test.Headless.Item.FoodNutrition
                    Test.Headless.Item.Discovery

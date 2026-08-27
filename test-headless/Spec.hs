@@ -51,6 +51,7 @@ import qualified Test.Headless.Item.BuffYaml as ItemBuffYaml
 import qualified Test.Headless.Item.QualityTier as ItemQualityTier
 import qualified Test.Headless.Item.ContentsSignature as ItemContentsSig
 import qualified Test.Headless.Item.Condition as ItemCondition
+import qualified Test.Headless.Item.RepairFinite as ItemRepairFinite
 import qualified Test.Headless.Item.Materialize as ItemMaterialize
 import qualified Test.Headless.Item.BulkStorage as ItemBulkStorage
 import qualified Test.Headless.Item.FoodNutrition as ItemFoodNutrition
@@ -582,6 +583,7 @@ main = hspec $ do
     describe "Construct.Footprint" ConstructFootprint.spec
     describe "Construct.PendingRefusal" ConstructPendingRefusal.spec
     describe "Craft.Execute" CraftExecute.spec
+    ItemRepairFinite.spec
     describe "Craft.Bills" CraftBills.spec
     describe "Power.Types" PowerTypes.spec
     describe "Power.Network" PowerNetwork.spec
