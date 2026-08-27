@@ -160,14 +160,14 @@ the critic, pre-analysis, `--replay`) still accepts them.
 ## The lockstep loop
 
 Per turn: **pause → screenshot (F1 `debug.captureScreenshot`) → the
-player decides from pixels alone → inject its action (F2 `input.*`) →
-record the pre-step oracle context → unpause for a wall-clock `dt` →
-re-pause → record the post-step oracle evidence.** Splitting the oracle
-capture around the step (#775) matters: the widgets/menu/pause state a
-click actually acted on has to be read BEFORE the step (a step can
-change the UI underneath it), while the event-log progress, F4 action
-outcomes, and visible-change comparison the step itself produces have
-to be read AFTER it — otherwise they get drained onto the FOLLOWING
+player decides from pixels alone → record the routing oracle → inject
+its action (F2 `input.*`) → record the pre-step oracle context →
+unpause for a wall-clock `dt` → re-pause → record the post-step oracle
+evidence.** Splitting the oracle capture around the step (#775)
+matters: the widgets/menu/pause state a click actually acted on has to
+be read BEFORE the step (a step can change the UI underneath it), while
+the event-log progress, F4 action outcomes, and visible-change
+comparison the step itself produces have to be read AFTER it — otherwise they get drained onto the FOLLOWING
 turn's pre-step read instead (or, on the session's last turn, lost
 outright, since there is no following turn to (mis)capture them). Both
 halves are recorded together as one turn's `oracle`. Wall-clock
@@ -301,9 +301,16 @@ gitignored):
   confirmed, or fully completed, #698/#728), and the **oracle** record
   (`ui.dumpWidgets`, `engine.getEventLog` delta, current menu, pause
   state), flagged `player_invisible: true`. Since #775, the oracle is
-  assembled from two reads: `widgets`/`current_menu`/`paused`/
+  assembled from three reads: `routing_widgets` (#1750) is a
+  `ui.dumpWidgets` read taken BEFORE the turn's first input call, so
+  the offline click join correlates against the record set the real
+  pointer router resolved the click against — a callback that opens,
+  closes or replaces a modal, or that creates/destroys elements, can no
+  longer rewrite it; `widgets`/`current_menu`/`paused`/
   `world_seed` are the PRE-step affordance context (the state the
-  player actually acted on, read once after inject+settle);
+  player actually acted on, read once after inject+settle) and keep
+  that later sampling point, because the digest and the seed promotion
+  consume them with exactly that meaning;
   `event_log_new`/`event_log_gaps`/`action_outcomes` are the union of
   that same pre-step read (whatever the action produced synchronously,
   while still paused) and — when the turn's sim step actually ran — a
@@ -436,6 +443,20 @@ the canonical cross-source joins (action-outcome `rejected`/`noop`/
 click-hit-no-widget ⇒ phantom-affordance; player-claims-nothing-
 happened while the oracle shows feedback ⇒ feedback-was-shown; stuck
 loops; crash) and enumerates **friction candidates** with stable ids.
+
+For a default or explicit LEFT click, that click-to-control join is
+routing-aware (#1750): it reproduces `UI.InputOwnership.routePointer`
+from engine-owned facts the dump now carries per record —
+`inScope` (the modal-scope decision, so empty exclusive-modal space
+never correlates a HUD control below it), effective `pointerBlocking`
+(so a callback-less blocking panel suppresses every lower control
+instead of the join falling through to one the router could not
+reach), and `leftClickTarget`/`leftClickAffordance` (which separate an
+ACTIVE left target from a right-click-only blocker and from #783's
+shown-but-disabled affordance, the one case that still correlates to
+itself). Right/middle clicks and drags keep the older
+`(paintKey, paintOrder)` topmost-eligible join, and so does any trace
+recorded before those fields existed.
 Adjudication (default `claude-opus-5`, high effort — cost is
 per-session, not per-turn) is **batched** so that every candidate's
 own screenshot is actually shown in the call that judges it:
