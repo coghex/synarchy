@@ -25,6 +25,7 @@
 --   GPU-resource-lifetime question.
 module Engine.Asset.Manager
   ( generateTextureHandle
+  , textureHandleNamespaceSpent
   , generateFontHandle
   , generateAssetId
   , updateTextureState
@@ -51,7 +52,8 @@ import Engine.Asset.Types
 import Engine.Asset.Handle
 import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Types
-import Engine.Graphics.Vulkan.Texture.Bindless (releaseTextureHandles)
+import Engine.Graphics.Vulkan.Texture.Bindless
+  (HandleAddressing(..), checkRegistrableHandle, releaseTextureHandles)
 import Engine.Graphics.Vulkan.Texture.Release
   (TextureReleasePlan(..), releaseOwnerHandles)
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem)
@@ -65,6 +67,29 @@ generateTextureHandle ∷ AssetPool → IO TextureHandle
 generateTextureHandle pool =
   atomicModifyIORef' (apNextTextureHandle pool) $ \n →
     (n + 1, TextureHandle n)
+
+-- | Would the NEXT id 'generateTextureHandle' hands out already be one
+--   the shader's handle→slot table cannot resolve (#1699)?
+--
+--   The counter is monotonic and has no reset anywhere in the tree, so
+--   once this answers 'True' it answers 'True' for the rest of the
+--   process: every further shader-addressable registration is refused,
+--   permanently. It reads the SAME guard those registrations run
+--   ('checkRegistrableHandle'), so there is one definition of the
+--   boundary rather than a second copy that could drift.
+--
+--   Only a caller that would otherwise repeat futile work every frame
+--   needs to ask — 'World.Render.BloodQuads', whose per-frame diff
+--   would re-upload and re-refuse the same decal forever. A one-shot
+--   request has no reason to: refusing at the registration boundary is
+--   already terminal, and asking first would only duplicate it.
+textureHandleNamespaceSpent ∷ AssetPool → IO Bool
+textureHandleNamespaceSpent pool =
+  isRefused ⊚ readIORef (apNextTextureHandle pool)
+  where
+    isRefused n = case checkRegistrableHandle ShaderAddressable (TextureHandle n) of
+      Left _   → True
+      Right () → False
 
 generateFontHandle ∷ AssetPool → IO FontHandle
 generateFontHandle pool =

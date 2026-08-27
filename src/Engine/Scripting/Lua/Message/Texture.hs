@@ -61,6 +61,7 @@ import Engine.Graphics.Vulkan.Texture.Bindless (registerPinnedTexture
                                                , registerTexture
                                                , checkRegistrableHandle
                                                , registrationFailureMessage
+                                               , HandleAddressing(..)
                                                , TextureRegistrationFailure(..)
                                                , writeHandleSlotEntry)
 import Engine.Graphics.Vulkan.Texture.Handle (BindlessTextureHandle(..))
@@ -142,6 +143,16 @@ publishTextureFailure env pool handle path reason =
 --   the @LuaAssetLoaded@ notification — otherwise this path would point
 --   @handleToSlot[0]@ at a real slot exactly as an unguarded
 --   registration would.
+--
+--   The guard's OTHER refusal is #1699's, and it settles the opposite
+--   way: a handle the shader's table cannot represent belongs to a REAL
+--   request — an ordinary @engine.loadTexture@ whose id merely arrived
+--   after the namespace was spent — so it takes #1690's terminal
+--   failure rather than being dropped. Everything a hit would have
+--   written is withheld: no @btsHandleMap@ entry, no handle→slot table
+--   poke, no @AssetReady@, no atlas refcount bump, no
+--   'rcTextureSizeRef' entry and no @LuaAssetLoaded@.
+--
 --   Its OTHER way of failing is #1690's: an atlas the pool holds but
 --   the bindless system has no mapping for — or no bindless system at
 --   all. Publishing @AssetReady@ for one of those is the poisoned cache
@@ -151,13 +162,24 @@ publishTextureFailure env pool handle path reason =
 duplicateCachedTextureHandle ∷ EngineEnv → TextureHandle → AssetId
                            → TextureAtlas → EngineM σ ()
 duplicateCachedTextureHandle env handle assetId atlas =
-  case checkRegistrableHandle handle of
+  case checkRegistrableHandle ShaderAddressable handle of
     -- #1696's refusal, dropped outright: nothing observable is written,
     -- not even #1690's terminal failure. A zero handle names no real
     -- request, so there is nothing to settle.
-    Left failure →
+    Left TextureHandleReserved →
       logWarnM CatTexture
-        (registrationFailureMessage failure handle (taPath atlas))
+        (registrationFailureMessage TextureHandleReserved handle (taPath atlas))
+    -- #1699's refusal, SETTLED: this alias is a real request that
+    -- something is waiting on, and the id is unusable for the rest of
+    -- the process, so it must end terminally rather than silently.
+    -- Unlike a registration refusal, no caller logged this one — this
+    -- path owns its own insertion, so it owns its own diagnostic.
+    Left failure → do
+      let reason = registrationFailureMessage failure handle (taPath atlas)
+      logWarnM CatTexture reason
+      poolRef ← asks (rcAssetPoolRef . toRenderCapability)
+      pool ← liftIO $ readIORef poolRef
+      publishTextureFailure env pool handle (taPath atlas) reason
     Right () → do
       poolRef ← asks (rcAssetPoolRef . toRenderCapability)
       pool ← liftIO $ readIORef poolRef

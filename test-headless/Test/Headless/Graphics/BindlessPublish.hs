@@ -37,6 +37,7 @@ import Engine.Asset.Handle (TextureHandle(..), missingTextureHandle)
 import Engine.Graphics.Vulkan.Texture.Handle
   (BindlessTextureHandle, toBindlessHandle
   , TextureRegistrationFailure(..), registrationFailureMessage)
+import Engine.Graphics.Vulkan.Texture.Limits (handleSlotTableSize)
 import Engine.Graphics.Vulkan.Texture.Slot
   (TextureSlot(..), TextureSlotAllocator, createSlotAllocator, allocateSlot)
 import Engine.Graphics.Vulkan.Texture.Publish
@@ -343,6 +344,59 @@ spec = do
       -- so both acquired a reference of their own.
       failedUploadCleanup UploadPinnedNearest `shouldBe`
         [CleanupImageView, CleanupImage, ReleasePinnedSampler]
+
+  describe "a handle the shader's table cannot resolve (#1699)" $ do
+    let spentHandle = TextureHandle handleSlotTableSize
+        reason = registrationFailureMessage TextureHandleUnrepresentable
+                   spentHandle "wall.png"
+
+    it "publishes a terminal FAILURE, not a load" $
+      classifyRegistration spentHandle "wall.png"
+        (Left TextureHandleUnrepresentable) `shouldBe` PublishFailed reason
+
+    it "names the id, the path and the cap, so the log line, the \
+       \AssetFailed state and the Lua notification all read alike" $ do
+      reason `shouldSatisfy` T.isInfixOf (T.pack (show handleSlotTableSize))
+      reason `shouldSatisfy` T.isInfixOf "wall.png"
+      reason `shouldSatisfy` T.isInfixOf "#1699"
+
+    it "is never restated as slot exhaustion or as the reserved \
+       \sentinel -- the three diagnoses stay apart" $ do
+      reason `shouldNotSatisfy` T.isInfixOf "Failed to allocate bindless slot"
+      reason `shouldNotSatisfy` T.isInfixOf "sentinel"
+      registrationFailureMessage TextureSlotsExhausted spentHandle "wall.png"
+        `shouldNotBe` reason
+
+    it "contributes nothing to either pool map, and deletes nothing" $
+      -- The same three prohibitions #1690 established: no entry of its
+      -- own, no overwrite, and -- load-bearing for 'apAssetPaths' -- no
+      -- deletion of an entry a different sampler policy owns.
+      publishRegisteredEntries
+        [ ("wall.png", AssetId 10, PublishFailed reason) ]
+        (Map.singleton "wall.png" (AssetId 99))
+          `shouldBe` Map.singleton "wall.png" (AssetId 99)
+
+    it "releases the refused upload's own GPU objects in order" $ do
+      failedUploadCleanup UploadGlobalSampler `shouldBe`
+        [CleanupImageView, CleanupImage]
+      failedUploadCleanup UploadPinnedNearest `shouldBe`
+        [CleanupImageView, CleanupImage, ReleasePinnedSampler]
+
+    it "retains the live preview and zoom generations instead of \
+       \disposing them for one nothing can sample" $ do
+      classifyTransientRegistration spentHandle "world preview"
+        (Left TextureHandleUnrepresentable) `shouldBe` TransientRetain
+          (registrationFailureMessage TextureHandleUnrepresentable
+             spentHandle "world preview")
+      classifyTransientRegistration spentHandle "zoom atlas"
+        (Left TextureHandleUnrepresentable) `shouldBe` TransientRetain
+          (registrationFailureMessage TextureHandleUnrepresentable
+             spentHandle "zoom atlas")
+
+    it "still publishes the LAST in-table id when its registration took \
+       \a slot, so the refusal is a boundary and not a blanket" $
+      classifyRegistration (TextureHandle (handleSlotTableSize - 1))
+        "wall.png" (Right registeredMapping) `shouldBe` PublishRegistered 4
 
   describe "a device with capacity behaves exactly as before" $ do
     let result = runBatch UploadGlobalSampler (createSlotAllocator 16)

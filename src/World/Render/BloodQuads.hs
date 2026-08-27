@@ -20,9 +20,12 @@
 --     terrain and below units/ground items (see 'bloodSortNudge').
 --
 --   A decal whose texture was never uploaded (GPU upload lags a frame
---   behind a fresh 'blood.spawn', or the bindless system was full) simply
---   has no entry in 'wsBloodTextureHandlesRef' yet and is skipped this
---   frame — it appears once 'uploadBloodTextures' catches up.
+--   behind a fresh 'blood.spawn', or the bindless system was full)
+--   simply has no entry in 'wsBloodTextureHandlesRef' yet and is skipped
+--   this frame — it appears once 'uploadBloodTextures' catches up. The
+--   one case it never catches up from is a spent texture-handle
+--   namespace (#1699), which is permanent; 'uploadOne' stops trying
+--   rather than repeating the whole upload-and-refuse cycle every frame.
 module World.Render.BloodQuads
     ( uploadBloodTextures
     , disposeQueuedBloodTextures
@@ -44,7 +47,7 @@ import Engine.Core.State (EngineEnv, EngineState(..), GraphicsState(..)
 import Engine.Core.Capability.RenderView
   (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Asset.Handle (TextureHandle, toInt)
-import Engine.Asset.Manager (generateTextureHandle)
+import Engine.Asset.Manager (generateTextureHandle, textureHandleNamespaceSpent)
 import Engine.Graphics.Types (DevQueues(..))
 import Engine.Graphics.Camera (Camera2D(..))
 import Engine.Graphics.Vulkan.Texture (createTextureFromRGBABytes)
@@ -183,24 +186,39 @@ uploadOne ∷ Device → PhysicalDevice → CommandPool → Queue
          → (BindlessTextureSystem, HandleMap) → BloodTextureDescriptor
          → EngineM σ (BindlessTextureSystem, HandleMap)
 uploadOne dev pdev cmdPool queue (bl, known) d = do
-    let img = generateBloodTexture d
     env ← ask
     poolRef ← asks (rvAssetPoolRef . toRenderViewCapability)
     ap ← liftIO $ readIORef poolRef
-    texHandle ← liftIO $ generateTextureHandle ap
-    ((_image, imageView), cleanupImg) ← createTextureFromRGBABytes
-        pdev dev cmdPool queue (btiWidth img, btiHeight img) (btiPixels img)
-    (mBindlessHandle, bl') ← registerTexture dev texHandle "blood decal atlas"
-                                imageView (btsTextureSampler bl) bl
-    case mBindlessHandle of
+    -- Unlike a slot shortage, a spent handle namespace never recovers
+    -- (#1699): the counter is monotonic with no reset, so every id from
+    -- here on is one the shader's table cannot resolve. This diff runs
+    -- once per FRAME against a decal that stays in the FIFO, so without
+    -- this check the same descriptor would generate a handle, upload a
+    -- texture, be refused, log a warning and destroy the texture again
+    -- every frame for the rest of the session. Ask before doing any of
+    -- that; the decal is simply not uploaded, exactly as this module
+    -- already handles an upload that has not caught up yet.
+    spent ← liftIO $ textureHandleNamespaceSpent ap
+    if spent then pure (bl, known) else do
+      let img = generateBloodTexture d
+      texHandle ← liftIO $ generateTextureHandle ap
+      ((_image, imageView), cleanupImg) ← createTextureFromRGBABytes
+          pdev dev cmdPool queue (btiWidth img, btiHeight img) (btiPixels img)
+      (mBindlessHandle, bl') ← registerTexture dev texHandle "blood decal atlas"
+                                  imageView (btsTextureSampler bl) bl
+      case mBindlessHandle of
         Right _ → do
             liftIO $ atomicModifyIORef' (rvTextureSizeRef (toRenderViewCapability env)) $ \m →
                 (HM.insert texHandle (btiWidth img, btiHeight img) m, ())
             pure (bl', HM.insert (btdId d) (texHandle, cleanupImg) known)
         Left _ → do
-            -- Bindless system full — drop the GPU resource we just made;
-            -- this decal's texture simply isn't uploaded yet and its
-            -- render pass is skipped until a slot frees up.
+            -- Bindless system full, or this id crossed the handle cap
+            -- between the check above and the allocation — drop the GPU
+            -- resource we just made, record no size entry and no handle
+            -- entry; this decal's texture simply isn't uploaded and its
+            -- render pass is skipped until a slot frees up. A crossing
+            -- reaches here at most once, because the check above answers
+            -- for every frame after it.
             liftIO cleanupImg
             pure (bl', known)
 

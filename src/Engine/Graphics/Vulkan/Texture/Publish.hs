@@ -6,10 +6,11 @@
 --   "Engine.Graphics.Vulkan.Texture.Slot" is out of slots: no descriptor
 --   write, no @btsHandleMap@ entry, no handle→slot table entry. The
 --   upload's GPU objects exist and nothing samples them. #1696's
---   @Left TextureHandleReserved@ leaves exactly the same wreckage, so
---   both refusals are decided here identically — what differs between
---   them is only the diagnosis a reader is handed, which
---   'registrationFailureMessage' already owns.
+--   @Left TextureHandleReserved@ and #1699's
+--   @Left TextureHandleUnrepresentable@ leave exactly the same
+--   wreckage, so all three refusals are decided here identically — what
+--   differs between them is only the diagnosis a reader is handed,
+--   which 'registrationFailureMessage' already owns.
 --
 --   Continuing from that as though registration had succeeded is worse
 --   than a missing texture, because the bookkeeping a success writes is
@@ -36,7 +37,10 @@
 --   'World.Render.BloodQuads' keeps its own inline handling: it is the
 --   precedent this module generalizes, and a decal that fails to
 --   register is simply not uploaded — it publishes nothing anywhere to
---   decide about.
+--   decide about. Being the one PER-FRAME registration path, it also
+--   asks 'Engine.Asset.Manager.textureHandleNamespaceSpent' before
+--   uploading at all, so #1699's permanent refusal costs it one cycle
+--   rather than one per frame.
 --   "Engine.Graphics.Vulkan.Texture.DefaultFaceMap" deliberately falls
 --   back to slot 0 for its 1×1 init-time face map and is not a
 --   publication boundary either.
