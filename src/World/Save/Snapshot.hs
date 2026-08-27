@@ -192,6 +192,19 @@ data SnapshotError
     | BuildingAllocatorTooLow !BuildingId
     | UnitAllocatorTooLow !UnitId
     | StructureEditPaletteIdMissing !WorldPageId !Int
+      -- | #1667: a decoded session-global allocator sitting BELOW its
+      --   own first valid id. Separate from the three
+      --   @...AllocatorTooLow@ constructors above, which report a live
+      --   ENTITY whose id has outrun the cursor: these three report the
+      --   CURSOR itself, and therefore fire on an empty session too —
+      --   the case the per-id comparisons structurally cannot see.
+      --   Item/building/unit ids all start at 1
+      --   ("Engine.Core.Init", 'Building.Types.emptyBuildingManager',
+      --   'Unit.Types.Manager.emptyUnitManager'), so 0 is the one
+      --   invalid value each unsigned cursor can carry.
+    | ItemAllocatorBelowFloor !Word64
+    | BuildingAllocatorBelowFloor !Word32
+    | UnitAllocatorBelowFloor !Word32
     deriving (Show, Eq)
 
 -- | Build the raw candidate snapshot (unconditionally — validation is
@@ -268,6 +281,7 @@ validateSessionSnapshot snap = concat
     , duplicateItemIdErrors snap
     , buildingAllocatorErrors snap
     , unitAllocatorErrors snap
+    , sessionAllocatorFloorErrors snap
     ]
 
 -- | Every texture/facemap palette id a persisted 'WeSetStructure' edit
@@ -374,6 +388,34 @@ unitAllocatorErrors snap =
     | page ← HM.elems (snapPages snap)
     , uid ← HM.keys (usnInstances (pgsUnits page))
     , unUnitId uid ≥ snapNextUnitId snap ]
+
+-- | #1667: each session-global allocator's OWN floor, checked
+--   independently of the entity maps the three comparisons above walk.
+--   Those iterate live ids, so an EMPTY session certified any cursor —
+--   including 0, which 'World.Load.Publish' then installs verbatim and
+--   the next allocation hands out as a real id, against the "ids start
+--   at 1" convention every one of the three establishes
+--   ('Engine.Core.Init''s @nextItemInstanceIdRef@,
+--   'Building.Types.emptyBuildingManager', 'Unit.Types.Manager.emptyUnitManager').
+--   All three cursors are UNSIGNED on the wire ('World.Save.Component.Session.CoreSessionDTO'),
+--   so 0 is the single invalid value each can carry.
+--
+--   Folded into 'validateSessionSnapshot' rather than into
+--   @core-session@'s own @csValidate@ deliberately: the legacy v90
+--   bridge ("World.Save.Compat.SessionV90") RECONSTRUCTS these three
+--   cursors instead of decoding that component, and funnels the
+--   assembled snapshot through this validator — so this is the one
+--   place both paths share. It runs on the CAPTURE side too, where a
+--   live session can never be below the floor.
+sessionAllocatorFloorErrors ∷ SessionSnapshot → [SnapshotError]
+sessionAllocatorFloorErrors snap = concat
+    [ [ ItemAllocatorBelowFloor (snapNextItemId snap)
+      | snapNextItemId snap < 1 ]
+    , [ BuildingAllocatorBelowFloor (snapNextBuildingId snap)
+      | snapNextBuildingId snap < 1 ]
+    , [ UnitAllocatorBelowFloor (snapNextUnitId snap)
+      | snapNextUnitId snap < 1 ]
+    ]
 
 -- | Duplicate page ids in the INPUT list, checked before
 --   'buildSessionSnapshot''s fold can silently collapse them.

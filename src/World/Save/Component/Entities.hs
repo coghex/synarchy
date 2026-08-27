@@ -160,9 +160,10 @@ import GHC.Generics (Generic)
 import World.Page.Types (WorldPageId)
 import Building.Types (BuildingId)
 import Craft.Bills
-    ( CraftBills(..), CraftBill(..), BillId(..), BillMode )
+    ( CraftBills(..), CraftBill(..), BillId(..), BillMode, emptyCraftBills )
 import Power.Types
-    ( PowerNodes(..), PowerNode(..), PowerNodeId(..), PowerRole )
+    ( PowerNodes(..), PowerNode(..), PowerNodeId(..), PowerRole
+    , emptyPowerNodes )
 import Unit.Types (UnitId, StatModifier(..), Wound(..), Scar(..))
 import Unit.Sim.Types
     ( UnitSimState(..), MoveTarget(..), Pose, UnitActivity, Direction )
@@ -1291,9 +1292,24 @@ migrateCraftBillsDTOv1 (CraftBillsDTOv1 ps) = CraftBillsDTO
 --   paused — drops the claim and its 'cbWorking' flag, and the station
 --   stops drawing the recipe's wattage for a worker the save no longer
 --   contains.
+--
+--   #1667: the page's OWN allocator floor is a separate clause, so it
+--   is checked even when the map it guards is empty — an empty map used
+--   to certify any cursor, 0 included, which the live allocator would
+--   then hand out as a real id against the "never 0" convention
+--   'emptyCraftBills'\/'emptyPowerNodes' establish.
+--   'World.Save.Component.Transfer.validateTransferOrders' is the
+--   precedent; this is the same check, generalized.
 validateCraftBills ∷ CraftBillsDTO → [ComponentError]
 validateCraftBills (CraftBillsDTO slices) = concat
     [ [ ComponentError craftBillsComponentId 2 ValidatePhase
+          ("page '" <> tshow (pcbPageId s) <> "': craft-bill allocator \
+             \is " <> tshow (bqNextId (pcbBills s)) <> ", below the \
+             \first valid bill id (" <> tshow firstBillId <> ")")
+      | s ← slices
+      , bqNextId (pcbBills s) < firstBillId
+      ]
+    , [ ComponentError craftBillsComponentId 2 ValidatePhase
           ("page '" <> tshow (pcbPageId s) <> "': bill #"
            <> tshow (unBillId bid) <> " is not below the page's bill \
               \allocator (" <> tshow (bqNextId (pcbBills s)) <> ")")
@@ -1310,6 +1326,10 @@ validateCraftBills (CraftBillsDTO slices) = concat
       , k ≢ bilId v
       ]
     ]
+  where
+    -- The floor IS what a fresh allocator starts at, read from
+    -- 'emptyCraftBills' itself so the two cannot drift.
+    firstBillId = cbsNextId emptyCraftBills
 
 -- | Issue #764 (save-overhaul C3): the current schema is v2 (typed
 --   'SamePageRef' station/claimant, see 'CraftBillDTO'); v1 decodes
@@ -1475,9 +1495,24 @@ migratePowerNodesDTOv1 (PowerNodesDTOv1 ps) = PowerNodesDTO
 --   latter DOES hard-reject a host building that resolves on a
 --   DIFFERENT page than the node itself, once the whole session is
 --   assembled and cross-component checking is actually possible.
+--
+--   #1667: the page's OWN allocator floor is a separate clause, so it
+--   is checked even when the map it guards is empty — an empty map used
+--   to certify any cursor, 0 included, which the live allocator would
+--   then hand out as a real id against the "never 0" convention
+--   'emptyCraftBills'\/'emptyPowerNodes' establish.
+--   'World.Save.Component.Transfer.validateTransferOrders' is the
+--   precedent; this is the same check, generalized.
 validatePowerNodes ∷ PowerNodesDTO → [ComponentError]
 validatePowerNodes (PowerNodesDTO slices) = concat
     [ [ ComponentError powerNodesComponentId 2 ValidatePhase
+          ("page '" <> tshow (ppnPageId s) <> "': power-node allocator \
+             \is " <> tshow (regNextId (ppnNodes s)) <> ", below the \
+             \first valid node id (" <> tshow firstPowerNodeId <> ")")
+      | s ← slices
+      , regNextId (ppnNodes s) < firstPowerNodeId
+      ]
+    , [ ComponentError powerNodesComponentId 2 ValidatePhase
           ("page '" <> tshow (ppnPageId s) <> "': power node #"
            <> tshow (unPowerNodeId nid) <> " is not below the page's node \
               \allocator (" <> tshow (regNextId (ppnNodes s)) <> ")")
@@ -1494,6 +1529,10 @@ validatePowerNodes (PowerNodesDTO slices) = concat
       , k ≢ nodId v
       ]
     ]
+  where
+    -- Same tie as 'validateCraftBills': the floor is read from
+    -- 'emptyPowerNodes' rather than restated as a literal.
+    firstPowerNodeId = pnsNextId emptyPowerNodes
 
 -- | Same reasoning as 'craftBillsCodec'. Current schema is v2 (typed
 --   'SamePageRef' host building, see 'PowerNodeDTO'); v1 decodes through

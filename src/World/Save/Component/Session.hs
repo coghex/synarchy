@@ -41,7 +41,7 @@ import UPrelude
 import qualified Data.HashMap.Strict as HM
 import Data.Serialize (Serialize)
 import GHC.Generics (Generic)
-import Structure.Palette (TexPalette(..))
+import Structure.Palette (TexPalette(..), emptyTexPalette)
 import World.Page.Types (WorldPageId)
 import Engine.Graphics.Camera (CameraFacing)
 import World.Save.Snapshot
@@ -167,9 +167,25 @@ fromTexPaletteDTO d =
 --   and any id at or above the palette's own 'tpdNextId' allocator
 --   (mirrors 'validateCraftBills'/'validatePowerNodes''s allocator
 --   check).
+--
+--   #1667: the allocator's OWN floor is a separate clause, so it is
+--   checked even when @pairs@ is empty — an empty palette used to
+--   certify any cursor, including a NEGATIVE one ('tpdNextId' being an
+--   unrestricted wire 'Int'), which 'Structure.Palette.internPath' would
+--   then hand out verbatim as a slot id. The palette is zero-based like
+--   ground items, so the floor is read from 'emptyTexPalette' itself
+--   rather than restated as a literal.
+--   'World.Save.Component.Transfer.validateTransferOrders' is the
+--   precedent this generalizes.
 validateTexPalette ∷ TexPaletteDTO → [ComponentError]
 validateTexPalette (TexPaletteDTO nextId pairs) = concat
     [ [ ComponentError texPaletteComponentId 1 ValidatePhase
+          ("texture palette allocator is " <> tshow nextId <> ", below \
+           \the first valid palette id (" <> tshow firstTexPaletteId
+           <> ")")
+      | nextId < firstTexPaletteId
+      ]
+    , [ ComponentError texPaletteComponentId 1 ValidatePhase
           ("duplicate texture palette path " <> tshow path)
       | (path, n) ← HM.toList
             (HM.fromListWith (+) [ (p, 1 ∷ Int) | (p, _) ← pairs ])
@@ -187,6 +203,8 @@ validateTexPalette (TexPaletteDTO nextId pairs) = concat
       | (_, pid) ← pairs, pid ≥ nextId
       ]
     ]
+  where
+    firstTexPaletteId = tpNextId emptyTexPalette
 
 texPaletteCodec ∷ ComponentCodec TexPaletteDTO
 texPaletteCodec = componentCodec ComponentSpec

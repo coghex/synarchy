@@ -857,6 +857,24 @@ ordersDTO next key embedded = TransferOrdersDTO
 mentions ∷ Text → [ComponentError] → Bool
 mentions needle = any (T.isInfixOf needle ∘ ceMessage)
 
+-- | #1667: a page's activity slice with every designation map empty and
+--   a FRESH ground-item allocator — the shape whose emptiness used to
+--   certify any cursor at all.
+emptyPageActivity ∷ WorldPageId → PageActivityDTO
+emptyPageActivity pid = PageActivityDTO pid HM.empty HM.empty HM.empty
+    HM.empty HM.empty emptyFloraHarvests HM.empty
+    (toGroundItemsDTO emptyGroundItems) HM.empty
+
+-- | #1667: one well-formed bill, so a floor test can pair an invalid
+--   allocator with a live id and see BOTH findings reported.
+sampleBillDTO ∷ CraftBillDTO
+sampleBillDTO = CraftBillDTO
+    { bilId = BillId 1, bilStation = SamePageRef (BuildingId 1)
+    , bilRecipe = "r", bilRemaining = -1, bilClaimant = Nothing
+    , bilClaimedAt = 0, bilProgress = 0, bilSeq = 1
+    , bilPaused = False, bilWorking = False
+    , bilMode = RepeatForever, bilTarget = 0, bilOutputItem = "" }
+
 -- | Drop the transfer-orders component from an encoded envelope
 --   entirely: the shape every save written before #1246 has.
 withoutTransferOrders ∷ BS.ByteString → BS.ByteString
@@ -1957,6 +1975,159 @@ spec = do
             validateTransferOrders (ordersDTO maxBound (TransferOrderId 1)
                                         (TransferOrderId 1))
                 `shouldBe` []
+
+    -- #1667: every allocator validator compared LIVE IDS with the
+    -- cursor and stopped there, so an EMPTY map certified any cursor at
+    -- all -- 0 where the id space starts at 1, and a negative value
+    -- wherever the wire field is a signed 'Int'. The live allocation
+    -- paths then hand that cursor out verbatim as the next real id.
+    -- 'validateTransferOrders' (above) already checked its own floor;
+    -- these five component validators and the three session-global
+    -- cursors now do too, each in its own clause so the map's emptiness
+    -- is irrelevant.
+    describe "decoded allocators validate their own floor (#1667)" $ do
+        let billSlice next = CraftBillsDTO
+                [ PageCraftBillsDTO page1 (BillQueueDTO HM.empty next) ]
+            nodeSlice next = PowerNodesDTO
+                [ PagePowerNodesDTO page1 (NodeRegistryDTO HM.empty next) ]
+            activitySlice next = WorldActivityDTO
+                [ (emptyPageActivity page1)
+                    { padGroundItems = GroundItemsDTO next HM.empty } ]
+            paletteWith next = TexPaletteDTO next []
+
+        it "rejects a craft-bill allocator of 0 on an EMPTY bill map, \
+           \and accepts the fresh allocator an empty page really has" $ do
+            validateCraftBills (billSlice 0)
+                `shouldSatisfy` mentions "craft-bill allocator is 0"
+            validateCraftBills (billSlice 1) `shouldBe` []
+
+        it "rejects a power-node allocator of 0 on an EMPTY node map, \
+           \and accepts the fresh allocator an empty page really has" $ do
+            validatePowerNodes (nodeSlice 0)
+                `shouldSatisfy` mentions "power-node allocator is 0"
+            validatePowerNodes (nodeSlice 1) `shouldBe` []
+
+        it "rejects a NEGATIVE ground-item allocator on an EMPTY item \
+           \map, while 0 stays valid -- ground items are the engine's \
+           \one zero-based allocator" $ do
+            validateWorldActivity (activitySlice (-1))
+                `shouldSatisfy` mentions "ground-item allocator is -1"
+            validateWorldActivity (activitySlice 0) `shouldBe` []
+            validateWorldActivity (activitySlice 5) `shouldBe` []
+
+        it "rejects a NEGATIVE texture-palette allocator on an EMPTY \
+           \palette, while 0 stays valid -- the palette is zero-based \
+           \too" $ do
+            validateTexPalette (paletteWith (-1))
+                `shouldSatisfy` mentions "texture palette allocator is -1"
+            validateTexPalette (paletteWith 0) `shouldBe` []
+
+        it "the floor is a SEPARATE finding from the per-id comparison, \
+           \so a payload violating both reports both" $ do
+            let bothWrong = CraftBillsDTO
+                    [ PageCraftBillsDTO page1
+                        (BillQueueDTO (HM.singleton (BillId 3)
+                            sampleBillDTO { bilId = BillId 3 }) 0) ]
+            validateCraftBills bothWrong
+                `shouldSatisfy` mentions "craft-bill allocator is 0"
+            validateCraftBills bothWrong
+                `shouldSatisfy` mentions "not below the page's bill allocator"
+
+        it "a legitimate GAP between the highest live id and the cursor \
+           \is still accepted -- the floor check tightens nothing that \
+           \already passed" $ do
+            validateCraftBills (CraftBillsDTO
+                [ PageCraftBillsDTO page1
+                    (BillQueueDTO (HM.singleton (BillId 1) sampleBillDTO) 99) ])
+                `shouldBe` []
+            validateWorldActivity (WorldActivityDTO
+                [ (emptyPageActivity page1)
+                    { padGroundItems = GroundItemsDTO 99 HM.empty } ])
+                `shouldBe` []
+
+        -- Requirement 4: a LEGACY component version must gain the
+        -- check rather than route around it. 'componentCodec' runs
+        -- 'ccValidate' on the canonical MIGRATED value after ANY
+        -- accepted decoder, so an older payload reaches the same
+        -- clause the current one does -- proved here on the pair
+        -- 'decodeComponentValue' itself runs.
+        it "a v1 craft-bills payload carrying a 0 allocator is rejected \
+           \by the same clause, not waved through by its older decoder" $ do
+            let v1With next = S.encode (CraftBillsDTOv1
+                    [ PageCraftBillsDTOv1 page1
+                        (BillQueueDTOv1 HM.empty next) ])
+                decodeThenValidate next =
+                    case ccDecode craftBillsCodec 1 (v1With next) of
+                        Left e  → [e]
+                        Right a → ccValidate craftBillsCodec a
+            decodeThenValidate 0
+                `shouldSatisfy` mentions "craft-bill allocator is 0"
+            decodeThenValidate 1 `shouldBe` []
+
+        -- The three session-global cursors ride on 'CoreSessionDTO' and
+        -- are checked by 'validateSessionSnapshot', which BOTH the
+        -- modern envelope decode and the legacy v90 bridge funnel
+        -- through -- so neither path can bypass the floor. All three are
+        -- unsigned on the wire, making 0 the single invalid value.
+        it "rejects a session-global item/building/unit allocator of 0 \
+           \even with EVERY entity map empty" $ do
+            let bare = (minimalPage page1)
+                    { pgsBuildings = BuildingSnapshot HM.empty 1
+                    , pgsUnits     = UnitSnapshot HM.empty 1
+                    , pgsUnitSimStates = HM.empty }
+                globals = minimalGlobals
+                    { sgNextBuildingId = 1, sgNextUnitId = 1 }
+                errsFor g = validateSessionSnapshot
+                                (buildSessionSnapshot g [bare])
+            errsFor globals { sgNextItemId = 0 }
+                `shouldBe` [ItemAllocatorBelowFloor 0]
+            errsFor globals { sgNextBuildingId = 0 }
+                `shouldBe` [BuildingAllocatorBelowFloor 0]
+            errsFor globals { sgNextUnitId = 0 }
+                `shouldBe` [UnitAllocatorBelowFloor 0]
+            errsFor globals `shouldBe` []
+
+        it "surfaces a rejected session-global floor through the real \
+           \envelope decode, attributed to core-session" $ do
+            let bare = (minimalPage page1)
+                    { pgsBuildings = BuildingSnapshot HM.empty 1
+                    , pgsUnits     = UnitSnapshot HM.empty 1
+                    , pgsUnitSimStates = HM.empty }
+                snap = (buildSessionSnapshot minimalGlobals [bare])
+                           { snapNextBuildingId = 0 }
+                meta = snapshotSaveMetadata (SaveRequestMeta "s" "t" False) snap
+                bytes = encodeSessionSnapshot meta snap []
+            case decodeSessionEnvelope HS.empty HS.empty bytes of
+                Right _  → expectationFailure
+                    "expected a core-session allocator-floor rejection"
+                Left msg → do
+                    msg `shouldSatisfy` T.isInfixOf "BuildingAllocatorBelowFloor"
+                    msg `shouldSatisfy` T.isInfixOf "core-session"
+
+        it "the legacy v90 bridge cannot bypass the floor either -- its \
+           \RECONSTRUCTED building/unit cursors and its carried item \
+           \cursor all go through the same validator" $ do
+            let v90With f = migrateSessionV90 minimalSaveMetadataV90
+                                (f minimalSaveDataV90)
+                zeroPages g = minimalSaveDataV90
+                    { sd90Worlds =
+                        [ g (minimalWorldPageSaveV90 (WorldPageId "main_world")) ] }
+                rejects r = case r of
+                    Left errs → errs `shouldSatisfy` (not . null)
+                    Right _   → expectationFailure
+                        "expected a v90 allocator-floor rejection"
+            rejects (v90With (\sd → sd { sd90NextItemInstanceId = 0 }))
+            rejects (migrateSessionV90 minimalSaveMetadataV90
+                        (zeroPages (\w → w { wp90Buildings =
+                                                BuildingSnapshotV90 HM.empty 0 })))
+            rejects (migrateSessionV90 minimalSaveMetadataV90
+                        (zeroPages (\w → w { wp90Units =
+                                                UnitSnapshotV90 HM.empty 0 })))
+            -- The unmodified fixture, whose v90 pages carry the real
+            -- convention, still migrates.
+            case migrateSessionV90 minimalSaveMetadataV90 minimalSaveDataV90 of
+                Left errs → expectationFailure (show errs)
+                Right _   → pure ()
 
     describe "assembly cross-validation (requirement 6/9/12)" $ do
         it "rejects a manifest/gameplay metadata mismatch" $ do

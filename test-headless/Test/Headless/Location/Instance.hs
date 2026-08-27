@@ -176,6 +176,34 @@ spec = describe "Location instance identity" $ do
             locationInstanceAllocatorErrors (instances3 { lisNextId = 2 })
                 `shouldSatisfy` (not . null)
 
+        -- #1667: the two comprehensions above both draw from 'lisById',
+        -- so an EMPTY table certified any cursor at all -- including 0
+        -- and, 'lisdNextId' being an unrestricted wire 'Int', a negative
+        -- one. 'allocateLocationInstance' hands the stored cursor out
+        -- verbatim, so such a payload would mint id 0 or a negative id
+        -- against the convention 'firstLocationInstanceId' documents.
+        it "flags an allocator below the first valid id even on an EMPTY \
+           \table, which no live id can witness" $ do
+            let withCursor n = emptyLocationInstances { lisNextId = n }
+            locationInstanceAllocatorErrors (withCursor 0)
+                `shouldSatisfy` any (T.isInfixOf "location-instance allocator is 0")
+            locationInstanceAllocatorErrors (withCursor (-3))
+                `shouldSatisfy` any (T.isInfixOf "location-instance allocator is -3")
+
+        it "still accepts an EMPTY table whose allocator is legitimately \
+           \fresh, and one that has legitimately advanced" $ do
+            locationInstanceAllocatorErrors emptyLocationInstances `shouldBe` []
+            locationInstanceAllocatorErrors
+                (emptyLocationInstances { lisNextId = 42 }) `shouldBe` []
+
+        it "reports the allocator floor SEPARATELY from the per-id \
+           \comparison, so a table violating both says so twice" $ do
+            let both = instances3 { lisNextId = 0 }
+                errs = locationInstanceAllocatorErrors both
+            errs `shouldSatisfy` any (T.isInfixOf "location-instance allocator is 0")
+            errs `shouldSatisfy`
+                any (T.isInfixOf "is not below the page's location-instance allocator")
+
         it "flags an instance stored under a key that is not its own id" $ do
             let inst = newLocationInstance Nothing (LocationInstanceId 1)
                            (ChunkCoord 0 0) ruinDef

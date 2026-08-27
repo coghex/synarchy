@@ -1411,16 +1411,38 @@ migrateWorldActivityV2 (WorldActivityDTOv2 slices) =
 --   key within one page's @gisiItems@ map is structurally impossible
 --   once decoded (a 'HashMap' cannot carry two entries under the same
 --   key), so there is nothing further to check there.
+--
+--   #1667: the page's OWN allocator floor is a separate clause, so it
+--   is checked even when @gisiItems@ is empty — an empty map used to
+--   certify any cursor, including a NEGATIVE one ('gisiNextId' being an
+--   unrestricted wire 'Int'), which 'Item.Ground.spawnGroundItem' would
+--   then hand out verbatim. Ground items are the engine's one ZERO-based
+--   allocator (@docs\/persistence_contract.md@), so the floor here is 0,
+--   not the 1 every other allocator uses; it is read from
+--   'emptyGroundItems' itself rather than restated, so the two cannot
+--   drift. 'World.Save.Component.Transfer.validateTransferOrders' is the
+--   precedent this generalizes.
 validateWorldActivity ∷ WorldActivityDTO → [ComponentError]
-validateWorldActivity (WorldActivityDTO slices) =
-    [ ComponentError worldActivityComponentId 3 ValidatePhase
-        ("page '" <> tshow (padPageId s) <> "': ground item #"
-         <> tshow gid <> " is not below the page's ground-item \
-            \allocator (" <> tshow (gisiNextId (padGroundItems s)) <> ")")
-    | s   ← slices
-    , gid ← HM.keys (gisiItems (padGroundItems s))
-    , gid ≥ gisiNextId (padGroundItems s)
+validateWorldActivity (WorldActivityDTO slices) = concat
+    [ [ ComponentError worldActivityComponentId 3 ValidatePhase
+          ("page '" <> tshow (padPageId s) <> "': ground-item allocator \
+             \is " <> tshow (gisiNextId (padGroundItems s)) <> ", below \
+             \the first valid ground-item id (" <> tshow firstGroundItemId
+           <> ")")
+      | s ← slices
+      , gisiNextId (padGroundItems s) < firstGroundItemId
+      ]
+    , [ ComponentError worldActivityComponentId 3 ValidatePhase
+          ("page '" <> tshow (padPageId s) <> "': ground item #"
+           <> tshow gid <> " is not below the page's ground-item \
+              \allocator (" <> tshow (gisiNextId (padGroundItems s)) <> ")")
+      | s   ← slices
+      , gid ← HM.keys (gisiItems (padGroundItems s))
+      , gid ≥ gisiNextId (padGroundItems s)
+      ]
     ]
+  where
+    firstGroundItemId = gisNextId emptyGroundItems
 
 -- | v2 (#1175) is a SEMANTIC bump, not a shape change: the wire layout
 --   is byte-identical to v1, but a v2 payload promises every designation
