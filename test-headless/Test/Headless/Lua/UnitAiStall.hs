@@ -8,6 +8,11 @@
 --   on schedule, and the budget accumulates ACROSS interruptions rather
 --   than restarting after one.
 --
+--   Since #1769 it also covers the REPORT the commanded-move branch
+--   files when it gives up: exactly one @unit_warning@ naming the unit
+--   and the order, for a PLAYER order only, and silent when the
+--   stuck-walk watchdog already reported that same walk.
+--
 --   Same standalone-Lua-VM pattern as
 --   "Test.Headless.Lua.UnitAiLocations": each 'it' runs one
 --   self-contained chunk via 'Lua.dostring' in a fresh interpreter,
@@ -69,12 +74,16 @@ prelude = lns
     [ "package.loaded['scripts.unit_ai'] = {}"
     , "local stall = require('scripts.unit_ai_stall')"
     , "NOW = 0"
-    , "POS = { gridX = 0, gridY = 0 }"
+    -- Named, because the abandonment report below must identify the
+    -- unit in its own text (#1769), not only by the uid it is filed
+    -- against.
+    , "POS = { gridX = 0, gridY = 0, name = 'Dorian Kessler' }"
     , "engine = { gameTime = function() return NOW end,"
     , "           logWarn = function() end, logInfo = function() end,"
-    , "           emitEventForUnit = function(cat, msg)"
+    , "           emitEventForUnit = function(cat, msg, uid)"
     , "             EVENTS = EVENTS or {}"
-    , "             EVENTS[#EVENTS + 1] = { cat = cat, msg = msg } end }"
+    , "             EVENTS[#EVENTS + 1] ="
+    , "               { cat = cat, msg = msg, uid = uid } end }"
     , "unit = { getInfo = function() return POS end }"
     , "local s = { commandedTask = nil, currentAction = nil }"
     , "local STEP = 0.25"
@@ -276,16 +285,169 @@ spec = describe "commanded order stall budget" $ do
                 , "assert(NOW < 70, 'and give up at the budget, not later')"
                 ]
 
-        it "expires silently, exactly as before — the player-visible \
-           \report on an unreachable commanded move is the stuck-walk \
-           \watchdog's, not maintainTask's" $
+    describe "an abandoned PLAYER order is reported (#1769)" $ do
+        it "reports exactly one unit_warning when the order expires \
+           \while the unit is still MOVING — the case the stuck-walk \
+           \watchdog cannot cover, since displacement keeps its own \
+           \mark fresh while net closure never reaches \
+           \TASK_PROGRESS_TILES" $
+            runsOk $ lns
+                [ prelude
+                , "EVENTS = {}"
+                , "s.commandedTask = { x = 40, y = 0, startedAt = NOW,"
+                , "                    player = true }"
+                -- The dead band, driven directly: every sample moves the
+                -- unit far enough that unit_ai.lua's watchdog would
+                -- refresh (> 0.1 tiles of displacement), and no sample
+                -- ever nets TASK_PROGRESS_TILES of improvement on the
+                -- best distance so far, so this budget never resets.
+                , "local worst = 0"
+                , "for i = 1, 40 do"
+                , "  local prev = POS.gridX"
+                , "  place((i % 2 == 0) and 0.3 or 0.0, 0)"
+                , "  local step = math.abs(POS.gridX - prev)"
+                , "  if step > worst then worst = step end"
+                , "  local t = s.commandedTask"
+                , "  if t and t.bestDist then"
+                , "    assert(t.bestDist == 40,"
+                , "      'the order never records a closer approach: '"
+                , "      .. tostring(t.bestDist))"
+                , "  end"
+                , "  tick(2, 'follow_command')"
+                , "end"
+                , "assert(worst > 0.1,"
+                , "  'the unit moved enough to keep the watchdog fresh: '"
+                , "  .. tostring(worst))"
+                , "assert(s.commandedTask == nil, 'and the order expired')"
+                -- Ticking on past the expiry is what proves requirement
+                -- 3: the cleared order cannot report a second time.
+                , "assert(#EVENTS == 1,"
+                , "  'exactly one report: ' .. tostring(#EVENTS))"
+                , "assert(EVENTS[1].cat == 'unit_warning',"
+                , "  'on the player-visible warning surface: '"
+                , "  .. tostring(EVENTS[1].cat))"
+                , "assert(EVENTS[1].uid == 1,"
+                , "  'filed against the unit that lost the order: '"
+                , "  .. tostring(EVENTS[1].uid))"
+                , "assert(EVENTS[1].msg:find('Dorian Kessler', 1, true),"
+                , "  'naming the unit: ' .. tostring(EVENTS[1].msg))"
+                , "assert(EVENTS[1].msg:find('move order', 1, true),"
+                , "  'and the order it abandoned: ' .. tostring(EVENTS[1].msg))"
+                ]
+
+        it "says nothing for an INTERNAL move — building_spawn.lua's \
+           \portal walk-out is not an order the player gave, exactly \
+           \as on the arrival branch" $
             runsOk $ lns
                 [ prelude
                 , "EVENTS = {}"
                 , "s.commandedTask = { x = 40, y = 0, startedAt = NOW }"
                 , "tick(75, 'follow_command')"
-                , "assert(s.commandedTask == nil, 'the order expired')"
-                , "assert(#EVENTS == 0, 'maintainTask must report nothing')"
+                , "assert(s.commandedTask == nil, 'the order still expired')"
+                , "assert(#EVENTS == 0,"
+                , "  'an internal move reports nothing: ' .. tostring(#EVENTS))"
+                ]
+
+        it "says nothing for an order that ARRIVES" $
+            runsOk $ lns
+                [ prelude
+                , "EVENTS = {}"
+                , "s.commandedTask = { x = 40, y = 0, startedAt = NOW,"
+                , "                    player = true }"
+                , "tick(5, 'follow_command')"
+                , "place(39.5, 0)"
+                , "tick(0.25, 'follow_command')"
+                , "assert(s.commandedTask == nil, 'arrival cleared the task')"
+                , "assert(s.holdAnchor, 'and left the hold it always did')"
+                , "assert(#EVENTS == 0,"
+                , "  'a completed order reports nothing: ' .. tostring(#EVENTS))"
+                ]
+
+        it "says nothing for an order the player SUPERSEDES, while a \
+           \replacement that independently expires still reports for \
+           \itself" $
+            runsOk $ lns
+                [ prelude
+                , "EVENTS = {}"
+                , "s.commandedTask = { x = 40, y = 0, startedAt = NOW,"
+                , "                    player = true }"
+                , "tick(50, 'follow_command')"
+                , "assert(s.commandedTask, 'the first order is still pending')"
+                -- unit_ai_core's commandMove replaces the table outright.
+                , "s.commandedTask = { x = 80, y = 0, startedAt = NOW,"
+                , "                    player = true }"
+                , "tick(50, 'follow_command')"
+                , "assert(s.commandedTask,"
+                , "  'the replacement runs its own fresh budget')"
+                , "assert(#EVENTS == 0,"
+                , "  'the superseded order reported nothing: '"
+                , "  .. tostring(#EVENTS))"
+                , "tick(15, 'follow_command')"
+                , "assert(s.commandedTask == nil,"
+                , "  'and the replacement expires on its own')"
+                , "assert(#EVENTS == 1,"
+                , "  'reporting for itself: ' .. tostring(#EVENTS))"
+                ]
+
+        it "says nothing when the stuck-walk watchdog already reported \
+           \this order's own walk — one event, one report" $
+            runsOk $ lns
+                [ prelude
+                , "EVENTS = {}"
+                , "s.commandedTask = { x = 40, y = 0, startedAt = NOW,"
+                , "                    player = true }"
+                , "tick(10, 'follow_command')"
+                -- unit_ai.lua's watchdog stops the unit, files its own
+                -- `Stuck — can't reach destination` warning on this same
+                -- surface, and records that it did.
+                , "s.currentAction = 'follow_command'"
+                , "stall.noteStuckReport(1, s)"
+                , "tick(60, 'follow_command')"
+                , "assert(s.commandedTask == nil, 'the order still expires')"
+                , "assert(#EVENTS == 0,"
+                , "  'and adds nothing to what the watchdog said: '"
+                , "  .. tostring(#EVENTS))"
+                ]
+
+        it "still reports when the watchdog's stuck walk was ANOTHER \
+           \action's, not this order's" $
+            runsOk $ lns
+                [ prelude
+                , "EVENTS = {}"
+                , "s.commandedTask = { x = 40, y = 0, startedAt = NOW,"
+                , "                    player = true }"
+                , "tick(10, 'treat_ally')"
+                , "s.currentAction = 'treat_ally'"
+                , "stall.noteStuckReport(1, s)"
+                , "tick(70, 'follow_command')"
+                , "assert(s.commandedTask == nil, 'the order expires')"
+                , "assert(#EVENTS == 1,"
+                , "  'and reports, since the stuck walk was not its own: '"
+                , "  .. tostring(#EVENTS))"
+                ]
+
+        it "reports a SECOND stall after a genuine closest approach — \
+           \the approach that refreshes the budget retires the \
+           \watchdog record along with it" $
+            runsOk $ lns
+                [ prelude
+                , "EVENTS = {}"
+                , "s.commandedTask = { x = 40, y = 0, startedAt = NOW,"
+                , "                    player = true }"
+                , "tick(10, 'follow_command')"
+                , "s.currentAction = 'follow_command'"
+                , "stall.noteStuckReport(1, s)"
+                , "place(10, 0)   -- 30 tiles closer: a real approach"
+                , "tick(10, 'follow_command')"
+                , "assert(s.commandedTask.bestDist < 31,"
+                , "  'the approach is recorded: '"
+                , "  .. tostring(s.commandedTask.bestDist))"
+                , "tick(60, 'follow_command')"
+                , "assert(s.commandedTask == nil,"
+                , "  'the order expires on the new stall')"
+                , "assert(#EVENTS == 1,"
+                , "  'which is a new event, so it reports: '"
+                , "  .. tostring(#EVENTS))"
                 ]
 
     describe "the closest-approach reset is unchanged" $ do
