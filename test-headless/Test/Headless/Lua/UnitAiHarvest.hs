@@ -24,6 +24,14 @@
 --   @s.harvestTarget@, the @unit.pickup@ bend-down animation, and the
 --   farming XP grant on completion.
 --
+--   #1743 adds the case that closes the gap the rest of this file left
+--   open: pending collection reaching @execute@ through ORDINARY
+--   arbitration, over a fixture holding exactly one ripe plant, with no
+--   @execOnly@ anywhere in it. Everything else here drives the
+--   collecting phase through @execOnly@ on purpose, which is what let
+--   @utility@ score @-math.huge@ for a pending collection — a score
+--   arbitration can never select — without a single example failing.
+--
 --   Same standalone-Lua-VM pattern as "Test.Headless.Lua.UnitAiStall":
 --   each 'it' runs one self-contained chunk via 'Lua.dostring' in a
 --   fresh interpreter, asserting inside Lua via @assert()@, with a
@@ -177,10 +185,12 @@ prelude = lns
     , "  S.currentAction = 'treat_ally'"
     , "  NOW = NOW + seconds"
     , "end"
-    -- The collecting phase runs on execute alone: it is bookkeeping
-    -- the action finishes AFTER the plant is gone, so utility has
-    -- nothing left to score. Arbitration reaches it the same way,
-    -- through whatever other ripe flora keeps auto_harvest winning.
+    -- Execute in isolation, with no arbitration pass in front of it:
+    -- what pins that #1743's utility change moved nothing INSIDE the
+    -- collecting branch — one exact gid per call, consumed from the end
+    -- of the recorded list, cleared on exhaustion. The arbitration half
+    -- of that phase has its own case below, which uses no execOnly at
+    -- all; do not "simplify" the two into one.
     , "local function execOnly() NOW = NOW + STEP"
     , "  harvest.execute(1, S, PARAMS) end"
     , "local function harvested() return CALLS.harvest > 0 end"
@@ -240,8 +250,13 @@ spec = describe "skill-scaled auto-harvest" $ do
                 -- charged time, plus the arrival tick that charges none.
                 , "tick(1.5)"
                 , "assert(not harvested(), 'must still be working at 1.5 s')"
-                , "tick(1.5)"
-                , "assert(harvested(), 'must have completed by 3 s at farming 50')"
+                -- Stop the arbitration ticks ON the completion tick.
+                -- Since #1743 utility scores a pending collection, so a
+                -- further ordinary tick here would collect a yield of
+                -- its own and this case would no longer be measuring
+                -- the execute branch in isolation.
+                , "tick(1.0)"
+                , "assert(harvested(), 'must have completed by 2.5 s at farming 50')"
                 , "assert(CALLS.pickup == 1, 'the bend-down anim must play once')"
                 , "assert(XP == PARAMS.harvest_xp_per_harvest,"
                 , "  'completion must grant farming XP exactly once')"
@@ -250,6 +265,7 @@ spec = describe "skill-scaled auto-harvest" $ do
                 -- The collecting phase then pulls the two ground yields
                 -- one per tick and hands control back.
                 , "assert(S.harvestPhase == 'collecting', 'yields must be collected')"
+                , "assert(#GROUND == 0, 'the completion tick itself collects nothing')"
                 , "execOnly()"
                 , "assert(#GROUND == 1, 'exactly one yield comes off the ground per tick')"
                 , "execOnly()"
@@ -257,6 +273,109 @@ spec = describe "skill-scaled auto-harvest" $ do
                 , "assert(#GROUND == 2, 'both yields must be picked up')"
                 , "assert(S.harvestPhase == nil and S.harvestLoot == nil,"
                 , "  'the collecting phase must end once the loot is gone')"
+                ]
+
+    -- #1743. The gap every other case in this file leaves open:
+    -- utility scored -math.huge the moment the last ripe plant was
+    -- gone, which is the ONE state a completed harvest guarantees, so
+    -- arbitration could never select the action that owns the pending
+    -- collection. Everything here runs through a production-shaped
+    -- arbitration pass -- idle is a real candidate scoring 0, and the
+    -- winner must beat it strictly, exactly as scripts/unit_ai.lua
+    -- selects -- and never calls execute directly.
+    describe "a completed harvest collects its yields with no second plant" $ do
+        it "keeps auto_harvest selectable through ordinary arbitration \
+           \until the last yield is off the ground and the phase has \
+           \cleared, scanning for nothing and harvesting nothing more" $
+            runsOk $ lns
+                [ prelude
+                -- scripts/unit_ai_needs.lua registers idle at a flat 0,
+                -- and scripts/unit_ai.lua seeds bestScore at -math.huge
+                -- and selects on `u > bestScore`. Scoring idle FIRST is
+                -- what makes this strict: auto_harvest has to come in
+                -- ABOVE 0 to win, so a merely finite negative pending
+                -- score -- which the prelude's single-action `step`
+                -- would happily execute -- loses here.
+                , "local IDLE_UTILITY = 0.0"
+                , "local function arbitrate()"
+                , "  NOW = NOW + STEP"
+                , "  local best, bestScore = nil, -math.huge"
+                , "  if IDLE_UTILITY > bestScore then"
+                , "    best, bestScore = 'idle', IDLE_UTILITY end"
+                , "  local u = harvest.utility(1, S, PARAMS)"
+                , "  if u > bestScore then best, bestScore = 'auto_harvest', u end"
+                , "  local switching = S.currentAction ~= best"
+                , "  S.currentAction = best"
+                , "  if best == 'auto_harvest' and (switching or ACTIVITY == 'idle') then"
+                , "    harvest.execute(1, S, PARAMS)"
+                , "  end"
+                , "  return best, bestScore"
+                , "end"
+                -- Exactly ONE ripe plant in the whole fixture, yielding
+                -- the prelude's two gids. Nothing below adds another.
+                , "assert(FLORA['10,0'] and #FLORA['10,0'] == 2,"
+                , "  'the fixture must hold one ripe plant yielding two gids')"
+                , "local planted = 0"
+                , "for _ in pairs(FLORA) do planted = planted + 1 end"
+                , "assert(planted == 1, 'and no second harvestable plant')"
+                , "place(9, 0)"
+                -- Work that one plant to completion, stopping ON the
+                -- completion tick so nothing has been collected yet.
+                , "local guard = 0"
+                , "while CALLS.harvest == 0 and guard < 60 do"
+                , "  arbitrate(); guard = guard + 1"
+                , "end"
+                , "assert(CALLS.harvest == 1, 'the single plant must be picked')"
+                , "assert(next(FLORA) == nil,"
+                , "  'and the world must now hold no harvestable plant at all')"
+                , "assert(S.harvestPhase == 'collecting' and #S.harvestLoot == 2,"
+                , "  'the completion must leave two recorded gids to collect')"
+                , "assert(#GROUND == 0, 'none of them collected yet')"
+                -- The defect, stated as an assertion: a pending
+                -- collection must outscore idle, and must reach that
+                -- score without a scan (requirement 5).
+                , "local findsAtCompletion = CALLS.find"
+                , "assert(harvest.utility(1, S, PARAMS) > IDLE_UTILITY,"
+                , "  'pending collection must score above idle, not -math.huge')"
+                , "assert(CALLS.find == findsAtCompletion,"
+                , "  'and must reach that score with no findHarvestableFlora scan')"
+                -- Two one-item ticks, in the exact order the unindexed
+                -- table.remove consumes the recorded list: from the END.
+                , "local winner = arbitrate()"
+                , "assert(winner == 'auto_harvest',"
+                , "  'pending collection must win arbitration over idle')"
+                , "assert(#GROUND == 1 and GROUND[1] == 2,"
+                , "  'the first tick must pick up exactly gid 2')"
+                , "winner = arbitrate()"
+                , "assert(winner == 'auto_harvest', 'and win again for the second')"
+                , "assert(#GROUND == 2 and GROUND[2] == 1,"
+                , "  'the second tick must pick up exactly gid 1')"
+                , "assert(S.harvestPhase == 'collecting',"
+                , "  'the terminal cleanup tick is still owed')"
+                -- ...then the terminal cleanup tick, which picks
+                -- nothing up. Eligibility is the PHASE, not a non-empty
+                -- list, or this state would strand in turn.
+                , "winner = arbitrate()"
+                , "assert(winner == 'auto_harvest',"
+                , "  'the empty-list cleanup tick must still be selectable')"
+                , "assert(#GROUND == 2, 'the cleanup tick collects nothing')"
+                , "assert(S.harvestPhase == nil and S.harvestLoot == nil,"
+                , "  'and clears the phase and its list')"
+                -- Nothing was searched for, and nothing else was
+                -- harvested, across all three of those ticks.
+                , "assert(CALLS.find == findsAtCompletion,"
+                , "  'no scan may run while a collection is pending')"
+                , "assert(CALLS.harvest == 1,"
+                , "  'and no second plant may be harvested to finish it')"
+                , "assert(CALLS.pickup == 1,"
+                , "  'the bend-down anim belongs to the pick, not to each yield')"
+                -- The bypass is confined to the phase: with it cleared
+                -- and no plant left, the scan resumes and idle wins.
+                , "winner = arbitrate()"
+                , "assert(winner == 'idle',"
+                , "  'with the loot gone and no plant left, idle wins again')"
+                , "assert(CALLS.find == findsAtCompletion + 1,"
+                , "  'and only then does the ordinary scan resume')"
                 ]
 
     describe "the farming skill decides how long the pick takes" $ do
