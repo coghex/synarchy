@@ -40,6 +40,16 @@ arena as the secondary page — it additionally asserts a pre-save
 world.addTile edit is replayed onto the rebuilt arena. The default run
 keeps two real generated worlds (the #219 gate) unchanged.
 
+Arena base seeding (#1718): rebuilding is not restoring. The save stores
+generation parameters and the edit overlay, never the arena's base tile
+grid, so every surface tile no edit touched is REGENERATED on load from
+the page's recorded seed. --arena therefore also captures the complete
+256-position surface-vegetation vector of an untouched chunk before the
+save and compares it after the load. The whole vector, not a tile: the
+arena generator picks among four grass/moss variants per column, so a
+single coordinate agrees by chance one time in four even when every
+other tile was re-rolled.
+
 World identity (#707): the probe also gates the player-facing identity
 layer end to end. Both pages are created through the extended Lua
 contract — world.init(pageId, seed, size, plates, displayName[, gloss])
@@ -297,11 +307,43 @@ def populate_world(port: int, page: str, seed: int, size: int, plates: int,
 
 ARENA_EDIT_TILE = (6, 6)  # tile raised pre-save; must survive the reload
 
+# Chunk (1,1) of the 5x5 arena — global tiles 16..31 on both axes. Far
+# from every spawn and from ARENA_EDIT_TILE, so nothing this probe does
+# ever writes an edit into it: its surface is pure generator output on
+# both sides of the round trip.
+ARENA_VEG_CHUNK = (16, 16)
 
-def populate_arena(port: int, page: str) -> tuple[int, int, int]:
+
+def read_arena_veg(port: int) -> list[int] | None:
+    """The COMPLETE 256-position surface-vegetation vector of the active
+    page's ARENA_VEG_CHUNK, in column order.
+
+    Not a sampled tile (#1718): the generator picks among four grass/moss
+    variants, so a single coordinate agrees by chance one time in four and
+    a one-tile check would miss three quarters of a reseeding regression.
+    A tile the engine cannot answer for (unloaded chunk -> nil) is
+    recorded as -1 rather than skipped, so a short or hole-punched read
+    fails the comparison instead of silently shrinking it.
+    """
+    x0, y0 = ARENA_VEG_CHUNK
+    lua = (
+        "local t={} "
+        f"for y={y0},{y0 + 15} do for x={x0},{x0 + 15} do "
+        "local v=world.getVegAt(x,y) "
+        "t[#t+1] = (v==nil) and -1 or v end end return t"
+    )
+    got = send_json(port, lua, timeout=15.0)
+    if not isinstance(got, list):
+        return None
+    return [as_int(str(v)) if not isinstance(v, int) else v for v in got]
+
+
+def populate_arena(port: int, page: str) -> tuple[int, int, int, list[int]]:
     """world.initArena `page`, show it, spawn a unit + cargo-hold building
     on the flat ground, and raise one tile so the load path's edit replay
-    is exercised. Returns (unitId, buildingId, editedTileZ)."""
+    is exercised. Returns (unitId, buildingId, editedTileZ, baseVegVector)
+    — the last being the untouched chunk's whole surface-vegetation vector
+    as this page was FRESHLY generated (#1718)."""
     send(port, f"world.initArena('{page}'); return 'ok'")
     send(port, f"world.show('{page}'); return 'ok'")
     # Same page-scoped, boundary-naming setup wait as populate_world: the
@@ -337,7 +379,19 @@ def populate_arena(port: int, page: str) -> tuple[int, int, int]:
     else:
         sys.exit(f"FAIL: arena addTile at ({ex},{ey}) never landed")
     print(f"{page}: raised tile ({ex},{ey}) to z={base + 1}")
-    return uid, bid, base + 1
+
+    # #1718: snapshot the untouched chunk's full surface vegetation while
+    # this page is still the freshly generated one. The save stores gen
+    # params and the edit overlay, never the base tile grid, so this
+    # vector is RECONSTRUCTED on load from the page's recorded seed —
+    # which is exactly what the post-load read below re-checks.
+    veg = read_arena_veg(port)
+    if veg is None or len(veg) != 256 or -1 in veg:
+        sys.exit(f"FAIL: could not read arena base vegetation on {page} "
+                 f"({'nil' if veg is None else f'{len(veg)} values'})")
+    print(f"{page}: base vegetation captured "
+          f"({len(veg)} tiles, ids {sorted(set(veg))})")
+    return uid, bid, base + 1, veg
 
 
 class Checks:
@@ -389,8 +443,10 @@ def main() -> int:
                                     args.seed, args.size, args.plates,
                                     name=f"  {MW_NAME}  ", gloss=MW_GLOSS)
         arena_z = None
+        arena_veg = None
         if args.arena:
-            u_sw, b_sw, arena_z = populate_arena(args.port, "second_world")
+            u_sw, b_sw, arena_z, arena_veg = populate_arena(
+                args.port, "second_world")
         else:
             u_sw, b_sw = populate_world(args.port, "second_world",
                                         args.seed2, args.size, args.plates,
@@ -506,6 +562,22 @@ def main() -> int:
             chk.ok(got == arena_z,
                    f"arena edit at ({ex},{ey}) replayed on load "
                    f"(z={got}, expected {arena_z})")
+
+        if args.arena and arena_veg is not None:
+            # #1718: the untouched chunk's base vegetation is regenerated
+            # from the page's recorded seed, so the WHOLE 256-position
+            # vector must come back identical. A short read, a nil tile
+            # (-1), or one differing variant fails.
+            after = read_arena_veg(args.port)
+            chk.ok(isinstance(after, list) and len(after) == 256
+                   and -1 not in after,
+                   "arena base vegetation is fully readable after load "
+                   f"({'nil' if after is None else f'{len(after)} values'})")
+            if isinstance(after, list):
+                differing = sum(1 for a, b in zip(arena_veg, after) if a != b)
+                chk.ok(after == arena_veg,
+                       "arena base vegetation survives the save/load round "
+                       f"trip unchanged ({differing}/256 tiles differ)")
 
         print("\n--- world identity restore checks (#707) ---")
         ident = get_identity(args.port, "main_world")
