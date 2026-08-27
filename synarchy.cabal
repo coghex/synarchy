@@ -963,6 +963,7 @@ executable synarchy
                  , App.Headless
                  , App.Dump
                  , App.Preview
+                 , App.Preview.Config
                  , App.LanguageReport
                  , App.ResourceRoot
     default-extensions: FlexibleInstances
@@ -1064,15 +1065,16 @@ test-suite synarchy-test-graphical
 test-suite synarchy-test-headless
     import: warnings, lang, build-policy
     type: exitcode-stdio-1.0
-    -- `app` is here for ONE module: App.Cli, the pure CLI parser (#1191).
-    -- It lives in the executable rather than the library and has no
-    -- app-local imports of its own, so compiling it into this suite is
-    -- what lets the absence-vs-malformed contract be tested without
+    -- `app` is here for two pure modules: App.Cli's parser (#1191) and
+    -- App.Preview.Config's hidden-window policy. Both live in the
+    -- executable rather than the library and have no app-local imports,
+    -- so compiling them into this suite tests their policy without
     -- booting a process. `test-headless` stays FIRST so main-is resolves
     -- to test-headless/Spec.hs, not app/Main.hs.
     hs-source-dirs: test-headless, app
     main-is: Spec.hs
     other-modules: App.Cli
+                   App.Preview.Config
                    Test.Headless.UPrelude
                    Test.Headless.Harness
                    Test.Headless.Harness.Isolation
@@ -1256,6 +1258,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Core.DebugListener
                    Test.Headless.App.Cli
                    Test.Headless.App.ChunkRegion
+                   Test.Headless.App.PreviewConfig
                    Test.Headless.Core.LogMonad
                    Test.Headless.Core.LogParity
                    Test.Headless.Core.LoopStartup
