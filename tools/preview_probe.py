@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """--preview real-boot browser probe (#886 Phase 2, #887 Phase 3, #888 Phase 4).
 
-Needs a GPU (a real GLFW window — --preview has no offscreen variant) —
-manual-only, never CI-gated (see tools/preview_cli_probe.py for the
-no-GPU CLI-contract checks this probe used to also carry, split out in
-#886 so a classifier/path-containment regression fails PRs directly
-instead of waiting for a manual dev-machine run).
+Needs a GPU and a real GLFW surface/swapchain. The probe sets
+SYNARCHY_PREVIEW_HIDDEN=1, so those windows stay hidden and non-activating
+while preserving the windowed resize path an offscreen boot would bypass.
+It is manual-only, never CI-gated (see tools/preview_cli_probe.py for the
+no-GPU CLI-contract checks this probe used to also carry, split out in #886
+so a classifier/path-containment regression fails PRs directly instead of
+waiting for a manual dev-machine run).
 
-Every check boots its own engine, so the whole run opens (and closes) a
-window per target — around fifteen of them, a few minutes end to end.
+Every check boots its own engine, so the whole run creates (and closes) a
+hidden window per target — around twenty-two of them, a few minutes end to
+end.
 
 Checks:
   1. Boot profile + preview target over the debug console
@@ -1396,6 +1399,11 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--port", type=int, default=9150)
     args = ap.parse_args()
+
+    # Keep the real GLFW/Vulkan/swapchain path (including live window
+    # resizing) without repeatedly taking keyboard focus from the developer.
+    # The variable is inherited only by this probe's engine subprocesses.
+    os.environ["SYNARCHY_PREVIEW_HIDDEN"] = "1"
 
     results = [
         check_simple_list_mode(args.port),

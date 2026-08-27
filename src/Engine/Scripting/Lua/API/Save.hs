@@ -473,11 +473,18 @@ acceptSaveRequest env mgr wantAutosave =
         -- times out or serialization fails. 'imposePauseHeld' because
         -- this whole function already holds the epoch mutex.
         imposePauseHeld (toWorldSimCapability env)
+        -- #1730: the count of pause assertions made by sources
+        -- INDEPENDENT of this save. Read after 'imposePauseHeld' only
+        -- for readability -- that call deliberately does not move it,
+        -- for the same reason 'arIntentGen' is not bumped here: a save
+        -- may not count its own pause as somebody else's.
+        enginePauseGen ← readIORef (enginePauseGenRef env)
         pure $ if not wantAutosave then Nothing else Just AutosaveRequest
-            { arPrePaused    = prePaused
-            , arPreTimeScale = scale
-            , arPausedPage   = fst <$> mVisible
-            , arIntentGen    = gen
+            { arPrePaused      = prePaused
+            , arPreTimeScale   = scale
+            , arPausedPage     = fst <$> mVisible
+            , arIntentGen      = gen
+            , arEnginePauseGen = enginePauseGen
             }
 
 -- | engine.getSaveConfig() → {enabled=, intervalMinutes=, rotationDepth=}

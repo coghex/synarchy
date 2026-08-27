@@ -6,6 +6,8 @@ module Engine.Graphics.Vulkan.Capability
   , queryBindlessSupport
   , determineTextureCapability
   , isBindlessSupported
+  , minimumUsableSlots
+  , bindlessCapacityShortfalls
   , bindlessShortfalls
   , unsupportedBindlessMessage
   , deviceBindlessFailureMessage
@@ -13,8 +15,10 @@ module Engine.Graphics.Vulkan.Capability
 
 import UPrelude
 import qualified Data.Text as T
+import Engine.Graphics.Vulkan.Texture.Limits (maxBindlessTextures)
 import Engine.Graphics.Vulkan.Texture.Requirements
-  (BindlessFeature, bindlessFeatureField, missingBindlessFeatures
+  (BindlessFeature, CapacityCheck(..), bindlessFeatureField
+  ,capacityCheckHolds, missingBindlessFeatures, reportedBindlessCapacities
   ,requiredBindlessFeatures)
 import Vulkan.Core10
 import Vulkan.Core11 (getPhysicalDeviceProperties2, getPhysicalDeviceFeatures2)
@@ -28,14 +32,27 @@ data BindlessSupport = BindlessSupport
   { bsVulkan12OrHigher                    ∷ Bool
   , bsMaxSampledImagesPerStage            ∷ Word32  -- Base limit (128)
   , bsMaxDescriptorSetSampledImages       ∷ Word32  -- Base limit (640)
-  -- The UPDATE_AFTER_BIND limits - these are the real bindless limits!
-  , bsMaxUpdateAfterBindSampledImages     ∷ Word32  -- Should be 1,000,000
+  -- | What the device reports for each capacity that APPLIES to it — the
+  --   UPDATE_AFTER_BIND limits governing the bindless pipeline layout and
+  --   pool. These are gates, not budgets: the texture array is fixed-size,
+  --   so a device supplies every applicable one in full or cannot run this
+  --   renderer at all (#1689). BOTH families are here and both are
+  --   enforced: each ordinary 'Vulkan.Core10.PhysicalDeviceLimits'
+  --   statement against the descriptors in the layout's
+  --   non-update-after-bind set, and each update-after-bind statement
+  --   against every set's. They are simultaneous @must@s over different
+  --   populations, never alternatives, and no device feature relaxes
+  --   either: the layout puts descriptors of each class against its limit
+  --   whatever the device advertises.
+  , bsCapacities                          ∷ [CapacityCheck]
   -- | Which of 'requiredBindlessFeatures' the device does NOT advertise
   --   (#1282). Empty on a device that can run the bindless renderer.
   , bsMissingFeatures                     ∷ [BindlessFeature]
   } deriving (Show, Eq)
 
--- | What texture system capability we'll use
+-- | What texture system capability we'll use. 'BindlessTextures' carries
+--   the descriptor count of the combined-image-sampler binding, which is
+--   always 'maxBindlessTextures' — see 'determineTextureCapability'.
 data TextureSystemCapability
   = BindlessTextures Word32
   | BoundedTextureArray Word32
@@ -57,7 +74,7 @@ queryBindlessSupport pDevice = do
   -- Below Vulkan 1.2 there is no 1.2 struct to chain onto either query: the
   -- device is unsupported on version alone, and every required feature counts
   -- as missing without ever asking the driver about it.
-  (props12, missing) ← if isVulkan12OrHigher
+  (capacities, missing) ← if isVulkan12OrHigher
     then do
       PhysicalDeviceProperties2 { next = (vk12Props :& ()) }
         ← getPhysicalDeviceProperties2 pDevice
@@ -65,59 +82,89 @@ queryBindlessSupport pDevice = do
       PhysicalDeviceFeatures2 { next = (vk12Feats :& ()) }
         ← getPhysicalDeviceFeatures2 pDevice
           ∷ IO (PhysicalDeviceFeatures2 '[PhysicalDeviceVulkan12Features])
-      let PhysicalDeviceVulkan12Properties
-            { maxPerStageDescriptorUpdateAfterBindSampledImages = maxBindless
-            } = vk12Props
-      pure (maxBindless, missingBindlessFeatures vk12Feats)
-    else return (0, requiredBindlessFeatures)
+      pure ( reportedBindlessCapacities deviceLimits vk12Props
+           , missingBindlessFeatures vk12Feats )
+    else return (unqueriedCapacities, requiredBindlessFeatures)
 
   pure $ BindlessSupport
     { bsVulkan12OrHigher = isVulkan12OrHigher
     , bsMaxSampledImagesPerStage = maxPerStageDescriptorSampledImages deviceLimits
     , bsMaxDescriptorSetSampledImages = maxDescriptorSetSampledImages deviceLimits
-    , bsMaxUpdateAfterBindSampledImages = props12
+    , bsCapacities = capacities
     , bsMissingFeatures = missing
     }
 
--- | Check if full bindless is supported
+-- | What a pre-1.2 device reports: nothing was measured, so there is no
+--   rule to check. The version gate refuses such a device before any
+--   capacity is consulted either way.
+unqueriedCapacities ∷ [CapacityCheck]
+unqueriedCapacities = []
+
+-- | Every APPLICABLE update-after-bind capacity the device reports below
+--   what the fixed-size bindless pipeline layout consumes, each naming the
+--   reported count and the count the renderer requires (#1689). Empty on a
+--   device that can build the binding at its declared size.
+--
+--   Driven by 'bsCapacities' rather than 'requiredBindlessCapacities': a
+--   capacity whose Valid Usage statement this device's features leave
+--   inactive is absent from that list precisely so it cannot produce a
+--   shortfall here.
+bindlessCapacityShortfalls ∷ BindlessSupport → [Text]
+bindlessCapacityShortfalls support =
+  [ "the device reports " <> tshow (ccReported check) <> " " <> ccField check
+      <> ", but the bindless texture array requires "
+      <> tshow (ccRequired check)
+  | check ← bsCapacities support
+  , not (capacityCheckHolds check)
+  ]
+
+-- | Check if full bindless is supported. The capacity gate is an exact
+--   requirement, not a floor to allocate down from: both fragment shaders
+--   declare @textures[maxBindlessTextures]@, so a device that cannot supply
+--   that whole binding cannot run this renderer (#1689).
 isBindlessSupported ∷ BindlessSupport → Bool
 isBindlessSupported bs = bsVulkan12OrHigher bs
                        ∧ null (bsMissingFeatures bs)
-                       ∧ bsMaxUpdateAfterBindSampledImages bs > 0
+                       ∧ null (bindlessCapacityShortfalls bs)
 
 -- | Why a device falls short of the renderer's bindless requirement, in the
 --   order the gates apply. Empty exactly when 'isBindlessSupported' holds.
---   A device below Vulkan 1.2 reports only that: the feature and limit
+--   A device below Vulkan 1.2 reports only that: the feature and capacity
 --   findings below it are consequences of the version gate, not independent
 --   evidence (nothing was queried to produce them).
 bindlessShortfalls ∷ BindlessSupport → [Text]
 bindlessShortfalls bs
   | not (bsVulkan12OrHigher bs) = ["Vulkan 1.2 or higher is required"]
-  | otherwise = featureShortfall <> limitShortfall
+  | otherwise = featureShortfall <> bindlessCapacityShortfalls bs
   where
     featureShortfall = case bsMissingFeatures bs of
       []      → []
       missing → ["missing required descriptor-indexing feature(s): "
                   <> T.intercalate ", " (map bindlessFeatureField missing)]
-    limitShortfall =
-      ["the device reports no update-after-bind sampled-image descriptors"
-      | bsMaxUpdateAfterBindSampledImages bs ≡ 0]
 
 -- | The renderer's one bindless-required failure message — #1055's
 --   diagnostic contract, factored in #1282 so device selection
 --   ("Engine.Graphics.Vulkan.Device") and texture-system creation
 --   ("Engine.Graphics.Vulkan.Texture.System") cannot describe the same
---   shortfall differently. The parenthetical is omitted when the device
---   clears every capability gate and only the post-reservation slot budget
---   came up short, which has no shortfall to name.
+--   shortfall differently. The parenthetical always names a cause: a device
+--   that clears every capability gate can only have been refused for the
+--   post-reservation slot budget, so that case names itself rather than
+--   leaving the rejection undescribed (#1689).
 unsupportedBindlessMessage ∷ BindlessSupport → TextureSystemCapability → Text
 unsupportedBindlessMessage support capability =
   "Bindless textures are required, but this device does not meet the \
   \renderer's required bindless capability: "
   <> describeCapability capability
-  <> case bindlessShortfalls support of
-       []     → ""
-       missed → " (" <> T.intercalate "; " missed <> ")"
+  <> " (" <> T.intercalate "; " causes <> ")"
+  where
+    causes = case bindlessShortfalls support of
+      []     → [reservationShortfall]
+      missed → missed
+    reservationShortfall =
+      "the renderer's slot reservations leave fewer than "
+        <> tshow minimumUsableSlots <> " of the binding's "
+        <> tshow maxBindlessTextures
+        <> " descriptors for application textures"
 
 -- | 'unsupportedBindlessMessage' for a caller with no slot reservations to
 --   account for: device selection runs before the texture system exists, so
@@ -127,20 +174,33 @@ deviceBindlessFailureMessage ∷ BindlessSupport → Text
 deviceBindlessFailureMessage support =
   unsupportedBindlessMessage support (determineTextureCapability support 0)
 
--- | Determine what texture system to use based on support
+-- | Fewest application-usable slots worth standing a bindless system up
+--   for. Distinct from the descriptor COUNT: the reservations are indices
+--   INSIDE the fixed binding ("Engine.Graphics.Vulkan.Texture.Slot" holds
+--   back index 0 for the undefined texture), so they never shrink it.
+minimumUsableSlots ∷ Word32
+minimumUsableSlots = 256
+
+-- | Determine what texture system to use based on support.
+--
+--   'BindlessTextures' always carries 'maxBindlessTextures' — the size both
+--   fragment shaders declare their @textures[]@ array at, and therefore the
+--   only descriptor count that satisfies the descriptor-set interface rule
+--   without @runtimeDescriptorArray@ (#1689). The device report decides
+--   whether that binding can be built at all ('isBindlessSupported'), never
+--   how big it is.
+--
+--   @reservedSlots@ is a separate question about the same binding: how many
+--   of its indices the texture system holds back, leaving the rest for
+--   application textures.
 determineTextureCapability ∷ BindlessSupport → Word32 → TextureSystemCapability
 determineTextureCapability support reservedSlots =
-  -- UpdateAfterBind limit is the real bindless limit, not the base one
-  let maxSlots = bsMaxUpdateAfterBindSampledImages support
-      availableSlots = if maxSlots > reservedSlots 
-                       then maxSlots - reservedSlots 
-                       else 0
-      cappedSlots = min availableSlots 1000000
-      worthIt = cappedSlots ≥ 256
-      
-  in if isBindlessSupported support ∧ worthIt
-     then BindlessTextures cappedSlots
-     else BoundedTextureArray 256
+  let usableSlots = if maxBindlessTextures > reservedSlots
+                    then maxBindlessTextures - reservedSlots
+                    else 0
+  in if isBindlessSupported support ∧ usableSlots ≥ minimumUsableSlots
+     then BindlessTextures maxBindlessTextures
+     else BoundedTextureArray minimumUsableSlots
 
 -- | Human-readable description of capability
 describeCapability ∷ TextureSystemCapability → Text

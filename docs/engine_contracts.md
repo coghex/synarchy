@@ -493,6 +493,14 @@ Enforced by `tools/preview_cli_probe.py` (CI-eligible, no boot) and
 `--match "Preview.Discovery"` / `"Preview.UnitAnimation"` /
 `"Preview.Building"`.
 
+The real-boot probe preserves the windowed GLFW/Vulkan surface, swapchain,
+input, and resize paths, but sets `SYNARCHY_PREVIEW_HIDDEN=1` for its engine
+children. Presence of that probe-only variable makes preview creation hidden
+and non-activating (`fullscreen=false`, `visible=false`, `focused=false`, and
+`focus-on-show=false`); an ordinary `--preview` launch remains visible and
+focused. This is deliberately not an offscreen conversion: the live-window
+resize behavior below is part of the probe's contract.
+
 ### Simple-category browser behavior
 
 - **Bare category** (`--preview icons`): a scrollable left-hand list of
@@ -692,9 +700,12 @@ control records `UI.ControlActivation.PendingActivation` (firing
 activates if it still resolves to the same element. Interruptions
 reverted before release are caught by epochs: global `upmPageEpoch`
 (bumped ONLY by `hidePage`/`showPage`) + per-element `ueRouteEpoch`
-(bumped by `setVisible`/`setClickable`/detach on THAT element, only on a
-real value change); `PendingActivation` snapshots the pressed element's
-and every ancestor's epoch and cancels on mismatch. Unrelated
+(bumped by `setVisible`/`setClickable` on THAT element, only on a real
+value change; by every detach; and — #1694 — by an
+`addToPage`/`addChild` that actually CHANGES that element's structural
+owner, a fresh or same-owner attachment staying neutral);
+`PendingActivation` snapshots the pressed element's and every
+ancestor's epoch and cancels on mismatch. Unrelated
 sibling/child churn (hover highlights, focus-ring attach) must never
 cancel an activation — that constraint shaped this design; don't
 "simplify" it back to a global counter. Sliders/scrollbar thumbs opt out

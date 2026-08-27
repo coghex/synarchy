@@ -46,7 +46,6 @@ import Engine.Graphics.Vulkan.ResizeRequest
   (recordSwapchainFramebufferState, sampleFramebufferState)
 import Engine.Graphics.Vulkan.Swapchain
 import Engine.Graphics.Vulkan.Sync (createRenderFinishedSemaphores)
-import Engine.Graphics.Vulkan.Texture.Limits (maxBindlessTextures)
 import Engine.Graphics.Vulkan.Texture.System
 import Engine.Graphics.Vulkan.Texture.Types
 import Engine.Graphics.Vulkan.Texture.DefaultFaceMap (createDefaultFaceMap
@@ -208,8 +207,7 @@ initializeVulkanCommon physicalDevice device queues swapInfo fbSize = do
                       descriptorState = Just updatedManager }
   
   let texSystemConfig = TextureSystemConfig
-        { tscMaxTextures   = maxBindlessTextures
-        , tscReservedSlots = 1      -- Slot 0 = undefined texture
+        { tscReservedSlots = 1      -- Slot 0 = undefined texture
         }
   texSystem ← createTextureSystem physicalDevice device cmdPool 
                                    (dqGraphicsQueue queues) texSystemConfig

@@ -295,7 +295,9 @@ worldHasSpawnedLocationContentsFn env = do
 -- | world.hasStampedLocation(gx, gy [, pageId]) → bool. One-time
 --   geometry-stamp flag (#424), deliberately still CHUNK-keyed (#911
 --   left it alone): true once the chunk containing (gx, gy) has had its
---   placed location's builder run. This is the idempotency check
+--   placed location's builder complete with every placement it attempted
+--   successful (#1719) — a partial stamp leaves this false so the
+--   every-load dispatch retries it. This is the idempotency check
 --   'scripts/location_stamper.lua' consults instead of
 --   @structure.hasAt gx gy "floor"@ — a check that a player clearing the
 --   anchor floor tile would otherwise defeat. With no page argument the

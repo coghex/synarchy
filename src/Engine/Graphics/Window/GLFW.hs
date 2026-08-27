@@ -64,7 +64,14 @@ createWindow config = do
                     GLFW.windowHint $ GLFW.WindowHint'ClientAPI GLFW.ClientAPI'NoAPI
                     GLFW.windowHint $ GLFW.WindowHint'Resizable True)
 
-  liftIO $ GLFW.windowHint $ GLFW.WindowHint'Resizable (wcResizable config)
+  liftIO $ do
+    GLFW.windowHint $ GLFW.WindowHint'Resizable (wcResizable config)
+    GLFW.windowHint $ GLFW.WindowHint'Visible (wcVisible config)
+    GLFW.windowHint $ GLFW.WindowHint'Focused (wcFocused config)
+    -- A hidden automated window must also stay non-activating if a
+    -- platform shows it as part of native surface setup. For ordinary
+    -- configs this preserves GLFW's normal focus-on-show behavior.
+    GLFW.windowHint $ GLFW.WindowHint'FocusOnShow (wcFocused config)
 
   window ← allocResource (\(Window w0) → liftIO $ GLFW.destroyWindow w0) $ do
     mw ← liftIO $ GLFW.createWindow (wcWidth config) (wcHeight config)
@@ -127,7 +134,9 @@ createRawWindow config = do
 
   GLFW.windowHint $ GLFW.WindowHint'Resizable (wcResizable config)
   GLFW.windowHint $ GLFW.WindowHint'ClientAPI GLFW.ClientAPI'NoAPI
-  GLFW.windowHint $ GLFW.WindowHint'Visible True
+  GLFW.windowHint $ GLFW.WindowHint'Visible (wcVisible config)
+  GLFW.windowHint $ GLFW.WindowHint'Focused (wcFocused config)
+  GLFW.windowHint $ GLFW.WindowHint'FocusOnShow (wcFocused config)
   mw ← liftIO $ GLFW.createWindow (wcWidth config) (wcHeight config)
                                   (T.unpack $ wcTitle config) Nothing Nothing
   pure $ case mw of

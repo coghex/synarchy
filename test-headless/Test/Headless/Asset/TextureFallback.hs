@@ -23,7 +23,10 @@ module Test.Headless.Asset.TextureFallback (spec) where
 
 import UPrelude
 import Test.Hspec
+import Control.Concurrent (forkIO)
+import Control.Concurrent.MVar (newEmptyMVar, putMVar, readMVar, takeMVar)
 import Control.Exception (finally)
+import Data.List (sort)
 import Data.IORef (IORef, newIORef, readIORef, writeIORef, modifyIORef')
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as Map
@@ -45,20 +48,24 @@ import Engine.Scripting.Lua.Thread (createLuaBackendState)
 import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Engine.Asset.Base (AssetId(..))
-import Engine.Asset.Handle (TextureHandle(..), missingTextureHandle
-    , firstAllocatableTextureHandle, isMissingTextureHandle, toInt)
-import Engine.Asset.Manager (generateTextureHandle)
+import Engine.Asset.Handle (AssetState(..), TextureHandle(..)
+    , missingTextureHandle, firstAllocatableTextureHandle
+    , isMissingTextureHandle, toInt)
+import Engine.Asset.Manager (TextureHandleReservation(..)
+    , generateTextureHandle, reserveTextureHandle)
 import Engine.Asset.Types (AssetPool(..), AtlasMetadata(..), TextureAtlas(..)
     , defaultAssetPool)
 import Engine.Core.Log
     ( LogBackend(..), LogConfig(..), LogEntry(..), LogLevel(..)
     , defaultLogConfig, initLogger )
-import Engine.Core.Monad (EngineM', runEngineM)
+import Engine.Core.Monad (EngineM', modifyGraphicsState, runEngineM)
 import Engine.Graphics.Camera (CameraFacing(..))
 import Engine.Graphics.Vulkan.Sampler.Types (SamplerKind(..))
 import Engine.Graphics.Vulkan.Texture.Bindless
-    ( TextureRegistrationFailure(..), checkRegistrableHandle
+    ( HandleAddressing(..), TextureRegistrationFailure(..)
+    , checkRegistrableHandle
     , defaultBindlessConfig, registerPinnedTexture, registerTexture
+    , registerSlotOnlyTexture
     , writeHandleSlotEntryPtr, handleSlotTableSize )
 import Engine.Graphics.Vulkan.Texture.Handle
     (BindlessTextureHandle(..), toBindlessHandle)
@@ -69,6 +76,16 @@ import Engine.Graphics.Vulkan.Texture.Undefined (undefinedTextureData)
 import Engine.Graphics.Vulkan.Types.Texture (UndefinedTexture(..), VulkanImage(..))
 import Engine.Scripting.Lua.Message.Texture
     (duplicateCachedTextureHandle, handleLoadTextureBatch)
+import Engine.Scripting.Lua.Types (LuaMsg(..))
+import Blood.Types (BloodStore(..), BloodStyle(..), BloodTextureRequest(..)
+    , SeverityBucket(..), FootprintBucket(..), AnisotropyBucket(..)
+    , EdgeBucket(..), emptyBloodStore, requestTexture)
+import Engine.Core.State (GraphicsState(..), worldManagerRef)
+import Engine.Graphics.Types (DevQueues(..))
+import World.Page.Types (WorldPageId(..))
+import World.Render.BloodQuads (bloodTextureSource, uploadBloodTextures)
+import World.State.Types (WorldState(..), WorldManager(..)
+    , emptyWorldState, emptyWorldManager)
 import qualified Engine.Core.Queue as Q
 import qualified Vulkan.Core10 as Vk
 import Vulkan.Zero (zero)
@@ -205,6 +222,7 @@ spec = do
                             fhHarvestedTexture harvest `shouldBe` missingTextureHandle
 
     sentinelHandleSpec
+    unrepresentableHandleSpec
 
 -- | #1696: handle 0 is the missing-texture SENTINEL, so no real texture
 --   may ever own it. The defect this pins was live in three layers at
@@ -252,7 +270,8 @@ sentinelHandleSpec = do
            \allocator hands out" $ \_env → do
             pool ← defaultAssetPool
             handles ← replicateM 8 (generateTextureHandle pool)
-            map checkRegistrableHandle handles `shouldBe` replicate 8 (Right ())
+            map (checkRegistrableHandle ShaderAddressable) handles
+                `shouldBe` replicate 8 (Right ())
 
         it "registerTexture refuses the sentinel, logging the zero handle \
            \and the caller's provenance, and mutates NOTHING" $ \_env →
@@ -436,6 +455,559 @@ sentinelHandleSpec = do
                     -- that the shader resolves through the table, which is
                     -- exactly how flora ended up shaded by a stranger.
                     fms `shouldNotBe` replicate 4 (0 ∷ Float)
+
+-- | Handle ids the shader's handle→slot table cannot resolve (#1699).
+--
+--   The defect: the table covers ids @[0, handleSlotTableSize)@ and
+--   'writeHandleSlotEntry' silently DROPS a write outside it, while
+--   'registerTextureImpl' went on to allocate a slot, write the
+--   descriptor and answer @Right@. Every publishing caller then reported
+--   the texture loaded — @AssetReady@, both pool caches, the size entry,
+--   @LuaAssetLoaded@ — for a handle every vertex resolves to slot 0, the
+--   undefined checkerboard. The handle namespace is monotonic with no
+--   reset anywhere in the tree, so that is permanent for the rest of the
+--   process rather than a transient shortage.
+--
+--   The fix is one guard at the registration boundary, so everything
+--   here drives PRODUCTION definitions: the real allocator on a real
+--   'defaultAssetPool', the guard itself, both registration entry points
+--   and the slot-only one, the cached-alias fast path, and the batch
+--   entry point Lua actually calls.
+--
+--   Device-free throughout for the same reason #1696's cases are: a
+--   REFUSED registration returns before 'writeDescriptorSlot', and the
+--   admission cases below are steered into the ALLOCATOR's refusal
+--   instead, which is equally Vulkan-free. That is also what makes them
+--   mutation-proof: neutralising the range half of
+--   'checkRegistrableHandle' makes the refusal cases reach the null
+--   device, and neutralising the ordering (checking after
+--   'allocateSlot') flips the two boundary cases' diagnoses.
+unrepresentableHandleSpec ∷ SpecWith EngineEnv
+unrepresentableHandleSpec = do
+    describe "texture handle ids the shader cannot resolve (#1699)" $ do
+
+        -- The boundary itself, against the REAL allocator.
+        it "the allocator walks straight off the end of the table, and \
+           \the guard admits the last id and refuses the first one past \
+           \it" $ \_env → do
+            pool ← defaultAssetPool
+            writeIORef (apNextTextureHandle pool) (handleSlotTableSize - 1)
+            lastInTable ← generateTextureHandle pool
+            firstPast   ← generateTextureHandle pool
+            toInt lastInTable `shouldBe` handleSlotTableSize - 1
+            toInt firstPast   `shouldBe` handleSlotTableSize
+            checkRegistrableHandle ShaderAddressable lastInTable
+                `shouldBe` Right ()
+            checkRegistrableHandle ShaderAddressable firstPast
+                `shouldBe` Left TextureHandleUnrepresentable
+
+        it "reserves the last representable id, then reports the \
+           \namespace spent to ONE claimant and never un-spends it" $ \_env → do
+            pool ← defaultAssetPool
+            writeIORef (apNextTextureHandle pool) (handleSlotTableSize - 1)
+            reserveTextureHandle pool `shouldReturn`
+                TextureHandleAllocated (TextureHandle (handleSlotTableSize - 1))
+            -- The first caller past the boundary is handed the id that
+            -- WOULD have been allocated, so its report can name it.
+            reserveTextureHandle pool `shouldReturn`
+                TextureHandlesSpent (Just (TextureHandle handleSlotTableSize))
+            -- Everyone after it is told the same permanent answer with
+            -- nothing to say about it, however many times they ask.
+            reserveTextureHandle pool
+                `shouldReturn` TextureHandlesSpent Nothing
+            reserveTextureHandle pool
+                `shouldReturn` TextureHandlesSpent Nothing
+            -- A refusal allocates nothing: the counter stopped at the
+            -- first id it could not hand out.
+            readIORef (apNextTextureHandle pool)
+                `shouldReturn` handleSlotTableSize
+
+        it "refuses an id another allocator took first, rather than \
+           \handing back one it had already judged safe" $ \_env → do
+            -- The shared allocator: the Lua texture worker, the two
+            -- transients and the blood diff all draw from this one
+            -- pool. With one id left, whoever gets there first takes it
+            -- and everyone else must be refused.
+            pool ← defaultAssetPool
+            writeIORef (apNextTextureHandle pool) (handleSlotTableSize - 1)
+            stolen ← generateTextureHandle pool
+            stolen `shouldBe` TextureHandle (handleSlotTableSize - 1)
+            reserveTextureHandle pool `shouldReturn`
+                TextureHandlesSpent (Just (TextureHandle handleSlotTableSize))
+
+        it "hands out every representable id exactly ONCE under real \
+           \contention, and never one past the cap" $ \_env → do
+            -- The interleaving the atomicity exists for, run for real
+            -- rather than argued: the decision and the allocation are
+            -- one 'atomicModifyIORef'', so no two claimants racing
+            -- across the boundary can both be told the same id is free.
+            -- A reserve that read the counter and then allocated
+            -- separately can be overtaken in that window and hand back
+            -- a duplicate, or an id past the cap it had already judged
+            -- safe -- either of which breaks the first assertion here.
+            -- Rounds, not one shot: the window a non-atomic reserve
+            -- leaves open is a handful of instructions wide, so a
+            -- single race can miss it. Each round is a fresh pool with
+            -- exactly ONE id left and many askers, which is the maximum
+            -- pressure on the boundary.
+            forM_ [1 .. 200 ∷ Int] $ \_round → do
+                pool ← defaultAssetPool
+                let room   = 1
+                    askers = 24
+                writeIORef (apNextTextureHandle pool)
+                    (handleSlotTableSize - room)
+                start ← newEmptyMVar
+                slots ← replicateM askers newEmptyMVar
+                forM_ slots $ \slot → forkIO $ do
+                    () ← readMVar start
+                    putMVar slot =≪ reserveTextureHandle pool
+                putMVar start ()
+                results ← mapM takeMVar slots
+
+                let allocated = [ h | TextureHandleAllocated h ← results ]
+                    claimed   = [ h | TextureHandlesSpent (Just h) ← results ]
+                -- Exactly the representable ids, each to exactly one
+                -- asker -- so none was double-issued, and none was past
+                -- the cap.
+                sort (map toInt allocated) `shouldBe`
+                    [handleSlotTableSize - room .. handleSlotTableSize - 1]
+                map (checkRegistrableHandle ShaderAddressable) allocated
+                    `shouldBe` replicate room (Right ())
+                -- Everyone else was refused, and the counter stopped
+                -- dead at the first id it could not hand out.
+                length results - length allocated `shouldBe` askers - room
+                readIORef (apNextTextureHandle pool)
+                    `shouldReturn` handleSlotTableSize
+                -- One report between all of them, whoever won it.
+                length claimed `shouldBe` 1
+
+        it "refuses an out-of-table id only where the SHADER reads the \
+           \table, never for a slot-only registration" $ \_env → do
+            -- The default face map's deliberately out-of-table id
+            -- ('DefaultFaceMap'): shader-addressable it is unusable,
+            -- slot-only it is fine, because its slot reaches the shader
+            -- through the UBO instead.
+            let faceMap = TextureHandle 999999
+            checkRegistrableHandle ShaderAddressable faceMap
+                `shouldBe` Left TextureHandleUnrepresentable
+            checkRegistrableHandle SlotOnly faceMap `shouldBe` Right ()
+            -- The sentinel is refused under BOTH: slot-only is an
+            -- exemption from the RANGE half alone (#1696 still holds).
+            checkRegistrableHandle SlotOnly missingTextureHandle
+                `shouldBe` Left TextureHandleReserved
+            -- A negative id is out of the table just as surely.
+            checkRegistrableHandle ShaderAddressable (TextureHandle (-1))
+                `shouldBe` Left TextureHandleUnrepresentable
+
+        -- The registration boundary, and the ORDER its two refusals
+        -- run in.
+        it "registerTexture refuses the first unrepresentable id, \
+           \logging the id and the cap, and mutates NOTHING" $ \_env →
+            withRegistrationFixture $ \fx → do
+                (outcome, entries) ← runRegistration fx $ \system →
+                    registerTexture zero (TextureHandle handleSlotTableSize)
+                        "assets/textures/ui/blank.png" zero zero system
+                expectUnrepresentableRefusal fx outcome entries
+                    "assets/textures/ui/blank.png"
+
+        it "registerPinnedTexture refuses it on the same terms" $ \_env →
+            withRegistrationFixture $ \fx → do
+                (outcome, entries) ← runRegistration fx $ \system →
+                    registerPinnedTexture zero (TextureHandle 999999)
+                        "zoom atlas" zero zero system
+                expectUnrepresentableRefusal fx outcome entries "zoom atlas"
+
+        it "detects it BEFORE the slot allocator, so the two capacity \
+           \stories never merge" $ \_env →
+            withRegistrationFixture $ \fx → do
+                -- maxSlots 1 leaves nothing to hand out, so whichever
+                -- guard the handle reaches first decides the answer.
+                -- The LAST in-table id gets past the range guard and
+                -- reports exhaustion; the FIRST one past the table is
+                -- refused before the allocator is consulted at all.
+                (admitted, _) ← runRegistrationWith fx
+                    (\sys → sys { btsSlotAllocator = createSlotAllocator 1 })
+                    (\system → registerTexture zero
+                        (TextureHandle (handleSlotTableSize - 1))
+                        "assets/textures/ui/blank.png" zero zero system)
+                fst admitted `shouldBe` Left TextureSlotsExhausted
+                (refused, entries) ← runRegistrationWith fx
+                    (\sys → sys { btsSlotAllocator = createSlotAllocator 1 })
+                    (\system → registerTexture zero
+                        (TextureHandle handleSlotTableSize)
+                        "assets/textures/ui/blank.png" zero zero system)
+                fst refused `shouldBe` Left TextureHandleUnrepresentable
+                message ← soleWarning entries
+                message `shouldNotSatisfy`
+                    T.isInfixOf "Failed to allocate bindless slot"
+
+        it "still admits the default face map's out-of-table id through \
+           \the slot-only entry point, so its bootstrap is untouched" $ \_env →
+            withRegistrationFixture $ \fx → do
+                -- Reaching the exhausted allocator is the proof it got
+                -- PAST the range guard; refusing it here would drop
+                -- 'dfmSlot' to the undefined slot 0.
+                (outcome, entries) ← runRegistrationWith fx
+                    (\sys → sys { btsSlotAllocator = createSlotAllocator 1 })
+                    (\system → registerSlotOnlyTexture zero
+                        (TextureHandle 999999) "default face map"
+                        zero zero system)
+                fst outcome `shouldBe` Left TextureSlotsExhausted
+                message ← soleWarning entries
+                message `shouldSatisfy`
+                    T.isInfixOf "Failed to allocate bindless slot"
+
+        -- The PER-FRAME registration path, whose diff would otherwise
+        -- repeat the whole upload-and-refuse cycle forever.
+        it "reports a spent namespace ONCE from the blood upload path, \
+           \and uploads, registers and records nothing" $ \_env →
+            withRegistrationFixture $ \fx → do
+                let env = rfEnv fx
+                ws ← seedBloodWorld env
+                spendTextureHandles fx 0
+
+                -- Two frames. The device handles are all null, which is
+                -- exactly the point: the refusal must return before
+                -- 'createTextureFromRGBABytes' or 'registerTexture'
+                -- touches any of them, so reaching either one fails this
+                -- case rather than passing it.
+                runFrame fx
+                first ← drainLog fx
+                runFrame fx
+                second ← drainLog fx
+
+                -- Reported once, naming the kind, the refused id and the
+                -- cap -- a procedural texture has no requested path.
+                message ← soleWarning first
+                message `shouldSatisfy` T.isInfixOf bloodTextureSource
+                message `shouldSatisfy`
+                    namesHandle (TextureHandle handleSlotTableSize)
+                message `shouldSatisfy` T.isInfixOf (T.pack (show handleSlotTableSize))
+                message `shouldSatisfy` T.isInfixOf "#1699"
+                -- ...and never again, however many frames run.
+                map leMessage (filter ((≡ LevelWarn) ∘ leLevel) second)
+                    `shouldBe` []
+
+                -- Nothing recorded for it, either frame: no handle entry
+                -- (so nothing draws it) and no size entry.
+                HM.null <$> readIORef (wsBloodTextureHandlesRef ws)
+                    `shouldReturn` True
+                sizes ← readIORef (textureSizeRef env)
+                HM.null sizes `shouldBe` True
+                -- The namespace was not advanced either: a refusal that
+                -- allocated per frame would still be spending ids.
+                pool ← readIORef (assetPoolRef env)
+                readIORef (apNextTextureHandle pool)
+                    `shouldReturn` handleSlotTableSize
+
+        it "...and reports it once even when a concurrent allocator \
+           \takes the last id out from under the frame" $ \_env →
+            withRegistrationFixture $ \fx → do
+                let env = rfEnv fx
+                ws ← seedBloodWorld env
+                -- One id left, and the Lua texture worker -- which draws
+                -- from this same pool -- takes it before the frame runs.
+                spendTextureHandles fx 1
+                pool ← readIORef (assetPoolRef env)
+                stolen ← generateTextureHandle pool
+                stolen `shouldBe` TextureHandle (handleSlotTableSize - 1)
+
+                runFrame fx
+                first ← drainLog fx
+                runFrame fx
+                second ← drainLog fx
+
+                -- A non-atomic reserve would have seen room, taken the
+                -- id past the cap, uploaded it against the null device
+                -- and then reported AGAIN the next frame.
+                message ← soleWarning first
+                message `shouldSatisfy` T.isInfixOf bloodTextureSource
+                message `shouldSatisfy`
+                    namesHandle (TextureHandle handleSlotTableSize)
+                map leMessage (filter ((≡ LevelWarn) ∘ leLevel) second)
+                    `shouldBe` []
+                HM.null <$> readIORef (wsBloodTextureHandlesRef ws)
+                    `shouldReturn` True
+                readIORef (apNextTextureHandle pool)
+                    `shouldReturn` handleSlotTableSize
+
+        -- The OTHER 'btsHandleMap' insertion path.
+        it "the cached-alias fast path refuses an unrepresentable id, \
+           \writes none of a hit's bookkeeping, and SETTLES the request" $ \_env →
+            withRegistrationFixture $ \fx → do
+                before ← hitObservables fx
+                let handle = TextureHandle handleSlotTableSize
+                entries ← runAlias fx handle
+                -- Nothing a HIT writes: no handle map entry, no table
+                -- poke, no atlas refcount bump, no size entry. The
+                -- terminal failure below is the only thing it does
+                -- write, which is exactly what separates #1699's
+                -- refusal from #1696's silent drop.
+                after ← hitObservables fx
+                after `shouldBe` before
+                peekTable fx (toInt missingTextureHandle) `shouldReturn` 0
+                message ← soleWarning entries
+                message `shouldSatisfy` T.isInfixOf (T.pack (show handleSlotTableSize))
+                message `shouldSatisfy` T.isInfixOf cachedAtlasPath
+                message `shouldSatisfy` T.isInfixOf "#1699"
+                -- ...but unlike the sentinel, this is a REAL request, so
+                -- it ends terminally instead of being dropped: nothing
+                -- waiting on it stalls.
+                expectTerminalFailure fx handle cachedAtlasPath
+
+        it "...while the LAST in-table id takes the hit and all of the \
+           \bookkeeping, so the case above is a real refusal" $ \_env →
+            withRegistrationFixture $ \fx → do
+                let handle = TextureHandle (handleSlotTableSize - 1)
+                entries ← runAlias fx handle
+                map leMessage entries `shouldBe` []
+                mSystem ← readIORef (textureSystemRef (rfEnv fx))
+                (Map.lookup handle ∘ btsHandleMap) <$> mSystem
+                    `shouldBe` Just (Just residentBindlessHandle)
+                peekTable fx (toInt handle)
+                    `shouldReturn` tsIndex (bthSlot residentBindlessHandle)
+                sizes ← readIORef (textureSizeRef (rfEnv fx))
+                HM.lookup handle sizes `shouldBe` Just (4, 4)
+                queued ← Q.flushQueue (luaQueue (rfEnv fx))
+                map assetEvent queued `shouldBe` [Just (True, toInt handle)]
+
+        -- The in-batch DEDUP lane, which is where a refused request
+        -- could inherit another handle's diagnostic.
+        it "settles two FRESH same-path requests separately, each on the \
+           \handle it names" $ \_env →
+            withRegistrationFixture $ \fx → do
+                -- Deliberately an UNCACHED path, so without the
+                -- entry-point judgement the first request becomes the
+                -- canonical fresh upload and the second is folded into
+                -- it as an in-batch alias -- the alias then taking the
+                -- canonical's reason, which names the canonical's id.
+                -- Judged per request, neither ever reaches that lane.
+                let freshPath = "assets/textures/ui/not_in_the_cache.png"
+                    canonical = TextureHandle handleSlotTableSize
+                    alias     = TextureHandle (handleSlotTableSize + 1)
+                    action ∷ EngineM' ()
+                    action = handleLoadTextureBatch
+                        [ (canonical, freshPath), (alias, freshPath) ]
+                _ ← either (fail ∘ show) pure
+                        =≪ runEngineM action (rfEnv fx) pure
+                entries ← drainLog fx
+
+                -- Two refusals, two diagnostics, each naming its own id
+                -- and neither naming the other's.
+                let warnings = map leMessage
+                        (filter ((≡ LevelWarn) ∘ leLevel) entries)
+                    canonicalId = namesHandle canonical
+                    aliasId     = namesHandle alias
+                length warnings `shouldBe` 2
+                case warnings of
+                    [first, second] → do
+                        first `shouldSatisfy` canonicalId
+                        first `shouldNotSatisfy` aliasId
+                        second `shouldSatisfy` aliasId
+                        second `shouldNotSatisfy` canonicalId
+                        -- Never mistaken for the batch giving up: with
+                        -- no request left, no upload was attempted.
+                        map (T.isInfixOf "Vulkan not ready") warnings
+                            `shouldBe` [False, False]
+                    _ → expectationFailure "expected exactly two warnings"
+
+                -- Both settle terminally, on their own reason.
+                expectTerminalFailure fx canonical (T.pack freshPath)
+                expectTerminalFailure fx alias (T.pack freshPath)
+                pool ← readIORef (assetPoolRef (rfEnv fx))
+                states ← readIORef (apTextureHandles pool)
+                case (Map.lookup canonical states, Map.lookup alias states) of
+                    (Just (AssetFailed a), Just (AssetFailed b)) → do
+                        a `shouldSatisfy` canonicalId
+                        a `shouldNotSatisfy` aliasId
+                        b `shouldSatisfy` aliasId
+                        b `shouldNotSatisfy` canonicalId
+                    other → expectationFailure $
+                        "expected both requests to settle, got " ⧺ show other
+
+                -- Each Lua notification carries its own handle AND its
+                -- own reason: this is the pairing that had drifted.
+                queued ← Q.flushQueue (luaQueue (rfEnv fx))
+                let failures = [ (h, reason)
+                               | LuaAssetFailed _ h _ reason ← queued ]
+                map fst failures
+                    `shouldBe` [toInt canonical, toInt alias]
+                forM_ failures $ \(h, reason) →
+                    reason `shouldSatisfy` namesHandle (TextureHandle h)
+                map assetEvent queued `shouldBe`
+                    [ Just (False, toInt canonical), Just (False, toInt alias) ]
+
+                -- Nothing else was written for either of them.
+                sizes ← readIORef (textureSizeRef (rfEnv fx))
+                HM.member canonical sizes `shouldBe` False
+                HM.member alias sizes `shouldBe` False
+                Map.member (T.pack freshPath) (apAssetPaths pool)
+                    `shouldBe` False
+
+        -- The public entry point Lua reaches, end to end.
+        it "the batch entry point settles an unrepresentable request and \
+           \still serves the rest of the batch" $ \_env →
+            withRegistrationFixture $ \fx → do
+                seedPathCache fx
+                -- Both name the CACHED path, so both take the alias lane
+                -- and neither needs a Vulkan device.
+                let spent = TextureHandle handleSlotTableSize
+                    action ∷ EngineM' ()
+                    action = handleLoadTextureBatch
+                        [ (spent,       T.unpack cachedAtlasPath)
+                        , (aliasHandle, T.unpack cachedAtlasPath) ]
+                _ ← either (fail ∘ show) pure
+                        =≪ runEngineM action (rfEnv fx) pure
+                _ ← drainLog fx
+
+                expectTerminalFailure fx spent cachedAtlasPath
+                sizes ← readIORef (textureSizeRef (rfEnv fx))
+                HM.member spent sizes `shouldBe` False
+                mSystem ← readIORef (textureSystemRef (rfEnv fx))
+                (Map.member spent ∘ btsHandleMap) <$> mSystem
+                    `shouldBe` Just False
+
+                -- The ordinary handle beside it was served in full.
+                pool ← readIORef (assetPoolRef (rfEnv fx))
+                states ← readIORef (apTextureHandles pool)
+                Map.member aliasHandle states `shouldBe` True
+                HM.member aliasHandle sizes `shouldBe` True
+                queued ← Q.flushQueue (luaQueue (rfEnv fx))
+                map assetEvent queued `shouldBe`
+                    [ Just (False, toInt spent), Just (True, toInt aliasHandle) ]
+
+-- | Everything a cache HIT writes, and nothing else: the bindless
+--   handle map, the sentinel's table entry, the atlas refcounts and the
+--   texture-size map.
+--
+--   Deliberately narrower than 'aliasObservables': #1699's refusal DOES
+--   settle the request on 'AssetFailed' and DOES queue its own
+--   notification, so those two are asserted separately rather than
+--   frozen here.
+hitObservables ∷ RegistrationFixture
+               → IO ( Map.Map TextureHandle BindlessTextureHandle
+                    , Word32, [Word32], Int )
+hitObservables fx = do
+    let env = rfEnv fx
+    mSystem ← readIORef (textureSystemRef env)
+    entry0 ← peekTable fx (toInt missingTextureHandle)
+    pool ← readIORef (assetPoolRef env)
+    sizes ← readIORef (textureSizeRef env)
+    pure ( maybe Map.empty btsHandleMap mSystem
+         , entry0
+         , map taRefCount (Map.elems (apTextureAtlases pool))
+         , HM.size sizes )
+
+-- | A refused registration: the failure, an untouched system, an
+--   untouched table, and one log line naming the id, the provenance and
+--   the cap that refused it.
+expectUnrepresentableRefusal
+    ∷ HasCallStack
+    ⇒ RegistrationFixture
+    → ( Either TextureRegistrationFailure BindlessTextureHandle
+      , BindlessTextureSystem )
+    → [LogEntry]
+    → Text
+    → Expectation
+expectUnrepresentableRefusal fx (outcome, system) entries source = do
+    outcome `shouldBe` Left TextureHandleUnrepresentable
+    btsHandleMap system `shouldBe` Map.singleton residentHandle residentBindlessHandle
+    btsImageViews system `shouldBe` Map.singleton residentHandle zero
+    btsPinned system `shouldBe` Map.empty
+    tsaNextSlot (btsSlotAllocator system) `shouldBe` 1
+    peekTable fx (toInt missingTextureHandle) `shouldReturn` 0
+    message ← soleWarning entries
+    message `shouldSatisfy` T.isInfixOf source
+    message `shouldSatisfy` T.isInfixOf (T.pack (show handleSlotTableSize))
+    message `shouldSatisfy` T.isInfixOf "#1699"
+    -- Never either OTHER reason a registration yields no handle.
+    message `shouldNotSatisfy` T.isInfixOf "Failed to allocate bindless slot"
+    message `shouldNotSatisfy` T.isInfixOf "sentinel"
+
+-- | One loaded world page holding exactly one blood-texture descriptor
+--   and nothing uploaded yet, registered with the engine's world
+--   manager so 'uploadBloodTextures' reaches it.
+seedBloodWorld ∷ EngineEnv → IO WorldState
+seedBloodWorld env = do
+    ws ← emptyWorldState
+    let (pool, _tid, _isNew, _evicted) =
+            requestTexture bloodRequest (bstPool (emptyBloodStore 8))
+    writeIORef (wsBloodStoreRef ws) (BloodStore pool (bstDecals (emptyBloodStore 8)))
+    writeIORef (worldManagerRef env) emptyWorldManager
+        { wmWorlds = [(WorldPageId "blood_page", ws)] }
+    pure ws
+
+bloodRequest ∷ BloodTextureRequest
+bloodRequest = BloodTextureRequest
+    { btrStyle      = StylePool
+    , btrWoundKind  = "stab"
+    , btrSeverity   = SeverityModerate
+    , btrFootprint  = FootprintSmall
+    , btrAnisotropy = AnisotropyNone
+    , btrEdge       = EdgeSmooth
+    , btrSeed       = 7
+    }
+
+-- | Leave the pool's counter @headroom@ ids short of the point past
+--   which the shader's table can resolve nothing — the state a
+--   long-lived process reaches on its own.
+spendTextureHandles ∷ RegistrationFixture → Int → IO ()
+spendTextureHandles fx headroom = do
+    pool ← readIORef (assetPoolRef (rfEnv fx))
+    writeIORef (apNextTextureHandle pool) (handleSlotTableSize - headroom)
+
+-- | Run one frame's blood upload sync against ALL-NULL Vulkan handles.
+--
+--   Sound for the same reason the registration cases above are: the
+--   refusal returns before any of them is used. A regression that
+--   uploaded or registered anyway fails on the null device instead of
+--   passing quietly.
+runFrame ∷ RegistrationFixture → IO ()
+runFrame fx = do
+    let action ∷ EngineM' ()
+        action = do
+            modifyGraphicsState $ \gs → gs
+                { vulkanDevice  = Just zero
+                , vulkanPDevice = Just zero
+                , vulkanCmdPool = Just zero
+                , deviceQueues  = Just (DevQueues zero zero 0 0)
+                }
+            uploadBloodTextures
+    result ← runEngineM action (rfEnv fx) pure
+    either (fail ∘ show) pure result
+
+-- | Does this diagnostic name THIS handle as the one it is about?
+--
+--   Deliberately positional rather than a bare substring: the message
+--   also states the CAP, and the first refused id IS the cap, so
+--   @T.isInfixOf "65536"@ matches every unrepresentable handle's
+--   message including @65537@'s. The @handle N for@ slot is the one
+--   place the id under discussion appears.
+namesHandle ∷ TextureHandle → Text → Bool
+namesHandle handle =
+    T.isInfixOf ("handle " <> T.pack (show (toInt handle)) <> " for")
+
+-- | #1690's terminal outcome: the handle settles on 'AssetFailed' and
+--   the failure reaches Lua on its OWN message, never 'LuaAssetLoaded'.
+expectTerminalFailure ∷ HasCallStack
+                      ⇒ RegistrationFixture → TextureHandle → Text
+                      → Expectation
+expectTerminalFailure fx handle path = do
+    pool ← readIORef (assetPoolRef (rfEnv fx))
+    states ← readIORef (apTextureHandles pool)
+    case Map.lookup handle states of
+        Just (AssetFailed reason) → do
+            reason `shouldSatisfy` T.isInfixOf "#1699"
+            reason `shouldSatisfy` T.isInfixOf path
+        other → expectationFailure $
+            "expected AssetFailed for the refused handle, got " ⧺ show other
+
+-- | Classify one queued asset notification: @Just (loaded?, handle)@.
+assetEvent ∷ LuaMsg → Maybe (Bool, Int)
+assetEvent = \case
+    LuaAssetLoaded _ handle _   → Just (True, handle)
+    LuaAssetFailed _ handle _ _ → Just (False, handle)
+    _                           → Nothing
 
 -- | Everything the two 'btsHandleMap' insertion paths need in order to
 --   run for real in a headless process.
