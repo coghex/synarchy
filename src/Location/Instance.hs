@@ -450,13 +450,32 @@ resolveLegacyLocationInstances registry overlay lis =
 
 -- | Component-local invariants for a decoded table (mirrors the
 --   ground-item allocator check @World.Save.Component.Page@ already
---   runs): every id sits at or above 'firstLocationInstanceId' and
---   strictly below the page's allocator, and every map key matches the
---   'liId' of the instance stored under it. Empty ⇒ the table is
---   well-formed. Literal duplicate ids are structurally impossible once
---   decoded into a 'HM.HashMap'.
+--   runs): the allocator itself sits at or above
+--   'firstLocationInstanceId', every id sits at or above that same
+--   floor and strictly below the allocator, and every map key matches
+--   the 'liId' of the instance stored under it. Literal duplicate ids
+--   are structurally impossible once decoded into a 'HM.HashMap'.
+--
+--   #1667: the allocator's OWN floor is checked separately from the
+--   per-id comparison, and therefore independently of whether the table
+--   is empty — an empty table used to certify any cursor at all,
+--   including 0 and (the field being an unrestricted wire 'Int') a
+--   negative one, which 'allocateLocationInstance' would then hand out
+--   verbatim as the next 'LocationInstanceId'. No engine path produces
+--   such a cursor ('emptyLocationInstances' and 'buildLocationInstances'
+--   both start at or above the floor), so this is hardening against a
+--   corrupt or hand-crafted payload. An empty table whose cursor IS
+--   valid stays well-formed, exactly as before.
+--   'World.Save.Component.Transfer.validateTransferOrders' is the
+--   precedent this generalizes.
 locationInstanceAllocatorErrors ∷ LocationInstances → [Text]
 locationInstanceAllocatorErrors lis =
+    [ "location-instance allocator is " <> tshow (lisNextId lis)
+        <> ", below the first valid location-instance id ("
+        <> tshow firstLocationInstanceId <> ")"
+    | lisNextId lis < firstLocationInstanceId
+    ]
+    ⧺
     [ "location instance #" <> tshow (unLocationInstanceId iid)
         <> " is not below the page's location-instance allocator ("
         <> tshow (lisNextId lis) <> ")"
