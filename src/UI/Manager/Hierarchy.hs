@@ -49,6 +49,36 @@ structuralOwners handle mgr =
         | handle `elem` ueChildren el = OwnedByParent eh : acc
         | otherwise                   = acc
 
+-- | The element whose 'ueChildren' actually contains @handle@, or
+--   'Nothing' when it sits directly in a page's root list.
+--
+--   The recorded 'ueParent' is CHECKED rather than trusted (see
+--   'structuralOwners'), and answering "no structural parent" goes
+--   through the page root lists rather than a full element scan. Both
+--   shortcuts are exact under the single-owner invariant this module
+--   maintains, and together they keep the common case — a consistent
+--   element whose recorded parent really does hold it, or a genuine
+--   page root — off the fallback scan entirely. That matters: this
+--   runs per attachment, and a UI build performs thousands.
+structuralParentOf ∷ ElementHandle → UIPageManager → Maybe ElementHandle
+structuralParentOf handle mgr
+    | Just p ← recorded, holds p = Just p
+    | isPageRoot                 = Nothing
+    | otherwise                  = scanForParent
+  where
+    recorded = Map.lookup handle (upmElements mgr) ⌦ ueParent
+    holds p = maybe False ((handle `elem`) ∘ ueChildren)
+                    (Map.lookup p (upmElements mgr))
+    isPageRoot = any ((handle `elem`) ∘ upRootElements)
+                     (Map.elems (upmPages mgr))
+    -- Short-circuits at the first match: 'foldrWithKey' only forces
+    -- the accumulator when the guard falls through.
+    scanForParent = Map.foldrWithKey pick Nothing (upmElements mgr)
+      where
+        pick eh el acc
+            | handle `elem` ueChildren el = Just eh
+            | otherwise                   = acc
+
 -- | Drop every reference to @handle@ from the given containers. A
 --   container holding it more than once is cleaned completely, which
 --   is what makes repeated attachment idempotent (#1694 requirement 3).
@@ -252,16 +282,26 @@ addChildElement parentHandle childHandle x y mgr
     -- but relocating a tall subtree adds its full height.
     tooDeep = parentDepth + 1 + childHeight > maxHierarchyDepth
 
-    -- Edges above the destination parent. 'walkUp' has already refused
-    -- anything deeper, so this is exact wherever it is reached; the
-    -- budget is only a backstop for a malformed chain.
-    parentDepth = countUp maxHierarchyDepth parentHandle
+    -- Edges above the destination parent, counted over the SAME
+    -- membership 'structuralOwners' defines ownership by — NOT over
+    -- the recorded 'ueParent'. 'removeFromPage' clears that field on
+    -- an element still sitting in its parent's 'ueChildren', which
+    -- understates its real depth as zero; a guard reading it would
+    -- then admit a fresh child under the deepest element of a
+    -- full-depth tree, and repeating the trick extends the structural
+    -- chain without bound.
+    --
+    -- 'walkUp' separately bounds the recorded-'ueParent' chain, so the
+    -- two together keep BOTH graphs inside 'maxHierarchyDepth' even
+    -- where they disagree.
+    parentDepth = climb Set.empty parentHandle 0
       where
-        countUp budget h
-            | budget ≤ 0 = maxHierarchyDepth
-            | otherwise = case Map.lookup h (upmElements mgr) ⌦ ueParent of
-                Just p  → 1 + countUp (budget - 1) p
-                Nothing → 0
+        climb seen h acc
+            | h `Set.member` seen = acc     -- malformed loop: stop
+            | acc > maxHierarchyDepth = acc -- already refusing; stop
+            | otherwise = case structuralParentOf h mgr of
+                Nothing → acc
+                Just p  → climb (Set.insert h seen) p (acc + 1)
 
     -- Edges below the child, over the same 'ueChildren' membership
     -- graph 'parentInChildSubtree' walks and with the same visited-set

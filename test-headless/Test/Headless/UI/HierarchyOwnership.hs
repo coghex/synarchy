@@ -337,6 +337,34 @@ spec = do
             roots p1 m3 `shouldBe` []
             map (`pageOf` m3) chain `shouldBe` map (const (Just p2)) chain
 
+        it "counts the destination parent's depth by membership, not by ueParent" $ do
+            -- removeFromPage clears the deepest element's ueParent
+            -- while leaving it in its structural parent's ueChildren.
+            -- A guard reading that field would see depth 0 and admit a
+            -- 65th edge — and the trick repeats without bound.
+            let (p1, _, m0) = twoPages
+                (_, deepest, _, m1) = chainOn maxDepth p1 m0
+                m2 = removeFromPage p1 deepest m1
+                (fresh, m3) = elemOn "fresh" p1 m2
+                m4 = addChildElement deepest fresh 0 0 m3
+            parentOf deepest m2 `shouldBe` Nothing
+            hierarchy m4 `shouldBe` hierarchy m3
+            kids deepest m4 `shouldBe` []
+
+        it "still bounds the recorded ueParent chain when membership is the shallow one" $ do
+            -- The mirror case: removeElement drops the handle from its
+            -- parent's ueChildren but KEEPS ueParent, so membership
+            -- reads shallow while the recorded chain every upward walk
+            -- follows is still full depth.
+            let (p1, _, m0) = twoPages
+                (_, deepest, _, m1) = chainOn maxDepth p1 m0
+                m2 = removeElement deepest m1
+                (fresh, m3) = elemOn "fresh" p1 m2
+                m4 = addChildElement deepest fresh 0 0 m3
+            parentOf deepest m2 `shouldSatisfy` (≢ Nothing)
+            hierarchy m4 `shouldBe` hierarchy m3
+            kids deepest m4 `shouldBe` []
+
         it "still refuses a cycle inside a maximum-depth subtree" $ do
             let (p1, _, m0) = twoPages
                 (root, deepest, _, m1) = chainOn maxDepth p1 m0
