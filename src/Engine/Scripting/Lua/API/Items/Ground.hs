@@ -34,7 +34,8 @@ import Engine.Scripting.Lua.API.Units.Page (unitOwningWorldState)
 import Item.Ground (GroundItem(..), GroundItems(..), spawnGroundItem
                    , removeGroundItem)
 import Item.Materialize (ItemOverrides(..), materializeItem, pristineItem)
-import Item.Roll (rollGroundCondition, rollGroundQuality)
+import Item.Roll (GroundConditionBase, mkGroundConditionBase
+                 , rollGroundCondition, rollGroundQuality)
 import Item.Temperature (effectiveItemTemp)
 import Item.Types
 import Unit.Types (UnitId(..), UnitInstance(..), UnitManager(..))
@@ -81,6 +82,23 @@ resolveItemPage env Nothing = activeWorldStateFrom (wsWorldManagerRef (toWorldSi
 --     penalty.
 --
 --   Both live in "Item.Roll" beside the rest of the roll logic.
+--
+--   An explicit @condition@ outside its declared 0-100 domain — above,
+--   below, NaN or either infinity — is REFUSED (#1790): the call
+--   answers @nil@, the same failure shape an unknown definition or an
+--   unresolvable page already answers with. It cannot be accepted and
+--   corrected, because the clamp inside @salvageCondition@ turns any
+--   base above 100 into exactly 100 for every allowed penalty — which
+--   is the pristine guarantee #1421 says this path does not offer —
+--   and turns a non-finite base into a 0 or a 100 no downstream range
+--   check can tell from a real roll.
+--
+--   That check runs BEFORE the definition lookup, before EITHER roll,
+--   and before any id is allocated, so a refused spawn spends no draw
+--   from the shared stat RNG (quality is rolled first, so a check
+--   sitting with the condition roll would already be too late) and
+--   leaves the page's ground items, its id allocator and the
+--   item-instance counter exactly as they were.
 itemSpawnGroundFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 itemSpawnGroundFn env = do
     nameArg ← Lua.tostring 1
@@ -102,8 +120,15 @@ itemSpawnGroundFn env = do
     mQuality ← getMaybeProp "quality"
     mCondition ← getMaybeProp "condition"
     mTemp ← getMaybeProp "temp"
-    case (nameArg, xArg, yArg) of
-        (Just nameBS, Just x, Just y) → do
+    -- Nothing        — the caller named a condition outside [0, 100];
+    -- Just Nothing   — no explicit condition, so the base is drawn;
+    -- Just (Just b)  — an explicit base, checked.
+    let mBase ∷ Maybe (Maybe GroundConditionBase)
+        mBase = case mCondition of
+            Nothing → Just Nothing
+            Just c  → Just <$> mkGroundConditionBase c
+    case (nameArg, xArg, yArg, mBase) of
+        (Just nameBS, Just x, Just y, Just base) → do
             let name = TE.decodeUtf8Lenient nameBS
             im ← Lua.liftIO $ readIORef (crItemManagerRef (toContentRegistriesCapability env))
             mWs ← Lua.liftIO $ resolveItemPage env (TE.decodeUtf8Lenient <$> pageArg)
@@ -118,7 +143,7 @@ itemSpawnGroundFn env = do
                     -- world, so they deliberately do not reach the
                     -- default contents it spawns holding.
                     quality ← Lua.liftIO $ rollGroundQuality iDef mQuality rng
-                    condition ← Lua.liftIO $ rollGroundCondition mCondition rng
+                    condition ← Lua.liftIO $ rollGroundCondition base rng
                     logger ← Lua.liftIO $
                         readIORef (ccLoggerRef (toCoreCapability env))
                     mInst ← Lua.liftIO $ materializeItem im logger rng
