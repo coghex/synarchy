@@ -74,6 +74,7 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import contextlib
+import math
 import os
 import signal
 import subprocess
@@ -848,9 +849,62 @@ def engine_preflight(namespace=None, environ=None, *, announce=None) -> str:
 
 
 # farm_ai_probe.py's O(n^2) TCP tile scan over natural terrain (#336) is the
-# slowest registered probe at ~11.5 min solo on a warm dev machine (#721) —
-# the default needs real margin above that for CI's slower runner.
+# slowest probe in the ordinary runtime class at ~11.5 min solo on a warm dev
+# machine (#721), so the shared default needs real margin above that. A probe
+# whose declared scenario structurally exceeds this class belongs in the
+# validated override table below rather than making every hung probe wait for
+# the exceptional case's budget.
 DEFAULT_TIMEOUT = 900.0
+
+# Per-key defaults for registered scenarios whose complete, expected workload
+# exceeds DEFAULT_TIMEOUT. An explicit CLI --timeout remains authoritative for
+# every selected key. save_compat_migration runs every manifest-declared
+# complete-session fixture through two real engine processes and two real-codec
+# GHCi dumps; its 20-fixture clean reference run took 2311 s, so 3600 s gives
+# useful loaded-machine and manifest-growth margin without weakening the normal
+# 900 s hang bound for the rest of the registry.
+PROBE_TIMEOUT_OVERRIDES: dict[str, float] = {
+    "save_compat_migration": 3600.0,
+}
+
+
+def timeout_override_problems(
+        probes=None, overrides: dict[str, float] | None = None) -> list[str]:
+    """Validate per-key default timeout declarations against the registry."""
+    registry = PROBES if probes is None else probes
+    declared = PROBE_TIMEOUT_OVERRIDES if overrides is None else overrides
+    known = {key for key, _, _ in registry}
+    problems = []
+    for key, timeout in sorted(declared.items()):
+        if key not in known:
+            problems.append(f"timeout override names unknown probe key {key!r}")
+        if (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
+                or not math.isfinite(timeout) or timeout <= 0):
+            problems.append(
+                f"timeout override for {key!r} must be finite and positive "
+                f"(got {timeout!r})")
+    return problems
+
+
+def effective_timeout(key: str, explicit: float | None = None) -> float:
+    """The CLI override, key-specific default, or ordinary default."""
+    if explicit is not None:
+        return explicit
+    return PROBE_TIMEOUT_OVERRIDES.get(key, DEFAULT_TIMEOUT)
+
+
+def format_timeout(timeout: float) -> str:
+    return f"{timeout:g}s"
+
+
+def timeout_plan(chosen, explicit: float | None = None) -> str:
+    """Compact human-readable budget summary for one selected run."""
+    budgets = sorted({effective_timeout(key, explicit) for key, _, _ in chosen})
+    if len(budgets) == 1:
+        return f"timeout {format_timeout(budgets[0])} each"
+    rendered = ", ".join(format_timeout(timeout) for timeout in budgets)
+    return f"per-probe timeouts {rendered}"
+
 
 # How long a signalled probe process group gets to leave on its own before
 # the escalation to SIGKILL. One grace period shared by the timeout path
@@ -1318,8 +1372,11 @@ def main() -> int:
                           "probe keeps its own default sequentially and the "
                           "parallel allocation starts at 9400. Never 8008, and "
                           "never a base whose span reaches it.")
-    ap.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT,
-                     help=f"per-probe wall-clock timeout in seconds (default {DEFAULT_TIMEOUT:.0f})")
+    ap.add_argument(
+        "--timeout", type=float, default=None,
+        help=("explicit wall-clock timeout in seconds for every selected "
+              f"probe (ordinary default {DEFAULT_TIMEOUT:g}; registered "
+              "per-key defaults apply when omitted)"))
     ap.add_argument("--tail", type=int, default=25,
                      help="lines of captured output to print for a failing probe")
     ap.add_argument("--retries", type=int, default=0,
@@ -1335,6 +1392,20 @@ def main() -> int:
                           "contention, --retries re-runs failures SOLO after the parallel "
                           "batch. Cap N to (cores - 1) or so — each probe is a full engine.")
     args = ap.parse_args()
+
+    if (args.timeout is not None
+            and (not math.isfinite(args.timeout) or args.timeout <= 0)):
+        print(f"--timeout must be finite and positive (got {args.timeout!r})",
+              file=sys.stderr)
+        return 2
+
+    timeout_problems = timeout_override_problems()
+    if timeout_problems:
+        print("registered probe timeout declarations are unusable:",
+              file=sys.stderr)
+        for problem in timeout_problems:
+            print(f"  - {problem}", file=sys.stderr)
+        return 2
 
     if args.port == GUI_PORT:
         # The base itself. Refused here, before `--list` and before any
@@ -1436,15 +1507,19 @@ def main() -> int:
     try:
         if args.jobs <= 1:
             # Sequential — the mode CI relies on: live, ordered, inline retry.
-            print(f"Running {n} probe(s) sequentially (timeout {args.timeout:.0f}s each)...\n")
+            print(f"Running {n} probe(s) sequentially "
+                  f"({timeout_plan(chosen, args.timeout)})...\n")
 
             def announce(kind, attempt, retries):
                 print(f"{kind}, retrying solo ({attempt}/{retries}) ... ", end="", flush=True)
 
             for i, (key, script, purpose) in enumerate(chosen, 1):
-                print(f"[{i}/{n}] {script} ... ", end="", flush=True)
+                timeout = effective_timeout(key, args.timeout)
+                print(f"[{i}/{n}] {script} ... "
+                      f"[timeout {format_timeout(timeout)}] ",
+                      end="", flush=True)
                 status, elapsed, out, attempts = run_with_retry(
-                    script, args.port, args.timeout, args.retries, announce,
+                    script, args.port, timeout, args.retries, announce,
                     groups, key=key, namespace=namespace, waiting=waiting)
                 note = f"  [passed on retry {attempts}]" if status == "PASS" and attempts > 1 else ""
                 print(f"{status} ({elapsed:.1f}s){note}")
@@ -1472,19 +1547,20 @@ def main() -> int:
             # parallel contention is exactly what a retry needs to escape.
             jobs = args.jobs
             print(f"Running {n} probe(s), up to {jobs} concurrently "
-                  f"(timeout {args.timeout:.0f}s each)...\n")
+                  f"({timeout_plan(chosen, args.timeout)})...\n")
 
             def work(idx, probe):
                 key, script, _ = probe
+                timeout = effective_timeout(key, args.timeout)
                 # `parallel_ports[idx]` is the BASE of this probe's own
                 # reserved span, which the allocation above laid clear of
                 # every other selected probe's (#1571). Never `base + idx`:
                 # a two-port probe binds its neighbour's base under that.
                 ok, timed_out, elapsed, out = run_one(
-                    script, parallel_ports[idx], args.timeout, groups,
+                    script, parallel_ports[idx], timeout, groups,
                     hold_env=descendant_hold_env(key, namespace))
                 status = "TIMEOUT" if timed_out else ("PASS" if ok else "FAIL")
-                return key, script, status, elapsed, out
+                return key, script, status, elapsed, out, timeout
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as ex:
                 # SUBMISSION is inside the try as well as completion: a
@@ -1587,8 +1663,10 @@ def main() -> int:
                             ledger.release(probe_exclusive, probe_shared)
                             hold.release()
                             done += 1
-                            key, script, status, elapsed, out = fut.result()
-                            print(f"[{done}/{n}] {script} ... {status} ({elapsed:.1f}s)")
+                            key, script, status, elapsed, out, timeout = fut.result()
+                            print(f"[{done}/{n}] {script} ... "
+                                  f"[timeout {format_timeout(timeout)}] "
+                                  f"{status} ({elapsed:.1f}s)")
                             results[key] = (script, status, elapsed, out)
                 except BaseException:
                     # Ctrl-C, or any orchestration failure. cancel() alone
@@ -1617,15 +1695,17 @@ def main() -> int:
                       f"(up to {args.retries} more attempt(s) each; the parallel "
                       f"batch was the first)...")
                 for key, script, _ in failed:
+                    timeout = effective_timeout(key, args.timeout)
                     for r in range(1, args.retries + 1):
                         # A solo retry is another full probe execution, so it
                         # takes the cross-process hold like any other (#1436).
                         with resource_hold(key, namespace, announce=waiting):
                             ok, timed_out, elapsed, out = run_one(
-                                script, parallel_base, args.timeout, groups,
+                                script, parallel_base, timeout, groups,
                                 hold_env=descendant_hold_env(key, namespace))
                         status = "TIMEOUT" if timed_out else ("PASS" if ok else "FAIL")
                         print(f"  {script} solo retry {r}/{args.retries} ... "
+                              f"[timeout {format_timeout(timeout)}] "
                               f"{status} ({elapsed:.1f}s)")
                         results[key] = (script, status, elapsed, out)
                         if ok:

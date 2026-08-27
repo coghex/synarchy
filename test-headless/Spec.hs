@@ -204,12 +204,14 @@ import qualified Test.Headless.Core.WorkerLifecycle as WorkerLifecycle
 import qualified Test.Headless.Core.DebugListener as DebugListener
 import qualified Test.Headless.App.Cli as AppCli
 import qualified Test.Headless.App.ChunkRegion as AppChunkRegion
+import qualified Test.Headless.App.PreviewConfig as PreviewConfig
 import qualified Test.Headless.Camera.GotoClamp as GotoClamp
 import qualified Test.Headless.Camera.ZoomScroll as ZoomScroll
 import qualified Test.Headless.Scene.BatchMerge as BatchMerge
 import qualified Test.Headless.Render.PanMargin as PanMargin
 import qualified Test.Headless.Location.Bounds as LocationBounds
 import qualified Test.Headless.Building.PageBinding as BuildingPageBinding
+import qualified Test.Headless.Building.PortalSpawnBinding as BuildingPortalSpawnBinding
 import qualified Test.Headless.Building.Placement as BuildingPlacement
 import qualified Test.Headless.Building.RemoteWarning as BuildingRemoteWarning
 import qualified Test.Headless.Save.AutosaveGuards as AutosaveGuards
@@ -226,6 +228,7 @@ import qualified Test.Headless.Location.Naming as LocationNaming
 import qualified Test.Headless.River.Naming as RiverNaming
 import qualified Test.Headless.Location.LootDeterminism as LocationLootDeterminism
 import qualified Test.Headless.Location.MapIcons as LocationMapIcons
+import qualified Test.Headless.Location.Stamping as LocationStamping
 import qualified Test.Headless.Tutorial.Definitions as TutorialDefinitions
 import qualified Test.Headless.Lua.SaveModules as LuaSaveModules
 import qualified Test.Headless.Lua.SharedHelpers as LuaSharedHelpers
@@ -642,6 +645,7 @@ main = hspec $ do
     -- BuildingSpawn / WorldDesignateConstruct stays in its queue and
     -- "nothing was committed" is asserted on the queue itself.
     BuildingPageBinding.spec
+    BuildingPortalSpawnBinding.spec
     describe "World.Render.ZTrackSeam" ZTrackSeam.spec
     describe "World.Render.SideFace" RenderSideFace.spec
     describe "World.Slope.slopeBit" RenderSlopeBit.spec
@@ -657,6 +661,7 @@ main = hspec $ do
     DebugListener.spec
     AppCli.spec
     AppChunkRegion.spec
+    describe "App.Preview.Config" PreviewConfig.spec
     describe "Camera.GotoClamp" GotoClamp.spec
     describe "Camera.ZoomScroll" ZoomScroll.spec
     describe "Scene.BatchMerge" BatchMerge.spec
@@ -670,6 +675,7 @@ main = hspec $ do
     RiverNaming.spec
     LocationLootDeterminism.spec
     LocationMapIcons.spec
+    LocationStamping.spec
     TutorialDefinitions.spec
     BuildingPlacement.spec
     BuildingRemoteWarning.spec

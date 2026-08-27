@@ -493,6 +493,14 @@ Enforced by `tools/preview_cli_probe.py` (CI-eligible, no boot) and
 `--match "Preview.Discovery"` / `"Preview.UnitAnimation"` /
 `"Preview.Building"`.
 
+The real-boot probe preserves the windowed GLFW/Vulkan surface, swapchain,
+input, and resize paths, but sets `SYNARCHY_PREVIEW_HIDDEN=1` for its engine
+children. Presence of that probe-only variable makes preview creation hidden
+and non-activating (`fullscreen=false`, `visible=false`, `focused=false`, and
+`focus-on-show=false`); an ordinary `--preview` launch remains visible and
+focused. This is deliberately not an offscreen conversion: the live-window
+resize behavior below is part of the probe's contract.
+
 ### Simple-category browser behavior
 
 - **Bare category** (`--preview icons`): a scrollable left-hand list of

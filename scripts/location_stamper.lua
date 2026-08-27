@@ -14,7 +14,9 @@
 --
 -- Idempotency (#424): a dedicated persisted marker — world.hasStampedLocation
 -- / world.markLocationStamped, keyed by chunk like the #90 content-spawn
--- flag below — tracks whether this chunk's location has been stamped.
+-- flag below — tracks whether this chunk's location has been COMPLETELY
+-- stamped (#1719: every placement the builder attempted succeeded, not
+-- merely that the builder ran).
 -- Earlier this inferred "already stamped" from structure.hasAt(gx, gy,
 -- "floor"), which stamping's own edit-log replay keeps true across a normal
 -- reload — but a player who later clears the anchor floor tile (an
@@ -33,7 +35,19 @@
 -- flag (world.hasSpawnedLocationContents), independent of structure.hasAt.
 -- A geometry-only skip does not imply contents already spawned: a
 -- floor-less location type never satisfies structure.hasAt, and a player
--- demolishing the floor would otherwise re-trigger a full re-stamp.
+-- demolishing the floor would otherwise re-trigger a full re-stamp. That
+-- independence also holds the other way (#1719): contents spawn on a
+-- dispatch whose geometry stamp FAILED, exactly as they do on one that
+-- was skipped, because the two flags answer different questions.
+--
+-- Partial stamps (#1719): locations.stamp returns (ok, failedCount), and
+-- the marker is written only when ok. A failed or partial stamp leaves
+-- the chunk unmarked, so the every-load dispatch in
+-- World.Thread.ChunkLoading re-attempts it on the next load of this
+-- chunk — the retry IS the recovery, and it is idempotent because both
+-- the Lua staging overlay and the authoritative edit apply key a piece
+-- by canonical tile and slot, so re-issuing a piece that already
+-- succeeded replaces it rather than adding a second one.
 
 local stamper = {}
 
@@ -48,8 +62,20 @@ function stamper.onStampLocation(pageId, locId, gx, gy)
     -- active world, so unrelated state there could suppress a valid stamp
     -- on a hidden secondary page.
     if not world.hasStampedLocation(gx, gy, pageId) then
-        locations.stamp(locId, gx, gy, pageId)
-        world.markLocationStamped(gx, gy, pageId)
+        local ok, failed = locations.stamp(locId, gx, gy, pageId)
+        if ok then
+            world.markLocationStamped(gx, gy, pageId)
+        elseif (failed or 0) > 0 then
+            -- One aggregate warning per unsuccessful ATTEMPT (so a retry
+            -- that fails again warns again), never one per piece. The
+            -- unknown-id / unknown-builder paths attempt nothing and
+            -- already warn inside locations.stamp, so they are excluded
+            -- here rather than summarised twice.
+            engine.logWarn(string.format(
+                "locations: stamp of '%s' on page '%s' at %d,%d failed %d " ..
+                "placement(s) — chunk left unmarked, will retry on next load",
+                tostring(locId), tostring(pageId), gx, gy, failed))
+        end
     end
     locations.spawnContents(locId, gx, gy, pageId)
 end

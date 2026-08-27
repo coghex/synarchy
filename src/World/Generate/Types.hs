@@ -112,7 +112,10 @@ data WorldGenParams = WorldGenParams
       --   save's per-chunk flags only until the load path resolves them.
     , wgpLocationStamped ∷ !(HS.HashSet ChunkCoord)
       -- ^ One-time geometry-stamp flag (#424): chunks whose placed
-      --   location has already had its builder run. Was formerly
+      --   location has already been stamped COMPLETELY — its builder
+      --   ran and every placement it attempted succeeded (#1719), so a
+      --   partial stamp is deliberately absent here and is retried on
+      --   the chunk's next load. Was formerly
       --   inferred from @structure.hasAt gx gy "floor"@, but that
       --   check is fooled by a player who later clears the anchor
       --   floor tile — the location has still been materialized, but
