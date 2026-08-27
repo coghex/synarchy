@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict #-}
 module Engine.Graphics.Vulkan.Recreate
   ( recreateSwapchain
+  , recreateSwapchainFor
   ) where
 
 import UPrelude
@@ -18,6 +19,9 @@ import Engine.Graphics.Config
 import Engine.Graphics.Types
 import Engine.Graphics.Window.Types (Window(..))
 import qualified Engine.Graphics.Window.GLFW as GLFW
+import Engine.Graphics.Vulkan.ResizeRequest
+  ( noteMinimizedFramebuffer, recordSwapchainFramebufferState
+  , sampleFramebufferState )
 import Engine.Graphics.Vulkan.Swapchain
 import Engine.Graphics.Vulkan.Framebuffer
 import Engine.Graphics.Vulkan.Pipeline
@@ -31,9 +35,52 @@ import Engine.Graphics.Font.Draw
 import Vulkan.Core10
 import Vulkan.Extensions.VK_KHR_surface (SurfaceKHR)
 
--- | Recreate the swapchain and all dependent resources
+-- | Recreate the swapchain and all dependent resources for the
+--   framebuffer size the window has right now.
+--
+--   The entry point for the callers that are not reacting to a size
+--   change and so have no state of their own to name: VSync, MSAA, and
+--   the three exceptional-status paths in "Engine.Loop.Frame".
+--
+--   The state comes from 'sampleFramebufferState' — the SAME reading
+--   'Engine.Loop.applyPendingFramebufferResize' judges a pending
+--   request against — and deliberately not from a fresh
+--   @GLFW.getFramebufferSize@. Sampling GLFW here instead would make
+--   the direct and pending paths disagree whenever a resize callback
+--   has fired but the input thread has not drained it yet: this
+--   recreation would build for and record the newer size B, the same
+--   tick's pending check would then see the ref still at A and rebuild
+--   AGAIN for A, and the drain would rebuild a third time back to B.
+--   One source, one coherent answer, so a direct recreation always
+--   satisfies a pending request for the state it recorded.
 recreateSwapchain ∷ Window → EngineM σ ()
-recreateSwapchain window = do
+recreateSwapchain window =
+    recreateSwapchainFor window =≪ sampleFramebufferState
+
+-- | Recreate the swapchain and all dependent resources for an explicit
+--   framebuffer state.
+--
+--   That state's size is used for the zero check, handed to
+--   'createVulkanSwapchain', and — with its paired generation — stored
+--   by 'recordSwapchainFramebufferState': one value, three uses, no
+--   second sample (#1693). This is what makes the resize request
+--   terminate: 'Engine.Loop.applyPendingFramebufferResize' passes the
+--   very state it saw outstanding, so serving a request always records
+--   exactly the request that was served. Re-sampling in here instead
+--   would let the swapchain be built from one state and the request
+--   judged against another.
+--
+--   It is equally what keeps a resize arriving DURING a recreation
+--   alive: the record names the state this rebuild used, never a later
+--   read, so a newer framebuffer state is still a disagreement when
+--   this returns and gets its own recreation.
+--
+--   Every recreation path in the engine ends up here, so any of them
+--   satisfies a pending request for the same framebuffer state and one
+--   window change can never cost two recreations.
+recreateSwapchainFor ∷ Window → FramebufferState → EngineM σ ()
+recreateSwapchainFor window fbState = do
+    let fbSize@(width, height) = fbsSize fbState
     state ← gets graphicsState
     
     device ← getDeviceOrFail state
@@ -41,13 +88,30 @@ recreateSwapchain window = do
     surface ← getSurfaceOrFail state
     queues ← getQueuesOrFail state
     
-    liftIO $ deviceWaitIdle device
+    -- The window is checked as well as the requested state, and the
+    -- check comes BEFORE deviceWaitIdle.
+    --
+    -- Before, because a minimized window has nothing to rebuild and
+    -- stalling the whole device to find that out is pure cost.
+    --
+    -- As well, because @fbState@ can be a moment out of date: the
+    -- caller reacting to a resize passes the state the input thread
+    -- last published, and the window may have been minimized since.
+    -- Building a swapchain for a stale nonzero size against a now-zero
+    -- surface is a Vulkan error, and the surface is the authority on
+    -- whether there is anything to build at all. On success the RECORD
+    -- is still @fbState@ and never this sample — see the note above.
     let Window glfwWin = window
-    (width, height) ← GLFW.getFramebufferSize glfwWin
-    
-    if width ≡ 0 ∨ height ≡ 0
-        then logDebugM CatSwapchain "Window minimized, skipping swapchain recreation"
+    (liveWidth, liveHeight) ← GLFW.getFramebufferSize glfwWin
+    if width ≡ 0 ∨ height ≡ 0 ∨ liveWidth ≡ 0 ∨ liveHeight ≡ 0
+        then do
+            logDebugM CatSwapchain "Window minimized, skipping swapchain recreation"
+            -- Record a ZERO size whatever @fbState@ said, so a restore
+            -- is a disagreement even when the requested size was the
+            -- stale nonzero one the live-window check just rejected.
+            noteMinimizedFramebuffer fbState { fbsSize = (0, 0) }
         else do
+            liftIO $ deviceWaitIdle device
             -- Old resources must be destroyed before new ones are created
             -- because Vulkan doesn't allow two swapchains for the same
             -- surface simultaneously. If recreateAllResources throws, the
@@ -60,11 +124,12 @@ recreateSwapchain window = do
                 vulkanCleanup = emptyCleanup
             }
 
-            recreateAllResources pDevice device queues surface window
+            recreateAllResources pDevice device queues surface fbSize
 
             modifyGraphicsState $ \gs → gs {
                 currentFrame = 0
             }
+            recordSwapchainFramebufferState fbState
 
             env ← ask
             liftIO $ writeIORef (rcUiCameraRef (toRenderCapability env)) $ 
@@ -73,10 +138,13 @@ recreateSwapchain window = do
             logInfoM CatSwapchain $ "Swapchain recreated: " <> (tshow width) 
                                     <> "x" <> (tshow height)
 
--- | Recreate all swapchain-dependent resources
+-- | Recreate all swapchain-dependent resources from the framebuffer
+--   size 'recreateSwapchainFor' was given — never a fresh GLFW read,
+--   so the size the swapchain is built from is the size that gets
+--   recorded.
 recreateAllResources ∷ PhysicalDevice → Device → DevQueues → SurfaceKHR 
-                     → Window → EngineM σ ()
-recreateAllResources pDevice device queues surface window = do
+                     → (Int, Int) → EngineM σ ()
+recreateAllResources pDevice device queues surface fbSize = do
     state ← gets graphicsState
     
     -- Descriptor manager and texture system survive recreation
@@ -91,8 +159,6 @@ recreateAllResources pDevice device queues surface window = do
     videoConfig ← liftIO $ readIORef (rcVideoConfigRef (toRenderCapability env))
     let vsyncEnabled = vcVSync videoConfig
         msaaInt      = vcMSAA videoConfig
-        Window glfwWin = window
-    fbSize ← GLFW.getFramebufferSize glfwWin
     swapInfo ← createVulkanSwapchain pDevice device queues surface
                  vsyncEnabled fbSize
     modifyGraphicsState $ \gs → gs {

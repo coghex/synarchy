@@ -63,7 +63,8 @@ import Engine.Graphics.Types (ScreenshotRequest)
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem)
 import Engine.Core.State
   ( EngineEnv
-  , videoConfigRef, windowSizeRef, windowPosRef, framebufferSizeRef, pixelSnapRef
+  , videoConfigRef, windowSizeRef, windowPosRef, framebufferSizeRef
+  , framebufferMinimizeGenRef, pixelSnapRef
   , fpsRef, textureFilterRef, assetPoolRef, textureNameRegistryRef, fontCacheRef
   , textureSystemRef, textureSizeRef, cameraRef, screenshotRequestQueue
   )
@@ -84,6 +85,7 @@ data RenderViewCapability = RenderViewCapability
   , rvWindowSizeRef          ∷ IORef (Int, Int)
   , rvWindowPosRef           ∷ IORef (Int, Int)
   , rvFramebufferSizeRef     ∷ IORef (Int, Int)
+  , rvFramebufferMinimizeGenRef ∷ IORef Word64
   , rvPixelSnapRef           ∷ IORef Bool
   , rvFpsRef                 ∷ IORef Double
   , rvTextureFilterRef       ∷ IORef TextureFilter
@@ -106,6 +108,7 @@ toRenderViewCapability env = RenderViewCapability
   , rvWindowSizeRef          = windowSizeRef env
   , rvWindowPosRef           = windowPosRef env
   , rvFramebufferSizeRef     = framebufferSizeRef env
+  , rvFramebufferMinimizeGenRef = framebufferMinimizeGenRef env
   , rvPixelSnapRef           = pixelSnapRef env
   , rvFpsRef                 = fpsRef env
   , rvTextureFilterRef       = textureFilterRef env

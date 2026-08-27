@@ -42,6 +42,8 @@ import Engine.Graphics.Vulkan.Pipeline.Bindless (createBindlessPipeline
                                                 , createBindlessUIPipeline)
 import Engine.Graphics.Vulkan.MSAA (createMSAAColorImage)
 import Engine.Graphics.Vulkan.Offscreen (createOffscreenTarget)
+import Engine.Graphics.Vulkan.ResizeRequest
+  (recordSwapchainFramebufferState, sampleFramebufferState)
 import Engine.Graphics.Vulkan.Swapchain
 import Engine.Graphics.Vulkan.Sync (createRenderFinishedSemaphores)
 import Engine.Graphics.Vulkan.Texture.Limits (maxBindlessTextures)
@@ -60,8 +62,6 @@ import Vulkan.CStruct.Extends (SomeStruct(..))
 -- | Initialize all Vulkan resources for the windowed (swapchain) path.
 initializeVulkan ∷ Window → EngineM σ CommandPool
 initializeVulkan window = do
-  let Window glfwWin = window
-
   logDebugM CatVulkan "Creating Vulkan instance"
   -- Registered for destruction at engine unwind: the messenger and
   -- instance are destroyed after the device and surface (LIFO).
@@ -99,9 +99,20 @@ initializeVulkan window = do
   logDebugSM CatVulkan "Creating swapchain"
     [("vsync", if vsyncEnabled then "enabled" else "disabled")]
   logDebugM CatGraphics "Creating swapchain"
-  fbSize ← GLFW.getFramebufferSize glfwWin
+  -- ONE source for every windowed swapchain build (#1693): the same
+  -- @framebufferSizeRef@ reading the loop judges a pending resize
+  -- against, which 'Engine.Graphics.Window.GLFW.createWindow' has
+  -- already seeded from this very window, and which every other
+  -- renderer consumer computes its projections from. Sampling GLFW
+  -- separately here would seed the record with a value the loop might
+  -- immediately disagree with. Windowed only:
+  -- 'initializeVulkanOffscreen' has no window to resize and must never
+  -- gain a recreation path.
+  fbState ← sampleFramebufferState
+  let fbSize = fbsSize fbState
   swapInfo0 ← createVulkanSwapchain physicalDevice device queues surface
                vsyncEnabled fbSize
+  recordSwapchainFramebufferState fbState
   imageViews ← createSwapchainImageViews device swapInfo0
   let swapInfo = swapInfo0 { siSwapImgViews = imageViews }
 

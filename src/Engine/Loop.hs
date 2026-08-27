@@ -9,10 +9,15 @@ import Control.Concurrent (threadDelay)
 import Engine.Core.Monad
 import Engine.Core.State
 import Engine.Core.Log (LogCategory(..))
-import Engine.Core.Log.Monad (logAndThrowM)
 import Engine.Core.Error.Exception (ExceptionType(..), SystemError(..))
+import Engine.Core.Log.Monad (logAndThrowM, logDebugM)
 import Engine.Graphics.Window.Types (Window(..))
 import qualified Engine.Graphics.Window.GLFW as GLFW
+import Engine.Graphics.Vulkan.Recreate (recreateSwapchainFor)
+import Engine.Graphics.Vulkan.ResizeRequest
+  (FramebufferResizeAction(..), noteMinimizedFramebuffer
+  , pendingFramebufferResize)
+import Engine.Graphics.Types (FramebufferState(..))
 import Engine.Loop.Timing (updateFrameTiming)
 import Engine.Loop.Frame (drawFrame)
 import Engine.Loop.Camera (updateCameraPanning, updateCameraMouseDrag
@@ -45,7 +50,8 @@ windowedMode = LoopMode
   , lmExitRequested = do
         Window glfwWin ← requireWindow
         GLFW.windowShouldClose glfwWin
-  , lmEndOfTick     = drawFrame *> updateFrameTiming
+  , lmEndOfTick     = applyPendingFramebufferResize
+                          *> drawFrame *> updateFrameTiming
   }
 
 offscreenMode ∷ LoopMode σ
@@ -65,6 +71,51 @@ offscreenMode = LoopMode
         liftIO $ threadDelay frameBudgetMicros
         updateFrameTiming
   }
+
+-- | Rebuild the swapchain when the window's framebuffer no longer
+--   matches the one the live swapchain was built for (#1693).
+--
+--   Windowed only, deliberately: this is a field of 'windowedMode'
+--   alone, so neither the offscreen loop nor the headless loop can
+--   reach 'recreateSwapchainFor' — and offscreen in particular can
+--   never take a swapchain path with no window behind it.
+--   @App.Preview@ IS covered, because it runs this same loop.
+--   Belt and braces: neither non-windowed mode ever seeds
+--   'Engine.Core.State.swapchainFbSize', and
+--   'pendingFramebufferResize' answers 'ResizeUpToDate' whenever that
+--   record is unset.
+--
+--   Run BEFORE the frame rather than after it, so the frame that
+--   follows a resize already presents at the new extent instead of
+--   showing one stale-extent frame first.
+--
+--   Requesting is separate from consuming
+--   ("Engine.Graphics.Vulkan.ResizeRequest"): 'pendingFramebufferResize'
+--   only reads, and 'recreateSwapchainFor' records the size it was
+--   given. A resize that lands while that rebuild runs is therefore
+--   still outstanding when this returns, and gets its own recreation
+--   next tick.
+--
+--   'requireWindow' is the same accessor the rest of this mode uses;
+--   it cannot fail here, because 'lmPollEvents' and 'lmExitRequested'
+--   have both already demanded a window this very tick.
+applyPendingFramebufferResize ∷ EngineM σ ()
+applyPendingFramebufferResize = do
+    action ← pendingFramebufferResize
+    case action of
+        ResizeUpToDate        → pure ()
+        ResizeMinimized  fbSt → noteMinimizedFramebuffer fbSt
+        ResizeRecreate   fbSt → do
+            let (w, h) = fbsSize fbSt
+            logDebugM CatSwapchain $
+                "Framebuffer resized to " <> tshow w <> "x" <> tshow h
+                <> ", recreating swapchain"
+            -- The state that was REQUESTED, not a fresh sample:
+            -- serving a request must record exactly the state it was
+            -- judged against, or a request could outlive its own
+            -- recreation and repeat forever.
+            window ← requireWindow
+            recreateSwapchainFor window fbSt
 
 -- | The per-tick camera integration both rendering modes run, on an
 --   unlocked tick only (see @Engine.Loop.Mode.runGatedByCaptureLock@).
