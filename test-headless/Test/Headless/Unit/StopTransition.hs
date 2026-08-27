@@ -34,6 +34,7 @@ import UPrelude
 import Test.Hspec
 import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
+import qualified Data.HashSet as HS
 import qualified Data.Text as T
 
 import Engine.Graphics.Camera (CameraFacing(..))
@@ -64,9 +65,11 @@ import World.Save.Component.Entities
     ( unitSimCodec, UnitSimDTO(..), PageSimDTO(..), UnitSimStateDTO(..) )
 import World.Save.Component.Types
     (ComponentCodec(..), renderComponentError)
+import World.Save.Envelope (encodeSessionSnapshot, decodeSessionEnvelope)
+import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotSaveMetadata)
 import World.Save.Reference (SamePageRef(..))
 import World.Save.Snapshot
-    ( SessionSnapshot, SessionGlobals(..), PageSnapshot(..)
+    ( SessionSnapshot(..), SessionGlobals(..), PageSnapshot(..)
     , LiveCameraSnapshot(..), captureSessionSnapshot )
 import World.Save.Types
     (BuildingSnapshot(..), UnitSnapshot(..), UnitInstanceSnapshot(..))
@@ -117,6 +120,12 @@ settleTicks = 300
 -- | Run to a settled state and return it.
 settle ∷ UnitSimState → UnitSimState
 settle s = snd (last (trajectory settleTicks s))
+
+-- | Settle from an explicit clock — for a state restored from a save,
+--   whose absolute transition deadline is only meaningful against the
+--   game time the save carried.
+settleFrom ∷ Double → UnitSimState → UnitSimState
+settleFrom t s = snd (last (take (settleTicks + 1) (iterate step (t, s))))
 
 isTransition ∷ UnitActivity → Bool
 isTransition (TransitioningTo _) = True
@@ -280,9 +289,13 @@ pageWithSim ss = PageSnapshot
     , pgsIdentity     = Nothing
     }
 
-globals ∷ SessionGlobals
-globals = SessionGlobals
-    { sgGameTime       = t0
+-- | Session globals stamped with the game time the save was taken at.
+--   Load restores this clock, and every deadline in a sim state is an
+--   ABSOLUTE game time, so an in-flight transition only resumes
+--   correctly when the two travel together.
+globalsAt ∷ Double → SessionGlobals
+globalsAt now = SessionGlobals
+    { sgGameTime       = now
     , sgTexPalette     = emptyTexPalette
     , sgNextItemId     = 1
     , sgNextBuildingId = 10
@@ -294,10 +307,13 @@ globals = SessionGlobals
         , lcsX = 0, lcsY = 0, lcsZoom = 1, lcsFacing = FaceEast }
     }
 
-snapshotOf ∷ UnitSimState → SessionSnapshot
-snapshotOf ss = case captureSessionSnapshot globals [pageWithSim ss] of
+snapshotAt ∷ Double → UnitSimState → SessionSnapshot
+snapshotAt now ss = case captureSessionSnapshot (globalsAt now) [pageWithSim ss] of
     Right snap → snap
-    Left errs  → error ("snapshotOf invalid: " ⧺ show errs)
+    Left errs  → error ("snapshotAt invalid: " ⧺ show errs)
+
+snapshotOf ∷ UnitSimState → SessionSnapshot
+snapshotOf = snapshotAt t0
 
 -- | Round-trip one sim state through the REAL @unit-sim@ save component
 --   — the same codec a save writes and a load reads — and hand back the
@@ -316,6 +332,28 @@ roundTripSim ss = do
                      , Just d ← [HM.lookup (SamePageRef testUnit) (psSim p)] ] of
                 (d : _) → pure d
                 []      → fail "unit-sim payload carried no sim state"
+
+-- | A REAL save and reload of the whole session: the production
+--   envelope encoder, then the production decoder, handing back the
+--   restored game clock and the restored sim state. Unlike
+--   'roundTripSim' (one component's bytes) this is the path
+--   @engine.saveWorld@ / @engine.loadSave@ actually take.
+saveAndReload ∷ Double → UnitSimState → IO (Double, UnitSimState)
+saveAndReload now ss = do
+    let snap = snapshotAt now ss
+        meta = snapshotSaveMetadata
+                 (SaveRequestMeta { srmSlotName = "stop-transition"
+                                  , srmTimestamp = "ts"
+                                  , srmAutosave = False })
+                 snap
+        bytes = encodeSessionSnapshot meta snap []
+    case decodeSessionEnvelope HS.empty HS.empty bytes of
+        Left err → fail ("save reload failed: " ⧺ T.unpack err)
+        Right (_meta, restored, _lua, _migrated) →
+            case HM.lookup testPage (snapPages restored)
+                     ⌦ HM.lookup testUnit . pgsUnitSimStates of
+                Just back → pure (snapGameTime restored, back)
+                Nothing   → fail "reloaded session carried no sim state"
 
 -- ---------------------------------------------------------------------
 
@@ -504,3 +542,32 @@ spec = do
         it "the payload is non-empty, so the check above is not vacuous" $ do
             let bytes = ccEncode unitSimCodec (snapshotOf (settle leaping))
             BS.length bytes `shouldSatisfy` (> 0)
+
+        it "a session saved WHILE the interrupted leap is still in flight \
+           \reloads and finishes the arc, landing grounded and standing" $ do
+            -- The save is taken at the instant the break lands, with the
+            -- unit still airborne and still TransitioningTo Falling —
+            -- the case requirement 6 is actually about. The settled
+            -- round trip above covers the save taken afterwards.
+            let (t, air)   = firstOffGrid leaping
+                interrupted = stopUnitSimState air
+            usState interrupted `shouldBe` TransitioningTo Falling
+            usRealZ interrupted `shouldSatisfy`
+                (> fromIntegral (usGridZ interrupted))
+            (clock, back) ← saveAndReload t interrupted
+            -- Nothing is lost or reconciled by the round trip itself:
+            -- the arc comes back exactly as it went in, on its own clock.
+            back  `shouldBe` interrupted
+            clock `shouldBe` t
+            let landed = settleFrom clock back
+            usState landed `shouldBe` Idle
+            usPose landed  `shouldBe` Standing
+            usRealX landed `shouldBe` 2.5
+            usRealY landed `shouldBe` 0.5
+            groundedAndClean landed
+
+        it "the reloaded in-flight leap settles exactly where an \
+           \uninterrupted, never-saved one does" $ do
+            let (t, air) = firstOffGrid leaping
+            (clock, back) ← saveAndReload t (stopUnitSimState air)
+            settleFrom clock back `shouldBe` settle leaping
