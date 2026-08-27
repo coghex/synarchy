@@ -201,6 +201,40 @@ spec = do
             roots p1 m4 `shouldBe` [a]
             kids b m4 `shouldBe` [c]
 
+        it "a STRUCTURAL descendant is refused as a parent even with a cleared ueParent" $ do
+            -- removeFromPage on a nested child clears its ueParent
+            -- while leaving it in the parent's ueChildren, so the
+            -- recorded ancestor chain no longer names the real one.
+            -- Attaching A under its own structural descendant B would
+            -- close an A→B→A ueChildren loop that every downward walk
+            -- (render, getPageElements, hitsAtPointBy,
+            -- paintTraversalOrder, deleteElementTree) follows forever.
+            let (p1, _, m0) = twoPages
+                (a, m1) = rootOn "a" p1 m0
+                (b, m2) = childOf "b" a p1 m1
+                m3 = removeFromPage p1 b m2
+                m4 = addChildElement b a 0 0 m3
+            parentOf b m3 `shouldBe` Nothing
+            kids a m3 `shouldBe` [b]
+            hierarchy m4 `shouldBe` hierarchy m3
+            roots p1 m4 `shouldBe` [a]
+            kids b m4 `shouldBe` []
+            -- The downward traversals still terminate and stay
+            -- exactly-once.
+            map ueHandle (getPageElements p1 m4) `shouldBe` [a, b]
+            paintTraversalOrder m4 `shouldBe` [a, b]
+
+        it "a deeper structural descendant is refused as a parent too" $ do
+            let (p1, _, m0) = twoPages
+                (a, m1) = rootOn "a" p1 m0
+                (b, m2) = childOf "b" a p1 m1
+                (c, m3) = childOf "c" b p1 m2
+                m4 = removeFromPage p1 c m3
+                m5 = addChildElement c a 0 0 m4
+            hierarchy m5 `shouldBe` hierarchy m4
+            kids c m5 `shouldBe` []
+            map ueHandle (getPageElements p1 m5) `shouldBe` [a, b, c]
+
         it "child-as-its-own-parent is refused without detaching it" $ do
             let (p1, _, m0) = twoPages
                 (a, m1)  = rootOn "a" p1 m0

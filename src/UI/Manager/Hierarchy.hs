@@ -158,7 +158,8 @@ addElementToPage pageHandle elemHandle x y mgr
 --   Rejection stays atomic in both of its forms. An unknown child or
 --   parent handle, and a refused cycle, each return the manager
 --   untouched: in particular a refused attachment never detaches the
---   child from the owner it already had.
+--   child from the owner it already had. The cycle guard covers BOTH
+--   edge directions this call adds — see 'wouldCycle' below.
 addChildElement ∷ ElementHandle → ElementHandle → Float → Float
                 → UIPageManager → UIPageManager
 addChildElement parentHandle childHandle x y mgr
@@ -166,12 +167,12 @@ addChildElement parentHandle childHandle x y mgr
     | otherwise = case Map.lookup parentHandle (upmElements mgr) of
         Nothing → mgr
         Just parent
-            -- Refuse to create a parent cycle (child already an
-            -- ancestor of the parent, or child ≡ parent). A cycle
-            -- would hang every parent-chain walk (absolute position,
-            -- accumulated z-index, tree recursion) on the render and
-            -- input threads forever. This is the only site that sets
-            -- a Just parent, so the check here keeps the forest
+            -- Refuse to create a cycle (child already an ancestor of
+            -- the parent, or child ≡ parent). A cycle would hang every
+            -- tree walk (absolute position, accumulated z-index,
+            -- rendering, hit testing, deletion) on the render and
+            -- input threads forever. This is the only site that adds
+            -- either kind of edge, so the check here keeps the forest
             -- acyclic globally. Evaluated against the PRE-detach
             -- hierarchy, which is the one the move has to be legal in.
             | wouldCycle → mgr
@@ -189,13 +190,36 @@ addChildElement parentHandle childHandle x y mgr
                    then bumpElementRouteEpoch childHandle mgr4
                    else mgr4
   where
-    wouldCycle = walkUp (64 ∷ Int) parentHandle
+    -- Attaching adds BOTH a @child → parent@ 'ueParent' edge and a
+    -- @parent → child@ 'ueChildren' edge, and the two graphs are
+    -- walked by different consumers — up by 'getElementAbsolutePosition'
+    -- / 'UI.ControlActivation.ancestorChain' /
+    -- 'UI.Clipping.effectiveClip', down by 'UI.Render' /
+    -- 'UI.Manager.Query.getPageElements' / 'hitsAtPointBy' /
+    -- 'paintTraversalOrder' / 'UI.Manager.Core.deleteElementTree'. Each
+    -- therefore needs its own guard, and #1694 is
+    -- exactly why the second one cannot be inferred from the first:
+    -- membership and the recorded 'ueParent' can disagree (see
+    -- 'structuralOwners'), so a child whose own structural descendant
+    -- had its 'ueParent' cleared by 'removeFromPage' would pass the
+    -- up-walk while closing a real 'ueChildren' loop.
+    wouldCycle = walkUp (64 ∷ Int) parentHandle ∨ walkDown (64 ∷ Int) childHandle
+
+    -- Is the child already an ancestor of the parent?
     walkUp depth h
         | depth ≤ 0 = True          -- pathological depth: refuse too
         | h ≡ childHandle = True
         | otherwise = case Map.lookup h (upmElements mgr) ⌦ ueParent of
             Just p  → walkUp (depth - 1) p
             Nothing → False
+
+    -- Is the parent already inside the child's structural subtree?
+    walkDown depth h
+        | depth ≤ 0 = True          -- pathological depth: refuse too
+        | h ≡ parentHandle = True
+        | otherwise = case Map.lookup h (upmElements mgr) of
+            Nothing → False
+            Just el → any (walkDown (depth - 1)) (ueChildren el)
 
 -- | #745: also bumps this element's OWN
 --   'UI.Types.ueRouteEpoch' — a pending pointer activation on this
