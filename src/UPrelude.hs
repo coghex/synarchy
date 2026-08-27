@@ -95,6 +95,29 @@ clamp minVal maxVal x
     | x > maxVal = maxVal
     | otherwise  = x
 
+-- | 'clamp' for 'Float', with an explicit non-finite policy (#1733).
+--
+--   Plain 'clamp' already handles an INFINITY correctly: @-Infinity <
+--   minVal@ and @Infinity > maxVal@ both hold, so each is pulled to the
+--   nearer bound. A NaN is the hole — every comparison against NaN is
+--   'False', so it falls through to @otherwise@ and leaves the band
+--   unchanged, which is how a single corrupt stat escapes a documented
+--   range and then silently biases every downstream comparison (which
+--   are all 'False' against it too).
+--
+--   NaN carries no magnitude to clamp toward, so it takes @minVal@: an
+--   uninterpretable input is given no benefit of the doubt, which keeps
+--   the containment fail-safe at the consumer rather than merely finite.
+--
+--   Every FINITE input is bit-identical to @clamp minVal maxVal@, so
+--   swapping a 'clamp' for this one is a pure widening of the domain.
+--   'clamp' itself is deliberately left alone: its @Ord a@ signature
+--   covers types for which no finiteness notion exists.
+clampFinite ∷ Float → Float → Float → Float
+clampFinite minVal maxVal x
+    | isNaN x   = minVal
+    | otherwise = clamp minVal maxVal x
+
 -- * Bitwise Operators
 
 -- | Bitwise AND (.&.).

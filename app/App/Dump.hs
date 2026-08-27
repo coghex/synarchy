@@ -8,7 +8,7 @@ module App.Dump
 import UPrelude
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.MVar (newEmptyMVar, takeMVar)
-import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
+import Data.IORef (readIORef, writeIORef)
 import System.IO (hPutStrLn, stderr, hFlush, stdout)
 import Data.List (sortBy)
 import Data.Ord (comparing)
@@ -38,6 +38,7 @@ import Engine.Loop.Shutdown (checkStatus)
 import Engine.Scripting.Lua.Thread (startLuaThread)
 import World.Thread (startWorldThread)
 import World.Types
+import World.Chunk.Queue (enqueueChunkRequest)
 import World.Plate (isGlacierZone, isBeyondGlacier)
 import World.Weather.Types (ClimateState, initClimateState)
 import World.Weather.Lookup (lookupWaterTable)
@@ -147,15 +148,14 @@ runDump layers gen region = do
             manager ← readIORef (worldManagerRef env')
             case wmWorlds manager of
                 ((_, ws):_) → do
-                    td ← readIORef (wsTilesRef ws)
-                    let coords = map (uncurry ChunkCoord)
-                                     (chunkRegionCoords region)
-                        needed = filter
-                            (\c → isNothing (lookupChunk c td)) coords
-                    atomicModifyIORef' (wsInitQueueRef ws) $ \q →
-                        (q ⧺ needed, ())
+                    -- Physical chunks, not coordinate spellings: a
+                    -- seam-crossing --region names one chunk twice, and
+                    -- the reported count is what waitForChunks below is
+                    -- actually waiting for (#1723).
+                    queued ← enqueueChunkRequest ws $
+                        map (uncurry ChunkCoord) (chunkRegionCoords region)
                     hPutStrLn stderr $ "dump: queued "
-                        ⧺ show (length needed) ⧺ " chunks"
+                        ⧺ show queued ⧺ " chunks"
                 [] → hPutStrLn stderr "dump: no world found"
 
         chunksOk ← liftIO $ waitForChunks env' 300

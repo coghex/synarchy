@@ -17,6 +17,21 @@
 --   it: whoever imposes the pause captures the speed, so whoever lifts
 --   it can give it back.
 --
+--   __An epoch records no OWNER, so the sources are counted
+--   instead.__ Because a second pause landing on an already-paused
+--   session is a complete no-op, nothing downstream could tell that a
+--   notification still wanted the game paused when an autosave's
+--   restore came to close the epoch — so the restore erased it, leaving
+--   the popup that announced the pause standing over a running game
+--   (#1730). 'imposePause' therefore bumps
+--   'Engine.Core.State.enginePauseGenRef' on every call, no-op
+--   included, while the two pauses a save imposes on its OWN behalf
+--   ('reassertSavePause' and @acceptSaveRequest@'s 'imposePauseHeld')
+--   deliberately do not — a save may not count itself as a reason to
+--   decline its own restore. The player's pause is not counted here
+--   either; @playerIntentGenRef@ already records it, and keeping the
+--   two apart is what lets a declined restore name the real reason.
+--
 --   __A pause is an EPOCH, not a flag.__ The capture happens on the
 --   unpaused→paused TRANSITION and only there. A second pause landing
 --   while the session is already paused — the world thread re-asserting
@@ -51,6 +66,7 @@
 module World.Pause
     ( imposePause
     , imposePauseHeld
+    , reassertSavePause
     , beginPauseEpoch
     , releasePause
     , releasePauseHeld
@@ -60,7 +76,8 @@ module World.Pause
 import UPrelude
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Engine.Core.Capability.WorldSim
-    ( WorldSimCapability(wsEnginePausedRef, wsWorldManagerRef)
+    ( WorldSimCapability(wsEnginePausedRef, wsEnginePauseGenRef
+                        , wsWorldManagerRef)
     , withPlayerIntentHeld )
 import World.Types
     ( WorldManager(wmWorlds), WorldState(wsTimeScaleRef, wsResumeScaleRef)
@@ -76,12 +93,58 @@ import World.Types
 --   is the player's real one and the clock it would re-capture is
 --   already zero.
 --
---   Every engine-side pause writer goes through here or through
---   'imposePauseHeld'.
+--   Every engine-side pause writer goes through here, through
+--   'imposePauseHeld', or — for a save re-asserting its own pause —
+--   through 'reassertSavePause'.
+--
+--   This one also COUNTS the assertion (#1730): the caller is a source
+--   independent of any save in flight, so an autosave that finds the
+--   count moved since its acceptance leaves the pause alone rather than
+--   erasing someone else's.
 imposePause ∷ WorldSimCapability → IO ()
-imposePause wsc = withEpochLock wsc (imposePauseHeld wsc)
+imposePause wsc = withEpochLock wsc $ do
+    countEnginePauseAssertion wsc
+    imposePauseHeld wsc
+
+-- | The pause a SAVE re-asserts on its own behalf, once its queued
+--   @WorldSave@ reaches the world thread
+--   ('World.Thread.Command.Save.WriteWorld.handleWorldSaveCommand').
+--
+--   Identical to 'imposePause' in what it does to the epoch — almost
+--   always nothing, since the Lua acceptance already opened it — and
+--   deliberately different in what it RECORDS: it does not count as an
+--   independent pause assertion (#1730). A save asserting its own pause
+--   a second time must never be mistaken for someone else wanting the
+--   game paused, or every autosave would decline to restore the state
+--   it just took.
+reassertSavePause ∷ WorldSimCapability → IO ()
+reassertSavePause wsc = withEpochLock wsc (imposePauseHeld wsc)
+
+-- | Record that an engine pause source INDEPENDENT of any running save
+--   has asserted a pause (#1730).
+--
+--   Counted on every call, including the overwhelmingly common one that
+--   finds the session already paused and changes nothing: that no-op is
+--   precisely the case the counter exists to make visible, because the
+--   epoch itself records no owner. Over-counting is the safe direction —
+--   it can only make an autosave decline to resume a game somebody else
+--   wanted paused — and under-counting is not.
+--
+--   Bare 'atomicModifyIORef'' rather than a lock of its own: every
+--   caller reaches this through 'withEpochLock', and the two sites that
+--   snapshot and compare the counter take that same mutex.
+countEnginePauseAssertion ∷ WorldSimCapability → IO ()
+countEnginePauseAssertion wsc =
+    atomicModifyIORef' (wsEnginePauseGenRef wsc) (\g → (g + 1, ()))
 
 -- | 'imposePause' for a caller already holding the player-intent lock.
+--
+--   The epoch half ALONE: it does not count an engine pause assertion
+--   (#1730), because its two callers are the two that must not — a
+--   save's own acceptance
+--   ('Engine.Scripting.Lua.API.Save.acceptSaveRequest') and the
+--   player's @engine.setPaused@, whose intent @playerIntentGenRef@
+--   already records.
 imposePauseHeld ∷ WorldSimCapability → IO ()
 imposePauseHeld wsc = do
     wasPaused ← atomicModifyIORef' (wsEnginePausedRef wsc) (\p → (True, p))
@@ -98,6 +161,13 @@ imposePauseHeld wsc = do
 --   captured — which is the load policy @scripts\/pause.lua@'s
 --   @onSaveLoaded@ states: a load resumes at 1.0, never at some
 --   pre-save speed.
+--
+--   Uncounted (#1730), like 'imposePauseHeld': a load and a save are
+--   mutually exclusive for the load's whole duration
+--   ('Engine.Scripting.Lua.API.Save.loadSaveFn' rejects one outright
+--   while the other runs), so there is no autosave window for this to
+--   land in — and the session it opens the epoch over is not the one
+--   any earlier request was taken from.
 beginPauseEpoch ∷ WorldSimCapability → IO ()
 beginPauseEpoch wsc = withEpochLock wsc $ do
     writeIORef (wsEnginePausedRef wsc) True

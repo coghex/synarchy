@@ -35,7 +35,7 @@ import World.Types
 import Structure.Types (emptyChunkStructures)
 import World.Generate (generateChunk)
 import World.Generate.Arena (generateArenaChunks)
-import World.Generate.Constants (chunkLoadRadius)
+import World.Chunk.Queue (chunkQueueCanon, initialChunkQueue)
 import World.Geology (buildTimeline)
 import World.Geology.Log (formatPlatesSummary)
 import World.Plate (generatePlates, elevationAtGlobal)
@@ -322,14 +322,20 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     
     -- Step 6: Center chunk
     writeIORef phaseRef (LoadPhase1 6 totalSteps)
-    let radius = chunkLoadRadius
-        totalInitialChunks = (2 * radius + 1) * (2 * radius + 1)
+    -- The load-radius box around the centre, counted as PHYSICAL
+    -- chunks: on a small world the box aliases against itself across
+    -- the seam, and this total is what LoadPhase2 progresses towards
+    -- (#1723). The centre is generated synchronously just below and so
+    -- is excluded from the queue but counted in the total.
+    let centerCoord = ChunkCoord 0 0
+        (remainingCoords, totalInitialChunks) =
+            initialChunkQueue (chunkQueueCanon params) centerCoord
     sendGenLog env $ "Generating initial chunks ("
         <> tshow totalInitialChunks <> ")..."
     
     catalog ← readIORef (wsFloraCatalogRef worldSim)
-    let centerCoord = ChunkCoord 0 0
-        (ct, cs, cterrain, cf, cice, cflora, cwt, cmagma) = generateChunk registry catalog params centerCoord
+    let (ct, cs, cterrain, cf, cice, cflora, cwt, cmagma) =
+            generateChunk registry catalog params centerCoord
         seededSurf = VU.imap (\idx surfZ →
             case cf V.! idx of
                 Just fc → max surfZ (fcSurface fc)
@@ -360,11 +366,6 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
 
     -- Step 7: Queue remaining chunks
     writeIORef phaseRef (LoadPhase1 7 totalSteps)
-    let remainingCoords = [ ChunkCoord cx cy
-                          | cx ← [-chunkLoadRadius .. chunkLoadRadius]
-                          , cy ← [-chunkLoadRadius .. chunkLoadRadius]
-                          , not (cx ≡ 0 ∧ cy ≡ 0)
-                          ]
     writeIORef (wsInitQueueRef worldState) remainingCoords
     
     -- Now switch to Phase 2 tracking
