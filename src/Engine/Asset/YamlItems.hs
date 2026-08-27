@@ -165,17 +165,155 @@ instance FromJSON ItemYamlContent where
 --   calories live under a `nutrition:` sub-object so future diet work
 --   (protein / fat / carbohydrate / micronutrients) can add sibling
 --   keys without restructuring the schema or bumping the save version.
+--
+--   'Item.Types.ItemFood' documents the two shapes as MUTUALLY
+--   EXCLUSIVE, and since #1716 'parseItemYamlFood' below is what makes
+--   that true: exactly one of the two fields is strictly positive in
+--   any value this decoder produces, and the other is exactly zero.
 data ItemYamlFood = ItemYamlFood
-    { iyfCalories      ∷ !Float  -- ^ kcal per item (food.nutrition.calories)
+    { iyfCalories      ∷ !Float  -- ^ kcal per item (food.nutrition.calories);
+                                 --   0 ⇒ not discrete food
     , iyfCaloriesPerKg ∷ !Float  -- ^ kcal per kg of fill for BULK food
-                                 --   (food.nutrition.calories_per_kg)
+                                 --   (food.nutrition.calories_per_kg);
+                                 --   0 ⇒ not bulk food
     } deriving (Show, Eq, Generic)
 
-instance FromJSON ItemYamlFood where
-    parseJSON = withObject "ItemYamlFood" $ \v → do
-        nut ← v .: "nutrition"
-        ItemYamlFood ⊚ nut .:? "calories" .!= 0.0
-                     ⊛ nut .:? "calories_per_kg" .!= 0.0
+-- | Parse ONE optional @nutrition:@ value. An absent key is the
+--   documented "not this mode" spelling and reads as zero; a PRESENT
+--   key must be a finite, NONNEGATIVE number once narrowed to the
+--   engine's 32-bit 'Float'.
+--
+--   Every test runs AFTER narrowing, and that is the whole subtlety
+--   (the same one 'requirePositiveQuantity' records). YAML's @.nan@ /
+--   @.inf@ resolve to STRINGS — the yaml package's scalar resolver only
+--   recognizes ordinary numeric syntax — so they arrive here as the
+--   non-number case, while a perfectly ordinary @1.0e+100@ is a valid
+--   'Scientific' that becomes 'Infinity' only in the @!Float@ field it
+--   lands in. Positivity narrows first for the mirror-image reason: a
+--   @1.0e-60@ is a strictly positive 'Scientific' that underflows to
+--   exactly zero in a 'Float', and letting it "select" a mode would
+--   author food the runtime cannot see.
+--
+--   Negative is rejected rather than clamped because the discrete feed
+--   path (@Engine.Scripting.Lua.API.Units.Survival@) has an upper clamp
+--   and no lower one: a negative @calories@ consumes the item and makes
+--   the eater HUNGRIER, and returns a negative credit that is still
+--   truthy in Lua. Requirement 9 of #1716 puts the fix here, at the
+--   authoring boundary, and not as defensive clamping in that consumer.
+--
+--   @calories: null@ resolves to the ABSENT case, exactly as @.:?@
+--   reads it everywhere else in this decoder. It is not silently
+--   accepted: a definition whose only nutrition key is null selects no
+--   mode, and the mode check below rejects it naming both keys and both
+--   effective values.
+parseNutritionValue
+    ∷ Text          -- ^ the definition's @name@, for the diagnostic
+    → Text          -- ^ this value's unit, e.g. @"kcal per item"@
+    → Aeson.Object  -- ^ the @nutrition:@ block
+    → Text          -- ^ the YAML key to read
+    → Aeson.Parser Float
+parseNutritionValue defName unit nut key = do
+    mval ← nut .:? Key.fromText key
+    case mval of
+        Nothing  → pure 0.0
+        Just val → case val of
+            Aeson.Number s →
+                let f = realToFrac s ∷ Float
+                in if isNaN f ∨ isInfinite f
+                     then bad ("must be finite, got " <> tshow val)
+                     else if f < 0
+                       then bad ("must not be negative, got " <> tshow f)
+                       else pure f
+            _ → bad ("must be a number of " <> unit <> ", got " <> tshow val)
+  where
+    bad why = fail ∘ T.unpack $
+        "item definition '" <> defName <> "': food nutrition (key '"
+        <> key <> "', " <> unit <> ") " <> why
+
+-- | Parse a @food:@ block against the OWNING definition (#1716), which
+--   is why there is deliberately no 'FromJSON' instance — exactly as
+--   'parseItemYamlStorage' has none. Two things reachable only from out
+--   there are load-bearing: the definition's @name@, so every rejection
+--   is findable without reading engine source (requirement 5), and
+--   whether it authors a @container:@ block, which decides whether bulk
+--   nutrition can ever be eaten.
+--
+--   'Item.Types.ItemFood' documents two mutually exclusive shapes and
+--   nothing enforced them, so four out-of-contract shapes reached
+--   @unit.feed@. Each is rejected here:
+--
+--     * __Neither mode positive.__ The discrete branch removes the item
+--       from the inventory and then credits @0@, returning a Lua number
+--       @0@ — TRUTHY, so @if not unit.feed(…)@ reads a wasted item as a
+--       successful meal.
+--     * __Negative discrete calories.__ Same branch, no lower clamp:
+--       the item is eaten and the eater ends up hungrier.
+--     * __Both modes positive.__ @Survival.hs@ guards the bulk branch
+--       on @ifCaloriesPerKg > 0@ and wins by branch order, so the
+--       authored discrete value is silently unreachable.
+--     * __Bulk nutrition with no @container:@.__ The bulk branch draws
+--       from @iiCurrentFill@, which is 0 for every non-container, so
+--       such a food always fails to feed — a silent permanent no-op.
+--
+--   The container test is on the DECODED @container:@ field, so
+--   @container: null@ counts as no container and a bulk food authoring
+--   it is rejected: @.:?@ reads an explicit null as absent, and this
+--   check must agree with the field the runtime will actually see.
+parseItemYamlFood
+    ∷ Text   -- ^ the definition's @name@
+    → Bool   -- ^ does the definition author a @container:@ block?
+    → Aeson.Value
+    → Aeson.Parser ItemYamlFood
+parseItemYamlFood defName hasContainer val = case val of
+    Aeson.Object v → do
+        nut ← case KM.lookup "nutrition" v of
+            Just (Aeson.Object n) → pure n
+            Just other → fail ∘ T.unpack $
+                "item definition '" <> defName <> "': food nutrition must \
+                \be a block authoring exactly one of calories (kcal per \
+                \item) or calories_per_kg (kcal per kilogram of fill), \
+                \got " <> tshow other
+            Nothing → fail ∘ T.unpack $
+                "item definition '" <> defName <> "': food authors no \
+                \nutrition: block — a food: block must author a \
+                \nutrition: block with exactly one of calories (kcal per \
+                \item) or calories_per_kg (kcal per kilogram of fill) \
+                \strictly positive"
+        cal   ← parseNutritionValue defName "kcal per item" nut "calories"
+        perKg ← parseNutritionValue defName "kcal per kilogram of fill"
+                    nut "calories_per_kg"
+        case (cal > 0, perKg > 0) of
+            (True, True) → fail ∘ T.unpack $
+                "item definition '" <> defName <> "': food nutrition \
+                \selects BOTH modes — key 'calories' (kcal per item) = "
+                <> tshow cal <> " and key 'calories_per_kg' (kcal per \
+                \kilogram of fill) = " <> tshow perKg <> " are mutually \
+                \exclusive, and the runtime honours only \
+                \calories_per_kg, so the authored calories would never \
+                \be credited. Author exactly one."
+            (False, False) → fail ∘ T.unpack $
+                "item definition '" <> defName <> "': food nutrition \
+                \selects NO mode — key 'calories' (kcal per item) = "
+                <> tshow cal <> " and key 'calories_per_kg' (kcal per \
+                \kilogram of fill) = " <> tshow perKg <> ", so eating \
+                \this would consume the item and credit nothing. \
+                \Exactly one must be strictly positive."
+            (False, True)
+                | not hasContainer → fail ∘ T.unpack $
+                    "item definition '" <> defName <> "': food nutrition \
+                    \selects BULK food (key 'calories_per_kg', kcal per \
+                    \kilogram of fill) = " <> tshow perKg <> ", but the \
+                    \definition authors no container: block. Bulk food \
+                    \is drawn from the item's own fill, which is 0 for \
+                    \a non-container, so it could never be eaten. Add a \
+                    \container: block, or author calories (kcal per \
+                    \item) instead."
+            _ → pure (ItemYamlFood cal perKg)
+    _ → fail ∘ T.unpack $
+        "item definition '" <> defName <> "': food must be a block \
+        \authoring a nutrition: block with exactly one of calories \
+        \(kcal per item) or calories_per_kg (kcal per kilogram of \
+        \fill), got " <> tshow val
 
 -- | (min, max) range for a rolled spec — used by both quality and
 --   condition. Interpreted as a normal distribution clamped to the
@@ -302,7 +440,11 @@ data ItemYamlDef = ItemYamlDef
     , iydContents    ∷ ![ItemYamlContent]            -- ^ item-container defaults
     , iydStorage     ∷ !(Maybe ItemYamlStorage)      -- ^ portable item-storage
                                                      --   capacity (#1233)
-    , iydFood        ∷ !(Maybe ItemYamlFood)
+    , iydFood        ∷ !(Maybe ItemYamlFood)      -- ^ nutrition; validated
+                                                 --   against the two
+                                                 --   mutually exclusive
+                                                 --   modes and against
+                                                 --   'iydContainer' (#1716)
     , iydWeapon      ∷ !(Maybe ItemYamlWeapon)
     , iydArmor       ∷ !(Maybe ItemYamlArmor)
     , iydUnequippable ∷ !Bool
@@ -334,6 +476,13 @@ data ItemYamlDef = ItemYamlDef
 --   (requirement 3), while a truly missing key stays the legitimate
 --   optional case. Same trap CLAUDE.md records for @asset_units:@.
 --
+--   @food:@ is parsed by 'parseItemYamlFood' rather than a 'FromJSON'
+--   instance, and monadically AFTER @container:@, because #1716's
+--   mutual-exclusion and bulk-without-container rules need the
+--   definition's own name for the diagnostic and its sibling
+--   @container:@ field for the correlation — neither of which an
+--   instance can reach.
+--
 --   @condition:@ is REJECTED outright for every value, @null@ included
 --   (#1421). Condition stopped being authorable when it became pure
 --   runtime wear state, and merely dropping the field would let aeson
@@ -362,6 +511,32 @@ instance FromJSON ItemYamlDef where
                 \state, every freshly made item starts at 100, and only \
                 \the ground-salvage path (item.spawnGround) starts one \
                 \worn. Delete the condition: block."
+        -- `container:` and `food:` are read HERE, monadically and in
+        -- this order, because #1716's bulk-without-container rule is a
+        -- CORRELATION between two sibling keys and the applicative
+        -- chain below cannot express one.
+        --
+        -- The two keys treat an explicit null DIFFERENTLY, and both
+        -- readings are deliberate. `container:` keeps `.:?`, so a null
+        -- is an ABSENT container: that is exactly what the runtime will
+        -- see (`iydContainer` is the field it reads), so a bulk food
+        -- authoring `container: null` must fail as bulk-WITHOUT-
+        -- container, naming the real problem, rather than as some
+        -- separate container-schema fault. `food: null` is rejected
+        -- instead, for the reason `storage:` above is: a key the author
+        -- WROTE is present, and silently reading it as "this item is
+        -- not edible" is the same quiet capability drop.
+        container ← v .:? "container"
+        food ← case KM.lookup "food" v of
+            Nothing         → pure Nothing
+            Just Aeson.Null → fail ∘ T.unpack $
+                "item definition '" <> name <> "': food is present but \
+                \null — a food: block must author a nutrition: block \
+                \with exactly one of calories (kcal per item) or \
+                \calories_per_kg (kcal per kilogram of fill) strictly \
+                \positive; omit the key entirely for an item that is \
+                \not edible"
+            Just val → Just <$> parseItemYamlFood name (isJust container) val
         ItemYamlDef name
             ⊚ v .:? "display_name" .!= ""
             ⊛ v .:  "sprite"
@@ -373,10 +548,10 @@ instance FromJSON ItemYamlDef where
             ⊛ v .:? "material"     .!= ""
             ⊛ v .:? "quality"
             ⊛ v .:? "quality_tiers" .!= []
-            ⊛ v .:? "container"
+            ⊛ pure container
             ⊛ v .:? "contents"     .!= []
             ⊛ pure storage
-            ⊛ v .:? "food"
+            ⊛ pure food
             ⊛ v .:? "weapon"
             ⊛ v .:? "armor"
             ⊛ v .:? "unequippable" .!= False

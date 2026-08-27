@@ -1119,6 +1119,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Item.ContentsSignature
                    Test.Headless.Item.Condition
         Test.Headless.Item.BulkStorage
+                   Test.Headless.Item.FoodNutrition
                    Test.Headless.Item.Discovery
                    Test.Headless.Asset.TextureFallback
                    Test.Headless.Asset.FloraContent

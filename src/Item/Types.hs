@@ -188,6 +188,14 @@ data ItemArmor = ItemArmor
 --   Credited kcal are clamped against the eater's max_hunger. Parsed from
 --   a `nutrition:` sub-object so future macronutrient fields slot in
 --   beside these without a schema/save change.
+--
+--   Since #1716 the exclusion above is ENFORCED, at the authoring
+--   boundary and nowhere else: 'Engine.Asset.YamlItems.parseItemYamlFood'
+--   rejects a definition unless exactly one of these two is strictly
+--   positive and the other exactly zero, and rejects bulk nutrition on a
+--   definition with no `container:` block (fill is 0 for a non-container,
+--   so it could never be eaten). Every consumer may therefore rely on
+--   the exclusion; none of them clamps defensively.
 data ItemFood = ItemFood
     { ifCalories      ∷ !Float   -- ^ kcal per item consumed (0 = not
                                  --   discrete food)
