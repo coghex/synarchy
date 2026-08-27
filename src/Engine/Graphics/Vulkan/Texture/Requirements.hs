@@ -37,10 +37,9 @@ module Engine.Graphics.Vulkan.Texture.Requirements
   , bindlessTextureBindingFlags
     -- * The descriptor-count rules that layout must satisfy
   , BindlessCapacity(..)
-  , CapacityScope(..)
   , CapacityCheck(..)
   , capacityCheckHolds
-  , layoutDescriptorsInScope
+  , bindlessCapacityRequirement
   , requiredBindlessCapacities
   , handleTableDescriptors
   , pipelineUniformBufferDescriptors
@@ -51,7 +50,7 @@ module Engine.Graphics.Vulkan.Texture.Requirements
   , readOrdinaryLimit
   , readUpdateAfterBindLimit
   , bindlessCapacityApplies
-  , bindlessCapacityChecks
+  , bindlessCapacityCheck
   , reportedBindlessCapacities
   ) where
 
@@ -176,7 +175,6 @@ bindlessTextureBindingRequirements =
 bindlessTextureBindingFlags ∷ DescriptorBindingFlags
 bindlessTextureBindingFlags =
   foldr ((⌄) . fst) zero bindlessTextureBindingRequirements
--- | Descriptors the bindless set's storage-buffer binding consumes: the one
 --   handle→slot table (#286, binding 1).
 handleTableDescriptors ∷ Word32
 handleTableDescriptors = 1
@@ -185,9 +183,7 @@ handleTableDescriptors = 1
 --   layout: one vertex-stage uniform buffer
 --   ("Engine.Graphics.Vulkan.Descriptor"'s @createUniformDescriptorSetLayout@,
 --   paired with the bindless texture layout in
---   "Engine.Graphics.Vulkan.Pipeline.Bindless"). Set 0 is an ORDINARY
---   layout, so unlike the texture array this descriptor is counted by both
---   families of statement.
+--   "Engine.Graphics.Vulkan.Pipeline.Bindless").
 pipelineUniformBufferDescriptors ∷ Word32
 pipelineUniformBufferDescriptors = 1
 
@@ -206,34 +202,13 @@ bindlessPipelineSetCount = 2
 bindlessColorAttachments ∷ Word32
 bindlessColorAttachments = 1
 
--- | Which descriptors of the bindless pipeline layout a Valid Usage
---   statement counts.
---
---   Vulkan writes each descriptor-count rule twice, once per scope, and
---   BOTH hold at the same time — they are not two spellings of one ceiling
---   and there is no combined \"effective\" limit. The difference is only
---   which descriptors each one ranges over, which is what
---   'layoutDescriptorsInScope' records for this renderer's layout.
-data CapacityScope
-  = -- | Counts ONLY descriptors in set layouts created WITHOUT
-    --   @UPDATE_AFTER_BIND_POOL_BIT@ — VUIDs 03016-03018, 03028-03029, and
-    --   @maxPerStageResources@, each of whose limit text says exactly that.
-    --   Set 0 is such a layout; the bindless texture layout is NOT.
-    ScopeWithoutUpdateAfterBind
-  | -- | Counts descriptors in EVERY set layout, with the bit or without —
-    --   VUIDs 03022-03027, 03036-03043, whose limit text reads "with or
-    --   without".
-    ScopeAllSets
-  deriving (Show, Eq, Ord, Enum, Bounded)
-
--- | One descriptor-count rule the bindless pipeline layout must satisfy: a
---   limit, the scope of descriptors its statement counts, how many of this
---   renderer's descriptors fall in that scope, and what the device reports.
+-- | One descriptor-count rule the bindless pipeline layout must satisfy: the
+--   limit it is measured against, how many of this renderer's descriptors
+--   count, and the EFFECTIVE capacity the device supplies for it.
 data CapacityCheck = CapacityCheck
-  { ccField    ∷ Text          -- ^ the limit's @VkPhysicalDevice…@ field name
-  , ccScope    ∷ CapacityScope -- ^ which descriptors its statement counts
-  , ccRequired ∷ Word32        -- ^ how many of ours are in that scope
-  , ccReported ∷ Word32        -- ^ what the device advertises for it
+  { ccField    ∷ Text    -- ^ the limit(s) this rule is measured against
+  , ccRequired ∷ Word32  -- ^ how many of ours the rule counts
+  , ccReported ∷ Word32  -- ^ the effective capacity the device supplies
   } deriving (Show, Eq)
 
 -- | Whether one rule is satisfied.
@@ -241,11 +216,12 @@ capacityCheckHolds ∷ CapacityCheck → Bool
 capacityCheckHolds check = ccReported check ≥ ccRequired check
 
 -- | A descriptor class the bindless pipeline layout puts descriptors into,
---   at one granularity. Each names a PAIR of statements — the ordinary one
---   and its update-after-bind counterpart — except where only one exists.
+--   at one granularity. Most name a PAIR of limits — an ordinary
+--   'PhysicalDeviceLimits' one and its update-after-bind counterpart on
+--   'PhysicalDeviceVulkan12Properties' — whose EFFECTIVE capacity is the
+--   greater of the two ('bindlessCapacityChecks').
 data BindlessCapacity
-  = -- | The texture array, per fragment stage
-    --   (@maxPerStageDescriptorSampledImages@ / …@UpdateAfterBindSampledImages@).
+  = -- | The texture array, per fragment stage.
     CapPerStageSampledImages
   | -- | The same descriptors as SAMPLERS: a combined image sampler is both.
     CapPerStageSamplers
@@ -253,8 +229,7 @@ data BindlessCapacity
     CapPerStageStorageBuffers
   | -- | Set 0's uniform buffer, per vertex stage.
     CapPerStageUniformBuffers
-  | -- | The busiest stage's aggregate (@maxPerStageResources@ /
-    --   @maxPerStageUpdateAfterBindResources@): the fragment stage's array,
+  | -- | The busiest stage's aggregate: the fragment stage's array,
     --   handle→slot table and colour attachment. Plain @SAMPLER@ descriptors
     --   are excluded from this aggregate, so the array counts once.
     CapPerStageResources
@@ -266,10 +241,10 @@ data BindlessCapacity
     CapSetStorageBuffers
   | -- | Set 0's uniform buffer across the whole pipeline layout.
     CapSetUniformBuffers
-  | -- | @maxBoundDescriptorSets@ (VUID 00286). Ordinary only: there is no
-    --   update-after-bind counterpart.
+  | -- | @maxBoundDescriptorSets@ (VUID 00286). No update-after-bind
+    --   counterpart exists, so its own value is the capacity.
     CapBoundDescriptorSets
-  | -- | @maxUpdateAfterBindDescriptorsInAllPools@. Update-after-bind only:
+  | -- | @maxUpdateAfterBindDescriptorsInAllPools@ — update-after-bind only:
     --   it governs creating the pool at all, and exceeding it fails pool
     --   creation with @VK_ERROR_FRAGMENTATION@.
     CapDescriptorsInAllPools
@@ -280,52 +255,27 @@ data BindlessCapacity
 requiredBindlessCapacities ∷ [BindlessCapacity]
 requiredBindlessCapacities = [minBound .. maxBound]
 
--- | How many descriptors of one class THIS renderer's pipeline layout puts
---   against a statement of the given scope.
---
---   Read the sampler and sampled-image rows: under
---   'ScopeWithoutUpdateAfterBind' the answer is ZERO. The 16,384-entry
---   texture array lives in a layout created WITH
---   @UPDATE_AFTER_BIND_POOL_BIT@ ('createBindlessDescriptorSetLayout'), so
---   an ordinary sampler or sampled-image statement counts none of it. That
---   statement is still CHECKED — 'bindlessCapacityChecks' emits it like any
---   other — it is simply satisfied by zero, at any reported value. A device
---   \"whose ordinary sampler limit supplies 16,384 descriptors\" is therefore
---   not a thing this layout can have: that limit supplies the array nothing,
---   so it can neither reject the layout nor rescue an update-after-bind
---   shortfall.
---
---   Set 0's uniform buffer is the converse and shows the split runs both
---   ways: it sits in an ordinary layout, so it counts in BOTH scopes and is
---   gated under both.
-layoutDescriptorsInScope ∷ CapacityScope → BindlessCapacity → Word32
-layoutDescriptorsInScope scope cap = case (scope, cap) of
-  (ScopeWithoutUpdateAfterBind, CapPerStageSamplers)       → 0
-  (ScopeWithoutUpdateAfterBind, CapSetSamplers)            → 0
-  (ScopeWithoutUpdateAfterBind, CapPerStageSampledImages)  → 0
-  (ScopeWithoutUpdateAfterBind, CapSetSampledImages)       → 0
-  (ScopeAllSets, CapPerStageSamplers)                      → maxBindlessTextures
-  (ScopeAllSets, CapSetSamplers)                           → maxBindlessTextures
-  (ScopeAllSets, CapPerStageSampledImages)                 → maxBindlessTextures
-  (ScopeAllSets, CapSetSampledImages)                      → maxBindlessTextures
-
-  (ScopeWithoutUpdateAfterBind, CapPerStageStorageBuffers) → 0
-  (ScopeWithoutUpdateAfterBind, CapSetStorageBuffers)      → 0
-  (ScopeAllSets, CapPerStageStorageBuffers)                → handleTableDescriptors
-  (ScopeAllSets, CapSetStorageBuffers)                     → handleTableDescriptors
-
-  (_, CapPerStageUniformBuffers) → pipelineUniformBufferDescriptors
-  (_, CapSetUniformBuffers)      → pipelineUniformBufferDescriptors
-
-  (ScopeWithoutUpdateAfterBind, CapPerStageResources) → bindlessColorAttachments
-  (ScopeAllSets, CapPerStageResources) →
+-- | How many descriptors of one class the bindless pipeline layout puts
+--   against its rule. Every texture figure is 'maxBindlessTextures' itself —
+--   #975's single definition, the one both fragment shaders interpolate — so
+--   the requirement and the shader array size cannot drift apart.
+bindlessCapacityRequirement ∷ BindlessCapacity → Word32
+bindlessCapacityRequirement = \case
+  CapPerStageSampledImages  → maxBindlessTextures
+  CapPerStageSamplers       → maxBindlessTextures
+  CapPerStageStorageBuffers → handleTableDescriptors
+  CapPerStageUniformBuffers → pipelineUniformBufferDescriptors
+  CapPerStageResources      →
     maxBindlessTextures + handleTableDescriptors + bindlessColorAttachments
+  CapSetSampledImages       → maxBindlessTextures
+  CapSetSamplers            → maxBindlessTextures
+  CapSetStorageBuffers      → handleTableDescriptors
+  CapSetUniformBuffers      → pipelineUniformBufferDescriptors
+  CapBoundDescriptorSets    → bindlessPipelineSetCount
+  CapDescriptorsInAllPools  → maxBindlessTextures + handleTableDescriptors
 
-  (_, CapBoundDescriptorSets)   → bindlessPipelineSetCount
-  (_, CapDescriptorsInAllPools) → maxBindlessTextures + handleTableDescriptors
-
--- | The @VkPhysicalDeviceLimits@ field carrying one class's ORDINARY
---   statement, and 'Nothing' where the class has no ordinary counterpart.
+-- | The @VkPhysicalDeviceLimits@ field carrying one class's ORDINARY limit,
+--   and 'Nothing' where the class has no ordinary counterpart.
 ordinaryCapacityField ∷ BindlessCapacity → Maybe Text
 ordinaryCapacityField = \case
   CapPerStageSampledImages  → Just "maxPerStageDescriptorSampledImages"
@@ -341,7 +291,7 @@ ordinaryCapacityField = \case
   CapDescriptorsInAllPools  → Nothing
 
 -- | The @VkPhysicalDeviceVulkan12Properties@ field carrying one class's
---   UPDATE-AFTER-BIND statement, and 'Nothing' where there is none.
+--   UPDATE-AFTER-BIND limit, and 'Nothing' where there is none.
 updateAfterBindCapacityField ∷ BindlessCapacity → Maybe Text
 updateAfterBindCapacityField = \case
   CapPerStageSampledImages  →
@@ -395,19 +345,16 @@ readUpdateAfterBindLimit props = \case
   CapBoundDescriptorSets    → 0
   CapDescriptorsInAllPools  → maxUpdateAfterBindDescriptorsInAllPools props
 
--- | Whether one class's UPDATE-AFTER-BIND statement applies to a device.
+-- | Whether one class's UPDATE-AFTER-BIND limit participates on a device.
 --
---   Each is conditioned on the device SUPPORTING that descriptor type's own
+--   Each update-after-bind pipeline-layout statement is conditioned on the
+--   device SUPPORTING that descriptor type's own
 --   @descriptorBinding…UpdateAfterBind@ feature — support, not enablement,
---   which is what @vkGetPhysicalDeviceFeatures2@ reports. A statement that
---   does not apply constrains nothing the renderer builds, so gating on it
---   would refuse a device whose pipeline layout Vulkan accepts. The
---   aggregate and the pool ceiling are unconditional: the first governs any
---   pipeline layout holding an update-after-bind set, the second creating
---   that pool at all.
---
---   The ORDINARY statements are never conditional; they hold on every
---   device, over the descriptors in the layout's non-update-after-bind set.
+--   which is what @vkGetPhysicalDeviceFeatures2@ reports. Where the
+--   statement is inactive its limit contributes nothing to the effective
+--   capacity, leaving the ordinary limit to supply it. The aggregate and the
+--   pool ceiling are unconditional: the first governs any pipeline layout
+--   holding an update-after-bind set, the second creating that pool at all.
 bindlessCapacityApplies
   ∷ PhysicalDeviceVulkan12Features → BindlessCapacity → Bool
 bindlessCapacityApplies feats = \case
@@ -423,55 +370,48 @@ bindlessCapacityApplies feats = \case
   CapDescriptorsInAllPools  → True
   CapBoundDescriptorSets    → True
   where
-    -- The one this renderer REQUIRES (VUIDs 03022, 03025, 03036, 03041).
     sampledImages  = descriptorBindingSampledImageUpdateAfterBind feats
-    -- Not required (#1282) — VUIDs 03024, 03039.
     storageBuffers = descriptorBindingStorageBufferUpdateAfterBind feats
-    -- Not required — VUIDs 03023, 03037.
     uniformBuffers = descriptorBindingUniformBufferUpdateAfterBind feats
 
--- | Every descriptor-count rule the device must satisfy for this layout.
+-- | The rule the device must satisfy for one descriptor class.
 --
---   BOTH statements of a pair are emitted and both are enforced, each
---   against the descriptors ITS OWN scope counts. That is the whole
---   contract: an ordinary limit and its update-after-bind counterpart are
---   simultaneous @must@s over different populations, so neither is skipped
---   and neither substitutes for the other. Where a statement counts none of
---   our descriptors its check is present and satisfied by zero, which is
---   what makes \"could the ordinary limit have covered the array?\" answerable
---   in the data rather than in a comment.
-bindlessCapacityChecks
+--   The capacity is the EFFECTIVE limit: where a class has both an ordinary
+--   limit and an update-after-bind counterpart, the greater of the two, so a
+--   device whose ordinary limit already supplies the count is accepted
+--   rather than refused on the update-after-bind figure alone. Where only
+--   one of the pair exists — or where the update-after-bind statement is
+--   inactive for want of its feature — that single value is the capacity.
+bindlessCapacityCheck
   ∷ PhysicalDeviceVulkan12Features
   → PhysicalDeviceLimits
   → PhysicalDeviceVulkan12Properties
   → BindlessCapacity
-  → [CapacityCheck]
-bindlessCapacityChecks feats base props cap = ordinary <> updateAfterBind
+  → CapacityCheck
+bindlessCapacityCheck feats base props cap = CapacityCheck
+  { ccField    = field
+  , ccRequired = bindlessCapacityRequirement cap
+  , ccReported = capacity
+  }
   where
-    ordinary =
-      [ CapacityCheck
-          { ccField    = field
-          , ccScope    = ScopeWithoutUpdateAfterBind
-          , ccRequired = layoutDescriptorsInScope ScopeWithoutUpdateAfterBind cap
-          , ccReported = readOrdinaryLimit base cap
-          }
-      | Just field ← [ordinaryCapacityField cap] ]
-    updateAfterBind =
-      [ CapacityCheck
-          { ccField    = field
-          , ccScope    = ScopeAllSets
-          , ccRequired = layoutDescriptorsInScope ScopeAllSets cap
-          , ccReported = readUpdateAfterBindLimit props cap
-          }
-      | bindlessCapacityApplies feats cap
-      , Just field ← [updateAfterBindCapacityField cap] ]
+    ordinary       = readOrdinaryLimit base cap <$ ordinaryCapacityField cap
+    updateAfterBind
+      | bindlessCapacityApplies feats cap =
+          readUpdateAfterBindLimit props cap <$ updateAfterBindCapacityField cap
+      | otherwise = Nothing
+    capacity = maximum (0 : catMaybes [ordinary, updateAfterBind])
+    field = case (ordinaryCapacityField cap, updateAfterBind) of
+      (Just a, Just _) → a <> " / "
+        <> fromMaybe "" (updateAfterBindCapacityField cap)
+        <> " (effective maximum)"
+      (Just a, Nothing) → a
+      (Nothing, _)      → fromMaybe "" (updateAfterBindCapacityField cap)
 
--- | Every rule the device must satisfy, across every descriptor class, in
---   declaration order.
+-- | Every rule the device must satisfy, in declaration order.
 reportedBindlessCapacities
   ∷ PhysicalDeviceVulkan12Features
   → PhysicalDeviceLimits
   → PhysicalDeviceVulkan12Properties
   → [CapacityCheck]
 reportedBindlessCapacities feats base props =
-  concatMap (bindlessCapacityChecks feats base props) requiredBindlessCapacities
+  map (bindlessCapacityCheck feats base props) requiredBindlessCapacities
