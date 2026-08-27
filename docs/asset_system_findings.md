@@ -18,21 +18,28 @@ No graphical engine or forced bindless-exhaustion run was performed. GPU-state f
 
 ## Status
 
-- [ ] ASSET-1. Failed bindless registrations are published as loaded textures
-- [ ] ASSET-2. Ordinary texture GPU resources have no reachable release boundary
-- [ ] ASSET-3. Stale preview completions create repeated handle aliases
-- [ ] ASSET-4. The all-reference texture validator is red and absent from the gates
-- [ ] ASSET-5. Three semantically distinct designation markers use identical art
-- [ ] ASSET-6. Five four-variant vegetation families contain only one visual variant
-- [ ] ASSET-7. Raspberry fruiting is harvestable but visually indistinguishable
-- [ ] ASSET-8. Production crops and their yields still use unrelated placeholder art
-- [ ] ASSET-9. The bundled shell font has no auditable redistribution provenance
+- [x] ASSET-1. Failed bindless registrations are published as loaded textures — [no-issue]
+- [x] ASSET-2. Ordinary texture GPU resources have no reachable release boundary — [#1691]
+- [x] ASSET-3. Stale preview completions create repeated handle aliases — [no-issue]
+- [x] ASSET-4. The all-reference texture validator is red and absent from the gates — [#1705]
+- [x] ASSET-5. Three semantically distinct designation markers use identical art — [#1780]
+- [x] ASSET-6. Five four-variant vegetation families contain only one visual variant — [#1782]
+- [x] ASSET-7. Raspberry fruiting is harvestable but visually indistinguishable — [#1786]
+- [x] ASSET-8. Production crops and their yields still use unrelated placeholder art — [#1781, #1787]
+- [x] ASSET-9. The bundled shell font has no auditable redistribution provenance — [no-issue]
 
 ---
 
 ## Runtime loading and lifetime
 
-### ASSET-1. Failed bindless registrations are published as loaded textures
+### [no-issue] ASSET-1. Failed bindless registrations are published as loaded textures
+
+> **Disposition:** No issue — fixed by #1690 (PR #1727, `55a0fd1b`), merged 22
+> minutes before this report was published. A refused registration now runs
+> `failedUploadCleanup`, settles on `AssetFailed`, and notifies `LuaAssetFailed`;
+> `publishRegisteredEntries` keeps the path cache unpoisoned; aliases inherit the
+> canonical's failure; and `Test.Headless.Graphics.BindlessPublish` covers the
+> full publication boundary the finding asked for.
 
 A texture that exhausts the bindless slot allocator is still entered into the asset pool as ready, cached by path, assigned dimensions, and announced to Lua as loaded. Its uploaded image has no bindless mapping, so consumers receive a success callback for a handle that cannot resolve to that image.
 
@@ -53,7 +60,14 @@ The cached-alias path has the same false-success behavior when its canonical atl
 - **Scope and constraints:** Cover ordinary and pinned fresh uploads plus cached aliases. Preserve the reserved-handle guard and the existing successful-cache path. Add a test at the full publication boundary, not only the slot allocator.
 - **Remaining uncertainty:** Real-device exhaustion was not forced. The incorrect transition after any returned `Left` is explicit in the current control flow.
 
-### ASSET-2. Ordinary texture GPU resources have no reachable release boundary
+### [#1691] ASSET-2. Ordinary texture GPU resources have no reachable release boundary
+
+> **Disposition:** Filed as #1691, which owns the shutdown drain — the pool is
+> released through the alias-safe `cleanupAssetManager` path after the existing
+> device-idle wait and before `runAllCleanups`, with the no-device boot modes
+> unchanged. Mid-session `unloadAsset` wiring is deliberately out of scope there
+> (an unresolved policy decision), and the handle-namespace growth it would
+> bound is #1699's.
 
 Every file texture stores a cleanup closure for its image view, image, and device memory, but the only functions that execute those closures have no production callers. Normal shutdown cleans transient preview/zoom textures and standard Vulkan cleanup registrations, but does not drain the asset pool.
 
@@ -75,7 +89,18 @@ Process exit will eventually reclaim driver resources, but session-long texture 
 - **Scope and constraints:** Destruction must occur on the render owner while the device and bindless system still exist, after GPU use has idled. Font and transient-texture ownership use different mechanisms and should not be conflated.
 - **Remaining uncertainty:** Peak VRAM and table growth were not measured during a long session.
 
-### ASSET-3. Stale preview completions create repeated handle aliases
+### [no-issue] ASSET-3. Stale preview completions create repeated handle aliases
+
+> **Disposition:** No issue — already dispositioned as `[no-issue]` in
+> `docs/project_review_909-874.md` PRR-3, and this finding adds no materially new
+> evidence. The race is real (`requestTexture`, `scripts/preview_manager.lua:154-166`,
+> never caches on request; the callback at `:526` drops any completion whose handle is
+> not the current `pendingHandle`), but costs only a few bookkeeping entries per lost
+> race in a developer-only preview session that documents never unloading as an accepted
+> trade-off (`:26-28`). No second upload and no display defect; the handle-table ceiling
+> whose overflow would matter is #1699's, and the missing unload path is #1691's. The
+> one-line fix — cache at request time, as `acquireTexture` at `:126-133` already does —
+> remains welcome inside any future preview change.
 
 The simple asset preview caches a path only when its callback still belongs to the current selection. Selecting A and then B before A finishes causes A’s successful completion to be ignored rather than cached. Revisiting A calls `engine.loadTexture` again.
 
@@ -100,7 +125,16 @@ The engine avoids a second GPU upload, but it allocates another handle alias, in
 
 ## Validation coverage
 
-### ASSET-4. The all-reference texture validator is red and absent from the gates
+### [#1705] ASSET-4. The all-reference texture validator is red and absent from the gates
+
+> **Disposition:** Filed as #1705, which owns both halves — a fail-loud comment-aware
+> lexer over `.hs`/`.lua`/`.yaml` (per reference, not per line; a comment introducer
+> inside a string literal does not start a comment), a mutation-resistant
+> `tools/test_check_texture_paths.py`, and unconditional wiring into BOTH
+> `.github/workflows/ci.yml` and `tools/ci-local.sh` with `ci_parity_audit.py` passing
+> and no new exemption. The Haddock counterexample at
+> `src/Engine/Preview/Discovery.hs:305-308` stays as written. Same gap as
+> `docs/project_review_432-412.md` PRR-1, already linked to #1705.
 
 The tool intended to validate every texture reference currently reports a missing path that exists only inside a Haddock counterexample. It scans raw source lines with a regular expression and cannot distinguish comments from executable strings.
 
@@ -126,7 +160,15 @@ More importantly, neither CI nor `make ci` invokes it. The passing subset audit 
 
 ## Semantic asset correctness
 
-### ASSET-5. Three semantically distinct designation markers use identical art
+### [#1780] ASSET-5. Three semantically distinct designation markers use identical art
+
+> **Disposition:** Filed as #1780, an art issue for the two construction markers only —
+> `mine_designate.png` is the legitimate original that `6316eafe` copied. Every marker in
+> the family is 96x64 RGBA holding one flat fill at alpha 150, one hue per category (mine
+> red, chop green, till brown, plant yellow), so the two construct markers simply never
+> received their own. #1780 carries the owner art checkpoint, leaves the three handles and
+> the `CursorQuads.hs:236-237` `CtStructure`/`CtBuilding` branch untouched, and adds a
+> durable guard against any two of the six becoming byte-identical again.
 
 Mining, planned structures, and planned buildings are assigned separate paths and handles, and the HUD comments promise that each category reads differently. All three files are byte-identical 96×64 red diamonds.
 
@@ -146,7 +188,17 @@ This removes the intended at-a-glance distinction and also uploads three separat
 - **Scope and constraints:** This can remain an asset-only change. A focused asset assertion should prevent the three semantic markers from becoming byte-identical again.
 - **Remaining uncertainty:** None at draft time.
 
-### ASSET-6. Five four-variant vegetation families contain only one visual variant
+### [#1782] ASSET-6. Five four-variant vegetation families contain only one visual variant
+
+> **Disposition:** Filed as #1782, an art issue for all 20 frames across the five
+> families. Hashing every vegetation family confirmed the five and showed the gap is
+> wider than recorded here: each is a flat fill of exactly ONE opaque colour, where
+> authored families carry 5-146 and vary by 44-64% of pixels between variants. 14
+> families already vary correctly and `tilled_soil` is deliberately single-frame
+> (#333). The repair is art-only — reducing the declared variant count is NOT, because
+> `getVegTexture` falls back to `wtBlankTexture` while `variant` is unconditionally
+> 0-3, so a short family would render three of every four tiles blank; #1782 puts that
+> out of scope and keeps every id, save field and worldgen output untouched.
 
 The engine selects one of four vegetation IDs per tile and loads every declared path separately. For desert scrub, fallen leaves, heavy ivy, lichen, and snow, all four files within each family are byte-identical.
 
@@ -168,7 +220,18 @@ Those five families therefore consume 20 IDs, paths, handles, uploads, and bindl
 - **Scope and constraints:** An art-only repair preserves IDs and save/worldgen structure. Because vegetation colors feed zoom presentation, validation should include close-up and zoom rendering.
 - **Remaining uncertainty:** Whether the duplicates were deliberate temporary copies is not documented; their lack of variation is certain.
 
-### ASSET-7. Raspberry fruiting is harvestable but visually indistinguishable
+### [#1786] ASSET-7. Raspberry fruiting is harvestable but visually indistinguishable
+
+> **Disposition:** Filed as #1786 (PixelLab, owner approves the finished image —
+> flora sprites carry no facemap, so #1782's flat/unshaded tile rule does not apply).
+> One correction to the text below: `matured.png` is never DRAWN for this species —
+> `Flora/Render.hs:59-73` always resolves a cycle-stage texture when the cycle is
+> non-empty and `findActiveCycleStage` always returns one, so fruiting is a copy of a
+> texture the player never sees. Fruiting IS distinguishable from its neighbours; what
+> is missing is any depiction of FRUIT. `saguaro` is the only other fruiting species
+> and its art is already distinct (#1688), making raspberry the sole invisible window.
+> Five further flora families duplicate COSMETIC seasonal stages; #1786 puts those out
+> of scope, and the tomato reuse of this directory stays #1781's.
 
 Red raspberry harvesting is deliberately restricted to the annual fruiting window, and the renderer deliberately switches to `matured_fruiting.png` for that stage. That PNG is byte-identical to ordinary `matured.png`, so a harvestable bush has no visible fruit cue.
 
@@ -190,7 +253,18 @@ The focused tests prove the gameplay window opens and closes, but do not validat
 - **Scope and constraints:** The same texture set is reused by the placeholder tomato plant, so replacement sequencing should account for ASSET-8.
 - **Remaining uncertainty:** None at draft time.
 
-### ASSET-8. Production crops and their yields still use unrelated placeholder art
+### [#1781, #1787] ASSET-8. Production crops and their yields still use unrelated placeholder art
+
+> **Disposition:** Owned by two issues covering all four substitutions — #1781 for
+> tomato (`crops.yaml:17` texDir plus `items/tomato.yaml:6`'s `wild_berries.png`,
+> art AND integration) and #1787 for wheat (`crops.yaml:113` texDir plus
+> `items/wheat_grain.yaml:8`'s `quinoa_sack.png`). #1787 also splits `wild/`
+> 32x32 sprites from `cultivated/` 96x64 field tiles, which the finding does not
+> anticipate: the `CropPlot` renderer stretches its texture across the tile while
+> natural `FloraInstance`s draw upright, and no selector exists between them.
+> #1787 is art-only by design and names its own follow-on — the render-context
+> capability plus repointing the wheat definitions — which should be filed once
+> its art lands, mirroring #1688 → PR #1741 for saguaro.
 
 The implemented farming content loads tomato plants as red raspberry bushes and wheat as white clover. Harvested tomatoes render as wild berries, while wheat grain renders as a quinoa sack.
 
@@ -214,7 +288,20 @@ The YAML explicitly identifies all four substitutions as placeholders, but these
 
 ## Distribution provenance
 
-### ASSET-9. The bundled shell font has no auditable redistribution provenance
+### [no-issue] ASSET-9. The bundled shell font has no auditable redistribution provenance
+
+> **Disposition:** No issue — owner decision, 2026-08-27. All three fonts were
+> sourced from https://www.fontspace.com/, and the owner is satisfied with their
+> terms for the project's current stage. Synarchy is not a published product, so
+> recording per-asset provenance and auditing redistribution terms is deliberately
+> deferred until first public distribution, at which point the owner will replace
+> the fonts with their own work or address licensing then. This closes the finding
+> as out of scope rather than resolving it: `shell.ttf` still embeds no license or
+> source (only `©2021 Lawrence! Ent. ©1996-2021 SEGA / D4Enterprise`), `gothic.ttf`
+> still claims "Open Font License" without shipping the license text OFL §1 requires,
+> and the repository still carries no NOTICE beside its MIT `LICENSE`. **The trigger
+> for revisiting is publication**, and `arcade.ttf` needs nothing — it embeds the
+> full OFL text and its licenseURL already.
 
 `shell.ttf` identifies itself as “Madou Futo Maru Gothic” and embeds third-party copyright names, including Lawrence! Entertainment and SEGA/D4Enterprise, but it contains no discoverable license text or source URL. Git history records only “switching to better fonts,” and the repository contains no third-party asset notice beyond its own MIT license.
 
