@@ -51,16 +51,18 @@ import World.Chunk.Types
 import World.Construct.Types
     ( ConstructDesignation(..), ConstructStatus(..), ConstructTarget(..)
     , StructurePiece(..) )
+import World.Flora.CropPlot (newCropPlot)
 import World.Flora.Types
     ( FloraCatalog(..), FloraChunkData(..), FloraHarvest(..), FloraId(..)
     , FloraInstance(..), FloraSpecies(..), FloraWorldGen(..)
     , emptyFloraCatalog, emptyFloraChunkData, newFloraSpecies )
+import Item.Types (ItemDef(..), ItemFood(..), ItemManager(..))
 import World.Cursor.Types (CursorState(..), emptyCursorState)
 import World.Fluid.Types (emptyIceMap)
 import World.Grid (gridToWorld, tileHeight)
 import World.Generate.Coordinates
-    ( canonicalTile, chunkInSeamRegion, localizeTileToAnchor, seamTileDist2
-    , tileAliasStep )
+    ( canonicalTile, chunkInSeamRegion, globalToChunk, localizeTileToAnchor
+    , seamTileDist2, tileAliasStep )
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import World.Page.Types (WorldPageId(..))
 import World.Save.Component.Page
@@ -122,6 +124,39 @@ drawnKeys ∷ [(Int, Int)]
 drawnKeys = sort [ canonicalTile worldSize gx rowY
                  | gx ← [16 * chunkSize + 14 .. 17 * chunkSize + 2] ]
 
+-- * Forage-query geometry (#1707)
+--
+--   One search origin in the inner chunk, and three candidates around
+--   it. The seam-crossing one is PHYSICALLY the nearest; the planar one
+--   is genuinely farther but is the only candidate a raw chunk-box scan
+--   can even reach, so it is what the pre-#1707 query returned.
+
+-- | The forager's tile: 'anchorTile', two tiles short of the seam.
+forageOrigin ∷ (Int, Int)
+forageOrigin = anchorTile
+
+-- | 4 tiles from the origin, across the seam: 'farTilePicked' is its
+--   canonical key, 'farTileLocal' the same tile in the origin's frame.
+seamCandidate ∷ (Int, Int)
+seamCandidate = farTilePicked
+
+-- | The inner chunk's corner tile — sqrt 260 ≈ 16.12 tiles away, so
+--   strictly farther than 'seamCandidate', and the only one of the two a
+--   raw chunk-box scan can reach.
+planarCandidate ∷ (Int, Int)
+planarCandidate = (16 * chunkSize, (-15) * chunkSize)
+
+-- | Radius covering both candidates, well inside the 64 clamp.
+forageRadius ∷ Int
+forageRadius = 20
+
+-- | Two candidates at EXACTLY equal distance from the origin, one along
+--   each axis, both inside the inner chunk. The historical ordering
+--   settles it on gx, so 'tieByX' (the smaller gx) must win.
+tieByX, tieByY ∷ (Int, Int)
+tieByX = (fst forageOrigin - 4, snd forageOrigin)
+tieByY = (fst forageOrigin, snd forageOrigin - 4)
+
 -- * Chunk fixtures
 
 baseChunk ∷ ChunkCoord → Word8 → FloraChunkData → LoadedChunk
@@ -181,6 +216,66 @@ woodCatalog =
                     { fhTags = ["wood"], fhYield = []
                     , fhRegrowth = 0, fhHarvestedTexture = TextureHandle 0 } }
     in emptyFloraCatalog { fcSpecies = HM.fromList [(1, sp)], fcNextId = 2 }
+
+-- | Flora instances at named CANONICAL tiles, dropped into whichever
+--   seam chunk stores each — the per-chunk shape 'seamTiles' wants.
+floraAtTiles ∷ [((Int, Int), FloraId)] → ChunkCoord → FloraChunkData
+floraAtTiles spots coord = emptyFloraChunkData
+    { fcdInstances =
+        [ FloraInstance
+            { fiSpecies = fid
+            , fiTileX = fromIntegral lx, fiTileY = fromIntegral ly
+            , fiOffU = 0, fiOffV = 0, fiZ = zSlice
+            , fiAge = 1, fiHealth = 1, fiVariant = 0, fiBaseWidth = 8
+            }
+        | (tile, fid) ← spots
+        , let (home, (lx, ly)) = globalToChunk (fst tile) (snd tile)
+        , home ≡ coord ]
+    }
+
+berrySpecies, cloverSpecies, logSpecies ∷ FloraId
+berrySpecies  = FloraId 1
+cloverSpecies = FloraId 2
+logSpecies    = FloraId 3
+
+-- | Three species that separate the bare and tagged scans (#97/#1707):
+--   two whose yield is EDIBLE and carry no tags (a bare call takes
+--   them), and one wood-tagged whose yield is not (only a "wood" call
+--   takes it). Evergreen with no phases and no annual cycle, so the #332
+--   growth window is open and these examples test the coordinate frame
+--   and nothing else.
+forageCatalog ∷ FloraCatalog
+forageCatalog =
+    let harvestOf tags yield = Just FloraHarvest
+            { fhTags = tags, fhYield = yield
+            , fhRegrowth = 0, fhHarvestedTexture = TextureHandle 0 }
+        sp name tags yield = (newFloraSpecies name (TextureHandle 0))
+            { fsHarvest = harvestOf tags yield }
+    in emptyFloraCatalog
+        { fcSpecies = HM.fromList
+            [ (1, sp "probe_berry"  [] [("probe_fruit", 1, 1)])
+            , (2, sp "probe_clover" [] [("probe_fruit", 1, 1)])
+            , (3, sp "probe_log" ["wood"] [("probe_timber", 1, 1)]) ]
+        , fcNextId = 4 }
+
+-- | One edible item and one inedible one, so 'edibleYield' — the gate a
+--   BARE world.findHarvestableFlora applies — has something to separate.
+forageItems ∷ ItemManager
+forageItems = ItemManager $ HM.fromList
+    [ ("probe_fruit",  baseItem { idName = "probe_fruit"
+                                , idFood = Just (ItemFood 50 0) })
+    , ("probe_timber", baseItem { idName = "probe_timber" }) ]
+  where
+    baseItem = ItemDef
+        { idName = "", idDisplayName = "", idTexture = TextureHandle 0
+        , idWeight = 1, idWeightSpec = Nothing, idBulk = 1
+        , idStorage = Nothing, idKind = "misc", idCategory = "Misc"
+        , idMake = "", idMaterial = "", idQualitySpec = Nothing
+        , idQualityTiers = [], idContainer = Nothing
+        , idDefaultContents = [], idFood = Nothing, idWeapon = Nothing
+        , idArmor = Nothing, idUnequippable = False, idBuffs = []
+        , idInsulation = 0, idSourcePath = "test-fixture"
+        }
 
 fixturePage ∷ WorldPageId
 fixturePage = WorldPageId "seam_frame_probe"
@@ -621,6 +716,134 @@ engineSpec = beforeAll setup $ do
           , "return m and tostring(m) or 'nil'" ])
         `shouldReturn` "1"
 
+  -- The forage half of the same contract (#1707). world.harvestFlora
+  -- already canonicalises, so the ACTION verb was correct while the two
+  -- DISCOVERY surfaces that steer a unit to it were not: the search
+  -- scanned raw chunk keys and measured planar distance, and the point
+  -- queries read the caller's raw coord straight through.
+  --
+  -- (world.getCropPlotAt's own raw lookup is deliberately out of scope
+  -- here — it is a separate surface with its own follow-up.)
+  describe "the forage search is seam-aware (#1707)" $ do
+
+    it "reaches a seam-crossing candidate and ranks it ahead of a \
+       \nearer-LOOKING planar one" $ \(env, ls) → do
+      -- 4 tiles away physically against 16.1 — but the near one's chunk
+      -- is stored a whole world along u, so the raw box scan never named
+      -- its key, and the raw distance would have failed the radius even
+      -- if it had.
+      _ ← forageWorld env worldSize 0 (floraAtTiles
+              [ (seamCandidate,   berrySpecies)
+              , (planarCandidate, berrySpecies) ])
+      findFlora ls forageOrigin forageRadius Nothing
+        `shouldReturn` expectedFind seamCandidate "probe_berry" "4.00"
+
+    it "answers the same when the search ORIGIN is the other alias" $
+        \(env, ls) → do
+      _ ← forageWorld env worldSize 0 (floraAtTiles
+              [ (seamCandidate,   berrySpecies)
+              , (planarCandidate, berrySpecies) ])
+      findFlora ls (aliasOf forageOrigin) forageRadius Nothing
+        `shouldReturn` expectedFind seamCandidate "probe_berry" "4.00"
+
+    it "returns the planar candidate once the seam one is gone" $
+        \(env, ls) → do
+      -- The control that keeps the two examples above honest: the planar
+      -- candidate really is an eligible, in-range answer, so winning
+      -- against it is an ORDERING result and not a filtering accident.
+      _ ← forageWorld env worldSize 0
+              (floraAtTiles [(planarCandidate, berrySpecies)])
+      findFlora ls forageOrigin forageRadius Nothing
+        `shouldReturn` expectedFind planarCandidate "probe_berry" "16.12"
+
+    it "ranks a seam-crossing CROP PLOT on that same geometry" $
+        \(env, ls) → do
+      -- The plot scan (#334) is a separate branch over a flat world-level
+      -- map, so it needs its own proof: plots were always REACHED (no
+      -- chunk box gates them) but were measured planar, which put this
+      -- one outside the radius entirely.
+      ws ← forageWorld env worldSize vegTilledSoil noFlora
+      writeIORef (wsCropPlotsRef ws) $ HM.fromList
+          [ (seamCandidate,   newCropPlot cloverSpecies 0 1)
+          , (planarCandidate, newCropPlot cloverSpecies 0 1) ]
+      findFlora ls forageOrigin forageRadius Nothing
+        `shouldReturn` expectedFind seamCandidate "probe_clover" "4.00"
+
+    it "keeps the tagged scan seam-aware AND the bare/tagged split \
+       \intact" $ \(env, ls) → do
+      _ ← forageWorld env worldSize 0 (floraAtTiles
+              [ (seamCandidate,   logSpecies)
+              , (planarCandidate, berrySpecies) ])
+      -- The chop flow's "wood" call (#97) crosses the seam too.
+      findFlora ls forageOrigin forageRadius (Just "wood")
+        `shouldReturn` expectedFind seamCandidate "probe_log" "4.00"
+      -- A BARE call must still refuse the inedible yield, near as it is,
+      -- and take the farther berry instead.
+      findFlora ls forageOrigin forageRadius Nothing
+        `shouldReturn` expectedFind planarCandidate "probe_berry" "16.12"
+
+    it "still skips a tile whose CANONICAL key carries a live regrowth \
+       \timer" $ \(env, ls) → do
+      -- The timer map is canonical-keyed, and the coords the scan derives
+      -- from a stored chunk are canonical, so the #94 skip keeps working
+      -- across the seam rather than silently passing every wrapped tile.
+      ws ← forageWorld env worldSize 0 (floraAtTiles
+              [ (seamCandidate,   berrySpecies)
+              , (planarCandidate, berrySpecies) ])
+      writeIORef (wsFloraHarvestsRef ws) (HM.singleton seamCandidate 123)
+      findFlora ls forageOrigin forageRadius Nothing
+        `shouldReturn` expectedFind planarCandidate "probe_berry" "16.12"
+
+    it "breaks an equidistant tie by canonical gx, as it always has" $
+        \(env, ls) → do
+      -- Distance is a Float now; the historical (d2, gx, gy, name)
+      -- ordering underneath it must be untouched.
+      _ ← forageWorld env worldSize 0 (floraAtTiles
+              [ (tieByY, berrySpecies), (tieByX, berrySpecies) ])
+      findFlora ls forageOrigin forageRadius Nothing
+        `shouldReturn` expectedFind tieByX "probe_berry" "4.00"
+
+    it "is the identity on a non-wrapping page" $ \(env, ls) → do
+      -- Same fixture, world size 0: nothing aliases, so the far chunk
+      -- really IS a world away and the planar candidate wins on the raw
+      -- geometry — exactly the pre-#1707 answer.
+      _ ← forageWorld env 0 0 (floraAtTiles
+              [ (seamCandidate,   berrySpecies)
+              , (planarCandidate, berrySpecies) ])
+      findFlora ls forageOrigin forageRadius Nothing
+        `shouldReturn` expectedFind planarCandidate "probe_berry" "16.12"
+
+  describe "the flora point queries take either alias (#1707)" $ do
+
+    -- Both examples pin a LIVE regrowth timer on the canonical key.
+    -- 'floraAt' and the timer map are two separate lookups, so
+    -- canonicalising only the first reports a real species with the
+    -- wrong (default, zero) timer — harvestable, when it is not.
+
+    it "world.getFloraAt" $ \(env, ls) → do
+      ws ← forageWorld env worldSize 0
+              (floraAtTiles [(seamCandidate, berrySpecies)])
+      writeIORef (wsFloraHarvestsRef ws) (HM.singleton seamCandidate 123)
+      forM_ [seamCandidate, farTileLocal] $ \(gx, gy) →
+        evalDebug ls (T.concat
+            [ "local f = world.getFloraAt(", tshow gx, ", ", tshow gy, "); "
+            , "return f and (f.id .. ',' .. tostring(f.harvestable) .. ',' "
+            , ".. string.format('%.0f', f.regrowthRemaining)) or 'nil'" ])
+          `shouldReturn` "probe_berry,false,123"
+
+    it "world.getFloraGrowthAt" $ \(env, ls) → do
+      ws ← forageWorld env worldSize 0
+              (floraAtTiles [(seamCandidate, berrySpecies)])
+      writeIORef (wsFloraHarvestsRef ws) (HM.singleton seamCandidate 123)
+      forM_ [seamCandidate, farTileLocal] $ \(gx, gy) →
+        evalDebug ls (T.concat
+            [ "local g = world.getFloraGrowthAt(", tshow gx, ", ", tshow gy
+            , "); if not g then return 'nil' end; "
+            , "return #g .. ',' .. g[1].id .. ',' .. "
+            , "tostring(g[1].harvestable) .. ',' .. "
+            , "string.format('%.0f', g[1].regrowthRemaining)" ])
+          `shouldReturn` "1,probe_berry,false,123"
+
   where
     setup = do
         EngineInitResult env ← initializeEngineHeadless
@@ -642,10 +865,17 @@ aliasOf (gx, gy) =
 -- | Install a fresh synthetic page: the two seam chunks, this world
 --   size, and empty designation maps.
 resetPage ∷ EngineEnv → Word8 → (ChunkCoord → FloraChunkData) → IO WorldState
-resetPage env veg flora = do
+resetPage env = resetPageSized env worldSize
+
+-- | 'resetPage' at an arbitrary declared world size. Size 0 is the
+--   non-wrapping (arena / zero-size) page every seam helper is the
+--   identity on — the control that pins "unchanged away from the seam".
+resetPageSized ∷ EngineEnv → Int → Word8 → (ChunkCoord → FloraChunkData)
+               → IO WorldState
+resetPageSized env size veg flora = do
     ws ← emptyWorldState
     writeIORef (wsGenParamsRef ws)
-        (Just defaultWorldGenParams { wgpWorldSize = worldSize })
+        (Just defaultWorldGenParams { wgpWorldSize = size })
     writeIORef (wsTilesRef ws) (seamTiles veg flora)
     writeIORef (worldManagerRef env) emptyWorldManager
         { wmWorlds = [(fixturePage, ws)], wmVisible = [fixturePage] }
@@ -765,3 +995,34 @@ newBareLuaBackend env = do
 --   built as a Lua string, so the quotes are transport, not content.
 evalDebug ∷ LuaBackendState → Text → IO Text
 evalDebug ls src = T.dropAround (≡ '"') <$> executeDebugLua (lbsLuaState ls) src
+
+-- | Drive the PRODUCTION world.findHarvestableFlora through the real
+--   registered verb, flattening its table to "gx,gy,id,dist" (or "nil").
+--   Every field the issue's consumers read is in that string: the coords
+--   they forward to world.harvestFlora and the distance the auto-harvest
+--   action divides into its utility.
+findFlora ∷ LuaBackendState → (Int, Int) → Int → Maybe Text → IO Text
+findFlora ls (ox, oy) radius mTag =
+    evalDebug ls $ T.concat
+        [ "local f = world.findHarvestableFlora(", tshow ox, ", ", tshow oy
+        , ", ", tshow radius, tagArg, "); "
+        , "return f and (f.gx .. ',' .. f.gy .. ',' .. f.id .. ',' .. "
+        , "string.format('%.2f', f.dist)) or 'nil'" ]
+  where tagArg = maybe "" (\t → T.concat [", '", t, "'"]) mTag
+
+-- | The 'findFlora' string a given canonical tile, species and distance
+--   should produce.
+expectedFind ∷ (Int, Int) → Text → Text → Text
+expectedFind (gx, gy) name dist =
+    T.intercalate "," [tshow gx, tshow gy, name, dist]
+
+-- | Prepare the seam page for a forage example: the given flora, this
+--   fixture's three species, and the item registry the BARE call's
+--   edible-yield gate consults.
+forageWorld ∷ EngineEnv → Int → Word8 → (ChunkCoord → FloraChunkData)
+            → IO WorldState
+forageWorld env size veg flora = do
+    ws ← resetPageSized env size veg flora
+    writeIORef (floraCatalogRef env) forageCatalog
+    writeIORef (itemManagerRef env) forageItems
+    pure ws
