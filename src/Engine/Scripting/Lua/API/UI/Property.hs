@@ -150,7 +150,8 @@ uiIsPageInScopeFn env = do
 --   { handle, x, y (absolute framebuffer-pixel position), width,
 --     height, visible, clickable, interactive (has an onClick or
 --     onRightClick callback), zIndex, paintKey, paintOrder, name, text,
---     page (page name), pageVisible, hovered, focused, controlFocused }.
+--     page (page name), pageVisible, hovered, focused, controlFocused,
+--     inScope, leftClickTarget, leftClickAffordance }.
 --   Shared by 'uiGetElementInfoFn'
 --   (one element by handle) and 'uiGetVisibleElementsFn' (every
 --   element on every visible page) so both report identical fields.
@@ -206,6 +207,41 @@ uiIsPageInScopeFn env = do
 --   offline consumer (ui.dumpWidgets) ranks overlapping controls by
 --   @(paintKey, paintOrder)@, both descending, to match a real click's
 --   resolution exactly, without re-deriving the page/element tree.
+--
+--   inScope/leftClickTarget/leftClickAffordance (#1750) complete that
+--   offline picture for LEFT clicks, so a consumer can reproduce
+--   'UI.InputOwnership.routePointer's outcome without a live
+--   point-query and without re-deriving anything itself:
+--
+--     * inScope is 'isPageInScope' for this element's own page — the
+--       engine-owned modal-scope decision routePointer applies FIRST.
+--       It is the same answer @UI.isPageInScope(pageHandle)@ already
+--       returns, carried per element so an offline consumer never has
+--       to reconstruct a modal boundary from layer names or paint
+--       keys. A HUD control under an exclusive modal reports @false@
+--       even where that modal has no element at the click point at
+--       all, which is exactly the empty-modal case that used to
+--       correlate to the unreachable control below it.
+--     * leftClickTarget is the ACTIVE left-click target predicate —
+--       'ueClickable' AND a registered 'ueOnClick' — i.e. exactly
+--       routePointer's @activeCallback PointerLeftClick@ returning
+--       'Just'. This is what @interactive@ above cannot express: that
+--       field ORs the left and right callbacks together, so a
+--       right-click-only control reads as interactive and (via
+--       'elementBlocksPointer') as pointer-blocking while a LEFT click
+--       over it is 'UI.InputOwnership.RouteBlocked', never an
+--       activation.
+--     * leftClickAffordance is the weaker "has a left-click callback
+--       registered at all" fact, independent of 'ueClickable'. A
+--       record with leftClickAffordance and NOT leftClickTarget is a
+--       shown-but-disabled left control — the affordance #783
+--       deliberately keeps correlatable, so a dead click on it reads
+--       as "the control is there but disabled" rather than as a
+--       phantom.
+--
+--   All three additively report state the manager already holds;
+--   nothing here changes routing, and the router stays the reference
+--   behaviour.
 pushElementInfoTable ∷ ElementHandle → UIElement → UIPageManager → Lua.LuaE Lua.Exception ()
 pushElementInfoTable handle el mgr = do
     let (ax, ay) = fromMaybe (0, 0) (getElementAbsolutePosition handle mgr)
@@ -219,6 +255,13 @@ pushElementInfoTable handle el mgr = do
         visible = isEffectivelyVisible handle mgr
         mText = elementText el mgr
         pointerBlocking = elementBlocksPointer el
+        -- #1750: the three engine-owned routing facts the offline F3
+        -- click join needs to reproduce 'UI.InputOwnership.routePointer'
+        -- without re-deriving any of them from layer names, z-order, or
+        -- the conflated 'interactive' flag above.
+        inScope = isPageInScope (uePage el) mgr
+        leftClickTarget = ueClickable el ∧ isJust (ueOnClick el)
+        leftClickAffordance = isJust (ueOnClick el)
         scrollCapturing = elementCapturesScroll el
         clipsChildren = ueClipChildren el
         interactiveOverflow = ueInteractiveOverflow el
@@ -265,6 +308,12 @@ pushElementInfoTable handle el mgr = do
     Lua.setfield (Lua.nth 2) "controlFocused"
     Lua.pushboolean pointerBlocking
     Lua.setfield (Lua.nth 2) "pointerBlocking"
+    Lua.pushboolean inScope
+    Lua.setfield (Lua.nth 2) "inScope"
+    Lua.pushboolean leftClickTarget
+    Lua.setfield (Lua.nth 2) "leftClickTarget"
+    Lua.pushboolean leftClickAffordance
+    Lua.setfield (Lua.nth 2) "leftClickAffordance"
     Lua.pushboolean scrollCapturing
     Lua.setfield (Lua.nth 2) "scrollCapturing"
     Lua.pushboolean clipsChildren

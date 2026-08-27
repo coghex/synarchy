@@ -500,6 +500,8 @@ library
                      Building.Placement
                      Building.HitTest
                      Structure.Types
+                     Structure.Facing
+                     Structure.WallCatalog
                      Structure.Render
                      Engine.Asset.YamlBuildings
                      Engine.Scripting.Lua.API.Buildings
@@ -1133,6 +1135,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Asset.FloraContent
                    Test.Headless.Asset.Types
                    Test.Headless.Asset.UnitInventory
+                   Test.Headless.Asset.MaterialMoveCost
                    Test.Headless.Asset.YamlList
                    Test.Headless.Preview.Discovery
                    Test.Headless.Preview.UnitAnimation
@@ -1153,6 +1156,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Save.Barrier
                    Test.Headless.Load.Status
                    Test.Headless.Save.Snapshot
+                   Test.Headless.World.ArenaSeed
                    Test.Headless.World.Identity
                    Test.Headless.World.CursorInfo
                    Test.Headless.World.CursorTextureDispatch
@@ -1197,6 +1201,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Craft.Execute
                    Test.Headless.Craft.Bills
                    Test.Headless.Craft.BillReconcile
+                   Test.Headless.Craft.OutputIdentity
                    Test.Headless.Power.Types
                    Test.Headless.Power.Placement
                    Test.Headless.Power.Demolition
@@ -1246,6 +1251,7 @@ test-suite synarchy-test-headless
                    Test.Headless.River.CalderaHazard
                    Test.Headless.River.InlandSources
                    Test.Headless.World.Render.FrontWallLift
+                   Test.Headless.World.Render.StructureRotation
                    Test.Headless.World.Render.GroundItemSeam
                    Test.Headless.World.Render.PickSeam
                    Test.Headless.World.Render.QuadSnapshot
@@ -1265,6 +1271,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Core.LogMonad
                    Test.Headless.Core.LogParity
                    Test.Headless.Core.LoopStartup
+                   Test.Headless.Core.ShutdownAtlasRelease
                    Test.Headless.Core.WorkerLifecycle
                    Test.Headless.Camera.GotoClamp
                    Test.Headless.Camera.ZoomScroll

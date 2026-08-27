@@ -224,6 +224,13 @@ data MaterialProps = MaterialProps
       --   crossing this material AND makes A* prefer firmer routes
       --   (loose/soft soils — sand, silt, mud — are >1.0; bare rock
       --   stays 1.0). Read by @Unit.Pathing.Cost@. See issue #312.
+      --
+      --   FINITE and strictly positive for every YAML-authored material:
+      --   'Engine.Asset.YamlMaterials.validMoveCost' is the domain, and
+      --   the loader substitutes the 1.0 default (with a warning) for
+      --   anything outside it (#1734). 'registerMaterial' itself takes
+      --   whatever props it is handed, so a directly-constructed
+      --   'MaterialProps' — as tests build — is NOT covered by that.
     } deriving (Show)
 
 defaultMaterialProps ∷ MaterialProps

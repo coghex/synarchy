@@ -126,7 +126,7 @@ consumer coupling:
 
 The `world-sim-render-handoff` split is the one that is not a §3.1
 thread-privacy split: neither half carries a thread-private field, and
-it exists because the seven render-handoff fields' consumers straddle
+it exists because the render-handoff fields' consumers straddle
 this group and `render-gpu-asset` (§7.4).
 
 **The capability-record convention (canonical statement).** Every
@@ -433,7 +433,7 @@ dependencies, cross-references, or compatibility-boundary remarks.
 | `brightnessRef` | boot-process | `MainRender` (`Engine.Loop.Frame`, `Engine.Graphics.Vulkan.Init`) | `MainRender` (`Engine.Scripting.Lua.Message.Video:174`'s `handleSetBrightness`, dispatched via `processLuaMessages` — never the Lua thread itself, which only enqueues the request) | `IORef Int` | From loaded `VideoConfig` (`src/Engine/Core/Init.hs:189`) | None | — |
 | `pixelSnapRef` | boot-process | `MainRender` (`Engine.Graphics.Vulkan.Init`, `Engine.Loop.Frame`) | `LuaThread` (`API.Config:223`, direct synchronous `writeIORef`), `MainRender` (`Engine.Scripting.Lua.Message.Video:180`'s `handleSetPixelSnap`, dispatched via `processLuaMessages`, a separate call path from `API.Config`'s) | `IORef Bool` | From loaded `VideoConfig` (`src/Engine/Core/Init.hs:190`) | None | — |
 | `textureFilterRef` | boot-process | `MainRender` (`Engine.Graphics.Vulkan.Texture.Bindless` — sampler selection) | `LuaThread` (`API.Config:236`, direct synchronous `writeIORef` alongside enqueuing the change), `MainRender` (`Engine.Scripting.Lua.Message.Video:190`'s `handleSetTextureFilter`, dispatched via `processLuaMessages` — this is also where the live GPU sampler swap on `textureSystemRef` happens) | `IORef TextureFilter` | From loaded `VideoConfig` (`src/Engine/Core/Init.hs:191`) | None | — |
-| `assetPoolRef` | boot-process | `LuaThread` (shared into the Lua backend as `apRef`, `Engine.Scripting.Lua.Thread:51`), `MainRender` (`Message.Texture:84`'s `duplicateCachedTextureHandle`, and `World.Render.BloodQuads:179`'s `uploadOne` -- BOTH dispatched via `processLuaMessages`: `uploadOne` is reached through `uploadBloodTextures`, which `Engine.Scripting.Lua.Message.processLuaMessages` calls directly, not through the world thread's `updateWorldTiles` quad-building path) | `LuaThread`/`Boot`, `MainRender` (`Message.Texture:108`, `atomicModifyIORef'` bumping a cached atlas's refcount, dispatched via `processLuaMessages`) | `IORef AssetPool` | `defaultAssetPool` (`src/Engine/Core/Init.hs:160-161`) | None today, but this container DOES own release state: every atlas loaded through `Engine.Scripting.Lua.Message.Texture:255` stores an explicit `taCleanup` closure (freeing that atlas's image view, image, and device memory) inside `apTextureAtlases`, and the only code that runs those closures is `Engine.Asset.Manager`'s retained teardown path (`unloadAsset`, and `cleanupAssetManager` via its `cleanupResources` helper) -- which nothing currently calls, so no atlas is released through it. Bindless slot unregistration is `unloadAsset`'s own separate step, not part of `taCleanup` | — |
+| `assetPoolRef` | boot-process | `LuaThread` (shared into the Lua backend as `apRef`, `Engine.Scripting.Lua.Thread:51`), `MainRender` (`Message.Texture:84`'s `duplicateCachedTextureHandle`, and `World.Render.BloodQuads:179`'s `uploadOne` -- BOTH dispatched via `processLuaMessages`: `uploadOne` is reached through `uploadBloodTextures`, which `Engine.Scripting.Lua.Message.processLuaMessages` calls directly, not through the world thread's `updateWorldTiles` quad-building path) | `LuaThread`/`Boot`, `MainRender` (`Message.Texture:108`, `atomicModifyIORef'` bumping a cached atlas's refcount, dispatched via `processLuaMessages`) | `IORef AssetPool` | `defaultAssetPool` (`src/Engine/Core/Init.hs:160-161`) | `Engine.Loop.Shutdown.shutdownEngine` (#1691), which calls `Engine.Asset.Manager.cleanupAssetManager` -- after its `deviceWaitIdle` and before `runAllCleanups`, and only in a boot mode holding both a `vulkanDevice` and its `deviceQueues`, since the drain fails loudly without either. Every atlas loaded through `Engine.Scripting.Lua.Message.Texture:255` stores an explicit `taCleanup` closure (freeing that atlas's image view, image, and device memory) inside `apTextureAtlases`; `cleanupResources` invalidates every stable handle naming a slot it is freeing (`releaseOwnerHandles` + `releaseTextureHandles`, #1281) before running one, then clears `apTextureAtlases` and `apAssetPaths`. A release that fails is logged and contained so the rest of shutdown still runs. `unloadAsset`, the mid-session single-atlas release, still has no caller -- when a texture should be released while the session runs is a separate policy question #1691 left out of scope. Bindless slot unregistration is `unloadAsset`'s own separate step, not part of `taCleanup` | — |
 | `textureNameRegistryRef` | boot-process | `LuaThread` (`Engine.Asset.TextureNameRegistry` name→handle lookups), `WorldThread` (`World.Render.GroundItemQuads:162`'s broken-equipment overlay lookup) | `LuaThread` (registration during content load) | `IORef TextureNameRegistry` | `emptyTextureNameRegistry` (`src/Engine/Core/Init.hs:166`) | None | — |
 | `fontCacheRef` | boot-shutdown | `MainRender` (`UI.Render`, `Engine.Scene.Batch.Text`, `Engine.Graphics.Vulkan.Command.Text`), `LuaThread` (`API.Text`) | `MainRender`/`Boot` (`Engine.Graphics.Font.Load` rasterizes on demand) | `IORef FontCache` | `defaultFontCache` (`src/Engine/Core/Init.hs:203`) | Glyph-atlas GPU memory registered via `allocResource` at creation (`Engine.Graphics.Font.Upload`/`Draw`), freed by the generic `vulkanCleanup` sweep in `shutdownEngine` | — |
 | `textureSystemRef` | boot-shutdown | `WorldThread` (`src/Unit/Render.hs:131`, via `updateWorldTiles`'s world-thread quad-building pass), `MainRender` (`src/UI/Render.hs`, `Engine.Scripting.Lua.Message.Texture` reads, and `World.Render.BloodQuads:76,161` — the blood-texture upload/dispose functions run via `processLuaMessages`, NOT the world thread's `updateWorldTiles` quad-building path `renderBloodDecalQuads` uses), `LuaThread` (`API.Blood`, direct queries) | `MainRender` (`Engine.Graphics.Vulkan.Init:213` — initial creation on the same thread that runs `Engine.Loop.mainLoop`; also `Engine.Scripting.Lua.Message.Video:196`/`Message.WorldTexture`/`Message.Texture`'s live rebuild/registration handlers, and `World.Render.BloodQuads:84,166` — all dispatched via `processLuaMessages`, never the Lua thread itself and never the world thread) | `IORef (Maybe BindlessTextureSystem)`, all writes confined to `MainRender` (multiple call sites, single writer thread); read by `WorldThread`/`LuaThread` too | `Nothing` at engine boot; populated by `Engine.Graphics.Vulkan.Init:213` on `MainRender` after device creation (graphical/offscreen/preview only — stays `Nothing` under headless/dump) | GPU descriptor/image resources registered via `allocResource` at creation, freed by the `vulkanCleanup` sweep in `shutdownEngine` | Moved to `EngineEnv` specifically because worker threads must be able to READ it (writes stay confined to `MainRender`) — see §3. |
@@ -466,12 +466,14 @@ the nine **world/sim** fields — `worldManagerRef`, `worldQueue`,
 `worldGenConfigRef`, `gameTimeRef`, `enginePausedRef`, `simQueue` — are
 reached through
 `Engine.Core.Capability.WorldSim.WorldSimCapability` rather than an
-`EngineEnv` field; since #894 (E5b) the remaining seven —
+`EngineEnv` field; since #894 (E5b) the rest —
 `worldPreviewRef`, `worldPreviewGenerationRef`, `zoomAtlasDataRef`,
 `worldQuadsRef`, `bloodDisposeQueue`, `texPaletteRef`,
-`texPaletteHandlesRef`, the **coupled render-handoff** half (the world
+`texPaletteHandlesRef` and, since #1712, `structureWallCatalogRef`, the
+**coupled render-handoff** half (the world
 thread's staging surface for `MainRender` GPU uploads plus the
-structure-palette translation table) — are reached through
+structure-palette translation table and the packs' directional wall
+art) — are reached through
 `Engine.Core.Capability.RenderHandoff.RenderHandoffCapability`. Both
 hold for every reader and writer below EXCEPT the §6.1 permanent
 orchestration modules, which keep whole-environment access by job
@@ -512,6 +514,7 @@ a world teardown (`boot-process`); `texPaletteRef`/
 | `simQueue` | boot-process | `SimThread` (drains; `Sim.Thread`) | `WorldThread` (`Thread.ChunkLoading`, `Command.Basic`, `Command.Edit.Sync`, `Command.UI`, and `World.Load.Publish:210-220`'s `discardStaleQueues` on a load publish), `MainRender` (`app/App/Dump.hs:85,135`, the dump driver's own `SimPause`/`SimFastSettleAll` enqueues after worker threads start) | `Q.Queue SimCommand` | `Q.newQueue` (`src/Engine/Core/Init.hs:148`) | None | — |
 | `texPaletteRef` | session-replaced | `WorldThread` (`Thread.Command.Save.WriteWorld`), `LuaThread` (`API.Structure` — placement interns paths→ids) | `LuaThread`, `WorldThread` (load publish, `World.Load.Publish:118`) | `IORef TexPalette` | `emptyTexPalette` (`src/Engine/Core/Init.hs:220`) | None | Persisted exactly as `sdTexPalette`. |
 | `texPaletteHandlesRef` | session-replaced | `WorldThread` (`Structure.Render`'s `renderStructureQuads`, reached via `updateWorldTiles`), `LuaThread` (`Engine.Scripting.Lua.API.Structure:239`'s `structureUnresolvedPaletteIdsFn` — `structure.unresolvedPaletteIds()`, a direct synchronous read) | `LuaThread` (lazy per-palette-path resolution), `WorldThread` (load publish, `World.Load.Publish:121`) | `IORef (HashMap Int TextureHandle)` | `HM.empty` (`src/Engine/Core/Init.hs:221`) | None | Runtime translation table, rebuilt each session — not itself persisted. |
+| `structureWallCatalogRef` | boot-process | `WorldThread` (`Structure.Render`'s `renderStructureQuads`, reached via `updateWorldTiles` — picks the sprite and cap facemap a wall's edge occupies at the current facing) | `LuaThread` (`Engine.Scripting.Lua.API.Structure`'s `structureRegisterWallFamilyFn` — `structure.registerWallFamily`, one call per structure-pack variant as `scripts/structures.lua` reads `data/structure_packs/*.yaml`) | `IORef StructureWallCatalog`, accumulate-only | `emptyStructureWallCatalog` (`src/Engine/Core/Init.hs:227`) | None | #1712. Content art indexed by texture PATH, so — unlike `texPaletteRef`/`texPaletteHandlesRef` above — it is deliberately NOT session-replaced: a load publish reassigns palette ids but cannot invalidate a path, and re-registering a variant is a no-op. A registration is refused outright unless it covers all four edges and all sixteen cap facemaps, so a partial family can never be stored. |
 
 ### `units-buildings-combat`
 
@@ -680,9 +683,9 @@ grep -rl "import Engine.Core.State" src app | wc -l                    # 205
 #        `EngineEnv(..)`)
 #   1  × `Engine.Core.Capability.RenderHandoff` (new by #894 — the
 #        coupled render-handoff half of the same projection; bare
-#        `EngineEnv` type plus its seven field accessors, never
+#        `EngineEnv` type plus its own field accessors, never
 #        `EngineEnv(..)`. One record, not a §3.1-style full/view pair:
-#        none of its seven fields is private to a single thread the way
+#        none of its fields is private to a single thread the way
 #        `engineStateRef` is to `MainRender` — every one is a deliberate
 #        cross-thread handoff)
 #   4  × the #894-narrowed `world-sim-render-handoff` modules — the E5b
@@ -1450,10 +1453,11 @@ change, no behaviour change.
 
 **What landed in E5b (#894):**
 `Engine.Core.Capability.RenderHandoff` exports `RenderHandoffCapability`
-over exactly the seven coupled render-handoff fields
+over exactly the seven coupled render-handoff fields E5b found
 (`worldPreviewRef`, `worldPreviewGenerationRef`, `zoomAtlasDataRef`,
 `worldQuadsRef`, `bloodDisposeQueue`, `texPaletteRef`,
-`texPaletteHandlesRef`) plus the total one-way projection
+`texPaletteHandlesRef`; #1712 later added an eighth,
+`structureWallCatalogRef`) plus the total one-way projection
 `toRenderHandoffCapability`, following the same §7.1/#889 convention
 E5a did (same live `IORef`s/`Queue`, never a copy; no import of a
 consumer). It is a pure refactor — no `EngineEnv` field-set change, no
@@ -1466,7 +1470,7 @@ through a projected field instead of an `EngineEnv` one.
   full/view pair because `engineStateRef` is `MainRender`-private, and
   `input-lua-transport` needed one because two of its fields are
   `LuaThread`-private. Nothing here is private to a single thread:
-  every one of the seven is a deliberate cross-thread handoff, which is
+  every one of them is a deliberate cross-thread handoff, which is
   the whole point of the group, so a second interface would carve a
   boundary the §5 contracts do not have. `texPaletteHandlesRef` makes
   that concrete — it has `LuaThread` readers
