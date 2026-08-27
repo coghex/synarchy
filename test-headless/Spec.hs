@@ -203,6 +203,7 @@ import qualified Test.Headless.Core.Queue as CoreQueue
 import qualified Test.Headless.Core.LogMonad as LogMonad
 import qualified Test.Headless.Core.LogParity as LogParity
 import qualified Test.Headless.Core.LoopStartup as LoopStartup
+import qualified Test.Headless.Core.ShutdownAtlasRelease as ShutdownAtlasRelease
 import qualified Test.Headless.Core.WorkerLifecycle as WorkerLifecycle
 import qualified Test.Headless.Core.DebugListener as DebugListener
 import qualified Test.Headless.App.Cli as AppCli
@@ -673,6 +674,7 @@ main = hspec $ do
     LogMonad.spec
     LogParity.spec
     LoopStartup.spec
+    ShutdownAtlasRelease.spec
     WorkerLifecycle.spec
     DebugListener.spec
     AppCli.spec
