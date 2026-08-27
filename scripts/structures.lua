@@ -38,6 +38,10 @@ end
 -- textures (and optionally facemaps); everything it doesn't list falls
 -- back to the default, so an unknown or partial variant still renders.
 local cache = {}
+-- Forward declaration: handles() registers each variant's wall art with
+-- the engine as it builds it, and registerWallFamily() reads the table
+-- handles() just filled in.
+local registerWallFamily
 local function handles(variant)
     local key = variant or ""
     if cache[key] then return cache[key] end
@@ -76,8 +80,55 @@ local function handles(variant)
         h.walls[e] = { tex = engine.loadTexture(texPath), texPath = texPath,
                        face = faces, facePath = facePaths }
     end
+    registerWallFamily(h, key)
     cache[key] = h
     return h
+end
+
+-- Declare this variant's four wall sprites + sixteen cap facemaps to the
+-- engine (#1712), so the renderer can draw a wall with the sprite its
+-- edge occupies once the camera rotates. The pack YAML is the authority:
+-- these are exactly the paths/handles built above, never a filename
+-- pattern. Keyed by PATH engine-side, so one registration per variant per
+-- session covers pieces placed later AND pieces replayed from a save.
+function registerWallFamily(h, key)
+    if not structure.registerWallFamily then return end
+    local entries = {}
+    for _, e in ipairs(WALL_DIRS) do
+        local w = h.walls[e]
+        -- A direction the pack never declared leaves the family short, and
+        -- the engine refuses a short family outright — so collect what
+        -- there is and let the one warning below report it.
+        if w then
+            entries[#entries + 1] = { dir = e, path = w.texPath, handle = w.tex }
+            for _, c in ipairs(WALL_CAPS) do
+                entries[#entries + 1] = { dir = e, cap = c,
+                                          path = w.facePath[c], handle = w.face[c] }
+            end
+        end
+    end
+    if not structure.registerWallFamily(entries) then
+        engine.logWarn("structures: pack '" .. M.pack .. "' variant '" ..
+            tostring(key) .. "' has incomplete wall art — walls will keep " ..
+            "their authored sprite when the camera rotates")
+    end
+end
+
+-- Register every variant's wall art up front. A wall replayed from a save
+-- is never re-placed, so waiting for a placement to warm `handles()` would
+-- leave a loaded room unrotatable; and `damaged` art is stamped by
+-- locations, not by the click builder. Cheap and idempotent — `handles()`
+-- caches per variant.
+local registeredPack = false
+function M.registerPackArt()
+    if registeredPack then return end
+    local pack = packDef()
+    if not pack then return end
+    registeredPack = true
+    handles(nil)
+    for name, _ in pairs(pack.variants or {}) do
+        handles(name)
+    end
 end
 
 -- Map a fractional in-tile hover position to the nearest diamond edge
@@ -261,6 +312,7 @@ function M.clear() structure.clearAll() end
 -- but their handles must be re-loaded for THIS session). Cheap when there's
 -- nothing pending — the common steady-state. Call each tick.
 function M.resolvePending()
+    M.registerPackArt()
     local u = structure.unresolvedPaletteIds()
     for _, e in ipairs(u) do
         structure.setPaletteHandle(e.id, engine.loadTexture(e.path))

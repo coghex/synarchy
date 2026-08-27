@@ -335,6 +335,9 @@ PROBES = [
      "Sleeping pose + go_to_sleep AI goal: lie-down/wake chain, sleep_pressure regen, wake conditions (#612)"),
     ("state_of_mind", "state_of_mind_probe.py",
      "unified consciousness/mood model: pain/awareness drift, no-hunger-config fallback, locomotor-collapse regression guard (#350)"),
+    ("structure_rotation", "structure_rotation_probe.py",
+     "GPU offscreen visual check: one stamped room captured at all four "
+     "camera facings — rotated wall art, terrain interleave, billboard lift (#1712)"),
     ("text_encoding", "text_encoding_probe.py",
      "TE.decodeUtf8Lenient sweep across Engine.Scripting.Lua: malformed UTF-8 through engine.setText (#618) and the representative non-Text-API world.show boundary (#665) no longer errors, and the Text-API case round-trips through engine.getText"),
     ("thermo_altitude", "thermo_altitude_probe.py",

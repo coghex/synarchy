@@ -26,6 +26,7 @@ module Engine.Scripting.Lua.API.Structure
     , structureUnresolvedPaletteIdsFn
     , structureSetPaletteHandleFn
     , structurePaletteCountFn
+    , structureRegisterWallFamilyFn
     ) where
 
 import UPrelude
@@ -41,7 +42,9 @@ import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import Engine.Asset.Handle (TextureHandle(..))
 import Structure.Types
+import Structure.Facing (WallEdge(..), WallCaps, wallCapsFromCode)
 import Structure.Palette (internPath, lookupPath, TexPalette(..))
+import Structure.WallCatalog (WallArtEntry(..), registerWallFamily)
 import World.Types
     (wsTilesRef, wsStructureStageRef, wmWorlds, WorldPageId(..), WorldState
     , pageWrapWorldSize)
@@ -295,6 +298,90 @@ structureSetPaletteHandleFn env = do
                 (HM.insert (fromIntegral i) (TextureHandle (fromIntegral h)) m, ())
         _ → pure ()
     return 0
+
+-- | structure.registerWallFamily(entries) → bool — declare ONE structure
+--   pack variant's complete directional wall art (#1712), so the renderer
+--   can draw a wall with the sprite its edge occupies once the camera has
+--   rotated. @entries@ is a dense array of
+--   @{dir = "ne"|"nw"|"se"|"sw", cap = "00"|"10"|"01"|"11" or nil,
+--     path = "...", handle = engine.loadTexture(path)}@ — the sprite for
+--   each direction (no @cap@) plus that direction's four cap facemaps.
+--
+--   All twenty must be present: a partial family would rotate some of a
+--   wall's directions and not others, so an incomplete or malformed call
+--   returns false and registers NOTHING. Registration is keyed by PATH,
+--   not by palette id, so it survives the wholesale palette replacement a
+--   load performs and never needs redoing; re-registering a variant is
+--   harmless. Nothing here places a piece or touches the palette — the
+--   catalogue is pure art metadata, read only at render time.
+structureRegisterWallFamilyFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+structureRegisterWallFamilyFn env = do
+    isT ← Lua.istable 1
+    ok ← if not isT then pure False else do
+        n ← Lua.rawlen 1
+        mEntries ← readEntries (fromIntegral n)
+        case mEntries of
+            Nothing → pure False
+            Just entries → Lua.liftIO $
+                atomicModifyIORef' (rhStructureWallCatalogRef (toRenderHandoffCapability env)) $
+                    \cat → case registerWallFamily entries cat of
+                        Just cat' → (cat', True)
+                        Nothing   → (cat, False)
+    Lua.pushboolean ok
+    return 1
+  where
+    -- Every entry must parse: a family assembled from the ones that
+    -- happened to be well-formed is exactly the partial family the
+    -- all-or-nothing rule exists to refuse.
+    readEntries ∷ Int → Lua.LuaE Lua.Exception (Maybe [WallArtEntry])
+    readEntries n = go 1 []
+      where
+        go i acc
+            | i > n = pure (Just (reverse acc))
+            | otherwise = do
+                ty ← Lua.rawgeti 1 (fromIntegral i)
+                mE ← if ty ≢ Lua.TypeTable then pure Nothing else readEntry
+                Lua.pop 1
+                case mE of
+                    Nothing → pure Nothing
+                    Just e  → go (i + 1) (e : acc)
+
+    readEntry ∷ Lua.LuaE Lua.Exception (Maybe WallArtEntry)
+    readEntry = do
+        mDir  ← strField "dir"
+        mPath ← strField "path"
+        mCap  ← strField "cap"
+        _     ← Lua.getfield (-1) "handle"
+        mH    ← Lua.tointeger (-1)
+        Lua.pop 1
+        pure $ do
+            dir  ← mDir ⌦ wallEdgeFromText
+            path ← mPath
+            caps ← readCaps mCap
+            h    ← mH
+            pure (WallArtEntry dir caps path (TextureHandle (fromIntegral h)))
+
+    -- An ABSENT cap names the direction's sprite; a PRESENT one must be a
+    -- valid "<left><right>" suffix, never silently treated as absent.
+    readCaps ∷ Maybe Text → Maybe (Maybe WallCaps)
+    readCaps Nothing  = Just Nothing
+    readCaps (Just c) = Just <$> wallCapsFromCode c
+
+    strField ∷ Lua.Name → Lua.LuaE Lua.Exception (Maybe Text)
+    strField name = do
+        ty ← Lua.getfield (-1) name
+        v  ← if ty ≢ Lua.TypeString then pure Nothing
+             else fmap (fmap TE.decodeUtf8Lenient) (Lua.tostring (-1))
+        Lua.pop 1
+        pure v
+
+    wallEdgeFromText ∷ Text → Maybe WallEdge
+    wallEdgeFromText t = case t of
+        "ne" → Just WallNE
+        "nw" → Just WallNW
+        "se" → Just WallSE
+        "sw" → Just WallSW
+        _    → Nothing
 
 -- | structure.floorZAt(gx, gy) → int|nil — the z of the FLOOR at this tile,
 --   or nil if there is none. Posts are only placeable where a floor exists,

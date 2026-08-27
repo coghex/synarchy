@@ -178,6 +178,7 @@ import qualified Test.Headless.World.FloraGrowth as FloraGrowth
 import qualified Test.Headless.River.CalderaHazard as RiverCalderaHazard
 import qualified Test.Headless.River.InlandSources as RiverInlandSources
 import qualified Test.Headless.World.Render.FrontWallLift as FrontWallLift
+import qualified Test.Headless.World.Render.StructureRotation as StructureRotation
 import qualified Test.Headless.World.Render.GroundItemSeam as GroundItemSeam
 import qualified Test.Headless.World.Render.PickSeam as PickSeam
 import qualified Test.Headless.World.Render.QuadSnapshot as QuadSnapshot
@@ -620,6 +621,7 @@ main = hspec $ do
     describe "World.FloraGrowth" FloraGrowth.spec
     describe "River.CalderaHazard" RiverCalderaHazard.spec
     describe "World.Render.FrontWallLift" FrontWallLift.spec
+    describe "World.Render.StructureRotation" StructureRotation.spec
     describe "World.Render.GroundItemSeam" GroundItemSeam.spec
     describe "World.Render.GroundItemSeam (engine)" GroundItemSeam.engineSpec
     describe "World.Render.PickSeam" PickSeam.spec

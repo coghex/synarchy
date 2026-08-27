@@ -32,6 +32,7 @@ registerDesignationAPI env = do
   registerLuaFunction "unresolvedPaletteIds" (structureUnresolvedPaletteIdsFn env)
   registerLuaFunction "setPaletteHandle" (structureSetPaletteHandleFn env)
   registerLuaFunction "paletteCount" (structurePaletteCountFn env)
+  registerLuaFunction "registerWallFamily" (structureRegisterWallFamilyFn env)
   registerLuaFunction "floorZAt" (structureFloorZAtFn env)
   registerLuaFunction "hasAt"    (structureHasAtFn env)
   registerLuaFunction "getAt"    (structureGetAtFn env)

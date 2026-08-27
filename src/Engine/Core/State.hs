@@ -47,6 +47,7 @@ import Unit.Command.Types (UnitCommand)
 import Building.Types (BuildingManager, BuildingGhost)
 import Building.Command.Types (BuildingCommand)
 import Structure.Palette (TexPalette)
+import Structure.WallCatalog (StructureWallCatalog)
 import Item.Types (ItemManager)
 import Equipment.Types (EquipmentClassManager)
 import Substance.Types (SubstanceManager)
@@ -274,6 +275,15 @@ data EngineEnv = EngineEnv
     --   already loaded) and lazily after load (Lua re-resolves each palette
     --   path). The structure renderer reads it; a palette id with no entry
     --   yet is skipped (renders once its handle is resolved).
+  , structureWallCatalogRef ∷ IORef StructureWallCatalog
+    -- ^ Directional wall art per structure pack/variant (#1712), keyed by
+    --   texture PATH: the four edge sprites and their sixteen cap facemaps,
+    --   with the runtime handle Lua already loaded for each. Registered from
+    --   `scripts/structures.lua` out of the pack YAML it read
+    --   (`structure.registerWallFamily`); read by `Structure.Render` to draw
+    --   a wall with the sprite its edge occupies once the camera rotates.
+    --   NOT persisted and never cleared — a load replaces the palette (and so
+    --   can reassign ids), which is exactly why this is keyed by path.
   , buildingQueue       ∷ Q.Queue BuildingCommand
   , combatQueue         ∷ Q.Queue Combat.Types.CombatCommand
     -- ^ Lua / AI → combat thread. Issued via `combat.attack` (and
