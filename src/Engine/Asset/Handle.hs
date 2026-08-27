@@ -44,7 +44,9 @@ newtype TextureHandle = TextureHandle Int
 --   2. Every bindless-registration path runs
 --      'Engine.Graphics.Vulkan.Texture.Handle.checkRegistrableHandle'
 --      first, so a producer synthesising a literal zero handle cannot
---      point table entry 0 at a real slot either.
+--      point table entry 0 at a real slot either. That same guard is
+--      where a handle id past the END of the table is refused (#1699);
+--      this reservation is its other half.
 missingTextureHandle ∷ TextureHandle
 missingTextureHandle = TextureHandle 0
 

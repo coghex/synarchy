@@ -36,10 +36,21 @@ maxBindlessTextures = 16384
 --   entry 0 belongs to 'Engine.Asset.Handle.missingTextureHandle' and is
 --   held at slot 0 for the whole process lifetime (#1696).
 --   World-tile material / facemap handles are allocated at startup (low
---   ids), so they are always in range. A handle id beyond this cap
---   resolves to slot 0 (undefined) in the shader — a graceful degrade
---   that can only bite a transient texture in an extremely long session,
---   never a cached tile. Sizes the storage buffer and its zero-fill
+--   ids), so they are always in range.
+--
+--   The id space is FINITE and never recycled: the counter is monotonic
+--   and nothing in the tree resets it, so a long-running process can
+--   spend it. Past this cap the shader would resolve every id to slot 0
+--   (the undefined checkerboard) while the engine reported the texture
+--   loaded, so a shader-addressable registration for such an id is
+--   REFUSED instead —
+--   'Engine.Graphics.Vulkan.Texture.Handle.checkRegistrableHandle'
+--   answers @TextureHandleUnrepresentable@ and the request settles on
+--   the terminal failure #1690 established (#1699). The one exemption
+--   is a @SlotOnly@ registration, whose slot never travels through this
+--   table at all ("Engine.Graphics.Vulkan.Texture.DefaultFaceMap").
+--
+--   Sizes the storage buffer and its zero-fill
 --   ("Engine.Graphics.Vulkan.Texture.Bindless") and @HANDLE_TABLE_SIZE@
 --   in both bindless fragment shaders. #286.
 handleSlotTableSize ∷ Int

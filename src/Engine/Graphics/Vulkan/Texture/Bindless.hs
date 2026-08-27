@@ -18,6 +18,7 @@ module Engine.Graphics.Vulkan.Texture.Bindless
     -- * Texture Management
   , registerTexture
   , registerPinnedTexture
+  , registerSlotOnlyTexture
   , unregisterTexture
   , releaseTextureHandles
   , setTextureFilter
@@ -27,6 +28,7 @@ module Engine.Graphics.Vulkan.Texture.Bindless
     -- * Registration validation (re-exported for callers that own their
     --   own 'btsHandleMap' insertion)
   , TextureRegistrationFailure(..)
+  , HandleAddressing(..)
   , checkRegistrableHandle
   , registrationFailureMessage
   ) where
@@ -312,6 +314,13 @@ writeHandleSlotDescriptor dev descSet buf = do
 --   handle pointing at an existing slot ('Engine.Asset.Manager',
 --   'Engine.Scripting.Lua.Message'). Out-of-range ids are dropped (they
 --   stay at the zero-initialised slot 0 = undefined). #286.
+--
+--   That drop is DEFENCE IN DEPTH, not the policy: since #1699 a
+--   shader-addressable registration for such an id is refused upstream
+--   by 'checkRegistrableHandle', so nothing reaches here expecting the
+--   write to land. What still does reach it is the one kind that never
+--   needed the table — a @SlotOnly@ registration's deliberately
+--   out-of-table id ('registerSlotOnlyTexture').
 writeHandleSlotEntry ∷ BindlessTextureSystem → Int → Word32 → IO ()
 writeHandleSlotEntry sys = writeHandleSlotEntryPtr (btsHandleSlotPtr sys)
 
@@ -321,7 +330,8 @@ writeHandleSlotEntry sys = writeHandleSlotEntryPtr (btsHandleSlotPtr sys)
 --
 --   Two ids are refused rather than written:
 --
---   * an id outside the table (#286, as above);
+--   * an id outside the table (#286, as above) — kept as the last line
+--     of defence behind #1699's upstream refusal;
 --   * a NONZERO slot for 'missingTextureHandle' (#1696). Entry 0 belongs
 --     to the missing-texture sentinel and must resolve to the undefined
 --     slot for the whole process lifetime, so this low-level mutation
@@ -348,7 +358,7 @@ registerTexture ∷ Device
                 → BindlessTextureSystem
                 → EngineM σ ( Either TextureRegistrationFailure BindlessTextureHandle
                             , BindlessTextureSystem )
-registerTexture = registerTextureImpl False
+registerTexture = registerTextureImpl False ShaderAddressable
 
 -- | Register a texture pinned to a SPECIFIC sampler that must survive a
 --   global filter toggle (world preview → NEAREST, zoom atlas → LINEAR).
@@ -362,14 +372,35 @@ registerPinnedTexture ∷ Device
                       → BindlessTextureSystem
                       → EngineM σ ( Either TextureRegistrationFailure BindlessTextureHandle
                                   , BindlessTextureSystem )
-registerPinnedTexture = registerTextureImpl True
+registerPinnedTexture = registerTextureImpl True ShaderAddressable
+
+-- | Register a texture whose SLOT INDEX is the only thing that reaches
+--   the shader, so its handle id never travels through
+--   @handleToSlot[]@ and need not be representable there (#1699).
+--
+--   "Engine.Graphics.Vulkan.Texture.DefaultFaceMap" is the only caller
+--   and deliberately the only one: its 1×1 face map is published as
+--   @fragDefaultFaceMapSlot@ through the UBO, and its handle id sits
+--   PAST the table on purpose so it can never collide with an allocated
+--   one. Refusing it for exactly that would force the uniform to slot 0
+--   and regress the shader fallback the face map exists to be.
+registerSlotOnlyTexture ∷ Device
+                        → TextureHandle
+                        → Text        -- ^ Caller provenance for diagnostics
+                        → ImageView
+                        → Sampler
+                        → BindlessTextureSystem
+                        → EngineM σ ( Either TextureRegistrationFailure BindlessTextureHandle
+                                    , BindlessTextureSystem )
+registerSlotOnlyTexture = registerTextureImpl False SlotOnly
 
 -- | Both registration paths' shared body. A refusal logs the failure
 --   with the handle id and the caller's provenance, and returns the
 --   bindless state completely UNTOUCHED — no slot allocated, no
 --   descriptor written, no table entry poked, no bookkeeping inserted
---   (#1696).
+--   (#1696, #1699).
 registerTextureImpl ∷ Bool          -- ^ pin this slot's sampler?
+                    → HandleAddressing  -- ^ does the shader read the table for it?
                     → Device
                     → TextureHandle
                     → Text          -- ^ Caller provenance for diagnostics
@@ -378,11 +409,11 @@ registerTextureImpl ∷ Bool          -- ^ pin this slot's sampler?
                     → BindlessTextureSystem
                     → EngineM σ ( Either TextureRegistrationFailure BindlessTextureHandle
                                 , BindlessTextureSystem )
-registerTextureImpl pinned dev texHandle source imageView sampler system =
-  -- The sentinel guard runs FIRST, ahead of every mutation below: a
+registerTextureImpl pinned addressing dev texHandle source imageView sampler system =
+  -- The handle guard runs FIRST, ahead of every mutation below: a
   -- refused handle allocates no slot, writes no descriptor, pokes no
   -- table entry and inserts no bookkeeping.
-  case checkRegistrableHandle texHandle of
+  case checkRegistrableHandle addressing texHandle of
     Left failure → refuse failure
     Right ()     → allocate
   where
