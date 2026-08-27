@@ -240,6 +240,9 @@ initializeEngineWith logBackend = do
   -- #913: starts at 0 and only ever counts UP; an autosave compares a
   -- snapshot of it, never its absolute value.
   playerIntentGenRef ← newMVar (0 ∷ Word64)
+  -- #1730: the same shape for pause assertions the engine makes on its
+  -- own behalf, read only under the mutex above.
+  enginePauseGenRef ← newIORef (0 ∷ Word64)
   gameTimeRef     ← newIORef (0 ∷ Double)
   saveBarrierRef  ← newSaveBarrier
   inputThreadActiveRef ← newIORef False
@@ -340,6 +343,7 @@ initializeEngineWith logBackend = do
         , simQueue          = simQueue
         , enginePausedRef   = enginePausedRef
         , playerIntentGenRef = playerIntentGenRef
+        , enginePauseGenRef  = enginePauseGenRef
         , gameTimeRef       = gameTimeRef
         , saveBarrierRef    = saveBarrierRef
         , inputThreadActiveRef = inputThreadActiveRef

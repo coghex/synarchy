@@ -20,13 +20,17 @@
 --     terrain and below units/ground items (see 'bloodSortNudge').
 --
 --   A decal whose texture was never uploaded (GPU upload lags a frame
---   behind a fresh 'blood.spawn', or the bindless system was full) simply
---   has no entry in 'wsBloodTextureHandlesRef' yet and is skipped this
---   frame — it appears once 'uploadBloodTextures' catches up.
+--   behind a fresh 'blood.spawn', or the bindless system was full)
+--   simply has no entry in 'wsBloodTextureHandlesRef' yet and is skipped
+--   this frame — it appears once 'uploadBloodTextures' catches up. The
+--   one case it never catches up from is a spent texture-handle
+--   namespace (#1699), which is permanent; 'uploadOne' stops trying
+--   rather than repeating the whole upload-and-refuse cycle every frame.
 module World.Render.BloodQuads
     ( uploadBloodTextures
     , disposeQueuedBloodTextures
     , renderBloodDecalQuads
+    , bloodTextureSource
     ) where
 
 import UPrelude
@@ -44,7 +48,12 @@ import Engine.Core.State (EngineEnv, EngineState(..), GraphicsState(..)
 import Engine.Core.Capability.RenderView
   (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Asset.Handle (TextureHandle, toInt)
-import Engine.Asset.Manager (generateTextureHandle)
+import Engine.Asset.Manager
+    (TextureHandleReservation(..), reserveTextureHandle)
+import Engine.Core.Log (LogCategory(..))
+import Engine.Core.Log.Monad (logWarnM)
+import Engine.Graphics.Vulkan.Texture.Handle
+    (TextureRegistrationFailure(..), registrationFailureMessage)
 import Engine.Graphics.Types (DevQueues(..))
 import Engine.Graphics.Camera (Camera2D(..))
 import Engine.Graphics.Vulkan.Texture (createTextureFromRGBABytes)
@@ -67,6 +76,17 @@ import World.Render.ChunkCulling (isChunkVisibleWrapped)
 import World.Render.ViewBounds (computeViewBounds)
 import World.Blood.Teardown (drainBloodDisposalRecords)
 import World.Types
+
+-- | The provenance label every blood-decal texture registration and
+--   refusal is reported under (#606, #1699).
+--
+--   A procedural texture has no requested path, so this stands in for
+--   one wherever a file-backed upload would name its file: the
+--   registration diagnostic 'registerTexture' logs, and the one-shot
+--   report 'uploadOne' makes when the texture-handle namespace is
+--   spent. Spelled once so the two always agree.
+bloodTextureSource ∷ Text
+bloodTextureSource = "blood decal atlas"
 
 -- * GPU upload / eviction sync (EngineM, once per frame)
 
@@ -183,23 +203,55 @@ uploadOne ∷ Device → PhysicalDevice → CommandPool → Queue
          → (BindlessTextureSystem, HandleMap) → BloodTextureDescriptor
          → EngineM σ (BindlessTextureSystem, HandleMap)
 uploadOne dev pdev cmdPool queue (bl, known) d = do
-    let img = generateBloodTexture d
     env ← ask
     poolRef ← asks (rvAssetPoolRef . toRenderViewCapability)
     ap ← liftIO $ readIORef poolRef
-    texHandle ← liftIO $ generateTextureHandle ap
-    ((_image, imageView), cleanupImg) ← createTextureFromRGBABytes
-        pdev dev cmdPool queue (btiWidth img, btiHeight img) (btiPixels img)
-    (mBindlessHandle, bl') ← registerTexture dev texHandle "blood decal atlas"
-                                imageView (btsTextureSampler bl) bl
-    case mBindlessHandle of
-        Right _ → do
+    -- Unlike a slot shortage, a spent handle namespace never recovers
+    -- (#1699): the counter is monotonic with no reset, so every id from
+    -- here on is one the shader's table cannot resolve. This diff runs
+    -- once per FRAME against a decal that stays in the FIFO, so without
+    -- this the same descriptor would generate a handle, upload a
+    -- texture, be refused, log a warning and destroy the texture again
+    -- every frame for the rest of the session.
+    --
+    -- 'reserveTextureHandle' answers and allocates in ONE atomic step,
+    -- which matters because the allocator is shared: a separate "is
+    -- there room?" read could be overtaken by the Lua worker between
+    -- answering and allocating, and hand this frame an id past the cap
+    -- it had already decided was safe.
+    --
+    -- The refusal is still REPORTED — a procedural texture has no
+    -- requested path, so it names its kind, the id that was refused and
+    -- the cap — but the pool hands that report to exactly one claimant,
+    -- so a permanent condition is stated once instead of every frame.
+    -- Afterwards the decal is simply not uploaded and has no entry in
+    -- 'wsBloodTextureHandlesRef', exactly as this module already handles
+    -- an upload that has not caught up yet.
+    reservation ← liftIO $ reserveTextureHandle ap
+    case reservation of
+      TextureHandlesSpent report → do
+        forM_ report $ \refused →
+          logWarnM CatTexture $ registrationFailureMessage
+              TextureHandleUnrepresentable refused bloodTextureSource
+        pure (bl, known)
+      TextureHandleAllocated texHandle → do
+        let img = generateBloodTexture d
+        ((_image, imageView), cleanupImg) ← createTextureFromRGBABytes
+            pdev dev cmdPool queue (btiWidth img, btiHeight img) (btiPixels img)
+        (mBindlessHandle, bl') ← registerTexture dev texHandle
+                                    bloodTextureSource
+                                    imageView (btsTextureSampler bl) bl
+        case mBindlessHandle of
+          Right _ → do
             liftIO $ atomicModifyIORef' (rvTextureSizeRef (toRenderViewCapability env)) $ \m →
                 (HM.insert texHandle (btiWidth img, btiHeight img) m, ())
             pure (bl', HM.insert (btdId d) (texHandle, cleanupImg) known)
-        Left _ → do
-            -- Bindless system full — drop the GPU resource we just made;
-            -- this decal's texture simply isn't uploaded yet and its
+          Left _ → do
+            -- Bindless system full: the id itself is representable (the
+            -- reservation above is atomic, so it cannot be anything
+            -- else), but there is no slot for it. Drop the GPU resource
+            -- we just made and record no size entry and no handle
+            -- entry; this decal's texture simply isn't uploaded and its
             -- render pass is skipped until a slot frees up.
             liftIO cleanupImg
             pure (bl', known)

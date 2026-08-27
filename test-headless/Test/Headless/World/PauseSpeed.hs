@@ -57,7 +57,9 @@ import Engine.Scripting.Lua.API (registerLuaAPI)
 import Engine.Scripting.Lua.API.Save (acceptSaveRequest)
 import Engine.Scripting.Lua.Thread (createLuaBackendState)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
-import World.Pause (beginPauseEpoch, imposePause, releasePause, setPauseResumeScale)
+import World.Pause
+    ( beginPauseEpoch, imposePause, reassertSavePause, releasePause
+    , setPauseResumeScale )
 import World.Thread.Command.Save.WriteWorld (restoreAfterAutosave)
 import World.Types
 
@@ -382,6 +384,77 @@ spec = describe "pause preserves the chosen world speed (#1599)" $ do
         readIORef (wsResumeScaleRef wsA) `shouldReturn` Nothing
         readIORef (wsTimeScaleRef wsB) `shouldReturn` bystanderScale
         readIORef (wsResumeScaleRef wsB) `shouldReturn` Nothing
+
+    it "a pause imposed by an unrelated engine source while an autosave \
+       \writes survives that autosave's restore" $ \env → do
+        (wsA, wsB) ← installSession env 12
+        ls ← newBackend env
+        logger ← readIORef (loggerRef env)
+        runLua_ ls "require('scripts.pause')"
+
+        mgr ← readIORef (worldManagerRef env)
+        req ← acceptSaveRequest env mgr True
+        fmap arPreTimeScale req `shouldBe` Just 12
+        fmap arPausedPage req `shouldBe` Just (Just pageA)
+
+        -- Production always re-asserts the save's OWN pause when the
+        -- queued WorldSave reaches the world thread
+        -- ('handleWorldSaveCommand'). It is not an independent source,
+        -- so it must not be what decides the verdict below; the case
+        -- underneath this one is that claim on its own.
+        reassertSavePause (toWorldSimCapability env)
+
+        -- The pause this issue is about, landing in the window
+        -- 'releaseCaptureLock'' opens when every owner resumes while the
+        -- disk write is still running. 'unit_warning' is the reachable
+        -- shape: it defaults to pause: false but is player-configurable,
+        -- and it is emitted from UI paths that run WHILE paused
+        -- (scripts/transfer_session.lua's Mode A/B gestures). On an
+        -- already-paused session 'imposePause' changes nothing at all,
+        -- which is exactly why the restore could not see it.
+        cfgs ← readIORef (ecNotificationCfgRef (toEventsCapability env))
+        -- Non-vacuity: withPausingCategory adjusts an EXISTING key, so a
+        -- renamed category would otherwise leave this event silent.
+        HM.member "unit_warning" cfgs `shouldBe` True
+        withPausingCategory env "unit_warning" $
+            emitEvent env "unit_warning" "Test.PauseSpeed"
+                      "a transfer failed"
+
+        -- Requirement 1: the restore declines rather than closing an
+        -- epoch a second source still wants open, and leaves the pair
+        -- coherently paused.
+        restoreAfterAutosave env logger req `shouldReturn` False
+        readIORef (enginePausedRef env) `shouldReturn` True
+        readIORef (wsTimeScaleRef wsA) `shouldReturn` 0
+        readIORef (wsResumeScaleRef wsA) `shouldReturn` Just 12
+        readIORef (wsTimeScaleRef wsB) `shouldReturn` bystanderScale
+
+        -- Requirement 2: the player's own resume gives back the speed
+        -- captured at the start of the epoch — the PRE-autosave 12, not
+        -- the default.
+        runLua_ ls "require('scripts.pause').set(false)"
+        readIORef (enginePausedRef env) `shouldReturn` False
+        readIORef (wsTimeScaleRef wsA) `shouldReturn` 12
+        readIORef (wsResumeScaleRef wsA) `shouldReturn` Nothing
+        readIORef (wsTimeScaleRef wsB) `shouldReturn` bystanderScale
+
+    it "a save re-asserting its own pause is not an independent source, \
+       \so an otherwise-undisturbed autosave still restores" $ \env → do
+        (wsA, _) ← installSession env 12
+        logger ← readIORef (loggerRef env)
+
+        -- The control for the case above: the SAME sequence minus the
+        -- unrelated event. If the re-assertion counted, every real
+        -- autosave would decline here and the regression would be
+        -- passing for the wrong reason.
+        mgr ← readIORef (worldManagerRef env)
+        req ← acceptSaveRequest env mgr True
+        reassertSavePause (toWorldSimCapability env)
+
+        restoreAfterAutosave env logger req `shouldReturn` True
+        readIORef (enginePausedRef env) `shouldReturn` False
+        readIORef (wsTimeScaleRef wsA) `shouldReturn` 12
+        readIORef (wsResumeScaleRef wsA) `shouldReturn` Nothing
 
     it "opening and closing an epoch are serialized against each other, \
        \so the flag can never be published before the capture" $ \env → do
