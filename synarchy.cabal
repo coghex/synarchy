@@ -620,6 +620,7 @@ library
                      World.Constants
                      World.Command.Types
                      World.Chunk.Types
+                     World.Chunk.Queue
                      World.Cursor.Types
                      World.Edit.Types
                      World.Edit.Apply
