@@ -29,8 +29,9 @@ import Building.Placement
 import Location.Bounds (remotePortalThresholdTiles)
 import Unit.Pathing.Cost (lookupTerrainZ)
 import World.Types
-    ( WorldManager(..), WorldState(..), WorldGenParams(..)
-    , selectionMovedSince )
+    ( WorldManager(..), WorldState(..), WorldGenParams(..) )
+import Engine.Scripting.Lua.API.PageBinding
+    (bindingStale, pageBindingStaleReason)
 import World.Generate.Coordinates (canonicalTile)
 import World.Tile.Types (WorldTileData)
 import Location.Instance (emptyLocationInstances)
@@ -364,30 +365,6 @@ visiblePageStateFrom env = do
     pure $ case wmVisible wm of
         []         → Nothing
         (pageId:_) → lookup pageId (wmWorlds wm)
-
--- | The rejection reason a stale page binding produces (#1602). One
---   spelling shared by 'buildingCanPlaceAtFn' and 'buildingSpawnFn' so
---   the validation and commit halves of a placement cannot drift apart.
-pageBindingStaleReason ∷ Text
-pageBindingStaleReason = "page binding stale"
-
--- | Has page selection moved since the binding was captured, or is a
---   change already on its way (#1602)? 'Nothing' (no binding supplied)
---   is never stale — every pre-#1602 caller keeps its exact behaviour.
---
---   'selectionMovedSince' reads both halves from the manager snapshot the
---   CALLER already took, so the check and the page resolution it guards
---   share one read. Its projected half is what makes this answer honest
---   rather than merely optimistic: a @world.hide@ enqueued before this
---   call has not moved the applied generation yet, so comparing that
---   alone would report "fresh" for a placement the world thread is about
---   to reject — and the caller would have recorded an acceptance for
---   something that never landed. An INEFFECTIVE request (a redundant
---   @world.show@) moves neither, so ordinary traffic never costs a
---   click.
-bindingStale ∷ Maybe Lua.Integer → WorldManager → Bool
-bindingStale Nothing     _  = False
-bindingStale (Just want) wm = selectionMovedSince (fromIntegral want) wm
 
 -- | Route a validated spawn to the queue that can actually commit it
 --   (#1602). An UNBOUND spawn — location content-spawning, the AI's

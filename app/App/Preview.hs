@@ -11,8 +11,8 @@ module App.Preview
 
 import UPrelude
 import Data.IORef (readIORef)
+import System.Environment (lookupEnv)
 import Engine.Core.Init (initializeEngine, EngineInitResult(..))
-import Engine.Core.Defaults (defaultWindowConfig)
 import Engine.Core.Monad (runEngineM, EngineM', liftIO, modifyGraphicsState)
 import Engine.Core.State (EngineEnv(..), glfwWindow)
 import Engine.Core.Types (PreviewBrowse)
@@ -30,6 +30,8 @@ import Engine.Scripting.Lua.Thread (startLuaThread)
 import App.Boot (FatalStream(..), previewBootConfig, handleBootResult
                 , luaThreadOrAbort)
 import App.Exception (guardNativeExceptions)
+import App.Preview.Config
+  (previewHiddenWindowEnvVar, previewWindowConfig)
 
 -- | Run the engine in preview mode: GLFW window + Vulkan, but no world,
 --   unit, sim, or combat thread. The input thread is kept so the OS
@@ -64,11 +66,13 @@ runPreview target mBrowse mPort = do
         }
 
   videoConfig ← readIORef (videoConfigRef env')
+  hiddenWindow ← isJust ⊚ lookupEnv previewHiddenWindowEnvVar
 
   let engineAction ∷ EngineM' ()
       engineAction = do
         logInfoM CatSystem "Starting engine (preview)..."
-        window ← GLFW.createWindow $ defaultWindowConfig videoConfig
+        window ← GLFW.createWindow $
+          previewWindowConfig hiddenWindow videoConfig
         modifyGraphicsState $ \gs → gs {
                             glfwWindow = Just window }
 

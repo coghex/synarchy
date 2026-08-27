@@ -537,6 +537,7 @@ class patched:
     def __init__(self, tree: Tree, grace: float = TEST_GRACE,
                  namespace: str | None = None,
                  spans: dict[str, int] | None = None,
+                 timeouts: dict[str, float] | None = None,
                  preflight: "PreflightRecorder | None" = None) -> None:
         self.tree, self.grace = tree, grace
         # The engine-executable preflight (#1570) is doubled for the same
@@ -552,11 +553,15 @@ class patched:
         # passing none leaves every synthetic probe at the default one
         # port, which is what the shipped table would give them anyway.
         self.spans = {} if spans is None else dict(spans)
+        # The shipped timeout table names shipped keys. Synthetic registries
+        # start with no exceptions unless a case supplies its own declarations.
+        self.timeouts = {} if timeouts is None else dict(timeouts)
 
     def __enter__(self):
         self._saved = (run_probes.REPO_ROOT, run_probes.PROBES,
                        run_probes.GROUP_GRACE, run_probes.RESOURCE_NAMESPACE,
                        run_probes.PROBE_PORT_SPANS,
+                       run_probes.PROBE_TIMEOUT_OVERRIDES,
                        run_probes.ENGINE_EXECUTABLE,
                        run_probes.ENGINE_PREFLIGHT_RUNNER)
         # An operator's own export of the runner's variables must not
@@ -568,6 +573,7 @@ class patched:
         run_probes.GROUP_GRACE = self.grace
         run_probes.RESOURCE_NAMESPACE = self.namespace
         run_probes.PROBE_PORT_SPANS = self.spans
+        run_probes.PROBE_TIMEOUT_OVERRIDES = self.timeouts
         run_probes.ENGINE_EXECUTABLE = None
         run_probes.ENGINE_PREFLIGHT_RUNNER = self.preflight
         return self
@@ -576,6 +582,7 @@ class patched:
         (run_probes.REPO_ROOT, run_probes.PROBES, run_probes.GROUP_GRACE,
          run_probes.RESOURCE_NAMESPACE,
          run_probes.PROBE_PORT_SPANS,
+         run_probes.PROBE_TIMEOUT_OVERRIDES,
          run_probes.ENGINE_EXECUTABLE,
          run_probes.ENGINE_PREFLIGHT_RUNNER) = self._saved
         for name, value in self._saved_env.items():
@@ -785,14 +792,16 @@ def _main_with_open(tree: Tree, argv: list[str]) -> tuple[int, str]:
 
 
 def _main_with(tree: Tree, argv: list[str],
-               spans: dict[str, int] | None = None) -> tuple[int, str]:
+               spans: dict[str, int] | None = None,
+               timeouts: dict[str, float] | None = None) -> tuple[int, str]:
     import io
     import contextlib
     buf = io.StringIO()
     saved_argv = sys.argv
     sys.argv = ["run_probes.py"] + argv
     try:
-        with patched(tree, spans=spans), contextlib.redirect_stdout(buf), \
+        with patched(tree, spans=spans, timeouts=timeouts), \
+             contextlib.redirect_stdout(buf), \
              contextlib.redirect_stderr(buf):
             rc = run_probes.main()
     finally:
@@ -836,6 +845,87 @@ def test_aggregate_exit_codes_unchanged() -> None:
         expect("FAIL" in out, "and reports FAIL")
         expect("diagnostic line 4" in out,
                "and still prints the failing probe's output tail")
+    finally:
+        tree.cleanup()
+
+
+def test_timeout_overrides_are_validated_registry_data() -> None:
+    print("\n-- per-probe timeout defaults are validated registry data")
+    expect(run_probes.timeout_override_problems() == [],
+           "the shipped timeout declarations are valid")
+    expect(run_probes.effective_timeout("save_compat_migration") == 3600.0,
+           "save_compat_migration receives its declared 3600s default")
+    expect(run_probes.effective_timeout("movement")
+           == run_probes.DEFAULT_TIMEOUT,
+           "an ordinary registered probe keeps the shared default")
+    expect(run_probes.effective_timeout("save_compat_migration", 17.0) == 17.0,
+           "an explicit CLI value wins over the key-specific default")
+
+    unknown = run_probes.timeout_override_problems(
+        overrides={"not_registered": 1.0})
+    expect(any("unknown probe key" in problem for problem in unknown),
+           f"an unknown declaration is rejected ({unknown})")
+    for bad in (0, -1, float("inf"), float("nan"), True, "900"):
+        problems = run_probes.timeout_override_problems(
+            overrides={"movement": bad})
+        expect(any("finite and positive" in problem for problem in problems),
+               f"an unusable timeout {bad!r} is rejected ({problems})")
+
+    tree = Tree()
+    try:
+        tree.add("ordinary", exit_code=0)
+        for bad in ("0", "-1", "nan", "inf"):
+            rc, out = _main_with(tree, ["--timeout", bad])
+            expect(rc == 2 and "finite and positive" in out,
+                   f"CLI --timeout {bad!r} is rejected before execution ({out!r})")
+        expect(not tree.started("ordinary"),
+               "no probe starts for an invalid explicit timeout")
+    finally:
+        tree.cleanup()
+
+
+def test_key_specific_timeout_and_explicit_override_reach_execution() -> None:
+    print("\n-- key-specific defaults reach execution and explicit CLI wins")
+    tree = Tree()
+    try:
+        tree.add("slow", dwell=0.25, descendant=False)
+        rc, out = _main_with(
+            tree, ["--only", "slow", "--exact"],
+            timeouts={"slow": 0.05})
+        expect(rc == 1 and "TIMEOUT" in out,
+               f"the short key-specific default terminates the probe ({out!r})")
+        expect("timeout 0.05s" in out,
+               f"the effective key-specific budget is reported ({out!r})")
+    finally:
+        tree.cleanup()
+
+    tree = Tree()
+    try:
+        tree.add("slow", dwell=0.25, descendant=False)
+        rc, out = _main_with(
+            tree, ["--only", "slow", "--exact", "--timeout", "2"],
+            timeouts={"slow": 0.05})
+        expect(rc == 0 and "PASS" in out,
+               f"an explicit larger budget overrides the default ({out!r})")
+        expect("timeout 2s" in out,
+               f"the explicit effective budget is reported ({out!r})")
+    finally:
+        tree.cleanup()
+
+
+def test_parallel_retry_reuses_the_key_specific_timeout() -> None:
+    print("\n-- a parallel attempt and its solo retry share the key budget")
+    tree = Tree()
+    try:
+        tree.add("slow", dwell=0.25, descendant=False)
+        rc, out = _main_with(
+            tree,
+            ["--only", "slow", "--exact", "--jobs", "2", "--retries", "1"],
+            timeouts={"slow": 0.05})
+        expect(rc == 1 and out.count("timeout 0.05s") >= 2,
+               f"both attempts report the same key-specific budget ({out!r})")
+        expect("solo retry 1/1" in out and "TIMEOUT" in out,
+               f"the failed parallel attempt reached its solo retry ({out!r})")
     finally:
         tree.cleanup()
 
@@ -2044,6 +2134,9 @@ DRIVER_SRC = textwrap.dedent("""\
     import run_probes
     run_probes.REPO_ROOT = {root!r}
     run_probes.PROBES = {probes!r}
+    # Like the in-process fixture, a synthetic registry starts with no
+    # shipped key-specific timeout declarations.
+    run_probes.PROBE_TIMEOUT_OVERRIDES = {{}}
     run_probes.GROUP_GRACE = {grace!r}
     # The synthetic tree is not a git checkout, so the cross-process
     # resource namespace (#1436) has to be supplied the same way the
@@ -2765,6 +2858,9 @@ def main() -> int:
     test_a_stopping_runner_launches_no_further_probe()
     test_reap_group_on_a_dead_group_is_a_noop()
     test_aggregate_exit_codes_unchanged()
+    test_timeout_overrides_are_validated_registry_data()
+    test_key_specific_timeout_and_explicit_override_reach_execution()
+    test_parallel_retry_reuses_the_key_specific_timeout()
     test_exclusive_resource_declaration_is_data_about_real_probes()
     test_every_probe_declares_what_an_exclusive_holder_takes()
     test_one_preflight_precedes_every_parallel_probe()

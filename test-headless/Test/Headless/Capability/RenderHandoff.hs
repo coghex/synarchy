@@ -9,11 +9,14 @@
 --   documented as returning the __identical live containers__ 'EngineEnv'
 --   already carries, never a copy and never a snapshot. For this
 --   particular record that property is not merely convenient, it is the
---   whole mechanism: every one of the seven fields is a CROSS-THREAD
+--   whole mechanism: every one of its fields is a CROSS-THREAD
 --   handoff, so a projection that copied a container would leave the
 --   world thread writing a preview/atlas/quad set the render thread can
---   never observe, or draining a blood-disposal queue nobody enqueues
---   onto — a silent GPU-resource leak (#788) rather than a crash. A
+--   never observe, draining a blood-disposal queue nobody enqueues onto —
+--   a silent GPU-resource leak (#788) rather than a crash — or drawing
+--   every rotated wall with its authored sprite because the wall-art
+--   catalogue Lua registered into is not the one the renderer reads
+--   (#1712). A
 --   projection that bound 'rhWorldPreviewRef' to @zoomAtlasDataRef env@,
 --   or minted a fresh ref with @newIORef =\<\< readIORef@, would still
 --   typecheck, still pass the SS6 ratchet, and still look right in a
@@ -55,7 +58,7 @@ sameContainer projected live
 
 spec ∷ SpecWith EngineEnv
 spec = do
-  describe "toRenderHandoffCapability (all seven render-handoff fields)" $ do
+  describe "toRenderHandoffCapability (every render-handoff field)" $ do
     let aliases name project field =
           it (name <> " aliases the live EngineEnv container") $ \env →
             sameContainer (project (toRenderHandoffCapability env)) (field env)
@@ -74,6 +77,8 @@ spec = do
             texPaletteRef
     aliases "rhTexPaletteHandlesRef"      rhTexPaletteHandlesRef
             texPaletteHandlesRef
+    aliases "rhStructureWallCatalogRef"   rhStructureWallCatalogRef
+            structureWallCatalogRef
 
     it "is stable across repeated projection (no fresh containers)" $ \env → do
       -- The migration re-projects inline at several call sites
@@ -81,7 +86,7 @@ spec = do
       -- world-init path projects once per command while MainRender
       -- projects on its own schedule. A projection that minted anything
       -- fresh per call would break cross-thread visibility everywhere at
-      -- once rather than in one place. Cover all seven, since each is a
+      -- once rather than in one place. Cover every field, since each is a
       -- separate handoff channel with its own consumer.
       let a = toRenderHandoffCapability env
           b = toRenderHandoffCapability env
@@ -92,6 +97,7 @@ spec = do
       sameContainer (rhBloodDisposeQueue a)         (rhBloodDisposeQueue b)
       sameContainer (rhTexPaletteRef a)             (rhTexPaletteRef b)
       sameContainer (rhTexPaletteHandlesRef a)      (rhTexPaletteHandlesRef b)
+      sameContainer (rhStructureWallCatalogRef a)   (rhStructureWallCatalogRef b)
 
     it "keeps the two single-slot upload handoffs distinct" $ \env → do
       -- worldPreviewRef and zoomAtlasDataRef are the record's pair of
@@ -120,3 +126,15 @@ spec = do
       let cap = toRenderHandoffCapability env
       sameContainer (rhTexPaletteRef cap)        (texPaletteRef env)
       sameContainer (rhTexPaletteHandlesRef cap) (texPaletteHandlesRef env)
+
+    it "keeps the wall-art catalogue on its own ref, beside the palette" $ \env → do
+      -- structureWallCatalogRef (#1712) is the third texture-identity ref
+      -- on this record and the odd one out: it is boot-process rather than
+      -- session-replaced, precisely BECAUSE it is keyed by texture path
+      -- and so survives the palette replacement a load performs. Binding
+      -- it to either palette ref is a type error, but binding either of
+      -- them to IT is caught only here — and a projection that minted it
+      -- fresh would leave the renderer reading an empty catalogue while
+      -- Lua registered into another, i.e. no rotation at all and no error.
+      let cap = toRenderHandoffCapability env
+      sameContainer (rhStructureWallCatalogRef cap) (structureWallCatalogRef env)

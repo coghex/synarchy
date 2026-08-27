@@ -163,7 +163,14 @@ end
 -- Per-building tick
 -----------------------------------------------------------
 
-local function tickOne(bid, info)
+-- unit.spawn's distinct refusal for a stale page binding (#1686).
+-- Spelled once in the engine (Engine.Scripting.Lua.API.PageBinding);
+-- restated here because Lua has no way to import it.
+local PAGE_BINDING_STALE = "page binding stale"
+
+-- `bindGen` is the page-selection generation buildingSpawn.update's
+-- snapshot was taken under; see the refusal branch below.
+local function tickOne(bid, info, bindGen)
     local params = config[info.defName]
     if not params then return end
 
@@ -209,8 +216,29 @@ local function tickOne(bid, info)
     -- (info.page) so the unit lands in the building's world even if the
     -- active page changes between the active-page scan and this call
     -- (#196) — unit.spawn otherwise stamps the active page.
-    local newUid = spawnedUid(unit.spawn(unitType, spawnX, spawnY,
-                                         nil, "player", info.page))
+    -- bindGen (#1686) closes the ELIGIBILITY window #196 left open.
+    -- #196 stopped a mid-tick page switch from routing this unit into
+    -- the wrong world by naming info.page explicitly, but an explicit
+    -- page is honoured for any LIVE page, hidden or not -- so a portal
+    -- enumerated while its page was active could still spawn into it
+    -- after the page stopped being active, off-view, spending a roster
+    -- entry the player never saw come out.
+    local rawUid, spawnReason = unit.spawn(unitType, spawnX, spawnY,
+                                           nil, "player", info.page, bindGen)
+    if spawnReason == PAGE_BINDING_STALE then
+        -- The page moved between update()'s snapshot and this commit.
+        -- Abandon the whole tick: no items, no walk-out, no roster
+        -- consumption -- and no failure bookkeeping either, because
+        -- this is not a spawn that failed, it is a spawn that was never
+        -- eligible. Nothing is stamped, so the tick that runs once the
+        -- selection settles behaves exactly as if this one never ran.
+        --
+        -- Checked BEFORE spawnedUid on purpose: the refusal must not
+        -- ride on `if not newUid` reading unit.spawn's truthy -1
+        -- sentinel correctly, which is #1687's separate concern.
+        return
+    end
+    local newUid = spawnedUid(rawUid)
     if not newUid then
         -- Throttle retries: stamp lastSpawnedAt so the spawn_interval
         -- cooldown gate at the top of tickOne rate-limits the next
@@ -281,10 +309,22 @@ end
 -- page rather than the building's own (#196). Scoping the scan to the
 -- active page keeps the building and its spawned unit on the same
 -- world. Returns empty when no world is active.
+--
+-- The scan is a SNAPSHOT, though, and every per-building verb after it
+-- is page-agnostic, so scoping alone never closed the ELIGIBILITY
+-- window: the active page can move while this loop is still working
+-- through the ids, and a portal enumerated here would still spawn into
+-- its own now-hidden page. That is what the generation returned
+-- alongside the ids carries to unit.spawn (#1686).
 -----------------------------------------------------------
 
+-- Returns the ids AND the page-selection generation they were scoped
+-- under, from the engine's single manager read (#1686). The generation
+-- rides along to unit.spawn so a commit whose page stopped being active
+-- after this snapshot is refused rather than spawning off-view.
 local function getActiveBuildingIds()
-    return building.getActiveIds() or {}
+    local ids, bindGen = building.getActiveIds()
+    return ids or {}, bindGen
 end
 
 -----------------------------------------------------------
@@ -623,12 +663,12 @@ function buildingSpawn.update(dt)
     -- would rebuild exactly the rows the teardown just cleared.
     if require("scripts.lib.session_teardown").isTornDown() then return end
     if require("scripts.pause").isPaused() then return end
-    local ids = getActiveBuildingIds()
+    local ids, bindGen = getActiveBuildingIds()
     if #ids == 0 then return end
     for _, bid in ipairs(ids) do
         local info = building.getInfo(bid)
         if info and info.defName then
-            tickOne(bid, info)
+            tickOne(bid, info, bindGen)
             constructionTickOne(bid, dt)
         end
     end

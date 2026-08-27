@@ -60,6 +60,8 @@ defaultWindowConfig vc = WindowConfig
       _          → False
   , wcTitle      = T.pack "Synarchy"
   , wcResizable  = True
+  , wcVisible    = True
+  , wcFocused    = True
   }
 
 defaultEngineState ∷ EngineState

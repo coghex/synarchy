@@ -1,11 +1,11 @@
 {-# LANGUAGE UnicodeSyntax #-}
 -- | The coupled __render-handoff__ half of the
 --   @world-sim-render-handoff@ capability (epic #537, issue #894 — E5b):
---   the seven fields 'docs/engineenv_capability_inventory.md' §7.4 held
+--   the fields 'docs/engineenv_capability_inventory.md' §7.4 held
 --   back from E5a (#893) because their consumers straddle this group and
 --   @render-gpu-asset@ — the world thread's staging surface for
 --   @MainRender@ GPU uploads, plus the structure-palette translation
---   table.
+--   table and (since #1712) the structure packs' directional wall art.
 --
 --   Follows the capability-record convention
 --   ('docs/engineenv_capability_inventory.md' SS2.1 is its one
@@ -18,7 +18,7 @@
 --   handoff semantics, no upload cadence, no staleness policy and no
 --   disposal ordering — it only removes the ability to reach fields a
 --   render-handoff consumer has no business touching. The three
---   distinct __lifecycles__ §5 records for these seven fields survive
+--   distinct __lifecycles__ §5 records for these fields survive
 --   the projection unchanged, and the clearing contract differs per
 --   lifecycle, so each field restates its own below rather than
 --   inheriting a single blanket rule:
@@ -30,7 +30,10 @@
 --   * @boot-process@ — 'rhWorldPreviewGenerationRef' is MONOTONIC and is
 --     never cleared or lowered; 'rhWorldQuadsRef' stays PUBLISHED until
 --     replaced by the next world-thread publish or explicitly cleared
---     by a world teardown.
+--     by a world teardown; 'rhStructureWallCatalogRef' accumulates one
+--     entry per pack variant at content load and is never cleared at
+--     all — it is keyed by texture PATH precisely so that the palette
+--     replacement a load performs cannot invalidate it.
 --   * @session-replaced@ — 'rhTexPaletteRef' and
 --     'rhTexPaletteHandlesRef' follow SESSION REPLACEMENT: a load
 --     publish swaps both wholesale, and neither is cleared piecemeal.
@@ -48,13 +51,13 @@
 --
 --   Unlike @render-gpu-asset@'s §3.1 split into a full record and a
 --   worker-safe view, this capability needs only ONE interface: none of
---   its seven fields is private to a single thread the way
+--   its fields is private to a single thread the way
 --   @engineStateRef@ is to @MainRender@ — every one is a deliberate
 --   cross-thread handoff, which is the whole point of the group.
 --
 --   Like the other capability modules, this one imports only the narrow
 --   slice of @Engine.Core.State@ it needs (the bare 'EngineEnv' type
---   plus the seven field accessors) rather than @EngineEnv(..)@ or a
+--   plus its own field accessors) rather than @EngineEnv(..)@ or a
 --   bare import, so it is not itself a full-@EngineEnv@-access consumer
 --   under @tools/engine_env_capability_audit.py@'s ratchet.
 module Engine.Core.Capability.RenderHandoff
@@ -70,11 +73,13 @@ import Engine.Core.Queue as Q
 import Engine.Asset.Handle (TextureHandle)
 import Engine.Scene.Types (LayeredQuads)
 import Structure.Palette (TexPalette)
+import Structure.WallCatalog (StructureWallCatalog)
 import World.Types (WorldState, BloodTextureHandles)
 import Engine.Core.State
   ( EngineEnv
   , worldPreviewRef, worldPreviewGenerationRef, zoomAtlasDataRef
   , worldQuadsRef, bloodDisposeQueue, texPaletteRef, texPaletteHandlesRef
+  , structureWallCatalogRef
   )
 
 -- | The coupled render-handoff slice of @world-sim-render-handoff@: the
@@ -137,6 +142,16 @@ data RenderHandoffCapability = RenderHandoffCapability
     --   (@Structure.Render@) AND directly by @LuaThread@
     --   (@structure.unresolvedPaletteIds@). A palette id with no entry
     --   yet is skipped by the renderer, never treated as an error.
+  , rhStructureWallCatalogRef   ∷ IORef StructureWallCatalog
+    -- ^ Boot-process. The structure packs' directional wall art keyed by
+    --   texture PATH (#1712) — four edge sprites and sixteen cap facemaps
+    --   per pack variant, each with the runtime handle Lua loaded for it.
+    --   Written by @LuaThread@ (@structure.registerWallFamily@, once per
+    --   variant as @scripts/structures.lua@ reads the pack YAML); read by
+    --   @WorldThread@ (@Structure.Render@) to pick the sprite a wall's edge
+    --   occupies at the current facing. Not persisted, and deliberately NOT
+    --   cleared on load publish: it is keyed by path, so it stays valid
+    --   across the palette replacement a load performs.
   }
 
 -- | Total projection — every field aliases the identical live
@@ -150,4 +165,5 @@ toRenderHandoffCapability env = RenderHandoffCapability
   , rhBloodDisposeQueue         = bloodDisposeQueue env
   , rhTexPaletteRef             = texPaletteRef env
   , rhTexPaletteHandlesRef      = texPaletteHandlesRef env
+  , rhStructureWallCatalogRef   = structureWallCatalogRef env
   }
