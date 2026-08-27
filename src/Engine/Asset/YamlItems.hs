@@ -24,8 +24,7 @@ import Data.Aeson (FromJSON(..), (.:), (.:?), (.!=), withObject)
 import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KM
-import qualified Data.Aeson.Types as Aeson
-    (Parser, JSONPathElement(..))
+import qualified Data.Aeson.Types as Aeson (Parser)
 import Engine.Core.Log (LoggerState)
 import Engine.Asset.YamlList (loadYamlList)
 
@@ -366,15 +365,20 @@ instance FromJSON ItemYamlQualityTier where
 --
 --     * __No zero floor.__ @[{min: 80, label: masterwork}]@ labels only
 --       the top of the range; quality 50 resolves to nothing.
---     * __A non-finite @min@.__ Note WHICH spelling this catches. YAML's
---       @.nan@ / @.inf@ resolve to STRINGS (the yaml package's scalar
---       resolver only recognizes ordinary numeric syntax), so the
---       instance above already rejects them as type errors; a perfectly
---       ordinary @1.0e+100@ is a valid 'Scientific' that becomes
---       'Infinity' only once narrowed to @iyqtMin@'s 32-bit 'Float', and
---       poisons both the resolver's @sortBy@ and its @find@. That is why
---       finiteness is tested AFTER narrowing, exactly as
---       'requirePositiveQuantity' and 'parseNutritionValue' record.
+--     * __A non-finite @min@.__ Two genuinely different spellings, both
+--       diagnosed here BY DEFINITION NAME. YAML's @.nan@ / @.inf@
+--       resolve to STRINGS (the yaml package's scalar resolver only
+--       recognizes ordinary numeric syntax), so they never reach a
+--       number at all and are rejected as the non-numeric @min@ they
+--       are; a perfectly ordinary @1.0e+100@ is a valid 'Scientific'
+--       that becomes 'Infinity' only once narrowed to @iyqtMin@'s
+--       32-bit 'Float', and poisons both the resolver's @sortBy@ and
+--       its @find@. That is why finiteness is tested AFTER narrowing,
+--       exactly as 'requirePositiveQuantity' and 'parseNutritionValue'
+--       record — and why this parser decodes a band's fields itself
+--       rather than delegating to the 'FromJSON' instance above, whose
+--       bare type error would name neither the definition nor the
+--       offending value.
 --     * __A @min@ outside 0..100.__ 'Item.Types.QualityTier' calls
 --       @qtMin@ the inclusive lower bound (0..100) and nothing checked it.
 --     * __Duplicate minima.__ @sortBy@ is stable, so two bands sharing a
@@ -416,24 +420,18 @@ parseItemYamlQualityTiers defName hasQuality v =
             case raws of
                 [] → pure []
                 _  → do
-                    -- Shape first, through the instance above, so a
-                    -- missing or mistyped field keeps the message it
-                    -- has always had; then the five content rules, each
-                    -- naming the definition. The two '<?>' restore the
-                    -- @$.quality_tiers[i]@ path that reading this key
-                    -- with '.:?' used to build, since 'KM.lookup' —
-                    -- needed here to see the key at all — builds none.
-                    bands ← traverse decodeBand (zip [0 ..] raws)
+                    let total = length raws
+                    bands ← traverse (parseBand total)
+                                     (zip [1 ..] raws)
                     unless hasQuality $ bad
-                        ("quality tier table authors " <> tshow (length bands)
+                        ("quality tier table authors " <> tshow total
                          <> " bands, but the definition has no quality: \
                             \spec. Every reader resolves a tier only for an \
                             \item that rolls a quality, so this table could \
                             \never take effect. Author a quality: \
                             \{ min, max } block, or delete the \
                             \quality_tiers: list.")
-                    mapM_ checkBand bands
-                    let mins = map (iyqtMin ∘ snd) bands
+                    let mins = map iyqtMin bands
                     case firstDuplicate mins of
                         Just m → bad
                             ("quality tier bands share the min " <> tshow m
@@ -450,44 +448,85 @@ parseItemYamlQualityTiers defName hasQuality v =
                             \at all. A non-empty override replaces the \
                             \default table wholesale, so it must carry its \
                             \own floor: author a band with min: 0.")
-                    pure (map snd bands)
+                    pure bands
   where
     -- Polymorphic in its result so the same helper can abort a
-    -- @Parser [Aeson.Value]@ and a @Parser ()@ alike.
+    -- @Parser [Aeson.Value]@, a @Parser Float@ and a @Parser ()@ alike.
     bad ∷ ∀ α. Text → Aeson.Parser α
     bad why = fail ∘ T.unpack $
         "item definition '" <> defName <> "': " <> why
 
-    decodeBand ∷ (Int, Aeson.Value)
-               → Aeson.Parser (Aeson.Value, ItemYamlQualityTier)
-    decodeBand (i, raw) =
-        ((,) raw ⊚ parseJSON raw)
-            Aeson.<?> Aeson.Index i
-            Aeson.<?> Aeson.Key "quality_tiers"
+    -- Decoded field by field rather than through the 'FromJSON'
+    -- instance above, so that a band's SHAPE faults are diagnosed the
+    -- same way its CONTENT faults are. Delegating would surface
+    -- @min: .nan@ as a bare aeson type error naming neither the
+    -- definition nor the offending value — and @.nan@ / @.inf@ are
+    -- precisely the spellings that arrive here as STRINGS, so they are
+    -- the ones that need it most. The instance itself stays exactly the
+    -- bare decoder it always was; it is a public part of this module's
+    -- schema surface and nothing about it changed.
+    parseBand ∷ Int → (Int, Aeson.Value) → Aeson.Parser ItemYamlQualityTier
+    parseBand total (i, raw) = case raw of
+        Aeson.Object o → do
+            m ← bandMin o
+            l ← bandLabel m o
+            pure (ItemYamlQualityTier m l)
+        _ → badBand ("must be a { min, label } block, got " <> tshow raw)
+      where
+        badBand ∷ ∀ α. Text → Aeson.Parser α
+        badBand why = bad $
+            "quality tier band " <> tshow i <> " of " <> tshow total
+            <> " (key 'quality_tiers') " <> why
 
-    describe ∷ ItemYamlQualityTier → Text
-    describe t = "band { min: " <> tshow (iyqtMin t) <> ", label: "
-                 <> tshow (iyqtLabel t) <> " }"
+        -- Finiteness and range are tested AFTER narrowing to the
+        -- engine's 32-bit 'Float', exactly as 'requirePositiveQuantity'
+        -- and 'parseNutritionValue' record. The two hazards are
+        -- genuinely different and both are named here: @.nan@ / @.inf@
+        -- never reach a number at all, while an ordinary @1.0e+100@
+        -- reaches one and becomes 'Infinity' only on the way in.
+        bandMin o = case KM.lookup "min" o of
+            Nothing → badBand
+                "authors no min — every band needs an inclusive lower \
+                \bound, a quality percentage in 0..100"
+            Just val@(Aeson.Number s) →
+                let f = realToFrac s ∷ Float
+                in if isNaN f ∨ isInfinite f
+                     then badBand ("must author a FINITE min, got "
+                         <> tshow val <> " which narrows to " <> tshow f
+                         <> " — an ordinary YAML number that large \
+                            \overflows the engine's 32-bit float, and a \
+                            \non-finite threshold poisons tier \
+                            \resolution's own sort and search")
+                     else if f < 0 ∨ f > 100
+                       then badBand ("must author a min within 0..100 \
+                            \inclusive — it is a quality percentage — got "
+                            <> tshow f <> " instead")
+                       else pure f
+            Just other → badBand ("must author a NUMERIC min, got "
+                <> tshow other <> " — YAML's scalar resolver reads the \
+                \not-a-number and infinity spellings as STRINGS rather \
+                \than numbers, so neither is a way to author an \
+                \unbounded band; a min is a quality percentage in \
+                \0..100")
 
-    checkBand (raw, t)
-        | isNaN m ∨ isInfinite m = bad
-            ("quality tier " <> describe t <> " must author a FINITE min, \
-             \got " <> tshow raw <> " — an ordinary YAML number that large \
-             \overflows the engine's 32-bit float, and a non-finite \
-             \threshold poisons tier resolution's own sort and search.")
-        | m < 0 ∨ m > 100 = bad
-            ("quality tier " <> describe t <> " must author a min within \
-             \0..100 inclusive — it is a quality percentage — got "
-             <> tshow m <> " instead.")
-        | T.null (T.strip (iyqtLabel t)) = bad
-            ("quality tier " <> describe t <> " must author a non-empty \
-             \label. A blank label renders as no tier at all, which is \
-             \exactly what an item with no tiers looks like.")
-        | otherwise = pure ()
-      where m = iyqtMin t
+        -- The min is threaded in only so a blank label — which prints
+        -- as nothing and so cannot identify its own band — is still
+        -- reported against a findable threshold.
+        bandLabel m o = case KM.lookup "label" o of
+            Nothing → badBand ("with min " <> tshow m <> " authors no \
+                \label — every band needs the text its quality range \
+                \renders as")
+            Just (Aeson.String t)
+                | T.null (T.strip t) → badBand ("with min " <> tshow m
+                    <> " must author a non-empty label. A blank label \
+                       \renders as no tier at all, which is exactly what \
+                       \an item with no tiers looks like")
+                | otherwise → pure t
+            Just other → badBand ("with min " <> tshow m <> " must author \
+                \a textual label, got " <> tshow other)
 
     -- Identity on the NARROWED Float, which is the value the runtime
-    -- will actually compare; `sort` is safe here because `checkBand`
+    -- will actually compare; `sort` is safe here because `parseBand`
     -- has already rejected every NaN.
     firstDuplicate ∷ [Float] → Maybe Float
     firstDuplicate = go ∘ sort

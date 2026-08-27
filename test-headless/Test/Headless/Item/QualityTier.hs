@@ -118,7 +118,9 @@ decodeDef src = case Yaml.decodeEither' (BS.pack src) of
 --   message, not substrings, so @quality@ cannot be satisfied by a
 --   message that only ever says @quality_tiers@. The scrub deliberately
 --   leaves @.@ and @-@ alone: they are inside the values (@-5.0@,
---   @1.0e100@) the tokens have to match.
+--   @1.0e100@, @-.inf@) the tokens have to match. It DOES drop the
+--   backslash, which 'show'ing the exception adds around a rendered
+--   'Aeson.String' and which is no part of the authored token.
 rejectsNaming ∷ [String] → String → Expectation
 rejectsNaming tokens src = case decodeDef src of
     Right d → expectationFailure $
@@ -132,7 +134,7 @@ rejectsNaming tokens src = case decodeDef src of
                  "rejected, but the message does not name "
                  ⧺ show missing ⧺ ": " ⧺ err
   where
-    scrub c = if c `elem` ("'\"(),:;=\8212" ∷ String) then ' ' else c
+    scrub c = if c `elem` ("'\"\\(),:;=\8212" ∷ String) then ' ' else c
 
 -- | The decoded tier table of a definition that is expected to PARSE.
 tiersOf ∷ String → Either String [ItemYamlQualityTier]
@@ -214,6 +216,62 @@ spec = do
             -- finiteness is tested after narrowing.
             rejectsNaming ["1.0e100", "Infinity"] (rollableWith
                 [ "{ min: 1.0e+100, label: masterwork }"
+                , "{ min: 0, label: crude }"
+                ])
+
+        it "requirement 2: .nan is a STRING to YAML, and is rejected \
+           \naming the definition and the authored token" $
+            -- The other half of requirement 2, and a genuinely
+            -- different fault from the overflow above: YAML's scalar
+            -- resolver only recognizes ordinary numeric syntax, so
+            -- `.nan` never reaches a number at all. Delegating the band
+            -- decode to ItemYamlQualityTier's FromJSON instance would
+            -- surface this as a bare aeson type error naming neither
+            -- the definition nor the token, which is what requirement 6
+            -- rules out.
+            -- The token can only come from the PRINTED value: the
+            -- diagnostic deliberately never spells .nan or .inf again
+            -- in its explanation, so this cannot pass vacuously.
+            rejectsNaming ["String", ".nan"] (rollableWith
+                [ "{ min: .nan, label: masterwork }"
+                , "{ min: 0, label: crude }"
+                ])
+
+        it "requirement 2: .inf is a STRING too" $
+            rejectsNaming ["String", ".inf"] (rollableWith
+                [ "{ min: .inf, label: masterwork }"
+                , "{ min: 0, label: crude }"
+                ])
+
+        it "requirement 2: and so is -.inf" $
+            rejectsNaming ["String", "-.inf"] (rollableWith
+                [ "{ min: -.inf, label: broken }"
+                , "{ min: 0, label: crude }"
+                ])
+
+        it "requirement 6: a band with no min names the definition" $
+            rejectsNaming ["min", "band"] (rollableWith
+                [ "{ label: masterwork }"
+                , "{ min: 0, label: crude }"
+                ])
+
+        it "requirement 6: a band with no label names the definition \
+           \and the band's min" $
+            rejectsNaming ["label", "80.0"] (rollableWith
+                [ "{ min: 80 }"
+                , "{ min: 0, label: crude }"
+                ])
+
+        it "requirement 6: a non-textual label names the definition \
+           \and the offending value" $
+            rejectsNaming ["label", "80.0", "Number"] (rollableWith
+                [ "{ min: 80, label: 90 }"
+                , "{ min: 0, label: crude }"
+                ])
+
+        it "requirement 6: a band that is not a block at all" $
+            rejectsNaming ["band", "Number"] (rollableWith
+                [ "80"
                 , "{ min: 0, label: crude }"
                 ])
 
