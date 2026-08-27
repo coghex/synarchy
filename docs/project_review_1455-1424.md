@@ -19,11 +19,11 @@ concrete precondition
 
 ## Status
 
-- [ ] PRR-1. Ground-salvage condition accepts an out-of-range base that guarantees pristine loot
+- [x] PRR-1. Ground-salvage condition accepts an out-of-range base that guarantees pristine loot — [#1790]
 
 ## 1. Ground-item condition
 
-### PRR-1. Ground-salvage condition accepts an out-of-range base that guarantees pristine loot
+### [#1790] PRR-1. Ground-salvage condition accepts an out-of-range base that guarantees pristine loot
 
 > **Captured note:** PR #1449 (`16c0c870`, issue #1421) correctly retained
 > the wear-penalty draw when callers provide an explicit condition base, but

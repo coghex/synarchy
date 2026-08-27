@@ -23,6 +23,16 @@ data AssetPool = AssetPool
   , apNextFontHandle    ∷ IORef Int
   , apTextureHandles    ∷ IORef (Map.Map TextureHandle (AssetState AssetId))
   , apFontHandles       ∷ IORef (Map.Map FontHandle (AssetState AssetId))
+  , apHandlesSpentReported ∷ IORef Bool
+    -- ^ Has the ONE report that 'apNextTextureHandle' has run past the
+    --   shader's handle→slot table already been claimed (#1699)?
+    --
+    --   The counter is monotonic and nothing resets it, so exhaustion
+    --   is permanent for the rest of the process: a per-frame consumer
+    --   that restated it would print the same line forever. Lives here
+    --   because the counter it describes does, which is also what makes
+    --   the report process-wide rather than once per world or per
+    --   subsystem. Never persisted — no save has a texture handle in it.
   }
 
 data GlyphInfo = GlyphInfo
@@ -41,6 +51,7 @@ defaultAssetPool = do
   nextFontHandleRef ← newIORef 0
   textureHandlesRef ← newIORef Map.empty
   fontHandlesRef ← newIORef Map.empty
+  handlesSpentReportedRef ← newIORef False
 
   pure $ AssetPool
     { apTextureAtlases = Map.empty
@@ -51,6 +62,7 @@ defaultAssetPool = do
     , apNextFontHandle    = nextFontHandleRef
     , apTextureHandles    = textureHandlesRef
     , apFontHandles       = fontHandlesRef
+    , apHandlesSpentReported = handlesSpentReportedRef
     }
 
 data AtlasMetadata = AtlasMetadata

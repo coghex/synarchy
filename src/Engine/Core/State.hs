@@ -348,6 +348,32 @@ data EngineEnv = EngineEnv
     --   writing the pause flag, in which the Lua thread's own pause write
     --   would simply be overwritten. Runtime-only, never part of
     --   'SaveData'.
+  , enginePauseGenRef  ∷ IORef Word64
+    -- ^ #1730: a monotonically increasing count of pause assertions made
+    --   by an engine source that is INDEPENDENT of whatever save
+    --   transaction may be running — a `pause: true` notification
+    --   category, an `engine.loadSave` acceptance. It is the companion
+    --   `playerIntentGenRef` above is for the player: a pause epoch
+    --   records no owner, and `World.Pause.imposePauseHeld` is a
+    --   complete no-op once the flag is already set, so without this
+    --   counter nothing downstream can tell that a second source still
+    --   wants the game paused.
+    --
+    --   Deliberately NOT bumped by the save path's own pause
+    --   (`acceptSaveRequest`'s epoch open and the world thread's
+    --   re-assertion, `World.Pause.reassertSavePause`): a save may not
+    --   count itself as a reason to decline its own restore. Nor by the
+    --   player's `engine.setPaused`, which `playerIntentGenRef` already
+    --   records, so a declined restore can name the right reason.
+    --
+    --   An `IORef` rather than a second `MVar` because it is never read
+    --   or written outside the `playerIntentGenRef` critical section:
+    --   every epoch transition takes that mutex
+    --   (`World.Pause.withEpochLock`), and so do the two sites that
+    --   snapshot and compare this counter (`acceptSaveRequest`,
+    --   `restoreAfterAutosave`). One mutex over both counters is what
+    --   makes the restore decision linearizable against a pause landing
+    --   beside it. Runtime-only, never part of `SaveData`.
   , gameTimeRef        ∷ IORef Double
     -- ^ Monotonic game-clock in seconds. Advances by real-tick dt
     --   only when `enginePausedRef` is False. All gameplay timestamps

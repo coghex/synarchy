@@ -33,10 +33,11 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
 import Test.Hspec
 import Engine.Asset.Base (AssetId(..))
-import Engine.Asset.Handle (TextureHandle(..), missingTextureHandle)
+import Engine.Asset.Handle (TextureHandle(..), missingTextureHandle, toInt)
 import Engine.Graphics.Vulkan.Texture.Handle
   (BindlessTextureHandle, toBindlessHandle
   , TextureRegistrationFailure(..), registrationFailureMessage)
+import Engine.Graphics.Vulkan.Texture.Limits (handleSlotTableSize)
 import Engine.Graphics.Vulkan.Texture.Slot
   (TextureSlot(..), TextureSlotAllocator, createSlotAllocator, allocateSlot)
 import Engine.Graphics.Vulkan.Texture.Publish
@@ -343,6 +344,136 @@ spec = do
       -- so both acquired a reference of their own.
       failedUploadCleanup UploadPinnedNearest `shouldBe`
         [CleanupImageView, CleanupImage, ReleasePinnedSampler]
+
+  describe "a handle the shader's table cannot resolve (#1699)" $ do
+    let spentHandle = TextureHandle handleSlotTableSize
+        reason = registrationFailureMessage TextureHandleUnrepresentable
+                   spentHandle "wall.png"
+
+    it "publishes a terminal FAILURE, not a load" $
+      classifyRegistration spentHandle "wall.png"
+        (Left TextureHandleUnrepresentable) `shouldBe` PublishFailed reason
+
+    it "names the id, the path and the cap, so the log line, the \
+       \AssetFailed state and the Lua notification all read alike" $ do
+      reason `shouldSatisfy` T.isInfixOf (T.pack (show handleSlotTableSize))
+      reason `shouldSatisfy` T.isInfixOf "wall.png"
+      reason `shouldSatisfy` T.isInfixOf "#1699"
+
+    it "is never restated as slot exhaustion or as the reserved \
+       \sentinel -- the three diagnoses stay apart" $ do
+      reason `shouldNotSatisfy` T.isInfixOf "Failed to allocate bindless slot"
+      reason `shouldNotSatisfy` T.isInfixOf "sentinel"
+      registrationFailureMessage TextureSlotsExhausted spentHandle "wall.png"
+        `shouldNotBe` reason
+
+    it "contributes nothing to either pool map, and deletes nothing" $
+      -- The same three prohibitions #1690 established: no entry of its
+      -- own, no overwrite, and -- load-bearing for 'apAssetPaths' -- no
+      -- deletion of an entry a different sampler policy owns.
+      publishRegisteredEntries
+        [ ("wall.png", AssetId 10, PublishFailed reason) ]
+        (Map.singleton "wall.png" (AssetId 99))
+          `shouldBe` Map.singleton "wall.png" (AssetId 99)
+
+    it "releases the refused upload's own GPU objects in order" $ do
+      failedUploadCleanup UploadGlobalSampler `shouldBe`
+        [CleanupImageView, CleanupImage]
+      failedUploadCleanup UploadPinnedNearest `shouldBe`
+        [CleanupImageView, CleanupImage, ReleasePinnedSampler]
+
+    it "retains the live preview and zoom generations instead of \
+       \disposing them for one nothing can sample" $ do
+      classifyTransientRegistration spentHandle "world preview"
+        (Left TextureHandleUnrepresentable) `shouldBe` TransientRetain
+          (registrationFailureMessage TextureHandleUnrepresentable
+             spentHandle "world preview")
+      classifyTransientRegistration spentHandle "zoom atlas"
+        (Left TextureHandleUnrepresentable) `shouldBe` TransientRetain
+          (registrationFailureMessage TextureHandleUnrepresentable
+             spentHandle "zoom atlas")
+
+    it "still publishes the LAST in-table id when its registration took \
+       \a slot, so the refusal is a boundary and not a blanket" $
+      classifyRegistration (TextureHandle (handleSlotTableSize - 1))
+        "wall.png" (Right registeredMapping) `shouldBe` PublishRegistered 4
+
+  describe "each request is judged on its OWN handle (#1699)" $ do
+    -- The regression: one batch can name ONE uncached path twice, so the
+    -- second request is folded into the first as an in-batch alias and
+    -- takes the canonical's result verbatim. When both handles are
+    -- unrepresentable, inheriting the canonical's REASON gave the alias
+    -- a log line, an 'AssetFailed' state and a 'LuaAssetFailed' whose
+    -- text named the canonical's id while the notification carried the
+    -- alias's own. 'classifyRequestHandle' runs first now, so the alias
+    -- is refused on the id it actually names.
+    let canonical = TextureHandle handleSlotTableSize
+        alias     = TextureHandle (handleSlotTableSize + 1)
+        reasonOf h = case classifyRequestHandle h "wall.png" of
+          Just (RequestSettled reason) → reason
+          other → "not settled: " <> T.pack (show other)
+
+    it "settles two unrepresentable same-path requests, each naming its \
+       \own id" $ do
+      classifyRequestHandle canonical "wall.png"
+        `shouldBe` Just (RequestSettled
+          (registrationFailureMessage TextureHandleUnrepresentable
+             canonical "wall.png"))
+      classifyRequestHandle alias "wall.png"
+        `shouldBe` Just (RequestSettled
+          (registrationFailureMessage TextureHandleUnrepresentable
+             alias "wall.png"))
+
+    it "never lets one of them speak about the other's handle" $ do
+      -- Positional, not a bare substring: the message also states the
+      -- CAP, and the first refused id IS the cap, so "65536" appears in
+      -- 65537's message too. The "handle N for" slot is the one place
+      -- the id under discussion appears.
+      let namesHandle h = T.isInfixOf
+            ("handle " <> T.pack (show (toInt h)) <> " for")
+      reasonOf canonical `shouldSatisfy` namesHandle canonical
+      reasonOf canonical `shouldNotSatisfy` namesHandle alias
+      reasonOf alias `shouldSatisfy` namesHandle alias
+      reasonOf alias `shouldNotSatisfy` namesHandle canonical
+      reasonOf canonical `shouldNotBe` reasonOf alias
+
+    it "is what stops the alias inheriting the canonical's reason, \
+       \which names the canonical handle" $ do
+      -- 'aliasPublish' still hands the canonical's failure down -- that
+      -- is right for the canonical's UPLOAD outcome and wrong for a
+      -- verdict on a handle this request does not name, which is
+      -- precisely why the judgement above runs first.
+      -- The success payload is irrelevant here, so it is '()' rather
+      -- than the batch's own @(AssetId, TextureAtlas)@.
+      let inherited ∷ Either Text ()
+          inherited = aliasPublish "wall.png"
+            (Just (Left (registrationFailureMessage
+                     TextureHandleUnrepresentable canonical "wall.png")))
+      inherited `shouldBe`
+        Left (registrationFailureMessage TextureHandleUnrepresentable
+                canonical "wall.png")
+      either id (const "") inherited `shouldNotSatisfy`
+        T.isInfixOf (T.pack (show (handleSlotTableSize + 1)))
+
+    it "would misdiagnose ACROSS kinds too, not just across ids" $ do
+      -- A canonical that ran out of SLOTS must never tell an
+      -- unrepresentable alias that slots ran out: the two are different
+      -- stories with different repairs.
+      let exhausted = registrationFailureMessage TextureSlotsExhausted
+                        canonical "wall.png"
+      exhausted `shouldSatisfy` T.isInfixOf "Failed to allocate bindless slot"
+      reasonOf alias `shouldNotSatisfy`
+        T.isInfixOf "Failed to allocate bindless slot"
+
+    it "drops the reserved sentinel instead of settling it, and admits \
+       \every in-table id" $ do
+      classifyRequestHandle missingTextureHandle "wall.png"
+        `shouldBe` Just (RequestDropped
+          (registrationFailureMessage TextureHandleReserved
+             missingTextureHandle "wall.png"))
+      classifyRequestHandle (TextureHandle (handleSlotTableSize - 1))
+        "wall.png" `shouldBe` Nothing
+      classifyRequestHandle (TextureHandle 1) "wall.png" `shouldBe` Nothing
 
   describe "a device with capacity behaves exactly as before" $ do
     let result = runBatch UploadGlobalSampler (createSlotAllocator 16)

@@ -1,13 +1,14 @@
-# Audio system component design
+# Audio system design
 
-This document turns the settled product concept in
-`docs/audio_system_concept.md` into implementable component boundaries for
-Synarchy's first audio runtime. It is the future implementation source of truth:
-the concept remains the rationale and product record, while this document owns
-module placement, native/Haskell contracts, schemas, lifecycle integration,
-failure behavior, verification, and dependency-ordered delivery slices.
-The concrete documentation deliverables and their slice ownership are kept in
-the [documentation roadmap](#documentation-roadmap) below.
+This document is the sole product and implementation source of truth for
+Synarchy's first audio runtime. It combines the settled product rationale with
+implementable component boundaries, module placement, native/Haskell contracts,
+schemas, lifecycle integration, failure behavior, verification, and
+dependency-ordered delivery slices. Product and architecture decisions are
+recorded as D-1 through D-26; the component-level decisions that refine them
+continue as D-27 through D-49. The concrete documentation deliverables and
+their slice ownership are kept in the
+[documentation roadmap](#documentation-roadmap) below.
 
 Design state: `ready for issue processing`
 
@@ -50,24 +51,6 @@ concrete precondition
   own the C/Haskell boundary and can diagnose health without reproducing a
   physical-device failure.
 - **Arc label:** None proposed
-
-## Relationship to the concept
-
-The concept's D-1 through D-26 are inherited unchanged. In condensed form they
-select native C mixing/DSP, one Haskell control worker, one final SPSC PCM ring,
-small resident samples plus a minimalist synth, no song/MIDI runtime, the camera
-as listener, five generators plus ADSR and LP/HP/BP filtering, data-authored
-types/instruments/sounds, Master/World/UI volume control, broad concrete-sound
-overrides, one source per `SoundId`, selective world-voice pause, zoom-dependent
-World range/gain with map silence, live-previewed settings, exact paused-voice
-resumption, advancing-but-muted zoom-map voices, player 0-100 and programmer dB
-units, real/null/none boot topology, per-dependency content failure isolation,
-eager shared decode, WAV/FLAC/non-looping-MP3 support, logical loops, a closed
-trigger override set, an approved ninth `audio-transport` capability, and
-deterministic foundation fixtures before a production sound library.
-
-Component decisions continue at D-27 so references cannot be confused with the
-settled concept decisions. Open questions likewise continue at Q-20.
 
 ## Current state and evidence
 
@@ -1016,6 +999,240 @@ the recent condition but preserves lifetime counters.
 
 ## Decisions
 
+### D-1. Production mixing and DSP are native C responsibilities
+
+Synarchy will not copy Idou's per-sample Haskell production renderer. The
+performance- and real-time-sensitive mixer, synth stepping, spatial gain/pan,
+bus accumulation, master output processing, resident sample cursors, and device
+callback may live in C. Haskell remains the orchestration and engine-integration
+layer. The all-Haskell implementation was valuable as a learning/reference
+system but is rejected as the production boundary.
+
+### D-2. A Haskell audio worker remains the sole control owner
+
+Moving rendering into C does not make gameplay threads native-audio clients.
+One Haskell worker owns lifecycle and command ordering and invokes the native
+core in coarse operations. This preserves Synarchy's queue-based thread model,
+keeps native handles out of gameplay code, and gives one place to enforce page,
+priority, and content policies.
+
+### D-3. The device boundary is one native SPSC PCM output ring
+
+The producer/native mixer writes a completed interleaved PCM mix to one
+single-producer/single-consumer ring; the device callback consumes it. Source
+types do not each own a device ring, and the output ring is not itself the
+multi-input abstraction.
+
+### D-4. V1 supports small resident samples and a minimalist synth
+
+Short assets in the selected sample formats are fully decoded and resident.
+Artificial sounds come from a small synth descended conceptually from Idou, not
+from a general instrument or patch system. Both source types mix concurrently
+through the same voice, spatial, bus, and master-output policies.
+
+### D-5. The song system is outside this arc
+
+Idou's song facade, adaptive timeline, music transport, MIDI support, tempo/bar
+scheduling, arrangement, and patch authoring are not prerequisites or hidden
+follow-ons of this audio foundation. A future music design may build on the
+foundation but must define its own product contract.
+
+### D-6. The camera is the world-audio listener
+
+Spatial world sounds are heard relative to the current camera on the active
+world page. UI and other declared non-spatial sounds bypass this listener.
+
+### D-7. The minimal synth includes five generators, ADSR, and one filter
+
+V1 supports sine, band-limited saw, square, triangle, and deterministic white
+noise. Each voice has one ADSR amplitude envelope and one bypassable filter
+selectable as low-pass, high-pass, or band-pass. Pink/colored noise, pitch
+glide, multiple oscillators, filter-envelope modulation, LFOs, and other
+modulation remain outside this arc. All parameters in the selected surface are
+authored data rather than compiled per-sound constants.
+
+### D-8. Sound types, synth instruments, and sounds are data-driven
+
+Gameplay triggers a validated `SoundId`; it does not provide an asset path or
+construct a native synth patch. Tracked YAML defines reusable `SoundType`
+policy, reusable `SynthInstrument` timbre, and concrete sample-or-synth sounds.
+The three registries have distinct responsibilities under one deterministic
+override model; exact YAML key spelling remains component-design work. None of
+these authoring concepts is hard-coded into gameplay modules.
+
+### D-9. V1 has Master, World, and UI volume control
+
+Every audible source routes to either the `World` or `UI` child bus and then to
+`Master`. A new Audio tab in Settings exposes sliders for all three gains. The
+values participate in Settings' pending/apply/save/back/default lifecycle and
+persist as player preferences; engine mixer budgets and sound content are not
+stored in the same local override.
+
+### D-10. Concrete sounds may override all authored parent fields
+
+`SoundType` owns reusable routing/playback policy and `SynthInstrument` owns
+reusable timbre/DSP policy. A concrete `SoundDefinition` may override any
+authorable field from either referenced definition, using explicit nested
+blocks and deterministic precedence. Runtime trigger calls do not share that
+broad authority: they provide the semantic sound ID and runtime context, plus
+only deliberately exposed instance gain or pitch when needed.
+
+### D-11. Each V1 SoundId has exactly one source
+
+A concrete sound selects either one supported sample asset or one synth
+instrument with its pitch/gate values. V1 has no weighted source list, random
+variant selection, or random pitch/gain range. The semantic ID boundary leaves
+those features possible later without changing gameplay call sites.
+
+### D-12. Player pause freezes world-event voices, not the whole mixer
+
+An explicit player pause freezes voices whose sound-type policy is `freeze`,
+including their sample cursor or synth oscillator, envelope, and filter state.
+UI remains audible. Future ambience may select `continue` and remain audible
+while paused even when it uses spatial/world routing, so pause policy is
+orthogonal to bus choice. Save/load and other short engine-internal pauses do
+not freeze audio. This rejects both a global audio pause, which would silence
+UI and ambience, and an unconditional World-bus pause, which would couple two
+independent policies.
+
+### D-13. Detailed-view zoom changes range and gain; the zoom map is silent
+
+Close zoom uses a slightly louder World trim and a narrower audible radius.
+Zooming out within the detailed view gently lowers World gain while expanding
+the radius. Across Synarchy's existing zoom-map fade band the target World gain
+drops sharply to zero at `zoomFadeEnd`; once the HUD is `zoomed_out`, no world
+sound is audible. Native gain changes are smoothed even when the target changes
+sharply, preventing clicks. UI gain is independent of camera zoom.
+
+### D-14. Audio volume sliders live-preview
+
+Dragging Master, World, or UI immediately previews the pending value. Apply
+accepts the preview for the session, Save persists sparse player overrides,
+Back restores the saved values, and Defaults previews the tracked defaults.
+This follows the settings menu's existing preview-and-revert pattern and lets
+the player judge an audio setting while changing it.
+
+### D-15. Paused voices retain state; new paused-world triggers are dropped
+
+At an explicit player pause, every existing `freeze` voice retains its sample
+cursor or synth oscillator, envelope, and filter state and resumes from that
+point. This is native voice-state retention, not sound restart, and is part of
+V1 rather than a deferred enhancement. A freeze-policy trigger received after
+the pause boundary is dropped and counted instead of being queued or created
+frozen. The completed-mix ring may still play its short already-rendered tail;
+the maximum response delay is the configured target-fill latency, after which
+the retained voice state no longer advances until resume.
+
+### D-16. Zoom-map muting does not stop voice clocks
+
+World voices continue advancing while the zoom map drives their bus to zero.
+Zooming back into the detailed view smoothly raises the gain of any voice still
+active at its current playback point. Finished one-shots stay finished; loops
+return at their naturally advanced cursor. Zoom therefore changes audibility,
+not world-audio time.
+
+### D-17. Players use 0-100; authors and programmers use signed decibels
+
+Settings stores and displays integer percentages. Zero is a hard mute and 100
+is 0 dB/unity; intermediate values follow a documented perceptual curve whose
+tuning belongs in tracked runtime configuration. YAML definitions and
+programmer-facing gain APIs use signed decibels with explicit `_db` names.
+Native DSP uses linear amplitude after boundary conversion, and the master
+protection stage remains authoritative when positive gains combine.
+
+### D-18. Graphical uses real output; headless and offscreen use null output
+
+Graphical mode opens the normal playback device. Headless and offscreen start
+the functional audio runtime against miniaudio's null destination, exercising
+the worker, native mixer, ring, callback, and health reporting without emitting
+speaker output. Dump and preview start no audio runtime; preview can gain real
+or null output later if an audio-preview product is designed. Direct offline
+rendering remains available for deterministic tests that should not depend on
+callback timing.
+
+### D-19. Invalid sound data disables only the affected dependency closure
+
+A missing, malformed, unsupported, oversized, or unresolved sound definition
+never crashes the game and never interrupts correctly defined sounds. Startup
+keeps every valid type, instrument, asset, and sound, disables only definitions
+that depend on an invalid node, and reports each cause through engine warnings
+and audio status. Triggering a rejected or unknown ID is a silent no-op with
+telemetry and rate-limited diagnostics. CI catalog validation remains strict so
+repository-owned content cannot treat runtime tolerance as permission to ship
+broken definitions.
+
+### D-20. V1 sample assets are eagerly decoded and shared
+
+During audio startup, every unique sample asset referenced by the valid catalog
+is decoded once into the fixed resident PCM representation. Multiple sounds
+referencing the same path share that buffer. Decode failure invalidates only
+dependent sounds. Per-asset duration and aggregate memory budgets apply to the
+decoded representation, not the encoded file size. Playback never performs
+first-use decoding on a gameplay or callback path.
+
+### D-21. Sample loading supports multiple encoded formats but not MIDI
+
+The source schema and loader are format-neutral: a sample definition names one
+supported encoded audio asset which is normalized to the same resident PCM
+form. Synarchy will preserve Idou's generic miniaudio-decoder boundary rather
+than expose a WAV-specific API. MIDI remains excluded with the song system.
+The exact codec set is fixed by D-22.
+
+### D-22. V1 sample formats are WAV, FLAC, and non-looping MP3
+
+V1 accepts miniaudio's dependency-free built-in decoder set: WAV, FLAC, and
+MP3. WAV and FLAC definitions may be one-shot or looping. MP3 definitions are
+non-looping because encoder delay/padding makes it a poor precision-loop source;
+a looping MP3 is invalid sound data and disables only that definition under
+D-19. AAC/M4A, Vorbis, Opus, and other formats requiring a custom decoder are
+deferred until a concrete asset justifies the additional dependency. All three
+accepted formats eagerly normalize to the same shared resident PCM form, so no
+codec logic enters mixing or the callback.
+
+### D-23. V1 includes logically identified controllable loops
+
+WAV and FLAC sounds may be controllable loops. Haskell callers assign a logical
+`LoopId` and can start, update, or stop it; starting an active identity updates
+that loop rather than creating another voice. Updates may move the spatial
+position and change instance gain. Stop follows a fade duration authored in the
+resolved sound policy, preserving click-free release without giving callers
+arbitrary envelope control. Native voice handles remain private to the audio
+worker. MP3 cannot loop under D-22.
+
+### D-24. Runtime trigger overrides are deliberately closed
+
+A one-shot trigger carries `SoundId`, page/position for a spatial sound, and
+optional signed `gain_db` and `pitch_semitones`. A loop start additionally
+carries `LoopId`; loop updates carry identity plus optional position and
+instance `gain_db`; stop carries only identity and uses the authored fade.
+Callers cannot override routing, attenuation, ADSR, filter, loop policy,
+priority, concurrency, pause behavior, asset, or instrument. This retains
+useful per-event variation without turning gameplay code into an unvalidated
+sound-authoring layer.
+
+### D-25. Audio may add a ninth `audio-transport` EngineEnv capability
+
+The repository maintainer explicitly approves the narrow new capability
+required by `docs/engineenv_capability_inventory.md` section 6.4(c).
+`AudioCapability` contains only the multi-producer command queue and shared
+status snapshot, with a total `EngineEnv` projection. The audio worker owns the
+device, decoded assets, native core, output ring, mixer, DSP, and voices
+privately. This decision does not approve unrelated audio state on `EngineEnv`,
+a generic capability, or another permanent full-access importer; implementation
+must make the complete synchronized inventory/audit/test changes mandated by
+section 6.4(c).
+
+### D-26. The foundation uses deterministic fixtures; production SFX come later
+
+This arc creates or checks in tiny deterministic fixtures sufficient to prove
+WAV, FLAC, MP3, looping, spatial, bus, and failure behavior, plus a few named
+reference sounds for manual development. The maintainer may supply a small
+number of representative development files, but they are not assumed to be the
+game's production library and are checked in only with suitable provenance and
+redistribution rights. Selecting, authoring, licensing, and reviewing the full
+player-facing sound library is a later content effort and does not block the
+audio foundation.
+
 ### D-27. Use a Synarchy-owned low-level miniaudio core
 
 Vendor and pin miniaudio 0.11.25, compile its `.c` file, and use device,
@@ -1166,6 +1383,82 @@ resolves Q-22.
 
 ## Open questions
 
+### Q-1. What is the exact minimal synth surface?
+
+Resolved by D-7.
+
+### Q-2. Are synth and sample sounds named definitions or raw trigger parameters?
+
+Resolved by D-8.
+
+### Q-3. Which fixed buses exist in v1?
+
+Resolved by D-9.
+
+### Q-4. What happens to world audio while simulation is paused?
+
+Resolved by D-12.
+
+### Q-5. Does camera zoom change listening range?
+
+Resolved by D-13.
+
+### Q-6. Which boot modes start real, null, or no audio?
+
+Resolved by D-18.
+
+### Q-7. Where do initial production audio assets come from?
+
+Resolved by D-26.
+
+### Q-8. How broad is definition inheritance and overriding?
+
+Resolved by D-10.
+
+### Q-9. Does one SoundId select one source or a weighted variant set?
+
+Resolved by D-11.
+
+### Q-10. Do Audio sliders live-preview pending values?
+
+Resolved by D-14.
+
+### Q-11. What happens to new world-event triggers received during player pause?
+
+Resolved by D-15.
+
+### Q-12. Do muted world voices continue advancing on the zoom map?
+
+Resolved by D-16.
+
+### Q-13. How should 0-100 volume values map to native gain?
+
+Resolved by D-17.
+
+### Q-14. Is catalog validation atomic or per-definition tolerant at runtime?
+
+Resolved by D-19.
+
+### Q-15. Are all V1 sample assets decoded during audio startup?
+
+Resolved by D-20.
+
+### Q-16. Which encoded sample formats are supported in V1?
+
+Resolved by D-22.
+
+### Q-17. Does V1 include controllable looping voices?
+
+Resolved by D-23.
+
+### Q-18. Which values may a trigger override at runtime?
+
+Resolved by D-24.
+
+### Q-19. May audio add Synarchy's ninth EngineEnv capability?
+
+Resolved by D-25.
+
 ### Q-20. Is the proposed squared-amplitude player volume curve correct?
 
 Resolved by D-47.
@@ -1201,8 +1494,7 @@ completed system.
 different audiences. The authoring guide is the data contract for people
 creating sounds; the runtime guide is the operational contract for people
 building, testing, and diagnosing the engine. Neither becomes a second design
-record: behavioral rationale and deferred alternatives remain here and in
-`docs/audio_system_concept.md`.
+record: behavioral rationale and deferred alternatives remain in this document.
 
 ### Existing documentation to update
 
