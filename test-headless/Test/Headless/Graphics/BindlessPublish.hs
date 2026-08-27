@@ -398,6 +398,78 @@ spec = do
       classifyRegistration (TextureHandle (handleSlotTableSize - 1))
         "wall.png" (Right registeredMapping) `shouldBe` PublishRegistered 4
 
+  describe "each request is judged on its OWN handle (#1699)" $ do
+    -- The regression: one batch can name ONE uncached path twice, so the
+    -- second request is folded into the first as an in-batch alias and
+    -- takes the canonical's result verbatim. When both handles are
+    -- unrepresentable, inheriting the canonical's REASON gave the alias
+    -- a log line, an 'AssetFailed' state and a 'LuaAssetFailed' whose
+    -- text named the canonical's id while the notification carried the
+    -- alias's own. 'classifyRequestHandle' runs first now, so the alias
+    -- is refused on the id it actually names.
+    let canonical = TextureHandle handleSlotTableSize
+        alias     = TextureHandle (handleSlotTableSize + 1)
+        reasonOf h = case classifyRequestHandle h "wall.png" of
+          Just (RequestSettled reason) → reason
+          other → "not settled: " <> T.pack (show other)
+
+    it "settles two unrepresentable same-path requests, each naming its \
+       \own id" $ do
+      classifyRequestHandle canonical "wall.png"
+        `shouldBe` Just (RequestSettled
+          (registrationFailureMessage TextureHandleUnrepresentable
+             canonical "wall.png"))
+      classifyRequestHandle alias "wall.png"
+        `shouldBe` Just (RequestSettled
+          (registrationFailureMessage TextureHandleUnrepresentable
+             alias "wall.png"))
+
+    it "never lets one of them speak about the other's handle" $ do
+      let canonicalId = T.pack (show handleSlotTableSize)
+          aliasId     = T.pack (show (handleSlotTableSize + 1))
+      reasonOf canonical `shouldSatisfy` T.isInfixOf canonicalId
+      reasonOf canonical `shouldNotSatisfy` T.isInfixOf aliasId
+      reasonOf alias `shouldSatisfy` T.isInfixOf aliasId
+      reasonOf canonical `shouldNotBe` reasonOf alias
+
+    it "is what stops the alias inheriting the canonical's reason, \
+       \which names the canonical handle" $ do
+      -- 'aliasPublish' still hands the canonical's failure down -- that
+      -- is right for the canonical's UPLOAD outcome and wrong for a
+      -- verdict on a handle this request does not name, which is
+      -- precisely why the judgement above runs first.
+      -- The success payload is irrelevant here, so it is '()' rather
+      -- than the batch's own @(AssetId, TextureAtlas)@.
+      let inherited ∷ Either Text ()
+          inherited = aliasPublish "wall.png"
+            (Just (Left (registrationFailureMessage
+                     TextureHandleUnrepresentable canonical "wall.png")))
+      inherited `shouldBe`
+        Left (registrationFailureMessage TextureHandleUnrepresentable
+                canonical "wall.png")
+      either id (const "") inherited `shouldNotSatisfy`
+        T.isInfixOf (T.pack (show (handleSlotTableSize + 1)))
+
+    it "would misdiagnose ACROSS kinds too, not just across ids" $ do
+      -- A canonical that ran out of SLOTS must never tell an
+      -- unrepresentable alias that slots ran out: the two are different
+      -- stories with different repairs.
+      let exhausted = registrationFailureMessage TextureSlotsExhausted
+                        canonical "wall.png"
+      exhausted `shouldSatisfy` T.isInfixOf "Failed to allocate bindless slot"
+      reasonOf alias `shouldNotSatisfy`
+        T.isInfixOf "Failed to allocate bindless slot"
+
+    it "drops the reserved sentinel instead of settling it, and admits \
+       \every in-table id" $ do
+      classifyRequestHandle missingTextureHandle "wall.png"
+        `shouldBe` Just (RequestDropped
+          (registrationFailureMessage TextureHandleReserved
+             missingTextureHandle "wall.png"))
+      classifyRequestHandle (TextureHandle (handleSlotTableSize - 1))
+        "wall.png" `shouldBe` Nothing
+      classifyRequestHandle (TextureHandle 1) "wall.png" `shouldBe` Nothing
+
   describe "a device with capacity behaves exactly as before" $ do
     let result = runBatch UploadGlobalSampler (createSlotAllocator 16)
                    Map.empty Map.empty

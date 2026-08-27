@@ -50,6 +50,8 @@ module Engine.Graphics.Vulkan.Texture.Publish
   , classifyRegistration
   , cachedAliasPublish
   , aliasPublish
+  , UnregistrableRequest(..)
+  , classifyRequestHandle
   , publishedSlot
   , publishFailureReason
   , publishRegisteredEntries
@@ -63,7 +65,8 @@ import UPrelude
 import qualified Data.Map.Strict as Map
 import Engine.Asset.Handle (TextureHandle)
 import Engine.Graphics.Vulkan.Texture.Handle
-  (BindlessTextureHandle(..), TextureRegistrationFailure
+  (BindlessTextureHandle(..), HandleAddressing(..)
+  , TextureRegistrationFailure(..), checkRegistrableHandle
   , registrationFailureMessage)
 import Engine.Graphics.Vulkan.Texture.Slot (TextureSlot(..))
 
@@ -128,8 +131,9 @@ classifyRegistration handle source = \case
 --   resolves to slot 0 (the undefined texture) on the shader read path,
 --   so reporting it loaded is a lie that no later request can correct.
 --
---   Scope: this decides only what a hit that PASSED #1696's
---   'checkRegistrableHandle' guard does. That guard runs first, in
+--   Scope: this decides only what a hit whose OWN handle
+--   'classifyRequestHandle' already admitted does. That judgement runs
+--   first, in
 --   'Engine.Scripting.Lua.Message.Texture.duplicateCachedTextureHandle'
 --   itself, because this path owns its own @btsHandleMap@ insertion
 --   rather than going through @registerTexture@ — and a refused
@@ -146,6 +150,54 @@ cachedAliasPublish path = \case
   Nothing → PublishFailed
       ("cached texture holds no bindless slot: " <> path)
 
+-- | What a request must do about its OWN handle before it can be
+--   published at all — 'Nothing' when the handle is fine.
+--
+--   Two paths reach a publication decision without ever calling
+--   'Engine.Graphics.Vulkan.Texture.Bindless.registerTexture', so
+--   nothing upstream has judged their handle for them: the cached-atlas
+--   fast path, which owns its own @btsHandleMap@ insertion, and an
+--   in-batch deduped ALIAS, which takes the canonical request's result
+--   verbatim. Both must be judged HERE, on the handle they themselves
+--   name.
+--
+--   That is not a formality for the alias. A batch can carry two
+--   unrepresentable requests for one uncached path — @65536@ folded
+--   into by @65537@ — and inheriting the canonical's reason would give
+--   the second request a log line, an 'AssetFailed' state and a Lua
+--   notification whose text names a DIFFERENT handle than the
+--   notification's own id (#1699). Worse across kinds: a canonical that
+--   ran out of SLOTS would tell an unrepresentable alias its slots ran
+--   out. One terminal outcome per request means one diagnostic per
+--   request too.
+data UnregistrableRequest
+  = RequestDropped !Text
+    -- ^ #1696's reserved sentinel: log the reason and write nothing at
+    --   all, not even a terminal failure. A zero handle names no real
+    --   request, so there is nothing to settle.
+  | RequestSettled !Text
+    -- ^ #1699's unrepresentable id: log the reason AND settle the
+    --   request on it. This is a real request that something is waiting
+    --   on, and the id is unusable for the rest of the process, so it
+    --   must end terminally rather than silently.
+  deriving (Show, Eq)
+
+-- | Judge one request's own handle. The reason is
+--   'registrationFailureMessage' verbatim, on THIS handle and THIS
+--   source, so it reads like every other refusal in the engine.
+classifyRequestHandle
+  ∷ TextureHandle
+  → Text  -- ^ Caller provenance: this request's own path or label
+  → Maybe UnregistrableRequest
+classifyRequestHandle handle source =
+  case checkRegistrableHandle ShaderAddressable handle of
+    Right ()                  → Nothing
+    Left TextureHandleReserved →
+      Just (RequestDropped (reasonFor TextureHandleReserved))
+    Left failure              → Just (RequestSettled (reasonFor failure))
+  where
+    reasonFor failure = registrationFailureMessage failure handle source
+
 -- | Resolve an in-batch deduped ALIAS against the canonical request it
 --   was folded into.
 --
@@ -156,6 +208,11 @@ cachedAliasPublish path = \case
 --   the batch's results entirely — which should be unreachable — fails
 --   them too rather than leaving them loading forever. An alias is a
 --   request like any other and must reach a terminal outcome.
+--
+--   Reached only AFTER 'classifyRequestHandle' has admitted the alias's
+--   own handle: what is inherited here is the canonical's UPLOAD
+--   outcome, never a verdict on a handle this request does not name
+--   (#1699).
 aliasPublish ∷ Text → Maybe (Either Text α) → Either Text α
 aliasPublish path = \case
   Just outcome → outcome

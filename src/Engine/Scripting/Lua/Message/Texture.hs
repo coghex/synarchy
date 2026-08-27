@@ -59,14 +59,13 @@ import Engine.Graphics.Vulkan.Sampler.Cache (acquireSampler, releaseSampler)
 import Engine.Graphics.Vulkan.Sampler.Types (SamplerKind(..))
 import Engine.Graphics.Vulkan.Texture.Bindless (registerPinnedTexture
                                                , registerTexture
-                                               , checkRegistrableHandle
                                                , registrationFailureMessage
-                                               , HandleAddressing(..)
                                                , TextureRegistrationFailure(..)
                                                , writeHandleSlotEntry)
 import Engine.Graphics.Vulkan.Texture.Handle (BindlessTextureHandle(..))
 import Engine.Graphics.Vulkan.Texture.Publish
   (UploadSampler(..), TexturePublish(..), GpuCleanupStep(..)
+  , UnregistrableRequest(..), classifyRequestHandle
   , classifyRegistration, cachedAliasPublish, aliasPublish, publishedSlot
   , publishFailureReason, publishRegisteredEntries, failedUploadCleanup)
 import Engine.Graphics.Vulkan.Texture.Slot (TextureSlot(..))
@@ -132,6 +131,36 @@ publishTextureFailure env pool handle path reason =
         Q.writeQueue (luaQueue env)
             (LuaAssetFailed "texture" (fromIntegral rawHandle) path reason)
 
+-- | Refuse one request on ITS OWN handle, before anything decides what
+--   it publishes (#1696, #1699). Answers 'True' when the request was
+--   refused and is now finished.
+--
+--   The two paths that reach a publication decision without ever
+--   calling 'Engine.Graphics.Vulkan.Texture.Bindless.registerTexture'
+--   share it, which is what stops either of them speaking about a
+--   handle it does not name: 'duplicateCachedTextureHandle', which owns
+--   its own @btsHandleMap@ insertion, and the in-batch deduped ALIAS
+--   resolution in 'handleLoadTextureBatchWith', which would otherwise
+--   inherit the canonical request's reason verbatim — a diagnostic
+--   naming the CANONICAL id, attached to this request's own handle in
+--   the log, in 'AssetFailed' and in @LuaAssetFailed@.
+--
+--   'classifyRequestHandle' owns the judgement; this only carries it
+--   out. Nothing logged it upstream — that is the whole difference from
+--   a registration refusal, which 'registerTextureImpl' logs itself.
+refuseUnregistrableRequest ∷ EngineEnv → AssetPool → TextureHandle → Text
+                           → EngineM σ Bool
+refuseUnregistrableRequest env pool handle path =
+  case classifyRequestHandle handle path of
+    Nothing → pure False
+    Just (RequestDropped reason) → do
+      logWarnM CatTexture reason
+      pure True
+    Just (RequestSettled reason) → do
+      logWarnM CatTexture reason
+      publishTextureFailure env pool handle path reason
+      pure True
+
 -- | The cached-atlas ALIAS fast path: a second handle naming a texture
 --   that is already resident, wired straight into 'btsHandleMap' and the
 --   shader table without going through
@@ -161,28 +190,11 @@ publishTextureFailure env pool handle path reason =
 --   can correct. 'cachedAliasPublish' answers both refusals.
 duplicateCachedTextureHandle ∷ EngineEnv → TextureHandle → AssetId
                            → TextureAtlas → EngineM σ ()
-duplicateCachedTextureHandle env handle assetId atlas =
-  case checkRegistrableHandle ShaderAddressable handle of
-    -- #1696's refusal, dropped outright: nothing observable is written,
-    -- not even #1690's terminal failure. A zero handle names no real
-    -- request, so there is nothing to settle.
-    Left TextureHandleReserved →
-      logWarnM CatTexture
-        (registrationFailureMessage TextureHandleReserved handle (taPath atlas))
-    -- #1699's refusal, SETTLED: this alias is a real request that
-    -- something is waiting on, and the id is unusable for the rest of
-    -- the process, so it must end terminally rather than silently.
-    -- Unlike a registration refusal, no caller logged this one — this
-    -- path owns its own insertion, so it owns its own diagnostic.
-    Left failure → do
-      let reason = registrationFailureMessage failure handle (taPath atlas)
-      logWarnM CatTexture reason
-      poolRef ← asks (rcAssetPoolRef . toRenderCapability)
-      pool ← liftIO $ readIORef poolRef
-      publishTextureFailure env pool handle (taPath atlas) reason
-    Right () → do
-      poolRef ← asks (rcAssetPoolRef . toRenderCapability)
-      pool ← liftIO $ readIORef poolRef
+duplicateCachedTextureHandle env handle assetId atlas = do
+  poolRef ← asks (rcAssetPoolRef . toRenderCapability)
+  pool ← liftIO $ readIORef poolRef
+  refused ← refuseUnregistrableRequest env pool handle (taPath atlas)
+  unless refused $ do
       mBindless ← liftIO $ readIORef (rcTextureSystemRef (toRenderCapability env))
       -- Both ways THIS resolution can come up empty — no bindless system
       -- at all, or an atlas with no @btsHandleMap@ entry — mean the same
@@ -543,9 +555,17 @@ handleLoadTextureBatchWith samplerPolicy incoming = do
                         [ (handle, result)
                         | (handle, _, _, _, result) ← batchResults
                         ]
-                forM_ (reverse aliasReqs) $ \(handle, path, canonical) →
-                    case aliasPublish (T.pack path)
-                             (Map.lookup canonical canonicalResults) of
+                forM_ (reverse aliasReqs) $ \(handle, path, canonical) → do
+                    -- An alias names an id of its OWN, so it is judged
+                    -- on that id FIRST (#1699) — one batch can carry two
+                    -- unrepresentable requests for one path, and the
+                    -- second must not be told about the first's handle.
+                    -- Only the canonical's UPLOAD outcome is inherited.
+                    refused ← refuseUnregistrableRequest env pool handle
+                                  (T.pack path)
+                    unless refused $
+                      case aliasPublish (T.pack path)
+                               (Map.lookup canonical canonicalResults) of
                         Right (assetId, atlas) →
                             duplicateCachedTextureHandle env handle assetId atlas
                         -- An alias is a request like any other: when the
