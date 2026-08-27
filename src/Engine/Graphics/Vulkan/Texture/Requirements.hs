@@ -41,6 +41,7 @@ module Engine.Graphics.Vulkan.Texture.Requirements
   , handleTableDescriptors
   , pipelineUniformBufferDescriptors
   , bindlessPipelineSetCount
+  , bindlessColorAttachments
   , bindlessCapacityField
   , bindlessCapacityRequirement
   , bindlessCapacityApplies
@@ -193,6 +194,21 @@ pipelineUniformBufferDescriptors = 1
 bindlessPipelineSetCount ∷ Word32
 bindlessPipelineSetCount = 2
 
+-- | Framebuffer colour attachments each bindless pipeline writes — one, from
+--   the single colour-blend attachment
+--   'Engine.Graphics.Vulkan.Pipeline.Bindless.createBindlessPipelineWithShader'
+--   configures (both the world and UI pipelines go through it).
+--
+--   These are not descriptors, but they are not free either:
+--   @maxPerStageResources@'s own text ends \"For the fragment shader stage
+--   the framebuffer color attachments also count against this limit\", and
+--   @maxPerStageUpdateAfterBindResources@ is defined as that same limit
+--   re-scoped to count update-after-bind sets too. Leaving them out would
+--   understate 'CapPerStageResources' by one and accept a device that then
+--   creates a pipeline over the limit.
+bindlessColorAttachments ∷ Word32
+bindlessColorAttachments = 1
+
 -- | One update-after-bind descriptor capacity the concrete bindless
 --   descriptor set consumes, named as @VkPhysicalDeviceVulkan12Properties@
 --   reports it.
@@ -263,12 +279,15 @@ data BindlessCapacity
   | -- | @maxPerStageDescriptorUpdateAfterBindUniformBuffers@ — set 0's
     --   uniform buffer, in the vertex stage that declares it.
     CapPerStageUniformBuffers
-  | -- | @maxPerStageUpdateAfterBindResources@ — the fragment stage's two
-    --   bindings together, the busiest stage in the layout. This is the
-    --   aggregate @VkGraphicsPipelineCreateInfo@'s @maxPerStageResources@
-    --   rule uses once a set in the layout is update-after-bind. Samplers
-    --   are excluded from it (as they are from @maxPerStageResources@), so
-    --   the array counts once; the uniform buffer is a different stage and
+  | -- | @maxPerStageUpdateAfterBindResources@ — everything the FRAGMENT
+    --   stage, the busiest in the layout, puts against the aggregate:
+    --   the texture array, the handle→slot buffer, and the pipeline's one
+    --   framebuffer colour attachment ('bindlessColorAttachments'). This is
+    --   the aggregate @VkGraphicsPipelineCreateInfo@'s @maxPerStageResources@
+    --   rule uses once a set in the layout is update-after-bind. Plain
+    --   @SAMPLER@ descriptors are excluded from it (as they are from
+    --   @maxPerStageResources@), so the combined-image-sampler array counts
+    --   once rather than twice; the uniform buffer is a different stage and
     --   does not add to it.
     CapPerStageResources
   | -- | @maxDescriptorSetUpdateAfterBindSampledImages@ — the texture array
@@ -352,6 +371,7 @@ bindlessCapacityRequirement = \case
   CapPerStageStorageBuffers → handleTableDescriptors
   CapPerStageUniformBuffers → pipelineUniformBufferDescriptors
   CapPerStageResources      → maxBindlessTextures + handleTableDescriptors
+                                + bindlessColorAttachments
   CapSetSampledImages       → maxBindlessTextures
   CapSetSamplers            → maxBindlessTextures
   CapSetStorageBuffers      → handleTableDescriptors

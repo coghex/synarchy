@@ -346,6 +346,26 @@ spec = describe "Vulkan bindless feature requirements" $ do
         (cap, bindlessCapacityRequirement cap)
           `shouldBe` (cap, maxBindlessTextures)
 
+    it "counts the fragment stage's colour attachment in the aggregate" $ do
+      -- maxPerStageResources counts, in its own words, "for the fragment
+      -- shader stage the framebuffer color attachments also"; the
+      -- update-after-bind form is that same limit re-scoped. The fragment
+      -- stage therefore puts the array, the handle→slot buffer AND the
+      -- pipeline's one colour attachment against it. Stated as arithmetic
+      -- rather than by re-deriving it, so an omitted term fails here.
+      bindlessCapacityRequirement CapPerStageResources
+        `shouldBe` maxBindlessTextures + 1 + 1
+      -- A device one short of that is refused; the general sweep below tests
+      -- the same boundary for every capacity, this pins WHICH number it is.
+      isBindlessSupported
+        (supportReporting
+           (loweredTo (maxBindlessTextures + 1) CapPerStageResources))
+        `shouldBe` False
+      isBindlessSupported
+        (supportReporting
+           (loweredTo (maxBindlessTextures + 2) CapPerStageResources))
+        `shouldBe` True
+
     it "covers the uniform buffer set 0 contributes to the same pipeline layout" $ do
       -- Every update-after-bind pipeline-layout statement counts descriptors
       -- across ALL of pSetLayouts, and
