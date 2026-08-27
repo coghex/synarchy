@@ -692,9 +692,12 @@ control records `UI.ControlActivation.PendingActivation` (firing
 activates if it still resolves to the same element. Interruptions
 reverted before release are caught by epochs: global `upmPageEpoch`
 (bumped ONLY by `hidePage`/`showPage`) + per-element `ueRouteEpoch`
-(bumped by `setVisible`/`setClickable`/detach on THAT element, only on a
-real value change); `PendingActivation` snapshots the pressed element's
-and every ancestor's epoch and cancels on mismatch. Unrelated
+(bumped by `setVisible`/`setClickable` on THAT element, only on a real
+value change; by every detach; and — #1694 — by an
+`addToPage`/`addChild` that actually CHANGES that element's structural
+owner, a fresh or same-owner attachment staying neutral);
+`PendingActivation` snapshots the pressed element's and every
+ancestor's epoch and cancels on mismatch. Unrelated
 sibling/child churn (hover highlights, focus-ring attach) must never
 cancel an activation — that constraint shaped this design; don't
 "simplify" it back to a global counter. Sliders/scrollbar thumbs opt out

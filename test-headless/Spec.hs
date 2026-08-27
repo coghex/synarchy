@@ -142,6 +142,7 @@ import qualified Test.Headless.UI.Tooltip as UITooltip
 import qualified Test.Headless.UI.InputOwnership as UIInputOwnership
 import qualified Test.Headless.UI.ElementInputPolicy as UIElementInputPolicy
 import qualified Test.Headless.UI.ControlActivation as UIControlActivation
+import qualified Test.Headless.UI.HierarchyOwnership as UIHierarchyOwnership
 import qualified Test.Headless.UI.FocusNavigation as UIFocusNavigation
 import qualified Test.Headless.UI.Clipping as UIClipping
 import qualified Test.Headless.UI.InteractiveBounds as UIInteractiveBounds
@@ -578,6 +579,7 @@ main = hspec $ do
     describe "UI.InputOwnership" UIInputOwnership.spec
     describe "UI.ElementInputPolicy" UIElementInputPolicy.spec
     describe "UI.ControlActivation" UIControlActivation.spec
+    describe "UI hierarchy structural ownership" UIHierarchyOwnership.spec
     describe "UI.FocusNavigation" UIFocusNavigation.spec
     describe "UI.Clipping" UIClipping.spec
     describe "UI.InteractiveBounds" UIInteractiveBounds.spec

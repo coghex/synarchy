@@ -12,6 +12,7 @@ module UI.Manager.Query
   , findElementAtExcept
   , findRightClickableElementAt
   , topHitBy
+  , hitsAtPointBy
   , elementBlocksPointer
   , elementCapturesScroll
   , isElementPointerBlocking
