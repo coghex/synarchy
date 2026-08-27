@@ -345,7 +345,12 @@ gitignored):
   comparison and post-step frame — populated only when a step ran, so
   never for a `done`/stuck terminal turn, but always for an ordinary
   turn INCLUDING the session's last one (previously lost outright, for
-  want of a following turn to capture it on).
+  want of a following turn to capture it on). A null `post_screenshot`
+  on a `"completed"` turn means the step ran but its frame could not be
+  taken (#1752): the turn's own drained events and outcomes are merged
+  before the screenshot is attempted, so a screenshot crash states the
+  missing frame rather than silently dropping evidence the runner had
+  already consumed.
 - `replay.jsonl` — one line **per turn** (no-input turns included, so
   replay pacing is faithful): `{"turn": N, "pre": [lua...], "post":
   [lua...], "step_phase": "not_started"|"interrupted"|"completed"}` —
