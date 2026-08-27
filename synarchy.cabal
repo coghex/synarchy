@@ -267,6 +267,7 @@ library
                      Engine.Scripting.Lua.Message.Texture
                      Engine.Scripting.Lua.Message.Scene
                      Engine.Scripting.Lua.Message.WorldTexture
+                     Engine.Scripting.Lua.TickPolicy
                      Engine.Scripting.Lua.Thread
                      Engine.Scripting.Lua.Thread.Console
                      Engine.Scripting.Lua.Thread.Dispatch
@@ -1317,6 +1318,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.PreviewGeneration
                    Test.Headless.Lua.PauseGate
                    Test.Headless.Lua.ScriptState
+                   Test.Headless.Lua.TickInterval
                    Test.Headless.Lua.DragSelectDeferred
                    Test.Headless.Lua.TextWrapping
                    Test.Headless.Lua.TextTruncation
