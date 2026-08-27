@@ -189,6 +189,57 @@ spec = describe "Location spatial bounds" $ do
                 \  contents: [ { kind: item, id: x, position: {x: 2, y: -2} } ] }"
                 `shouldSatisfy` isRight'
 
+        -- #1708: the content-kind vocabulary is CLOSED at this same
+        -- entry point. Both rejections assert the id AND the offending
+        -- token, because a message carrying only one of them cannot
+        -- tell an author which entry of which definition to fix.
+        it "rejects the removed nested 'structure' content kind (#1708), \
+           \naming the location and the offending kind" $
+            decodeDef
+                "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] },\
+                \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
+                \  contents: [ { kind: structure, id: room_small, position: {x: 2, y: 0} } ] }"
+                `shouldSatisfy` rejectedNamingFields "t" ["'structure'"]
+
+        it "rejects an unrecognized content kind (#1708), naming the \
+           \location and the offending kind" $
+            decodeDef
+                "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] },\
+                \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
+                \  contents: [ { kind: not_a_real_kind, id: x } ] }"
+                `shouldSatisfy` rejectedNamingFields "t" ["'not_a_real_kind'"]
+
+        it "accepts every kind in the closed content vocabulary (#1708)" $
+            decodeDef
+                "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] },\
+                \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
+                \  contents: [ { kind: unit, id: u, count: 2, faction: hostile },\
+                \              { kind: item, id: i, position: {x: 1, y: 1} },\
+                \              { kind: loot_table, id: l, rolls: 3 },\
+                \              { kind: building, id: g } ] }"
+                `shouldSatisfy` isRight'
+
+        it "one bad content kind fails the WHOLE file's load (#1708) -- \
+           \the surviving defs are not returned without it" $ do
+            let goodOnly = "{ locations: [\
+                    \ { id: ok, builder: b,\
+                    \   naming: { heads: [KEEP], modifiers: [ASH] },\
+                    \   bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
+                    \   contents: [ { kind: loot_table, id: l } ] } ] }"
+                withBad = "{ locations: [\
+                    \ { id: ok, builder: b,\
+                    \   naming: { heads: [KEEP], modifiers: [ASH] },\
+                    \   bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
+                    \   contents: [ { kind: loot_table, id: l } ] },\
+                    \ { id: bad, builder: b,\
+                    \   naming: { heads: [KEEP], modifiers: [ASH] },\
+                    \   bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
+                    \   contents: [ { kind: structure, id: room_small } ] } ] }"
+            fmap (map lydId . lyfLocations) (decodeFile goodOnly)
+                `shouldBe` Right ["ok"]
+            decodeFile withBad
+                `shouldSatisfy` rejectedNamingFields "bad" ["'structure'"]
+
         it "the shipped ruin_small.yaml declares the exact 5x5 contract" $ do
             result ← Yaml.decodeFileEither "data/locations/ruin_small.yaml"
             case result of

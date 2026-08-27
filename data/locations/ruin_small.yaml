@@ -7,7 +7,10 @@
 # that authors the geometry when the location is stamped.
 #
 # `contents` ids are resolved at spawn time (#90), not here — an unknown
-# id or kind logs a warning and is skipped rather than crashing.
+# id logs a warning and is skipped rather than crashing. A content
+# `kind`, by contrast, is checked HERE at load: the vocabulary is closed
+# to unit / item / loot_table / building (#1708), and anything else
+# fails this whole file's load rather than registering and warning later.
 locations:
   - id: ruin_small
     label: "Small Ruin"

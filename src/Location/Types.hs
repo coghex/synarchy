@@ -20,15 +20,18 @@ import Language.Semantic.Types (ConceptId)
 import Location.Bounds (RelBounds(..))
 
 -- | One piece of content a location places when it is stamped — a
---   building, unit, ground item, loot-table roll, or nested structure,
---   addressed by its raw id string. The ids are NOT validated or
---   resolved here: the content-spawning pass (#90) resolves them at
---   spawn time. `kind` is a free string tag ("building" / "unit" /
---   "item" / "loot_table" / "structure") so new content kinds don't
---   force a schema change.
+--   building, unit, ground item, or loot-table roll, addressed by its
+--   raw id string. The ids are NOT validated or resolved here: the
+--   content-spawning pass (#90) resolves them at spawn time. `kind` is
+--   held as 'Text' rather than a sum, but the VOCABULARY is closed
+--   (#1708) at the YAML boundary by
+--   'Engine.Asset.YamlLocations.validContentKinds', which is the one
+--   place to extend when a new kind is added; a value outside it never
+--   reaches a registered def.
 data LocationContent = LocationContent
     { lconKind     ∷ !Text            -- ^ "building" | "unit" | "item"
-                                      --   | "loot_table" | "structure"
+                                      --   | "loot_table" — the closed
+                                      --   #1708 vocabulary
     , lconId       ∷ !Text            -- ^ raw id string, resolved at spawn time
     , lconCount    ∷ !Int             -- ^ how many to place (defaults to 1;
                                       --   ignored by "loot_table", which
@@ -36,8 +39,8 @@ data LocationContent = LocationContent
     , lconPosition ∷ !(Maybe (Int, Int))
                                       -- ^ fixed (x, y) offset from the
                                       --   location anchor; 'Nothing' scatters
-                                      --   randomly within the structure
-                                      --   footprint instead
+                                      --   randomly within the location's own
+                                      --   declared bounds instead
     , lconFaction  ∷ !(Maybe Text)    -- ^ "unit" only: spawn-time faction tag
                                       --   (defaults to "hostile" when omitted)
     , lconRolls    ∷ !Int             -- ^ "loot_table" only: how many times

@@ -29,11 +29,17 @@ location's chunk loads, end to end:
      re-rolled across save/load or chunk eviction), the breach pattern
      replays identically, and the pieces still resolve to the damaged
      variant art (the #91 variant round-trip).
-  3. An unknown content `kind` and an unknown content `id` both log a
-     warning and are skipped rather than crashing the engine. Also
-     covers the fixed-position `kind: item` dispatch path, which #921
-     left no SHIPPED location exercising: a probe-local def spawns one
-     at a declared `position` and it must land on exactly that tile.
+  3. An unknown content `id` — an unregistered unit, and a loot table
+     rolling an unregistered item — logs a warning and is skipped
+     rather than crashing the engine. An unknown content `kind` is NOT
+     part of this: since #1708 the vocabulary is closed at the YAML
+     boundary, so such a file fails to decode and registers nothing;
+     that rejection is pinned by hspec "Location spatial bounds", and
+     the fixture here is checked to LOAD so the runtime id paths below
+     are actually reached. Also covers the fixed-position `kind: item`
+     dispatch path, which #921 left no SHIPPED location exercising: a
+     probe-local def spawns one at a declared `position` and it must
+     land on exactly that tile.
   4. Location discovery (#780): stamping a ruin's geometry and spawning
      its contents do NOT discover it; a hostile unit standing on it
      doesn't either; a player-faction unit that SEES it does (#1230),
@@ -1182,9 +1188,13 @@ def run(args, root: str, token: str) -> int:
     elif not ruins:
         failures.append("phase 2 skipped: no ruins from phase 1")
 
-    # ---- Phase 3: unknown content kind / id logs a warning and is
-    #      skipped, not a crash. Also covers a loot_table rolling an
-    #      item id that isn't registered. ----
+    # ---- Phase 3: an unknown content id logs a warning and is skipped,
+    #      not a crash. Also covers a loot_table rolling an item id that
+    #      isn't registered. An unknown content KIND is deliberately
+    #      absent from this fixture: #1708 closed that vocabulary at the
+    #      YAML boundary, so an entry naming one would fail the whole
+    #      file's decode and leave bogus_ruin unregistered, taking the
+    #      unknown-ID checks below down with it. ----
     bogus_yaml = "/tmp/loc_content_probe_bogus.yaml"
     with open(bogus_yaml, "w") as fh:
         fh.write(
@@ -1199,7 +1209,6 @@ def run(args, root: str, token: str) -> int:
             "    naming: { heads: [KEEP], modifiers: [ASH] }\n"
             "    contents:\n"
             "      - { kind: unit, id: does_not_exist, count: 1 }\n"
-            "      - { kind: not_a_real_kind, id: whatever, count: 1 }\n"
             "      - { kind: loot_table, id: bogus_table, rolls: 1 }\n"
         )
     bogus_loot_yaml = "/tmp/loc_content_probe_bogus_loot.yaml"
@@ -1254,10 +1263,13 @@ def run(args, root: str, token: str) -> int:
     proc = boot_isolated(args.port, root)
     try:
         load_defs(args.port)
-        # These four fixtures are DELIBERATELY full of unknown ids, but the
+        # These four fixtures are DELIBERATELY full of unknown IDS, but the
         # files themselves must still register: phase 3 is about what
-        # spawnContents does with a bogus CONTENT entry, which it can only
-        # reach once the location and loot-table defs exist.
+        # spawnContents does with an unresolvable content id, which it can
+        # only reach once the location and loot-table defs exist. That is
+        # exactly why no entry here names a bogus KIND — since #1708 the
+        # kind vocabulary is closed at load, so one would make
+        # load_fixture_yaml's zero-count rejection fire here instead.
         load_fixture_yaml(args.port, "engine.loadLocationYaml", bogus_yaml)
         load_fixture_yaml(args.port, "engine.loadLootTableYaml", bogus_loot_yaml)
         load_fixture_yaml(args.port, "engine.loadLocationYaml", quinoa_yaml)
@@ -1272,20 +1284,19 @@ def run(args, root: str, token: str) -> int:
                   "return 'ok'")
         alive = send(args.port, "return engine.getFPS() ~= nil and 'alive' or 'dead'")
         if r.strip('"') == "ok" and "alive" in alive:
-            print("PASS: unknown unit id + unknown content kind + unknown "
-                  "loot roll did not crash the engine")
+            print("PASS: unknown unit id + unknown loot roll did not crash "
+                  "the engine")
         else:
             failures.append(f"spawnContents with bogus content misbehaved: {r!r} / {alive!r}")
         log_text = open(LOG, errors="replace").read()
         if ("unknown unit content" in log_text
-                and "unknown content kind" in log_text
                 and "rolled unknown item id" in log_text):
-            print("PASS: the unknown unit id, unknown content kind, AND "
-                  "loot-table-rolled-unknown-item-id all logged a warning")
+            print("PASS: the unknown unit id AND the "
+                  "loot-table-rolled-unknown-item-id both logged a warning")
         else:
             failures.append(
-                "expected warnings for unknown unit id, unknown content "
-                f"kind, AND unknown loot roll not all found in {LOG}")
+                "expected warnings for unknown unit id AND unknown loot "
+                f"roll not both found in {LOG}")
 
         # #800: the registry-based validation replacing the old hardcoded
         # loot_names allowlist. First, force quinoa_sack through the real

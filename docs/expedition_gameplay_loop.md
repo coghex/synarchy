@@ -281,8 +281,10 @@ The engine already supports much of the required substrate:
 - deterministic location placement in suitable world chunks;
 - lazy materialization as chunks load;
 - persistent, idempotent geometry and content spawning;
-- location content containing items, units, buildings, nested structures, and
-  loot-table rolls;
+- location content containing items, units, buildings, and loot-table rolls
+  (the closed four-kind vocabulary of #1708 — the nested-structure kind was
+  removed there, having translated the outer definition's bounds around a
+  shifted anchor);
 - damaged structure variants;
 - ground-item pickup, inventory, equipment, storage, survival, combat, injury,
   construction, crafting, and saving.
