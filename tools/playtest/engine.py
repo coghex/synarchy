@@ -449,11 +449,36 @@ class PlaytestEngine:
     #     TWICE in one turn (once after settle, once after the step)
     #     yields two disjoint slices that the caller concatenates —
     #     never a double-count, never a drop.
+    #   oracle_routing() — #1750's widget read, taken BEFORE the first
+    #     input call of the turn is injected, so click correlation is
+    #     joined against the state the click was actually routed
+    #     against rather than whatever a callback left behind. Also
+    #     read-only and non-destructive.
+
+    def oracle_routing(self) -> dict:
+        """The #1750 ROUTING context: one ui.dumpWidgets() read taken
+        BEFORE this turn's first input call is injected, so the records
+        the offline click join correlates against are the ones the real
+        pointer router actually resolved the click against.
+
+        `oracle_context` below stays where it is (after inject+settle) —
+        its menu/pause/seed fields are consumed with post-injection
+        meaning by `_promote_seed` and the session digest, and #775's
+        pre-STEP contract is unchanged. This is a separate, narrower
+        read taken at a strictly earlier moment: a callback that opens,
+        closes, or replaces a modal, or that creates/destroys elements,
+        rewrites `widgets` but can no longer rewrite the routing record
+        set. Read-only and non-destructive, exactly like
+        `oracle_context`."""
+        return {"widgets": self._dump_widgets()}
+
+    def _dump_widgets(self):
+        widgets = self.lua('return require("scripts.ui.registry").dumpWidgets()')
+        return widgets if isinstance(widgets, list) else {"error": str(widgets)}
 
     def oracle_context(self) -> dict:
         snap: dict = {"player_invisible": True}
-        widgets = self.lua('return require("scripts.ui.registry").dumpWidgets()')
-        snap["widgets"] = widgets if isinstance(widgets, list) else {"error": str(widgets)}
+        snap["widgets"] = self._dump_widgets()
         menu = self.lua('return require("scripts.ui_manager").currentMenu')
         snap["current_menu"] = menu if isinstance(menu, str) else None
         snap["paused"] = self.lua("return engine.isPaused()") is True
@@ -527,6 +552,9 @@ class FakeEngine(PlaytestEngine):
     def inject(self, calls: list[str]) -> list:
         self.injected.extend(calls)
         return [{"ok": True} for _ in calls]
+
+    def oracle_routing(self) -> dict:
+        return {"widgets": []}
 
     def oracle_context(self) -> dict:
         return {"player_invisible": True, "widgets": [], "current_menu": "main",

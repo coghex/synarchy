@@ -190,7 +190,7 @@ def _file_hash(path: str) -> str | None:
         return None
 
 
-def widget_at(widgets, x, y):
+def widget_at(widgets, x, y, route_aware=False):
     """The topmost eligible control whose bounds contain (x, y) — the F3
     join used to tell phantom-affordance from discoverability (#783).
 
@@ -230,15 +230,82 @@ def widget_at(widgets, x, y):
     (even a tied one) resolves to the control the real UI input router
     would pick, independent of the dump list's own (Lua-table-derived)
     order. A missing `paintKey`/`paintOrder` defaults to 0.
+
+    `route_aware` (#1750) switches the join to reproduce the real
+    left-click router (`UI.InputOwnership.routePointer`) instead of
+    "topmost eligible record". The caller turns it on only for a
+    default/left `click` action over a record set that actually
+    carries the routing facts (see `routing_aware_records`); drag,
+    right/middle clicks, and legacy traces keep the behavior described
+    above, unchanged. The routing precedence is:
+
+      0. Records the engine reports as out of pointer scope
+         (`inScope is False` — a page below the modal boundary) are
+         dropped outright. They are unreachable, so they can neither
+         correlate nor occlude.
+      1. Among the remaining records containing the point, find the
+         topmost EFFECTIVE pointer-blocking surface
+         (`pointerBlocking is True`) by the same `(paintKey,
+         paintOrder)` ranking, which is exactly what
+         `UI.Manager.Query.topHitBy` picks under
+         `elementBlocksPointer`.
+      2. If that surface is an active left-click target
+         (`leftClickTarget is True`), correlate it — the click fires
+         its callback.
+      3. Otherwise, if it is a shown, explicitly pointer-blocking
+         DISABLED left affordance (`leftClickAffordance is True`,
+         `leftClickTarget` not True), correlate that disabled control
+         itself. It blocks and it is visibly a control, so #783's
+         "the control is there but disabled" reading still holds.
+      4. Otherwise the blocker is passive (a callback-less occlusion
+         surface, or a right-click-only control): correlate NOTHING,
+         and never fall through to a lower control the router could
+         not have reached.
+      5. Only when no pointer-blocking surface covers the point at all
+         does the disabled-affordance fallback apply: the topmost
+         shown disabled left affordance, preserving #783 for a lone
+         `setClickable(false)` control (which is NOT pointer-blocking
+         unless it opted in explicitly).
+
+    Note what case 5 deliberately does not cover: an in-scope, shown,
+    non-blocking record that is neither an active target nor a
+    disabled left affordance (an enabled control carrying only a
+    right-click callback, say) correlates to nothing, matching
+    `routePointer`'s `RouteMiss`. Records marked `control: False` stay
+    passive context — they can OCCLUDE as blockers (that is the whole
+    point of admitting the callback-less blocker) but can never be the
+    correlated control. A record with no routing fields at all in an
+    otherwise route-aware set is one the engine has no live element
+    for, so it neither blocks nor correlates.
     """
     if not isinstance(widgets, list):
         return None
     best = None
     best_key = None
+    # #1750 route-aware pass: collected here, resolved by the routing
+    # precedence below. `blocker` is the topmost effective
+    # pointer-blocking surface at the point; `affordance` is the
+    # topmost shown disabled left-control affordance, used only as
+    # case 5's no-blocker fallback.
+    blocker = None
+    blocker_key = None
+    affordance = None
+    affordance_key = None
     for w in widgets:
         if not isinstance(w, dict):
             continue
-        if w.get("control") is False or w.get("visible") is False:
+        if w.get("visible") is False:
+            continue
+        # A `control: False` record is passive context: never a
+        # correlation target. In the route-aware pass it is still read
+        # for OCCLUSION (a callback-less pointer blocker is exactly
+        # such a record), so the eligibility test moves to the point
+        # where a winner is chosen rather than gating the scan.
+        if not route_aware and w.get("control") is False:
+            continue
+        # Out of pointer scope (below the modal boundary) — the router
+        # cannot see it, so it neither correlates nor occludes.
+        if route_aware and w.get("inScope") is False:
             continue
         # #749: prefer the effective interactive bounds (the rect a real
         # hit resolves against). A value of False is the engine's DISTINCT
@@ -267,9 +334,72 @@ def widget_at(widgets, x, y):
         if not hit:
             continue
         key = (w.get("paintKey", 0), w.get("paintOrder", 0))
+        if route_aware:
+            if w.get("pointerBlocking") is True:
+                if blocker is None or key >= blocker_key:
+                    blocker, blocker_key = w, key
+            if (w.get("control") is not False
+                    and w.get("leftClickAffordance") is True
+                    and w.get("leftClickTarget") is not True):
+                if affordance is None or key >= affordance_key:
+                    affordance, affordance_key = w, key
+            continue
         if best is None or key >= best_key:
             best, best_key = w, key
+    if route_aware:
+        if blocker is not None:
+            # An active left target activates; an explicitly blocking
+            # disabled left affordance correlates to itself; anything
+            # else consumed the click without a left-control meaning,
+            # so nothing correlates and nothing lower is reachable.
+            if blocker.get("control") is not False:
+                if blocker.get("leftClickTarget") is True:
+                    return blocker
+                if blocker.get("leftClickAffordance") is True:
+                    return blocker
+            return None
+        return affordance
     return best
+
+
+def routing_aware_records(widgets) -> bool:
+    """True when this record set carries #1750's routing facts, so the
+    click join may use `widget_at(..., route_aware=True)`.
+
+    Detected EXPLICITLY, by the presence of the fields themselves, and
+    never inferred from their values. On a pre-#1750 trace every
+    record lacks `pointerBlocking`, so reading absent as False would
+    make the routing precedence conclude "no blocking surface" and
+    drop straight to the disabled-affordance fallback — silently
+    correlating a disabled control over an enabled one on every legacy
+    trace. `inScope` is the marker because the engine emits it for
+    every element it has a live record for (`pushElementInfoTable`),
+    and both `ui.dumpWidgets` passes carry it through."""
+    if not isinstance(widgets, list):
+        return False
+    return any(isinstance(w, dict) and "inScope" in w for w in widgets)
+
+
+def _is_left_click(action: dict) -> bool:
+    """True for a `click` action the #1750 routing contract covers:
+    button omitted (or otherwise falsy — `translate_action` normalizes
+    that to "left") or naming left.
+
+    Matched case-insensitively because the engine itself case-folds
+    (`Engine.Input.Inject.resolveButton` lowercases before matching),
+    so "Left" really does inject a left click. No other normalization
+    is applied: the engine does not strip whitespace either, and a
+    value it would reject outright must not be treated as a left click
+    here. Anything that does not resolve to left — "right", "middle",
+    a typo, a non-string — falls through to the legacy join, so an
+    unexpected token can never cause a false routing suppression.
+    """
+    if action.get("do") != "click":
+        return False
+    button = action.get("button")
+    if not button:
+        return True
+    return isinstance(button, str) and button.lower() == "left"
 
 
 BAD_OUTCOMES = ("rejected", "noop", "deadclick", "partial")
@@ -322,9 +452,26 @@ def build_signals(trace_dir: str, turns: list[dict]) -> list[dict]:
             changed = (hashes[i + 1] != hashes[i]) if i + 1 < len(turns) else None
         clicked = None
         if action.get("do") in ("click", "drag") and action.get("x") is not None:
-            clicked = widget_at(oracle.get("widgets"),
+            # #1750: correlate against the PRE-INJECTION record set when
+            # the trace has one (`routing_widgets`), so a callback that
+            # changed modal or element state during this very action
+            # can't rewrite the context the click was routed against.
+            # A trace recorded before #1750 has no such key and falls
+            # back to `widgets`, exactly as before.
+            if "routing_widgets" in oracle and oracle.get("routing_widgets") is not None:
+                click_records = oracle.get("routing_widgets")
+            else:
+                click_records = oracle.get("widgets")
+            # Route-aware only for a default/left click over a record
+            # set carrying the routing facts; drag and non-left buttons
+            # keep the legacy join (requirement 8 — this issue
+            # establishes no router-parity contract for them).
+            route_aware = (_is_left_click(action)
+                           and routing_aware_records(click_records))
+            clicked = widget_at(click_records,
                                 float(action.get("x", -1)),
-                                float(action.get("y", -1)))
+                                float(action.get("y", -1)),
+                                route_aware=route_aware)
         bad = [o for o in outcomes
                if isinstance(o, dict) and o.get("outcome") in BAD_OUTCOMES]
         widgets = oracle.get("widgets")
@@ -1279,6 +1426,176 @@ def selftest() -> int:
                   "interactiveBounds": {"x": 20, "y": 20, "w": 60, "h": 0}}
     check("a degenerate (zero-extent) interactiveBounds is skipped (#749)",
           widget_at([degenerate], 30, 20) is None)
+
+    # ---- #1750: routing-aware left-click correlation ----------------
+    # Every fixture below carries the engine-owned routing facts
+    # (inScope/pointerBlocking/leftClickTarget/leftClickAffordance) the
+    # producer now emits, so `routing_aware_records` selects the
+    # route-aware join. Geometry is shared: all of them cover (10, 10).
+    def rec(rid, **kw):
+        base = {"id": rid, "control": True, "visible": True,
+                "bounds": {"x": 0, "y": 0, "w": 100, "h": 100},
+                "inScope": True, "pointerBlocking": False,
+                "leftClickTarget": False, "leftClickAffordance": False,
+                "paintKey": 0, "paintOrder": 0}
+        base.update(kw)
+        return base
+
+    # An ACTIVE left control: clickable + an onClick callback, which is
+    # exactly what makes elementBlocksPointer fire.
+    def active(rid, **kw):
+        return rec(rid, pointerBlocking=True, leftClickTarget=True,
+                   leftClickAffordance=True, enabled=True, **kw)
+
+    check("routing_aware_records detects the new facts, and rejects a legacy set",
+          routing_aware_records([active("button:a")])
+          and not routing_aware_records([{"id": "button:legacy", "control": True}])
+          and not routing_aware_records("nope"))
+
+    # 5.1/5.4 — empty exclusive-modal space. The modal itself owns the
+    # boundary; the HUD control below reports inScope=False, so the
+    # click correlates to nothing rather than to an unreachable button.
+    hud_under_modal = active("button:hud", inScope=False, paintKey=100)
+    check("empty exclusive-modal space never correlates a lower-page control (#1750)",
+          widget_at([hud_under_modal], 10, 10, route_aware=True) is None)
+    check("...while the same record still correlates on the legacy path",
+          widget_at([hud_under_modal], 10, 10) is hud_under_modal)
+
+    # 5.1/5.4 — a passive, callback-less pointer blocker (an explicit
+    # UI.setPointerBlocking panel) suppresses every lower control. It
+    # is admitted to the dump as control=False occlusion evidence.
+    passive_blocker = rec("element:blocker", control=False,
+                          pointerBlocking=True, paintKey=20000)
+    lower_button = active("button:lower", paintKey=10)
+    check("a passive callback-less blocker suppresses the control below it (#1750)",
+          widget_at([lower_button, passive_blocker], 10, 10,
+                    route_aware=True) is None)
+    check("...and is never itself the correlated control (control=False) (#1750)",
+          widget_at([passive_blocker], 10, 10, route_aware=True) is None)
+    check("...independent of the dump list's own order (#1750)",
+          widget_at([passive_blocker, lower_button], 10, 10,
+                    route_aware=True) is None)
+
+    # 5.5 vs 5.1 — a DISABLED control that did not opt into blocking is
+    # not a pointer surface at all (setClickable(false) drops the
+    # implicit block), so the enabled control below it wins, exactly as
+    # routePointer would resolve it.
+    disabled_nonblocking = rec("button:disabled_hi", enabled=False,
+                               leftClickAffordance=True, paintKey=30000)
+    check("a lower enabled control wins over a higher NON-blocking disabled control (#1750)",
+          widget_at([lower_button, disabled_nonblocking], 10, 10,
+                    route_aware=True) is lower_button)
+    check("...whereas the legacy join would have picked the higher disabled one",
+          widget_at([lower_button, disabled_nonblocking], 10, 10)
+          is disabled_nonblocking)
+
+    # 5.3 — a disabled control that DID opt into pointer blocking
+    # consumes the click; #783 keeps it correlatable as the affordance
+    # that explains the dead click, and the control below stays
+    # unreachable.
+    disabled_blocking = rec("button:disabled_block", enabled=False,
+                            pointerBlocking=True, leftClickAffordance=True,
+                            paintKey=30000)
+    check("an explicitly blocking disabled control suppresses the lower control "
+          "and correlates to itself (#1750)",
+          widget_at([lower_button, disabled_blocking], 10, 10,
+                    route_aware=True) is disabled_blocking)
+
+    # 5.5 — a lone shown disabled affordance, with nothing blocking
+    # anywhere: #783's behavior is preserved unchanged.
+    check("a lone shown disabled affordance is still correlatable (#783 preserved)",
+          widget_at([disabled_nonblocking], 10, 10,
+                    route_aware=True) is disabled_nonblocking)
+
+    # 5.4, explicit: in scope, shown, control=True, but neither an
+    # effective blocking surface nor a disabled LEFT affordance — e.g.
+    # an enabled control carrying only a right-click callback. Nothing
+    # correlates (routePointer's RouteMiss); the fallback must not
+    # widen to enabled non-blocking controls.
+    right_only_nonblocking = rec("button:rightonly", enabled=True,
+                                 paintKey=40)
+    check("an in-scope shown control that neither blocks nor offers a left "
+          "affordance correlates to nothing (#1750, RouteMiss)",
+          widget_at([right_only_nonblocking], 10, 10, route_aware=True) is None)
+    # ...and a right-click-only control that DOES block (clickable +
+    # onRightClick makes elementBlocksPointer fire) suppresses the
+    # lower control without correlating itself.
+    right_only_blocker = rec("button:rightblock", enabled=True,
+                             pointerBlocking=True, paintKey=40000)
+    check("a blocking right-click-only control suppresses the lower control "
+          "and correlates nothing (#1750)",
+          widget_at([lower_button, right_only_blocker], 10, 10,
+                    route_aware=True) is None)
+
+    # Requirement 7 — a record set with no routing fields keeps the
+    # legacy (paintKey, paintOrder) winner. Asserted as the actual
+    # winner, not merely "no exception": treating absent pointerBlocking
+    # as False would drop to the disabled-affordance fallback and pick
+    # the DISABLED record over the enabled one.
+    legacy_enabled = {"id": "button:legacy_enabled", "control": True,
+                      "visible": True, "enabled": True, "paintKey": 10,
+                      "bounds": {"x": 0, "y": 0, "w": 100, "h": 100}}
+    legacy_disabled = {"id": "button:legacy_disabled", "control": True,
+                       "visible": True, "enabled": False, "paintKey": 5,
+                       "bounds": {"x": 0, "y": 0, "w": 100, "h": 100}}
+    legacy_set = [legacy_disabled, legacy_enabled]
+    check("a legacy record set is not routing-aware and keeps its "
+          "(paintKey, paintOrder) winner (#1750 req 7)",
+          not routing_aware_records(legacy_set)
+          and widget_at(legacy_set, 10, 10) is legacy_enabled)
+
+    # Requirement 1/8 — the route-aware contract covers default and
+    # explicit left clicks only. Everything else keeps the legacy join.
+    check("_is_left_click accepts an omitted button and an explicit left",
+          _is_left_click({"do": "click"})
+          and _is_left_click({"do": "click", "button": None})
+          and _is_left_click({"do": "click", "button": ""})
+          and _is_left_click({"do": "click", "button": "left"})
+          and _is_left_click({"do": "click", "button": "Left"}))
+    check("_is_left_click rejects other buttons, drag, and unusable values",
+          not _is_left_click({"do": "click", "button": "right"})
+          and not _is_left_click({"do": "click", "button": "middle"})
+          and not _is_left_click({"do": "click", "button": " left "})
+          and not _is_left_click({"do": "click", "button": 1})
+          and not _is_left_click({"do": "drag", "button": "left"}))
+
+    # The build_signals join end to end: which record set it reads, and
+    # when it goes route-aware. `routing_widgets` is the pre-injection
+    # capture; `widgets` here is a deliberately DIFFERENT (post-callback)
+    # set, so preferring the wrong one is visible in the result.
+    def click_turn(n, oracle, **action_kw):
+        action = {"do": "click", "x": 10, "y": 10}
+        action.update(action_kw)
+        return {"turn": n, "player": {"action": action}, "oracle": oracle}
+
+    post_only = active("button:post_only", paintKey=1)
+    routing_turns = [
+        # 1: routing set says the HUD control is under a modal → no
+        # correlation, even though the post-injection set (the modal
+        # closed itself) shows a plainly clickable button.
+        click_turn(1, {"routing_widgets": [hud_under_modal],
+                       "widgets": [post_only]}),
+        # 2: no routing_widgets key at all (a pre-#1750 trace) → the
+        # legacy join over `widgets`.
+        click_turn(2, {"widgets": legacy_set}),
+        # 3: right-click over the same routing set → legacy join, which
+        # does correlate the out-of-scope record.
+        click_turn(3, {"routing_widgets": [hud_under_modal],
+                       "widgets": [post_only]}, button="right"),
+    ]
+    with tempfile.TemporaryDirectory() as rtmp:
+        rsig = build_signals(rtmp, routing_turns)
+    check("the click join prefers the pre-injection routing record set (#1750)",
+          rsig[0]["clicked_widget"] is None,
+          str(rsig[0]["clicked_widget"]))
+    check("a trace with no routing_widgets falls back to `widgets` and the "
+          "legacy winner (#1750 req 7)",
+          rsig[1]["clicked_widget"] is legacy_enabled,
+          str(rsig[1]["clicked_widget"]))
+    check("a right click keeps the legacy join even on a routing-aware set "
+          "(#1750 req 8)",
+          rsig[2]["clicked_widget"] is hud_under_modal,
+          str(rsig[2]["clicked_widget"]))
 
     with tempfile.TemporaryDirectory() as tmp:
         tdir = build_canned_trace(os.path.join(tmp, "trace"))

@@ -142,7 +142,8 @@ def _count_f4_outcomes(trace: SessionTrace, oracle: dict) -> None:
 
 
 def _merge_oracle(pre_ctx: dict, pre_events: dict, post_events: dict | None,
-                  post_screenshot: str | None, visual_change: bool) -> dict:
+                  post_screenshot: str | None, visual_change: bool,
+                  route_ctx: dict | None = None) -> dict:
     """Combine a turn's pre-step affordance context (widgets/menu/
     paused/seed, captured once after inject+settle — #775) with its
     event-log/action-outcome drains into the single oracle record the
@@ -162,11 +163,23 @@ def _merge_oracle(pre_ctx: dict, pre_events: dict, post_events: dict | None,
     and both belong to this turn. They are deliberately not merged into
     `event_log_new` — a gap is the absence of evidence, and collapsing
     it into the row list would be indistinguishable from an unchanged
-    log, which is the silent loss the sequence exists to expose."""
+    log, which is the silent loss the sequence exists to expose.
+
+    `route_ctx` (#1750) is the separate PRE-INJECTION widget read
+    (`PlaytestEngine.oracle_routing`). It is stored under its own
+    `routing_widgets` key rather than replacing `widgets`, because the
+    two answer different questions: `widgets` is #775's post-inject,
+    pre-step affordance context that the session digest and the seed
+    promotion already consume with that meaning, while
+    `routing_widgets` is the record set the click was actually routed
+    against. The critic prefers `routing_widgets` for its click join
+    and falls back to `widgets` when the key is absent, so a trace
+    recorded before #1750 still correlates exactly as it did."""
     post_events = post_events or {}
     return {
         "player_invisible": True,
         "widgets": pre_ctx.get("widgets"),
+        "routing_widgets": (route_ctx or {}).get("widgets"),
         "current_menu": pre_ctx.get("current_menu"),
         "paused": pre_ctx.get("paused"),
         "world_seed": pre_ctx.get("world_seed"),
@@ -339,7 +352,20 @@ def run_session(eng: PlaytestEngine, player, trace: SessionTrace, *,
         # into a separate local first — see _run_step's docstring for
         # why that matters (#728 review).
         phase = ["not_started"]
+        route_ctx = None
         try:
+            # 4a. routing oracle (#1750): the widget record set the
+            # click is about to be routed against, read BEFORE the
+            # first input call of this action lands. The action is
+            # already chosen at this point, so this is the state the
+            # player acted on AND the state the real pointer router
+            # resolves against — a callback that opens, closes, or
+            # replaces a modal, or that creates/destroys elements, can
+            # no longer rewrite it. It rides into the record as its own
+            # `routing_widgets` key; #775's post-inject `widgets` and
+            # the menu/pause/seed fields keep their existing sampling
+            # point below.
+            route_ctx = eng.oracle_routing()
             # inject one call at a time so a mid-action crash still
             # records the acknowledged prefix
             for call in calls:
@@ -359,7 +385,8 @@ def run_session(eng: PlaytestEngine, player, trace: SessionTrace, *,
             # to a step-scoped local that's never assigned).
             pre_ctx = eng.oracle_context()
             pre_events = eng.oracle_events()
-            oracle = _merge_oracle(pre_ctx, pre_events, None, None, False)
+            oracle = _merge_oracle(pre_ctx, pre_events, None, None, False,
+                                   route_ctx)
             _promote_seed(trace, oracle)
             _count_f4_outcomes(trace, oracle)
 
@@ -415,7 +442,8 @@ def run_session(eng: PlaytestEngine, player, trace: SessionTrace, *,
                 visual_change = _file_hash(post_frame) != frame_hash
                 oracle = _merge_oracle(
                     pre_ctx, pre_events, post_events,
-                    os.path.relpath(post_frame, trace.dir), visual_change)
+                    os.path.relpath(post_frame, trace.dir), visual_change,
+                    route_ctx)
         finally:
             trace.record_turn({
                 "turn": turn,
@@ -525,7 +553,13 @@ def run_replay(eng: PlaytestEngine, source_dir: str, trace: SessionTrace,
         # into a separate local first — see _run_step's docstring for
         # why that matters (#728 review).
         phase = ["not_started"]
+        route_ctx = None
         try:
+            # Routing oracle (#1750) — see run_session's identical
+            # comment: read before this turn's first replayed input
+            # call, so a replay trace carries the same pre-injection
+            # correlation context a live session does.
+            route_ctx = eng.oracle_routing()
             for call in entry["pre"]:
                 acks.extend(eng.inject([call]))
                 sent.append(call)
@@ -536,7 +570,8 @@ def run_replay(eng: PlaytestEngine, source_dir: str, trace: SessionTrace,
             # step still retains at least this much.
             pre_ctx = eng.oracle_context()
             pre_events = eng.oracle_events()
-            oracle = _merge_oracle(pre_ctx, pre_events, None, None, False)
+            oracle = _merge_oracle(pre_ctx, pre_events, None, None, False,
+                                   route_ctx)
             _promote_seed(trace, oracle)
             _count_f4_outcomes(trace, oracle)
             if entry["step_phase"] != "not_started":
@@ -555,7 +590,8 @@ def run_replay(eng: PlaytestEngine, source_dir: str, trace: SessionTrace,
                 visual_change = _file_hash(post_frame) != frame_hash
                 oracle = _merge_oracle(
                     pre_ctx, pre_events, post_events,
-                    os.path.relpath(post_frame, trace.dir), visual_change)
+                    os.path.relpath(post_frame, trace.dir), visual_change,
+                    route_ctx)
         finally:
             trace.record_turn({
                 "turn": turn, "ts": ts,
@@ -1053,6 +1089,88 @@ def selftest() -> int:
               r2crashed and len(r2turns) == 1
               and r2turns[0]["injected"] == ['return input.keyDown("W")']
               and r2turns[0].get("step_phase") == "not_started")
+
+        # 3i-bis (#1750). An engine whose input injection CHANGES modal
+        # and widget state: before the click the HUD button sits under
+        # an exclusive modal (out of pointer scope); the click's own
+        # callback closes that modal, so by the time the post-inject
+        # oracle samples, the very same button reads as in scope and
+        # plainly clickable. The trace must record the PRE-injection
+        # state as this click's routing context, otherwise the offline
+        # critic correlates the click to a control the router could not
+        # have reached at the moment it was routed.
+        class ModalClosingEngine(FakeEngine):
+            _HUD = {"id": "button:hud", "control": True, "visible": True,
+                    "bounds": {"x": 0, "y": 0, "w": 100, "h": 100},
+                    "pointerBlocking": True, "leftClickTarget": True,
+                    "leftClickAffordance": True,
+                    "paintKey": 100, "paintOrder": 0}
+
+            def __init__(self):
+                super().__init__()
+                self.modal_open = True
+                self.routing_reads: list[bool] = []
+
+            def _hud(self, in_scope):
+                return dict(self._HUD, inScope=in_scope)
+
+            def inject(self, calls):
+                # the click's Lua callback closes the modal
+                if any("click" in c for c in calls):
+                    self.modal_open = False
+                return super().inject(calls)
+
+            def oracle_routing(self):
+                self.routing_reads.append(self.modal_open)
+                return {"widgets": [self._hud(not self.modal_open)]}
+
+            def oracle_context(self):
+                snap = super().oracle_context()
+                snap["widgets"] = [self._hud(not self.modal_open)]
+                return snap
+
+        cdir = os.path.join(tmp, "routing_capture")
+        ctrace = SessionTrace(cdir, {"mode": "selftest-routing"})
+        ceng = ModalClosingEngine()
+        creason = run_session(
+            ceng, agent_mod.ScriptedAgent([{"do": "click", "x": 10, "y": 10}]),
+            ctrace, turns=1, dt=0.0, max_seconds=None, memory_turns=4,
+            stuck_k=99, settle=0.0)
+        ctrace.finish(creason)
+        cturns = load_turns(cdir)
+        c_oracle = cturns[0]["oracle"]
+        check("the routing oracle is sampled before the turn's first "
+              "injected call (#1750)",
+              ceng.routing_reads == [True]
+              and ceng.injected and "click" in ceng.injected[0],
+              f"modal_open at each routing read: {ceng.routing_reads}")
+        check("the recorded routing context is the PRE-injection state (#1750)",
+              c_oracle["routing_widgets"][0]["inScope"] is False,
+              str(c_oracle.get("routing_widgets")))
+        check("...while #775's post-inject `widgets` keeps its own, changed "
+              "sampling point (#1750)",
+              c_oracle["widgets"][0]["inScope"] is True,
+              str(c_oracle.get("widgets")))
+        from critic import build_signals as _build_signals
+        c_signals = _build_signals(cdir, cturns)
+        check("the critic correlates the click against the pre-injection "
+              "context, not the post-callback one (#1750)",
+              c_signals[0]["clicked_widget"] is None,
+              str(c_signals[0]["clicked_widget"]))
+
+        # Replay takes the identical pre-injection capture, so a
+        # replayed trace carries the same correlation context.
+        rcdir = os.path.join(tmp, "routing_capture_replay")
+        rctrace = SessionTrace(rcdir, {"mode": "selftest-routing-replay"})
+        rceng = ModalClosingEngine()
+        rctrace.finish(run_replay(rceng, cdir, rctrace, dt=0.0, settle=0.0))
+        rcturns = load_turns(rcdir)
+        check("replay samples its routing oracle before injecting too (#1750)",
+              rceng.routing_reads == [True]
+              and rcturns[0]["oracle"]["routing_widgets"][0]["inScope"] is False
+              and rcturns[0]["oracle"]["widgets"][0]["inScope"] is True,
+              f"{rceng.routing_reads}; "
+              f"{rcturns[0]['oracle'].get('routing_widgets')}")
 
         # 3j. crash mid multi-call action: the acknowledged prefix of a
         # drag survives in trace + replay; the unacked remainder is

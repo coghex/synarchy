@@ -9,20 +9,33 @@
 --     'updateFontState') — the only writers of 'apTextureHandles' and
 --     'apFontHandles';
 --   * a teardown path ('unloadAsset', 'cleanupAssetManager', and its
---     helper @cleanupResources@) that nothing currently calls.
+--     helper @cleanupResources@).
 --
---   The teardown path is kept deliberately. The live texture upload
---   path ('Engine.Scripting.Lua.Message.Texture') registers atlases
---   through 'Engine.Graphics.Vulkan.Texture.Bindless.registerTexture'
+--   The live texture upload path
+--   ('Engine.Scripting.Lua.Message.Texture') registers atlases through
+--   'Engine.Graphics.Vulkan.Texture.Bindless.registerTexture'
 --   directly — or 'registerPinnedTexture', for a compiled
 --   unit-animation atlas that must stay nearest (#1259) — and stores a
 --   cleanup closure on every atlas it loads ('taCleanup', freeing that
 --   atlas's image view, image, and device memory; no sampler, since a
 --   slot's sampler always comes from the shared refcounted cache rather
---   than being owned by the atlas). The functions below are the ONLY code that ever runs those
---   closures, so they are the only path capable of releasing a loaded
---   texture's GPU resources. Whether to wire them up is a separate
---   GPU-resource-lifetime question.
+--   than being owned by the atlas). The functions below are the ONLY
+--   code that ever runs those closures, so they are the only path
+--   capable of releasing a loaded texture's GPU resources.
+--
+--   'cleanupAssetManager' is the shutdown drain, and since #1691
+--   'Engine.Loop.Shutdown.shutdownEngine' calls it — after its
+--   device-idle wait and before the generic Vulkan cleanup sweep, in a
+--   boot mode that has a device and its queues. Until then nothing
+--   called it, so every atlas loaded from disk was still holding a
+--   live @VkImage@ \/ @VkImageView@ \/ @VkDeviceMemory@ when the
+--   logical device was destroyed.
+--
+--   'unloadAsset' is the mid-session single-atlas release and still has
+--   no caller. #1281 cleared its alias-safety blocker, but WHO would
+--   release a texture while the session runs — a refcount, a Lua verb,
+--   or nobody — is a separate policy question (#1691 put it out of
+--   scope explicitly), so it stays retained and uncalled.
 module Engine.Asset.Manager
   ( generateTextureHandle
   , TextureHandleReservation(..)
