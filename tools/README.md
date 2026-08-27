@@ -558,6 +558,18 @@ over a probe that's genuinely broken. `--tail N` prints the last `N` lines
 of a failing probe's captured output for a quicker look without re-running
 it by hand.
 
+**Timeouts are per probe.** Most registered probes use the ordinary 900-second
+default. A scenario whose complete expected workload structurally exceeds that
+class declares a validated key-specific default in
+`run_probes.PROBE_TIMEOUT_OVERRIDES`; the runner prints each probe's effective
+budget when it starts or completes. `save_compat_migration` uses 3600 seconds
+because its manifest-wide two-process/two-real-codec-dump path has a measured
+clean runtime above 2300 seconds. Passing `--timeout SECONDS` explicitly
+overrides both the ordinary and key-specific defaults for every selected probe,
+including solo retries. Keep short explicit values available for deliberate
+timeout-path testing; do not raise the global default to accommodate one
+exceptional scenario.
+
 **Prebuilt execution: one Cabal contact per run (#1570).** Probes used to
 launch their engine as `cabal run -v0 exe:synarchy --`, so a `--jobs N`
 sweep put N concurrent Cabal processes on the one `dist-newstyle` and an
