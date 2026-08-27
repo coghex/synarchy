@@ -399,11 +399,11 @@ spec = describe "commanded order stall budget" $ do
                 , "tick(10, 'follow_command')"
                 -- unit_ai.lua's watchdog stops the unit, files its own
                 -- `Stuck — can't reach destination` warning on this same
-                -- surface, and records that it did. Its last-progress
-                -- stamp is 6 s back — after this order was issued, so
-                -- the motionless stretch was this order's own walk.
+                -- surface, and records that it did. This order is the
+                -- one maintainTask has been servicing all along, so it
+                -- is the one that was walking.
                 , "s.currentAction = 'follow_command'"
-                , "stall.noteStuckReport(1, s, NOW - 6)"
+                , "stall.noteStuckReport(1, s)"
                 , "tick(60, 'follow_command')"
                 , "assert(s.commandedTask == nil, 'the order still expires')"
                 , "assert(#EVENTS == 0,"
@@ -420,7 +420,7 @@ spec = describe "commanded order stall budget" $ do
                 , "                    player = true }"
                 , "tick(10, 'treat_ally')"
                 , "s.currentAction = 'treat_ally'"
-                , "stall.noteStuckReport(1, s, NOW - 6)"
+                , "stall.noteStuckReport(1, s)"
                 , "tick(70, 'follow_command')"
                 , "assert(s.commandedTask == nil, 'the order expires')"
                 , "assert(#EVENTS == 1,"
@@ -438,9 +438,6 @@ spec = describe "commanded order stall budget" $ do
                 , "EVENTS = {}"
                 , "s.commandedTask = { x = 40, y = 0, startedAt = NOW,"
                 , "                    player = true }"
-                -- The unit goes motionless under the first order: its
-                -- last-progress stamp stops advancing here.
-                , "local movingAt = NOW"
                 , "tick(10, 'follow_command')"
                 -- The player commands somewhere else. maintainTask sees
                 -- the replacement first...
@@ -450,13 +447,43 @@ spec = describe "commanded order stall budget" $ do
                 -- ...and only then does the watchdog report the walk
                 -- the FIRST order was doing.
                 , "s.currentAction = 'follow_command'"
-                , "stall.noteStuckReport(1, s, movingAt)"
+                , "stall.noteStuckReport(1, s)"
                 , "tick(70, 'follow_command')"
                 , "assert(s.commandedTask == nil,"
                 , "  'the replacement expires on its own budget')"
                 , "assert(#EVENTS == 1,"
                 , "  'and reports, since the watchdog never spoke about '"
                 , "  .. 'it: ' .. tostring(#EVENTS))"
+                ]
+
+        it "makes that distinction by task IDENTITY, not by comparing \
+           \timestamps: game time need not advance between the \
+           \player's command and the tick that first sees it, so the \
+           \replacement can carry the very same startedAt as the \
+           \moment the old walk was last making progress" $
+            runsOk $ lns
+                [ prelude
+                , "EVENTS = {}"
+                , "s.commandedTask = { x = 40, y = 0, startedAt = NOW,"
+                , "                    player = true }"
+                , "tick(10, 'follow_command')"
+                -- The clock does not move: NOW is the last instant the
+                -- watchdog would have stamped, AND the replacement's
+                -- own issue time. A > / >= test on those two numbers
+                -- cannot separate these orders; the two-slot record
+                -- does.
+                , "local tie = NOW"
+                , "s.commandedTask = { x = 80, y = 0, startedAt = tie,"
+                , "                    player = true }"
+                , "assert(s.commandedTask.startedAt == tie,"
+                , "  'the replacement is issued at the tying instant')"
+                , "tick(0.25, 'follow_command')"
+                , "s.currentAction = 'follow_command'"
+                , "stall.noteStuckReport(1, s)"
+                , "tick(70, 'follow_command')"
+                , "assert(s.commandedTask == nil, 'the replacement expires')"
+                , "assert(#EVENTS == 1,"
+                , "  'and still reports for itself: ' .. tostring(#EVENTS))"
                 ]
 
         it "reports a SECOND stall after a genuine closest approach — \
@@ -469,7 +496,7 @@ spec = describe "commanded order stall budget" $ do
                 , "                    player = true }"
                 , "tick(10, 'follow_command')"
                 , "s.currentAction = 'follow_command'"
-                , "stall.noteStuckReport(1, s, NOW - 6)"
+                , "stall.noteStuckReport(1, s)"
                 , "place(10, 0)   -- 30 tiles closer: a real approach"
                 , "tick(10, 'follow_command')"
                 , "assert(s.commandedTask.bestDist < 31,"
