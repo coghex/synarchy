@@ -278,11 +278,29 @@ YAML_BLOCK_SCALAR = re.compile(r"(?:^|[\s:])[|>][+-]?[0-9]*[+-]?\s*$")
 
 def _yaml_scalar_start(line: str, i: int) -> bool:
     """True when the quote at `i` begins a node rather than sitting inside a
-    plain scalar (`don't`, `6" wide`), where YAML treats it as a character."""
+    plain scalar (`don't`, `6" wide`), where YAML treats it as a character.
+
+    A node may carry tag and anchor properties before its scalar
+    (`!!str "x"`, `&id "x"`, `key: !tag &id "x"`), each a whole
+    whitespace-delimited token, so those are stepped over rather than read as
+    plain-scalar text. A token merely CONTAINING `!` or `&` is not one:
+    `note: hello !world "x"` really is a plain scalar, and stepping past
+    `hello` would open a quoted scalar that is not there.
+    """
     j = i - 1
-    while j >= 0 and line[j] in " \t":
-        j -= 1
-    return j < 0 or line[j] in ":-,[{?"
+    while True:
+        while j >= 0 and line[j] in " \t":
+            j -= 1
+        if j < 0:
+            return True
+        if line[j] in ":-,[{?":
+            return True
+        start = j
+        while start >= 0 and line[start] not in " \t":
+            start -= 1
+        if line[start + 1] not in "!&":
+            return False
+        j = start          # a tag or anchor property: keep looking behind it
 
 
 def scan_yaml(lines: list[str]) -> list[bytearray]:

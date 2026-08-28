@@ -349,6 +349,61 @@ def test_legal_multiline_constructs_are_not_errors() -> None:
                f"(got {out.splitlines()[0]})")
 
 
+def test_yaml_tag_and_anchor_properties_precede_a_quoted_scalar() -> None:
+    """A node's tag/anchor properties sit between the indicator and the scalar,
+    so a quote after one still opens a quoted scalar. Missing that, the `#`
+    inside `!!str "literal # character"` reads as a comment and masks every
+    reference after it on the line."""
+    print("\n[req 4] a quote after a YAML tag or anchor still opens a scalar")
+    cases = {
+        "a tagged scalar": (
+            "data/tag.yaml",
+            '{note: !!str "literal # character", '
+            'icon: "assets/textures/nope/tagged.png"}\n',
+            "assets/textures/nope/tagged.png"),
+        "an anchored scalar": (
+            "data/anc.yaml",
+            '{note: &id "literal # character", '
+            'icon: "assets/textures/nope/anchored.png"}\n',
+            "assets/textures/nope/anchored.png"),
+        "a tagged and anchored scalar": (
+            "data/both.yaml",
+            '{note: !!str &id "literal # character", '
+            'icon: "assets/textures/nope/both.png"}\n',
+            "assets/textures/nope/both.png"),
+    }
+    for label, (path, text, ref) in cases.items():
+        code, out, err = check({path: text})
+        expect(code == ctp.EXIT_MISSING,
+               f"{label}: exits 1 (got {code}: {out.strip()} {err.strip()})")
+        expect(ref in out,
+               f"{label}: the reference after the scalar is still checked")
+        expect(skipped_count(out) == 0,
+               f"{label}: the `#` inside the scalar started no comment "
+               f"(got {out.splitlines()[0]})")
+
+
+def test_yaml_property_lookbehind_stops_at_a_plain_scalar() -> None:
+    """The counterpart to the rule above: only a whole whitespace-delimited
+    `!`/`&` token is a property. `hello !world "x"` is one plain scalar, so
+    its trailing comment is still a comment."""
+    print("\n[req 4] a `!` word inside a plain scalar is not a tag property")
+    code, out, err = check({
+        "data/plainprop.yaml":
+            'note: hello !world "still plain"'
+            '  # assets/textures/nope/prose.png\n'
+            'icon: assets/textures/nope/code.png\n',
+    })
+    expect(code == ctp.EXIT_MISSING,
+           f"exits 1 (got {code}: {out.strip()} {err.strip()})")
+    expect("assets/textures/nope/code.png" in out,
+           "the following line is still lexed as code")
+    expect("assets/textures/nope/prose.png" not in out,
+           "the trailing comment is still a comment")
+    expect(skipped_count(out) == 1,
+           f"exactly one comment skip (got {out.splitlines()[0]})")
+
+
 # ---------------------------------------------------------------------------
 # Requirement 5 — a genuinely missing reference still fails, all three shapes
 # ---------------------------------------------------------------------------
@@ -524,6 +579,8 @@ def main() -> int:
         test_haskell_operator_and_identifier_tick_are_not_comments()
         test_yaml_apostrophe_in_a_plain_scalar()
         test_yaml_hash_inside_a_plain_scalar_is_not_a_comment()
+        test_yaml_tag_and_anchor_properties_precede_a_quoted_scalar()
+        test_yaml_property_lookbehind_stops_at_a_plain_scalar()
         test_missing_references_still_fail()
         test_lua_long_strings_are_executable_content()
         test_resolving_references_pass()
