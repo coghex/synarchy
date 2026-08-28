@@ -43,11 +43,13 @@ It asserts, against the live instance:
      `handleSetWindowMode` — away from the current mode and back —
      with the instance responsive and `rcWindowSizeRef`/
      `rcFramebufferSizeRef` live and sane through every branch, the
-     mode round-tripping, and (from a `windowed` start) the window
-     landing back on its exact pre-transition SIZE and POSITION.
-     `fullscreen` is never chosen as the target (it switches the
-     monitor video mode); `borderless` covers the same code shape
-     without disrupting the desktop,
+     mode round-tripping, and (from a `windowed` or `borderless` start)
+     the window landing back on its exact pre-transition SIZE and
+     POSITION. From a `borderless` start it additionally asserts that
+     the `windowed` leg reached the SAVED resolution — the #1731
+     startup-seed gate. `fullscreen` is never chosen as the target (it
+     switches the monitor video mode); `borderless` covers the same
+     code shape without disrupting the desktop,
   7. every setting it touched is restored to the value it found — the
      CONFIG resolution and the PHYSICAL window size independently.
 
@@ -77,13 +79,26 @@ script forces a publish (a no-op `engine.setResolution`) immediately
 before sampling — otherwise a window the human dragged since boot would
 be measured where it used to be.
 
-The geometry assertions run only from a `windowed` start, which is the
-state the cache contract is about. From a `borderless` or `fullscreen`
-start the values are printed but not asserted: `defaultWindowConfig`
-only applies `fullscreen` at window creation, so a
-borderless-configured boot comes up as a plain decorated window whose
-reported mode and real mode disagree, and the round trip legitimately
-moves it.
+A `borderless` start is the #1731 gate. `defaultWindowConfig` now asks
+GLFW for borderless as well as fullscreen, so such a boot comes up
+undecorated and monitor-sized and `wsAppliedMode` records
+`BorderlessWindowed`. Applying the mode at creation consumes the
+first-switch caching opportunity, so `createWindow` seeds the windowed
+cache from the decorated window it just made at the CONFIGURED size,
+immediately before mutating it — and the `windowed` leg of the round
+trip must therefore land on that saved resolution rather than
+`defaultWindowState`'s 800x600 fallback.
+
+That mid-transition size is what makes the gate real. `getVideoConfig()`
+reports the mode `setWindowModeFn` QUEUED, independently of what the
+render thread actually applied, so the mode strings round-trip whether
+or not the startup seed is right; only the geometry tells a correctly
+seeded `wsAppliedMode` from an incorrect one.
+
+A `fullscreen` start is the one case whose values are printed but not
+asserted: no windowed window was ever on screen, so its `windowed` leg
+legitimately lands on the `defaultWindowState` fallback. That gap is
+`PRR-2` in `docs/project_review_909-874.md`, tracked separately.
 
 Rendering is verified structurally (the instance keeps answering and
 keeps reporting a sane framebuffer). Whether the picture still LOOKS
@@ -331,31 +346,54 @@ def main() -> int:
         # way out (keyed off `wsAppliedMode`, the mode the render thread
         # last applied) and restores both on the way back in.
         after = geometry(mode_back)
-        if orig_mode != "windowed":
-            # Only a `windowed` start exercises the windowed-geometry
-            # cache contract. From `borderless`, `defaultWindowConfig`
-            # never applied borderless at window creation, so the
-            # reported mode and the window's real state disagree and the
-            # round trip legitimately relocates it.
-            print(f"    (started in {orig_mode!r}, not 'windowed' — geometry "
-                  f"round trip reported but not asserted: {before} -> {after})")
+        mid = geometry(mode_now)
+        if orig_mode == "fullscreen":
+            # The one start with no windowed geometry behind it: nothing
+            # ever cached a real windowed window, so the `windowed` leg
+            # legitimately lands on `defaultWindowState`'s fallback and
+            # the return leg relocates it. That is `PRR-2`, tracked
+            # separately and deliberately outside #1731's scope.
+            print("    (started in 'fullscreen' — geometry round trip "
+                  f"reported but not asserted: {before} -> {mid} -> {after})")
         else:
-            check("window-mode round trip restored the pre-transition size "
-                  "(#907)",
+            check(f"{orig_mode} start: window-mode round trip restored the "
+                  "pre-transition size (#907)",
                   before is not None and after is not None
                   and after[2:] == before[2:],
                   f"{before} -> {after}")
-            check("window-mode round trip restored the pre-transition "
-                  "position (#907)",
+            check(f"{orig_mode} start: window-mode round trip restored the "
+                  "pre-transition position (#907)",
                   before is not None and after is not None
                   and after[:2] == before[:2],
                   f"{before} -> {after}")
 
+        if orig_mode == "borderless":
+            # #1731. `before`/`after` above ARE the startup borderless
+            # monitor geometry, so those two checks already prove the
+            # return leg reached it. What is left is the leg in between.
+            # A borderless boot applies the mode at creation, so its
+            # first switch to `windowed` is an ENTRY —
+            # `applyWindowModeTransition` never caches on the way in, and
+            # the only thing that can put the user's resolution in the
+            # cache is `createWindow`'s own startup seed. Landing on
+            # 800x600 here is exactly the un-seeded failure.
+            #
+            # Asserted against the CONFIG resolution captured at startup:
+            # that is what `defaultWindowConfig` asked GLFW for, and
+            # therefore the size of the decorated pre-mutation window the
+            # seed was sampled from. Run this from a NON-DEFAULT saved
+            # resolution, or the assertion cannot tell the seed from the
+            # fallback.
+            check("borderless start: the windowed leg reached the saved "
+                  "resolution rather than the 800x600 fallback (#1731)",
+                  mid is not None and mid[2:] == (cfg_w, cfg_h),
+                  f"{mid} (saved config resolution {cfg_w}x{cfg_h})")
+
     # --- 7. leave the instance as we found it ---------------------------
-    # Re-pin the physical window size. From a `windowed` start the round
-    # trip already restored it (asserted above) and this is a no-op; from
-    # the other starting modes there is no windowed-geometry cache
-    # guaranteeing it came back to exactly where it began.
+    # Re-pin the physical window size. From a `windowed` or `borderless`
+    # start the round trip already restored it (asserted above) and this
+    # is a no-op; from a `fullscreen` start there is no windowed-geometry
+    # cache guaranteeing it came back to exactly where it began.
     lua(f"engine.setResolution({orig_w}, {orig_h}); return true")
     settle()
 

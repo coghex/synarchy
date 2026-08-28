@@ -38,6 +38,7 @@ import Location.Instance
     , LocationLifecycle(..), buildLocationInstances, instancesToList
     , setLocationLifecycle )
 import Location.Bounds (RelBounds(..))
+import Test.Headless.Location.Fixture (expectGeometry)
 import World.Chunk.Types (ChunkCoord(..))
 import World.Grid (gridToWorld)
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
@@ -129,7 +130,7 @@ paramsWith overlay discovered =
                  , HS.member (liChunk i) discovered ]
 
 baseFor ∷ LocationOverlay → LocationInstances
-baseFor = buildLocationInstances Nothing registryForQuads
+baseFor = expectGeometry ∘ buildLocationInstances Nothing registryForQuads
 
 -- | The same fixture generalised to ANY lifecycle state, for the
 --   six-constructor appearance sweep (#1230 requirement 3).
@@ -327,7 +328,8 @@ spec = describe "Location map icons" $ do
                     , (locationIconTextureName "unknown", hijackTex)
                     ]
                 iconSet = buildLocationIconMap reg nameReg fallbackTex
-                base = buildLocationInstances Nothing reg overlay
+                base = expectGeometry
+                    (buildLocationInstances Nothing reg overlay)
                 paramsAt l = defaultWorldGenParams
                     { wgpLocationOverlay   = overlay
                     , wgpLocationInstances =

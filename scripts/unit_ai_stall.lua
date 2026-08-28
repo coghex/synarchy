@@ -62,6 +62,16 @@
 -- thought tick, jitter included) and far below either budget
 -- (30 s / 60 s), so a genuinely stalled order still expires.
 --
+-- All three of those order timers REPORT the abandonment they decide
+-- on (#1769). pickup_timeout and transfer_order_timeout always did,
+-- in their own modules and unchanged by that issue; TASK_TIMEOUT_SEC's
+-- expiry did not, and the report maintainTask now emits below closes
+-- the one gap -- see that branch for the case it covers and the
+-- duplicate it avoids. The position-hold walk home is deliberately NOT
+-- among them: it is the residue of an order that already ARRIVED, not
+-- an order of its own, so releasing an unreachable anchor abandons
+-- nothing the player is waiting on.
+--
 -- Deliberately dependency-free: no requires at all (unit_ai_core
 -- requires THIS module, so requiring it back would be a load cycle),
 -- and the accounting itself takes `now` from its caller rather than
@@ -88,6 +98,78 @@ local function distance(ax, ay, bx, by)
     local dx = ax - bx
     local dy = ay - by
     return math.sqrt(dx * dx + dy * dy)
+end
+
+-- unit_ai_pickup's own player-facing unit name, duplicated rather
+-- than required for the same reason `distance` is: that module
+-- requires this one, so requiring it back would be a cycle. A personal
+-- name (#264) if the unit has one, else the species label, else a
+-- prettified def name.
+local function unitLabel(uid)
+    local info = unit.getInfo(uid)
+    if info and info.name and info.name ~= "" then return info.name end
+    if info and info.displayName and info.displayName ~= "" then
+        return info.displayName
+    end
+    local n = (info and info.defName) or "Unit"
+    return n:sub(1, 1):upper() .. n:sub(2)
+end
+
+-- Per-uid bookkeeping for the stuck-walk watchdog's report, read by
+-- maintainTask's timeout branch below. Deliberately module-local and
+-- NOT a field on the order or on aiState: it is a within-session fact
+-- about a message the player has already seen, not durable player
+-- intent, so it must not ride into a save (this change touches no save
+-- format). Dropped whole on every branch below that ends the order it
+-- describes.
+--
+--   walking  -- the task the ENGINE was last given a destination for,
+--               recorded by M.noteWalk from unit_ai_combat.lua's
+--               followCommandExecute. That is the only place a
+--               commanded task reaches unit.moveTo, and it is the only
+--               honest answer to "whose walk is this?": commandMove
+--               replaces `s.commandedTask` alone, and unit_ai.lua's
+--               switch-or-idle execute gate does NOT re-run an action
+--               that is already running, so a replacement issued mid-
+--               walk can stay un-issued for many ticks while the
+--               engine is still walking its predecessor's destination.
+--   reported -- the task the watchdog has already reported for, held
+--               as the TABLE rather than a flag, so a replacement is
+--               never covered by a report about its predecessor.
+--
+-- Identity rather than a timestamp comparison: game time need not
+-- advance between a player command and the tick that first sees it, so
+-- an order's `startedAt` can tie the watchdog's last-progress stamp and
+-- no comparison of the two numbers could separate those orders at all.
+local watchdog = {}
+
+-- Called by followCommandExecute when it hands a commanded task to the
+-- engine. Until that happens the task is merely PENDING, however long
+-- it has been current.
+function M.noteWalk(uid, task)
+    local w = watchdog[uid]
+    if not w then
+        w = {}
+        watchdog[uid] = w
+    end
+    w.walking = task
+end
+
+-- Called by the stuck-walk watchdog when it reports a unit that has
+-- stopped moving. Two things must BOTH hold before that report may
+-- silence a later stall expiry, or the wrong order is the one
+-- silenced: the commanded move's own action was in control over the
+-- interval just judged (so the stuck walk IS a commanded walk rather
+-- than some other action's), and the order still current is the one
+-- the engine was actually walking. Nothing is lost when the check
+-- refuses -- the order then reports for itself if it goes on to stall,
+-- which is the direction this issue exists to fix.
+function M.noteStuckReport(uid, s)
+    if not s or s.currentAction ~= "follow_command" then return end
+    local w = watchdog[uid]
+    if not w or not s.commandedTask then return end
+    if s.commandedTask ~= w.walking then return end
+    w.reported = s.commandedTask
 end
 
 -- Charge the interval ending at `now` against `order`'s stall budget
@@ -171,11 +253,19 @@ end
 -----------------------------------------------------------
 local function maintainTask(uid, s)
     local task = s.commandedTask
-    if not task then return end
+    if not task then
+        watchdog[uid] = nil
+        return
+    end
+
+    -- This unit's watchdog record, if its commanded move has reached
+    -- the engine at all yet -- M.noteWalk is what creates one.
+    local w = watchdog[uid]
 
     local info = unit.getInfo(uid)
     if not info then
         -- Unit gone; drop the task.
+        watchdog[uid] = nil
         s.commandedTask = nil
         return
     end
@@ -198,6 +288,7 @@ local function maintainTask(uid, s)
     local d = distance(info.gridX, info.gridY, task.x, task.y)
     if d <= TASK_ARRIVAL_TILES then
         if task.player then s.holdAnchor = { x = task.x, y = task.y } end
+        watchdog[uid] = nil
         s.commandedTask = nil
         return
     end
@@ -205,17 +296,49 @@ local function maintainTask(uid, s)
     -- Timeout. The deadline resets ONLY on a new closest approach --
     -- circling an unreachable target never refreshes it, and still
     -- gives up -- and only eligible time is charged against it (see
-    -- the header). Expiry stays silent, as it has always been: the
-    -- player-visible report on an unreachable commanded move is the
-    -- stuck-walk watchdog's (unit_ai.lua), not this one's.
+    -- the header).
+    --
+    -- Expiry REPORTS (#1769). It used to stay silent, on the reasoning
+    -- that the player-visible report on an unreachable commanded move
+    -- was the stuck-walk watchdog's (unit_ai.lua). It is not, because
+    -- the two ask different questions: the watchdog asks whether the
+    -- unit is MOVING (it refreshes on more than 0.1 tiles of
+    -- displacement in any direction from its mark), while this budget
+    -- asks whether the unit is CLOSING (it refreshes only on more than
+    -- TASK_PROGRESS_TILES of improvement on the best distance yet).
+    -- A unit that circles, oscillates, or crawls toward the target
+    -- without netting that improvement over the whole eligible budget
+    -- keeps the watchdog fresh the entire time -- so it never reported,
+    -- and the order was dropped with nothing said at all.
+    --
+    -- The two reports are one event when the watchdog's stuck walk IS
+    -- this order's walk, and M.noteStuckReport records exactly that
+    -- case; the order then expires silently rather than saying twice
+    -- what the watchdog already said once. A later genuine closest
+    -- approach retires that record along with the budget it refreshes.
+    --
+    -- Only a PLAYER order reports. `task.player` is unit_ai_core's
+    -- commandMove marker, absent on an internal move
+    -- (scripts/building_spawn.lua's portal walk-out) exactly as it is
+    -- on the arrival branch above: nobody asked for that walk, so its
+    -- abandonment is not news. An order that ARRIVES, is superseded by
+    -- a replacement, or is cancelled never reaches here at all.
     local now = engine.gameTime()
     local eligible = s.currentAction == "follow_command"
     if eligible and (not task.bestDist
                      or d < task.bestDist - TASK_PROGRESS_TILES) then
         task.bestDist = d
+        if w then w.reported = nil end
         M.reset(task, now)
     end
     if M.charge(task, eligible, now) > TASK_TIMEOUT_SEC then
+        local alreadyReported = w ~= nil and w.reported == task
+        watchdog[uid] = nil
+        if task.player and not alreadyReported then
+            engine.emitEventForUnit("unit_warning", string.format(
+                "%s gave up on its move order — no progress toward (%.0f, %.0f)",
+                unitLabel(uid), task.x, task.y), uid, info.gridX, info.gridY)
+        end
         s.commandedTask = nil
     end
 end

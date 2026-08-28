@@ -14,9 +14,10 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Serialize as S
 import qualified Data.Text as T
-import Location.Bounds (AbsBounds(..), RelBounds(..))
+import Location.Bounds (AbsBounds(..), RelBounds(..), translateBounds)
 import Location.Instance
 import Location.Overlay.Types (LocationOverlay, emptyLocationOverlay)
+import Test.Headless.Location.Fixture (expectGeometry)
 import Location.Types
     ( LocationDef(..), LocationNaming(..), LocationRegistry
     , emptyLocationRegistry, registerLocation )
@@ -78,7 +79,7 @@ overlay3 = HM.fromList
     ]
 
 instances3 ∷ LocationInstances
-instances3 = buildLocationInstances Nothing registry overlay3
+instances3 = expectGeometry (buildLocationInstances Nothing registry overlay3)
 
 -- | The pre-#911 per-chunk flags a v1 payload carries for 'overlay3':
 --   chunk (0,0) discovered, chunk (2,-1) contents-spawned — two
@@ -113,9 +114,12 @@ identityOf lis =
 --   addressable, which the chunk-keyed sets could not.
 sameChunk ∷ (LocationInstanceId, LocationInstanceId, LocationInstances)
 sameChunk =
-    let (a, l1) = allocateLocationInstance Nothing (ChunkCoord 7 7) ruinDef
-                      emptyLocationInstances
-        (b, l2) = allocateLocationInstance Nothing (ChunkCoord 7 7) campDef l1
+    let (a, l1) = expectGeometry
+                      (allocateLocationInstance Nothing (ChunkCoord 7 7) ruinDef
+                          emptyLocationInstances)
+        (b, l2) = expectGeometry
+                      (allocateLocationInstance Nothing (ChunkCoord 7 7) campDef
+                          l1)
     in (a, b, l2)
 
 spec ∷ Spec
@@ -152,8 +156,8 @@ spec = describe "Location instance identity" $ do
 
         it "reserves an id for an overlay entry whose definition is not \
            \registered, so the remaining ids do not shift" $ do
-            let partial = buildLocationInstances Nothing
-                    (registerLocation campDef emptyLocationRegistry) overlay3
+            let partial = expectGeometry (buildLocationInstances Nothing
+                    (registerLocation campDef emptyLocationRegistry) overlay3)
             -- Only "camp" resolves; it keeps id 1 (its (cx,cy) slot), and
             -- the allocator still accounts for all three placements.
             map (\i → (unLocationInstanceId (liId i), liDefId i))
@@ -161,13 +165,16 @@ spec = describe "Location instance identity" $ do
             lisNextId partial `shouldBe` 4
 
         it "an empty overlay yields an empty table with a fresh allocator" $ do
-            let none = buildLocationInstances Nothing registry emptyLocationOverlay
+            let none = expectGeometry
+                    (buildLocationInstances Nothing registry
+                                            emptyLocationOverlay)
             instancesToList none `shouldBe` []
             lisNextId none `shouldBe` firstLocationInstanceId
 
         it "allocateLocationInstance hands out the next id and advances it" $ do
-            let (iid, after) = allocateLocationInstance Nothing (ChunkCoord 9 9)
-                                   ruinDef instances3
+            let (iid, after) = expectGeometry
+                    (allocateLocationInstance Nothing (ChunkCoord 9 9)
+                                              ruinDef instances3)
             unLocationInstanceId iid `shouldBe` 4
             lisNextId after `shouldBe` 5
             locationInstanceAllocatorErrors after `shouldBe` []
@@ -205,8 +212,9 @@ spec = describe "Location instance identity" $ do
                 any (T.isInfixOf "is not below the page's location-instance allocator")
 
         it "flags an instance stored under a key that is not its own id" $ do
-            let inst = newLocationInstance Nothing (LocationInstanceId 1)
-                           (ChunkCoord 0 0) ruinDef
+            let inst = expectGeometry
+                    (newLocationInstance Nothing (LocationInstanceId 1)
+                                         (ChunkCoord 0 0) ruinDef)
                 broken = LocationInstances
                     { lisNextId        = 9
                     , lisById          = HM.singleton (LocationInstanceId 5) inst
@@ -216,21 +224,23 @@ spec = describe "Location instance identity" $ do
     -- #1668: the table's GEOMETRY, beside its ids. The save decode path
     -- rebuilds an 'AbsBounds' from four unrestricted wire 'Int's,
     -- entirely outside the YAML loader's inverted-bounds gate, so a
-    -- corrupt payload can carry one. Engine placement normally cannot:
-    -- 'newLocationInstance' translates an already-loader-validated
-    -- 'RelBounds' and 'translateBounds' offsets both ends alike -- but
-    -- only for translations that do not overflow, the addition being
-    -- unchecked 'Int' arithmetic over a loader that constrains ordering
-    -- and not range. Either way rejecting the box is right: an inverted
-    -- one fails silently, containing no point at any wrap image
+    -- corrupt payload can carry one. Since #1796 engine placement
+    -- CANNOT, without qualification: 'newLocationInstance' builds every
+    -- box through 'locationInstanceGeometry', which computes each
+    -- component in Integer and refuses the placement outright unless it
+    -- is representable, and an accepted translation offsets both ends
+    -- of an axis alike. Decode is therefore now the only source -- which
+    -- is exactly why this check stays. Rejecting the box is right: an
+    -- inverted one fails silently, containing no point at any wrap image
     -- (discovery can never fire) while still reporting intersection
     -- with unrelated terrain (placement blocks valid ground).
     describe "stored-bounds validation" $ do
         let withBounds b = LocationInstances
                 { lisNextId        = 2
                 , lisById          = HM.singleton (LocationInstanceId 1)
-                    ((newLocationInstance Nothing (LocationInstanceId 1)
-                          (ChunkCoord 0 0) ruinDef) { liBounds = b })
+                    ((expectGeometry
+                          (newLocationInstance Nothing (LocationInstanceId 1)
+                              (ChunkCoord 0 0) ruinDef)) { liBounds = b })
                 , lisPendingLegacy = Nothing }
 
         it "accepts every box an engine-placed table carries" $
@@ -283,8 +293,10 @@ spec = describe "Location instance identity" $ do
 
         it "reports EVERY offending instance in the table, keyed by the \
            \map key the entry is addressed under" $ do
-            let inst iid b = (newLocationInstance Nothing iid
-                                 (ChunkCoord 0 0) ruinDef) { liBounds = b }
+            let inst iid b = (expectGeometry
+                    (newLocationInstance Nothing iid
+                                         (ChunkCoord 0 0) ruinDef))
+                        { liBounds = b }
                 table = LocationInstances
                     { lisNextId = 4
                     , lisById   = HM.fromList
@@ -331,10 +343,11 @@ spec = describe "Location instance identity" $ do
             -- The ONLY registry-consulting path after placement is the v1
             -- migration, and it is a no-op on an already-resolved table.
             resolveLegacyLocationInstances edited overlay3 instances3
-                `shouldBe` instances3
+                `shouldBe` Right instances3
 
         it "the anchor is the hosting chunk's centre tile" $
-            locationAnchorTile (ChunkCoord (-3) 4) `shouldBe` (-40, 72)
+            locationAnchorTileChecked (ChunkCoord (-3) 4)
+                `shouldBe` Right (-40, 72)
 
         it "a page-scoped lookup returns nothing for an unknown id" $
             lookupLocationInstance (LocationInstanceId 99) instances3
@@ -443,7 +456,8 @@ spec = describe "Location instance identity" $ do
                 `shouldBe` instances3
 
     describe "pre-#911 chunk-set migration" $ do
-        let migrated = resolveLegacyLocationInstances registry overlay3 legacyFlags
+        let migrated = expectGeometry
+                (resolveLegacyLocationInstances registry overlay3 legacyFlags)
 
         it "creates one instance per overlay entry, with the same ids a \
            \fresh placement of that overlay would allocate" $
@@ -468,7 +482,8 @@ spec = describe "Location instance identity" $ do
             let stray = pendingLegacyFlags
                     (HS.fromList [ChunkCoord 50 50])
                     (HS.fromList [ChunkCoord 60 60])
-                out = resolveLegacyLocationInstances registry overlay3 stray
+                out = expectGeometry
+                    (resolveLegacyLocationInstances registry overlay3 stray)
             map liLifecycle (instancesToList out)
                 `shouldBe` replicate 3 LifecycleUnknown
             map liContentsSpawned (instancesToList out)
@@ -477,19 +492,20 @@ spec = describe "Location instance identity" $ do
         it "clears the pending carry, and is idempotent" $ do
             lisPendingLegacy migrated `shouldBe` Nothing
             resolveLegacyLocationInstances registry overlay3 migrated
-                `shouldBe` migrated
+                `shouldBe` Right migrated
 
         it "leaves a table with nothing pending untouched" $
             resolveLegacyLocationInstances registry overlay3 instances3
-                `shouldBe` instances3
+                `shouldBe` Right instances3
 
     describe "world-pages v1 → v2 component migration" $ do
         let v1Params = defaultWorldGenParams
                 { wgpSeed              = 4242
                 , wgpLocationOverlay   = overlay3
                 , wgpLocationStamped   = HS.fromList [ChunkCoord 0 0]
-                , wgpLocationInstances =
-                    resolveLegacyLocationInstances registry overlay3 legacyFlags
+                , wgpLocationInstances = expectGeometry
+                    (resolveLegacyLocationInstances registry overlay3
+                                                    legacyFlags)
                 }
             v1Page = PageCoreDTOv1
                 { pc1PageId     = WorldPageId "main_world"
@@ -536,16 +552,19 @@ spec = describe "Location instance identity" $ do
         it "resolving the migrated page against the registry reproduces the \
            \original discovered / contents-spawned state exactly" $
             withMigratedPage $ \params →
-                stateOf (resolveLegacyLocationInstances registry
-                            (wgpLocationOverlay params)
-                            (wgpLocationInstances params))
+                stateOf (expectGeometry
+                            (resolveLegacyLocationInstances registry
+                                (wgpLocationOverlay params)
+                                (wgpLocationInstances params)))
                     `shouldBe` expectedMigratedState
 
         it "the resolved page re-encodes and round-trips its instance ids, \
            \lifecycles, content flags and allocator" $
             withMigratedPage $ \params → do
-                let resolved = resolveLegacyLocationInstances registry
-                        (wgpLocationOverlay params) (wgpLocationInstances params)
+                let resolved = expectGeometry
+                        (resolveLegacyLocationInstances registry
+                            (wgpLocationOverlay params)
+                            (wgpLocationInstances params))
                     params2 = params { wgpLocationInstances = resolved }
                 case S.decode (S.encode params2) ∷ Either String WorldGenParams of
                     Left err → expectationFailure err
@@ -555,3 +574,183 @@ spec = describe "Location instance identity" $ do
                         stateOf back'    `shouldBe` expectedMigratedState
                         lisNextId back'  `shouldBe` lisNextId resolved
                         lisPendingLegacy back' `shouldBe` Nothing
+
+    -- #1796: the CHECKED construction, the second of the two
+    -- complementary boundaries. The authored domain (covered under
+    -- "Location spatial bounds") keeps YAML sane; it cannot prove
+    -- anything about arbitrary chunk coordinates, because ChunkCoord
+    -- holds unrestricted Ints and nothing caps them. This is where that
+    -- proof lives: every anchor and translated bound is computed in
+    -- Integer and the geometry is built only once all six components
+    -- are known representable.
+    --
+    -- The constants below are exact for chunkSize 16 (anchor = cx*16+8)
+    -- on a 64-bit Int, which is the only build this project targets.
+    describe "checked geometry construction (#1796)" $ do
+        let limitBox   = RelBounds (-2147483647) (-2147483647)
+                                   2147483647 2147483647
+            limitDef   = mkDef "limit" "At Limit" limitBox
+            -- The extremal chunks for a SMALL box: the anchor itself is
+            -- the binding constraint.
+            maxAnchorChunk = 576460752303423487
+            minAnchorChunk = -576460752303423488
+            -- The extremal chunks for an AT-LIMIT box: the translation
+            -- is the binding constraint, one whole authored limit
+            -- earlier.
+            maxLimitChunk  = 576460752169205759
+            minLimitChunk  = -576460752169205760
+            geomOf coord def = locationInstanceGeometry coord def
+            failedOn coord def component =
+                case locationInstanceGeometry coord def of
+                    Left err → lgeComponent err ≡ component
+                                   ∧ lgeDefId err ≡ ldId def
+                                   ∧ lgeChunk err ≡ coord
+                    Right _  → False
+
+        -- Requirement 6: every accepted footprint keeps the geometry it
+        -- had, and 'translateBounds' is the oracle for what that is.
+        it "reproduces the ordinary, degenerate, negative-offset and \
+           \cross-chunk footprints exactly, anchor and box alike" $ do
+            let cases =
+                    [ (ChunkCoord 0 0,       ruinDef)     -- ordinary
+                    , (ChunkCoord 2 (-1),    ruinDef)     -- ordinary, offset
+                    , (ChunkCoord (-3) 4,    campDef)     -- negative chunk
+                    , (ChunkCoord 0 0,       mkDef "dot" "Dot"
+                                                 (RelBounds 0 0 0 0))
+                    , (ChunkCoord 7 (-9),    mkDef "neg" "Neg"
+                                                 (RelBounds (-9) (-7) (-1) (-2)))
+                    , (ChunkCoord (-2) 3,    mkDef "wide" "Wide"
+                                                 (RelBounds (-40) (-40) 40 40))
+                    ]
+            forM_ cases $ \(coord, def) → do
+                let ChunkCoord cx cy = coord
+                    anchor = (cx * 16 + 8, cy * 16 + 8)
+                geomOf coord def
+                    `shouldBe` Right (anchor, translateBounds anchor
+                                                  (ldBounds def))
+
+        it "the anchor arithmetic is exact at the most extreme chunk \
+           \coordinates a small box survives, on both sides" $ do
+            fst <$> geomOf (ChunkCoord maxAnchorChunk 0) ruinDef
+                `shouldBe` Right (9223372036854775800, 8)
+            fst <$> geomOf (ChunkCoord minAnchorChunk 0) ruinDef
+                `shouldBe` Right (-9223372036854775800, 8)
+
+        it "one chunk further out, the ANCHOR itself is unrepresentable \
+           \-- on both sides, and independently per axis" $ do
+            failedOn (ChunkCoord (maxAnchorChunk + 1) 0) ruinDef "anchor.x"
+                `shouldBe` True
+            failedOn (ChunkCoord (minAnchorChunk - 1) 0) ruinDef "anchor.x"
+                `shouldBe` True
+            failedOn (ChunkCoord 0 (maxAnchorChunk + 1)) ruinDef "anchor.y"
+                `shouldBe` True
+            failedOn (ChunkCoord 0 (minAnchorChunk - 1)) ruinDef "anchor.y"
+                `shouldBe` True
+
+        -- Requirement 9's extremal-anchor case: an AT-LIMIT authored box
+        -- at the furthest chunk whose translation still fits, asserted
+        -- as an EXACT box -- and it must be ordered on both axes, which
+        -- is precisely what a wrapped result would not be.
+        it "accepts an at-limit authored box at the most positive chunk \
+           \whose translation is still representable, with exact ordered \
+           \bounds" $ do
+            let expected = AbsBounds 9223372032559808505 (-2147483639)
+                                     9223372036854775799 2147483655
+            geomOf (ChunkCoord maxLimitChunk 0) limitDef
+                `shouldBe` Right ((9223372034707292152, 8), expected)
+            abMinX expected `shouldSatisfy` (≤ abMaxX expected)
+            abMinY expected `shouldSatisfy` (≤ abMaxY expected)
+
+        it "accepts an at-limit authored box at the most negative chunk \
+           \whose translation is still representable, with exact ordered \
+           \bounds" $ do
+            let expected = AbsBounds (-9223372036854775799) (-2147483639)
+                                     (-9223372032559808505) 2147483655
+            geomOf (ChunkCoord minLimitChunk 0) limitDef
+                `shouldBe` Right ((-9223372034707292152, 8), expected)
+            abMinX expected `shouldSatisfy` (≤ abMaxX expected)
+            abMinY expected `shouldSatisfy` (≤ abMaxY expected)
+
+        it "one chunk further out, the TRANSLATION is unrepresentable \
+           \even though the anchor still fits -- on both sides" $ do
+            -- The anchor alone is fine at these coordinates ...
+            locationAnchorTileChecked (ChunkCoord (maxLimitChunk + 1) 0)
+                `shouldSatisfy` isRight'
+            locationAnchorTileChecked (ChunkCoord (minLimitChunk - 1) 0)
+                `shouldSatisfy` isRight'
+            -- ... it is the at-limit box's own edge that does not fit.
+            failedOn (ChunkCoord (maxLimitChunk + 1) 0) limitDef
+                     "bounds.max_x" `shouldBe` True
+            failedOn (ChunkCoord (minLimitChunk - 1) 0) limitDef
+                     "bounds.min_x" `shouldBe` True
+
+        it "never returns an inverted box: a refused placement yields no \
+           \geometry at all" $ do
+            let refused = [ geomOf (ChunkCoord (maxAnchorChunk + 1) 0) ruinDef
+                          , geomOf (ChunkCoord (minAnchorChunk - 1) 0) ruinDef
+                          , geomOf (ChunkCoord (maxLimitChunk + 1) 0) limitDef
+                          , geomOf (ChunkCoord (minLimitChunk - 1) 0) limitDef ]
+            refused `shouldSatisfy` all (not ∘ isRight')
+
+        it "reports the definition id, the chunk, the component and the \
+           \exact unrepresentable value" $
+            case locationInstanceGeometry
+                     (ChunkCoord (maxAnchorChunk + 1) 0) ruinDef of
+                Right _  → expectationFailure "expected a geometry failure"
+                Left err → do
+                    lgeDefId err     `shouldBe` "ruin"
+                    lgeChunk err     `shouldBe`
+                        ChunkCoord (maxAnchorChunk + 1) 0
+                    lgeComponent err `shouldBe` "anchor.x"
+                    lgeValue err     `shouldBe` 9223372036854775816
+                    locationGeometryErrorText err `shouldSatisfy`
+                        T.isInfixOf "anchor.x"
+                    locationGeometryErrorText err `shouldSatisfy`
+                        T.isInfixOf "ruin"
+
+        -- Requirement 5: the failure is ATOMIC at every construction
+        -- path. None of the three may hand back a table that is missing
+        -- one instance, or an allocator that counted one it never built.
+        describe "atomic propagation" $ do
+            let badChunk  = ChunkCoord (maxAnchorChunk + 1) 0
+                badOverlay = HM.fromList
+                    [ (ChunkCoord 0 0, "ruin")
+                    , (badChunk,       "ruin") ]
+
+            it "buildLocationInstances returns NO partial table when one \
+               \placement is unrepresentable" $
+                buildLocationInstances Nothing registry badOverlay
+                    `shouldSatisfy` (not ∘ isRight')
+
+            it "buildLocationInstances still succeeds when every placement \
+               \is representable" $
+                buildLocationInstances Nothing registry overlay3
+                    `shouldBe` Right instances3
+
+            it "allocateLocationInstance fails without advancing the \
+               \allocator or inserting anything" $ do
+                allocateLocationInstance Nothing badChunk ruinDef instances3
+                    `shouldSatisfy` (not ∘ isRight')
+                -- The table it was handed is untouched, so the very next
+                -- successful allocation still gets the id the refused one
+                -- would have taken.
+                case allocateLocationInstance Nothing (ChunkCoord 9 9)
+                         ruinDef instances3 of
+                    Left _ → expectationFailure "expected a successful allocation"
+                    Right (iid, after) → do
+                        unLocationInstanceId iid `shouldBe` 4
+                        lisNextId after `shouldBe` 5
+
+            it "resolveLegacyLocationInstances propagates the failure \
+               \rather than resolving into wrapped geometry" $
+                resolveLegacyLocationInstances registry badOverlay
+                        (pendingLegacyFlags mempty mempty)
+                    `shouldSatisfy` (not ∘ isRight')
+
+            it "resolveLegacyLocationInstances still leaves a table with \
+               \nothing pending untouched, bad overlay or not" $
+                resolveLegacyLocationInstances registry badOverlay instances3
+                    `shouldBe` Right instances3
+
+isRight' ∷ Either a b → Bool
+isRight' = either (const False) (const True)

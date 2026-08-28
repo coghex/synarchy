@@ -24,6 +24,7 @@ import Language.Generated.Bound (LanguageRoots(..))
 import Location.Bounds (RelBounds(..))
 import Location.Instance
 import Location.Naming
+import Test.Headless.Location.Fixture (expectGeometry)
 import Location.Overlay.Types (LocationOverlay)
 import Location.Types
 import World.Chunk.Types (ChunkCoord(..))
@@ -85,9 +86,12 @@ spec = describe "Location naming" $ do
             Right n → n
         namerA  = namerOf provA
         namerB  = namerOf provB
-        builtA  = buildLocationInstances (Just namerA) registry overlay
-        builtB  = buildLocationInstances (Just namerB) registry overlay
-        builtNone = buildLocationInstances Nothing registry overlay
+        builtA  = expectGeometry
+                      (buildLocationInstances (Just namerA) registry overlay)
+        builtB  = expectGeometry
+                      (buildLocationInstances (Just namerB) registry overlay)
+        builtNone = expectGeometry
+                      (buildLocationInstances Nothing registry overlay)
         namesOf = map liDisplayName ∘ instancesToList
         glossesOf = map liGloss ∘ instancesToList
 
@@ -179,8 +183,9 @@ spec = describe "Location naming" $ do
 
         it "the pre-#911 legacy migration names from the label too, and \
            \never infers a language" $ do
-            let migrated = resolveLegacyLocationInstances registry overlay
-                    (pendingLegacyFlags mempty mempty)
+            let migrated = expectGeometry
+                    (resolveLegacyLocationInstances registry overlay
+                        (pendingLegacyFlags mempty mempty))
             namesOf migrated `shouldBe` replicate 3 (ldLabel ruinDef)
             glossesOf migrated `shouldBe` replicate 3 Nothing
 
@@ -189,16 +194,18 @@ spec = describe "Location naming" $ do
            \registry-consulting path after placement refuses to touch a \
            \resolved table" $
             resolveLegacyLocationInstances registry overlay builtA
-                `shouldBe` builtA
+                `shouldBe` Right builtA
 
     describe "determinism from the instance's own identity" $ do
         it "the id decides the name: an instance allocated at id 2 gets \
            \the same name whichever chunk it sits in" $ do
             let nameAt coord =
-                    let (iid, lis) = allocateLocationInstance (Just namerA)
-                            coord ruinDef emptyLocationInstances
-                        (_, lis') = allocateLocationInstance (Just namerA)
-                            coord ruinDef lis
+                    let (iid, lis) = expectGeometry
+                            (allocateLocationInstance (Just namerA)
+                                coord ruinDef emptyLocationInstances)
+                        (_, lis') = expectGeometry
+                            (allocateLocationInstance (Just namerA)
+                                coord ruinDef lis)
                     in ( fmap liDisplayName (lookupLocationInstance iid lis')
                        , map liDisplayName (instancesToList lis') )
             snd (nameAt (ChunkCoord 0 0)) `shouldBe`
