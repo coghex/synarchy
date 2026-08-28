@@ -2090,7 +2090,11 @@ recommendation: a batch that passed under a configuration the invocation could
 not recreate passed somewhere else, and de-listing a probe on that would
 promote a measurement the producer itself says was not the condition.
 `no-confident-fix` — the failure reproduced, and the evidence establishes no
-one probe-side cause. `partial-improvement` — a repair candidate measurably
+one probe-side cause. "Reproduced" is #1437's own two-part qualification and is
+asked of every route past the `cannot-reproduce` fork: over X or a lost target,
+AND at least one TARGET actually non-PASS, since failures confined to unrelated
+checks satisfy the aggregate while demonstrating nothing about the checks under
+diagnosis. `partial-improvement` — a repair candidate measurably
 improved the failure count and still failed #1437's acceptance gate. None of
 the three opens a pull request: the publisher boundary is a table every route
 is looked up in, so the gate can inject a spy and prove the silence rather
@@ -2111,6 +2115,16 @@ document; exit 4 DOES write one, whose own `status` is `harness-error` with a
 populated `error` and `error_run` and a null rate. So a document that merely
 exists and parses establishes nothing, and every classification reads the
 document's own `status`, `error_run`, `completed_runs` and per-check tallies.
+Every declared measurement goes through #1437's CANONICAL result gate first,
+not just the census validator it starts with:
+`deflake_diagnosis.require_result` adds the run indices, the artifact topology
+and the retention pairing on top of declared shape and the cross-field
+invariants. `probe_flake.measure` deletes a run's directory the moment it
+passes and keeps every unsuccessful one, so a non-PASS run with a null
+`artifact_dir` is producer-impossible — and a `no-confident-fix` recorded from
+one would be a failure nobody can diagnose stored as the evidence FOR a
+diagnosis.
+
 `error_run` gets its own clause because `probe_flake` keeps a harness-error
 run OUT of `runs`, so an all-PASS run list is not on its own evidence of a
 trustworthy batch.

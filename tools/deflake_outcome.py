@@ -28,6 +28,11 @@ Three stable outcomes, and everything else
   plus an ADVISORY de-list recommendation.
 * `no-confident-fix` — the failure reproduced, but the evidence
   establishes no one probe-side cause and no one bounded repair.
+  "Reproduced" is #1437's own two-part qualification, asked of every
+  route past the `cannot-reproduce` fork: the batch is over X or lost a
+  target, AND at least one TARGET was actually non-PASS. Failures
+  confined to unrelated checks satisfy the first while demonstrating
+  nothing about the checks under diagnosis.
 * `partial-improvement` — a repair candidate measurably improved the
   failure count and still failed #1437's acceptance gate.
 
@@ -90,6 +95,17 @@ aggregate returns an actionable non-success. None of them can become a
 `cannot-reproduce`, which is the load-bearing distinction of this whole
 module: "we could not make it fail" and "we could not measure it" are
 opposite conclusions that a careless reading collapses into one.
+
+Every declared measurement goes through #1437's CANONICAL result gate
+first, not just the census validator it starts with:
+`probe_census.validate_result` owns declared shape and the cross-field
+invariants, while `deflake_diagnosis.require_result` adds the rules that
+make a document one `probe_flake.measure` could have written — the run
+indices, the artifact topology, and the retention pairing in particular.
+`measure` deletes a run's directory the moment it passes and keeps every
+unsuccessful one, so a non-PASS run with a null `artifact_dir` is
+producer-impossible, and a `no-confident-fix` recorded from one would be
+a failure nobody can diagnose stored as the evidence FOR a diagnosis.
 
 `error_run` gets its own clause because `probe_flake` deliberately keeps
 a harness-error run OUT of `runs`. A classifier that inspected only
@@ -1001,8 +1017,21 @@ def require_measurement(entry, *, probe: str, seen: set,
         raise HandoffError(
             f"the {role} measurement exited {exit_code}, which writes a "
             f"result document, but the handoff carries none")
-    _delegate(lambda: probe_census.validate_result(result),
-              f"the {role} measurement's result document")
+    # #1437's CANONICAL result gate, not just the census validator it
+    # starts with. `probe_census.validate_result` owns declared shape
+    # and #1493's cross-field invariants; `require_result` adds the
+    # rules that make a document one `probe_flake.measure` could have
+    # written — run indices, the artifact TOPOLOGY, and the retention
+    # pairing in particular. `measure` deletes a run's directory the
+    # moment it passes and keeps every unsuccessful one, so a non-PASS
+    # run with a null `artifact_dir` is producer-impossible, and a
+    # `no-confident-fix` recorded from one would be a failure nobody can
+    # diagnose stored as the evidence for a diagnosis.
+    try:
+        deflake_diagnosis.require_result(
+            result, f"the {role} measurement's result document")
+    except deflake_diagnosis.HandoffError as error:
+        raise HandoffError(str(error)) from None
     if result["probe"] != probe:
         raise HandoffError(
             f"the {role} measurement measured {result['probe']!r}, not the "
@@ -1216,6 +1245,45 @@ def _classify_cannot_reproduce(handoff: Handoff) -> dict:
     }
 
 
+def _require_reproduced(handoff: Handoff, baseline: Measurement) -> None:
+    """The baseline reproduced the pattern the targets were named from.
+
+    #1437 asks this of EVERY route past the `cannot-reproduce` fork, in
+    two independent parts, and a consumer that asked only the first
+    would persist a diagnosis its own producer refuses:
+
+    * the batch is over X or lost a target, which is what makes it a
+      reproduction at all; and
+    * at least one TARGET was actually non-PASS. Failures confined to
+      unrelated checks satisfy the aggregate while demonstrating nothing
+      about the checks under diagnosis — `evaluate` calls that
+      `cannot-reproduce` precisely because the pattern was not
+      reproduced.
+
+    Both are re-derived from the baseline's own document, the second
+    through #1437's `non_pass_ids` so "non-PASS" keeps one definition.
+    """
+    missing = baseline.missing_targets(handoff.targets)
+    if (baseline.failure_count <= handoff.acceptable_failures
+            and not missing):
+        raise NonSuccess(
+            f"the baseline observed {baseline.failure_count} failure(s) "
+            f"against an acceptable ceiling of "
+            f"{handoff.acceptable_failures} out of "
+            f"{baseline.requested_runs} and left no target check MISSING, "
+            f"so it reproduced nothing to attribute; that is the "
+            f"{OUTCOME_CANNOT_REPRODUCE!r} evidence")
+    observed = set(deflake_diagnosis.non_pass_ids(baseline.result))
+    hit = [cid for cid in handoff.targets if cid in observed]
+    if not hit:
+        raise NonSuccess(
+            f"the baseline never observed the target check(s) "
+            f"{', '.join(handoff.targets)} as FAIL or MISSING, so it did "
+            f"not reproduce the pattern the targets were identified from; "
+            f"failures somewhere else are the "
+            f"{OUTCOME_CANNOT_REPRODUCE!r} evidence for these targets")
+
+
 def _classify_no_confident_fix(handoff: Handoff) -> dict:
     """A reproduced failure the evidence cannot attribute confidently.
 
@@ -1225,18 +1293,7 @@ def _classify_no_confident_fix(handoff: Handoff) -> dict:
     clean measurement under a conclusion about causality it never
     supported.
     """
-    measurement = handoff.measurement(ROLE_BASELINE)
-    missing = measurement.missing_targets(handoff.targets)
-    if (measurement.failure_count <= handoff.acceptable_failures
-            and not missing):
-        raise NonSuccess(
-            f"the baseline observed {measurement.failure_count} failure(s) "
-            f"against an acceptable ceiling of "
-            f"{handoff.acceptable_failures} out of "
-            f"{measurement.requested_runs} and left no target check MISSING, "
-            f"so it reproduced nothing to attribute; that is the "
-            f"{OUTCOME_CANNOT_REPRODUCE!r} evidence, not "
-            f"{OUTCOME_NO_CONFIDENT_FIX!r}")
+    _require_reproduced(handoff, handoff.measurement(ROLE_BASELINE))
     return {"recommendation": None, "comparison": None}
 
 
@@ -1253,6 +1310,10 @@ def _classify_partial_improvement(handoff: Handoff) -> dict:
     """
     baseline = handoff.measurement(ROLE_BASELINE)
     verification = handoff.measurement(ROLE_VERIFICATION)
+    # The same qualification #1437 makes before either route: a repair
+    # is only ever verified against a baseline that reproduced the
+    # pattern, so "improved" has something to be an improvement ON.
+    _require_reproduced(handoff, baseline)
     conditions = []
     if baseline.requested_runs != verification.requested_runs:
         conditions.append(

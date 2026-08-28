@@ -4682,8 +4682,15 @@ def forged_ok_result(*, error_run: bool = False, error=None) -> dict:
         requested=keep,
         runs=[{name: PASS for name in ids} for _ in range(keep)])
     if error_run:
-        document["error_run"] = result_document(
-            harness_error=True)["error_run"]
+        broken = result_document(harness_error=True)["error_run"]
+        document["error_run"] = broken
+        # The retention pairing is #1437's and it is checked before any
+        # of this: `probe_flake` keeps the broken run's directory, and
+        # `retained_artifacts` is exactly the non-null ones in run order
+        # with the error run last. Omitting it would make the fixture
+        # malformed rather than a spotless-looking batch that kept one.
+        document["retained_artifacts"] = list(
+            document["retained_artifacts"]) + [broken["artifact_dir"]]
     if error is not None:
         document["error"] = error
     return document
@@ -4760,6 +4767,35 @@ def forged_verification_counts() -> dict:
     return document
 
 
+def discarded_failure_result(count: int = 3) -> dict:
+    """A failing batch that kept none of its failing runs' logs.
+
+    `probe_flake.measure` deletes a run's directory the moment it passes
+    and retains every unsuccessful one, so this is producer-impossible —
+    and `probe_census.validate_result` does not look at the pairing at
+    all. Recorded, it would be a failure nobody can diagnose stored as
+    the evidence FOR a diagnosis.
+    """
+    document = result_document(runs=failing_runs(count, abort=False))
+    for run in document["runs"]:
+        run["artifact_dir"] = None
+    document["retained_artifacts"] = []
+    return document
+
+
+def elsewhere_failure_result(count: int = 4) -> dict:
+    """Over X, and never on a target check.
+
+    The default targets are `beta` and `gamma`; this fails `alpha` and
+    keeps going, so every run emits everything and the batch is over
+    tolerance while demonstrating nothing about the checks under
+    diagnosis. `deflake_diagnosis.evaluate` calls that
+    `cannot-reproduce`.
+    """
+    return result_document(runs=failing_runs(count, cid="alpha",
+                                             abort=False))
+
+
 def forged_completion_result() -> dict:
     """Nine all-PASS runs under a `completed_runs` of ten.
 
@@ -4795,23 +4831,24 @@ def non_target_missing_verification() -> dict:
                                runs=[dict(run) for _ in range(dd.RUN_COUNT)])
 
 
+def referenced(route: str, section: str, **fields) -> dict:
+    """A handoff whose producer reference for `section` was moved.
+
+    The binding checks the AGREEMENT between the record's reference and
+    the document it names, so moving either side asks the same
+    question — and moving the REFERENCE is what keeps the result
+    document a shape `probe_flake.measure` could have written, which
+    #1437's own result gate now requires of every declared measurement.
+    """
+    document = outcome_handoff(route)
+    document["diagnosis_outcome"][section].update(fields)
+    return document
+
+
 def restamped(document: dict, stamp: str = "2026-08-22T09:30:00Z") -> dict:
     """The same measurement, claiming another instant."""
     document = copy.deepcopy(document)
     document["timestamp_utc"] = stamp
-    return document
-
-
-def relocated(document: dict, **fields) -> dict:
-    """The same measurement, claiming it wrote somewhere else.
-
-    One path field at a time, so each is isolated: a fixture that moved
-    the artifact root would move the invocation directory with it (the
-    harness derives one from the other), and either field alone would
-    then be enough to refuse it.
-    """
-    document = copy.deepcopy(document)
-    document.update(fields)
     return document
 
 
@@ -5313,20 +5350,25 @@ def test_a_measurement_of_another_state_is_not_this_attempts_evidence()\
              {"role": do.ROLE_BASELINE, "exit_code": probe_flake.EXIT_OK,
               "result": restamped(spotless_result())}]),
          "is not the measurement that diagnosis judged"),
-        ("a baseline claiming another artifact root",
-         outcome_handoff(rebind=False, measurements=[
-             {"role": do.ROLE_BASELINE, "exit_code": probe_flake.EXIT_OK,
-              "result": relocated(spotless_result(),
-                                  artifact_root=f"{OUTSIDE}/elsewhere")}]),
+        # These two move the REFERENCE rather than the result. #1437's
+        # own layout rule binds an invocation directory to the root it
+        # sits directly under, so a result document cannot differ in one
+        # of them alone without becoming malformed — and it is the
+        # AGREEMENT between the record and the document that this
+        # checks, which side is moved being arbitrary.
+        ("a baseline reference naming another artifact root",
+         referenced(dd.ROUTE_CANNOT_REPRODUCE, "baseline",
+                    artifact_root=f"{OUTSIDE}/elsewhere"),
          "reports artifact_root"),
-        ("a baseline claiming another invocation directory",
-         outcome_handoff(rebind=False, measurements=[
-             {"role": do.ROLE_BASELINE, "exit_code": probe_flake.EXIT_OK,
-              "result": relocated(
-                  spotless_result(),
-                  invocation_dir=f"{OUTSIDE}/artifacts/"
-                                 f"{PROBE}-20260821T130000Z-4712-beefcafe")}]),
+        ("a baseline reference naming another invocation directory",
+         referenced(dd.ROUTE_CANNOT_REPRODUCE, "baseline",
+                    invocation_dir=f"{OUTSIDE}/artifacts/"
+                                   f"{PROBE}-20260821T130000Z-4712-beefcafe"),
          "reports invocation_dir"),
+        ("a baseline reference naming another instant",
+         referenced(dd.ROUTE_CANNOT_REPRODUCE, "baseline",
+                    timestamp_utc="2026-08-22T09:30:00Z"),
+         "reports timestamp_utc"),
         ("a baseline naming another batch's retained artifacts",
          outcome_handoff(dd.ROUTE_NO_CONFIDENT_FIX, rebind=False,
                          measurements=[
@@ -6026,6 +6068,83 @@ def test_the_census_stores_references_and_never_raw_evidence() -> None:
                 "sample_timestamp_utc": measurement["timestamp_utc"]},
                 "a measurement is addressed in the census by its cohort "
                 "commit and sample timestamp")
+
+
+def test_a_failure_whose_logs_are_gone_is_not_diagnostic_evidence() -> None:
+    """The retention pairing, which the census validator does not check.
+
+    `probe_flake.measure` deletes a passing run's directory and retains
+    every unsuccessful one, so a non-PASS run with a null `artifact_dir`
+    and an empty `retained_artifacts` is a shape no harness wrote — and
+    `probe_census.validate_result` permits it. A `no-confident-fix`
+    recorded from one stores a diagnosis whose evidence nobody can open.
+    """
+    for label, route in (("no-confident-fix", dd.ROUTE_NO_CONFIDENT_FIX),
+                         ("cannot-reproduce", dd.ROUTE_CANNOT_REPRODUCE)):
+        with census_file() as path:
+            before = path.read_bytes()
+            publisher = Publisher()
+            expect_handoff_rejected(
+                lambda r=route, p=publisher: record_outcome(
+                    outcome_handoff(r, measurements=[
+                        {"role": do.ROLE_BASELINE,
+                         "exit_code": probe_flake.EXIT_OK,
+                         "result": discarded_failure_result()}]),
+                    path, publisher=p),
+                "did not pass",
+                f"a {label} whose failing runs kept no logs")
+            expect_nothing_recorded(path, before, publisher, label)
+
+
+def test_failures_somewhere_else_are_not_a_reproduction() -> None:
+    """#1437 asks for a TARGET hit, and asks it on every route past the fork.
+
+    A batch over X whose failures are confined to unrelated checks
+    demonstrates nothing about the checks under diagnosis, and
+    `deflake_diagnosis.evaluate` routes it to `cannot-reproduce` for
+    exactly that reason. A consumer that asked only the aggregate would
+    persist a `no-confident-fix` its own producer refuses.
+    """
+    elsewhere = elsewhere_failure_result()
+    expect(not [cid for cid in ("beta", "gamma")
+                if cid in dd.non_pass_ids(elsewhere)],
+           "the fixture must miss every target, or it proves nothing")
+    expect(dd.failure_count(elsewhere) > 0,
+           "...while still being over an X of zero")
+
+    with census_file() as path:
+        before = path.read_bytes()
+        publisher = Publisher()
+        expect_non_success(
+            lambda: record_outcome(outcome_handoff(
+                dd.ROUTE_NO_CONFIDENT_FIX, measurements=[
+                    {"role": do.ROLE_BASELINE,
+                     "exit_code": probe_flake.EXIT_OK,
+                     "result": elsewhere}]), path, publisher=publisher),
+            "did not reproduce the pattern",
+            "failures confined to unrelated checks as no-confident-fix")
+        expect_nothing_recorded(path, before, publisher,
+                                "a baseline that missed every target")
+
+    # The same qualification guards the comparison route.
+    diagnosis, _record = produced(dd.ROUTE_PARTIAL_IMPROVEMENT)
+    with census_file() as path:
+        before = path.read_bytes()
+        publisher = Publisher()
+        expect_non_success(
+            lambda: record_outcome(outcome_handoff(
+                dd.ROUTE_PARTIAL_IMPROVEMENT, measurements=[
+                    {"role": do.ROLE_BASELINE,
+                     "exit_code": probe_flake.EXIT_OK,
+                     "result": elsewhere},
+                    {"role": do.ROLE_VERIFICATION,
+                     "exit_code": probe_flake.EXIT_OK,
+                     "result": diagnosis["verification"]["result"]}]),
+                path, publisher=publisher),
+            "did not reproduce the pattern",
+            "a partial improvement over a baseline that missed every target")
+        expect_nothing_recorded(path, before, publisher,
+                                "an improvement on nothing")
 
 
 def test_a_path_no_filesystem_can_name_is_never_stored() -> None:
