@@ -284,7 +284,8 @@ def test_record_shape() -> None:
         "history": [],
         "attempts": [],
         "claims": [],
-    }, "an empty census record is exactly the seven specified fields")
+        "outcomes": [],
+    }, "an empty census record is exactly the eight specified fields")
     expect(empty["acceptable_failures"] == 0
            and empty["acceptable_failures_justification"] is None,
            "a fresh record starts at X=0 with no justification: it must pass "
@@ -295,8 +296,8 @@ def test_record_shape() -> None:
 
     with registry(ci_eligible={"beta"}, protocol={"beta": "probe-result/v1"}):
         document = probe_census.build_manifest()
-        expect(document["schema"] == "probe-census/v3",
-               "a freshly built census is probe-census/v3")
+        expect(document["schema"] == "probe-census/v4",
+               "a freshly built census is probe-census/v4")
         expect([row["key"] for row in document["probes"]]
                == ["alpha", "beta", "gamma"],
                "rows are built in live registry order")
@@ -329,7 +330,7 @@ def test_record_shape() -> None:
 
 # ==========================================================================
 def test_migration() -> None:
-    print("\n-- lossless v1 -> v2 migration --")
+    print("\n-- lossless v1 -> v4 migration --")
     with registry(ci_eligible={"beta"}, protocol={"beta": "probe-result/v1"}):
         source = v1_document()
         # An inventory field this tool does not know about must survive.
@@ -339,8 +340,8 @@ def test_migration() -> None:
 
         expect(source == original,
                "migration does not mutate the document it was given")
-        expect(migrated["schema"] == "probe-census/v3",
-               "the migrated document is probe-census/v3")
+        expect(migrated["schema"] == "probe-census/v4",
+               "the migrated document is probe-census/v4")
         expect([row["key"] for row in migrated["probes"]] == ["alpha", "beta"],
                "row order is preserved exactly")
         expect(len(migrated["probes"]) == 2,
@@ -396,8 +397,8 @@ def test_seed_and_noop() -> None:
         path = root / "docs" / "probe_census.json"
         document = seeded(path)
         expect(path.exists(), "an absent census is created")
-        expect(document["schema"] == "probe-census/v3",
-               "the fresh census is probe-census/v3")
+        expect(document["schema"] == "probe-census/v4",
+               "the fresh census is probe-census/v4")
         expect([row["key"] for row in document["probes"]]
                == ["alpha", "beta", "gamma"],
                "the fresh census lists the live registry in order")
@@ -416,7 +417,7 @@ def test_seed_and_noop() -> None:
         legacy = root / "legacy.json"
         legacy.write_text(json.dumps(v1_document()), encoding="utf-8")
         migrated = probe_census.ensure_document(legacy)
-        expect(migrated["schema"] == "probe-census/v3",
+        expect(migrated["schema"] == "probe-census/v4",
                "seeding a v1 census migrates it")
         expect([row["key"] for row in migrated["probes"]]
                == ["alpha", "beta", "gamma"],
@@ -746,15 +747,15 @@ def _legacy_policy_census() -> dict:
     Every row's X is still the null #1428 staged, and two rows carry
     real accumulated data, so the initialization has something it could
     plausibly damage. It is a genuine v2 document — six-field records,
-    no `claims` — so `--seed` here performs the real migration as well
-    as the policy initialization, which is exactly the pairing an
-    operator with an old census meets.
+    no `claims` and no `outcomes` — so `--seed` here performs the real
+    migration as well as the policy initialization, which is exactly the
+    pairing an operator with an old census meets.
     """
     def row(key, census):
         return {"key": key, "script": f"{key}_probe.py",
                 "classification": "manual-only", "protocol": "legacy",
                 "census": {field: value for field, value in census.items()
-                           if field != "claims"}}
+                           if field not in ("claims", "outcomes")}}
 
     return {
         "schema": probe_census.RECORD_SCHEMA,
@@ -836,9 +837,10 @@ def test_acceptable_failure_policy_defaults() -> None:
                == stored["probes"][0]["census"]["attempts"],
                "...and no cohort, sample or attempt at all")
         expect(rows["beta"] == {**stored["probes"][1]["census"],
-                                "claims": []},
+                                "claims": [], "outcomes": []},
                "a row whose X is already set is left exactly as it was, "
-               "apart from the empty claim log its migration adds")
+               "apart from the empty claim and outcome logs its migration "
+               "adds")
         expect(rows["retired"]["acceptable_failures"] == 0,
                "a row whose probe left the registry is initialized too, so a "
                "legacy census can always be made policy-valid")
@@ -1567,14 +1569,14 @@ def test_atomicity() -> None:
                 raised = error
             expect(raised is not None and "injected" in str(raised),
                    "the injected failure propagates rather than being swallowed")
-            expect(len(calls) == 1 and b"probe-census/v3" in calls[0],
+            expect(len(calls) == 1 and b"probe-census/v4" in calls[0],
                    "the candidate had been fully serialized before the failure")
         finally:
             probe_census._atomic_replace = original
         unchanged(path, before,
                   "a failure before replacement leaves the OLD census intact")
         expect(json.loads(path.read_text(encoding="utf-8"))["schema"]
-               == "probe-census/v3",
+               == "probe-census/v4",
                "and the old census is still a complete, readable document")
 
         # Stale staging residue from a killed writer is never
@@ -1709,6 +1711,33 @@ def _replace(document, path, value):
     return True
 
 
+def stored_v3_document() -> dict:
+    """A `probe-census/v3` census exactly as #1434 left one.
+
+    Seven-field records, `claims` but no `outcomes`. Spelled out here
+    for the same reason `stored_v2_document` is: it describes migration
+    INPUT, and deriving it from the current `empty_census()` would
+    silently start testing the current shape the moment the record grows
+    another field.
+    """
+    return {
+        "schema": "probe-census/v3",
+        "probes": [{
+            "key": "alpha", "script": "alpha_probe.py",
+            "classification": "manual-only", "protocol": "legacy",
+            "census": {
+                "acceptable_failures": 2,
+                "acceptable_failures_justification": "two known races",
+                "estimated_worst_case_seconds": 480,
+                "current": None,
+                "history": [],
+                "attempts": [],
+                "claims": [],
+            },
+        }],
+    }
+
+
 def rich_census() -> dict:
     """A current-schema census with real accumulated data on its first row.
 
@@ -1743,7 +1772,8 @@ def rich_census() -> dict:
                                        "samples": [copy.deepcopy(archived)]}],
                           "attempts": [copy.deepcopy(archived_attempt),
                                        copy.deepcopy(attempt)],
-                          "claims": []}),
+                          "claims": [],
+                          "outcomes": []}),
             row("beta", probe_census.empty_census()),
             row("gamma", probe_census.empty_census()),
         ],
@@ -1936,7 +1966,8 @@ def test_declared_schema() -> None:
     # here at all is the self-check passing.
     expect(set(probe_census.SCHEMA_DEFINITIONS)
            == {probe_census.SEED_SCHEMA, probe_census.RECORD_SCHEMA,
-               probe_census.CENSUS_SCHEMA, probe_census.RESULT_SCHEMA},
+               probe_census.CLAIM_SCHEMA, probe_census.CENSUS_SCHEMA,
+               probe_census.RESULT_SCHEMA},
            "every document kind the tool reads has a declared schema")
     expect(all(name in (schema.get("$defs") or {})
                for name in probe_census.SCHEMA_DEFINITIONS.values()),
@@ -1957,12 +1988,16 @@ def test_declared_schema() -> None:
             v1_document(), probe_census.SEED_SCHEMA, "a v1 seed"),
             "the v1 seed schema accepts a real v1 seed")
         expect_valid(lambda: probe_census.validate_document(
-            rich_census(), probe_census.CENSUS_SCHEMA, "a v3 census"),
-            "the v3 census schema accepts a real measured census")
+            rich_census(), probe_census.CENSUS_SCHEMA, "a v4 census"),
+            "the v4 census schema accepts a real measured census")
         expect_valid(lambda: probe_census.validate_document(
             stored_v2_document(), probe_census.RECORD_SCHEMA, "a v2 census"),
             "the FROZEN v2 schema still accepts a real stored v2 census, "
             "which is what --seed migrates from")
+        expect_valid(lambda: probe_census.validate_document(
+            stored_v3_document(), probe_census.CLAIM_SCHEMA, "a v3 census"),
+            "the FROZEN v3 schema still accepts a real stored v3 census, "
+            "which --seed also migrates from")
         expect_valid(lambda: probe_census.validate_document(
             probe_census.build_manifest(), probe_census.CENSUS_SCHEMA,
             "a fresh manifest"),
@@ -2445,7 +2480,7 @@ def test_missing_dependency() -> None:
                 # a skipped check, and keeping it dependency-free is
                 # what lets a fresh checkout run it.
                 code, out, _ = cli("--print")
-                expect(code == 0 and '"probe-census/v3"' in out,
+                expect(code == 0 and '"probe-census/v4"' in out,
                        "--print still works: it validates nothing to skip")
             code, _, _ = cli("--record", str(result_file))
             expect(code == 0,
@@ -2748,8 +2783,8 @@ def test_cli() -> None:
         try:
             code, out, _ = cli("--print")
             document = json.loads(out)
-            expect(code == 0 and document["schema"] == "probe-census/v3",
-                   "--print emits the v2 census the live registry implies")
+            expect(code == 0 and document["schema"] == "probe-census/v4",
+                   "--print emits the v4 census the live registry implies")
             expect(all(row["census"] == probe_census.empty_census()
                        for row in document["probes"]),
                    "--print gives every row an empty census record")
@@ -2791,10 +2826,10 @@ def test_cli() -> None:
 
     with registry(ci_eligible={"beta"}), cli_repo() as (_root, path):
         code, out, _ = cli("--seed")
-        expect(code == 0 and path.exists() and "probe-census/v3" in out,
+        expect(code == 0 and path.exists() and "probe-census/v4" in out,
                "--seed creates the census in the docs worktree")
         code, _, _ = cli("--validate")
-        expect(code == 0, "--validate accepts the freshly seeded v2 census")
+        expect(code == 0, "--validate accepts the freshly seeded v4 census")
 
         holding = Path(tempfile.mkdtemp(prefix="probe-census-results-"))
         good = holding / "result.json"
@@ -3817,11 +3852,199 @@ def test_summary_cli() -> None:
 
 
 # ==========================================================================
+# ==========================================================================
+def outcome_record(mark: str, *, probe: str = "alpha",
+                   outcome: str = "cannot-reproduce") -> dict:
+    """A schema-valid durable de-flake outcome, tagged by its attempt.
+
+    Spelled here rather than imported from `tools/deflake_outcome.py`:
+    this file tests the census's own storage and preservation rules, and
+    a fixture built by the one producer would stop being able to fail
+    when the two disagree.
+    """
+    return {
+        "attempt": mark,
+        "outcome": outcome,
+        "probe": probe,
+        "timestamp_utc": "2026-08-28T12:00:00Z",
+        "baseline_sha": COMMIT_A,
+        "acceptable_failures": 0,
+        "targets": ["first"],
+        "measurements": [{
+            "role": "baseline",
+            "exit_code": 0,
+            "status": "ok",
+            "commit_sha": COMMIT_A,
+            "timestamp_utc": "2026-08-28T11:00:00Z",
+            "requested_runs": 10,
+            "completed_runs": 10,
+            "runs": [{"index": index, "outcome": "PASS"}
+                     for index in range(1, 11)],
+            "check_counts": {"first": {"PASS": 10, "FAIL": 0, "MISSING": 0}},
+            "failure_count": 0,
+            "failure_rate": 0.0,
+            "timeout_count": 0,
+            "rts_capabilities": 4,
+            "error": None,
+            "error_run_index": None,
+            "retained_artifacts": [],
+            "census_reference": {"cohort_commit_sha": COMMIT_A,
+                                 "sample_timestamp_utc":
+                                     "2026-08-28T11:00:00Z"},
+        }],
+        "retained_artifacts": [f"/tmp/artifacts/{mark}"],
+        "summary": f"the {mark} attempt reproduced nothing",
+        "recommendation": {"action": "de-list", "advisory": True,
+                           "detail": "consider de-listing; advisory only"},
+        "comparison": None,
+    }
+
+
+def test_outcome_log() -> None:
+    """#1439's append-only outcome log: its own aspect, and idempotent.
+
+    The census gained a fourth mutating aspect, so the two questions the
+    preservation guard exists to answer are asked of it in both
+    directions: an outcome append may touch nothing else, and no other
+    operation may touch `outcomes`.
+    """
+    print("\n-- the de-flake outcome log --")
+    with registry(), scratch() as root:
+        path = root / "probe_census.json"
+        seeded(path)
+        probe_census.record_result(path, result_document())
+        probe_census.record_claim(path, "alpha", {
+            "token": "claim-1", "timestamp_utc": "2026-08-27T09:00:00Z",
+            "commit_sha": COMMIT_A, "owner": "deflake", "host": "here",
+            "pid": 4711, "lease_seconds": 3600.0, "requested_runs": 10})
+        before = json.loads(path.read_text(encoding="utf-8"))
+
+        probe_census.record_outcome(path, "alpha", outcome_record("a-1"))
+        after = json.loads(path.read_text(encoding="utf-8"))
+        row = probe_census.find_entry(after, "alpha")["census"]
+        expect([entry["attempt"] for entry in row["outcomes"]] == ["a-1"],
+               "an outcome append lands in the row's own outcome log")
+        was = probe_census.find_entry(before, "alpha")["census"]
+        expect(all(was[field] == row[field] for field in
+                   ("current", "history", "attempts", "claims",
+                    "acceptable_failures",
+                    "acceptable_failures_justification",
+                    "estimated_worst_case_seconds")),
+               "...and touches no cohort, sample, attempt, claim or policy "
+               "field")
+        expect(all(a == b for a, b in zip(before["probes"][1:],
+                                          after["probes"][1:])),
+               "...nor any unrelated row")
+
+        stored = path.read_bytes()
+        probe_census.record_outcome(path, "alpha", outcome_record("a-1"))
+        unchanged(path, stored,
+                  "resuming the same attempt installs the identical bytes")
+        expect_refusal(
+            lambda: probe_census.record_outcome(
+                path, "alpha", {**outcome_record("a-1"),
+                                "summary": "a different account"}),
+            "one attempt identity carrying different evidence is refused",
+            "already recorded with different evidence")
+        unchanged(path, stored, "...and changes no bytes")
+
+        probe_census.record_outcome(path, "alpha", outcome_record("a-2"))
+        expect([entry["attempt"] for entry in probe_census.find_entry(
+            json.loads(path.read_text(encoding="utf-8")),
+            "alpha")["census"]["outcomes"]] == ["a-1", "a-2"],
+            "a second attempt appends after the first, in order")
+
+        # The record names its own probe, because it is handed BETWEEN
+        # workflows; the two must agree rather than one being trusted.
+        expect_refusal(
+            lambda: probe_census.record_outcome(
+                path, "beta", outcome_record("b-1")),
+            "an outcome naming another probe is refused",
+            "so it is not this row's outcome")
+        expect_refusal(
+            lambda: probe_census.record_outcome(path, "alpha", ["not", "it"]),
+            "a non-object outcome record is refused",
+            "must be a JSON object")
+        expect_refusal(
+            lambda: probe_census.record_outcome(
+                path, "alpha", {**outcome_record("a-3"), "attempt": ""}),
+            "an outcome with no attempt identity is refused",
+            "`attempt` identity")
+
+        # The aspect boundary, from both sides.
+        current = path.read_bytes()
+
+        def outcome_touching_measurements(document):
+            candidate = copy.deepcopy(document)
+            row = [r for r in candidate["probes"] if r["key"] == "alpha"][0]
+            row["census"]["outcomes"].append(outcome_record("a-9"))
+            row["census"]["attempts"].append(attempt_record("forged"))
+            return candidate, {"alpha": {"outcomes"}}
+        expect_refusal(
+            lambda: probe_census.update(path, outcome_touching_measurements),
+            "an outcome append that also logs an attempt is refused",
+            "which a diagnosis outcome may not touch")
+        unchanged(path, current, "...and changes no bytes")
+
+        def measurement_touching_outcomes(document):
+            candidate = copy.deepcopy(document)
+            row = [r for r in candidate["probes"] if r["key"] == "alpha"][0]
+            row["census"]["outcomes"].append(outcome_record("a-9"))
+            return candidate, {"alpha": {"measurements"}}
+        expect_refusal(
+            lambda: probe_census.update(path, measurement_touching_outcomes),
+            "a measurement ingestion appending an outcome is refused",
+            "which a measurement ingestion may not touch")
+        unchanged(path, current, "...and changes no bytes")
+
+        def policy_touching_outcomes(document):
+            candidate = copy.deepcopy(document)
+            row = [r for r in candidate["probes"] if r["key"] == "alpha"][0]
+            row["census"]["outcomes"] = []
+            return candidate, {"alpha": {"policy"}}
+        expect_refusal(
+            lambda: probe_census.update(path, policy_touching_outcomes),
+            "a policy update clearing the outcome log is refused",
+            "which a policy update may not touch")
+        unchanged(path, current, "...and changes no bytes")
+
+        # Append-only, like every other durable log on the record.
+        for mutate, why in (
+            (lambda outcomes: outcomes.clear(), "dropping the log"),
+            (lambda outcomes: outcomes.insert(0, outcome_record("a-0")),
+             "prepending to the log"),
+            (lambda outcomes: outcomes.__setitem__(0, outcome_record("a-x")),
+             "rewriting an existing entry"),
+        ):
+            def rewrite(document, apply=mutate):
+                candidate = copy.deepcopy(document)
+                row = [r for r in candidate["probes"]
+                       if r["key"] == "alpha"][0]
+                apply(row["census"]["outcomes"])
+                return candidate, {"alpha": {"outcomes"}}
+            expect_refusal(lambda: probe_census.update(path, rewrite),
+                           f"{why} is refused", "append-only")
+            unchanged(path, current, f"...and changes no bytes ({why})")
+
+    # The v3 -> v4 migration adds the empty log and nothing else.
+    with registry(), scratch() as root:
+        path = root / "legacy.json"
+        stored = stored_v3_document()
+        path.write_text(json.dumps(stored), encoding="utf-8")
+        migrated = probe_census.ensure_document(path)
+        expect(migrated["schema"] == probe_census.CENSUS_SCHEMA,
+               "seeding a v3 census migrates it to the current schema")
+        record = probe_census.find_entry(migrated, "alpha")["census"]
+        expect(record == {**stored["probes"][0]["census"], "outcomes": []},
+               "...adding the empty outcome log and nothing else")
+
+
 def main() -> int:
     for test in (test_record_shape, test_migration, test_seed_and_noop,
                  test_reconciliation, test_ingest_accepted,
                  test_ci_eligible_takes_no_measurement,
-                 test_ingest_harness_error, test_policy,
+                 test_ingest_harness_error, test_outcome_log,
+                 test_policy,
                  test_acceptable_failure_policy_defaults,
                  test_acceptable_failure_policy_rules,
                  test_acceptable_failure_policy_promotion,

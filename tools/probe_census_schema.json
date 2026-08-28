@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/coghex/synarchy/blob/master/tools/probe_census_schema.json",
   "title": "The probe census and the flake-harness result it ingests",
-  "$comment": "The four ROOT definitions are `census_v1`, `census_v2`, `census_v3` and `flake_result_v1`; tools/probe_census.py maps each declared schema string to one of them. They are deliberately not named after the schema strings themselves, because a JSON Pointer treats `/` as a separator and `#/$defs/probe-census/v2` would name nothing.",
+  "$comment": "The five ROOT definitions are `census_v1`, `census_v2`, `census_v3`, `census_v4` and `flake_result_v1`; tools/probe_census.py maps each declared schema string to one of them. They are deliberately not named after the schema strings themselves, because a JSON Pointer treats `/` as a separator and `#/$defs/probe-census/v2` would name nothing.",
   "description": "The declared shape of every document tools/probe_census.py reads or writes (#1492). It replaces hand-rolled type, presence, closed-object, enum, length and range checking; it deliberately declares NO cross-field invariant -- those span fields, so no keyword expresses them and they live in tools/probe_census.py's census_invariants()/result_invariants() (#1493) -- and no parity with the live probe registry, which stays validate_manifest's report and --seed's repair. Every object here is closed: explicit `required` plus `additionalProperties: false`, with a nullable field REQUIRED and null-inclusive rather than optional, so deleting one is a violation rather than an absence. Enums are spelled as one-element `enum` rather than `const` on purpose: the library's const message names only the value it EXPECTED, while enum names the offending one.",
 
   "$defs": {
@@ -42,12 +42,23 @@
     },
 
     "census_v3": {
-      "$comment": "#1434's record: the v2 document with each row's census also carrying its append-only `claims` log. Claim acquisitions are a DEDICATED collection rather than more `attempts`, which tools/probe_census.py defines as result-ingestion attempts and deliberately makes non-idempotent.",
+      "$comment": "#1434's record: the v2 document with each row's census also carrying its append-only `claims` log. Claim acquisitions are a DEDICATED collection rather than more `attempts`, which tools/probe_census.py defines as result-ingestion attempts and deliberately makes non-idempotent. FROZEN for the same reason census_v2 is: it is now a migration INPUT, and pointing it at the current row would make every real v3 census invalid for carrying no `outcomes`.",
       "type": "object",
       "required": ["schema", "probes"],
       "additionalProperties": false,
       "properties": {
         "schema": {"enum": ["probe-census/v3"]},
+        "probes": {"type": "array", "items": {"$ref": "#/$defs/inventory_row_v3"}}
+      }
+    },
+
+    "census_v4": {
+      "$comment": "#1439's record: the v3 document with each row's census also carrying its append-only `outcomes` log. A de-flake attempt's stable non-success outcome is a DEDICATED collection rather than more `attempts` (which are result-ingestion attempts) or more `claims` (which are lock acquisitions): an outcome is recorded after a diagnosis, is keyed for idempotency by its attempt identity, and carries evidence neither of the other two logs has a field for.",
+      "type": "object",
+      "required": ["schema", "probes"],
+      "additionalProperties": false,
+      "properties": {
+        "schema": {"enum": ["probe-census/v4"]},
         "probes": {"type": "array", "items": {"$ref": "#/$defs/inventory_row"}}
       }
     },
@@ -63,6 +74,20 @@
         "classification": {"$ref": "#/$defs/classification"},
         "protocol": {"$ref": "#/$defs/protocol_status"},
         "census": {"$ref": "#/$defs/census_record_v2"}
+      }
+    },
+
+    "inventory_row_v3": {
+      "$comment": "A stored v3 row. Frozen alongside census_v3 and never widened.",
+      "type": "object",
+      "required": ["key", "script", "classification", "protocol", "census"],
+      "additionalProperties": false,
+      "properties": {
+        "key": {"$ref": "#/$defs/probe_key"},
+        "script": {"$ref": "#/$defs/script_name"},
+        "classification": {"$ref": "#/$defs/classification"},
+        "protocol": {"$ref": "#/$defs/protocol_status"},
+        "census": {"$ref": "#/$defs/census_record_v3"}
       }
     },
 
@@ -109,8 +134,8 @@
       }
     },
 
-    "census_record": {
-      "$comment": "Exactly the seven fields probe_census.empty_census() writes.",
+    "census_record_v3": {
+      "$comment": "A stored v3 record: the seven fields #1434 left behind, with no `outcomes`. Frozen -- it describes migration INPUT, so widening it would make every real v3 census invalid.",
       "type": "object",
       "required": ["acceptable_failures", "acceptable_failures_justification",
                    "estimated_worst_case_seconds", "current", "history",
@@ -142,6 +167,43 @@
         }
       }
     },
+    "census_record": {
+      "$comment": "Exactly the eight fields probe_census.empty_census() writes.",
+      "type": "object",
+      "required": ["acceptable_failures", "acceptable_failures_justification",
+                   "estimated_worst_case_seconds", "current", "history",
+                   "attempts", "claims", "outcomes"],
+      "additionalProperties": false,
+      "properties": {
+        "acceptable_failures": {
+          "$comment": "X (#1430): the failures a complete 10-run measurement may show and still be acceptable, so 0 through 9 -- an X of 10 would declare a probe that never passes acceptable. Still null-INCLUSIVE here, and only here: a census written before the policy existed holds nulls, and tools/probe_census.py's --seed has to be able to read one in order to initialize it to 0. policy_invariants() is what refuses a null on every candidate and on --validate.",
+          "type": ["integer", "null"], "minimum": 0, "maximum": 9
+        },
+        "acceptable_failures_justification": {
+          "type": ["string", "null"], "maxLength": 4000
+        },
+        "estimated_worst_case_seconds": {
+          "$comment": "Supplied metadata, distinct from a sample's OBSERVED worst_elapsed_seconds.",
+          "type": ["number", "null"], "minimum": 0, "maximum": 1000000000
+        },
+        "current": {
+          "$comment": "The current commit cohort, or null when nothing has been measured. Spelled as if/else rather than oneOf so a malformed cohort reports the field that is actually wrong instead of `is not valid under any of the given schemas`.",
+          "if": {"type": "null"},
+          "then": true,
+          "else": {"$ref": "#/$defs/cohort"}
+        },
+        "history": {"type": "array", "items": {"$ref": "#/$defs/cohort"}},
+        "attempts": {"type": "array", "items": {"$ref": "#/$defs/attempt"}},
+        "claims": {
+          "$comment": "#1434's append-only log of successful claim ACQUISITIONS, keyed for idempotency by `token`. Deliberately not `attempts`, which are result-ingestion attempts and are non-idempotent by design.",
+          "type": "array", "items": {"$ref": "#/$defs/claim"}
+        },
+        "outcomes": {
+          "$comment": "#1439's append-only log of a de-flake attempt's STABLE NON-SUCCESS outcomes, keyed for idempotency by `attempt`. A repair that passed its gate is not here: it becomes a pull request, not a census row.",
+          "type": "array", "items": {"$ref": "#/$defs/outcome"}
+        }
+      }
+    },
 
     "claim": {
       "$comment": "Exactly what probe_claim.Claim.census_record() writes: one successful acquisition of the per-probe lock, recorded BEFORE the measurement it authorizes runs. `token` is the acquisition token and the idempotency key -- replaying the same acquisition must remain one record, and the same token carrying different metadata is refused rather than appended.",
@@ -161,6 +223,140 @@
         },
         "lease_seconds": {"type": "number", "minimum": 0, "maximum": 1000000000},
         "requested_runs": {"$ref": "#/$defs/count"}
+      }
+    },
+
+    "outcome": {
+      "$comment": "Exactly what deflake_outcome.outcome_record() writes: one de-flake attempt's STABLE NON-SUCCESS outcome (#1439). `attempt` is the attempt identity and the idempotency key -- resuming an already-recorded attempt must remain one record, and the same identity carrying different evidence is refused rather than appended. The record is a RESUME point: it carries the summarized measurement evidence, artifact REFERENCES and the diagnostic summary, so a later reader never has to re-run the attempt to know what it established.",
+      "type": "object",
+      "required": ["attempt", "outcome", "probe", "timestamp_utc",
+                   "baseline_sha", "acceptable_failures", "targets",
+                   "measurements", "retained_artifacts", "summary",
+                   "recommendation", "comparison"],
+      "additionalProperties": false,
+      "properties": {
+        "attempt": {"type": "string", "minLength": 1, "maxLength": 128},
+        "outcome": {
+          "$comment": "The three STABLE outcomes. An operational error is deliberately not one of them: exit codes 2-4, an incomplete run set and malformed measurement data return an actionable non-success and record nothing at all.",
+          "enum": ["cannot-reproduce", "no-confident-fix", "partial-improvement"]
+        },
+        "probe": {
+          "$comment": "Redundant with the row key, and required anyway: an outcome record is handed BETWEEN workflows, so it has to name its own probe. probe_census.ingest_outcome refuses one that disagrees with the row it is being appended to.",
+          "$ref": "#/$defs/probe_key"
+        },
+        "timestamp_utc": {"$ref": "#/$defs/timestamp_utc"},
+        "baseline_sha": {"$ref": "#/$defs/commit_sha"},
+        "acceptable_failures": {"type": "integer", "minimum": 0, "maximum": 9},
+        "targets": {"type": "array", "items": {"$ref": "#/$defs/check_id"}},
+        "measurements": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/outcome_measurement"}
+        },
+        "retained_artifacts": {"$ref": "#/$defs/artifact_paths"},
+        "summary": {
+          "$comment": "The diagnostic or attempted-fix summary that explains the selected outcome. Prose, and required non-empty: an outcome nobody can read is not a resume point.",
+          "type": "string", "minLength": 1, "maxLength": 8000
+        },
+        "recommendation": {
+          "$comment": "ADVISORY ONLY, and only ever on cannot-reproduce. Nothing reads this to change tools/ci_probes.py: de-listing is a person's decision, and every independent non-flaky exclusion reason survives it.",
+          "if": {"type": "null"},
+          "then": true,
+          "else": {"$ref": "#/$defs/outcome_recommendation"}
+        },
+        "comparison": {
+          "$comment": "Only ever on partial-improvement: the before-and-after failure counts, the X-out-of-N ceiling they are judged against, and the acceptance condition that stayed unmet.",
+          "if": {"type": "null"},
+          "then": true,
+          "else": {"$ref": "#/$defs/outcome_comparison"}
+        }
+      }
+    },
+
+    "outcome_recommendation": {
+      "type": "object",
+      "required": ["action", "advisory", "detail"],
+      "additionalProperties": false,
+      "properties": {
+        "action": {"enum": ["de-list"]},
+        "advisory": {
+          "$comment": "Always true. Spelled as a stored field rather than left implicit so a reader of the raw census cannot mistake the recommendation for an applied change.",
+          "enum": [true]
+        },
+        "detail": {"type": "string", "minLength": 1, "maxLength": 4000}
+      }
+    },
+
+    "outcome_comparison": {
+      "type": "object",
+      "required": ["baseline_failure_count", "verification_failure_count",
+                   "acceptable_failures", "requested_runs",
+                   "unmet_condition"],
+      "additionalProperties": false,
+      "properties": {
+        "baseline_failure_count": {"$ref": "#/$defs/count"},
+        "verification_failure_count": {"$ref": "#/$defs/count"},
+        "acceptable_failures": {"type": "integer", "minimum": 0, "maximum": 9},
+        "requested_runs": {"$ref": "#/$defs/count"},
+        "unmet_condition": {"type": "string", "minLength": 1, "maxLength": 4000}
+      }
+    },
+
+    "outcome_measurement": {
+      "$comment": "One measurement the outcome rests on, summarized from its own probe-flake-result/v1 document. References, never copies: retained_artifacts are the paths probe_flake kept OUTSIDE every worktree, and no stdout, protocol stream or engine log enters the census.",
+      "type": "object",
+      "required": ["role", "exit_code", "status", "commit_sha",
+                   "timestamp_utc", "requested_runs", "completed_runs",
+                   "runs", "check_counts", "failure_count", "failure_rate",
+                   "timeout_count", "rts_capabilities", "error",
+                   "error_run_index", "retained_artifacts",
+                   "census_reference"],
+      "additionalProperties": false,
+      "properties": {
+        "role": {"enum": ["handoff", "baseline", "verification"]},
+        "exit_code": {
+          "$comment": "The tools/probe_flake.py exit the measurement came back with: 0 a valid measurement, 2 a rejection before execution, 3 port exhaustion, 4 an untrustworthy harness result. 2 and 3 write no document at all; 4 writes one whose own status says harness-error.",
+          "type": "integer", "minimum": 0, "maximum": 255
+        },
+        "status": {"$ref": "#/$defs/result_status"},
+        "commit_sha": {"$ref": "#/$defs/commit_sha"},
+        "timestamp_utc": {"$ref": "#/$defs/timestamp_utc"},
+        "requested_runs": {"$ref": "#/$defs/count"},
+        "completed_runs": {"$ref": "#/$defs/count"},
+        "runs": {"type": "array", "items": {"$ref": "#/$defs/outcome_run"}},
+        "check_counts": {"$ref": "#/$defs/check_counts"},
+        "failure_count": {"$ref": "#/$defs/count"},
+        "failure_rate": {"$ref": "#/$defs/rate"},
+        "timeout_count": {"$ref": "#/$defs/count"},
+        "rts_capabilities": {"$ref": "#/$defs/capabilities"},
+        "error": {"$ref": "#/$defs/error_text"},
+        "error_run_index": {
+          "$comment": "The index of the run whose stream could not be trusted, or null. Its own field because probe_flake keeps that run OUT of `runs`, so an all-PASS `runs` list is not on its own evidence of a trustworthy measurement.",
+          "type": ["integer", "null"], "minimum": 0, "maximum": 1000000
+        },
+        "retained_artifacts": {"$ref": "#/$defs/artifact_paths"},
+        "census_reference": {"$ref": "#/$defs/outcome_census_reference"}
+      }
+    },
+
+    "outcome_run": {
+      "$comment": "One run's durable outcome. The per-run check map stays in the retained artifacts; check_counts is the tally the outcome is judged on.",
+      "type": "object",
+      "required": ["index", "outcome"],
+      "additionalProperties": false,
+      "properties": {
+        "index": {"$ref": "#/$defs/count"},
+        "outcome": {"$ref": "#/$defs/run_outcome"}
+      }
+    },
+
+    "outcome_census_reference": {
+      "$comment": "The coordinates that address this measurement in the census: a probe row's cohort is keyed by commit and each of its samples by timestamp, so the pair locates the stored sample when one exists. It is deliberately a REFERENCE and not an assertion that the sample is stored -- only the #1436 measurement is ingested by --record, while a controlled comparison batch is evidence that lives in its retained artifact tree, and a reference that claimed otherwise would be inventing a census row.",
+      "type": "object",
+      "required": ["cohort_commit_sha", "sample_timestamp_utc"],
+      "additionalProperties": false,
+      "properties": {
+        "cohort_commit_sha": {"$ref": "#/$defs/commit_sha"},
+        "sample_timestamp_utc": {"$ref": "#/$defs/timestamp_utc"}
       }
     },
 

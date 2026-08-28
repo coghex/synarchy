@@ -28,6 +28,7 @@ Exit codes: 0 = all tests passed, 1 = one or more failed.
 """
 from __future__ import annotations
 
+import contextlib
 import copy
 import json
 import re
@@ -39,7 +40,9 @@ import types
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import ci_probes  # type: ignore
 import deflake_diagnosis as dd  # type: ignore
+import deflake_outcome as do  # type: ignore
 import probe_census  # type: ignore
 import deflake  # type: ignore
 import probe_flake  # type: ignore
@@ -4582,6 +4585,1114 @@ def test_the_apparatus_inventory_is_what_refuses_a_harness_repair() -> None:
         lambda: diagnosis_document(repair={
             "commit_sha": REPAIR_COMMIT, "base_sha": BASE_COMMIT,
             "changed_paths": ["tools/role_probe.py", "tools/probe_flake.py"]}))
+
+
+# ==========================================================================
+# #1439: the non-success outcomes of a de-flake attempt
+# ==========================================================================
+#
+# `tools/deflake_outcome.py` consumes the record #1437 emits and decides
+# whether the evidence supports a STABLE non-success outcome. The rules
+# below are the ones a test can hold it to: what may become
+# `cannot-reproduce`, what an improvement has to be to be one, that no
+# route reaches a publisher, and that a census append is durable,
+# idempotent and destroys nothing.
+#
+# The diagnosis records these cases feed it are PRODUCED by #1437's own
+# evaluator rather than hand-assembled, for the reason `handoff_document`
+# already gives: a hand-written envelope agrees with whatever the
+# consumer happens to require, which is exactly how a consumer that
+# could never read a real producer record keeps a green suite.
+ATTEMPT = "role-20260828T120000Z-4711-abcdef12"
+OUTCOME_NOW = "2026-08-28T12:00:00Z"
+OUTCOME_SUMMARY = ("ten controlled runs at the handoff's own commit, with "
+                   "the configuration recreated from its manifest")
+UNMET = ("the verification stayed above the acceptable-failure ceiling the "
+         "handoff carries")
+
+_DEFAULT = object()
+
+
+def spotless_result(**kwargs) -> dict:
+    """A complete measurement in which nothing at all went wrong."""
+    return result_document(**kwargs)
+
+
+def missing_check_result(cid: str = "gamma") -> dict:
+    """Ten PASSING runs, one declared check never emitted in any of them.
+
+    The shape `error_run`'s clause and the per-check clause exist for:
+    every run's OUTCOME is PASS and the aggregate failure count is zero,
+    so a classifier reading only `runs` or only `failure_count` would
+    call this spotless.
+    """
+    ids = [c for c, _label in CHECKS]
+    run = {name: (MISSING if name == cid else PASS) for name in ids}
+    return result_document(runs=[dict(run) for _ in range(dd.RUN_COUNT)])
+
+
+def timed_out_result() -> dict:
+    ids = [c for c, _label in CHECKS]
+    runs = [{name: PASS for name in ids} for _ in range(dd.RUN_COUNT - 1)]
+    timed_out = {name: (PASS if name == ids[0] else MISSING) for name in ids}
+    timed_out["__timeout__"] = True
+    return result_document(runs=runs + [timed_out])
+
+
+def short_result() -> dict:
+    """Nine runs of a ten-run batch, and a document that says `ok`.
+
+    `probe_census.validate_result` accepts this — only a NON-accepted
+    status is required to leave a run uncompleted — so the incomplete
+    run set really does have to be caught by the classifier rather than
+    by the schema in front of it.
+    """
+    ids = [c for c, _label in CHECKS]
+    return result_document(
+        runs=[{name: PASS for name in ids} for _ in range(dd.RUN_COUNT - 1)])
+
+
+def forged_ok_result(*, error_run: bool = False, error=None) -> dict:
+    """A complete all-PASS document that still carries a harness fault.
+
+    `probe_flake` never writes one — `stop_with_harness_error` sets the
+    status, the error and the error run together — but the DECLARED
+    schema accepts it, and the run that broke the stream is deliberately
+    kept OUT of `runs`. So a classifier that read only `runs`, or only
+    the aggregates, would see a spotless batch here. These are the
+    fields that say otherwise.
+    """
+    ids = [c for c, _label in CHECKS]
+    keep = dd.RUN_COUNT - 1
+    document = result_document(
+        requested=keep,
+        runs=[{name: PASS for name in ids} for _ in range(keep)])
+    if error_run:
+        document["error_run"] = result_document(
+            harness_error=True)["error_run"]
+    if error is not None:
+        document["error"] = error
+    return document
+
+
+def forged_aggregate_result(shape: str = "silent-timeout") -> dict:
+    """A batch whose aggregates disagree with its own run list.
+
+    Nothing in the declared schema binds `failure_count` or
+    `timeout_count` to `runs`, so "an inconsistent aggregate" is a shape
+    the classifier has to refuse for itself — and each counter is an
+    INDEPENDENT account, so each gets a fixture only its own clause can
+    see:
+
+    * `silent-timeout` — the last run timed out AFTER emitting every
+      declared check, so the per-check tallies are spotless and
+      consistent and only `runs` says anything went wrong, with both
+      counters zeroed.
+    * `phantom-failures` — a spotless run list under a non-zero failure
+      count.
+    * `phantom-timeouts` — a spotless run list, a zero failure count,
+      and a non-zero timeout count. `probe_flake` counts a timeout as a
+      failure too, so a batch claiming timeouts and no failures is one
+      no harness wrote.
+    """
+    ids = [c for c, _label in CHECKS]
+    timing_out = shape == "silent-timeout"
+    runs = [{name: PASS for name in ids}
+            for _ in range(dd.RUN_COUNT - (1 if timing_out else 0))]
+    if timing_out:
+        runs.append({**{name: PASS for name in ids}, "__timeout__": True})
+    document = result_document(runs=runs)
+    if timing_out:
+        document["failure_count"] = 0
+        document["failure_rate"] = 0.0
+        document["timeout_count"] = 0
+    elif shape == "phantom-failures":
+        document["failure_count"] = 3
+        document["failure_rate"] = 0.3
+    elif shape == "phantom-timeouts":
+        document["timeout_count"] = 2
+    else:
+        raise AssertionError(f"unknown forged shape {shape!r}")
+    return document
+
+
+def route_diagnosis(route: str) -> dict:
+    """A diagnosis document `dd.evaluate` really does take down `route`."""
+    if route == dd.ROUTE_NO_TARGET:
+        return diagnosis_document(
+            route=route, handoff=handoff_document(result=result_document()),
+            baseline=False, verification=False)
+    document = diagnosis_document(route=route)
+    if route == dd.ROUTE_CANNOT_REPRODUCE:
+        # The controlled baseline reproduced nothing: no failure over X
+        # and no target left MISSING.
+        document["baseline"]["result"] = spotless_result()
+    elif route == dd.ROUTE_PARTIAL_IMPROVEMENT:
+        # Better than the baseline's four failures and still over an X
+        # of zero. `abort=False` keeps every declared check emitted, so
+        # the MISSING half of the acceptance gate is satisfied and the
+        # failure COUNT is the half that is not.
+        document["verification"]["result"] = verification_result(
+            runs=failing_runs(2, abort=False), artifact_root=VERIFY_ARTIFACTS)
+    return document
+
+
+def produced(route: str) -> tuple:
+    """`(diagnosis document, the deflake-diagnosis-outcome/v1 it emits)`."""
+    document = route_diagnosis(route)
+    return document, evaluate(document).to_document()
+
+
+def measurement_entries(route: str, diagnosis: dict) -> list:
+    """The measurements the route rests on, exactly as the harness left them.
+
+    Pulled out of the diagnosis document rather than rebuilt, so the
+    evidence #1439 classifies is literally the evidence #1437 judged.
+    """
+    if route == dd.ROUTE_NO_TARGET:
+        return [{"role": do.ROLE_HANDOFF, "exit_code": probe_flake.EXIT_OK,
+                 "result": diagnosis["handoff"]["result"]}]
+    entries = [{"role": do.ROLE_BASELINE, "exit_code": probe_flake.EXIT_OK,
+                "result": diagnosis["baseline"]["result"]}]
+    if route == dd.ROUTE_PARTIAL_IMPROVEMENT:
+        entries.append({"role": do.ROLE_VERIFICATION,
+                        "exit_code": probe_flake.EXIT_OK,
+                        "result": diagnosis["verification"]["result"]})
+    return entries
+
+
+def outcome_handoff(route: str = dd.ROUTE_CANNOT_REPRODUCE, *,
+                    attempt: str = ATTEMPT, summary: str = OUTCOME_SUMMARY,
+                    measurements=None, unmet=_DEFAULT,
+                    diagnosis_outcome=_DEFAULT) -> dict:
+    document_diagnosis, record = produced(route)
+    envelope = {
+        "schema": do.HANDOFF_SCHEMA,
+        "attempt": attempt,
+        "summary": summary,
+        "diagnosis_outcome": record if diagnosis_outcome is _DEFAULT
+                             else diagnosis_outcome,
+        "measurements": (measurement_entries(route, document_diagnosis)
+                         if measurements is None else measurements),
+    }
+    if unmet is _DEFAULT:
+        unmet = (UNMET if route == dd.ROUTE_PARTIAL_IMPROVEMENT else None)
+    if unmet is not None:
+        envelope["unmet_condition"] = unmet
+    return copy.deepcopy(envelope)
+
+
+class Publisher:
+    """The pull-request publisher, injected so its silence is provable."""
+
+    def __init__(self) -> None:
+        self.calls: list = []
+
+    def __call__(self, record) -> str:
+        self.calls.append(record)
+        return "https://example.invalid/pull/1"
+
+
+@contextlib.contextmanager
+def census_file():
+    """A real seeded census on disk, in a directory of its own."""
+    root = Path(tempfile.mkdtemp(prefix="deflake_outcome_census_"))
+    try:
+        path = root / "docs" / "probe_census.json"
+        path.parent.mkdir(parents=True)
+        probe_census.ensure_document(path)
+        yield path
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def record_outcome(handoff_document_, path, *, publisher=None, now=OUTCOME_NOW):
+    """Run the whole workflow over one handoff, with a spy publisher."""
+    publisher = Publisher() if publisher is None else publisher
+    accepted = do.require_handoff(handoff_document_)
+    return do.record(accepted, census_path=path, now=now,
+                     publisher=publisher), publisher
+
+
+def stored_outcomes(path, probe: str = PROBE) -> list:
+    document = json.loads(Path(path).read_text(encoding="utf-8"))
+    row = probe_census.find_entry(document, probe)
+    return list((row or {}).get("census", {}).get("outcomes") or [])
+
+
+def expect_non_success(thunk, fragment: str, msg: str) -> None:
+    """`thunk` is a well-formed handoff whose ending is not stable."""
+    try:
+        thunk()
+    except do.NonSuccess as error:
+        expect(fragment in str(error),
+               f"{msg}: refused, but for {str(error)!r} rather than "
+               f"{fragment!r}")
+        return
+    except do.HandoffError as error:
+        FAILURES.append(f"{msg}: rejected the INPUT ({error}) where the "
+                        f"EVIDENCE should have been refused")
+        return
+    FAILURES.append(f"{msg}: recorded a stable outcome")
+
+
+def expect_handoff_rejected(thunk, fragment: str, msg: str) -> None:
+    try:
+        thunk()
+    except do.HandoffError as error:
+        expect(fragment in str(error),
+               f"{msg}: rejected, but for {str(error)!r} rather than "
+               f"{fragment!r}")
+        return
+    except do.NonSuccess as error:
+        FAILURES.append(f"{msg}: refused the EVIDENCE ({error}) where the "
+                        f"input should have been rejected")
+        return
+    FAILURES.append(f"{msg}: accepted")
+
+
+def expect_nothing_recorded(path, before: bytes, publisher, msg: str) -> None:
+    """The one assertion every non-success owes: no trace, anywhere."""
+    expect(Path(path).read_bytes() == before,
+           f"{msg}: the census bytes changed")
+    expect(not stored_outcomes(path),
+           f"{msg}: an outcome was recorded anyway")
+    expect(publisher.calls == [],
+           f"{msg}: the pull-request publisher was called")
+
+
+def test_this_workflow_answers_every_route_1437_hands_it() -> None:
+    """Parity with the producer, so a new route is a failure not a crash.
+
+    #1437 decides which issue owns each ending. If it grows another one
+    owned by #1439 and this module's table is not extended, the
+    workflow would raise a `KeyError` on a real handoff; this is what
+    turns that into a red test on the day the route is added.
+    """
+    owned = {route for route, owner in dd.ROUTE_OWNER.items()
+             if owner == 1439}
+    expect(set(do.ROUTE_TO_OUTCOME) == owned,
+           f"every route #1437 hands to #1439 has an answer here; got "
+           f"{sorted(do.ROUTE_TO_OUTCOME)} against {sorted(owned)}")
+    expect(set(do.ROUTE_ROLES) == set(do.ROUTE_TO_OUTCOME),
+           f"and each of them declares the roles its evidence needs; got "
+           f"{sorted(do.ROUTE_ROLES)}")
+    expect(set(do.ROUTE_TO_OUTCOME.values()) == set(do.STABLE_OUTCOMES),
+           f"and between them they reach every stable outcome; got "
+           f"{sorted(set(do.ROUTE_TO_OUTCOME.values()))}")
+    for route, roles in do.ROUTE_ROLES.items():
+        expect(roles["designated"] in roles["required"],
+               f"the {route!r} route is judged on a measurement it also "
+               f"requires; got {roles}")
+        expect(not (set(roles["required"]) & set(roles["forbidden"])),
+               f"the {route!r} route does not both require and forbid a "
+               f"role; got {roles}")
+        expect(set(roles["required"]) <= set(do.ROLES)
+               and set(roles["forbidden"]) <= set(do.ROLES),
+               f"the {route!r} route names only declared roles; got {roles}")
+    # The routes #1437 keeps or hands elsewhere are not silently owned.
+    for route in dd.ROUTES:
+        if route in owned:
+            continue
+        expect(route not in do.ROUTE_TO_OUTCOME,
+               f"the {route!r} route is not #1439's, and this workflow does "
+               f"not claim it")
+
+
+def test_a_spotless_controlled_baseline_records_cannot_reproduce() -> None:
+    """The one predicate that may conclude "nothing is wrong here"."""
+    with census_file() as path:
+        recorded, publisher = record_outcome(outcome_handoff(), path)
+        record = recorded.record
+        expect(record["outcome"] == do.OUTCOME_CANNOT_REPRODUCE,
+               f"a spotless controlled baseline is cannot-reproduce; got "
+               f"{record['outcome']}")
+        expect(publisher.calls == [],
+               "and it opens no pull request")
+        expect(not recorded.resumed and recorded.durable,
+               "the first append is a real, durable write")
+
+        stored = stored_outcomes(path)
+        expect(len(stored) == 1 and stored[0] == record,
+               f"the census row holds exactly the record that was built; got "
+               f"{len(stored)} outcome(s)")
+        recommendation = record["recommendation"]
+        expect(isinstance(recommendation, dict)
+               and recommendation["action"] == "de-list"
+               and recommendation["advisory"] is True,
+               f"with an advisory de-list recommendation; got "
+               f"{recommendation}")
+        expect(record["comparison"] is None,
+               "and no before-and-after comparison, which it has no second "
+               "batch for")
+        expect(record["attempt"] == ATTEMPT and record["probe"] == PROBE
+               and record["timestamp_utc"] == OUTCOME_NOW
+               and record["baseline_sha"] == BASE_COMMIT
+               and record["summary"] == OUTCOME_SUMMARY,
+               "the record identifies the attempt, probe, instant, baseline "
+               "commit and diagnostic summary")
+        expect(record["acceptable_failures"] == 0
+               and record["targets"] == ["beta", "gamma"],
+               f"and the ceiling and targets it was judged against; got "
+               f"X={record['acceptable_failures']}, {record['targets']}")
+
+        # The stored document is a census this tool will still read.
+        document = json.loads(path.read_text(encoding="utf-8"))
+        try:
+            probe_census.validate_document(
+                document, probe_census.CENSUS_SCHEMA, "the written census")
+        except probe_census.CensusError as error:
+            FAILURES.append(f"an outcome append leaves an invalid census: "
+                            f"{error}")
+
+
+def test_a_no_target_ending_is_cannot_reproduce_on_its_own_measurement()\
+        -> None:
+    """`/deflake`'s all-PASS ending runs no controlled batch at all.
+
+    It is #1437's `no-target` route, owned by #1439, and it means what
+    `cannot-reproduce` means. The predicate is the SAME one, so an
+    all-PASS ending cannot be recorded on weaker evidence than a
+    controlled one.
+    """
+    with census_file() as path:
+        recorded, publisher = record_outcome(
+            outcome_handoff(dd.ROUTE_NO_TARGET), path)
+        expect(recorded.record["outcome"] == do.OUTCOME_CANNOT_REPRODUCE,
+               f"an all-PASS #1436 measurement is cannot-reproduce; got "
+               f"{recorded.record['outcome']}")
+        expect(recorded.record["measurements"][0]["role"] == do.ROLE_HANDOFF,
+               "recorded against the measurement it actually has")
+        expect(publisher.calls == [], "and it opens no pull request")
+
+    # The same route over a measurement that is NOT spotless.
+    with census_file() as path:
+        before = path.read_bytes()
+        handoff = outcome_handoff(dd.ROUTE_NO_TARGET, measurements=[
+            {"role": do.ROLE_HANDOFF, "exit_code": probe_flake.EXIT_OK,
+             "result": missing_check_result()}])
+        publisher = Publisher()
+        expect_non_success(
+            lambda: record_outcome(handoff, path, publisher=publisher),
+            "check 'gamma' is MISSING",
+            "a no-target ending whose measurement lost a check")
+        expect_nothing_recorded(path, before, publisher,
+                                "a no-target ending over a MISSING check")
+
+
+def test_untrustworthy_evidence_is_never_cannot_reproduce() -> None:
+    """The load-bearing distinction of the whole issue.
+
+    "We could not make it fail" and "we could not measure it" are
+    opposite conclusions. Each input below must return an actionable
+    non-success and record NO `cannot-reproduce` outcome — not be
+    accepted as one, and not crash.
+    """
+    cases = (
+        ("a failing run", probe_flake.EXIT_OK,
+         result_document(runs=failing_runs(1, abort=False)),
+         "observed 1 failing run"),
+        ("a timed-out run", probe_flake.EXIT_OK, timed_out_result(),
+         "timed-out run"),
+        ("an incomplete run set", probe_flake.EXIT_OK, short_result(),
+         f"completed {dd.RUN_COUNT - 1} of {dd.RUN_COUNT} requested runs"),
+        ("a check that never arrived", probe_flake.EXIT_OK,
+         missing_check_result(), "check 'gamma' is MISSING"),
+        ("an untrustworthy harness result", probe_flake.EXIT_HARNESS_ERROR,
+         result_document(harness_error=True), "exited 4"),
+        ("a retained error run beside an all-PASS list", probe_flake.EXIT_OK,
+         forged_ok_result(error_run=True), "kept an error run"),
+        ("a run list its own aggregates contradict", probe_flake.EXIT_OK,
+         forged_aggregate_result(),
+         f"run {dd.RUN_COUNT} is {probe_flake.RUN_TIMEOUT}"),
+        ("a failure aggregate its own run list contradicts",
+         probe_flake.EXIT_OK, forged_aggregate_result("phantom-failures"),
+         "observed 3 failing run(s)"),
+        ("a timeout aggregate its own run list contradicts",
+         probe_flake.EXIT_OK, forged_aggregate_result("phantom-timeouts"),
+         "observed 2 timed-out run(s)"),
+        ("a reported harness error beside an all-PASS list",
+         probe_flake.EXIT_OK,
+         forged_ok_result(error="the event stream could not be trusted"),
+         "reports the harness error"),
+        ("a rejection before execution", probe_flake.EXIT_REJECTED, None,
+         "exited 2"),
+        ("port exhaustion", probe_flake.EXIT_NO_PORT, None, "exited 3"),
+    )
+    for label, code, result, fragment in cases:
+        with census_file() as path:
+            before = path.read_bytes()
+            handoff = outcome_handoff(measurements=[
+                {"role": do.ROLE_BASELINE, "exit_code": code,
+                 "result": result}])
+            publisher = Publisher()
+            expect_non_success(
+                lambda h=handoff, p=publisher: record_outcome(
+                    h, path, publisher=p),
+                fragment, f"{label} classified as cannot-reproduce")
+            expect_nothing_recorded(path, before, publisher, label)
+
+
+def test_a_reproduced_failure_with_no_bounded_repair_is_no_confident_fix()\
+        -> None:
+    with census_file() as path:
+        recorded, publisher = record_outcome(
+            outcome_handoff(dd.ROUTE_NO_CONFIDENT_FIX), path)
+        record = recorded.record
+        expect(record["outcome"] == do.OUTCOME_NO_CONFIDENT_FIX,
+               f"a reproduced failure nobody can attribute is "
+               f"no-confident-fix; got {record['outcome']}")
+        expect(record["recommendation"] is None
+               and record["comparison"] is None,
+               "carrying neither a de-list recommendation nor a comparison")
+        expect(publisher.calls == [], "and opening no pull request")
+
+        measurement = record["measurements"][0]
+        expect(measurement["role"] == do.ROLE_BASELINE
+               and measurement["failure_count"] == 4
+               and measurement["completed_runs"] == dd.RUN_COUNT
+               and measurement["check_counts"]["beta"][FAIL] == 4
+               and measurement["retained_artifacts"],
+               f"with the baseline evidence it rests on; got {measurement}")
+        expect(record["summary"] == OUTCOME_SUMMARY,
+               "and the diagnostic summary that explains it")
+
+    # Evidence that reproduced NOTHING is the other outcome, not this one.
+    with census_file() as path:
+        before = path.read_bytes()
+        handoff = outcome_handoff(dd.ROUTE_NO_CONFIDENT_FIX, measurements=[
+            {"role": do.ROLE_BASELINE, "exit_code": probe_flake.EXIT_OK,
+             "result": spotless_result()}])
+        publisher = Publisher()
+        expect_non_success(
+            lambda: record_outcome(handoff, path, publisher=publisher),
+            "reproduced nothing to attribute",
+            "a spotless baseline recorded as no-confident-fix")
+        expect_nothing_recorded(path, before, publisher,
+                                "a spotless no-confident-fix")
+
+
+def test_a_lower_rate_that_still_fails_the_gate_is_partial_improvement()\
+        -> None:
+    with census_file() as path:
+        recorded, publisher = record_outcome(
+            outcome_handoff(dd.ROUTE_PARTIAL_IMPROVEMENT), path)
+        record = recorded.record
+        expect(record["outcome"] == do.OUTCOME_PARTIAL_IMPROVEMENT,
+               f"a measured improvement that still fails the gate is "
+               f"partial-improvement; got {record['outcome']}")
+        expect(publisher.calls == [],
+               "a lower failure rate is not success, so it opens no PR")
+        comparison = record["comparison"]
+        expect(comparison == {"baseline_failure_count": 4,
+                              "verification_failure_count": 2,
+                              "acceptable_failures": 0,
+                              "requested_runs": dd.RUN_COUNT,
+                              "unmet_condition": UNMET},
+               f"with the before-and-after counts, the X-out-of-N ceiling "
+               f"and the unmet acceptance condition; got {comparison}")
+        expect([m["role"] for m in record["measurements"]]
+               == [do.ROLE_BASELINE, do.ROLE_VERIFICATION],
+               "and both measurements it compared")
+        expect(record["recommendation"] is None,
+               "and no de-list recommendation, which only cannot-reproduce "
+               "carries")
+
+
+def test_partial_improvement_is_numeric_on_both_halves() -> None:
+    """An improvement, and a gate it still fails. Neither is an adjective."""
+    diagnosis, _record = produced(dd.ROUTE_PARTIAL_IMPROVEMENT)
+    baseline = diagnosis["baseline"]["result"]
+
+    def handoff(verification, **kwargs):
+        return outcome_handoff(dd.ROUTE_PARTIAL_IMPROVEMENT, measurements=[
+            {"role": do.ROLE_BASELINE, "exit_code": probe_flake.EXIT_OK,
+             "result": baseline},
+            {"role": do.ROLE_VERIFICATION, "exit_code": probe_flake.EXIT_OK,
+             "result": verification}], **kwargs)
+
+    cases = (
+        ("a verification no better than the baseline",
+         handoff(verification_result(runs=failing_runs(4, abort=False),
+                                     artifact_root=VERIFY_ARTIFACTS)),
+         "which is no improvement"),
+        ("a verification that measurably passes the gate",
+         handoff(verification_result(artifact_root=VERIFY_ARTIFACTS)),
+         "measurably PASSES the acceptance gate"),
+        ("a verification at another run count",
+         handoff(verification_result(
+             requested=dd.RUN_COUNT - 4, artifact_root=VERIFY_ARTIFACTS,
+             runs=failing_runs(2, abort=False)[:dd.RUN_COUNT - 4])),
+         "requested"),
+        ("a verification at another capability count",
+         handoff(verification_result(rts_caps=dd.RTS_CAPABILITIES + 1,
+                                     runs=failing_runs(2, abort=False),
+                                     artifact_root=VERIFY_ARTIFACTS)),
+         "RTS capabilities"),
+        ("an invalid verification",
+         handoff(verification_result(runs=failing_runs(2, abort=False),
+                                     harness_error=True,
+                                     artifact_root=VERIFY_ARTIFACTS),
+                 ),
+         "exited 0 while its document reports status"),
+    )
+    for label, document, fragment in cases:
+        with census_file() as path:
+            before = path.read_bytes()
+            publisher = Publisher()
+            try:
+                do.require_handoff(copy.deepcopy(document))
+            except do.HandoffError as error:
+                expect(fragment in str(error),
+                       f"{label}: rejected, but for {str(error)!r} rather "
+                       f"than {fragment!r}")
+                expect_nothing_recorded(path, before, publisher, label)
+                continue
+            expect_non_success(
+                lambda d=document, p=publisher: record_outcome(
+                    d, path, publisher=p),
+                fragment, f"{label} recorded as partial-improvement")
+            expect_nothing_recorded(path, before, publisher, label)
+
+
+def test_an_untrustworthy_verification_is_not_an_improvement() -> None:
+    """A batch that became invalid improved nothing measurable.
+
+    It is the operational-error route, and specifically NOT a partial
+    improvement claimed over evidence that cannot establish one.
+    """
+    diagnosis, _record = produced(dd.ROUTE_PARTIAL_IMPROVEMENT)
+    document = outcome_handoff(dd.ROUTE_PARTIAL_IMPROVEMENT, measurements=[
+        {"role": do.ROLE_BASELINE, "exit_code": probe_flake.EXIT_OK,
+         "result": diagnosis["baseline"]["result"]},
+        {"role": do.ROLE_VERIFICATION,
+         "exit_code": probe_flake.EXIT_HARNESS_ERROR,
+         "result": verification_result(runs=failing_runs(2, abort=False),
+                                       harness_error=True,
+                                       artifact_root=VERIFY_ARTIFACTS)}])
+    with census_file() as path:
+        before = path.read_bytes()
+        publisher = Publisher()
+        expect_non_success(
+            lambda: record_outcome(document, path, publisher=publisher),
+            "exited 4",
+            "an invalid verification recorded as partial-improvement")
+        expect_nothing_recorded(path, before, publisher,
+                                "an invalid verification")
+
+
+def test_a_production_defect_is_an_actionable_non_success_naming_1438()\
+        -> None:
+    """#1438 is a sibling, not a prerequisite: nothing here stubs it."""
+    with census_file() as path:
+        before = path.read_bytes()
+        publisher = Publisher()
+        expect_non_success(
+            lambda: record_outcome(
+                outcome_handoff(dd.ROUTE_PRODUCTION_DEFECT), path,
+                publisher=publisher),
+            "#1438", "a production defect recorded as a stable outcome")
+        expect_nothing_recorded(path, before, publisher, "a production defect")
+
+
+def test_no_stable_outcome_reaches_the_pull_request_publisher() -> None:
+    """The boundary, from both sides.
+
+    The table is consulted on every route, so the silence below is a
+    branch that really ran — flipping an entry makes the injected
+    publisher fire, which is what stops this assertion being vacuous.
+    """
+    expect(set(do.OPENS_PULL_REQUEST) == set(do.STABLE_OUTCOMES)
+           and not any(do.OPENS_PULL_REQUEST.values()),
+           f"every stable outcome forbids a repair PR; got "
+           f"{do.OPENS_PULL_REQUEST}")
+    routes = (dd.ROUTE_NO_TARGET, dd.ROUTE_CANNOT_REPRODUCE,
+              dd.ROUTE_NO_CONFIDENT_FIX, dd.ROUTE_PARTIAL_IMPROVEMENT)
+    for route in routes:
+        with census_file() as path:
+            recorded, publisher = record_outcome(outcome_handoff(route), path)
+            expect(publisher.calls == [],
+                   f"the {route!r} route called the publisher")
+            expect(recorded.record["outcome"] in do.STABLE_OUTCOMES
+                   and recorded.to_document()["opened_pull_request"] is False,
+                   f"the {route!r} route recorded "
+                   f"{recorded.record['outcome']!r}, not a stable outcome "
+                   f"reported as opening nothing")
+
+    # The branch is live: with the policy flipped, the publisher fires.
+    saved = dict(do.OPENS_PULL_REQUEST)
+    do.OPENS_PULL_REQUEST[do.OUTCOME_CANNOT_REPRODUCE] = True
+    try:
+        with census_file() as path:
+            recorded, publisher = record_outcome(outcome_handoff(), path)
+            expect(len(publisher.calls) == 1
+                   and recorded.to_document()["opened_pull_request"] is True,
+                   "the publisher boundary is consulted rather than absent, "
+                   "so `never called` is an observed fact — and the report "
+                   "says what the boundary DID, not what the policy says")
+    finally:
+        do.OPENS_PULL_REQUEST.clear()
+        do.OPENS_PULL_REQUEST.update(saved)
+
+    # And the default publisher refuses rather than quietly succeeding.
+    try:
+        do.forbidden_publisher(do.OUTCOME_CANNOT_REPRODUCE)
+    except do.NonSuccess:
+        pass
+    else:
+        FAILURES.append("the default publisher accepted a call")
+
+
+def test_resuming_a_recorded_attempt_appends_nothing() -> None:
+    with census_file() as path:
+        first, _publisher = record_outcome(outcome_handoff(), path)
+        after_first = path.read_bytes()
+        stamp = path.stat()
+        second, publisher = record_outcome(outcome_handoff(), path)
+        expect(path.read_bytes() == after_first,
+               "resuming a recorded attempt rewrote the census")
+        expect(len(stored_outcomes(path)) == 1,
+               f"resuming appended a duplicate; got "
+               f"{len(stored_outcomes(path))} outcomes")
+        expect(second.resumed and second.record == first.record,
+               "and the resume reports the record already stored")
+        expect(publisher.calls == [], "and publishes nothing on the way")
+        after = path.stat()
+        expect((after.st_ino, after.st_mtime_ns)
+               == (stamp.st_ino, stamp.st_mtime_ns),
+               "a resume does not even rewrite the file")
+
+        # The same identity carrying different evidence is not a resume.
+        conflicting = outcome_handoff(dd.ROUTE_NO_CONFIDENT_FIX)
+        publisher = Publisher()
+        expect_non_success(
+            lambda: record_outcome(conflicting, path, publisher=publisher),
+            "already recorded with different evidence",
+            "one attempt identity carrying two outcomes")
+        expect(path.read_bytes() == after_first,
+               "a conflicting resume changed the census bytes")
+        expect(publisher.calls == [],
+               "a conflicting resume reached the publisher")
+
+
+def test_a_census_write_failure_leaves_the_attempt_resumable() -> None:
+    """Byte-identical afterwards, nothing recorded, nothing published."""
+    with census_file() as path:
+        before = path.read_bytes()
+        publisher = Publisher()
+        original = probe_census._atomic_replace
+
+        def refuse(*args, **kwargs):
+            raise probe_census.CensusError("injected: the disk is full")
+
+        probe_census._atomic_replace = refuse
+        try:
+            expect_non_success(
+                lambda: record_outcome(outcome_handoff(), path,
+                                       publisher=publisher),
+                "the census refused",
+                "a census write failure recorded an outcome anyway")
+        finally:
+            probe_census._atomic_replace = original
+        expect_nothing_recorded(path, before, publisher,
+                                "a refused census write")
+
+        # Resumable: the same attempt records once the cause is gone.
+        recorded, publisher = record_outcome(outcome_handoff(), path)
+        expect(recorded.record["outcome"] == do.OUTCOME_CANNOT_REPRODUCE
+               and len(stored_outcomes(path)) == 1,
+               "the attempt could not be resumed after the write failure")
+        expect(not recorded.resumed,
+               "and the retry is a real append, not a reported resume")
+
+
+def test_every_declared_measurement_has_to_be_trustworthy() -> None:
+    """Not only the one the route is judged on.
+
+    A stable outcome is stored beside every measurement the attempt
+    declared and rests on all of them, so one untrustworthy batch makes
+    the whole attempt an operational error rather than a stable outcome
+    with a hole in its evidence.
+    """
+    diagnosis, _record = produced(dd.ROUTE_NO_CONFIDENT_FIX)
+    baseline = {"role": do.ROLE_BASELINE, "exit_code": probe_flake.EXIT_OK,
+                "result": diagnosis["baseline"]["result"]}
+    handoff_measurement = diagnosis["handoff"]["result"]
+
+    with census_file() as path:
+        before = path.read_bytes()
+        publisher = Publisher()
+        expect_non_success(
+            lambda: record_outcome(outcome_handoff(
+                dd.ROUTE_NO_CONFIDENT_FIX,
+                measurements=[baseline,
+                              {"role": do.ROLE_HANDOFF,
+                               "exit_code": probe_flake.EXIT_NO_PORT,
+                               "result": None}]),
+                path, publisher=publisher),
+            "exited 3",
+            "an untrustworthy measurement beside a usable baseline")
+        expect_nothing_recorded(path, before, publisher,
+                                "an untrustworthy extra measurement")
+
+    # A trustworthy extra measurement is recorded, in role order.
+    with census_file() as path:
+        recorded, _publisher = record_outcome(outcome_handoff(
+            dd.ROUTE_NO_CONFIDENT_FIX,
+            measurements=[baseline,
+                          {"role": do.ROLE_HANDOFF,
+                           "exit_code": probe_flake.EXIT_OK,
+                           "result": handoff_measurement}]),
+            path)
+        expect([m["role"] for m in recorded.record["measurements"]]
+               == [do.ROLE_HANDOFF, do.ROLE_BASELINE],
+               f"every declared measurement is stored, in role order; got "
+               f"{[m['role'] for m in recorded.record['measurements']]}")
+
+
+def test_a_durability_warning_is_not_a_refusal() -> None:
+    """The one failure that happens AFTER the record is installed.
+
+    `probe_census.update` raises it only after the replacement, so the
+    outcome is already what a later reader parses; treating it as a
+    refusal and re-recording would be the duplicate the attempt identity
+    exists to prevent.
+    """
+    with census_file() as path:
+        original = probe_census._atomic_replace
+
+        def unconfirmed(target, payload, **kwargs):
+            original(target, payload, **kwargs)
+            raise probe_census.CensusDurabilityUnconfirmed(
+                "injected: the directory fsync failed", target=target,
+                error=OSError("injected"))
+
+        probe_census._atomic_replace = unconfirmed
+        try:
+            recorded, publisher = record_outcome(outcome_handoff(), path)
+        finally:
+            probe_census._atomic_replace = original
+        expect(recorded.record["outcome"] == do.OUTCOME_CANNOT_REPRODUCE
+               and not recorded.durable,
+               "an unconfirmed durability is reported, not raised as a "
+               "refusal")
+        expect(len(stored_outcomes(path)) == 1,
+               "the record is installed exactly once despite the warning")
+        expect(publisher.calls == [], "and nothing was published")
+
+        again, _publisher = record_outcome(outcome_handoff(), path)
+        expect(again.resumed and len(stored_outcomes(path)) == 1,
+               "and a later resume finds it rather than appending a second")
+
+
+def test_an_outcome_append_preserves_every_prior_record() -> None:
+    """Measurement history, claim log, policy and unrelated rows."""
+    with census_file() as path:
+        # Real accumulated state on the row about to be written, and on
+        # one that must not move at all.
+        probe_census.record_result(path, result_document(
+            runs=failing_runs(3), commit=BASE_COMMIT))
+        probe_census.record_claim(path, PROBE, {
+            "token": "claim-1", "timestamp_utc": "2026-08-27T09:00:00Z",
+            "commit_sha": BASE_COMMIT, "owner": "deflake", "host": "here",
+            "pid": 4711, "lease_seconds": 3600.0,
+            "requested_runs": dd.RUN_COUNT})
+        probe_census.record_policy(path, OTHER, acceptable_failures=1,
+                                   justification="a known race")
+        before = json.loads(path.read_text(encoding="utf-8"))
+
+        record_outcome(outcome_handoff(), path)
+        after = json.loads(path.read_text(encoding="utf-8"))
+
+        expect([row["key"] for row in after["probes"]]
+               == [row["key"] for row in before["probes"]],
+               "an outcome append changed the inventory order or membership")
+        for was, now in zip(before["probes"], after["probes"]):
+            if was["key"] == PROBE:
+                continue
+            expect(was == now,
+                   f"an outcome append modified the unrelated row "
+                   f"{was['key']!r}")
+        was = probe_census.find_entry(before, PROBE)["census"]
+        now = probe_census.find_entry(after, PROBE)["census"]
+        for field in ("current", "history", "attempts", "claims",
+                      "acceptable_failures",
+                      "acceptable_failures_justification",
+                      "estimated_worst_case_seconds"):
+            expect(was[field] == now[field],
+                   f"an outcome append changed `{field}`, which it may not "
+                   f"touch")
+        expect(now["current"]["samples"] and now["attempts"] and now["claims"],
+               "the fixture must carry real prior state for that to mean "
+               "anything")
+
+        # A second, different attempt appends after the first.
+        record_outcome(outcome_handoff(dd.ROUTE_NO_CONFIDENT_FIX, attempt=
+                                       "role-20260828T130000Z-4711-beefcafe"),
+                       path)
+        stored = stored_outcomes(path)
+        expect([entry["attempt"] for entry in stored]
+               == [ATTEMPT, "role-20260828T130000Z-4711-beefcafe"],
+               f"outcome history is append-only and ordered; got "
+               f"{[entry['attempt'] for entry in stored]}")
+
+
+def test_recording_an_outcome_changes_no_registry_classification() -> None:
+    """The de-list recommendation is advisory, and only that.
+
+    `MANUAL_ONLY_REASONS` models a probe's grounds as several
+    INDEPENDENT `Reason` records, so a comparison that looked only at
+    the set of keys would miss exactly the regression the advisory-only
+    rule exists to prevent: one non-flaky reason quietly dropped.
+    """
+    def snapshot():
+        return (sorted(ci_probes.CI_ELIGIBLE),
+                {key: tuple((reason.category, reason.explanation)
+                            for reason in reasons)
+                 for key, reasons in ci_probes.MANUAL_ONLY_REASONS.items()})
+
+    before = snapshot()
+    expect(any(len(reasons) > 1
+               for reasons in ci_probes.MANUAL_ONLY_REASONS.values()),
+           "the registry must carry a multi-reason probe for this "
+           "comparison to be able to see a dropped one")
+    with census_file() as path:
+        row_before = probe_census.find_entry(
+            json.loads(path.read_text(encoding="utf-8")), PROBE)
+        record_outcome(outcome_handoff(), path)
+        row_after = probe_census.find_entry(
+            json.loads(path.read_text(encoding="utf-8")), PROBE)
+        for field in ("key", "script", "classification", "protocol"):
+            expect(row_before[field] == row_after[field],
+                   f"an outcome append changed the inventory field "
+                   f"`{field}`")
+    expect(snapshot() == before,
+           "recording an outcome changed tools/ci_probes.py's classification "
+           "or a probe's independent manual-only reasons")
+
+
+def test_the_census_stores_references_and_never_raw_evidence() -> None:
+    """Paths out, streams left where the harness put them."""
+    with census_file() as path:
+        recorded, _publisher = record_outcome(
+            outcome_handoff(dd.ROUTE_PARTIAL_IMPROVEMENT), path)
+        record = recorded.record
+        trees = [Path(tree) for tree in
+                 (CLEAN_WT, REPAIR_WT, PRIMARY_WT, str(Path(path).parent))]
+        expect(record["retained_artifacts"],
+               "the outcome names the artifacts the attempt retained")
+        for entry in record["retained_artifacts"]:
+            candidate = Path(entry)
+            expect(candidate.is_absolute(),
+                   f"a retained artifact reference is relative: {entry}")
+            for tree in trees:
+                expect(not (candidate == tree or tree in candidate.parents),
+                       f"the retained artifact {entry} sits inside {tree}")
+        for measurement in record["measurements"]:
+            expect(set(measurement) == {
+                "role", "exit_code", "status", "commit_sha", "timestamp_utc",
+                "requested_runs", "completed_runs", "runs", "check_counts",
+                "failure_count", "failure_rate", "timeout_count",
+                "rts_capabilities", "error", "error_run_index",
+                "retained_artifacts", "census_reference"},
+                f"a stored measurement summary carries "
+                f"{sorted(measurement)}, which is not the declared set")
+            expect(all(set(run) == {"index", "outcome"}
+                       for run in measurement["runs"]),
+                   "a stored run keeps its outcome, not its check map")
+            expect(measurement["census_reference"] == {
+                "cohort_commit_sha": measurement["commit_sha"],
+                "sample_timestamp_utc": measurement["timestamp_utc"]},
+                "a measurement is addressed in the census by its cohort "
+                "commit and sample timestamp")
+
+
+def test_the_run_count_is_the_measurements_own_not_a_literal() -> None:
+    """X out of the handoff's own run count, never X out of ten.
+
+    `probe_flake.py` accepts any positive `--runs`, and the handoff
+    carries the count as an input this issue may not change. A ceiling
+    hard-coded at ten would misclassify every measurement taken at
+    another one.
+    """
+    short = dd.RUN_COUNT - 4
+    ids = [c for c, _label in CHECKS]
+    with census_file() as path:
+        handoff = outcome_handoff(measurements=[
+            {"role": do.ROLE_BASELINE, "exit_code": probe_flake.EXIT_OK,
+             "result": result_document(
+                 requested=short,
+                 runs=[{name: PASS for name in ids} for _ in range(short)])}])
+        recorded, _publisher = record_outcome(handoff, path)
+        measurement = recorded.record["measurements"][0]
+        expect(recorded.record["outcome"] == do.OUTCOME_CANNOT_REPRODUCE
+               and measurement["requested_runs"] == short
+               and measurement["completed_runs"] == short,
+               f"a complete measurement at {short} runs is still complete; "
+               f"got {recorded.record['outcome']} over {measurement}")
+
+
+def test_a_malformed_outcome_handoff_is_rejected_without_recording() -> None:
+    """Rejected, not classified: a malformed input reached no diagnosis."""
+    def broken(mutate, route=dd.ROUTE_CANNOT_REPRODUCE):
+        document = outcome_handoff(route)
+        mutate(document)
+        return document
+
+    def repair_record():
+        document = outcome_handoff()
+        _diagnosis, produced_record = produced(dd.ROUTE_REPAIR)
+        document["diagnosis_outcome"] = produced_record
+        return document
+
+    cases = (
+        ("a document that is not a handoff", lambda: {"schema": "other"},
+         "expected 'deflake-outcome-handoff/v1'"),
+        ("a handoff with no attempt identity",
+         lambda: broken(lambda d: d.__setitem__("attempt", "")),
+         "`attempt` identity"),
+        ("an attempt identity carrying a newline",
+         lambda: broken(lambda d: d.__setitem__("attempt", "a\nb")),
+         "single unpadded line"),
+        ("a handoff with no diagnostic summary",
+         lambda: broken(lambda d: d.__setitem__("summary", "   ")),
+         "`summary`"),
+        ("a handoff carrying #1437's repair ending", repair_record,
+         "opens a pull request"),
+        ("a handoff naming an unregistered probe",
+         lambda: broken(lambda d: d["diagnosis_outcome"].__setitem__(
+             "probe", "not_a_probe")),
+         "not registered in tools/run_probes.py"),
+        ("a handoff with no measurement at all",
+         lambda: broken(lambda d: d.__setitem__("measurements", [])),
+         "at least one measurement"),
+        ("a handoff declaring one role twice",
+         lambda: broken(lambda d: d["measurements"].append(
+             copy.deepcopy(d["measurements"][0]))),
+         "twice"),
+        ("a cannot-reproduce handoff carrying a verification",
+         lambda: broken(lambda d: d["measurements"].append({
+             "role": do.ROLE_VERIFICATION,
+             "exit_code": probe_flake.EXIT_OK,
+             "result": verification_result(artifact_root=VERIFY_ARTIFACTS)})),
+         "runs no verification batch"),
+        ("a partial improvement with no verification",
+         lambda: broken(lambda d: d.__setitem__(
+             "measurements", d["measurements"][:1]),
+             dd.ROUTE_PARTIAL_IMPROVEMENT),
+         "rests on its verification measurement"),
+        ("a partial improvement with no unmet condition",
+         lambda: broken(lambda d: d.pop("unmet_condition"),
+                        dd.ROUTE_PARTIAL_IMPROVEMENT),
+         "`unmet_condition`"),
+        ("an unmet condition on a route that has no gate to fail",
+         lambda: broken(lambda d: d.__setitem__("unmet_condition", "x")),
+         "may not carry one"),
+        ("an exit this harness never returns",
+         lambda: broken(lambda d: d["measurements"][0].__setitem__(
+             "exit_code", 5)),
+         "not one of tools/probe_flake.py's exits"),
+        ("a rejection that somehow wrote a document",
+         lambda: broken(lambda d: d["measurements"][0].__setitem__(
+             "exit_code", probe_flake.EXIT_REJECTED)),
+         "wrote no result document"),
+        ("a harness error with no document",
+         lambda: broken(lambda d: d["measurements"][0].update(
+             {"exit_code": probe_flake.EXIT_HARNESS_ERROR, "result": None})),
+         "writes a result document, but the handoff carries none"),
+        ("a measurement of another probe",
+         lambda: broken(lambda d: d["measurements"][0].__setitem__(
+             "result", result_document(probe=OTHER))),
+         f"measured {OTHER!r}"),
+        ("a retained artifact named by a relative path",
+         lambda: broken(lambda d: d["diagnosis_outcome"].__setitem__(
+             "retained_artifacts", ["artifacts/run-001"])),
+         "must be an absolute path"),
+        ("a record that dropped its target list",
+         lambda: broken(lambda d: d["diagnosis_outcome"].pop("targets"),
+                        dd.ROUTE_NO_CONFIDENT_FIX),
+         "`targets` must be a list"),
+        ("a record that dropped its retained-artifact list",
+         lambda: broken(lambda d: d["diagnosis_outcome"].pop(
+             "retained_artifacts")),
+         "`retained_artifacts` must be a list"),
+    )
+    for label, build, fragment in cases:
+        with census_file() as path:
+            before = path.read_bytes()
+            publisher = Publisher()
+            expect_handoff_rejected(
+                lambda b=build, p=publisher: record_outcome(
+                    b(), path, publisher=p),
+                fragment, label)
+            expect_nothing_recorded(path, before, publisher, label)
+
+
+def test_the_exit_contract_is_the_harnesss_own() -> None:
+    expect(set(do.EXIT_CONTRACT) == {
+        probe_flake.EXIT_OK, probe_flake.EXIT_REJECTED,
+        probe_flake.EXIT_NO_PORT, probe_flake.EXIT_HARNESS_ERROR},
+        f"the exit contract is probe_flake's four exits; got "
+        f"{sorted(do.EXIT_CONTRACT)}")
+    expect(do.EXIT_CONTRACT[probe_flake.EXIT_OK]
+           == probe_census.ACCEPTED_STATUS,
+           "only exit 0 supplies a valid measurement")
+    expect(do.EXIT_CONTRACT[probe_flake.EXIT_REJECTED] is None
+           and do.EXIT_CONTRACT[probe_flake.EXIT_NO_PORT] is None,
+           "exits 2 and 3 are caught before any document is rendered")
+    expect(do.EXIT_CONTRACT[probe_flake.EXIT_HARNESS_ERROR]
+           == "harness-error",
+           "exit 4 DOES write a document, and that document says so itself")
+
+
+def test_the_command_line_reports_each_ending_with_its_own_exit() -> None:
+    """The three endings, through the shipped entry point."""
+    tool = str(Path(__file__).resolve().parent / "deflake_outcome.py")
+    with census_file() as path:
+        root = Path(path).parent
+        accepted = root / "accepted.json"
+        accepted.write_text(json.dumps(outcome_handoff()), encoding="utf-8")
+        done = subprocess.run(
+            [sys.executable, tool, "--handoff", str(accepted),
+             "--census", str(path), "--json"],
+            capture_output=True, text=True, timeout=120)
+        expect(done.returncode == do.EXIT_OK,
+               f"a recordable outcome exits 0; got {done.returncode} "
+               f"({done.stderr.strip()})")
+        try:
+            reported = json.loads(done.stdout)
+        except json.JSONDecodeError:
+            reported = {}
+        expect(reported.get("outcome") == do.OUTCOME_CANNOT_REPRODUCE
+               and reported.get("opened_pull_request") is False,
+               f"and reports the outcome it recorded; got {done.stdout[:200]}")
+        expect(len(stored_outcomes(path)) == 1,
+               "and the census holds it afterwards")
+
+        before = path.read_bytes()
+        defect = root / "defect.json"
+        defect.write_text(
+            json.dumps(outcome_handoff(dd.ROUTE_PRODUCTION_DEFECT)),
+            encoding="utf-8")
+        done = subprocess.run(
+            [sys.executable, tool, "--handoff", str(defect),
+             "--census", str(path)],
+            capture_output=True, text=True, timeout=120)
+        expect(done.returncode == do.EXIT_NON_SUCCESS
+               and "#1438" in done.stderr,
+               f"an actionable non-success exits 3 naming its owner; got "
+               f"{done.returncode} ({done.stderr.strip()[:200]})")
+
+        malformed = root / "malformed.json"
+        malformed.write_text(json.dumps({"schema": "nope"}), encoding="utf-8")
+        done = subprocess.run(
+            [sys.executable, tool, "--handoff", str(malformed),
+             "--census", str(path)],
+            capture_output=True, text=True, timeout=120)
+        expect(done.returncode == do.EXIT_REJECTED,
+               f"a malformed handoff exits 2; got {done.returncode}")
+        expect(path.read_bytes() == before,
+               "and neither ending touched the census")
 
 
 def main() -> int:

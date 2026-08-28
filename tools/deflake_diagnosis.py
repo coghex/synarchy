@@ -336,6 +336,10 @@ diagnosis evidence, the preservation attestations, and the repair and
 verification evidence when the route has them. #1437 owns that PRODUCER
 record; what #1438 and #1439 DO with it is theirs to define, this module
 does not invent their contracts, and filing an issue is not its job.
+`tools/deflake_outcome.py` is #1439's consumer: it takes this record,
+re-checks the evidence for itself, and appends one stable non-success
+outcome to the probe's census row — or returns an actionable
+non-success. It opens no pull request either.
 
 The handoff this module CONSUMES is #1659's, in #1659's own spelling:
 `invocation.argv`/`cwd`/`timeout` and a bare `configuration` list — and
