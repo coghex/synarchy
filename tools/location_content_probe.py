@@ -1222,7 +1222,7 @@ def run(args, root: str, token: str) -> int:
     # A single-entry loot table forces quinoa_sack to spawn through the
     # real content-spawn path (locations.spawnContents -> loot.rollFor ->
     # item.spawnGround) whatever the roll context, rather than depending
-    # on whether ruin_common's 2/12-weight entry happens to be the one
+    # on whether ruin_common's 2/13-weight entry happens to be the one
     # this instance's draw selects (#800). #948 made that draw seed-stable
     # rather than random, but it is still weight-dependent — which entry a
     # given instance lands on is not something to assert on here.
@@ -1334,7 +1334,7 @@ def run(args, root: str, token: str) -> int:
         if got_quinoa >= 1:
             print(f"PASS: a forced single-entry loot table deterministically "
                   f"spawned quinoa_sack ({got_quinoa}), independent of "
-                  f"ruin_common's 2/12-weight entry")
+                  f"ruin_common's 2/13-weight entry")
         else:
             failures.append(
                 f"probe_quinoa_ruin's loot table did not spawn quinoa_sack: {counts3}")
