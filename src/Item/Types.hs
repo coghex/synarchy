@@ -351,15 +351,19 @@ data ItemInstance = ItemInstance
                                 --   for every fresh item (ground salvage
                                 --   excepted, #1421) and degrades with
                                 --   use. 0 = broken.
-    , iiWeight      ∷ !Float    -- ^ THIS instance's empty weight (kg),
-                                --   rolled at creation from the def's
-                                --   weight spec when one is declared
+    , iiWeight      ∷ !Float    -- ^ THIS instance's own EMPTY weight (kg)
+                                --   and nothing more — it counts neither
+                                --   the fill it holds nor anything nested
+                                --   inside it. Rolled at creation from the
+                                --   def's weight spec when one is declared
                                 --   (raw gems vary per find); equals
-                                --   idWeight otherwise. Carried weight
-                                --   = iiWeight + iiCurrentFill (1 L =
-                                --   1 kg). Field order is load-bearing
-                                --   (positional Generic Serialize) —
-                                --   appended for save v36.
+                                --   idWeight otherwise. For carried or
+                                --   contained mass ask 'itemTotalWeight',
+                                --   which is the sole authority — a second
+                                --   copy of its formula here is exactly
+                                --   what drifted. Field order is
+                                --   load-bearing (positional Generic
+                                --   Serialize) — appended for save v36.
     , iiSharpness   ∷ !Float    -- ^ 0..100; edge keenness as a % of the
                                 --   def's base_sharpness (100 = factory
                                 --   edge). DISTINCT from iiCondition:
