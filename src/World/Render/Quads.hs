@@ -25,7 +25,8 @@ import World.Generate (chunkToGlobal, viewDepth)
 import World.Generate.Coordinates (canonicalTileFrame)
 import World.Grid (gridToScreen, tileSideHeight, applyFacing)
 import Structure.Types (StructureSlot(..), ChunkStructures, spdGridZ)
-import Structure.Render (isScreenFrontWall, wallTieBreak, frontWallDepthSteps)
+import Structure.Render
+  (isScreenFrontWall, wallTieBreak, frontWallDepthSteps, pieceWithinSliceBand)
 import World.Render.ViewBounds (viewBoundsAt, expandViewBounds, isTileVisible)
 import World.Render.Camera (quadCacheMargins)
 import World.Render.ChunkCulling (isChunkRelevantForSlice, isChunkVisibleWrapped)
@@ -194,7 +195,8 @@ renderWorldQuads env worldState zoomAlpha snap = do
                 bump gx gy q
                     | not chunkNearStructures = q
                     | otherwise = case structureFrontWallClear facing worldSize
-                                           zSlice structLookup gx gy of
+                                           zSlice effectiveDepth structLookup
+                                           gx gy of
                         Just c  → q { sqSortKey = max (sqSortKey q) (c + 0.0001) }
                         Nothing → q
 
@@ -436,6 +438,19 @@ renderWorldQuads env worldState zoomAlpha snap = do
 --   rotation-correct. Wall lookups cross chunks; the per-chunk gate at
 --   the call site keeps it free where there are none.
 --
+--   Slice-bounded (#1715): eligibility is restricted to walls the
+--   structure renderer would EMIT for this same frame, by taking the
+--   frame's effective depth and gating on 'pieceWithinSliceBand' — the
+--   very predicate 'frontWallStrips' gates on. A wall the camera slice
+--   cut away, or one deeper than the zoom-derived depth window, is on
+--   screen nowhere and clears nothing, so it must not move a sprite.
+--   (Renderer parity is the whole claim here, not just the visible
+--   above-slice promotion: that band is zoom-dependent, and every other
+--   structure decision in the frame already follows it.) Suppressions
+--   the renderer makes on information this helper does not have — an
+--   unresolved palette handle, an unavailable texture system — are out
+--   of its reach and deliberately out of scope.
+--
 --   Seam-aware (#423): loaded chunks are keyed by canonical (u-wrapped)
 --   coords ('World.Thread.ChunkLoading'), and a chunk's structures are
 --   keyed by tile coords in that canonical frame. A neighbour probed
@@ -446,10 +461,11 @@ structureFrontWallClear
     ∷ CameraFacing
     → Int                                   -- ^ world size in chunks
     → Int                                   -- ^ camera z-slice
+    → Int                                   -- ^ frame's effective depth
     → (ChunkCoord → Maybe ChunkStructures)  -- ^ loaded-chunk structure lookup
     → Int → Int                             -- ^ sprite tile (gx, gy)
     → Maybe Float
-structureFrontWallClear facing worldSize zSlice structLookup gx gy =
+structureFrontWallClear facing worldSize zSlice effDepth structLookup gx gy =
     let (fa, fb) = applyFacing facing gx gy
         spriteDepth = fa + fb
         -- The walls whose edge is drawn at the SCREEN front right now,
@@ -505,7 +521,23 @@ structureFrontWallClear facing worldSize zSlice structLookup gx gy =
                 scDepth  = sa + sb + frontWallDepthSteps
                 (la, lb) = applyFacing facing wgx wgy
                 localDepth = la + lb + frontWallDepthSteps
-            if spriteDepth < localDepth   -- sprite is NOT fully in front
+            -- #1715: only a wall the structure renderer would actually
+            -- EMIT this frame can be cleared. 'pieceWithinSliceBand' is
+            -- the renderer's own gate, shared rather than restated, so
+            -- 'frontWallStrips' and this cannot disagree for any
+            -- (gridZ, zSlice, effDepth). Both ends bite. ABOVE the
+            -- slice: dropping the slice below a room's walls is the
+            -- ordinary way to look inside it, and those walls stop
+            -- being emitted — yet 'spdGridZ spd - zSlice' is then
+            -- POSITIVE, so a wall nobody can see used to lift an
+            -- adjacent sprite HARDER than a drawn one would. BELOW the
+            -- window: that wall is equally not on screen, and while its
+            -- key happens to lose to the sprite's today, the parity is
+            -- the contract, not the arithmetic that currently masks the
+            -- gap. Inside the band this is a no-op, which is why the
+            -- in-slice keys below are untouched.
+            if not (pieceWithinSliceBand zSlice effDepth (spdGridZ spd))
+               ∨ spriteDepth < localDepth   -- sprite is NOT fully in front
                ∨ scDepth ≢ localDepth     -- frames disagree (E/W seam)
                then Nothing
                else Just (fromIntegral scDepth

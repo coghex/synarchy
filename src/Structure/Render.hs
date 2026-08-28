@@ -43,6 +43,7 @@ module Structure.Render
     , isScreenFrontWall
     , wallTieBreak
     , frontWallDepthSteps
+    , pieceWithinSliceBand
     ) where
 
 import UPrelude
@@ -242,6 +243,30 @@ structurePieceQuads catalog palette handles lookupSlot texSizes
         fPath ← lookupPath (spdFaceId spd) palette
         rotatedWallArt catalog facing edge (tPath, th) (fPath, fh)
 
+-- | The active z band a structure piece has to sit in to be emitted at
+--   all: at or below the camera's slice, and no deeper than the frame's
+--   zoom-derived depth window ('World.Render.Quads' @effectiveDepth@,
+--   which ranges 8..250 with the zoom). INCLUSIVE at both ends. Every
+--   producer in this module gates on it, so a piece outside the band
+--   draws nothing.
+--
+--   It is named, exported and shared rather than restated because the
+--   #418 billboard lift depends on the SAME answer: the lift raises a
+--   flora/vegetation sprite over a front wall's whole strip range, so a
+--   wall that emits no strips must produce no lift, and a wall that
+--   emits strips must stay eligible for one. Before #1715
+--   'World.Render.Quads.structureFrontWallClear' could not even ask —
+--   it took no effective depth — so a wall above the slice, or deeper
+--   than the depth window, still lifted a sprite whose wall was not on
+--   screen. Two copies of the comparison could drift apart; one cannot.
+pieceWithinSliceBand
+    ∷ Int    -- ^ camera z-slice
+    → Int    -- ^ frame's effective depth
+    → Int    -- ^ the piece's stored grid z
+    → Bool
+pieceWithinSliceBand zSlice effDepth gridZ =
+    gridZ ≤ zSlice ∧ gridZ ≥ zSlice - effDepth
+
 -- | Does this slot's edge sit at the SCREEN front (the SE/SW pair) at
 --   this facing, and so take the #415 depth-strip path? At 'FaceSouth'
 --   exactly 'SWallSE' and 'SWallSW', as it always was. Also the candidate
@@ -263,7 +288,7 @@ structureToQuad
 structureToQuad lookupSlot facing zSlice effDepth tileAlpha gx gy slot piece texSizes =
     let gridZ     = spGridZ piece
         relativeZ = gridZ - zSlice
-    in if gridZ > zSlice ∨ gridZ < (zSlice - effDepth)
+    in if not (pieceWithinSliceBand zSlice effDepth gridZ)
        then Nothing
        else
         let texHandle = spTexture piece
@@ -379,7 +404,7 @@ frontWallStrips
 frontWallStrips lookupSlot facing zSlice effDepth tileAlpha gx gy slot piece texSizes =
     let gridZ     = spGridZ piece
         relativeZ = gridZ - zSlice
-    in if gridZ > zSlice ∨ gridZ < (zSlice - effDepth)
+    in if not (pieceWithinSliceBand zSlice effDepth gridZ)
        then []
        else
         let texHandle = spTexture piece
@@ -483,7 +508,7 @@ postToQuad
 postToQuad lookupSlot facing zSlice effDepth tileAlpha gx gy slot piece texSizes =
     let gridZ     = spGridZ piece
         relativeZ = gridZ - zSlice
-    in if gridZ > zSlice ∨ gridZ < (zSlice - effDepth)
+    in if not (pieceWithinSliceBand zSlice effDepth gridZ)
        then Nothing
        else
         let texHandle = spTexture piece
