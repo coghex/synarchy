@@ -486,6 +486,23 @@ jobs:
       - name: Test audit
         run: python3 tools/test_audit.py
 
+      # Cheap, no-engine guard (#1724): the executable specification of
+      # what tools/world_determinism.py means by "content-identical" ---
+      # a reversed tile array and a reordered-key tile must hash equal,
+      # a changed field, a missing tile and an unstable canonical form
+      # must not. Issue #23 / PR #34 chose content identity over byte
+      # identity deliberately, and this is the only place that choice is
+      # asserted. world_check.py hashing six real seeds against their
+      # baselines (#1361) does not cover it: the engine emits tiles in a
+      # stable order, so a regression that made the checker order-
+      # SENSITIVE would still produce matching hashes and pass. Pure
+      # Python, no engine, no GPU, no network, sub-second --- and
+      # unconditional rather than behind the worldgen selector, because
+      # the contract lives in tools/ and can be broken by a change that
+      # selector would not fire on.
+      - name: World determinism content-identity self-test
+        run: python3 tools/test_determinism.py
+
       # Cheap, no-engine guard (#538/#541/#545): fails if a Lua module
       # that was split to stay reviewable (the debug overlay,
       # unit-resource physiology, or unit-AI splits) grows back past
