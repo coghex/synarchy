@@ -165,21 +165,44 @@ itemSpawnGroundFn env = do
                 _ → Lua.pushnil >> return 1
         _ → Lua.pushnil >> return 1
 
--- | Push ONE @{id, defName, x, y, fill, quality, qualityTier,
---   condition, weight}@ ground-item row, leaving it on top of the
---   stack.
+-- | Push ONE @{id, instanceId, defName, kind, x, y, fill, quality,
+--   qualityTier, condition, sharpness, weight}@ ground-item row,
+--   leaving it on top of the stack.
 --
 --   The single place that row shape is built (#1666). The whole-page
 --   listing and the owning-page single-entry lookup below both go
 --   through it, so the two cannot come to describe the same item
 --   differently — which is exactly the divergence a caller that
 --   switches from one to the other would be unable to see.
+--
+--   @instanceId@, @sharpness@ and @kind@ (#1737) are what let the
+--   autonomous repair AI treat a ground item as a repair TARGET rather
+--   than only as a consumable to haul: claims, the player-priority flag
+--   and the post-load reference graph are all keyed by the instance id,
+--   and 'scripts.unit_ai_repair_target' scores both wear axes plus the
+--   broken-armour band from @condition@ \/ @sharpness@ \/ @kind@. All
+--   three are spelled exactly as @unit.getInventory@ spells them, so
+--   one severity function reads a held row and a ground row alike:
+--
+--   * @instanceId@ — the instance's own process-unique id (#67);
+--   * @sharpness@ — UNCONDITIONAL, like @condition@, because
+--     'iiSharpness' is universal runtime wear state that every item
+--     instance carries. It deliberately does NOT follow @qualityTier@'s
+--     present-only-when-declared convention, which exists because
+--     workmanship is a def-level opt-in;
+--   * @kind@ — the DEF's equipment-slot kind, defaulted to @"misc"@
+--     when the def is unknown, exactly as @unit.getInventory@ defaults
+--     it, so a row is never missing the field a predicate branches on.
 pushGroundRow ∷ ItemManager → Int → GroundItem
               → Lua.LuaE Lua.Exception ()
 pushGroundRow im gid gi = do
+    let inst = giInst gi
+        mDef = lookupItemDef (iiDefName inst) im
     Lua.newtable
     Lua.pushinteger (fromIntegral gid)
     Lua.setfield (Lua.nth 2) "id"
+    Lua.pushinteger (fromIntegral (iiInstanceId inst))
+    Lua.setfield (Lua.nth 2) "instanceId"
     Lua.pushstring (TE.encodeUtf8 (iiDefName (giInst gi)))
     Lua.setfield (Lua.nth 2) "defName"
     Lua.pushnumber (Lua.Number (realToFrac (giX gi)))
@@ -195,7 +218,7 @@ pushGroundRow im gid gi = do
     -- Tier label only when the def actually declares a
     -- quality spec (mirrors unit.getInventory / the
     -- equipment queries — #345).
-    case lookupItemDef (iiDefName (giInst gi)) im of
+    case mDef of
         Just d | Just _ ← idQualitySpec d →
             case qualityTierLabel d
                      (iiQuality (giInst gi)) of
@@ -207,6 +230,11 @@ pushGroundRow im gid gi = do
     Lua.pushnumber (Lua.Number (realToFrac
         (iiCondition (giInst gi))))
     Lua.setfield (Lua.nth 2) "condition"
+    Lua.pushnumber (Lua.Number (realToFrac
+        (iiSharpness inst)))
+    Lua.setfield (Lua.nth 2) "sharpness"
+    Lua.pushstring (TE.encodeUtf8 (maybe "misc" idKind mDef))
+    Lua.setfield (Lua.nth 2) "kind"
     -- True live mass: empty weight + fill (at the
     -- container's per-unit fill weight) + everything
     -- nested in iiContents, computed recursively. A
@@ -216,11 +244,12 @@ pushGroundRow im gid gi = do
         (itemTotalWeight im (giInst gi))))
     Lua.setfield (Lua.nth 2) "weight"
 
--- | item.listGround() → array of {id, defName, x, y, fill, quality,
---   qualityTier, condition, weight}. `weight` is the live total mass
---   (itemTotalWeight: empty weight + fill + nested contents), not the
---   static def weight. `qualityTier` (#345) is present only when the
---   def declares a quality spec.
+-- | item.listGround() → array of {id, instanceId, defName, kind, x, y,
+--   fill, quality, qualityTier, condition, sharpness, weight}.
+--   `weight` is the live total mass (itemTotalWeight: empty weight +
+--   fill + nested contents), not the static def weight. `qualityTier`
+--   (#345) is present only when the def declares a quality spec;
+--   `condition`, `sharpness` (#1737) and `kind` are always present.
 --
 --   ACTIVE-page scoped, deliberately: this is the UI's listing, and
 --   the UI only ever shows the world the player is looking at. A
@@ -246,7 +275,9 @@ itemListGroundFn env = do
 --
 --   The owning-page counterpart to 'itemListGroundFn' (#1666): ONE
 --   ground row, looked up on the page unit @uid@ is standing on, in
---   the identical shape @item.listGround@ produces. Resolved through
+--   the identical shape @item.listGround@ produces — same builder, so
+--   the instance id, sharpness and kind #1737's repair scan decides on
+--   are by construction the same values the listing showed. Resolved through
 --   the same 'unitOwningWorldState' 'itemPickupGroundFn' commits
 --   through, so a caller that inspects an entry here and then picks it
 --   up is guaranteed to have described the instance it moved — the

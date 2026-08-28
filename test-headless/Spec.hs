@@ -46,6 +46,7 @@ import qualified Test.Headless.World.TimeLocal as TimeLocal
 import qualified Test.Headless.World.Climate as Climate
 import qualified Test.Headless.Item.GroundPageOwnership as GroundPageOwnership
 import qualified Test.Headless.Lua.UnitAiPickupPage as LuaUnitAiPickupPage
+import qualified Test.Headless.Lua.UnitAiRepairGround as LuaUnitAiRepairGround
 import qualified Test.Headless.Item.Temperature as ItemTemp
 import qualified Test.Headless.Item.BuffYaml as ItemBuffYaml
 import qualified Test.Headless.Item.QualityTier as ItemQualityTier
@@ -425,6 +426,12 @@ main = hspec $ do
     -- carrier and its target sit on live, non-active page B, and drives
     -- the production scripts/unit_ai_pickup.lua over it.
     aroundAll withHeadlessEngine LuaUnitAiPickupPage.spec
+    -- Own engine for the same reason (#1737): the repair AI's ground
+    -- rung is judged against two live pages carrying the SAME gid, and
+    -- it drives the production scripts/unit_ai_repair.lua +
+    -- unit_ai_repair_target.lua over the engine's real ground,
+    -- inventory and page APIs.
+    aroundAll withHeadlessEngine LuaUnitAiRepairGround.spec
     -- Own engine for the same reason (#1599): the pause-speed gate
     -- installs its own two-page world manager, rewrites wmVisible
     -- mid-example, and drives the real scripts/pause.lua against the

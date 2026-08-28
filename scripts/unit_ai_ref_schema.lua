@@ -80,10 +80,19 @@ local REF_SCHEMA = {
     -- abort (issue #1589 requirement 3).
     { holder = "table", field = "repairJob", sub = "instanceId",
       kind = "item_instance", required = true, drop = "repairJob" },
-    -- The ONE pair legitimately absent in a live row: bid is set only
-    -- once the job reaches its walking phase and resolves a station.
+    -- The two subfields legitimately absent in a live row: bid is set
+    -- only once the job reaches its walking phase and resolves a
+    -- station, and groundGid (#1737) only while a ground-sourced target
+    -- is still lying on the ground -- it is cleared the moment the
+    -- pickup lands, because from then on the target is inventory and
+    -- the gid names nothing. A gid that IS present and no longer
+    -- resolves on the owning unit's page is a target that vanished
+    -- under the job, so the whole job goes out through the same abort
+    -- path (the item, if any, is returned and the claim released).
     { holder = "table", field = "repairJob", sub = "bid", kind = "building",
       absentOk = true, drop = "repairJob" },
+    { holder = "table", field = "repairJob", sub = "groundGid",
+      kind = "ground_item", absentOk = true, drop = "repairJob" },
     { holder = "table", field = "pickupOrder", sub = "gid",
       kind = "ground_item" },
     { holder = "table", field = "forageTarget", sub = "gid",

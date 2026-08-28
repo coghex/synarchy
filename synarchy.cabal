@@ -1315,6 +1315,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.UnitAiLoadReset
                    Test.Headless.Lua.UnitAiReconcile
                    Test.Headless.Lua.UnitAiPickupPage
+                   Test.Headless.Lua.UnitAiRepairGround
                    Test.Headless.Lua.SessionTeardown
                    Test.Headless.Lua.BuildingSpawnSentinel
                    Test.Headless.Lua.WorkClaimCapacity

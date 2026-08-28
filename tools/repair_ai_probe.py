@@ -49,6 +49,14 @@ it IS the machinery under test, unlike movement_probe which neutralises it):
      offered/shown as "priority" even if flagged at the backend, since the
      AI would never actually act on it. Pure Lua checks against synthetic
      item tables (no world/units needed, mirrors phase 7).
+ 10. ground_target : #1737 — the DEGRADED TARGET ITSELF lies on the ground
+     (phase 2's only ground item is the CONSUMABLE, for an equipped
+     target). Exercises the ladder's middle rung end to end against a real
+     world: the row's new instanceId/sharpness/kind, the claim carrying
+     fromGround, the instance-preserving pickup, the repair, and the
+     return to the ground when the job ends. Supporting evidence only —
+     the primary gate is the deterministic `repair ground target` hspec
+     describe, since repair_ai is manual-only/flaky.
 
 Test fixtures deliberately use condition/sharpness = 5 (not 20-40) for the
 "degraded but not broken" cases: repair_job's utility (base 1.2 * severity)
@@ -290,6 +298,43 @@ def has_repair_job(port: int, uid: int) -> bool:
     return send(port,
         f"local ai=require('scripts.unit_ai'); local s=ai.getState({uid}); "
         f"return (s ~= nil and s.repairJob ~= nil)") == "true"
+
+
+def repair_job_of(port: int, uid: int):
+    """{instanceId, fromGround, onMule, phase} for uid's live repair job,
+    or None. #1737's fromGround is the durable provenance that decides
+    whether the target owes a drop on the ground or a hand-back to a
+    mule, so a phase asserting the ground rung has to read it rather
+    than infer it from where the item happens to be."""
+    return send_json(port,
+        f"local ai=require('scripts.unit_ai'); local s=ai.getState({uid}); "
+        f"local j = s and s.repairJob; if not j then return nil end; "
+        f"return {{instanceId=j.instanceId, fromGround=(j.fromGround==true), "
+        f"        onMule=(j.onMule==true), phase=tostring(s.repairPhase)}}")
+
+
+def ground_state(port: int, iid: int):
+    """{gid, cond, sharp, qual, kind} for the ground row carrying item
+    INSTANCE iid, or None. Keyed on the instance rather than the gid
+    because a returned target is re-spawned at the worker's own tile and
+    so gets a fresh gid -- the instance id is the only stable identity
+    across the take-and-return round trip."""
+    return send_json(port,
+        f"for _,g in ipairs(item.listGround() or {{}}) do "
+        f"  if g.instanceId=={iid} then "
+        f"    return {{gid=g.id, cond=g.condition, sharp=g.sharpness, "
+        f"             qual=g.quality, kind=g.kind, x=g.x, y=g.y}} end end; "
+        f"return nil")
+
+
+def held_row(port: int, uid: int, iid: int):
+    """{cond, sharp, qual} for instance iid in uid's own INVENTORY (the
+    only place a picked-up ground target can be), or None."""
+    return send_json(port,
+        f"for _,it in ipairs(unit.getInventory({uid}) or {{}}) do "
+        f"  if it.instanceId=={iid} then "
+        f"    return {{cond=it.condition, sharp=it.sharpness, "
+        f"             qual=it.quality}} end end; return nil")
 
 
 # --- phases -------------------------------------------------------------
@@ -645,6 +690,70 @@ def phase_priority_gating(port: int) -> None:
                           f"return m ~= nil and m.label") == "Prioritize Repair")
 
 
+def phase_ground_target(port: int) -> None:
+    print("\n[phase 10] GROUND-held TARGET (#1737): the ladder's middle "
+          "rung — claim, instance-preserving pickup, repair, return")
+    # Own row, clear of every other phase's furniture.
+    build_station(port, "furnace", 3, -18, {"granite_chunk": 6, "steel_bar": 2})
+    uid = spawn_acolyte(port, 4.5, -17.5)
+    # The consumable is ground-sourced for phase 1's reason (an idle
+    # Materials item in inventory is fair game for store_materials).
+    send(port, "item.spawnGround('lignite_chunk', 6.5, -17.5); "
+               "item.spawnGround('lignite_chunk', 6.5, -16.5); return 'ok'")
+    # The TARGET itself on the ground. condition=5 is an explicit salvage
+    # base, and the penalty roll only ever subtracts, so the spawned
+    # instance is always under repair_condition_threshold.
+    gid = int(float(send(port,
+        "return item.spawnGround('axe_steel', 7.5, -18.5, "
+        "{ condition = 5 })")))
+    # Single-valued on purpose: getGroundForUnit returns (entry,
+    # pageResolved), and the console serializes a multi-return as
+    # tab-separated values, which is not JSON.
+    row = send_json(port,
+        f"local r = item.getGroundForUnit({uid}, {gid}); return r")
+    check("ground row carries instanceId, sharpness and kind (#1737)",
+          isinstance(row, dict) and row.get("instanceId") is not None
+          and row.get("sharpness") is not None and row.get("kind") == "weapon")
+    if not isinstance(row, dict) or row.get("instanceId") is None:
+        destroy_unit(port, uid)
+        return
+    iid = int(row["instanceId"])
+    sharp0, qual0 = row["sharpness"], row["quality"]
+    check("the ground target is degraded below the repair threshold",
+          row["condition"] < 50)
+
+    job = poll_until(port, 90, lambda: repair_job_of(port, uid))
+    check("acolyte claimed the GROUND instance, not a held or mule one",
+          job is not None and job.get("instanceId") == iid
+          and job.get("fromGround") is True and job.get("onMule") is False)
+
+    held = poll_until(port, 180, lambda: held_row(port, uid, iid))
+    check("the EXACT instance was taken into inventory (item.pickupGround "
+          "preserves it; nothing was re-created)", held is not None)
+    check("its quality and sharpness survived the pickup untouched",
+          held is not None and held["qual"] == qual0
+          and held["sharp"] == sharp0)
+    check("it is no longer lying on the ground while carried",
+          ground_state(port, iid) is None)
+
+    # The job ENDS by returning the target to the ground, so the repaired
+    # state is observed wherever it has got to by then.
+    repaired = poll_until(port, 240, lambda:
+        ((held_row(port, uid, iid) or {}).get("cond") == 100)
+        or ((ground_state(port, iid) or {}).get("cond") == 100))
+    check("the ground-sourced weapon was repaired to full condition",
+          repaired is not None)
+
+    back = poll_until(port, 90, lambda: ground_state(port, iid))
+    check("the target was RETURNED to the ground when the job ended "
+          "(#1737 requirement 8), never left in the worker's inventory",
+          back is not None)
+    check("it went back at full condition and unchanged quality",
+          back is not None and back["cond"] == 100 and back["qual"] == qual0)
+    check("the worker is not still holding it", held_row(port, uid, iid) is None)
+    destroy_unit(port, uid)
+
+
 PHASES = {
     "own_inventory": phase_own_inventory,
     "equipped_ground": phase_equipped_ground,
@@ -655,6 +764,7 @@ PHASES = {
     "role_weight": phase_role_weight,
     "player_priority": phase_player_priority,
     "priority_gating": phase_priority_gating,
+    "ground_target": phase_ground_target,
 }
 
 

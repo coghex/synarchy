@@ -415,12 +415,17 @@ spec = describe "position hold after a completed move order" $ do
                 , "  'an unticked unit is not holding')"
                 ]
 
-    describe "the hold rides the lua.unit_ai component at v6" $ do
+    describe "the hold rides the lua.unit_ai component" $ do
         it "round-trips a live hold through the real snapshot -> encode \
            \-> decode -> apply path" $
             runsOk $ lns
                 [ savePrelude
-                , "assert(spec.version == 6, 'the component is at v6: '"
+                -- The hold landed at v6 (#1216); the component has
+                -- moved on since (v7, #1737's ground-sourced repair
+                -- provenance). What this gate owns is that the CURRENT
+                -- version still round-trips a hold, so it pins the
+                -- current number rather than the one #1216 shipped.
+                , "assert(spec.version == 7, 'the component is at v7: '"
                 , "  .. tostring(spec.version))"
                 , "aiState[1] = { currentAction = 'hold_position',"
                 , "  holdAnchor = { x = 12, y = -3, stalledFor = 4.5,"
@@ -443,7 +448,7 @@ spec = describe "position hold after a completed move order" $ do
            \could not record one" $
             runsOk $ lns
                 [ savePrelude
-                , "for _, v in ipairs({ 1, 2, 3, 4, 5 }) do"
+                , "for _, v in ipairs({ 1, 2, 3, 4, 5, 6 }) do"
                 , "  assert(saveModules.registry.unit_ai.inputVersions,"
                 , "    'the component declares its accepted inputs')"
                 , "  local old = { [1] = { currentAction = 'wander',"
@@ -461,7 +466,7 @@ spec = describe "position hold after a completed move order" $ do
                 , "end"
                 , "local accepted = {}"
                 , "for _, v in ipairs(spec.inputVersions) do accepted[v] = true end"
-                , "for v = 1, 6 do"
+                , "for v = 1, 7 do"
                 , "  assert(accepted[v], 'v' .. v .. ' must stay an accepted input')"
                 , "end"
                 ]
