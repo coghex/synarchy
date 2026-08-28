@@ -17,6 +17,7 @@ import UPrelude
 import GHC.Generics (Generic)
 import Data.List (sortOn)
 import Language.Semantic.Types (ConceptId)
+import Location.Anchor (LocationAnchor)
 import Location.Bounds (RelBounds(..))
 
 -- | One piece of content a location places when it is stamped — a
@@ -75,9 +76,16 @@ data LocationDef = LocationDef
     , ldLabel    ∷ !Text              -- ^ display name
     , ldType     ∷ !Text              -- ^ tag: "ruin" / "camp" / "natural" / …
     , ldBuilder  ∷ !Text              -- ^ name of the Lua builder function
-    , ldAnchor   ∷ ![Text]            -- ^ terrain placement constraint tags
-                                      --   (e.g. ["mountain","flat"]); the
-                                      --   generator (#89) filters on these.
+    , ldAnchor   ∷ ![LocationAnchor]  -- ^ terrain placement constraint tags
+                                      --   (e.g. [AnchorMountain, AnchorFlat]);
+                                      --   the generator (#89) filters on
+                                      --   these. The CLOSED #801\/#1681
+                                      --   vocabulary, so a def cannot carry
+                                      --   a tag placement has no semantics
+                                      --   for — from YAML or from Haskell.
+                                      --   Not serialized: defs reload from
+                                      --   YAML each boot and saves reference
+                                      --   them by id only.
     , ldMaxCount ∷ !Int               -- ^ max instances the world-gen
                                       --   overlay (#89) places (per type).
     , ldMinSpacing ∷ !Int             -- ^ min chunk separation between two

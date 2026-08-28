@@ -18,6 +18,8 @@ import Data.Aeson.Types (parseEither, Parser)
 import qualified Data.Aeson.Key as Key
 import Engine.Core.Log (LoggerState)
 import Engine.Asset.YamlList (loadYamlList)
+import Location.Anchor
+    ( LocationAnchor, locationAnchorTags, parseLocationAnchor )
 
 -- | A fixed relative tile offset from a location's anchor (#90).
 data LocationYamlPosition = LocationYamlPosition
@@ -115,8 +117,10 @@ authoredLocationCoordinateLimit = 2147483647
 --   'FromJSON' instance. The ids themselves are validated against the
 --   concept catalogue by the API loader
 --   ('Location.Naming.locationNamingErrors'), which is where the
---   catalogue is available; this module keeps its existing
---   zero-local-dependency shape.
+--   catalogue is available; this module keeps its existing shape,
+--   depending on no runtime location or placement code (#1681 added one
+--   import, the dependency-free 'Location.Anchor' leaf, and nothing
+--   else).
 data LocationYamlNaming = LocationYamlNaming
     { lynHeads     ∷ ![Text]
     , lynModifiers ∷ ![Text]
@@ -129,8 +133,12 @@ instance FromJSON LocationYamlNaming where
 
 -- | True iff a fixed content offset falls inside a bounds box —
 --   duplicated from 'Location.Bounds.rawContainsPoint' rather than
---   imported, so this module keeps its existing zero-local-dependency
---   shape (mirrors 'Engine.Asset.YamlItems' and its siblings).
+--   imported, because 'Location.Bounds' is NOT dependency-free (it
+--   reaches 'World.Plate' for the seam-aware variants), and importing
+--   it would pull runtime world geometry into an asset decoder
+--   (mirrors 'Engine.Asset.YamlItems' and its siblings). Contrast the
+--   anchor vocabulary below, which #1681 could share precisely because
+--   'Location.Anchor' is a leaf.
 relBoundsContains ∷ LocationYamlBounds → Int → Int → Bool
 relBoundsContains b x y =
     x ≥ lybMinX b ∧ x ≤ lybMaxX b ∧ y ≥ lybMinY b ∧ y ≤ lybMaxY b
@@ -158,21 +166,24 @@ relBoundsContains b x y =
 validContentKinds ∷ [Text]
 validContentKinds = [ "unit", "item", "loot_table", "building" ]
 
--- | The authoritative anchor-tag vocabulary (#801): terrain/height
---   (flat/mountain/highland/lowland), ocean-distance
---   (coast/coastal/inland), and the #414 water-proximity opt-out
---   modifier (waterside — tolerates nearby water, no terrain
---   constraint of its own; see 'Location.Overlay.anchorOk'). Every tag
---   outside this set — a typo or an unimplemented climate/biome name —
---   is rejected below rather than silently matching every chunk.
---   Duplicated (not imported) in 'Location.Overlay.anchorOk' for the
---   same zero-local-dependency reason as 'relBoundsContains' above.
-validAnchorTags ∷ [Text]
-validAnchorTags =
-    [ "flat", "mountain", "highland", "lowland"
-    , "coast", "coastal", "inland"
-    , "waterside"
-    ]
+-- | Parse one authored anchor tag into the closed vocabulary
+--   ('Location.Anchor', #801\/#1681), attributing a rejection to the
+--   owning definition and naming both the offending text and the
+--   accepted set. The accepted set is DERIVED from the type
+--   ('locationAnchorTags'), so this module holds no second copy of the
+--   vocabulary and a tag that parses here is one every consumer already
+--   has total semantics for — the drift #1681 closed.
+--
+--   'Location.Anchor' is a dependency-free leaf, so importing it keeps
+--   this module's existing shape: it still depends on no runtime
+--   location or placement code (compare 'relBoundsContains' above,
+--   which is duplicated for exactly that reason).
+parseAnchorTag ∷ Text → Text → Parser LocationAnchor
+parseAnchorTag lid tag = case parseLocationAnchor tag of
+    Just a  → pure a
+    Nothing → fail (T.unpack ("location '" <> lid <> "': unsupported anchor tag '"
+        <> tag <> "' (expected one of: "
+        <> T.intercalate ", " locationAnchorTags <> ")"))
 
 -- | The YAML shape of a location definition. Converted to
 --   'Location.Types.LocationDef' by the API loader.
@@ -181,7 +192,7 @@ data LocationYamlDef = LocationYamlDef
     , lydLabel      ∷ !Text
     , lydType       ∷ !Text
     , lydBuilder    ∷ !Text
-    , lydAnchor     ∷ ![Text]
+    , lydAnchor     ∷ ![LocationAnchor]
     , lydMaxCount   ∷ !Int   -- ^ max placements (#89); default 4
     , lydMinSpacing ∷ !Int   -- ^ min chunk separation (#89); default 4
     , lydContents   ∷ ![LocationYamlContent]
@@ -238,7 +249,7 @@ instance FromJSON LocationYamlDef where
         mapIcon  ← parseMapIcon lid v
         naming   ← requireField lid "naming" v
         contents ← v .:? "contents" .!= []
-        anchor   ← v .:? "anchor" .!= []
+        anchorText ← v .:? "anchor" .!= ([] ∷ [Text])
         -- Reject inverted bounds / an out-of-bounds fixed content
         -- position HERE, at the only entry point for this def's spatial
         -- contract, so a bad YAML fails the whole file's load with a
@@ -324,11 +335,7 @@ instance FromJSON LocationYamlDef where
                         <> tshow (lypX p) <> ","
                         <> tshow (lypY p)
                         <> ") lies outside declared bounds"))
-        forM_ anchor $ \tag →
-            unless (tag `elem` validAnchorTags) $
-                fail (T.unpack ("location '" <> lid <> "': unsupported anchor tag '"
-                    <> tag <> "' (expected one of: "
-                    <> T.intercalate ", " validAnchorTags <> ")"))
+        anchor ← mapM (parseAnchorTag lid) anchorText
         -- #1101: a pool that is present but empty would leave the
         -- definition with no concept to draw, which is authored data
         -- silently meaning "fall back to the label" — the one thing the
