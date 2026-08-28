@@ -37,6 +37,18 @@ module Location.Overlay
     , PlacementOutcome(..)
     , ChunkMetrics(..)
     , chunkMetricsAt
+    -- * Anchor semantics
+    --
+    -- | Exported for the always-blocking #1681 gate, which pins one
+    --   expectation per 'Location.Anchor.LocationAnchor' constructor.
+    --   Driving them through 'computeLocationOverlay' alone cannot do
+    --   that: a generated world exercises whichever tags its own
+    --   terrain happens to satisfy, which is how the pre-#1681 tree
+    --   shipped six of the eight constructors with no direct coverage
+    --   at all.
+    , Cuts(..)
+    , anchorOk
+    , wantsWater
     ) where
 
 import UPrelude
@@ -52,6 +64,7 @@ import World.Ocean.Types (OceanMap, OceanDistMap, oceanDistAt)
 import World.Fluid.Lake.Types (WorldLakes, lakesInChunk)
 import World.Fluid.River.Types (WorldRivers, riversInChunk)
 import World.Constants (seaLevel)
+import Location.Anchor (LocationAnchor(..))
 import Location.Types (LocationDef(..))
 import Location.Overlay.Types (LocationOverlay, emptyLocationOverlay)
 
@@ -358,35 +371,49 @@ idSalt = T.foldl' (\acc c → (acc `xor` fromIntegral (fromEnum c)) * 0x10000000
 
 -- | True if a def's anchors opt it INTO water proximity (a coast / shore /
 --   waterside location), so the dry-ground filter (#414) is skipped for it.
---   @coast@/@coastal@ also constrain to the ocean shore; @waterside@ just
---   tolerates nearby water without any other terrain requirement. Every
---   other location keeps clear of lakes / rivers / the ocean shore.
-wantsWater ∷ [Text] → Bool
-wantsWater = any (`elem` (["coast", "coastal", "waterside"] ∷ [Text]))
+--   'AnchorCoast'\/'AnchorCoastal' also constrain to the ocean shore;
+--   'AnchorWaterside' just tolerates nearby water without any other terrain
+--   requirement. Every other location keeps clear of lakes / rivers / the
+--   ocean shore.
+--
+--   TOTAL over the closed vocabulary (#1681), with no catch-all: a new
+--   'LocationAnchor' constructor must state its water-proximity policy
+--   here or the @-Werror@ build fails, so it cannot silently inherit the
+--   dry-ground filter.
+wantsWater ∷ [LocationAnchor] → Bool
+wantsWater = any tolerates
+  where
+    tolerates a = case a of
+        AnchorCoast     → True
+        AnchorCoastal   → True
+        AnchorWaterside → True
+        AnchorFlat      → False
+        AnchorMountain  → False
+        AnchorHighland  → False
+        AnchorLowland   → False
+        AnchorInland    → False
 
--- | Does a chunk satisfy ALL of a def's anchor tags? Every tag in the
---   authoritative vocabulary ('Engine.Asset.YamlLocations.validAnchorTags',
---   #801) is listed explicitly, including "waterside" (the #414
---   water-proximity opt-out modifier: tolerate nearby water, no terrain
---   constraint of its own). The catch-all fallback is defensive only —
---   'Engine.Asset.YamlLocations' rejects any tag outside that vocabulary
---   at YAML load time, so a def registered through the normal content
---   pipeline never reaches this function carrying an unknown tag; only a
---   directly-constructed 'LocationDef' (e.g. a test) that bypasses YAML
---   validation could.
-anchorOk ∷ Cuts → [Text] → ChunkMetrics → Bool
+-- | Does a chunk satisfy ALL of a def's anchor tags? TOTAL over the closed
+--   'Location.Anchor' vocabulary (#801\/#1681) with no catch-all branch, so
+--   adding a constructor without giving it terrain semantics fails the
+--   @-Werror@ build rather than becoming the always-true match #801 existed
+--   to remove.
+--
+--   'AnchorWaterside' is unconstrained ON PURPOSE and says so as its own
+--   case: it is the #414 water-proximity opt-out modifier (tolerate nearby
+--   water — see 'wantsWater'), carrying no terrain requirement of its own.
+anchorOk ∷ Cuts → [LocationAnchor] → ChunkMetrics → Bool
 anchorOk cuts tags cm = all ok tags
   where
     ok tag = case tag of
-        "flat"      → cmElevRange  cm ≤ flatCut cuts
-        "mountain"  → cmMedianElev cm ≥ mountainCut cuts
-        "highland"  → cmMedianElev cm ≥ highlandCut cuts
-        "lowland"   → cmMedianElev cm ≤ lowlandCut cuts
-        "coast"     → cmOceanDist  cm ≡ 1
-        "coastal"   → cmOceanDist  cm ≡ 1
-        "inland"    → cmOceanDist  cm ≥ 4
-        "waterside" → True
-        _           → True
+        AnchorFlat      → cmElevRange  cm ≤ flatCut cuts
+        AnchorMountain  → cmMedianElev cm ≥ mountainCut cuts
+        AnchorHighland  → cmMedianElev cm ≥ highlandCut cuts
+        AnchorLowland   → cmMedianElev cm ≤ lowlandCut cuts
+        AnchorCoast     → cmOceanDist  cm ≡ 1
+        AnchorCoastal   → cmOceanDist  cm ≡ 1
+        AnchorInland    → cmOceanDist  cm ≥ 4
+        AnchorWaterside → True
 
 -- | p-quantile of a pre-sorted list (0 for the empty list).
 pctl ∷ [Int] → Double → Int
