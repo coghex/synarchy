@@ -4845,6 +4845,32 @@ def referenced(route: str, section: str, **fields) -> dict:
     return document
 
 
+def redeclared_result(*, rename=None, relabel=None, drop=False,
+                      reorder=False, **kwargs) -> dict:
+    """A spotless batch that reports against a DIFFERENT declared contract.
+
+    Everything `_bind_to_producer` compares stays identical — probe,
+    commit, instant, artifact root, invocation directory, retained
+    artifacts — because a spotless batch retains nothing and the fixture
+    keeps its stamps. Only the descriptor moves.
+    """
+    checks = [list(pair) for pair in CHECKS]
+    if rename is not None:
+        checks[-1][0] = rename
+    if relabel is not None:
+        checks[-1][1] = relabel
+    if drop:
+        checks = checks[:-1]
+    if reorder:
+        checks = [checks[1], checks[0]] + checks[2:]
+    declared = [(cid, label) for cid, label in checks]
+    return result_document(
+        checks=declared,
+        runs=[{cid: PASS for cid, _label in declared}
+              for _ in range(dd.RUN_COUNT)],
+        **kwargs)
+
+
 def restamped(document: dict, stamp: str = "2026-08-22T09:30:00Z") -> dict:
     """The same measurement, claiming another instant."""
     document = copy.deepcopy(document)
@@ -6249,6 +6275,75 @@ def test_a_path_no_filesystem_can_name_is_never_stored() -> None:
                f"{done.returncode}\n{done.stderr[:300]}")
         expect(Path(path).read_bytes() == before,
                "and writes nothing on the way out")
+
+
+def test_one_attempt_reports_against_one_declared_contract() -> None:
+    """The descriptor `_bind_to_producer` cannot see.
+
+    A result can keep its probe, its targets, its commit, its instant
+    and every artifact path while swapping or relabelling an unrelated
+    declared check — nothing the identity binding compares moves — and
+    #1437 REJECTS that drift rather than routing it anywhere. The
+    producer record restates only the identifiers and their order, so
+    labels are held between the declared measurements instead.
+    """
+    for label, result, fragment in (
+        ("a renamed check", redeclared_result(rename="delta"),
+         "identifiers and their order are the stable contract"),
+        ("a dropped check", redeclared_result(drop=True),
+         "identifiers and their order are the stable contract"),
+        ("a reordered descriptor", redeclared_result(reorder=True),
+         "identifiers and their order are the stable contract"),
+    ):
+        with census_file() as path:
+            before = path.read_bytes()
+            publisher = Publisher()
+            expect_handoff_rejected(
+                lambda r=result, p=publisher: record_outcome(
+                    outcome_handoff(dd.ROUTE_CANNOT_REPRODUCE, measurements=[
+                        {"role": do.ROLE_BASELINE,
+                         "exit_code": probe_flake.EXIT_OK, "result": r}]),
+                    path, publisher=p),
+                fragment, label)
+            expect_nothing_recorded(path, before, publisher, label)
+
+    # A relabel keeps every identifier, so only the cross-measurement
+    # comparison can see it — the producer record carries no labels.
+    diagnosis, _record = produced(dd.ROUTE_PARTIAL_IMPROVEMENT)
+    with census_file() as path:
+        before = path.read_bytes()
+        publisher = Publisher()
+        expect_handoff_rejected(
+            lambda p=publisher: record_outcome(
+                outcome_handoff(dd.ROUTE_PARTIAL_IMPROVEMENT, measurements=[
+                    {"role": do.ROLE_BASELINE,
+                     "exit_code": probe_flake.EXIT_OK,
+                     "result": diagnosis["baseline"]["result"]},
+                    {"role": do.ROLE_VERIFICATION,
+                     "exit_code": probe_flake.EXIT_OK,
+                     "result": redeclared_result(
+                         relabel="a different assertion entirely",
+                         commit=REPAIR_COMMIT,
+                         artifact_root=VERIFY_ARTIFACTS)}]),
+                path, publisher=p),
+            "relabels", "a relabelled check in the verification")
+        expect_nothing_recorded(path, before, publisher, "a relabelled check")
+
+    # And a target the record's own descriptor never declared.
+    with census_file() as path:
+        before = path.read_bytes()
+        _diagnosis, record = produced(dd.ROUTE_NO_CONFIDENT_FIX)
+        record["targets"] = record["targets"] + ["delta"]
+        record["handoff"]["targets"] = list(record["targets"])
+        publisher = Publisher()
+        expect_handoff_rejected(
+            lambda: record_outcome(
+                outcome_handoff(dd.ROUTE_NO_CONFIDENT_FIX,
+                                diagnosis_outcome=record),
+                path, publisher=publisher),
+            "does not declare",
+            "a target the expected descriptor never declared")
+        expect_nothing_recorded(path, before, publisher, "an undeclared target")
 
 
 def test_the_declared_boundary_is_a_place_not_a_label() -> None:

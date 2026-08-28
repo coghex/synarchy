@@ -2283,6 +2283,16 @@ a record whose handoff identifies one commit while its top-level field, its
 baseline reference and the supplied measurement all name another is refused
 rather than stored as an attempt about a baseline the producer never diagnosed.
 
+**One attempt reports against one declared contract.** A batch's descriptor is
+what it reports against and the identity binding cannot see it — a result can
+keep its probe, targets, commit, instant and every artifact path while swapping
+or relabelling an unrelated declared check, which #1437 rejects outright. The
+producer record restates only half of it, so this binds identifiers and their
+ORDER against `handoff.expected_checks` and the LABELS between the declared
+measurements themselves, through `deflake_diagnosis.require_descriptor`. The
+targets are held to that same descriptor: one it never declared cannot be among
+the measurement's own non-PASS identifiers.
+
 **The measurement is the one that diagnosis judged.** Binding on the probe
 alone would admit any well-formed batch of that probe — one taken at another
 commit or another instant, supplied under a diagnosis that judged a different

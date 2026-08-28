@@ -139,6 +139,22 @@ check here. Each duplicated field is re-parsed with the grammar its twin
 was parsed with and required to match, so agreement is established
 between two VALIDATED values rather than two strings.
 
+One attempt reports against one declared contract
+-------------------------------------------------
+A batch's DESCRIPTOR is what it reports against, and the identity
+binding below cannot see it: a result can keep its probe, its targets,
+its commit, its instant and every artifact path while swapping or
+relabelling an unrelated declared check, which #1437 rejects rather than
+routing anywhere. The producer record restates only half of it, so the
+binding is two independent statements — identifiers and their ORDER
+against the record's own `handoff.expected_checks`, and the LABELS
+between the declared measurements themselves, through #1437's
+`require_descriptor`. A label is the check's stated meaning, so a batch
+that kept every identifier while relabelling one measures something else
+and says so nowhere. The targets are held to that same descriptor: a
+target it never declared cannot be one of the measurement's own non-PASS
+identifiers.
+
 The measurement is the one that diagnosis judged
 ------------------------------------------------
 Binding a declared measurement to its PROBE alone would admit any
@@ -994,6 +1010,21 @@ def require_diagnosis_outcome(document, *, worktrees=()) -> dict:
         require_artifact_reference(
             path, "a retained artifact of the diagnosis outcome",
             worktrees=worktrees)
+    expected_checks = _require_string_list(
+        outcome.get("handoff", {}).get("expected_checks")
+        if isinstance(outcome.get("handoff"), dict) else None,
+        "the diagnosis outcome's `handoff`.expected_checks")
+    if not expected_checks:
+        raise HandoffError(
+            "the diagnosis outcome's `handoff`.expected_checks is empty; a "
+            "measurement that declared no check reported nothing")
+    stray = [cid for cid in targets if cid not in expected_checks]
+    if stray:
+        raise HandoffError(
+            f"the diagnosis outcome targets {', '.join(stray)}, which its "
+            f"own expected descriptor {expected_checks} does not declare; "
+            f"the targets are the measurement's own non-PASS identifiers, "
+            f"so one it never declared is not among them")
     # The input identity #1437 states twice, reconciled once.
     require_input_identity(
         outcome.get("handoff"), "the diagnosis outcome's `handoff`",
@@ -1021,6 +1052,7 @@ def require_diagnosis_outcome(document, *, worktrees=()) -> dict:
         "acceptable_failures": acceptable,
         "baseline_sha": baseline_sha,
         "retained_artifacts": artifacts,
+        "expected_checks": expected_checks,
         "references": references,
         "configuration": require_configuration(
             outcome.get("configuration"),
@@ -1280,6 +1312,57 @@ def declared_worktrees(document) -> list:
     return trees
 
 
+def _require_one_descriptor(measurements: dict, diagnosis: dict) -> None:
+    """Every declared measurement reports the SAME declared checks.
+
+    A batch's descriptor is the contract it reports against, and
+    `_bind_to_producer` cannot see it: a result can keep its probe, its
+    targets, its commit, its instant and every artifact path while
+    swapping or relabelling an unrelated declared check, and #1437
+    rejects exactly that drift rather than routing it anywhere.
+
+    Two independent bindings, because the producer record carries only
+    half the descriptor:
+
+    * against the record's own `handoff.expected_checks` — identifiers
+      and their ORDER, which is the stable part of the contract and the
+      only part #1437 restates in its outcome; and
+    * against each OTHER, through #1437's own `require_descriptor`,
+      which adds the LABELS. A label is the check's stated meaning, so a
+      batch that kept every identifier while relabelling one measures
+      something else and says so nowhere — and since the labels are
+      absent from the producer record, agreement between the declared
+      measurements is the strongest statement about them available here.
+    """
+    expected = diagnosis["expected_checks"]
+    reference = None
+    for role in ROLES:
+        measurement = measurements.get(role)
+        if measurement is None or measurement.result is None:
+            continue
+        where = f"the {role} measurement's result document"
+        found = deflake_diagnosis.descriptor_ids(measurement.result)
+        if found != expected:
+            raise HandoffError(
+                f"{where} declares the checks {found} where the diagnosis "
+                f"outcome's expected descriptor is {expected}; identifiers "
+                f"and their order are the stable contract, and a rename, a "
+                f"removal or a reorder is a protocol change this workflow "
+                f"invents no mapping for")
+        if reference is None:
+            reference = (role, deflake_diagnosis.descriptor_of(
+                measurement.result))
+            continue
+        try:
+            deflake_diagnosis.require_descriptor(
+                measurement.result, reference[1], where)
+        except deflake_diagnosis.HandoffError as error:
+            raise HandoffError(
+                f"{error}; the {reference[0]} measurement of this same "
+                f"attempt declares it differently, and one attempt reports "
+                f"against one contract") from None
+
+
 def require_handoff(document, *, worktrees=(), primary=None) -> Handoff:
     """One `deflake-outcome-handoff/v1`, or the refusal that names why."""
     envelope = _require_object(document, "the outcome handoff")
@@ -1328,6 +1411,7 @@ def require_handoff(document, *, worktrees=(), primary=None) -> Handoff:
                 f"do")
     for measurement in measurements.values():
         _bind_to_producer(measurement, diagnosis)
+    _require_one_descriptor(measurements, diagnosis)
     if envelope.get("unmet_condition") is not None:
         raise HandoffError(
             "which #1437 acceptance condition a partial improvement failed "
