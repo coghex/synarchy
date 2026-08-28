@@ -28,33 +28,54 @@
 --   bare Lua backend, spies on @world.pickTile@/@world.selectTile@ to
 --   inject and capture a sentinel z distinct from any real coordinate,
 --   and asserts each path forwards it end to end.
+--
+--   #1702: 'handleWorldSelectTileByCoordCommand' is also the tile-side
+--   half of #813's "a direct selection wins outright" rule, and it used
+--   to preserve both deferred arms instead of clearing them. The
+--   "stale deferred arms" example below arms BOTH
+--   'zoomSelectNow' and 'worldSelectNow', commits a direct tile
+--   selection, and then runs the two REAL render-time commit paths
+--   ('renderWorldCursorQuads' and 'makeCursorQuad'). Two control
+--   passes run first with the arms deliberately left set, proving the
+--   hover inputs the example feeds those paths really do resolve (a
+--   'Nothing' hover would take each path's no-op branch and the
+--   regression would pass vacuously).
 module Test.Headless.World.SelectTileZ (spec) where
 
 import UPrelude
 import Engine.Core.Capability.WorldSim (toWorldSimCapability)
 import Test.Hspec
-import Data.IORef (readIORef, newIORef)
+import Data.IORef (readIORef, newIORef, writeIORef)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
 import qualified Data.Vector.Unboxed as VU
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Thread (ThreadControl(..))
+import Engine.Asset.Handle (TextureHandle)
+import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..), defaultCamera)
 import Engine.Scripting.Lua.API (registerLuaAPI)
 import Engine.Scripting.Lua.Thread (createLuaBackendState)
 import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import World.Tile.Types (WorldTileData(..))
 import World.Chunk.Types (LoadedChunk(..), columnIndex)
+import World.Generate (viewDepth)
 import World.Generate.Coordinates (chunkToGlobal)
-import World.Cursor.Types (CursorState(..))
+import World.Generate.Types (WorldGenParams(..))
+import World.Grid (gridToWorld)
+import World.Cursor.Types (CursorState(..), emptyCursorState)
+import World.Render.CursorQuads (renderWorldCursorQuads)
+import World.Render.HitTest (pickWorldTile)
+import World.Render.ViewBounds (computeViewBounds)
+import World.Render.Zoom.Cursor (makeCursorQuad, pixelToChunkOrigin)
 import World.State.Types (WorldState(..))
 import World.Page.Types (WorldPageId(..))
 import World.Thread.Command.Cursor (handleWorldSelectTileByCoordCommand)
-import Test.Headless.Harness (sharedWorld, getWorldTileData)
+import Test.Headless.Harness (sharedWorld, getWorldTileData, getWorldGenParams)
 
 spec ∷ SpecWith EngineEnv
 spec = do
-    describe "tile selection z (#367)" $
+    describe "tile selection z (#367)" $ do
         it "Just z pins the clicked tile; Nothing falls back to surface z" $ \env → do
             ws     ← sharedWorld env 42 64 3
             -- The handler ignores the logger, but takes a real one.
@@ -80,6 +101,148 @@ spec = do
                     sel1 ← worldSelectedTile <$> readIORef (wsCursorRef ws)
                     sel1 `shouldBe` Just (gx, gy, belowZ)
 
+        it "a fresh direct tile selection wins outright over stale deferred arms on EITHER side (#1702)" $ \env → do
+            ws     ← sharedWorld env 42 64 3
+            logger ← readIORef (loggerRef env)
+            let pid = WorldPageId "shared_42_64_3"
+            tiles   ← getWorldTileData ws
+            mParams ← getWorldGenParams ws
+            case (HM.toList (wtdChunks tiles), mParams) of
+                ([], _)      → expectationFailure "shared world has no loaded chunks"
+                (_, Nothing) → expectationFailure "shared world has no gen params"
+                (chunks, Just params) → do
+                    let facing       = FaceSouth
+                        zoom         = 2.0 ∷ Float
+                        worldSize    = wgpWorldSize params
+                        (fbW, fbH)   = (800, 600)
+                        (winW, winH) = (800, 600)
+                        effectiveDepth =
+                            min viewDepth (max 8 (round (zoom * 80.0 + 8.0 ∷ Float)))
+                        pixX = winW `div` 2
+                        pixY = winH `div` 2
+                        -- Same center-pixel aiming trick as
+                        -- Test.Headless.World.SelectChunk's shared spec:
+                        -- at the screen's dead center the view offset is
+                        -- zero, so parking the camera on a tile's own
+                        -- world-space position guarantees that pixel
+                        -- lands on it. Search EVERY loaded chunk (not an
+                        -- arbitrary "first" from the unordered HashMap —
+                        -- steep/edge terrain may yield no clean hit).
+                        tryChunk (coord, lc) =
+                            let (tgx, tgy)   = chunkToGlobal coord 0 0
+                                surfZ        = lcSurfaceMap lc VU.! columnIndex 0 0
+                                (camX, camY) = gridToWorld facing tgx tgy
+                                tryZSlice zSlice =
+                                    let cam = defaultCamera
+                                            { camPosition = (camX, camY), camZoom = zoom
+                                            , camFacing = facing, camZSlice = zSlice }
+                                        vb = computeViewBounds cam fbW fbH effectiveDepth
+                                    in pickWorldTile facing zoom zSlice camX camY fbW fbH
+                                           winW winH worldSize effectiveDepth vb tiles pixX pixY
+                            in [ (tgx, tgy, surfZ, camX, camY, zSlice, hit)
+                               | zSlice ← [surfZ - 40 .. surfZ + 40]
+                               , Just hit ← [tryZSlice zSlice]
+                               ]
+                        hits = concatMap tryChunk chunks
+                    case hits of
+                        [] → expectationFailure
+                            "could not find any loaded chunk where the center \
+                            \pixel hits a real tile"
+                        ((tgx, tgy, surfZ, camX, camY, zSlice, (hgx, hgy, _, _, _)) : _) → do
+                            writeIORef (cameraRef env) $ defaultCamera
+                                { camPosition = (camX, camY), camZoom = zoom
+                                , camFacing = facing, camZSlice = zSlice }
+                            writeIORef (windowSizeRef env) (winW, winH)
+                            writeIORef (framebufferSizeRef env) (fbW, fbH)
+
+                            -- The directly selected tile must differ from
+                            -- the tile the world hover resolves to, or
+                            -- "was not retargeted" would be unfalsifiable.
+                            -- Both candidates sit inside the same loaded
+                            -- chunk (chunkSize is 16), so the handler's
+                            -- unloaded-chunk no-op can't swallow either.
+                            let directTile@(dgx, dgy)
+                                    | (hgx, hgy) ≢ (tgx, tgy) = (tgx, tgy)
+                                    | otherwise               = (tgx + 1, tgy + 1)
+                                directZ = surfZ - 2
+                            directTile `shouldNotBe` (hgx, hgy)
+
+                            -- The zoom hover must resolve to a real chunk
+                            -- too, or makeCursorQuad would take its
+                            -- off-map no-op branch instead of the commit
+                            -- branch this example is about.
+                            pixelToChunkOrigin facing
+                                    defaultCamera { camPosition = (camX, camY)
+                                                  , camZoom = zoom, camFacing = facing
+                                                  , camZSlice = zSlice }
+                                    winW winH fbW fbH worldSize pixX pixY
+                                `shouldNotBe` Nothing
+
+                            let armedCursor = emptyCursorState
+                                    { zoomSelectNow     = True
+                                    , worldSelectNow    = True
+                                    , worldCursorPos    = Just (pixX, pixY)
+                                    , zoomCursorPos     = Just (pixX, pixY)
+                                    , worldSelectedTile = Just (dgx, dgy, directZ)
+                                    }
+
+                            -- Control 1: with worldSelectNow left ARMED,
+                            -- the tile render pass really does retarget
+                            -- the selection to the hover result.
+                            writeIORef (wsCursorRef ws) armedCursor
+                            _ ← renderWorldCursorQuads env ws 1.0
+                            ctrlTile ← readIORef (wsCursorRef ws)
+                            fmap (\(gx', gy', _) → (gx', gy')) (worldSelectedTile ctrlTile)
+                                `shouldBe` Just (hgx, hgy)
+
+                            -- Control 2: with zoomSelectNow left ARMED,
+                            -- the zoom render pass really does commit a
+                            -- chunk and erase the tile selection.
+                            writeIORef (wsCursorRef ws) armedCursor
+                            _ ← makeCursorQuad facing
+                                    defaultCamera { camPosition = (camX, camY)
+                                                  , camZoom = zoom, camFacing = facing
+                                                  , camZSlice = zSlice }
+                                    winW winH fbW fbH worldSize (wsCursorRef ws)
+                                    lookupSlot (-1)
+                            ctrlZoom ← readIORef (wsCursorRef ws)
+                            zoomSelectedPos ctrlZoom `shouldNotBe` Nothing
+                            worldSelectedTile ctrlZoom `shouldBe` Nothing
+
+                            -- The real case: both arms pending, plus a
+                            -- stale chunk selection the #135 opposing
+                            -- clear must drop.
+                            writeIORef (wsCursorRef ws) $ armedCursor
+                                { worldSelectedTile = Nothing
+                                , zoomSelectedPos   = Just (tgx, tgy)
+                                }
+                            handleWorldSelectTileByCoordCommand (toWorldSimCapability env)
+                                logger pid dgx dgy (Just directZ)
+                            afterSelect ← readIORef (wsCursorRef ws)
+                            worldSelectedTile afterSelect `shouldBe` Just (dgx, dgy, directZ)
+                            zoomSelectedPos afterSelect `shouldBe` Nothing
+                            zoomSelectNow afterSelect `shouldBe` False
+                            worldSelectNow afterSelect `shouldBe` False
+
+                            -- A later tile render pass must NOT resolve
+                            -- the now-cleared arm and retarget the fresh
+                            -- selection to the hover tile.
+                            _ ← renderWorldCursorQuads env ws 1.0
+                            afterTileRender ← readIORef (wsCursorRef ws)
+                            worldSelectedTile afterTileRender `shouldBe` Just (dgx, dgy, directZ)
+
+                            -- Nor may a later zoom render pass commit a
+                            -- chunk and wipe the fresh tile selection.
+                            _ ← makeCursorQuad facing
+                                    defaultCamera { camPosition = (camX, camY)
+                                                  , camZoom = zoom, camFacing = facing
+                                                  , camZSlice = zSlice }
+                                    winW winH fbW fbH worldSize (wsCursorRef ws)
+                                    lookupSlot (-1)
+                            afterZoomRender ← readIORef (wsCursorRef ws)
+                            worldSelectedTile afterZoomRender `shouldBe` Just (dgx, dgy, directZ)
+                            zoomSelectedPos afterZoomRender `shouldBe` Nothing
+
     describe "UI wiring forwards the picked z (#802)" $ do
         it "Info-tool left-click forwards world.pickTile's z to world.selectTile (scripts/hud.lua)" $ \env → do
             ls ← newBareLuaBackend env
@@ -103,6 +266,11 @@ spec = do
             invokeInfo `shouldNotSatisfy` isLuaError
 
             evalDebug ls "_G.__capturedZ" ≫= (`shouldBe` "4242")
+
+-- | Stable-handle → slot resolution for the cursor quad emitters; the
+--   #1702 example only inspects cursor STATE, never the quads.
+lookupSlot ∷ TextureHandle → Int
+lookupSlot _ = 0
 
 -- * Real-Lua-backend helper (mirrors Test.Headless.UI.InputOwnership's
 --   newBareLuaBackend — a real Lua backend with the full Lua API
