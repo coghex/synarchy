@@ -217,7 +217,7 @@ local function queueNormalProfile()
     -- Texture-only phases.
     -- Icons are organized into kind subfolders; addTextureDir is not
     -- recursive, so enqueue each subfolder.
-    for _, sub in ipairs({ "stat", "skill", "status", "injury", "infection", "knowledge", "effects" }) do
+    for _, sub in ipairs({ "stat", "skill", "status", "injury", "infection", "knowledge" }) do
         addTextureDir("assets/textures/icons/" .. sub, "Loading icons...")
     end
     addTextureList("Loading HUD...",   hudPaths)

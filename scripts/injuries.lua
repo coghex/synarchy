@@ -121,9 +121,16 @@ local INJURY_TIERS = {
     ["blunt|"] = { { 0.5, "Deep contusion" },  { 0.0, "Bruise" } },
 }
 
--- Icon basename (assets/textures/icons/<name>.png). Per-kind default,
--- refined per body region by INJURY_ICON below. Missing icons degrade to
--- a dim text label in the panel, so art can land later.
+-- Icon basename (assets/textures/icons/<kind>/<name>.png). Per-kind
+-- default, refined per body region by INJURY_ICON below.
+--
+-- Degradation is THREE steps, not two (#478, corrected in #1740): the
+-- basename is looked up in ONE GLOBAL index built over every family in
+-- unit_info_v2_panel_engine.lua's ICON_SUBDIRS; on a miss the row falls
+-- back to its OWN family's "<kind>_unknown" placeholder; only when that
+-- placeholder is also absent does the row degrade to a dim text label. So
+-- a missing or misspelled basename here renders a placeholder rather than
+-- text, which is why tools/bare_name_icon_asset_check.py exists.
 local KIND_ICON = {
     fracture   = "broken_bone",
     concussion = "concussion",
