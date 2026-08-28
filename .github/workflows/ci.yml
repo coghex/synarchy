@@ -684,6 +684,25 @@ jobs:
           python3 tools/material_id_audit.py --self-test
           python3 tools/material_id_audit.py
 
+      # Cheap, no-engine guard (issue #1740): fails if an authoritative
+      # bare-name icon reference does not resolve through the runtime's
+      # GLOBAL icon index. Unit-info panel icons are referenced by bare
+      # basename, and scripts/unit_info_v2_panel_engine.lua consults a
+      # row's "<kind>_unknown" placeholder only when the basename misses
+      # that index -- so a deleted or misspelled basename renders a
+      # placeholder instead of erroring, which is indistinguishable from
+      # art that has not landed yet. Nothing verified those references,
+      # and the tracked tree really had drifted (knowledge_basic_cuisine
+      # was mapped but absent). It also pins the two runtime icon-family
+      # inventories to each other and to the per-family fallback assets.
+      # Unconditional rather than path-selective: it reads a handful of
+      # scripts and directory listings and costs milliseconds, and either
+      # the Lua maps or the assets can drift alone.
+      - name: Bare-name icon asset check
+        run: |
+          python3 tools/bare_name_icon_asset_check.py --self-test
+          python3 tools/bare_name_icon_asset_check.py
+
       # Cheap, no-engine guard (issue #1717): fails if a concept id
       # data/language/concepts.yaml has ever shipped is missing from it,
       # or if a new one arrived without being ratcheted into

@@ -26,10 +26,14 @@ separate subsets even though they share a data domain.
 
 Icon families (skill/stat/status/injury/infection/knowledge) reference
 icons by bare basename resolved at runtime via a directory-listing index
-(scripts/unit_info_v2.lua buildIconIndex), not literal yaml paths, so
-per-entity missing-texture checking is out of scope here (same carve-out
-tools/check_texture_paths.py already makes) — only unknown-asset presence
-is checked per family.
+(scripts/unit_info_v2_panel_engine.lua buildIconIndex), not literal yaml
+paths, so per-entity missing-texture checking is out of scope here (same
+carve-out tools/check_texture_paths.py already makes) — only unknown-asset
+presence is checked per family. Per-REFERENCE bare-name validation is owned
+by tools/bare_name_icon_asset_check.py (#1740), which resolves every
+authoritative bare name through that same global index; this audit keeps its
+own responsibility for the per-family fallback assets those references
+degrade to.
 
 Exit 0 when every subset has its unknown asset AND every yaml-declared
 per-entity texture resolves. Exit 1 otherwise (offenders listed).
@@ -167,8 +171,10 @@ for _kind in ICON_KINDS:
             "name": f"icons/{_kind}",
             "unknown": f"assets/textures/icons/{_kind}/{_kind}_unknown.png",
             "missing_entities": lambda: [],
-            "note": "bare-name, runtime-resolved (unit_info_v2.lua buildIconIndex) — "
-                    "per-entity check out of scope, see module docstring",
+            "note": "bare-name, runtime-resolved "
+                    "(unit_info_v2_panel_engine.lua buildIconIndex) — "
+                    "per-reference validation is owned by "
+                    "bare_name_icon_asset_check.py, see module docstring",
         }
     )
 
