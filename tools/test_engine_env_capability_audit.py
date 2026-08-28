@@ -28,9 +28,10 @@ from engine_env_capability_audit import (  # type: ignore
     audit_input_boundary, INPUT_CAPABILITY_MODULE, INPUT_VIEW_MODULE,
     CAPABILITIES, PERMANENT_IMPORTERS, PERMANENT_DEFINER, TEMPORARY_CEILING,
     parse_permanent_boundary, audit_permanent_boundary,
-    audit_field_total, extract_marked_spans, FIELD_TOTAL_OPEN,
-    FIELD_TOTAL_CLOSE, NO_FIELD_TOTAL_OPEN, NO_FIELD_TOTAL_CLOSE,
-    ONE_ROW_PHRASE,
+    audit_field_total, extract_marked_spans, section_bounds,
+    FIELD_TOTAL_OPEN, FIELD_TOTAL_CLOSE, NO_FIELD_TOTAL_OPEN,
+    NO_FIELD_TOTAL_CLOSE, ONE_ROW_PHRASE, SECTION_1_HEADING,
+    SECTION_6_2_HEADING,
     audit_save_load_projection, parse_projection_bindings,
     SAVE_LOAD_CAPABILITY_MODULE, SAVE_LOAD_CAPABILITY_FILE,
     SAVE_LOAD_FIELD_MAP, SAVE_LOAD_PROJECTION,
@@ -1199,7 +1200,8 @@ _FT_LIVE = ["fieldOne", "fieldTwo", "fieldThree"]
 def _field_total_doc(total_body: str | None = None,
                      no_total_body: str | None = None,
                      *, total_blocks: int = 1,
-                     no_total_blocks: int = 1) -> str:
+                     no_total_blocks: int = 1,
+                     trailing_section: str = "") -> str:
     """A minimal document carrying both marked blocks."""
     if total_body is None:
         total_body = ("\n\n`Fake.hs` declares it with exactly **3** fields, "
@@ -1209,14 +1211,17 @@ def _field_total_doc(total_body: str | None = None,
         no_total_body = ("For each module, scan its source for every "
                          "occurrence of one of the `EngineEnv` field names "
                          "from §5.")
-    parts = ["# Fake inventory\n\n## 1. Scope\n\n"]
+    parts = [f"# Fake inventory\n\n{SECTION_1_HEADING}\n\n"]
     for _ in range(total_blocks):
         parts.append(f"{FIELD_TOTAL_OPEN}{total_body}{FIELD_TOTAL_CLOSE}\n\n")
-    parts.append("## 6. Boundary\n\n")
+    parts.append("## 6. Boundary\n\nprose\n\n"
+                 f"{SECTION_6_2_HEADING}\n\n")
     for _ in range(no_total_blocks):
         parts.append(
             f"1. {NO_FIELD_TOTAL_OPEN}{no_total_body}"
             f"{NO_FIELD_TOTAL_CLOSE}\n\n")
+    if trailing_section:
+        parts.append(f"{trailing_section}\n\n")
     return "".join(parts)
 
 
@@ -1424,13 +1429,79 @@ def test_marker_extractor_does_not_confuse_the_two_pairs():
     expect(violations == [] and len(bodies) == 1,
            f"exactly one total block should be extracted, got "
            f"{len(bodies)} and {violations}")
-    expect("scan its source" not in bodies[0],
+    expect("scan its source" not in bodies[0].body,
            "the total block must not swallow the no-total sentence")
     no_bodies, no_violations = extract_marked_spans(
         doc, NO_FIELD_TOTAL_OPEN, NO_FIELD_TOTAL_CLOSE)
     expect(no_violations == [] and len(no_bodies) == 1,
            f"exactly one no-total block should be extracted, got "
            f"{len(no_bodies)} and {no_violations}")
+
+
+def test_field_total_block_outside_section_one_rejected():
+    """The escape the section binding closes: both marker pairs still
+    exist, still well-formed and self-consistent, but they were lifted
+    out of the prose they govern -- which is then free to carry a stale
+    hand-maintained total again."""
+    doc = _field_total_doc(trailing_section="## 9. Appendix")
+    spans, _ = extract_marked_spans(doc, FIELD_TOTAL_OPEN, FIELD_TOTAL_CLOSE)
+    block = doc[spans[0].start:spans[0].end]
+    moved = doc.replace(block, "It has exactly 83 fields.", 1) + block + "\n"
+    violations = audit_field_total(_FT_LIVE, moved)
+    expect(any("is not inside" in v and SECTION_1_HEADING in v
+               for v in violations),
+           f"a total block relocated out of the scope section must be "
+           f"rejected, got: {violations}")
+
+
+def test_no_total_block_outside_section_six_two_rejected():
+    doc = _field_total_doc(trailing_section="## 9. Appendix")
+    spans, _ = extract_marked_spans(
+        doc, NO_FIELD_TOTAL_OPEN, NO_FIELD_TOTAL_CLOSE)
+    block = doc[spans[0].start:spans[0].end]
+    moved = (doc.replace(block, "one of the 83 `EngineEnv` field names", 1)
+             + block + "\n")
+    violations = audit_field_total(_FT_LIVE, moved)
+    expect(any("is not inside" in v and SECTION_6_2_HEADING in v
+               for v in violations),
+           f"a no-total block relocated out of the procedure section must "
+           f"be rejected, got: {violations}")
+
+
+def test_field_total_renamed_section_heading_rejected():
+    """Renaming the section is the other half of relocating the block:
+    the pair stays put and the heading moves away from it."""
+    doc = _field_total_doc().replace(SECTION_1_HEADING, "## 1. Purpose", 1)
+    violations = audit_field_total(_FT_LIVE, doc)
+    expect(any("has no" in v and SECTION_1_HEADING in v
+               for v in violations),
+           f"renaming the governed section must be rejected, got: "
+           f"{violations}")
+
+
+def test_section_bounds_stops_at_the_next_peer_heading():
+    doc = _field_total_doc()
+    bounds = section_bounds(doc, SECTION_1_HEADING, ("## ",))
+    expect(bounds is not None, "SS1's bounds must be found")
+    start, end = bounds
+    expect("## 6. Boundary" not in doc[start:end],
+           "SS1's body must stop at the next top-level heading")
+    expect(FIELD_TOTAL_OPEN in doc[start:end],
+           "SS1's body must contain the total block it governs")
+
+
+def test_section_bounds_keeps_subsections_inside_a_top_level_section():
+    """`"## "` must not match `"### "` -- otherwise every top-level
+    section would end at its own first subsection."""
+    doc = "## 6. Boundary\n\nintro\n\n### 6.2 Sub\n\ntail\n\n## 7. Next\n"
+    bounds = section_bounds(doc, "## 6. Boundary", ("## ",))
+    expect(bounds is not None, "the section must be found")
+    start, end = bounds
+    expect("### 6.2 Sub" in doc[start:end] and "tail" in doc[start:end],
+           f"a subsection must stay inside its parent section, got: "
+           f"{doc[start:end]!r}")
+    expect("## 7. Next" not in doc[start:end],
+           "the next peer heading must end the section")
 
 
 def test_field_total_against_the_real_repo():
@@ -1443,30 +1514,61 @@ def test_field_total_against_the_real_repo():
     expect(violations == [],
            f"the real inventory's SS1 block must state the real live "
            f"count and span, got: {violations}")
-    bodies, marker_violations = extract_marked_spans(
+    spans, marker_violations = extract_marked_spans(
         real_inventory, FIELD_TOTAL_OPEN, FIELD_TOTAL_CLOSE)
-    expect(marker_violations == [] and len(bodies) == 1,
+    expect(marker_violations == [] and len(spans) == 1,
            f"the real document must carry exactly one well-formed total "
-           f"block, got {len(bodies)} and {marker_violations}")
-    stale_body = bodies[0].replace(str(len(live_fields)),
-                                   str(len(live_fields) - 1), 1)
-    expect(stale_body != bodies[0],
+           f"block, got {len(spans)} and {marker_violations}")
+    body = spans[0].body
+    stale_body = body.replace(str(len(live_fields)),
+                              str(len(live_fields) - 1), 1)
+    expect(stale_body != body,
            "the real block must actually contain the live count for this "
            "mutation to mean anything")
-    stale = real_inventory.replace(bodies[0], stale_body, 1)
+    stale = real_inventory.replace(body, stale_body, 1)
     expect(audit_field_total(live_fields, stale) != [],
            "the real inventory with its own block's total decremented by "
            "one must be rejected -- proving the check reads THIS "
            "document's block, not only synthetic fixtures")
-    anchored_body = bodies[0].replace(
+    anchored_body = body.replace(
         "`src/Engine/Core/State.hs`", "`src/Engine/Core/State.hs:70`", 1)
-    expect(anchored_body != bodies[0],
+    expect(anchored_body != body,
            "the real block must name the source file for this mutation to "
            "mean anything")
-    anchored = real_inventory.replace(bodies[0], anchored_body, 1)
+    anchored = real_inventory.replace(body, anchored_body, 1)
     expect(audit_field_total(live_fields, anchored) != [],
            "a hand-written source line anchor put back into the real "
            "block must be rejected (issue #1669 requirement 3)")
+
+    # Relocation: lift the real pair out of SS1 and re-append it,
+    # unchanged and self-consistent, at the very end of the document,
+    # leaving a stale hand-maintained total behind in SS1's prose. Every
+    # between-the-markers rule still passes on the moved block; only the
+    # section binding catches it.
+    whole_block = real_inventory[spans[0].start:spans[0].end]
+    relocated = (real_inventory.replace(
+        whole_block,
+        "`src/Engine/Core/State.hs` declares exactly 83 fields.", 1)
+        + "\n\n## 9. Appendix\n\n" + whole_block + "\n")
+    expect(any("is not inside" in v for v in
+               audit_field_total(live_fields, relocated)),
+           "moving the real total block out of SS1 must be rejected, or "
+           "SS1's prose could carry a stale total again with the markers "
+           "parked somewhere inert")
+
+    no_spans, _ = extract_marked_spans(
+        real_inventory, NO_FIELD_TOTAL_OPEN, NO_FIELD_TOTAL_CLOSE)
+    expect(len(no_spans) == 1,
+           f"the real document must carry exactly one no-total block, got "
+           f"{len(no_spans)}")
+    no_block = real_inventory[no_spans[0].start:no_spans[0].end]
+    no_relocated = (real_inventory.replace(
+        no_block, "one of the 83 `EngineEnv` field names", 1)
+        + "\n\n## 9. Appendix\n\n" + no_block + "\n")
+    expect(any("is not inside" in v for v in
+               audit_field_total(live_fields, no_relocated)),
+           "moving the real no-total block out of SS6.2 must be rejected "
+           "for the same reason")
 
 
 def test_real_repo_end_state():
@@ -1672,6 +1774,11 @@ def main() -> int:
         test_no_total_span_missing_rejected,
         test_no_total_span_duplicate_rejected,
         test_marker_extractor_does_not_confuse_the_two_pairs,
+        test_field_total_block_outside_section_one_rejected,
+        test_no_total_block_outside_section_six_two_rejected,
+        test_field_total_renamed_section_heading_rejected,
+        test_section_bounds_stops_at_the_next_peer_heading,
+        test_section_bounds_keeps_subsections_inside_a_top_level_section,
         test_field_total_against_the_real_repo,
         test_real_repo_end_state,
     ]

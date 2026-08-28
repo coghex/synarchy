@@ -58,7 +58,11 @@ removing an `EngineEnv` field without amending that paragraph fails the
 audit in CI and in `make ci` — even when §5's rows were updated
 correctly. Do not restate the count elsewhere in this document, and do
 not put a second number (a line anchor above all) inside the block; the
-audit rejects both.
+audit rejects both. The markers are anchored to the sections they
+govern — this block to `## 1. Scope`, §6.2's to its own heading — so
+moving a pair somewhere inert while the real sentence goes back to a
+hand-maintained number is rejected too, as is renaming either heading
+out from under its block.
 
 It is the same field set
 [`docs/persistence_state_inventory.md`](persistence_state_inventory.md)

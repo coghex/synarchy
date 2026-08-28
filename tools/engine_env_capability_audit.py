@@ -35,8 +35,11 @@ field NAMES, never their count and never the prose. `audit_field_total`
 re-derives the count and the two span field names from the live
 declaration and rejects the marked SS1 block when either disagrees;
 SS6.2's assignment-method sentence, which used to repeat the same
-total, is marked as prose that must carry no number at all. See that
-function's own section comment for the marker contract.
+total, is marked as prose that must carry no number at all. Each
+marker pair is bound to the section it governs, so it cannot be parked
+somewhere inert while the real sentence regains a hand-maintained
+number. See that function's own section comment for the marker
+contract.
 
 This is a static presence/well-formedness check, not a semantic proof:
 it cannot verify that a documented reader/writer/sync/lifecycle
@@ -100,6 +103,7 @@ from __future__ import annotations
 import re
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -506,13 +510,24 @@ def audit(engine_env_source: str, inventory_text: str) -> list[str]:
 #       contain NO number at all -- so the two sites cannot disagree,
 #       because only one of them is allowed to state a total.
 #
-# Both blocks are REQUIRED: deleting a marker is itself a violation,
-# so the check cannot be disabled by removing what it governs.
+# Both blocks are REQUIRED, and each is bound to the SECTION it
+# governs: deleting a marker is a violation, and so is relocating a
+# pair somewhere harmless while the real scope statement or the real
+# procedure sentence keeps a stale total outside it. A marker pair that
+# is not inside its own section governs nothing.
 #
 # Section references (`SS5`, `SS7.3` -- written with the section sign in
 # the document) are excluded from both number scans. They are
 # navigation, not counts, and SS1's contract sentence necessarily names
 # SS5.
+# The two sections whose prose these markers govern. A block found
+# outside its own section is not governing that section's prose, which
+# is the whole point of the check.
+SECTION_1_HEADING = "## 1. Scope"
+# SECTION_6_2_HEADING is defined with the SS6 parsers further down; the
+# section-bounds helper takes the heading as an argument so the two
+# uses stay on one definition.
+
 FIELD_TOTAL_OPEN = "<!-- engineenv-field-total -->"
 FIELD_TOTAL_CLOSE = "<!-- /engineenv-field-total -->"
 NO_FIELD_TOTAL_OPEN = "<!-- engineenv-no-field-total -->"
@@ -527,9 +542,22 @@ _SECTION_REF_RE = re.compile(r"§\d+(?:\.\d+)*")
 _INTEGER_RE = re.compile(r"\d+")
 
 
+class MarkedSpan(NamedTuple):
+    """One marker pair: its inner prose and where the whole block sits.
+
+    `start`/`end` bracket the block INCLUDING both markers, which is
+    what the section-containment check needs -- a pair whose opening
+    marker is inside its section but whose closing marker is not has
+    not kept its prose there.
+    """
+    body: str
+    start: int
+    end: int
+
+
 def extract_marked_spans(text: str, open_marker: str, close_marker: str
-                         ) -> tuple[list[str], list[str]]:
-    """Return `(span bodies, violations)` for one marker pair.
+                         ) -> tuple[list[MarkedSpan], list[str]]:
+    """Return `(spans, violations)` for one marker pair.
 
     Deliberately literal string scanning, not a regex: the markers are
     fixed literals, and an unbalanced or nested pair must be reported
@@ -539,7 +567,7 @@ def extract_marked_spans(text: str, open_marker: str, close_marker: str
     The inventory document is the only text this is applied to, so the
     diagnostics name it directly.
     """
-    bodies: list[str] = []
+    spans: list[MarkedSpan] = []
     violations: list[str] = []
     cursor = 0
     while True:
@@ -561,14 +589,75 @@ def extract_marked_spans(text: str, open_marker: str, close_marker: str
                 f"docs/{INVENTORY_PATH.name} (a second one opens at "
                 f"offset {nested} before the first closes) -- the "
                 f"governed prose must be one flat block")
-        bodies.append(text[body_start:end])
+        spans.append(MarkedSpan(text[body_start:end], start,
+                                end + len(close_marker)))
         cursor = end + len(close_marker)
-    return bodies, violations
+    return spans, violations
+
+
+def section_bounds(text: str, heading: str,
+                   stop_prefixes: tuple[str, ...]) -> tuple[int, int] | None:
+    """Character bounds of one Markdown section's body, or `None` when
+    the heading is absent.
+
+    The body runs from just after the heading line to just before the
+    next line whose stripped form starts with one of `stop_prefixes`
+    (or to end of document). `"## "` does NOT match `"### "` -- the
+    third character is a `#`, not the required space -- so a top-level
+    section legitimately contains its own subsections.
+    """
+    start: int | None = None
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        stripped = line.strip()
+        if start is None:
+            if stripped == heading:
+                start = offset + len(line)
+        elif any(stripped.startswith(prefix) for prefix in stop_prefixes):
+            return start, offset
+        offset += len(line)
+    if start is None:
+        return None
+    return start, offset
 
 
 def _countable_numbers(body: str) -> list[str]:
     """Every decimal integer in `body` that is not a section reference."""
     return _INTEGER_RE.findall(_SECTION_REF_RE.sub("", body))
+
+
+def _audit_span_location(inventory_text: str, spans: list[MarkedSpan],
+                         open_marker: str, heading: str,
+                         stop_prefixes: tuple[str, ...],
+                         governed: str) -> list[str]:
+    """Each marker pair must sit INSIDE the section it governs.
+
+    Without this, the markers could be lifted out of SS1 and SS6.2 and
+    dropped somewhere inert -- an appendix, a code fence, the end of the
+    file -- while the real scope statement and the real procedure
+    sentence went back to carrying hand-maintained totals that nothing
+    reads. Every other rule here would still pass, because they only
+    ever look between the markers.
+    """
+    violations: list[str] = []
+    doc = f"docs/{INVENTORY_PATH.name}"
+    bounds = section_bounds(inventory_text, heading, stop_prefixes)
+    if bounds is None:
+        violations.append(
+            f"{doc} has no `{heading}` heading -- `{open_marker}` is "
+            f"anchored to that section, so the section cannot be renamed "
+            f"or removed without moving the marker contract with it")
+        return violations
+    start, end = bounds
+    for span in spans:
+        if span.start < start or span.end > end:
+            violations.append(
+                f"{doc}'s `{open_marker}` block (offsets "
+                f"{span.start}-{span.end}) is not inside `{heading}` "
+                f"(offsets {start}-{end}) -- a marker pair moved out of "
+                f"its section governs nothing, leaving {governed} free "
+                f"to drift again")
+    return violations
 
 
 def audit_field_total(live_fields: list[str], inventory_text: str
@@ -587,6 +676,9 @@ def audit_field_total(live_fields: list[str], inventory_text: str
     bodies, marker_violations = extract_marked_spans(
         inventory_text, FIELD_TOTAL_OPEN, FIELD_TOTAL_CLOSE)
     violations.extend(marker_violations)
+    violations.extend(_audit_span_location(
+        inventory_text, bodies, FIELD_TOTAL_OPEN, SECTION_1_HEADING,
+        ("## ",), "the scope statement it governs"))
     if not bodies:
         violations.append(
             f"{doc} SS1 has no `{FIELD_TOTAL_OPEN}` block -- the audited "
@@ -598,7 +690,7 @@ def audit_field_total(live_fields: list[str], inventory_text: str
             f"exactly one paragraph may state the field total, or the "
             f"copies can disagree with each other again")
     else:
-        body = bodies[0]
+        body = bodies[0].body
         numbers = _countable_numbers(body)
         expected = str(len(live_fields))
         if not numbers:
@@ -640,6 +732,10 @@ def audit_field_total(live_fields: list[str], inventory_text: str
     no_total_bodies, no_total_marker_violations = extract_marked_spans(
         inventory_text, NO_FIELD_TOTAL_OPEN, NO_FIELD_TOTAL_CLOSE)
     violations.extend(no_total_marker_violations)
+    violations.extend(_audit_span_location(
+        inventory_text, no_total_bodies, NO_FIELD_TOTAL_OPEN,
+        SECTION_6_2_HEADING, ("## ", "### "),
+        "the assignment-method procedure it governs"))
     if not no_total_bodies:
         violations.append(
             f"{doc} SS6.2 has no `{NO_FIELD_TOTAL_OPEN}` block -- the "
@@ -650,7 +746,7 @@ def audit_field_total(live_fields: list[str], inventory_text: str
             f"{doc} has {len(no_total_bodies)} "
             f"`{NO_FIELD_TOTAL_OPEN}` blocks -- exactly one is expected")
     else:
-        numbers = _countable_numbers(no_total_bodies[0])
+        numbers = _countable_numbers(no_total_bodies[0].body)
         if numbers:
             violations.append(
                 f"{doc} SS6.2's `{NO_FIELD_TOTAL_OPEN}` block contains "
