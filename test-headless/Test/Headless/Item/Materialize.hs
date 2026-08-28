@@ -29,28 +29,37 @@ import Data.IORef
 import Data.List (isPrefixOf, nub, sort)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
 import qualified Data.Text.IO as TIO
+import qualified Data.Yaml as Yaml
+import qualified HsLua as Lua
 import System.Directory
-    ( getTemporaryDirectory, createDirectoryIfMissing
+    ( getTemporaryDirectory, createDirectoryIfMissing, doesFileExist
     , removeDirectoryRecursive )
 import System.FilePath ((</>))
 import System.Random (StdGen, mkStdGen)
 import Engine.Asset.Discovery (walkFilesWithExtension)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Asset.YamlItems (ItemYamlDef(..), loadItemYaml)
+import Engine.Asset.YamlLootTables
+    ( LootTableYamlDef(..), LootTableYamlEntry(..) )
 import Engine.Asset.YamlUnits
     ( UnitYamlDef(..), UnitYamlInventoryEntry(..), loadUnitYaml )
 import Engine.Core.Log
     ( initLogger, defaultLogConfig, LogConfig(..), LogBackend(..)
     , LogCategory(..), LogEntry(..), LogLevel(..), LoggerState(..) )
 import Engine.Scripting.Lua.API.Items.Defs (itemDefFromYaml)
+import Engine.Scripting.Lua.API.Items.Contents (pushGroupedContents)
 import Item.Materialize
     ( ItemOverrides(..), materializeItem, pristineItem
     , pristineCondition, pristineSharpness )
 import Item.Roll (rollItemSpec, rollItemWeight)
 import Item.Types
     ( ItemContainer(..), ItemContentEntry(..), ItemDef(..)
-    , ItemInstance(..), ItemManager(..), ItemStorage(..), lookupItemDef )
+    , ItemInstance(..), ItemManager(..), ItemStorage(..), lookupItemDef
+    , itemTotalWeight )
+import LootTable.Roll (LootRollContext(..), rollLootTableFor)
+import LootTable.Types (LootTableDef(..), LootTableEntry(..))
 
 -- * Fixtures
 
@@ -295,6 +304,45 @@ constructionSites path = do
         Nothing → case dropWhile T.null (map T.strip laterLines) of
             (l : _) → T.isPrefixOf "{" l
             []      → False
+
+-- | The engine's shipped loot-table YAML conversion, kept here so the
+--   toolbox test rolls the live table rather than an in-test approximation.
+toLootTableDef ∷ LootTableYamlDef → LootTableDef
+toLootTableDef d = LootTableDef
+    { ltdId = ltydId d
+    , ltdEntries = [ LootTableEntry (ltyeId e) (ltyeWeight e)
+                   | e ← ltydEntries d ]
+    }
+
+-- | Read the exact grouped row fields the Contents view consumes, through
+--   the production row builder shared by unit and remembered-container APIs.
+groupedContentRows
+    ∷ ItemManager → [ItemInstance] → IO [(Text, Text, Int)]
+groupedContentRows mgr contents = Lua.run @Lua.Exception $ do
+    Lua.openlibs
+    pushGroupedContents mgr contents
+    rawCount ← Lua.rawlen (-1)
+    let count = fromIntegral rawCount ∷ Int
+    rows ← forM [1 .. count] $ \idx → do
+        _ ← Lua.rawgeti (-1) (fromIntegral idx)
+        defName ← textField "defName"
+        displayName ← textField "displayName"
+        itemCount ← intField "count"
+        Lua.pop 1
+        pure (defName, displayName, itemCount)
+    Lua.pop 1
+    pure rows
+  where
+    textField field = do
+        _ ← Lua.getfield (-1) field
+        val ← Lua.tostring (-1)
+        Lua.pop 1
+        pure (maybe "" TE.decodeUtf8Lenient val)
+    intField field = do
+        _ ← Lua.getfield (-1) field
+        val ← Lua.tointeger (-1)
+        Lua.pop 1
+        pure (maybe (-1) fromIntegral val)
 
 spec ∷ Spec
 spec = do
@@ -679,6 +727,85 @@ spec = do
                     let ids = map iiInstanceId (allInstances k)
                     length ids `shouldBe` 30
                     sort ids `shouldBe` [1 .. 30]
+
+    describe "field toolbox content" $ do
+        it "loads and materialises the shipped definition's exact Contents view" $ do
+            logger ← silentLogger
+            yamlDefs ← loadItemYaml logger "data/items/field_toolbox.yaml"
+            case yamlDefs of
+                [yamlDef] → do
+                    iydName yamlDef `shouldBe` "field_toolbox"
+                    iydSprite yamlDef
+                        `shouldBe` "assets/textures/items/tool/toolbox.png"
+                    doesFileExist (T.unpack (iydSprite yamlDef))
+                        `shouldReturn` True
+                other → expectationFailure
+                    ("expected one field toolbox definition, got "
+                     <> show (length other))
+
+            mgr ← shippedItems
+            case lookupItemDef "field_toolbox" mgr of
+                Nothing → expectationFailure
+                    "field_toolbox missing from the shipped item registry"
+                Just def → do
+                    ( idDisplayName def, idWeight def, idBulk def
+                      , idKind def, idCategory def, idMake def
+                      , idMaterial def )
+                        `shouldBe` ( "Field Toolbox", 1.2, 6.0
+                                   , "container", "Tools", "factory"
+                                   , "steel" )
+                    idContainer def `shouldBe` Nothing
+                    idStorage def `shouldBe` Nothing
+                    let authored =
+                            [ ( iceItem e, iceCount e
+                              , iceFill e, iceContents e )
+                            | e ← idDefaultContents def ]
+                    authored `shouldBe`
+                        [ ("whetstone", 1, Nothing, Nothing)
+                        , ("steel_hardware", 4, Nothing, Nothing)
+                        , ("wiring", 1, Nothing, Nothing)
+                        ]
+
+            inst ← mintWith mgr pristineItem "field_toolbox"
+            case inst of
+                Nothing → expectationFailure
+                    "shipped field_toolbox did not materialize"
+                Just toolbox → do
+                    let children = iiContents toolbox
+                        ids = map iiInstanceId (allInstances toolbox)
+                    map iiDefName children `shouldBe`
+                        [ "whetstone", "steel_hardware", "steel_hardware"
+                        , "steel_hardware", "steel_hardware", "wiring" ]
+                    length children `shouldBe` 6
+                    length (nub ids) `shouldBe` 7
+                    itemTotalWeight mgr toolbox `shouldSatisfy`
+                        (\weight → abs (weight - 2.8) < 1.0e-5)
+                    rows ← groupedContentRows mgr children
+                    sort rows `shouldBe` sort
+                        [ ("whetstone", "Whetstone", 1)
+                        , ("steel_hardware", "Steel Hardware", 4)
+                        , ("wiring", "Wiring", 1)
+                        ]
+
+        it "materialises the field toolbox selected by its pinned ruin roll" $ do
+            shipped ← Yaml.decodeFileEither
+                "data/loot_tables/ruin_common.yaml"
+            case shipped of
+                Left err → expectationFailure (show err)
+                Right yamlDef → do
+                    let table = toLootTableDef yamlDef
+                        context = LootRollContext
+                            { lrcWorldSeed = 42, lrcInstanceId = 4
+                            , lrcEntryIndex = 1, lrcRollIndex = 2 }
+                        selected = rollLootTableFor table context
+                    selected `shouldBe` Just "field_toolbox"
+                    mgr ← shippedItems
+                    inst ← case selected of
+                        Nothing → pure Nothing
+                        Just name → mintWith mgr pristineItem name
+                    (map iiDefName ∘ iiContents <$> inst) `shouldBe` Just
+                        [ "whetstone", "steel_hardware", "steel_hardware"
+                        , "steel_hardware", "steel_hardware", "wiring" ]
 
     describe "no other production mint site (requirement 10)" $ do
         it "every mint module reaches the materializer" $ do
