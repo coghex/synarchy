@@ -4802,6 +4802,19 @@ def restamped(document: dict, stamp: str = "2026-08-22T09:30:00Z") -> dict:
     return document
 
 
+def relocated(document: dict, **fields) -> dict:
+    """The same measurement, claiming it wrote somewhere else.
+
+    One path field at a time, so each is isolated: a fixture that moved
+    the artifact root would move the invocation directory with it (the
+    harness derives one from the other), and either field alone would
+    then be enough to refuse it.
+    """
+    document = copy.deepcopy(document)
+    document.update(fields)
+    return document
+
+
 def route_diagnosis(route: str) -> dict:
     """A diagnosis document `dd.evaluate` really does take down `route`."""
     if route == dd.ROUTE_NO_TARGET:
@@ -4847,19 +4860,46 @@ def measurement_entries(route: str, diagnosis: dict) -> list:
     return entries
 
 
+def rebind_references(record: dict, measurements) -> dict:
+    """Refresh the producer record's own references from `measurements`.
+
+    A case that substitutes a measurement is asking a question about the
+    CLASSIFIER, and #1439 binds every declared measurement to the
+    reference #1437 recorded for it — so a fixture that swapped a result
+    without moving the reference would be refused for the substitution
+    rather than answering the question it asked. This keeps the envelope
+    internally consistent in every dimension except the one the case is
+    actually about; the binding tests pass `rebind=False` and supply the
+    mismatch deliberately.
+    """
+    record = copy.deepcopy(record)
+    for entry in measurements:
+        section = record.get(entry["role"])
+        result = entry.get("result")
+        if not isinstance(section, dict) or not isinstance(result, dict):
+            continue
+        for field in do.REFERENCE_FIELDS:
+            section[field] = copy.deepcopy(result[field])
+    return record
+
+
 def outcome_handoff(route: str = dd.ROUTE_CANNOT_REPRODUCE, *,
                     attempt: str = ATTEMPT, summary: str = OUTCOME_SUMMARY,
-                    measurements=None, unmet=None,
+                    measurements=None, unmet=None, rebind: bool = True,
                     diagnosis_outcome=_DEFAULT) -> dict:
     document_diagnosis, record = produced(route)
+    if diagnosis_outcome is not _DEFAULT:
+        record = diagnosis_outcome
+    entries = (measurement_entries(route, document_diagnosis)
+               if measurements is None else measurements)
+    if measurements is not None and rebind:
+        record = rebind_references(record, entries)
     envelope = {
         "schema": do.HANDOFF_SCHEMA,
         "attempt": attempt,
         "summary": summary,
-        "diagnosis_outcome": record if diagnosis_outcome is _DEFAULT
-                             else diagnosis_outcome,
-        "measurements": (measurement_entries(route, document_diagnosis)
-                         if measurements is None else measurements),
+        "diagnosis_outcome": record,
+        "measurements": entries,
     }
     if unmet is not None:
         envelope["unmet_condition"] = unmet
@@ -5263,15 +5303,37 @@ def test_a_measurement_of_another_state_is_not_this_attempts_evidence()\
     other_commit = "c" * 40
     cases = (
         ("a baseline measured at another commit",
-         outcome_handoff(measurements=[
+         outcome_handoff(rebind=False, measurements=[
              {"role": do.ROLE_BASELINE, "exit_code": probe_flake.EXIT_OK,
               "result": spotless_result(commit=other_commit)}]),
          "is not the measurement that diagnosis judged"),
         ("a baseline measured at another instant",
-         outcome_handoff(measurements=[
+         outcome_handoff(rebind=False, measurements=[
              {"role": do.ROLE_BASELINE, "exit_code": probe_flake.EXIT_OK,
               "result": restamped(spotless_result())}]),
          "is not the measurement that diagnosis judged"),
+        ("a baseline claiming another artifact root",
+         outcome_handoff(rebind=False, measurements=[
+             {"role": do.ROLE_BASELINE, "exit_code": probe_flake.EXIT_OK,
+              "result": relocated(spotless_result(),
+                                  artifact_root=f"{OUTSIDE}/elsewhere")}]),
+         "reports artifact_root"),
+        ("a baseline claiming another invocation directory",
+         outcome_handoff(rebind=False, measurements=[
+             {"role": do.ROLE_BASELINE, "exit_code": probe_flake.EXIT_OK,
+              "result": relocated(
+                  spotless_result(),
+                  invocation_dir=f"{OUTSIDE}/artifacts/"
+                                 f"{PROBE}-20260821T130000Z-4712-beefcafe")}]),
+         "reports invocation_dir"),
+        ("a baseline naming another batch's retained artifacts",
+         outcome_handoff(dd.ROUTE_NO_CONFIDENT_FIX, rebind=False,
+                         measurements=[
+                             {"role": do.ROLE_BASELINE,
+                              "exit_code": probe_flake.EXIT_OK,
+                              "result": result_document(
+                                  runs=failing_runs(3))}]),
+         "retained_artifacts"),
         ("a no-confident-fix carrying a verification",
          outcome_handoff(dd.ROUTE_NO_CONFIDENT_FIX, measurements=[
              {"role": do.ROLE_BASELINE, "exit_code": probe_flake.EXIT_OK,

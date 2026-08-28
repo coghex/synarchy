@@ -2136,12 +2136,19 @@ a total the reconciliation has already bound.
 alone would admit any well-formed batch of that probe — one taken at another
 commit or another instant, supplied under a diagnosis that judged a different
 one, leaving the census holding two conflicting accounts of a single attempt.
-Each declared measurement is held to the producer record's own reference for
-its role (commit and instant), and the pre-fix roles again to the `baseline_sha`
-the census row is about to record: two independent statements, since a producer
-record whose reference and `baseline_sha` disagreed would satisfy either alone.
-A role the producer ran no batch for carries a `null` reference, and a
-measurement supplied for it describes work the invocation did not do.
+Each declared measurement is held to EVERY field of the producer record's
+reference for its role that a result document also reports — the commit, the
+instant, the artifact root, the invocation directory and the ordered retained
+artifacts. The commit and the instant alone are not an identity: two batches of
+one probe at one commit differ in where they wrote, which is exactly why
+`probe_flake.new_invocation_dir` stamps a fresh directory per invocation, and a
+substitute agreeing on the first two would still hand the census another
+batch's artifacts as this attempt's evidence. The pre-fix roles are held again
+to the `baseline_sha` the census row is about to record: an independent
+statement, since a producer record whose reference and `baseline_sha` disagreed
+would satisfy either alone. A role the producer ran no batch for carries a
+`null` reference, and a measurement supplied for it describes work the
+invocation did not do.
 
 **The run count is the measurement's own.** Completeness is `completed_runs ==
 requested_runs` and the ceiling is X out of that measurement's own requested

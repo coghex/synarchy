@@ -763,12 +763,22 @@ def require_diagnosis_outcome(document) -> dict:
     }
 
 
+# Every field of #1437's per-batch reference that a result document also
+# reports, so a declared measurement can be held to ALL of them. The
+# commit and the instant alone are not an identity: two batches of one
+# probe at one commit differ in where they wrote, and
+# `probe_flake.new_invocation_dir` stamps a fresh directory per
+# invocation precisely so that they do.
+REFERENCE_FIELDS = ("commit_sha", "timestamp_utc", "artifact_root",
+                    "invocation_dir", "retained_artifacts")
+
+
 def _batch_reference(section, what: str):
     """The identity #1437 recorded for one batch, or None if it ran none.
 
     #1437's outcome document carries a REFERENCE per batch rather than
-    the document itself, so this is the pair that says WHICH measurement
-    it judged. A malformed reference is a malformed producer record.
+    the document itself, so this is what says WHICH measurement it
+    judged. A malformed reference is a malformed producer record.
     """
     if section is None:
         return None
@@ -780,7 +790,20 @@ def _batch_reference(section, what: str):
     stamp = reference.get("timestamp_utc")
     _delegate(lambda: probe_census.parse_timestamp(
         stamp, f"{what}'s `timestamp_utc`"), f"{what}'s timestamp")
-    return {"commit_sha": commit, "timestamp_utc": stamp}
+    artifacts = _require_string_list(
+        reference.get("retained_artifacts"),
+        f"{what}'s `retained_artifacts`")
+    for path in artifacts:
+        require_artifact_reference(path, f"a retained artifact of {what}")
+    return {
+        "commit_sha": commit,
+        "timestamp_utc": stamp,
+        "artifact_root": require_artifact_reference(
+            reference.get("artifact_root"), f"{what}'s `artifact_root`"),
+        "invocation_dir": require_artifact_reference(
+            reference.get("invocation_dir"), f"{what}'s `invocation_dir`"),
+        "retained_artifacts": artifacts,
+    }
 
 
 def require_measurement(entry, *, probe: str, seen: set) -> Measurement:
@@ -842,11 +865,21 @@ def _bind_to_producer(measurement: Measurement, diagnosis: dict) -> None:
     same probe: a result taken at another commit, or another instant,
     could be supplied under a diagnosis that judged a different one, and
     the census would then store two conflicting accounts of one attempt.
-    So each measurement is held to the producer record's own reference
-    for its role, and the pre-fix roles are additionally held to the
-    `baseline_sha` the census row is about to record — two independent
-    statements, because a producer record whose reference and
-    `baseline_sha` disagreed would satisfy either one alone.
+    So each measurement is held to EVERY field of the producer record's
+    reference for its role that a result document also reports — the
+    commit, the instant, the artifact root, the invocation directory and
+    the ordered retained artifacts. The commit and the instant alone are
+    not an identity: two batches of one probe at one commit differ in
+    where they wrote, which is exactly why
+    `probe_flake.new_invocation_dir` stamps a fresh directory per
+    invocation, and a substitute agreeing on the first two would still
+    hand the census another batch's artifacts as this attempt's
+    evidence.
+
+    The pre-fix roles are additionally held to the `baseline_sha` the
+    census row is about to record — an independent statement, because a
+    producer record whose reference and `baseline_sha` disagreed would
+    satisfy either one alone.
 
     A role the producer ran no batch for has a `null` reference, and a
     measurement supplied for it describes work the invocation did not
@@ -864,7 +897,7 @@ def _bind_to_producer(measurement: Measurement, diagnosis: dict) -> None:
             f"a {measurement.role} measurement here describes work the "
             f"invocation did not do")
     result = measurement.result
-    for field in ("commit_sha", "timestamp_utc"):
+    for field in REFERENCE_FIELDS:
         if result[field] != reference[field]:
             raise HandoffError(
                 f"the {measurement.role} measurement reports {field} "
