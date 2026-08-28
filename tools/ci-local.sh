@@ -78,14 +78,14 @@ SAVE_COMPAT_PATHS="$(python3 tools/ci_expensive_gates.py --local-changed-paths)"
 # needs to be injected here.
 printf 'package synarchy\n  ghc-options: -fforce-recomp\n' > "$LOCAL"
 
-echo "==> [1/25] build (library + executable, -Werror)"
+echo "==> [1/26] build (library + executable, -Werror)"
 cabal build all
 
-echo "==> [2/25] build test suites"
+echo "==> [2/26] build test suites"
 cabal build synarchy-test-headless
 cabal build synarchy-test-graphical
 
-echo "==> [3/25] headless hspec suite (full tier)"
+echo "==> [3/26] headless hspec suite (full tier)"
 # SYNARCHY_FULL_TESTS=1 turns the full-tier examples from pending into
 # real runs (#1364) -- today exactly one, the w128 seed-42 volcano
 # exposure regression in test-headless/Test/Headless/WorldGen/Exposure.hs.
@@ -97,7 +97,7 @@ echo "==> [3/25] headless hspec suite (full tier)"
 # enabled.
 SYNARCHY_FULL_TESTS=1 cabal test synarchy-test-headless --test-show-details=direct
 
-echo "==> [4/25] test audit"
+echo "==> [4/26] test audit"
 python3 tools/test_audit.py
 
 # The executable specification of what tools/world_determinism.py means
@@ -113,33 +113,33 @@ python3 tools/test_audit.py
 # on both sides rather than behind the worldgen selector, because the
 # contract lives in tools/ and can be broken by a change that selector
 # would not fire on.
-echo "==> [5/25] world determinism content-identity self-test"
+echo "==> [5/26] world determinism content-identity self-test"
 python3 tools/test_determinism.py
 
-echo "==> [6/25] lua module line budget"
+echo "==> [6/26] lua module line budget"
 python3 tools/lua_module_budget.py
 
-echo "==> [7/25] lua duplicate function audit"
+echo "==> [7/26] lua duplicate function audit"
 python3 tools/test_lua_duplicate_function_audit.py
 python3 tools/lua_duplicate_function_audit.py
 
-echo "==> [8/25] haskell module line budget"
+echo "==> [8/26] haskell module line budget"
 python3 tools/test_haskell_module_budget.py
 python3 tools/haskell_module_budget.py
 
-echo "==> [9/25] unicode operator audit"
+echo "==> [9/26] unicode operator audit"
 python3 tools/test_unicode_operator_audit.py
 python3 tools/unicode_operator_audit.py
 
-echo "==> [10/25] lua strict-decode audit"
+echo "==> [10/26] lua strict-decode audit"
 python3 tools/lua_strict_decode_audit.py --self-test
 python3 tools/lua_strict_decode_audit.py
 
-echo "==> [11/25] persistence inventory audit"
+echo "==> [11/26] persistence inventory audit"
 python3 tools/test_persistence_inventory_audit.py
 python3 tools/persistence_inventory_audit.py
 
-echo "==> [12/25] EngineEnv capability inventory audit"
+echo "==> [12/26] EngineEnv capability inventory audit"
 python3 tools/test_engine_env_capability_audit.py
 python3 tools/engine_env_capability_audit.py
 
@@ -153,7 +153,7 @@ python3 tools/engine_env_capability_audit.py
 # this working tree's own changes touch a path that can move its result.
 # Every other member and the whole real audit still run on every local
 # invocation.
-echo "==> [13/25] save compatibility audit"
+echo "==> [13/26] save compatibility audit"
 python3 tools/test_save_compat_audit.py --without-reproducibility
 python3 tools/save_compat_audit.py
 
@@ -179,24 +179,41 @@ python3 tools/save_compat_audit.py
 # write.
 SAVE_COMPAT_REPRO="$(printf '%s\n' "$SAVE_COMPAT_PATHS" | python3 tools/ci_expensive_gates.py --stdin --gate save-compat)"
 if [ "$SAVE_COMPAT_REPRO" = true ]; then
-  echo "==> [13/25] save compatibility fixture reproducibility (selected)"
+  echo "==> [13/26] save compatibility fixture reproducibility (selected)"
   python3 tools/test_save_compat_audit.py --only-reproducibility
 else
-  echo "==> [13/25] save compatibility fixture reproducibility: skipped (no save-format, fixture, save-tooling or Cabal path changed)"
+  echo "==> [13/26] save compatibility fixture reproducibility: skipped (no save-format, fixture, save-tooling or Cabal path changed)"
 fi
 # <<< save-compat reproducibility selection <<<
 
-echo "==> [14/25] enum append-only audit"
+echo "==> [14/26] enum append-only audit"
 python3 tools/enum_append_only_audit.py --self-test
 python3 tools/enum_append_only_audit.py
 
-echo "==> [15/25] cabal library module inventory audit"
+echo "==> [15/26] cabal library module inventory audit"
 python3 tools/test_cabal_module_audit.py
 python3 tools/cabal_module_audit.py
 
-echo "==> [16/25] material id/name correspondence audit"
+echo "==> [16/26] material id/name correspondence audit"
 python3 tools/material_id_audit.py --self-test
 python3 tools/material_id_audit.py
+
+# Cheap, no-engine guard (issue #1740): fails if an authoritative
+# bare-name icon reference does not resolve through the runtime's GLOBAL
+# icon index. Unit-info panel icons are referenced by bare basename, and
+# scripts/unit_info_v2_panel_engine.lua consults a row's "<kind>_unknown"
+# placeholder only when the basename misses that index -- so a deleted or
+# misspelled basename renders a placeholder instead of erroring, which is
+# indistinguishable from art that has not landed yet. Nothing verified
+# those references, and the tracked tree really had drifted
+# (knowledge_basic_cuisine was mapped but absent). It also pins the two
+# runtime icon-family inventories to each other and to the per-family
+# fallback assets. Unconditional rather than path-selective: it reads a
+# handful of scripts and directory listings and costs milliseconds, and
+# either the Lua maps or the assets can drift alone.
+echo "==> [17/26] bare-name icon asset check"
+python3 tools/bare_name_icon_asset_check.py --self-test
+python3 tools/bare_name_icon_asset_check.py
 
 # Cheap, no-engine guard (issue #1717): fails if a concept id
 # data/language/concepts.yaml has ever shipped is missing from it, or if
@@ -211,11 +228,11 @@ python3 tools/material_id_audit.py
 # goldens cover only the handful of concepts their samples use.
 # Unconditional rather than path-selective: it is a two-file comparison
 # costing milliseconds, and either side can drift alone.
-echo "==> [17/25] concept id inventory audit"
+echo "==> [18/26] concept id inventory audit"
 python3 tools/concept_id_inventory_audit.py --self-test
 python3 tools/concept_id_inventory_audit.py
 
-echo "==> [18/25] findings report status audit"
+echo "==> [19/26] findings report status audit"
 python3 tools/test_findings_report_audit.py
 python3 tools/findings_report_audit.py
 
@@ -223,7 +240,7 @@ python3 tools/findings_report_audit.py
 # comparison against a fresh regeneration, and #1262's image/slot and
 # resident-memory budgets. --strict is what makes a budget breach fail
 # rather than merely print.
-echo "==> [19/25] unit asset inventory, freshness and budget"
+echo "==> [20/26] unit asset inventory, freshness and budget"
 python3 tools/test_pack_atlas.py
 python3 tools/pack_atlas.py --validate-only --strict
 
@@ -236,11 +253,11 @@ python3 tools/pack_atlas.py --validate-only --strict
 # comment-vs-code pass the checker needs to tell a Haddock
 # counterexample from a runtime path -- without it a green run below
 # could be a checker that had quietly stopped scanning.
-echo "==> [20/25] texture path existence check"
+echo "==> [21/26] texture path existence check"
 python3 tools/test_check_texture_paths.py
 python3 tools/check_texture_paths.py
 
-echo "==> [21/25] world_check --quick"
+echo "==> [22/26] world_check --quick"
 python3 tools/world_check.py --quick
 
 # Validate the probe-runner harness itself (cheap, no engine, no GPU) --
@@ -306,7 +323,7 @@ python3 tools/world_check.py --quick
 # approved rereview amendment scopes the diagnosis lab's own self-test
 # to manual invocation. It is engine-free and takes seconds -- run it by
 # hand when touching tools/deflake_diagnosis.py.
-echo "==> [22/25] probe runner self-tests"
+echo "==> [23/26] probe runner self-tests"
 python3 tools/ci_probes.py --self-test
 python3 tools/ci_expensive_gates.py --self-test
 python3 tools/ci_docs_fast_path.py --self-test
@@ -330,7 +347,7 @@ python3 tools/test_movement_probe.py
 # here would notice it regressing; this self-test is the only thing that
 # observes its policy. It builds throwaway commit graphs in a temporary
 # directory -- no engine, no network, no GitHub, about a second.
-echo "==> [23/25] review-gate decision self-test"
+echo "==> [24/26] review-gate decision self-test"
 python3 tools/review_gate_decision.py --self-test
 
 # Cheap, no-engine self-test of CI's cache-outcome report (#1358). The
@@ -341,7 +358,7 @@ python3 tools/review_gate_decision.py --self-test
 # either cache step to the combined `actions/cache` action would empty
 # `cache-matched-key` and turn every prefix hit into a reported cold
 # cache, with nothing failing.
-echo "==> [24/25] CI cache policy and report self-tests"
+echo "==> [25/26] CI cache policy and report self-tests"
 python3 tools/ci_cache_epoch.py --self-test
 python3 tools/ci_cache_cleanup.py --self-test
 python3 tools/ci_cache_report.py --self-test
@@ -351,7 +368,7 @@ python3 tools/ci_cache_report.py --self-test
 # here, or here and not there, outside the audit's hard-coded exemption
 # list. Without it the two drift silently, and they already had --- the
 # original five of the probe-runner self-tests above ran only in CI.
-echo "==> [25/25] CI/local gate parity audit"
+echo "==> [26/26] CI/local gate parity audit"
 python3 tools/ci_parity_audit.py --self-test
 python3 tools/ci_parity_audit.py
 
