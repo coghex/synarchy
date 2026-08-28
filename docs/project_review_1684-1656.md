@@ -9,8 +9,8 @@ PRs #1684, #1683, #1677, #1663, #1652, #1662, and #1657 retain their intended co
 ## Status
 
 - [x] PRR-1. Foraging probe setup failure can leak its isolated resource root — [#1791]
-- [ ] PRR-2. The till probe can select a fluid tile as its dry control
-- [ ] PRR-3. Authored location bounds can overflow into inverted live geometry
+- [x] PRR-2. The till probe can select a fluid tile as its dry control — [#1793]
+- [x] PRR-3. Authored location bounds can overflow into inverted live geometry — [#1796]
 
 ## 1. Foraging probe setup cleanup
 
@@ -39,7 +39,7 @@ PRs #1684, #1683, #1677, #1663, #1652, #1662, and #1657 retain their intended co
 
 ## 2. Till-probe dry-tile selection
 
-### PRR-2. The till probe can select a fluid tile as its dry control
+### [#1793] PRR-2. The till probe can select a fluid tile as its dry control
 
 > **Captured note:** Apply PR #1664's corrected `world.getFluidAt` multi-return decoding to `find_tillable` as well as `find_fluid_tile`. The former still tests for a JSON object the API never returns, so its supposedly dry control can be chosen from under water.
 
@@ -65,7 +65,7 @@ PRs #1684, #1683, #1677, #1663, #1652, #1662, and #1657 retain their intended co
 
 ## 3. Authored location-bound arithmetic
 
-### PRR-3. Authored location bounds can overflow into inverted live geometry
+### [#1796] PRR-3. Authored location bounds can overflow into inverted live geometry
 
 > **Captured note:** Close the overflow edge documented during PR #1678: the YAML loader validates only relative-bound ordering, then `translateBounds` performs unchecked `Int` addition. An ordered extreme authored box at a nonzero anchor can wrap one endpoint and become the same unusable inverted geometry that save validation now rejects.
 
