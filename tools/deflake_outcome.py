@@ -126,6 +126,19 @@ anything: a nine-run batch claiming ten completed satisfies
 `completed_runs == requested_runs` and would be STORED as ten of ten. A
 mismatch in any of the four is an untrustworthy measurement.
 
+The record has to agree with itself first
+-----------------------------------------
+#1437's record states the input identity TWICE: its `handoff` section
+carries the probe, the commit, X and the targets of the `/deflake`
+invocation consumed, and the top-level fields are derived from that same
+handoff — `baseline_sha` IS `handoff.commit_sha`. Validating each side
+alone leaves the pair free to disagree, and a record whose handoff
+identifies one commit while its top-level field, its baseline reference
+and the supplied measurement all name another would satisfy every other
+check here. Each duplicated field is re-parsed with the grammar its twin
+was parsed with and required to match, so agreement is established
+between two VALIDATED values rather than two strings.
+
 The measurement is the one that diagnosis judged
 ------------------------------------------------
 Binding a declared measurement to its PROBE alone would admit any
@@ -536,6 +549,60 @@ def require_configuration(value, what: str) -> list:
             for entry in manifest["entries"]]
 
 
+def require_input_identity(section, what: str, *, probe: str,
+                           baseline_sha: str, acceptable_failures: int,
+                           targets) -> None:
+    """#1437's record states the input identity TWICE; the two must agree.
+
+    Its `handoff` section carries the probe, the commit, X and the
+    targets of the `/deflake` invocation that was consumed, and the
+    record's own top-level fields are derived from that same handoff —
+    `baseline_sha` IS `handoff.commit_sha`. Validating each side alone
+    leaves the pair free to disagree: a record whose handoff identifies
+    commit A while its top-level `baseline_sha`, its baseline reference
+    and the supplied measurement all say B satisfies every check made so
+    far, and the census would then hold B as the diagnosed baseline of
+    an attempt the producer says was about A.
+
+    Each field is re-parsed with the grammar its top-level twin was
+    parsed with, so agreement is established between two VALIDATED
+    values rather than between two strings.
+    """
+    record = _require_object(section, what)
+    if record.get("probe") != probe:
+        raise HandoffError(
+            f"{what}.probe is {record.get('probe')!r} while the diagnosis "
+            f"outcome names the probe {probe!r}; one record cannot be about "
+            f"two probes")
+    commit = _delegate(
+        lambda: probe_census.require_commit_identity(
+            record.get("commit_sha"), f"{what}.commit_sha"),
+        f"{what}'s commit")
+    if commit != baseline_sha:
+        raise HandoffError(
+            f"{what}.commit_sha is {commit!r} while the diagnosis outcome's "
+            f"`baseline_sha` is {baseline_sha!r}; the baseline commit IS the "
+            f"commit the consumed handoff was measured at, so a record whose "
+            f"two statements of it disagree identifies no baseline at all")
+    ceiling = _delegate(
+        lambda: probe_census.require_acceptable_failures(
+            record.get("acceptable_failures"),
+            f"{what}.acceptable_failures"),
+        "the consumed handoff's acceptable-failure ceiling")
+    if ceiling != acceptable_failures:
+        raise HandoffError(
+            f"{what}.acceptable_failures is {ceiling!r} while the diagnosis "
+            f"outcome's is {acceptable_failures!r}; every classification "
+            f"here is made against that ceiling, so the two cannot differ")
+    declared = _require_string_list(record.get("targets"),
+                                    f"{what}.targets")
+    if declared != list(targets):
+        raise HandoffError(
+            f"{what}.targets is {declared} while the diagnosis outcome's is "
+            f"{list(targets)}; the targets are the checks under diagnosis "
+            f"and a record that names two sets names neither")
+
+
 def require_invocation_identity(section, what: str) -> dict:
     """WHICH `/deflake` invocation the diagnosis consumed.
 
@@ -904,6 +971,11 @@ def require_diagnosis_outcome(document, *, worktrees=()) -> dict:
         require_artifact_reference(
             path, "a retained artifact of the diagnosis outcome",
             worktrees=worktrees)
+    # The input identity #1437 states twice, reconciled once.
+    require_input_identity(
+        outcome.get("handoff"), "the diagnosis outcome's `handoff`",
+        probe=probe, baseline_sha=baseline_sha,
+        acceptable_failures=acceptable, targets=targets)
     # WHICH measurement #1437 judged for each batch it ran. A route that
     # ran no such batch states `null` rather than dropping the key, so an
     # absent reference is a fact about the invocation and not a gap.

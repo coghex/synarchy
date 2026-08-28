@@ -5414,22 +5414,54 @@ def test_a_measurement_of_another_state_is_not_this_attempts_evidence()\
         expect_nothing_recorded(path, before, publisher,
                                 "a nulled batch reference")
 
-    # The producer's reference and the `baseline_sha` it stores are two
-    # independent statements, so a record whose halves disagree is
-    # refused by whichever of them the measurement matches.
+    # The stored `baseline_sha` and the per-batch reference are two
+    # independent statements about one commit, so the pre-fix roles are
+    # held to BOTH. Moving `baseline_sha` and the handoff identity
+    # together — which the identity reconciliation requires — leaves the
+    # reference and the measurement agreeing with each other and
+    # disagreeing with the commit the row is about to record.
     with census_file() as path:
         before = path.read_bytes()
         _diagnosis, record = produced(dd.ROUTE_CANNOT_REPRODUCE)
         record["baseline_sha"] = other_commit
+        record["handoff"]["commit_sha"] = other_commit
         document = outcome_handoff(diagnosis_outcome=record)
         publisher = Publisher()
         expect_handoff_rejected(
             lambda: record_outcome(document, path, publisher=publisher),
             "not at the diagnosis outcome's baseline commit",
-            "a producer record whose baseline_sha contradicts its own "
-            "reference")
+            "a producer record whose baseline_sha contradicts the batch it "
+            "references")
         expect_nothing_recorded(path, before, publisher,
                                 "a contradictory baseline_sha")
+
+    # The input identity #1437 states twice, disagreeing with itself.
+    for label, mutate, fragment in (
+        ("probe", lambda r: r["handoff"].__setitem__("probe", OTHER),
+         "one record cannot be about two probes"),
+        ("baseline commit",
+         lambda r: r["handoff"].__setitem__("commit_sha", other_commit),
+         "identifies no baseline at all"),
+        ("acceptable-failure ceiling",
+         lambda r: r["handoff"].__setitem__("acceptable_failures", 3),
+         "the two cannot differ"),
+        ("target list",
+         lambda r: r["handoff"].__setitem__("targets", ["beta"]),
+         "names two sets names neither"),
+    ):
+        with census_file() as path:
+            before = path.read_bytes()
+            _diagnosis, record = produced(dd.ROUTE_CANNOT_REPRODUCE)
+            mutate(record)
+            document = outcome_handoff(diagnosis_outcome=record)
+            publisher = Publisher()
+            expect_handoff_rejected(
+                lambda d=document, p=publisher: record_outcome(
+                    d, path, publisher=p),
+                fragment,
+                f"a producer record whose two statements of the {label} "
+                f"disagree")
+            expect_nothing_recorded(path, before, publisher, label)
 
 
 def test_a_reproduced_failure_with_no_bounded_repair_is_no_confident_fix()\

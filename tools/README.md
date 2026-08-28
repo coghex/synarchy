@@ -2146,6 +2146,15 @@ genuinely independent of each other (a run can time out after emitting every
 check, and a check can go MISSING across an all-PASS batch) rather than reading
 a total the reconciliation has already bound.
 
+**The record has to agree with itself first.** #1437's record states the
+input identity twice — its `handoff` section carries the probe, commit, X and
+targets of the `/deflake` invocation consumed, and the top-level fields derive
+from that same handoff, `baseline_sha` being `handoff.commit_sha`. Each
+duplicated field is re-parsed with its twin's grammar and required to match, so
+a record whose handoff identifies one commit while its top-level field, its
+baseline reference and the supplied measurement all name another is refused
+rather than stored as an attempt about a baseline the producer never diagnosed.
+
 **The measurement is the one that diagnosis judged.** Binding on the probe
 alone would admit any well-formed batch of that probe — one taken at another
 commit or another instant, supplied under a diagnosis that judged a different
