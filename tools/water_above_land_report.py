@@ -1,15 +1,38 @@
 #!/usr/bin/env python3
 """
-Detect water tiles whose surface is visibly above adjacent dry land.
-This is the "water floating above grass" issue.
+Report water tiles whose surface is visibly above adjacent dry land — the
+"water floating above grass" appearance.
 
 For each dry tile T at position (x,y) with terrain z=T:
   For each neighbor (x',y') that's a water tile with surface S:
     If S > T + 1 → water visibly floats above this dry tile
 
-Also detects:
+Also reported:
   - Isolated water columns (water tile with all dry neighbors at much lower terrain)
   - Lake/ocean tiles adjacent to dry tiles at terrain below water surface
+
+This is an exploratory DIAGNOSTIC, not a gate: it reports what it measures and
+never turns an anomaly count into a failure, so every analysis that completes
+exits 0 no matter how many anomalies it just printed.  (A missing file, invalid
+JSON, or other runtime error still fails the way it always has.)  The maintained
+pass/fail worldgen gate over these anomaly classes is `tools/world_audit.py`,
+enforced per seed by `tools/world_check.py`.  Its checks OVERLAP this report
+rather than covering it exhaustively: this script counts every
+(water tile, direction) pair, includes ocean tiles, and flags one-step dry
+banks below a lake surface, all of which the audit's own checks exclude or
+classify differently.
+
+Overlapping `world_audit.py` categories:
+  - ISSUE 1 (water floating above adjacent dry land): `WATER_ABOVE_LAND` and
+    `WATER_CLIFF`.  Both require a ≥2 step, exclude ocean, and report once per
+    water tile; `WATER_ABOVE_LAND` further requires the dry neighbor to be
+    above sea level.
+  - ISSUE 2 (lake tiles with a dry bank below the lake surface): `LAKE_HOLE`
+    and `SUBMERGED_BUMP` cover narrower forms of the same shape.
+
+`DRY_BELOW_SEA` and the `FLOATING_FLUID` family are NOT equivalents of either
+breakdown: those key on ocean connectivity, or on fluid depth relative to the
+same tile's own terrain, rather than on a neighbor comparison.
 """
 
 import json

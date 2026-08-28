@@ -1,13 +1,37 @@
 #!/usr/bin/env python3
 """
-Comprehensive test for visible water anomalies in the rendered world.
+Broad report on visible water anomalies in the rendered world.
 
-Detects:
+Reported:
   1. Water floating 2+ above adjacent dry land (severe)
   2. Water 1 above dry land where dry tile is a non-shore (mid-water dry island)
   3. Water-water cliffs (adjacent water tiles with surface diff > 1)
   4. Lake/river tiles with dry bank BELOW their surface (should overflow)
   5. Isolated water tiles (single water tile surrounded by dry)
+
+This is an exploratory DIAGNOSTIC, not a gate: it reports what it measures and
+never turns an anomaly count into a failure, so every analysis that completes
+exits 0 no matter how many anomalies it just printed.  (A missing file, invalid
+JSON, or other runtime error still fails the way it always has.)  The maintained
+pass/fail worldgen gate over these anomaly classes is `tools/world_audit.py`,
+enforced per seed by `tools/world_check.py`.  Its checks OVERLAP this report
+rather than covering it exhaustively: this script counts every
+(water tile, direction) pair and every adjacent water pair, includes ocean
+tiles, and flags one-step dry banks below a water surface, all of which the
+audit's own checks exclude or classify differently.
+
+Overlapping `world_audit.py` categories:
+  - ISSUE 1 (water surface > dry neighbor terrain + 1): `WATER_ABOVE_LAND` and
+    `WATER_CLIFF`.
+  - ISSUE 2 (water-water cliffs): `WATER_WATER_CLIFF` and `MID_RIVER_CLIFF`.
+  - ISSUE 3 (dry bank below a lake/river surface): `LAKE_HOLE` and
+    `SUBMERGED_BUMP` cover narrower forms of the same shape.
+  - ISSUE 4 (isolated river/lake tiles): `ISOLATED_FLUID` and
+    `FLAT_ISOLATED_WATER`.
+
+`FLOATING_WATER` and `MULTI_ISLAND` are NOT coextensive with anything printed
+here: the first compares a water tile's own terrain to adjacent dry terrain,
+and the second detects dry clusters surrounded by water.
 """
 
 import json
