@@ -28,6 +28,9 @@ from engine_env_capability_audit import (  # type: ignore
     audit_input_boundary, INPUT_CAPABILITY_MODULE, INPUT_VIEW_MODULE,
     CAPABILITIES, PERMANENT_IMPORTERS, PERMANENT_DEFINER, TEMPORARY_CEILING,
     parse_permanent_boundary, audit_permanent_boundary,
+    audit_field_total, extract_marked_spans, FIELD_TOTAL_OPEN,
+    FIELD_TOTAL_CLOSE, NO_FIELD_TOTAL_OPEN, NO_FIELD_TOTAL_CLOSE,
+    ONE_ROW_PHRASE,
     audit_save_load_projection, parse_projection_bindings,
     SAVE_LOAD_CAPABILITY_MODULE, SAVE_LOAD_CAPABILITY_FILE,
     SAVE_LOAD_FIELD_MAP, SAVE_LOAD_PROJECTION,
@@ -1180,6 +1183,292 @@ def test_audit_against_the_real_repo():
            f"got {len(live_fields)}")
 
 
+# ----- SS1's audited field total and field span (issue #1669) ----------
+#
+# Every rule the new prose check adds is mutation-tested here in BOTH
+# directions: each rejects a crafted violating document, and the REAL
+# inventory is accepted. Issue #1669 requirement 5 exists because
+# hand-rolled prose validators have shipped here that rejected nothing
+# (#704, #1128, #1309), so "the real file passes" on its own is not
+# evidence that a rule is enforced.
+
+# Three fields whose FIRST and LAST are what SS1's span claim names.
+_FT_LIVE = ["fieldOne", "fieldTwo", "fieldThree"]
+
+
+def _field_total_doc(total_body: str | None = None,
+                     no_total_body: str | None = None,
+                     *, total_blocks: int = 1,
+                     no_total_blocks: int = 1) -> str:
+    """A minimal document carrying both marked blocks."""
+    if total_body is None:
+        total_body = ("\n\n`Fake.hs` declares it with exactly **3** fields, "
+                      "`fieldOne` through `fieldThree`, and every one of them "
+                      f"has {ONE_ROW_PHRASE} below.\n\n")
+    if no_total_body is None:
+        no_total_body = ("For each module, scan its source for every "
+                         "occurrence of one of the `EngineEnv` field names "
+                         "from §5.")
+    parts = ["# Fake inventory\n\n## 1. Scope\n\n"]
+    for _ in range(total_blocks):
+        parts.append(f"{FIELD_TOTAL_OPEN}{total_body}{FIELD_TOTAL_CLOSE}\n\n")
+    parts.append("## 6. Boundary\n\n")
+    for _ in range(no_total_blocks):
+        parts.append(
+            f"1. {NO_FIELD_TOTAL_OPEN}{no_total_body}"
+            f"{NO_FIELD_TOTAL_CLOSE}\n\n")
+    return "".join(parts)
+
+
+def test_field_total_clean_fixture_accepted():
+    violations = audit_field_total(_FT_LIVE, _field_total_doc())
+    expect(violations == [],
+           f"a document whose marked block states the live count and the "
+           f"real first/last field should have zero violations, got: "
+           f"{violations}")
+
+
+def test_field_total_stale_count_rejected_while_rows_stay_synchronized():
+    """Issue #1669 requirement 4, in the shape the issue review pinned:
+    the recurrence that ESCAPES today is a live field change whose SS5
+    row was added correctly while the SS1 prose stayed stale. A wholly
+    unamended document already fails `audit`'s missing-row check, so
+    that case proves nothing about this one."""
+    doc = _field_total_doc(
+        total_body=("\n\n`Fake.hs` declares it with exactly **3** fields, "
+                    "`fieldOne` through `fieldFour`, and every one of them "
+                    f"has {ONE_ROW_PHRASE} below.\n\n"))
+    grown = _FT_LIVE + ["fieldFour"]
+    violations = audit_field_total(grown, doc)
+    expect(any("states 3 fields" in v and "declares 4" in v
+               for v in violations),
+           f"a fourth live field whose SS1 total was not amended must be "
+           f"rejected, got: {violations}")
+
+
+def test_field_total_synchronized_rows_alone_do_not_save_a_stale_block():
+    """The same recurrence proven end-to-end against the ROW audit:
+    `audit` (rows vs live field set) passes on a document whose SS5 rows
+    were updated for a new field, and only `audit_field_total` catches
+    the stale SS1 total. Without this pairing, the new check could be
+    passing for a reason the old one already covered."""
+    grown_env = SYNTHETIC_ENGINE_ENV.replace(
+        "  } deriving (Eq)",
+        "  , fieldFour  ∷ IORef Bool\n  } deriving (Eq)")
+    field_four_row = (
+        "| `fieldFour` | boot-process | `Boot` (`src/Fake/Init.hs:8`) "
+        "| `Boot` (`src/Fake/Init.hs:8`) | `IORef Bool` "
+        "| `src/Fake/Init.hs:8` | None | — |\n")
+    rows_doc = _doc(render_rows=FIELD_TWO_ROW + FIELD_THREE_ROW
+                    + field_four_row)
+    expect(audit(grown_env, rows_doc) == [],
+           "the row audit must accept a new field whose SS5 row was added "
+           "-- that is the case whose SS1 prose then goes stale unnoticed")
+    live = extract_record_fields(grown_env, ENGINE_ENV_PATTERN)
+    expect(len(live) == 4, f"fixture should now declare 4 fields, got {live}")
+    stale = _field_total_doc(
+        total_body=("\n\n`Fake.hs` declares it with exactly **3** fields, "
+                    "`fieldOne` through `fieldThree`, and every one of them "
+                    f"has {ONE_ROW_PHRASE} below.\n\n"))
+    expect(audit_field_total(live, stale) != [],
+           "the field-total check must reject the SS1 block the row audit "
+           "just accepted the document for")
+
+
+def test_field_total_missing_block_rejected():
+    doc = _field_total_doc(total_blocks=0)
+    violations = audit_field_total(_FT_LIVE, doc)
+    expect(any("has no" in v and FIELD_TOTAL_OPEN in v for v in violations),
+           f"deleting the marked block must be a violation, not a way to "
+           f"turn the check off, got: {violations}")
+
+
+def test_field_total_duplicate_block_rejected():
+    doc = _field_total_doc(total_blocks=2)
+    violations = audit_field_total(_FT_LIVE, doc)
+    expect(any("2 " in v and FIELD_TOTAL_OPEN in v for v in violations),
+           f"two total blocks can disagree with each other, so a second "
+           f"one must be rejected, got: {violations}")
+
+
+def test_field_total_unclosed_block_rejected():
+    doc = _field_total_doc().replace(FIELD_TOTAL_CLOSE, "", 1)
+    violations = audit_field_total(_FT_LIVE, doc)
+    expect(any("never closed" in v for v in violations),
+           f"an unbalanced marker pair must be reported as malformed "
+           f"markup, got: {violations}")
+
+
+def test_field_total_reintroduced_line_anchor_rejected():
+    """Issue #1669 requirement 3: the stale `State.hs:NNN` anchors are
+    gone, and the one-number rule is what keeps them gone."""
+    doc = _field_total_doc(
+        total_body=("\n\n`Fake.hs:12` declares it with exactly **3** "
+                    "fields, `fieldOne` through `fieldThree`, and every one "
+                    f"of them has {ONE_ROW_PHRASE} below.\n\n"))
+    violations = audit_field_total(_FT_LIVE, doc)
+    expect(any("contains 2 numbers" in v for v in violations),
+           f"a hand-written source line anchor inside the block is a "
+           f"second number and must be rejected, got: {violations}")
+
+
+def test_field_total_absent_number_rejected():
+    doc = _field_total_doc(
+        total_body=("\n\n`Fake.hs` declares some fields, `fieldOne` through "
+                    f"`fieldThree`, and every one of them has "
+                    f"{ONE_ROW_PHRASE} below.\n\n"))
+    violations = audit_field_total(_FT_LIVE, doc)
+    expect(any("states no field total" in v for v in violations),
+           f"a block that states no total at all is not a passing block, "
+           f"got: {violations}")
+
+
+def test_field_total_wrong_span_field_rejected():
+    doc = _field_total_doc(
+        total_body=("\n\n`Fake.hs` declares it with exactly **3** fields, "
+                    "`fieldOne` through `fieldTwo`, and every one of them "
+                    f"has {ONE_ROW_PHRASE} below.\n\n"))
+    violations = audit_field_total(_FT_LIVE, doc)
+    expect(any("first and last field" in v for v in violations),
+           f"a span claim naming a field that is not the record's last "
+           f"must be rejected, got: {violations}")
+
+
+def test_field_total_reversed_span_rejected():
+    doc = _field_total_doc(
+        total_body=("\n\n`Fake.hs` declares it with exactly **3** fields, "
+                    "`fieldThree` through `fieldOne`, and every one of them "
+                    f"has {ONE_ROW_PHRASE} below.\n\n"))
+    violations = audit_field_total(_FT_LIVE, doc)
+    expect(any("first and last field" in v for v in violations),
+           f"the span claim is ordered -- first THROUGH last -- so a "
+           f"reversed pair must be rejected, got: {violations}")
+
+
+def test_field_total_missing_one_row_contract_rejected():
+    """Requirement 2: the one-row-per-field contract is the useful half
+    of the sentence and must survive independently of the number."""
+    doc = _field_total_doc(
+        total_body=("\n\n`Fake.hs` declares it with exactly **3** fields, "
+                    "`fieldOne` through `fieldThree`.\n\n"))
+    violations = audit_field_total(_FT_LIVE, doc)
+    expect(any("one-row-per-field contract" in v for v in violations),
+           f"dropping the one-row-per-field contract must be rejected, "
+           f"got: {violations}")
+
+
+def test_field_total_section_references_are_not_counts():
+    """The section sign is navigation, not a number: a block citing
+    §5 and §7.3 alongside the one real total is still a
+    one-number block."""
+    doc = _field_total_doc(
+        total_body=("\n\n`Fake.hs` (see §7.3) declares it with exactly "
+                    "**3** fields, `fieldOne` through `fieldThree`, and every "
+                    f"one of them has {ONE_ROW_PHRASE} below.\n\n"))
+    violations = audit_field_total(_FT_LIVE, doc)
+    expect(violations == [],
+           f"section references must not be read as a second field total, "
+           f"got: {violations}")
+
+
+def test_no_total_span_reintroduced_total_rejected():
+    """Requirement 1: SS1 and the SS6.2 procedure sentence must not be
+    able to disagree. They cannot, because only SS1 may state a total --
+    and this is the rule that keeps the second copy from coming back."""
+    doc = _field_total_doc(
+        no_total_body=("For each module, scan its source for every "
+                       "occurrence of one of the 83 `EngineEnv` field "
+                       "names from §5."))
+    violations = audit_field_total(_FT_LIVE, doc)
+    expect(any("must state no field total" in v for v in violations),
+           f"a field count reintroduced into SS6.2's procedure sentence "
+           f"must be rejected, got: {violations}")
+
+
+def test_no_total_span_agreeing_total_still_rejected():
+    """Even a CORRECT second copy is rejected: two hand-maintained
+    numbers is the defect, not one wrong one."""
+    doc = _field_total_doc(
+        no_total_body=("For each module, scan its source for every "
+                       "occurrence of one of the 3 `EngineEnv` field "
+                       "names from §5."))
+    violations = audit_field_total(_FT_LIVE, doc)
+    expect(any("must state no field total" in v for v in violations),
+           f"a second copy of the total is rejected even when it agrees "
+           f"today, got: {violations}")
+
+
+def test_no_total_span_missing_rejected():
+    doc = _field_total_doc(no_total_blocks=0)
+    violations = audit_field_total(_FT_LIVE, doc)
+    expect(any("has no" in v and NO_FIELD_TOTAL_OPEN in v
+               for v in violations),
+           f"deleting the no-total marker must be a violation too, got: "
+           f"{violations}")
+
+
+def test_no_total_span_duplicate_rejected():
+    doc = _field_total_doc(no_total_blocks=2)
+    violations = audit_field_total(_FT_LIVE, doc)
+    expect(any("2 " in v and NO_FIELD_TOTAL_OPEN in v for v in violations),
+           f"exactly one no-total block is expected, got: {violations}")
+
+
+def test_marker_extractor_does_not_confuse_the_two_pairs():
+    """`<!-- engineenv-no-field-total -->` must not be found by a scan
+    for `<!-- engineenv-field-total -->`, or the no-total sentence would
+    be audited as if it were the total block."""
+    doc = _field_total_doc()
+    bodies, violations = extract_marked_spans(
+        doc, FIELD_TOTAL_OPEN, FIELD_TOTAL_CLOSE)
+    expect(violations == [] and len(bodies) == 1,
+           f"exactly one total block should be extracted, got "
+           f"{len(bodies)} and {violations}")
+    expect("scan its source" not in bodies[0],
+           "the total block must not swallow the no-total sentence")
+    no_bodies, no_violations = extract_marked_spans(
+        doc, NO_FIELD_TOTAL_OPEN, NO_FIELD_TOTAL_CLOSE)
+    expect(no_violations == [] and len(no_bodies) == 1,
+           f"exactly one no-total block should be extracted, got "
+           f"{len(no_bodies)} and {no_violations}")
+
+
+def test_field_total_against_the_real_repo():
+    real_source = (REPO_ROOT / ENGINE_ENV_FILE).read_text(encoding="utf-8")
+    real_inventory = (REPO_ROOT / "docs" /
+                      "engineenv_capability_inventory.md").read_text(
+                          encoding="utf-8")
+    live_fields = extract_record_fields(real_source, ENGINE_ENV_PATTERN)
+    violations = audit_field_total(live_fields, real_inventory)
+    expect(violations == [],
+           f"the real inventory's SS1 block must state the real live "
+           f"count and span, got: {violations}")
+    bodies, marker_violations = extract_marked_spans(
+        real_inventory, FIELD_TOTAL_OPEN, FIELD_TOTAL_CLOSE)
+    expect(marker_violations == [] and len(bodies) == 1,
+           f"the real document must carry exactly one well-formed total "
+           f"block, got {len(bodies)} and {marker_violations}")
+    stale_body = bodies[0].replace(str(len(live_fields)),
+                                   str(len(live_fields) - 1), 1)
+    expect(stale_body != bodies[0],
+           "the real block must actually contain the live count for this "
+           "mutation to mean anything")
+    stale = real_inventory.replace(bodies[0], stale_body, 1)
+    expect(audit_field_total(live_fields, stale) != [],
+           "the real inventory with its own block's total decremented by "
+           "one must be rejected -- proving the check reads THIS "
+           "document's block, not only synthetic fixtures")
+    anchored_body = bodies[0].replace(
+        "`src/Engine/Core/State.hs`", "`src/Engine/Core/State.hs:70`", 1)
+    expect(anchored_body != bodies[0],
+           "the real block must name the source file for this mutation to "
+           "mean anything")
+    anchored = real_inventory.replace(bodies[0], anchored_body, 1)
+    expect(audit_field_total(live_fields, anchored) != [],
+           "a hand-written source line anchor put back into the real "
+           "block must be rejected (issue #1669 requirement 3)")
+
+
 def test_real_repo_end_state():
     """Issue #899 (E8) requirement 7: the epic's END STATE, asserted
     against the REAL repository rather than a fixture.
@@ -1366,6 +1655,24 @@ def main() -> int:
         test_input_boundary_stale_lua_only_entry_rejected,
         test_input_boundary_stale_field_owner_rejected,
         test_real_repo_input_boundary_holds,
+        test_field_total_clean_fixture_accepted,
+        test_field_total_stale_count_rejected_while_rows_stay_synchronized,
+        test_field_total_synchronized_rows_alone_do_not_save_a_stale_block,
+        test_field_total_missing_block_rejected,
+        test_field_total_duplicate_block_rejected,
+        test_field_total_unclosed_block_rejected,
+        test_field_total_reintroduced_line_anchor_rejected,
+        test_field_total_absent_number_rejected,
+        test_field_total_wrong_span_field_rejected,
+        test_field_total_reversed_span_rejected,
+        test_field_total_missing_one_row_contract_rejected,
+        test_field_total_section_references_are_not_counts,
+        test_no_total_span_reintroduced_total_rejected,
+        test_no_total_span_agreeing_total_still_rejected,
+        test_no_total_span_missing_rejected,
+        test_no_total_span_duplicate_rejected,
+        test_marker_extractor_does_not_confuse_the_two_pairs,
+        test_field_total_against_the_real_repo,
         test_real_repo_end_state,
     ]
 

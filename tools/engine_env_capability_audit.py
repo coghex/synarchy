@@ -25,6 +25,19 @@ pattern) -- so this audit and the persistence-inventory audit can never
 independently drift onto two different notions of "the live EngineEnv
 field set."
 
+Since issue #1669 it also checks the prose SS1 uses to describe that
+same field set. SS1 states the record's field TOTAL and its first- and
+last-field SPAN; before #1669 both were hand-maintained, and both had
+drifted: the doc still claimed 83 fields, with three equally stale
+source line anchors, against a live record several fields larger, and
+every gate stayed green -- the row comparison above only ever compared
+field NAMES, never their count and never the prose. `audit_field_total`
+re-derives the count and the two span field names from the live
+declaration and rejects the marked SS1 block when either disagrees;
+SS6.2's assignment-method sentence, which used to repeat the same
+total, is marked as prose that must carry no number at all. See that
+function's own section comment for the marker contract.
+
 This is a static presence/well-formedness check, not a semantic proof:
 it cannot verify that a documented reader/writer/sync/lifecycle
 decision is actually TRUE of the code, only that a decision -- using
@@ -456,6 +469,195 @@ def audit(engine_env_source: str, inventory_text: str) -> list[str]:
             f"`{field}` ({ENGINE_ENV_FILE}) has no row in "
             f"{INVENTORY_PATH.name} SS5")
 
+    return violations
+
+
+# ===========================================================================
+# SS1's audited field total and field span (issue #1669)
+# ===========================================================================
+#
+# SS1 used to state a hand-maintained field total ("exactly 83 fields")
+# and three hand-written `src/Engine/Core/State.hs` line anchors. All
+# four had drifted from the live record while every gate stayed green:
+# `audit` above compares the live field SET with SS5's row set, so it
+# never looked at the prose total at all, and SS6.2's assignment-method
+# procedure repeated the same stale number a second time.
+#
+# The fix follows the rule this repository settled on in issue #1584:
+# a total a document displays is obtained mechanically or is not
+# displayed. Here it is displayed and mechanically checked, which needs
+# the governed prose to be delimited rather than pattern-matched out of
+# free text -- a prose validator that has to GUESS which sentence is
+# the total is the shape that burned review rounds in #704/#1128/#1309.
+# Two explicit HTML-comment markers do that instead:
+#
+#   `<!-- engineenv-field-total -->` ... `<!-- /engineenv-field-total -->`
+#       SS1's scope paragraph. Exactly one block, and inside it:
+#       exactly one number, equal to the live field count; the live
+#       record's FIRST and LAST field named in backticks and no other
+#       live field name; and the one-row-per-field contract sentence.
+#       "Exactly one number" is what keeps a hand-written
+#       `State.hs:NNN` anchor out, so the anchors #1669 removed cannot
+#       come back either.
+#
+#   `<!-- engineenv-no-field-total -->` ... `<!-- /engineenv-no-field-total -->`
+#       SS6.2's assignment-method sentence, which used to carry the
+#       second copy of the total. Exactly one block, and it must
+#       contain NO number at all -- so the two sites cannot disagree,
+#       because only one of them is allowed to state a total.
+#
+# Both blocks are REQUIRED: deleting a marker is itself a violation,
+# so the check cannot be disabled by removing what it governs.
+#
+# Section references (`SS5`, `SS7.3` -- written with the section sign in
+# the document) are excluded from both number scans. They are
+# navigation, not counts, and SS1's contract sentence necessarily names
+# SS5.
+FIELD_TOTAL_OPEN = "<!-- engineenv-field-total -->"
+FIELD_TOTAL_CLOSE = "<!-- /engineenv-field-total -->"
+NO_FIELD_TOTAL_OPEN = "<!-- engineenv-no-field-total -->"
+NO_FIELD_TOTAL_CLOSE = "<!-- /engineenv-no-field-total -->"
+
+# Requirement 2 of issue #1669: the one-row-per-field contract is the
+# useful half of SS1's sentence and is independent of the number, so it
+# survives explicitly rather than by accident.
+ONE_ROW_PHRASE = "exactly one row in §5"
+
+_SECTION_REF_RE = re.compile(r"§\d+(?:\.\d+)*")
+_INTEGER_RE = re.compile(r"\d+")
+
+
+def extract_marked_spans(text: str, open_marker: str, close_marker: str
+                         ) -> tuple[list[str], list[str]]:
+    """Return `(span bodies, violations)` for one marker pair.
+
+    Deliberately literal string scanning, not a regex: the markers are
+    fixed literals, and an unbalanced or nested pair must be reported
+    as the malformed markup it is rather than silently matching some
+    other pair's text.
+
+    The inventory document is the only text this is applied to, so the
+    diagnostics name it directly.
+    """
+    bodies: list[str] = []
+    violations: list[str] = []
+    cursor = 0
+    while True:
+        start = text.find(open_marker, cursor)
+        if start < 0:
+            break
+        body_start = start + len(open_marker)
+        end = text.find(close_marker, body_start)
+        if end < 0:
+            violations.append(
+                f"`{open_marker}` at offset {start} in "
+                f"docs/{INVENTORY_PATH.name} is never closed by "
+                f"`{close_marker}`")
+            break
+        nested = text.find(open_marker, body_start, end)
+        if nested >= 0:
+            violations.append(
+                f"`{open_marker}` blocks are nested in "
+                f"docs/{INVENTORY_PATH.name} (a second one opens at "
+                f"offset {nested} before the first closes) -- the "
+                f"governed prose must be one flat block")
+        bodies.append(text[body_start:end])
+        cursor = end + len(close_marker)
+    return bodies, violations
+
+
+def _countable_numbers(body: str) -> list[str]:
+    """Every decimal integer in `body` that is not a section reference."""
+    return _INTEGER_RE.findall(_SECTION_REF_RE.sub("", body))
+
+
+def audit_field_total(live_fields: list[str], inventory_text: str
+                      ) -> list[str]:
+    """SS1's stated field total and field span must be the live ones,
+    and SS6.2's procedure sentence must state no total at all.
+
+    `live_fields` is the ORDERED field list `extract_record_fields`
+    returns, so `[0]`/`[-1]` are the record's real first and last
+    field -- which is what SS1's "`engineConfig` through
+    `popupQueueRef`" span claim asserts.
+    """
+    violations: list[str] = []
+    doc = f"docs/{INVENTORY_PATH.name}"
+
+    bodies, marker_violations = extract_marked_spans(
+        inventory_text, FIELD_TOTAL_OPEN, FIELD_TOTAL_CLOSE)
+    violations.extend(marker_violations)
+    if not bodies:
+        violations.append(
+            f"{doc} SS1 has no `{FIELD_TOTAL_OPEN}` block -- the audited "
+            f"field-total paragraph is missing, so nothing states the "
+            f"live count and nothing can be checked against it")
+    elif len(bodies) > 1:
+        violations.append(
+            f"{doc} has {len(bodies)} `{FIELD_TOTAL_OPEN}` blocks -- "
+            f"exactly one paragraph may state the field total, or the "
+            f"copies can disagree with each other again")
+    else:
+        body = bodies[0]
+        numbers = _countable_numbers(body)
+        expected = str(len(live_fields))
+        if not numbers:
+            violations.append(
+                f"{doc} SS1's `{FIELD_TOTAL_OPEN}` block states no field "
+                f"total -- it must state exactly one number, the live "
+                f"count ({expected})")
+        elif len(numbers) > 1:
+            violations.append(
+                f"{doc} SS1's `{FIELD_TOTAL_OPEN}` block contains "
+                f"{len(numbers)} numbers ({', '.join(numbers)}) -- it "
+                f"may contain exactly one, the field total. A source "
+                f"line number belongs nowhere in it: hand-written "
+                f"anchors are what drifted before issue #1669")
+        elif numbers[0] != expected:
+            violations.append(
+                f"{doc} SS1's `{FIELD_TOTAL_OPEN}` block states "
+                f"{numbers[0]} fields, but {ENGINE_ENV_FILE} declares "
+                f"{expected} -- update the block (the total is stated "
+                f"once, there, and nowhere else in the document)")
+
+        live_set = set(live_fields)
+        named = [t for t in BACKTICK_RE.findall(body) if t in live_set]
+        span = [live_fields[0], live_fields[-1]]
+        if named != span:
+            violations.append(
+                f"{doc} SS1's `{FIELD_TOTAL_OPEN}` block names live "
+                f"EngineEnv field(s) {named} -- it must name exactly the "
+                f"record's first and last field, in order "
+                f"(`{span[0]}` through `{span[1]}`), and no others")
+
+        if ONE_ROW_PHRASE not in body:
+            violations.append(
+                f"{doc} SS1's `{FIELD_TOTAL_OPEN}` block no longer states "
+                f"the one-row-per-field contract ({ONE_ROW_PHRASE!r}) -- "
+                f"that contract is the useful half of the sentence and is "
+                f"independent of the number")
+
+    no_total_bodies, no_total_marker_violations = extract_marked_spans(
+        inventory_text, NO_FIELD_TOTAL_OPEN, NO_FIELD_TOTAL_CLOSE)
+    violations.extend(no_total_marker_violations)
+    if not no_total_bodies:
+        violations.append(
+            f"{doc} SS6.2 has no `{NO_FIELD_TOTAL_OPEN}` block -- the "
+            f"assignment-method sentence that used to repeat SS1's total "
+            f"must stay marked, or it can quietly regain one")
+    elif len(no_total_bodies) > 1:
+        violations.append(
+            f"{doc} has {len(no_total_bodies)} "
+            f"`{NO_FIELD_TOTAL_OPEN}` blocks -- exactly one is expected")
+    else:
+        numbers = _countable_numbers(no_total_bodies[0])
+        if numbers:
+            violations.append(
+                f"{doc} SS6.2's `{NO_FIELD_TOTAL_OPEN}` block contains "
+                f"number(s) {', '.join(numbers)} -- that sentence must "
+                f"state no field total at all. SS1's marked block is the "
+                f"document's only field count; a second copy here is the "
+                f"drift issue #1669 removed")
     return violations
 
 
@@ -1368,6 +1570,15 @@ def main() -> int:
               f"capability/thread-role/lifecycle vocabulary).")
         return 1
 
+    live_fields = extract_record_fields(engine_env_source, ENGINE_ENV_PATTERN)
+    total_violations = audit_field_total(live_fields, inventory_text)
+    if total_violations:
+        print(f"{len(total_violations)} SS1 field-total/field-span "
+              f"violation(s):")
+        for v in total_violations:
+            print(f"  - {v}")
+        return 1
+
     production_sources = scan_production_sources(REPO_ROOT)
     unrestricted = classify_production_sources(production_sources)
     doc_temporary = parse_temporary_boundary(inventory_text)
@@ -1411,10 +1622,11 @@ def main() -> int:
             print(f"  - {v}")
         return 1
 
-    total_fields = len(extract_record_fields(engine_env_source, ENGINE_ENV_PATTERN))
+    total_fields = len(live_fields)
     temporary_total = sum(len(m) for m in TEMPORARY_CEILING.values())
     print(f"engine-env capability-inventory audit: {total_fields} EngineEnv "
-          f"field(s) all classified, {len(unrestricted) + 1} full-access "
+          f"field(s) all classified and agreeing with SS1's marked field "
+          f"total and `{live_fields[0]}`-through-`{live_fields[-1]}` span, {len(unrestricted) + 1} full-access "
           f"modules (incl. the {PERMANENT_DEFINER} definer) within the SS6 "
           f"ratchet, all permanent (SS6.1 documented set == the checked-in "
           f"constants; {temporary_total} temporary), "
