@@ -723,6 +723,26 @@ jobs:
           python3 tools/concept_id_inventory_audit.py --self-test
           python3 tools/concept_id_inventory_audit.py
 
+      # Cheap, no-engine guard (issue #1704): fails if an F4 Tier 1
+      # (Layer A) input area's mapping is stranded -- a producer renamed
+      # or moved out from under tools/action_outcome_coverage.py -- or
+      # if its instrumentation was deleted outright. The plain coverage
+      # report cannot tell those two apart and exits 0 for both, which
+      # is exactly how #787's input-thread split left five fully
+      # instrumented Layer A areas reporting as gaps, unnoticed, with
+      # nothing failing: the pre-#1704 self-test proved its patterns
+      # against constructed source strings and never touched the real
+      # tree. Unconditional rather than path-selective: the stranding is
+      # caused by the very rename that moves the file a path filter
+      # would key on, and the check is a handful of regex searches
+      # costing milliseconds. Tier 2/3 gaps stay deliberate fast-follows
+      # (#646) -- this gate ignores them, and the plain report keeps
+      # exit status 0.
+      - name: F4 action-outcome Tier 1 coverage mapping gate
+        run: |
+          python3 tools/action_outcome_coverage.py --self-test
+          python3 tools/action_outcome_coverage.py --verify-tier1
+
       # Cheap, no-engine guard (issue #1196): fails if a CH item's
       # `## Status` checklist marker and its `### ` heading marker
       # disagree. Two independent lanes write the findings report --
@@ -871,6 +891,20 @@ jobs:
       # needs-gpu, so without this companion that contract is only ever
       # observed by a GPU run nothing here can make; the companion boots
       # nothing and runs in well under a second.
+      # test_probe_root_cleanup is #1791's: the staging half of the
+      # isolated-root contract `tools/foraging_probe.py`,
+      # `tools/flora_growth_probe.py`, `tools/farm_ai_probe.py` and
+      # `tools/item_temp_probe.py` each carry. A failure while STAGING
+      # the run's throwaway root — the root, three symlinks, a copied
+      # `config/`, `saves/` — used to bypass the cleanup guard entirely
+      # and leave the invocation-owned tree on disk. It drives each
+      # probe's real `main()` in a subprocess under injected staging and
+      # removal faults, asserting a non-zero run, an operator-visible
+      # cause, an absent base, a checkout left untouched behind the
+      # symlinks, and no `engine.quit()` aimed at whoever else holds the
+      # port. All four probes are manual-only, so without this companion
+      # the boundary is only ever observed by long engine runs; the
+      # companion boots nothing and runs in about a second.
       # test_movement_probe is #1586's: `tools/movement_probe.py --list`
       # is a metadata query, answered from scripts/movement_arena.lua
       # before any boot() and for every --mode, with the derived view
@@ -902,6 +936,7 @@ jobs:
           python3 tools/test_probe_resource_lock.py
           python3 tools/test_deflake.py
           python3 tools/test_location_embark_probe.py
+          python3 tools/test_probe_root_cleanup.py
           python3 tools/test_movement_probe.py
 
       # The decision `.github/workflows/review-gate.yml` makes on every

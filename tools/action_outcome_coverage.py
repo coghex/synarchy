@@ -24,13 +24,30 @@ Growing coverage is a two-step: add the real `debug.recordOutcome` /
 here (or extend its function-scope patterns) so the audit stops
 flagging it as a gap.
 
+A `gap` is only honest if the checker is reading the file the producers
+actually live in. #1704: it was not. #787 split the input thread into
+`Engine.Input.Thread.{Dispatch,Keyboard,Char,Mouse,Scroll}` and left
+`Engine.Input.Thread` a 98-line lifecycle facade, and every one of the
+five Layer A input checks kept reading the facade — so five fully
+instrumented areas reported as gaps while the report still exited 0 and
+nothing failed. `--verify-tier1` is the answer to that class of drift:
+it is the CI-invoked gate over the Tier 1 areas ONLY, and it fails when
+a mapped source file is absent (a producer renamed or moved out from
+under the mapping) or when a mapped file is present but a required
+producer pattern is missing (instrumentation actually deleted). Whether
+a Tier 1 area is uninstrumented or merely unmapped, the answer under
+that flag is the same — non-zero — because the report cannot tell those
+apart and must not be trusted to.
+
 Usage:
   python3 tools/action_outcome_coverage.py
   python3 tools/action_outcome_coverage.py --self-test
+  python3 tools/action_outcome_coverage.py --verify-tier1
 Exit code is always 0 for the coverage report — this is a visibility
 report, not a blocking gate. Tier 2/3 gaps are deliberate fast-follows
 (see issue #646), not regressions; only Tier 1 (this PR's scope) is
-expected to read 100%. --self-test exits 1 on a self-test failure.
+expected to read 100%. --self-test exits 1 on a self-test failure;
+--verify-tier1 exits 1 on a stranded or uninstrumented Tier 1 area.
 """
 from __future__ import annotations
 
@@ -94,6 +111,32 @@ def _count_at_least(text: str, pattern: str, n: int) -> bool:
     return len(re.findall(pattern, text)) >= n
 
 
+def _read(relpath: str) -> str:
+    """The file's text, or "" when it does not exist. Every Layer A
+    check treats "" as a gap, and `--verify-tier1` reports the absence
+    separately and more precisely (#1704) — a moved producer is a
+    stranded MAPPING, not missing instrumentation, and the two need
+    different repairs."""
+    path = REPO_ROOT / relpath
+    return path.read_text(encoding="utf-8") if path.exists() else ""
+
+
+# #1704: the modules that really own each Layer A family's producers
+# today. #787 moved every one of them out of 'Engine.Input.Thread',
+# which is now a 98-line thread-lifecycle facade (see its own header
+# comment) that emits no outcome at all; #1676 then split the deferred
+# gesture's press-capture/release-resolution pair out of Mouse.hs into
+# 'Engine.Input.Thread.Mouse.Deferred'. Named as constants so the
+# mapping is one declaration per family, reachable by --verify-tier1
+# rather than buried inside a lambda.
+INPUT_MOUSE = "src/Engine/Input/Thread/Mouse.hs"
+INPUT_MOUSE_DEFERRED = "src/Engine/Input/Thread/Mouse/Deferred.hs"
+INPUT_STATE = "src/Engine/Input/State.hs"
+INPUT_KEYBOARD = "src/Engine/Input/Thread/Keyboard.hs"
+INPUT_CHAR = "src/Engine/Input/Thread/Char.hs"
+INPUT_SCROLL = "src/Engine/Input/Thread/Scroll.hs"
+
+
 # Anchored to an ACTUAL oracle call, not just a bare literal appearing
 # somewhere in the file — a handler/route STRING with no producer call
 # anywhere near it (the call renamed, replaced, or deleted while a
@@ -105,7 +148,7 @@ def _count_at_least(text: str, pattern: str, n: int) -> bool:
 # handler literals, never the `recordRouteOutcome`/`recordClick` call
 # itself. Every entry below opens with the real call name and a bounded
 # lazy window before the literal it's checking, mirroring _ROC's fix.
-_ROC_ROUTE = r"recordRouteOutcome[\s\S]{0,80}?"  # Engine.Input.Thread's helper
+_ROC_ROUTE = r"recordRouteOutcome[\s\S]{0,80}?"  # Thread.Mouse's helper
 _ROC_CLICK = r"recordClick\([\s\S]{0,60}?"       # init_mouse.lua's helper
 
 # #730: the non-click Layer A families' producer calls, anchored to the
@@ -114,10 +157,10 @@ _ROC_CLICK = r"recordClick\([\s\S]{0,60}?"       # init_mouse.lua's helper
 # call name with no other field in between, so an exact sequence is both
 # more precise than a window and immune to a window wide enough to bridge
 # past a renamed call into an unrelated sibling's leftover literal.
-_KEY_OUTCOME    = r"recordKeyOutcome\s+env\s+"          # Engine.Input.Thread
-_CHAR_ACC_TRUE  = r'accumulateCharOutcome\s+inpSt\s+True\s+'   # ditto
+_KEY_OUTCOME    = r"recordKeyOutcome\s+env\s+"          # Thread.Keyboard
+_CHAR_ACC_TRUE  = r'accumulateCharOutcome\s+inpSt\s+True\s+'   # Thread.Char
 _CHAR_ACC_FALSE = r'accumulateCharOutcome\s+inpSt\s+False\s+' # ditto
-_SCROLL_OUTCOME = r"recordScrollOutcome\s+"             # ditto
+_SCROLL_OUTCOME = r"recordScrollOutcome\s+"             # Thread.Scroll
 _DRAG_OUTCOME   = r"recordDragOutcome\("                # unit_drag_select.lua
 
 LAYER_A_KEY_DOMAINS = [
@@ -134,6 +177,12 @@ LAYER_A_SCROLL_DOMAINS = [
     _SCROLL_OUTCOME + r'"accepted"\s*"ui_scroll"',
     _SCROLL_OUTCOME + r'"accepted"\s*"game_scroll"',
     _SCROLL_OUTCOME + r'"noop"\s*"degenerate_viewport"',
+    # #1704: the fifth domain Scroll.hs really emits — a wheel event
+    # consumed by a modal page's empty space (#742's modal boundary
+    # swallows it rather than letting it fall through to the z-slice or
+    # the camera). It was never in this list, so deleting its record
+    # would not have registered as a Layer A gap.
+    _SCROLL_OUTCOME + r'"noop"\s*"ui_modal_block"',
 ]
 LAYER_A_DRAG_OUTCOMES = [
     _DRAG_OUTCOME + r'#final > 0 and "accepted" or "noop"',
@@ -151,42 +200,89 @@ LAYER_A_DRAG_OUTCOMES = [
     _DRAG_OUTCOME + r'"noop"[\s\S]{0,80}?"no drag gesture is defined for this input"',
 ]
 
+#   Haskell producers' raw pushActionOutcome call, bounded to its OWN
+#   record literal (the run up to the closing `}`) rather than a fixed
+#   character window: plant.designate's accepted/rejected calls sit
+#   close together, and a wide-enough-for-real-source window bridged
+#   from one call's `pushActionOutcome` token straight through a
+#   RENAMED sibling call's leftover `aoOutcome = "..."` field, reading
+#   DONE even with that sibling's own call renamed away (review round
+#   10 — same window-bridging bug class as the portal-accepted check
+#   below, here in the generic Haskell-producer anchor instead of a
+#   single hand-written one).
+_PAO = r"pushActionOutcome(?:(?!\})[\s\S])*?"
+
+
+# #730 round 3's interrupted release, in 'Engine.Input.State': a press
+# whose release never arrives (focus loss / minimize) still resolves to
+# exactly one record instead of being silently dropped. Both the "noop"
+# outcome and its reason must sit inside the SAME record literal —
+# _PAO's brace bound, not a character window, so the pattern is immune
+# to however much commentary the record grows between the two fields
+# (#1676 added eight lines of it, which is what a fixed window would
+# have broken on).
+_INTERRUPTED_RELEASE = (
+    _PAO + r'aoOutcome\s*=\s*"noop"' + r"(?:(?!\})[\s\S])*?"
+    + r'"release swallowed \(focus loss / minimize\)"')
+
 # #730 review rounds 2 & 3: a ClickUI-routed press (real UI widget
 # click OR an H1 drag that starts on one) OR a middle-button press
 # (camera-drag) is deferred to its matching release — 'Engine.Input.
-# Thread' stashes (kind, callback, press-x, press-y) via writeIORef
-# pendingUIClickRef at EACH of the four producing sites (left-click
-# hit, right-click hit, right-click-consumed-by-a-left-only-control,
-# middle-button camera_drag), then resolves exactly one outcome at
-# release by comparing movement against uiDragThresholdPx — OR, if
-# focus loss/minimize swallows the release entirely (round 3),
+# Thread.Mouse' stashes the press's kind/callback/position at each
+# producing site, then exactly one outcome is resolved at release by
+# comparing movement against uiDragThresholdPx — OR, if focus loss/
+# minimize swallows the release entirely (round 3),
 # 'Engine.Input.State.releaseHeldButtons' resolves it as an
 # interrupted noop instead of losing it silently. Anchored to the
 # actual call/comparison, not bare literals, same convention as
 # _ROC_ROUTE.
-_PENDING_UI_CLICK = r'writeIORef pendingUIClickRef[\s\S]{0,60}?'
+#
+# #1676 replaced the four bare `writeIORef pendingUIClickRef` sites
+# with a `deferPress kind callback` helper (the press's framebuffer
+# position now has to be captured from PRESS-time geometry, which the
+# helper closes over) and moved the release-side resolution into
+# 'Engine.Input.Thread.Mouse.Deferred'. #743 had already turned the
+# fourth site — a right-click consumed by a left-click-only control —
+# into an IMMEDIATE `recordRouteOutcome "noop" (Just leftClickCallback)`,
+# which is why the deferred sites now number three, not four, and why
+# that route is checked in the swallowed-routes area below instead
+# (#1704: this check still demanded three deferred "input.click" writes
+# when only two have existed since #743).
+_DEFER_PRESS = r"deferPress\s+"
 
 
-def _ui_click_deferred_check(thread_text: str, state_text: str) -> bool:
-    if not thread_text or not state_text:
+def _ui_click_deferred_check(mouse_text: str, deferred_text: str,
+                              state_text: str) -> bool:
+    if not mouse_text or not deferred_text or not state_text:
         return False
     return (
-        # THREE sites push a leading "input.click" (the left-click hit,
-        # the right-click-consumed-by-left-only-control fallback, AND
-        # the middle-button camera_drag site below) — a count, not a
-        # bare _all_present, so losing any one of them still reads as
+        # TWO sites defer a leading "input.click" — the left-click UI
+        # hit and the middle-button camera_drag site below — a count,
+        # not a bare _all_present, so losing either one still reads as
         # a gap (mirrors the game-chain deadclick count above).
-        _count_at_least(thread_text, _PENDING_UI_CLICK + r'"input\.click"', 3)
-        and bool(re.search(_PENDING_UI_CLICK + r'"input\.rightClick"', thread_text))
+        _count_at_least(mouse_text, _DEFER_PRESS + r'"input\.click"', 2)
+        and bool(re.search(_DEFER_PRESS + r'"input\.rightClick"', mouse_text))
         and bool(re.search(
-            _PENDING_UI_CLICK + r'"input\.click",\s*"camera_drag"', thread_text))
+            _DEFER_PRESS + r'"input\.click"\s+"camera_drag"', mouse_text))
+        # The release-side classification, in the module that owns it
+        # since #1676. Bounded by a negative lookahead on the guard bar
+        # rather than a character window: `(?:(?!\|)[\s\S])*?` cannot
+        # cross out of the `| movedPx ≥ uiDragThresholdPx =` guard's own
+        # alternative, so a window wide enough for real source can never
+        # bridge into the NEXT guard's leftover literal (the exact
+        # window-bridging bug class review rounds 10-11 found elsewhere
+        # in this file).
         and bool(re.search(
-            r'movedPx\s*≥\s*uiDragThresholdPx[\s\S]{0,80}?"input\.drag"'
-            r'[\s\S]{0,80}?else\s*\(clickKind', thread_text))
-        and bool(re.search(
-            r'pushActionOutcome[\s\S]{0,220}?aoOutcome\s*=\s*"noop"'
-            r'[\s\S]{0,260}?"release swallowed \(focus loss / minimize\)"',
-            state_text)))
+            r'movedPx\s*≥\s*uiDragThresholdPx(?:(?!\|)[\s\S])*?"input\.drag"',
+            deferred_text))
+        # …and its below-threshold companion, which must keep replaying
+        # the PRESS's own kind rather than inventing one.
+        and bool(re.search(r'otherwise\s*=\s*\(pucKind\b', deferred_text))
+        # A classification that reaches no recorder is not coverage:
+        # require the resolved kind to actually be pushed, within ONE
+        # record literal (_PAO's brace-bounded anchor above).
+        and bool(re.search(_PAO + r'aoKind\s*=\s*kind\b', deferred_text))
+        and bool(re.search(_INTERRUPTED_RELEASE, state_text)))
 
 # Shared source of truth between the real checks below and the self-test:
 # every distinct route/reason literal a multi-route area is expected to
@@ -197,15 +293,39 @@ LAYER_A_SWALLOWED_ROUTES = [
     _ROC_ROUTE + r'"ui_surface_block"',
     _ROC_ROUTE + r'"tooltip_lock_dismiss"',
     _ROC_ROUTE + r'"unmapped_button"',  # GLFW buttons 4-8, mapped to Lua button 0
-    # NB: "camera_drag" (middle-button) and the no-right-click-handler
-    # route (review round 8) used to live here as immediate
-    # recordRouteOutcome calls — #730 review rounds 2-3 moved BOTH to
-    # the SAME deferred-to-release pendingUIClickRef mechanism as the
-    # other ClickUI routes (a right-click OR middle-button press can
-    # start an H1 drag too), so their coverage now lives in
-    # _ui_click_deferred_check's "click_site2"/"camera_drag_site" parts
-    # instead.
+    # #1704: the no-right-click-handler consumption — a right-click
+    # eaten by an ordinary left-click-only control. It briefly lived on
+    # the deferred path (#730 round 8), but #743 made it an IMMEDIATE
+    # noop again, recorded under the consuming control's OWN left-click
+    # callback name for diagnostic identity. It is therefore a
+    # swallowed route once more, and was in NEITHER area's inventory in
+    # between — deleting it registered nowhere. Its handler is a
+    # BINDING, not a literal, so it is matched by name.
+    _ROC_ROUTE + r'\bleftClickCallback\b',
+    # NB: "camera_drag" (middle-button) stays out of this list — #730
+    # review round 3 moved it onto the SAME deferred-to-release
+    # mechanism as the other ClickUI routes (a middle-button press can
+    # start an H1 drag too), so its coverage lives in
+    # _ui_click_deferred_check's "camera_drag_site" part instead.
 ]
+
+# #1704: "ui_pointer_block" is emitted at TWO independently
+# load-bearing sites — #743's left-click RouteBlocked branch and its
+# right-click twin — and either can be deleted alone. A bare presence
+# check over the shared literal is satisfied by whichever one survives,
+# so this area counts them, exactly as the deferred "input.click" sites
+# and the game chain's deadclick sites are counted. Bump this when a
+# genuinely new pointer-block branch is added.
+LAYER_A_POINTER_BLOCK_ROUTE = _ROC_ROUTE + r'"ui_pointer_block"'
+LAYER_A_POINTER_BLOCK_SITES = 2
+
+
+def _swallowed_routes_check(text: str) -> bool:
+    return (bool(text) and _all_present(text, LAYER_A_SWALLOWED_ROUTES)
+            and _count_at_least(text, LAYER_A_POINTER_BLOCK_ROUTE,
+                                LAYER_A_POINTER_BLOCK_SITES))
+
+
 LAYER_A_GAME_CHAIN_HANDLERS = [
     _ROC_CLICK + r'"debug_overlay"', _ROC_CLICK + r'"debug_anim_panel"',
     _ROC_CLICK + r'"build_tool"', _ROC_CLICK + r'"mine_tool"',
@@ -267,18 +387,6 @@ def _game_chain_check(text: str) -> bool:
         and _all_present(text, [
             _ROC_CLICK + r'"deadclick"[\s\S]{0,40}?"no tile under cursor"'])
 
-
-#   Haskell producers' raw pushActionOutcome call, bounded to its OWN
-#   record literal (the run up to the closing `}`) rather than a fixed
-#   character window: plant.designate's accepted/rejected calls sit
-#   close together, and a wide-enough-for-real-source window bridged
-#   from one call's `pushActionOutcome` token straight through a
-#   RENAMED sibling call's leftover `aoOutcome = "..."` field, reading
-#   DONE even with that sibling's own call renamed away (review round
-#   10 — same window-bridging bug class as the portal-accepted check
-#   below, here in the generic Haskell-producer anchor instead of a
-#   single hand-written one).
-_PAO = r"pushActionOutcome(?:(?!\})[\s\S])*?"
 
 
 #   The portal-accepted hook has no distinguishing reason text (success
@@ -382,67 +490,77 @@ def _build_tool_check(text: str) -> bool:
                 handle_scope, _ROC + r'reason\s*=[^\n]*"page binding changed"', 3))
 
 
-# Each entry: (tier, verb, check) where check() -> bool. Built below so
-# each verb's own check can pick file-wide vs function-scoped as needed.
-def _build_verbs() -> list[tuple[str, str, callable]]:
+# Each entry: (tier, verb, paths, check) where check() -> bool and
+# `paths` names every repo-relative source file that check() reads.
+# Built below so each verb's own check can pick file-wide vs
+# function-scoped as needed.
+#
+# #1704: `paths` is not decoration. A check reads its files through
+# _read/_all_present_check, both of which turn an absent file into a
+# plain False — indistinguishable, in the report, from instrumentation
+# that was really deleted. Declaring the mapping alongside the check
+# lets --verify-tier1 tell the two apart and fail on either.
+def _build_verbs() -> list[tuple[str, str, list[str], callable]]:
     return [
         # --- Layer A: input routing, "complete" per the issue's scope note ---
         ("A", "input click -> UI/camera-drag consumption (deferred to release, #730 rounds 2-3)",
          # #730 review round 2 moved this from an immediate Dispatch.hs
-         # record to a deferred Engine.Input.Thread one; round 3 added
-         # the middle-button camera_drag site and the focus-loss/
-         # minimize interrupted-release resolution in Engine.Input.State
-         # (see _ui_click_deferred_check) — a UI-origin OR middle-button
-         # H1 drag reads as exactly one "input.drag" instead of also
+         # record to a deferred one; round 3 added the middle-button
+         # camera_drag site and the focus-loss/minimize
+         # interrupted-release resolution in Engine.Input.State (see
+         # _ui_click_deferred_check) — a UI-origin OR middle-button H1
+         # drag reads as exactly one "input.drag" instead of also
          # carrying a stale press-time "input.click", and a swallowed
-         # release no longer loses the record outright.
+         # release no longer loses the record outright. #787 moved the
+         # press sites into Thread.Mouse and #1676 moved the release
+         # resolution into Thread.Mouse.Deferred.
+         [INPUT_MOUSE, INPUT_MOUSE_DEFERRED, INPUT_STATE],
          lambda: _ui_click_deferred_check(
-             (REPO_ROOT / "src/Engine/Input/Thread.hs").read_text(encoding="utf-8")
-             if (REPO_ROOT / "src/Engine/Input/Thread.hs").exists() else "",
-             (REPO_ROOT / "src/Engine/Input/State.hs").read_text(encoding="utf-8")
-             if (REPO_ROOT / "src/Engine/Input/State.hs").exists() else "")),
+             _read(INPUT_MOUSE), _read(INPUT_MOUSE_DEFERRED),
+             _read(INPUT_STATE))),
         ("A", "input click -> swallowed/no-handler routes (no event ever queued)",
          # Every distinct ClickSwallowed/no-handler-ClickUI route this
          # module knows about — ALL must be present, not just one, or a
          # route silently loses its record (review round 2 found the
          # degenerate-viewport and middle-click-miss routes missing
          # while the others made the whole area read DONE).
-         lambda: _all_present_check(
-             "src/Engine/Input/Thread.hs", LAYER_A_SWALLOWED_ROUTES)),
+         [INPUT_MOUSE],
+         lambda: _swallowed_routes_check(_read(INPUT_MOUSE))),
         ("A", "input click -> game-world tool/select/deadclick chain",
-         lambda: _game_chain_check(
-             (REPO_ROOT / "scripts/init_mouse.lua").read_text(encoding="utf-8")
-             if (REPO_ROOT / "scripts/init_mouse.lua").exists() else "")),
+         ["scripts/init_mouse.lua"],
+         lambda: _game_chain_check(_read("scripts/init_mouse.lua"))),
         # --- Layer A (#730): non-click H1 input families — keyboard, text,
         # scroll/z-slice, drag. Each area's `_all_present_check` requires
         # EVERY registered domain literal, not just one, mirroring the
         # click area's multi-route pattern above. ---
         ("A", "input key -> shell/UI-text/gameplay routing domains",
-         lambda: _all_present_check(
-             "src/Engine/Input/Thread.hs", LAYER_A_KEY_DOMAINS)),
+         [INPUT_KEYBOARD],
+         lambda: _all_present_check(INPUT_KEYBOARD, LAYER_A_KEY_DOMAINS)),
         ("A", "input type/char -> text-delivery + drop domains (aggregated)",
-         lambda: _all_present_check(
-             "src/Engine/Input/Thread.hs", LAYER_A_CHAR_DOMAINS)),
-        ("A", "input scroll -> z-slice/UI-scroll/game-scroll/degenerate domains",
-         lambda: _all_present_check(
-             "src/Engine/Input/Thread.hs", LAYER_A_SCROLL_DOMAINS)),
+         [INPUT_CHAR],
+         lambda: _all_present_check(INPUT_CHAR, LAYER_A_CHAR_DOMAINS)),
+        ("A", "input scroll -> z-slice/UI-scroll/game-scroll/modal/degenerate domains",
+         [INPUT_SCROLL],
+         lambda: _all_present_check(INPUT_SCROLL, LAYER_A_SCROLL_DOMAINS)),
         ("A", "input drag -> unit_drag_select box-selection outcome",
+         ["scripts/unit_drag_select.lua"],
          lambda: _all_present_check(
              "scripts/unit_drag_select.lua", LAYER_A_DRAG_OUTCOMES)),
 
         # --- Layer B Tier 1: onboarding + highest naive-frequency (this PR) ---
         ("B1", "createWorld.generate (proceed commit)",
+         ["scripts/create_world/generation.lua"],
          lambda: _filewide_check(
              "scripts/create_world/generation.lua", r"debug\.recordOutcome")),
         ("B1", "buildTool.commitPlacement",
+         ["scripts/build_tool.lua"],
          # Every distinct reject/accept site handleMouseDown's placement
          # branch and commitPlacement itself cover — a single file-wide
          # "does debug.recordOutcome appear anywhere" pattern reads DONE
          # even if every hook but one were deleted (review round 2).
-         lambda: _build_tool_check(
-             (REPO_ROOT / "scripts/build_tool.lua").read_text(encoding="utf-8")
-             if (REPO_ROOT / "scripts/build_tool.lua").exists() else "")),
+         lambda: _build_tool_check(_read("scripts/build_tool.lua"))),
         ("B1", "wire.place",
+         ["scripts/wire.lua"],
          lambda: _filewide_check(
              "scripts/wire.lua", r"debug\.recordOutcome")),
         # Each designation verb needs BOTH its partial/reject-within-a-
@@ -452,21 +570,25 @@ def _build_verbs() -> list[tuple[str, str, callable]]:
         # longer exists, a different failure than "page exists, sweep
         # found nothing").
         ("B1", "till.designate (partial-drop counts + missing-world)",
+         ["src/World/Thread/Command/Cursor/Till.hs"],
          lambda: _all_present_check(
              "src/World/Thread/Command/Cursor/Till.hs",
              [r'recordDesignationOutcome env "till\.designate"',
               r'recordMissingWorldOutcome env "till\.designate"'])),
         ("B1", "chop.designate (partial-drop counts + missing-world)",
+         ["src/World/Thread/Command/Cursor/Chop.hs"],
          lambda: _all_present_check(
              "src/World/Thread/Command/Cursor/Chop.hs",
              [r'recordDesignationOutcome env "chop\.designate"',
               r'recordMissingWorldOutcome env "chop\.designate"'])),
         ("B1", "world.designateMine (partial-drop counts + missing-world)",
+         ["src/World/Thread/Command/Cursor/Mine.hs"],
          lambda: _all_present_check(
              "src/World/Thread/Command/Cursor/Mine.hs",
              [r'recordDesignationOutcome env "world\.designateMine"',
               r'recordMissingWorldOutcome env "world\.designateMine"'])),
         ("B1", "plant.designate (accept/reject + missing-world)",
+         ["src/World/Thread/Command/Cursor/Plant.hs"],
          # Both branches share the same aoKind literal (only aoOutcome
          # differs), so a bare field-presence check reads DONE even with
          # the accepted branch's pushActionOutcome call itself renamed
@@ -485,26 +607,31 @@ def _build_verbs() -> list[tuple[str, str, callable]]:
         # execute/executeAt, so a file-wide pattern would false-positive
         # the moment either sibling is instrumented. ---
         ("B2", "unitAi.commandMove",
+         ["scripts/unit_ai_core.lua"],
          lambda: _scoped_check(
              "scripts/unit_ai_core.lua",
              r"^function unitAi\.commandMove", LUA_FUNCTION_BOUNDARY,
              r"debug\.recordOutcome")),
         ("B2", "unitAi.commandAttack",
+         ["scripts/unit_ai_core.lua"],
          lambda: _scoped_check(
              "scripts/unit_ai_core.lua",
              r"^function unitAi\.commandAttack", LUA_FUNCTION_BOUNDARY,
              r"debug\.recordOutcome")),
         ("B2", "craft.execute",
+         ["src/Engine/Scripting/Lua/API/Craft/Execute.hs"],
          lambda: _scoped_check(
              "src/Engine/Scripting/Lua/API/Craft/Execute.hs",
              r"^craftExecuteFn\s*∷", HASKELL_TOPLEVEL_BOUNDARY,
              r"pushActionOutcome")),
         ("B2", "craft.executeAt",
+         ["src/Engine/Scripting/Lua/API/Craft/Execute.hs"],
          lambda: _scoped_check(
              "src/Engine/Scripting/Lua/API/Craft/Execute.hs",
              r"^craftExecuteAtFn\s*∷", HASKELL_TOPLEVEL_BOUNDARY,
              r"pushActionOutcome")),
         ("B2", "craft.addBill",
+         ["src/Engine/Scripting/Lua/API/Craft/Bill.hs"],
          lambda: _scoped_check(
              "src/Engine/Scripting/Lua/API/Craft/Bill.hs",
              r"^craftAddBillFn\s*∷", HASKELL_TOPLEVEL_BOUNDARY,
@@ -514,6 +641,7 @@ def _build_verbs() -> list[tuple[str, str, callable]]:
         # touched. construction.designate is structurally identical to
         # till/chop/mine but wasn't named in the issue's Tier 1 list. ---
         ("B3", "construction.designate (building/structure)",
+         ["src/World/Thread/Command/Cursor/Construct.hs"],
          lambda: _filewide_check(
              "src/World/Thread/Command/Cursor/Construct.hs",
              r'recordDesignationOutcome env "construction\.designate"')),
@@ -521,7 +649,69 @@ def _build_verbs() -> list[tuple[str, str, callable]]:
 
 
 def check() -> list[tuple[str, str, bool]]:
-    return [(tier, verb, fn()) for tier, verb, fn in _build_verbs()]
+    return [(tier, verb, fn()) for tier, verb, _paths, fn in _build_verbs()]
+
+
+TIER1 = "A"
+
+
+def verify_tier1_entries(entries) -> list[str]:
+    """#1704 requirement 4: every Tier 1 (Layer A) area must be both
+    MAPPED and INSTRUMENTED, evaluated against the real checked-in tree.
+
+    Two distinct failures, reported apart because they have different
+    repairs:
+
+      * a mapped source file is absent — a producer was renamed or
+        moved and the mapping is stranded. This is what #787 did to all
+        five Layer A areas: the checker went on reading
+        `Engine.Input.Thread` after that module became a thread-lifecycle
+        facade, reporting instrumented behaviour as five gaps while
+        exiting 0.
+      * every mapped file exists but a required producer pattern is
+        missing — instrumentation really was deleted.
+
+    Takes the entry list so the self-test can prove both branches
+    against synthetic entries without mutating the working tree.
+    """
+    problems = []
+    for tier, verb, paths, fn in entries:
+        if tier != TIER1:
+            continue
+        if not paths:
+            problems.append(f"{verb}: declares no source-file mapping")
+            continue
+        missing = [rel for rel in paths if not (REPO_ROOT / rel).exists()]
+        if missing:
+            problems.append(
+                f"{verb}: mapped source file(s) absent — {', '.join(missing)}. "
+                f"A producer moved; re-point this checker's mapping.")
+            continue
+        if not fn():
+            problems.append(
+                f"{verb}: a required producer pattern is missing from "
+                f"{', '.join(paths)}. Instrumentation was deleted, or its "
+                f"call shape changed.")
+    return problems
+
+
+def main_verify_tier1() -> int:
+    entries = _build_verbs()
+    problems = verify_tier1_entries(entries)
+    total = sum(1 for tier, *_rest in entries if tier == TIER1)
+    if problems:
+        print(f"{len(problems)} of {total} Tier 1 (Layer A) area(s) failed "
+              f"the mapping/instrumentation gate:")
+        for problem in problems:
+            print(f"  FAIL: {problem}")
+        print("\nTier 1 is expected to read 100%. The plain coverage report "
+              "cannot tell a stranded mapping from deleted instrumentation "
+              "and exits 0 either way — this gate exists so neither is "
+              "silent (#1704).")
+        return 1
+    print(f"action_outcome_coverage.py --verify-tier1: all {total} Tier 1 "
+          f"area(s) mapped and instrumented")
+    return 0
 
 
 def main() -> int:
@@ -586,9 +776,11 @@ craftExecuteAtFn env = do
 def _self_test() -> list[str]:
     failures = []
 
-    def expect(label: str, got: bool, want: bool) -> None:
+    # Most cases compare booleans; #1704's verify-tier1 cases compare a
+    # problem-list length or the list itself, so this stays value-generic.
+    def expect(label: str, got: object, want: object) -> None:
         if got != want:
-            failures.append(f"{label}: expected {want}, got {got}")
+            failures.append(f"{label}: expected {want!r}, got {got!r}")
 
     # 1. Neither sibling instrumented -> both scopes report False.
     move_scope = _function_scope(_LUA_SIBLINGS, r"^function unitAi\.commandMove",
@@ -673,6 +865,13 @@ def _self_test() -> list[str]:
         "context_menu_tile",
     ]
 
+    # #1704: the two `ui_pointer_block` branches are counted, not merely
+    # present, and the no-right-click-handler route records under a
+    # BINDING rather than a literal — so the fixture names those three
+    # sites individually.
+    _POINTER_BLOCK_SITES = {"pointer_block_left", "pointer_block_right"}
+    _SWALLOWED_SITES = set(_ROUTE_NAMES) | _POINTER_BLOCK_SITES | {"no_handler"}
+
     def swallowed_routes_fixture(include: set[str],
                                   call_name: str = "recordRouteOutcome") -> str:
         lines = [f"{call_name} ∷ Text → Maybe Text → IO ()",
@@ -680,19 +879,35 @@ def _self_test() -> list[str]:
         for name in _ROUTE_NAMES:
             if name in include:
                 lines.append(f'{call_name} "accepted" (Just "{name}")')
+        for site in sorted(_POINTER_BLOCK_SITES):
+            if site in include:
+                lines.append(f'-- {site}')
+                lines.append(f'{call_name} "noop" (Just "ui_pointer_block")')
+        if "no_handler" in include:
+            lines.append(f'{call_name} "noop" (Just leftClickCallback)')
         return "\n".join(lines)
 
-    swallowed_full = swallowed_routes_fixture(set(_ROUTE_NAMES))
+    swallowed_full = swallowed_routes_fixture(_SWALLOWED_SITES)
     expect("Layer A swallowed routes: all present reads DONE",
-           _all_present(swallowed_full, LAYER_A_SWALLOWED_ROUTES), True)
-    for name in _ROUTE_NAMES:
-        missing_one = swallowed_routes_fixture(set(_ROUTE_NAMES) - {name})
+           _swallowed_routes_check(swallowed_full), True)
+    for name in sorted(_SWALLOWED_SITES):
+        missing_one = swallowed_routes_fixture(_SWALLOWED_SITES - {name})
         expect(f"Layer A swallowed routes: missing {name!r} reads gap",
-               _all_present(missing_one, LAYER_A_SWALLOWED_ROUTES), False)
-    renamed_call = swallowed_routes_fixture(set(_ROUTE_NAMES), call_name="someOtherHelper")
+               _swallowed_routes_check(missing_one), False)
+    # The count is what makes EITHER pointer-block branch load-bearing:
+    # a bare presence check over the shared literal passes with one of
+    # the two deleted, which is exactly the hole #1704 closed.
+    one_pointer_block = swallowed_routes_fixture(
+        _SWALLOWED_SITES - {"pointer_block_right"})
+    expect("Layer A swallowed routes: a bare presence check WOULD have "
+           "missed one deleted ui_pointer_block branch (sanity check on "
+           "the fixture)",
+           _all_present(one_pointer_block, LAYER_A_SWALLOWED_ROUTES), True)
+    renamed_call = swallowed_routes_fixture(_SWALLOWED_SITES,
+                                            call_name="someOtherHelper")
     expect("Layer A swallowed routes: recordRouteOutcome renamed away "
            "(literals kept) reads as a gap (review round 5)",
-           _all_present(renamed_call, LAYER_A_SWALLOWED_ROUTES), False)
+           _swallowed_routes_check(renamed_call), False)
 
     def game_chain_fixture(include: set[str], deadclick_reasons: list[str],
                             call_name: str = "recordClick") -> str:
@@ -1065,15 +1280,19 @@ def _self_test() -> list[str]:
             "ui_scroll": '"accepted" "ui_scroll" (Just eh)',
             "game_scroll": '"accepted" "game_scroll" Nothing',
             "degenerate_viewport": '"noop" "degenerate_viewport" Nothing',
+            # #1704: the fifth domain, absent from this inventory until
+            # now — a modal page's empty space swallowing the wheel.
+            "ui_modal_block": '"noop" "ui_modal_block" Nothing',
         }
         for name, argtext in combos.items():
             if name in include:
                 lines.append(f'{call_name} {argtext}')
         return "\n".join(lines)
 
-    _SCROLL_DOMAINS_SET = {"z_slice", "ui_scroll", "game_scroll", "degenerate_viewport"}
+    _SCROLL_DOMAINS_SET = {"z_slice", "ui_scroll", "game_scroll",
+                           "degenerate_viewport", "ui_modal_block"}
     scroll_full = scroll_outcome_fixture(_SCROLL_DOMAINS_SET)
-    expect("input scroll: all four domains present reads DONE",
+    expect("input scroll: all five domains present reads DONE",
            _all_present(scroll_full, LAYER_A_SCROLL_DOMAINS), True)
     for domain in _SCROLL_DOMAINS_SET:
         expect(f"input scroll: missing the {domain!r} domain reads gap",
@@ -1117,29 +1336,46 @@ def _self_test() -> list[str]:
     expect("input drag: recordDragOutcome renamed away (literals kept) reads gap",
            _all_present(drag_renamed, LAYER_A_DRAG_OUTCOMES), False)
 
-    # #730 review rounds 2 & 3: the deferred-to-release UI/camera-drag
-    # click classification — the "input.click" push sites (left-click
-    # hit, right-click-consumed-by-left-only-control), the
-    # "input.rightClick" site, the middle-button "camera_drag" site,
-    # the release-side threshold comparison that picks between them
-    # and "input.drag" (all in Engine.Input.Thread, `thread_include`),
-    # and the interrupted-release resolution in Engine.Input.State
-    # (`state_include`) for a focus-loss/minimize swallow.
-    def ui_click_deferred_fixture(thread_include: set[str],
-                                   pending_call: str = "writeIORef pendingUIClickRef") -> str:
+    # #730 review rounds 2 & 3, re-pointed by #1704: the
+    # deferred-to-release UI/camera-drag click classification. Three
+    # producing sites live in Engine.Input.Thread.Mouse
+    # (`mouse_include`) — the left-click UI hit, the right-click hit,
+    # and the middle-button camera_drag press, all through #1676's
+    # `deferPress` helper; the release-side threshold comparison that
+    # picks between the press's own kind and "input.drag" lives in
+    # Engine.Input.Thread.Mouse.Deferred (`deferred_include`); and the
+    # interrupted-release resolution for a focus-loss/minimize swallow
+    # lives in Engine.Input.State (`state_include`).
+    #
+    # There is deliberately NO fourth "input.click" site: #743 turned
+    # the right-click-consumed-by-a-left-only-control route back into
+    # an immediate noop, which the swallowed-routes area above now
+    # requires instead.
+    def ui_click_mouse_fixture(mouse_include: set[str],
+                                defer_call: str = "deferPress") -> str:
         lines = []
-        if "click_site1" in thread_include:
-            lines.append(f'{pending_call} (Just ("input.click", callback, x, y))')
-        if "rightclick_site" in thread_include:
-            lines.append(f'{pending_call} (Just ("input.rightClick", callback, x, y))')
-        if "click_site2" in thread_include:
-            lines.append(f'{pending_call} (Just ("input.click", leftClickCallback, x, y))')
-        if "camera_drag_site" in thread_include:
-            lines.append(f'{pending_call} (Just ("input.click", "camera_drag", x, y))')
-        if "release_classify" in thread_include:
-            lines.append(
-                'if movedPx ≥ uiDragThresholdPx then ("input.drag", x, y) '
-                'else (clickKind, px, py)')
+        if "click_site" in mouse_include:
+            lines.append(f'{defer_call} "input.click" callback')
+        if "rightclick_site" in mouse_include:
+            lines.append(f'{defer_call} "input.rightClick" callback')
+        if "camera_drag_site" in mouse_include:
+            lines.append(f'{defer_call} "input.click" "camera_drag"')
+        return "\n".join(lines)
+
+    def ui_click_deferred_fixture(deferred_include: set[str],
+                                   push_call: str = "pushActionOutcome") -> str:
+        lines = ["    let (kind, whereX, whereY)"]
+        if "release_classify" in deferred_include:
+            lines.append('            | movedPx ≥ uiDragThresholdPx =')
+            lines.append('                let (rx, ry) = windowToFbOrRaw win fb (x, y)')
+            lines.append('                in ("input.drag", rx, ry)')
+        if "release_click_branch" in deferred_include:
+            lines.append('            | otherwise = (pucKind pc, pucPressFbX pc, '
+                         'pucPressFbY pc)')
+        if "release_push" in deferred_include:
+            lines.append(f'    {push_call} (actionOutcomeRef env) ActionOutcome')
+            lines.append('        { aoTs = gt, aoKind = kind, aoOutcome = outcomeName')
+            lines.append('        }')
         return "\n".join(lines)
 
     def ui_click_interrupted_fixture(include: set[str],
@@ -1148,46 +1384,125 @@ def _self_test() -> list[str]:
             return ""
         return (f'{push_call} (actionOutcomeRef env) ActionOutcome\n'
                 '    { aoOutcome = "noop"\n'
+                '    -- #1676: the press\'s own PRESS-TIME framebuffer\n'
+                '    -- position, captured before the ratio could move.\n'
+                '    , aoWhereX = Just (pucPressFbX pc)\n'
                 '    , aoReason = Just "release swallowed (focus loss / minimize)"\n'
                 '    }')
 
-    _UI_CLICK_THREAD_PARTS = {
-        "click_site1", "rightclick_site", "click_site2",
-        "camera_drag_site", "release_classify",
+    _UI_CLICK_MOUSE_PARTS = {"click_site", "rightclick_site", "camera_drag_site"}
+    _UI_CLICK_DEFERRED_PARTS = {
+        "release_classify", "release_click_branch", "release_push",
     }
     _UI_CLICK_STATE_PARTS = {"interrupted"}
-    ui_click_full = ui_click_deferred_fixture(_UI_CLICK_THREAD_PARTS)
+    ui_mouse_full = ui_click_mouse_fixture(_UI_CLICK_MOUSE_PARTS)
+    ui_deferred_full = ui_click_deferred_fixture(_UI_CLICK_DEFERRED_PARTS)
     ui_interrupted_full = ui_click_interrupted_fixture(_UI_CLICK_STATE_PARTS)
     expect("input click UI deferral: all parts present reads DONE",
-           _ui_click_deferred_check(ui_click_full, ui_interrupted_full), True)
-    for part in _UI_CLICK_THREAD_PARTS:
-        expect(f"input click UI deferral: missing {part!r} reads gap",
+           _ui_click_deferred_check(ui_mouse_full, ui_deferred_full,
+                                     ui_interrupted_full), True)
+    for part in sorted(_UI_CLICK_MOUSE_PARTS):
+        expect(f"input click UI deferral: missing the {part!r} press site reads gap",
                _ui_click_deferred_check(
-                   ui_click_deferred_fixture(_UI_CLICK_THREAD_PARTS - {part}),
+                   ui_click_mouse_fixture(_UI_CLICK_MOUSE_PARTS - {part}),
+                   ui_deferred_full, ui_interrupted_full),
+               False)
+    for part in sorted(_UI_CLICK_DEFERRED_PARTS):
+        expect(f"input click UI deferral: missing the {part!r} release part reads gap",
+               _ui_click_deferred_check(
+                   ui_mouse_full,
+                   ui_click_deferred_fixture(_UI_CLICK_DEFERRED_PARTS - {part}),
                    ui_interrupted_full),
                False)
     expect("input click UI deferral: missing the interrupted-release "
            "resolution (review round 3) reads gap",
-           _ui_click_deferred_check(ui_click_full, ui_click_interrupted_fixture(set())),
+           _ui_click_deferred_check(ui_mouse_full, ui_deferred_full,
+                                     ui_click_interrupted_fixture(set())),
            False)
-    # Only ONE of the two "input.click" push sites present must still
-    # read as a gap (a count, not a bare presence check).
+    # #1704: a stale THRESHOLD is its own regression. The check used to
+    # demand three deferred "input.click" writes when #743 had left
+    # only two, which is one of the five false Tier 1 gaps this issue
+    # closed — so the fixture pins that exactly two satisfy it and one
+    # does not.
     expect("input click UI deferral: only one of two 'input.click' sites reads gap",
            _ui_click_deferred_check(
-               ui_click_deferred_fixture(
-                   {"click_site1", "rightclick_site", "camera_drag_site", "release_classify"}),
-               ui_interrupted_full),
+               ui_click_mouse_fixture({"rightclick_site", "camera_drag_site"}),
+               ui_deferred_full, ui_interrupted_full),
            False)
-    ui_click_renamed = ui_click_deferred_fixture(
-        _UI_CLICK_THREAD_PARTS, pending_call="someOtherPendingWrite")
-    expect("input click UI deferral: pendingUIClickRef write renamed away "
+    ui_mouse_renamed = ui_click_mouse_fixture(
+        _UI_CLICK_MOUSE_PARTS, defer_call="someOtherDeferFn")
+    expect("input click UI deferral: deferPress renamed away "
            "(literals kept) reads gap",
-           _ui_click_deferred_check(ui_click_renamed, ui_interrupted_full), False)
+           _ui_click_deferred_check(ui_mouse_renamed, ui_deferred_full,
+                                     ui_interrupted_full), False)
+    ui_deferred_renamed = ui_click_deferred_fixture(
+        _UI_CLICK_DEFERRED_PARTS, push_call="someOtherPushFn")
+    expect("input click UI deferral: release-side pushActionOutcome renamed "
+           "away (classification kept) reads gap",
+           _ui_click_deferred_check(ui_mouse_full, ui_deferred_renamed,
+                                     ui_interrupted_full), False)
     ui_interrupted_renamed = ui_click_interrupted_fixture(
         _UI_CLICK_STATE_PARTS, push_call="someOtherPushFn")
     expect("input click UI deferral: interrupted-release pushActionOutcome "
            "renamed away (literals kept) reads gap",
-           _ui_click_deferred_check(ui_click_full, ui_interrupted_renamed), False)
+           _ui_click_deferred_check(ui_mouse_full, ui_deferred_full,
+                                     ui_interrupted_renamed), False)
+    # Each of the three files is independently load-bearing: an EMPTY
+    # one (which is what _read returns for a path that does not exist —
+    # the #787 stranding, seen from inside a check) reads as a gap
+    # rather than being skipped.
+    for label, args in (
+            ("Mouse.hs", ("", ui_deferred_full, ui_interrupted_full)),
+            ("Mouse/Deferred.hs", (ui_mouse_full, "", ui_interrupted_full)),
+            ("State.hs", (ui_mouse_full, ui_deferred_full, "")),
+    ):
+        expect(f"input click UI deferral: an absent {label} reads gap",
+               _ui_click_deferred_check(*args), False)
+
+    # ---------------------------------------------------------------
+    # #1704 requirement 4: the Tier 1 mapping/instrumentation gate.
+    # Proven against SYNTHETIC entries so both failure branches are
+    # exercised without mutating the working tree — the real-tree half
+    # is `--verify-tier1` itself, which CI runs on every push.
+    # ---------------------------------------------------------------
+    _REAL_PATH = "tools/action_outcome_coverage.py"  # this file; always present
+    _GONE_PATH = "src/Engine/Input/ThisModuleWasMovedAwayByARefactor.hs"
+
+    expect("verify-tier1: a mapped-and-instrumented Tier 1 area passes",
+           verify_tier1_entries([(TIER1, "ok", [_REAL_PATH], lambda: True)]), [])
+    stranded = verify_tier1_entries(
+        [(TIER1, "stranded", [_GONE_PATH], lambda: False)])
+    expect("verify-tier1: a Tier 1 area whose mapped file is absent fails",
+           len(stranded), 1)
+    expect("verify-tier1: …and says the mapping is stranded, not that the "
+           "instrumentation is missing",
+           "mapped source file(s) absent" in stranded[0], True)
+    # The stranded case must be reported even when only ONE of several
+    # mapped files went missing — the #787 shape, where a check reads a
+    # facade that still exists beside modules that moved.
+    partly_stranded = verify_tier1_entries(
+        [(TIER1, "partly", [_REAL_PATH, _GONE_PATH], lambda: True)])
+    expect("verify-tier1: one absent file among several still fails",
+           len(partly_stranded), 1)
+    deleted = verify_tier1_entries(
+        [(TIER1, "deleted", [_REAL_PATH], lambda: False)])
+    expect("verify-tier1: a present-but-uninstrumented Tier 1 area fails",
+           len(deleted), 1)
+    expect("verify-tier1: …and says the producer pattern is missing",
+           "required producer pattern is missing" in deleted[0], True)
+    expect("verify-tier1: a Tier 1 area declaring no mapping at all fails",
+           len(verify_tier1_entries([(TIER1, "unmapped", [], lambda: True)])), 1)
+    # Tier 2/3 gaps are deliberate fast-follows (#646) — the gate must
+    # ignore them entirely, or it would block on work nobody has done
+    # yet. This is the other half of requirement 5.
+    expect("verify-tier1: a failing Tier 2 entry is NOT a gate failure",
+           verify_tier1_entries([("B2", "fast-follow", [_REAL_PATH],
+                                   lambda: False)]), [])
+    expect("verify-tier1: every Tier 1 entry in the real table declares "
+           "at least one mapped path",
+           all(bool(paths)
+               for tier, _verb, paths, _fn in _build_verbs() if tier == TIER1),
+           True)
 
     return failures
 
@@ -1206,4 +1521,6 @@ def main_self_test() -> int:
 if __name__ == "__main__":
     if "--self-test" in sys.argv:
         raise SystemExit(main_self_test())
+    if "--verify-tier1" in sys.argv:
+        raise SystemExit(main_verify_tier1())
     raise SystemExit(main())
