@@ -95,7 +95,11 @@ no direct `Data.Text.Encoding.decodeUtf8` under
 / save-compat / enum-append-only / cabal-library-module-inventory /
 material-id / bare-name-icon / concept-id-inventory /
 findings-report-status audits (each
-with its own self-test), the unit-asset inventory gate (`test_pack_atlas.py` +
+with its own self-test), the F4 Tier 1 coverage-mapping gate
+(`action_outcome_coverage.py --self-test` then `--verify-tier1`, #1704 —
+the only half of that tool that reads the real tree, and the only half
+that blocks: the plain report stays a visibility report and always exits
+0), the unit-asset inventory gate (`test_pack_atlas.py` +
 `pack_atlas.py --validate-only --strict`), `world_check.py --quick`, the
 eight probe-runner self-tests (`ci_probes.py --self-test`,
 `ci_expensive_gates.py --self-test`, `ci_docs_fast_path.py --self-test`,
