@@ -6398,6 +6398,18 @@ def test_a_malformed_outcome_handoff_is_rejected_without_recording() -> None:
          lambda: broken(lambda d: d.__setitem__("unmet_condition", UNMET),
                         dd.ROUTE_PARTIAL_IMPROVEMENT),
          "is DERIVED from the diagnosis outcome's own `reason`"),
+        ("a no-target record that names a target",
+         lambda: broken(lambda d: (
+             d["diagnosis_outcome"].__setitem__("targets", ["beta"]),
+             d["diagnosis_outcome"]["handoff"].__setitem__(
+                 "targets", ["beta"])), dd.ROUTE_NO_TARGET),
+         "names no target"),
+        ("a diagnosing route that names none",
+         lambda: broken(lambda d: (
+             d["diagnosis_outcome"].__setitem__("targets", []),
+             d["diagnosis_outcome"]["handoff"].__setitem__("targets", [])),
+             dd.ROUTE_NO_CONFIDENT_FIX),
+         "every other route diagnoses at least one"),
         ("a diagnosis outcome with no reason at all",
          lambda: broken(lambda d: d["diagnosis_outcome"].pop("reason")),
          "cannot be reached for"),

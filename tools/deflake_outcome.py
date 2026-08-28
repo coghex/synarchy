@@ -294,7 +294,10 @@ PRE_FIX_ROLES = (ROLE_HANDOFF, ROLE_BASELINE)
 # it becomes that stable outcome over the measurement it DOES have,
 # which is the #1436 one. The predicate is identical either way, so an
 # all-PASS ending cannot be recorded on weaker evidence than a
-# controlled one.
+# controlled one. Its record therefore names NO target, and every other
+# route names at least one — the two directions `evaluate` refuses, and
+# a consumer that let either through would classify against a premise
+# its own producer had rejected.
 ROUTE_TO_OUTCOME = {
     deflake_diagnosis.ROUTE_NO_TARGET: OUTCOME_CANNOT_REPRODUCE,
     deflake_diagnosis.ROUTE_CANNOT_REPRODUCE: OUTCOME_CANNOT_REPRODUCE,
@@ -954,6 +957,26 @@ def require_diagnosis_outcome(document, *, worktrees=()) -> dict:
     # writes the key, empty list and all.
     targets = _require_string_list(outcome.get("targets"),
                                    "the diagnosis outcome's `targets`")
+    # The target list and the route are two statements of one fact, and
+    # #1437 makes them agree in BOTH directions: `no-target` is what an
+    # all-PASS measurement produces, and it refuses that route over a
+    # handoff naming targets — while every other route is refused over a
+    # handoff naming NONE, because there is then nothing to diagnose. A
+    # consumer that let either through would classify against a premise
+    # its own producer had rejected: a `no-target` record naming `beta`
+    # would earn an advisory de-list from a measurement that observed
+    # `beta` going wrong.
+    if route == deflake_diagnosis.ROUTE_NO_TARGET and targets:
+        raise HandoffError(
+            f"the {route!r} route is what an all-PASS measurement produces, "
+            f"so its record names no target; this one names "
+            f"{', '.join(targets)}")
+    if route != deflake_diagnosis.ROUTE_NO_TARGET and not targets:
+        raise HandoffError(
+            f"the diagnosis outcome names no target check, which is the "
+            f"{deflake_diagnosis.ROUTE_NO_TARGET!r} ending and not "
+            f"{route!r}; every other route diagnoses at least one observed "
+            f"non-PASS check")
     acceptable = outcome.get("acceptable_failures")
     acceptable = _delegate(
         lambda: probe_census.require_acceptable_failures(
