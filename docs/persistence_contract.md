@@ -156,6 +156,17 @@ persistence-inventory audit](#the-persistence-inventory-audit)), a
 - `WorldManager` and `WorldState` (`src/World/State/Types.hs`) — every
   per-page IORef hangs off `WorldState`; every page hangs off
   `WorldManager`.
+- `UnitManager` (`src/Unit/Types/Manager.hs`), `BuildingManager`
+  (`src/Building/Types.hs`) and `UnitThreadState`
+  (`src/Unit/Sim/Types.hs`) — the three gameplay managers `EngineEnv`
+  reaches through a bare IORef pointer (`unitManagerRef`,
+  `buildingManagerRef`, `utsRef`). Those pointer fields are themselves
+  root-owned and classified `Rebuild`, delegating the real decisions
+  onto these records' own fields, so scanning only the pointer would
+  land that delegation in unenforced territory: a field added inside an
+  already-reachable manager would pass every gate with no persistence
+  decision recorded. Added by #1703; their fields are classified in
+  `persistence_state_inventory.md` §5.
 - `SaveData`, `WorldPageSave`, `SaveMetadata`, `SaveHeader`
   (`src/World/Save/Types.hs`) — historically the ground truth of what a
   save persists. #759 (save-overhaul B1) made `SaveData`/`WorldPageSave`
@@ -177,7 +188,14 @@ persistence-inventory audit](#the-persistence-inventory-audit)), a
 
 This is deliberately not "every record in the codebase" — it is exactly
 the set of records that a brand-new manager, cache, or subsystem *must*
-be wired into to be reachable from a running session at all. A new
+be wired into to be reachable from a running session at all, plus the
+three managers an existing pointer on that set already delegates to. It
+is a fixed allowlist, never a transitive closure: records reached
+THROUGH a scanned one (`UnitInstance` via `umInstances`,
+`BuildingInstance` via `bmInstances`, `UnitSimState` via `utsSimStates`)
+are inventoried separately rather than scanned, and the worker-thread
+state nothing on `EngineEnv`/`WorldState` reaches at all stays outside
+the boundary entirely (`persistence_state_inventory.md` §6). A new
 top-level manager with no field anywhere on `EngineEnv` or `WorldState`
 is unreachable and doesn't exist as engine state; the moment it's wired
 in (an `IORef NewManager` field appears on `EngineEnv`, or a

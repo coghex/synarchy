@@ -1111,7 +1111,9 @@ is the field-by-field classification, enforced by
 `tools/persistence_inventory_audit.py` (in `make ci`/CI — fails when a
 new root state owner, Lua save module, component, or typed reference
 kind lacks a classification/coverage row). Read the contract before
-adding state to `EngineEnv`, `WorldState`, `World.Save.Types`, or
+adding state to `EngineEnv`, `WorldState`, `World.Save.Types`, the three
+gameplay managers `EngineEnv` points at (`UnitManager`,
+`BuildingManager`, `UnitThreadState` — scanned directly since #1703), or
 `scripts/lib/save_modules.lua`'s registry.
 
 ```bash

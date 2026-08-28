@@ -98,14 +98,27 @@ def bootstrap(port):
 
 def find_tillable(port, span=4):
     """Scan sample points across the loaded region for a flat, dry,
-    flora-free tile; returns (gx, gy) or None."""
+    flora-free tile; returns (gx, gy) or None.
+
+    ``world.getFluidAt`` is a MULTI-RETURN query whose ARITY is the
+    contract (`Engine.Scripting.Lua.API.WorldQuery.Fluid`): a fluid tile
+    pushes TWO values — the type string and the fluid surface z — while a
+    dry tile, and one whose chunk is not loaded, pushes a single nil. The
+    debug console joins several return values with tabs, so asking for
+    both back yields text like ``river\t12``, never anything JSON-shaped.
+    Bind the first return alone: a nonempty first value IS the fluid type,
+    and means WET. ``getFloraAt`` really is table-or-nil
+    (`Engine.Scripting.Lua.API.Forage.Query`), so its dict test below is
+    correct as written.
+    """
     for sx in range(-span * 16, span * 16 + 1, 4):
         for sy in range(-span * 16, span * 16 + 1, 4):
             slope = send_json(port, f"return world.getSlopeAt({sx},{sy})")
             if slope != 0:
                 continue
-            fluid = send_json(port, f"return world.getFluidAt({sx},{sy})")
-            if isinstance(fluid, dict) and fluid.get("type"):
+            fluid = send_json(port, f"local t = world.getFluidAt({sx},{sy}); "
+                                    f"return t")
+            if isinstance(fluid, str) and fluid:
                 continue
             flora = send_json(port, f"return world.getFloraAt({sx},{sy})")
             if isinstance(flora, dict):

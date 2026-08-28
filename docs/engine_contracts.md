@@ -92,8 +92,8 @@ Unicode-operator audit, the Lua strict-decoder audit
 no direct `Data.Text.Encoding.decodeUtf8` under
 `src/Engine/Scripting/Lua/`), the persistence-inventory / EngineEnv-capability
 / save-compat / enum-append-only / cabal-library-module-inventory /
-material-id / findings-report-status audits (each with its own
-self-test), the unit-asset inventory gate (`test_pack_atlas.py` +
+material-id / concept-id-inventory / findings-report-status audits (each
+with its own self-test), the unit-asset inventory gate (`test_pack_atlas.py` +
 `pack_atlas.py --validate-only --strict`), `world_check.py --quick`, the
 eight probe-runner self-tests (`ci_probes.py --self-test`,
 `ci_expensive_gates.py --self-test`, `ci_docs_fast_path.py --self-test`,
@@ -104,6 +104,21 @@ cache-outcome report's own classification, plus the `ci.yml` wiring it
 reads), the project-cache epoch and cleanup policy self-tests
 (`ci_cache_epoch.py --self-test`, `ci_cache_cleanup.py --self-test`), and the
 parity audit itself.
+
+**The concept-id-inventory audit (#1717)** is the newest member.
+`tools/concept_id_inventory_audit.py` pins every concept id
+`data/language/concepts.yaml` has shipped against
+`docs/language/concept_id_baseline.json`: a removal fails naming the id
+and why it is immutable, a rename fails as BOTH a removal and an
+addition, and a new id passes only through `--update-baseline`, a
+MONOTONIC ratchet that refuses any run which would drop a recorded id.
+It guards the id's presence and exact string — the whole compatibility
+boundary, since `Language.Etymology` reports a missing id as
+`EtyInvalidConcept` and `Language.Generated.Hash` seeds each concept's
+native root from the id string — and deliberately does NOT freeze the
+four authored English forms or the `domain`, which stay editable. That
+scope means same-string REPURPOSING is review policy, not something
+this gate can see. Contract comment: `src/Language/Semantic/Types.hs`.
 
 **One member of the save-compat self-test is path-selective on BOTH
 sides (#1360).** `tools/test_save_compat_audit.py` gained two flags that
