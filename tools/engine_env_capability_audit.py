@@ -649,11 +649,12 @@ def _audit_scope_block_placement(inventory_text: str,
     (a) The pair is SS1's first content. Whatever a reader sees first
         under `## 1. Scope` is the audited paragraph.
     (b) The rest of SS1 states no number at all. Digits are permitted
-        only inside a backtick code span (source references such as
-        `` `src/Engine/Core/State.hs:446` `` in the out-of-scope list),
-        in a section reference (`SS5`), and in an issue reference
-        (`#1669`). A field count is none of those, so a second copy has
-        nowhere in SS1 to live.
+        only in a SOURCE-LOCATION code span (`` `src/Engine/Core/
+        State.hs:446` `` in the out-of-scope list), in a section
+        reference (`SS5`), and in an issue reference (`#1669`). A bare
+        `` `83` `` is none of those -- code font does not make a field
+        total a citation -- so a second copy has nowhere in SS1 to
+        live.
     """
     violations: list[str] = []
     doc = f"docs/{INVENTORY_PATH.name}"
@@ -695,14 +696,39 @@ def _audit_scope_block_placement(inventory_text: str,
             f"SS1 states exactly one number, the field total, inside that "
             f"block; anything else there is a second hand-maintained count "
             f"waiting to drift. Section (SS5) and issue (#1669) references "
-            f"and numbers inside `code spans` are fine")
+            f"are fine, and so is a source-location code span such as "
+            f"`src/Engine/Core/State.hs:446` -- but a bare `83` is a field "
+            f"total in code font, not a citation")
     return violations
 
 
+# A backtick span whose digits are a SOURCE LOCATION -- a repository
+# path, optionally with a line or line-range anchor. This is the only
+# code span whose numbers are exempt from the no-stray-count rule.
+#
+# Exempting code spans wholesale was the third rereview's finding: it
+# let `` `83` `` stand in the governed prose, which reads to a human as
+# exactly the stale total this audit exists to remove. A span has to
+# LOOK like a source reference to be excused, and a bare number does
+# not.
+_SOURCE_SPAN_RE = re.compile(
+    r"^[A-Za-z0-9_./+\-]+\.(?:hs|lua|py|md|json|yaml|yml|cabal|sh)"
+    r"(?::\d+(?:-\d+)?)?$")
+
+
 def _stray_numbers_outside_code(text: str) -> list[str]:
-    """Decimal integers in `text` that are not inside a backtick code
-    span and are not a section or issue reference."""
-    without_code = re.sub(r"`[^`]*`", "", text)
+    """Decimal integers in `text` that are neither a section reference,
+    an issue reference, nor part of a source-location code span.
+
+    A code span that is NOT a source location keeps its digits in the
+    scan: `` `83` `` is a field total wearing a code font, not a
+    citation.
+    """
+    def _strip_span(match: re.Match[str]) -> str:
+        inner = match.group(1).strip()
+        return "" if _SOURCE_SPAN_RE.match(inner) else match.group(1)
+
+    without_code = re.sub(r"`([^`]*)`", _strip_span, text)
     without_refs = re.sub(r"#\d+", "", _SECTION_REF_RE.sub("", without_code))
     return _INTEGER_RE.findall(without_refs)
 
@@ -784,7 +810,8 @@ def _audit_procedure_item_binding(inventory_text: str) -> list[str]:
 # record"), and a rule that flagged those would be a rule maintainers
 # route around.
 _ENGINEENV_TOTAL_RE = re.compile(
-    r"\d+\s*(?:\*\*)?\s*`?EngineEnv`?\s+fields?\b", re.IGNORECASE)
+    r"[`*]{0,2}\d+[`*]{0,2}\s*[`*]{0,2}EngineEnv[`*]{0,2}\s+fields?\b",
+    re.IGNORECASE)
 
 
 def _audit_no_stray_engineenv_total(inventory_text: str,

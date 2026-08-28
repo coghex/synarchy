@@ -1498,12 +1498,46 @@ def test_scope_section_allows_code_spans_and_references():
            f"field counts, got: {violations}")
 
 
+def test_scope_section_code_span_total_rejected():
+    """Code font does not make a field total a citation: a bare
+    `` `83` `` in SS1 is the stale count a reader sees, so it is
+    rejected even though it sits inside backticks."""
+    doc = _field_total_doc(scope_suffix="It has exactly `83` fields.")
+    violations = audit_field_total(_FT_LIVE, doc)
+    expect(any("outside its" in v and "83" in v for v in violations),
+           f"a code-span field total in SS1 must be rejected, got: "
+           f"{violations}")
+
+
+def test_procedure_item_code_span_total_rejected():
+    doc = _field_total_doc(
+        procedure_item=(f"For each module, scan its source for every "
+                        f"occurrence of one of the `83` "
+                        f"{PROCEDURE_ITEM_ANCHOR}."))
+    violations = audit_field_total(_FT_LIVE, doc)
+    expect(any("must state no field total" in v for v in violations),
+           f"a code-span field total in the procedure sentence must be "
+           f"rejected, got: {violations}")
+
+
+def test_source_location_spans_stay_exempt():
+    """The narrow exemption still has to cover what the document really
+    carries: a path with a line anchor, and a path with a line range."""
+    doc = _field_total_doc(
+        scope_suffix="See `src/Engine/Core/State.hs:446` and "
+                     "`docs/persistence_state_inventory.md:12-20`.")
+    violations = audit_field_total(_FT_LIVE, doc)
+    expect(violations == [],
+           f"source-location code spans must stay exempt, got: "
+           f"{violations}")
+
+
 def test_stray_engineenv_total_anywhere_rejected():
     """The document-wide backstop: the one unambiguous reintroduction
     shape is rejected wherever it appears, not only in the two governed
     places."""
     doc = _field_total_doc(
-        trailing_section="## 9. Appendix\n\nA reminder that there are 83 "
+        trailing_section="## 9. Appendix\n\nA reminder that there are `83` "
                          "`EngineEnv` fields in total.")
     violations = audit_field_total(_FT_LIVE, doc)
     expect(any("outside its" in v and "EngineEnv" in v
@@ -1641,17 +1675,30 @@ def test_field_total_against_the_real_repo():
            "an unaudited scope paragraph placed ahead of the real block "
            "must be rejected")
 
-    # The real SS6.2 procedure sentence, given its old total back.
-    procedure = real_inventory.replace(
-        f"one of the\n   {PROCEDURE_ITEM_ANCHOR}",
-        f"one of the\n   83 {PROCEDURE_ITEM_ANCHOR}", 1)
-    expect(procedure != real_inventory,
-           "the real procedure sentence must be found for this mutation "
-           "to mean anything")
-    expect(any("must state no field total" in v or "outside its" in v
-               for v in audit_field_total(live_fields, procedure)),
-           "restoring the second copy of the total in the real SS6.2 "
-           "procedure sentence must be rejected")
+    # The real SS6.2 procedure sentence, given its old total back --
+    # plain, and again wearing code font.
+    for restored in ("83", "`83`"):
+        procedure = real_inventory.replace(
+            f"one of the\n   {PROCEDURE_ITEM_ANCHOR}",
+            f"one of the\n   {restored} {PROCEDURE_ITEM_ANCHOR}", 1)
+        expect(procedure != real_inventory,
+               f"the real procedure sentence must be found for the "
+               f"{restored} mutation to mean anything")
+        expect(any("must state no field total" in v or "outside its" in v
+                   for v in audit_field_total(live_fields, procedure)),
+               f"restoring the second copy of the total ({restored}) in "
+               f"the real SS6.2 procedure sentence must be rejected")
+
+    # And the real SS1, given a code-font copy after its block.
+    spans2, _ = extract_marked_spans(
+        real_inventory, FIELD_TOTAL_OPEN, FIELD_TOTAL_CLOSE)
+    tail = real_inventory[:spans2[0].end] + \
+        "\n\nThe record has `83` fields.\n" + \
+        real_inventory[spans2[0].end:]
+    expect(any("outside its" in v for v in
+               audit_field_total(live_fields, tail)),
+           "a code-font second count after the real block must be "
+           "rejected")
 
 
 def test_real_repo_end_state():
@@ -1862,6 +1909,9 @@ def main() -> int:
         test_scope_block_must_be_section_ones_first_content,
         test_scope_section_may_state_no_other_number,
         test_scope_section_allows_code_spans_and_references,
+        test_scope_section_code_span_total_rejected,
+        test_procedure_item_code_span_total_rejected,
+        test_source_location_spans_stay_exempt,
         test_stray_engineenv_total_anywhere_rejected,
         test_bare_field_counts_elsewhere_are_not_flagged,
         test_field_total_block_outside_section_one_rejected,

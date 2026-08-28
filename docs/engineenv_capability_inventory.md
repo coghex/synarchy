@@ -60,9 +60,11 @@ correctly. Do not restate the count elsewhere in this document, and do
 not put a second number (a line anchor above all) inside the block; the
 audit rejects both. The block is pinned to where it sits, not merely
 to this section: it must be §1's first content, §1 may state no other
-number outside it (section and issue references, and numbers inside
-`code spans`, excepted), and the whole document is swept for the
-phrase shape `<n> EngineEnv fields`. §6.2's first assignment-method
+number outside it (section and issue references excepted, along with a
+source-location span such as `src/Engine/Core/State.hs:446` — but not
+a bare number in code font, which is a field total wearing a citation's
+clothes), and the whole document is swept for the phrase shape
+`<n> EngineEnv fields`. §6.2's first assignment-method
 item, which used to repeat the total, is held to the same result
 without markers — see the note there.
 
