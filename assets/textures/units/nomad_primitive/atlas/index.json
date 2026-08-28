@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "generator": "tools/pack_atlas.py",
+  "tool_version": 1,
+  "digest_algorithm": "sha256",
+  "unit": "nomad_primitive",
+  "direction_order": [
+    "south",
+    "south-west",
+    "west",
+    "north-west",
+    "north",
+    "north-east",
+    "east",
+    "south-east"
+  ],
+  "animations": [
+    {
+      "name": "attack_heavy_unarmed",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/nomad_primitive/atlas/attack_heavy_unarmed.png",
+      "atlas_width": 576,
+      "atlas_height": 320,
+      "cell_width": 64,
+      "cell_height": 64,
+      "columns": 9,
+      "rows": 5,
+      "flip": true,
+      "fps": 10.0,
+      "loop": false,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 9
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "c72a1b3203a94db446349b9a34f3bbe28205f7f4a96472bc26dd3fb49428008f",
+      "atlas_digest": "464e1e631cf3b02e5b990e97c5e5bced9159517750ea6ff22d0d547fdf2f0358"
+    },
+    {
+      "name": "attack_quick_unarmed",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/nomad_primitive/atlas/attack_quick_unarmed.png",
+      "atlas_width": 320,
+      "atlas_height": 320,
+      "cell_width": 64,
+      "cell_height": 64,
+      "columns": 5,
+      "rows": 5,
+      "flip": true,
+      "fps": 10.0,
+      "loop": false,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 5
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 5
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 5
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 5
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 5
+        }
+      ],
+      "source_digest": "585fd3b8d05deb08ebc0e45504abf4a596f2e2223cf6d87496839c5a9e86820d",
+      "atlas_digest": "f4cdcea3adca5e856896c267e738877b4890db3648cd5d224c1bbfc0f92b5aa8"
+    }
+  ]
+}

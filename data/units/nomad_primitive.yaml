@@ -1,0 +1,96 @@
+# Asset-only staging declaration for #916's owner-reviewed hostile nomad art.
+# This becomes a gameplay `units:` definition only after the required
+# animation set and encounter contract are approved.
+asset_units:
+  - name: nomad_primitive
+    animations:
+      attack_heavy_unarmed:
+        fps: 10
+        loop: false
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/nomad_primitive/animations/attack_heavy_unarmed/south/frame_000.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_heavy_unarmed/south/frame_001.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_heavy_unarmed/south/frame_002.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_heavy_unarmed/south/frame_003.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_heavy_unarmed/south/frame_004.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_heavy_unarmed/south/frame_005.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_heavy_unarmed/south/frame_006.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_heavy_unarmed/south/frame_007.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_heavy_unarmed/south/frame_008.png"
+          south-east:
+            - "assets/textures/units/nomad_primitive/animations/attack_heavy_unarmed/south-east/frame_000.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_heavy_unarmed/south-east/frame_001.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_heavy_unarmed/south-east/frame_002.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_heavy_unarmed/south-east/frame_003.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_heavy_unarmed/south-east/frame_004.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_heavy_unarmed/south-east/frame_005.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_heavy_unarmed/south-east/frame_006.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_heavy_unarmed/south-east/frame_007.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_heavy_unarmed/south-east/frame_008.png"
+          east:
+            - "assets/textures/units/nomad_primitive/animations/attack_heavy_unarmed/east/frame_000.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_heavy_unarmed/east/frame_001.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_heavy_unarmed/east/frame_002.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_heavy_unarmed/east/frame_003.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_heavy_unarmed/east/frame_004.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_heavy_unarmed/east/frame_005.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_heavy_unarmed/east/frame_006.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_heavy_unarmed/east/frame_007.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_heavy_unarmed/east/frame_008.png"
+          north-east:
+            - "assets/textures/units/nomad_primitive/animations/attack_heavy_unarmed/north-east/frame_000.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_heavy_unarmed/north-east/frame_001.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_heavy_unarmed/north-east/frame_002.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_heavy_unarmed/north-east/frame_003.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_heavy_unarmed/north-east/frame_004.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_heavy_unarmed/north-east/frame_005.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_heavy_unarmed/north-east/frame_006.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_heavy_unarmed/north-east/frame_007.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_heavy_unarmed/north-east/frame_008.png"
+          north:
+            - "assets/textures/units/nomad_primitive/animations/attack_heavy_unarmed/north/frame_000.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_heavy_unarmed/north/frame_001.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_heavy_unarmed/north/frame_002.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_heavy_unarmed/north/frame_003.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_heavy_unarmed/north/frame_004.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_heavy_unarmed/north/frame_005.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_heavy_unarmed/north/frame_006.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_heavy_unarmed/north/frame_007.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_heavy_unarmed/north/frame_008.png"
+      attack_quick_unarmed:
+        fps: 10
+        loop: false
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/nomad_primitive/animations/attack_quick_unarmed/south/frame_000.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_quick_unarmed/south/frame_001.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_quick_unarmed/south/frame_002.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_quick_unarmed/south/frame_003.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_quick_unarmed/south/frame_004.png"
+          south-east:
+            - "assets/textures/units/nomad_primitive/animations/attack_quick_unarmed/south-east/frame_000.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_quick_unarmed/south-east/frame_001.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_quick_unarmed/south-east/frame_002.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_quick_unarmed/south-east/frame_003.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_quick_unarmed/south-east/frame_004.png"
+          east:
+            - "assets/textures/units/nomad_primitive/animations/attack_quick_unarmed/east/frame_000.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_quick_unarmed/east/frame_001.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_quick_unarmed/east/frame_002.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_quick_unarmed/east/frame_003.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_quick_unarmed/east/frame_004.png"
+          north-east:
+            - "assets/textures/units/nomad_primitive/animations/attack_quick_unarmed/north-east/frame_000.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_quick_unarmed/north-east/frame_001.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_quick_unarmed/north-east/frame_002.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_quick_unarmed/north-east/frame_003.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_quick_unarmed/north-east/frame_004.png"
+          north:
+            - "assets/textures/units/nomad_primitive/animations/attack_quick_unarmed/north/frame_000.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_quick_unarmed/north/frame_001.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_quick_unarmed/north/frame_002.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_quick_unarmed/north/frame_003.png"
+            - "assets/textures/units/nomad_primitive/animations/attack_quick_unarmed/north/frame_004.png"
