@@ -74,9 +74,13 @@ DEFAULT_FLAVOR_MODEL = "claude-haiku-4-5"
 FLAVOR_SCHEMA = {
     "type": "object",
     "properties": {
-        "name": {"type": "string",
+        # minLength keeps a structured-output model off the empty string,
+        # but it cannot express "not whitespace-only" or "slugs to
+        # something" — llm_flavor applies the full rule to structured and
+        # fallback completions alike (#1701).
+        "name": {"type": "string", "minLength": 1,
                  "description": "short snake_case handle, adjective_firstname style"},
-        "blurb": {"type": "string",
+        "blurb": {"type": "string", "minLength": 1,
                   "description": "one-paragraph third-person persona voice"},
     },
     "required": ["name", "blurb"],
@@ -340,6 +344,23 @@ def _slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", str(text).lower()).strip("_")
 
 
+def _flavor_field(data: dict, field: str) -> str:
+    """One usable string out of a flavor completion, or a ValueError
+    naming the field and what was wrong with it. Nothing is coerced:
+    a non-string is rejected, not stringified (#1701)."""
+    if field not in data:
+        raise ValueError(f"flavor model returned no {field!r} field")
+    value = data[field]
+    if not isinstance(value, str):
+        raise ValueError(f"flavor model returned a non-string {field!r} "
+                         f"field: {type(value).__name__}")
+    text = value.strip()
+    if not text:
+        raise ValueError(f"flavor model returned an empty {field!r} field: "
+                         f"{value!r}")
+    return text
+
+
 def _flavor_prompt(spec: dict) -> str:
     tendencies = "\n".join(f"- {t}" for t in spec["tendencies"])
     return (
@@ -397,16 +418,27 @@ def llm_flavor(spec: dict, model: str = DEFAULT_FLAVOR_MODEL,
     the returned spec: this is the only point prose is ever generated —
     everything downstream (persona files, the H1 trace, replay) reads
     the stored text. Axes/goal/tendencies are never touched, so they
-    stay seed-deterministic. `_complete` is injectable for tests."""
+    stay seed-deterministic. `_complete` is injectable for tests.
+
+    Unusable output is a HARD FAILURE (#1701): _anthropic_complete's
+    compatibility retry parses JSON without applying FLAVOR_SCHEMA, so
+    every completion is validated here. A rejected one raises and
+    returns no spec at all — never the template prose carrying a
+    `flavored: true` claim it didn't earn."""
     complete = _complete or _anthropic_complete
     data = complete(_flavor_prompt(spec), model)
+    if not isinstance(data, dict):
+        raise ValueError("flavor model returned a non-object completion: "
+                         f"{type(data).__name__}")
+    raw_name = _flavor_field(data, "name")
+    blurb = _flavor_field(data, "blurb")
+    name = _slug(raw_name)
+    if not name:
+        raise ValueError("flavor model returned a 'name' field that "
+                         f"normalizes to nothing: {raw_name!r}")
     out = dict(spec)
-    name = _slug(data.get("name", ""))
-    blurb = str(data.get("blurb", "")).strip()
-    if name:
-        out["name"] = name
-    if blurb:
-        out["temperament"] = blurb
+    out["name"] = name
+    out["temperament"] = blurb
     out["llm"] = {"model": model, "flavored": True}
     return out
 
@@ -434,6 +466,7 @@ def _dump(spec: dict) -> str:
 
 def selftest() -> int:
     """Offline check — no engine, no API key, no window."""
+    import copy
     import tempfile
     failures = []
 
@@ -587,6 +620,40 @@ def selftest() -> int:
         reloaded = load_persona(path)
         check("saved flavored spec replays stored prose verbatim",
               reloaded == flavored and calls == ["fake-model"])
+
+    # 5b. unusable flavor output is rejected outright (#1701) — the old
+    # code coerced it, kept the template prose, and still wrote
+    # `flavored: true`, so a paid session ran on degenerate prose while
+    # the spec claimed the flavoring had worked
+    check("FLAVOR_SCHEMA excludes zero-length strings",
+          all(FLAVOR_SCHEMA["properties"][f].get("minLength", 0) >= 1
+              for f in ("name", "blurb")))
+    before = copy.deepcopy(a)
+    rejections = [
+        ("a non-object completion", ["a", "b"], "list"),
+        ("a missing name", {"blurb": "ok blurb"}, "name"),
+        ("a non-string name", {"name": 123, "blurb": "ok blurb"}, "name"),
+        ("an empty name", {"name": "", "blurb": "ok blurb"}, "name"),
+        ("a whitespace-only name", {"name": " \t ", "blurb": "ok blurb"},
+         "name"),
+        ("a name that slugs to nothing", {"name": "!!!", "blurb": "ok blurb"},
+         "name"),
+        ("a missing blurb", {"name": "ok_name"}, "blurb"),
+        ("a non-string blurb", {"name": "ok_name", "blurb": {"a": 1}},
+         "blurb"),
+        ("an empty blurb", {"name": "ok_name", "blurb": ""}, "blurb"),
+        ("a whitespace-only blurb", {"name": "ok_name", "blurb": " \n "},
+         "blurb"),
+    ]
+    for label, payload, reason in rejections:
+        try:
+            llm_flavor(a, model="fake-model",
+                       _complete=lambda _p, _m, r=payload: r)
+            check(f"flavor rejects {label}", False, "no ValueError raised")
+        except ValueError as e:
+            check(f"flavor rejects {label}", reason in str(e), str(e))
+    check("a rejected completion leaves the input spec untouched",
+          a == before and "llm" not in a)
 
     # 6. the axes data file is not offered as a persona
     bundled = list_personas()
