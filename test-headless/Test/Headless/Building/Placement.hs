@@ -73,6 +73,7 @@ import Location.Types
 import Location.Overlay.Types (LocationOverlay)
 import Location.Instance
     (LocationInstances, buildLocationInstances, emptyLocationInstances)
+import Test.Headless.Location.Fixture (expectGeometry)
 import Location.Bounds (RelBounds(..))
 import Language.Semantic.Types (ConceptId(..))
 
@@ -199,7 +200,7 @@ overlay1 = HM.singleton (ChunkCoord 0 0) "loc1"
 --   (#911) — built from the overlay above exactly the way world init
 --   builds it, so the stored bounds are the same (6,6)..(10,10) box.
 instances1 ∷ LocationInstances
-instances1 = buildLocationInstances Nothing registry1 overlay1
+instances1 = expectGeometry (buildLocationInstances Nothing registry1 overlay1)
 
 -- | An unoccupied manager — the location-exclusion tests don't need
 --   any existing buildings.
@@ -308,8 +309,9 @@ spec = describe "Portal location exclusion (#778)" $ do
         -- (6,22)..(10,26), which DOES contain footprint tile (8,24) —
         -- physically adjacent across the wrap even though the raw
         -- coordinates are far apart.
-        let seamInstances = buildLocationInstances Nothing registry1
-                                (HM.singleton (ChunkCoord 1 0) "loc1")
+        let seamInstances = expectGeometry
+                (buildLocationInstances Nothing registry1
+                    (HM.singleton (ChunkCoord 1 0) "loc1"))
             seamWtd = worldWithChunks [flatChunkAt (ChunkCoord 0 1) 5]
             seamCheck ws = canPlaceAt noBuildings seamWtd seamInstances
                                        ws portalDef 8 24
