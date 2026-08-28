@@ -25,8 +25,9 @@ import Engine.Core.Log
     ( initLogger, defaultLogConfig, LogConfig(..), LogBackend(..)
     , LogCategory(..), LogLevel(..), LogEntry(..), LoggerState )
 import Engine.Asset.YamlLocations
-    ( LocationYamlBounds(..), LocationYamlDef(..), LocationYamlFile(..)
-    , authoredLocationCoordinateLimit, loadLocationYaml )
+    ( LocationYamlBounds(..), LocationYamlContent(..), LocationYamlDef(..)
+    , LocationYamlFile(..), authoredLocationCoordinateLimit
+    , loadLocationYaml )
 import Location.Bounds
 
 decodeBounds ∷ BS.ByteString → Either String LocationYamlBounds
@@ -248,6 +249,125 @@ spec = describe "Location spatial bounds" $ do
                 `shouldBe` Right ["ok"]
             decodeFile withBad
                 `shouldSatisfy` rejectedNamingFields "bad" ["'structure'"]
+
+        -- #1721: `count` and `rolls` are per-entry MULTIPLICITIES with a
+        -- positive domain, closed at this same entry point. A
+        -- non-positive value used to load cleanly, spawn nothing (the
+        -- Lua spawn loops run zero iterations), log nothing, and then be
+        -- recorded as the location's permanent exactly-once content
+        -- lifecycle -- invisible at every layer.
+        it "rejects a zero `count`, naming the location, the entry and \
+           \the offending value" $
+            decodeDef
+                "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] },\
+                \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
+                \  contents: [ { kind: unit, id: raider, count: 0 } ] }"
+                `shouldSatisfy`
+                    rejectedNamingFields "t"
+                        ["content entry 1", "'raider'", "'count'", "0"]
+
+        it "rejects a negative `count`" $
+            decodeDef
+                "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] },\
+                \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
+                \  contents: [ { kind: unit, id: raider, count: -1 } ] }"
+                `shouldSatisfy`
+                    rejectedNamingFields "t"
+                        ["content entry 1", "'raider'", "'count'", "-1"]
+
+        it "rejects a zero `rolls`" $
+            decodeDef
+                "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] },\
+                \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
+                \  contents: [ { kind: loot_table, id: ruin_common, rolls: 0 } ] }"
+                `shouldSatisfy`
+                    rejectedNamingFields "t"
+                        ["content entry 1", "'ruin_common'", "'rolls'", "0"]
+
+        it "rejects a negative `rolls`" $
+            decodeDef
+                "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] },\
+                \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
+                \  contents: [ { kind: loot_table, id: ruin_common, rolls: -4 } ] }"
+                `shouldSatisfy`
+                    rejectedNamingFields "t"
+                        ["content entry 1", "'ruin_common'", "'rolls'", "-4"]
+
+        -- The index must be the 1-based POSITION in `contents`, the same
+        -- index `ipairs`/`rollCtx.index` and the Lua-facing `zip [1..]`
+        -- already use. A fixture whose only bad entry is the first
+        -- cannot tell a 1-based index from a 0-based one, or from a
+        -- hard-coded constant.
+        it "names the 1-based position of a bad entry that is NOT the \
+           \first in the list" $ do
+            let bad = decodeDef
+                    "{ id: t, builder: b,\
+                    \  naming: { heads: [KEEP], modifiers: [ASH] },\
+                    \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
+                    \  contents: [ { kind: unit, id: raider, count: 2 },\
+                    \              { kind: item, id: canteen },\
+                    \              { kind: loot_table, id: ruin_common,\
+                    \                rolls: -7 } ] }"
+            bad `shouldSatisfy`
+                rejectedNamingFields "t"
+                    ["content entry 3", "'ruin_common'", "'rolls'", "-7"]
+            -- ...and NOT the position it would carry under a 0-based or
+            -- constant index.
+            bad `shouldNotSatisfy` rejectedNamingFields "t" ["content entry 2"]
+
+        it "accepts positive multiplicities and retains the authored \
+           \values exactly" $
+            fmap (map (\c → (lycId c, lycCount c, lycRolls c)) . lydContents)
+                (decodeDef
+                    "{ id: t, builder: b,\
+                    \  naming: { heads: [KEEP], modifiers: [ASH] },\
+                    \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
+                    \  contents: [ { kind: unit, id: raider, count: 3 },\
+                    \              { kind: loot_table, id: ruin_common,\
+                    \                rolls: 2 },\
+                    \              { kind: item, id: canteen, count: 1,\
+                    \                rolls: 1 } ] }")
+                `shouldBe` Right [ ("raider", 3, 1)
+                                 , ("ruin_common", 1, 2)
+                                 , ("canteen", 1, 1) ]
+
+        -- An explicit YAML `null` reads as absence through aeson's `.:?`
+        -- and must keep doing so: this rejection constrains the numeric
+        -- domain, it does not change what counts as omitted.
+        it "defaults an omitted -- or explicitly null -- `count` and \
+           \`rolls` to 1" $
+            fmap (map (\c → (lycId c, lycCount c, lycRolls c)) . lydContents)
+                (decodeDef
+                    "{ id: t, builder: b,\
+                    \  naming: { heads: [KEEP], modifiers: [ASH] },\
+                    \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
+                    \  contents: [ { kind: item, id: canteen },\
+                    \              { kind: unit, id: raider, count: null,\
+                    \                rolls: null } ] }")
+                `shouldBe` Right [ ("canteen", 1, 1), ("raider", 1, 1) ]
+
+        it "one non-positive multiplicity fails the WHOLE file's load \
+           \(#1721) -- the surviving defs are not returned without it" $ do
+            let goodOnly = "{ locations: [\
+                    \ { id: ok, builder: b,\
+                    \   naming: { heads: [KEEP], modifiers: [ASH] },\
+                    \   bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
+                    \   contents: [ { kind: loot_table, id: l, rolls: 2 } ] } ] }"
+                withBad = "{ locations: [\
+                    \ { id: ok, builder: b,\
+                    \   naming: { heads: [KEEP], modifiers: [ASH] },\
+                    \   bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
+                    \   contents: [ { kind: loot_table, id: l, rolls: 2 } ] },\
+                    \ { id: bad, builder: b,\
+                    \   naming: { heads: [KEEP], modifiers: [ASH] },\
+                    \   bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
+                    \   contents: [ { kind: unit, id: raider, count: 0 } ] } ] }"
+            fmap (map lydId . lyfLocations) (decodeFile goodOnly)
+                `shouldBe` Right ["ok"]
+            decodeFile withBad
+                `shouldSatisfy`
+                    rejectedNamingFields "bad"
+                        ["content entry 1", "'raider'", "'count'", "0"]
 
         it "the shipped ruin_small.yaml declares the exact 5x5 contract" $ do
             result ← Yaml.decodeFileEither "data/locations/ruin_small.yaml"
