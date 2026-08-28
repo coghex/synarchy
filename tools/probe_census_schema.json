@@ -231,8 +231,9 @@
       "type": "object",
       "required": ["attempt", "outcome", "reason", "probe", "timestamp_utc",
                    "baseline_sha", "acceptable_failures", "targets",
-                   "measurements", "retained_artifacts", "summary",
-                   "recommendation", "comparison"],
+                   "configuration", "invocation", "measurements",
+                   "retained_artifacts", "summary", "recommendation",
+                   "comparison"],
       "additionalProperties": false,
       "properties": {
         "attempt": {"type": "string", "minLength": 1, "maxLength": 128},
@@ -252,6 +253,11 @@
         "baseline_sha": {"$ref": "#/$defs/commit_sha"},
         "acceptable_failures": {"type": "integer", "minimum": 0, "maximum": 9},
         "targets": {"type": "array", "items": {"$ref": "#/$defs/check_id"}},
+        "configuration": {
+          "$comment": "The gitignored config/*.local.yaml manifest both controlled batches read, as tools/deflake.py records it. An EMPTY list is the expected default and a real statement -- every member of the family absent -- so the KEY is required and the entries are not.",
+          "type": "array", "items": {"$ref": "#/$defs/outcome_config_entry"}
+        },
+        "invocation": {"$ref": "#/$defs/outcome_invocation"},
         "measurements": {
           "type": "array",
           "items": {"$ref": "#/$defs/outcome_measurement"}
@@ -273,6 +279,30 @@
           "then": true,
           "else": {"$ref": "#/$defs/outcome_comparison"}
         }
+      }
+    },
+
+    "outcome_config_entry": {
+      "type": "object",
+      "required": ["path", "sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+
+    "outcome_invocation": {
+      "$comment": "WHICH /deflake invocation the diagnosis consumed: the exact command and the directory it ran in. The census row cannot answer this -- probe_census.ingest_result drops the command and the invocation directory -- so an outcome record that did not keep it could not say what was actually run.",
+      "type": "object",
+      "required": ["command", "directory"],
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "type": "array", "minItems": 1,
+          "items": {"type": "string", "minLength": 1, "maxLength": 4096}
+        },
+        "directory": {"type": "string", "minLength": 1, "maxLength": 4096}
       }
     },
 

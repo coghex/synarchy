@@ -174,7 +174,21 @@ falls through to a publisher.
 Raw stdout, protocol streams and engine logs stay in the harness's
 artifact tree outside every worktree; only their path references are
 stored, exactly as `probe_census.summarize_sample` already does for a
-measurement.
+measurement — and every path this module would store is REFUSED if it
+lies inside one, which `probe_flake.check_artifact_root` enforces at
+measurement time and this enforces again at the point a path enters a
+durable record. The comparison worktrees the producer record declares
+are checked beside the live registered ones, because `/deflake` removes
+them when it finishes and an artifact that sat inside one was still
+inside a worktree when it was written.
+
+The record also keeps two inputs no census field has ever held: the
+configuration manifest both batches read, and the exact command and
+directory of the `/deflake` invocation the diagnosis consumed.
+`probe_census.ingest_result` drops the command and the invocation
+directory, and nothing in the census stores the manifest at all, so an
+outcome record without them could not say what was run or under what
+state — which is the first thing anyone resuming an attempt needs.
 """
 from __future__ import annotations
 
@@ -393,7 +407,7 @@ def _delegate(call, what: str):
         raise HandoffError(f"{what}: {error}") from None
 
 
-def require_artifact_reference(value, what: str) -> str:
+def require_artifact_reference(value, what: str, *, worktrees=()) -> str:
     """One retained-artifact path, stored as a REFERENCE and nothing else.
 
     Absolute because `probe_flake.check_artifact_root` resolves its root
@@ -401,13 +415,81 @@ def require_artifact_reference(value, what: str) -> str:
     relative entry names nothing a later reader can find. The census
     stores this string; it never opens the directory and never copies a
     byte of what is inside it.
+
+    And OUTSIDE every worktree, which `probe_flake.check_artifact_root`
+    refuses at measurement time and #1437 re-checks on every path a
+    result names. Restating it here is not redundant: this module is
+    what puts a path into a durable record, "raw artifacts do not enter
+    a worktree" is one of the guarantees that record carries, and a
+    self-consistent handoff that named a worktree-resident tree would
+    otherwise pass every other check and be stored. Containment is
+    compared over `_path_forms`, so a `..` segment or a symlinked
+    spelling of the same place is the same place.
     """
     text = _require_text(value, what, limit=4096)
     if not Path(text).is_absolute():
         raise HandoffError(
             f"{what} must be an absolute path, got {text!r}; the census "
             f"stores artifact references, and a relative one names nothing")
+    tree = deflake_diagnosis.inside_any_worktree(text, worktrees)
+    if tree is not None:
+        raise HandoffError(
+            f"{what} is {text!r}, inside the worktree {tree}; raw probe "
+            f"artifacts stay outside every worktree, and a census record "
+            f"that referenced one would be pointing at evidence a checkout "
+            f"can overwrite")
     return text
+
+
+def require_configuration(value, what: str) -> list:
+    """The manifest of gitignored configuration the batches read.
+
+    #1437 validates this and then states it in its record; this requires
+    it and STORES it, because "resume without repeating completed work"
+    means a later reader can establish which configuration the numbers
+    were measured under — and no census field has ever held it.
+
+    Held to #1437's own `require_manifest`, called rather than
+    reimplemented: the family rule, the digest shape and the
+    duplicate-path rule are that module's, and a second copy is how the
+    two would come to disagree about what a manifest entry may be. An
+    EMPTY entry list is the expected default and a real statement —
+    every `config/*.local.yaml` absent — so the KEY is required and the
+    entries are not.
+
+    What is stored is the ENTRIES. The manifest also names the root it
+    was scanned from, which is a machine-local scratch path that means
+    nothing to a later reader of the census.
+    """
+    try:
+        manifest = deflake_diagnosis.require_manifest(value, what)
+    except deflake_diagnosis.HandoffError as error:
+        raise HandoffError(str(error)) from None
+    return [{"path": entry["path"], "sha256": entry["sha256"]}
+            for entry in manifest["entries"]]
+
+
+def require_invocation_identity(section, what: str) -> dict:
+    """WHICH `/deflake` invocation the diagnosis consumed.
+
+    The exact command and the directory it ran in. The census row cannot
+    answer this — `probe_census.ingest_result` drops the command and the
+    invocation directory — so a record that did not keep it could not
+    say what was actually run, which is the first thing anyone resuming
+    an attempt needs.
+    """
+    record = _require_object(section, what)
+    command = _require_string_list(record.get("command"), f"{what}.command")
+    if not command:
+        raise HandoffError(
+            f"{what}.command is empty; a measurement nobody can say the "
+            f"command for cannot be repeated")
+    directory = _require_text(record.get("directory"), f"{what}.directory",
+                              limit=4096)
+    if not Path(directory).is_absolute():
+        raise HandoffError(
+            f"{what}.directory is {directory!r}, not an absolute path")
+    return {"command": command, "directory": directory}
 
 
 class Measurement:
@@ -638,6 +720,14 @@ class Handoff:
     def baseline_sha(self) -> str:
         return self.diagnosis["baseline_sha"]
 
+    @property
+    def configuration(self) -> list:
+        return copy.deepcopy(self.diagnosis["configuration"])
+
+    @property
+    def invocation(self) -> dict:
+        return copy.deepcopy(self.diagnosis["invocation"])
+
     def measurement(self, role: str):
         return self.measurements.get(role)
 
@@ -663,7 +753,7 @@ def _registered_probes() -> set:
     return {key for key, _script, _purpose in run_probes.PROBES}
 
 
-def require_diagnosis_outcome(document) -> dict:
+def require_diagnosis_outcome(document, *, worktrees=()) -> dict:
     """#1437's producer record, held to the fields this consumer reads.
 
     Deliberately not a re-validation of the whole
@@ -738,18 +828,21 @@ def require_diagnosis_outcome(document) -> dict:
         "the diagnosis outcome's `retained_artifacts`")
     for path in artifacts:
         require_artifact_reference(
-            path, "a retained artifact of the diagnosis outcome")
+            path, "a retained artifact of the diagnosis outcome",
+            worktrees=worktrees)
     # WHICH measurement #1437 judged for each batch it ran. A route that
     # ran no such batch states `null` rather than dropping the key, so an
     # absent reference is a fact about the invocation and not a gap.
     references = {
         ROLE_HANDOFF: _batch_reference(
-            outcome.get("handoff"), "the diagnosis outcome's `handoff`"),
+            outcome.get("handoff"), "the diagnosis outcome's `handoff`",
+            worktrees=worktrees),
         ROLE_BASELINE: _batch_reference(
-            outcome.get("baseline"), "the diagnosis outcome's `baseline`"),
+            outcome.get("baseline"), "the diagnosis outcome's `baseline`",
+            worktrees=worktrees),
         ROLE_VERIFICATION: _batch_reference(
             outcome.get("verification"),
-            "the diagnosis outcome's `verification`"),
+            "the diagnosis outcome's `verification`", worktrees=worktrees),
     }
     return {
         "route": route,
@@ -760,6 +853,11 @@ def require_diagnosis_outcome(document) -> dict:
         "baseline_sha": baseline_sha,
         "retained_artifacts": artifacts,
         "references": references,
+        "configuration": require_configuration(
+            outcome.get("configuration"),
+            "the diagnosis outcome's `configuration`"),
+        "invocation": require_invocation_identity(
+            outcome.get("handoff"), "the diagnosis outcome's `handoff`"),
     }
 
 
@@ -773,7 +871,7 @@ REFERENCE_FIELDS = ("commit_sha", "timestamp_utc", "artifact_root",
                     "invocation_dir", "retained_artifacts")
 
 
-def _batch_reference(section, what: str):
+def _batch_reference(section, what: str, *, worktrees=()):
     """The identity #1437 recorded for one batch, or None if it ran none.
 
     #1437's outcome document carries a REFERENCE per batch rather than
@@ -794,19 +892,23 @@ def _batch_reference(section, what: str):
         reference.get("retained_artifacts"),
         f"{what}'s `retained_artifacts`")
     for path in artifacts:
-        require_artifact_reference(path, f"a retained artifact of {what}")
+        require_artifact_reference(path, f"a retained artifact of {what}",
+                                   worktrees=worktrees)
     return {
         "commit_sha": commit,
         "timestamp_utc": stamp,
         "artifact_root": require_artifact_reference(
-            reference.get("artifact_root"), f"{what}'s `artifact_root`"),
+            reference.get("artifact_root"), f"{what}'s `artifact_root`",
+            worktrees=worktrees),
         "invocation_dir": require_artifact_reference(
-            reference.get("invocation_dir"), f"{what}'s `invocation_dir`"),
+            reference.get("invocation_dir"), f"{what}'s `invocation_dir`",
+            worktrees=worktrees),
         "retained_artifacts": artifacts,
     }
 
 
-def require_measurement(entry, *, probe: str, seen: set) -> Measurement:
+def require_measurement(entry, *, probe: str, seen: set,
+                        worktrees=()) -> Measurement:
     """One declared measurement, bound to its own exit code."""
     section = _require_object(entry, "a declared measurement")
     role = section.get("role")
@@ -854,7 +956,12 @@ def require_measurement(entry, *, probe: str, seen: set) -> Measurement:
             f"produce (expected {expected_status!r})")
     for path in result["retained_artifacts"]:
         require_artifact_reference(
-            path, f"a retained artifact of the {role} measurement")
+            path, f"a retained artifact of the {role} measurement",
+            worktrees=worktrees)
+    for field in ("artifact_root", "invocation_dir"):
+        require_artifact_reference(
+            result[field], f"the {role} measurement's `{field}`",
+            worktrees=worktrees)
     return Measurement(role, exit_code, result)
 
 
@@ -915,7 +1022,26 @@ def _bind_to_producer(measurement: Measurement, diagnosis: dict) -> None:
                 f"evidence")
 
 
-def require_handoff(document) -> Handoff:
+def declared_worktrees(document) -> list:
+    """The comparison worktrees the producer record names, if any.
+
+    Collected BEFORE anything is admitted, and kept beside the live
+    registered ones, because the workflow removes or hands off both
+    comparison worktrees when it finishes: by the time an outcome is
+    recorded the paths it correctly names may no longer be registered,
+    and an artifact that sat inside one was still inside a worktree when
+    it was written.
+    """
+    trees = []
+    for section in ("baseline", "verification"):
+        record = document.get(section) if isinstance(document, dict) else None
+        tree = record.get("worktree") if isinstance(record, dict) else None
+        if isinstance(tree, str) and tree:
+            trees.append(tree)
+    return trees
+
+
+def require_handoff(document, *, worktrees=(), primary=None) -> Handoff:
     """One `deflake-outcome-handoff/v1`, or the refusal that names why."""
     envelope = _require_object(document, "the outcome handoff")
     schema = envelope.get("schema")
@@ -927,7 +1053,13 @@ def require_handoff(document) -> Handoff:
     summary = _require_text(envelope.get("summary"),
                             "the handoff's diagnostic or attempted-fix "
                             "`summary`", limit=MAX_SUMMARY)
-    diagnosis = require_diagnosis_outcome(envelope.get("diagnosis_outcome"))
+    trees = [tree for tree in
+             list(worktrees) + declared_worktrees(
+                 envelope.get("diagnosis_outcome"))
+             + ([primary] if primary else [])
+             if tree]
+    diagnosis = require_diagnosis_outcome(envelope.get("diagnosis_outcome"),
+                                          worktrees=trees)
     entries = envelope.get("measurements")
     if not isinstance(entries, list) or not entries:
         raise HandoffError(
@@ -936,7 +1068,8 @@ def require_handoff(document) -> Handoff:
     measurements: dict = {}
     for entry in entries:
         measurement = require_measurement(entry, probe=diagnosis["probe"],
-                                          seen=set(measurements))
+                                          seen=set(measurements),
+                                          worktrees=trees)
         measurements[measurement.role] = measurement
     roles = ROUTE_ROLES[diagnosis["route"]]
     for role in roles["required"]:
@@ -1207,6 +1340,13 @@ def outcome_record(handoff: Handoff, *, now: str) -> dict:
         "baseline_sha": handoff.baseline_sha,
         "acceptable_failures": handoff.acceptable_failures,
         "targets": handoff.targets,
+        # The condition the numbers were measured under, and the
+        # invocation that produced them. Neither is derivable from a
+        # census row: `probe_census.ingest_result` drops the command and
+        # the invocation directory, and no census field has ever held
+        # the configuration manifest at all.
+        "configuration": handoff.configuration,
+        "invocation": handoff.invocation,
         "measurements": [handoff.measurements[role].summary()
                          for role in ROLES if role in handoff.measurements],
         "retained_artifacts": handoff.artifacts(),
@@ -1345,7 +1485,10 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
 
     try:
-        handoff = require_handoff(_load(args.handoff, "outcome handoff"))
+        handoff = require_handoff(
+            _load(args.handoff, "outcome handoff"),
+            worktrees=deflake_diagnosis.worktree_paths(),
+            primary=deflake_diagnosis.primary_checkout())
         census_path = (Path(args.census) if args.census
                        else probe_census.manifest_path())
         recorded = record(handoff, census_path=census_path, now=utc_now())

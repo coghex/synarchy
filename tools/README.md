@@ -2176,9 +2176,22 @@ INDEPENDENT `Reason` records, so "it turned out not to be flaky" is one of
 them and the rest still stand; acting on the recommendation is a person's
 decision taken with all of them in view.
 
+**Paths are bounded, not merely absolute.** Every artifact reference this module
+would store is refused if it lies inside a worktree — the live registered ones
+AND the comparison worktrees the producer record declares, because `/deflake`
+removes those when it finishes and an artifact that sat inside one was still
+inside a worktree when it was written. Containment is compared over resolved
+path forms, so a `..` segment or a symlinked spelling of the same place is the
+same place. `probe_flake.check_artifact_root` enforces this at measurement
+time; restating it here is what stops a self-consistent handoff putting a
+worktree-resident tree into a durable record.
+
 **Durable, idempotent, and destroying nothing.** The stored record is a RESUME
-point — attempt identity, probe, timestamp, baseline commit, X, targets, one
-summary per measurement (commit, timestamp, run counts, failure and timeout
+point — attempt identity, probe, timestamp, baseline commit, X, targets, the
+configuration manifest both batches read, the exact command and directory of
+the `/deflake` invocation consumed (neither of which any census field has ever
+held: `ingest_result` drops the command and the invocation directory, and
+nothing stores the manifest), one summary per measurement (commit, timestamp, run counts, failure and timeout
 counts, rate, RTS capabilities, per-run outcomes, per-check PASS/FAIL/MISSING
 tallies), the retained artifact REFERENCES, the summary, and the
 route-specific evidence. Recording is idempotent on the attempt identity: a

@@ -4933,7 +4933,8 @@ def census_file():
 def record_outcome(handoff_document_, path, *, publisher=None, now=OUTCOME_NOW):
     """Run the whole workflow over one handoff, with a spy publisher."""
     publisher = Publisher() if publisher is None else publisher
-    accepted = do.require_handoff(handoff_document_)
+    accepted = do.require_handoff(handoff_document_, worktrees=WORKTREES,
+                                  primary=PRIMARY_WT)
     return do.record(accepted, census_path=path, now=now,
                      publisher=publisher), publisher
 
@@ -5612,7 +5613,8 @@ def test_partial_improvement_is_numeric_on_both_halves() -> None:
             before = path.read_bytes()
             publisher = Publisher()
             try:
-                do.require_handoff(copy.deepcopy(document))
+                do.require_handoff(copy.deepcopy(document),
+                                   worktrees=WORKTREES, primary=PRIMARY_WT)
             except do.HandoffError as error:
                 expect(fragment in str(error),
                        f"{label}: rejected, but for {str(error)!r} rather "
@@ -6026,6 +6028,75 @@ def test_the_census_stores_references_and_never_raw_evidence() -> None:
                 "commit and sample timestamp")
 
 
+def test_a_removed_comparison_worktree_still_bounds_the_artifacts() -> None:
+    """The paths a record names outlive the worktrees they were inside.
+
+    `/deflake` removes or hands off both comparison worktrees when it
+    finishes, so by the time an outcome is recorded neither is
+    REGISTERED any more — and an artifact that sat inside one was still
+    inside a worktree when it was written. The record's own declared
+    worktrees are therefore collected beside the live ones, which is the
+    only thing standing between a removed worktree's artifacts and the
+    census.
+    """
+    document = outcome_handoff()
+    document["diagnosis_outcome"]["retained_artifacts"] = [
+        f"{CLEAN_WT}/artifacts/run-001"]
+    expect(document["diagnosis_outcome"]["baseline"]["worktree"] == CLEAN_WT,
+           "the record must declare the worktree, or this proves nothing")
+    try:
+        do.require_handoff(copy.deepcopy(document), worktrees=(),
+                           primary=None)
+    except do.HandoffError as error:
+        expect("inside the worktree" in str(error),
+               f"a removed worktree's artifacts are still refused; got "
+               f"{error}")
+    else:
+        FAILURES.append("an artifact inside a no-longer-registered "
+                        "comparison worktree was accepted")
+
+
+def test_the_record_keeps_the_condition_and_the_command() -> None:
+    """Two inputs no census field has ever held.
+
+    `probe_census.ingest_result` drops the exact command and the
+    invocation directory, and nothing in the census has ever stored the
+    configuration manifest at all — so a record that did not keep them
+    could not say what was run, or under what state, which is the first
+    thing anyone resuming an attempt needs.
+    """
+    entries = [("config/save.local.yaml", "a" * 64),
+               ("config/video.local.yaml", "b" * 64)]
+    handoff = handoff_document(config=config_entries(entries))
+    diagnosis = diagnosis_document(handoff=handoff)
+    diagnosis["route"] = dd.ROUTE_CANNOT_REPRODUCE
+    diagnosis.pop("attestations", None)
+    diagnosis.pop("repair", None)
+    diagnosis.pop("verification", None)
+    diagnosis["baseline"]["result"] = spotless_result()
+    diagnosis["baseline"]["configuration"] = manifest(entries)
+    record = evaluate(diagnosis).to_document()
+
+    with census_file() as path:
+        recorded, _publisher = record_outcome(outcome_handoff(
+            dd.ROUTE_CANNOT_REPRODUCE, diagnosis_outcome=record,
+            measurements=[
+                {"role": do.ROLE_BASELINE, "exit_code": probe_flake.EXIT_OK,
+                 "result": diagnosis["baseline"]["result"]}]), path)
+        stored = stored_outcomes(path)[0]
+        expect(stored["configuration"] == [
+            {"path": path_, "sha256": digest} for path_, digest in entries],
+            f"the manifest the batches read is stored entry for entry; got "
+            f"{stored['configuration']}")
+        expect(stored["invocation"]["command"]
+               == list(record["handoff"]["command"])
+               and stored["invocation"]["directory"] == PRIMARY_WT,
+               f"and the exact command and directory of the /deflake "
+               f"invocation consumed; got {stored['invocation']}")
+        expect(stored == recorded.record,
+               "and the census holds exactly the record that was built")
+
+
 def test_the_run_count_is_the_measurements_own_not_a_literal() -> None:
     """X out of the handoff's own run count, never X out of ten.
 
@@ -6131,6 +6202,42 @@ def test_a_malformed_outcome_handoff_is_rejected_without_recording() -> None:
          lambda: broken(lambda d: d["diagnosis_outcome"].__setitem__(
              "retained_artifacts", ["artifacts/run-001"])),
          "must be an absolute path"),
+        ("a retained artifact inside the primary checkout",
+         lambda: broken(lambda d: d["diagnosis_outcome"].__setitem__(
+             "retained_artifacts", [f"{PRIMARY_WT}/artifacts/run-001"])),
+         "inside the worktree"),
+        ("a retained artifact inside a comparison worktree",
+         lambda: broken(lambda d: d["diagnosis_outcome"].__setitem__(
+             "retained_artifacts", [f"{CLEAN_WT}/artifacts/run-001"])),
+         "inside the worktree"),
+        ("a batch reference whose artifact root is inside a worktree",
+         lambda: broken(lambda d: d["diagnosis_outcome"]["baseline"]
+                        .__setitem__("artifact_root",
+                                     f"{REPAIR_WT}/artifacts")),
+         "inside the worktree"),
+        ("a batch reference reaching a worktree through a traversal",
+         lambda: broken(lambda d: d["diagnosis_outcome"]["baseline"]
+                        .__setitem__(
+                            "invocation_dir",
+                            f"{OUTSIDE}/../{Path(CLEAN_WT).name}/inv")),
+         "inside the worktree"),
+        ("a diagnosis outcome with no configuration manifest",
+         lambda: broken(lambda d: d["diagnosis_outcome"].pop(
+             "configuration")),
+         "`configuration` must be a JSON object"),
+        ("a configuration entry outside the gitignored family",
+         lambda: broken(lambda d: d["diagnosis_outcome"]["configuration"]
+                        ["entries"].append({"path": "../outside.local.yaml",
+                                            "sha256": "0" * 64})),
+         "not a member of the gitignored"),
+        ("a diagnosis outcome that dropped its invocation command",
+         lambda: broken(lambda d: d["diagnosis_outcome"]["handoff"].pop(
+             "command")),
+         "`handoff`.command must be a list"),
+        ("an invocation directory that is not a path",
+         lambda: broken(lambda d: d["diagnosis_outcome"]["handoff"]
+                        .__setitem__("directory", "relative/checkout")),
+         "not an absolute path"),
         ("a record that dropped its target list",
          lambda: broken(lambda d: d["diagnosis_outcome"].pop("targets"),
                         dd.ROUTE_NO_CONFIDENT_FIX),
