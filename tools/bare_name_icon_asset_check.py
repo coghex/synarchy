@@ -32,12 +32,17 @@ Deliberately the SHIPPED global ones, not family-local ownership:
     family the runtime would actually load. Duplicates are reported in the
     summary rather than passed over silently; there are none today.
 
-Intentional cross-family reuse is PINNED (see `CROSS_FAMILY_PINS`): each
-pin names the reference source, the row's own fallback family and the
-family that actually supplies the asset, and requires the two to DIFFER.
-Moving one of those assets into the row's own family, or reinterpreting
-the lookup as family-local, therefore fails this check or its self-test
-instead of quietly changing meaning.
+Intentional cross-family reuse is PINNED (`cross_family_pins`): each pin
+names the reference SITE, the exact ROWS of it that reuse the asset, the
+row's own fallback family and the family that actually supplies it, and
+requires the last two to DIFFER. Binding to the site and row rather than
+to "the basename appears somewhere" is what makes the pin an assertion
+rather than a coincidence -- `agility` and `strength` are each used by
+their own physical-stat row AND by a skill row in one file, so a
+basename-only pin would still pass after the skill row's reuse was
+deleted. Moving one of those assets into the row's own family, dropping a
+pinned reuse, or reinterpreting the lookup as family-local therefore fails
+this check or its self-test instead of quietly changing meaning.
 
 Fail loudly, never narrow
 -------------------------
@@ -242,15 +247,23 @@ TRAILING_NOISE = re.compile(r"^[\s,;)}\]]*(?:\b(?:end|then|do|else|elseif)\b[\s;
 
 
 class Assignment:
-    __slots__ = ("line", "targets", "index", "rhs", "depth", "start")
+    __slots__ = ("line", "targets", "index", "rhs", "depth", "start",
+                 "owner", "scope")
 
-    def __init__(self, line, targets, index, rhs, depth, start):
+    def __init__(self, line, targets, index, rhs, depth, start, owner, scope):
         self.line = line
         self.targets = targets
         self.index = index
         self.rhs = rhs
         self.depth = depth
         self.start = start
+        #: The table key whose constructor immediately encloses this
+        #: assignment (`dodge` for `dodge = { icon = "agility" }`), or None
+        #: for an anonymous entry or file scope.
+        self.owner = owner
+        #: Index of the innermost open bracket, so entries of the SAME table
+        #: entry can be found as siblings (-1 at file scope).
+        self.scope = scope
 
     @property
     def target(self) -> str:
@@ -293,6 +306,9 @@ def scan_assignments(cleaned: str, lines: LineMap) -> list:
     n = len(cleaned)
     depth = 0
     field_start = {0: 0}
+    owners = [None]          # owners[d] = the table key owning scope depth d
+    scopes = []              # indices of the currently open brackets
+    pending = {}             # depth -> (target, index just past its `=`)
     i = 0
     while i < n:
         ch = cleaned[i]
@@ -300,6 +316,16 @@ def scan_assignments(cleaned: str, lines: LineMap) -> list:
             i = _skip_string(cleaned, i)
             continue
         if ch in OPEN:
+            # A table constructor written as the right-hand side of `key = {`
+            # makes `key` the owner of everything one level deeper; anything
+            # else (a call's parens, an index) owns nothing.
+            owner = None
+            if ch == "{":
+                recent = pending.get(depth)
+                if recent and recent[1] <= i and not cleaned[recent[1]:i].strip():
+                    owner = recent[0]
+            owners.append(owner)
+            scopes.append(i)
             depth += 1
             field_start[depth] = i + 1
             i += 1
@@ -310,6 +336,10 @@ def scan_assignments(cleaned: str, lines: LineMap) -> list:
             # of the left-hand side, so the field must still start where the
             # enclosing `{` or `,` put it.
             depth = max(0, depth - 1)
+            if len(owners) > 1:
+                owners.pop()
+            if scopes:
+                scopes.pop()
             i += 1
             continue
         if ch in "\n;" or (ch == "," and depth > 0):
@@ -356,9 +386,14 @@ def scan_assignments(cleaned: str, lines: LineMap) -> list:
             pieces = _split_top_level(rhs_all) if (depth == 0 and len(targets) > 1) \
                 else [rhs_all]
             line = lines.line_of(i)
+            owner = owners[depth] if depth < len(owners) else None
+            scope = scopes[-1] if scopes else -1
             for idx in range(len(targets)):
                 piece = pieces[idx] if idx < len(pieces) else ""
-                found.append(Assignment(line, targets, idx, piece, depth, i))
+                found.append(Assignment(line, targets, idx, piece, depth, i,
+                                        owner, scope))
+            if len(targets) == 1:
+                pending[depth] = (targets[0], rhs_start)
             # Resume INSIDE the right-hand side rather than past it: a table
             # constructor is itself full of field assignments, and skipping to
             # `j` would swallow every entry of `local KIND_ICON = { ... }`.
@@ -452,13 +487,19 @@ def locate_region(cleaned: str, lines: LineMap, label: str, region: dict):
 # --------------------------------------------------------------------------
 
 class Reference:
-    __slots__ = ("basename", "source", "line", "site")
+    __slots__ = ("basename", "source", "line", "site", "row")
 
-    def __init__(self, basename, source, line, site):
+    def __init__(self, basename, source, line, site, row=None):
         self.basename = basename
         self.source = source
         self.line = line
         self.site = site
+        #: Which ROW of the site this reference belongs to -- the enclosing
+        #: table key (`dodge`), else the entry's own identifying literal field
+        #: (`stat = "neuro"`), else None for a rowless site such as an anchor.
+        #: Cross-family pins bind to this, so a pin cannot be satisfied by an
+        #: unrelated reference that merely shares the basename.
+        self.row = row
 
     def where(self) -> str:
         return f"{self.source}:{self.line} ({self.site})"
@@ -482,6 +523,33 @@ def extract_lua(root: Path, spec: dict, allow_hits: dict) -> list:
     for region in spec["regions"]:
         start, end = locate_region(cleaned, lines, label, region)
         regions.append((start, end, region))
+
+    row_key_fields = spec.get("row_key_fields", ["stat", "id", "name"])
+    by_scope = {}
+    for assignment in assignments:
+        by_scope.setdefault(assignment.scope, []).append(assignment)
+
+    def row_of(assignment):
+        """Which row of the site this assignment belongs to.
+
+        The enclosing table key when there is one (`dodge` in
+        `dodge = { icon = "agility" }`); otherwise the entry's own
+        identifying literal field, which is how an ANONYMOUS table entry
+        (`{ stat = "neuro", icon = "nerve_injury" }`) names itself.
+        """
+        if assignment.owner is not None:
+            return assignment.owner
+        if assignment.scope < 0:
+            return None
+        siblings = by_scope.get(assignment.scope, ())
+        for field in row_key_fields:
+            for sibling in siblings:
+                if sibling.target != field:
+                    continue
+                value = literal_of(sibling.rhs)
+                if value:
+                    return value
+        return None
 
     references = []
     covered = set()
@@ -515,7 +583,8 @@ def extract_lua(root: Path, spec: dict, allow_hits: dict) -> list:
                         f"`{assignment.target}` has a computed value "
                         f"({assignment.rhs.strip()!r}); this table must hold "
                         f"literal icon basenames only")
-                references.append(Reference(value, label, assignment.line, site))
+                references.append(Reference(value, label, assignment.line,
+                                            site, assignment.target))
                 produced += 1
         else:
             for assignment in inside:
@@ -535,7 +604,8 @@ def extract_lua(root: Path, spec: dict, allow_hits: dict) -> list:
                             f"or make it a literal basename")
                     allow_hits[key] += 1
                     continue
-                references.append(Reference(value, label, assignment.line, site))
+                references.append(Reference(value, label, assignment.line,
+                                            site, row_of(assignment)))
                 produced += 1
         for anchor in region.get("anchors", []):
             hits = 0
@@ -587,30 +657,39 @@ def extract_yaml(root: Path, spec: dict) -> list:
     references = []
     for path in files:
         label = str(path.relative_to(root))
+        # compose, not safe_load: the NODE graph carries source marks, so a
+        # missing basename can name the real `file:line` the way every Lua
+        # diagnostic does.
         try:
-            document = yaml.safe_load(path.read_text(encoding="utf-8"))
+            documents = list(yaml.compose_all(path.read_text(encoding="utf-8")))
         except yaml.YAMLError as error:
             raise CheckError(f"{label}: could not be parsed as YAML ({error})")
         found = []
 
         def walk(node):
-            if isinstance(node, dict):
-                for key, value in node.items():
-                    if key == spec["key"]:
-                        if not isinstance(value, str) or not value.strip():
+            if isinstance(node, yaml.MappingNode):
+                for key_node, value_node in node.value:
+                    if (isinstance(key_node, yaml.ScalarNode)
+                            and key_node.value == spec["key"]):
+                        line = value_node.start_mark.line + 1
+                        if (not isinstance(value_node, yaml.ScalarNode)
+                                or value_node.tag != "tag:yaml.org,2002:str"
+                                or not value_node.value.strip()):
                             raise CheckError(
-                                f"{label}: `{spec['key']}:` must be a non-empty "
-                                f"string basename, got {value!r}")
-                        found.append(value.strip())
+                                f"{label}:{line}: `{spec['key']}:` must be a "
+                                f"non-empty string basename")
+                        found.append((value_node.value.strip(), line))
                     else:
-                        walk(value)
-            elif isinstance(node, list):
-                for item in node:
+                        walk(value_node)
+            elif isinstance(node, yaml.SequenceNode):
+                for item in node.value:
                     walk(item)
 
-        walk(document)
-        for value in found:
-            references.append(Reference(value, label, 0, f"{label} `{spec['key']}:`"))
+        for document in documents:
+            walk(document)
+        for value, line in found:
+            references.append(
+                Reference(value, label, line, f"{label} `{spec['key']}:`"))
     if not references:
         raise CheckError(
             f"{spec['dir']}: no `{spec['key']}:` scalars found; the extractor "
@@ -780,10 +859,24 @@ def run_check(root: Path, config: dict, out=None) -> int:
                 f"family {row!r} as its supplier, so it pins nothing. A pin "
                 f"exists to state that the asset comes from ANOTHER family; "
                 f"drop it or correct it ({pin['reason']})")
-        if not any(r.basename == basename for r in references):
+        # Bind to the exact SITE and ROW, never to "the basename appears
+        # somewhere". `agility` is used by both the physical-stat row and the
+        # Dodge/Jumping SKILL rows in one file; a pin that accepted either
+        # would keep asserting a cross-family use that had been removed.
+        at_site = [r for r in references
+                   if r.site == pin["site"] and r.basename == basename]
+        missing_rows = [pin_row for pin_row in pin["rows"]
+                        if not any(r.row == pin_row for r in at_site)]
+        if missing_rows:
             failures.append(
-                f"cross-family pin {basename!r} matches no extracted reference; "
-                f"the pin or the reference set is stale ({pin['reason']})")
+                f"cross-family pin {basename!r} names row(s) "
+                f"{', '.join(repr(r) for r in missing_rows)} of {pin['site']}, "
+                f"but no reference there uses that basename on those rows "
+                f"(present rows: "
+                f"{', '.join(sorted(repr(r.row) for r in at_site)) or 'none'}). "
+                f"The pinned reuse is gone or moved; re-decide it rather than "
+                f"leaving a pin that asserts something untrue "
+                f"({pin['reason']})")
             continue
         actual = index.get(basename)
         if actual is None:
@@ -798,7 +891,10 @@ def run_check(root: Path, config: dict, out=None) -> int:
                 f"to the shipped global lookup and must be re-decided, not "
                 f"absorbed ({pin['reason']})")
         else:
-            write(f"  cross-family: {pin['source']} uses {basename!r} on a "
+            named = [r for r in pin["rows"] if r is not None]
+            where = (f"{pin['site']} row(s) {', '.join(repr(r) for r in named)}"
+                     if named else pin["site"])
+            write(f"  cross-family: {where} uses {basename!r} on a "
                   f"{row!r}-fallback row; supplied by family {actual!r}\n")
 
     if failures:
@@ -893,32 +989,39 @@ REPO_CONFIG = {
     # row passes to buildIconStatPanel; `family` is the family that actually
     # supplies the asset. They must differ, or the global lookup has been
     # quietly reinterpreted as family-local.
+    #
+    # `site` + `rows` bind each pin to the EXACT references it describes. That
+    # binding is load-bearing: `agility` and `strength` are each used both by
+    # their own physical-stat row and by a SKILL row in the same file, and
+    # `pain` is used by a Status row as well as by M.icon's injury-row last
+    # resort. A pin satisfied by "the basename appears somewhere in the file"
+    # would keep asserting a cross-family use after that use was deleted.
     "cross_family_pins": [
         {"basename": "agility", "family": "stat", "row_family": "skill",
-         "source": STAT_DEFS,
+         "site": STAT_DEFS, "rows": ["dodge", "jumping"],
          "reason": "the Dodge and Jumping SKILL rows draw the STAT-family "
                    "agility icon"},
         {"basename": "strength", "family": "stat", "row_family": "skill",
-         "source": STAT_DEFS,
+         "site": STAT_DEFS, "rows": ["grappling"],
          "reason": "the Grappling SKILL row draws the STAT-family strength icon"},
         {"basename": "weight", "family": "stat", "row_family": "status",
-         "source": STAT_DEFS,
+         "site": STAT_DEFS, "rows": ["carrying_capacity"],
          "reason": "the Status panel's Carry Load row draws the STAT-family "
                    "weight icon"},
         {"basename": "pain", "family": "status", "row_family": "injury",
-         "source": INJURIES,
+         "site": f"{INJURIES} M.icon", "rows": [None],
          "reason": "M.icon's last-resort gives INJURY-kind rows the "
                    "STATUS-family pain icon"},
         {"basename": "nerve_injury", "family": "injury", "row_family": "status",
-         "source": STATUS,
+         "site": STATUS, "rows": ["neuro"],
          "reason": "the Brain-failing STATUS condition row draws an "
                    "INJURY-family icon"},
         {"basename": "festered_injury", "family": "injury",
-         "row_family": "status", "source": STATUS,
+         "row_family": "status", "site": STATUS, "rows": ["organ", "sepsis"],
          "reason": "the Organ-failure and Septic STATUS condition rows draw an "
                    "INJURY-family icon"},
         {"basename": "frostbite", "family": "injury", "row_family": "status",
-         "source": STATUS,
+         "site": STATUS, "rows": ["hypothermia", "hyperthermia"],
          "reason": "the Hypothermic and Overheating STATUS condition rows draw "
                    "an INJURY-family icon"},
     ],
@@ -980,7 +1083,11 @@ end
 
 FIXTURE_DEFS = """-- fixture stat defs
 local STAT_DEFS = {
+    -- The physical-stat row: same-family, deliberately NOT pinned. It is the
+    -- decoy that a basename-only pin would wrongly accept.
     agility = { icon = "agility", name = "Agility" },
+    -- The skill row: the pinned cross-family reuse.
+    dodge   = { icon = "agility", name = "Dodge" },
     hurt    = { icon = "pain",    name = "Pain" },
 }
 """
@@ -1046,7 +1153,7 @@ def fixture_config() -> dict:
         ],
         "cross_family_pins": [
             {"basename": "agility", "family": "stat", "row_family": "skill",
-             "source": "scripts/defs.lua",
+             "site": "scripts/defs.lua", "rows": ["dodge"],
              "reason": "fixture: a skill-fallback row drawing a stat asset"},
         ],
     }
@@ -1123,6 +1230,14 @@ def self_test() -> int:
     case("infection YAML icon detects a missing asset",
          lambda r, c: _drop_asset(r, "status", "bacterial_infection"), 1,
          "'bacterial_infection'")
+    # A YAML reference must carry its REAL line, like every Lua one.
+    case("the YAML diagnostic names the real source line",
+         lambda r, c: _drop_asset(r, "status", "bacterial_infection"), 1,
+         "data/inf/a.yaml:3")
+    case("a non-string YAML icon scalar is refused",
+         lambda r, c: (r / "data" / "inf" / "a.yaml").write_text(
+             "infections:\n  - id: bug\n    icon: 12\n", encoding="utf-8"),
+         2, "a.yaml:3: `icon:` must be a non-empty string basename")
 
     # 2b. The missing-basename diagnostic names everything requirement 8 asks
     #     for: basename, file:line, source map, and the searched families.
@@ -1140,10 +1255,10 @@ def self_test() -> int:
          "every authoritative bare-name icon reference resolves")
 
     # 4. Global cross-family references resolve to the expected supplier.
-    case("a cross-family reference names its real supplying family",
+    case("a cross-family reference names its real row and supplying family",
          lambda r, c: None, 0,
-         "scripts/defs.lua uses 'agility' on a 'skill'-fallback row; "
-         "supplied by family 'stat'")
+         "scripts/defs.lua row(s) 'dodge' uses 'agility' on a "
+         "'skill'-fallback row; supplied by family 'stat'")
     case("a family-local move of a pinned asset is refused",
          lambda r, c: (_drop_asset(r, "stat", "agility"),
                        (r / ICON_ROOT / "skill" / "agility.png").write_bytes(b"")),
@@ -1151,6 +1266,21 @@ def self_test() -> int:
     case("a pin naming the row's own family as its supplier is refused",
          lambda r, c: c["cross_family_pins"][0].update(family="skill"), 2,
          "pins nothing")
+    # The pin must bind to its ROW, not merely to the basename: the untouched
+    # physical-stat row keeps referencing 'agility' in the same file.
+    case("a pin is not satisfied by an unrelated same-basename reference",
+         lambda r, c: _edit(r, "scripts/defs.lua",
+                            '    dodge   = { icon = "agility", name = "Dodge" },',
+                            '    dodge   = { icon = "pain",    name = "Dodge" },'),
+         1, "names row(s) 'dodge'")
+    case("that same mutation leaves the decoy reference in place",
+         lambda r, c: _edit(r, "scripts/defs.lua",
+                            '    dodge   = { icon = "agility", name = "Dodge" },',
+                            '    dodge   = { icon = "pain",    name = "Dodge" },'),
+         1, "present rows: 'agility'")
+    case("a pin naming a row of the wrong site is refused",
+         lambda r, c: c["cross_family_pins"][0].update(site="scripts/inj.lua"),
+         1, "present rows: none")
 
     # 6. An unsupported table shape fails loudly.
     case("an unsupported table shape is refused",

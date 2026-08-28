@@ -121,7 +121,12 @@ is instead PINNED (skill rows drawing stat `agility`/`strength`, the
 Status panel's stat `weight`, injury rows drawing status `pain`, status
 condition rows drawing injury `nerve_injury`/`festered_injury`/
 `frostbite`), so a family-local reinterpretation fails rather than
-silently changing meaning. It also pins the two runtime family
+silently changing meaning. Each pin binds to the exact reference SITE and
+the exact ROWS of it that reuse the asset — never to "the basename appears
+somewhere" — because `agility` and `strength` are each used by their own
+physical-stat row AND by a skill row in one file, so a basename-only pin
+would keep passing after the pinned reuse was deleted. It also pins the
+two runtime family
 inventories (`ICON_SUBDIRS` and `scripts/startup_loader.lua`'s preload
 list) to each other and to every family's `<kind>_unknown.png`.
 Extraction refuses rather than narrows: an unsupported table shape, a
