@@ -70,6 +70,13 @@ locations:
     # Content spawned once, the first time this location's chunk loads
     # (#90). Fixed-position entries land at that exact anchor offset;
     # entries without `position` scatter randomly within the room.
+    # `count` (how many instances to place) and `rolls` (how many loot
+    # draws to perform) are both optional and both default to 1. Each
+    # must be an integer >= 1 when written out: zero and negative values
+    # are rejected when this file loads (#1721), because they would
+    # spawn nothing while still burning the location's exactly-once
+    # content lifecycle. There is no disable-by-zero — delete or comment
+    # out an entry you do not want.
     # A scavenge scene (#91): 2 rolls of common ruin loot, scattered
     # where the occupants left them. Units in ruins are a future issue —
     # none here by design.
