@@ -604,6 +604,52 @@ def extract_marked_spans(text: str, open_marker: str, close_marker: str
     return spans, violations
 
 
+def _countable_numbers(body: str) -> list[str]:
+    """Every decimal integer in `body` that is not a section reference."""
+    return _INTEGER_RE.findall(_SECTION_REF_RE.sub("", body))
+
+
+_FENCE_RE = re.compile(r"^(`{3,}|~{3,})")
+
+
+def _fence_states(text: str) -> "list[bool]":
+    """Per line, whether that line is INSIDE a fenced code block.
+
+    A fence opens on a line of three or more backticks or tildes and
+    closes on a later line of at least as many of the SAME character.
+    The opening and closing fence lines themselves count as inside, so
+    a heading can never be read out of fenced content.
+
+    This exists because `section_bounds` decides where a section ends,
+    and a fenced block containing a line like `## example` would
+    otherwise end the section early -- while Markdown still renders
+    everything after it inside the real section. That gap was a live
+    bypass of the scope rules below: prose past the fake heading was
+    outside the audit and inside the document.
+    """
+    inside: list[bool] = []
+    open_char = ""
+    open_len = 0
+    for line in text.splitlines():
+        stripped = line.strip()
+        match = _FENCE_RE.match(stripped)
+        if not open_char:
+            if match:
+                open_char = match.group(1)[0]
+                open_len = len(match.group(1))
+                inside.append(True)
+                continue
+            inside.append(False)
+            continue
+        inside.append(True)
+        if (match and match.group(1)[0] == open_char
+                and len(match.group(1)) >= open_len
+                and not stripped[len(match.group(1)):].strip()):
+            open_char = ""
+            open_len = 0
+    return inside
+
+
 def section_bounds(text: str, heading: str,
                    stop_prefixes: tuple[str, ...]) -> tuple[int, int] | None:
     """Character bounds of one Markdown section's body, or `None` when
@@ -614,25 +660,27 @@ def section_bounds(text: str, heading: str,
     (or to end of document). `"## "` does NOT match `"### "` -- the
     third character is a `#`, not the required space -- so a top-level
     section legitimately contains its own subsections.
+
+    Lines inside a fenced code block are not headings, in either role:
+    a fenced `## 1. Scope` does not start the section, and a fenced
+    `## anything` does not end it.
     """
+    fenced = _fence_states(text)
     start: int | None = None
     offset = 0
-    for line in text.splitlines(keepends=True):
+    for index, line in enumerate(text.splitlines(keepends=True)):
         stripped = line.strip()
+        in_fence = fenced[index] if index < len(fenced) else False
         if start is None:
-            if stripped == heading:
+            if stripped == heading and not in_fence:
                 start = offset + len(line)
-        elif any(stripped.startswith(prefix) for prefix in stop_prefixes):
+        elif not in_fence and any(stripped.startswith(prefix)
+                                  for prefix in stop_prefixes):
             return start, offset
         offset += len(line)
     if start is None:
         return None
     return start, offset
-
-
-def _countable_numbers(body: str) -> list[str]:
-    """Every decimal integer in `body` that is not a section reference."""
-    return _INTEGER_RE.findall(_SECTION_REF_RE.sub("", body))
 
 
 def _audit_scope_block_placement(inventory_text: str,

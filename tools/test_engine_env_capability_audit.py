@@ -1587,6 +1587,71 @@ def test_field_total_renamed_section_heading_rejected():
            f"{violations}")
 
 
+def test_fenced_heading_does_not_end_the_scope_section():
+    """A fenced code block containing a heading-shaped line must not
+    end SS1: Markdown renders everything after it inside SS1 still, so
+    a stale total placed there would be inside the document and outside
+    the audit."""
+    doc = _field_total_doc(
+        scope_suffix="```\n## example\n```\n\nIt has exactly 83 fields.")
+    violations = audit_field_total(_FT_LIVE, doc)
+    expect(any("outside its" in v and "83" in v for v in violations),
+           f"prose hidden behind a fenced pseudo-heading must still be "
+           f"audited, got: {violations}")
+
+
+def test_fenced_heading_does_not_end_the_procedure_section():
+    doc = _field_total_doc().replace(
+        "1. For each module",
+        "```\n### 6.9 not a heading\n```\n\n1. For each module", 1)
+    violations = audit_field_total(_FT_LIVE, doc)
+    expect(violations == [],
+           f"a fenced pseudo-heading before the procedure item must not "
+           f"hide the item from the check, got: {violations}")
+
+
+def test_fenced_scope_heading_does_not_start_the_section():
+    """The same rule in the other role: a fenced `## 1. Scope` must not
+    be mistaken for the section's start, which would put the real
+    section's prose outside the audited range."""
+    doc = _field_total_doc().replace(
+        "# Fake inventory\n",
+        f"# Fake inventory\n\n```\n{SECTION_1_HEADING}\n```\n", 1)
+    violations = audit_field_total(_FT_LIVE, doc)
+    expect(violations == [],
+           f"a fenced copy of the scope heading must be ignored, got: "
+           f"{violations}")
+
+
+def test_tilde_fences_and_longer_closers_are_handled():
+    """Tilde fences count too, and a closing fence must be at least as
+    long as its opener -- a shorter run inside the block does not end
+    it."""
+    doc = _field_total_doc(
+        scope_suffix="~~~~\n## example\n~~~\nstill fenced\n~~~~\n\n"
+                     "It has exactly 83 fields.")
+    violations = audit_field_total(_FT_LIVE, doc)
+    expect(any("outside its" in v and "83" in v for v in violations),
+           f"tilde fences must be tracked with the same length rule, "
+           f"got: {violations}")
+
+
+def test_real_inventory_fenced_heading_escape_rejected():
+    """The same escape, on the real document."""
+    real = (REPO_ROOT / "docs" /
+            "engineenv_capability_inventory.md").read_text(encoding="utf-8")
+    live = extract_record_fields(
+        (REPO_ROOT / ENGINE_ENV_FILE).read_text(encoding="utf-8"),
+        ENGINE_ENV_PATTERN)
+    spans, _ = extract_marked_spans(real, FIELD_TOTAL_OPEN, FIELD_TOTAL_CLOSE)
+    escaped = (real[:spans[0].end]
+               + "\n\n```\n## example\n```\n\nIt has exactly 83 fields.\n"
+               + real[spans[0].end:])
+    expect(any("outside its" in v for v in audit_field_total(live, escaped)),
+           "a fenced pseudo-heading must not carve a stale total out of "
+           "the real SS1")
+
+
 def test_section_bounds_stops_at_the_next_peer_heading():
     doc = _field_total_doc()
     bounds = section_bounds(doc, SECTION_1_HEADING, ("## ",))
@@ -1916,6 +1981,11 @@ def main() -> int:
         test_bare_field_counts_elsewhere_are_not_flagged,
         test_field_total_block_outside_section_one_rejected,
         test_field_total_renamed_section_heading_rejected,
+        test_fenced_heading_does_not_end_the_scope_section,
+        test_fenced_heading_does_not_end_the_procedure_section,
+        test_fenced_scope_heading_does_not_start_the_section,
+        test_tilde_fences_and_longer_closers_are_handled,
+        test_real_inventory_fenced_heading_escape_rejected,
         test_section_bounds_stops_at_the_next_peer_heading,
         test_section_bounds_keeps_subsections_inside_a_top_level_section,
         test_field_total_against_the_real_repo,
