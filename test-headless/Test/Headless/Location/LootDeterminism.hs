@@ -60,6 +60,7 @@ pinnedRuinCommon = LootTableDef
         , LootTableEntry "shovel_steel"   2
         , LootTableEntry "steel_hardware" 2
         , LootTableEntry "steel_dagger"   1
+        , LootTableEntry "field_toolbox"  1
         ]
     }
 
@@ -123,16 +124,16 @@ spec = describe "Location loot determinism" $ do
             sequenceFor ruinCommon 42 1 1 2
                 `shouldBe` [Just "shovel_steel", Just "steel_hardware"]
             sequenceFor ruinCommon 42 2 1 2
-                `shouldBe` [Just "shovel_steel", Just "shovel_steel"]
+                `shouldBe` [Just "steel_hardware", Just "steel_hardware"]
             sequenceFor ruinCommon 42 3 1 2
                 `shouldBe` [Just "first_aid_kit", Just "rations"]
             sequenceFor ruinCommon 42 4 1 2
-                `shouldBe` [Just "steel_hardware", Just "steel_dagger"]
+                `shouldBe` [Just "steel_hardware", Just "field_toolbox"]
 
         it "pins a second world seed" $
             sequenceFor ruinCommon 1337 2 1 4
-                `shouldBe` [ Just "rations", Just "steel_dagger"
-                           , Just "shovel_steel", Just "steel_hardware" ]
+                `shouldBe` [ Just "rations", Just "field_toolbox"
+                           , Just "shovel_steel", Just "steel_dagger" ]
 
         it "pins the underlying unit draws" $
             [ lootRollUnit (ctxAt 42 1 3 r) | r ← [1, 2] ]
@@ -147,7 +148,7 @@ spec = describe "Location loot determinism" $ do
                 entry2 = sequenceFor ruinCommon 42 1 2 3
             entry1 `shouldBe` [ Just "shovel_steel", Just "steel_hardware"
                               , Just "quinoa_sack" ]
-            entry2 `shouldBe` [ Just "steel_hardware", Just "quinoa_sack"
+            entry2 `shouldBe` [ Just "steel_hardware", Just "first_aid_kit"
                               , Just "shovel_steel" ]
             entry1 `shouldNotBe` entry2
 
@@ -204,34 +205,36 @@ spec = describe "Location loot determinism" $ do
 
     describe "loot-table data contract" $ do
         it "walks entries by running sum, lower bound inclusive" $ do
-            -- total weight 12; rations spans [0, 3].
-            pickByWeight 0      ruinCommon `shouldBe` Just "rations"
-            pickByWeight 0.25   ruinCommon `shouldBe` Just "rations"
-            pickByWeight 0.2501 ruinCommon `shouldBe` Just "quinoa_sack"
-            pickByWeight (5 / 12) ruinCommon `shouldBe` Just "quinoa_sack"
-            pickByWeight 0.9999 ruinCommon `shouldBe` Just "steel_dagger"
+            -- Total weight 13; rations spans the scaled interval [0, 3].
+            pickByWeight 0        ruinCommon `shouldBe` Just "rations"
+            pickByWeight (3 / 13) ruinCommon `shouldBe` Just "rations"
+            pickByWeight 0.231    ruinCommon `shouldBe` Just "quinoa_sack"
+            pickByWeight (5 / 13) ruinCommon `shouldBe` Just "quinoa_sack"
+            pickByWeight 0.9999   ruinCommon `shouldBe` Just "field_toolbox"
 
         it "gives the last entry any floating-point overshoot" $
-            pickByWeight 1 ruinCommon `shouldBe` Just "steel_dagger"
+            pickByWeight 1 ruinCommon `shouldBe` Just "field_toolbox"
 
         it "treats weights as RELATIVE, not percentages" $ do
-            -- Same 3:1 ratio between rations and steel_dagger whether the
-            -- weights sum to 12 or to 1.2.
+            -- Same 3:1 ratio between rations and field_toolbox whether the
+            -- weights sum to 13 or to 1.3.
             let scaled = ruinCommon
                     { ltdEntries = [ LootTableEntry (lteId e) (lteWeight e / 10)
                                    | e ← ltdEntries ruinCommon ] }
-            [ pickByWeight u scaled | u ← [0, 0.25, 0.2501, 0.9999] ]
+            [ pickByWeight u scaled | u ← [0, 3 / 13, 0.231, 0.9999] ]
                 `shouldBe` [ Just "rations", Just "rations"
-                           , Just "quinoa_sack", Just "steel_dagger" ]
+                           , Just "quinoa_sack", Just "field_toolbox" ]
 
         it "tracks the declared weights over many contexts" $ do
-            -- 60000 draws: rations (weight 3/12) ~15000, steel_dagger
-            -- (1/12) ~5000. Wide bands — this catches a degenerate or
-            -- weight-blind mixer, not sampling noise.
+            -- 60000 draws: rations (weight 3/13) ~13846, while both
+            -- one-weight entries are ~4615. Wide bands catch a degenerate
+            -- or weight-blind mixer rather than sampling noise.
             tally ruinCommon "rations"      60000 `shouldSatisfy` \n →
-                n > 14000 ∧ n < 16000
+                n > 13000 ∧ n < 14800
             tally ruinCommon "steel_dagger" 60000 `shouldSatisfy` \n →
-                n > 4500 ∧ n < 5500
+                n > 4100 ∧ n < 5200
+            tally ruinCommon "field_toolbox" 60000 `shouldSatisfy` \n →
+                n > 4100 ∧ n < 5200
 
         it "returns Nothing for an empty table" $
             rollLootTableFor (LootTableDef "empty" []) (ctxAt 42 1 1 1)

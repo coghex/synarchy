@@ -673,8 +673,16 @@ spec = describe "skill-scaled auto-harvest" $ do
                 , "  harvestProgress = 0.75,"
                 , "  harvestProgressAt = { x = 10, y = 0 },"
                 , "  lastHarvestAt = 120 }"
-                , "assert(spec.version == 6,"
-                , "  'this change must not move the component version: '"
+                -- #1582 moved no version, and this pin is what says
+                -- so -- but it pins the component's CURRENT number, not
+                -- the one standing when auto-harvest landed, so a LATER
+                -- unrelated bump (v7, #1737's ground-repair provenance)
+                -- updates it here rather than being mistaken for one
+                -- this action caused. The real guarantee is the
+                -- payload-shape assertions below.
+                , "assert(spec.version == 7,"
+                , "  'auto-harvest must contribute no version move; the '"
+                , "  .. 'component is at v7, got '"
                 , "  .. tostring(spec.version))"
                 , "local snap = spec.snapshot()"
                 , "local row = snap[1]"

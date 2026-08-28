@@ -442,15 +442,27 @@ then exit normally for every observed count.  They are valuable for exploring a
 dump, but a green process does not distinguish a healthy world from one with
 floating water, water cliffs, or dry banks below a water surface.
 
+Renamed under #1594: the two now carry the diagnostic-report naming #1590
+established for the river scripts (`tools/water_above_land_report.py`,
+`tools/water_anomalies_report.py`) and each docstring names
+`tools/world_audit.py` / `tools/world_check.py` as the maintained worldgen
+gate, listing the audit categories that overlap the anomalies it prints.  The
+paragraph above describes the pre-rename tree; the analyses themselves are
+unchanged and still report without a verdict, which is the deliberate outcome —
+the misleading name was the defect, not the missing threshold.
+
 **Evidence:**
 
-- `tools/test_water_above_land.py:1-10` calls itself a detector for the
-  “water floating above grass” issue; `:31-100` prints two `ISSUE` categories
-  and examples without comparing them to a limit or exiting nonzero.
-- `tools/test_water_anomalies.py:1-10` calls itself a comprehensive test and
-  describes five visible anomaly classes; `:31-123` labels the detected
-  floating-water, water-cliff, dry-bank, and isolated-water counts as issues,
-  but its `__main__` merely calls `main`.
+- `tools/water_above_land_report.py:54-121` prints two `ISSUE` categories and
+  examples without comparing them to a limit or exiting nonzero.  Its docstring
+  never called itself a test — it described detecting the “water floating above
+  grass” issue — so here the misleading claim came from the old `test_*`
+  filename alone.
+- `tools/water_anomalies_report.py:49-143` labels the detected floating-water,
+  water-cliff, dry-bank, and isolated-water counts as issues, but its
+  `__main__` merely calls `main`.  This one stated it twice before the rename:
+  the old `test_*` filename and a docstring opening “Comprehensive test for
+  visible water anomalies”.
 - Neither script contains a threshold, boolean test result, or failure exit,
   so the process status remains zero after any reported anomaly count.
 - NCT-9 covers the analogous river/lake diagnostic scripts; this entry is

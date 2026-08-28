@@ -38,10 +38,37 @@ needed.
 
 ## 1. Scope
 
+<!-- engineenv-field-total -->
+
 `src/Engine/Core/State.hs` declares `data EngineEnv = EngineEnv { ... }`
-(`:68`) with exactly **83 fields** (`engineConfig` at `:69` through
-`popupQueueRef` at `:405`). Every one of the 83 has exactly one row in
-§5 below, matching the same field set
+with exactly **87** fields, `engineConfig` through `popupQueueRef`, and
+every one of them has exactly one row in §5 below.
+
+<!-- /engineenv-field-total -->
+
+That marked paragraph is the only place this document states a field
+total or names the record's first and last field, and it deliberately
+carries no source line numbers: the hand-written ones that used to sit
+in it had all drifted from the live record, unnoticed, because nothing
+checked them (issue #1669). Since that issue,
+[`tools/engine_env_capability_audit.py`](../tools/engine_env_capability_audit.py)
+re-derives the count and both field names from the live declaration on
+every run and rejects the block when either disagrees, so adding or
+removing an `EngineEnv` field without amending that paragraph fails the
+audit in CI and in `make ci` — even when §5's rows were updated
+correctly. Do not restate the count elsewhere in this document, and do
+not put a second number (a line anchor above all) inside the block; the
+audit rejects both. The block is pinned to where it sits, not merely
+to this section: it must be §1's first content, §1 may state no other
+number outside it (section and issue references excepted, along with a
+source-location span such as `src/Engine/Core/State.hs:446` — but not
+a bare number in code font, which is a field total wearing a citation's
+clothes), and the whole document is swept for the phrase shape
+`<n> EngineEnv fields`. §6.2's first assignment-method
+item, which used to repeat the total, is held to the same result
+without markers — see the note there.
+
+It is the same field set
 [`docs/persistence_state_inventory.md`](persistence_state_inventory.md)
 §1 already enumerates and
 [`tools/persistence_inventory_audit.py`](../tools/persistence_inventory_audit.py)
@@ -876,8 +903,14 @@ guessing. Every name in every cell is a literal, complete Haskell
 module name: **no path-prefix globs, no "and similar" language, and no
 catch-all row**.
 
+The first numbered item below used to repeat §1's field total. It
+states no number now, and the audit holds it that way: it locates this
+section's first numbered item, requires it to still be that sentence,
+and rejects any number in it. The other items count freely — only the
+one that carried the second copy of the total is governed.
+
 1. For each module, scan its source for every occurrence of one of the
-   83 `EngineEnv` field names from §5 (`asks`/`gets`/`readIORef env
+   `EngineEnv` field names from §5 (`asks`/`gets`/`readIORef env
    ...`/`atomicModifyIORef' ... env`/`writeIORef ... env` patterns, and
    plain field-name references) and tally which capability group (§5's
    heading structure) each hit belongs to.
@@ -1042,7 +1075,11 @@ complete set of requirements:
    further to add" there, and nowhere else.
 9. Grounding evidence: at least one backtick-quoted `.hs`/`.lua`
    source-location citation somewhere in the row.
-10. Whatever else the **live** audit rules require — read the tool, not
+10. §1's marked field-total block amended: it states the new live
+    count and names the record's real first and last field. The audit
+    re-derives all three from the live declaration, so a correct §5 row
+    with a stale §1 block still fails (issue #1669).
+11. Whatever else the **live** audit rules require — read the tool, not
     just this list. The §3/§7.3 boundary checks, for instance, will
     reject a new field that a thread privately owns being placed on a
     worker-visible record.

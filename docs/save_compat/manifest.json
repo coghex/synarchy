@@ -1609,6 +1609,93 @@
           "expectedCanonicalSummary": "test-headless/data/save-compat/p1-position-hold.expected.json"
         }
       ]
+    },
+    {
+      "id": "q1-repair-ground-target",
+      "description": "Ground-sourced autonomous repair targets (issue #1737, completing #302's own-inventory -> ground -> technomule ladder): lua.unit_ai became v7, adding repairJob.fromGround and the page-local repairJob.groundGid -- durable provenance, because a save can land anywhere between the pickup and the repair and only the job itself can then say that the instance in a worker's inventory owes a DROP on the ground rather than a hand-back to a mule. This baseline tracks a REAL current-format session written by the live engine at lua.unit_ai v7, whose acolyte holds an IN-FLIGHT ground-sourced repair job its OWN autonomous scoring claimed over a degraded axe_steel item.spawnGround left 12 tiles away, still in its fetch_ground phase -- so the new shape has its own compatibility coverage rather than a version number with nothing behind it, and the gid half of it is exercised while it still names something. groundGid rides the wire as a typed ground_item reference (scripts/unit_ai_ref_schema.lua), so the integrity graph checks it against the owning unit's page like every other per-page id. The furnace is really built (materials delivered, then addBuildProgress) because repairUtility refuses to score a job with no reachable station for its axis, and the spawn-seeded find_water goal is retired first because its search utility otherwise out-competes a repair a dozen tiles away. v1-v6 payloads stay tracked by the b3/c3/d1/e1/f1/g1/h1/i1/j1/k1/l1/m1/n1/o1/p1 baselines above and decode with both fields absent, which is exactly right: those sessions had no ground rung to record.",
+      "declaredAt": "2026-08-28",
+      "declaredByIssue": 1737,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "scripts/unit_ai_save.lua's decode (v1 -> wrapAiState, v2 -> addOwnerToAiState, v3/v4/v5/v6 -> identity: a pre-#1737 payload carries no fromGround/groundGid at all, and their ABSENCE is already the correct v7 value -- the ground rung did not exist, so those sessions could only ever have sourced a repair target from held gear or a technomule)",
+      "components": [
+        {
+          "id": "metadata",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "core-session",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "texture-palette",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-pages",
+          "version": 7,
+          "required": true
+        },
+        {
+          "id": "world-edits",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-activity",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "buildings",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "units",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "unit-sim",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "craft-bills",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "power-nodes",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "lua.unit_ai",
+          "version": 7,
+          "required": true
+        },
+        {
+          "id": "lua.building_spawn",
+          "version": 3,
+          "required": true
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "q1-repair-ground-target-session",
+          "path": "test-headless/data/save-compat/q1-repair-ground-target.bin",
+          "kind": "complete-session",
+          "sha256": "3743e3bf7b1b7d9425440fc88f7bd8cef08df941343b94aac35711e23a843d35",
+          "sizeBytes": 909586,
+          "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), building.spawn('furnace', 0, 0), unit.spawn('acolyte', 0,0, 0, 'player'), then for i=1,6 do unit.addItem({uid},'granite_chunk'); unit.transferItemToBuilding({uid},{bid},'granite_chunk') end; for i=1,2 do unit.addItem({uid},'steel_bar'); unit.transferItemToBuilding({uid},{bid},'steel_bar') end; return building.areMaterialsSatisfied({bid}); building.addBuildProgress({bid}, 100000); return building.getActivity({bid}); local ai = require('scripts.unit_ai'); local s = ai.getState({uid}); if not s then return false end; ai.markGoalAccomplished(s, 'find_water'); return true; return tostring(item.spawnGround('axe_steel', 12, 0, { condition = 5 })), settled 8.0s and held until `(function() local s = require('scripts.unit_ai_core').aiState[1]; local j = s and s.repairJob; return j ~= nil and j.fromGround == true and j.groundGid ~= nil and s.repairPhase == 'fetch_ground' end)()`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/q1-repair-ground-target.expected.json"
+        }
+      ]
     }
   ],
   "retiredBaselinesComment": "Empty for now (round-7 review): the #760-only split-Haskell-plus-opaque-lua-state shape previously listed here as 'never declared, no removal needed' is now a REAL declared baseline (b2-split-haskell-lua-state, above) -- issue #766 requirement 3 explicitly requires supporting it, regardless of whether a manifest existed to declare it at the time. Nothing this manifest has ever declared has since been retired.",
