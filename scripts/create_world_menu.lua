@@ -951,10 +951,16 @@ function createWorldMenu.onWorldPreviewReady(textureHandle)
     createWorldMenu.worldPreviewTexture = textureHandle
     if createWorldMenu.page and UI.isPageVisible(createWorldMenu.page) then
         local savedGenState = createWorldMenu.genState
+        -- #1671: a preview arriving mid-generation is a full
+        -- destroy+recreate of a VISIBLE page, so it owes the same
+        -- caller-side control-focus (#745) snapshot/restore the resize
+        -- path does — the page is already known visible here.
+        local controlFocusName = responsive.snapshotControlFocusName()
         createWorldMenu.createUI()
         createWorldMenu.genState = savedGenState
         -- createUI already builds the right buttons now, no extra call needed
         UI.showPage(createWorldMenu.page)
+        responsive.restoreControlFocusName(controlFocusName)
     end
 end
 
@@ -1088,8 +1094,17 @@ function createWorldMenu.onDefaults()
     -- #748: the one rebuild that must discard in-progress edits
     -- (the pending table was just reset above) rather than restore
     -- them from the about-to-be-destroyed widgets.
+    -- #1671: preserveState=false scopes to in-progress EDIT values (the
+    -- pending table and raw unsubmitted textbox text) — keyboard control
+    -- focus (#745) is not part of it and is caller-side by construction,
+    -- so this rebuild owes the same snapshot/restore onFramebufferResize
+    -- below already does.
+    local controlFocusName = responsive.snapshotControlFocusName()
     createWorldMenu.createUI({ preserveState = false })
-    if createWorldMenu.page then UI.showPage(createWorldMenu.page) end
+    if createWorldMenu.page then
+        UI.showPage(createWorldMenu.page)
+        responsive.restoreControlFocusName(controlFocusName)
+    end
 end
 
 function createWorldMenu.onGenerateWorld()
