@@ -765,6 +765,49 @@ decode — and to stay quiet on a fixed-query helper, rather than merely
 agreeing that today's tree is clean. ~5 s; blocking CI step alongside
 `test_run_probes.py`.
 
+### `test_probe_root_cleanup.py` — the isolated root's staging boundary (#1791)
+
+`foraging_probe.py` (#1618), `flora_growth_probe.py` and `farm_ai_probe.py`
+(#1616) and `item_temp_probe.py` (#1613) each give one invocation its own
+throwaway resource root and promise to remove it on every exit path.
+The promise had a hole: `tempfile.mkdtemp` AND `make_isolated_root(base)`
+both ran before the `try` whose `finally` owns `remove_run_root(base)`, so
+a failure while STAGING the tree — the root, three symlinks into the
+checkout, a copied `config/`, `saves/`, created in that order — bypassed
+cleanup entirely and left the invocation-owned directory on disk. Staging
+now happens inside that guard, one statement after the base exists.
+
+`python3 tools/test_probe_root_cleanup.py` pins the boundary for all four,
+and it drives each probe's REAL `main()` rather than `make_isolated_root`
+alone — calling the builder in isolation would pass while the defect
+above it stood. Each case runs the probe in a subprocess against a
+stand-in checkout and a private `TMPDIR`, with `boot`/`quit_engine`
+observable and no engine anywhere, so the exit status and the
+operator-visible cause are the process's own. Four scenarios per probe: a
+`copytree` that fails once the root and its three symlinks exist (real
+partial state to leak) must end non-zero with the cause visible, the base
+gone, the temp directory empty, and neither `boot` nor `quit_engine`
+reached — a staging failure precedes any engine, and an `engine.quit()`
+sent anyway would be aimed at whoever else holds the port; a removal that
+silently no-ops and one that raises must each still be non-zero and name
+the residue, because cleanup cannot promise absence when the filesystem
+refuses; and a `boot` abort must still announce the staged root and slot,
+still leave nothing, and still send no quit. The stand-in checkout's
+`scripts/`, `assets/` and `data/` sentinels sit behind the symlinks the
+partial tree holds, and an unrelated outside directory beside it — both
+are asserted byte-identical after every scenario, which pins the
+"deletion stays inside the run" half without assuming anything about how
+`shutil.rmtree` treats a symlink.
+
+All four probes are manual-only, so without this companion the contract
+is only ever observed by long engine runs. Engine-free, GPU-free,
+network-free, under a second; blocking CI step alongside
+`test_location_embark_probe.py`.
+
+```bash
+python3 tools/test_probe_root_cleanup.py
+```
+
 ### `ci_probes.py` — CI probe selection + eligibility (#530, #540)
 
 Computes which probes CI should run for a given set of changed files (see

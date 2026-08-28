@@ -852,6 +852,20 @@ jobs:
       # needs-gpu, so without this companion that contract is only ever
       # observed by a GPU run nothing here can make; the companion boots
       # nothing and runs in well under a second.
+      # test_probe_root_cleanup is #1791's: the staging half of the
+      # isolated-root contract `tools/foraging_probe.py`,
+      # `tools/flora_growth_probe.py`, `tools/farm_ai_probe.py` and
+      # `tools/item_temp_probe.py` each carry. A failure while STAGING
+      # the run's throwaway root — the root, three symlinks, a copied
+      # `config/`, `saves/` — used to bypass the cleanup guard entirely
+      # and leave the invocation-owned tree on disk. It drives each
+      # probe's real `main()` in a subprocess under injected staging and
+      # removal faults, asserting a non-zero run, an operator-visible
+      # cause, an absent base, a checkout left untouched behind the
+      # symlinks, and no `engine.quit()` aimed at whoever else holds the
+      # port. All four probes are manual-only, so without this companion
+      # the boundary is only ever observed by long engine runs; the
+      # companion boots nothing and runs in about a second.
       # test_movement_probe is #1586's: `tools/movement_probe.py --list`
       # is a metadata query, answered from scripts/movement_arena.lua
       # before any boot() and for every --mode, with the derived view
@@ -883,6 +897,7 @@ jobs:
           python3 tools/test_probe_resource_lock.py
           python3 tools/test_deflake.py
           python3 tools/test_location_embark_probe.py
+          python3 tools/test_probe_root_cleanup.py
           python3 tools/test_movement_probe.py
 
       # The decision `.github/workflows/review-gate.yml` makes on every

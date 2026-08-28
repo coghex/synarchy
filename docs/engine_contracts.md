@@ -96,11 +96,14 @@ no direct `Data.Text.Encoding.decodeUtf8` under
 material-id / concept-id-inventory / findings-report-status audits (each
 with its own self-test), the unit-asset inventory gate (`test_pack_atlas.py` +
 `pack_atlas.py --validate-only --strict`), `world_check.py --quick`, the
-eight probe-runner self-tests (`ci_probes.py --self-test`,
+sixteen probe-runner self-tests (`ci_probes.py --self-test`,
 `ci_expensive_gates.py --self-test`, `ci_docs_fast_path.py --self-test`,
 `test_run_probes.py`, `test_persistence_contract_sweep.py`,
-`test_action_outcome_probe.py`, `test_probelib.py`,
-`test_probe_flake.py`), `ci_cache_report.py --self-test` (#1358 — the
+`test_action_outcome_probe.py`, `test_tillable_fluid_filter.py`,
+`test_probelib.py`, `test_probe_flake.py`, `test_probe_census.py`,
+`test_probe_claim.py`, `test_probe_resource_lock.py`, `test_deflake.py`,
+`test_location_embark_probe.py`, `test_probe_root_cleanup.py`,
+`test_movement_probe.py`), `ci_cache_report.py --self-test` (#1358 — the
 cache-outcome report's own classification, plus the `ci.yml` wiring it
 reads), the project-cache epoch and cleanup policy self-tests
 (`ci_cache_epoch.py --self-test`, `ci_cache_cleanup.py --self-test`), and the
