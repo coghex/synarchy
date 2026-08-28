@@ -773,9 +773,22 @@ jobs:
       # chop-fixture classification (#1398) — setup-vs-behavior failure
       # and the 0/1/2 exit contract — against a fake console, so the
       # branches are checked without the probe's own ~8-minute real
-      # engine and 64-world generation. That probe itself stays
-      # manual-only and out of the path-selective gate; only this
-      # engine-free companion runs here. test_probelib pins
+      # engine and 64-world generation, and (#1793) its
+      # find_mixed_box anchor filter and 5x5 sweep reading
+      # world.getFluidAt through that query's ARITY contract. That
+      # probe itself stays manual-only and out of the
+      # path-selective gate; only this engine-free companion runs
+      # here. test_tillable_fluid_filter is #1793's own: the
+      # tillable-tile scans in till_probe, plant_probe and
+      # farm_ai_probe decode world.getFluidAt by arity too, so a
+      # flat, flora-free tile under water is never returned as
+      # tillable. It owns the fake console that reproduces the
+      # debug console's tab-joined multi-return — the thing a
+      # sloppier test double would paper over — and
+      # test_action_outcome_probe imports it rather than
+      # re-deriving it, so the two cannot drift. Those three
+      # probes each boot a real engine and generate a world; this
+      # companion boots nothing. test_probelib pins
       # probelib.send_json's result contract (empty -> None, valid JSON
       # -> value, invalid JSON -> text) against a real socket speaking
       # the console protocol, and fails if a probe grows a private JSON
@@ -845,6 +858,7 @@ jobs:
           python3 tools/test_run_probes.py
           python3 tools/test_persistence_contract_sweep.py
           python3 tools/test_action_outcome_probe.py
+          python3 tools/test_tillable_fluid_filter.py
           python3 tools/test_probelib.py
           python3 tools/test_probe_flake.py
           python3 tools/test_probe_census.py

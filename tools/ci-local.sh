@@ -236,7 +236,16 @@ python3 tools/world_check.py --quick
 # test_persistence_contract_sweep covers the cross-probe registry-drift
 # guard; test_action_outcome_probe covers action_outcome_probe.py's
 # fixture classification against a fake console, so its branches are
-# checked without that probe's own ~8-minute real engine;
+# checked without that probe's own ~8-minute real engine, and
+# (#1793) find_mixed_box's anchor and 5x5 fluid reads;
+# test_tillable_fluid_filter is #1793's own: the tillable-tile
+# scans in till_probe, plant_probe and farm_ai_probe read
+# world.getFluidAt through its ARITY contract, so a wet tile is
+# never returned as tillable. It owns the fake console that
+# reproduces the debug console's tab-joined multi-return, which
+# test_action_outcome_probe imports rather than re-deriving. Those
+# three probes each boot a real engine and generate a world; this
+# companion boots nothing;
 # test_probelib pins probelib.send_json's result contract against a real
 # socket and fails if a probe grows a private JSON console wrapper again
 # (#1160), and owns probe_engine.py's launcher contract -- runner mode
@@ -288,6 +297,7 @@ python3 tools/ci_docs_fast_path.py --self-test
 python3 tools/test_run_probes.py
 python3 tools/test_persistence_contract_sweep.py
 python3 tools/test_action_outcome_probe.py
+python3 tools/test_tillable_fluid_filter.py
 python3 tools/test_probelib.py
 python3 tools/test_probe_flake.py
 python3 tools/test_probe_census.py
