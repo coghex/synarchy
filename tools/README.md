@@ -858,7 +858,7 @@ pre-execution rejections (2), port exhaustion (3) and harness errors (4) — a
 malformed, truncated, duplicate, out-of-order or unclassifiable protocol
 event, which is never reported as a probe pass.
 
-### `probe_census.py` — the probe census (#1425, #1428, #1430, #1492, #1434)
+### `probe_census.py` — the probe census (#1425, #1428, #1430, #1492, #1434, #1441)
 
 Builds, validates and updates `docs/probe_census.json`, now
 `probe-census/v3`: every registered probe exactly once, with its script, its
@@ -883,6 +883,9 @@ python3 tools/probe_census.py --summary        # every probe's current statistic
 python3 tools/probe_census.py --summary --probe KEY --json
 python3 tools/probe_census.py --summary --as-of 2026-08-21T05:00:00Z \
     --stale-after-days 7
+python3 tools/probe_census.py --promotion-candidates   # who could be promoted
+python3 tools/probe_census.py --promotion-candidates --json \
+    --as-of 2026-08-21T05:00:00Z --stale-after-days 7
 python3 tools/probe_census.py --probe KEY --set-acceptable-failures 2 \
     --justification "two known engine-side races"
 python3 tools/probe_census.py --probe KEY --set-acceptable-failures 7
@@ -991,6 +994,64 @@ writes nothing. A harness error is deliberately NOT gated: it reads no cohort
 and contributes to none, and unmeasurable provenance is exactly what the
 attempt log retains. The CROSS-FIELD invariants remain #1493's.
 
+**CI-promotion candidates (#1441).** `--promotion-candidates` reports what a
+person needs in front of them before editing `tools/ci_probes.py`, and it edits
+nothing itself. Promotion has two halves and only one of them is measurable:
+the census can say a probe is RELIABLE, and it cannot say whether the probe
+covers enough to be worth a slot on every matching PR, whether its wall time
+fits the gate's budget, or whether the CI runner can host it at all. Those stay
+a human judgement, and so does the promotion.
+
+A probe is RELIABILITY-QUALIFIED when every measurable precondition holds: it
+is registered and LIVE-classified manual-only; its protocol is
+`probe-result/v1` (a legacy probe emits no structured result, so there is
+nothing to have measured); its stored X is integer ZERO — not "non-positive"
+and not unset, because only a zero states that the probe is expected to pass
+every run, and a null X states no expectation at all; it has a CURRENT cohort
+rather than an archived one; that cohort is FRESH against the caller's horizon;
+that cohort is COMPLETE; and it shows zero failures AND zero timeouts, which
+`probe_flake` counts separately. A probe failing any of these is reported in
+neither list — the report answers "what could a human promote?", and a row
+with nothing measured is not an answer to it.
+
+COMPLETE means three things, because a spotless-looking cohort can be missing
+runs in ways its own counts cannot show: it reaches the policy's ten runs
+pooled across every sample; every sample finished every run it scheduled; and
+no harness error is charged to it. That last is what a harness error looks
+like in the record — an ATTEMPT and no sample, so ten scheduled runs of which
+one never reported are indistinguishable from nine clean ones by counting
+alone. Attribution FAILS CLOSED: an attempt is excluded only when provably
+outside the cohort — a usable commit identity that is not the cohort's, or a
+usable timestamp strictly before the cohort opened — so the `unknown`
+provenance a harness error legitimately carries counts against it. "We cannot
+tell which cohort lost a run" is not evidence that this one did not.
+
+Statistics are POOLED over the whole cohort, never taken from the newest sample
+and never averaged across samples of unequal size: summed requested and
+completed runs, summed failures and timeouts, and a rate recomputed from the
+combined numerator and denominator. Duration is reported as TWO fields, because
+they answer two questions: `observed_worst_elapsed_seconds` is the MAXIMUM
+`worst_elapsed_seconds` across the cohort, and `estimated_worst_case_seconds`
+is the record's stored estimate. A missing estimate displays as `unset` and is
+never filled in from the observation beside it.
+
+Qualified probes are then split by their MANUAL-ONLY REASONS, every one of
+which is reported (`ci_probes.MANUAL_ONLY_REASONS` records one entry per
+independent ground since #1440, and several probes carry more than one). Only
+`flaky` and `unclassified` are grounds a measurement can answer, so a probe
+lands in the ready list only when EVERY declared category is one of those, and
+a single `needs-gpu`, `slow/worldgen-heavy`, `scenario-heavy`, `targeted` or
+`base-failing` puts it in the mechanically-blocked list however clean its runs
+are — a clean GPU probe is not a disappointment, it is a probe whose obstacle
+was never flakiness. That allowlist FAILS CLOSED by construction: a category
+added later, or one this tool has never heard of, is absent from it and
+therefore blocks, and a probe with no declared reason at all is blocked rather
+than vacuously ready.
+
+Every cardinality in the report is derived from the live registry. There is no
+frozen probe total anywhere in it, so it stays correct as probes are registered
+and promoted.
+
 **A CI-eligible probe takes no measurement at all (#1431).** "A promoted probe
 receives no further census samples" is a STORAGE invariant, not only a
 reporting one: `--record` refuses a probe `tools/ci_probes.py` currently
@@ -1002,6 +1063,12 @@ is still well-formed and schema-valid. Eligibility is read LIVE from the
 registry, never from the stored row's classification, which a census not yet
 reconciled by `--seed` still holds at its old value. The retained history stays
 exactly as the promotion left it.
+
+That is the whole of what a promotion does to the census: the probe keeps its
+row in the global manifest with an updated classification, `--seed` ARCHIVES
+its current cohort into `history` rather than deleting it, its attempt log is
+untouched, it leaves `--promotion-candidates`' manual-only report, and it
+accepts no further samples.
 
 `--print` never touches the docs worktree. `--seed` is the ONLY operation that
 migrates: it creates an absent census, migrates a `probe-census/v1` or
