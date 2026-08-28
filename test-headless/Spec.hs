@@ -58,6 +58,7 @@ import qualified Test.Headless.Item.FoodNutrition as ItemFoodNutrition
 import qualified Test.Headless.Item.Discovery as ItemDiscovery
 import qualified Test.Headless.Asset.TextureFallback as TextureFallback
 import qualified Test.Headless.Asset.FloraContent as FloraContent
+import qualified Test.Headless.Asset.FloraRegrowthSchema as FloraRegrowthSchema
 import qualified Test.Headless.Asset.UnitInventory as AssetUnitInventory
 import qualified Test.Headless.Asset.Types as AssetTypes
 import qualified Test.Headless.Asset.YamlList as AssetYamlList
@@ -468,6 +469,7 @@ main = hspec $ do
     describe "WorldGen.FluidSurfaceFold" FluidSurfaceFold.spec
     describe "Asset.Types" AssetTypes.spec
     describe "Asset.FloraContent" FloraContent.spec
+    describe "Asset.FloraRegrowthSchema" FloraRegrowthSchema.spec
     describe "Asset.UnitInventory" AssetUnitInventory.spec
     describe "Asset.YamlList" AssetYamlList.spec
     describe "material move_cost validation" AssetMaterialMoveCost.spec

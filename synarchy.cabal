@@ -1134,6 +1134,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Item.Discovery
                    Test.Headless.Asset.TextureFallback
                    Test.Headless.Asset.FloraContent
+                   Test.Headless.Asset.FloraRegrowthSchema
                    Test.Headless.Asset.Types
                    Test.Headless.Asset.UnitInventory
                    Test.Headless.Asset.MaterialMoveCost
