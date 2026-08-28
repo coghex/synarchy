@@ -9,13 +9,15 @@
 --
 -- Since #1421 EVERY item reports a condition, so instanceId is what
 -- this eligibility check actually turns on. The items the repair AI can
--- ever consider (own inventory / equipped / accessories, or the nearest
+-- ever consider (own inventory / equipped / accessories, a GROUND
+-- instance within repair_scan_range since #1737, or the nearest
 -- technomule's inventory — see the repair_job comment in
--- unit_ai_repair.lua) all carry one. Ground items are deliberately
--- excluded (#302: item.listGround() exposes neither instanceId nor
--- sharpness), and repair only ever scans a unit's own held items or a
--- technomule's — never a cargo building's storage — so flagging an item
--- there would be silently inert.
+-- unit_ai_repair.lua) all carry one: item.listGround /
+-- item.getGroundForUnit expose instanceId, sharpness and kind alongside
+-- condition, so a ground row satisfies this check and the priority flag
+-- on it is acted on exactly as a held one's is. Repair still never
+-- scans a cargo building's storage, so flagging an item THERE would be
+-- silently inert.
 --
 -- Eligibility alone isn't enough to offer/show "priority", though: an
 -- item at, say, 80% condition structurally COULD be flagged, but the AI

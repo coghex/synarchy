@@ -1,21 +1,35 @@
 -- Unit AI equipment repair (#538 split from unit_ai.lua).
 --
 -- Action: repair_job (#302). AI-autonomous equipment maintenance: an
--- acolyte notices its own (or the technomule's spare) gear has
--- degraded past a threshold and carries it to the right station
--- (#301: furnace for condition, workbench for sharpness) to restore
--- it via repair.repairAt. No engine-side spatial designation — a
--- repair target is an item INSTANCE (inventory/equipment/accessories,
--- own or the technomule's), so claims are keyed by instanceId
--- (repairClaims) rather than tile, playing the same race-guard role
--- a designation's status does for dig/chop/construct. Ground-item
--- targeting is out of scope (item.listGround() exposes no instanceId/
--- condition/sharpness).
+-- acolyte notices that gear it can reach has degraded past a threshold
+-- and carries it to the right station (#301: furnace for condition,
+-- workbench for sharpness) to restore it via repair.repairAt. No
+-- engine-side spatial designation — a repair target is an item
+-- INSTANCE, so claims are keyed by instanceId (repairClaims) rather
+-- than tile, playing the same race-guard role a designation's status
+-- does for dig/chop/construct.
+--
+-- The SOURCING LADDER is own held gear → a ground instance → the
+-- technomule's spare stock, and scripts/unit_ai_repair_target.lua owns
+-- every rung of it. #1737 completed the middle one: the ground scan
+-- reads instanceId, kind, condition and sharpness off the SAME
+-- pushGroundRow the consumable fetch already read x/weight from, so a
+-- ground target is scored, claimed, prioritized and race-guarded by
+-- exactly the machinery a held target is. (The stale "ground-item
+-- targeting is out of scope" note this header carried is gone with it.)
+--
+-- A ground target is TAKEN with item.pickupGround, which preserves the
+-- exact instance, and RETURNED with unit.dropItemById on the worker's
+-- own tile when the job ends for any reason — completed, aborted, or
+-- dropped by the post-load reconcile. `fromGround` remembers that
+-- obligation across a save (lua.unit_ai v7), which is why it is durable
+-- rather than derived from the phase.
 --
 -- State on s: repairJob = { instanceId, defName, axis, recipeId,
 -- consumable, consumableCount, groundWant, muleWant, groundDone,
--- onMule, itemFetched, bid }; repairPhase = "fetch_item" |
--- "fetch_consumable" | "walking" | "repairing".
+-- onMule, fromGround, groundGid, itemFetched, bid }; repairPhase =
+-- "fetch_ground" | "fetch_item" | "fetch_consumable" | "walking" |
+-- "repairing" | "returning".
 -----------------------------------------------------------
 
 local unitAi = package.loaded["scripts.unit_ai"]
@@ -25,14 +39,20 @@ local chebToFootprint = core.chebToFootprint
 local reportFailure   = core.reportFailure
 local grantWorkXP     = core.grantWorkXP
 
-local config = require("scripts.unit_ai_tunables")
-
 local fetch = require("scripts.unit_ai_fetch")
 local findTechnomule       = fetch.findTechnomule
 local deliverItemWeight    = fetch.deliverItemWeight
 local inventoryCountOf     = fetch.inventoryCountOf
 local fetchWantsFromGround = fetch.fetchWantsFromGround
 local fetchWantsFromMule   = fetch.fetchWantsFromMule
+
+-- Candidate selection — the whole own/ground/mule ladder — lives in its
+-- own module (#1737, #538 line budget). It reads the claim and priority
+-- tables below through an explicit ctx rather than owning them: they are
+-- session coordination state this module releases and refreshes on every
+-- tick, and splitting the registry away from the code that mutates it
+-- would put the two out of reach of one another.
+local targets = require("scripts.unit_ai_repair_target")
 
 local mv = require("scripts.movement_speed")
 local page = require("scripts.unit_ai_page")
@@ -116,7 +136,17 @@ end
 -- instead of a bare releaseRepairJob.
 local function abortRepairJob(uid, s, info)
     local job = s.repairJob
-    if job and job.itemFetched and info then
+    -- #1737: a ground-sourced target goes back to the GROUND, on this
+    -- worker's own tile and own page, never to a mule. A failed drop
+    -- (no live page) leaves it still held, so the job is parked in
+    -- "returning" and retried instead of released -- ending it here
+    -- would strand the instance in an inventory nothing now tracks.
+    if job and job.itemFetched and job.fromGround then
+        if not targets.returnGroundTarget(uid, job) then
+            s.repairPhase = "returning"
+            return
+        end
+    elseif job and job.itemFetched and info then
         local mule = findTechnomule(uid, info.gridX, info.gridY)
         if mule then
             -- Targeted by instanceId: without it, a defName-only
@@ -138,84 +168,14 @@ end
 -- reconcileDropHooks.
 repairAbort = abortRepairJob
 
--- How urgent is repairing this one item, and which axis? Condition is
--- checked before sharpness — a broken/low-condition item is
--- combat-catastrophic (zero armor protection, or a crippled weapon)
--- while low sharpness only reduces penetration, so it's repaired
--- first; the AI picks up a remaining sharpness need on a later tick.
--- Returns severity, axis — or nil if the item doesn't need repair.
-local function repairSeverity(it, params)
-    if it.condition ~= nil and it.condition < params.repair_condition_threshold then
-        if it.condition <= 0 then
-            local band = (it.kind == "armor")
-                and params.repair_severity_broken_armor
-                or params.repair_severity_broken_weapon
-            return band, "condition"
-        end
-        local x = 1 - (it.condition / params.repair_condition_threshold)
-        return x * x, "condition"
-    end
-    if it.sharpness and it.sharpness < params.repair_sharpness_threshold then
-        local x = 1 - (it.sharpness / params.repair_sharpness_threshold)
-        return x * x, "sharpness"
-    end
-    return nil, nil
-end
-
--- Whether `it` is currently something the autonomous repair AI would
--- pick up on its own — i.e. repairSeverity would return a candidate for
--- it (#303 review: without this check, the UI could offer/show
--- "priority" on an item above both thresholds, which the AI would then
--- never actually act on). repair_job is only registered for acolytes
--- today, so acolyte's thresholds are the only ones that matter; this
--- reads them directly rather than requiring a callers to know which
--- unit owns the item.
-function unitAi.itemNeedsRepair(it)
-    local params = config.acolyte
-    if not params or not it then return false end
-    return repairSeverity(it, params) ~= nil
-end
-
--- Best repair candidate among ownerUid's inventory + equipped gear +
--- accessories. Skips anything already claimed by another live unit.
--- A player-prioritized item (unitAi.setRepairPriority) always beats a
--- non-prioritized one regardless of severity; among same-priority
--- candidates the more severe one wins, as before.
-local function scanHeldItems(ownerUid, actingUid, onMule, now, params)
-    local best, bestSev, bestPri = nil, 0, false
-    local function consider(it)
-        if repairClaimedByOther(it.instanceId, actingUid, now,
-                                params.repair_claim_timeout) then
-            return
-        end
-        local sev, axis = repairSeverity(it, params)
-        if not sev then return end
-        local pri = repairPriority[it.instanceId] == true
-        local better = (pri and not bestPri)
-                     or (pri == bestPri and sev > bestSev)
-        if better then
-            best, bestSev, bestPri = {
-                instanceId = it.instanceId, defName = it.defName,
-                axis = axis, severity = sev, onMule = onMule,
-            }, sev, pri
-        end
-    end
-    for _, it in ipairs(unit.getInventory(ownerUid) or {}) do consider(it) end
-    for _, it in pairs(equipment.getLoadout(ownerUid) or {}) do consider(it) end
-    for _, it in ipairs(equipment.getAccessories(ownerUid) or {}) do consider(it) end
-    return best
-end
-
--- Own gear first (no fetch needed); only look to the mule's spare
--- stock when the unit itself carries nothing worth repairing.
-local function findRepairCandidate(uid, info, params)
-    local now = engine.gameTime()
-    local best = scanHeldItems(uid, uid, false, now, params)
-    if best then return best end
-    local mule = findTechnomule(uid, info.gridX, info.gridY)
-    if not mule then return nil end
-    return scanHeldItems(mule.uid, uid, true, now, params)
-end
+-- How unit_ai_repair_target.lua's scans read this module's two session
+-- registries. Built once; both closures are pure lookups.
+local targetCtx = {
+    claimedByOther = function(iid, uid, now, timeout)
+        return repairClaimedByOther(iid, uid, now, timeout)
+    end,
+    isPriority = function(iid) return repairPriority[iid] == true end,
+}
 
 function repairUtility(uid, s, params)
     if s.repairJob then return params.repair_lock_utility end
@@ -223,7 +183,7 @@ function repairUtility(uid, s, params)
     local info = unit.getInfo(uid)
     if not info then return -math.huge end
 
-    local cand = findRepairCandidate(uid, info, params)
+    local cand = targets.findCandidate(uid, info, params, targetCtx)
     if not cand then return -math.huge end
 
     -- Only claim if a station for this axis is actually reachable —
@@ -266,6 +226,15 @@ function repairUtility(uid, s, params)
     local needed = 0
     if cand.onMule then
         needed = needed + deliverItemWeight(cand.defName)
+    elseif cand.onGround then
+        -- The resolved row's LIVE total mass (empty case + fill +
+        -- nested contents), never the static def weight: #1737
+        -- requirement 6 keeps fill and nested contents intact across
+        -- the pickup, so a half-full canteen or a stocked kit weighs
+        -- what it actually weighs. Same number the arrival-time gate
+        -- re-reads, so a candidate that passes here and is still
+        -- carriable on arrival cannot be refused by a different rule.
+        needed = needed + (cand.weight or deliverItemWeight(cand.defName))
     end
     if inventoryCountOf(uid, input.item) < (input.count or 1) then
         needed = needed + deliverItemWeight(input.item) * (input.count or 1)
@@ -302,12 +271,22 @@ function repairExecute(uid, s, params)
             axis = cand.axis, recipeId = cand.recipeId,
             consumable = cand.consumable, consumableCount = cand.consumableCount,
             onMule = cand.onMule,
+            -- #1737: DURABLE provenance, not a phase-derived guess. A
+            -- save can land anywhere between the pickup and the repair,
+            -- and afterwards only the job itself can say "this instance
+            -- came off the ground and owes a drop, not a hand-back to a
+            -- mule". groundGid is the page-local id the fetch phase
+            -- re-resolves, cleared the moment the pickup lands.
+            fromGround = cand.onGround or nil,
+            groundGid = cand.onGround and cand.gid or nil,
             -- #1673: the station repairUtility already vetted against
             -- this unit's page. Carried in so the guard below covers
             -- the job from its first tick, fetch phases included.
             bid = cand.bid,
         }
-        s.repairPhase = cand.onMule and "fetch_item" or "fetch_consumable"
+        s.repairPhase = (cand.onGround and "fetch_ground")
+                     or (cand.onMule and "fetch_item")
+                     or "fetch_consumable"
         -- Cancel any in-flight moveTo the PREVIOUS action left running
         -- (e.g. a wander/search-spiral step): the switch-or-idle
         -- dispatch gate only re-fires execute() while activity=="idle",
@@ -321,6 +300,17 @@ function repairExecute(uid, s, params)
     local job = s.repairJob
     -- Keep the claim fresh while the job is held.
     repairClaims[job.instanceId] = { uid = uid, at = now }
+
+    -- #1737: the job is over and only the ground-sourced target's drop
+    -- is left. Reached when abortRepairJob's drop failed (no live page),
+    -- and deliberately AHEAD of the station revalidation below, since
+    -- the usual reason we are here is that the station just went away.
+    if s.repairPhase == "returning" then
+        if unit.dropItemById(uid, job.instanceId) then
+            releaseRepairJob(s, uid)
+        end
+        return
+    end
 
     -- #1673: job.bid is a PERSISTED building reference, so a save
     -- written before this check (or a page switch mid-job) can name a
@@ -337,6 +327,21 @@ function repairExecute(uid, s, params)
         if not binfo or not page.same(info.page, binfo.page) then
             abortRepairJob(uid, s, info); return
         end
+    end
+
+    if s.repairPhase == "fetch_ground" then
+        -- The ground rung itself -- re-resolve, walk, weigh, take --
+        -- belongs to unit_ai_repair_target.lua; this is the phase
+        -- machine reacting to its verdict.
+        local verdict = targets.takeGroundTarget(uid, job, info, params)
+        if verdict == "taken" then
+            job.itemFetched = true
+            job.groundGid = nil
+            s.repairPhase = "fetch_consumable"
+        elseif verdict == "lost" then
+            releaseRepairJob(s, uid)   -- never fetched
+        end
+        return
     end
 
     if s.repairPhase == "fetch_item" then
