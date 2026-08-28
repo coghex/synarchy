@@ -4943,6 +4943,19 @@ def rebind_references(record: dict, measurements) -> dict:
             continue
         for field in do.REFERENCE_FIELDS:
             section[field] = copy.deepcopy(result[field])
+    # The top-level list is #1437's ordered, deduplicated union of every
+    # batch it ran, and the entry gate rebuilds it from those same
+    # references — so a fixture that moved a reference has to move this
+    # with it or the substitution is what gets refused.
+    union: list = []
+    for role in do.ROLES:
+        section = record.get(role)
+        if not isinstance(section, dict):
+            continue
+        for path in section.get("retained_artifacts") or []:
+            if path not in union:
+                union.append(path)
+    record["retained_artifacts"] = union
     return record
 
 
@@ -6604,6 +6617,25 @@ def test_a_malformed_outcome_handoff_is_rejected_without_recording() -> None:
          lambda: broken(lambda d: d["diagnosis_outcome"].__setitem__(
              "retained_artifacts", ["artifacts/run-001"])),
          "must be an absolute path"),
+        ("an artifact list with an entry no batch retained",
+         lambda: broken(lambda d: d["diagnosis_outcome"].__setitem__(
+             "retained_artifacts",
+             list(d["diagnosis_outcome"]["retained_artifacts"])
+             + [f"{OUTSIDE}/unrelated/run-001"]),
+             dd.ROUTE_NO_CONFIDENT_FIX),
+         "names evidence this attempt does not have"),
+        ("an artifact list that hides one a batch retained",
+         lambda: broken(lambda d: d["diagnosis_outcome"].__setitem__(
+             "retained_artifacts",
+             list(d["diagnosis_outcome"]["retained_artifacts"])[:-1]),
+             dd.ROUTE_NO_CONFIDENT_FIX),
+         "hides evidence it does"),
+        ("an artifact list in an order no producer wrote",
+         lambda: broken(lambda d: d["diagnosis_outcome"].__setitem__(
+             "retained_artifacts",
+             list(reversed(d["diagnosis_outcome"]["retained_artifacts"]))),
+             dd.ROUTE_NO_CONFIDENT_FIX),
+         "ordered, deduplicated union"),
         ("a retained artifact inside the primary checkout",
          lambda: broken(lambda d: d["diagnosis_outcome"].__setitem__(
              "retained_artifacts", [f"{PRIMARY_WT}/artifacts/run-001"])),

@@ -2368,6 +2368,13 @@ among them, because those are evidence too. An embedded NUL makes
 a string passes an absoluteness test, names no location for the containment
 check to find, and would be stored while the CLI printed a traceback.
 
+**The artifact list is rebuilt, not believed.** #1437 produces its top-level
+`retained_artifacts` by accumulating every batch it ran, in role order,
+deduplicated, so the field is derived and the entry gate reconstructs it from
+the same per-batch references. Checking each path individually only asks
+whether each names a legal place; an unrelated directory appended to the list
+alone would still be stored as this attempt's evidence.
+
 **Durable, idempotent, and destroying nothing.** The stored record is a RESUME
 point — attempt identity, probe, timestamp, baseline commit, X, targets, the
 configuration manifest both batches read, the exact command and directory of

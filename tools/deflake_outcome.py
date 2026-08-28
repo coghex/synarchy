@@ -219,6 +219,13 @@ records no outcome, releases the lock and returns an actionable
 non-success — the attempt stays incomplete and resumable, and never
 falls through to a publisher.
 
+The record's own artifact list is REBUILT rather than believed. #1437
+produces it by accumulating every batch it ran, in role order,
+deduplicated — so it is derived, and validating each path individually
+only asks whether each names a legal place, never whether the list is
+the one the invocation produced. An unrelated directory appended to it
+alone would otherwise be stored as this attempt's evidence.
+
 Raw stdout, protocol streams and engine logs stay in the harness's
 artifact tree outside every worktree; only their path references are
 stored, exactly as `probe_census.summarize_sample` already does for a
@@ -897,19 +904,14 @@ class Handoff:
     def artifacts(self) -> list:
         """Every retained artifact this attempt has, in a stable order.
 
-        Deduplicated, not concatenated: #1437's outcome document already
-        names every batch's retained directories, and a measurement
-        names its own, so a plain `+` would store each of them twice.
+        Taken from the producer record alone, because the entry gate has
+        already REBUILT that field from the per-batch references and
+        required the two to be equal — and every declared measurement is
+        bound to its reference's retained list exactly. Unioning the
+        measurements in again here would add nothing and would quietly
+        re-admit whatever the equality check exists to refuse.
         """
-        seen: list[str] = []
-        sources = [self.diagnosis.get("retained_artifacts") or []]
-        sources += [self.measurements[role].result["retained_artifacts"]
-                    for role in ROLES if role in self.measurements]
-        for group in sources:
-            for path in group:
-                if path not in seen:
-                    seen.append(path)
-        return seen
+        return list(self.diagnosis["retained_artifacts"])
 
 
 def _registered_probes() -> set:
@@ -1051,6 +1053,28 @@ def require_diagnosis_outcome(document, *, worktrees=()) -> dict:
             outcome.get("verification"),
             "the diagnosis outcome's `verification`", worktrees=worktrees),
     }
+    # #1437 builds its top-level `retained_artifacts` by accumulating
+    # every batch it ran, in role order, deduplicated — so the field is
+    # DERIVED and the consumer can rebuild it instead of believing it.
+    # Validating each path individually only asks whether each names a
+    # legal place; it never asks whether the list is the one the
+    # invocation actually produced, so an unrelated directory appended
+    # here alone would be stored as this attempt's evidence.
+    union: list = []
+    for role in ROLES:
+        reference = references.get(role)
+        if reference is None:
+            continue
+        for path in reference["retained_artifacts"]:
+            if path not in union:
+                union.append(path)
+    if artifacts != union:
+        raise HandoffError(
+            f"the diagnosis outcome's `retained_artifacts` is {artifacts} "
+            f"where the batches it references retained {union}; that list "
+            f"is the ordered, deduplicated union of every batch the "
+            f"invocation ran, so a set that is not it names evidence this "
+            f"attempt does not have, or hides evidence it does")
     return {
         "route": route,
         "reason": reason,
