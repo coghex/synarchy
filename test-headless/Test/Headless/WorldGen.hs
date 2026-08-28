@@ -34,6 +34,7 @@ import World.Types
 import qualified Data.Vector as V
 import World.Fluid.Lake.Types (lakesInChunk)
 import World.Fluid.River.Types (riversInChunk)
+import Location.Anchor
 import Location.Types
     ( LocationDef(..), LocationNaming(..), allLocations
     , emptyLocationRegistry, registerLocation )
@@ -44,8 +45,17 @@ import Test.Headless.Location.Fixture (expectGeometry)
 import Location.Bounds (RelBounds(..), translateBounds)
 import Location.Overlay
     ( computeLocationOverlay, computeLocationPlacement, LocationPlacement(..)
-    , PlacementOutcome(..), chunkMetricsAt, ChunkMetrics(..) )
-import Test.Headless.Location.Bounds (decodeDef, rejectedNaming, isRight')
+    , PlacementOutcome(..), chunkMetricsAt, ChunkMetrics(..)
+    , Cuts(..), anchorOk, wantsWater )
+import Test.Headless.Location.Bounds (decodeDef, rejectedNaming)
+import Engine.Asset.YamlLocations (LocationYamlDef(..), LocationYamlFile(..))
+import Engine.Scripting.Lua.API.Locations (locationListDefsFn)
+import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
+import qualified Data.Yaml as Yaml
+import qualified HsLua as Lua
+import System.Directory (listDirectory)
+import System.FilePath (takeExtension)
 import Language.Semantic.Types (ConceptId(..))
 
 -- | The naming scheme every 'LocationDef' fixture in this module
@@ -170,8 +180,8 @@ spec = do
                 , ldMaxCount = 8, ldMinSpacing = 3, ldContents = []
                 , ldBounds = RelBounds (-2) (-2) 2 2
                 , ldMapIcon = Nothing, ldNaming = testNaming }
-            flatDef = mkDef "flat_test"     ["flat"]
-            mtnDef  = mkDef "mountain_test" ["mountain"]
+            flatDef = mkDef "flat_test"     [AnchorFlat]
+            mtnDef  = mkDef "mountain_test" [AnchorMountain]
             -- A chunk's anchor tile — mirrors Location.Instance's
             -- 'locationAnchorTileChecked', spelled out here so the
             -- expectation is independent of the code under test.
@@ -466,7 +476,7 @@ spec = do
             it "names a registered definition, and only the first in id order" $ \_env → do
                 -- `defsSorted` is `sortOn ldId`, so "aaa_test" wins over
                 -- "flat_test" regardless of the argument order.
-                let firstDef = mkDef "aaa_test" ["flat"]
+                let firstDef = mkDef "aaa_test" [AnchorFlat]
                     ov = lpOverlay (placeWith HS.empty allWet [flatDef, firstDef])
                 HM.elems ov `shouldBe` ["aaa_test"]
 
@@ -478,7 +488,7 @@ spec = do
                 -- guarantee has to break the anchor either way. Which
                 -- chunk it breaks it ON is the point: the dry one, not
                 -- the one the score order alone would reach.
-                let mtnOnly = mkDef "mtn_only" ["mountain"]
+                let mtnOnly = mkDef "mtn_only" [AnchorMountain]
                     med c = cmMedianElev (chunkMetricsAt gseed gplates gws allDry c)
                     wetOnly = placeWith HS.empty allWet [mtnOnly]
                     scorePick = HM.keys (lpOverlay wetOnly)
@@ -574,8 +584,11 @@ spec = do
                     `shouldBe` [translateBounds (chunkCentre coord) (ldBounds flatDef)]
 
         -- #801: an unsupported or misspelled anchor tag must not silently
-        -- impose no constraint. Validation lives at the YAML load layer
-        -- ('Engine.Asset.YamlLocations'), not in 'anchorOk' above, so
+        -- impose no constraint. Since #1681 the vocabulary is a CLOSED
+        -- type ('Location.Anchor.LocationAnchor'), so this group no
+        -- longer types the accepted set out by hand — it enumerates the
+        -- type. Validation still lives at the YAML load layer
+        -- ('Engine.Asset.YamlLocations'), not in 'anchorOk' below, so
         -- these decode a def straight from a YAML fragment rather than
         -- going through 'computeLocationOverlay'. Nested here (rather
         -- than alongside the #777 YAML tests in
@@ -586,14 +599,31 @@ spec = do
                     "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] },\
                     \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
                     \  anchor: " <> anchorYaml <> " }"
+                decodeAnchors yaml = lydAnchor ⊚ decodeDef yaml
 
-            it "accepts every tag in the supported vocabulary" $ \_env →
-                forM_ [ "flat", "mountain", "highland", "lowland"
-                      , "coast", "coastal", "inland", "waterside" ] $ \tag →
-                    decodeDef (anchorDef ("[" <> tag <> "]")) `shouldSatisfy` isRight'
+            it "accepts every tag the closed vocabulary inhabits, and \
+               \decodes it to that inhabitant" $ \_env → do
+                -- Enumerated from the TYPE (#1681), not from a list
+                -- typed out again here: a ninth constructor joins this
+                -- example the moment it exists, and a constructor whose
+                -- authored spelling regressed fails it.
+                allLocationAnchors `shouldSatisfy` (not ∘ null)
+                forM_ allLocationAnchors $ \a → do
+                    let yaml = anchorDef ("[" <> TE.encodeUtf8 (locationAnchorText a) <> "]")
+                    decodeAnchors yaml `shouldBe` Right [a]
+
+            it "round-trips the whole vocabulary as one authored list, \
+               \in order" $ \_env → do
+                -- Order is preserved, and eight distinct spellings map
+                -- to eight distinct inhabitants — a duplicated spelling
+                -- would collapse two of them here.
+                let allTags = T.intercalate ", " locationAnchorTags
+                    yaml = anchorDef ("[" <> TE.encodeUtf8 allTags <> "]")
+                decodeAnchors yaml `shouldBe` Right allLocationAnchors
+                nub locationAnchorTags `shouldBe` locationAnchorTags
 
             it "accepts a definition with no anchor tags at all" $ \_env →
-                decodeDef (anchorDef "[]") `shouldSatisfy` isRight'
+                decodeAnchors (anchorDef "[]") `shouldBe` Right []
 
             it "rejects an unknown anchor tag, naming the definition" $ \_env →
                 decodeDef (anchorDef "[jungle]") `shouldSatisfy` rejectedNaming "t"
@@ -611,3 +641,163 @@ spec = do
                 case decodeDef (anchorDef "[jungle]") of
                     Left err → err `shouldSatisfy` ("jungle" `isInfixOf`)
                     Right _  → expectationFailure "expected a decode failure"
+
+            it "prints the supported set DERIVED from the type, so the \
+               \diagnostic cannot fall out of step with it" $ \_env →
+                case decodeDef (anchorDef "[jungle]") of
+                    Left err → forM_ locationAnchorTags $ \tag →
+                        T.pack err `shouldSatisfy` (tag `T.isInfixOf`)
+                    Right _  → expectationFailure "expected a decode failure"
+
+            it "decodes every shipped data/locations/*.yaml definition \
+               \into the closed type" $ \_env → do
+                -- Requirement 9's direct evidence: the shipped corpus
+                -- still parses under the closed vocabulary, and its one
+                -- authored anchor is the one the overlay specs above
+                -- exercise. A shipped tag the type stopped accepting
+                -- fails HERE, at the file, rather than at boot.
+                names ← listDirectory "data/locations"
+                let yamls = sortOn id
+                        [ "data/locations" ⊘ n | n ← names, takeExtension n ≡ ".yaml" ]
+                yamls `shouldSatisfy` (not ∘ null)
+                decoded ← forM yamls $ \path → do
+                    result ← Yaml.decodeFileEither path
+                    case result of
+                        Left err → do
+                            expectationFailure
+                                (path <> ": " <> show (err ∷ Yaml.ParseException))
+                            return []
+                        Right lf → return
+                            [ (lydId d, lydAnchor d) | d ← lyfLocations lf ]
+                concat decoded `shouldBe` [("ruin_small", [AnchorFlat])]
+
+        -- #1681: the vocabulary is closed, and BOTH production
+        -- decisions over it are total. These pin one expectation per
+        -- inhabitant against a fixed set of cut-offs, because a
+        -- generated world only ever exercises whichever tags its own
+        -- terrain happens to satisfy — before #1681 six of the eight
+        -- had no direct coverage, so a swap between (say) highland and
+        -- mountain would have gone unnoticed.
+        describe "anchor semantics (#1681)" $ do
+            -- Deliberately four distinct values, so a branch reading
+            -- the wrong cut-off cannot coincidentally agree.
+            let cuts = Cuts { flatCut = 10, mountainCut = 100
+                            , highlandCut = 60, lowlandCut = 40 }
+                cm medianElev elevRange oceanDist = ChunkMetrics
+                    { cmMedianElev = medianElev
+                    , cmElevRange  = elevRange
+                    , cmOceanDist  = oceanDist }
+                -- A neutral chunk: no cut-off is met except by the
+                -- field each case varies.
+                base = cm 50 30 2
+                -- (tag, chunks it must ACCEPT, chunks it must REJECT).
+                -- Written as data rather than as a mirror of the
+                -- implementation's own case expression, and sitting on
+                -- the cut-offs themselves so an off-by-one in either
+                -- direction shows up.
+                table =
+                    [ ( AnchorFlat
+                      , [base { cmElevRange = 0 }, base { cmElevRange = 10 }]
+                      , [base { cmElevRange = 11 }, base { cmElevRange = 999 }] )
+                    , ( AnchorMountain
+                      , [base { cmMedianElev = 100 }, base { cmMedianElev = 101 }]
+                      , [base { cmMedianElev = 99 }, base { cmMedianElev = 60 }] )
+                    , ( AnchorHighland
+                      , [base { cmMedianElev = 60 }, base { cmMedianElev = 99 }]
+                      , [base { cmMedianElev = 59 }, base { cmMedianElev = 0 }] )
+                    , ( AnchorLowland
+                      , [base { cmMedianElev = 40 }, base { cmMedianElev = 0 }]
+                      , [base { cmMedianElev = 41 }, base { cmMedianElev = 100 }] )
+                    , ( AnchorCoast
+                      , [base { cmOceanDist = 1 }]
+                      , [base { cmOceanDist = 0 }, base { cmOceanDist = 2 }
+                        , base { cmOceanDist = 4 }] )
+                    , ( AnchorCoastal
+                      , [base { cmOceanDist = 1 }]
+                      , [base { cmOceanDist = 0 }, base { cmOceanDist = 2 }
+                        , base { cmOceanDist = 4 }] )
+                    , ( AnchorInland
+                      , [base { cmOceanDist = 4 }, base { cmOceanDist = 40 }]
+                      , [base { cmOceanDist = 3 }, base { cmOceanDist = 0 }] )
+                    , ( AnchorWaterside
+                      , [ base, base { cmElevRange = 999 }
+                        , base { cmMedianElev = 0 }, base { cmMedianElev = 999 }
+                        , base { cmOceanDist = 0 }, base { cmOceanDist = 99 } ]
+                      , [] )
+                    ]
+                waterTags = [AnchorCoast, AnchorCoastal, AnchorWaterside]
+
+            it "covers every inhabitant of the closed vocabulary" $ \_env →
+                -- The table is the coverage claim, so it is checked
+                -- against the type rather than trusted: a ninth
+                -- constructor fails here until it is given a row.
+                map (\(a, _, _) → a) table `shouldBe` allLocationAnchors
+
+            it "matches exactly the chunks each tag is specified to \
+               \match, on both sides of its cut-off" $ \_env →
+                forM_ table $ \(a, accepted, rejected) → do
+                    forM_ accepted $ \metrics →
+                        (locationAnchorText a, metrics, anchorOk cuts [a] metrics)
+                            `shouldBe` (locationAnchorText a, metrics, True)
+                    forM_ rejected $ \metrics →
+                        (locationAnchorText a, metrics, anchorOk cuts [a] metrics)
+                            `shouldBe` (locationAnchorText a, metrics, False)
+
+            it "treats waterside as an explicit unconstrained case, not \
+               \a wildcard effect" $ \_env → do
+                -- Requirement 6: it must impose NO terrain constraint of
+                -- its own, and it must not weaken one a sibling tag adds.
+                forM_ [ metrics | (_, acc, rej) ← table, metrics ← acc ⧺ rej ] $
+                    \metrics → do
+                        anchorOk cuts [AnchorWaterside] metrics `shouldBe` True
+                        anchorOk cuts [AnchorWaterside, AnchorMountain] metrics
+                            `shouldBe` anchorOk cuts [AnchorMountain] metrics
+
+            it "requires EVERY tag in a def's list, not any of them" $ \_env → do
+                let both = [AnchorMountain, AnchorInland]
+                anchorOk cuts both (cm 100 30 4) `shouldBe` True
+                anchorOk cuts both (cm 100 30 3) `shouldBe` False
+                anchorOk cuts both (cm  99 30 4) `shouldBe` False
+
+            it "imposes no constraint at all on a def with no tags" $ \_env →
+                forM_ [ metrics | (_, acc, rej) ← table, metrics ← acc ⧺ rej ] $
+                    \metrics → anchorOk cuts [] metrics `shouldBe` True
+
+            it "opts into water proximity for exactly coast, coastal and \
+               \waterside" $ \_env → do
+                -- Enumerated over the type (#1681), so a ninth
+                -- constructor cannot silently inherit either answer.
+                forM_ allLocationAnchors $ \a →
+                    (locationAnchorText a, wantsWater [a])
+                        `shouldBe` (locationAnchorText a, a `elem` waterTags)
+                wantsWater [] `shouldBe` False
+                wantsWater [AnchorFlat, AnchorCoast] `shouldBe` True
+                wantsWater [AnchorFlat, AnchorInland] `shouldBe` False
+
+            it "engine.listLocationDefs() still reports anchors as the \
+               \authored strings, in the authored order" $ \env → do
+                -- Requirement 8's boundary: the closed values are
+                -- rendered back through the type's own total spelling
+                -- map, so Lua sees exactly what the YAML said.
+                let regs    = toContentRegistriesCapability env
+                    defsRef = crLocationDefsRef regs
+                    -- Deliberately NOT the constructor order, so the
+                    -- assertion tests the def's order rather than the
+                    -- type's.
+                    authored = [ AnchorWaterside, AnchorCoastal, AnchorFlat
+                               , AnchorInland, AnchorMountain ]
+                    def = mkDef "anchor_dump_test" authored
+                bracket (readIORef defsRef) (writeIORef defsRef) $ \_ → do
+                    writeIORef defsRef (registerLocation def emptyLocationRegistry)
+                    tags ← Lua.run $ do
+                        Lua.openlibs
+                        _ ← locationListDefsFn regs
+                        _ ← Lua.rawgeti (-1) 1
+                        _ ← Lua.getfield (-1) "anchor"
+                        n ← Lua.rawlen (-1)
+                        forM [1 .. n] $ \i → do
+                            _ ← Lua.rawgeti (-1) (fromIntegral i)
+                            t ← Lua.tostring (-1)
+                            Lua.pop 1
+                            return (TE.decodeUtf8 <$> t)
+                    tags `shouldBe` map (Just ∘ locationAnchorText) authored

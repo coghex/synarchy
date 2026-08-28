@@ -33,6 +33,7 @@ import Engine.Scripting.Lua.API.YamlTextures
 import Engine.Asset.YamlLocations
 import Language.Semantic.Types (ConceptId(..), catalogueErrorText)
 import Language.Semantic.Catalogue (conceptCataloguePath, loadCatalogue)
+import Location.Anchor (locationAnchorText)
 import Location.Naming (locationNamingErrors)
 import Location.Types
 import Location.Bounds (RelBounds(..))
@@ -212,10 +213,13 @@ locationListDefsFn regs = do
         Lua.setfield (-2) "max_count"
         Lua.pushinteger (fromIntegral (ldMinSpacing d))
         Lua.setfield (-2) "min_spacing"
-        -- anchor: array of tag strings
+        -- anchor: array of tag strings, in the def's authored order.
+        -- The values are the closed #1681 vocabulary, rendered back
+        -- through the type's own total spelling map, so Lua still sees
+        -- exactly the strings the YAML authored.
         Lua.newtable
         forM_ (zip [1..] (ldAnchor d)) $ \(j, tag) → do
-            Lua.pushstring (TE.encodeUtf8 tag)
+            Lua.pushstring (TE.encodeUtf8 (locationAnchorText tag))
             Lua.rawseti (-2) j
         Lua.setfield (-2) "anchor"
         -- contents: array of {kind, id, count}

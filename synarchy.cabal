@@ -564,6 +564,7 @@ library
                      Blood.Trail
                      Blood.Pool
                      Engine.Scripting.Lua.API.Blood
+                     Location.Anchor
                      Location.Types
                      Location.Bounds
                      Location.Naming
