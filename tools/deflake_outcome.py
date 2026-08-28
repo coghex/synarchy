@@ -51,13 +51,18 @@ A lower failure rate is not success
 requires a baseline and a verification that are both complete and
 trustworthy, were taken at the SAME run count and the SAME RTS
 capability count, and whose verification failure count is strictly lower
-than the baseline's while STILL failing the acceptance gate — over X, or
-leaving a target check MISSING. Without the same-conditions clause the
-comparison is not a comparison; without the still-failing clause the
-route contradicts its own evidence. A verification that merely became
-INVALID improved nothing measurable, so it is an operational error here
-rather than a partial improvement claimed over evidence that cannot
-support it.
+than the baseline's while STILL failing #1437's acceptance gate. That
+gate is CALLED rather than paraphrased: over X, or any violation of
+`deflake_diagnosis.missing_problems`, whose scoped rule has four clauses
+of which only one is about targets — a PASSING run that omits a
+NON-target check fails it too, and a consumer that checked only the
+targets would call such a verification passing while
+`deflake_diagnosis.evaluate` had just routed it here. Without the
+same-conditions clause the comparison is not a comparison; without the
+still-failing clause the route contradicts its own evidence. A
+verification that merely became INVALID improved nothing measurable, so
+it is an operational error here rather than a partial improvement
+claimed over evidence that cannot support it.
 
 Operational errors are not "cannot reproduce"
 ---------------------------------------------
@@ -98,8 +103,11 @@ an all-PASS batch under a forged failure count is schema-valid, and it
 would read as a REPRODUCED failure, which is the evidence
 `no-confident-fix` and `partial-improvement` rest on. The three totals
 are therefore reconciled against the run list using
-`probe_flake.Measurement`'s own arithmetic, and a mismatch is an
-untrustworthy measurement.
+`probe_flake.Measurement`'s own arithmetic, and so is `completed_runs`,
+which the producer writes as `len(runs)` and which makes the rest mean
+anything: a nine-run batch claiming ten completed satisfies
+`completed_runs == requested_runs` and would be STORED as ten of ten. A
+mismatch in any of the four is an untrustworthy measurement.
 
 The measurement is the one that diagnosis judged
 ------------------------------------------------
@@ -153,7 +161,11 @@ Idempotency is the WHOLE record, and exactly one of its fields is not
 derived from the handoff — `timestamp_utc` comes from a clock, which
 reads differently on a retry — so a retry reuses the instant the stored
 attempt was first stamped with instead of restamping itself into a
-conflict. A write that refuses leaves the census file byte-identical,
+conflict. That lookup happens INSIDE the census transaction, under the
+same lock the append is made under, so two concurrent invocations of one
+new attempt serialize: the loser rebuilds against what the winner
+actually committed rather than against a snapshot taken before it. A
+write that refuses leaves the census file byte-identical,
 records no outcome, releases the lock and returns an actionable
 non-success — the attempt stays incomplete and resumable, and never
 falls through to a publisher.
@@ -476,6 +488,13 @@ class Measurement:
         passes the census's own invariants, and would otherwise read as
         a reproduced failure.
 
+        `completed_runs` is checked here for the same reason and is the
+        one that makes the rest mean anything: the producer writes it as
+        `len(runs)`, nothing on the way back in re-establishes that, and
+        a nine-run batch claiming ten completed passes a completeness
+        test of `completed_runs == requested_runs` and is then STORED as
+        ten of ten.
+
         The arithmetic is `probe_flake.Measurement`'s own, not a second
         opinion: a failure is a FAIL or a TIMEOUT run, a timeout is a
         TIMEOUT run, and the rate is failures over REQUESTED runs
@@ -483,6 +502,11 @@ class Measurement:
         """
         problems: list[str] = []
         runs = self.result["runs"]
+        if len(runs) != self.completed_runs:
+            problems.append(
+                f"the {self.role} measurement reports "
+                f"{self.completed_runs} completed run(s) while its run list "
+                f"holds {len(runs)}")
         failures = sum(1 for run in runs if run["outcome"] in
                        (probe_flake.RUN_FAIL, probe_flake.RUN_TIMEOUT))
         timeouts = sum(1 for run in runs
@@ -969,10 +993,11 @@ def _classify_partial_improvement(handoff: Handoff) -> dict:
 
     Numeric on both halves. The improvement is a strictly lower failure
     count between two batches taken under the SAME conditions, and the
-    failure is the acceptance gate's own measurement half — over X, or a
-    target left MISSING. A verification that measurably PASSES that half
-    contradicts the route it was handed under, and this refuses rather
-    than recording a claim its own evidence denies.
+    failure is #1437's acceptance gate — over X, or any violation of its
+    scoped MISSING rule, which is CALLED here rather than paraphrased.
+    A verification that measurably PASSES that gate contradicts the
+    route it was handed under, and this refuses rather than recording a
+    claim its own evidence denies.
     """
     baseline = handoff.measurement(ROLE_BASELINE)
     verification = handoff.measurement(ROLE_VERIFICATION)
@@ -998,16 +1023,25 @@ def _classify_partial_improvement(handoff: Handoff) -> dict:
             f"which is no improvement; a lower failure RATE is the only "
             f"thing {OUTCOME_PARTIAL_IMPROVEMENT!r} claims, and this "
             f"evidence does not establish one")
-    missing = verification.missing_targets(handoff.targets)
+    # #1437's OWN acceptance predicate, called rather than paraphrased.
+    # Its MISSING half is a scoped rule with four clauses — a target
+    # MISSING anywhere, a PASSING run omitting anything at all, an
+    # aborted run losing something other than a contiguous suffix, and
+    # an identifier that vanished from the batch — so a consumer that
+    # checked only the target clause would call a verification "passing"
+    # that `deflake_diagnosis.evaluate` had just routed here.
+    unmet = deflake_diagnosis.missing_problems(
+        verification.result, targets=set(handoff.targets),
+        what="the verification batch")
     if (verification.failure_count <= handoff.acceptable_failures
-            and not missing):
+            and not unmet):
         raise NonSuccess(
             f"the verification observed {verification.failure_count} "
             f"failure(s) against an acceptable ceiling of "
             f"{handoff.acceptable_failures} out of "
-            f"{verification.requested_runs} and left no target check "
-            f"MISSING, so it measurably PASSES the acceptance gate this "
-            f"outcome exists to record a failure of")
+            f"{verification.requested_runs} and satisfied the MISSING rule, "
+            f"so it measurably PASSES the acceptance gate this outcome "
+            f"exists to record a failure of")
     return {
         "recommendation": None,
         "comparison": {
@@ -1105,38 +1139,29 @@ class Recorded:
                 "record": self.record}
 
 
-def recorded_timestamp(census_path: Path, probe: str, attempt: str):
-    """The instant an already-recorded attempt was stamped with, or None.
+def reuse_stored_timestamp(candidate: dict, stored: dict) -> dict:
+    """The one field of a rebuilt record that cannot be derived again.
 
-    Every field of an outcome record is derived from the handoff except
-    one: `timestamp_utc` comes from a clock, and a clock reads
-    differently on a retry. Idempotency is the WHOLE record, so a resume
-    that stamped itself afresh would present the same attempt identity
-    carrying different evidence and be refused as a conflict instead of
-    recognized as the resume it is. Reading the stored instant first is
-    what makes "resuming an already-recorded attempt appends nothing"
-    true of the command line and not only of the library.
+    Every field of an outcome record comes from the handoff except
+    `timestamp_utc`, which comes from a clock — and a clock reads
+    differently on a retry. Idempotency is the WHOLE record, so a retry
+    that stamped itself anew would present one attempt identity carrying
+    two different records and be refused as a conflict instead of
+    recognized as the resume it is.
 
-    Read WITHOUT the census lock, deliberately. A concurrent writer that
-    inserts this attempt between the read and the transaction leaves the
-    conflict check in `probe_census.ingest_outcome` to refuse loudly —
-    which is the safe direction, since the alternative to a loud refusal
-    is a duplicate. A missing, unreadable or malformed census answers
-    None and lets the transaction report it properly.
+    `probe_census.record_outcome_installed` calls this INSIDE its locked
+    transaction, and only when the attempt is already stored. That
+    placement is the point: two concurrent invocations of one new
+    attempt serialize on the census lock, so the second builds its
+    record against what the first actually committed rather than against
+    a snapshot taken before it. Nothing else is copied across — every
+    other difference is a real one, and `ingest_outcome` still refuses
+    it.
     """
-    path = Path(census_path)
-    if not path.exists():
-        return None
-    try:
-        document = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    row = probe_census.find_entry(document, probe)
-    stored = probe_census.find_outcome((row or {}).get("census"), attempt)
-    if not isinstance(stored, dict):
-        return None
     instant = stored.get("timestamp_utc")
-    return instant if isinstance(instant, str) else None
+    if not isinstance(instant, str):
+        return candidate
+    return dict(candidate, timestamp_utc=instant)
 
 
 def record(handoff: Handoff, *, census_path: Path, now: str,
@@ -1158,15 +1183,18 @@ def record(handoff: Handoff, *, census_path: Path, now: str,
     exists to prevent.
     """
     path = Path(census_path)
-    # A retry rebuilds the record the census already holds, stamp
-    # included, so `ingest_outcome` sees a replay rather than a conflict.
-    stored = recorded_timestamp(path, handoff.probe, handoff.attempt)
-    document = outcome_record(handoff, now=stored if stored else now)
+    document = outcome_record(handoff, now=now)
     durable = True
     resumed = False
     try:
-        _probe, resumed = probe_census.record_outcome_installed(
-            path, handoff.probe, document)
+        # A retry rebuilds the record the census already holds, stamp
+        # included, so `ingest_outcome` sees a replay rather than a
+        # conflict — and the stored record is read under the same lock
+        # the append is made under, so no concurrent first writer can
+        # slip between the two.
+        _probe, resumed, document = probe_census.record_outcome_installed(
+            path, handoff.probe, document,
+            reconcile=reuse_stored_timestamp)
     except probe_census.CensusDurabilityUnconfirmed as error:
         durable = False
         print(f"deflake_outcome: warning: the census append is installed but "

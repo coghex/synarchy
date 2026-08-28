@@ -4760,6 +4760,41 @@ def forged_verification_counts() -> dict:
     return document
 
 
+def forged_completion_result() -> dict:
+    """Nine all-PASS runs under a `completed_runs` of ten.
+
+    The producer writes `completed_runs` as `len(runs)`, and nothing on
+    the way back in re-establishes that: the declared schema does not,
+    and `probe_census.validate_result` binds `check_counts` to the runs
+    that ARE there, so nine matching tallies keep it consistent. A
+    completeness test of `completed_runs == requested_runs` therefore
+    passes, and the batch would be stored as ten of ten.
+    """
+    ids = [c for c, _label in CHECKS]
+    document = result_document(
+        runs=[{name: PASS for name in ids} for _ in range(dd.RUN_COUNT - 1)])
+    document["completed_runs"] = dd.RUN_COUNT
+    return document
+
+
+def non_target_missing_verification() -> dict:
+    """A clean verification that still fails #1437's MISSING rule.
+
+    Zero failures, so the COUNT half of the acceptance gate is
+    satisfied, and the targets (`beta`, `gamma`) are emitted in every
+    run — but `alpha` is never emitted at all, which `missing_problems`
+    refuses twice over: a PASSING run must omit nothing, and no declared
+    identifier may vanish from the batch. `deflake_diagnosis.evaluate`
+    routes this to `partial-improvement`, so a consumer that only looked
+    at the targets would call it a passing verification and record
+    nothing.
+    """
+    ids = [c for c, _label in CHECKS]
+    run = {name: (MISSING if name == ids[0] else PASS) for name in ids}
+    return verification_result(artifact_root=VERIFY_ARTIFACTS,
+                               runs=[dict(run) for _ in range(dd.RUN_COUNT)])
+
+
 def restamped(document: dict, stamp: str = "2026-08-22T09:30:00Z") -> dict:
     """The same measurement, claiming another instant."""
     document = copy.deepcopy(document)
@@ -5047,6 +5082,10 @@ def test_untrustworthy_evidence_is_never_cannot_reproduce() -> None:
          f"run {dd.RUN_COUNT} is {probe_flake.RUN_TIMEOUT}"),
         ("an incomplete run set", probe_flake.EXIT_OK, short_result(),
          f"completed {dd.RUN_COUNT - 1} of {dd.RUN_COUNT} requested runs"),
+        ("a completion count its own run list contradicts",
+         probe_flake.EXIT_OK, forged_completion_result(),
+         f"reports {dd.RUN_COUNT} completed run(s) while its run list holds "
+         f"{dd.RUN_COUNT - 1}"),
         ("a check that never arrived", probe_flake.EXIT_OK,
          missing_check_result(), "check 'gamma' is MISSING"),
         ("an untrustworthy harness result", probe_flake.EXIT_HARNESS_ERROR,
@@ -5271,6 +5310,111 @@ def test_a_lower_rate_that_still_fails_the_gate_is_partial_improvement()\
         expect(record["recommendation"] is None,
                "and no de-list recommendation, which only cannot-reproduce "
                "carries")
+
+
+def test_the_acceptance_gate_is_1437s_own_missing_rule() -> None:
+    """Not just "no target went MISSING".
+
+    #1437's scoped MISSING rule has four clauses, and only one of them
+    is about targets. A verification that reached zero failures while
+    losing a NON-target check fails that rule, so
+    `deflake_diagnosis.evaluate` routes it here — and a consumer that
+    checked only the targets would call it a passing verification and
+    record nothing at all.
+    """
+    diagnosis, _record = produced(dd.ROUTE_PARTIAL_IMPROVEMENT)
+    verification = non_target_missing_verification()
+    expect(bool(dd.missing_problems(
+        verification, targets={"beta", "gamma"}, what="the verification")),
+        "the fixture must actually violate #1437's MISSING rule")
+    expect(not dd.missing_targets(verification, ["beta", "gamma"]),
+           "...while leaving every TARGET emitted, or it would be refused "
+           "by the clause this case exists to look past")
+
+    with census_file() as path:
+        recorded, publisher = record_outcome(outcome_handoff(
+            dd.ROUTE_PARTIAL_IMPROVEMENT, measurements=[
+                {"role": do.ROLE_BASELINE, "exit_code": probe_flake.EXIT_OK,
+                 "result": diagnosis["baseline"]["result"]},
+                {"role": do.ROLE_VERIFICATION,
+                 "exit_code": probe_flake.EXIT_OK,
+                 "result": verification}]), path)
+        expect(recorded.record["outcome"] == do.OUTCOME_PARTIAL_IMPROVEMENT,
+               f"a 4 -> 0 verification that lost a non-target check is still "
+               f"a partial improvement; got {recorded.record['outcome']}")
+        expect(recorded.record["comparison"]["verification_failure_count"]
+               == 0,
+               "recorded with the zero failures it really observed")
+        expect(publisher.calls == [], "and opening no pull request")
+
+
+def test_two_concurrent_invocations_of_one_attempt_append_once() -> None:
+    """The stamp is chosen inside the lock, so a race is still a resume.
+
+    Two processes starting on the same NEW attempt both build a record
+    before either has committed. Whichever loses the census lock finds
+    the winner's record already stored and rebuilds against it, so the
+    pair ends in one append and two successes rather than a conflict.
+    """
+    tool = str(Path(__file__).resolve().parent / "deflake_outcome.py")
+    with census_file() as path:
+        document = Path(path).parent / "concurrent.json"
+        document.write_text(json.dumps(outcome_handoff()), encoding="utf-8")
+        command = [sys.executable, tool, "--handoff", str(document),
+                   "--census", str(path)]
+        running = [subprocess.Popen(command, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, text=True)
+                   for _ in range(2)]
+        finished = [process.communicate(timeout=180) for process in running]
+        codes = [process.returncode for process in running]
+        expect(codes == [do.EXIT_OK, do.EXIT_OK],
+               f"both concurrent invocations succeed; got {codes} "
+               f"({[err.strip()[:160] for _out, err in finished]})")
+        stored = stored_outcomes(path)
+        expect(len(stored) == 1,
+               f"and exactly one outcome is appended; got {len(stored)}")
+
+
+def test_a_malformed_stored_census_is_an_actionable_non_success() -> None:
+    """No traceback, whatever is sitting in the file.
+
+    The stored census is read and validated inside the locked
+    transaction, so a valid-JSON document that is not a census reaches a
+    controlled refusal rather than an attribute error on the way to one.
+    """
+    tool = str(Path(__file__).resolve().parent / "deflake_outcome.py")
+    for label, build in (
+            ("a census that is a JSON array", lambda _document: []),
+            ("a row whose census record is a list",
+             lambda document: _row_census_as_list(document)),
+            ("a census on an older schema", lambda document: dict(
+                document, schema=probe_census.CLAIM_SCHEMA)),
+    ):
+        with census_file() as path:
+            stored = json.loads(Path(path).read_text(encoding="utf-8"))
+            Path(path).write_text(json.dumps(build(stored)), encoding="utf-8")
+            before = Path(path).read_bytes()
+            handoff = Path(path).parent / "handoff.json"
+            handoff.write_text(json.dumps(outcome_handoff()), encoding="utf-8")
+            done = subprocess.run(
+                [sys.executable, tool, "--handoff", str(handoff),
+                 "--census", str(path)],
+                capture_output=True, text=True, timeout=120)
+            expect(done.returncode == do.EXIT_NON_SUCCESS,
+                   f"{label}: exits with an actionable non-success; got "
+                   f"{done.returncode} ({done.stderr.strip()[:200]})")
+            expect("Traceback" not in done.stderr,
+                   f"{label}: printed a traceback\n{done.stderr[:400]}")
+            expect(Path(path).read_bytes() == before,
+                   f"{label}: the refusal changed the census bytes")
+
+
+def _row_census_as_list(document: dict) -> dict:
+    document = copy.deepcopy(document)
+    for row in document["probes"]:
+        if row["key"] == PROBE:
+            row["census"] = []
+    return document
 
 
 def test_partial_improvement_is_numeric_on_both_halves() -> None:

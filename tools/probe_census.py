@@ -2832,29 +2832,50 @@ def record_claim(path: Path, probe: str, claim) -> str:
     return probe
 
 
-def record_outcome_installed(path: Path, probe: str, outcome) -> tuple:
-    """Record one outcome and return `(probe, resumed)`.
+def record_outcome_installed(path: Path, probe: str, outcome, *,
+                             reconcile=None) -> tuple:
+    """Record one outcome and return `(probe, resumed, installed)`.
+
+    `installed` is the record as it now sits in the census — which is
+    the reconciled one when `reconcile` ran, so a caller reports what
+    the census holds rather than the candidate it proposed.
 
     `resumed` is decided INSIDE the transaction, while the lock is held
     — it is true exactly when the stored census already carried this
-    attempt identity and the append was therefore a no-op. A caller
-    that instead compared the file's bytes before and after would be
-    reading them outside the lock, and a concurrent writer's unrelated
-    edit would make a genuine first append look like a resume.
+    attempt identity. A caller that instead compared the file's bytes
+    before and after would be reading them outside the lock, and a
+    concurrent writer's unrelated edit would make a genuine first append
+    look like a resume.
+
+    `reconcile(candidate, stored)` is the same window offered to the
+    caller. Idempotency is the WHOLE record, so a caller whose record
+    carries a field it cannot derive — a wall-clock stamp is the one
+    that exists — needs the STORED record to reproduce itself, and the
+    only race-free place to read it is here. It runs only when this
+    attempt is already recorded, and whatever it returns is what
+    `ingest_outcome` then holds to that stored record: it can make a
+    replay identical, and it cannot make two genuinely different
+    outcomes agree.
     """
-    resumed: list[bool] = []
+    seen: list[tuple] = []
 
     def mutate(before):
         document = require_current_schema(before, path)
-        row = find_entry(document, probe)
-        attempt = outcome.get("attempt") if isinstance(outcome, dict) else None
-        resumed.append(isinstance(attempt, str) and attempt != "" and
-                       find_outcome((row or {}).get("census"),
-                                    attempt) is not None)
-        candidate, key = ingest_outcome(document, probe, outcome)
-        return candidate, {key: {"outcomes"}}
+        candidate = outcome
+        attempt = (candidate.get("attempt")
+                   if isinstance(candidate, dict) else None)
+        stored = None
+        if isinstance(attempt, str) and attempt:
+            row = find_entry(document, probe)
+            stored = find_outcome((row or {}).get("census"), attempt)
+        if stored is not None and reconcile is not None:
+            candidate = reconcile(candidate, stored)
+        seen.append((stored is not None, candidate))
+        installed, key = ingest_outcome(document, probe, candidate)
+        return installed, {key: {"outcomes"}}
     update(path, mutate)
-    return probe, resumed[-1]
+    resumed, record = seen[-1]
+    return probe, resumed, _deep_copy(record)
 
 
 def record_outcome(path: Path, probe: str, outcome) -> str:

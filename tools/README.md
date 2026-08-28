@@ -2098,7 +2098,11 @@ nothing binds `failure_count`, `timeout_count` or `failure_rate` to the run
 list — so an all-PASS batch under a forged failure count is schema-valid and
 would read as a REPRODUCED failure, which is what `no-confident-fix` and
 `partial-improvement` rest on. The three totals are reconciled against the run
-list using `probe_flake.Measurement`'s own arithmetic; the remaining defect
+list using `probe_flake.Measurement`'s own arithmetic — and so is
+`completed_runs`, which the producer writes as `len(runs)` and which makes the
+rest mean anything, since a nine-run batch claiming ten completed satisfies
+`completed_runs == requested_runs` and would be stored as ten of ten. The
+remaining defect
 predicate then reads the RUN LIST and the PER-CHECK TALLIES, which are
 genuinely independent of each other (a run can time out after emitting every
 check, and a check can go MISSING across an all-PASS batch) rather than reading
@@ -2123,11 +2127,15 @@ misclassify a measurement taken at any other one.
 **A lower failure rate is not success.** `partial-improvement` is numeric on
 both halves: both batches complete and trustworthy, taken at the SAME run
 count and the SAME RTS capability count, the verification's failure count
-strictly lower, and the verification STILL failing the acceptance gate — over
-X, or leaving a target check MISSING. A verification that measurably passes
-that gate contradicts the route it was handed under, and a verification that
-merely became INVALID improved nothing measurable, so both are refused rather
-than recorded.
+strictly lower, and the verification STILL failing #1437's acceptance gate.
+That gate is CALLED rather than paraphrased — over X, or any violation of
+`deflake_diagnosis.missing_problems`, whose scoped rule has four clauses of
+which only one is about targets, so a PASSING run omitting a NON-target check
+fails it too and a consumer checking only the targets would call such a
+verification passing while `evaluate` had just routed it here. A verification
+that measurably passes that gate contradicts the route it was handed under, and
+one that merely became INVALID improved nothing measurable, so both are refused
+rather than recorded.
 
 **The de-list recommendation is advisory, and only that.** Nothing here edits
 `tools/ci_probes.py`, removes a manual-only reason, changes a classification
@@ -2147,8 +2155,12 @@ identity carrying different evidence is refused rather than appended past.
 Idempotency is the WHOLE record, and exactly one field is not derived from the
 handoff — `timestamp_utc` comes from a clock, which reads differently on a
 retry — so a retry reuses the instant the stored attempt was first stamped
-with instead of restamping itself into a conflict; running the command twice
-over one handoff therefore succeeds twice and appends once. A
+with instead of restamping itself into a conflict. That lookup happens INSIDE
+the census transaction, under the same lock the append is made under (through
+`probe_census.record_outcome_installed`'s `reconcile` hook), so two concurrent
+invocations of one new attempt serialize and the loser rebuilds against what
+the winner actually committed; running the command twice over one handoff
+succeeds twice and appends once, concurrently or not. A
 write that refuses leaves the census byte-identical, records no outcome and
 returns an actionable non-success without reaching a publisher. The one
 failure that is NOT a refusal is `CensusDurabilityUnconfirmed`, raised after
