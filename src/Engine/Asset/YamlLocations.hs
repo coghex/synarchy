@@ -33,6 +33,12 @@ instance FromJSON LocationYamlPosition where
 -- | One `{kind, id, count, position, faction, rolls}` content entry.
 --   `count` defaults to 1; `position`/`faction`/`rolls` are all
 --   optional (#90) — see 'Location.Types.LocationContent'.
+--
+--   Both multiplicities are decoded as bare 'Int' here and constrained
+--   to @>= 1@ by 'LocationYamlDef''s 'FromJSON' instance (#1721), which
+--   is the one entry point that can name the owning location. An
+--   omitted key — and an explicit YAML @null@, which aeson's '.:?'
+--   reads as absence — still defaults to 1.
 data LocationYamlContent = LocationYamlContent
     { lycKind     ∷ !Text
     , lycId       ∷ !Text
@@ -273,7 +279,7 @@ instance FromJSON LocationYamlDef where
             fail (T.unpack ("location '" <> lid <> "': bounds.min_y ("
                 <> tshow (lybMinY bounds) <> ") > bounds.max_y ("
                 <> tshow (lybMaxY bounds) <> ")"))
-        forM_ contents $ \c → do
+        forM_ (zip [1 ∷ Int ..] contents) $ \(entryIx, c) → do
             -- The kind is checked BEFORE the position: an entry naming
             -- a kind nothing spawns has no meaningful footprint to
             -- contain, so reporting the unsupported kind is the
@@ -283,6 +289,34 @@ instance FromJSON LocationYamlDef where
                     <> "': unsupported content kind '" <> lycKind c
                     <> "' (expected one of: "
                     <> T.intercalate ", " validContentKinds <> ")"))
+            -- #1721: 'count' and 'rolls' are per-entry MULTIPLICITIES,
+            -- and the spawn sites consume them as the upper bound of a
+            -- positive-step Lua numeric @for@ (scripts/locations.lua).
+            -- A zero or negative value therefore runs no iterations:
+            -- nothing spawns, the unknown-id warnings inside those
+            -- loops are unreachable, and the empty result is then
+            -- recorded as the location's permanent exactly-once content
+            -- lifecycle. Rejected HERE, at the authoring boundary, so
+            -- no spawn site has to clamp and no author can lose an
+            -- entry silently. Zero is NOT a disable toggle — an entry
+            -- that spawns nothing is an entry that should not be
+            -- authored (contrast 'lydMaxCount', a placement BUDGET
+            -- whose zero has a stated meaning, Location.Overlay).
+            --
+            -- Unconditional with respect to the entry's ID: an unknown
+            -- unit/item/loot-table/building id normally reaches a
+            -- runtime warning inside those loops, but one carrying a
+            -- non-positive multiplicity is rejected here for the
+            -- numeric defect, because that defect is what makes the
+            -- warning unreachable in the first place.
+            forM_ [ ("count" ∷ Text, lycCount c)
+                  , ("rolls",        lycRolls c) ] $ \(field, n) →
+                when (n ≤ 0) $
+                    fail (T.unpack ("location '" <> lid
+                        <> "': content entry " <> tshow entryIx
+                        <> " ('" <> lycId c <> "'): '" <> field
+                        <> "' must be a positive integer, got "
+                        <> tshow n))
             forM_ (lycPosition c) $ \p →
                 unless (relBoundsContains bounds (lypX p) (lypY p)) $
                     fail (T.unpack ("location '" <> lid <> "': content '"
