@@ -5,7 +5,10 @@ Guards docs/persistence_state_inventory.md against silent drift. Per
 docs/persistence_contract.md SS2, a "root state owner" is a field on one
 of the aggregator records everything else hangs off (EngineEnv,
 EngineState, WorldManager, WorldState, and the World.Save.Types
-envelope), or a Lua module registered with scripts/lib/save_modules.lua.
+envelope), a field on one of the three gameplay managers EngineEnv
+reaches through a bare IORef pointer (UnitManager, BuildingManager,
+UnitThreadState -- see ROOT_RECORDS, added by #1703), or a Lua module
+registered with scripts/lib/save_modules.lua.
 Every such field/module must have a classification entry in the
 inventory doc: a backtick-quoted name in the first column of one of its
 markdown tables, under the SAME `### OwnerName` heading that owns that
@@ -51,11 +54,29 @@ LUA_OWNER_HEADING = "Lua persistence registry"
 # `data X = X` line). `label` doubles as the exact `### label` heading
 # text the inventory doc must use to classify this record's fields --
 # see OWNER_HEADING_RE / parse_classified_names.
+#
+# These are DIRECTLY scanned owners, not a transitive closure: the audit
+# reads exactly these records' own field lists. Records reached THROUGH
+# one of them (UnitInstance via umInstances, BuildingInstance via
+# bmInstances, UnitSimState via utsSimStates) are covered separately by
+# the inventory's own sections and stay out of scope here, as does the
+# worker-thread state nothing on EngineEnv/WorldState reaches at all
+# (inventory SS6).
 ROOT_RECORDS: list[tuple[str, str, str]] = [
     ("EngineEnv", "src/Engine/Core/State.hs", r"^data EngineEnv = EngineEnv\b"),
     ("EngineState", "src/Engine/Core/State.hs", r"^data EngineState = EngineState\b"),
     ("WorldManager", "src/World/State/Types.hs", r"^data WorldManager = WorldManager\b"),
     ("WorldState", "src/World/State/Types.hs", r"^data WorldState = WorldState\b"),
+    # The three gameplay managers EngineEnv reaches through a bare
+    # IORef pointer (#1703). Each pointer field is itself classified on
+    # EngineEnv as `Rebuild`, delegating the real decisions onto these
+    # records' own fields -- so without them here, a field added inside
+    # an already-reachable manager would land with every gate green and
+    # no persistence decision recorded, which is exactly the drift this
+    # audit exists to stop.
+    ("UnitManager", "src/Unit/Types/Manager.hs", r"^data UnitManager = UnitManager\b"),
+    ("BuildingManager", "src/Building/Types.hs", r"^data BuildingManager = BuildingManager\b"),
+    ("UnitThreadState", "src/Unit/Sim/Types.hs", r"^data UnitThreadState = UnitThreadState\b"),
     ("SaveHeader", "src/World/Save/Types.hs", r"^data SaveHeader = SaveHeader\b"),
     ("SaveMetadata", "src/World/Save/Types.hs", r"^data SaveMetadata = SaveMetadata\b"),
     ("WorldPageSave", "src/World/Save/Types.hs", r"^data WorldPageSave = WorldPageSave\b"),

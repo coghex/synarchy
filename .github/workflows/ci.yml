@@ -667,6 +667,26 @@ jobs:
           python3 tools/material_id_audit.py --self-test
           python3 tools/material_id_audit.py
 
+      # Cheap, no-engine guard (issue #1717): fails if a concept id
+      # data/language/concepts.yaml has ever shipped is missing from it,
+      # or if a new one arrived without being ratcheted into
+      # docs/language/concept_id_baseline.json. A ConceptId is persisted
+      # identity -- Language.Etymology reports one the catalogue no
+      # longer carries as EtyInvalidConcept, so every already-persisted
+      # EtymologySource naming it loses its etymology -- and
+      # Language.Generated.Hash seeds each concept's native root from the
+      # id string, so a rename re-roots the concept. Nothing else names
+      # an individual id: the headless suite's catalogue checks are all
+      # aggregates (version, count, domains, balance, forms), and the
+      # location/river naming goldens cover only the handful of concepts
+      # their samples happen to use. Unconditional rather than
+      # path-selective: it is a two-file comparison costing
+      # milliseconds, and either side can drift alone.
+      - name: Concept id inventory audit
+        run: |
+          python3 tools/concept_id_inventory_audit.py --self-test
+          python3 tools/concept_id_inventory_audit.py
+
       # Cheap, no-engine guard (issue #1196): fails if a CH item's
       # `## Status` checklist marker and its `### ` heading marker
       # disagree. Two independent lanes write the findings report --
