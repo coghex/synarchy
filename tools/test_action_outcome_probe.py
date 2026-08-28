@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Unit tests for action_outcome_probe.py's chop-fixture stage (#1398).
+"""Unit tests for action_outcome_probe.py's fixture discovery.
+
+Its chop-fixture stage (#1398), and its tillable-box discovery's two
+`world.getFluidAt` reads (#1793).
 
 ENGINE-FREE, and deliberately so: `action_outcome_probe.py` boots a real
 headless engine and generates a 64-world, which is the ~8-minute cost
@@ -33,6 +36,15 @@ Covered:
     property that makes "found nothing" a statement about the region
     rather than about a sample grid.
 
+And, for `find_mixed_box` (#1793):
+  * its anchor filter rejects a flat, flora-free WET candidate and
+    scans on, while the same lattice with nothing wet returns that
+    first candidate;
+  * a WET neighbour marks the 5x5 box mixed, exactly as a sloped or
+    flora-bearing one already does, and a uniform box is not mixed;
+  * both paths collapse `world.getFluidAt`'s multi-return before
+    transport, so neither can decode the tab-joined text as a table.
+
 Injecting a hand-constructed invalid record here does not conflict with
 the issue's ban on synthetic outcome records: that ban is scoped to the
 real-engine check, where the pass must come from a real designation and
@@ -55,6 +67,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import action_outcome_probe as probe  # noqa: E402
+# The arity-boundary fake console (#1793) lives in its sibling
+# self-test, so the two files cannot drift on what the debug console
+# really returns for a multi-return query.
+from test_tillable_fluid_filter import (  # noqa: E402
+    Tile, TerrainConsole)
 
 FAILURES: list[str] = []
 
@@ -317,8 +334,84 @@ def test_the_loaded_region_matches_what_the_probe_loads():
           match.group(0) if match else "no loadChunksInRegion found")
 
 
+# ---------------------------------------------------------------------
+# find_mixed_box's two fluid reads (#1793)
+# ---------------------------------------------------------------------
+# The scan's own lattice: range(-span*8, span*8+1, 3) at the declared
+# span=6, so the first two anchors it considers are these.
+FIRST_ANCHOR = (-48, -48)
+SECOND_ANCHOR = (-48, -45)
+
+
+def drive_mixed_box(console, **kwargs):
+    """Run the shipped find_mixed_box against a TerrainConsole."""
+    original_send, original_json = probe.send, probe.send_json
+    probe.send, probe.send_json = console.send, console.send_json
+    try:
+        return probe.find_mixed_box(PORT, **kwargs)
+    finally:
+        probe.send, probe.send_json = original_send, original_json
+
+
+def neighbours(anchor):
+    """The 5x5 box find_mixed_box sweeps around `anchor`, centre aside."""
+    ax, ay = anchor
+    return [(ax + dx, ay + dy)
+            for dx in range(-2, 3) for dy in range(-2, 3)
+            if (dx, dy) != (0, 0)]
+
+
+def test_a_wet_anchor_is_rejected():
+    # The first anchor is under water; the second has a wet neighbour, so
+    # it is the box the scan should settle on.
+    console = TerrainConsole({
+        FIRST_ANCHOR: Tile(fluid="lake"),
+        neighbours(SECOND_ANCHOR)[0]: Tile(fluid="river"),
+    })
+    found = drive_mixed_box(console)
+    check("find_mixed_box rejects a flat, flora-free WET anchor",
+          found == SECOND_ANCHOR, f"returned {found}, wanted {SECOND_ANCHOR}")
+    check("find_mixed_box really queried the wet anchor",
+          console.queried("getFluidAt", *FIRST_ANCHOR),
+          "the wet anchor was never asked about")
+
+
+def test_a_wet_neighbour_marks_the_box_mixed():
+    cases = [("a wet neighbour", Tile(fluid="river")),
+             ("a sloped neighbour", Tile(slope=1)),
+             ("a flora-bearing neighbour", Tile(flora={"id": "oak"}))]
+    for label, tile in cases:
+        console = TerrainConsole({neighbours(FIRST_ANCHOR)[0]: tile})
+        found = drive_mixed_box(console)
+        check(f"{label} marks the 5x5 box mixed",
+              found == FIRST_ANCHOR,
+              f"returned {found}, wanted {FIRST_ANCHOR}")
+
+
+def test_a_uniform_region_is_never_mixed():
+    console = TerrainConsole()
+    found = drive_mixed_box(console)
+    check("a wholly flat, dry, flora-free region yields no mixed box",
+          found is None, f"returned {found}")
+
+
+def test_both_fluid_reads_collapse_the_multi_return():
+    console = TerrainConsole({
+        FIRST_ANCHOR: Tile(fluid="lake"),
+        neighbours(SECOND_ANCHOR)[0]: Tile(fluid="river"),
+    })
+    drive_mixed_box(console)
+    check("find_mixed_box asks about fluid on both the anchor and its box",
+          console.queried("getFluidAt", *SECOND_ANCHOR)
+          and console.queried("getFluidAt", *neighbours(SECOND_ANCHOR)[0]),
+          "one of the two fluid reads never ran")
+    check("neither fluid read leaves the multi-return uncaptured",
+          console.uncaptured_fluid_calls() == [],
+          str(console.uncaptured_fluid_calls()[:1]))
+
+
 def main():
-    print("action_outcome_probe chop-fixture tests (engine-free)\n")
+    print("action_outcome_probe fixture-discovery tests (engine-free)\n")
     test_no_wood_anywhere_is_a_setup_failure()
     test_malformed_wood_result_is_a_setup_failure()
     test_setup_failure_outranks_an_ordinary_failure()
@@ -330,12 +423,16 @@ def main():
     test_the_designation_drain_is_destructive_and_isolated()
     test_search_origins_cover_the_loaded_region()
     test_the_loaded_region_matches_what_the_probe_loads()
+    test_a_wet_anchor_is_rejected()
+    test_a_wet_neighbour_marks_the_box_mixed()
+    test_a_uniform_region_is_never_mixed()
+    test_both_fluid_reads_collapse_the_multi_return()
     if FAILURES:
         print(f"\n{len(FAILURES)} test(s) failed:")
         for failure in FAILURES:
             print(f"  {failure}")
         return 1
-    print("\nAll action_outcome_probe chop-fixture tests passed")
+    print("\nAll action_outcome_probe fixture-discovery tests passed")
     return 0
 
 

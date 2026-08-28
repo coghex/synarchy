@@ -67,14 +67,31 @@ def find_mixed_box(port, span=6):
     one DIFFERENT tile (fluid, sloped, or flora-carrying) inside a 5x5
     box around it — guarantees till.designate's filter drops something
     without depending on any specific seed's geography beyond "typical
-    generated terrain has some variety within 5 tiles of most points"."""
+    generated terrain has some variety within 5 tiles of most points".
+
+    ``world.getFluidAt`` is a MULTI-RETURN query whose ARITY is the
+    contract (`Engine.Scripting.Lua.API.WorldQuery.Fluid`): a fluid tile
+    pushes TWO values — the type string and the fluid surface z — while a
+    dry tile, and one whose chunk is not loaded, pushes a single nil. The
+    debug console joins several return values with tabs, so asking for
+    both back yields text like ``river\t12``, never anything JSON-shaped.
+    Bind the first return alone: a nonempty first value IS the fluid type,
+    and means WET. ``getFloraAt`` really is table-or-nil
+    (`Engine.Scripting.Lua.API.Forage.Query`), so its dict test below is
+    correct as written.
+
+    Both the anchor filter and the 5x5 sweep read fluid that way, so a
+    wet neighbour marks the box mixed exactly as a sloped or
+    flora-bearing one does.
+    """
     for sx in range(-span * 8, span * 8 + 1, 3):
         for sy in range(-span * 8, span * 8 + 1, 3):
             slope = send_json(port, f"return world.getSlopeAt({sx},{sy})")
             if slope != 0:
                 continue
-            fluid = send_json(port, f"return world.getFluidAt({sx},{sy})")
-            if isinstance(fluid, dict) and fluid.get("type"):
+            fluid = send_json(port, f"local t = world.getFluidAt({sx},{sy}); "
+                                    f"return t")
+            if isinstance(fluid, str) and fluid:
                 continue
             flora = send_json(port, f"return world.getFloraAt({sx},{sy})")
             if isinstance(flora, dict):
@@ -88,9 +105,11 @@ def find_mixed_box(port, span=6):
                         continue
                     gx, gy = sx + dx, sy + dy
                     s2 = send_json(port, f"return world.getSlopeAt({gx},{gy})")
-                    f2 = send_json(port, f"return world.getFluidAt({gx},{gy})")
+                    f2 = send_json(port,
+                                   f"local t = world.getFluidAt({gx},{gy}); "
+                                   f"return t")
                     fl2 = send_json(port, f"return world.getFloraAt({gx},{gy})")
-                    if s2 != 0 or (isinstance(f2, dict) and f2.get("type")) \
+                    if s2 != 0 or (isinstance(f2, str) and f2) \
                        or isinstance(fl2, dict):
                         mixed = True
                         break
