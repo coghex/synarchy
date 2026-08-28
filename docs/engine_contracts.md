@@ -113,8 +113,11 @@ bare-name icon reference — `scripts/injuries.lua`'s `KIND_ICON`,
 `INJURY_ICON` and its four icon-carrying functions,
 `scripts/unit_info_v2_stat_defs.lua` and `scripts/unit_info_v2_status.lua`'s
 literal `icon =` fields, `scripts/knowledge.lua`'s registry and
-`M.UNKNOWN_ICON`, and `data/infections/*.yaml`'s `icon:` scalars — through
-the SHIPPED GLOBAL index `scripts/unit_info_v2_panel_engine.lua`'s
+`M.UNKNOWN_ICON`, `data/infections/*.yaml`'s `icon:` scalars, and the
+engine's own publications of that Lua field (`Units/Combat.hs`'s immunity
+literal and `Asset/YamlInfection.hs`'s decoder default, found by scanning
+every `.hs` under `src/`/`app/` that names it, so a new site fails rather
+than joining unchecked) — through the SHIPPED GLOBAL index `scripts/unit_info_v2_panel_engine.lua`'s
 `buildIconIndex` builds over `ICON_SUBDIRS`, last-wins on a duplicate
 basename exactly as the runtime resolves one. It never requires a
 reference to live in the row's own family: intentional cross-family reuse

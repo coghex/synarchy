@@ -53,6 +53,8 @@ error naming `file:line` (or the expected table) and never a quietly
 smaller reference set:
 
   * an unsupported table shape inside an enumerated value table;
+  * a Haskell `icon` publication in neither an enumerated site nor the
+    Haskell forwarding allowlist;
   * an icon assignment whose value is COMPUTED rather than literal and
     which is not in the reason-carrying forwarding allowlist;
   * an icon assignment found OUTSIDE the enumerated reference sites of a
@@ -81,6 +83,13 @@ Authoritative reference sources
   * `data/infections/*.yaml` — `icon:` scalars, which reach the identical
     global index through Engine.Scripting.Lua.API.Infection ->
     `infectionIcon` -> `scripts/injuries.lua`'s infection rows
+  * every `.hs` under `src/` and `app/` that names the Lua `icon` field —
+    the ENGINE publishes bare names into it with no Lua map in between:
+    `Units/Combat.hs` pushes the immunity row's literal, and
+    `Asset/YamlInfection.hs` supplies the default an infection def with no
+    `icon:` silently gets. Scope is the whole tree rather than a fixed file
+    list, so a NEW publication site fails loudly instead of joining the
+    index unchecked.
 
 Deliberately NOT covered: the skill panel derives a basename from the
 live skill name (`scripts/unit_info_v2_panels.lua` with
@@ -698,6 +707,180 @@ def extract_yaml(root: Path, spec: dict) -> list:
 
 
 # --------------------------------------------------------------------------
+# Haskell-side references
+# --------------------------------------------------------------------------
+
+#: Haskell's symbol characters. A run of dashes only starts a comment when it
+#: is not part of a longer operator (`<--`, `-->`), which is GHC's own rule.
+SYMBOL_CHARS = set("!#$%&*+./<=>?@\\^|-~:")
+
+
+def clean_haskell(text: str, label: str) -> str:
+    """Blank Haskell comments; keep string literals verbatim.
+
+    Same contract as `clean_lua`: the result is the same length as the input,
+    so a `"icon"` occurrence that survives is one that really is code. Without
+    this a Haddock paragraph mentioning the field would read as a reference
+    site, which is the mistake #1705 had to correct in the texture-path
+    checker.
+    """
+    out = []
+    i, n, line = 0, len(text), 1
+    depth = 0
+    while i < n:
+        ch = text[i]
+        if depth:
+            if text.startswith("{-", i):
+                depth += 1
+                out.append("  ")
+                i += 2
+                continue
+            if text.startswith("-}", i):
+                depth -= 1
+                out.append("  ")
+                i += 2
+                continue
+            out.append("\n" if ch == "\n" else " ")
+            line += ch == "\n"
+            i += 1
+            continue
+        if ch == "\n":
+            out.append("\n")
+            line += 1
+            i += 1
+            continue
+        if text.startswith("{-", i):
+            depth = 1
+            out.append("  ")
+            i += 2
+            continue
+        if ch == "-" and text.startswith("--", i):
+            j = i
+            while j < n and text[j] == "-":
+                j += 1
+            if (text[j:j + 1] not in SYMBOL_CHARS
+                    and text[i - 1:i] not in SYMBOL_CHARS):
+                end = text.find("\n", i)
+                if end < 0:
+                    end = n
+                out.append(_blank(text[i:end]))
+                i = end
+                continue
+            out.append(text[i:j])
+            i = j
+            continue
+        if ch == "'":
+            # A character literal, so `'"'` cannot open a phantom string. A
+            # trailing identifier tick (`x'`) simply fails to match and is
+            # emitted as-is.
+            match = re.match(r"'(?:\\.|[^\\'])'", text[i:])
+            if match:
+                out.append(match.group(0))
+                i += match.end()
+                continue
+            out.append(ch)
+            i += 1
+            continue
+        if ch == '"':
+            j = i + 1
+            while j < n and text[j] != '"':
+                if text[j] == "\\":
+                    j += 2
+                    continue
+                if text[j] == "\n":
+                    raise CheckError(
+                        f"{label}:{line}: unterminated string literal")
+                j += 1
+            if j >= n:
+                raise CheckError(f"{label}:{line}: unterminated string literal")
+            out.append(text[i:j + 1])
+            i = j + 1
+            continue
+        out.append(ch)
+        i += 1
+    if depth:
+        raise CheckError(f"{label}: unterminated block comment")
+    return "".join(out)
+
+
+def extract_haskell(root: Path, config: dict, allow_hits: dict) -> list:
+    """Bare names the ENGINE publishes into the same Lua icon field.
+
+    Two Haskell literals reach `buildIconIndex` without passing through any
+    Lua map: the immunity row's icon, pushed directly, and the default a
+    `data/infections/*.yaml` entry gets when it declares no `icon:`. A third
+    site forwards an already-extracted YAML value.
+
+    Scope is every `.hs` under the configured roots that CONTAINS the field
+    name, so a new publication site anywhere in the tree fails loudly rather
+    than joining the index unchecked.
+    """
+    field = config.get("haskell_field", "icon")
+    needle = f'"{field}"'
+    candidates = []
+    for relative_root in config.get("haskell_roots", []):
+        directory = root / relative_root
+        if not directory.is_dir():
+            continue
+        for path in sorted(directory.rglob("*.hs")):
+            if needle in path.read_text(encoding="utf-8"):
+                candidates.append(path)
+
+    sites = config.get("haskell_sites", [])
+    allowlist = config.get("haskell_forwarding_allowlist", [])
+    declared = {entry["file"] for entry in sites} | {e["file"] for e in allowlist}
+    seen = {str(path.relative_to(root)) for path in candidates}
+    for missing in sorted(declared - seen):
+        raise CheckError(
+            f"{missing}: declared as a Haskell {needle} reference site, but the "
+            f"file does not exist or no longer names that field; the extractor "
+            f"refuses rather than silently narrowing coverage")
+
+    references = []
+    site_hits = {(entry["file"], entry["name"]): 0 for entry in sites}
+    for path in candidates:
+        label = str(path.relative_to(root))
+        cleaned = clean_haskell(path.read_text(encoding="utf-8"), label)
+        lines = LineMap(cleaned)
+        consumed = []
+        for entry in sites:
+            if entry["file"] != label:
+                continue
+            for match in re.finditer(entry["pattern"], cleaned):
+                references.append(
+                    Reference(match.group("name"), label,
+                              lines.line_of(match.start()),
+                              f"{label} {entry['name']}"))
+                consumed.append((match.start(), match.end()))
+                site_hits[(label, entry["name"])] += 1
+        for entry in allowlist:
+            if entry["file"] != label:
+                continue
+            key = (entry["file"], entry["pattern"])
+            for match in re.finditer(entry["pattern"], cleaned):
+                consumed.append((match.start(), match.end()))
+                allow_hits[key] = allow_hits.get(key, 0) + 1
+        for match in re.finditer(re.escape(needle), cleaned):
+            if any(start <= match.start() and match.end() <= end
+                   for start, end in consumed):
+                continue
+            raise CheckError(
+                f"{label}:{lines.line_of(match.start())}: a Lua {needle} field "
+                f"is published here, but this is neither an enumerated Haskell "
+                f"reference site nor a reason-carrying forwarding allowlist "
+                f"entry. Every engine-published icon basename reaches the same "
+                f"global index; enumerate it or allowlist it.")
+
+    for (file_name, site_name), hits in sorted(site_hits.items()):
+        if hits == 0:
+            raise CheckError(
+                f"{file_name}: Haskell reference site {site_name!r} matched "
+                f"nothing; the extractor refuses rather than silently "
+                f"narrowing coverage")
+    return references
+
+
+# --------------------------------------------------------------------------
 # Family inventories and the asset index
 # --------------------------------------------------------------------------
 
@@ -814,12 +997,15 @@ def run_check(root: Path, config: dict, out=None) -> int:
 
     allow_hits = {(entry["file"], entry["target"], entry["rhs"]): 0
                   for entry in config["forwarding_allowlist"]}
+    allow_hits.update({(entry["file"], entry["pattern"]): 0
+                       for entry in config.get("haskell_forwarding_allowlist", [])})
 
     references = []
     for spec in config["lua_sources"]:
         references.extend(extract_lua(root, spec, allow_hits))
     for spec in config.get("yaml_sources", []):
         references.extend(extract_yaml(root, spec))
+    references.extend(extract_haskell(root, config, allow_hits))
 
     counts = {}
     for reference in references:
@@ -835,10 +1021,19 @@ def run_check(root: Path, config: dict, out=None) -> int:
                 f"`{entry['target']} = {entry['rhs']}` matched nothing; a stale "
                 f"entry would silently permit a future computed assignment. "
                 f"Remove it or correct it.")
+    for entry in config.get("haskell_forwarding_allowlist", []):
+        if allow_hits[(entry["file"], entry["pattern"])] == 0:
+            raise CheckError(
+                f"{entry['file']}: Haskell forwarding allowlist entry "
+                f"{entry['pattern']!r} matched nothing; a stale entry would "
+                f"silently permit a future engine-published basename. Remove "
+                f"it or correct it.")
 
+    source_count = (len(config["lua_sources"])
+                    + len(config.get("yaml_sources", []))
+                    + len({e["file"] for e in config.get("haskell_sites", [])}))
     write(f"Extracted {len(references)} authoritative bare-name references "
-          f"from {len(config['lua_sources']) + len(config.get('yaml_sources', []))} "
-          f"sources\n")
+          f"from {source_count} sources\n")
 
     searched = ", ".join(panel)
     for reference in sorted(references, key=lambda r: (r.source, r.line, r.basename)):
@@ -911,6 +1106,9 @@ def run_check(root: Path, config: dict, out=None) -> int:
 # The repository's own configuration
 # --------------------------------------------------------------------------
 
+COMBAT = "src/Engine/Scripting/Lua/API/Units/Combat.hs"
+YAML_INFECTION = "src/Engine/Asset/YamlInfection.hs"
+INFECTION_API = "src/Engine/Scripting/Lua/API/Infection.hs"
 INJURIES = "scripts/injuries.lua"
 STATUS = "scripts/unit_info_v2_status.lua"
 STAT_DEFS = "scripts/unit_info_v2_stat_defs.lua"
@@ -965,6 +1163,30 @@ REPO_CONFIG = {
         # `infectionIcon`, and injuries.lua's M.infectionList forwards it
         # into an infection row.
         {"dir": "data/infections", "key": "icon"},
+    ],
+    # Bare names the ENGINE publishes into the same Lua `icon` field without
+    # passing through any Lua map. Scope is every .hs under these roots that
+    # names the field, so a new publication site fails loudly.
+    "haskell_roots": ["src", "app"],
+    "haskell_field": "icon",
+    "haskell_sites": [
+        # Lua.pushstring (TE.encodeUtf8 "immunity")
+        # Lua.setfield (-2) "icon"
+        # -- unit.getImmunities' rows, rendered by
+        # unit_info_v2_status.lua's immunity section.
+        {"file": COMBAT, "name": "the immunity row's pushed `icon`",
+         "pattern": r'pushstring\s*\([^\n"]*"(?P<name>[A-Za-z0-9_]+)"\s*\)'
+                    r'\s*\n\s*Lua\.setfield\s*\(-2\)\s*"icon"'},
+        # v .:? "icon" .!= "bacterial_infection" -- the basename an infection
+        # def that declares no `icon:` silently gets, so it is authoritative
+        # even though no YAML file spells it.
+        {"file": YAML_INFECTION, "name": "the `icon:` decoder default",
+         "pattern": r'"icon"\s*\.!=\s*"(?P<name>[A-Za-z0-9_]+)"'},
+    ],
+    "haskell_forwarding_allowlist": [
+        {"file": INFECTION_API, "pattern": r'putS\s+"icon"\s+\(infIcon d\)',
+         "reason": "forwards infIcon, extracted from data/infections/*.yaml "
+                   "and from YamlInfection.hs's decoder default"},
     ],
     # Live `icon` assignments that FORWARD an already-extracted value rather
     # than naming a new basename. Keyed on the assignment text rather than a
@@ -1037,7 +1259,8 @@ FIXTURE_ASSETS = {
     "stat": ["stat_unknown", "agility"],
     "skill": ["skill_unknown"],
     "status": ["status_unknown", "pain", "broken_bone", "joint_injury",
-               "rot_injury", "scar", "know_a", "bacterial_infection"],
+               "rot_injury", "scar", "know_a", "bacterial_infection",
+               "immunity"],
 }
 
 FIXTURE_PANEL = """-- fixture panel engine
@@ -1109,6 +1332,30 @@ FIXTURE_YAML = """infections:
     icon: bacterial_infection
 """
 
+# A literal the engine pushes straight into the Lua `icon` field, a decoder
+# default, a forwarding site, and -- deliberately -- the field name inside a
+# comment, which must NOT read as a reference site.
+FIXTURE_COMBAT = """module Fixture.Combat where
+
+-- | Publishes the immunity row. The Lua side reads its "icon" field.
+pushRow :: IO ()
+pushRow = do
+    Lua.pushstring (TE.encodeUtf8 "immunity")
+    Lua.setfield (-2) "icon"
+"""
+
+FIXTURE_DECODER = """module Fixture.Decoder where
+
+parseInfection v = Infection
+    <$> v .: "id"
+    <*> v .:? "icon" .!= "bacterial_infection"
+"""
+
+FIXTURE_FORWARD = """module Fixture.Forward where
+
+publish d = putS "icon" (infIcon d)
+"""
+
 
 def fixture_config() -> dict:
     return {
@@ -1144,6 +1391,19 @@ def fixture_config() -> dict:
             },
         ],
         "yaml_sources": [{"dir": "data/inf", "key": "icon"}],
+        "haskell_roots": ["src"],
+        "haskell_field": "icon",
+        "haskell_sites": [
+            {"file": "src/Combat.hs", "name": "pushed `icon`",
+             "pattern": r'pushstring\s*\([^\n"]*"(?P<name>[A-Za-z0-9_]+)"\s*\)'
+                        r'\s*\n\s*Lua\.setfield\s*\(-2\)\s*"icon"'},
+            {"file": "src/Decoder.hs", "name": "decoder default",
+             "pattern": r'"icon"\s*\.!=\s*"(?P<name>[A-Za-z0-9_]+)"'},
+        ],
+        "haskell_forwarding_allowlist": [
+            {"file": "src/Forward.hs", "pattern": r'putS\s+"icon"\s+\(infIcon d\)',
+             "reason": "fixture: forwards an already-extracted value"},
+        ],
         "forwarding_allowlist": [
             {"file": "scripts/inj.lua", "target": "rowIcon",
              "rhs": "M.icon(\"blunt\", \"hand\")",
@@ -1163,6 +1423,10 @@ def build_fixture(base: Path) -> Path:
     root = base
     (root / "scripts").mkdir(parents=True, exist_ok=True)
     (root / "data" / "inf").mkdir(parents=True, exist_ok=True)
+    (root / "src").mkdir(parents=True, exist_ok=True)
+    (root / "src" / "Combat.hs").write_text(FIXTURE_COMBAT, encoding="utf-8")
+    (root / "src" / "Decoder.hs").write_text(FIXTURE_DECODER, encoding="utf-8")
+    (root / "src" / "Forward.hs").write_text(FIXTURE_FORWARD, encoding="utf-8")
     (root / "scripts" / "panel.lua").write_text(FIXTURE_PANEL, encoding="utf-8")
     (root / "scripts" / "loader.lua").write_text(FIXTURE_LOADER, encoding="utf-8")
     (root / "scripts" / "inj.lua").write_text(FIXTURE_INJ, encoding="utf-8")
@@ -1336,6 +1600,33 @@ def self_test() -> int:
     case("an emptied YAML source directory is refused",
          lambda r, c: (r / "data" / "inf" / "a.yaml").unlink(), 2,
          "produced no files")
+    # The engine publishes bare names into the same Lua field without any Lua
+    # map in between, so those sites are covered too -- and a mention of the
+    # field in a COMMENT must not read as one.
+    case("an engine-pushed icon literal detects a missing asset",
+         lambda r, c: _drop_asset(r, "status", "immunity"), 1, "'immunity'")
+    case("the engine-pushed diagnostic names its Haskell source and line",
+         lambda r, c: _drop_asset(r, "status", "immunity"), 1, "src/Combat.hs:6")
+    case("a decoder-default icon literal detects a missing asset",
+         lambda r, c: _drop_asset(r, "status", "bacterial_infection"), 1,
+         "src/Decoder.hs:5")
+    case("the field name inside a Haskell comment is not a reference site",
+         lambda r, c: None, 0,
+         "every authoritative bare-name icon reference resolves")
+    case("a NEW engine-published icon field outside the sites is refused",
+         lambda r, c: (r / "src" / "Extra.hs").write_text(
+             'module Fixture.Extra where\n\npush = Lua.setfield (-2) "icon"\n',
+             encoding="utf-8"),
+         2, "neither an enumerated Haskell reference site")
+    case("a Haskell reference site that matches nothing is refused",
+         lambda r, c: _edit(r, "src/Combat.hs",
+                            '    Lua.setfield (-2) "icon"',
+                            '    Lua.setfield (-2) "ikon"'),
+         2, "matched nothing")
+    case("a stale Haskell forwarding-allowlist entry is refused",
+         lambda r, c: (r / "src" / "Forward.hs").write_text(
+             "module Fixture.Forward where\n", encoding="utf-8"),
+         2, "no longer names that field")
     case("a stale forwarding-allowlist entry is refused",
          lambda r, c: _edit(r, "scripts/inj.lua", "        icon = rowIcon,\n", ""),
          2, "matched nothing")
