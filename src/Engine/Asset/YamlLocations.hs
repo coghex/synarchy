@@ -3,6 +3,7 @@ module Engine.Asset.YamlLocations
     ( LocationYamlPosition(..)
     , LocationYamlContent(..)
     , LocationYamlBounds(..)
+    , authoredLocationCoordinateLimit
     , LocationYamlNaming(..)
     , LocationYamlDef(..)
     , LocationYamlFile(..)
@@ -53,7 +54,12 @@ instance FromJSON LocationYamlContent where
 -- | The authoritative spatial contract (#777): an inclusive,
 --   axis-aligned tile box relative to the location's anchor. Required
 --   on every definition — see 'LocationYamlDef''s 'FromJSON' instance
---   for the inverted-bounds rejection.
+--   for the inverted-bounds rejection (#777\/#1151) and the
+--   authored-coordinate range rejection (#1796).
+--
+--   This instance itself accepts any four 'Int's on purpose: the
+--   range rule is stated in the DEF parser, which is the only scope
+--   where the location id is available to attribute a rejection to.
 data LocationYamlBounds = LocationYamlBounds
     { lybMinX ∷ !Int
     , lybMinY ∷ !Int
@@ -67,6 +73,35 @@ instance FromJSON LocationYamlBounds where
         ⊛ v .: "min_y"
         ⊛ v .: "max_x"
         ⊛ v .: "max_y"
+
+-- | The inclusive domain an authored location bounds coordinate may
+--   occupy (#1796): @[-2147483647, 2147483647]@, i.e. @±(2^31 - 1)@.
+--   Enforced on all four of @bounds.min_x@, @bounds.min_y@,
+--   @bounds.max_x@ and @bounds.max_y@ by 'LocationYamlDef''s 'FromJSON'
+--   instance below, which REJECTS an out-of-domain value rather than
+--   clamping or saturating it.
+--
+--   The limit is vastly larger than anything the generator produces.
+--   'Location.Overlay.allCoords' ranges a placed chunk over
+--   @[-worldSize\/2 .. worldSize\/2 - 1]@ and the anchor tile is that
+--   chunk's centre, so the largest advertised world (1,024 chunks;
+--   @scripts\/create_world\/settings_tab.lua@) reaches only about
+--   ±8,184 tiles, and a 512-chunk world about ±4,088. An authored box
+--   is allowed five more decimal orders of magnitude than that.
+--
+--   It is an authored-data SANITY boundary and nothing more. It is NOT
+--   the proof that translating an authored box onto an arbitrary
+--   'World.Chunk.Types.ChunkCoord' cannot overflow: chunk coordinates
+--   are unrestricted 'Int's, no world-size normalization caps them, and
+--   @ChunkCoord (2^59 - 1) 0@ alone already anchors at @maxBound - 7@.
+--   That proof is 'Location.Instance.locationInstanceGeometry', which
+--   computes every anchor and translated bound in 'Integer' and refuses
+--   the placement before any instance exists if a component is not
+--   representable. The two boundaries are complementary: this one keeps
+--   authored data sane and attributable to a field; the checked
+--   construction keeps the ENGINE from ever publishing a wrapped box.
+authoredLocationCoordinateLimit ∷ Int
+authoredLocationCoordinateLimit = 2147483647
 
 -- | The authored naming scheme (#1101): the two concept-id pools a
 --   definition's generated instance names draw on. Both keys are
@@ -204,6 +239,25 @@ instance FromJSON LocationYamlDef where
         -- message naming the def and the offending field rather than
         -- silently substituting geometry downstream (#777).
         --
+        -- #1796: RANGE first, then ordering. An out-of-domain
+        -- coordinate is rejected here rather than clamped, and each of
+        -- the four fields is named separately so an author is told
+        -- which one to fix. The comparison is a direct two-sided test
+        -- against the domain: 'abs' would be wrong, because
+        -- @abs (minBound ∷ Int)@ is 'minBound' again and would sail
+        -- through any magnitude check.
+        forM_ [ ("bounds.min_x" ∷ Text, lybMinX bounds)
+              , ("bounds.min_y", lybMinY bounds)
+              , ("bounds.max_x", lybMaxX bounds)
+              , ("bounds.max_y", lybMaxY bounds) ] $ \(field, value) →
+            when (value < negate authoredLocationCoordinateLimit
+                    ∨ value > authoredLocationCoordinateLimit) $
+                fail (T.unpack ("location '" <> lid <> "': " <> field
+                    <> " (" <> tshow value
+                    <> ") is outside the authored coordinate domain ["
+                    <> tshow (negate authoredLocationCoordinateLimit)
+                    <> ", " <> tshow authoredLocationCoordinateLimit
+                    <> "]"))
         -- The two comparisons below are the ONE implementation of the
         -- "min ≤ max on both axes" rule (#1151): they are per-axis only
         -- so each failure can name its own offending field, and being

@@ -64,7 +64,12 @@ module Location.Instance
     , LegacyLocationChunkFlags(..)
     , emptyLocationInstances
     , newLocationInstance
-    , locationAnchorTile
+      -- * Checked geometry construction
+    , LocationGeometryError(..)
+    , locationGeometryErrorText
+    , locationAnchorTileInteger
+    , locationAnchorTileChecked
+    , locationInstanceGeometry
       -- * Queries
     , instancesToList
     , lookupLocationInstance
@@ -92,7 +97,9 @@ import Data.List (sortOn)
 import Data.Serialize (Serialize)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
-import Location.Bounds (AbsBounds(..), translateBounds)
+import Location.Bounds
+    ( AbsBounds(..), LocationGeometryFailure(..), narrowTileCoordinate
+    , translateBoundsChecked )
 import Language.Etymology.Source (EtymologySource)
 import Location.Naming (LocationNamer, nameLocationInstance)
 import Location.Overlay.Types (LocationOverlay, overlayToList)
@@ -204,8 +211,8 @@ data LocationInstance = LocationInstance
       -- ^ the chunk hosting its anchor. NOT an identity: two instances
       --   may share one chunk, and the footprint may straddle chunks.
     , liAnchor          ∷ !(Int, Int)
-      -- ^ absolute anchor tile ('locationAnchorTile' of 'liChunk' at
-      --   placement time), stored rather than re-derived
+      -- ^ absolute anchor tile ('locationAnchorTileChecked' of
+      --   'liChunk' at placement time), stored rather than re-derived
     , liBounds          ∷ !AbsBounds
       -- ^ absolute, inclusive tile footprint (#777), resolved from the
       --   definition when the instance was created
@@ -268,32 +275,115 @@ emptyLocationInstances = LocationInstances
     , lisPendingLegacy = Nothing
     }
 
+-- * Checked geometry construction ------------------------------------
+
+-- | A placement whose geometry cannot be represented (#1796), with
+--   enough attribution to act on: which definition, which chunk, which
+--   component, and the exact value that component would have held.
+--
+--   Produced only by 'locationInstanceGeometry', and propagated
+--   unchanged by every construction path below, so an unrepresentable
+--   placement is refused BEFORE any 'LocationInstance' — or any partial
+--   'LocationInstances' table — exists. That is the difference from
+--   'locationInstanceBoundsErrors', which is a save-boundary check on
+--   geometry that is already live.
+data LocationGeometryError = LocationGeometryError
+    { lgeDefId     ∷ !Text
+    , lgeChunk     ∷ !ChunkCoord
+    , lgeComponent ∷ !Text
+    , lgeValue     ∷ !Integer
+    } deriving (Show, Eq, Generic, NFData)
+
+-- | Render a geometry failure for a log line or a load rejection.
+locationGeometryErrorText ∷ LocationGeometryError → Text
+locationGeometryErrorText err =
+    "location '" <> lgeDefId err <> "' anchored at chunk ("
+        <> tshow cx <> ", " <> tshow cy <> "): " <> lgeComponent err
+        <> " would be " <> tshow (lgeValue err)
+        <> ", which is not a representable tile coordinate"
+  where
+    ChunkCoord cx cy = lgeChunk err
+
 -- | A chunk's anchor tile — its centre, the tile every location stamp,
---   query, and bounds translation has always been anchored at.
-locationAnchorTile ∷ ChunkCoord → (Int, Int)
-locationAnchorTile (ChunkCoord cx cy) =
-    let half = chunkSize `div` 2
-    in (cx * chunkSize + half, cy * chunkSize + half)
+--   query, and bounds translation has always been anchored at — as
+--   exact 'Integer's.
+--
+--   'ChunkCoord' holds unrestricted 'Int's and nothing caps them
+--   (neither 'World.Generate.Config.Normalize.normalizeWorldSize' nor
+--   @world.init@), so @cx * chunkSize + half@ can overflow on its own:
+--   at 'World.Chunk.Types.chunkSize' 16, @ChunkCoord (2^59 - 1) 0@
+--   already lands on @maxBound - 7@ and one more chunk wraps. Computing
+--   in 'Integer' is what makes that observable instead of silent; the
+--   result is narrowed only by 'locationAnchorTileChecked' (#1796).
+locationAnchorTileInteger ∷ ChunkCoord → (Integer, Integer)
+locationAnchorTileInteger (ChunkCoord cx cy) =
+    let side = toInteger chunkSize
+        half = toInteger (chunkSize `div` 2)
+    in (toInteger cx * side + half, toInteger cy * side + half)
+
+-- | 'locationAnchorTileInteger' narrowed back to tile coordinates, or
+--   the first anchor component that does not fit (#1796). For any chunk
+--   a real world places — 'Location.Overlay.allCoords' spans about
+--   ±8,184 tiles even on the largest advertised 1,024-chunk world —
+--   this is the identity on the old unchecked arithmetic.
+locationAnchorTileChecked
+    ∷ ChunkCoord → Either LocationGeometryFailure (Int, Int)
+locationAnchorTileChecked coord =
+    let (ax, ay) = locationAnchorTileInteger coord
+    in (,) ⊚ narrowTileCoordinate "anchor.x" ax
+           ⊛ narrowTileCoordinate "anchor.y" ay
+
+-- | The ONE checked route from a chunk coordinate and a definition to
+--   placed geometry (#1796) — the anchor tile and the definition's box
+--   translated onto it.
+--
+--   Every component is computed in 'Integer' and checked; the @(Int,
+--   Int)@ anchor and the 'AbsBounds' are constructed only once all six
+--   are known representable, so this never wraps, never clamps, and
+--   never returns an inverted box. A failure carries the definition id
+--   and chunk coordinate ('LocationGeometryError').
+--
+--   Ordering is preserved for free on every accepted result: the two
+--   ends of an axis are offset by the same anchor, exactly as
+--   'Location.Bounds.translateBounds' does, and that function stays the
+--   suites' oracle for the values this must produce.
+locationInstanceGeometry
+    ∷ ChunkCoord → LocationDef
+    → Either LocationGeometryError ((Int, Int), AbsBounds)
+locationInstanceGeometry coord def =
+    case ( locationAnchorTileChecked coord
+         , translateBoundsChecked (locationAnchorTileInteger coord)
+                                  (ldBounds def) ) of
+        (Left f,  _)              → Left (attribute f)
+        (_,       Left f)         → Left (attribute f)
+        (Right anchor, Right box) → Right (anchor, box)
+  where
+    attribute f =
+        LocationGeometryError (ldId def) coord (lgfComponent f) (lgfValue f)
 
 -- | A fresh, undiscovered instance with its geometry resolved from
 --   @def@ and its name rendered from @namer@ — the page's language
 --   (#1101), or 'Nothing' for a page that has none, which names it
 --   @def@'s 'ldLabel' with no gloss.
 --
---   This is the ONLY place either name field is ever written.
+--   This is the ONLY place either name field is ever written, and since
+--   #1796 the only place an instance is built at all: geometry comes
+--   from 'locationInstanceGeometry', so an unrepresentable placement
+--   yields a 'LocationGeometryError' and no instance rather than a
+--   wrapped anchor and an inverted box.
 newLocationInstance
     ∷ Maybe LocationNamer → LocationInstanceId → ChunkCoord → LocationDef
-    → LocationInstance
-newLocationInstance namer iid coord def =
-    let anchor              = locationAnchorTile coord
-        (name, gloss, ety)  = nameLocationInstance namer def
+    → Either LocationGeometryError LocationInstance
+newLocationInstance namer iid coord def = do
+    (anchor, box) ← locationInstanceGeometry coord def
+    let (name, gloss, ety) = nameLocationInstance namer def
                                  (unLocationInstanceId iid)
-    in LocationInstance
+    pure LocationInstance
         { liId              = iid
         , liDefId           = ldId def
         , liChunk           = coord
         , liAnchor          = anchor
-        , liBounds          = translateBounds anchor (ldBounds def)
+        , liBounds          = box
         , liDisplayName     = name
         , liGloss           = gloss
         , liEtymology       = ety
@@ -339,35 +429,52 @@ locationInstanceBounds = map liBounds . instancesToList
 --   loaded. (That tolerance is defensive only: the overlay is computed
 --   FROM the registered defs at world init, and the load path rejects a
 --   save naming an unregistered location def before this ever runs.)
+--
+--   #1796: ALL-OR-NOTHING. One unrepresentable placement fails the whole
+--   build with that placement's 'LocationGeometryError' and produces no
+--   table at all — not a table missing one instance, and not a table
+--   whose allocator counted an instance that was never built. The
+--   registry tolerance above is unchanged and is a different case
+--   entirely: an entry naming an UNREGISTERED def still consumes its id
+--   and produces no instance, on the success path.
 buildLocationInstances
     ∷ Maybe LocationNamer → LocationRegistry → LocationOverlay
-    → LocationInstances
-buildLocationInstances namer registry overlay = LocationInstances
-    { lisNextId        = firstLocationInstanceId + length entries
-    , lisById          = HM.fromList [ (liId i, i) | Just i ← map mk entries ]
-    , lisPendingLegacy = Nothing
-    }
+    → Either LocationGeometryError LocationInstances
+buildLocationInstances namer registry overlay = do
+    built ← traverse mk entries
+    pure LocationInstances
+        { lisNextId        = firstLocationInstanceId + length entries
+        , lisById          = HM.fromList [ (liId i, i) | Just i ← built ]
+        , lisPendingLegacy = Nothing
+        }
   where
     entries = zip [firstLocationInstanceId ..] (overlayToList overlay)
-    mk (n, (coord, lid)) =
-        newLocationInstance namer (LocationInstanceId n) coord
-            <$> lookupLocation lid registry
+    mk (n, (coord, lid)) = case lookupLocation lid registry of
+        Nothing  → Right Nothing
+        Just def → Just ⊚ newLocationInstance namer (LocationInstanceId n)
+                                              coord def
 
 -- | Add one instance under a freshly allocated id. The engine's own
 --   placement pass uses 'buildLocationInstances'; this is the seam a
 --   later feature (or a test building two instances in one chunk) adds
 --   through without reaching into 'lisNextId' by hand.
+--
+--   #1796: an unrepresentable placement returns its
+--   'LocationGeometryError' and leaves @lis@ ENTIRELY untouched —
+--   'lisNextId' does not advance and 'lisById' gains nothing — so a
+--   refused allocation costs no id and the table a caller already holds
+--   stays exactly as valid as it was.
 allocateLocationInstance
     ∷ Maybe LocationNamer → ChunkCoord → LocationDef → LocationInstances
-    → (LocationInstanceId, LocationInstances)
-allocateLocationInstance namer coord def lis =
-    let iid  = LocationInstanceId (lisNextId lis)
-        inst = newLocationInstance namer iid coord def
-    in ( iid
-       , lis { lisNextId = lisNextId lis + 1
-             , lisById   = HM.insert iid inst (lisById lis)
-             }
-       )
+    → Either LocationGeometryError (LocationInstanceId, LocationInstances)
+allocateLocationInstance namer coord def lis = do
+    let iid = LocationInstanceId (lisNextId lis)
+    inst ← newLocationInstance namer iid coord def
+    pure ( iid
+         , lis { lisNextId = lisNextId lis + 1
+               , lisById   = HM.insert iid inst (lisById lis)
+               }
+         )
 
 -- | Update one instance in place; a no-op for an unknown id.
 adjustLocationInstance
@@ -427,15 +534,25 @@ pendingLegacyFlags discovered spawned = emptyLocationInstances
 --   language to name them in and one must never be invented. Every
 --   later payload carries its instances — and their already-rendered
 --   names — and never reaches this function at all.
+--
+--   #1796: the rebuild goes through the checked construction, so a
+--   legacy payload whose SAVED overlay names a chunk coordinate outside
+--   the representable envelope propagates that failure instead of
+--   resolving into wrapped geometry. The load path turns it into a
+--   rejection before anything is staged or published
+--   ('Engine.Scripting.Lua.API.Save.loadSaveFn'). No valid legacy save
+--   is affected: generated overlays span
+--   'Location.Overlay.allCoords' 's @[-half .. half-1]@ chunk range,
+--   and no registered definition can carry an out-of-domain box.
 resolveLegacyLocationInstances
     ∷ LocationRegistry → LocationOverlay → LocationInstances
-    → LocationInstances
+    → Either LocationGeometryError LocationInstances
 resolveLegacyLocationInstances registry overlay lis =
     case lisPendingLegacy lis of
-        Nothing → lis
-        Just flags →
-            let base = buildLocationInstances Nothing registry overlay
-            in base { lisById = HM.map (applyFlags flags) (lisById base) }
+        Nothing → Right lis
+        Just flags → do
+            base ← buildLocationInstances Nothing registry overlay
+            pure base { lisById = HM.map (applyFlags flags) (lisById base) }
   where
     applyFlags flags inst = inst
         { liLifecycle =
@@ -504,21 +621,26 @@ locationInstanceAllocatorErrors lis =
 --   which is why this rule needs a second implementation here rather
 --   than being left to #1151's single YAML-side one.
 --
---   Decode is the DOMINANT source but not provably the only one.
---   'newLocationInstance' builds the box as
---   @translateBounds anchor (ldBounds def)@ from an already-loaded
---   'Location.Bounds.RelBounds', and 'Location.Bounds.translateBounds'
---   offsets both ends by the same amount — so for any authored box
---   whose translation does not overflow, ordering is preserved and the
---   engine cannot invert one. That qualifier is load-bearing: the
---   translation is unchecked 'Int' addition and the YAML loader
---   constrains ORDERING but imposes no coordinate RANGE, so extreme
---   authored coordinates at a nonzero anchor can wrap and come out
---   inverted. Defining an authored-coordinate range is a separate
---   decision (#1668 explicitly leaves it out of scope), and this check
---   is the right behaviour either way: a wrapped box is not a usable
---   footprint, so refusing to publish it is correct whichever site
---   produced it.
+--   Since #1796 decode is the ONLY remaining source. The engine side
+--   is now proved rather than merely likely: 'newLocationInstance'
+--   builds every box through 'locationInstanceGeometry', which computes
+--   the anchor and all four translated bounds in 'Integer' and refuses
+--   the placement outright unless every component is representable —
+--   and an accepted translation offsets both ends of an axis by the
+--   same anchor, so ordering is preserved. The old qualifier that made
+--   this only DOMINANT — unchecked 'Int' addition under a loader that
+--   constrained ordering but not RANGE, which let an extreme authored
+--   box at a nonzero anchor wrap and invert — no longer holds:
+--   'Engine.Asset.YamlLocations.authoredLocationCoordinateLimit' bounds
+--   authored coordinates to @±(2^31 - 1)@, and the checked construction
+--   above covers arbitrary chunk coordinates, which that limit alone
+--   never could.
+--
+--   This check is NOT thereby redundant, and stays exactly as it is:
+--   'World.Save.Component.WorldGen.fromAbsBoundsDTO' still copies four
+--   unrestricted wire 'Int's, which no construction-time proof can
+--   reach. A wrapped box is not a usable footprint, so refusing to
+--   publish it is correct whichever site produced it.
 --
 --   An inverted box fails SILENTLY rather than loudly, differently in
 --   each consumer: 'Location.Bounds.boundsContainsPoint' is false at

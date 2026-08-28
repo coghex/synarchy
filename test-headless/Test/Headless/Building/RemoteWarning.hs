@@ -24,6 +24,7 @@ import Location.Types
     )
 import Location.Overlay.Types (LocationOverlay, emptyLocationOverlay)
 import Location.Instance (buildLocationInstances)
+import Test.Headless.Location.Fixture (expectGeometry)
 import Location.Bounds (RelBounds(..), remotePortalThresholdTiles)
 import Language.Semantic.Types (ConceptId(..))
 
@@ -115,7 +116,8 @@ westEdgeAt relMinX =
 checkAt ∷ Int → LocationRegistry → LocationOverlay → BuildingDef → Int → Int
         → RemoteCheck
 checkAt worldSize locs overlay def gx gy =
-    remoteCheck (buildLocationInstances Nothing locs overlay) worldSize def gx gy
+    remoteCheck (expectGeometry (buildLocationInstances Nothing locs overlay))
+                worldSize def gx gy
 
 spec ∷ Spec
 spec = describe "Remote portal warning" $ do

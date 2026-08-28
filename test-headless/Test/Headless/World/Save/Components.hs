@@ -54,6 +54,7 @@ import World.Save.Integrity (integrityErrorCap, KnownEntities(..))
 import Engine.Scripting.Lua.API.Save.Integrity (knownEntitiesFromSaveData)
 import World.Save.Reference (SamePageRef(..))
 import World.Save.Snapshot
+import Test.Headless.Location.Fixture (expectGeometry)
 import Location.Types (emptyLocationRegistry)
 import Location.Bounds (AbsBounds(..))
 import Location.Instance
@@ -2834,8 +2835,9 @@ resolveFixturePages snap = snap
     { snapPages = HM.map resolvePage (snapPages snap) }
   where
     resolvePage p = p
-        { pgsGenParams =
-            resolveLegacyLocationParams emptyLocationRegistry (pgsGenParams p) }
+        { pgsGenParams = expectGeometry
+            (resolveLegacyLocationParams emptyLocationRegistry
+                                         (pgsGenParams p)) }
 
 -- | The expectation for a fixture whose bytes predate #1092: identical
 --   to the live snapshot except that no identity carries language
