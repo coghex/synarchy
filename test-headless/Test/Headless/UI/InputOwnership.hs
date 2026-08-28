@@ -14,10 +14,15 @@ import qualified Graphics.UI.GLFW as GLFW
 import qualified HsLua as Lua
 import Test.Hspec
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef', newIORef)
+import qualified Data.HashMap.Strict as HM
+import qualified Data.HashSet as HS
+import qualified Data.Map.Strict as Map
 import qualified Data.Sequence as Seq
 import qualified Data.Text as T
 import Data.Foldable (toList)
 import Engine.ActionOutcome (ActionOutcome(..))
+import Engine.Asset.Handle (TextureHandle(..))
+import Engine.Core.Capability.WorldSim (toWorldSimCapability)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Thread (ThreadControl(..))
 import Engine.Input.Bindings (defaultKeyBindings)
@@ -30,11 +35,20 @@ import Engine.Scripting.Lua.Script (loadModuleRef)
 import Engine.Scripting.Lua.Thread (createLuaBackendState)
 import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
 import Engine.Scripting.Lua.Types (LuaMsg(..), LuaBackendState(..))
-import Test.Headless.Harness (withHeadlessEngine)
+import Test.Headless.Harness (withHeadlessEngine, withHeadlessEngineNoWorld)
 import UI.ShellFocus (FocusId, createFocusManager, registerFocusTarget, setFocus, unFocusId)
 import UI.InputOwnership
 import UI.Manager
 import UI.Types
+import Unit.Direction (Direction(..))
+import Unit.Faction (Faction(..))
+import Unit.Types
+    ( UnitId(..), UnitInstance(..), UnitManager(..), emptyUnitManager )
+import World.Page.Types (WorldPageId(..))
+import World.State.Types
+    ( WorldManager(..), emptyWorldManager, emptyWorldState )
+import World.Thread.Command.UI
+    (handleWorldHideCommand, handleWorldShowCommand)
 
 -- * Pure fixtures
 
@@ -451,6 +465,236 @@ spec = do
                 call `shouldNotSatisfy` isLuaError
                 reached ← evalDebug ls "_G.__tool_reached == true"
                 reached `shouldBe` "false"
+
+    -- #1672: the gameplay Escape's own selection-cleanup branch —
+    -- the LAST thing onKeyDown does, once the dismiss cascade has
+    -- declined and the gameplay-input gate has let the press through.
+    --
+    -- Unit selection is ONE global set with page-filtered reads (#78):
+    -- 'Unit.Selection.getSelected' filters @umSelected@ through the
+    -- ACTIVE page, while 'Unit.Selection.clearSelection' empties it with
+    -- no page predicate at all. Escape used to read the filtered getter
+    -- and only clear when it came back non-empty, so a unit selected on
+    -- a page that was later hidden read as "nothing selected", survived
+    -- the cancellation, and was selected again the moment that page was
+    -- shown. That is the exact asymmetry the comment directly above the
+    -- branch already documented for buildings and fixed there in #177 /
+    -- PR #207, without applying it to the unit clear on the next lines.
+    --
+    -- Two in-memory 'emptyWorldState' pages cost no worldgen (the shape
+    -- 'Test.Headless.Building.PageBinding' uses), and with no generation
+    -- parameters they need no world worker either — hence
+    -- 'withHeadlessEngineNoWorld'. The page switch goes through the
+    -- PRODUCTION 'handleWorldShowCommand' / 'handleWorldHideCommand'
+    -- handlers rather than a hand-written @wmVisible@ poke, so the
+    -- precondition this regression rests on is one the real page-
+    -- selection path actually produces.
+    --
+    -- The handlers ABOVE the branch are stubbed inert and the
+    -- gameplay-input gate is stubbed active for the reason
+    -- 'Test.Headless.UI.PopupQueueTeardown' stubs its own cascade: each
+    -- owns a window/page this suite has no business booting, and the
+    -- amended issue spec scopes the requirement to the press that
+    -- actually REACHES this branch — a higher-priority consumer or a
+    -- closed gameplay gate still wins, unchanged.
+    around withHeadlessEngineNoWorld $
+      describe "gameplay Escape clears the GLOBAL unit selection (#1672)" $ do
+
+        it "clears a selection made on a page that has since been hidden" $
+          \env → do
+            ls ← escapeBackend env
+            installEscapePages env
+            -- Selected through the real page-filtered production verb,
+            -- while its page is the active one: this is a selection the
+            -- engine itself agreed to make.
+            evalDebug ls "return unit.select(1)"
+                `shouldReturn` "true"
+            escSelectedIds env `shouldReturn` [escUnitA]
+            -- Switch to page B exactly as production does.
+            switchToPageB env
+            -- The precondition this regression exists for, asserted
+            -- rather than assumed: the FILTERED read is empty while the
+            -- underlying global set still holds the page-A unit. Without
+            -- this, a fixture that silently dropped the selection during
+            -- setup would let the example pass for the wrong reason.
+            evalDebug ls "return #unit.getSelected()" `shouldReturn` "0"
+            escSelectedIds env `shouldReturn` [escUnitA]
+
+            pressEscape ls
+
+            -- The GLOBAL set, not the page-filtered view.
+            escSelectedIds env `shouldReturn` []
+            -- And it stays gone once page A is shown again, which is
+            -- where the stale selection used to reappear intact.
+            switchToPageA env
+            evalDebug ls "return #unit.getSelected()" `shouldReturn` "0"
+            escSelectedIds env `shouldReturn` []
+
+        it "still clears a selection on the ACTIVE page" $ \env → do
+            ls ← escapeBackend env
+            installEscapePages env
+            evalDebug ls "return unit.select(1)"
+                `shouldReturn` "true"
+            evalDebug ls "return #unit.getSelected()" `shouldReturn` "1"
+
+            pressEscape ls
+
+            evalDebug ls "return #unit.getSelected()" `shouldReturn` "0"
+            escSelectedIds env `shouldReturn` []
+
+        it "completes without error when nothing is selected at all" $
+          \env → do
+            ls ← escapeBackend env
+            installEscapePages env
+            escSelectedIds env `shouldReturn` []
+
+            pressEscape ls
+
+            escSelectedIds env `shouldReturn` []
+
+        it "leaves the page-filtered selection READS and WRITES scoped \
+           \to the active page" $ \env → do
+            ls ← escapeBackend env
+            installEscapePages env
+            -- Page A is active: page B's unit can be selected by
+            -- neither of the two selecting verbs, and reads about it
+            -- stay negative. Requirement 4 (plus the review's addition
+            -- of unit.setSelection, which scripts/init_mouse.lua and
+            -- scripts/unit_drag_select.lua use for Shift selection).
+            evalDebug ls "return unit.select(2)"
+                `shouldReturn` "false"
+            escSelectedIds env `shouldReturn` []
+            evalDebug ls "unit.setSelection({1, 2}); return #unit.getSelected()"
+                `shouldReturn` "1"
+            escSelectedIds env `shouldReturn` [escUnitA]
+            evalDebug ls "return unit.isSelected(1)"
+                `shouldReturn` "true"
+            evalDebug ls "return unit.isSelected(2)"
+                `shouldReturn` "false"
+
+-- * #1672 fixture: two in-memory pages, one unit on each
+
+escPageA, escPageB ∷ WorldPageId
+escPageA = WorldPageId "esc_page_a"
+escPageB = WorldPageId "esc_page_b"
+
+-- | Page A's unit — the one every scenario selects — and page B's,
+--   which exists so the active-page filter has something to exclude.
+escUnitA, escUnitB ∷ UnitId
+escUnitA = UnitId 1
+escUnitB = UnitId 2
+
+-- | Only 'uiPage' matters to selection; the rest are inert placeholders
+--   (the same minimal-instance shape 'Test.Headless.Unit.LineOfSight'
+--   uses).
+escUnitOn ∷ WorldPageId → UnitInstance
+escUnitOn page = UnitInstance
+    { uiDefName = "esc_test", uiName = "", uiPage = page
+    , uiTexture = TextureHandle 0, uiDirSprites = Map.empty
+    , uiBaseWidth = 0, uiGridX = 0, uiGridY = 0, uiGridZ = 0
+    , uiRealZ = 0, uiFacing = DirS
+    , uiCurrentAnim = "", uiAnimStart = 0, uiAnimReverse = False
+    , uiActivity = "idle", uiPose = "standing", uiAnimStride = 1
+    , uiStats = HM.empty, uiModifiers = HM.empty, uiSkills = HM.empty
+    , uiKnowledge = HM.empty, uiInventory = [], uiEquipment = HM.empty
+    , uiAccessories = [], uiFactionId = FactionPlayer, uiWounds = []
+    , uiScars = [], uiImmuneResponse = 0, uiImmunities = HM.empty
+    , uiBlood = 5.0, uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
+    , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False
+    , uiClimbDest = Nothing, uiTrailState = Nothing
+    }
+
+-- | Both pages registered with page A visible, both units live, nothing
+--   selected. No generation parameters: these pages are storage for a
+--   page id, and a page carrying params is what would need a worker.
+installEscapePages ∷ EngineEnv → IO ()
+installEscapePages env = do
+    wsA ← emptyWorldState
+    wsB ← emptyWorldState
+    writeIORef (worldManagerRef env) emptyWorldManager
+        { wmWorlds  = [(escPageA, wsA), (escPageB, wsB)]
+        , wmVisible = [escPageA] }
+    writeIORef (unitManagerRef env) emptyUnitManager
+        { umInstances = HM.fromList
+            [ (escUnitA, escUnitOn escPageA)
+            , (escUnitB, escUnitOn escPageB) ]
+        , umNextId = 3 }
+
+-- | The UNFILTERED global selection — what 'Unit.Selection.clearSelection'
+--   writes and what @unit.getSelected()@ deliberately cannot show once
+--   its page is hidden.
+escSelectedIds ∷ EngineEnv → IO [UnitId]
+escSelectedIds env =
+    HS.toList ∘ umSelected ⊚ readIORef (unitManagerRef env)
+
+-- | Make page B active through the production handlers: @world.show@
+--   prepends, so showing B makes it the head, and hiding A leaves it
+--   the only visible page.
+switchToPageB ∷ EngineEnv → IO ()
+switchToPageB env = do
+    logger ← readIORef (loggerRef env)
+    let wsc = toWorldSimCapability env
+    handleWorldShowCommand wsc logger escPageB
+    handleWorldHideCommand wsc logger escPageA
+
+-- | The reverse switch — "show that page again", where the stale
+--   selection used to come back.
+switchToPageA ∷ EngineEnv → IO ()
+switchToPageA env = do
+    logger ← readIORef (loggerRef env)
+    let wsc = toWorldSimCapability env
+    handleWorldShowCommand wsc logger escPageA
+    handleWorldHideCommand wsc logger escPageB
+
+-- | A real Lua backend with every handler ABOVE the selection branch
+--   stubbed inert, the gameplay-input gate stubbed active, and the HUD
+--   stubbed invisible so the branch stops after the three deselects
+--   (cursor Escape behaviour is #180's, and explicitly out of scope
+--   here). @scripts/init_keys.lua@ itself is the REAL module.
+escapeBackend ∷ EngineEnv → IO LuaBackendState
+escapeBackend env = do
+    ls ← newBareLuaBackend env
+    setup ← evalDebug ls
+        "local function inert() return false end; \
+        \package.loaded['scripts.build_tool_remote_warning'] = \
+        \  { handleKeyDown = inert }; \
+        \package.loaded['scripts.ui.context_menu'] = \
+        \  { handleEscape = inert }; \
+        \package.loaded['scripts.cargo_inventory_panel'] = \
+        \  { handleKeyDown = inert }; \
+        \package.loaded['scripts.crafting_panel']  = { handleKeyDown = inert }; \
+        \package.loaded['scripts.etymology_panel'] = { handleKeyDown = inert }; \
+        \package.loaded['scripts.popup'] = \
+        \  { dismissAll = function() return 0 end, \
+        \    dismissTopmost = inert }; \
+        \local function hidden() return { isVisible = inert, \
+        \                                 hide = function() end } end; \
+        \package.loaded['scripts.event_log']        = hidden(); \
+        \package.loaded['scripts.combat_log']       = hidden(); \
+        \package.loaded['scripts.injury_log_panel'] = hidden(); \
+        \package.loaded['scripts.unit_log']         = hidden(); \
+        \package.loaded['scripts.ui_manager'] = \
+        \  { isGameplayInputActive = function() return true end }; \
+        \local tool = { handleKeyDown = inert }; \
+        \package.loaded['scripts.build_tool'] = tool; \
+        \package.loaded['scripts.mine_tool']  = tool; \
+        \package.loaded['scripts.chop_tool']  = tool; \
+        \package.loaded['scripts.till_tool']  = tool; \
+        \package.loaded['scripts.plant_tool'] = tool; \
+        \package.loaded['scripts.hud'] = { visible = false }; \
+        \return 'ok'"
+    when (isLuaError setup) $
+        error ("escape fixture setup failed: " ⧺ T.unpack setup)
+    pure ls
+
+-- | Press Escape through the production entry point, exactly as
+--   'Test.Headless.UI.PopupQueueTeardown' drives it, and fail the
+--   example if the handler raised.
+pressEscape ∷ LuaBackendState → Expectation
+pressEscape ls = do
+    got ← evalDebug ls
+        "require('scripts.init_keys').onKeyDown('Escape'); return true"
+    got `shouldBe` "true"
 
 -- * Wire-integration helpers (mirrors Test.Headless.Input.LayerA)
 

@@ -170,8 +170,19 @@ function settingsMenu.onDefaults()
         engine.loadDefaultKeybinds()
         engine.saveKeybinds()
     end
+    -- #1671: this rebuild destroys and recreates every control, so it
+    -- owes the same caller-side control-focus (#745) snapshot/restore
+    -- onFramebufferResize below already does — createUI() itself never
+    -- restores it (restoring needs the page already visible, which
+    -- createUI never makes it; see its own comment). Restore BEFORE the
+    -- scale fan-out below, so the onFramebufferResize rebuild it can
+    -- trigger snapshots the already-restored focus rather than nothing.
+    local controlFocusName = responsive.snapshotControlFocusName()
     settingsMenu.createUI()
-    if settingsMenu.page then UI.showPage(settingsMenu.page) end
+    if settingsMenu.page then
+        UI.showPage(settingsMenu.page)
+        responsive.restoreControlFocusName(controlFocusName)
+    end
     if data.current.uiScale ~= uiScaleBefore then
         responsive.notifyResize(settingsMenu.fbW, settingsMenu.fbH)
         shell.onFramebufferResize(settingsMenu.fbW, settingsMenu.fbH)

@@ -3,10 +3,17 @@
 "the audit detects an intentionally introduced unclassified root state
 owner or Lua persistence module in its own automated test").
 
-Feeds the audit's pure functions synthetic Haskell record text, synthetic
-Lua source, and a synthetic inventory doc -- never touches the real repo
-files -- so these tests stay stable regardless of how EngineEnv or the
-inventory grow.
+Mostly feeds the audit's pure functions synthetic Haskell record text,
+synthetic Lua source, and a synthetic inventory doc, so those tests stay
+stable regardless of how EngineEnv or the inventory grow.
+
+Four groups deliberately read the REAL checked-out sources instead,
+because what they assert is a property of the production configuration
+rather than of the parser: `test_audit_against_the_real_repo` (the
+end-to-end smoke test CI runs via main()), and the three #1703 groups
+binding the pointer-reached gameplay managers to the production
+ROOT_RECORDS. All four read the tree and mutate only in-memory copies;
+none writes a repo file.
 
 Usage:
   python3 tools/test_persistence_inventory_audit.py
@@ -14,11 +21,13 @@ Exit codes: 0 = all tests passed, 1 = one or more failed.
 """
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from persistence_inventory_audit import (  # type: ignore
+    ROOT_RECORDS,
     extract_record_fields, extract_lua_registered_modules,
     find_lua_register_aliases, find_lua_register_dynamic_names,
     find_untracked_registry_aliases,
@@ -2938,6 +2947,135 @@ def test_audit_against_the_real_repo():
            f"reference fields, or Lua reference kinds, got {violations}")
 
 
+# ----- #1703 pointer-reached gameplay managers ---------------------------
+
+# The three records EngineEnv reaches only through a bare IORef pointer.
+# Before #1703 the audit scanned the POINTER field (classified `Rebuild`,
+# delegating onward) but never the record it points at, so a field added
+# inside an already-reachable manager passed every gate with no
+# persistence decision recorded. Each entry is the exact production
+# ROOT_RECORDS triple these tests bind against -- asserting the label
+# alone would pass even if the path or pattern silently stopped matching
+# the live record, and a synthetic fixture would prove nothing about the
+# production allowlist at all.
+POINTER_REACHED_MANAGERS = [
+    ("UnitManager", "src/Unit/Types/Manager.hs",
+     r"^data UnitManager = UnitManager\b"),
+    ("BuildingManager", "src/Building/Types.hs",
+     r"^data BuildingManager = BuildingManager\b"),
+    ("UnitThreadState", "src/Unit/Sim/Types.hs",
+     r"^data UnitThreadState = UnitThreadState\b"),
+]
+
+# The field name injected into a REAL record's source below. Deliberately
+# one no inventory table can plausibly classify, so its violation can be
+# attributed unambiguously.
+PROBE_FIELD = "injectedUnclassifiedProbeField"
+
+
+def _inject_field_into_real_record(source: str, pattern: str,
+                                   field_name: str) -> str:
+    """Add one unclassified field to a REAL checked-out record's text.
+
+    Finds the record's `data X = X` line via its own production regex,
+    then the opening `{` of its brace block, and splices a new field in
+    right after the first one. Everything else in the file is untouched,
+    so the audit sees the actual tree with exactly one field added."""
+    lines = source.split("\n")
+    header = re.compile(pattern)
+    for index, line in enumerate(lines):
+        if not header.match(line):
+            continue
+        for brace in range(index, len(lines)):
+            if lines[brace].lstrip().startswith("{"):
+                lines.insert(brace + 1, f"    , {field_name} ∷ Int")
+                return "\n".join(lines)
+        raise AssertionError(
+            f"no opening brace found after the record header {pattern!r}")
+    raise AssertionError(f"no line matched the record header {pattern!r}")
+
+
+def test_production_roots_include_the_pointer_reached_managers():
+    """The three records must be in the PRODUCTION allowlist, at their
+    real source paths, with patterns that match the live declarations --
+    not merely reachable through some fixture."""
+    for label, relpath, pattern in POINTER_REACHED_MANAGERS:
+        entries = [e for e in ROOT_RECORDS if e[0] == label]
+        expect(entries == [(label, relpath, pattern)],
+               f"ROOT_RECORDS carries exactly one {label} entry at "
+               f"{relpath} with the expected pattern, got {entries}")
+
+
+def test_pointer_reached_managers_parse_from_their_real_sources():
+    """A pattern that stopped matching (a record moved file, or the
+    parser desynced) would make the audit report a hard violation rather
+    than silently scanning nothing -- but only if the source is actually
+    reachable and parseable, which this pins directly."""
+    from persistence_inventory_audit import _load_repo_state  # type: ignore
+    record_sources, _, _, _, _ = _load_repo_state()
+    expected_counts = {"UnitManager": 4, "BuildingManager": 4,
+                       "UnitThreadState": 1}
+    for label, relpath, pattern in POINTER_REACHED_MANAGERS:
+        expect(relpath in record_sources,
+               f"{label}'s source {relpath} is loaded by _load_repo_state")
+        fields = extract_record_fields(record_sources[relpath], pattern)
+        expect(len(fields) == expected_counts[label],
+               f"{label} parses to {expected_counts[label]} fields from its "
+               f"real source, got {len(fields)}: {fields}")
+
+
+def test_audit_detects_a_new_field_on_each_pointer_reached_manager():
+    """The regression #1703 exists to prevent, proven against the REAL
+    tree through the DEFAULT (production) root records: add one field to
+    each of the three managers in turn and the audit must name it.
+
+    `audit()` is called with no `root_records=` argument on purpose --
+    that is what makes this bind to the production allowlist rather than
+    to a fixture list the test itself supplies."""
+    from persistence_inventory_audit import _load_repo_state  # type: ignore
+    record_sources, scripts_text_by_file, inventory_text, registered_ids, \
+        component_sources = _load_repo_state()
+    for label, relpath, pattern in POINTER_REACHED_MANAGERS:
+        mutated = dict(record_sources)
+        mutated[relpath] = _inject_field_into_real_record(
+            record_sources[relpath], pattern, PROBE_FIELD)
+        expect(mutated[relpath] != record_sources[relpath],
+               f"the {label} fixture mutation actually changed {relpath}")
+        violations = audit(mutated, scripts_text_by_file, inventory_text,
+                           registered_ids=registered_ids,
+                           component_sources=component_sources)
+        expect(any(f"{label}.{PROBE_FIELD}" in v for v in violations),
+               f"a field added to {label} ({relpath}) is reported by the "
+               f"audit under its production root entry, got {violations}")
+        expect(all(PROBE_FIELD in v for v in violations),
+               f"injecting one field into {label} produces no OTHER "
+               f"violation -- the rest of the real tree stays clean, got "
+               f"{violations}")
+
+
+def test_pointer_reached_manager_fields_are_classified_per_owner():
+    """The three managers' own headings are load-bearing: the audit
+    scopes classification PER owner heading, so a row moved out from
+    under `### UnitThreadState` (or either manager's heading) stops
+    counting. Stripping the heading must therefore fail the audit."""
+    from persistence_inventory_audit import _load_repo_state  # type: ignore
+    record_sources, scripts_text_by_file, inventory_text, registered_ids, \
+        component_sources = _load_repo_state()
+    for label, relpath, pattern in POINTER_REACHED_MANAGERS:
+        renamed = inventory_text.replace(f"### {label}\n",
+                                         f"### Not{label}\n")
+        expect(renamed != inventory_text,
+               f"the inventory really carries a '### {label}' owner heading")
+        violations = audit(record_sources, scripts_text_by_file, renamed,
+                           registered_ids=registered_ids,
+                           component_sources=component_sources)
+        fields = extract_record_fields(record_sources[relpath], pattern)
+        for field in fields:
+            expect(any(f"{label}.{field}" in v for v in violations),
+                   f"{label}.{field} is reported once its owner heading is "
+                   f"renamed away, got {violations}")
+
+
 # ----- #760 component-registration checks --------------------------------
 
 # The derived registered set, as `derive_registered_component_ids` would
@@ -3441,6 +3579,10 @@ def main() -> int:
         test_find_lua_reference_kinds_follows_a_delegated_helper_module,
         test_audit_detects_unclassified_lua_reference_kind,
         test_audit_against_the_real_repo,
+        test_production_roots_include_the_pointer_reached_managers,
+        test_pointer_reached_managers_parse_from_their_real_sources,
+        test_audit_detects_a_new_field_on_each_pointer_reached_manager,
+        test_pointer_reached_manager_fields_are_classified_per_owner,
         test_component_check_accepts_registered_persistent_owner,
         test_component_check_flags_unregistered_persistent_owner,
         test_component_check_reset_owner_needs_no_registration,
