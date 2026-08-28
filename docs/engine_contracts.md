@@ -92,7 +92,8 @@ Unicode-operator audit, the Lua strict-decoder audit
 no direct `Data.Text.Encoding.decodeUtf8` under
 `src/Engine/Scripting/Lua/`), the persistence-inventory / EngineEnv-capability
 / save-compat / enum-append-only / cabal-library-module-inventory /
-material-id / concept-id-inventory / findings-report-status audits (each
+material-id / bare-name-icon / concept-id-inventory /
+findings-report-status audits (each
 with its own self-test), the unit-asset inventory gate (`test_pack_atlas.py` +
 `pack_atlas.py --validate-only --strict`), `world_check.py --quick`, the
 eight probe-runner self-tests (`ci_probes.py --self-test`,
@@ -105,7 +106,34 @@ reads), the project-cache epoch and cleanup policy self-tests
 (`ci_cache_epoch.py --self-test`, `ci_cache_cleanup.py --self-test`), and the
 parity audit itself.
 
-**The concept-id-inventory audit (#1717)** is the newest member.
+**The bare-name-icon check (#1740)** is the newest member.
+`tools/bare_name_icon_asset_check.py` resolves every authoritative
+bare-name icon reference — `scripts/injuries.lua`'s `KIND_ICON`,
+`INJURY_ICON` and its four icon-carrying functions,
+`scripts/unit_info_v2_stat_defs.lua` and `scripts/unit_info_v2_status.lua`'s
+literal `icon =` fields, `scripts/knowledge.lua`'s registry and
+`M.UNKNOWN_ICON`, and `data/infections/*.yaml`'s `icon:` scalars — through
+the SHIPPED GLOBAL index `scripts/unit_info_v2_panel_engine.lua`'s
+`buildIconIndex` builds over `ICON_SUBDIRS`, last-wins on a duplicate
+basename exactly as the runtime resolves one. It never requires a
+reference to live in the row's own family: intentional cross-family reuse
+is instead PINNED (skill rows drawing stat `agility`/`strength`, the
+Status panel's stat `weight`, injury rows drawing status `pain`, status
+condition rows drawing injury `nerve_injury`/`festered_injury`/
+`frostbite`), so a family-local reinterpretation fails rather than
+silently changing meaning. It also pins the two runtime family
+inventories (`ICON_SUBDIRS` and `scripts/startup_loader.lua`'s preload
+list) to each other and to every family's `<kind>_unknown.png`.
+Extraction refuses rather than narrows: an unsupported table shape, a
+computed `icon` assignment outside the closed reason-carrying forwarding
+allowlist, an `icon` assignment outside the enumerated reference sites, an
+unterminated string, and any enumerated source, table, anchor or allowlist
+entry yielding zero matches are each an error naming `file:line`. Per-FAMILY
+fallback-asset presence stays `tools/texture_subset_audit.py`'s job, and
+`assets/textures/icons/location/` is outside `ICON_SUBDIRS` and owned by
+`tools/location_map_icon_asset_check.py`.
+
+**The concept-id-inventory audit (#1717)** was the previous newest member.
 `tools/concept_id_inventory_audit.py` pins every concept id
 `data/language/concepts.yaml` has shipped against
 `docs/language/concept_id_baseline.json`: a removal fails naming the id
