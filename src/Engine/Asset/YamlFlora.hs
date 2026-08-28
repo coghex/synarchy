@@ -16,7 +16,11 @@ module Engine.Asset.YamlFlora
 import UPrelude
 import GHC.Generics (Generic)
 import Control.Applicative ((<|>))
+import qualified Data.Text as T
 import Data.Aeson (FromJSON(..), (.:), (.:?), (.!=), withObject)
+import qualified Data.Aeson as Aeson
+import qualified Data.Aeson.KeyMap as KM
+import qualified Data.Aeson.Types as Aeson (Parser)
 import Engine.Core.Log (LoggerState)
 import Engine.Asset.YamlList (loadYamlList)
 import World.Flora.Types (LifePhaseTag(..), AnnualStageTag(..))
@@ -84,7 +88,8 @@ instance FromJSON FloraYamlYield where
 
 -- | Optional @harvestable:@ block (#94). Plants without it are
 --   decorative only. @regrowth_time@ is in GAME seconds (86400 = one
---   game-day ≈ 24 real-minutes at timeScale 1).
+--   game-day ≈ 24 real-minutes at timeScale 1) and must be a finite,
+--   strictly positive number — see 'requireRegrowthTime' (#1711).
 data FloraYamlHarvest = FloraYamlHarvest
     { fyhTags             ∷ [Text]
     , fyhYield            ∷ [FloraYamlYield]
@@ -93,12 +98,83 @@ data FloraYamlHarvest = FloraYamlHarvest
                                          --   = plant hidden while regrowing
     } deriving (Show, Eq, Generic)
 
-instance FromJSON FloraYamlHarvest where
-    parseJSON = withObject "FloraYamlHarvest" $ \v → FloraYamlHarvest
+-- | Read a @harvestable:@ block’s REQUIRED @regrowth_time@ as a
+--   finite, strictly positive number of GAME seconds, diagnosing every
+--   rejection BY SPECIES NAME (#1711).
+--
+--   The domain check has to live HERE, at the authoring boundary, and
+--   not at any action site. @regrowth_time@ is the only thing standing
+--   between a harvested wild plant and being harvestable again:
+--   'Engine.Scripting.Lua.API.Forage.Harvest' gates a harvest on the
+--   live timer being @≤ 0@ and then reinserts this value unchanged, so a
+--   non-positive one is immediately “expired” and the very next call on
+--   the same tile spawns the full yield again — an unbounded item source
+--   needing no tick in between. The regrowth tick does not close it
+--   either: 'World.Flora.Harvest.tickFloraHarvests' DROPS an entry that
+--   is already @≤ 0@, and no entry is the harvestable state, so the tick
+--   reopens the tile rather than retiring it. Zero cannot be repurposed
+--   as a one-shot harvest, because wild flora has no persistent
+--   per-instance “permanently harvested” record to carry that meaning.
+--
+--   Naming the SPECIES is the whole reason this is a named parser
+--   rather than a @v .: "regrowth_time"@ plus a check, exactly as
+--   'Engine.Asset.YamlItems.requirePositiveQuantity' is:
+--   'Engine.Asset.YamlList.loadYamlList' supplies the failing FILE path
+--   in its warning, but an ordinary Aeson field error only reaches for
+--   a JSON path like @$.flora[2].harvestable.regrowth_time@ — an index
+--   nobody can map back to a species without counting entries. The two
+--   halves together name the file AND the species.
+--
+--   Taking the whole 'Aeson.Value' rather than decoding to 'Float'
+--   first is deliberate for the same reason it is there: YAML’s
+--   @.nan@/@.inf@ resolve to STRINGS (the yaml package’s scalar
+--   resolver only recognizes ordinary numeric syntax), so decoding
+--   first would surface those as a type error naming neither the
+--   species nor what was actually wrong. The finiteness check still has
+--   to run AFTER narrowing, because a perfectly ordinary @1.0e+100@ is
+--   a valid 'Scientific' that becomes 'Infinity' in the engine’s
+--   32-bit 'Float' field — and an infinite timer never expires, so it
+--   would reach gameplay as a silently one-shot plant.
+requireRegrowthTime ∷ Text → Aeson.Object → Aeson.Parser Float
+requireRegrowthTime species v = do
+    mval ← v .:? "regrowth_time"
+    case mval of
+        Nothing  → bad "is required and has no default"
+        Just val → case val of
+            Aeson.Number s →
+                let f = realToFrac s ∷ Float
+                in if isNaN f ∨ isInfinite f
+                     then bad ("must be finite, got " <> tshow val)
+                     else if f ≤ 0
+                       then bad ("must be strictly positive, got " <> tshow f)
+                       else pure f
+            _ → bad ("must be a number of game seconds, got " <> tshow val)
+  where
+    bad why = fail ∘ T.unpack $
+        "flora species '" <> species <> "': harvestable regrowth_time (key \
+        \'regrowth_time', game seconds) " <> why
+
+-- | Parse a @harvestable:@ block, threading the OWNING species’ name
+--   through so a bad @regrowth_time@ is diagnosed by species rather
+--   than by list index. There is deliberately no 'FromJSON' instance:
+--   the name is not reachable from inside one, which is the whole point
+--   (see 'requireRegrowthTime').
+--
+--   The object check is spelled out rather than delegated to
+--   'withObject' for the same reason: @harvestable: 23@ would otherwise
+--   fail with aeson’s own “expected Object, but encountered Number”,
+--   which names neither the species nor the block.
+parseFloraYamlHarvest ∷ Text → Aeson.Value → Aeson.Parser FloraYamlHarvest
+parseFloraYamlHarvest species val = case val of
+    Aeson.Object v → FloraYamlHarvest
         ⊚ v .:? "tags" .!= []
         ⊛ v .:? "yield" .!= []
-        ⊛ v .:  "regrowth_time"
+        ⊛ requireRegrowthTime species v
         ⊛ v .:? "harvested_texture"
+    _ → fail ∘ T.unpack $
+        "flora species '" <> species <> "': harvestable must be a block \
+        \authoring a finite, strictly positive regrowth_time (game \
+        \seconds), got " <> tshow val
 
 data FloraYamlWorldGen = FloraYamlWorldGen
     { fywCategory     ∷ Text
@@ -164,19 +240,32 @@ data FloraYamlDef = FloraYamlDef
     } deriving (Show, Eq, Generic)
 
 instance FromJSON FloraYamlDef where
-    parseJSON = withObject "FloraYamlDef" $ \v → FloraYamlDef
-        ⊚ v .:  "name"
-        ⊛ v .:  "type"
-        ⊛ v .:  "texDir"
-        ⊛ v .:? "lifecycle"    .!= "evergreen"
-        ⊛ v .:? "minLife"
-        ⊛ v .:? "maxLife"
-        ⊛ v .:? "deathChance"
-        ⊛ v .:? "phases"       .!= []
-        ⊛ v .:? "annualCycle"  .!= []
-        ⊛ v .:? "cycleOverrides" .!= []
-        ⊛ v .:? "harvestable"
-        ⊛ v .:  "worldGen"
+    parseJSON = withObject "FloraYamlDef" $ \v → do
+        -- `name` is read FIRST, monadically, because the `harvestable:`
+        -- block below is parsed by a named parser that carries it into
+        -- every diagnostic — the applicative chain cannot pass an
+        -- already-parsed field to a later one.
+        name ← v .: "name"
+        -- Looked up rather than read with `.:?` only so a present-but-
+        -- null key keeps meaning exactly what it meant before (#1711 is
+        -- about the block’s CONTENT, not its presence): aeson’s `.:?`
+        -- reads `harvestable: null` as absent, and this reproduces that.
+        harvest ← case KM.lookup "harvestable" v of
+            Nothing         → pure Nothing
+            Just Aeson.Null → pure Nothing
+            Just hv         → Just <$> parseFloraYamlHarvest name hv
+        FloraYamlDef name
+            ⊚ v .:  "type"
+            ⊛ v .:  "texDir"
+            ⊛ v .:? "lifecycle"    .!= "evergreen"
+            ⊛ v .:? "minLife"
+            ⊛ v .:? "maxLife"
+            ⊛ v .:? "deathChance"
+            ⊛ v .:? "phases"       .!= []
+            ⊛ v .:? "annualCycle"  .!= []
+            ⊛ v .:? "cycleOverrides" .!= []
+            ⊛ pure harvest
+            ⊛ v .:  "worldGen"
 
 data FloraYamlFile = FloraYamlFile
     { fyfFlora ∷ [FloraYamlDef]
