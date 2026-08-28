@@ -147,19 +147,20 @@ function M.onKeyDown(key)
     --
     -- Unit, building, and ground-item selections all share the same HUD
     -- info-panel ownership system, so Escape clears whichever one is
-    -- active (#177). building.deselect()/item.deselect() are called
-    -- unconditionally (matching every other deselection site in this
-    -- file): they are no-ops when nothing is selected, and
-    -- building.getSelected() in particular is filtered to the active
-    -- world page while building.deselect() clears the underlying global
-    -- building selection, so guarding on getSelected() would skip a
-    -- stale off-page building selection and leave it live when that page
-    -- is shown again.
+    -- active (#177). All three deselects are called unconditionally
+    -- (matching every other deselection site in this file): they are
+    -- no-ops when nothing is selected, and each getter is filtered to
+    -- the active world page while its deselect clears the underlying
+    -- GLOBAL selection, so guarding on a getter would skip a stale
+    -- off-page selection and leave it live when that page is shown
+    -- again. unit.deselectAll() was the last site still guarded that
+    -- way (#1672): unit.getSelected() filters through the active page
+    -- exactly as building.getSelected() does, so a unit selected on a
+    -- page that was later hidden read as "nothing selected" and came
+    -- back selected on re-show. The clear itself is idempotent and
+    -- always succeeds, so the guard bought nothing.
     if key == "Escape" then
-        local selected = unit.getSelected()
-        if #selected > 0 then
-            unit.deselectAll()
-        end
+        unit.deselectAll()
         building.deselect()
         item.deselect()
         -- ESC also clears the active cursor (tile/chunk) selection so it
