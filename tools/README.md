@@ -224,16 +224,30 @@ path-selectively on PRs (`ci_expensive_gates.py --gate unit-assets`).
 Self-audit (#646) for the F4 action-outcome oracle: greps each registered
 commit-boundary verb's own source for its `debug.recordOutcome` /
 `pushActionOutcome` call site and reports instrumented yes/no, mirroring
-`ci_probes.py --status`'s "make the gap visible" style. Not a blocking
-gate — Tier 2/3 verbs are deliberate fast-follows, not regressions.
-Verbs that share a file (e.g. `unitAi.commandMove`/`commandAttack`,
-`craft.execute`/`executeAt`) are checked within their OWN function body,
-not file-wide, so instrumenting one sibling can't false-positive the
-other. `--self-test` proves that scoping actually discriminates.
+`ci_probes.py --status`'s "make the gap visible" style. The plain report
+is not a blocking gate — it always exits 0, because Tier 2/3 verbs are
+deliberate fast-follows, not regressions. Verbs that share a file (e.g.
+`unitAi.commandMove`/`commandAttack`, `craft.execute`/`executeAt`) are
+checked within their OWN function body, not file-wide, so instrumenting
+one sibling can't false-positive the other. `--self-test` proves that
+scoping actually discriminates, against constructed source strings.
+
+`--verify-tier1` (#1704) is the blocking half, and it is the only one
+that reads the real tree: it evaluates the Tier 1 (Layer A) areas ONLY
+and exits non-zero when a mapped source file is absent — a producer
+renamed or moved out from under the checker — or when a mapped file is
+present but a required producer pattern is missing. Each verb declares
+the files its check reads, which is what lets the gate tell a stranded
+MAPPING (re-point the checker) from deleted INSTRUMENTATION (restore
+it); the plain report cannot, and prints `gap` with status 0 for both.
+That is how #787's input-thread split left all five Layer A areas
+reporting as gaps while every producer was present and passing its own
+hspec suite. Run by CI and `make ci`.
 
 ```bash
 python3 tools/action_outcome_coverage.py
 python3 tools/action_outcome_coverage.py --self-test
+python3 tools/action_outcome_coverage.py --verify-tier1
 ```
 
 ### `location_placement_sweep.py`
@@ -765,6 +779,49 @@ decode — and to stay quiet on a fixed-query helper, rather than merely
 agreeing that today's tree is clean. ~5 s; blocking CI step alongside
 `test_run_probes.py`.
 
+### `test_probe_root_cleanup.py` — the isolated root's staging boundary (#1791)
+
+`foraging_probe.py` (#1618), `flora_growth_probe.py` and `farm_ai_probe.py`
+(#1616) and `item_temp_probe.py` (#1613) each give one invocation its own
+throwaway resource root and promise to remove it on every exit path.
+The promise had a hole: `tempfile.mkdtemp` AND `make_isolated_root(base)`
+both ran before the `try` whose `finally` owns `remove_run_root(base)`, so
+a failure while STAGING the tree — the root, three symlinks into the
+checkout, a copied `config/`, `saves/`, created in that order — bypassed
+cleanup entirely and left the invocation-owned directory on disk. Staging
+now happens inside that guard, one statement after the base exists.
+
+`python3 tools/test_probe_root_cleanup.py` pins the boundary for all four,
+and it drives each probe's REAL `main()` rather than `make_isolated_root`
+alone — calling the builder in isolation would pass while the defect
+above it stood. Each case runs the probe in a subprocess against a
+stand-in checkout and a private `TMPDIR`, with `boot`/`quit_engine`
+observable and no engine anywhere, so the exit status and the
+operator-visible cause are the process's own. Four scenarios per probe: a
+`copytree` that fails once the root and its three symlinks exist (real
+partial state to leak) must end non-zero with the cause visible, the base
+gone, the temp directory empty, and neither `boot` nor `quit_engine`
+reached — a staging failure precedes any engine, and an `engine.quit()`
+sent anyway would be aimed at whoever else holds the port; a removal that
+silently no-ops and one that raises must each still be non-zero and name
+the residue, because cleanup cannot promise absence when the filesystem
+refuses; and a `boot` abort must still announce the staged root and slot,
+still leave nothing, and still send no quit. The stand-in checkout's
+`scripts/`, `assets/` and `data/` sentinels sit behind the symlinks the
+partial tree holds, and an unrelated outside directory beside it — both
+are asserted byte-identical after every scenario, which pins the
+"deletion stays inside the run" half without assuming anything about how
+`shutil.rmtree` treats a symlink.
+
+All four probes are manual-only, so without this companion the contract
+is only ever observed by long engine runs. Engine-free, GPU-free,
+network-free, under a second; blocking CI step alongside
+`test_location_embark_probe.py`.
+
+```bash
+python3 tools/test_probe_root_cleanup.py
+```
+
 ### `ci_probes.py` — CI probe selection + eligibility (#530, #540)
 
 Computes which probes CI should run for a given set of changed files (see
@@ -858,7 +915,7 @@ pre-execution rejections (2), port exhaustion (3) and harness errors (4) — a
 malformed, truncated, duplicate, out-of-order or unclassifiable protocol
 event, which is never reported as a probe pass.
 
-### `probe_census.py` — the probe census (#1425, #1428, #1430, #1492, #1434)
+### `probe_census.py` — the probe census (#1425, #1428, #1430, #1492, #1434, #1441)
 
 Builds, validates and updates `docs/probe_census.json`, now
 `probe-census/v3`: every registered probe exactly once, with its script, its
@@ -883,6 +940,9 @@ python3 tools/probe_census.py --summary        # every probe's current statistic
 python3 tools/probe_census.py --summary --probe KEY --json
 python3 tools/probe_census.py --summary --as-of 2026-08-21T05:00:00Z \
     --stale-after-days 7
+python3 tools/probe_census.py --promotion-candidates   # who could be promoted
+python3 tools/probe_census.py --promotion-candidates --json \
+    --as-of 2026-08-21T05:00:00Z --stale-after-days 7
 python3 tools/probe_census.py --probe KEY --set-acceptable-failures 2 \
     --justification "two known engine-side races"
 python3 tools/probe_census.py --probe KEY --set-acceptable-failures 7
@@ -991,6 +1051,68 @@ writes nothing. A harness error is deliberately NOT gated: it reads no cohort
 and contributes to none, and unmeasurable provenance is exactly what the
 attempt log retains. The CROSS-FIELD invariants remain #1493's.
 
+**CI-promotion candidates (#1441).** `--promotion-candidates` reports what a
+person needs in front of them before editing `tools/ci_probes.py`, and it edits
+nothing itself. Promotion has two halves and only one of them is measurable:
+the census can say a probe is RELIABLE, and it cannot say whether the probe
+covers enough to be worth a slot on every matching PR, whether its wall time
+fits the gate's budget, or whether the CI runner can host it at all. Those stay
+a human judgement, and so does the promotion.
+
+A probe is RELIABILITY-QUALIFIED when every measurable precondition holds: it
+is registered and LIVE-classified manual-only; its protocol is
+`probe-result/v1` (a legacy probe emits no structured result, so there is
+nothing to have measured); its stored X is integer ZERO — not "non-positive"
+and not unset, because only a zero states that the probe is expected to pass
+every run, and a null X states no expectation at all; it has a CURRENT cohort
+rather than an archived one; that cohort is FRESH against the caller's horizon;
+that cohort is COMPLETE; and it shows zero failures AND zero timeouts, which
+`probe_flake` counts separately. A probe failing any of these is reported in
+neither list — the report answers "what could a human promote?", and a row
+with nothing measured is not an answer to it.
+
+COMPLETE means three things, because a spotless-looking cohort can be missing
+runs in ways its own counts cannot show: it reaches the policy's ten runs
+pooled across every sample; every sample finished EXACTLY the runs it
+scheduled; and no harness error is charged to it. That second one is checked
+PER SAMPLE and in both directions, because pooled totals cannot answer it — a
+9-of-10 beside an 11-of-10 pools to a flawless 20 of 20 while holding a
+measurement that lost a run, and more completions than were requested is a
+count nothing could have produced. That last is what a harness error looks
+like in the record — an ATTEMPT and no sample, so ten scheduled runs of which
+one never reported are indistinguishable from nine clean ones by counting
+alone. Attribution FAILS CLOSED: an attempt is excluded only when provably
+outside the cohort — a usable commit identity that is not the cohort's, or a
+usable timestamp strictly before the cohort opened — so the `unknown`
+provenance a harness error legitimately carries counts against it. "We cannot
+tell which cohort lost a run" is not evidence that this one did not.
+
+Statistics are POOLED over the whole cohort, never taken from the newest sample
+and never averaged across samples of unequal size: summed requested and
+completed runs, summed failures and timeouts, and a rate recomputed from the
+combined numerator and denominator. Duration is reported as TWO fields, because
+they answer two questions: `observed_worst_elapsed_seconds` is the MAXIMUM
+`worst_elapsed_seconds` across the cohort, and `estimated_worst_case_seconds`
+is the record's stored estimate. A missing estimate displays as `unset` and is
+never filled in from the observation beside it.
+
+Qualified probes are then split by their MANUAL-ONLY REASONS, every one of
+which is reported (`ci_probes.MANUAL_ONLY_REASONS` records one entry per
+independent ground since #1440, and several probes carry more than one). Only
+`flaky` and `unclassified` are grounds a measurement can answer, so a probe
+lands in the ready list only when EVERY declared category is one of those, and
+a single `needs-gpu`, `slow/worldgen-heavy`, `scenario-heavy`, `targeted` or
+`base-failing` puts it in the mechanically-blocked list however clean its runs
+are — a clean GPU probe is not a disappointment, it is a probe whose obstacle
+was never flakiness. That allowlist FAILS CLOSED by construction: a category
+added later, or one this tool has never heard of, is absent from it and
+therefore blocks, and a probe with no declared reason at all is blocked rather
+than vacuously ready.
+
+Every cardinality in the report is derived from the live registry. There is no
+frozen probe total anywhere in it, so it stays correct as probes are registered
+and promoted.
+
 **A CI-eligible probe takes no measurement at all (#1431).** "A promoted probe
 receives no further census samples" is a STORAGE invariant, not only a
 reporting one: `--record` refuses a probe `tools/ci_probes.py` currently
@@ -1002,6 +1124,12 @@ is still well-formed and schema-valid. Eligibility is read LIVE from the
 registry, never from the stored row's classification, which a census not yet
 reconciled by `--seed` still holds at its old value. The retained history stays
 exactly as the promotion left it.
+
+That is the whole of what a promotion does to the census: the probe keeps its
+row in the global manifest with an updated classification, `--seed` ARCHIVES
+its current cohort into `history` rather than deleting it, its attempt log is
+untouched, it leaves `--promotion-candidates`' manual-only report, and it
+accepts no further samples.
 
 `--print` never touches the docs worktree. `--seed` is the ONLY operation that
 migrates: it creates an absent census, migrates a `probe-census/v1` or
@@ -2398,7 +2526,7 @@ tools/
 ├── test_audit.py           (unit tests)
 ├── ci_expensive_gates.py   (path selector for the worldgen/graphical/unit-assets/save-compat gates)
 ├── lua_module_budget.py    (Lua module split line-budget guard)
-├── action_outcome_coverage.py (F4 action-outcome verb instrumentation self-audit)
+├── action_outcome_coverage.py (F4 action-outcome verb instrumentation self-audit; --verify-tier1 is the CI gate)
 ├── language_report.py      (generated-language native-name report/check, #710/#1094/#1095/#1096)
 ├── run_probes.py           (opt-in aggregate behavior-probe runner)
 ├── gameplay_scenarios.py   (manual first-expedition scenarios, #925 — outside CI)
