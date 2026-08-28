@@ -6028,6 +6028,78 @@ def test_the_census_stores_references_and_never_raw_evidence() -> None:
                 "commit and sample timestamp")
 
 
+def test_a_path_no_filesystem_can_name_is_never_stored() -> None:
+    """Absolute is not usable.
+
+    An embedded NUL makes `Path.resolve()` raise `ValueError` from
+    `lstat` rather than `OSError`, so such a string sails past an
+    absoluteness test, names no location for the worktree-containment
+    check to find, and would be stored in the census as an artifact
+    reference or an invocation directory. Every recorded path this
+    module keeps goes through #1437's own `require_path`, including the
+    ones it never resolves — a command token and a manifest entry are
+    evidence too, and evidence naming nothing is not evidence.
+    """
+    nul = "/tmp/synarchy-deflake-evidence/artifacts\x00/run-001"
+    cases = (
+        ("a retained artifact", lambda d: d["diagnosis_outcome"].__setitem__(
+            "retained_artifacts", [nul])),
+        ("a batch reference's artifact root",
+         lambda d: d["diagnosis_outcome"]["baseline"].__setitem__(
+             "artifact_root", nul)),
+        ("a batch reference's invocation directory",
+         lambda d: d["diagnosis_outcome"]["baseline"].__setitem__(
+             "invocation_dir", nul)),
+        ("a measurement's own artifact root",
+         lambda d: d["measurements"][0]["result"].__setitem__(
+             "artifact_root", nul)),
+        ("the /deflake invocation's directory",
+         lambda d: d["diagnosis_outcome"]["handoff"].__setitem__(
+             "directory", nul)),
+        ("a /deflake command token",
+         lambda d: d["diagnosis_outcome"]["handoff"]["command"].__setitem__(
+             1, nul)),
+        ("a declared comparison worktree",
+         lambda d: d["diagnosis_outcome"]["baseline"].__setitem__(
+             "worktree", nul)),
+        ("a configuration entry's path",
+         lambda d: d["diagnosis_outcome"]["configuration"]["entries"].append(
+             {"path": "config/save\x00.local.yaml", "sha256": "c" * 64})),
+    )
+    for label, mutate in cases:
+        with census_file() as path:
+            before = path.read_bytes()
+            document = outcome_handoff()
+            mutate(document)
+            publisher = Publisher()
+            expect_handoff_rejected(
+                lambda d=document, p=publisher: record_outcome(
+                    d, path, publisher=p),
+                "which contains a NUL",
+                f"{label} that no filesystem can name")
+            expect_nothing_recorded(path, before, publisher, label)
+
+    # And through the shipped entry point, which is where the traceback
+    # this refuses would actually have been printed.
+    tool = str(Path(__file__).resolve().parent / "deflake_outcome.py")
+    with census_file() as path:
+        document = outcome_handoff()
+        document["diagnosis_outcome"]["retained_artifacts"] = [nul]
+        handoff = Path(path).parent / "nul.json"
+        handoff.write_text(json.dumps(document), encoding="utf-8")
+        before = Path(path).read_bytes()
+        done = subprocess.run(
+            [sys.executable, tool, "--handoff", str(handoff),
+             "--census", str(path)],
+            capture_output=True, text=True, timeout=120)
+        expect(done.returncode == do.EXIT_REJECTED
+               and "Traceback" not in done.stderr,
+               f"the CLI rejects it rather than crashing; got "
+               f"{done.returncode}\n{done.stderr[:300]}")
+        expect(Path(path).read_bytes() == before,
+               "and writes nothing on the way out")
+
+
 def test_a_removed_comparison_worktree_still_bounds_the_artifacts() -> None:
     """The paths a record names outlive the worktrees they were inside.
 

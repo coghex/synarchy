@@ -182,6 +182,15 @@ are checked beside the live registered ones, because `/deflake` removes
 them when it finishes and an artifact that sat inside one was still
 inside a worktree when it was written.
 
+Absolute is not the same as usable. Every recorded path goes through
+`deflake_diagnosis.require_path` first — including the ones this module
+stores without ever resolving, a command token and a manifest entry
+among them, because those are evidence too. An embedded NUL makes
+`Path.resolve()` raise `ValueError` from `lstat` rather than `OSError`,
+so such a string passes an absoluteness test, names no location for the
+containment check to find, and would be stored as an artifact reference
+or an invocation directory while the CLI printed a traceback.
+
 The record also keeps two inputs no census field has ever held: the
 configuration manifest both batches read, and the exact command and
 directory of the `/deflake` invocation the diagnosis consumed.
@@ -407,6 +416,41 @@ def _delegate(call, what: str):
         raise HandoffError(f"{what}: {error}") from None
 
 
+def _require_nul_free(value, what: str) -> str:
+    """A recorded string the filesystem could actually name.
+
+    Split out from `_require_usable_path` because the same rule applies
+    to strings this module STORES without ever resolving — a command
+    token, a manifest entry's path — and to the ones it resolves. Both
+    are evidence, and evidence naming nothing is not evidence.
+    """
+    return _require_usable_path(value, what)
+
+
+def _require_usable_path(value, what: str) -> str:
+    """A path string the FILESYSTEM can be asked about, via #1437's rule.
+
+    Being a non-empty absolute-looking string is not enough. An embedded
+    NUL makes `Path.resolve()` raise `ValueError` from `lstat` rather
+    than `OSError`, and `deflake_diagnosis.inside_any_worktree` resolves
+    every form it compares — so a NUL-bearing string would sail past the
+    absoluteness test, name no filesystem location for the containment
+    check to find, and be stored in the census as an artifact reference
+    or an invocation directory.
+
+    `deflake_diagnosis.require_path` is that module's own rule for
+    exactly this, applied at every point a document-supplied path is
+    first read. Calling it keeps one definition of "a path a recorded
+    measurement could have used"; its refusal is re-raised as this
+    module's own, so a caller never sees the producer's exception type
+    escaping from a consumer it did not invoke.
+    """
+    try:
+        return deflake_diagnosis.require_path(value, what)
+    except deflake_diagnosis.HandoffError as error:
+        raise HandoffError(str(error)) from None
+
+
 def require_artifact_reference(value, what: str, *, worktrees=()) -> str:
     """One retained-artifact path, stored as a REFERENCE and nothing else.
 
@@ -426,7 +470,8 @@ def require_artifact_reference(value, what: str, *, worktrees=()) -> str:
     compared over `_path_forms`, so a `..` segment or a symlinked
     spelling of the same place is the same place.
     """
-    text = _require_text(value, what, limit=4096)
+    text = _require_usable_path(
+        _require_text(value, what, limit=4096), what)
     if not Path(text).is_absolute():
         raise HandoffError(
             f"{what} must be an absolute path, got {text!r}; the census "
@@ -465,6 +510,12 @@ def require_configuration(value, what: str) -> list:
         manifest = deflake_diagnosis.require_manifest(value, what)
     except deflake_diagnosis.HandoffError as error:
         raise HandoffError(str(error)) from None
+    for position, entry in enumerate(manifest["entries"]):
+        # #1437's family rule is a shape rule — `fnmatch` and
+        # `PurePosixPath` neither stat nor reject a NUL — so a
+        # `config/x\x00.local.yaml` satisfies it and would be stored as
+        # the name of a file that was read.
+        _require_nul_free(entry["path"], f"{what} entry {position}'s `path`")
     return [{"path": entry["path"], "sha256": entry["sha256"]}
             for entry in manifest["entries"]]
 
@@ -484,8 +535,15 @@ def require_invocation_identity(section, what: str) -> dict:
         raise HandoffError(
             f"{what}.command is empty; a measurement nobody can say the "
             f"command for cannot be repeated")
-    directory = _require_text(record.get("directory"), f"{what}.directory",
-                              limit=4096)
+    for position, token in enumerate(command):
+        # The interpreter and the script are paths, and the whole list
+        # is stored verbatim as the evidence of what was run. A token no
+        # shell could have passed is not a record of a real invocation.
+        _require_nul_free(token, f"{what}.command[{position}]")
+    directory = _require_usable_path(
+        _require_text(record.get("directory"), f"{what}.directory",
+                      limit=4096),
+        f"{what}.directory")
     if not Path(directory).is_absolute():
         raise HandoffError(
             f"{what}.directory is {directory!r}, not an absolute path")
@@ -1036,8 +1094,14 @@ def declared_worktrees(document) -> list:
     for section in ("baseline", "verification"):
         record = document.get(section) if isinstance(document, dict) else None
         tree = record.get("worktree") if isinstance(record, dict) else None
-        if isinstance(tree, str) and tree:
-            trees.append(tree)
+        if tree is None:
+            continue
+        # Every collected path is RESOLVED by the containment check, so
+        # one the filesystem cannot name would raise out of it rather
+        # than be compared — and `main` would print that as a traceback
+        # instead of a rejection.
+        trees.append(_require_usable_path(
+            tree, f"the diagnosis outcome's {section} `worktree`"))
     return trees
 
 

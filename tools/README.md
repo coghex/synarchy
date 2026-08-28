@@ -2186,6 +2186,14 @@ same place. `probe_flake.check_artifact_root` enforces this at measurement
 time; restating it here is what stops a self-consistent handoff putting a
 worktree-resident tree into a durable record.
 
+Absolute is also not the same as usable, so every recorded path goes through
+`deflake_diagnosis.require_path` first — including the ones stored without ever
+being resolved, a `/deflake` command token and a configuration manifest entry
+among them, because those are evidence too. An embedded NUL makes
+`Path.resolve()` raise `ValueError` from `lstat` rather than `OSError`, so such
+a string passes an absoluteness test, names no location for the containment
+check to find, and would be stored while the CLI printed a traceback.
+
 **Durable, idempotent, and destroying nothing.** The stored record is a RESUME
 point — attempt identity, probe, timestamp, baseline commit, X, targets, the
 configuration manifest both batches read, the exact command and directory of
