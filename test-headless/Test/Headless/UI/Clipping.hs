@@ -20,12 +20,15 @@ import Engine.Scripting.Lua.API (registerLuaAPI)
 import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
 import Engine.Scripting.Lua.Thread (createLuaBackendState)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
-import Data.IORef (newIORef)
+import Data.IORef (atomicModifyIORef', newIORef, readIORef)
+import Engine.Graphics.Config (VideoConfig(..))
 import Engine.Graphics.Font.Data (GlyphInstance(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..))
 import Engine.Scene.Base (LayerId(..))
 import Engine.Scene.Types.Batch (RenderBatch(..))
 import Test.Headless.Harness (withHeadlessEngine)
+import Test.Headless.Harness.Isolation
+  (isInsideIsolatedResourceRoot, withIsolatedResourceRoot)
 import UI.Clipping
 import UI.InputOwnership (routePointer, routeScroll, PointerKind(..), InputRoute(..))
 import UI.Manager
@@ -116,6 +119,65 @@ uCoordsAtEdge pick vs =
     let vl = VS.toList vs
         edgeX = pick (map (x ∘ pos) vl)
     in nub [x (tex v) | v ← vl, x (pos v) ≡ edgeX]
+
+-- * Engine-backed fixture (#1747)
+
+-- | The canonical UI scale every engine-backed example in this suite
+--   starts from. Matches the tracked @config/video_default.yaml@'s
+--   @ui_scale@, so a machine with no local overlay sees no behavioral
+--   change at all.
+clippingBaselineUIScale ∷ Float
+clippingBaselineUIScale = 1.0
+
+-- | Pin the engine's in-memory UI scale to 'clippingBaselineUIScale',
+--   preserving every other 'VideoConfig' field exactly as engine
+--   initialization resolved it.
+--
+--   This is #1266's mechanism verbatim (see
+--   'Test.Headless.UI.ResponsiveMenus.normalizeUIScale'), not a new
+--   one: an in-memory mutation of 'videoConfigRef' — the same narrow
+--   one @engine.setUIScale@ performs
+--   ('Engine.Scripting.Lua.API.Config') — whose persistence is a
+--   separate @saveVideoConfig@ call this suite never makes.
+normalizeUIScale ∷ EngineEnv → IO ()
+normalizeUIScale env =
+    atomicModifyIORef' (videoConfigRef env) $ \c →
+        (c { vcUIScale = clippingBaselineUIScale }, ())
+
+-- | Every engine-backed example here boots its own headless engine, and
+--   'Engine.Core.Init' populates that engine's 'videoConfigRef' from the
+--   developer's @config/video.local.yaml@ when one exists, falling back
+--   to @config/video_default.yaml@ otherwise (#638/#786's local-overlay
+--   contract, which is correct and out of scope). Without this wrapper
+--   an example's effective UI scale is therefore whatever the developer
+--   last saved from the Settings menu, and the widget geometry this
+--   suite hard-codes was written against an implicit 1x: the real
+--   @scripts/ui/list.lua@ and @scripts/ui/slider.lua@ both resolve
+--   @params.uiscale or scale.get()@ and scale every dimension from it,
+--   so a persisted @ui_scale: 1.5@ flipped two examples' verdicts
+--   (#1747 — the clip height asserted as 60 measured 90, and a drag
+--   asserted at 100% of the track measured 65%).
+--
+--   So establish the canonical baseline BEFORE the example body runs,
+--   which is before any of its Lua modules or widget geometry
+--   initialize. A case that intentionally exercises a different scale
+--   is unaffected: it states it itself with an explicit
+--   @engine.setUIScale(...)@ or an explicit @uiscale@ widget param,
+--   which overrides this baseline exactly as it overrode the inherited
+--   value before (the 'Test.Headless.UI.ResponsiveMenus' convention).
+--
+--   The wrapper ALSO establishes #1357's filesystem boundary, and does
+--   so OUTSIDE 'withHeadlessEngine': engine initialization is itself a
+--   config writer — 'Engine.Core.Init.migrateLegacyConfig' can
+--   materialize an absent @config/video.local.yaml@ or
+--   @config/keybinds.local.yaml@, and notification overrides
+--   self-materialize — so isolating only after the engine came up would
+--   already be too late (see 'Test.Headless.Harness.Isolation').
+withClippingEngine ∷ (EngineEnv → IO α) → IO α
+withClippingEngine action = withIsolatedResourceRoot $
+    withHeadlessEngine $ \env → do
+        normalizeUIScale env
+        action env
 
 spec ∷ Spec
 spec = do
@@ -495,10 +557,48 @@ spec = do
                 m5 = setElementZIndex hiH 10 m4
             in routePointer PointerLeftClick (50, 50) m5 `shouldBe` RouteElement hiH "hiClick"
 
+    -- #1747: the guards that keep 'withClippingEngine' from being
+    -- quietly unwired, one per half of what it does. Nothing else in
+    -- this suite notices either — the geometry assertions below pass
+    -- whenever the developer's persisted ui_scale happens to be 1.0,
+    -- and no example inspects the working directory — so without these
+    -- an unwired wrapper silently restores the bug.
+    around withClippingEngine $
+        describe "suite fixture baseline (#1747)" $ do
+            it "runs inside the scratch resource root, never the checkout (#1357)" $ \_ → do
+                inScratch ← isInsideIsolatedResourceRoot
+                inScratch `shouldBe` True
+
+            it "pins the effective scale to 1x whatever the local video config resolved to, preserving every other video setting" $ \env → do
+                -- Simulate an arbitrary developer overlay landing in the
+                -- engine's live config, then re-run the wrapper's own
+                -- normalization: the scale must come back to the
+                -- baseline and nothing else may move. Deterministic on a
+                -- machine with no config/video.local.yaml (CI) as well as
+                -- one with any in-envelope ui_scale saved.
+                atomicModifyIORef' (videoConfigRef env) $ \c →
+                    (c { vcUIScale = 1.5 }, ())
+                skewed ← readIORef (videoConfigRef env)
+                normalizeUIScale env
+                pinned ← readIORef (videoConfigRef env)
+                vcUIScale pinned `shouldBe` clippingBaselineUIScale
+                pinned `shouldBe` skewed { vcUIScale = clippingBaselineUIScale }
+
+            it "is what a widget without its own uiscale actually observes, through the real scripts/ui/scale.lua" $ \env → do
+                ls ← newBareLuaBackend env
+                -- The exact expression scripts/ui/list.lua:157 and
+                -- scripts/ui/slider.lua:120 fall back to when no
+                -- `uiscale` param is supplied, which is the case for
+                -- every widget fixture in this suite.
+                atBaseline ← evalDebug ls
+                    "return require('scripts.ui.scale').get() == 1.0 \
+                    \and engine.getUIScale() == 1.0"
+                atBaseline `shouldBe` "true"
+
     -- #747 Lua-facing coverage: the new opt-in and its effective-clip
     -- query can be configured/queried through the real UI API without
     -- any graphical engine (mirrors ElementInputPolicy.hs's pattern).
-    around withHeadlessEngine $
+    around withClippingEngine $
         describe "Lua-facing UI API for clipping (#747)" $ do
             it "UI.setClipChildren / UI.isClipChildren round-trip through the real Lua UI API" $ \env → do
                 ls ← newBareLuaBackend env
@@ -552,7 +652,7 @@ spec = do
     -- view (simulated here by shrinking the viewport below its full
     -- slot stack, the exact "resize edge case" #747 is a safety net
     -- for) cannot be hit — while a still-visible row keeps working.
-    around withHeadlessEngine $
+    around withClippingEngine $
         describe "scripts/ui/list.lua clip adoption (#747)" $
             it "exposes the list's effective clip and a row clipped out of view cannot be hit" $ \env → do
                 ls ← newBareLuaBackend env
@@ -594,7 +694,7 @@ spec = do
     -- over whatever sat behind a "hidden" list. Proves the viewport now
     -- follows the list's own visibility, so a hidden list falls through
     -- to an underlying control, and showing it again restores its rows.
-    around withHeadlessEngine $
+    around withClippingEngine $
         describe "scripts/ui/list.lua setVisible also hides its clipping viewport (#857)" $
             it "a hidden list stops intercepting hits; showing it again restores its rows" $ \env → do
                 ls ← newBareLuaBackend env
@@ -627,7 +727,7 @@ spec = do
     -- x/y were framebuffer-absolute, which stops being true once
     -- parented — both now query the live (parent-aware) element
     -- position instead.
-    around withHeadlessEngine $
+    around withClippingEngine $
         describe "widget library parent support (#747)" $ do
             it "dropdown/slider/randbox/sprite/panel all become real children of a clipping container" $ \env → do
                 ls ← newBareLuaBackend env
