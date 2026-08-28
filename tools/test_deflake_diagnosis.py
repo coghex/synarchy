@@ -4618,6 +4618,7 @@ def spotless_result(**kwargs) -> dict:
     return result_document(**kwargs)
 
 
+
 def missing_check_result(cid: str = "gamma") -> dict:
     """Ten PASSING runs, one declared check never emitted in any of them.
 
@@ -4629,6 +4630,19 @@ def missing_check_result(cid: str = "gamma") -> dict:
     ids = [c for c, _label in CHECKS]
     run = {name: (MISSING if name == cid else PASS) for name in ids}
     return result_document(runs=[dict(run) for _ in range(dd.RUN_COUNT)])
+
+
+def clean_timeout_result() -> dict:
+    """A run that timed out AFTER emitting every declared check.
+
+    Honest aggregates, spotless per-check tallies, and one run whose
+    OUTCOME is TIMEOUT. Only the run list says anything went wrong, so
+    it is what isolates that clause from the tally beside it.
+    """
+    ids = [c for c, _label in CHECKS]
+    runs = [{name: PASS for name in ids} for _ in range(dd.RUN_COUNT - 1)]
+    return result_document(
+        runs=runs + [{**{name: PASS for name in ids}, "__timeout__": True}])
 
 
 def timed_out_result() -> dict:
@@ -4694,6 +4708,9 @@ def forged_aggregate_result(shape: str = "silent-timeout") -> dict:
       and a non-zero timeout count. `probe_flake` counts a timeout as a
       failure too, so a batch claiming timeouts and no failures is one
       no harness wrote.
+    * `phantom-rate` — honest counts under a rate neither of them
+      implies. `failure_rate` is the third account, and it is the one
+      every summary and every threshold comparison downstream reads.
     """
     ids = [c for c, _label in CHECKS]
     timing_out = shape == "silent-timeout"
@@ -4711,8 +4728,42 @@ def forged_aggregate_result(shape: str = "silent-timeout") -> dict:
         document["failure_rate"] = 0.3
     elif shape == "phantom-timeouts":
         document["timeout_count"] = 2
+    elif shape == "phantom-rate":
+        document["failure_rate"] = 0.4
     else:
         raise AssertionError(f"unknown forged shape {shape!r}")
+    return document
+
+
+def forged_verification_counts() -> dict:
+    """An all-PASS verification batch reporting two failures.
+
+    The other half of the reviewer's 4 -> 2 shape: paired with a
+    `phantom-failures` baseline it reads as a measured improvement while
+    neither batch observed anything at all.
+    """
+    document = verification_result(artifact_root=VERIFY_ARTIFACTS,
+                                   runs=failing_runs(2, abort=False))
+    document["failure_count"] = 2
+    document["failure_rate"] = 0.2
+    for run in document["runs"]:
+        run["outcome"] = probe_flake.RUN_PASS
+    for tally in document["check_counts"].values():
+        tally[FAIL] = 0
+        tally[PASS] = dd.RUN_COUNT
+    for run in document["runs"]:
+        for cid in run["checks"]:
+            run["checks"][cid] = PASS
+    document["retained_artifacts"] = []
+    for run in document["runs"]:
+        run["artifact_dir"] = None
+    return document
+
+
+def restamped(document: dict, stamp: str = "2026-08-22T09:30:00Z") -> dict:
+    """The same measurement, claiming another instant."""
+    document = copy.deepcopy(document)
+    document["timestamp_utc"] = stamp
     return document
 
 
@@ -4991,9 +5042,9 @@ def test_untrustworthy_evidence_is_never_cannot_reproduce() -> None:
     cases = (
         ("a failing run", probe_flake.EXIT_OK,
          result_document(runs=failing_runs(1, abort=False)),
-         "observed 1 failing run"),
-        ("a timed-out run", probe_flake.EXIT_OK, timed_out_result(),
-         "timed-out run"),
+         f"run 1 is {probe_flake.RUN_FAIL}"),
+        ("a timed-out run", probe_flake.EXIT_OK, clean_timeout_result(),
+         f"run {dd.RUN_COUNT} is {probe_flake.RUN_TIMEOUT}"),
         ("an incomplete run set", probe_flake.EXIT_OK, short_result(),
          f"completed {dd.RUN_COUNT - 1} of {dd.RUN_COUNT} requested runs"),
         ("a check that never arrived", probe_flake.EXIT_OK,
@@ -5002,15 +5053,6 @@ def test_untrustworthy_evidence_is_never_cannot_reproduce() -> None:
          result_document(harness_error=True), "exited 4"),
         ("a retained error run beside an all-PASS list", probe_flake.EXIT_OK,
          forged_ok_result(error_run=True), "kept an error run"),
-        ("a run list its own aggregates contradict", probe_flake.EXIT_OK,
-         forged_aggregate_result(),
-         f"run {dd.RUN_COUNT} is {probe_flake.RUN_TIMEOUT}"),
-        ("a failure aggregate its own run list contradicts",
-         probe_flake.EXIT_OK, forged_aggregate_result("phantom-failures"),
-         "observed 3 failing run(s)"),
-        ("a timeout aggregate its own run list contradicts",
-         probe_flake.EXIT_OK, forged_aggregate_result("phantom-timeouts"),
-         "observed 2 timed-out run(s)"),
         ("a reported harness error beside an all-PASS list",
          probe_flake.EXIT_OK,
          forged_ok_result(error="the event stream could not be trusted"),
@@ -5031,6 +5073,138 @@ def test_untrustworthy_evidence_is_never_cannot_reproduce() -> None:
                     h, path, publisher=p),
                 fragment, f"{label} classified as cannot-reproduce")
             expect_nothing_recorded(path, before, publisher, label)
+
+
+def test_an_inconsistent_aggregate_reaches_no_stable_outcome() -> None:
+    """A document that contradicts itself cannot support ANY conclusion.
+
+    Nothing upstream establishes it: `probe_census.validate_result` binds
+    `check_counts` to `runs` and refuses a PASS run carrying a FAIL
+    check, but says nothing about `failure_count`, `timeout_count` or
+    `failure_rate`. So an all-PASS run list under a forged failure count
+    is schema-valid — and it would otherwise read as a REPRODUCED
+    failure, which is the evidence `no-confident-fix` and
+    `partial-improvement` rest on, not only the evidence
+    `cannot-reproduce` denies.
+    """
+    diagnosis, _record = produced(dd.ROUTE_PARTIAL_IMPROVEMENT)
+    clean = diagnosis["baseline"]["result"]
+
+    def entry(role, result):
+        return {"role": role, "exit_code": probe_flake.EXIT_OK,
+                "result": result}
+
+    cases = []
+    for shape, fragment in (
+            ("silent-timeout", "reports 0 failing run(s) while its run list "
+                               "shows 1"),
+            ("phantom-failures", "reports 3 failing run(s) while its run "
+                                 "list shows 0"),
+            ("phantom-timeouts", "reports 2 timed-out run(s) while its run "
+                                 "list shows 0"),
+            ("phantom-rate", "not the 0.0 its own counts imply")):
+        forged = forged_aggregate_result(shape)
+        cases.append((f"a {shape} baseline recorded as cannot-reproduce",
+                      outcome_handoff(measurements=[
+                          entry(do.ROLE_BASELINE, forged)]), fragment))
+        cases.append((f"a {shape} baseline recorded as no-confident-fix",
+                      outcome_handoff(dd.ROUTE_NO_CONFIDENT_FIX,
+                                      measurements=[
+                                          entry(do.ROLE_BASELINE, forged)]),
+                      fragment))
+    # The reviewer's exact partial-improvement shape: an all-PASS
+    # baseline and verification whose forged counts read as 4 -> 2.
+    improving = outcome_handoff(dd.ROUTE_PARTIAL_IMPROVEMENT, measurements=[
+        entry(do.ROLE_BASELINE, forged_aggregate_result("phantom-failures")),
+        entry(do.ROLE_VERIFICATION, forged_verification_counts())])
+    cases.append(("a forged 4 -> 2 improvement over two all-PASS batches",
+                  improving, "while its run list shows 0"))
+
+    for label, document, fragment in cases:
+        with census_file() as path:
+            before = path.read_bytes()
+            publisher = Publisher()
+            expect_non_success(
+                lambda d=document, p=publisher: record_outcome(
+                    d, path, publisher=p),
+                fragment, label)
+            expect_nothing_recorded(path, before, publisher, label)
+
+
+def test_a_measurement_of_another_state_is_not_this_attempts_evidence()\
+        -> None:
+    """Bound to the diagnosis outcome's OWN references, not just the probe.
+
+    A well-formed batch of the same probe taken at another commit or
+    another instant would otherwise be accepted under a diagnosis that
+    judged a different one, and the census would store two conflicting
+    accounts of one attempt.
+    """
+    other_commit = "c" * 40
+    cases = (
+        ("a baseline measured at another commit",
+         outcome_handoff(measurements=[
+             {"role": do.ROLE_BASELINE, "exit_code": probe_flake.EXIT_OK,
+              "result": spotless_result(commit=other_commit)}]),
+         "is not the measurement that diagnosis judged"),
+        ("a baseline measured at another instant",
+         outcome_handoff(measurements=[
+             {"role": do.ROLE_BASELINE, "exit_code": probe_flake.EXIT_OK,
+              "result": restamped(spotless_result())}]),
+         "is not the measurement that diagnosis judged"),
+        ("a no-confident-fix carrying a verification",
+         outcome_handoff(dd.ROUTE_NO_CONFIDENT_FIX, measurements=[
+             {"role": do.ROLE_BASELINE, "exit_code": probe_flake.EXIT_OK,
+              "result": produced(dd.ROUTE_NO_CONFIDENT_FIX)[0]["baseline"][
+                  "result"]},
+             {"role": do.ROLE_VERIFICATION,
+              "exit_code": probe_flake.EXIT_OK,
+              "result": verification_result(
+                  artifact_root=VERIFY_ARTIFACTS)}]),
+         "runs no verification batch"),
+    )
+    for label, document, fragment in cases:
+        with census_file() as path:
+            before = path.read_bytes()
+            publisher = Publisher()
+            expect_handoff_rejected(
+                lambda d=document, p=publisher: record_outcome(
+                    d, path, publisher=p),
+                fragment, label)
+            expect_nothing_recorded(path, before, publisher, label)
+
+    # A producer record that nulled a reference for a batch its own
+    # route DID run. The route-level policy above cannot see it, so the
+    # binding is what refuses a measurement of work no reference names.
+    with census_file() as path:
+        before = path.read_bytes()
+        _diagnosis, record = produced(dd.ROUTE_CANNOT_REPRODUCE)
+        record["baseline"] = None
+        document = outcome_handoff(diagnosis_outcome=record)
+        publisher = Publisher()
+        expect_handoff_rejected(
+            lambda: record_outcome(document, path, publisher=publisher),
+            "records no baseline batch",
+            "a producer record with no reference for the batch it judged")
+        expect_nothing_recorded(path, before, publisher,
+                                "a nulled batch reference")
+
+    # The producer's reference and the `baseline_sha` it stores are two
+    # independent statements, so a record whose halves disagree is
+    # refused by whichever of them the measurement matches.
+    with census_file() as path:
+        before = path.read_bytes()
+        _diagnosis, record = produced(dd.ROUTE_CANNOT_REPRODUCE)
+        record["baseline_sha"] = other_commit
+        document = outcome_handoff(diagnosis_outcome=record)
+        publisher = Publisher()
+        expect_handoff_rejected(
+            lambda: record_outcome(document, path, publisher=publisher),
+            "not at the diagnosis outcome's baseline commit",
+            "a producer record whose baseline_sha contradicts its own "
+            "reference")
+        expect_nothing_recorded(path, before, publisher,
+                                "a contradictory baseline_sha")
 
 
 def test_a_reproduced_failure_with_no_bounded_repair_is_no_confident_fix()\
@@ -5241,6 +5415,54 @@ def test_no_stable_outcome_reaches_the_pull_request_publisher() -> None:
         pass
     else:
         FAILURES.append("the default publisher accepted a call")
+
+
+def test_a_retry_under_a_different_clock_is_still_a_resume() -> None:
+    """The one field a rebuilt record cannot derive from the handoff.
+
+    Every other field comes from the handoff, but `timestamp_utc` comes
+    from a clock — and the command line reads it afresh on every
+    invocation. Idempotency is the WHOLE record, so a retry that stamped
+    itself anew would present one attempt identity carrying two
+    different records and be refused as a conflict instead of
+    recognized as the resume it is.
+    """
+    with census_file() as path:
+        first, _publisher = record_outcome(outcome_handoff(), path,
+                                           now=OUTCOME_NOW)
+        after_first = path.read_bytes()
+        later = "2026-08-29T04:05:06Z"
+        expect(later != OUTCOME_NOW, "the retry must read a different clock")
+        second, publisher = record_outcome(outcome_handoff(), path, now=later)
+        expect(second.resumed and second.record == first.record,
+               f"a retry under a later clock is a resume of the stored "
+               f"record; got resumed={second.resumed}, stamp="
+               f"{second.record['timestamp_utc']}")
+        expect(second.record["timestamp_utc"] == OUTCOME_NOW,
+               "and it keeps the instant the attempt was first stamped with")
+        expect(path.read_bytes() == after_first and
+               len(stored_outcomes(path)) == 1,
+               "so the census is untouched and holds one outcome")
+        expect(publisher.calls == [], "and nothing was published")
+
+    # The shipped entry point, which reads the real clock twice.
+    with census_file() as path:
+        tool = str(Path(__file__).resolve().parent / "deflake_outcome.py")
+        document = Path(path).parent / "retry.json"
+        document.write_text(json.dumps(outcome_handoff()), encoding="utf-8")
+        codes = []
+        for _attempt in range(2):
+            done = subprocess.run(
+                [sys.executable, tool, "--handoff", str(document),
+                 "--census", str(path)],
+                capture_output=True, text=True, timeout=120)
+            codes.append(done.returncode)
+        expect(codes == [do.EXIT_OK, do.EXIT_OK],
+               f"running the command twice over one handoff succeeds both "
+               f"times; got {codes}")
+        expect(len(stored_outcomes(path)) == 1,
+               f"and appends exactly one outcome; got "
+               f"{len(stored_outcomes(path))}")
 
 
 def test_resuming_a_recorded_attempt_appends_nothing() -> None:

@@ -89,6 +89,32 @@ opposite conclusions that a careless reading collapses into one.
 a harness-error run OUT of `runs`. A classifier that inspected only
 `runs` would see an all-PASS list for a measurement nobody can trust.
 
+A document that contradicts ITSELF is refused the same way, and before
+any route is classified rather than only before `cannot-reproduce`.
+`probe_census.validate_result` binds `check_counts` to `runs` and
+refuses a PASS run carrying a FAIL check, but nothing there binds
+`failure_count`, `timeout_count` or `failure_rate` to the run list — so
+an all-PASS batch under a forged failure count is schema-valid, and it
+would read as a REPRODUCED failure, which is the evidence
+`no-confident-fix` and `partial-improvement` rest on. The three totals
+are therefore reconciled against the run list using
+`probe_flake.Measurement`'s own arithmetic, and a mismatch is an
+untrustworthy measurement.
+
+The measurement is the one that diagnosis judged
+------------------------------------------------
+Binding a declared measurement to its PROBE alone would admit any
+well-formed batch of that probe: one taken at another commit, or another
+instant, supplied under a diagnosis that judged a different one, leaving
+the census holding two conflicting accounts of a single attempt. So each
+declared measurement is held to the producer record's own reference for
+its role — commit and instant — and the pre-fix roles are held again to
+the `baseline_sha` the census row is about to record. Two independent
+statements, because a producer record whose reference and `baseline_sha`
+disagreed would satisfy either one alone. A role the producer ran no
+batch for carries a `null` reference, and a measurement supplied for it
+describes work the invocation did not do.
+
 The run count is the document's, not a literal
 ----------------------------------------------
 Completeness is `completed_runs == requested_runs` and the ceiling is X
@@ -123,10 +149,14 @@ know what it established.
 
 Recording is idempotent on the attempt identity: resuming an attempt the
 census already holds installs the identical bytes and appends nothing.
-A write that refuses leaves the census file byte-identical, records no
-outcome, releases the lock and returns an actionable non-success — the
-attempt stays incomplete and resumable, and never falls through to a
-publisher.
+Idempotency is the WHOLE record, and exactly one of its fields is not
+derived from the handoff — `timestamp_utc` comes from a clock, which
+reads differently on a retry — so a retry reuses the instant the stored
+attempt was first stamped with instead of restamping itself into a
+conflict. A write that refuses leaves the census file byte-identical,
+records no outcome, releases the lock and returns an actionable
+non-success — the attempt stays incomplete and resumable, and never
+falls through to a publisher.
 
 Raw stdout, protocol streams and engine logs stay in the harness's
 artifact tree outside every worktree; only their path references are
@@ -184,6 +214,10 @@ ROLE_HANDOFF = "handoff"
 ROLE_BASELINE = "baseline"
 ROLE_VERIFICATION = "verification"
 ROLES = (ROLE_HANDOFF, ROLE_BASELINE, ROLE_VERIFICATION)
+# The roles measured BEFORE any repair, and therefore at the diagnosis
+# outcome's own baseline commit. The verification is deliberately not
+# one: #1437 requires it to be measured at the REPAIR commit.
+PRE_FIX_ROLES = (ROLE_HANDOFF, ROLE_BASELINE)
 
 # Which #1437 route this module answers, and how. A route absent from
 # this table is one this workflow does not own.
@@ -224,7 +258,12 @@ ROUTE_ROLES = {
     deflake_diagnosis.ROUTE_NO_CONFIDENT_FIX: {
         "designated": ROLE_BASELINE,
         "required": (ROLE_BASELINE,),
-        "forbidden": (),
+        # #1437 refuses a `no-confident-fix` diagnosis that carries a
+        # verification section at all — that route opens no pull request
+        # and changes no probe, so a verification means a repair was
+        # attempted and the route is mislabelled. Forbidding it here
+        # keeps the two ends of the handoff describing one invocation.
+        "forbidden": (ROLE_VERIFICATION,),
     },
     deflake_diagnosis.ROUTE_PARTIAL_IMPROVEMENT: {
         "designated": ROLE_BASELINE,
@@ -417,29 +456,70 @@ class Measurement:
                 f"the {self.role} measurement completed "
                 f"{self.completed_runs} of {self.requested_runs} requested "
                 f"runs")
+        problems += self.aggregate_problems()
+        return problems
+
+    def aggregate_problems(self) -> list[str]:
+        """Every way this document's totals contradict its own run list.
+
+        A document that disagrees with itself is one nobody can believe,
+        so this belongs to trustworthiness rather than to any one
+        route's predicate: an inconsistent aggregate must be refused
+        before ANY stable outcome is reached, not only before
+        `cannot-reproduce`.
+
+        Nothing upstream establishes it. `probe_census.validate_result`'s
+        cross-field rules bind `check_counts` to `runs` and refuse a
+        PASS run carrying a FAIL check, but they say nothing about
+        `failure_count`, `timeout_count` or `failure_rate` — so an
+        all-PASS run list under a forged failure count is schema-valid,
+        passes the census's own invariants, and would otherwise read as
+        a reproduced failure.
+
+        The arithmetic is `probe_flake.Measurement`'s own, not a second
+        opinion: a failure is a FAIL or a TIMEOUT run, a timeout is a
+        TIMEOUT run, and the rate is failures over REQUESTED runs
+        rounded the way the producer rounds it.
+        """
+        problems: list[str] = []
+        runs = self.result["runs"]
+        failures = sum(1 for run in runs if run["outcome"] in
+                       (probe_flake.RUN_FAIL, probe_flake.RUN_TIMEOUT))
+        timeouts = sum(1 for run in runs
+                       if run["outcome"] == probe_flake.RUN_TIMEOUT)
+        if self.failure_count != failures:
+            problems.append(
+                f"the {self.role} measurement reports "
+                f"{self.failure_count} failing run(s) while its run list "
+                f"shows {failures}")
+        if self.timeout_count != timeouts:
+            problems.append(
+                f"the {self.role} measurement reports "
+                f"{self.timeout_count} timed-out run(s) while its run list "
+                f"shows {timeouts}")
+        rate = self.result["failure_rate"]
+        expected = (round(self.failure_count / self.requested_runs, 6)
+                    if self.requested_runs else None)
+        if rate != expected:
+            problems.append(
+                f"the {self.role} measurement reports the failure rate "
+                f"{rate!r}, not the {expected!r} its own counts imply")
         return problems
 
     def defect_problems(self) -> list[str]:
         """Everything a TRUSTWORTHY measurement observed going wrong.
 
         Its counterpart above answers "can this batch be believed"; this
-        answers "did it show anything". Every clause is stated
-        separately even where two overlap, because a run outcome, an
-        aggregate and a per-check tally are three INDEPENDENT accounts
-        of one batch — nothing in the declared schema binds
-        `failure_count` or `timeout_count` to the run list — and
-        `cannot-reproduce` is the one conclusion that must not be
-        reachable by satisfying only some of them.
+        answers "did it show anything", and it asks the RUN LIST and the
+        PER-CHECK TALLIES rather than the aggregates. Those two are
+        genuinely independent — a run can time out after emitting every
+        declared check, and a check can go MISSING across a batch whose
+        every run PASSED — while the totals are the same fact counted,
+        and `aggregate_problems` has already bound them to the run list.
+        Reading a total here would be asking the derived value instead
+        of its source, and would leave a clause no fixture can isolate.
         """
         problems: list[str] = []
-        if self.failure_count:
-            problems.append(
-                f"the {self.role} measurement observed "
-                f"{self.failure_count} failing run(s)")
-        if self.timeout_count:
-            problems.append(
-                f"the {self.role} measurement observed "
-                f"{self.timeout_count} timed-out run(s)")
         for run in self.result["runs"]:
             if run["outcome"] != probe_flake.RUN_PASS:
                 problems.append(
@@ -626,6 +706,18 @@ def require_diagnosis_outcome(document) -> dict:
     for path in artifacts:
         require_artifact_reference(
             path, "a retained artifact of the diagnosis outcome")
+    # WHICH measurement #1437 judged for each batch it ran. A route that
+    # ran no such batch states `null` rather than dropping the key, so an
+    # absent reference is a fact about the invocation and not a gap.
+    references = {
+        ROLE_HANDOFF: _batch_reference(
+            outcome.get("handoff"), "the diagnosis outcome's `handoff`"),
+        ROLE_BASELINE: _batch_reference(
+            outcome.get("baseline"), "the diagnosis outcome's `baseline`"),
+        ROLE_VERIFICATION: _batch_reference(
+            outcome.get("verification"),
+            "the diagnosis outcome's `verification`"),
+    }
     return {
         "route": route,
         "probe": probe,
@@ -633,7 +725,28 @@ def require_diagnosis_outcome(document) -> dict:
         "acceptable_failures": acceptable,
         "baseline_sha": baseline_sha,
         "retained_artifacts": artifacts,
+        "references": references,
     }
+
+
+def _batch_reference(section, what: str):
+    """The identity #1437 recorded for one batch, or None if it ran none.
+
+    #1437's outcome document carries a REFERENCE per batch rather than
+    the document itself, so this is the pair that says WHICH measurement
+    it judged. A malformed reference is a malformed producer record.
+    """
+    if section is None:
+        return None
+    reference = _require_object(section, what)
+    commit = _delegate(
+        lambda: probe_census.require_commit_identity(
+            reference.get("commit_sha"), f"{what}'s `commit_sha`"),
+        f"{what}'s commit")
+    stamp = reference.get("timestamp_utc")
+    _delegate(lambda: probe_census.parse_timestamp(
+        stamp, f"{what}'s `timestamp_utc`"), f"{what}'s timestamp")
+    return {"commit_sha": commit, "timestamp_utc": stamp}
 
 
 def require_measurement(entry, *, probe: str, seen: set) -> Measurement:
@@ -688,6 +801,53 @@ def require_measurement(entry, *, probe: str, seen: set) -> Measurement:
     return Measurement(role, exit_code, result)
 
 
+def _bind_to_producer(measurement: Measurement, diagnosis: dict) -> None:
+    """The declared measurement IS the one #1437 judged, and no other.
+
+    Binding on the probe alone would admit any well-formed batch of the
+    same probe: a result taken at another commit, or another instant,
+    could be supplied under a diagnosis that judged a different one, and
+    the census would then store two conflicting accounts of one attempt.
+    So each measurement is held to the producer record's own reference
+    for its role, and the pre-fix roles are additionally held to the
+    `baseline_sha` the census row is about to record — two independent
+    statements, because a producer record whose reference and
+    `baseline_sha` disagreed would satisfy either one alone.
+
+    A role the producer ran no batch for has a `null` reference, and a
+    measurement supplied for it describes work the invocation did not
+    do.
+    """
+    if measurement.result is None:
+        # Exits 2 and 3 wrote no document, so there is nothing to bind.
+        # `trustworthiness_problems` is what refuses them, as an
+        # operational error rather than a malformed handoff.
+        return
+    reference = diagnosis["references"].get(measurement.role)
+    if reference is None:
+        raise HandoffError(
+            f"the diagnosis outcome records no {measurement.role} batch, so "
+            f"a {measurement.role} measurement here describes work the "
+            f"invocation did not do")
+    result = measurement.result
+    for field in ("commit_sha", "timestamp_utc"):
+        if result[field] != reference[field]:
+            raise HandoffError(
+                f"the {measurement.role} measurement reports {field} "
+                f"{result[field]!r} while the diagnosis outcome's "
+                f"{measurement.role} reference names "
+                f"{reference[field]!r}, so it is not the measurement that "
+                f"diagnosis judged")
+    if measurement.role in PRE_FIX_ROLES:
+        if result["commit_sha"] != diagnosis["baseline_sha"]:
+            raise HandoffError(
+                f"the {measurement.role} measurement was taken at "
+                f"{result['commit_sha']!r}, not at the diagnosis outcome's "
+                f"baseline commit {diagnosis['baseline_sha']!r}; a pre-fix "
+                f"measurement of another commit is not this attempt's "
+                f"evidence")
+
+
 def require_handoff(document) -> Handoff:
     """One `deflake-outcome-handoff/v1`, or the refusal that names why."""
     envelope = _require_object(document, "the outcome handoff")
@@ -717,12 +877,18 @@ def require_handoff(document) -> Handoff:
             raise HandoffError(
                 f"the {diagnosis['route']!r} route rests on its {role} "
                 f"measurement, which the handoff does not declare")
+    # The route's own policy first, then the identity of what it was
+    # given: "this route runs no verification batch" is the more
+    # actionable sentence, and it is true of the ROUTE whatever the
+    # producer record happens to reference.
     for role in roles["forbidden"]:
         if role in measurements:
             raise HandoffError(
                 f"the {diagnosis['route']!r} route runs no {role} batch, so "
                 f"a {role} measurement here describes work the route did not "
                 f"do")
+    for measurement in measurements.values():
+        _bind_to_producer(measurement, diagnosis)
     unmet = envelope.get("unmet_condition")
     if diagnosis["route"] == deflake_diagnosis.ROUTE_PARTIAL_IMPROVEMENT:
         unmet = _require_text(
@@ -939,6 +1105,40 @@ class Recorded:
                 "record": self.record}
 
 
+def recorded_timestamp(census_path: Path, probe: str, attempt: str):
+    """The instant an already-recorded attempt was stamped with, or None.
+
+    Every field of an outcome record is derived from the handoff except
+    one: `timestamp_utc` comes from a clock, and a clock reads
+    differently on a retry. Idempotency is the WHOLE record, so a resume
+    that stamped itself afresh would present the same attempt identity
+    carrying different evidence and be refused as a conflict instead of
+    recognized as the resume it is. Reading the stored instant first is
+    what makes "resuming an already-recorded attempt appends nothing"
+    true of the command line and not only of the library.
+
+    Read WITHOUT the census lock, deliberately. A concurrent writer that
+    inserts this attempt between the read and the transaction leaves the
+    conflict check in `probe_census.ingest_outcome` to refuse loudly —
+    which is the safe direction, since the alternative to a loud refusal
+    is a duplicate. A missing, unreadable or malformed census answers
+    None and lets the transaction report it properly.
+    """
+    path = Path(census_path)
+    if not path.exists():
+        return None
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    row = probe_census.find_entry(document, probe)
+    stored = probe_census.find_outcome((row or {}).get("census"), attempt)
+    if not isinstance(stored, dict):
+        return None
+    instant = stored.get("timestamp_utc")
+    return instant if isinstance(instant, str) else None
+
+
 def record(handoff: Handoff, *, census_path: Path, now: str,
            publisher=forbidden_publisher) -> Recorded:
     """Append one stable outcome to the probe's census row.
@@ -957,8 +1157,11 @@ def record(handoff: Handoff, *, census_path: Path, now: str,
     parses and re-appending it would be the duplicate this whole path
     exists to prevent.
     """
-    document = outcome_record(handoff, now=now)
     path = Path(census_path)
+    # A retry rebuilds the record the census already holds, stamp
+    # included, so `ingest_outcome` sees a replay rather than a conflict.
+    stored = recorded_timestamp(path, handoff.probe, handoff.attempt)
+    document = outcome_record(handoff, now=stored if stored else now)
     durable = True
     resumed = False
     try:

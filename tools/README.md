@@ -2089,11 +2089,31 @@ exists and parses establishes nothing, and every classification reads the
 document's own `status`, `error_run`, `completed_runs` and per-check tallies.
 `error_run` gets its own clause because `probe_flake` keeps a harness-error
 run OUT of `runs`, so an all-PASS run list is not on its own evidence of a
-trustworthy batch. Nothing in the declared schema binds `failure_count` or
-`timeout_count` to the run list either, so the aggregate, the per-run outcome
-and the per-check tally are checked as three INDEPENDENT accounts of one
-batch: `cannot-reproduce` is the one conclusion that must not be reachable by
-satisfying only some of them.
+trustworthy batch.
+
+A document that contradicts ITSELF is refused before any route is classified,
+not only before `cannot-reproduce`. `probe_census.validate_result` binds
+`check_counts` to `runs` and refuses a PASS run carrying a FAIL check, but
+nothing binds `failure_count`, `timeout_count` or `failure_rate` to the run
+list — so an all-PASS batch under a forged failure count is schema-valid and
+would read as a REPRODUCED failure, which is what `no-confident-fix` and
+`partial-improvement` rest on. The three totals are reconciled against the run
+list using `probe_flake.Measurement`'s own arithmetic; the remaining defect
+predicate then reads the RUN LIST and the PER-CHECK TALLIES, which are
+genuinely independent of each other (a run can time out after emitting every
+check, and a check can go MISSING across an all-PASS batch) rather than reading
+a total the reconciliation has already bound.
+
+**The measurement is the one that diagnosis judged.** Binding on the probe
+alone would admit any well-formed batch of that probe — one taken at another
+commit or another instant, supplied under a diagnosis that judged a different
+one, leaving the census holding two conflicting accounts of a single attempt.
+Each declared measurement is held to the producer record's own reference for
+its role (commit and instant), and the pre-fix roles again to the `baseline_sha`
+the census row is about to record: two independent statements, since a producer
+record whose reference and `baseline_sha` disagreed would satisfy either alone.
+A role the producer ran no batch for carries a `null` reference, and a
+measurement supplied for it describes work the invocation did not do.
 
 **The run count is the measurement's own.** Completeness is `completed_runs ==
 requested_runs` and the ceiling is X out of that measurement's own requested
@@ -2123,7 +2143,12 @@ counts, rate, RTS capabilities, per-run outcomes, per-check PASS/FAIL/MISSING
 tallies), the retained artifact REFERENCES, the summary, and the
 route-specific evidence. Recording is idempotent on the attempt identity: a
 resume installs the identical bytes and appends nothing, while the same
-identity carrying different evidence is refused rather than appended past. A
+identity carrying different evidence is refused rather than appended past.
+Idempotency is the WHOLE record, and exactly one field is not derived from the
+handoff — `timestamp_utc` comes from a clock, which reads differently on a
+retry — so a retry reuses the instant the stored attempt was first stamped
+with instead of restamping itself into a conflict; running the command twice
+over one handoff therefore succeeds twice and appends once. A
 write that refuses leaves the census byte-identical, records no outcome and
 returns an actionable non-success without reaching a publisher. The one
 failure that is NOT a refusal is `CensusDurabilityUnconfirmed`, raised after
