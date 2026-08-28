@@ -51,18 +51,19 @@ A lower failure rate is not success
 requires a baseline and a verification that are both complete and
 trustworthy, were taken at the SAME run count and the SAME RTS
 capability count, and whose verification failure count is strictly lower
-than the baseline's while STILL failing #1437's acceptance gate. That
-gate is CALLED rather than paraphrased: over X, or any violation of
-`deflake_diagnosis.missing_problems`, whose scoped rule has four clauses
-of which only one is about targets — a PASSING run that omits a
-NON-target check fails it too, and a consumer that checked only the
-targets would call such a verification passing while
-`deflake_diagnosis.evaluate` had just routed it here. Without the
-same-conditions clause the comparison is not a comparison; without the
-still-failing clause the route contradicts its own evidence. A
-verification that merely became INVALID improved nothing measurable, so
-it is an operational error here rather than a partial improvement
-claimed over evidence that cannot support it.
+than the baseline's while STILL failing #1437's acceptance gate for the
+reason #1437 named. `verification-over-tolerance` is re-derived from the
+verification's own failure count, and `verification-missing-rule` by
+CALLING `deflake_diagnosis.missing_problems` — whose scoped rule has
+four clauses of which only one is about targets, so a PASSING run that
+omits a NON-target check fails it too and a paraphrase of "no target
+went MISSING" would call such a verification passing. The other two
+reasons are the producer's to make. Without the same-conditions clause
+the comparison is not a comparison; without the still-failing clause the
+route contradicts its own evidence. A verification that merely became
+INVALID improved nothing measurable, so it is an operational error here
+rather than a partial improvement claimed over evidence that cannot
+support it.
 
 Operational errors are not "cannot reproduce"
 ---------------------------------------------
@@ -297,7 +298,6 @@ EXIT_CONTRACT = {
 
 MAX_IDENTITY = 128
 MAX_SUMMARY = 8000
-MAX_CONDITION = 4000
 
 EXIT_OK = 0
 EXIT_REJECTED = 2
@@ -607,17 +607,20 @@ class Measurement:
 class Handoff:
     """One accepted outcome handoff: one probe, one de-flake attempt."""
 
-    def __init__(self, *, attempt: str, summary: str, unmet_condition,
-                 diagnosis, measurements: dict):
+    def __init__(self, *, attempt: str, summary: str, diagnosis,
+                 measurements: dict):
         self.attempt = attempt
         self.summary = summary
-        self.unmet_condition = unmet_condition
         self.diagnosis = diagnosis
         self.measurements = measurements
 
     @property
     def route(self) -> str:
         return self.diagnosis["route"]
+
+    @property
+    def reason(self) -> str:
+        return self.diagnosis["reason"]
 
     @property
     def probe(self) -> str:
@@ -702,6 +705,12 @@ def require_diagnosis_outcome(document) -> dict:
             f"off to {'#%d' % owner if owner else 'nobody'}, and the routes "
             f"this workflow owns are "
             f"{', '.join(sorted(ROUTE_TO_OUTCOME))}")
+    reason = outcome.get("reason")
+    if reason not in deflake_diagnosis.ROUTE_REASONS.get(route, ()):
+        raise HandoffError(
+            f"the diagnosis outcome declares the reason {reason!r}, which "
+            f"the {route!r} route cannot be reached for; its reasons are "
+            f"{', '.join(deflake_diagnosis.ROUTE_REASONS.get(route, ()))}")
     probe = outcome.get("probe")
     if probe not in _registered_probes():
         raise HandoffError(
@@ -744,6 +753,7 @@ def require_diagnosis_outcome(document) -> dict:
     }
     return {
         "route": route,
+        "reason": reason,
         "probe": probe,
         "targets": targets,
         "acceptable_failures": acceptable,
@@ -913,16 +923,14 @@ def require_handoff(document) -> Handoff:
                 f"do")
     for measurement in measurements.values():
         _bind_to_producer(measurement, diagnosis)
-    unmet = envelope.get("unmet_condition")
-    if diagnosis["route"] == deflake_diagnosis.ROUTE_PARTIAL_IMPROVEMENT:
-        unmet = _require_text(
-            unmet, "the handoff's `unmet_condition`", limit=MAX_CONDITION)
-    elif unmet is not None:
+    if envelope.get("unmet_condition") is not None:
         raise HandoffError(
-            f"`unmet_condition` states which #1437 acceptance condition a "
-            f"partial improvement failed, so the {diagnosis['route']!r} "
-            f"route may not carry one")
-    return Handoff(attempt=attempt, summary=summary, unmet_condition=unmet,
+            "which #1437 acceptance condition a partial improvement failed "
+            "is DERIVED from the diagnosis outcome's own `reason`, so the "
+            "handoff may not supply one; a stored condition nobody checked "
+            "would be the one field of the record that could say anything "
+            "at all")
+    return Handoff(attempt=attempt, summary=summary,
                    diagnosis=diagnosis, measurements=measurements)
 
 
@@ -934,19 +942,33 @@ def _refuse(problems: list[str], because: str) -> None:
 
 
 def _classify_cannot_reproduce(handoff: Handoff) -> dict:
-    """The one predicate that may conclude "nothing is wrong here".
+    """"Nothing is wrong here" — and only when the condition was real.
 
-    Stated over the designated measurement's own fields so no partial
-    reading of the document can satisfy it, and refused for every
-    operational error rather than being reached by one.
+    #1437 reaches `cannot-reproduce` three ways, and only one of them
+    says anything about the PROBE: the controlled batch ran under the
+    handoff's own recorded condition and observed nothing. The other two
+    say the invocation could not establish that condition at all — the
+    configuration could not be recreated from the manifest, or the batch
+    never became a controlled measurement — and a batch that passed
+    somewhere else is no evidence about this probe.
+
+    Both are recorded, because the evidence is what #1439 exists to
+    keep. Only the first carries the de-list recommendation, and only
+    the first is held to "observed nothing wrong at all": a batch that
+    ran out of control may well have failed, and demanding a spotless
+    one would throw the evidence away rather than record it.
     """
+    reason = handoff.reason
     role = ROUTE_ROLES[handoff.route]["designated"]
     measurement = handoff.measurement(role)
+    if reason not in deflake_diagnosis.CONTROLLED_REASONS:
+        return {"recommendation": None, "comparison": None}
     problems = measurement.defect_problems()
     if problems:
         _refuse(problems,
-                f"{OUTCOME_CANNOT_REPRODUCE!r} requires a measurement that "
-                f"observed nothing wrong at all, and this one is not that")
+                f"{OUTCOME_CANNOT_REPRODUCE!r} for the reason {reason!r} "
+                f"requires a measurement that observed nothing wrong at all, "
+                f"and this one is not that")
     return {
         "recommendation": {
             "action": "de-list",
@@ -954,11 +976,11 @@ def _classify_cannot_reproduce(handoff: Handoff) -> dict:
             "detail": (
                 f"{measurement.requested_runs} of "
                 f"{measurement.requested_runs} runs passed at "
-                f"{measurement.result['commit_sha']} with every declared "
-                f"check present, so consider de-listing {handoff.probe!r} as "
-                f"flaky. Advisory only: tools/ci_probes.py is unchanged, and "
-                f"a probe's other independent manual-only reasons still "
-                f"stand."),
+                f"{measurement.result['commit_sha']} under the handoff's own "
+                f"recorded condition, with every declared check present, so "
+                f"consider de-listing {handoff.probe!r} as flaky. Advisory "
+                f"only: tools/ci_probes.py is unchanged, and a probe's other "
+                f"independent manual-only reasons still stand."),
         },
         "comparison": None,
     }
@@ -1023,25 +1045,16 @@ def _classify_partial_improvement(handoff: Handoff) -> dict:
             f"which is no improvement; a lower failure RATE is the only "
             f"thing {OUTCOME_PARTIAL_IMPROVEMENT!r} claims, and this "
             f"evidence does not establish one")
-    # #1437's OWN acceptance predicate, called rather than paraphrased.
-    # Its MISSING half is a scoped rule with four clauses — a target
-    # MISSING anywhere, a PASSING run omitting anything at all, an
-    # aborted run losing something other than a contiguous suffix, and
-    # an identifier that vanished from the batch — so a consumer that
-    # checked only the target clause would call a verification "passing"
-    # that `deflake_diagnosis.evaluate` had just routed here.
-    unmet = deflake_diagnosis.missing_problems(
-        verification.result, targets=set(handoff.targets),
-        what="the verification batch")
-    if (verification.failure_count <= handoff.acceptable_failures
-            and not unmet):
-        raise NonSuccess(
-            f"the verification observed {verification.failure_count} "
-            f"failure(s) against an acceptable ceiling of "
-            f"{handoff.acceptable_failures} out of "
-            f"{verification.requested_runs} and satisfied the MISSING rule, "
-            f"so it measurably PASSES the acceptance gate this outcome "
-            f"exists to record a failure of")
+    # WHICH half of #1437's acceptance gate the verification failed is
+    # the producer's own finding, and two of the four reasons are not
+    # derivable here at all: whether the two comparison worktrees held
+    # the same configuration, and whether the batch ran under control,
+    # are facts about the INVOCATION rather than about either result
+    # document. So the reason is taken from the record and CROSS-CHECKED
+    # against the documents wherever it can be — a producer that named a
+    # measurement-visible reason its own evidence denies has contradicted
+    # itself, and that is not a stable outcome to record.
+    _require_gate_failure(handoff, verification)
     return {
         "recommendation": None,
         "comparison": {
@@ -1049,9 +1062,60 @@ def _classify_partial_improvement(handoff: Handoff) -> dict:
             "verification_failure_count": verification.failure_count,
             "acceptable_failures": handoff.acceptable_failures,
             "requested_runs": verification.requested_runs,
-            "unmet_condition": handoff.unmet_condition,
+            # DERIVED from the producer's reason, never free text a
+            # caller supplies: a stored "unmet condition" nobody checked
+            # would be the one field of this record that could say
+            # anything at all.
+            "unmet_condition": handoff.reason,
         },
     }
+
+
+def _require_gate_failure(handoff: Handoff, verification: Measurement) -> None:
+    """The named gate failure is real, wherever the documents can say.
+
+    `verification-over-tolerance` and `verification-missing-rule` are
+    both visible in the verification's own document, so each is
+    re-derived — the second by CALLING #1437's scoped MISSING rule,
+    whose four clauses include a PASSING run omitting a NON-target
+    check, which a consumer paraphrasing "no target went MISSING" would
+    have called a passing verification.
+
+    The other two reasons are taken on the producer's word, and stated
+    here rather than left implicit: a consumer handed only the result
+    documents cannot see a configuration difference between two
+    worktrees or a resource hold that was never obtained.
+    """
+    reason = handoff.reason
+    over = verification.failure_count > handoff.acceptable_failures
+    missing = deflake_diagnosis.missing_problems(
+        verification.result, targets=set(handoff.targets),
+        what="the verification batch")
+    if reason == deflake_diagnosis.REASON_VERIFICATION_OVER_TOLERANCE:
+        if not over:
+            raise NonSuccess(
+                f"the diagnosis outcome names {reason!r}, but the "
+                f"verification observed {verification.failure_count} "
+                f"failure(s) against an acceptable ceiling of "
+                f"{handoff.acceptable_failures} out of "
+                f"{verification.requested_runs}; a record whose own evidence "
+                f"denies the condition it names is not a stable outcome")
+        return
+    if reason == deflake_diagnosis.REASON_VERIFICATION_MISSING_RULE:
+        if not missing:
+            raise NonSuccess(
+                f"the diagnosis outcome names {reason!r}, but the "
+                f"verification satisfies #1437's scoped MISSING rule; a "
+                f"record whose own evidence denies the condition it names is "
+                f"not a stable outcome")
+        return
+    # `verification-not-controlled` and `verification-not-comparable`
+    # are facts about the invocation, not about either result document,
+    # so nothing here can confirm or deny them and the producer's word
+    # stands. A verification that ALSO fails a measurement-visible half
+    # of the gate is no contradiction: the reason names the FIRST thing
+    # that made the batch unacceptable, not the only one.
+    del over, missing
 
 
 CLASSIFIERS = {
@@ -1099,6 +1163,12 @@ def outcome_record(handoff: Handoff, *, now: str) -> dict:
     return {
         "attempt": handoff.attempt,
         "outcome": outcome,
+        # WHY #1437 took the route this outcome answers. `outcome` says
+        # what was concluded; this says what the invocation actually
+        # established, and the two are not the same question — a
+        # `cannot-reproduce` whose condition could not be recreated
+        # carries no de-list recommendation precisely because of it.
+        "reason": handoff.reason,
         "probe": handoff.probe,
         "timestamp_utc": now,
         "baseline_sha": handoff.baseline_sha,

@@ -3865,6 +3865,7 @@ def outcome_record(mark: str, *, probe: str = "alpha",
     return {
         "attempt": mark,
         "outcome": outcome,
+        "reason": "baseline-observed-nothing",
         "probe": probe,
         "timestamp_utc": "2026-08-28T12:00:00Z",
         "baseline_sha": COMMIT_A,

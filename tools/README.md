@@ -1995,11 +1995,24 @@ module's own malformed-input rejection, never allowed to escape as a traceback.
 needs a source-clean repair worktree and a verification whose `commit_sha` is
 the repair commit being proposed.
 
-**Routes.** `repair-pr` is the only one that opens a pull request, and the
-`Diagnosis` session enforces at most one per invocation. `handoff-rejected`
-stops at the gate; `no-target`, `cannot-reproduce`, `no-confident-fix` and
-`partial-improvement` hand off to #1439; `production-defect` hands off to
-#1438 and does not touch the probe.
+**Routes, and the reason each was taken.** `repair-pr` is the only one that
+opens a pull request, and the `Diagnosis` session enforces at most one per
+invocation. `handoff-rejected` stops at the gate; `no-target`,
+`cannot-reproduce`, `no-confident-fix` and `partial-improvement` hand off to
+#1439; `production-defect` hands off to #1438 and does not touch the probe.
+
+The route alone is ambiguous in both directions that matter, so the emitted
+record also carries a machine-readable `reason` from a closed vocabulary
+(`REASONS`, with `ROUTE_REASONS` saying which route can be reached for which).
+`cannot-reproduce` is reached by a controlled batch that ran under the
+handoff's own recorded condition and observed nothing, by one whose
+configuration could not be recreated from the manifest, and by one that never
+became a controlled measurement — three different findings, and only the first
+says anything about the PROBE. `partial-improvement` is reached by four gate
+failures, of which `verification-not-comparable` and
+`verification-not-a-controlled-measurement` are facts about the INVOCATION
+rather than about either result document, so a consumer handed only the
+documents could never derive them.
 
 Emitting a handoff means emitting `deflake-diagnosis-outcome/v1`, and #1437
 owns that PRODUCER record: the route, its owning issue, the identity of the
@@ -2062,9 +2075,20 @@ that exit wrote, if it wrote one. Exit 0 and 3 exits are not interchangeable
 and neither are their documents, which is why the exit travels with the
 result rather than being inferred from it.
 
+**The route is not the whole finding.** #1437's machine-readable `reason` is
+carried, validated against its own route, and cross-checked against the
+documents wherever it can be: a record naming a measurement-visible condition
+its own evidence denies has contradicted itself and is not a stable outcome,
+while one naming a condition the documents cannot see is taken on the
+producer's word, which is where that finding was actually made.
+
 **Three stable outcomes, and everything else.** `cannot-reproduce` — the
 designated pre-fix measurement is complete, trustworthy and observed nothing
 wrong at all; it appends the outcome plus an ADVISORY de-list recommendation.
+The other two `cannot-reproduce` reasons record their evidence and NO
+recommendation: a batch that passed under a configuration the invocation could
+not recreate passed somewhere else, and de-listing a probe on that would
+promote a measurement the producer itself says was not the condition.
 `no-confident-fix` — the failure reproduced, and the evidence establishes no
 one probe-side cause. `partial-improvement` — a repair candidate measurably
 improved the failure count and still failed #1437's acceptance gate. None of
@@ -2127,15 +2151,16 @@ misclassify a measurement taken at any other one.
 **A lower failure rate is not success.** `partial-improvement` is numeric on
 both halves: both batches complete and trustworthy, taken at the SAME run
 count and the SAME RTS capability count, the verification's failure count
-strictly lower, and the verification STILL failing #1437's acceptance gate.
-That gate is CALLED rather than paraphrased — over X, or any violation of
+strictly lower, and the verification STILL failing #1437's acceptance gate for
+the reason #1437 named. `verification-over-tolerance` is re-derived from the
+failure count and `verification-missing-rule` by CALLING
 `deflake_diagnosis.missing_problems`, whose scoped rule has four clauses of
-which only one is about targets, so a PASSING run omitting a NON-target check
-fails it too and a consumer checking only the targets would call such a
-verification passing while `evaluate` had just routed it here. A verification
-that measurably passes that gate contradicts the route it was handed under, and
-one that merely became INVALID improved nothing measurable, so both are refused
-rather than recorded.
+which only one is about targets — a PASSING run omitting a NON-target check
+fails it too, and a paraphrase of "no target went MISSING" would call such a
+verification passing while `evaluate` had just routed it here. The other two
+reasons are the producer's to make and are recorded on its word. A record whose
+own evidence denies the measurement-visible condition it names is refused, and
+`unmet_condition` is DERIVED from the reason rather than accepted as free text.
 
 **The de-list recommendation is advisory, and only that.** Nothing here edits
 `tools/ci_probes.py`, removes a manual-only reason, changes a classification

@@ -229,7 +229,7 @@
     "outcome": {
       "$comment": "Exactly what deflake_outcome.outcome_record() writes: one de-flake attempt's STABLE NON-SUCCESS outcome (#1439). `attempt` is the attempt identity and the idempotency key -- resuming an already-recorded attempt must remain one record, and the same identity carrying different evidence is refused rather than appended. The record is a RESUME point: it carries the summarized measurement evidence, artifact REFERENCES and the diagnostic summary, so a later reader never has to re-run the attempt to know what it established.",
       "type": "object",
-      "required": ["attempt", "outcome", "probe", "timestamp_utc",
+      "required": ["attempt", "outcome", "reason", "probe", "timestamp_utc",
                    "baseline_sha", "acceptable_failures", "targets",
                    "measurements", "retained_artifacts", "summary",
                    "recommendation", "comparison"],
@@ -239,6 +239,10 @@
         "outcome": {
           "$comment": "The three STABLE outcomes. An operational error is deliberately not one of them: exit codes 2-4, an incomplete run set and malformed measurement data return an actionable non-success and record nothing at all.",
           "enum": ["cannot-reproduce", "no-confident-fix", "partial-improvement"]
+        },
+        "reason": {
+          "$comment": "WHY #1437 took the route this outcome answers, in its own machine-readable vocabulary (deflake_diagnosis.REASONS). `outcome` says what was concluded; this says what the invocation actually established. A `cannot-reproduce` whose condition could not be recreated carries no de-list recommendation precisely because of this field. Deliberately NOT enumerated here: the vocabulary is tools/deflake_diagnosis.py's and grows with its routes, and a second copy in a data file would be the one that went stale.",
+          "type": "string", "minLength": 1, "maxLength": 128
         },
         "probe": {
           "$comment": "Redundant with the row key, and required anyway: an outcome record is handed BETWEEN workflows, so it has to name its own probe. probe_census.ingest_outcome refuses one that disagrees with the row it is being appended to.",
@@ -297,7 +301,10 @@
         "verification_failure_count": {"$ref": "#/$defs/count"},
         "acceptable_failures": {"type": "integer", "minimum": 0, "maximum": 9},
         "requested_runs": {"$ref": "#/$defs/count"},
-        "unmet_condition": {"type": "string", "minLength": 1, "maxLength": 4000}
+        "unmet_condition": {
+          "$comment": "DERIVED from the diagnosis outcome's own `reason`, never text a caller supplies. It repeats the record's top-level `reason` on purpose: `comparison` is the self-contained evidence for the numeric claim, and a reader of it alone must be able to see which acceptance condition stayed unmet.",
+          "type": "string", "minLength": 1, "maxLength": 4000
+        }
       }
     },
 

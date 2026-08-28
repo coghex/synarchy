@@ -4849,7 +4849,7 @@ def measurement_entries(route: str, diagnosis: dict) -> list:
 
 def outcome_handoff(route: str = dd.ROUTE_CANNOT_REPRODUCE, *,
                     attempt: str = ATTEMPT, summary: str = OUTCOME_SUMMARY,
-                    measurements=None, unmet=_DEFAULT,
+                    measurements=None, unmet=None,
                     diagnosis_outcome=_DEFAULT) -> dict:
     document_diagnosis, record = produced(route)
     envelope = {
@@ -4861,8 +4861,6 @@ def outcome_handoff(route: str = dd.ROUTE_CANNOT_REPRODUCE, *,
         "measurements": (measurement_entries(route, document_diagnosis)
                          if measurements is None else measurements),
     }
-    if unmet is _DEFAULT:
-        unmet = (UNMET if route == dd.ROUTE_PARTIAL_IMPROVEMENT else None)
     if unmet is not None:
         envelope["unmet_condition"] = unmet
     return copy.deepcopy(envelope)
@@ -5114,6 +5112,89 @@ def test_untrustworthy_evidence_is_never_cannot_reproduce() -> None:
             expect_nothing_recorded(path, before, publisher, label)
 
 
+def test_a_condition_that_was_never_established_never_de_lists() -> None:
+    """#1437 reaches `cannot-reproduce` three ways, and only one de-lists.
+
+    A controlled batch whose CONFIGURATION could not be recreated from
+    the handoff's manifest passed somewhere else, and "somewhere else"
+    is no evidence about this probe. The evidence is still recorded —
+    that is what this workflow exists for — but recommending a de-list
+    from it would promote a measurement the invocation itself says was
+    not the condition.
+    """
+    other = manifest(entries=[("config/probe.local.yaml", "0" * 64)])
+    diagnosis = diagnosis_document(route=dd.ROUTE_CANNOT_REPRODUCE)
+    diagnosis["baseline"]["result"] = spotless_result()
+    diagnosis["baseline"]["configuration"] = other
+    record = evaluate(diagnosis).to_document()
+    expect(record["reason"] == dd.REASON_CONFIGURATION_NOT_RECREATED,
+           f"#1437 routes a manifest mismatch here; got {record['reason']}")
+
+    with census_file() as path:
+        recorded, publisher = record_outcome(outcome_handoff(
+            dd.ROUTE_CANNOT_REPRODUCE, diagnosis_outcome=record,
+            measurements=[
+                {"role": do.ROLE_BASELINE, "exit_code": probe_flake.EXIT_OK,
+                 "result": diagnosis["baseline"]["result"]}]), path)
+        expect(recorded.record["outcome"] == do.OUTCOME_CANNOT_REPRODUCE,
+               f"the evidence is still recorded; got "
+               f"{recorded.record['outcome']}")
+        expect(recorded.record["recommendation"] is None,
+               f"but nothing is recommended from it; got "
+               f"{recorded.record['recommendation']}")
+        expect(recorded.record["reason"]
+               == dd.REASON_CONFIGURATION_NOT_RECREATED,
+               "and the record says which condition was never established")
+        expect(publisher.calls == [], "and it opens no pull request")
+
+    # The batch that DID run under the handoff's condition still does.
+    with census_file() as path:
+        recorded, _publisher = record_outcome(outcome_handoff(), path)
+        expect(recorded.record["reason"]
+               == dd.REASON_BASELINE_OBSERVED_NOTHING
+               and recorded.record["recommendation"] is not None,
+               "a baseline under the recorded condition still recommends "
+               "de-listing, or this case proves nothing")
+
+
+def test_a_condition_failure_the_documents_cannot_see_is_still_recorded()\
+        -> None:
+    """#1437's gate is wider than the two halves a consumer can re-derive.
+
+    Two comparison worktrees holding different configuration is a fact
+    about the INVOCATION, not about either result document, so a clean
+    4 -> 0 verification looks like a passing one here. #1437 routes it
+    to `partial-improvement`, and that stable outcome has to be recorded
+    rather than argued with.
+    """
+    diagnosis = route_diagnosis(dd.ROUTE_PARTIAL_IMPROVEMENT)
+    diagnosis["verification"]["result"] = verification_result(
+        artifact_root=VERIFY_ARTIFACTS)
+    diagnosis["verification"]["configuration"] = manifest(
+        entries=[("config/probe.local.yaml", "1" * 64)])
+    record = evaluate(diagnosis).to_document()
+    expect(record["reason"] == dd.REASON_VERIFICATION_NOT_COMPARABLE,
+           f"#1437 routes an incomparable pair here; got "
+           f"{record['reason']}")
+
+    with census_file() as path:
+        recorded, publisher = record_outcome(outcome_handoff(
+            dd.ROUTE_PARTIAL_IMPROVEMENT, diagnosis_outcome=record,
+            measurements=[
+                {"role": do.ROLE_BASELINE, "exit_code": probe_flake.EXIT_OK,
+                 "result": diagnosis["baseline"]["result"]},
+                {"role": do.ROLE_VERIFICATION,
+                 "exit_code": probe_flake.EXIT_OK,
+                 "result": diagnosis["verification"]["result"]}]), path)
+        expect(recorded.record["outcome"] == do.OUTCOME_PARTIAL_IMPROVEMENT,
+               f"a 4 -> 0 verification the producer called incomparable is "
+               f"still recorded; got {recorded.record['outcome']}")
+        expect(recorded.record["comparison"]["unmet_condition"]
+               == dd.REASON_VERIFICATION_NOT_COMPARABLE,
+               "with the condition #1437 says stayed unmet")
+        expect(publisher.calls == [], "and it opens no pull request")
+
+
 def test_an_inconsistent_aggregate_reaches_no_stable_outcome() -> None:
     """A document that contradicts itself cannot support ANY conclusion.
 
@@ -5301,7 +5382,8 @@ def test_a_lower_rate_that_still_fails_the_gate_is_partial_improvement()\
                               "verification_failure_count": 2,
                               "acceptable_failures": 0,
                               "requested_runs": dd.RUN_COUNT,
-                              "unmet_condition": UNMET},
+                              "unmet_condition":
+                                  dd.REASON_VERIFICATION_OVER_TOLERANCE},
                f"with the before-and-after counts, the X-out-of-N ceiling "
                f"and the unmet acceptance condition; got {comparison}")
         expect([m["role"] for m in record["measurements"]]
@@ -5322,7 +5404,6 @@ def test_the_acceptance_gate_is_1437s_own_missing_rule() -> None:
     checked only the targets would call it a passing verification and
     record nothing at all.
     """
-    diagnosis, _record = produced(dd.ROUTE_PARTIAL_IMPROVEMENT)
     verification = non_target_missing_verification()
     expect(bool(dd.missing_problems(
         verification, targets={"beta", "gamma"}, what="the verification")),
@@ -5331,9 +5412,17 @@ def test_the_acceptance_gate_is_1437s_own_missing_rule() -> None:
            "...while leaving every TARGET emitted, or it would be refused "
            "by the clause this case exists to look past")
 
+    diagnosis = route_diagnosis(dd.ROUTE_PARTIAL_IMPROVEMENT)
+    diagnosis["verification"]["result"] = verification
+    record = evaluate(diagnosis).to_document()
+    expect(record["reason"] == dd.REASON_VERIFICATION_MISSING_RULE,
+           f"#1437 routes it here for the MISSING rule; got "
+           f"{record['reason']}")
+
     with census_file() as path:
         recorded, publisher = record_outcome(outcome_handoff(
-            dd.ROUTE_PARTIAL_IMPROVEMENT, measurements=[
+            dd.ROUTE_PARTIAL_IMPROVEMENT, diagnosis_outcome=record,
+            measurements=[
                 {"role": do.ROLE_BASELINE, "exit_code": probe_flake.EXIT_OK,
                  "result": diagnosis["baseline"]["result"]},
                 {"role": do.ROLE_VERIFICATION,
@@ -5343,8 +5432,10 @@ def test_the_acceptance_gate_is_1437s_own_missing_rule() -> None:
                f"a 4 -> 0 verification that lost a non-target check is still "
                f"a partial improvement; got {recorded.record['outcome']}")
         expect(recorded.record["comparison"]["verification_failure_count"]
-               == 0,
-               "recorded with the zero failures it really observed")
+               == 0 and recorded.record["comparison"]["unmet_condition"]
+               == dd.REASON_VERIFICATION_MISSING_RULE,
+               "recorded with the zero failures it really observed and the "
+               "condition that actually stayed unmet")
         expect(publisher.calls == [], "and opening no pull request")
 
 
@@ -5436,7 +5527,7 @@ def test_partial_improvement_is_numeric_on_both_halves() -> None:
          "which is no improvement"),
         ("a verification that measurably passes the gate",
          handoff(verification_result(artifact_root=VERIFY_ARTIFACTS)),
-         "measurably PASSES the acceptance gate"),
+         "the verification observed 0 failure(s)"),
         ("a verification at another run count",
          handoff(verification_result(
              requested=dd.RUN_COUNT - 4, artifact_root=VERIFY_ARTIFACTS,
@@ -5947,13 +6038,17 @@ def test_a_malformed_outcome_handoff_is_rejected_without_recording() -> None:
              "measurements", d["measurements"][:1]),
              dd.ROUTE_PARTIAL_IMPROVEMENT),
          "rests on its verification measurement"),
-        ("a partial improvement with no unmet condition",
-         lambda: broken(lambda d: d.pop("unmet_condition"),
+        ("a handoff supplying its own unmet condition",
+         lambda: broken(lambda d: d.__setitem__("unmet_condition", UNMET),
                         dd.ROUTE_PARTIAL_IMPROVEMENT),
-         "`unmet_condition`"),
-        ("an unmet condition on a route that has no gate to fail",
-         lambda: broken(lambda d: d.__setitem__("unmet_condition", "x")),
-         "may not carry one"),
+         "is DERIVED from the diagnosis outcome's own `reason`"),
+        ("a diagnosis outcome with no reason at all",
+         lambda: broken(lambda d: d["diagnosis_outcome"].pop("reason")),
+         "cannot be reached for"),
+        ("a reason its own route cannot be reached for",
+         lambda: broken(lambda d: d["diagnosis_outcome"].__setitem__(
+             "reason", dd.REASON_VERIFICATION_ACCEPTED)),
+         "cannot be reached for"),
         ("an exit this harness never returns",
          lambda: broken(lambda d: d["measurements"][0].__setitem__(
              "exit_code", 5)),
