@@ -1204,8 +1204,47 @@ def _bind_to_producer(measurement: Measurement, diagnosis: dict) -> None:
                 f"evidence")
 
 
+def require_worktree_boundary(value, what: str) -> str:
+    """One declared comparison worktree, as a boundary rather than a label.
+
+    #1437 canonicalises both declared worktrees and requires each batch
+    to have run inside the one its section names, so a real record
+    carries the spelling `Path.resolve` produces. That rule is restated
+    here — the producer exposes it publicly only through
+    result-document validation — because this is the value the
+    containment check is made AGAINST: a relative, `..`-bearing or
+    symlinked spelling would compare as somewhere other than the place
+    it names, and the boundary would quietly stop covering it.
+
+    What this cannot establish is that the named directory ever WAS a
+    worktree. Nothing else in the record identifies those directories,
+    and by the time an outcome is recorded both have usually been
+    removed, so a plausible substitute is indistinguishable from a
+    truthful declaration. The declared worktrees are therefore an
+    ADDITIONAL boundary the record supplies about itself: they can only
+    ever add refusals, never lift one, and the live registered worktrees
+    and the primary checkout — which no document can edit — are what
+    the guarantee actually rests on.
+    """
+    text = _require_usable_path(
+        _require_text(value, what, limit=4096), what)
+    if not Path(text).is_absolute():
+        raise HandoffError(
+            f"{what} is the relative path {text!r}; a containment boundary "
+            f"has to name one place, and a relative one names a different "
+            f"place from every directory it is read in")
+    resolved = str(Path(text).resolve())
+    if resolved != text:
+        raise HandoffError(
+            f"{what} is {text!r}, which is not the spelling `Path.resolve` "
+            f"produces ({resolved!r}); #1437 canonicalises both declared "
+            f"worktrees, and a boundary compared in one spelling while the "
+            f"paths it bounds are written in another covers nothing")
+    return text
+
+
 def declared_worktrees(document) -> list:
-    """The comparison worktrees the producer record names, if any.
+    """The comparison worktrees the producer record names.
 
     Collected BEFORE anything is admitted, and kept beside the live
     registered ones, because the workflow removes or hands off both
@@ -1213,19 +1252,31 @@ def declared_worktrees(document) -> list:
     recorded the paths it correctly names may no longer be registered,
     and an artifact that sat inside one was still inside a worktree when
     it was written.
+
+    REQUIRED of every batch the record says it ran, for the same reason:
+    a section that declared no worktree would silently contribute no
+    boundary, and the artifacts of a removed worktree would then be
+    stored unbounded. Both are held to #1437's own rule that neither may
+    contain the other, since two labels for one place are not two
+    states.
     """
     trees = []
     for section in ("baseline", "verification"):
         record = document.get(section) if isinstance(document, dict) else None
-        tree = record.get("worktree") if isinstance(record, dict) else None
-        if tree is None:
+        if not isinstance(record, dict):
             continue
-        # Every collected path is RESOLVED by the containment check, so
-        # one the filesystem cannot name would raise out of it rather
-        # than be compared — and `main` would print that as a traceback
-        # instead of a rejection.
-        trees.append(_require_usable_path(
-            tree, f"the diagnosis outcome's {section} `worktree`"))
+        trees.append(require_worktree_boundary(
+            record.get("worktree"),
+            f"the diagnosis outcome's {section} `worktree`"))
+    if len(trees) == 2:
+        first, second = (Path(tree) for tree in trees)
+        if (first == second or first in second.parents
+                or second in first.parents):
+            raise HandoffError(
+                f"the diagnosis outcome declares the comparison worktrees "
+                f"{trees[0]} and {trees[1]}, which are not two separate "
+                f"states; the clean comparison worktree stays at the "
+                f"baseline commit and the repair lives in its own")
     return trees
 
 

@@ -2203,7 +2203,18 @@ decision taken with all of them in view.
 would store is refused if it lies inside a worktree — the live registered ones
 AND the comparison worktrees the producer record declares, because `/deflake`
 removes those when it finishes and an artifact that sat inside one was still
-inside a worktree when it was written. Containment is compared over resolved
+inside a worktree when it was written. Each declared worktree is required and
+held to #1437's canonical spelling: a boundary compared in one spelling while
+the paths it bounds are written in another covers nothing, and a section that
+declared none would contribute no boundary while looking like a record that
+had one. Neither may contain the other, since two labels are not two states.
+
+What that cannot establish is that a named directory ever WAS a worktree —
+nothing else in the record identifies those directories, and both are usually
+gone by the time an outcome is recorded. The declared worktrees are an
+ADDITIONAL boundary the record supplies about itself: they can only add
+refusals, never lift one, and the guarantee rests on the live registered
+worktrees and the primary checkout, which no document can edit. Containment is compared over resolved
 path forms, so a `..` segment or a symlinked spelling of the same place is the
 same place. `probe_flake.check_artifact_root` enforces this at measurement
 time; restating it here is what stops a self-consistent handoff putting a

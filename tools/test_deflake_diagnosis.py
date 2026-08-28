@@ -6251,6 +6251,53 @@ def test_a_path_no_filesystem_can_name_is_never_stored() -> None:
                "and writes nothing on the way out")
 
 
+def test_the_declared_boundary_is_a_place_not_a_label() -> None:
+    """A boundary compared in one spelling bounds nothing in another.
+
+    The declared worktrees are what the containment check is made
+    AGAINST once the real ones have been removed, so a relative,
+    `..`-bearing or otherwise non-canonical spelling would compare as
+    somewhere other than the place it names and the boundary would
+    quietly stop covering it. A section that declared none at all would
+    contribute no boundary while looking like a record that had one.
+    """
+    cases = (
+        ("a batch that declares no worktree",
+         lambda d: d["diagnosis_outcome"]["baseline"].pop("worktree"),
+         "must be a non-empty string"),
+        ("a relative boundary",
+         lambda d: d["diagnosis_outcome"]["baseline"].__setitem__(
+             "worktree", "deflake-clean-role"),
+         "is the relative path"),
+        ("a boundary spelled through a traversal",
+         lambda d: d["diagnosis_outcome"]["baseline"].__setitem__(
+             "worktree", f"{CLEAN_WT}/../{Path(CLEAN_WT).name}"),
+         "not the spelling `Path.resolve` produces"),
+        ("two labels for one state",
+         lambda d: d["diagnosis_outcome"]["verification"].__setitem__(
+             "worktree", CLEAN_WT),
+         "not two separate states"),
+        ("a boundary nested inside the other",
+         lambda d: d["diagnosis_outcome"]["verification"].__setitem__(
+             "worktree", f"{CLEAN_WT}/repair"),
+         "not two separate states"),
+    )
+    for label, mutate, fragment in cases:
+        route = (dd.ROUTE_PARTIAL_IMPROVEMENT
+                 if "other" in label or "one state" in label
+                 else dd.ROUTE_CANNOT_REPRODUCE)
+        with census_file() as path:
+            before = path.read_bytes()
+            document = outcome_handoff(route)
+            mutate(document)
+            publisher = Publisher()
+            expect_handoff_rejected(
+                lambda d=document, p=publisher: record_outcome(
+                    d, path, publisher=p),
+                fragment, label)
+            expect_nothing_recorded(path, before, publisher, label)
+
+
 def test_a_removed_comparison_worktree_still_bounds_the_artifacts() -> None:
     """The paths a record names outlive the worktrees they were inside.
 
