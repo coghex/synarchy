@@ -11,7 +11,11 @@ needs worldgen) and checks the DERIVED growth runtime end-to-end:
      state (age / health / phase / stage / generation).
   3. Season window: a fruiting species is harvestable only inside its
      fruiting window; a leaves species with no fruiting stage stays open
-     in the dormant season. Poked via world.setDate. Both species under
+     in the dormant season. Poked via world.setDate. Then (#1711) the
+     regrowth CYCLE on that same tile: a harvest starts a positive
+     timer, an immediate second harvest is refused while it runs, and
+     only an actual game-time tick (not a calendar poke — the tick
+     decrements by dtGame) reopens the tile. Both species under
      test are probe-registered, max-tolerance worldGen fixtures so they
      place reliably on any seed's geography: `probe_berry` (raspberry-
      shaped, fruiting) and `probe_clover` (white-clover-shaped, no
@@ -251,10 +255,40 @@ def bootstrap(port):
         ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
         ("data/items/*.yaml",      "engine.loadItemYaml"),
         ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
-        ("data/flora/*.yaml",      "engine.loadFloraYaml"),
     ]:
         for path in sorted(glob.glob(pattern)):
             send(port, f"{fn}('{path}'); return 'ok'")
+    # The SHIPPED flora is loaded with its result read, unlike the three
+    # families above (#1342 deliberately leaves shipped bulk loads
+    # unasserted, and this is the documented exception to that): #1711
+    # moved `regrowth_time` behind a finite/strictly-positive domain
+    # check that rejects the WHOLE FILE, so a shipped file that stopped
+    # registering is exactly the regression this probe has to be unable
+    # to miss. `engine.loadFloraYaml` answers with the number of
+    # TEXTURES it queued, not species (YamlTextures.hs folds texture
+    # counts), so only the rejection signal is read here — every
+    # Engine.Asset loader returns 0 and nothing else when it registered
+    # nothing. The species COUNT per file is pinned in hspec
+    # (Asset.FloraRegrowthSchema), where it can be read from
+    # loadFloraYaml's own list.
+    shipped = sorted(glob.glob("data/flora/*.yaml"))
+    if not shipped:
+        sys.exit("SETUP FAILURE: no data/flora/*.yaml found — the probe "
+                 "cannot show that the shipped flora still registers")
+    rejected = []
+    for path in shipped:
+        raw = send(port, f"return engine.loadFloraYaml('{path}')")
+        try:
+            queued = float(raw)
+        except (TypeError, ValueError):
+            queued = 0.0
+        if queued <= 0:
+            rejected.append(f"{path} (returned {raw!r})")
+    if rejected:
+        sys.exit("SETUP FAILURE: shipped flora rejected by the loader — "
+                 + ", ".join(rejected))
+    print(f"  [PASS] all {len(shipped)} shipped data/flora/*.yaml files "
+          f"still register")
     # The probe's own fruiting species — appended after the real flora
     # so their placement hashes (indexed by registration order) are
     # untouched. Max-tolerance worldGen: places on any seed.
@@ -460,6 +494,55 @@ def main():
         passed &= ok3d
         print(f"  [{'PASS' if ok3d else 'FAIL'}] harvest yields raspberry's "
               f"fruit in season: {y}")
+
+        # --- 3b. The regrowth timer actually gates the NEXT harvest ---
+        # #1711: `regrowth_time` is the only thing between a harvested
+        # wild plant and being harvestable again. The bare `live <= 0`
+        # gate in Forage/Harvest.hs reinserts the authored value
+        # unchanged, so a non-positive one is already expired the instant
+        # it is written and the very next call spawns the full yield
+        # again. That defect is now impossible to AUTHOR (the decoder
+        # rejects it — Asset.FloraRegrowthSchema), and this is the other
+        # half: with the positive duration probe_berry authors (86400
+        # game-seconds), the cycle still behaves.
+        #
+        # Every step below runs against the SAME tile 3d just harvested,
+        # so this reads that harvest's own timer rather than setting one
+        # up separately.
+        e3b = growth_entry(port, *rasp, "probe_berry")
+        live = e3b.get("regrowthRemaining") if e3b else None
+        ok3e = isinstance(live, (int, float)) and live > 0
+        passed &= ok3e
+        print(f"  [{'PASS' if ok3e else 'FAIL'}] the harvest started a "
+              f"POSITIVE regrowth timer: {live}")
+        # Immediately again, same tile, same in-season date: refused.
+        y2 = send_json(port, f"return world.harvestFlora({rasp[0]},{rasp[1]})")
+        ok3f = y2 is None
+        passed &= ok3f
+        print(f"  [{'PASS' if ok3f else 'FAIL'}] an immediate second harvest "
+              f"on the same tile is refused while the timer runs: {y2}")
+        # Only an actual GAME-TIME tick may reopen it — World.Thread.Time
+        # decrements by dtGame (dt * scale * 60), so changing the
+        # calendar date alone would prove nothing. 86400 game-seconds at
+        # 3000 game-min/real-sec is ~0.5 real-seconds of ticking; 2.5s
+        # leaves generous margin, and ~4 game-days keeps the raspberry
+        # inside its own fruiting window (day-of-year 200 -> ~204, window
+        # 180-269) so the retry is gated by the TIMER and nothing else.
+        send(port, "world.setTimeScale('probe', 3000); return 'ok'")
+        time.sleep(2.5)
+        send(port, "world.setTimeScale('probe', 1); return 'ok'")
+        e3c = growth_entry(port, *rasp, "probe_berry")
+        expired = e3c.get("regrowthRemaining") if e3c else None
+        ok3g = e3c is not None and expired == 0
+        passed &= ok3g
+        print(f"  [{'PASS' if ok3g else 'FAIL'}] the timer expired on the "
+              f"game clock: {live} -> {expired}")
+        y3 = send_json(port, f"return world.harvestFlora({rasp[0]},{rasp[1]})")
+        ok3h = isinstance(y3, list) and len(y3) >= 1 \
+            and all(item.get("id") == "wild_berries" for item in y3)
+        passed &= ok3h
+        print(f"  [{'PASS' if ok3h else 'FAIL'}] the same tile harvests "
+              f"again once the timer expired: {y3}")
 
         # --- 4. Aging + generational reseed ---
         # +4 years: the plant aged (or, if its lifespan fell in between,

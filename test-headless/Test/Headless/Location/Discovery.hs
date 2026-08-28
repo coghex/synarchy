@@ -30,6 +30,7 @@ import Location.Instance
     ( LocationInstance(..), LocationInstanceId(..), LocationInstances
     , LocationLifecycle(..), buildLocationInstances, instancesToList
     , markLocationContentsSpawned, setLocationLifecycle )
+import Test.Headless.Location.Fixture (expectGeometry)
 import Unit.Faction (Faction(..), allFactions, factionTag)
 import World.Chunk.Types (ChunkCoord(..))
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
@@ -83,14 +84,15 @@ loc1Id = LocationInstanceId 1
 
 -- | The instance table every scenario below runs against (#911).
 instances1 ∷ LocationInstances
-instances1 = buildLocationInstances Nothing registry1 overlay1
+instances1 = expectGeometry (buildLocationInstances Nothing registry1 overlay1)
 
 -- | 'instances1' with loc1 already at the given lifecycle state.
 instancesAt ∷ LocationLifecycle → LocationInstances
 instancesAt l = fromMaybe instances1 (setLocationLifecycle loc1Id l instances1)
 
 seamInstances ∷ LocationInstances
-seamInstances = buildLocationInstances Nothing registry1 seamOverlay
+seamInstances =
+    expectGeometry (buildLocationInstances Nothing registry1 seamOverlay)
 
 hit1 ∷ DiscoveryHit Int
 hit1 = DiscoveryHit loc1Id loc1Coord (8, 8) "Small Ruin" 1

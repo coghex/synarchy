@@ -13,11 +13,20 @@ module Test.Headless.Location.Bounds
 
 import UPrelude
 import Test.Hspec
+import Control.Exception (finally)
+import Data.IORef (IORef, newIORef, readIORef, modifyIORef')
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.Text as T
 import qualified Data.Yaml as Yaml
+import System.Directory
+    (getTemporaryDirectory, createDirectoryIfMissing, removeDirectoryRecursive)
+import System.FilePath ((</>))
+import Engine.Core.Log
+    ( initLogger, defaultLogConfig, LogConfig(..), LogBackend(..)
+    , LogCategory(..), LogLevel(..), LogEntry(..), LoggerState )
 import Engine.Asset.YamlLocations
-    ( LocationYamlBounds(..), LocationYamlDef(..), LocationYamlFile(..) )
+    ( LocationYamlBounds(..), LocationYamlDef(..), LocationYamlFile(..)
+    , authoredLocationCoordinateLimit, loadLocationYaml )
 import Location.Bounds
 
 decodeBounds ∷ BS.ByteString → Either String LocationYamlBounds
@@ -251,10 +260,209 @@ spec = describe "Location spatial bounds" $ do
                         ("expected exactly one location def, got "
                             <> show (length defs))
 
+    -- #1796: the authored-coordinate DOMAIN, the first of the two
+    -- complementary boundaries. Every case here decodes a COMPLETE
+    -- LocationYamlDef, because that is the only scope carrying the
+    -- location id the rejection is attributed with -- LocationYamlBounds
+    -- 's own FromJSON instance still accepts any four Ints on purpose,
+    -- so 'decodeBounds' would not exercise this rule at all.
+    describe "authored coordinate domain (#1796)" $ do
+        let limit  = authoredLocationCoordinateLimit
+            defAt ∷ Int → Int → Int → Int → BS.ByteString
+            defAt mnx mny mxx mxy = BS.pack
+                ("{ id: t, builder: b,\
+                 \  naming: { heads: [KEEP], modifiers: [ASH] },\
+                 \  bounds: { min_x: " <> show mnx
+                     <> ", min_y: " <> show mny
+                     <> ", max_x: " <> show mxx
+                     <> ", max_y: " <> show mxy <> " } }")
+
+        it "the limit is exactly 2^31 - 1" $
+            limit `shouldBe` 2147483647
+
+        it "accepts a box sitting exactly on both authored limits" $
+            decodeDef (defAt (negate limit) (negate limit) limit limit)
+                `shouldSatisfy` isRight'
+
+        it "accepts the shipped ruin_small box, well inside the domain" $
+            decodeDef (defAt (-2) (-2) 2 2) `shouldSatisfy` isRight'
+
+        -- Each of the four fields is driven out of the domain on its
+        -- OWN, so a rejection that named the wrong field -- or collapsed
+        -- all four into one generic message -- fails here.
+        it "rejects bounds.min_x one step below the negative limit, \
+           \naming the location and that field" $
+            decodeDef (defAt (negate limit - 1) (negate limit) limit limit)
+                `shouldSatisfy` rejectedNamingFields "t" ["bounds.min_x"]
+
+        it "rejects bounds.min_y one step below the negative limit, \
+           \naming the location and that field" $
+            decodeDef (defAt (negate limit) (negate limit - 1) limit limit)
+                `shouldSatisfy` rejectedNamingFields "t" ["bounds.min_y"]
+
+        it "rejects bounds.max_x one step above the positive limit, \
+           \naming the location and that field" $
+            decodeDef (defAt (negate limit) (negate limit) (limit + 1) limit)
+                `shouldSatisfy` rejectedNamingFields "t" ["bounds.max_x"]
+
+        it "rejects bounds.max_y one step above the positive limit, \
+           \naming the location and that field" $
+            decodeDef (defAt (negate limit) (negate limit) limit (limit + 1))
+                `shouldSatisfy` rejectedNamingFields "t" ["bounds.max_y"]
+
+        -- The check must be a direct two-sided comparison against the
+        -- domain. A magnitude test written with @abs ∷ Int → Int@ would
+        -- accept minBound, because 'abs' 'minBound' IS 'minBound' --
+        -- the single most extreme value the rule exists to exclude.
+        it "rejects minBound, which an 'abs'-based magnitude check would \
+           \wrongly accept" $ do
+            decodeDef (defAt minBound (-2) 2 2)
+                `shouldSatisfy` rejectedNamingFields "t" ["bounds.min_x"]
+            decodeDef (defAt (-2) minBound 2 2)
+                `shouldSatisfy` rejectedNamingFields "t" ["bounds.min_y"]
+
+        it "rejects maxBound too" $
+            decodeDef (defAt (-2) (-2) maxBound 2)
+                `shouldSatisfy` rejectedNamingFields "t" ["bounds.max_x"]
+
+        it "reports the offending VALUE and the accepted domain, so an \
+           \author is told what to change it to" $
+            decodeDef (defAt (-3000000000) (-2) 2 2)
+                `shouldSatisfy` rejectedNamingFields "t"
+                    [ "bounds.min_x", "-3000000000"
+                    , "-2147483647", "2147483647" ]
+
+        -- The range rule sits BESIDE the #777/#1151 ordering rule, not
+        -- instead of it: an in-domain but inverted box still earns the
+        -- ordering rejection it always did.
+        it "still rejects an in-domain but inverted box on each axis" $ do
+            decodeDef (defAt 5 (-2) 2 2)
+                `shouldSatisfy` rejectedNamingFields "t"
+                    ["bounds.min_x", "bounds.max_x"]
+            decodeDef (defAt (-2) 5 2 2)
+                `shouldSatisfy` rejectedNamingFields "t"
+                    ["bounds.min_y", "bounds.max_y"]
+
+        it "still accepts a degenerate single-tile box (min == max)" $
+            decodeDef (defAt 0 0 0 0) `shouldSatisfy` isRight'
+
+        it "one out-of-domain box fails the WHOLE file's decode -- the \
+           \valid def beside it is not returned without it" $ do
+            let goodOnly = "{ locations: [\
+                    \ { id: ok, builder: b,\
+                    \   naming: { heads: [KEEP], modifiers: [ASH] },\
+                    \   bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 } } ] }"
+                withBad = "{ locations: [\
+                    \ { id: ok, builder: b,\
+                    \   naming: { heads: [KEEP], modifiers: [ASH] },\
+                    \   bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 } },\
+                    \ { id: bad, builder: b,\
+                    \   naming: { heads: [KEEP], modifiers: [ASH] },\
+                    \   bounds: { min_x: -2, min_y: -2,\
+                    \             max_x: 2147483648, max_y: 2 } } ] }"
+            fmap (map lydId . lyfLocations) (decodeFile goodOnly)
+                `shouldBe` Right ["ok"]
+            decodeFile withBad
+                `shouldSatisfy` rejectedNamingFields "bad" ["bounds.max_x"]
+
+        -- Requirement 3: that file-level failure must actually REACH
+        -- 'loadLocationYaml' 's boundary, where 'loadYamlList' turns it
+        -- into one CatAsset warning and an empty result -- which is what
+        -- makes engine.loadLocationYaml register nothing and return 0.
+        it "loadLocationYaml returns [] and logs ONE CatAsset warning \
+           \naming the invalid definition and field" $ do
+            let contents = unlines
+                    [ "locations:"
+                    , "  - id: ok"
+                    , "    builder: b"
+                    , "    naming: { heads: [KEEP], modifiers: [ASH] }"
+                    , "    bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 }"
+                    , "  - id: bad"
+                    , "    builder: b"
+                    , "    naming: { heads: [KEEP], modifiers: [ASH] }"
+                    , "    bounds: { min_x: -2, min_y: -2,"
+                    , "              max_x: 2147483648, max_y: 2 }"
+                    ]
+            withTempLocationYaml "range.yaml" contents $ \path → do
+                (logger, entriesRef) ← callbackLogger
+                defs ← loadLocationYaml logger path
+                map lydId defs `shouldBe` []
+                entries ← readIORef entriesRef
+                case entries of
+                    [entry] → do
+                        leLevel entry `shouldBe` LevelWarn
+                        leCategory entry `shouldBe` CatAsset
+                        leMessage entry `shouldSatisfy`
+                            T.isInfixOf "location \'bad\'"
+                        leMessage entry `shouldSatisfy`
+                            T.isInfixOf "bounds.max_x"
+                    other → expectationFailure
+                        ("expected exactly one captured log entry, got "
+                            <> show (length other))
+
+        it "a file whose defs are all in-domain still loads normally" $ do
+            let contents = unlines
+                    [ "locations:"
+                    , "  - id: ok"
+                    , "    builder: b"
+                    , "    naming: { heads: [KEEP], modifiers: [ASH] }"
+                    , "    bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 }"
+                    ]
+            withTempLocationYaml "ok.yaml" contents $ \path → do
+                (logger, _) ← callbackLogger
+                defs ← loadLocationYaml logger path
+                map lydId defs `shouldBe` ["ok"]
+
     describe "translateBounds" $
         it "anchors a relative box at an absolute tile" $
             translateBounds (10, 20) (RelBounds (-2) (-2) 2 2)
                 `shouldBe` AbsBounds 8 18 12 22
+
+    -- #1796: the checked ARITHMETIC these two primitives provide. The
+    -- attributed, definition-aware construction that builds on them is
+    -- 'Location.Instance.locationInstanceGeometry', covered under
+    -- "Location instance identity".
+    describe "checked coordinate arithmetic (#1796)" $ do
+        it "narrows any value inside Int's range unchanged" $ do
+            narrowTileCoordinate "c" 0 `shouldBe` Right 0
+            narrowTileCoordinate "c" (toInteger (maxBound ∷ Int))
+                `shouldBe` Right maxBound
+            narrowTileCoordinate "c" (toInteger (minBound ∷ Int))
+                `shouldBe` Right minBound
+
+        it "refuses a value one step outside Int's range on either side, \
+           \reporting the component and the exact value" $ do
+            narrowTileCoordinate "c" (toInteger (maxBound ∷ Int) + 1)
+                `shouldBe` Left (LocationGeometryFailure "c"
+                                    (toInteger (maxBound ∷ Int) + 1))
+            narrowTileCoordinate "c" (toInteger (minBound ∷ Int) - 1)
+                `shouldBe` Left (LocationGeometryFailure "c"
+                                    (toInteger (minBound ∷ Int) - 1))
+
+        it "agrees exactly with translateBounds wherever the translation \
+           \is representable" $ do
+            let cases = [ ((10, 20), RelBounds (-2) (-2) 2 2)
+                        , ((0, 0),   RelBounds 0 0 0 0)
+                        , ((-40, 72), RelBounds (-9) (-3) 1 9)
+                        , ((5, -3),  RelBounds (-2147483647) (-2147483647)
+                                               2147483647 2147483647) ]
+            forM_ cases $ \(anchor@(gx, gy), rel) →
+                translateBoundsChecked (toInteger gx, toInteger gy) rel
+                    `shouldBe` Right (translateBounds anchor rel)
+
+        it "refuses the first offending component in min_x, min_y, max_x, \
+           \max_y order rather than wrapping" $ do
+            let top = toInteger (maxBound ∷ Int)
+            translateBoundsChecked (top, 0) (RelBounds 0 0 1 0)
+                `shouldBe` Left (LocationGeometryFailure "bounds.max_x"
+                                    (top + 1))
+            translateBoundsChecked (0, top) (RelBounds 0 0 0 1)
+                `shouldBe` Left (LocationGeometryFailure "bounds.max_y"
+                                    (top + 1))
+            translateBoundsChecked (toInteger (minBound ∷ Int), 0)
+                                   (RelBounds (-1) 0 0 0)
+                `shouldBe` Left (LocationGeometryFailure "bounds.min_x"
+                                    (toInteger (minBound ∷ Int) - 1))
 
     describe "boundsContainsPoint (non-wrapping)" $ do
         let box = AbsBounds 0 0 4 4
@@ -326,3 +534,25 @@ spec = describe "Location spatial bounds" $ do
         it "a non-wrapping (arena / zero-size) world never wraps" $
             boundsContainsPoint 0 (AbsBounds 60 0 63 4) (-64, 0)
                 `shouldBe` False
+
+-- | A logger whose backend appends every emitted 'LogEntry' to an
+--   'IORef', with 'CatAsset' debug logging enabled -- mirrors
+--   'Test.Headless.Asset.YamlList' 's own fixture, which does not
+--   export it.
+callbackLogger ∷ IO (LoggerState, IORef [LogEntry])
+callbackLogger = do
+    entriesRef ← newIORef []
+    logger ← initLogger defaultLogConfig
+        { lcBackend = LogToCallback (\e → modifyIORef' entriesRef (e :))
+        , lcDebugCategories = [CatAsset]
+        }
+    pure (logger, entriesRef)
+
+withTempLocationYaml ∷ FilePath → String → (FilePath → IO a) → IO a
+withTempLocationYaml name contents action = do
+    tmp ← getTemporaryDirectory
+    let dir  = tmp </> "synarchy-location-bounds-spec"
+        path = dir </> name
+    createDirectoryIfMissing True dir
+    writeFile path contents
+    action path `finally` removeDirectoryRecursive dir

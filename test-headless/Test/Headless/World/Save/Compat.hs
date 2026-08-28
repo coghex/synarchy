@@ -58,6 +58,7 @@ import World.Save.Types
     ( SaveMetadata(..), BuildingSnapshot(..), UnitSnapshot(..)
     , BuildingInstanceSnapshot(..), UnitInstanceSnapshot(..)
     , resolveLegacyLocationParams )
+import Test.Headless.Location.Fixture (expectGeometry)
 import Location.Types (emptyLocationRegistry)
 import Location.Bounds (AbsBounds(..))
 import World.Chunk.Types (ChunkCoord(..))
@@ -1889,5 +1890,6 @@ resolveSnapshotLocations snap = snap
     { snapPages = HM.map resolvePage (snapPages snap) }
   where
     resolvePage p = p
-        { pgsGenParams =
-            resolveLegacyLocationParams emptyLocationRegistry (pgsGenParams p) }
+        { pgsGenParams = expectGeometry
+            (resolveLegacyLocationParams emptyLocationRegistry
+                                         (pgsGenParams p)) }

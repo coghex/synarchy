@@ -40,6 +40,7 @@ import Location.Instance
     ( LocationInstance(..), LocationLifecycle(..), buildLocationInstances
     , instancesToList )
 import Location.Bounds (RelBounds(..))
+import Test.Headless.Location.Fixture (expectGeometry)
 import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
 import Unit.Types
@@ -193,7 +194,8 @@ newSightPage env pageId chunk time = do
 pageParams ∷ WorldGenParams
 pageParams = defaultWorldGenParams
     { wgpLocationOverlay   = overlay1
-    , wgpLocationInstances = buildLocationInstances Nothing registry1 overlay1
+    , wgpLocationInstances =
+        expectGeometry (buildLocationInstances Nothing registry1 overlay1)
     }
 
 -- | The seam fixture (#1230): a 2-chunk-wide world with loc1 placed at
@@ -214,7 +216,8 @@ seamPageParams ∷ WorldGenParams
 seamPageParams = defaultWorldGenParams
     { wgpWorldSize         = 2
     , wgpLocationOverlay   = seamOverlay
-    , wgpLocationInstances = buildLocationInstances Nothing registry1 seamOverlay
+    , wgpLocationInstances =
+        expectGeometry (buildLocationInstances Nothing registry1 seamOverlay)
     }
 
 -- | The canonical key the seam fixture's terrain must be stored under.

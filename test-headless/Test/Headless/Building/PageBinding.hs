@@ -68,6 +68,7 @@ import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Language.Semantic.Types (ConceptId(..))
 import Location.Bounds (RelBounds(..))
 import Location.Instance (LocationInstances, buildLocationInstances)
+import Test.Headless.Location.Fixture (expectGeometry)
 import Location.Overlay.Types (LocationOverlay)
 import Location.Types
     ( LocationDef(..), LocationNaming(..), LocationRegistry
@@ -222,7 +223,7 @@ locDef lid = LocationDef
 --   chunk (0,0) (bounds around 'insideLocA'), page B's in chunk (1,0)
 --   (bounds around 'insideLocB').
 instancesFor ∷ ChunkCoord → LocationInstances
-instancesFor cc = buildLocationInstances Nothing registry overlay
+instancesFor cc = expectGeometry (buildLocationInstances Nothing registry overlay)
   where
     registry ∷ LocationRegistry
     registry = registerLocation (locDef "bind_loc") emptyLocationRegistry
