@@ -224,16 +224,30 @@ path-selectively on PRs (`ci_expensive_gates.py --gate unit-assets`).
 Self-audit (#646) for the F4 action-outcome oracle: greps each registered
 commit-boundary verb's own source for its `debug.recordOutcome` /
 `pushActionOutcome` call site and reports instrumented yes/no, mirroring
-`ci_probes.py --status`'s "make the gap visible" style. Not a blocking
-gate — Tier 2/3 verbs are deliberate fast-follows, not regressions.
-Verbs that share a file (e.g. `unitAi.commandMove`/`commandAttack`,
-`craft.execute`/`executeAt`) are checked within their OWN function body,
-not file-wide, so instrumenting one sibling can't false-positive the
-other. `--self-test` proves that scoping actually discriminates.
+`ci_probes.py --status`'s "make the gap visible" style. The plain report
+is not a blocking gate — it always exits 0, because Tier 2/3 verbs are
+deliberate fast-follows, not regressions. Verbs that share a file (e.g.
+`unitAi.commandMove`/`commandAttack`, `craft.execute`/`executeAt`) are
+checked within their OWN function body, not file-wide, so instrumenting
+one sibling can't false-positive the other. `--self-test` proves that
+scoping actually discriminates, against constructed source strings.
+
+`--verify-tier1` (#1704) is the blocking half, and it is the only one
+that reads the real tree: it evaluates the Tier 1 (Layer A) areas ONLY
+and exits non-zero when a mapped source file is absent — a producer
+renamed or moved out from under the checker — or when a mapped file is
+present but a required producer pattern is missing. Each verb declares
+the files its check reads, which is what lets the gate tell a stranded
+MAPPING (re-point the checker) from deleted INSTRUMENTATION (restore
+it); the plain report cannot, and prints `gap` with status 0 for both.
+That is how #787's input-thread split left all five Layer A areas
+reporting as gaps while every producer was present and passing its own
+hspec suite. Run by CI and `make ci`.
 
 ```bash
 python3 tools/action_outcome_coverage.py
 python3 tools/action_outcome_coverage.py --self-test
+python3 tools/action_outcome_coverage.py --verify-tier1
 ```
 
 ### `location_placement_sweep.py`
@@ -2398,7 +2412,7 @@ tools/
 ├── test_audit.py           (unit tests)
 ├── ci_expensive_gates.py   (path selector for the worldgen/graphical/unit-assets/save-compat gates)
 ├── lua_module_budget.py    (Lua module split line-budget guard)
-├── action_outcome_coverage.py (F4 action-outcome verb instrumentation self-audit)
+├── action_outcome_coverage.py (F4 action-outcome verb instrumentation self-audit; --verify-tier1 is the CI gate)
 ├── language_report.py      (generated-language native-name report/check, #710/#1094/#1095/#1096)
 ├── run_probes.py           (opt-in aggregate behavior-probe runner)
 ├── gameplay_scenarios.py   (manual first-expedition scenarios, #925 — outside CI)

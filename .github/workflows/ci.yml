@@ -723,6 +723,26 @@ jobs:
           python3 tools/concept_id_inventory_audit.py --self-test
           python3 tools/concept_id_inventory_audit.py
 
+      # Cheap, no-engine guard (issue #1704): fails if an F4 Tier 1
+      # (Layer A) input area's mapping is stranded -- a producer renamed
+      # or moved out from under tools/action_outcome_coverage.py -- or
+      # if its instrumentation was deleted outright. The plain coverage
+      # report cannot tell those two apart and exits 0 for both, which
+      # is exactly how #787's input-thread split left five fully
+      # instrumented Layer A areas reporting as gaps, unnoticed, with
+      # nothing failing: the pre-#1704 self-test proved its patterns
+      # against constructed source strings and never touched the real
+      # tree. Unconditional rather than path-selective: the stranding is
+      # caused by the very rename that moves the file a path filter
+      # would key on, and the check is a handful of regex searches
+      # costing milliseconds. Tier 2/3 gaps stay deliberate fast-follows
+      # (#646) -- this gate ignores them, and the plain report keeps
+      # exit status 0.
+      - name: F4 action-outcome Tier 1 coverage mapping gate
+        run: |
+          python3 tools/action_outcome_coverage.py --self-test
+          python3 tools/action_outcome_coverage.py --verify-tier1
+
       # Cheap, no-engine guard (issue #1196): fails if a CH item's
       # `## Status` checklist marker and its `### ` heading marker
       # disagree. Two independent lanes write the findings report --
