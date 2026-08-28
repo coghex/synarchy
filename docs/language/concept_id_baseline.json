@@ -2,6 +2,7 @@
   "comment": [
     "GENERATED RATCHET — do not hand-edit; see tools/concept_id_inventory_audit.py.",
     "Every concept id data/language/concepts.yaml has ever shipped. An id is immutable once it appears here: it may be added, never renamed, removed or reused.",
+    "This artifact records an id's presence and exact string and nothing else, so the audit fails a removal, a rename and an unratcheted addition. Same-string reuse -- keeping an id while repurposing what it means -- is review policy, not something this artifact can detect: the authored English forms and the domain stay editable.",
     "Record a deliberate addition with `python3 tools/concept_id_inventory_audit.py --update-baseline`, which refuses any run that would drop an id."
   ],
   "version": 1,

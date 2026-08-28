@@ -3,8 +3,11 @@
 
 `src/Language/Semantic/Types.hs` states the rule plainly — "Ids may be
 added, never renamed or reused" — and until this audit nothing enforced
-it. A change could drop `MEMORY`, add a conforming `RECOLLECTION`, and
-leave every existing check green: the headless suite
+any part of it. This audit enforces THREE of those, not all of it:
+removal, rename and unratcheted addition (see "What this audit cannot
+see" below). A change could drop `MEMORY`, add a conforming
+`RECOLLECTION`, and leave every existing check green: the headless
+suite
 (`Test.Headless.Language.Semantic`) pins the catalogue VERSION, a
 minimum COUNT, the six domains, the 20-30 per-domain balance and the
 presence of all four authored forms, and every one of those is an
@@ -32,7 +35,9 @@ a removal AND an addition rather than as a single "renamed" finding.
 === What is guarded, and what is deliberately NOT
 
 Guarded: the PRESENCE of every id the catalogue has ever shipped, and
-its exact STRING. That is the whole compatibility boundary.
+its exact STRING — so removal, rename and unratcheted addition fail.
+That is the whole boundary this gate can hold; "never reused" is not
+part of it (see below).
 
 Not guarded, deliberately (issue #1717 requirement 5):
 
@@ -59,13 +64,16 @@ that scope rather than merely observing it.
 
 === What this audit cannot see
 
-Same-string REPURPOSING. Because every authored form and the domain may
+Same-string REPURPOSING — the "never reused" half of the contract
+comment's rule. Because every authored form and the domain may
 legitimately change, an entry that keeps its id while its meaning is
 rewritten from "memory" to "mountain" is indistinguishable here from an
-ordinary copy-edit. Detecting that would mean freezing exactly the
-fields requirement 5 keeps editable, so it remains a review policy, not
-behaviour this gate enforces. The gate covers removal, rename and
-unratcheted addition.
+ordinary copy-edit. Detecting it would mean freezing exactly the fields
+requirement 5 keeps editable, so REUSE remains a review policy and is
+not behaviour this gate enforces. The gate covers removal, rename and
+unratcheted addition, and nothing claims otherwise: the diagnostics
+below restate the RULE an id is held to, never the set of violations
+this audit can see.
 
 === The artifact and the ratchet
 
@@ -226,6 +234,12 @@ def write_baseline(root: Path, ids: list[str]) -> None:
             "Every concept id data/language/concepts.yaml has ever shipped. "
             "An id is immutable once it appears here: it may be added, never "
             "renamed, removed or reused.",
+            "This artifact records an id's presence and exact string and "
+            "nothing else, so the audit fails a removal, a rename and an "
+            "unratcheted addition. Same-string reuse -- keeping an id while "
+            "repurposing what it means -- is review policy, not something "
+            "this artifact can detect: the authored English forms and the "
+            "domain stay editable.",
             f"Record a deliberate addition with `{UPDATE_COMMAND}`, which "
             "refuses any run that would drop an id.",
         ],
