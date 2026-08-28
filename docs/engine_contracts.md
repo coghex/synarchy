@@ -85,9 +85,10 @@ and the gate is never an iteration loop. This is the enumeration and the
 exemptions.
 
 The set: warning-clean (`-Werror`) build of library/exe + both test
-suites, the headless hspec suite, `test_audit.py`, the Lua/Haskell
-module-budget guards, the Lua duplicate-function audit, the
-Unicode-operator audit, the Lua strict-decoder audit
+suites, the headless hspec suite, `test_audit.py`,
+`test_determinism.py`, the Lua/Haskell module-budget guards, the Lua
+duplicate-function audit, the Unicode-operator audit, the Lua
+strict-decoder audit
 (`lua_strict_decode_audit.py --self-test` then the bare audit, #1605 —
 no direct `Data.Text.Encoding.decodeUtf8` under
 `src/Engine/Scripting/Lua/`), the persistence-inventory / EngineEnv-capability
@@ -126,19 +127,36 @@ the exact ROWS of it that reuse the asset — never to "the basename appears
 somewhere" — because `agility` and `strength` are each used by their own
 physical-stat row AND by a skill row in one file, so a basename-only pin
 would keep passing after the pinned reuse was deleted. It also pins the
-two runtime family
-inventories (`ICON_SUBDIRS` and `scripts/startup_loader.lua`'s preload
-list) to each other and to every family's `<kind>_unknown.png`.
-Extraction refuses rather than narrows: an unsupported table shape, a
-computed `icon` assignment outside the closed reason-carrying forwarding
-allowlist, an `icon` assignment outside the enumerated reference sites, an
-unterminated string, and any enumerated source, table, anchor or allowlist
-entry yielding zero matches are each an error naming `file:line`. Per-FAMILY
-fallback-asset presence stays `tools/texture_subset_audit.py`'s job, and
+two runtime family inventories (`ICON_SUBDIRS` and
+`scripts/startup_loader.lua`'s preload list) to each other and to every
+family's `<kind>_unknown.png`. Extraction refuses rather than narrows: an
+unsupported table shape, a computed `icon` assignment outside the closed
+reason-carrying forwarding allowlist, an `icon` assignment outside the
+enumerated reference sites, an unterminated string, and any enumerated
+source, table, anchor or allowlist entry yielding zero matches are each an
+error naming `file:line`. Per-FAMILY fallback-asset presence stays
+`tools/texture_subset_audit.py`'s job, and
 `assets/textures/icons/location/` is outside `ICON_SUBDIRS` and owned by
 `tools/location_map_icon_asset_check.py`.
 
-**The concept-id-inventory audit (#1717)** was the previous newest member.
+**The world-determinism content-identity self-test (#1724)** was the
+previous newest member. `tools/test_determinism.py` is the executable
+specification of what `tools/world_determinism.py` means by
+"content-identical" — a reversed tile array and a reordered-key tile
+must hash EQUAL, while a changed field, a missing tile and an unstable
+canonical form must not. Issue #23 / PR #34 chose content identity over
+byte identity deliberately, and this is the only place that choice is
+asserted; it defines the relation, it does not change it. `world_check
+--quick` hashing six real seeds against their baselines (#1361) does
+NOT cover it — the engine emits tiles in a stable order, so a regression
+that made the checker order-SENSITIVE would still produce matching
+hashes and pass every gate. Pure Python, no engine, no GPU, no network,
+sub-second, and deliberately UNCONDITIONAL on both sides rather than
+behind the worldgen selector that gates `world_check --quick`: the
+contract lives in `tools/`, and a change that selector would not fire on
+can break it.
+
+**The concept-id-inventory audit (#1717).**
 `tools/concept_id_inventory_audit.py` pins every concept id
 `data/language/concepts.yaml` has shipped against
 `docs/language/concept_id_baseline.json`: a removal fails naming the id
