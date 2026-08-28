@@ -58,6 +58,13 @@ defaultWindowConfig vc = WindowConfig
   , wcFullscreen = case (vcWindowMode vc) of
       Fullscreen → True
       _          → False
+  -- A persisted borderless mode reaches GLFW from the creation path
+  -- (#1731). Before that it was reported by `getVideoConfig` but never
+  -- applied, so the window came up decorated and ordinary until some
+  -- later explicit mode request performed the real transition.
+  , wcBorderless = case (vcWindowMode vc) of
+      BorderlessWindowed → True
+      _                  → False
   , wcTitle      = T.pack "Synarchy"
   , wcResizable  = True
   , wcVisible    = True

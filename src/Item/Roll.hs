@@ -6,6 +6,9 @@ module Item.Roll
     , groundQualityFallbackRange
     , groundConditionBaseRange
     , groundConditionPenaltyRange
+    , groundConditionBaseDomain
+    , GroundConditionBase
+    , mkGroundConditionBase
     , salvageCondition
     , rollGroundQuality
     , rollGroundCondition
@@ -73,6 +76,47 @@ groundConditionBaseRange = (80, 100)
 groundConditionPenaltyRange ∷ (Float, Float)
 groundConditionPenaltyRange = (0, 20)
 
+-- | The domain an EXPLICIT caller condition must lie in: exactly
+--   'Item.Types.iiCondition'\'s declared @0..100@, both endpoints
+--   included. Not to be confused with 'groundConditionBaseRange',
+--   which is the narrower band a base is DRAWN from when the caller
+--   names none.
+groundConditionBaseDomain ∷ (Float, Float)
+groundConditionBaseDomain = (0, 100)
+
+-- | An explicit ground-salvage base that has been CHECKED against
+--   'groundConditionBaseDomain' (#1790).
+--
+--   Abstract on purpose — 'mkGroundConditionBase' is the only way to
+--   build one — so \"no base outside the domain reaches
+--   'salvageCondition'\" holds by construction rather than by a runtime
+--   branch a later caller could route around.
+--
+--   The clamp inside 'salvageCondition' is not that guarantee and never
+--   was: it bounds the RESULT, so a base of 120 lands on exactly 100
+--   for every penalty in @[0, 20]@ — handing the caller the pristine
+--   condition this path is defined not to offer — while a non-finite
+--   base is laundered into 0 or 100 by the same clamp and becomes
+--   indistinguishable from a legitimate roll downstream.
+newtype GroundConditionBase = GroundConditionBase Float
+
+-- | Accept an explicit @condition@ prop iff it lies in
+--   'groundConditionBaseDomain'. 'Nothing' REJECTS it, and the caller
+--   is expected to refuse the whole spawn rather than substitute a
+--   fallback: a silently corrected base is a wrong salvage condition
+--   that no downstream range check can tell from a real one.
+--
+--   Non-finite values fail by that same comparison rather than by a
+--   test of their own: every IEEE comparison against NaN is False, so
+--   NaN fails @≥ lo@; @+Infinity@ fails @≤ hi@ and @-Infinity@ fails
+--   @≥ lo@. A value that cannot be ordered against the domain is not
+--   in it.
+mkGroundConditionBase ∷ Float → Maybe GroundConditionBase
+mkGroundConditionBase b
+    | b ≥ lo ∧ b ≤ hi = Just (GroundConditionBase b)
+    | otherwise       = Nothing
+  where (lo, hi) = groundConditionBaseDomain
+
 -- | Combine the salvage path's TWO independent draws: the condition the
 --   item started at, minus the wear it has taken, clamped to [0, 100].
 --
@@ -115,10 +159,15 @@ rollGroundQuality def Nothing  rngRef =
 --   drawn either way, because a caller naming a condition is naming
 --   what the item STARTED as, not what it is now. There is no way to
 --   request or guarantee pristine condition by bypassing the penalty.
-rollGroundCondition ∷ Maybe Float → IORef StdGen → IO Float
+--
+--   An explicit base arrives already checked against
+--   'groundConditionBaseDomain' (#1790): 'GroundConditionBase' cannot
+--   be built any other way, so every base this sees — drawn or named —
+--   is inside @[0, 100]@ before the penalty is subtracted.
+rollGroundCondition ∷ Maybe GroundConditionBase → IORef StdGen → IO Float
 rollGroundCondition mBase rngRef = do
     base ← case mBase of
-        Just b  → return b
+        Just (GroundConditionBase b) → return b
         Nothing → rollUniformRange groundConditionBaseRange rngRef
     penalty ← rollUniformRange groundConditionPenaltyRange rngRef
     return (salvageCondition base penalty)

@@ -21,7 +21,10 @@
 module Location.Bounds
     ( RelBounds(..)
     , AbsBounds(..)
+    , LocationGeometryFailure(..)
+    , narrowTileCoordinate
     , translateBounds
+    , translateBoundsChecked
     , boundsContainsPoint
     , boundsIntersect
     , distancePointToBounds
@@ -62,12 +65,26 @@ import World.Plate (worldWidthTiles)
 --   reinstated.
 --
 --   Being downstream of the gate is not by itself a PROOF of ordering
---   either. 'translateBounds' below is unchecked 'Int' addition and the
---   loader constrains ordering without constraining RANGE, so an
---   extreme authored box at a nonzero anchor can wrap and invert. That
---   is a known, deliberately unaddressed edge (#1668 leaves defining an
---   authored-coordinate range out of scope); it is noted here so the
---   save-side check is not read as covering only corrupt payloads.
+--   either, and since #1796 the proof has two halves, neither of which
+--   is this one. First, the loader gate now ALSO constrains RANGE: all
+--   four authored coordinates must lie in
+--   'Engine.Asset.YamlLocations.authoredLocationCoordinateLimit' 's
+--   inclusive @±(2^31 - 1)@ domain, which keeps authored data sane and
+--   attributable to a field. Second — and this is the part that
+--   actually proves it, because chunk coordinates remain unrestricted
+--   'Int's — instance geometry is CONSTRUCTED CHECKED:
+--   'Location.Instance.locationInstanceGeometry' computes the chunk
+--   centre and all four translated bounds in 'Integer' and refuses the
+--   placement before any 'Location.Instance.LocationInstance' exists
+--   unless every component is representable as an 'Int'.
+--   'translateBoundsChecked' below is that translation half.
+--
+--   'translateBounds' itself stays as it was — plain, unchecked 'Int'
+--   addition — because it is the shared expectation ORACLE the bounds
+--   and worldgen suites compare placed geometry against, and because
+--   every representable translation must still come out identical to
+--   it. Production code reaches geometry through the checked route, not
+--   through this function.
 data RelBounds = RelBounds
     { rbMinX ∷ !Int
     , rbMinY ∷ !Int
@@ -84,10 +101,68 @@ data AbsBounds = AbsBounds
     , abMaxY ∷ !Int
     } deriving (Show, Eq, Generic, NFData, Serialize)
 
--- | Anchor a relative bounds box at an absolute tile.
+-- | Anchor a relative bounds box at an absolute tile. Unchecked 'Int'
+--   addition: for any translation that is representable at all this
+--   agrees exactly with 'translateBoundsChecked', which is why it stays
+--   the suites' expectation oracle (#1796). Production geometry is
+--   built through the checked route.
 translateBounds ∷ (Int, Int) → RelBounds → AbsBounds
 translateBounds (gx, gy) (RelBounds minX minY maxX maxY) =
     AbsBounds (gx + minX) (gy + minY) (gx + maxX) (gy + maxY)
+
+-- | One coordinate component that could not be represented, and the
+--   exact 'Integer' value it would have had (#1796). Carried out of the
+--   checked arithmetic below and given its definition id and chunk
+--   coordinate by 'Location.Instance.locationInstanceGeometry', which
+--   is the only place this is produced with attribution.
+--
+--   'lgfComponent' names the component in authored\/derived terms —
+--   @"anchor.x"@, @"anchor.y"@, @"bounds.min_x"@, @"bounds.min_y"@,
+--   @"bounds.max_x"@ or @"bounds.max_y"@.
+data LocationGeometryFailure = LocationGeometryFailure
+    { lgfComponent ∷ !Text
+    , lgfValue     ∷ !Integer
+    } deriving (Show, Eq, Generic, NFData)
+
+-- | Narrow an exactly-computed 'Integer' tile coordinate to an 'Int',
+--   or report it as unrepresentable (#1796).
+--
+--   This is where the whole checked path's safety actually lives: every
+--   caller does its arithmetic in 'Integer', which cannot wrap, and
+--   only ever reaches an 'Int' through here. The comparison is a direct
+--   two-sided test against 'Int' 's own bounds — never @abs@, which is
+--   'minBound' at 'minBound' and would admit exactly the value it was
+--   meant to exclude.
+narrowTileCoordinate ∷ Text → Integer → Either LocationGeometryFailure Int
+narrowTileCoordinate component n
+    | n < toInteger (minBound ∷ Int) ∨ n > toInteger (maxBound ∷ Int)
+        = Left (LocationGeometryFailure component n)
+    | otherwise = Right (fromInteger n)
+
+-- | The checked counterpart of 'translateBounds' (#1796): anchor a
+--   relative box at an absolute tile given as exact 'Integer's, and
+--   build the 'AbsBounds' only once all four translated coordinates are
+--   proven representable.
+--
+--   The anchor arrives as 'Integer' rather than 'Int' deliberately, so
+--   a caller whose anchor is itself the result of unchecked
+--   multiplication ('Location.Instance.locationAnchorTileInteger') can
+--   hand it over WITHOUT narrowing it first — narrowing is the one
+--   operation that could wrap, and it happens here, after the check.
+--
+--   Failure reports the FIRST offending component in
+--   @min_x, min_y, max_x, max_y@ order. Nothing is clamped, saturated,
+--   or returned inverted: an unrepresentable component yields no box at
+--   all.
+translateBoundsChecked
+    ∷ (Integer, Integer) → RelBounds
+    → Either LocationGeometryFailure AbsBounds
+translateBoundsChecked (gx, gy) (RelBounds minX minY maxX maxY) =
+    AbsBounds
+        ⊚ narrowTileCoordinate "bounds.min_x" (gx + toInteger minX)
+        ⊛ narrowTileCoordinate "bounds.min_y" (gy + toInteger minY)
+        ⊛ narrowTileCoordinate "bounds.max_x" (gx + toInteger maxX)
+        ⊛ narrowTileCoordinate "bounds.max_y" (gy + toInteger maxY)
 
 rawContainsPoint ∷ AbsBounds → (Int, Int) → Bool
 rawContainsPoint (AbsBounds minX minY maxX maxY) (px, py) =

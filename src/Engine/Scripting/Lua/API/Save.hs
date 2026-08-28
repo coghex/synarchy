@@ -62,6 +62,7 @@ import World.Save.Types (SaveMetadata(..), SaveData(..), WorldPageSave(..)
                         , renderMissingLocationRef
                         , missingInfectionReferences
                         , renderMissingInfectionRef)
+import Location.Instance (locationGeometryErrorText)
 import Location.Types (LocationRegistry(..), LocationDef(..))
 import Building.Types (BuildingManager(..))
 import Unit.Types (UnitManager(..))
@@ -836,81 +837,99 @@ continueLoad env logger requestId saveName descriptors = do
                         "loadSave rejected for '" <> saveName <> "': " <> msg
                     failLoad (loadStatusRef env) requestId msg
                 Lua.pushboolean False
-              else do
-                -- #911: a pre-instance-identity save carries its
-                -- locations as per-chunk discovered / contents-spawned
-                -- sets with no instance table. Turning those into
-                -- instances needs each definition's bounds / label
-                -- (since #1230 there is no margin to resolve), which no
-                -- component decoder can reach — so the
-                -- pure decode left them PENDING and they are resolved
-                -- HERE, against the same registry the check above just
-                -- validated every location id against, before anything
-                -- is staged or published. Total and idempotent: a save
-                -- already carrying instances (or a page with no
-                -- locations at all) passes through untouched, so stored
-                -- instance state is never overwritten from a definition
-                -- edited since placement.
-                let resolvedSaveData = saveData
-                        { sdWorlds = map (resolveLegacyLocations locReg)
-                                         (sdWorlds saveData) }
-                -- issue #761 requirement 11: decode + migrate +
-                -- component-locally-validate EVERY registered Lua
-                -- component before touching any live Lua state. Any
-                -- failure aborts the whole load (nothing has changed
-                -- yet), exactly like the def-reference check above.
-                -- issue #766 requirement 5: a recognized pre-#760
-                -- compatibility migration predates every Lua-owned
-                -- persistent component (luaComponents is always empty
-                -- here), so isMigratedLegacyBaseline tells
-                -- save_modules.prepareLoad to supply each currently-
-                -- required module's own empty-state default instead of
-                -- hard-failing on "missing".
-                -- issue #900: the restored session's entity context,
-                -- computed ONCE here and used for two things — handed to
-                -- prepareLoad so each component's apply() can resolve its
-                -- rows' ownership (it is stashed for the later applyAll),
-                -- and reused below for the reference-edge diagnostics
-                -- that were previously its only consumer.
-                let known = knownEntitiesFromSaveData resolvedSaveData
-                prepared ← prepareLuaLoad logger requestId luaComponents
-                                          isMigratedLegacyBaseline known
-                case prepared of
-                  Left err → do
+              else case traverse (resolveLegacyLocations locReg)
+                                 (sdWorlds saveData) of
+                -- #1796: the legacy reconstruction below builds
+                -- instance geometry through the checked construction,
+                -- so an out-of-envelope saved overlay coordinate is a
+                -- LOAD REJECTION here rather than a wrapped box that
+                -- reaches staging. Same terms as the def-reference gate
+                -- above: nothing has been staged or published yet, so
+                -- the live session is untouched.
+                Left err → do
+                    let msg = "a saved page's location geometry is not \
+                              \representable — aborting the entire load \
+                              \(nothing changed): "
+                              <> locationGeometryErrorText err
                     Lua.liftIO $ do
                         logWarn logger CatWorld $
-                            "loadSave rejected for '" <> saveName
-                            <> "': " <> err
-                        failLoad (loadStatusRef env) requestId err
+                            "loadSave rejected for '" <> saveName <> "': " <> msg
+                        failLoad (loadStatusRef env) requestId msg
                     Lua.pushboolean False
-                  Right luaRefs → do
-                    Lua.liftIO $ do
-                        -- Issue #764 (save-overhaul C3): cross-validate
-                        -- every Lua-declared reference against this
-                        -- load's real entity sets. Never load-blocking
-                        -- (the #761-established tolerated-dangling-
-                        -- reference contract — see
-                        -- "World.Save.Integrity"'s haddock) — logged as
-                        -- diagnostics only (requirement 16).
-                        let -- componentVersions (issue #764):
-                            -- 'descriptors' is this SAME load's
-                            -- current Lua registry ({id,version,required}),
-                            -- already threaded into 'continueLoad' above --
-                            -- reused here rather than re-deriving it, so
-                            -- each diagnostic's version matches the reader
-                            -- that actually decoded its edge.
-                            componentVersions = HM.fromList
-                                [ (n, v) | (n, v, _) ← descriptors ]
-                            report = capIntegrityErrors
-                                (luaReferenceErrors componentVersions known luaRefs)
-                        forM_ (renderIntegrityReport report) $ \msg →
+                Right resolvedWorlds → do
+                    -- #911: a pre-instance-identity save carries its
+                    -- locations as per-chunk discovered / contents-spawned
+                    -- sets with no instance table. Turning those into
+                    -- instances needs each definition's bounds / label
+                    -- (since #1230 there is no margin to resolve), which no
+                    -- component decoder can reach — so the
+                    -- pure decode left them PENDING and they are resolved
+                    -- HERE, against the same registry the check above just
+                    -- validated every location id against, before anything
+                    -- is staged or published. Total and idempotent: a save
+                    -- already carrying instances (or a page with no
+                    -- locations at all) passes through untouched, so stored
+                    -- instance state is never overwritten from a definition
+                    -- edited since placement.
+                    let resolvedSaveData = saveData
+                            { sdWorlds = resolvedWorlds }
+                    -- issue #761 requirement 11: decode + migrate +
+                    -- component-locally-validate EVERY registered Lua
+                    -- component before touching any live Lua state. Any
+                    -- failure aborts the whole load (nothing has changed
+                    -- yet), exactly like the def-reference check above.
+                    -- issue #766 requirement 5: a recognized pre-#760
+                    -- compatibility migration predates every Lua-owned
+                    -- persistent component (luaComponents is always empty
+                    -- here), so isMigratedLegacyBaseline tells
+                    -- save_modules.prepareLoad to supply each currently-
+                    -- required module's own empty-state default instead of
+                    -- hard-failing on "missing".
+                    -- issue #900: the restored session's entity context,
+                    -- computed ONCE here and used for two things — handed to
+                    -- prepareLoad so each component's apply() can resolve its
+                    -- rows' ownership (it is stashed for the later applyAll),
+                    -- and reused below for the reference-edge diagnostics
+                    -- that were previously its only consumer.
+                    let known = knownEntitiesFromSaveData resolvedSaveData
+                    prepared ← prepareLuaLoad logger requestId luaComponents
+                                              isMigratedLegacyBaseline known
+                    case prepared of
+                      Left err → do
+                        Lua.liftIO $ do
                             logWarn logger CatWorld $
-                                "loadSave '" <> saveName
-                                <> "': integrity diagnostic: " <> msg
-                        -- Hand off the expensive per-page reconstruction
-                        -- to the world thread (World.Load.Stage) — it
-                        -- touches no live ref (requirement 6), so
-                        -- nothing here needs to wait for it.
-                        Q.writeQueue (worldQueue env)
-                            (WorldLoadTransaction requestId resolvedSaveData matReg)
-                    Lua.pushboolean True
+                                "loadSave rejected for '" <> saveName
+                                <> "': " <> err
+                            failLoad (loadStatusRef env) requestId err
+                        Lua.pushboolean False
+                      Right luaRefs → do
+                        Lua.liftIO $ do
+                            -- Issue #764 (save-overhaul C3): cross-validate
+                            -- every Lua-declared reference against this
+                            -- load's real entity sets. Never load-blocking
+                            -- (the #761-established tolerated-dangling-
+                            -- reference contract — see
+                            -- "World.Save.Integrity"'s haddock) — logged as
+                            -- diagnostics only (requirement 16).
+                            let -- componentVersions (issue #764):
+                                -- 'descriptors' is this SAME load's
+                                -- current Lua registry ({id,version,required}),
+                                -- already threaded into 'continueLoad' above --
+                                -- reused here rather than re-deriving it, so
+                                -- each diagnostic's version matches the reader
+                                -- that actually decoded its edge.
+                                componentVersions = HM.fromList
+                                    [ (n, v) | (n, v, _) ← descriptors ]
+                                report = capIntegrityErrors
+                                    (luaReferenceErrors componentVersions known luaRefs)
+                            forM_ (renderIntegrityReport report) $ \msg →
+                                logWarn logger CatWorld $
+                                    "loadSave '" <> saveName
+                                    <> "': integrity diagnostic: " <> msg
+                            -- Hand off the expensive per-page reconstruction
+                            -- to the world thread (World.Load.Stage) — it
+                            -- touches no live ref (requirement 6), so
+                            -- nothing here needs to wait for it.
+                            Q.writeQueue (worldQueue env)
+                                (WorldLoadTransaction requestId resolvedSaveData matReg)
+                        Lua.pushboolean True

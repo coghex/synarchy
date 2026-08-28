@@ -40,6 +40,7 @@ import Location.Types
 import Location.Instance
     ( LocationInstance(..), LocationLifecycle(..)
     , buildLocationInstances, instancesToList )
+import Test.Headless.Location.Fixture (expectGeometry)
 import Location.Bounds (RelBounds(..), translateBounds)
 import Location.Overlay
     ( computeLocationOverlay, computeLocationPlacement, LocationPlacement(..)
@@ -172,8 +173,8 @@ spec = do
             flatDef = mkDef "flat_test"     ["flat"]
             mtnDef  = mkDef "mountain_test" ["mountain"]
             -- A chunk's anchor tile — mirrors Location.Instance's
-            -- 'locationAnchorTile', spelled out here so the expectation
-            -- is independent of the code under test.
+            -- 'locationAnchorTileChecked', spelled out here so the
+            -- expectation is independent of the code under test.
             chunkCentre (ChunkCoord cx cy) =
                 ( cx * chunkSize + chunkSize `div` 2
                 , cy * chunkSize + chunkSize `div` 2 )
@@ -275,7 +276,9 @@ spec = do
                         -- page is initialized with no identity, so it
                         -- has no language provenance (#1092/#1101).
                         wgpLocationInstances p `shouldBe`
-                            buildLocationInstances Nothing registry expected
+                            expectGeometry
+                                (buildLocationInstances Nothing registry
+                                                        expected)
 
         it "places flat-anchored locations on land" $ \env → do
             ws ← sharedWorld env 42 64 3
@@ -358,8 +361,8 @@ spec = do
                 registry = registerLocation flatDef emptyLocationRegistry
                 p = defaultWorldGenParams
                         { wgpLocationStamped = HS.singleton coord
-                        , wgpLocationInstances =
-                            buildLocationInstances Nothing registry overlay
+                        , wgpLocationInstances = expectGeometry
+                            (buildLocationInstances Nothing registry overlay)
                         }
             HS.member coord (wgpLocationStamped p) `shouldBe` True
             map liContentsSpawned
@@ -541,8 +544,9 @@ spec = do
                 -- anchor, resolved bounds and save coverage with no
                 -- parallel construction path.
                 let registry = registerLocation flatDef emptyLocationRegistry
-                    insts = instancesToList
-                                (buildLocationInstances Nothing registry (lpOverlay wetPlacement))
+                    insts = instancesToList (expectGeometry
+                                (buildLocationInstances Nothing registry
+                                    (lpOverlay wetPlacement)))
                 case insts of
                     [i] → do
                         liDefId i `shouldBe` "flat_test"
@@ -561,9 +565,9 @@ spec = do
                 -- same constructor the placement pass uses.
                 let coord = ChunkCoord 5 (-3)
                     registry = registerLocation flatDef emptyLocationRegistry
-                    insts = instancesToList
+                    insts = instancesToList (expectGeometry
                                 (buildLocationInstances Nothing registry
-                                    (HM.singleton coord ("flat_test" ∷ Text)))
+                                    (HM.singleton coord ("flat_test" ∷ Text))))
                 map liChunk insts `shouldBe` [coord]
                 map liAnchor insts `shouldBe` [chunkCentre coord]
                 map liBounds insts

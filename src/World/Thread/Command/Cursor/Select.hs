@@ -183,6 +183,22 @@ handleWorldSetWorldCursorHoverBgTextureCommand wsc logger pageId tid = do
 --   without going through the hover-then-select cursor flow (which
 --   races with the per-tick mouse-hover updates from hud.update).
 --   No-op if the chunk isn't loaded.
+--
+--   Also clears BOTH zoomSelectNow and worldSelectNow, mirroring the
+--   standard 'handleWorldSelectChunkByCoordCommand' sets: this direct
+--   selection is authoritative and must win outright over any
+--   still-pending deferred arm from EITHER world.setZoomCursorSelect
+--   or world.setWorldCursorSelect (issue #1702). Leaving worldSelectNow
+--   True would let a LATER renderWorldCursorQuads pass
+--   (World.Render.CursorQuads) resolve that stale arm against whatever
+--   worldCursorPos is by then and retarget the tile just committed here
+--   to the hover result; leaving zoomSelectNow True is just as dangerous
+--   from the OTHER side — makeCursorQuad (World.Render.Zoom.Cursor)
+--   commits the hovered chunk into zoomSelectedPos and unconditionally
+--   clears worldSelectedTile whenever it resolves a pending zoom arm
+--   (the #135 opposing-clear, mirrored the other way), so a lingering
+--   chunk arm could wipe out this fresh tile selection on the very next
+--   zoom-map render even though nothing about it was ever re-armed.
 handleWorldSelectTileByCoordCommand ∷ WorldSimCapability → LoggerState → WorldPageId
     → Int → Int → Maybe Int → IO ()
 handleWorldSelectTileByCoordCommand wsc _logger pageId gx gy mz = do
@@ -199,11 +215,16 @@ handleWorldSelectTileByCoordCommand wsc _logger pageId gx gy mz = do
                     -- default to the column surface.
                     let z = fromMaybe (lcSurfaceMap lc VU.! columnIndex lx ly) mz
                     -- This path resolves the tile immediately (no hover
-                    -- round-trip), so the set and the opposing-chunk clear
-                    -- happen in the SAME write — no blank window. A new
-                    -- tile selection drops any chunk selection (issue #135).
+                    -- round-trip), so the set, the opposing-chunk clear
+                    -- and BOTH deferred-arm clears happen in the SAME
+                    -- write — no blank window, and no armed-but-
+                    -- uncommitted window a later render pass could
+                    -- resolve differently (issue #1702). A new tile
+                    -- selection drops any chunk selection (issue #135).
                     atomicModifyIORef' (wsCursorRef worldState) $ \cs →
                         (cs { worldSelectedTile = Just (gx, gy, z)
+                            , zoomSelectNow     = False
+                            , worldSelectNow    = False
                             , zoomSelectedPos   = Nothing }, ())
 
 -- | Directly select the chunk whose chunk-aligned grid origin is

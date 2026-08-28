@@ -42,12 +42,14 @@ import Language.Generated.Types (generatorErrorText)
 import Language.Semantic.Catalogue (conceptCataloguePath, loadCatalogue)
 import Language.Semantic.Types (catalogueErrorText)
 import Location.Types (allLocations)
-import Location.Instance (buildLocationInstances)
+import Location.Instance
+    (buildLocationInstances, emptyLocationInstances, locationGeometryErrorText)
 import Language.Naming (Namer, mkNamer)
 import World.River.Identity (timelineRiverFeatureIds)
 import World.River.Naming (buildRiverNames)
 import Location.Overlay ( computeLocationPlacement, LocationPlacement(..)
                         , PlacementOutcome(..) )
+import Location.Overlay.Types (emptyLocationOverlay)
 import World.Preview (buildPreviewFromPixels, PreviewImage(..))
 import World.Render (surfaceHeadroom)
 import World.ZoomMap.Cache (buildZoomCacheWithPixels)
@@ -237,16 +239,34 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     let locDefs = allLocations locRegistry
         placement = computeLocationPlacement seed worldSize plates oceanMap oceanDist
                       (gtWorldLakes timeline) (gtWorldRivers timeline) locDefs
-        overlay = lpOverlay placement
-        params = params0
+        placedOverlay = lpOverlay placement
+    -- Instance ids (#911) are allocated HERE, at placement time, from
+    -- the deterministic overlay's canonical order — not at stamp time —
+    -- so an id is stable across save/load and across chunk
+    -- eviction/reload. Names (#1101) are rendered from those same ids,
+    -- once, and never re-derived.
+    --
+    -- #1796: that construction is CHECKED, and its failure is reported
+    -- rather than swallowed. There is no world-init failure LoadPhase
+    -- and this handler has no failure return, so an unrepresentable
+    -- placement takes the same degraded-but-continue shape the #997
+    -- outcomes below already use — a loud warning on both the log and
+    -- the generation feed — and drops BOTH the overlay and the instance
+    -- table together, so no wrapped or inverted box is ever written to
+    -- wsGenParamsRef and the two never disagree about what was placed.
+    (overlay, instances) ← case buildLocationInstances namer locRegistry
+                                                       placedOverlay of
+        Right built → pure (placedOverlay, built)
+        Left err → do
+            let msg = "Placed-location geometry is not representable — \
+                      \placing no locations (#1796): "
+                      <> locationGeometryErrorText err
+            logWarn logger CatWorld msg
+            sendGenLog env msg
+            pure (emptyLocationOverlay, emptyLocationInstances)
+    let params = params0
             { wgpLocationOverlay   = overlay
-            -- Instance ids (#911) are allocated HERE, at placement time,
-            -- from the deterministic overlay's canonical order — not at
-            -- stamp time — so an id is stable across save/load and
-            -- across chunk eviction/reload. Names (#1101) are rendered
-            -- from those same ids, once, and never re-derived.
-            , wgpLocationInstances =
-                buildLocationInstances namer locRegistry overlay
+            , wgpLocationInstances = instances
             -- River names (#1102) are rendered from the ids the
             -- timeline already allocated, once, and never re-derived.
             -- The table is empty without a language; the ids stay

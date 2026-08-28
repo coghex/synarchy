@@ -33,7 +33,8 @@ import qualified Data.Text as T
 import Data.IORef (writeIORef, modifyIORef')
 import qualified Graphics.UI.GLFW as GLFW
 import Engine.Core.Monad
-import Engine.Core.State (WindowState(..), appliedModeAtCreation, luaQueue)
+import Engine.Core.State (WindowCreationOutcome(..), applyWindowCreation
+                         , luaQueue)
 import Engine.Core.Capability.Render
   (RenderCapability(..), toRenderCapability)
 import Engine.Core.Resource
@@ -85,29 +86,64 @@ createWindow config = do
         logInfoM CatGraphics $ "Window created with actual size: " <> tshow actualSize
         pure $ Window win
   let Window win = window
-  -- A fullscreen request degrades gracefully to the plain window GLFW
-  -- just created, so the outcome — not the config — is what gets
-  -- recorded as the applied mode below (#907).
-  fullscreenApplied ← if wcFullscreen config
+  -- The live DECORATED window, sampled before any mode mutation moves or
+  -- resizes it. This is what seeds the windowed-geometry cache when the
+  -- borderless branch below succeeds (#1731): applying borderless here
+  -- means the first switch to 'Windowed' is an ENTRY, and
+  -- 'Engine.Core.State.applyWindowModeTransition' deliberately never
+  -- caches on the way in — so without this seed that switch would
+  -- restore 'defaultWindowState''s (100,100) / 800x600 fallback. The
+  -- REQUESTED dimensions would not do: configuration persists no
+  -- position, and a window manager may not honour the size exactly.
+  decoratedPos ← liftIO $ GLFW.getWindowPos win
+  decoratedSize ← liftIO $ GLFW.getWindowSize win
+
+  -- A fullscreen or borderless request degrades gracefully to the plain
+  -- window GLFW just created, so the outcome — not the config — is what
+  -- gets recorded as the applied mode below (#907, #1731).
+  let withPrimaryVideoMode ∷ ∀ s. Text
+                           → (GLFW.Monitor → GLFW.VideoMode → IO ())
+                           → EngineM s Bool
+      withPrimaryVideoMode what act = do
+        primaryMonitor ← liftIO $ GLFW.getPrimaryMonitor
+        case primaryMonitor of
+          Nothing → do
+            logInfoM CatGraphics $ "Failed to get primary monitor for " <> what
+            pure False
+          Just monitor → do
+            videoMode ← liftIO $ GLFW.getVideoMode monitor
+            case videoMode of
+              Nothing → do
+                logInfoM CatGraphics $ "Failed to get video mode for " <> what
+                pure False
+              Just vm → do
+                liftIO $ act monitor vm
+                pure True
+
+  -- Fullscreen wins if a caller somehow asks for both, so exactly one
+  -- mutation can ever run. 'defaultWindowConfig' never sets both.
+  outcome ← if wcFullscreen config
     then do
-      primaryMonitor ← liftIO $ GLFW.getPrimaryMonitor
-      case primaryMonitor of
-        Nothing → do
-          logInfoM CatGraphics "Failed to get primary monitor for fullscreen"
-          pure False
-        Just monitor → do
-          videoMode ← liftIO $ GLFW.getVideoMode monitor
-          case videoMode of
-            Nothing → do
-              logInfoM CatGraphics "Failed to get video mode for fullscreen"
-              pure False
-            Just vm → do
-              liftIO $ GLFW.setFullscreen win monitor vm
-              pure True
-    else pure False
+      applied ← withPrimaryVideoMode "fullscreen" $ \monitor vm →
+        GLFW.setFullscreen win monitor vm
+      pure $ if applied then CreatedFullscreen else CreatedPlain
+    else if wcBorderless config
+      then do
+        -- The same mutation 'Engine.Scripting.Lua.Message.Video's
+        -- BorderlessWindowed branch performs, on the same main-render
+        -- thread — a startup borderless window and one reached by a
+        -- later mode request are the same window.
+        applied ← withPrimaryVideoMode "borderless" $ \_monitor vm → do
+          GLFW.setWindowed win (GLFW.videoModeWidth vm)
+                               (GLFW.videoModeHeight vm) 0 0
+          GLFW.setWindowAttrib win GLFW.WindowAttrib'Decorated False
+        pure $ if applied then CreatedBorderless else CreatedPlain
+      else pure CreatedPlain
 
   env ← ask
   liftIO $ do
+    -- Sampled AFTER the mutation, so every published value describes the
+    -- window as it finally is — monitor-sized for a borderless boot.
     windowSize ← GLFW.getWindowSize win
     framebufferSize ← GLFW.getFramebufferSize win
     windowPos ← GLFW.getWindowPos win
@@ -116,11 +152,9 @@ createWindow config = do
     writeIORef (rcWindowPosRef (toRenderCapability env)) windowPos
     -- Seed the window-mode tracker from what GLFW actually did. Nothing
     -- else establishes it: 'Engine.Core.Init' cannot know whether this
-    -- fullscreen request succeeded, and 'defaultWindowConfig' never asks
-    -- for borderless at creation, so any non-fullscreen outcome is a
-    -- plain decorated window.
-    modifyIORef' (rcWindowStateRef (toRenderCapability env)) $ \ws →
-      ws { wsAppliedMode = appliedModeAtCreation fullscreenApplied }
+    -- fullscreen or borderless request succeeded.
+    modifyIORef' (rcWindowStateRef (toRenderCapability env)) $
+      applyWindowCreation outcome decoratedPos decoratedSize
     Q.writeQueue (luaQueue env) (LuaWindowResize (fst windowSize) (snd windowSize))
     Q.writeQueue (luaQueue env) (LuaFramebufferResize (fst framebufferSize) (snd framebufferSize))
     
