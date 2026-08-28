@@ -146,7 +146,13 @@ data FloraHarvest = FloraHarvest
       -- ^ (item def name, min count, max count) per harvest.
     , fhRegrowth         ∷ !Float
       -- ^ GAME-seconds until the tile is harvestable again (86400 = one
-      --   game-day ≈ 24 real-minutes at timeScale 1).
+      --   game-day ≈ 24 real-minutes at timeScale 1). Always finite and
+      --   strictly positive: the value is constrained where it is
+      --   AUTHORED ('Engine.Asset.YamlFlora.requireRegrowthTime', #1711)
+      --   and deliberately not clamped at any action site, so a
+      --   non-positive one — which the harvest gate would read as
+      --   already expired, making the very next call spawn the full
+      --   yield again — cannot reach here at all.
     , fhHarvestedTexture ∷ !TextureHandle
       -- ^ Depleted visual drawn while regrowing (a berry bush with no
       --   fruit). Handle 0 = no depleted art; the plant is hidden
