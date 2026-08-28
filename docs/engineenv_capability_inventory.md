@@ -58,11 +58,13 @@ removing an `EngineEnv` field without amending that paragraph fails the
 audit in CI and in `make ci` — even when §5's rows were updated
 correctly. Do not restate the count elsewhere in this document, and do
 not put a second number (a line anchor above all) inside the block; the
-audit rejects both. The markers are anchored to the sections they
-govern — this block to `## 1. Scope`, §6.2's to its own heading — so
-moving a pair somewhere inert while the real sentence goes back to a
-hand-maintained number is rejected too, as is renaming either heading
-out from under its block.
+audit rejects both. The block is pinned to where it sits, not merely
+to this section: it must be §1's first content, §1 may state no other
+number outside it (section and issue references, and numbers inside
+`code spans`, excepted), and the whole document is swept for the
+phrase shape `<n> EngineEnv fields`. §6.2's first assignment-method
+item, which used to repeat the total, is held to the same result
+without markers — see the note there.
 
 It is the same field set
 [`docs/persistence_state_inventory.md`](persistence_state_inventory.md)
@@ -899,14 +901,17 @@ guessing. Every name in every cell is a literal, complete Haskell
 module name: **no path-prefix globs, no "and similar" language, and no
 catch-all row**.
 
-1. For each module<!-- engineenv-no-field-total -->, scan its source
-   for every occurrence of one of the `EngineEnv` field names from §5
-   (`asks`/`gets`/`readIORef env ...`/`atomicModifyIORef' ... env`/
-   `writeIORef ... env` patterns, and plain field-name references) and
-   tally which capability group (§5's heading structure) each hit
-   belongs to.<!-- /engineenv-no-field-total --> (This sentence used to
-   repeat §1's field total; the marker keeps it from regaining one —
-   the audit rejects any number between the two markers.)
+The first numbered item below used to repeat §1's field total. It
+states no number now, and the audit holds it that way: it locates this
+section's first numbered item, requires it to still be that sentence,
+and rejects any number in it. The other items count freely — only the
+one that carried the second copy of the total is governed.
+
+1. For each module, scan its source for every occurrence of one of the
+   `EngineEnv` field names from §5 (`asks`/`gets`/`readIORef env
+   ...`/`atomicModifyIORef' ... env`/`writeIORef ... env` patterns, and
+   plain field-name references) and tally which capability group (§5's
+   heading structure) each hit belongs to.
 2. Four fields — `loggerRef`, `lifecycleRef`, `engineConfig`,
    `inputThreadActiveRef` — are read from nearly every module in the
    codebase purely for logging/boot-config boilerplate (§5's own

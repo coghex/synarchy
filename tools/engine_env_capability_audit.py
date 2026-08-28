@@ -504,17 +504,20 @@ def audit(engine_env_source: str, inventory_text: str) -> list[str]:
 #       `State.hs:NNN` anchor out, so the anchors #1669 removed cannot
 #       come back either.
 #
-#   `<!-- engineenv-no-field-total -->` ... `<!-- /engineenv-no-field-total -->`
-#       SS6.2's assignment-method sentence, which used to carry the
-#       second copy of the total. Exactly one block, and it must
-#       contain NO number at all -- so the two sites cannot disagree,
-#       because only one of them is allowed to state a total.
+# SS6.2's assignment-method sentence -- the second copy's old home --
+# is governed WITHOUT markers, by structural position plus a content
+# anchor: SS6.2's first numbered item must still be that sentence
+# (`PROCEDURE_ITEM_ANCHOR`) and must state no number at all. Markers
+# there would have to open the list item's content, which starts a
+# Markdown HTML block and splits the item's rendering.
 #
-# Both blocks are REQUIRED, and each is bound to the SECTION it
-# governs: deleting a marker is a violation, and so is relocating a
-# pair somewhere harmless while the real scope statement or the real
-# procedure sentence keeps a stale total outside it. A marker pair that
-# is not inside its own section governs nothing.
+# Three things stop the governed prose from being hollowed out rather
+# than edited: the marker pair is REQUIRED (deleting it is a
+# violation), it must be SS1's first content and SS1's only number
+# (so an unaudited paragraph cannot stand in front of the audited one,
+# and no second count can hide behind it), and the whole document is
+# swept for the one unambiguous reintroduction shape,
+# `<n> EngineEnv field(s)`.
 #
 # Section references (`SS5`, `SS7.3` -- written with the section sign in
 # the document) are excluded from both number scans. They are
@@ -530,8 +533,14 @@ SECTION_1_HEADING = "## 1. Scope"
 
 FIELD_TOTAL_OPEN = "<!-- engineenv-field-total -->"
 FIELD_TOTAL_CLOSE = "<!-- /engineenv-field-total -->"
-NO_FIELD_TOTAL_OPEN = "<!-- engineenv-no-field-total -->"
-NO_FIELD_TOTAL_CLOSE = "<!-- /engineenv-no-field-total -->"
+# SS6.2's assignment-method item 1 -- the sentence that used to carry
+# the second copy of the total -- is bound by CONTENT, not by markers:
+# it is identified by the phrase below and then required to state no
+# number. Markers were tried first and rejected: an HTML comment cannot
+# open a Markdown list item's content without starting an HTML block
+# and splitting the item's rendering, and marking only part of the
+# sentence would leave the rest free to state a total.
+PROCEDURE_ITEM_ANCHOR = "`EngineEnv` field names from §5"
 
 # Requirement 2 of issue #1669: the one-row-per-field contract is the
 # useful half of SS1's sentence and is independent of the number, so it
@@ -626,38 +635,172 @@ def _countable_numbers(body: str) -> list[str]:
     return _INTEGER_RE.findall(_SECTION_REF_RE.sub("", body))
 
 
-def _audit_span_location(inventory_text: str, spans: list[MarkedSpan],
-                         open_marker: str, heading: str,
-                         stop_prefixes: tuple[str, ...],
-                         governed: str) -> list[str]:
-    """Each marker pair must sit INSIDE the section it governs.
+def _audit_scope_block_placement(inventory_text: str,
+                                 spans: list[MarkedSpan]) -> list[str]:
+    """SS1's marked block must BE the scope statement, not merely live
+    in the same section as one.
 
-    Without this, the markers could be lifted out of SS1 and SS6.2 and
-    dropped somewhere inert -- an appendix, a code fence, the end of the
-    file -- while the real scope statement and the real procedure
-    sentence went back to carrying hand-maintained totals that nothing
-    reads. Every other rule here would still pass, because they only
-    ever look between the markers.
+    Section containment alone is not enough: the pair could be moved to
+    a later paragraph of SS1 -- or into a fenced block -- while SS1's
+    opening sentence went back to a hand-maintained total that nothing
+    reads. Two rules pin it, and they are deliberately positional
+    rather than semantic:
+
+    (a) The pair is SS1's first content. Whatever a reader sees first
+        under `## 1. Scope` is the audited paragraph.
+    (b) The rest of SS1 states no number at all. Digits are permitted
+        only inside a backtick code span (source references such as
+        `` `src/Engine/Core/State.hs:446` `` in the out-of-scope list),
+        in a section reference (`SS5`), and in an issue reference
+        (`#1669`). A field count is none of those, so a second copy has
+        nowhere in SS1 to live.
     """
     violations: list[str] = []
     doc = f"docs/{INVENTORY_PATH.name}"
-    bounds = section_bounds(inventory_text, heading, stop_prefixes)
+    bounds = section_bounds(inventory_text, SECTION_1_HEADING, ("## ",))
     if bounds is None:
-        violations.append(
-            f"{doc} has no `{heading}` heading -- `{open_marker}` is "
-            f"anchored to that section, so the section cannot be renamed "
-            f"or removed without moving the marker contract with it")
-        return violations
+        return [f"{doc} has no `{SECTION_1_HEADING}` heading -- "
+                f"`{FIELD_TOTAL_OPEN}` is anchored to that section, so it "
+                f"cannot be renamed or removed without moving the marker "
+                f"contract with it"]
     start, end = bounds
     for span in spans:
         if span.start < start or span.end > end:
             violations.append(
-                f"{doc}'s `{open_marker}` block (offsets "
-                f"{span.start}-{span.end}) is not inside `{heading}` "
-                f"(offsets {start}-{end}) -- a marker pair moved out of "
-                f"its section governs nothing, leaving {governed} free "
-                f"to drift again")
+                f"{doc}'s `{FIELD_TOTAL_OPEN}` block (offsets "
+                f"{span.start}-{span.end}) is not inside "
+                f"`{SECTION_1_HEADING}` (offsets {start}-{end}) -- a "
+                f"marker pair moved out of its section governs nothing, "
+                f"leaving the scope statement free to drift again")
+    if len(spans) == 1 and start <= spans[0].start <= end:
+        leading = inventory_text[start:spans[0].start]
+        if leading.strip():
+            violations.append(
+                f"{doc}'s `{FIELD_TOTAL_OPEN}` block is not the first "
+                f"content of `{SECTION_1_HEADING}` -- {leading.strip()[:60]!r} "
+                f"precedes it. The audited paragraph must be the scope "
+                f"statement a reader meets first, or an unaudited one can "
+                f"stand in front of it")
+
+    remainder = inventory_text[start:end]
+    for span in spans:
+        if start <= span.start and span.end <= end:
+            remainder = remainder.replace(
+                inventory_text[span.start:span.end], "", 1)
+    stray = _stray_numbers_outside_code(remainder)
+    if stray:
+        violations.append(
+            f"{doc}'s `{SECTION_1_HEADING}` states number(s) "
+            f"{', '.join(stray)} outside its `{FIELD_TOTAL_OPEN}` block. "
+            f"SS1 states exactly one number, the field total, inside that "
+            f"block; anything else there is a second hand-maintained count "
+            f"waiting to drift. Section (SS5) and issue (#1669) references "
+            f"and numbers inside `code spans` are fine")
     return violations
+
+
+def _stray_numbers_outside_code(text: str) -> list[str]:
+    """Decimal integers in `text` that are not inside a backtick code
+    span and are not a section or issue reference."""
+    without_code = re.sub(r"`[^`]*`", "", text)
+    without_refs = re.sub(r"#\d+", "", _SECTION_REF_RE.sub("", without_code))
+    return _INTEGER_RE.findall(without_refs)
+
+
+_NUMBERED_ITEM_RE = re.compile(r"^(\d+)\.[ \t]", re.MULTILINE)
+
+
+def _first_numbered_item(body: str) -> tuple[int, int] | None:
+    """`(content start, content end)` of the first `1. ` list item in
+    `body`, the item running to the next top-level numbered marker or
+    to the end of the text."""
+    first = None
+    for match in _NUMBERED_ITEM_RE.finditer(body):
+        if first is None:
+            if match.group(1) != "1":
+                continue
+            first = match
+            continue
+        return first.end(), match.start()
+    if first is None:
+        return None
+    return first.end(), len(body)
+
+
+def _audit_procedure_item_binding(inventory_text: str) -> list[str]:
+    """SS6.2's assignment-method item 1 must still be that sentence,
+    and must state no number.
+
+    That item is where the second, drifted copy of the total lived.
+    Section containment would not be enough even with markers: SS6.2
+    legitimately carries many numbers (module tallies, epic ids, its
+    own table), so the rule is pinned to the sentence itself -- found
+    by structural position AND by its own wording, so that inserting a
+    new item ahead of it does not quietly move the governed sentence
+    out from under the check.
+    """
+    doc = f"docs/{INVENTORY_PATH.name}"
+    bounds = section_bounds(inventory_text, SECTION_6_2_HEADING,
+                            ("## ", "### "))
+    if bounds is None:
+        return [f"{doc} has no `{SECTION_6_2_HEADING}` heading -- its "
+                f"assignment-method item 1 is audited for the field total "
+                f"it used to repeat, so the section cannot be renamed or "
+                f"removed without moving that rule with it"]
+    start, end = bounds
+    body = inventory_text[start:end]
+    item = _first_numbered_item(body)
+    if item is None:
+        return [f"{doc}'s `{SECTION_6_2_HEADING}` has no numbered "
+                f"assignment-method item -- item 1 is the audited "
+                f"sentence, so it must still exist"]
+    content = body[item[0]:item[1]]
+    violations: list[str] = []
+    if PROCEDURE_ITEM_ANCHOR not in content:
+        violations.append(
+            f"{doc}'s `{SECTION_6_2_HEADING}` item 1 no longer contains "
+            f"{PROCEDURE_ITEM_ANCHOR!r} -- that sentence is the one "
+            f"audited for the field total it used to repeat, so it may "
+            f"not be reworded past recognition or displaced by a new "
+            f"item 1. Item 1 currently reads {content.strip()[:80]!r}...")
+    stray = _stray_numbers_outside_code(content)
+    if stray:
+        violations.append(
+            f"{doc}'s `{SECTION_6_2_HEADING}` item 1 states number(s) "
+            f"{', '.join(stray)} -- that sentence must state no field "
+            f"total at all. SS1's marked block is the document's only "
+            f"field count; a second copy here is the drift issue #1669 "
+            f"removed")
+    return violations
+
+
+# The one reintroduction shape that is unambiguous enough to police
+# across the WHOLE document rather than inside a marked block: a number
+# directly qualifying `EngineEnv` fields, which is how both drifted
+# copies were written ("exactly 83 fields" was SS1's, "one of the 83
+# `EngineEnv` field names" was SS6.2's). Deliberately NOT the bare
+# "<n> fields" shape -- SS5's capability groups and SS7's roadmap
+# legitimately state their own record sizes ("21 fields", "a 14-field
+# record"), and a rule that flagged those would be a rule maintainers
+# route around.
+_ENGINEENV_TOTAL_RE = re.compile(
+    r"\d+\s*(?:\*\*)?\s*`?EngineEnv`?\s+fields?\b", re.IGNORECASE)
+
+
+def _audit_no_stray_engineenv_total(inventory_text: str,
+                                    spans: list[MarkedSpan]) -> list[str]:
+    """No `<n> EngineEnv field(s)` phrase anywhere outside the marked
+    block, whichever section it appears in."""
+    outside = inventory_text
+    for span in spans:
+        outside = outside.replace(
+            inventory_text[span.start:span.end], "", 1)
+    found = [m.group(0) for m in _ENGINEENV_TOTAL_RE.finditer(outside)]
+    if not found:
+        return []
+    return [f"docs/{INVENTORY_PATH.name} states {found} outside its "
+            f"`{FIELD_TOTAL_OPEN}` block -- the field total is stated "
+            f"once, in that block, and nowhere else in this document"]
 
 
 def audit_field_total(live_fields: list[str], inventory_text: str
@@ -676,9 +819,9 @@ def audit_field_total(live_fields: list[str], inventory_text: str
     bodies, marker_violations = extract_marked_spans(
         inventory_text, FIELD_TOTAL_OPEN, FIELD_TOTAL_CLOSE)
     violations.extend(marker_violations)
-    violations.extend(_audit_span_location(
-        inventory_text, bodies, FIELD_TOTAL_OPEN, SECTION_1_HEADING,
-        ("## ",), "the scope statement it governs"))
+    violations.extend(_audit_scope_block_placement(inventory_text, bodies))
+    violations.extend(_audit_no_stray_engineenv_total(
+        inventory_text, bodies))
     if not bodies:
         violations.append(
             f"{doc} SS1 has no `{FIELD_TOTAL_OPEN}` block -- the audited "
@@ -729,31 +872,7 @@ def audit_field_total(live_fields: list[str], inventory_text: str
                 f"that contract is the useful half of the sentence and is "
                 f"independent of the number")
 
-    no_total_bodies, no_total_marker_violations = extract_marked_spans(
-        inventory_text, NO_FIELD_TOTAL_OPEN, NO_FIELD_TOTAL_CLOSE)
-    violations.extend(no_total_marker_violations)
-    violations.extend(_audit_span_location(
-        inventory_text, no_total_bodies, NO_FIELD_TOTAL_OPEN,
-        SECTION_6_2_HEADING, ("## ", "### "),
-        "the assignment-method procedure it governs"))
-    if not no_total_bodies:
-        violations.append(
-            f"{doc} SS6.2 has no `{NO_FIELD_TOTAL_OPEN}` block -- the "
-            f"assignment-method sentence that used to repeat SS1's total "
-            f"must stay marked, or it can quietly regain one")
-    elif len(no_total_bodies) > 1:
-        violations.append(
-            f"{doc} has {len(no_total_bodies)} "
-            f"`{NO_FIELD_TOTAL_OPEN}` blocks -- exactly one is expected")
-    else:
-        numbers = _countable_numbers(no_total_bodies[0].body)
-        if numbers:
-            violations.append(
-                f"{doc} SS6.2's `{NO_FIELD_TOTAL_OPEN}` block contains "
-                f"number(s) {', '.join(numbers)} -- that sentence must "
-                f"state no field total at all. SS1's marked block is the "
-                f"document's only field count; a second copy here is the "
-                f"drift issue #1669 removed")
+    violations.extend(_audit_procedure_item_binding(inventory_text))
     return violations
 
 

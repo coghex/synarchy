@@ -29,9 +29,8 @@ from engine_env_capability_audit import (  # type: ignore
     CAPABILITIES, PERMANENT_IMPORTERS, PERMANENT_DEFINER, TEMPORARY_CEILING,
     parse_permanent_boundary, audit_permanent_boundary,
     audit_field_total, extract_marked_spans, section_bounds,
-    FIELD_TOTAL_OPEN, FIELD_TOTAL_CLOSE, NO_FIELD_TOTAL_OPEN,
-    NO_FIELD_TOTAL_CLOSE, ONE_ROW_PHRASE, SECTION_1_HEADING,
-    SECTION_6_2_HEADING,
+    FIELD_TOTAL_OPEN, FIELD_TOTAL_CLOSE, ONE_ROW_PHRASE,
+    SECTION_1_HEADING, SECTION_6_2_HEADING, PROCEDURE_ITEM_ANCHOR,
     audit_save_load_projection, parse_projection_bindings,
     SAVE_LOAD_CAPABILITY_MODULE, SAVE_LOAD_CAPABILITY_FILE,
     SAVE_LOAD_FIELD_MAP, SAVE_LOAD_PROJECTION,
@@ -1198,28 +1197,33 @@ _FT_LIVE = ["fieldOne", "fieldTwo", "fieldThree"]
 
 
 def _field_total_doc(total_body: str | None = None,
-                     no_total_body: str | None = None,
+                     procedure_item: str | None = None,
                      *, total_blocks: int = 1,
-                     no_total_blocks: int = 1,
+                     scope_prefix: str = "",
+                     scope_suffix: str = "",
                      trailing_section: str = "") -> str:
-    """A minimal document carrying both marked blocks."""
+    """A minimal document shaped like the real one: SS1 opening with the
+    marked block, and SS6.2 whose first numbered item is the audited
+    assignment-method sentence."""
     if total_body is None:
         total_body = ("\n\n`Fake.hs` declares it with exactly **3** fields, "
                       "`fieldOne` through `fieldThree`, and every one of them "
                       f"has {ONE_ROW_PHRASE} below.\n\n")
-    if no_total_body is None:
-        no_total_body = ("For each module, scan its source for every "
-                         "occurrence of one of the `EngineEnv` field names "
-                         "from §5.")
+    if procedure_item is None:
+        procedure_item = (f"For each module, scan its source for every "
+                          f"occurrence of one of the "
+                          f"{PROCEDURE_ITEM_ANCHOR}.")
     parts = [f"# Fake inventory\n\n{SECTION_1_HEADING}\n\n"]
+    if scope_prefix:
+        parts.append(f"{scope_prefix}\n\n")
     for _ in range(total_blocks):
         parts.append(f"{FIELD_TOTAL_OPEN}{total_body}{FIELD_TOTAL_CLOSE}\n\n")
+    if scope_suffix:
+        parts.append(f"{scope_suffix}\n\n")
     parts.append("## 6. Boundary\n\nprose\n\n"
-                 f"{SECTION_6_2_HEADING}\n\n")
-    for _ in range(no_total_blocks):
-        parts.append(
-            f"1. {NO_FIELD_TOTAL_OPEN}{no_total_body}"
-            f"{NO_FIELD_TOTAL_CLOSE}\n\n")
+                 f"{SECTION_6_2_HEADING}\n\nintro\n\n"
+                 f"1. {procedure_item}\n"
+                 "2. A later step that legitimately counts 4 modules.\n\n")
     if trailing_section:
         parts.append(f"{trailing_section}\n\n")
     return "".join(parts)
@@ -1376,66 +1380,150 @@ def test_field_total_section_references_are_not_counts():
            f"got: {violations}")
 
 
-def test_no_total_span_reintroduced_total_rejected():
+def test_procedure_item_reintroduced_total_rejected():
     """Requirement 1: SS1 and the SS6.2 procedure sentence must not be
     able to disagree. They cannot, because only SS1 may state a total --
     and this is the rule that keeps the second copy from coming back."""
     doc = _field_total_doc(
-        no_total_body=("For each module, scan its source for every "
-                       "occurrence of one of the 83 `EngineEnv` field "
-                       "names from §5."))
+        procedure_item=(f"For each module, scan its source for every "
+                        f"occurrence of one of the 83 "
+                        f"{PROCEDURE_ITEM_ANCHOR}."))
     violations = audit_field_total(_FT_LIVE, doc)
     expect(any("must state no field total" in v for v in violations),
            f"a field count reintroduced into SS6.2's procedure sentence "
            f"must be rejected, got: {violations}")
 
 
-def test_no_total_span_agreeing_total_still_rejected():
+def test_procedure_item_agreeing_total_still_rejected():
     """Even a CORRECT second copy is rejected: two hand-maintained
     numbers is the defect, not one wrong one."""
     doc = _field_total_doc(
-        no_total_body=("For each module, scan its source for every "
-                       "occurrence of one of the 3 `EngineEnv` field "
-                       "names from §5."))
+        procedure_item=(f"For each module, scan its source for every "
+                        f"occurrence of one of the 3 "
+                        f"{PROCEDURE_ITEM_ANCHOR}."))
     violations = audit_field_total(_FT_LIVE, doc)
     expect(any("must state no field total" in v for v in violations),
            f"a second copy of the total is rejected even when it agrees "
            f"today, got: {violations}")
 
 
-def test_no_total_span_missing_rejected():
-    doc = _field_total_doc(no_total_blocks=0)
+def test_procedure_item_total_in_its_tail_rejected():
+    """The whole item is audited, not its opening clause: a total added
+    after the recognizable phrase is still a second copy."""
+    doc = _field_total_doc(
+        procedure_item=(f"For each module, scan its source for every "
+                        f"occurrence of one of the "
+                        f"{PROCEDURE_ITEM_ANCHOR}, all 83 of them."))
     violations = audit_field_total(_FT_LIVE, doc)
-    expect(any("has no" in v and NO_FIELD_TOTAL_OPEN in v
-               for v in violations),
-           f"deleting the no-total marker must be a violation too, got: "
+    expect(any("must state no field total" in v for v in violations),
+           f"a total in the item's tail must be rejected, got: "
            f"{violations}")
 
 
-def test_no_total_span_duplicate_rejected():
-    doc = _field_total_doc(no_total_blocks=2)
+def test_procedure_item_reworded_away_rejected():
+    """The sentence is bound by its own wording as well as by position,
+    so it cannot be rewritten past recognition (or displaced by a new
+    item 1) while a stale total returns under a new phrasing."""
+    doc = _field_total_doc(
+        procedure_item="Tally each module's hits against the 83 names.")
     violations = audit_field_total(_FT_LIVE, doc)
-    expect(any("2 " in v and NO_FIELD_TOTAL_OPEN in v for v in violations),
-           f"exactly one no-total block is expected, got: {violations}")
+    expect(any("no longer contains" in v for v in violations),
+           f"an item 1 that is no longer the audited sentence must be "
+           f"rejected, got: {violations}")
 
 
-def test_marker_extractor_does_not_confuse_the_two_pairs():
-    """`<!-- engineenv-no-field-total -->` must not be found by a scan
-    for `<!-- engineenv-field-total -->`, or the no-total sentence would
-    be audited as if it were the total block."""
+def test_procedure_item_displaced_by_a_new_first_item_rejected():
     doc = _field_total_doc()
-    bodies, violations = extract_marked_spans(
-        doc, FIELD_TOTAL_OPEN, FIELD_TOTAL_CLOSE)
-    expect(violations == [] and len(bodies) == 1,
-           f"exactly one total block should be extracted, got "
-           f"{len(bodies)} and {violations}")
-    expect("scan its source" not in bodies[0].body,
-           "the total block must not swallow the no-total sentence")
-    no_bodies, no_violations = extract_marked_spans(
-        doc, NO_FIELD_TOTAL_OPEN, NO_FIELD_TOTAL_CLOSE)
-    expect(no_violations == [] and len(no_bodies) == 1,
-           f"exactly one no-total block should be extracted, got "
-           f"{len(no_bodies)} and {no_violations}")
+    displaced = doc.replace(
+        "1. For each module",
+        "1. A newly inserted first step.\n2. For each module", 1)
+    violations = audit_field_total(_FT_LIVE, displaced)
+    expect(any("no longer contains" in v for v in violations),
+           f"inserting a new item 1 must not move the audited sentence "
+           f"out from under the check, got: {violations}")
+
+
+def test_procedure_item_missing_section_rejected():
+    doc = _field_total_doc().replace(SECTION_6_2_HEADING, "### 6.2 Gone", 1)
+    violations = audit_field_total(_FT_LIVE, doc)
+    expect(any("has no" in v and SECTION_6_2_HEADING in v
+               for v in violations),
+           f"renaming the procedure's section must be rejected, got: "
+           f"{violations}")
+
+
+def test_procedure_item_later_items_may_count_legitimately():
+    """SS6.2's other steps legitimately state their own tallies; only
+    the one audited sentence is held to no-number."""
+    violations = audit_field_total(_FT_LIVE, _field_total_doc())
+    expect(violations == [],
+           f"item 2's legitimate '4 modules' count must not be flagged, "
+           f"got: {violations}")
+
+
+def test_scope_block_must_be_section_ones_first_content():
+    """Same-section relocation: the pair still sits in SS1, but an
+    unaudited paragraph -- carrying a stale total -- now stands in
+    front of it."""
+    doc = _field_total_doc(
+        scope_prefix="The record has exactly 83 fields.")
+    violations = audit_field_total(_FT_LIVE, doc)
+    expect(any("not the first content" in v for v in violations),
+           f"an unaudited paragraph placed ahead of the block must be "
+           f"rejected, got: {violations}")
+
+
+def test_scope_section_may_state_no_other_number():
+    """The other half of same-section relocation: the pair stays first,
+    and the stale copy is appended after it instead."""
+    doc = _field_total_doc(
+        scope_suffix="Historically the record had 83 of them.")
+    violations = audit_field_total(_FT_LIVE, doc)
+    expect(any("outside its" in v and "83" in v for v in violations),
+           f"a second count later in SS1 must be rejected, got: "
+           f"{violations}")
+
+
+def test_scope_section_allows_code_spans_and_references():
+    """The rule above must not flag what SS1 legitimately carries: a
+    source reference inside a code span, a section reference, and an
+    issue reference."""
+    doc = _field_total_doc(
+        scope_suffix="Out of scope: `EngineState` "
+                     "(`src/Engine/Core/State.hs:446`), see §7.3 and "
+                     "issue #1669.")
+    violations = audit_field_total(_FT_LIVE, doc)
+    expect(violations == [],
+           f"code spans and section/issue references must not read as "
+           f"field counts, got: {violations}")
+
+
+def test_stray_engineenv_total_anywhere_rejected():
+    """The document-wide backstop: the one unambiguous reintroduction
+    shape is rejected wherever it appears, not only in the two governed
+    places."""
+    doc = _field_total_doc(
+        trailing_section="## 9. Appendix\n\nA reminder that there are 83 "
+                         "`EngineEnv` fields in total.")
+    violations = audit_field_total(_FT_LIVE, doc)
+    expect(any("outside its" in v and "EngineEnv" in v
+               for v in violations),
+           f"an EngineEnv field total stated in an unrelated section must "
+           f"be rejected, got: {violations}")
+
+
+def test_bare_field_counts_elsewhere_are_not_flagged():
+    """The backstop is deliberately narrow: SS5's capability groups and
+    SS7's roadmap state their own record sizes, and a rule that flagged
+    those is a rule maintainers route around."""
+    doc = _field_total_doc(
+        trailing_section="## 9. Appendix\n\nThe render capability covers "
+                         "21 fields; content-registries is a 7-field "
+                         "record.")
+    violations = audit_field_total(_FT_LIVE, doc)
+    expect(violations == [],
+           f"a capability record's own field count must not be mistaken "
+           f"for the EngineEnv total, got: {violations}")
 
 
 def test_field_total_block_outside_section_one_rejected():
@@ -1452,20 +1540,6 @@ def test_field_total_block_outside_section_one_rejected():
                for v in violations),
            f"a total block relocated out of the scope section must be "
            f"rejected, got: {violations}")
-
-
-def test_no_total_block_outside_section_six_two_rejected():
-    doc = _field_total_doc(trailing_section="## 9. Appendix")
-    spans, _ = extract_marked_spans(
-        doc, NO_FIELD_TOTAL_OPEN, NO_FIELD_TOTAL_CLOSE)
-    block = doc[spans[0].start:spans[0].end]
-    moved = (doc.replace(block, "one of the 83 `EngineEnv` field names", 1)
-             + block + "\n")
-    violations = audit_field_total(_FT_LIVE, moved)
-    expect(any("is not inside" in v and SECTION_6_2_HEADING in v
-               for v in violations),
-           f"a no-total block relocated out of the procedure section must "
-           f"be rejected, got: {violations}")
 
 
 def test_field_total_renamed_section_heading_rejected():
@@ -1556,19 +1630,28 @@ def test_field_total_against_the_real_repo():
            "SS1's prose could carry a stale total again with the markers "
            "parked somewhere inert")
 
-    no_spans, _ = extract_marked_spans(
-        real_inventory, NO_FIELD_TOTAL_OPEN, NO_FIELD_TOTAL_CLOSE)
-    expect(len(no_spans) == 1,
-           f"the real document must carry exactly one no-total block, got "
-           f"{len(no_spans)}")
-    no_block = real_inventory[no_spans[0].start:no_spans[0].end]
-    no_relocated = (real_inventory.replace(
-        no_block, "one of the 83 `EngineEnv` field names", 1)
-        + "\n\n## 9. Appendix\n\n" + no_block + "\n")
-    expect(any("is not inside" in v for v in
-               audit_field_total(live_fields, no_relocated)),
-           "moving the real no-total block out of SS6.2 must be rejected "
-           "for the same reason")
+    # Same-section relocation on the REAL document: the block stays in
+    # SS1 but an unaudited paragraph carrying a stale total is placed
+    # ahead of it.
+    shadowed = real_inventory.replace(
+        f"{SECTION_1_HEADING}\n",
+        f"{SECTION_1_HEADING}\n\nThe record has exactly 83 fields.\n", 1)
+    expect(any("not the first content" in v for v in
+               audit_field_total(live_fields, shadowed)),
+           "an unaudited scope paragraph placed ahead of the real block "
+           "must be rejected")
+
+    # The real SS6.2 procedure sentence, given its old total back.
+    procedure = real_inventory.replace(
+        f"one of the\n   {PROCEDURE_ITEM_ANCHOR}",
+        f"one of the\n   83 {PROCEDURE_ITEM_ANCHOR}", 1)
+    expect(procedure != real_inventory,
+           "the real procedure sentence must be found for this mutation "
+           "to mean anything")
+    expect(any("must state no field total" in v or "outside its" in v
+               for v in audit_field_total(live_fields, procedure)),
+           "restoring the second copy of the total in the real SS6.2 "
+           "procedure sentence must be rejected")
 
 
 def test_real_repo_end_state():
@@ -1769,13 +1852,19 @@ def main() -> int:
         test_field_total_reversed_span_rejected,
         test_field_total_missing_one_row_contract_rejected,
         test_field_total_section_references_are_not_counts,
-        test_no_total_span_reintroduced_total_rejected,
-        test_no_total_span_agreeing_total_still_rejected,
-        test_no_total_span_missing_rejected,
-        test_no_total_span_duplicate_rejected,
-        test_marker_extractor_does_not_confuse_the_two_pairs,
+        test_procedure_item_reintroduced_total_rejected,
+        test_procedure_item_agreeing_total_still_rejected,
+        test_procedure_item_total_in_its_tail_rejected,
+        test_procedure_item_reworded_away_rejected,
+        test_procedure_item_displaced_by_a_new_first_item_rejected,
+        test_procedure_item_missing_section_rejected,
+        test_procedure_item_later_items_may_count_legitimately,
+        test_scope_block_must_be_section_ones_first_content,
+        test_scope_section_may_state_no_other_number,
+        test_scope_section_allows_code_spans_and_references,
+        test_stray_engineenv_total_anywhere_rejected,
+        test_bare_field_counts_elsewhere_are_not_flagged,
         test_field_total_block_outside_section_one_rejected,
-        test_no_total_block_outside_section_six_two_rejected,
         test_field_total_renamed_section_heading_rejected,
         test_section_bounds_stops_at_the_next_peer_heading,
         test_section_bounds_keeps_subsections_inside_a_top_level_section,
