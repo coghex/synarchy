@@ -454,13 +454,15 @@ the misleading name was the defect, not the missing threshold.
 **Evidence:**
 
 - `tools/water_above_land_report.py:54-121` prints two `ISSUE` categories and
-  examples without comparing them to a limit or exiting nonzero; before the
-  rename its `test_*` name and its docstring both framed the “water floating
-  above grass” detection as a test.
+  examples without comparing them to a limit or exiting nonzero.  Its docstring
+  never called itself a test — it described detecting the “water floating above
+  grass” issue — so here the misleading claim came from the old `test_*`
+  filename alone.
 - `tools/water_anomalies_report.py:49-143` labels the detected floating-water,
   water-cliff, dry-bank, and isolated-water counts as issues, but its
-  `__main__` merely calls `main`; before the rename its `test_*` name and its
-  “comprehensive test” docstring both said otherwise.
+  `__main__` merely calls `main`.  This one stated it twice before the rename:
+  the old `test_*` filename and a docstring opening “Comprehensive test for
+  visible water anomalies”.
 - Neither script contains a threshold, boolean test result, or failure exit,
   so the process status remains zero after any reported anomaly count.
 - NCT-9 covers the analogous river/lake diagnostic scripts; this entry is
