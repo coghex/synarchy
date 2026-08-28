@@ -708,6 +708,27 @@ jobs:
           python3 tools/test_pack_atlas.py
           python3 tools/pack_atlas.py --validate-only --strict
 
+      # The #428 guard that had never been wired to anything (#1705).
+      # Issue #428 required a path-existence check as the mandatory
+      # guard against its own headline failure mode -- a missed
+      # `assets/textures/...` reference after a texture move renders
+      # MAGENTA in-engine rather than erroring, so nothing fails, it
+      # just looks wrong. tools/check_texture_paths.py shipped as that
+      # guard in PR #430 and was then run by nothing: neither this
+      # workflow, nor tools/ci-local.sh, nor the Makefile or Cabal. A
+      # real moved or missing texture merged with it never running.
+      # Unconditional rather than path-selective: it costs a fraction of
+      # a second, and the reference and the file it names live in
+      # different trees, so either side can break the other alone.
+      # The self-test runs first: it proves the checker still reports a
+      # missing reference of each supported shape, and still lexes
+      # comment from code, so a green run below cannot be a checker that
+      # had quietly stopped scanning.
+      - name: Texture path existence check
+        run: |
+          python3 tools/test_check_texture_paths.py
+          python3 tools/check_texture_paths.py
+
       # Worldgen regression gate — see the header comment. Baselines
       # are tracked in tools/baselines/ (#421), captured on the primary
       # dev machine (macOS/aarch64); Linux output matches them exactly.
