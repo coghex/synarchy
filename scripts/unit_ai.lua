@@ -75,6 +75,10 @@ local roles = require("scripts.unit_roles")
 local core = require("scripts.unit_ai_core")
 local aiState = core.aiState
 local hold = require("scripts.unit_ai_hold")
+-- #1769: the order stall accounting, for the watchdog's report
+-- de-duplication below. A leaf module (no requires at all), so this is
+-- not a cycle; core re-exports maintainTask but is at its line budget.
+local stall = require("scripts.unit_ai_stall")
 
 local config = require("scripts.unit_ai_tunables")
 
@@ -323,6 +327,10 @@ local function tickOne(uid, defName)
                         .. tostring(uid))
                     unit.stop(uid)
                     core.reportFailure(uid, "Stuck — can't reach destination")
+                    -- Silence the later stall expiry of the order
+                    -- that was actually walking this, if it is still
+                    -- the current one (#1769).
+                    stall.noteStuckReport(uid, s)
                     s.watchX, s.watchY = wi.gridX, wi.gridY
                     s.lastProgressAt = engine.gameTime()
                 end

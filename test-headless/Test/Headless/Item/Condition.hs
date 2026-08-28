@@ -23,7 +23,10 @@
 --      range: @rand(80,100) − rand(0,20)@ and a flat @rand(60,100)@
 --      share both bounds AND the mean of 80, so a range check or an
 --      average cannot tell them apart — only the shape can, and the
---      shape is what the design asks for.
+--      shape is what the design asks for. An explicit base outside
+--      condition's 0-100 domain is REFUSED rather than clamped
+--      (#1790), because clamping the RESULT is what let a base of 120
+--      guarantee the pristine condition this path does not offer.
 --
 --   3. __Condition is universal, and DISPLAY keys on its value.__ All
 --      three Lua exporters push it for every item, and the two panels
@@ -43,6 +46,7 @@ import qualified Data.Text as T
 import qualified Data.Yaml as Yaml
 import Control.Monad (foldM)
 import Data.Either (isLeft, isRight)
+import Data.List (sort)
 import Data.IORef
     (IORef, atomicModifyIORef', newIORef, readIORef, writeIORef)
 import Combat.Resolution.Damage (ResolvedStrike(..), resolveStrike)
@@ -57,10 +61,12 @@ import Engine.Scripting.Lua.Thread (createLuaBackendState)
 import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Equipment.Types (EquipmentClass(..), EquipmentSlot(..))
-import Item.Ground (spawnGroundItem)
+import Item.Ground (GroundItem(..), GroundItems(..), spawnGroundItem)
 import Item.Roll
-    ( groundConditionBaseRange, groundConditionPenaltyRange
-    , groundQualityFallbackRange, rollGroundCondition, rollGroundQuality
+    ( GroundConditionBase, groundConditionBaseDomain
+    , groundConditionBaseRange, groundConditionPenaltyRange
+    , groundQualityFallbackRange, mkGroundConditionBase
+    , rollGroundCondition, rollGroundQuality
     , rollItemSpec, salvageCondition )
 import Item.Types
     ( ItemContentEntry(..), ItemDef(..), ItemInstance(..), ItemManager(..)
@@ -258,7 +264,7 @@ withSeed seed act = do
     pure (v, g)
 
 -- | Fraction of @n@ salvage conditions landing inside [lo, hi].
-sampleFraction ∷ Int → Maybe Float → (Float, Float) → IO Double
+sampleFraction ∷ Int → Maybe GroundConditionBase → (Float, Float) → IO Double
 sampleFraction n mBase (lo, hi) = do
     ref ← newIORef (mkStdGen 4242)
     hits ← foldM (\acc _ → do
@@ -267,10 +273,53 @@ sampleFraction n mBase (lo, hi) = do
              (0 ∷ Int) [1 .. n]
     pure (fromIntegral hits / fromIntegral n)
 
-sampleAll ∷ Int → Maybe Float → IO [Float]
+sampleAll ∷ Int → Maybe GroundConditionBase → IO [Float]
 sampleAll n mBase = do
     ref ← newIORef (mkStdGen 99)
     mapM (\_ → rollGroundCondition mBase ref) [1 .. n]
+
+-- * Ground-spawn observation (#1790)
+--
+-- Every surface a REFUSED @item.spawnGround@ must leave alone, sampled
+-- together: the page's ground entries, its own id allocator, the
+-- process-wide item-instance counter, and the shared stat RNG. The RNG
+-- is read as the draw it WOULD next produce rather than by consuming
+-- one, so observing costs nothing and the sample can be taken on both
+-- sides of a call.
+
+data GroundObservation = GroundObservation
+    { obsGroundIds  ∷ [Int]
+    , obsNextGid    ∷ Int
+    , obsNextItemId ∷ Word64
+    , obsNextDraw   ∷ Float
+    } deriving (Eq, Show)
+
+observeGround ∷ EngineEnv → WorldState → IO GroundObservation
+observeGround env ws = do
+    gis ← readIORef (wsGroundItemsRef ws)
+    nid ← readIORef (nextItemInstanceIdRef env)
+    g   ← readIORef (statRNGRef env)
+    pure GroundObservation
+        { obsGroundIds  = sort (HM.keys (gisItems gis))
+        , obsNextGid    = gisNextId gis
+        , obsNextItemId = nid
+        , obsNextDraw   = fst (drawUniform (0, 1) g)
+        }
+
+-- | The out-of-domain explicit conditions the verb must refuse, as the
+--   Lua expressions that produce them. @0/0@ and @±1/0@ are Lua 5.4
+--   float division, so they arrive as genuine NaN and infinities
+--   rather than as parse errors.
+rejectedConditionExprs ∷ [(String, Text)]
+rejectedConditionExprs =
+    [ ("far above the domain",  "120")
+    , ("just above 100",        "100.0001")
+    , ("far below the domain",  "-5")
+    , ("just below 0",          "-0.0001")
+    , ("NaN",                   "0/0")
+    , ("+Infinity",             "1/0")
+    , ("-Infinity",             "-1/0")
+    ]
 
 -- * YAML fixtures
 
@@ -399,14 +448,15 @@ spec = describe "Item.Condition" $ do
            \base, and never suppresses that penalty" $ \_ → do
             let g0            = mkStdGen 777
                 (penalty, g1) = drawUniform groundConditionPenaltyRange g0
-            (v, gEnd) ← withSeed 777 (rollGroundCondition (Just 80))
+            (v, gEnd) ← withSeed 777
+                (rollGroundCondition (mkGroundConditionBase 80))
             v `shouldBe` salvageCondition 80 penalty
             fst (drawUniform (0, 1 ∷ Float) gEnd)
                 `shouldBe` fst (drawUniform (0, 1 ∷ Float) g1)
 
         it "an explicit condition of 7 is a BASE, so it lands worn — \
            \never at 100" $ \_ → do
-            vs ← sampleAll 200 (Just 7)
+            vs ← sampleAll 200 (mkGroundConditionBase 7)
             all (\v → v ≥ 0 ∧ v ≤ 7) vs `shouldBe` True
 
         it "stays within [60, 100] with no explicit prop" $ \_ → do
@@ -414,7 +464,7 @@ spec = describe "Item.Condition" $ do
             all (\v → v ≥ 60 ∧ v ≤ 100) vs `shouldBe` True
 
         it "stays within [60, 80] for an explicit base of 80" $ \_ → do
-            vs ← sampleAll 2000 (Just 80)
+            vs ← sampleAll 2000 (mkGroundConditionBase 80)
             all (\v → v ≥ 60 ∧ v ≤ 80) vs `shouldBe` True
 
         it "is TRIANGULAR, not the flat rand(60,100) that shares its \
@@ -468,6 +518,95 @@ spec = describe "Item.Condition" $ do
                 , "return worn > 0 and 'worn' or 'all-pristine'"
                 ]
             r `shouldBe` q "worn"
+
+        -- The domain check on an explicit base (#1790).
+
+        it "the domain check accepts every in-domain base, endpoints \
+           \included, and rejects everything outside it — non-finite \
+           \values included" $ \_ → do
+            groundConditionBaseDomain `shouldBe` (0, 100)
+            map (isJust ∘ mkGroundConditionBase)
+                [0, 0.5, 7, 80, 99.9, 100]
+                `shouldBe` replicate 6 True
+            map (isJust ∘ mkGroundConditionBase)
+                [ 100.0001, 120, 1e9, -0.0001, -5, -1e9
+                , 0 / 0, 1 / 0, -1 / 0 ]
+                `shouldBe` replicate 9 False
+
+        forM_ rejectedConditionExprs $ \(label, expr) →
+            it ("refuses an explicit condition " <> label <> " through \
+                \the real verb, answering nil and mutating nothing") $
+                \env → do
+                    ws ← resetScene env
+                    ls ← newBareLuaBackend env
+                    writeIORef (statRNGRef env) (mkStdGen 20250827)
+                    before ← observeGround env ws
+                    r ← runOk ls $
+                        "return tostring(item.spawnGround('ration', 3, \
+                        \4, {condition = " <> expr <> "}))"
+                    r `shouldBe` q "nil"
+                    -- No ground entry, no advanced ground-item id, no
+                    -- minted ItemInstance id, and the shared stat RNG
+                    -- still about to produce the same draw: a refused
+                    -- spawn cannot shift a later gameplay roll.
+                    after ← observeGround env ws
+                    after `shouldBe` before
+
+        it "an ACCEPTED spawn moves all four of those observables, so \
+           \the refusals above are not vacuous" $ \env → do
+            ws ← resetScene env
+            ls ← newBareLuaBackend env
+            writeIORef (statRNGRef env) (mkStdGen 20250827)
+            before ← observeGround env ws
+            r ← runOk ls
+                "return tostring(item.spawnGround('ration', 3, 4) ~= nil)"
+            r `shouldBe` q "true"
+            after ← observeGround env ws
+            obsGroundIds after `shouldNotBe` obsGroundIds before
+            obsNextGid after `shouldNotBe` obsNextGid before
+            obsNextItemId after `shouldNotBe` obsNextItemId before
+            obsNextDraw after `shouldNotBe` obsNextDraw before
+
+        it "accepts both domain endpoints through the real verb" $ \env → do
+            ws ← resetScene env
+            ls ← newBareLuaBackend env
+            r ← runOk ls $ luaLines
+                [ "local a = item.spawnGround('ration', 0, 0, {condition = 0});"
+                , "local b = item.spawnGround('ration', 1, 1, {condition = 100});"
+                , "return string.format('%s,%s', tostring(a ~= nil),"
+                , "  tostring(b ~= nil))"
+                ]
+            r `shouldBe` q "true,true"
+            gis ← readIORef (wsGroundItemsRef ws)
+            HM.size (gisItems gis) `shouldBe` 2
+
+        it "cannot be made to guarantee 100 even at the MAXIMUM valid \
+           \base, because the penalty draw still applies" $ \env → do
+            ws ← resetScene env
+            ls ← newBareLuaBackend env
+            -- Naming the quality explicitly spends no draw, so the
+            -- penalty is the FIRST draw off this generator and can be
+            -- reproduced exactly. 100 is the largest base the domain
+            -- admits, and every smaller one is further below 100 after
+            -- the same non-negative penalty.
+            let seed         = 31337
+                (penalty, _) = drawUniform groundConditionPenaltyRange
+                                           (mkStdGen seed)
+            penalty `shouldSatisfy` (> 0)
+            writeIORef (statRNGRef env) (mkStdGen seed)
+            r ← runOk ls
+                "return tostring(item.spawnGround('ration', 0, 0, \
+                \{quality = 50, condition = 100}) ~= nil)"
+            r `shouldBe` q "true"
+            gis ← readIORef (wsGroundItemsRef ws)
+            case HM.elems (gisItems gis) of
+                [gi] → do
+                    iiCondition (giInst gi)
+                        `shouldBe` salvageCondition 100 penalty
+                    iiCondition (giInst gi) `shouldSatisfy` (< 100)
+                other → expectationFailure $
+                    "expected exactly one ground item, got "
+                    <> show (length other)
 
     -- 4. Universal exposure, value-based display.
 

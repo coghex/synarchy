@@ -2354,10 +2354,25 @@ actually applied. Position is read through `debug.getWindowPos()`, the
 narrow diagnostic seam added with that fix — `GLFW.getWindowPos` is
 main-thread-only, so the Lua thread reads a ref the render thread
 publishes, and the script forces a publish (a no-op `setResolution`)
-before sampling. From a `borderless` or `fullscreen` start the geometry
-is reported but not asserted: `defaultWindowConfig` only applies
-`fullscreen` at window creation, so a borderless-configured boot's
-reported mode and real window state disagree.
+before sampling.
+
+From a `borderless` start it is the #1731 gate, and that start asserts
+the same round trip plus one more thing. `defaultWindowConfig` now asks
+GLFW for borderless as well as fullscreen, so such a boot comes up
+undecorated and monitor-sized; applying the mode at creation consumes
+the first-switch caching opportunity, so `createWindow` seeds the
+windowed cache from the decorated window it made at the CONFIGURED size
+immediately before mutating it. The `windowed` leg must therefore reach
+that saved resolution rather than `defaultWindowState`'s 800x600
+fallback — which is what distinguishes a correct startup seed from an
+incorrect one, since `getVideoConfig()` reports the QUEUED target mode
+independently of what the render thread applied and so round-trips
+either way. Run that start from a non-default saved resolution.
+
+A `fullscreen` start remains reported but not asserted: no windowed
+window was ever on screen, so its `windowed` leg legitimately lands on
+the fallback. That gap is `PRR-2` in
+`docs/project_review_909-874.md`, tracked separately.
 
 Every setting it touches is captured from the LIVE config first and
 restored at the end — never to a hardcoded default, since a user's
