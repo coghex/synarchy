@@ -1815,7 +1815,14 @@ spec = around withMenusEngine $ do
                     tspCursor p `shouldBe` 1
                     tspFocused p `shouldBe` True
 
-    describe "keyboard control focus (#745) survives a resize rebuild" $ do
+    -- #1671 renamed this group from "... survives a resize rebuild":
+    -- resize is no longer the only rebuild covered here — Defaults and
+    -- a mid-generation preview arrival destroy+recreate an already
+    -- visible page just as completely, and the contract
+    -- (docs/engine_contracts.md §Responsive UI lifecycle) admits no
+    -- rebuild-kind exemption. The "keyboard control focus" match token
+    -- is unchanged.
+    describe "keyboard control focus (#745) survives a rebuild" $ do
         it "settings menu restores focus onto the rebuilt control with the same name" $ \env → do
             ls ← newBareLuaBackend env
             r ← evalJSON ls $ luaLines
@@ -1914,6 +1921,145 @@ spec = around withMenusEngine $ do
                     cfpHadFocusBefore p `shouldBe` True
                     cfpHasFocusAfter p `shouldBe` True
 
+        -- #1671: three rebuilds of an ALREADY-VISIBLE page skipped the
+        -- by-name snapshot/restore the resize cases above establish --
+        -- Settings' Defaults, Create World's Defaults, and Create
+        -- World's mid-generation preview arrival. Each drives the
+        -- production handler (the two Defaults cases through the real
+        -- button activation callback, so the click path itself is what
+        -- rebuilds), keeps the pre-rebuild handle to prove the
+        -- replacement is genuinely a different element, and counts the
+        -- restored control's own callback to prove restoration never
+        -- re-fires it (requirement 5).
+        it "settings menu Defaults restores focus onto the rebuilt Defaults button, running the action once" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ bootSettings 1280 720 <> ";"
+                , "UI.showPage(m.page);"
+                , "local button = require('scripts.ui.button');"
+                , "local before = button.getElementHandle(m.defaultsButtonId);"
+                , "UI.setControlFocus(before);"
+                , "local hadFocusBefore = UI.hasControlFocus(before);"
+                , "local runs = 0;"
+                , "local realOnDefaults = m.onDefaults;"
+                , "m.onDefaults = function(...) runs = runs + 1; return realOnDefaults(...) end;"
+                -- The button's own onClick closure indexes
+                -- settingsMenu.onDefaults at CALL time, so the counter
+                -- above sees the real activation path, not a stub.
+                , "button.handleClickByElement(before);"
+                , "m.onDefaults = realOnDefaults;"
+                , "local after = button.getElementHandle(m.defaultsButtonId);"
+                , focusReportExpr "before" "after" "runs"
+                ]
+            expectRestoredFocus r defaultsBoxName (Just 1)
+
+        it "create-world menu Defaults restores focus onto the rebuilt Defaults button, running the action once" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ bootCreateWorld 1280 720 <> ";"
+                , "UI.showPage(m.page);"
+                , "local button = require('scripts.ui.button');"
+                , "local before = button.getElementHandle(m.defaultsButtonId);"
+                , "UI.setControlFocus(before);"
+                , "local hadFocusBefore = UI.hasControlFocus(before);"
+                , "local runs = 0;"
+                , "local realOnDefaults = m.onDefaults;"
+                , "m.onDefaults = function(...) runs = runs + 1; return realOnDefaults(...) end;"
+                , "button.handleClickByElement(before);"
+                , "m.onDefaults = realOnDefaults;"
+                , "local after = button.getElementHandle(m.defaultsButtonId);"
+                , focusReportExpr "before" "after" "runs"
+                ]
+            expectRestoredFocus r defaultsBoxName (Just 1)
+
+        it "create-world menu preview arrival restores focus onto the rebuilt control, firing no callback" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ bootCreateWorld 1280 720 <> ";"
+                , "UI.showPage(m.page);"
+                , "local button = require('scripts.ui.button');"
+                , "local before = button.getElementHandle(m.backButtonId);"
+                , "UI.setControlFocus(before);"
+                , "local hadFocusBefore = UI.hasControlFocus(before);"
+                -- Replaced outright (not wrapped): the restored Back
+                -- button's callback must not run at all here, and
+                -- letting the real one through would tear the screen
+                -- down.
+                , "local runs = 0;"
+                , "m.onBack = function() runs = runs + 1 end;"
+                , "m.onWorldPreviewReady(99);"
+                , "local after = button.getElementHandle(m.backButtonId);"
+                , focusReportExpr "before" "after" "runs"
+                ]
+            expectRestoredFocus r "back_btn_box" (Just 0)
+
+        -- Requirement 7: an unfocused rebuild must stay unfocused --
+        -- restoring by name off a stale or arbitrary handle would show
+        -- up here rather than in the positive cases above.
+        it "settings menu Defaults focuses nothing when nothing held control focus" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ bootSettings 1280 720 <> ";"
+                , "UI.showPage(m.page);"
+                , "local focusBeforeNil = (UI.getControlFocus() == nil);"
+                , "m.onDefaults();"
+                , nilFocusReportExpr
+                ]
+            expectNoRestoredFocus r
+
+        it "create-world menu Defaults focuses nothing when nothing held control focus" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ bootCreateWorld 1280 720 <> ";"
+                , "UI.showPage(m.page);"
+                , "local focusBeforeNil = (UI.getControlFocus() == nil);"
+                , "m.onDefaults();"
+                , nilFocusReportExpr
+                ]
+            expectNoRestoredFocus r
+
+        it "create-world menu preview arrival focuses nothing when nothing held control focus" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ bootCreateWorld 1280 720 <> ";"
+                , "UI.showPage(m.page);"
+                , "local focusBeforeNil = (UI.getControlFocus() == nil);"
+                , "m.onWorldPreviewReady(99);"
+                , nilFocusReportExpr
+                ]
+            expectNoRestoredFocus r
+
+        -- Requirement 4 for the Create World side: preserveState=false
+        -- scopes to in-progress EDIT values, and adding the focus
+        -- restore above must not start preserving them. Plate Count is
+        -- the sharpest probe -- it only syncs into `pending` at Generate
+        -- time, so its raw box text is exactly the kind of unsubmitted
+        -- edit the resize rebuild DOES keep (see the textbox cases
+        -- earlier in this file) and Defaults must not.
+        it "create-world menu Defaults still discards the pending value and the raw unsubmitted textbox edit" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ bootCreateWorld 1280 720 <> ";"
+                , "UI.showPage(m.page);"
+                , "local textbox = require('scripts.ui.textbox');"
+                , "local advanced = require('scripts.create_world.advanced_tab');"
+                , "m.pending.plateCount = '7';"
+                , "textbox.setText(advanced.plateCountTextBoxId, '77');"
+                , "local pendingBefore = m.pending.plateCount;"
+                , "local rawBefore = textbox.getText(advanced.plateCountTextBoxId);"
+                , "m.onDefaults();"
+                , "return {pendingBefore=pendingBefore, pendingAfter=m.pending.plateCount,"
+                    <> " rawBefore=rawBefore,"
+                    <> " rawAfter=textbox.getText(advanced.plateCountTextBoxId)}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe DefaultsResetProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    drpPendingBefore p `shouldBe` "7"
+                    drpRawBefore p `shouldBe` "77"
+                    drpPendingAfter p `shouldBe` "10"
+                    drpRawAfter p `shouldBe` "10"
+
 -- * Boot helpers (synthetic texture/font handles — nothing renders
 --   headless, so their numeric values are never inspected)
 
@@ -1955,6 +2101,63 @@ panelInFrameExpr mVar w h = luaLines
     , "return x >= 0 and y >= 0 and (x + pw) <= " <> tshow w <> " and (y + ph) <= " <> tshow h
     , "end)()"
     ]
+
+-- | The element name a Defaults button's control focus actually
+--   carries: 'scripts/ui/button.lua' builds its clickable box as
+--   @\<name\>_box@, and that box is both what holds keyboard control
+--   focus and what @responsive.restoreControlFocusName@ matches on. The
+--   two Defaults buttons declare @name = "defaults_btn"@
+--   ('scripts/settings_menu.lua', 'scripts/create_world/bottom_buttons.lua').
+defaultsBoxName ∷ Text
+defaultsBoxName = "defaults_btn_box"
+
+-- | #1671 rebuild-focus report: the pre-rebuild handle @beforeVar@, the
+--   same-named replacement handle @afterVar@ read back after the
+--   rebuild, and @runsVar@ -- how many times the focused control's own
+--   callback fired. Reporting the CURRENTLY focused element's name
+--   (rather than only a boolean) is what makes "restored by name onto
+--   the replacement" observable instead of inferred.
+focusReportExpr ∷ Text → Text → Text → Text
+focusReportExpr beforeVar afterVar runsVar = luaLines
+    [ "local focused = UI.getControlFocus();"
+    , "local focusedInfo = focused and UI.getElementInfo(focused);"
+    , "return {hadFocusBefore=hadFocusBefore,"
+        <> " handleChanged=(" <> afterVar <> " ~= " <> beforeVar <> "),"
+        <> " hasFocusAfter=UI.hasControlFocus(" <> afterVar <> "),"
+        <> " focusedName=(focusedInfo and focusedInfo.name or ''),"
+        <> " actionRuns=" <> runsVar <> "}"
+    ]
+
+-- | #1671 requirement 7's report: control focus was nil before the
+--   rebuild and must still be nil after it.
+nilFocusReportExpr ∷ Text
+nilFocusReportExpr =
+    "return {focusBeforeNil=focusBeforeNil, focusAfterNil=(UI.getControlFocus() == nil)}"
+
+-- | Assert a #1671 positive case: focus was held before, the rebuild
+--   really did replace the element, and control focus now sits on the
+--   replacement carrying the expected name -- having fired the
+--   control's own callback exactly @runs@ times.
+expectRestoredFocus ∷ Text → Text → Maybe Int → Expectation
+expectRestoredFocus r expectedName runs =
+    case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe RebuildFocusProbe of
+        Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+        Just p → do
+            rfpHadFocusBefore p `shouldBe` True
+            rfpHandleChanged p `shouldBe` True
+            rfpHasFocusAfter p `shouldBe` True
+            rfpFocusedName p `shouldBe` expectedName
+            maybe (pure ()) (rfpActionRuns p `shouldBe`) runs
+
+-- | Assert a #1671 requirement-7 case: nothing focused before, nothing
+--   focused after.
+expectNoRestoredFocus ∷ Text → Expectation
+expectNoRestoredFocus r =
+    case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe NilFocusProbe of
+        Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+        Just p → do
+            nfpFocusBeforeNil p `shouldBe` True
+            nfpFocusAfterNil p `shouldBe` True
 
 -- | Loading screen has no panelId — its fixed action is the progress
 --   bar itself (m.barId via scripts/ui/bar.lua).
@@ -2213,6 +2416,33 @@ data ControlFocusProbe = ControlFocusProbe
 instance FromJSON ControlFocusProbe where
     parseJSON = withObject "ControlFocusProbe" $ \o →
         ControlFocusProbe <$> o .: "hadFocusBefore" <*> o .: "hasFocusAfter"
+
+-- #1671 decode targets
+
+data RebuildFocusProbe = RebuildFocusProbe
+    { rfpHadFocusBefore ∷ Bool, rfpHandleChanged ∷ Bool
+    , rfpHasFocusAfter ∷ Bool, rfpFocusedName ∷ Text
+    , rfpActionRuns ∷ Int
+    } deriving Show
+instance FromJSON RebuildFocusProbe where
+    parseJSON = withObject "RebuildFocusProbe" $ \o → RebuildFocusProbe
+        <$> o .: "hadFocusBefore" <*> o .: "handleChanged"
+        <*> o .: "hasFocusAfter" <*> o .: "focusedName"
+        <*> o .: "actionRuns"
+
+data NilFocusProbe = NilFocusProbe
+    { nfpFocusBeforeNil ∷ Bool, nfpFocusAfterNil ∷ Bool } deriving Show
+instance FromJSON NilFocusProbe where
+    parseJSON = withObject "NilFocusProbe" $ \o →
+        NilFocusProbe <$> o .: "focusBeforeNil" <*> o .: "focusAfterNil"
+
+data DefaultsResetProbe = DefaultsResetProbe
+    { drpPendingBefore ∷ Text, drpPendingAfter ∷ Text
+    , drpRawBefore ∷ Text, drpRawAfter ∷ Text } deriving Show
+instance FromJSON DefaultsResetProbe where
+    parseJSON = withObject "DefaultsResetProbe" $ \o → DefaultsResetProbe
+        <$> o .: "pendingBefore" <*> o .: "pendingAfter"
+        <*> o .: "rawBefore" <*> o .: "rawAfter"
 
 -- #1107 decode targets
 
