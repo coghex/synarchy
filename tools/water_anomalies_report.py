@@ -4,10 +4,9 @@ Broad report on visible water anomalies in the rendered world.
 
 Reported:
   1. Water floating 2+ above adjacent dry land (severe)
-  2. Water 1 above dry land where dry tile is a non-shore (mid-water dry island)
-  3. Water-water cliffs (adjacent water tiles with surface diff > 1)
-  4. Lake/river tiles with dry bank BELOW their surface (should overflow)
-  5. Isolated water tiles (single water tile surrounded by dry)
+  2. Water-water cliffs (adjacent water tiles with surface diff > 1)
+  3. Lake/river tiles with dry bank BELOW their surface (should overflow)
+  4. Isolated river/lake tiles (no water neighbors)
 
 This is an exploratory DIAGNOSTIC, not a gate: it reports what it measures and
 never turns an anomaly count into a failure, so every analysis that completes
