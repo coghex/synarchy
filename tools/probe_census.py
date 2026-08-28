@@ -2114,9 +2114,10 @@ def cohort_evidence(cohort, what: str) -> tuple:
 
     Four additions, each of which a pooled failure rate alone hides:
 
-    - the pooled COMPLETED runs, because a cohort that did not finish
-      what it scheduled is not a clean ten however few failures the
-      runs it did finish reported;
+    - the pooled COMPLETED runs, so a reader can see how much of what
+      was scheduled actually ran. It is REPORTING only: whether every
+      sample finished its own runs is `incomplete_samples`' question,
+      because pooled totals cancel a shortfall against an overrun;
     - the pooled TIMEOUT count, which `probe_flake` counts SEPARATELY
       from failures, so a cohort with zero failures can still have lost
       runs to the clock;
@@ -2162,6 +2163,42 @@ def cohort_evidence(cohort, what: str) -> tuple:
         "opened_at": earliest.strftime(TIMESTAMP_FORMAT),
     })
     return evidence, anchor, earliest
+
+
+def incomplete_samples(cohort, what: str) -> list[int]:
+    """The positions of samples that did not finish what they scheduled.
+
+    PER SAMPLE, and that is the whole point: pooled totals cannot answer
+    this question, because one sample's shortfall is cancelled by
+    another's overrun. A cohort of a 9-of-10 and an 11-of-10 pools to a
+    perfect 20 of 20 while containing a measurement that lost a run, and
+    "every sample finished every run it scheduled" is the condition a
+    promotion actually rests on.
+
+    The comparison is inequality in BOTH directions. A sample reporting
+    MORE completions than it requested is not a bonus, it is a count
+    nothing could have produced — the intake path constrains neither
+    against the other — so it disqualifies exactly as a shortfall does.
+    """
+    if not isinstance(cohort, dict):
+        raise CensusError(
+            f"{what} must be an object, got {type(cohort).__name__}")
+    samples = cohort.get("samples")
+    if not isinstance(samples, list):
+        raise CensusError(f"{what} `samples` must be a list")
+    positions: list[int] = []
+    for position, sample in enumerate(samples):
+        where = f"{what} sample {position}"
+        if not isinstance(sample, dict):
+            raise CensusError(
+                f"{where} is not an object, got {type(sample).__name__}")
+        requested = require_count(sample.get("requested_runs"),
+                                  f"{where} `requested_runs`")
+        completed = require_count(sample.get("completed_runs"),
+                                  f"{where} `completed_runs`")
+        if completed != requested:
+            positions.append(position)
+    return positions
 
 
 def unresolved_attempts(census, probe: str, cohort_commit: str,
@@ -2237,8 +2274,10 @@ def promotion_row(entry, *, now, stale_after_seconds) -> dict | None:
       a promoted probe keeps, not evidence about the code as it stands;
     - that cohort is FRESH against the caller's horizon;
     - that cohort is COMPLETE: it reaches the policy's run count, every
-      sample finished every run it scheduled, and no unattributable or
-      same-commit harness error sits in the attempt log for it;
+      sample finished EXACTLY the runs it scheduled — checked per
+      sample, since pooled totals cancel a shortfall against an
+      overrun — and no unattributable or same-commit harness error sits
+      in the attempt log for it;
     - and it shows ZERO failures and ZERO timeouts.
 
     A probe failing any of these is not reported at all, in either
@@ -2279,7 +2318,11 @@ def promotion_row(entry, *, now, stale_after_seconds) -> dict | None:
         return None
     if evidence["requested_runs"] < POLICY_RUN_COUNT:
         return None
-    if evidence["completed_runs"] != evidence["requested_runs"]:
+    # PER SAMPLE, never the pooled totals: a 9-of-10 beside an 11-of-10
+    # pools to a flawless 20 of 20 while holding a measurement that lost
+    # a run. Per-sample equality implies the pooled equality, so this
+    # replaces that comparison rather than joining it.
+    if incomplete_samples(cohort, f"probe {probe!r} current cohort"):
         return None
     if unresolved_attempts(census, probe, evidence["commit_sha"], opened_at):
         return None

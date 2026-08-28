@@ -4018,6 +4018,31 @@ def test_promotion_disqualifications() -> None:
            "a scheduled run that never completed makes the cohort "
            "incomplete, however clean the runs that did")
 
+    # The COMPENSATED case: completion is checked per SAMPLE, so one
+    # sample's shortfall is not cancelled by another's overrun. Pooled
+    # totals read as a flawless 20 of 20 here.
+    def compensate(document):
+        cohort = document["probes"][0]["census"]["current"]
+        cohort["samples"][0]["completed_runs"] = 9
+        cohort["samples"][1]["completed_runs"] = 11
+
+    def two_samples(path):
+        qualified_census(path, age_days=0.5)
+
+    expect(qualifies(compensate, extra=two_samples) is False,
+           "a 9-of-10 beside an 11-of-10 does NOT qualify: pooling them "
+           "to 20 of 20 would hide a measurement that lost a run")
+    expect(qualifies(extra=two_samples) is True,
+           "while the same two-sample cohort with both complete does")
+
+    def overrun(document):
+        document["probes"][0]["census"]["current"]["samples"][0][
+            "completed_runs"] = 11
+
+    expect(qualifies(overrun) is False,
+           "and an overrun alone disqualifies too: more completions than "
+           "were requested is a count nothing could have produced")
+
     expect(qualifies(extra=lambda path: probe_census.record_result(
         path, result_document(status="harness-error", commit=COMMIT_A,
                               timestamp_utc=at(0.5)))) is False,

@@ -1016,8 +1016,12 @@ with nothing measured is not an answer to it.
 
 COMPLETE means three things, because a spotless-looking cohort can be missing
 runs in ways its own counts cannot show: it reaches the policy's ten runs
-pooled across every sample; every sample finished every run it scheduled; and
-no harness error is charged to it. That last is what a harness error looks
+pooled across every sample; every sample finished EXACTLY the runs it
+scheduled; and no harness error is charged to it. That second one is checked
+PER SAMPLE and in both directions, because pooled totals cannot answer it — a
+9-of-10 beside an 11-of-10 pools to a flawless 20 of 20 while holding a
+measurement that lost a run, and more completions than were requested is a
+count nothing could have produced. That last is what a harness error looks
 like in the record — an ATTEMPT and no sample, so ten scheduled runs of which
 one never reported are indistinguishable from nine clean ones by counting
 alone. Attribution FAILS CLOSED: an attempt is excluded only when provably
