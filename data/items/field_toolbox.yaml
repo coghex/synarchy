@@ -1,0 +1,17 @@
+items:
+  # A rare pre-stocked ruin find. This is an inspectable item-container,
+  # not player-managed storage: its authored contents materialize with each
+  # fresh instance, but it deliberately has no storage-capacity block.
+  - name: "field_toolbox"
+    display_name: "Field Toolbox"
+    sprite: "assets/textures/items/tool/toolbox.png"
+    weight: 1.2       # empty steel case; contents contribute recursively
+    bulk: 6.0         # litres of external bulk
+    kind: container
+    category: Tools
+    make: factory
+    material: steel
+    contents:
+      - { item: whetstone,      count: 1 }
+      - { item: steel_hardware, count: 4 }
+      - { item: wiring,         count: 1 }

@@ -368,6 +368,17 @@ python3 tools/world_check.py --quick
 # still yielding a removable tree. That probe is manual-only needs-gpu,
 # so without this companion the contract is only ever observed by a GPU
 # run neither gate can make; the companion boots nothing.
+# test_probe_root_cleanup is #1791's: the staging half of the isolated-root
+# contract that tools/foraging_probe.py, flora_growth_probe.py,
+# farm_ai_probe.py and item_temp_probe.py each carry. A failure while
+# STAGING the run's throwaway root used to bypass the cleanup guard
+# entirely and leave the invocation-owned tree on disk. It drives each
+# probe's real main() in a subprocess with injected staging and removal
+# faults, asserting a non-zero run, a visible cause, an absent base, an
+# untouched checkout behind the symlinks, and no engine.quit() aimed at
+# whoever else holds the port. All four probes are manual-only, so
+# without this companion the boundary is only ever observed by long
+# engine runs; the companion boots nothing.
 # test_movement_probe is #1586's: tools/movement_probe.py --list is a
 # metadata query answered from scripts/movement_arena.lua before any
 # boot(), for every --mode, and the derived view is held to the runtime
@@ -396,6 +407,7 @@ python3 tools/test_probe_claim.py
 python3 tools/test_probe_resource_lock.py
 python3 tools/test_deflake.py
 python3 tools/test_location_embark_probe.py
+python3 tools/test_probe_root_cleanup.py
 python3 tools/test_movement_probe.py
 
 # The decision .github/workflows/review-gate.yml makes on every

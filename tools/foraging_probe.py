@@ -184,22 +184,33 @@ def main():
     # (#1618): stage 4 writes a slot that no ordinary `cabal run` can
     # reach, and the whole tree goes away below.
     base = tempfile.mkdtemp(prefix="synarchy_foraging_")
-    root = make_isolated_root(base)
-    # Unique per invocation as well as per root, so the slot NAME alone
-    # identifies this run even in a log shared with another.
-    slot = f"foraging_v66_check_{uuid.uuid4().hex[:8]}"
-    print(f"isolated resource root: {root}", flush=True)
-    print(f"save slot: {slot}", flush=True)
 
-    # `boot` exits the probe outright when the engine dies before READY
-    # or never prints it, so it belongs INSIDE the try: otherwise that
-    # failure path leaves this run's root — the one thing the cleanup
-    # below exists to remove — sitting in the temp directory. A None
-    # handle is what `quit_engine` already expects when there is no live
-    # process to shut down.
+    # The guard starts HERE, one statement after that directory exists
+    # (#1791), because everything between this point and the cleanup
+    # below can fail with invocation-owned state already on disk.
+    # `make_isolated_root` stages incrementally — the root, three
+    # symlinks, a copied `config/`, `saves/` — so a permission, source
+    # or disk-space failure part-way through leaves a partial tree that
+    # nothing outside this guard would remove. `boot` is inside for the
+    # same reason: it exits the probe outright when the engine dies
+    # before READY or never prints it, and that failure path would
+    # otherwise leave this run's root — the one thing the cleanup below
+    # exists to remove — sitting in the temp directory.
+    #
+    # A None handle is what `quit_engine` already expects when there is
+    # no live process to shut down, and it is initialised BEFORE the
+    # try, so a staging failure — which happens before any boot — sends
+    # no `engine.quit()` at an engine that is somebody else's.
     proc = None
     rc = 1
     try:
+        root = make_isolated_root(base)
+        # Unique per invocation as well as per root, so the slot NAME alone
+        # identifies this run even in a log shared with another.
+        slot = f"foraging_v66_check_{uuid.uuid4().hex[:8]}"
+        print(f"isolated resource root: {root}", flush=True)
+        print(f"save slot: {slot}", flush=True)
+
         proc = boot(port, f"{SPROOT}/foraging_probe_engine.log",
                     args=["--resource-root", root])
         bootstrap(port)
