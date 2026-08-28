@@ -453,11 +453,11 @@ the misleading name was the defect, not the missing threshold.
 
 **Evidence:**
 
-- `tools/water_above_land_report.py:53-119` prints two `ISSUE` categories and
+- `tools/water_above_land_report.py:54-121` prints two `ISSUE` categories and
   examples without comparing them to a limit or exiting nonzero; before the
   rename its `test_*` name and its docstring both framed the “water floating
   above grass” detection as a test.
-- `tools/water_anomalies_report.py:50-144` labels the detected floating-water,
+- `tools/water_anomalies_report.py:49-143` labels the detected floating-water,
   water-cliff, dry-bank, and isolated-water counts as issues, but its
   `__main__` merely calls `main`; before the rename its `test_*` name and its
   “comprehensive test” docstring both said otherwise.

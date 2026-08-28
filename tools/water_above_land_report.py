@@ -3,13 +3,15 @@
 Report water tiles whose surface is visibly above adjacent dry land — the
 "water floating above grass" appearance.
 
-For each dry tile T at position (x,y) with terrain z=T:
-  For each neighbor (x',y') that's a water tile with surface S:
-    If S > T + 1 → water visibly floats above this dry tile
-
-Also reported:
-  - Isolated water columns (water tile with all dry neighbors at much lower terrain)
-  - Lake/ocean tiles adjacent to dry tiles at terrain below water surface
+Reported:
+  1. Every (water tile, direction) pair — river, lake or ocean — whose surface S
+     stands more than 1 above the terrain z of the dry tile in that direction,
+     so the water visibly floats above it.  Broken down by fluid type and by
+     difference, with the count of distinct water tiles involved and the worst
+     examples.
+  2. Lake tiles with a dry 4-neighbor whose terrain is strictly below the lake
+     surface — a bank the lake should have overflowed into.  Counted once per
+     lake tile.  River and ocean tiles are not examined for this one.
 
 This is an exploratory DIAGNOSTIC, not a gate: it reports what it measures and
 never turns an anomaly count into a failure, so every analysis that completes
