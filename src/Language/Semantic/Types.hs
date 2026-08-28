@@ -8,8 +8,18 @@
 --
 --   Concept ids are LOAD-BEARING for #710: a generated language derives
 --   each concept's native root deterministically from the id string, so
---   renaming an id silently re-roots every language that uses it.
---   Ids may be added, never renamed or reused.
+--   renaming an id silently re-roots every language that uses it — and
+--   'Language.Etymology' reports an id the catalogue no longer carries
+--   as @EtyInvalidConcept@, so a removal costs every already-persisted
+--   'EtymologySource' naming it (#1104) its etymology.
+--   Ids may be added, never renamed or reused. ENFORCED (#1717) by
+--   @tools\/concept_id_inventory_audit.py@ (CI + @make ci@, with its own
+--   @--self-test@), which pins every shipped id against
+--   @docs\/language\/concept_id_baseline.json@: a removal or a rename
+--   fails, and an addition passes only through that audit's
+--   @--update-baseline@ ratchet. The authored English forms and the
+--   'ConceptDomain' are deliberately NOT pinned — they are display data,
+--   free to improve.
 --
 --   English lexical forms are AUTHORED, not derived from spelling
 --   (@memory@ → @memories@, @oath@ → modifier @sworn@); a form a name
