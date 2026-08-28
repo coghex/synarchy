@@ -640,10 +640,20 @@ data WindowState = WindowState
 
 -- | The pre-window seed. @wsAppliedMode@ starts 'Windowed' because no
 --   GLFW window exists yet — 'Engine.Graphics.Window.GLFW.createWindow'
---   overwrites it with 'appliedModeAtCreation' once one does, and the
+--   overwrites it via 'applyWindowCreation' once one does, and the
 --   window-less boot profiles (@--headless@, @--dump@, @--offscreen@)
 --   never reach 'Engine.Scripting.Lua.Message.Video.handleSetWindowMode'
 --   at all.
+--
+--   The geometry is a pre-window fallback and nothing more. A boot that
+--   comes up 'Windowed' replaces it the first time it switches away, and
+--   a boot that comes up 'BorderlessWindowed' has 'applyWindowCreation'
+--   seed it from the decorated window GLFW just made (#1731) — precisely
+--   because applying borderless at creation consumes that first-switch
+--   caching opportunity. Only a successful FULLSCREEN boot still reaches
+--   a 'Windowed' request with this fallback intact, which is the honest
+--   answer there: no windowed window was ever on screen (that gap is
+--   @PRR-2@, tracked separately).
 defaultWindowState ∷ WindowState
 defaultWindowState = WindowState
   { wsWindowedPos  = (100, 100)
@@ -651,23 +661,70 @@ defaultWindowState = WindowState
   , wsAppliedMode  = Windowed
   }
 
--- | The window mode a freshly created GLFW window actually came up in,
---   given whether 'Engine.Graphics.Window.Types.wcFullscreen' was both
---   requested AND successfully applied.
+-- | What 'Engine.Graphics.Window.GLFW.createWindow' actually got GLFW to
+--   do — never what the 'Engine.Graphics.Window.Types.WindowConfig'
+--   asked for.
 --
---   Deliberately keyed on the OUTCOME, not the configured mode.
---   'Engine.Core.Defaults.defaultWindowConfig' only ever asks GLFW for
---   fullscreen, so a 'BorderlessWindowed' config comes up as a plain
---   decorated window; and 'Engine.Graphics.Window.GLFW.createWindow'
---   degrades a fullscreen request gracefully to that same plain window
+--   Both non-plain requests degrade gracefully to the plain decorated
+--   window GLFW already created when no primary monitor or video mode is
+--   available, so a request and its outcome genuinely differ. Modelling
+--   the outcome as this sum rather than the config makes the
+--   simultaneously-fullscreen-and-borderless state unrepresentable
+--   downstream.
+data WindowCreationOutcome
+  = CreatedPlain
+    -- ^ An ordinary decorated window: no special mode was requested, or
+    --   the one that was could not be applied.
+  | CreatedFullscreen
+    -- ^ 'Engine.Graphics.Window.Types.wcFullscreen' was requested AND
+    --   applied.
+  | CreatedBorderless
+    -- ^ 'Engine.Graphics.Window.Types.wcBorderless' was requested AND
+    --   applied (#1731).
+  deriving (Show, Eq)
+
+-- | The window mode a freshly created GLFW window actually came up in.
+--
+--   Deliberately keyed on the OUTCOME, not the configured mode:
+--   'Engine.Graphics.Window.GLFW.createWindow' degrades a fullscreen or
+--   borderless request gracefully to the plain window it just created
 --   when no primary monitor or video mode is available. Seeding
---   'wsAppliedMode' from the config would call both of those cases
---   fullscreen, and a later 'Windowed' request would then skip caching
---   and teleport a live decorated window onto 'defaultWindowState'\'s
---   fallback geometry.
-appliedModeAtCreation ∷ Bool → WindowMode
-appliedModeAtCreation True  = Fullscreen
-appliedModeAtCreation False = Windowed
+--   'wsAppliedMode' from the config would call those cases fullscreen or
+--   borderless, and a later 'Windowed' request would then be a real
+--   switch restoring a cache no live windowed window ever filled —
+--   teleporting the window onto 'defaultWindowState'\'s fallback
+--   geometry.
+appliedModeAtCreation ∷ WindowCreationOutcome → WindowMode
+appliedModeAtCreation CreatedFullscreen = Fullscreen
+appliedModeAtCreation CreatedBorderless = BorderlessWindowed
+appliedModeAtCreation CreatedPlain      = Windowed
+
+-- | Fold ONE window creation into the render-thread-owned 'WindowState':
+--   record the mode GLFW actually came up in, and — only for a
+--   successful borderless creation — seed the windowed-geometry cache.
+--
+--   The supplied position and size must be sampled from the live
+--   DECORATED window, after 'Engine.Graphics.Window.GLFW.createWindow'
+--   made it but before any borderless mutation, so they describe a real
+--   window on screen rather than the requested dimensions (configuration
+--   persists no position at all).
+--
+--   Seeding is confined to 'CreatedBorderless' on purpose. A
+--   'CreatedPlain' boot IS the windowed state, so its own first switch
+--   away caches the live geometry and a seed here would be inert; a
+--   'CreatedFullscreen' boot never had a windowed window on screen, so
+--   there is nothing honest to seed and its behaviour is unchanged.
+--   Borderless is the case that needs it: applying the mode at creation
+--   (#1731) means the first switch to 'Windowed' is an ENTRY, and
+--   'applyWindowModeTransition' never caches on the way in.
+applyWindowCreation ∷ WindowCreationOutcome → (Int, Int) → (Int, Int)
+                    → WindowState → WindowState
+applyWindowCreation outcome decoratedPos decoratedSize ws = case outcome of
+    CreatedBorderless → seeded { wsWindowedPos  = decoratedPos
+                               , wsWindowedSize = decoratedSize }
+    _                 → seeded
+  where
+    seeded = ws { wsAppliedMode = appliedModeAtCreation outcome }
 
 -- | Does switching to @target@ mean LEAVING an applied windowed state?
 --   Only then may the live GLFW geometry be captured into the cache:

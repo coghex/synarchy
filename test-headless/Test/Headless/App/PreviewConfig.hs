@@ -27,3 +27,16 @@ spec = describe "preview window presentation" $ do
          wcResizable hidden) `shouldBe`
           (wcWidth ordinary, wcHeight ordinary, wcTitle ordinary,
            wcResizable ordinary)
+
+    -- #1731 gave the preview's ordinary path a persisted borderless
+    -- request. The hidden automated presentation must suppress it for
+    -- the same reason it suppresses fullscreen: a probe window that
+    -- went undecorated and monitor-sized would not be the ordinary
+    -- window the surface/swapchain/resize path is being exercised on.
+    it "passes a persisted borderless request through only when visible" $ do
+        let borderlessVideo = defaultVideoConfig
+              { vcWindowMode = BorderlessWindowed }
+        wcBorderless (previewWindowConfig False borderlessVideo)
+            `shouldBe` True
+        wcBorderless (previewWindowConfig True borderlessVideo)
+            `shouldBe` False
