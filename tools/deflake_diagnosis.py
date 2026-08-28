@@ -2119,6 +2119,15 @@ class Outcome:
             "acceptable_failures": self.handoff.acceptable_failures,
             "targets": list(self.handoff.targets),
             "expected_checks": list(self.handoff.expected_checks),
+            # The WHOLE descriptor, labels included. The identifier list
+            # above is the stable contract, but a label is the check's
+            # stated MEANING, and a consumer holding a supplied
+            # measurement to identifiers alone would accept a batch that
+            # relabelled one to describe a different assertion. A route
+            # with a single measurement has nothing else to compare it
+            # against, so the record has to carry it.
+            "expected_descriptor": _deep_copy(
+                self.handoff.expected_descriptor),
             "timestamp_utc": result.get("timestamp_utc"),
             "artifact_root": result.get("artifact_root"),
             "invocation_dir": result.get("invocation_dir"),
@@ -2168,6 +2177,11 @@ class Outcome:
             "attestations": source.get("attestations"),
             "repair": source.get("repair"),
         }
+
+
+def _deep_copy(value):
+    """A copy no later mutation of the original can reach through."""
+    return json.loads(json.dumps(value))
 
 
 def _require_canonical(path, what: str) -> None:

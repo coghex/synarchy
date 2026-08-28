@@ -145,13 +145,16 @@ A batch's DESCRIPTOR is what it reports against, and the identity
 binding below cannot see it: a result can keep its probe, its targets,
 its commit, its instant and every artifact path while swapping or
 relabelling an unrelated declared check, which #1437 rejects rather than
-routing anywhere. The producer record restates only half of it, so the
-binding is two independent statements — identifiers and their ORDER
-against the record's own `handoff.expected_checks`, and the LABELS
-between the declared measurements themselves, through #1437's
-`require_descriptor`. A label is the check's stated meaning, so a batch
-that kept every identifier while relabelling one measures something else
-and says so nowhere. The targets are held to that same descriptor: a
+routing anywhere. The record carries the WHOLE ordered descriptor — #1437
+serializes it beside the identifier list for this — and every supplied
+measurement is held to it through that module's own
+`require_descriptor`, so identifiers, order and LABELS are compared by
+one definition. Against the RECORD rather than against a sibling
+measurement, because the routes that carry one baseline have no sibling,
+and those are the routes that record a de-list recommendation: a
+self-consistent handoff that relabelled a check would otherwise recommend
+de-listing on the strength of a different asserted check. A label is the
+check's stated meaning. The targets are held to that same descriptor: a
 target it never declared cannot be one of the measurement's own non-PASS
 identifiers.
 
@@ -1018,6 +1021,10 @@ def require_diagnosis_outcome(document, *, worktrees=()) -> dict:
         raise HandoffError(
             "the diagnosis outcome's `handoff`.expected_checks is empty; a "
             "measurement that declared no check reported nothing")
+    descriptor = _require_descriptor_record(
+        outcome["handoff"].get("expected_descriptor"),
+        "the diagnosis outcome's `handoff`.expected_descriptor",
+        expected_checks)
     stray = [cid for cid in targets if cid not in expected_checks]
     if stray:
         raise HandoffError(
@@ -1053,6 +1060,7 @@ def require_diagnosis_outcome(document, *, worktrees=()) -> dict:
         "baseline_sha": baseline_sha,
         "retained_artifacts": artifacts,
         "expected_checks": expected_checks,
+        "expected_descriptor": descriptor,
         "references": references,
         "configuration": require_configuration(
             outcome.get("configuration"),
@@ -1312,55 +1320,69 @@ def declared_worktrees(document) -> list:
     return trees
 
 
-def _require_one_descriptor(measurements: dict, diagnosis: dict) -> None:
-    """Every declared measurement reports the SAME declared checks.
+def _require_descriptor_record(value, what: str, expected_checks) -> list:
+    """#1437's WHOLE expected descriptor, identifiers and labels.
 
-    A batch's descriptor is the contract it reports against, and
+    Required, and required to agree with the identifier list beside it:
+    the record states the descriptor twice, and two statements free to
+    disagree establish neither.
+    """
+    if not isinstance(value, list) or not value:
+        raise HandoffError(
+            f"{what} must be the handoff's ordered descriptor, got "
+            f"{type(value).__name__}")
+    descriptor = []
+    for position, entry in enumerate(value):
+        where = f"{what}[{position}]"
+        record = _require_object(entry, where)
+        if set(record) != {"id", "label"}:
+            raise HandoffError(
+                f"{where} carries {sorted(record)}, not exactly `id` and "
+                f"`label`")
+        descriptor.append({
+            "id": _require_text(record["id"], f"{where}.id", limit=128),
+            "label": _require_text(record["label"], f"{where}.label",
+                                   limit=4096),
+        })
+    ids = [entry["id"] for entry in descriptor]
+    if ids != list(expected_checks):
+        raise HandoffError(
+            f"{what} declares {ids} where the record's own "
+            f"`expected_checks` is {list(expected_checks)}; one descriptor "
+            f"stated twice cannot be two descriptors")
+    return descriptor
+
+
+def _require_one_descriptor(measurements: dict, diagnosis: dict) -> None:
+    """Every declared measurement reports the contract the record names.
+
+    A batch's descriptor is what it reports against, and
     `_bind_to_producer` cannot see it: a result can keep its probe, its
     targets, its commit, its instant and every artifact path while
     swapping or relabelling an unrelated declared check, and #1437
     rejects exactly that drift rather than routing it anywhere.
 
-    Two independent bindings, because the producer record carries only
-    half the descriptor:
-
-    * against the record's own `handoff.expected_checks` — identifiers
-      and their ORDER, which is the stable part of the contract and the
-      only part #1437 restates in its outcome; and
-    * against each OTHER, through #1437's own `require_descriptor`,
-      which adds the LABELS. A label is the check's stated meaning, so a
-      batch that kept every identifier while relabelling one measures
-      something else and says so nowhere — and since the labels are
-      absent from the producer record, agreement between the declared
-      measurements is the strongest statement about them available here.
+    Held to the RECORD's own ordered descriptor rather than to the other
+    supplied measurements, through #1437's `require_descriptor` so
+    identifiers, order AND labels are compared by one definition. The
+    difference matters: `cannot-reproduce` and `no-confident-fix`
+    normally supply a single baseline, so a comparison between
+    measurements has nothing to compare it against, and a self-
+    consistent handoff that relabelled a check would record a stable
+    outcome — a de-list recommendation among them — for a different
+    asserted check.
     """
-    expected = diagnosis["expected_checks"]
-    reference = None
+    expected = diagnosis["expected_descriptor"]
     for role in ROLES:
         measurement = measurements.get(role)
         if measurement is None or measurement.result is None:
             continue
-        where = f"the {role} measurement's result document"
-        found = deflake_diagnosis.descriptor_ids(measurement.result)
-        if found != expected:
-            raise HandoffError(
-                f"{where} declares the checks {found} where the diagnosis "
-                f"outcome's expected descriptor is {expected}; identifiers "
-                f"and their order are the stable contract, and a rename, a "
-                f"removal or a reorder is a protocol change this workflow "
-                f"invents no mapping for")
-        if reference is None:
-            reference = (role, deflake_diagnosis.descriptor_of(
-                measurement.result))
-            continue
         try:
             deflake_diagnosis.require_descriptor(
-                measurement.result, reference[1], where)
+                measurement.result, expected,
+                f"the {role} measurement's result document")
         except deflake_diagnosis.HandoffError as error:
-            raise HandoffError(
-                f"{error}; the {reference[0]} measurement of this same "
-                f"attempt declares it differently, and one attempt reports "
-                f"against one contract") from None
+            raise HandoffError(str(error)) from None
 
 
 def require_handoff(document, *, worktrees=(), primary=None) -> Handoff:

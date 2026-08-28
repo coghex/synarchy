@@ -2286,10 +2286,12 @@ rather than stored as an attempt about a baseline the producer never diagnosed.
 **One attempt reports against one declared contract.** A batch's descriptor is
 what it reports against and the identity binding cannot see it — a result can
 keep its probe, targets, commit, instant and every artifact path while swapping
-or relabelling an unrelated declared check, which #1437 rejects outright. The
-producer record restates only half of it, so this binds identifiers and their
-ORDER against `handoff.expected_checks` and the LABELS between the declared
-measurements themselves, through `deflake_diagnosis.require_descriptor`. The
+or relabelling an unrelated declared check, which #1437 rejects outright. #1437's
+record carries the whole ordered descriptor beside the identifier list, and
+every supplied measurement is held to it through that module's own
+`require_descriptor` — against the RECORD rather than a sibling measurement,
+since the routes carrying one baseline have no sibling and are the ones that
+record a de-list recommendation. The
 targets are held to that same descriptor: one it never declared cannot be among
 the measurement's own non-PASS identifiers.
 

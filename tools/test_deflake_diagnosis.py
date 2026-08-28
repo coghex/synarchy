@@ -6307,27 +6307,52 @@ def test_one_attempt_reports_against_one_declared_contract() -> None:
                 fragment, label)
             expect_nothing_recorded(path, before, publisher, label)
 
-    # A relabel keeps every identifier, so only the cross-measurement
-    # comparison can see it — the producer record carries no labels.
-    diagnosis, _record = produced(dd.ROUTE_PARTIAL_IMPROVEMENT)
+    # A relabel keeps every identifier, so nothing the identity binding
+    # compares moves. It is held to the RECORD's own descriptor and not
+    # to a sibling measurement, because the routes that carry ONE
+    # baseline have no sibling — and those are the routes that record a
+    # de-list recommendation.
+    relabelled = redeclared_result(relabel="a different assertion entirely")
+    for label, route, measurements in (
+        ("a single-baseline cannot-reproduce", dd.ROUTE_CANNOT_REPRODUCE,
+         [{"role": do.ROLE_BASELINE, "exit_code": probe_flake.EXIT_OK,
+           "result": relabelled}]),
+        ("a single-baseline no-confident-fix", dd.ROUTE_NO_CONFIDENT_FIX,
+         [{"role": do.ROLE_BASELINE, "exit_code": probe_flake.EXIT_OK,
+           "result": relabelled}]),
+        ("a relabelled verification", dd.ROUTE_PARTIAL_IMPROVEMENT,
+         [{"role": do.ROLE_BASELINE, "exit_code": probe_flake.EXIT_OK,
+           "result": produced(dd.ROUTE_PARTIAL_IMPROVEMENT)[0]["baseline"][
+               "result"]},
+          {"role": do.ROLE_VERIFICATION, "exit_code": probe_flake.EXIT_OK,
+           "result": redeclared_result(
+               relabel="a different assertion entirely",
+               commit=REPAIR_COMMIT, artifact_root=VERIFY_ARTIFACTS)}]),
+    ):
+        with census_file() as path:
+            before = path.read_bytes()
+            publisher = Publisher()
+            expect_handoff_rejected(
+                lambda r=route, m=measurements, p=publisher: record_outcome(
+                    outcome_handoff(r, measurements=m), path, publisher=p),
+                "relabels", f"{label} whose check was relabelled")
+            expect_nothing_recorded(path, before, publisher, label)
+
+    # The record states the descriptor twice; the two must agree.
     with census_file() as path:
         before = path.read_bytes()
+        _diagnosis, record = produced(dd.ROUTE_CANNOT_REPRODUCE)
+        record["handoff"]["expected_descriptor"][-1]["id"] = "delta"
         publisher = Publisher()
         expect_handoff_rejected(
-            lambda p=publisher: record_outcome(
-                outcome_handoff(dd.ROUTE_PARTIAL_IMPROVEMENT, measurements=[
-                    {"role": do.ROLE_BASELINE,
-                     "exit_code": probe_flake.EXIT_OK,
-                     "result": diagnosis["baseline"]["result"]},
-                    {"role": do.ROLE_VERIFICATION,
-                     "exit_code": probe_flake.EXIT_OK,
-                     "result": redeclared_result(
-                         relabel="a different assertion entirely",
-                         commit=REPAIR_COMMIT,
-                         artifact_root=VERIFY_ARTIFACTS)}]),
-                path, publisher=p),
-            "relabels", "a relabelled check in the verification")
-        expect_nothing_recorded(path, before, publisher, "a relabelled check")
+            lambda: record_outcome(
+                outcome_handoff(dd.ROUTE_CANNOT_REPRODUCE,
+                                diagnosis_outcome=record),
+                path, publisher=publisher),
+            "one descriptor stated twice cannot be two descriptors",
+            "a record whose two descriptors disagree")
+        expect_nothing_recorded(path, before, publisher,
+                                "two disagreeing descriptors")
 
     # And a target the record's own descriptor never declared.
     with census_file() as path:
