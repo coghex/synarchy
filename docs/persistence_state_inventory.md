@@ -90,7 +90,7 @@ the affected fields as unclassified.
 | `materialRegistryRef` | global | Rebuild | built-in material table | boot-time, not YAML-driven | none yet |
 | `unitManagerRef` | global | Rebuild | see §5 (`UnitManager` fields classified individually) | the IORef itself is always freshly allocated at boot; the interesting classification decisions live on `UnitManager`'s own fields (§5) | none yet |
 | `unitQueue` | global | Exclude | — | transport queue; see contract §3 | none yet |
-| `utsRef` | global | Rebuild | `wpsUnits`/`wpsUnitSimStates` after load | sim-side per-unit pos/pose/target/path rebuilt from the restored `UnitInstance`/`UnitSimState` snapshot, not itself directly serialized | `tools/movement_probe.py` (post-load steering sanity) |
+| `utsRef` | global | Rebuild | `wpsUnits`/`wpsUnitSimStates` after load | the IORef itself is always freshly allocated at boot and repopulated from the restored `UnitInstance`/`UnitSimState` snapshot, not itself directly serialized; the classification decision for the state it holds lives on `UnitThreadState.utsSimStates` (§5), which IS persisted | `tools/movement_probe.py` (post-load steering sanity) |
 | `statRNGRef` | global | Exclude | — | explicitly non-deterministic, not save-seeded (contract §1) | none yet |
 | `buildingManagerRef` | global | Rebuild | see §5 (`BuildingManager` fields classified individually) | the IORef itself is always freshly allocated at boot; the interesting classification decisions live on `BuildingManager`'s own fields (§5) | none yet |
 | `texPaletteRef` | global | Persist exactly | — | `sdTexPalette` | `tools/persistence_contract_probe.py` (see §12) |
@@ -337,16 +337,24 @@ field either has no cross-field dependency or is noted below:
 
 ## 5. Gameplay managers
 
-`UnitManager`/`BuildingManager` are not in `ROOT_RECORDS` (they aren't
-fields of `EngineEnv`/`WorldState` themselves — `unitManagerRef`/
-`buildingManagerRef`, the fields that ARE, are classified in §1 as
-pointers into here), so the audit doesn't scan them; they're inventoried
-per issue requirement 3 for completeness and get owner headings for
-navigability, same as everything else.
+`UnitManager`, `BuildingManager` and `UnitThreadState` ARE in
+`ROOT_RECORDS` (#1703): each is reached from `EngineEnv` through a bare
+IORef pointer — `unitManagerRef`/`buildingManagerRef`/`utsRef`, the
+fields that hang directly off `EngineEnv`, are classified in §1 as
+`Rebuild` pointers that delegate the real decisions onto these records'
+own fields — so the audit scans all three directly and a field added to
+any of them fails until it carries a classification row here. Before
+#1703 only the pointers were scanned, which left the delegation
+landing in unenforced territory.
+
+Their own `### ` owner headings below are therefore load-bearing, not
+merely navigational: `parse_classified_names` scopes classification per
+owner heading, so a row moved out from under one of these headings stops
+counting.
 
 ### UnitManager
 
-`UnitManager` (`src/Unit/Types.hs:623`) — global:
+`UnitManager` (`src/Unit/Types/Manager.hs:37`) — global:
 
 | Field | Classification | Restoration dependency | Validation | Test oracle |
 |---|---|---|---|---|
@@ -357,7 +365,7 @@ navigability, same as everything else.
 
 ### BuildingManager
 
-`BuildingManager` (`src/Building/Types.hs:179`) — global:
+`BuildingManager` (`src/Building/Types.hs:231`) — global:
 
 | Field | Classification | Restoration dependency | Validation | Test oracle |
 |---|---|---|---|---|
@@ -366,13 +374,27 @@ navigability, same as everything else.
 | `bmNextId` | Persist exactly | — | must exceed every restored `BuildingId` so post-load spawns can't collide | `tools/persistence_contract_probe.py` (see §12) |
 | `bmSelected` | Exclude | — | selections are cleared on load (contract §1) | none yet |
 
+### UnitThreadState
+
+`UnitThreadState` (`src/Unit/Sim/Types.hs:231`) — global. The unit
+thread's own simulation store, reached from `EngineEnv` via `utsRef`
+(§1). The POINTER stays `Rebuild` — the IORef and its container are
+freshly allocated at boot and repopulated on load — while the state it
+holds is persisted, which is the distinction this heading exists to
+record:
+
+| Field | Classification | Restoration dependency | Validation | Test oracle |
+|---|---|---|---|---|
+| `utsSimStates` | Persist exactly | via `UnitSimDTO`/the `unit-sim` component (§10) and `wpsUnitSimStates`, needs the restored `UnitInstance`s (`umInstances`) resolved first — a sim state keyed by a `UnitId` no unit carries has nothing to steer | per-unit pos/pose/target/path/deadlines restore as saved; in-flight move targets keep the hazard policy their bytes were written under (see `UnitSimDTO` in §10) | `tools/movement_probe.py` (post-load steering sanity); `tools/persistence_contract_probe.py` (see §12) |
+
 ### UnitInstance (reset-on-load fields)
 
 `UnitInstance` fields explicitly dropped by `fromUnitSnapshot`
 (`src/World/Save/Types.hs:756`) — per-unit, reset rather than persisted.
-Not in `ROOT_RECORDS` either (these are individual fields WITHIN
+Not in `ROOT_RECORDS` (these are individual fields WITHIN
 `UnitInstance`, which is itself reached only via `umInstances` above,
-already covered):
+already covered — the audit scans the three manager records themselves,
+not the records they point at):
 
 | Field | Owner | Scope | Classification | Restoration dependency | Validation | Test oracle |
 |---|---|---|---|---|---|---|
