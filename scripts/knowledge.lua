@@ -30,7 +30,12 @@ M.REGISTRY = {
     {
         id   = "basic_cuisine",
         name = "Basic Cuisine",
-        icon = "knowledge_basic_cuisine",
+        -- No dedicated art yet. Name the shared knowledge fallback
+        -- EXPLICITLY (#1740): "knowledge_basic_cuisine" has never existed,
+        -- so the panel already drew this placeholder -- but as a MISS
+        -- against the global icon index, indistinguishable from a
+        -- misspelling. A deliberate fallback says so.
+        icon = "knowledge_unknown",
         desc = "Gates the cooking recipe tier — brewing a pot of coffee and\n"
             .. "future cuisine besides. Output quality scales with this\n"
             .. "level and the cooking skill.",

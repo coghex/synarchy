@@ -93,8 +93,13 @@ strict-decoder audit
 no direct `Data.Text.Encoding.decodeUtf8` under
 `src/Engine/Scripting/Lua/`), the persistence-inventory / EngineEnv-capability
 / save-compat / enum-append-only / cabal-library-module-inventory /
-material-id / concept-id-inventory / findings-report-status audits (each
-with its own self-test), the unit-asset inventory gate (`test_pack_atlas.py` +
+material-id / bare-name-icon / concept-id-inventory /
+findings-report-status audits (each
+with its own self-test), the F4 Tier 1 coverage-mapping gate
+(`action_outcome_coverage.py --self-test` then `--verify-tier1`, #1704 —
+the only half of that tool that reads the real tree, and the only half
+that blocks: the plain report stays a visibility report and always exits
+0), the unit-asset inventory gate (`test_pack_atlas.py` +
 `pack_atlas.py --validate-only --strict`), `world_check.py --quick`, the
 sixteen probe-runner self-tests (`ci_probes.py --self-test`,
 `ci_expensive_gates.py --self-test`, `ci_docs_fast_path.py --self-test`,
@@ -109,8 +114,43 @@ reads), the project-cache epoch and cleanup policy self-tests
 (`ci_cache_epoch.py --self-test`, `ci_cache_cleanup.py --self-test`), and the
 parity audit itself.
 
-**The world-determinism content-identity self-test (#1724)** is the
-newest member. `tools/test_determinism.py` is the executable
+**The bare-name-icon check (#1740)** is the newest member.
+`tools/bare_name_icon_asset_check.py` resolves every authoritative
+bare-name icon reference — `scripts/injuries.lua`'s `KIND_ICON`,
+`INJURY_ICON` and its four icon-carrying functions,
+`scripts/unit_info_v2_stat_defs.lua` and `scripts/unit_info_v2_status.lua`'s
+literal `icon =` fields, `scripts/knowledge.lua`'s registry and
+`M.UNKNOWN_ICON`, `data/infections/*.yaml`'s `icon:` scalars, and the
+engine's own publications of that Lua field (`Units/Combat.hs`'s immunity
+literal and `Asset/YamlInfection.hs`'s decoder default, found by scanning
+every `.hs` under `src/`/`app/` that names it, so a new site fails rather
+than joining unchecked) — through the SHIPPED GLOBAL index `scripts/unit_info_v2_panel_engine.lua`'s
+`buildIconIndex` builds over `ICON_SUBDIRS`, last-wins on a duplicate
+basename exactly as the runtime resolves one. It never requires a
+reference to live in the row's own family: intentional cross-family reuse
+is instead PINNED (skill rows drawing stat `agility`/`strength`, the
+Status panel's stat `weight`, injury rows drawing status `pain`, status
+condition rows drawing injury `nerve_injury`/`festered_injury`/
+`frostbite`), so a family-local reinterpretation fails rather than
+silently changing meaning. Each pin binds to the exact reference SITE and
+the exact ROWS of it that reuse the asset — never to "the basename appears
+somewhere" — because `agility` and `strength` are each used by their own
+physical-stat row AND by a skill row in one file, so a basename-only pin
+would keep passing after the pinned reuse was deleted. It also pins the
+two runtime family inventories (`ICON_SUBDIRS` and
+`scripts/startup_loader.lua`'s preload list) to each other and to every
+family's `<kind>_unknown.png`. Extraction refuses rather than narrows: an
+unsupported table shape, a computed `icon` assignment outside the closed
+reason-carrying forwarding allowlist, an `icon` assignment outside the
+enumerated reference sites, an unterminated string, and any enumerated
+source, table, anchor or allowlist entry yielding zero matches are each an
+error naming `file:line`. Per-FAMILY fallback-asset presence stays
+`tools/texture_subset_audit.py`'s job, and
+`assets/textures/icons/location/` is outside `ICON_SUBDIRS` and owned by
+`tools/location_map_icon_asset_check.py`.
+
+**The world-determinism content-identity self-test (#1724)** was the
+previous newest member. `tools/test_determinism.py` is the executable
 specification of what `tools/world_determinism.py` means by
 "content-identical" — a reversed tile array and a reordered-key tile
 must hash EQUAL, while a changed field, a missing tile and an unstable
