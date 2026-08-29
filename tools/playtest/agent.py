@@ -150,7 +150,15 @@ def build_system_prompt(persona: dict, manual: str, fb_size) -> str:
         manual=manual.strip(), width=fb_size[0], height=fb_size[1])
 
 
-def _lenient_parse(text: str) -> dict:
+# The two ways a reply can be unusable before its action is even read.
+# They stay distinct in the trace: one is text that is not JSON at all,
+# the other is JSON of the wrong top-level type.
+NOT_JSON_NOTE = "[harness: reply was not JSON]"
+NON_OBJECT_NOTE = ("[harness: reply was valid JSON but not an object, "
+                   "treated as wait]")
+
+
+def _lenient_parse(text: str) -> object:
     try:
         return json.loads(text)
     except (ValueError, TypeError):
@@ -160,10 +168,19 @@ def _lenient_parse(text: str) -> dict:
         raise
 
 
-def normalize_turn(data: dict) -> dict:
+def normalize_turn(data: object) -> dict:
     """Coerce a model reply into the turn shape, downgrading anything
     unusable to a recorded 'wait' (a confused reply is data, not a
-    crash)."""
+    crash).
+
+    ``data`` is whatever the reply parsed to, which is not necessarily a
+    mapping: valid JSON of any other shape (a list, a scalar, ``null``)
+    is a confused turn too, and gets its own note so the trace says which
+    failure the model actually produced rather than crashing the session.
+    """
+    if not isinstance(data, dict):
+        return {"observation": "", "action": {"do": "wait"},
+                "expectation": "", "note": NON_OBJECT_NOTE}
     raw_action = data.get("action")
     action = ({k: v for k, v in raw_action.items() if v is not None}
               if isinstance(raw_action, dict) else {})
@@ -281,8 +298,21 @@ def _parse_codex_usage(events_jsonl: str) -> dict | None:
     return result
 
 
-def _parse_claude_result(output: str) -> tuple[dict | None, dict | None]:
-    """Return (structured turn, normalized usage) from Claude Code JSON.
+def _parse_claude_result(output: str) -> tuple[dict | None, dict | None, str]:
+    """Return (structured turn, normalized usage, fallback text) from
+    Claude Code JSON.
+
+    The turn is only ever a mapping or ``None`` — the same discipline the
+    outer payload and ``structured_output`` already get. A ``result`` that
+    parses as valid JSON of some other shape is not a turn, so it is not
+    returned as one.
+
+    Whenever ``structured_output`` was unusable the raw ``result`` text is
+    handed back separately, independent of what it parsed to. The caller
+    needs it for two things the accepted turn value cannot carry: telling
+    malformed fallback text apart from valid non-object JSON, and keeping
+    the model's own words in the trace even when they parsed to something
+    falsy.
 
     Claude Code may make small internal helper-model calls. ``modelUsage`` is
     therefore the conservative source: all models, cached/created input, and
@@ -292,15 +322,19 @@ def _parse_claude_result(output: str) -> tuple[dict | None, dict | None]:
     try:
         payload = json.loads(output)
     except (TypeError, ValueError):
-        return None, None
+        return None, None, ""
     if not isinstance(payload, dict):
-        return None, None
+        return None, None, ""
     structured = payload.get("structured_output")
+    fallback = ""
     if not isinstance(structured, dict):
+        result_text = payload.get("result")
+        fallback = result_text if isinstance(result_text, str) else ""
         try:
-            structured = _lenient_parse(payload.get("result") or "")
+            parsed = _lenient_parse(fallback)
         except (TypeError, ValueError):
-            structured = None
+            parsed = None
+        structured = parsed if isinstance(parsed, dict) else None
     input_tokens = 0
     output_tokens = 0
     cache_read = 0
@@ -326,13 +360,13 @@ def _parse_claude_result(output: str) -> tuple[dict | None, dict | None]:
                             + cache_read + cache_creation)
             output_tokens = int(usage.get("output_tokens") or 0)
         else:
-            return structured, None
+            return structured, None, fallback
     return structured, {
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "cache_read_input_tokens": cache_read,
         "cache_creation_input_tokens": cache_creation,
-    }
+    }, fallback
 
 
 class PlayerAgent:
@@ -434,16 +468,21 @@ class PlayerAgent:
                 data = None
                 usage = _parse_codex_usage(response.stdout)
             else:
-                data, usage = _parse_claude_result(response.stdout)
-                text = json.dumps(data, separators=(",", ":")) if data else ""
+                data, usage, fallback = _parse_claude_result(response.stdout)
+                # Keep the model's own fallback text rather than a
+                # re-serialization of it: an unusable parse still has to
+                # reach the trace, and a falsy one has no serialization.
+                text = (json.dumps(data, separators=(",", ":"))
+                        if isinstance(data, dict) else fallback)
 
         if data is None:
             try:
                 data = _lenient_parse(text)
             except (ValueError, TypeError):
                 data = {"observation": "", "action": {"do": "wait"},
-                        "expectation": "",
-                        "note": "[harness: reply was not JSON]"}
+                        "expectation": "", "note": NOT_JSON_NOTE}
+        # normalize_turn, not this branch, owns the wrong-top-level-type
+        # case: _lenient_parse succeeding says nothing about the shape.
         result = normalize_turn(data)
         result["raw"] = text
         result["usage"] = usage

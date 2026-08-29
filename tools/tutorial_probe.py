@@ -54,12 +54,14 @@ What it proves (issue #922 requirements 2 and 3):
      latches "Prepare an expedition" and checks both its subobjectives
      before that branch is ever revealed -- reveal is gated on
      "Secure water source", which has nothing to do with carried
-     supplies. The moment secure_water_source finally completes (a real
-     FOV discovery, same as check 3 above), the already-latched branch
-     must become observable in the checklist rather than latching and
-     hiding in the same instant -- and removing the supplies afterwards
-     must still uncheck the live subobjectives, keep the branch
-     observable, and never touch the durable completion.
+     supplies. The moment secure_water_source finally completes (the
+     same real FOV discovery check 3 drives, but with its sight
+     conditions established rather than hoped for -- see
+     `phase_pre_latched_reveal`), the already-latched branch must become
+     observable in the checklist rather than latching and hiding in the
+     same instant -- and removing the supplies afterwards must still
+     uncheck the live subobjectives, keep the branch observable, and
+     never touch the durable completion.
 
 Two deliberate departures from "just play the game", both forced by the
 shipped content and both documented rather than worked around:
@@ -132,6 +134,30 @@ SUB_FOOD = "first_session_prepare_food"
 # the probe teleports it there.
 CAMP_CLEARANCE = 12
 CAMP_MIN_DISTANCE = 20
+
+# The hour every sight-based check in this probe runs at, and the sun
+# angle that hour MUST read back as once the engine has applied it.
+# World.Time.Types.worldTimeToSunAngle is (h * 60 + m) / 1440, and
+# World.Time.Local.localSunAngle adds a u = gx - gy longitude offset, so
+# the global angle is the one read at the origin: 720 / 1440 = 0.5.
+PIN_HOUR = 12
+PIN_MINUTE = 0
+PIN_SUN_ANGLE = 0.5
+PIN_SUN_TOLERANCE = 0.01
+
+#: How long the pre-latched leg waits for the acolyte's own FOV scan
+#: to register the water. Named so the failure message cannot drift
+#: away from the budget it reports on.
+REVEAL_DISCOVERY_SECONDS = 60.0
+
+#: Compass name for each single-tile step, spelled the way
+#: `unit.setFacing` parses it (Engine.Scripting.Lua.API.Units.Selection)
+#: and oriented the way Unit.LineOfSight's `facingVector` is: +y is
+#: south.
+STEP_DIRECTION = {
+    (0, -1): "N",  (1, -1): "NE", (1, 0): "E",  (1, 1): "SE",
+    (0, 1): "S",   (-1, 1): "SW", (-1, 0): "W", (-1, -1): "NW",
+}
 
 YAML_LOADERS = [
     ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
@@ -456,9 +482,22 @@ def water_sources(port: int, uid: int) -> set[tuple[int, int]]:
     return found
 
 
-def pin_daylight(port: int) -> None:
-    """Pin the world clock to local noon, so every sight-based check in
-    this probe is deterministic.
+def sun_angle_at(port: int, gx: int, gy: int) -> float | None:
+    """`world.getSunAngleAt` — the longitude-local day/night phase (0..1)
+    at a tile, or None when the engine cannot answer it (no active
+    world, or a malformed reply)."""
+    raw = send(port, f"local a = world.getSunAngleAt({gx}, {gy}); "
+                     f"return a == nil and 'nil' or tostring(a)", timeout=15.0)
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def pin_daylight(port: int, page: str = PAGE) -> float:
+    """Pin `page`'s clock to local noon and WAIT until the engine has
+    applied it, so every sight-based check in this probe is
+    deterministic. Returns the settled global sun angle.
 
     #1230 made `unit.getVisibleTiles` scale its radius by the page-local
     `nightPerceptionFactor`: at midnight a perception-1.0 unit sees 3
@@ -467,8 +506,128 @@ def pin_daylight(port: int) -> None:
     happened to reach — the exact flakiness a probe must not have. Noon
     is the maximum, so pinning it here keeps the objective's difficulty
     at what it was before the night factor applied to the binary set.
+
+    Two things this deliberately does not shortcut, both found by #1771:
+
+      * `world.setTime` takes (pageId, hour, minute)
+        (Engine.Scripting.Lua.API.World.Clock). The two-argument call
+        this helper used to make matched no branch of that decoder, so
+        it queued NOTHING — every caller then ran at whatever hour
+        worldgen happened to leave behind while believing it was noon.
+      * Even spelled correctly the call only ENQUEUES a WorldSetTime for
+        the world thread. It becomes observable through
+        `world.getSunAngleAt`, which World.Thread.Time mirrors from the
+        VISIBLE page's own clock on every tick — including while paused,
+        because that mirror sits outside the pause gate. Polling it is
+        what makes "pinned" a fact rather than a hope, and it is how
+        tools/circadian_probe.py waits for the same command.
     """
-    send(port, "world.setTime(12, 0); return 'ok'", timeout=10.0)
+    send(port, f"world.setTime('{page}', {PIN_HOUR}, {PIN_MINUTE}); return 'ok'",
+         timeout=15.0)
+    seen: list[float | None] = []
+
+    def settled() -> bool:
+        angle = sun_angle_at(port, 0, 0)
+        seen.append(angle)
+        return angle is not None and abs(angle - PIN_SUN_ANGLE) <= PIN_SUN_TOLERANCE
+
+    if poll_until(20.0, settled) is None:
+        raise ProbeError(
+            f"world.setTime('{page}', {PIN_HOUR}, {PIN_MINUTE}) never took "
+            f"effect: world.getSunAngleAt(0, 0) last read "
+            f"{seen[-1] if seen else 'nothing'!r}, not "
+            f"{PIN_SUN_ANGLE} +/- {PIN_SUN_TOLERANCE}")
+    return seen[-1]
+
+
+def face_toward(port: int, uid: int, fx: int, fy: int,
+                tx: int, ty: int) -> str:
+    """Turn `uid`, standing at (fx, fy), to look at the adjacent tile
+    (tx, ty). Returns the compass name applied.
+
+    `unit.getVisibleTiles` is cone-limited — Unit.LineOfSight's `inCone`
+    is a 120° wedge centred on the unit's facing — so a tile directly
+    BESIDE a unit is genuinely invisible to it when it is looking the
+    other way. A teleport does not touch facing
+    (Unit.Thread.Command.Lifecycle), and the acolyte's facing coming out
+    of the unpaused AI-state window is wherever it last happened to
+    walk. Leaving that to chance would make "can it see the water"
+    depend on an accident of the AI's wander, which is the same class of
+    flakiness as depending on the hour — so the probe sets it, through
+    the engine's own synchronous setter, before asserting what the
+    engine reports. Nothing about sight, the cone, or the objective
+    changes; only the setup stops being random.
+
+    CALL THIS ON A FROZEN UNIT. `unit.setFacing` writes the render-facing
+    instance the FOV query reads, and Unit.Thread.publishToRender
+    overwrites that from the sim state's own `usFacing` on its very next
+    tick — a tick that runs whether or not the engine is paused. Skipping
+    that overwrite for a frozen unit is exactly what the flag is for
+    ("so Lua's setAnim / setFacing / setPos aren't stomped"); without the
+    freeze this setter reliably lasts less than a tenth of a second.
+    """
+    dx, dy = tx - fx, ty - fy
+    step = ((dx > 0) - (dx < 0), (dy > 0) - (dy < 0))
+    name = STEP_DIRECTION.get(step)
+    if name is None:
+        raise ProbeError(f"cannot face unit {uid} at ({fx},{fy}) toward "
+                         f"({tx},{ty}): they are the same tile")
+    ok = send(port, f"return tostring(unit.setFacing({uid}, '{name}'))",
+              timeout=15.0)
+    if ok != "true":
+        raise ProbeError(f"unit.setFacing({uid}, '{name}') failed: {ok!r}")
+    return name
+
+
+def set_frozen(port: int, uid: int, on: bool, required: bool = True) -> None:
+    """`unit.setFrozen` — pin (or release) the render-facing instance a
+    unit's sight is read from.
+
+    Unit.Thread.publishToRender republishes position, facing and pose
+    from the sim state every tick unless the instance is frozen. Freezing
+    is therefore what makes a probe-set position or facing SURVIVE, and
+    what keeps the field of view this probe asserted the same field of
+    view the AI scans for the whole window. It stops nothing else: the
+    Lua AI still ticks a frozen unit, and
+    scripts/unit_ai_water.lua's `scanForWater` still runs at 10 Hz off
+    `unit.getVisibleTiles` — which is precisely how the main discovery
+    path can freeze its recipient and still watch a radio share land in
+    its memory.
+
+    `required` is False on the RELEASE calls: they run on the way out of
+    a failure, where the unit may already be the thing that went wrong,
+    and a second exception raised there would bury the diagnostic that
+    explains the first.
+    """
+    got = send(port, f"return tostring(unit.setFrozen({uid}, "
+                     f"{'true' if on else 'false'}))", timeout=15.0)
+    if required and got != "true":
+        raise ProbeError(f"unit.setFrozen({uid}, {on}) failed: {got!r}")
+
+
+def wait_for_teleport(port: int, uid: int, gx: int, gy: int,
+                      page: str = PAGE, timeout: float = 20.0) -> bool:
+    """Poll until `unit.setPos` has actually landed `uid` on
+    (page, gx, gy).
+
+    `unit.setPos` only QUEUES a UnitTeleport for the unit thread
+    (Engine.Scripting.Lua.API.Units.Spawn) and returns before it is
+    applied, so a caller that reads sight straight afterwards can be
+    reading the unit's OLD tile. The unit thread drains its command
+    queue OUTSIDE the pause gate (Unit.Thread.unitTick), which is what
+    makes this readback work in the probe's paused setup window.
+    """
+    expected = f"{page},{gx},{gy}"
+
+    def landed() -> bool:
+        raw = send(port,
+                   f"local i = unit.getInfo({uid}); "
+                   f"if not i then return 'missing' end; "
+                   f"return tostring(i.page) .. ',' .. math.floor(i.gridX) "
+                   f".. ',' .. math.floor(i.gridY)", timeout=15.0)
+        return raw == expected
+
+    return poll_until(timeout, landed) is not None
 
 
 def sees_water(port: int, uid: int) -> bool:
@@ -493,6 +652,190 @@ def sees_water(port: int, uid: int) -> bool:
                f"if f == 'lake' or f == 'river' then return 'yes' end end; "
                f"return 'no'", timeout=20.0)
     return raw == "yes"
+
+
+class SightSnapshot:
+    """One classifying observation of a unit's sight conditions (#1771).
+
+    Everything `Unit.LineOfSight.visibleTilesOnPage` derives its answer
+    from — the unit's page, position, facing and the night-scaled clock
+    — read in ONE console call together with the question that actually
+    matters: did that exact target tile come back in the FOV set? A
+    reveal that does not happen is then classifiable instead of a bare
+    uid: an unapplied teleport, a wrong page, a facing that excluded the
+    pond and an AI that walked away all read differently, and "the unit
+    could see it and the discovery did not fire" reads differently again.
+    Page and position are BOTH rendered as requested-vs-observed pairs,
+    because a unit that reached the right coordinates on the wrong page
+    is looking at a different page's tiles and is not a sight failure at
+    all.
+
+    Every field is either a value or an EXPLICIT absence marker
+    (``missing`` / ``unavailable`` / ``unknown``). A vanished unit, an AI
+    module that never produced state and an unanswerable clock each
+    render as themselves rather than raising some unrelated parse or
+    nil-access error inside the very diagnostic that exists to explain a
+    failure.
+    """
+
+    def __init__(self, label: str, uid: int, raw: str,
+                 requested: tuple[int, int], target: tuple[int, int],
+                 requested_page: str = PAGE) -> None:
+        self.label = label
+        self.uid = uid
+        self.raw = raw
+        self.requested = requested
+        self.requested_page = requested_page
+        self.target = target
+        self.fields: dict[str, str] = {}
+        for part in raw.split(";"):
+            key, sep, value = part.partition("=")
+            if sep:
+                self.fields[key.strip()] = value
+
+    def get(self, key: str, default: str = "unknown") -> str:
+        value = self.fields.get(key)
+        return default if value in (None, "", "nil") else value
+
+    @property
+    def unit_present(self) -> bool:
+        return self.fields.get("unit") == "present"
+
+    @property
+    def observed(self) -> tuple[int, int] | None:
+        try:
+            return int(self.fields["gx"]), int(self.fields["gy"])
+        except (KeyError, ValueError):
+            return None
+
+    @property
+    def position_applied(self) -> bool:
+        return self.observed == self.requested
+
+    @property
+    def page_applied(self) -> bool:
+        return self.fields.get("page") == self.requested_page
+
+    @property
+    def teleport_applied(self) -> bool:
+        """Both halves of what `unit.setPos` was asked for. A unit that
+        reached the right COORDINATES on the wrong page is not where the
+        caller sent it, and its field of view is a different page's."""
+        return self.page_applied and self.position_applied
+
+    @property
+    def sees_target(self) -> bool | None:
+        """True / False, or None when the engine could not answer."""
+        answer = self.fields.get("target")
+        if answer == "yes":
+            return True
+        if answer == "no":
+            return False
+        return None
+
+    def classify(self) -> str:
+        """The one sentence a reader needs: WHY this observation looks
+        the way it does, in the order the causes have to be ruled out."""
+        if not self.unit_present:
+            return (f"unit {self.uid} does not exist — unit.getInfo returned "
+                    f"nil, so nothing about its sight can be read")
+        if not self.teleport_applied:
+            return (f"the requested teleport to {self.requested} on page "
+                    f"{self.requested_page} was NOT applied — the unit is at "
+                    f"{self.observed} on page {self.get('page')}")
+        if self.sees_target is None:
+            return ("the engine could not report a field of view for the unit "
+                    f"(unit.getVisibleTiles: {self.get('fov')}), so its sight "
+                    "of the target cannot be classified")
+        if self.sees_target:
+            return (f"the unit COULD see the target water tile {self.target} "
+                    f"— sight is not the explanation")
+        return (f"the unit could NOT see the target water tile {self.target} "
+                f"(facing {self.get('facing')}, {self.get('fovCount')} tiles "
+                f"in view, {self.get('water')} of them water)")
+
+    def detail_lines(self) -> list[str]:
+        return [
+            f"observed page={self.get('page')} "
+            f"pos=({self.get('gx')},{self.get('gy')}) z={self.get('gz')} "
+            f"facing={self.get('facing')} | requested page="
+            f"{self.requested_page} pos=({self.requested[0]},"
+            f"{self.requested[1]}) "
+            f"[{'applied' if self.teleport_applied else 'NOT applied'}]",
+            f"target water ({self.target[0]},{self.target[1]}) in field of "
+            f"view: {self.get('target')} | unit.getVisibleTiles: "
+            f"{self.get('fov')}, {self.get('fovCount')} tiles, "
+            f"{self.get('water')} of them water",
+            f"sun angle: global {self.get('sunGlobal')}, local at the unit "
+            f"{self.get('sunLocal')} | pinned {PIN_HOUR:02d}:{PIN_MINUTE:02d} "
+            f"= {PIN_SUN_ANGLE:.4f}",
+            f"AI state: {self.get('ai')} | currentAction="
+            f"{self.get('action')} activeGoal={self.get('goal')} "
+            f"knownWaterSources={self.get('known')}",
+        ]
+
+    def render(self) -> str:
+        return "\n".join([f"  [{self.label}] {self.classify()}"]
+                         + [f"      {line}" for line in self.detail_lines()])
+
+    def __str__(self) -> str:
+        return self.render()
+
+
+def sight_snapshot(port: int, uid: int, label: str,
+                   requested: tuple[int, int], target: tuple[int, int],
+                   requested_page: str = PAGE) -> SightSnapshot:
+    """Capture one `SightSnapshot` in a single console round trip.
+
+    One call, because the point is a COHERENT picture: position, facing,
+    FOV and clock read across four separate round trips could each
+    describe a different instant, which is exactly the ambiguity the
+    snapshot exists to remove.
+    """
+    wx, wy = target
+    lua = (
+        "local out = {}; "
+        "local function put(k, v) out[#out+1] = k .. '=' .. tostring(v) end; "
+        "local function num(v) return v == nil and 'unknown' "
+        "or string.format('%.4f', v) end; "
+        f"local i = unit.getInfo({uid}); "
+        "if not i then put('unit', 'missing') else "
+        "put('unit', 'present'); put('page', i.page); "
+        "put('gx', math.floor(i.gridX)); put('gy', math.floor(i.gridY)); "
+        "put('gz', i.gridZ); put('facing', i.facing) end; "
+        "put('sunGlobal', num(world.getSunAngleAt(0, 0))); "
+        "put('sunLocal', i and num(world.getSunAngleAt(math.floor(i.gridX), "
+        "math.floor(i.gridY))) or 'unknown'); "
+        f"local tiles = unit.getVisibleTiles({uid}); "
+        "if not tiles then put('fov', 'unavailable'); "
+        "put('fovCount', 'unknown'); put('target', 'unknown'); "
+        "put('water', 'unknown') else local seen, water = false, 0; "
+        "for _, t in ipairs(tiles) do "
+        f"if math.floor(t.x) == {wx} and math.floor(t.y) == {wy} "
+        "then seen = true end; local f = world.getFluidAt(t.x, t.y); "
+        "if f == 'lake' or f == 'river' then water = water + 1 end end; "
+        "put('fov', 'ok'); put('fovCount', #tiles); "
+        "put('target', seen and 'yes' or 'no'); put('water', water) end; "
+        "local ok, ai = pcall(require, 'scripts.unit_ai'); "
+        f"local s = (ok and ai and ai.getState) and ai.getState({uid}) or nil; "
+        "if not s then put('ai', 'missing'); put('action', 'unknown'); "
+        "put('goal', 'unknown'); put('known', 'unknown') else "
+        "put('ai', 'present'); put('action', s.currentAction); "
+        "put('goal', s.activeGoal); "
+        "put('known', #(s.knownWaterSources or {})) end; "
+        "return table.concat(out, ';')"
+    )
+    return SightSnapshot(label, uid, send(port, lua, timeout=30.0),
+                         requested, target, requested_page)
+
+
+def sight_failure(headline: str, *snapshots: SightSnapshot) -> str:
+    """A ProbeError message that CLASSIFIES a sight failure rather than
+    naming a uid — #1771 requirement 4. Every snapshot handed in is
+    preserved, so a pre-poll picture and a failure-time picture sit side
+    by side and an unapplied teleport reads differently from an AI that
+    walked away afterwards."""
+    return "\n".join([headline] + [s.render() for s in snapshots])
 
 
 def hud_open(port: int) -> str:
@@ -799,16 +1142,71 @@ def phase_pre_latched_portal(port: int, gx: int, gy: int) -> int:
     return bid
 
 
-def phase_pre_latched_reveal(port: int, uid: int, sx: int, sy: int) -> None:
+def phase_pre_latched_reveal(port: int, uid: int, sx: int, sy: int,
+                             wx: int, wy: int) -> None:
     """The acolyte discovers real water -- secure_water_source completes,
     and the already-latched prepare branch is revealed for the FIRST
-    time. The checklist must stay non-empty (#996's whole point)."""
+    time. The checklist must stay non-empty (#996's whole point).
+
+    Sight here is SET UP, not hoped for (#1771). This leg drives the
+    same night-aware FOV scan the main discovery path does, so it earns
+    the same determinism the main path already establishes: the clock is
+    pinned and its application waited for, the queued teleport is waited
+    for, the finder is turned toward the water it is meant to find, and
+    only then does the phase assert — positively, before unpausing —
+    that the engine really does report THAT tile (not incidental water)
+    in the unit's field of view.
+
+    Both ways this can fail carry the state that classifies them, and
+    neither spends the whole discovery budget to say so: a
+    precondition that does not hold aborts immediately with the same
+    snapshot a post-poll timeout would produce.
+    """
+    pin_daylight(port)
     send(port, f"unit.setPos({uid}, {sx}, {sy}); return 'ok'", timeout=15.0)
+    landed = wait_for_teleport(port, uid, sx, sy)
+    if landed:
+        # Freeze first, then face — and stay frozen for the whole
+        # discovery window. The freeze is what makes the facing stick
+        # (see `face_toward`) AND what pins the position the FOV query
+        # reads, so the field of view asserted below is the SAME field
+        # of view the AI scans until the poll ends, rather than drifting
+        # with a wander this leg has no reason to exercise. It is the
+        # same instrument the main discovery path already uses on its
+        # recipient, for the same reason: sight that a phase depends on
+        # should be established, not hoped for.
+        set_frozen(port, uid, True)
+        face_toward(port, uid, sx, sy, wx, wy)
+    before = sight_snapshot(port, uid, "before the discovery window",
+                            (sx, sy), (wx, wy))
+    if not landed:
+        raise ProbeError(sight_failure(
+            f"acolyte {uid} never landed on the shore tile ({sx},{sy})",
+            before))
+    if not check("the acolyte can see the target water tile before the "
+                 "discovery window opens", before.sees_target is True,
+                 before.classify()):
+        set_frozen(port, uid, False, required=False)
+        raise ProbeError(sight_failure(
+            f"acolyte {uid} cannot see the water ({wx},{wy}) it is expected "
+            f"to discover", before))
+
     set_paused(port, False)
-    found = poll_until(60.0, lambda: known_water_count(port, uid) > 0)
+    found = poll_until(REVEAL_DISCOVERY_SECONDS,
+                       lambda: known_water_count(port, uid) > 0)
     set_paused(port, True)
-    if found is None:
-        raise ProbeError(f"acolyte {uid} never discovered the generated water")
+    # Snapshot BEFORE unfreezing, so a failure reports the pinned state
+    # the unit actually held for the whole window rather than whatever
+    # the sim publishes the instant the pin comes off.
+    after = (None if found is not None
+             else sight_snapshot(port, uid, "at the discovery timeout",
+                                 (sx, sy), (wx, wy)))
+    set_frozen(port, uid, False, required=False)
+    if after is not None:
+        raise ProbeError(sight_failure(
+            f"acolyte {uid} never discovered the generated water "
+            f"({wx},{wy}) within {REVEAL_DISCOVERY_SECONDS:.0f} s",
+            before, after))
 
     p = settle(port, lambda s: s.is_completed(OBJ_WATER))
     check("discovering water completes 'Secure water source'",
@@ -966,7 +1364,7 @@ def main() -> int:
 
         print("== 11. discovering water reveals the branch already "
               "complete ==")
-        phase_pre_latched_reveal(args.port, uid, sx, sy)
+        phase_pre_latched_reveal(args.port, uid, sx, sy, wx, wy)
 
         print("== 12. removing supplies unchecks live subobjectives, "
               "keeps the branch observable ==")

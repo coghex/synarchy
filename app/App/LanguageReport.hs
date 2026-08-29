@@ -17,7 +17,8 @@ import qualified Data.Text as T
 import Data.Aeson (Value, object, (.=), encode)
 import Language.Semantic.Types (ConceptId(..), catVersion, conceptCount,
                                  catalogueErrorText)
-import Language.Semantic.Catalogue (conceptCataloguePath, loadCatalogue)
+import Language.Semantic.Catalogue ( conceptCataloguePath
+                                   , conceptOrdinalPath, loadCatalogue )
 import Language.Generated.Types
 import Language.Generated.Onset (onsetTotalPairs)
 import Language.Generated.Orthography
@@ -27,7 +28,7 @@ import Language.Generated.Report
 runLanguageReport ∷ (Word64, Word64) → IO ()
 runLanguageReport (loSeed, hiSeed) = do
   hPutStrLn stderr $ "language-report: seeds " ⧺ show loSeed ⧺ ":" ⧺ show hiSeed
-  result ← loadCatalogue conceptCataloguePath
+  result ← loadCatalogue conceptCataloguePath conceptOrdinalPath
   case result of
     Left err → do
       hPutStrLn stderr $ T.unpack (catalogueErrorText err)

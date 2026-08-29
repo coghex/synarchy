@@ -370,7 +370,7 @@ explain cat storedName storedGloss prov prof expr
                 }
           where rebuilt = traceSurface pieces
   where
-    roots = assignLanguageRoots prof (conceptIds cat)
+    roots = assignLanguageRoots prof (catOrdinals cat) (conceptIds cat)
 
     -- Every (concept, lexical form) pair this expression's own gloss
     -- rendering demands, checked against the catalogue up front. The
