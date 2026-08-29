@@ -891,6 +891,27 @@ jobs:
       # needs-gpu, so without this companion that contract is only ever
       # observed by a GPU run nothing here can make; the companion boots
       # nothing and runs in well under a second.
+      # test_location_probe_config_isolation is #1729's: the private
+      # `config/` tree `tools/location_content_probe.py`,
+      # `tools/location_overlay_probe.py` and
+      # `tools/location_stamp_idempotent_probe.py` each stage, and that
+      # `tools/portal_ghost_probe.py` shares by importing the first of
+      # them. All four used to SYMLINK `config/` in beside the content
+      # families as "read-only content" — but engine init is itself a
+      # `config/` writer, so through that alias a run created files in
+      # the developer's own checkout, and teardown, which unlinks the
+      # alias rather than descending it, left them there. It drives each
+      # builder against synthetic, read-only and real source trees,
+      # asserting a copy that is neither a symlink nor an
+      # `os.path.samefile` alias, an absent seeded `*.local.yaml`, a
+      # source left byte- and mode-identical after both a new local file
+      # and a rewrite through the root, a read-only source still
+      # yielding a writable and removable tree, and a teardown that
+      # never follows the content symlinks. Three of those probes are
+      # long and the fourth is manual-only needs-gpu, so without this
+      # companion the contract is only ever observed by runs neither
+      # gate can make; the companion boots nothing and runs in well
+      # under a second.
       # test_probe_root_cleanup is #1791's: the staging half of the
       # isolated-root contract `tools/foraging_probe.py`,
       # `tools/flora_growth_probe.py`, `tools/farm_ai_probe.py` and
@@ -936,6 +957,7 @@ jobs:
           python3 tools/test_probe_resource_lock.py
           python3 tools/test_deflake.py
           python3 tools/test_location_embark_probe.py
+          python3 tools/test_location_probe_config_isolation.py
           python3 tools/test_probe_root_cleanup.py
           python3 tools/test_movement_probe.py
 

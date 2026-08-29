@@ -822,6 +822,54 @@ network-free, under a second; blocking CI step alongside
 python3 tools/test_probe_root_cleanup.py
 ```
 
+### `test_location_probe_config_isolation.py` — the location probes' private `config/` (#1729)
+
+`location_content_probe.py`, `location_overlay_probe.py` and
+`location_stamp_idempotent_probe.py` each build one invocation's throwaway
+resource root, and `portal_ghost_probe.py` imports the first of those
+builders and hands the same root to both its headless writer and its
+offscreen reader. All four used to SYMLINK `config/` in beside `scripts`,
+`assets` and `data`, calling all four "read-only content, safe to share".
+
+`config/` is not read-only content. Engine initialization is itself a
+writer: `Engine.Asset.YamlNotifications` materializes
+`config/notifications.local.yaml` from registry defaults whenever that file
+is absent, and `Engine.Core.Init.migrateLegacyConfig` copies a tracked
+legacy file over an absent local one. Through the alias those writes landed
+in the developer's own checkout, and teardown — which unlinks a symlink
+rather than descending it — then left them there. A personal `*.local.yaml`
+was visible to the run in the same breath, so a local override could decide
+what the probe observed. Each builder now COPIES `config/` with
+`shutil.ignore_patterns("*.local.yaml")` and makes the copy owner-writable,
+the `location_embark_probe.py` pattern from #1569.
+
+`python3 tools/test_location_probe_config_isolation.py` pins that for all
+three distinct builders, and asserts rather than assumes that
+`portal_ghost_probe.py` is still sharing the corrected one. Each builder is
+driven against a synthetic checkout, a read-only synthetic checkout, and the
+REAL checkout: the private `config/` is neither a symlink nor an
+`os.path.samefile` alias, and neither is any file inside it; a seeded
+`*.local.yaml` is absent at both the top level and nested; creating a new
+`*.local.yaml` AND rewriting an already-copied file through the root leave
+the source's entry names, entry types, file bytes and mode bits all
+unchanged; a read-only source still yields a copy that is owner-writable
+recursively and really removable, with the source's own modes untouched;
+and teardown never follows the content symlinks. The checkout comparison is
+a full manifest including ignored entries, because `.gitignore` hides the
+exact `*.local.yaml` paths at issue — `git status --porcelain config/`
+cannot see the failure this file exists to catch — and it restores anything
+it finds changed before reporting, so a regression cannot leave the
+developer's tree dirty on its way out.
+
+Three of those probes are long and the fourth is manual-only `needs-gpu`, so
+without this companion the contract is only ever observed by runs neither
+gate can make. Engine-free, GPU-free, network-free, under a second; blocking
+CI step alongside `test_location_embark_probe.py`.
+
+```bash
+python3 tools/test_location_probe_config_isolation.py
+```
+
 ### `ci_probes.py` — CI probe selection + eligibility (#530, #540)
 
 Computes which probes CI should run for a given set of changed files (see
