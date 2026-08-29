@@ -473,6 +473,14 @@ a candidate if it cites real trace turns including that candidate's
 turn, an oracle record, the player's own words when the friction came
 from a note, and only frames its call was actually shown (a bounded
 repair pass re-adjudicates anything stripped, then honest warnings).
+It also enforces **one verdict per candidate** (#1873): findings are
+indexed back by candidate identity, agreeing duplicates publish with a
+warning, and opposite verdicts on one candidate are withdrawn from
+both claimants — candidate-scoped, so a finding consolidating several
+candidates keeps its uncontested ones — which makes that candidate
+uncovered and sends it through the same bounded repair pass. A
+conflict the repair round repeats ends as an honest warning naming the
+candidate and the competing verdicts, never as two published verdicts.
 Findings attach only screenshots their call saw; `findings.json`
 embeds the full candidate list and a per-call audit
 (`adjudication_calls`: which candidates, which frames) so nothing is
