@@ -156,8 +156,9 @@ spec = around withGateEngine $ do
             _ ← offBandRecord env "input.click" "noop" "zoomed_out"
             nothingPending ls `shouldReturn` "true"
 
-        it "an off-band press DRAGGED past threshold and released in \
-           \zoomed_in commits no box selection" $ \env → do
+        it "an off-band LEFT press DRAGGED past threshold and released in \
+           \zoomed_in commits no box selection, and the drag record it \
+           \resolves to still names the press band" $ \env → do
             ls ← gateBackend env
             selectUnitA ls
             setBand ls "zoomed_out"
@@ -173,8 +174,54 @@ spec = around withGateEngine $ do
             evalOk ls "return probe.rectTests" `shouldReturn` "0"
             selectedCount ls `shouldReturn` "1"
             nothingPending ls `shouldReturn` "true"
-            recs ← drainOutcomes env
-            map aoKind recs `shouldBe` ["input.drag"]
+            -- A gesture past the threshold resolves as ONE "input.drag"
+            -- record and DISCARDS the deferred click (#730), so the band
+            -- has to survive into THAT record — otherwise a dragged
+            -- off-band press carries no diagnostic naming its band at
+            -- all (PR review round 1).
+            _ ← offBandDragRecord env "zoomed_out"
+            pure ()
+
+        it "an off-band RIGHT press DRAGGED past threshold resolves to a \
+           \drag record that still names the press band" $ \env → do
+            ls ← gateBackend env
+            selectUnitA ls
+            setBand ls "none"
+            clearOutcomes env
+
+            rightPress ls 20 20
+            releaseRight ls 220 220
+
+            evalOk ls "return probe.moveOrders" `shouldReturn` "0"
+            nothingPending ls `shouldReturn` "true"
+            rec ← offBandDragRecord env "none"
+            aoReason rec `shouldNotSatisfy` maybe False (T.isInfixOf "zoomed_out")
+
+        it "an off-band RIGHT press already past threshold when the \
+           \zoomBand teardown fires is cancelled with its band intact" $
+          \env → do
+            ls ← gateBackend env
+            setBand ls "zoomed_out"
+            clearOutcomes env
+
+            rightPress ls 20 20
+            -- The real periodic tick is what promotes rightState to
+            -- "dragging"; driving it keeps this off a hand-set flag.
+            -- (There is deliberately no LEFT twin: an off-band left
+            -- press is never boxSelectArmed, so dragSelect.update never
+            -- promotes it, and its teardown always takes the pending-
+            -- click branch the example above already covers.)
+            evalOk ls "probe.mouse = { 220, 220 }; \
+                       \require('scripts.unit_drag_select').update(0.03); \
+                       \return require('scripts.unit_drag_select').rightState \
+                       \       == 'dragging'"
+                `shouldReturn` "true"
+
+            runZoomBandTeardown ls "zoomed_in"
+
+            nothingPending ls `shouldReturn` "true"
+            _ ← offBandDragRecord env "zoomed_out"
+            pure ()
 
         it "a zoomed_in press keeps its immediate unit selection when the \
            \band changes afterwards, while the zoomBand teardown still \
@@ -454,7 +501,8 @@ gateBackend env = do
         \             rectTests = 0, toolCalls = 0, menuTries = 0, \
         \             moveOrders = 0, chunkClears = 0, \
         \             selectedChunk = nil, unitHitId = nil, \
-        \             toolClaims = false, tileMenuClaims = false }; \
+        \             toolClaims = false, tileMenuClaims = false, \
+        \             mouse = { 0, 0 } }; \
         \local function makeTool() return { \
         \    handleMouseDown = function() \
         \        probe.toolCalls = probe.toolCalls + 1; \
@@ -495,6 +543,8 @@ gateBackend env = do
         \world.clearZoomCursorSelect = function() \
         \    probe.chunkClears = probe.chunkClears + 1 end; \
         \world.clearWorldCursorSelect = function() end; \
+        \engine.getMousePosition = function() \
+        \    return probe.mouse[1], probe.mouse[2] end; \
         \require('scripts.ui_manager').currentMenu = 'world_view'; \
         \local h = require('scripts.hud'); \
         \h.visible = true; h.worldId = 'zoom_band_gate_page'; \
@@ -613,6 +663,25 @@ drainOutcomes env = toList ⊚ atomicModifyIORef' (actionOutcomeRef env)
 --   assertions describe only the press it just made.
 clearOutcomes ∷ EngineEnv → IO ()
 clearOutcomes = void ∘ drainOutcomes
+
+-- | Exactly one recorded outcome — the @input.drag@ one a gesture past
+--   DRAG_THRESHOLD resolves to — whose reason still names the press band
+--   the deferred click it discarded was carrying.
+offBandDragRecord ∷ EngineEnv → Text → IO ActionOutcome
+offBandDragRecord env band = do
+    recs ← drainOutcomes env
+    case recs of
+        [r] → do
+            aoKind r    `shouldBe` "input.drag"
+            aoOutcome r `shouldBe` "noop"
+            aoHandler r `shouldBe` Just "unit_drag_select"
+            aoReason r  `shouldSatisfy` maybe False (T.isInfixOf band)
+            pure r
+        _ → do
+            expectationFailure
+                ("expected exactly one drag outcome record, got "
+                 ⧺ show (map (\r → (aoKind r, aoOutcome r, aoReason r)) recs))
+            error "unreachable"
 
 -- | Exactly one recorded outcome, of the given kind and outcome, whose
 --   reason names the given band.
