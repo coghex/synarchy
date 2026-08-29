@@ -15,6 +15,10 @@ function game.update(dt)
     -- Lazily resolve any structure texture-palette ids that need a runtime
     -- handle (after a save/load). No-op in steady state.
     require("scripts.structures").resolvePending()
+    -- #1842: hand the wire pack's per-shape art to the engine once, so a
+    -- wire DESIGNATION can be resolved without Lua. Self-latching, so
+    -- this is a single boolean test per tick after the first.
+    require("scripts.wire").registerPackArt()
 end
 
 function game.onMouseDown(button, x, y)

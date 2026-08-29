@@ -8,6 +8,7 @@ import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import Engine.Core.State (EngineEnv, loadStatusRef)
+import Engine.Graphics.Solar (publishedSolar)
 import Engine.Load.Status (loadInProgress)
 import World.Types
 import World.Flora.Harvest (tickFloraHarvests)
@@ -119,11 +120,21 @@ tickWorldTime env dt = do
             tickLocationDiscovery env pageId worldState
             tickCraftBillOwners env pageId worldState
 
+    -- The process-global BASE angle (#1869): the visible head page's own
+    -- clock, published for the geometry that names no page (UI and
+    -- generic scene sprites) and for the Lua climate queries. Publishing
+    -- also clears any @world.setSunAngle@ override, which is exactly how
+    -- long that override has always lasted — before #1869 the scalar it
+    -- wrote was simply overwritten here on the next tick. Every VISIBLE
+    -- page's own angle is resolved from its own 'wsTimeRef' where the
+    -- frame's solar table is built ('World.Render.updateWorldTiles'),
+    -- one step later on this same thread.
     case wmVisible manager of
         (pageId:_) → case lookup pageId (wmWorlds manager) of
             Just worldState → do
                 wt ← readIORef (wsTimeRef worldState)
                 let sunAngle = worldTimeToSunAngle wt
-                atomicModifyIORef' (wsSunAngleRef (toWorldSimCapability env)) $ \_ → (sunAngle, ())
+                atomicModifyIORef' (wsSunAngleRef (toWorldSimCapability env)) $ \_ →
+                    (publishedSolar sunAngle, ())
             Nothing → return ()
         [] → return ()

@@ -14,7 +14,11 @@ import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv, resolveActiveWorld)
 import Engine.Core.Capability.RenderView
   (RenderViewCapability(..), toRenderViewCapability)
-import Engine.Scene.Types (LayeredQuads(..), mergeSortedQuads, sortQuadsByLayer)
+import Engine.Scene.Types (LayeredQuads(..), mergeSortedQuads, sortQuadsByLayer
+                          , stampSolarPage)
+import Engine.Graphics.Solar (SolarBase(..), SolarPageTable, solarPageNone)
+import World.Render.Solar (solarSlotAssignment, buildSolarPageTable)
+import qualified Data.HashMap.Strict as HM
 import Engine.Graphics.Camera (Camera2D(..))
 import World.Types
 import World.Generate (viewDepth)
@@ -56,6 +60,13 @@ updateWorldTiles env = do
 
     worldManager ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
 
+    -- Per-page solar attribution (#1869). Several pages can be visible
+    -- at once, each on its own clock and its own circumference, and the
+    -- merge below deliberately discards page identity — so every quad
+    -- is stamped with its page's slot HERE, while the page is still
+    -- known, and the table those slots index travels out with the quads.
+    (solarSlotOf, solarTable) ← buildFrameSolar env worldManager
+
     tileQuads ← if tileAlpha ≤ 0.001
         then return Map.empty
         else do
@@ -78,8 +89,16 @@ updateWorldTiles env = do
                         -- wsQuadCacheRef).
                         curGen ← readIORef (wsQuadCacheGenRef worldState)
                         cached ← readIORef (wsQuadCacheRef worldState)
+                        let solarSlot = solarSlotOf pageId
                         case cached of
+                            -- The stamped solar slot joins the reuse test
+                            -- (#1869): attribution is baked into these
+                            -- vertices, so a cache built when this page held
+                            -- a different slot must rebuild rather than draw
+                            -- with another page's sun. A visible-list REORDER
+                            -- leaves the assignment identical and so reuses.
                             Just wqc | wqcGen wqc ≡ curGen
+                                     , wqcSolarSlot wqc ≡ solarSlot
                                      , not (cameraChanged (wqcCamera wqc) currentSnap) →
                                 return (wqcQuads wqc)
                             _ → do
@@ -88,9 +107,10 @@ updateWorldTiles env = do
                                 -- the world thread — the frame loop then only
                                 -- linear-merges dynamic quads into these runs
                                 -- (#446).
-                                let sorted = sortQuadsByLayer result
+                                let sorted = Map.map (stampSolarPage solarSlot)
+                                                     (sortQuadsByLayer result)
                                 writeIORef (wsQuadCacheRef worldState) $
-                                    Just (WorldQuadCache curGen currentSnap sorted)
+                                    Just (WorldQuadCache curGen currentSnap solarSlot sorted)
                                 return sorted
                     Nothing → return Map.empty
             return $ Map.unionsWith mergeSortedQuads quads
@@ -103,7 +123,8 @@ updateWorldTiles env = do
             cursorResults ← forM (wmVisible worldManager) $ \pageId →
                 case lookup pageId (wmWorlds worldManager) of
                     Just worldState →
-                        renderWorldCursorQuads env worldState tileAlpha
+                        stampSolarPage (solarSlotOf pageId) ⊚
+                            renderWorldCursorQuads env worldState tileAlpha
                     Nothing → return V.empty
             return $ V.concat cursorResults
 
@@ -116,7 +137,8 @@ updateWorldTiles env = do
             giResults ← forM (wmVisible worldManager) $ \pageId →
                 case lookup pageId (wmWorlds worldManager) of
                     Just worldState →
-                        renderGroundItemQuads env worldState tileAlpha
+                        stampSolarPage (solarSlotOf pageId) ⊚
+                            renderGroundItemQuads env worldState tileAlpha
                     Nothing → return V.empty
             return $ V.concat giResults
 
@@ -130,7 +152,8 @@ updateWorldTiles env = do
             spResults ← forM (wmVisible worldManager) $ \pageId →
                 case lookup pageId (wmWorlds worldManager) of
                     Just worldState →
-                        renderSpoilQuads env worldState tileAlpha
+                        stampSolarPage (solarSlotOf pageId) ⊚
+                            renderSpoilQuads env worldState tileAlpha
                     Nothing → return V.empty
             return $ V.concat spResults
 
@@ -145,7 +168,8 @@ updateWorldTiles env = do
             blResults ← forM (wmVisible worldManager) $ \pageId →
                 case lookup pageId (wmWorlds worldManager) of
                     Just worldState →
-                        renderBloodDecalQuads env pageId worldState tileAlpha
+                        stampSolarPage (solarSlotOf pageId) ⊚
+                            renderBloodDecalQuads env pageId worldState tileAlpha
                     Nothing → return V.empty
             return $ V.concat blResults
 
@@ -156,7 +180,7 @@ updateWorldTiles env = do
         else do
             let facing = camFacing camera
                 zSlice = camZSlice camera
-            renderUnitQuads env facing zSlice effDepth tileAlpha
+            renderUnitQuads env solarSlotOf facing zSlice effDepth tileAlpha
 
     -- Buildings: same shape as units, simpler internals. Plus the
     -- optional ghost preview while in placement mode.
@@ -165,7 +189,7 @@ updateWorldTiles env = do
         else do
             let facing = camFacing camera
                 zSlice = camZSlice camera
-            renderBuildingQuads env facing zSlice effDepth tileAlpha
+            renderBuildingQuads env solarSlotOf facing zSlice effDepth tileAlpha
 
     -- Structures (walls / floors / ceilings) — same iso-sorted quad path
     -- as buildings, with each piece's own facemap slot.
@@ -177,8 +201,9 @@ updateWorldTiles env = do
             stResults ← forM (wmVisible worldManager) $ \pageId →
                 case lookup pageId (wmWorlds worldManager) of
                     Just worldState →
-                        renderStructureQuads env worldState facing zSlice
-                                             effDepth tileAlpha
+                        stampSolarPage (solarSlotOf pageId) ⊚
+                            renderStructureQuads env worldState facing zSlice
+                                                 effDepth tileAlpha
                     Nothing → return V.empty
             return $ V.concat stResults
 
@@ -187,9 +212,13 @@ updateWorldTiles env = do
         else do
             let facing = camFacing camera
                 zSlice = camZSlice camera
-            renderGhostQuad env facing zSlice
+                -- The ghost previews a placement on the ACTIVE page, so
+                -- it is lit by that page (#1869).
+                activeSolarSlot = maybe solarPageNone (solarSlotOf . fst)
+                                        (resolveActiveWorld worldManager)
+            renderGhostQuad env activeSolarSlot facing zSlice
 
-    zoomQuads ← generateZoomMapQuads env camera fbW fbH
+    zoomQuads ← generateZoomMapQuads env solarSlotOf camera fbW fbH
 
     let shouldTrack = camZTracking camera
                     ∨ (tileAlpha > 0.001 ∧ tileAlpha < 0.999)
@@ -235,4 +264,33 @@ updateWorldTiles env = do
                 <> bloodQuads <> groundItemQuads
                 <> buildingQuads <> structureQuads
                 <> unitQuads <> ghostQuads <> zoomQuads
-    return (LayeredQuads tileQuads dynQuads)
+    return (LayeredQuads tileQuads dynQuads solarTable)
+
+-- | This frame's page→slot lookup and the table those slots index.
+--
+--   Both are derived from the SAME visible list in one read, so the
+--   stamps a frame's quads carry and the table published beside them
+--   can never describe different page sets. The base angle comes from
+--   'wsSunAngleRef' and stands in only for a visible id with no page
+--   state; each real page's own clock and world size come from its own
+--   'WorldState'. @world.setSunAngle@ is NOT applied here — it is
+--   overlaid onto whichever table the frame draws, at upload
+--   ('Engine.Graphics.Solar.solarUniformEntries').
+buildFrameSolar ∷ EngineEnv → WorldManager
+                → IO (WorldPageId → Word32, SolarPageTable)
+buildFrameSolar env worldManager = do
+    solarBase ← readIORef (wsSunAngleRef (toWorldSimCapability env))
+    let visible = wmVisible worldManager
+    pageInputs ← fmap (HM.fromList . catMaybes) $ forM visible $ \pageId →
+        case lookup pageId (wmWorlds worldManager) of
+            Nothing → return Nothing
+            Just worldState → do
+                wt ← readIORef (wsTimeRef worldState)
+                mParams ← readIORef (wsGenParamsRef worldState)
+                return $ Just
+                    ( pageId
+                    , (worldTimeToSunAngle wt, wgpWorldSize ⊚ mParams) )
+    let slots = solarSlotAssignment visible
+        table = buildSolarPageTable (sbAngle solarBase)
+                                    (`HM.lookup` pageInputs) visible
+    return (\pageId → HM.lookupDefault solarPageNone pageId slots, table)

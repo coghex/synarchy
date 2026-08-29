@@ -56,40 +56,70 @@ end
 -- (World.Slope: bit0=N(gy-1) bit1=E(gx+1) bit2=S(gy+1) bit3=W(gx-1)).
 local NEIGHBOR_OFFSETS = { {0, -1}, {1, 0}, {0, 1}, {-1, 0} }
 
+-- Which neighbours a wire at (gx,gy) connects to. The engine owns this
+-- (#1842) so the construction render pass and the placer cannot drift:
+-- one canonical, seam-aware (#1175) lookup of the same placed + staged
+-- wire `structure.hasAt` reads. The designation-aware variant is the
+-- render pass's — `structure.wireNeighbors(gx, gy, page, true)` — and
+-- placement must NOT use it, or laying a run would recap neighbours
+-- against wire that is not there yet.
 local function neighborsAt(gx, gy)
-    return structure.hasAt(gx, gy - 1, "wire"),
-           structure.hasAt(gx + 1, gy, "wire"),
-           structure.hasAt(gx, gy + 1, "wire"),
-           structure.hasAt(gx - 1, gy, "wire")
+    local n = structure.wireNeighbors(gx, gy)
+    return n.n, n.e, n.s, n.w
 end
 
 -- Which connection-shape a tile's 4-neighbour wire presence maps to.
--- Corner/tee names follow the wall-edge vocabulary (ne/nw/se/sw); a tee
--- is named by its MISSING side (e.g. tee_n = connected E+S+W, the open
--- side facing N).
+-- Also engine-side now (#1842): ONE sixteen-way rule, shared with the
+-- render pass, rather than a second table to keep in step. Corner/tee
+-- names follow the wall-edge vocabulary (ne/nw/se/sw); a tee is named by
+-- its MISSING side (e.g. tee_n = connected E+S+W, the open side facing N).
 local function shapeFor(n, e, s, w)
-    local count = (n and 1 or 0) + (e and 1 or 0) + (s and 1 or 0) + (w and 1 or 0)
-    if count == 0 then return "isolated" end
-    if count == 4 then return "cross" end
-    if count == 1 then
-        if n then return "end_n"
-        elseif e then return "end_e"
-        elseif s then return "end_s"
-        else return "end_w" end
+    return structure.wireShape(n, e, s, w)
+end
+
+-- Every connection variant the pack must declare, in the shape rule's
+-- own vocabulary.
+local WIRE_SHAPES = {
+    "isolated", "end_n", "end_e", "end_s", "end_w",
+    "straight_ns", "straight_ew",
+    "corner_ne", "corner_nw", "corner_se", "corner_sw",
+    "tee_n", "tee_e", "tee_s", "tee_w", "cross",
+}
+
+-- Declare the wire pack's per-shape art for UNPLACED pieces (#1842), so
+-- the construction render pass can resolve what a wire designation would
+-- be BUILT with without calling into Lua. One call per session,
+-- registered all-or-nothing engine-side; a shape the pack never declared
+-- is OMITTED rather than sent with a nil path, so the engine's refusal
+-- names the missing connection instead of rejecting the payload as
+-- unreadable. It reports the failure itself — nothing warns here.
+--
+-- The pack NAME is the literal "wire": that is what a wire designation
+-- carries (scripts/build_tool.lua's `pack = "wire"`), and the catalogue
+-- is keyed by the designation's own spelling.
+local registeredArt = false
+function M.registerPackArt()
+    if registeredArt or not structure.registerPackArt then return end
+    local pack = packDef()
+    if not pack then return end
+    registeredArt = true
+    local h = handles()
+    local b = pack.build and pack.build.wire
+    local art = {}
+    for _, name in ipairs(WIRE_SHAPES) do
+        if h.connPath[name] and h.facePath then
+            art[#art + 1] = { kind = "wire", shape = name,
+                              texture = h.connPath[name], texHandle = h.conn[name],
+                              facemap = h.facePath, faceHandle = h.face }
+        end
     end
-    if count == 3 then
-        if not n then return "tee_n"
-        elseif not e then return "tee_e"
-        elseif not s then return "tee_s"
-        else return "tee_w" end
-    end
-    -- count == 2
-    if n and s then return "straight_ns" end
-    if e and w then return "straight_ew" end
-    if n and e then return "corner_ne" end
-    if n and w then return "corner_nw" end
-    if s and e then return "corner_se" end
-    return "corner_sw"   -- s and w
+    structure.registerPackArt{
+        pack  = "wire",
+        kinds = { { kind = "wire",
+                    buildable = (b ~= nil) and (b.build_work ~= nil)
+                                and (b.materials ~= nil) } },
+        art   = art,
+    }
 end
 
 -- (Re)place the wire piece at (gx,gy) with the shape its CURRENT

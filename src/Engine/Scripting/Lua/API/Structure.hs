@@ -27,6 +27,7 @@ module Engine.Scripting.Lua.API.Structure
     , structureSetPaletteHandleFn
     , structurePaletteCountFn
     , structureRegisterWallFamilyFn
+    , resolveStructurePage
     ) where
 
 import UPrelude

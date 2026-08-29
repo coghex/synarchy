@@ -9,6 +9,13 @@
 --   PHASE is longitude-local. A tile's local sun angle is the global
 --   angle plus a fraction of a day proportional to how far around the
 --   cylinder it sits.
+--
+--   "Global" here means global TO ONE PAGE. Both arguments are that
+--   page's own: several world pages can be visible at once, each on its
+--   own clock and generated at its own size, and every caller resolves
+--   the pair per page — solar generation (#794), unit vision and combat
+--   awareness (#797), and, since #1869, rendering
+--   ("Engine.Graphics.Solar").
 module World.Time.Local
     ( localSunAngle
     ) where

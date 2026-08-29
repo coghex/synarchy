@@ -229,18 +229,35 @@ atlasFrames aa = frame ⊚ aaDirections aa
 --   the SAME elapsed value, so the enlarged sprite and the direction row
 --   stay phase-aligned.
 --
---   Non-loop end-of-clip policy (Requirement 5, implementer's
---   discretion): HOLD the last frame — the same clamp
---   'Unit.Render.pickFrame' already applies to a non-looping game
---   animation, so the viewer shows exactly what the game would.
+--   End-of-clip policy (#1833): the preview ALWAYS replays. Frame
+--   @frameCount - 1@ is followed, after its own normal duration, by
+--   frame @0@ again, indefinitely — for every clip, whatever its
+--   authored @loop@ says. The viewer exists to inspect an animation,
+--   and #887's original hold-at-end made a short @loop: false@ clip
+--   (@acolyte@'s @attack_quick_RH_dagger@ is five frames at 12 fps)
+--   look static within half a second of selecting it.
+--
+--   The source @loop@ value is still taken as an argument and still
+--   reported by both dumps unchanged (Requirement 6) — it is
+--   deliberately not consulted HERE, which is the whole of the policy
+--   and is what the @loop: false@ examples in
+--   "Test.Headless.Preview.UnitAnimation" pin. Gameplay is a different
+--   code path entirely ('Unit.Render.pickFrame'), still clamps, and is
+--   untouched.
+--
+--   The wrap is in the INDEX, never in the clock: nothing restarts
+--   @animStart@\/@entryStart@ at the end of a cycle, which is what lets
+--   a direction change and a resize preserve the playback phase.
+--
+--   A non-positive effective fps leaves @rate@ at 0, so the clip stays
+--   on frame 0 forever rather than dividing by zero.
 frameIndexAt ∷ Bool → Float → Int → Double → Int
-frameIndexAt looping fps frameCount elapsed
+frameIndexAt _srcLoop fps frameCount elapsed
     | frameCount ≤ 1 = 0
     | otherwise =
         let rate = max 0 (realToFrac fps ∷ Double)
             raw  = floor (max 0 elapsed * rate) ∷ Int
-        in if looping then raw `mod` frameCount
-                      else min raw (frameCount - 1)
+        in raw `mod` frameCount
 
 -- * YAML metadata
 

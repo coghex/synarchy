@@ -52,6 +52,7 @@ module Engine.Core.Capability.WorldSim
 import UPrelude
 import Control.Concurrent.MVar (MVar, modifyMVar, withMVar)
 import Data.IORef (IORef)
+import Engine.Graphics.Solar (SolarBase(..))
 import Engine.Core.Queue as Q
 import Sim.Command.Types (SimCommand)
 import World.Generate.Config (WorldGenConfig)
@@ -81,10 +82,12 @@ data WorldSimCapability = WorldSimCapability
     -- ^ Drained by @WorldThread@ only; produced by @LuaThread@,
     --   @SimThread@, @WorldThread@ (deferred-command re-enqueue) and
     --   @MainRender@ (the @--dump@ driver).
-  , wsSunAngleRef         ∷ IORef Float
-    -- ^ Written by @WorldThread@ (derived from world time) and by
-    --   @LuaThread@'s direct @world.setSunAngle@ override; read by
-    --   @LuaThread@ and @MainRender@ (lighting).
+  , wsSunAngleRef         ∷ IORef SolarBase
+    -- ^ Written by @WorldThread@ (derived from the visible head page's
+    --   world time) and by @LuaThread@'s direct @world.setSunAngle@
+    --   override; read by @LuaThread@ and @MainRender@ (lighting), and
+    --   by @WorldThread@ again when it builds a frame's per-page solar
+    --   table (#1869).
   , wsFloraCatalogRef     ∷ IORef FloraCatalog
     -- ^ Populated from YAML by @LuaThread@'s content load; read by
     --   @WorldThread@ and @LuaThread@.

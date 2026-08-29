@@ -40,14 +40,19 @@ module Engine.Graphics.Vulkan.Uniform.Layout
     -- * Derived GLSL
   , GlslSource(..)
   , glslTypeName
+  , glslArraySuffix
   , uboGlslBlock
     -- * Derived Haskell
   , declareUniformBufferObject
+  , peekVec4Array
+  , pokeVec4Array
   ) where
 
 import UPrelude
+import qualified Data.Vector as V
 import Language.Haskell.TH
-import Linear (M44)
+import Linear (M44, V4(..))
+import Engine.Graphics.Solar (maxSolarPages)
 
 -- | The GLSL type of a UBO member.
 --
@@ -58,6 +63,12 @@ import Linear (M44)
 data UBOMemberType
     = UBOMat4   -- ^ GLSL @mat4@ / Haskell @M44 Float@
     | UBOFloat  -- ^ GLSL @float@ / Haskell @Float@
+    | UBOVec4Array !Int
+      -- ^ GLSL @vec4 name[n]@ / Haskell @V.Vector (V4 Float)@ of
+      --   exactly @n@ elements. std140 gives a @vec4@ array a 16-byte
+      --   element stride, which is the natural size of the element
+      --   anyway, so the array is dense — unlike a @float[]@, whose
+      --   elements would each be padded to 16.
     deriving (Show, Eq)
 
 -- | One member of the uniform block.
@@ -113,9 +124,17 @@ uboMembers =
          <> "uses it when a tile's own face map handle resolves to slot 0 "
          <> "(unregistered) (#286)")
     , UBOMember "uboWorldCircumference" "worldCircumferenceTiles" UBOFloat
-        ("the active world's u-axis (gx-gy) circumference in tiles. The "
-         <> "world vertex shader divides a vertex's packed world u by this "
-         <> "to get its longitude-local day/night phase offset (#483)")
+        ("the FALLBACK u-axis (gx-gy) circumference in tiles, used by a "
+         <> "vertex that names no world page. The world vertex shader "
+         <> "divides a vertex's packed world u by this to get its "
+         <> "longitude-local day/night phase offset (#483)")
+    , UBOMember "uboSolarPages" "solarPages" (UBOVec4Array maxSolarPages)
+        ("per-visible-page solar attribution (#1869): entry n-1 holds the "
+         <> "base sun angle in .x and the u-axis circumference in tiles in "
+         <> ".y for a vertex whose solarPage attribute is n. A vertex with "
+         <> "solarPage 0 uses sunAngle/worldCircumferenceTiles above "
+         <> "instead. Slots the frame does not describe are filled with "
+         <> "those same fallback values")
     ]
 
 -- Note: 'umDoc' is what keeps the per-member documentation from being lost
@@ -129,13 +148,15 @@ uboMembers =
 --   a @float@ aligns to 4, a @mat4@ is an array of four @vec4@ column
 --   vectors and so aligns to 16.
 memberBaseAlignment ∷ UBOMemberType → Int
-memberBaseAlignment UBOMat4  = 16
-memberBaseAlignment UBOFloat = 4
+memberBaseAlignment UBOMat4          = 16
+memberBaseAlignment UBOFloat         = 4
+memberBaseAlignment (UBOVec4Array _) = 16
 
 -- | Size a member consumes, per std140.
 memberSize ∷ UBOMemberType → Int
-memberSize UBOMat4  = 64
-memberSize UBOFloat = 4
+memberSize UBOMat4          = 64
+memberSize UBOFloat         = 4
+memberSize (UBOVec4Array n) = 16 * n
 
 -- | Round @n@ up to the next multiple of @a@.
 alignUp ∷ Int → Int → Int
@@ -146,6 +167,9 @@ alignUp n a = ((n + a - 1) `div` a) * a
 --   As of #1072 these are @0, 64, 128, 192, 256, 320, 324, 328, 332, 336,
 --   340, 344, 348, 352@ — unchanged from the hand-written instance this
 --   replaced, which is what makes the change representation-preserving.
+--   #1869 APPENDED @solarPages@ at 368 (352 + 4, rounded up to the
+--   @vec4@ array's 16-byte alignment), leaving every one of those
+--   offsets where it was.
 uboMemberOffsets ∷ [Int]
 uboMemberOffsets = reverse (snd (foldl' step (0 ∷ Int, []) uboMembers))
   where
@@ -154,7 +178,9 @@ uboMemberOffsets = reverse (snd (foldl' step (0 ∷ Int, []) uboMembers))
         in (off + memberSize (umType m), off : acc)
 
 -- | Bytes actually occupied by members: the end of the last one, with no
---   trailing padding. 356 today.
+--   trailing padding: 356 through @worldCircumferenceTiles@, then 12
+--   bytes of alignment padding and @solarPages@' 16 bytes per
+--   'Engine.Graphics.Solar.maxSolarPages'.
 uboPayloadSize ∷ Int
 uboPayloadSize = foldl' step 0 uboMembers
   where
@@ -169,8 +195,9 @@ uboBaseAlignment =
     alignUp (maximum (1 : map (memberBaseAlignment . umType) uboMembers)) 16
 
 -- | Size of the block, which under std140 is 'uboPayloadSize' rounded up to
---   'uboBaseAlignment' — 368, i.e. 'uboPayloadSize' plus 12 bytes of
---   trailing padding.
+--   'uboBaseAlignment' — which 'uboPayloadSize' already is a multiple
+--   of while the block ends in a @vec4@ array, so there is no trailing
+--   padding at present.
 --
 --   This is what 'sizeOf' reports, so it is what the engine allocates per
 --   uniform buffer and what it puts in the descriptor's @range@
@@ -197,8 +224,17 @@ instance Show GlslSource where
 
 -- | GLSL spelling of a member type.
 glslTypeName ∷ UBOMemberType → String
-glslTypeName UBOMat4  = "mat4"
-glslTypeName UBOFloat = "float"
+glslTypeName UBOMat4          = "mat4"
+glslTypeName UBOFloat         = "float"
+glslTypeName (UBOVec4Array _) = "vec4"
+
+-- | The @[n]@ a member's DECLARATION carries after its name, empty for
+--   a scalar\/matrix. Spelled after the name rather than as part of the
+--   type so the block reads as ordinary GLSL (@vec4 solarPages[8];@).
+glslArraySuffix ∷ UBOMemberType → String
+glslArraySuffix UBOMat4          = ""
+glslArraySuffix UBOFloat         = ""
+glslArraySuffix (UBOVec4Array n) = "[" <> show n <> "]"
 
 -- | The uniform block declaration every shader that reads the UBO
 --   interpolates, so none of them can carry a stale member list.
@@ -215,7 +251,8 @@ glslTypeName UBOFloat = "float"
 uboGlslBlock ∷ GlslSource
 uboGlslBlock = GlslSource $ mconcat
     [ "layout(set = 0, binding = 0, std140) uniform UniformBufferObject { "
-    , mconcat [ glslTypeName (umType m) <> " " <> umGlslName m <> "; "
+    , mconcat [ glslTypeName (umType m) <> " " <> umGlslName m
+                  <> glslArraySuffix (umType m) <> "; "
               | m ← uboMembers ]
     , "} ubo;"
     ]
@@ -226,8 +263,26 @@ uboGlslBlock = GlslSource $ mconcat
 
 -- | Haskell type of a member.
 memberHsType ∷ UBOMemberType → Q Type
-memberHsType UBOMat4  = [t| M44 Float |]
-memberHsType UBOFloat = [t| Float |]
+memberHsType UBOMat4          = [t| M44 Float |]
+memberHsType UBOFloat         = [t| Float |]
+memberHsType (UBOVec4Array _) = [t| V.Vector (V4 Float) |]
+
+-- | Read a @vec4[n]@ member back. std140 puts element @i@ at
+--   @offset + 16 * i@, which is exactly @sizeOf (V4 Float)@, so the
+--   array is read densely.
+peekVec4Array ∷ Int → Ptr α → Int → IO (V.Vector (V4 Float))
+peekVec4Array n ptr off =
+    V.generateM n $ \i → peekByteOff ptr (off + 16 * i)
+
+-- | Write a @vec4[n]@ member. Writes EXACTLY @n@ elements whatever the
+--   vector's length: a short vector is zero-filled and a long one
+--   truncated, so a caller can never write past the member or leave a
+--   slot holding the previous frame's value.
+pokeVec4Array ∷ Int → Ptr α → Int → V.Vector (V4 Float) → IO ()
+pokeVec4Array n ptr off values =
+    forM_ [0 .. n - 1] $ \i →
+        pokeByteOff ptr (off + 16 * i)
+            (fromMaybe (V4 0 0 0 0) (values V.!? i))
 
 -- | An 'Int' literal expression.
 intE ∷ Int → Q Exp
@@ -273,11 +328,13 @@ alignmentDec = funD 'alignment
 peekDec ∷ Name → Q Dec
 peekDec conName = do
     ptr ← newName "ptr"
-    let peekAt off = [| peekByteOff $(varE ptr) $(intE off) |]
-    body ← case uboMemberOffsets of
-        []           → fail "uboMembers is empty: the UBO needs at least one member"
-        (off0:rest)  → foldl' (\acc off → [| $acc <*> $(peekAt off) |])
-                              [| $(conE conName) ⊚ $(peekAt off0) |]
+    let peekAt m off = case umType m of
+            UBOVec4Array n → [| peekVec4Array n $(varE ptr) $(intE off) |]
+            _              → [| peekByteOff $(varE ptr) $(intE off) |]
+    body ← case zip uboMembers uboMemberOffsets of
+        []                 → fail "uboMembers is empty: the UBO needs at least one member"
+        ((m0, off0):rest)  → foldl' (\acc (m, off) → [| $acc <*> $(peekAt m off) |])
+                              [| $(conE conName) ⊚ $(peekAt m0 off0) |]
                               rest
     funD 'peek [clause [varP ptr] (normalB (pure body)) []]
 
@@ -286,8 +343,12 @@ pokeDec ∷ Name → Q Dec
 pokeDec conName = do
     ptr  ← newName "ptr"
     vars ← mapM (newName . umHsName) uboMembers
-    let stmts = zipWith
-            (\v off → noBindS [| pokeByteOff $(varE ptr) $(intE off) $(varE v) |])
-            vars uboMemberOffsets
+    let pokeAt m off v = case umType m of
+            UBOVec4Array n →
+                [| pokeVec4Array n $(varE ptr) $(intE off) $(varE v) |]
+            _ → [| pokeByteOff $(varE ptr) $(intE off) $(varE v) |]
+        stmts = zipWith3
+            (\m v off → noBindS (pokeAt m off v))
+            uboMembers vars uboMemberOffsets
     funD 'poke
         [clause [varP ptr, conP conName (map varP vars)] (normalB (doE stmts)) []]

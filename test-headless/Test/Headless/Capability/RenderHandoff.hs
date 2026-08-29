@@ -79,6 +79,8 @@ spec = do
             texPaletteHandlesRef
     aliases "rhStructureWallCatalogRef"   rhStructureWallCatalogRef
             structureWallCatalogRef
+    aliases "rhStructureArtCatalogRef"    rhStructureArtCatalogRef
+            structureArtCatalogRef
 
     it "is stable across repeated projection (no fresh containers)" $ \env → do
       -- The migration re-projects inline at several call sites
@@ -98,6 +100,7 @@ spec = do
       sameContainer (rhTexPaletteRef a)             (rhTexPaletteRef b)
       sameContainer (rhTexPaletteHandlesRef a)      (rhTexPaletteHandlesRef b)
       sameContainer (rhStructureWallCatalogRef a)   (rhStructureWallCatalogRef b)
+      sameContainer (rhStructureArtCatalogRef a)    (rhStructureArtCatalogRef b)
 
     it "keeps the two single-slot upload handoffs distinct" $ \env → do
       -- worldPreviewRef and zoomAtlasDataRef are the record's pair of
@@ -127,14 +130,22 @@ spec = do
       sameContainer (rhTexPaletteRef cap)        (texPaletteRef env)
       sameContainer (rhTexPaletteHandlesRef cap) (texPaletteHandlesRef env)
 
-    it "keeps the wall-art catalogue on its own ref, beside the palette" $ \env → do
-      -- structureWallCatalogRef (#1712) is the third texture-identity ref
-      -- on this record and the odd one out: it is boot-process rather than
-      -- session-replaced, precisely BECAUSE it is keyed by texture path
-      -- and so survives the palette replacement a load performs. Binding
-      -- it to either palette ref is a type error, but binding either of
-      -- them to IT is caught only here — and a projection that minted it
-      -- fresh would leave the renderer reading an empty catalogue while
-      -- Lua registered into another, i.e. no rotation at all and no error.
+    it "keeps both structure-art catalogues on their own refs, beside \
+       \the palette" $ \env → do
+      -- structureWallCatalogRef (#1712) and structureArtCatalogRef
+      -- (#1842) are the third and fourth texture-identity refs on this
+      -- record, and both are the odd ones out: boot-process rather than
+      -- session-replaced, precisely BECAUSE neither is keyed by a
+      -- palette id — one by texture PATH, one by PACK NAME — so both
+      -- survive the palette replacement a load performs. They answer
+      -- DIFFERENT questions about the same packs (how a PLACED wall
+      -- rotates; what an UNPLACED piece would be built with). Binding
+      -- either to a palette ref is a type error, but binding a palette
+      -- ref to one of THEM, or binding these two to each other, is
+      -- caught only here — and a projection that minted either fresh
+      -- would leave Lua registering into one container while every
+      -- reader consulted another: no rotation and no resolution at all,
+      -- with no error anywhere.
       let cap = toRenderHandoffCapability env
       sameContainer (rhStructureWallCatalogRef cap) (structureWallCatalogRef env)
+      sameContainer (rhStructureArtCatalogRef cap)  (structureArtCatalogRef env)

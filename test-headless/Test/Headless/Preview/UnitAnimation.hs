@@ -2,8 +2,9 @@
 --   @--preview@ browser epic #427): the pure direction-mirroring table,
 --   the default-selection rule, animation ordering/labeling, numeric
 --   frame ordering, YAML metadata extraction, the unequal-frame-count
---   playback rule, and the documented non-loop end-of-clip policy —
---   plus the filesystem containment rules that reject a bad
+--   playback rule, and the documented end-of-clip policy — since #1833
+--   a CONTINUOUS REPLAY, for every clip, whatever its authored @loop@
+--   says — plus the filesystem containment rules that reject a bad
 --   @units\/\<name\>@ target before a window is ever created. No engine
 --   needed.
 --
@@ -331,10 +332,24 @@ spec = do
             map (\t → frameIndexAt True 8 4 t) [0, 0.13, 0.26, 0.4, 0.51]
                 `shouldBe` [0, 1, 2, 3, 0]
 
-        it "HOLDS the last frame past the end of a non-looping clip \
-           \(the documented policy, matching Unit.Render.pickFrame)" $
-            map (\t → frameIndexAt False 8 4 t) [0, 0.4, 0.6, 10.0]
-                `shouldBe` [0, 3, 3, 3]
+        -- #1833 Requirement 9. This is the whole of the preview replay
+        -- policy: the source `loop` value is still an ARGUMENT (both
+        -- Lua mirrors still pass it, and both dumps still report it
+        -- unchanged), and this function deliberately never reads it.
+        -- The clip below is a source `loop: false` one — 4 frames at
+        -- 8 fps, so a 0.5 s cycle — and it must wrap at the cycle
+        -- boundary and keep going, not freeze on frame 3.
+        it "REPLAYS a source loop:false clip: it wraps at frameCount/fps \
+           \and keeps advancing through later cycles (#1833)" $
+            map (\t → frameIndexAt False 8 4 t)
+                [0, 0.4, 0.5, 0.6, 0.9, 1.0, 10.0, 10.4]
+                `shouldBe` [0, 3, 0, 0, 3, 0, 0, 3]
+
+        it "replays a source loop:false clip identically to a loop:true one \
+           \— the authored value never reaches the index (#1833)" $
+            map (\t → frameIndexAt False 8 4 t) [0, 0.13, 0.26, 0.4, 0.51]
+                `shouldBe` map (\t → frameIndexAt True 8 4 t)
+                               [0, 0.13, 0.26, 0.4, 0.51]
 
         it "gives each direction its OWN index from the SAME elapsed value, \
            \so unequal frame counts stay phase-aligned" $ do
@@ -343,13 +358,37 @@ spec = do
             frameIndexAt True 10 4 0.9 `shouldBe` 1
             frameIndexAt True 10 3 0.9 `shouldBe` 0
 
+        -- #1833: forced replay makes the unequal-frame-count case
+        -- observable PAST the first cycle, where the two directions
+        -- have wrapped a different number of times. That divergence is
+        -- the intended reading of "phase-aligned" (one clock, each
+        -- direction modulo its own count), so pin it — a future change
+        -- to per-direction clocking has to fail here.
+        it "keeps unequal-frame-count directions on ONE clock past their \
+           \first wrap, so they no longer share a frame ordinal (#1833)" $ do
+            -- 2.5 s at 10 fps = raw frame 25, well past both wraps:
+            -- a 5-frame direction shows 0, a 3-frame direction shows 1.
+            frameIndexAt False 10 5 2.5 `shouldBe` 0
+            frameIndexAt False 10 3 2.5 `shouldBe` 1
+            -- One tick later they advance together but stay divergent.
+            frameIndexAt False 10 5 2.6 `shouldBe` 1
+            frameIndexAt False 10 3 2.6 `shouldBe` 2
+
         it "is 0 for a single-frame or empty direction, at any time" $ do
             frameIndexAt True 8 1 99.0 `shouldBe` 0
             frameIndexAt True 8 0 99.0 `shouldBe` 0
+            -- Forced replay must not make a one-frame clip start moving.
+            frameIndexAt False 8 1 99.0 `shouldBe` 0
+
+        it "stays on frame 0 at a non-positive effective fps, so replay \
+           \never divides a zero-length cycle (#1833)" $ do
+            frameIndexAt False 0 4 99.0 `shouldBe` 0
+            frameIndexAt False (-5) 4 99.0 `shouldBe` 0
 
         it "is 0 before the clock starts (a negative elapsed can't index \
-           \out of range)" $
+           \out of range)" $ do
             frameIndexAt True 8 4 (-5.0) `shouldBe` 0
+            frameIndexAt False 8 4 (-5.0) `shouldBe` 0
 
     describe "buildPreviewAnims (the compiled index is the whole input)" $ do
         it "reads fps/loop/flip from each animation's index record" $
