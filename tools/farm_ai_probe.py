@@ -46,8 +46,15 @@ Checks:
   9. Auto-harvest: fast-forward tile A's wheat past its 30-day
      vegetating threshold, then the same (now idle) acolyte
      autonomously finds and harvests it — NOT hunger-gated, reuses
-     #94's yield path — clearing the plot and dropping wheat_grain on
-     the ground, growing farming XP further.
+     #94's yield path — clearing the plot and producing wheat_grain,
+     growing farming XP further. The yield is judged by IDENTITY, not
+     by where it lies at one instant (#1760): `YieldTrail` below is
+     armed before the clock jumps and follows the exact yield off the
+     ground and into whoever picked it up, so a harvest whose own
+     collecting phase (or the needs ladder) removed the grain still
+     passes. Reaching the harvestable state is satisfied either by
+     sampling it or by the AI having already harvested the plot, on
+     causally specific evidence.
  10. Re-designating a tile the AI has already claimed with a DIFFERENT
      crop makes it plant the NEW crop, not the stale one it originally
      walked over for (plant.designate replaces in place, HM.insert).
@@ -283,6 +290,305 @@ def clear_wild_forage(port, cx, cy, radius=30, keep=None):
         send_json(port, f"return world.harvestFlora({spot['gx']},{spot['gy']})")
         cleared.append((spot.get("gx"), spot.get("gy"), spot.get("id")))
     return cleared
+
+
+# --- The harvested yield's observation trail (#1760) -----------------
+#
+# The auto-harvest capstone used to be scored by catching `wheat_grain`
+# lying on the ground at one instant. That instant is an INTERMEDIATE of
+# the very action the check waits for: `scripts/unit_ai_harvest.lua`
+# runs the harvest as TWO phases of one action -- `world.harvestFlora`
+# spawns the yield and clears the plot, and the `collecting` phase then
+# pulls it in one item per tick -- so the probe broke its wait on the
+# FIRST phase's own effect and then sampled a ground the SECOND phase
+# was actively emptying. Since #1743 made that collecting phase
+# reachable under ordinary arbitration the emptying reliably completes,
+# and the needs ladder can eat the grain besides (`data/items/
+# wheat_grain.yaml` declares it as 80-calorie food), so the old oracle
+# failed precisely on the runs where everything worked.
+#
+# What is durable here is not a LOCATION but an observation trail the
+# probe owns. `world.harvestFlora` reports page-local ground ids
+# (`gid`), not the item's process-unique `instanceId` (#67), and a gid
+# stops resolving the moment the item leaves the ground -- so the trail
+# is built by WATCHING, not by one lookup after the fact:
+#
+#   * armed BEFORE the time scale goes up, so a harvest completed inside
+#     the first polling interval is still recorded, and so nothing
+#     already lying about (or already carried) can be credited to it;
+#   * scoped to the crop plot's OWN tile, which `spawnYields`
+#     (`Engine.Scripting.Lua.API.Forage.Harvest`) drops yields onto at
+#     `gx + 0.5 +/- 0.3`, so `clear_wild_forage`'s sweep yields -- which
+#     land on the wild plants' tiles -- can never satisfy it;
+#   * every candidate id resolved through `item.getGroundForUnit(uid,
+#     gid)`, the worker-OWNING-page contract (#1666). The active-page
+#     `item.listGround()` is used only to DISCOVER candidate ids, never
+#     as evidence: identical numeric gids name different items on
+#     different pages, so a row only enters the trail once the
+#     owning-page query has confirmed it;
+#   * followed off the ground and into the carrier by `instanceId`,
+#     which `item.getGroundForUnit` and `unit.getInventory` spell
+#     identically.
+#
+# Only "never produced" fails the check. A yield that was picked up,
+# carried, hauled or eaten was still harvested (#1760 requirement 1).
+HARVEST_YIELD_DEF = "wheat_grain"
+
+# Where the yield got to, MOST-ADVANCED state first: a carried instance
+# outranks one that merely left the ground, which outranks one still
+# lying there. Only YIELD_NOT_PRODUCED is a failure.
+YIELD_CARRIED = "carried"
+YIELD_MOVED = "moved-after-pickup"
+YIELD_ON_GROUND = "on-ground"
+YIELD_NOT_PRODUCED = "not-produced"
+
+
+def _rows(value):
+    """A Lua array field as a Python list.
+
+    `Engine.Scripting.Lua.API.Shell.luaTableToJson` emits an EMPTY Lua
+    table as the JSON OBJECT `{}` -- its array test needs at least one
+    key -- so every list-shaped field arrives as either a list or an
+    empty dict. A caller that only tested `isinstance(v, list)` would
+    read "nothing observed yet" as a decode failure.
+    """
+    return value if isinstance(value, list) else []
+
+
+def _ids(value):
+    """The integer ids in a Lua array field, ignoring anything else."""
+    out = []
+    for entry in _rows(value):
+        if isinstance(entry, bool) or not isinstance(entry, (int, float)):
+            continue
+        out.append(int(entry))
+    return out
+
+
+class YieldTrail:
+    """Follows ONE crop plot's harvest yield by identity (#1760).
+
+    `arm` takes the baseline, `observe` takes one sample (a console
+    round trip plus `ingest`), and `classify` says how far the yield
+    got. `ingest` is deliberately separate from the console read so the
+    classification oracle can be exercised deterministically without an
+    engine (`tools/test_farm_ai_probe.py`).
+    """
+
+    def __init__(self, gx, gy, def_name=HARVEST_YIELD_DEF):
+        self.gx = gx
+        self.gy = gy
+        self.def_name = def_name
+        self.armed = False
+        self.armed_gids = set()
+        self.armed_instances = set()
+        # Ids the unit AI itself recorded from world.harvestFlora's
+        # return. Diagnostic only: a gid alone does not say WHICH plant
+        # was picked, so it never carries the check on its own.
+        self.loot_gids = []
+        # gid -> the owning-page row that confirmed it at (gx, gy).
+        self.ground = {}
+        # Candidate ids the owning page answered for and does not have.
+        self.retired = set()
+        # instanceId -> {"poll": n, "linked": bool}
+        self.carried = {}
+        self.log = []
+        self.last_phase = None
+        self.last_action = None
+        self.polls = 0
+
+    # -- the console query --------------------------------------------
+
+    def tracked(self):
+        """Candidate gids worth re-resolving on the next sample."""
+        return (set(self.loot_gids) | set(self.ground)) - self.retired
+
+    def query(self, uid, known=()):
+        """The single-line Lua this trail samples with.
+
+        One round trip returns the unit AI's harvest phase/action, the
+        gids it recorded from `world.harvestFlora`, the owning-page
+        resolution of every candidate id, and the worker's carried
+        instances of `def_name`.
+        """
+        known_list = ",".join(str(int(g)) for g in sorted(known))
+        return (
+            f"local ai=require('scripts.unit_ai'); "
+            f"local s=ai.getState({uid}) or {{}}; "
+            f"local o={{loot={{}},ground={{}},gone={{}},inv={{}}}}; "
+            f"o.phase=s.harvestPhase or ''; o.action=s.currentAction or ''; "
+            f"local seen={{}}; local cand={{}}; "
+            f"local function add(g) if g and not seen[g] then "
+            f"seen[g]=true; cand[#cand+1]=g end end; "
+            f"for _,g in ipairs(s.harvestLoot or {{}}) do "
+            f"o.loot[#o.loot+1]=g; add(g) end; "
+            f"for _,g in ipairs({{{known_list}}}) do add(g) end; "
+            # item.listGround() is ACTIVE-page scoped, so it only ever
+            # nominates candidates; the owning-page query below is what
+            # admits one.
+            f"for _,r in ipairs(item.listGround() or {{}}) do "
+            f"if r.defName=='{self.def_name}' "
+            f"and math.floor(r.x)=={self.gx} and math.floor(r.y)=={self.gy} "
+            f"then add(r.id) end end; "
+            f"for _,g in ipairs(cand) do "
+            f"local e,p=item.getGroundForUnit({uid},g); "
+            f"if e and e.defName=='{self.def_name}' "
+            f"and math.floor(e.x)=={self.gx} and math.floor(e.y)=={self.gy} "
+            f"then o.ground[#o.ground+1]="
+            f"{{gid=g,instanceId=e.instanceId,x=e.x,y=e.y}} "
+            # nil WITH a resolved page means that page really has no
+            # such id; nil with p==false determined nothing at all and
+            # must never be read as a disappearance.
+            f"elseif (not e) and p then o.gone[#o.gone+1]=g end end; "
+            f"for _,r in ipairs(unit.getInventory({uid}) or {{}}) do "
+            f"if r.defName=='{self.def_name}' "
+            f"then o.inv[#o.inv+1]=r.instanceId end end; "
+            f"return o")
+
+    def _read(self, port, uid, known):
+        got = send_json(port, self.query(uid, known))
+        return got if isinstance(got, dict) else {}
+
+    # -- sampling ------------------------------------------------------
+
+    def arm(self, port, uid):
+        """Baseline, taken BEFORE the time scale goes up."""
+        return self.arm_from(self._read(port, uid, ()))
+
+    def arm_from(self, obs):
+        self.armed_gids = {int(row["gid"]) for row in _rows(obs.get("ground"))
+                           if isinstance(row, dict)
+                           and isinstance(row.get("gid"), (int, float))}
+        self.armed_instances = set(_ids(obs.get("inv")))
+        self.armed = True
+        self.log.append(
+            f"armed: ground gids {sorted(self.armed_gids)} already at "
+            f"({self.gx},{self.gy}), carried {self.def_name} instanceIds "
+            f"{sorted(self.armed_instances)}")
+        return obs
+
+    def observe(self, port, uid):
+        return self.ingest(self._read(port, uid, tuple(sorted(self.tracked()))))
+
+    def ingest(self, obs):
+        """Fold one decoded sample into the trail."""
+        if not isinstance(obs, dict):
+            obs = {}
+        self.polls += 1
+        phase = obs.get("phase") or None
+        action = obs.get("action") or None
+        if phase != self.last_phase:
+            self._note(f"unit_ai harvestPhase -> {phase!r}")
+            self.last_phase = phase
+        if action != self.last_action:
+            self._note(f"unit_ai currentAction -> {action!r}")
+            self.last_action = action
+        for gid in _ids(obs.get("loot")):
+            if gid in self.armed_gids or gid in self.loot_gids:
+                continue
+            self.loot_gids.append(gid)
+            self._note(f"unit_ai recorded harvest yield gid {gid}")
+        for row in _rows(obs.get("ground")):
+            if not isinstance(row, dict):
+                continue
+            gid = row.get("gid")
+            if not isinstance(gid, (int, float)) or isinstance(gid, bool):
+                continue
+            gid = int(gid)
+            if gid in self.armed_gids:
+                continue
+            if gid not in self.ground:
+                self._note(
+                    f"gid {gid} confirmed on the ground at "
+                    f"({row.get('x')},{row.get('y')}) as instanceId "
+                    f"{row.get('instanceId')}")
+            self.ground[gid] = row
+            self.retired.discard(gid)
+        for gid in _ids(obs.get("gone")):
+            if gid in self.armed_gids or gid in self.retired:
+                continue
+            self.retired.add(gid)
+            if gid in self.ground:
+                self._note(f"gid {gid} left its owner's page")
+        ground_instances = {row.get("instanceId") for row in self.ground.values()}
+        for inst in _ids(obs.get("inv")):
+            if inst in self.armed_instances or inst in self.carried:
+                continue
+            linked = inst in ground_instances
+            self.carried[inst] = {"poll": self.polls, "linked": linked}
+            self._note(
+                f"instanceId {inst} carried by the worker"
+                f"{' (the same instance seen on the ground)' if linked else ''}")
+        return obs
+
+    def _note(self, text):
+        self.log.append(f"poll {self.polls}: {text}")
+
+    # -- the oracle ----------------------------------------------------
+
+    def gone(self):
+        """Confirmed at the plot tile, then confirmed no longer there."""
+        return {gid for gid in self.ground if gid in self.retired}
+
+    def on_ground_now(self):
+        return {gid: row for gid, row in self.ground.items()
+                if gid not in self.retired}
+
+    def classify(self):
+        if self.carried:
+            return YIELD_CARRIED
+        if self.gone():
+            return YIELD_MOVED
+        if self.ground:
+            return YIELD_ON_GROUND
+        return YIELD_NOT_PRODUCED
+
+    def produced(self):
+        return self.classify() != YIELD_NOT_PRODUCED
+
+    def report(self):
+        """Where the yield was found -- printed on every run, pass or
+        fail, as the acceptance evidence that the oracle no longer
+        depends on one transient location."""
+        where = []
+        still = self.on_ground_now()
+        if still:
+            where.append(
+                "on the ground as gid(s) "
+                + ",".join(str(g) for g in sorted(still)))
+        left = self.gone()
+        if left:
+            where.append(
+                "left the ground as gid(s) "
+                + ",".join(str(g) for g in sorted(left)))
+        if self.carried:
+            linked = sum(1 for v in self.carried.values() if v["linked"])
+            where.append(
+                "carried as instanceId(s) "
+                + ",".join(str(i) for i in sorted(self.carried))
+                + f" ({linked} of {len(self.carried)} matched to a ground "
+                  f"observation)")
+        if not where:
+            where.append("nowhere -- never observed")
+        return f"{self.classify()}: " + "; ".join(where)
+
+    def diagnostics(self):
+        """Everything a reader needs to tell "no harvest happened" from
+        "the harvest happened and the yield moved" (#1760 requirement
+        4)."""
+        lines = [
+            f"    yield trail for {self.def_name} at ({self.gx},{self.gy}) "
+            f"over {self.polls} sample(s): {self.report()}",
+            f"    worker's last unit_ai currentAction={self.last_action!r} "
+            f"harvestPhase={self.last_phase!r}",
+            f"    gids unit_ai recorded from world.harvestFlora: "
+            f"{self.loot_gids or 'none'}",
+            f"    owning-page rows confirmed at the plot tile: "
+            f"{sorted(self.ground.values(), key=lambda r: r.get('gid', 0)) or 'none'}",
+            f"    carried instances: {self.carried or 'none'}",
+        ]
+        lines += [f"      {entry}" for entry in self.log]
+        return "\n".join(lines)
 
 
 def get_skill(port, uid, name):
@@ -586,25 +892,44 @@ def main():
         #     the AI decision this once), and sweep wild forage away
         #     from the site frequently.
         clear_wild_forage(port, ax, ay)
+
+        # Arm the yield trail BEFORE the clock jumps (#1760). Everything
+        # after this point is watched, so a harvest completed inside the
+        # very first polling interval is still recorded, and nothing
+        # lying about beforehand can be credited to it.
+        trail = YieldTrail(ax, ay)
+        trail.arm(port, uid)
+
         send(port, "world.setTimeScale('probe', 50000); return 'ok'")
         deadline = time.time() + 15.0
         ripe_wheat = False
+        cleared_while_ripening = False
+        plot_sample = send_json(port, f"return world.getCropPlotAt({ax},{ay})")
         while time.time() < deadline:
             time.sleep(1.0)
+            trail.observe(port, uid)
             pw = send_json(port, f"return world.getCropPlotAt({ax},{ay})")
+            plot_sample = pw
             if isinstance(pw, dict) and pw.get("harvestable") is True:
                 ripe_wheat = True
                 break
+            if pw is None:
+                # world.setTimeScale is game-MINUTES per real second, so
+                # scale 50,000 buys roughly 34.7 game days per one-second
+                # poll: the acolyte can find the plot and harvest it
+                # inside a single sample. That is the outcome this phase
+                # exists to produce, not a missing ripe state — resolved
+                # below against the yield trail and the phase-local
+                # farming-XP delta, never against a bare nil crop sample.
+                cleared_while_ripening = True
+                break
         send(port, "world.setTimeScale('probe', 1); return 'ok'")
-        ok9a = ripe_wheat
-        passed &= ok9a
-        print(f"  [{'PASS' if ok9a else 'FAIL'}] wheat becomes harvestable "
-              f"under the game clock: {ripe_wheat}")
 
         send(port, f"unit.moveTo({uid}, {ax + 0.5}, {ay + 1.5}, 1.0); return 'ok'")
         deadline = time.time() + 20.0
         while time.time() < deadline:
             time.sleep(1.0)
+            trail.observe(port, uid)
             info = send_json(port, f"return unit.getInfo({uid})")
             if isinstance(info, dict):
                 dx = info.get("gridX", 0) - ax
@@ -617,26 +942,62 @@ def main():
         # at once, not just the wheat plot — keep sweeping it away each
         # poll, tightly, so the plot stays the ONLY harvestable thing in
         # range and the now-nearby unit can't get waylaid en route by a
-        # regrowing wild bush.
+        # regrowing wild bush. Sample the trail immediately after the
+        # sweep and immediately before the plot read, so the three
+        # observations describe the same moment.
         deadline = time.time() + 60.0
-        harvested = False
-        while time.time() < deadline:
+        harvested = cleared_while_ripening
+        while not harvested and time.time() < deadline:
             time.sleep(0.5)
             clear_wild_forage(port, ax, ay, radius=60, keep=(ax, ay))
+            trail.observe(port, uid)
             pw2 = send_json(port, f"return world.getCropPlotAt({ax},{ay})")
+            plot_sample = pw2
             if pw2 is None:
                 harvested = True
                 break
-        ground = send_json(port, "return item.listGround()")
-        has_grain = isinstance(ground, list) and any(
-            g.get("defName") == "wheat_grain" for g in ground)
-        ok9 = harvested and has_grain
-        passed &= ok9
-        print(f"  [{'PASS' if ok9 else 'FAIL'}] acolyte auto-harvests the ripe "
-              f"wheat: plot_cleared={harvested} grain_on_ground={has_grain}")
+
+        # The pick and the collection are two phases of ONE action
+        # (scripts/unit_ai_harvest.lua): the plot clears in the first,
+        # and the second pulls the yield off the ground one item per
+        # tick. Keep watching PAST the clear so the trail records that
+        # transition rather than sampling one instant of it. Nothing is
+        # driven here — no sweep, no time scale, no command — so the
+        # scenario under test is unchanged.
+        settle = time.time() + 15.0
+        while time.time() < settle:
+            trail.observe(port, uid)
+            if trail.classify() == YIELD_CARRIED:
+                break
+            time.sleep(0.5)
 
         farming_after_harvest = get_skill(port, uid, "farming")
-        ok9b = farming_after_harvest > farming_after_plant
+        xp_grew = farming_after_harvest > farming_after_plant
+
+        # Ripeness: a sampled harvestable state, OR the AI having
+        # already harvested the plot — the same precondition reached by
+        # its own effect. The fallback needs causally specific evidence
+        # that THIS plot was harvested (a recorded yield, or the plot
+        # clear plus the phase-local farming-XP delta), so a plot that
+        # merely vanished never satisfies it.
+        ok9a = ripe_wheat or (harvested and (trail.produced() or xp_grew))
+        passed &= ok9a
+        print(f"  [{'PASS' if ok9a else 'FAIL'}] wheat reaches the harvestable "
+              f"state: sampled_ripe={ripe_wheat} plot_cleared={harvested} "
+              f"yield={trail.classify()} farming_xp_grew={xp_grew}")
+
+        # The yield is judged by identity, not by where it happens to be
+        # at one instant: picked up, carried or eaten all still count,
+        # and only a yield that was never produced fails (#1760).
+        ok9 = harvested and trail.produced()
+        passed &= ok9
+        print(f"  [{'PASS' if ok9 else 'FAIL'}] acolyte auto-harvests the ripe "
+              f"wheat: plot_cleared={harvested} yield found {trail.report()}")
+        if not (ok9a and ok9):
+            print(f"    last crop-plot sample at ({ax},{ay}): {plot_sample!r}")
+            print(trail.diagnostics())
+
+        ok9b = xp_grew
         passed &= ok9b
         print(f"  [{'PASS' if ok9b else 'FAIL'}] farming skill grows further "
               f"from auto-harvest: {farming_after_plant} -> "

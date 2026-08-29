@@ -403,6 +403,17 @@ python3 tools/world_check.py --quick
 # without this companion a reintroduced boot() on the listing path, a
 # mode dispatch that preempts --list again, or a silently empty inventory
 # would only ever be noticed by hand; the companion boots nothing.
+# test_farm_ai_probe is #1760's: farm_ai_probe.py's phase-9 capstone
+# judges the auto-harvest by the yield's IDENTITY rather than by its
+# location at one instant, following the exact harvested instance off
+# the ground and into whoever picked it up. Its four classifications --
+# produced-on-ground, carried, moved-after-pickup and the only failing
+# one, never-produced -- are scheduling-dependent in a real run, so this
+# companion drives YieldTrail.ingest with decoded samples and pins all
+# four deterministically, plus the arming baseline, the owning-page
+# (item.getGroundForUnit, #1666) resolution contract and the plot-tile
+# scoping. That probe is manual-only and takes about eleven minutes;
+# this boots nothing.
 #
 # tools/test_deflake_diagnosis.py (#1437) is deliberately absent from
 # this list as well, and from the CI job it mirrors: that issue's
@@ -427,6 +438,7 @@ python3 tools/test_location_embark_probe.py
 python3 tools/test_location_probe_config_isolation.py
 python3 tools/test_probe_root_cleanup.py
 python3 tools/test_movement_probe.py
+python3 tools/test_farm_ai_probe.py
 
 # The decision .github/workflows/review-gate.yml makes on every
 # synchronize push: keep `reviewed:approve` only when the push left the
