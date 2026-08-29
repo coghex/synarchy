@@ -55,6 +55,7 @@ Exit codes: 0 = all tests passed, 1 = one or more failed.
 from __future__ import annotations
 
 import ast
+import html
 import os
 import random
 import re
@@ -316,6 +317,15 @@ class ReadmeSectionError(Exception):
 # different-character run inside a block stays content.
 _FENCE_LINE = re.compile(r"^\s*(?P<fence>`{3,}|~{3,})(?P<info>.*)$")
 
+# Inline HTML, which Markdown renders: the TAGS are markup and go, while
+# everything between them is displayed text and stays. An HTML comment's
+# delimiters go the same way and its content is deliberately KEPT -- scanning
+# more than the reader sees is the safe direction here. The tag pattern needs
+# a letter straight after "<", so a bare comparison ("`--jobs > 1`") is not
+# mistaken for one.
+_HTML_MARKUP = re.compile(
+    r"<!--|-->|</?[A-Za-z][A-Za-z0-9-]*(?:\s[^<>]*?)?/?>")
+
 # A Markdown emphasis delimiter: a short run of "*" or "_" that is not
 # flanked by alphanumerics on BOTH sides. Intra-word runs are left alone,
 # which is what keeps `PROBE_PORT_SPANS` one token and "2*3" an expression.
@@ -393,6 +403,11 @@ def _scannable(section: str) -> str:
     passed through unchanged (their backticks are the fences), so a total
     smuggled into a shell comment is scanned too.
 
+    Inline HTML is reduced to what it renders: entities are decoded, tags
+    and comment delimiters are dropped, and the text between them is kept --
+    "There are 93 <em>registered</em> probes." states the same total the
+    plain sentence does.
+
     Emphasis delimiters go the same way as the backticks, for the same
     reason: "There are **93 registered probes**." displays a total, and the
     stars are not part of it. A run is only a delimiter when it is NOT
@@ -419,6 +434,8 @@ def _scannable(section: str) -> str:
         if run_fenced:
             chunks.append(blob)
             return
+        blob = html.unescape(blob)
+        blob = _HTML_MARKUP.sub(" ", blob)
         blob = re.sub(r"`([^`]*)`", r" \1 ", blob, flags=re.S)
         blob = _EMPHASIS_RUN.sub(" ", blob)
         # Unwrap soft line breaks; a blank line stays a break.
@@ -3676,6 +3693,9 @@ def test_the_readme_states_no_registry_total() -> None:
             "The probe registry totals **93**.",
             "*The registry holds 93.*",
             "The probe tally is **ninety-three**.",
+            "The probe registry totals <b>93</b>.",
+            "<!-- The probe registry totals 93. -->",
+            "The registry holds 93.&nbsp;",
             "The registry holds ninety-plus.",
             # Inverted: the quantity leads and the subject follows.
             "There are 93 entries in the probe registry.",
@@ -3732,6 +3752,10 @@ def test_the_readme_states_no_registry_total() -> None:
             # Emphasis is display, not content.
             "There are **93 registered probes**.",
             "There are __93 registered probes__.",
+            # Inline HTML renders to the same sentence.
+            "There are 93 <em>registered</em> probes.",
+            "There are <span class=\"x\">93 registered probes</span>.",
+            "There are &#57;&#51; registered probes.",
             "90 registered probes ship today.",
             "It registers 90 probes today.",
             "It lists ninety probes.",
@@ -3804,6 +3828,8 @@ def test_the_readme_states_no_registry_total() -> None:
             # The round-15 review's two bypasses, verbatim.
             "There are **93 registered probes**.",
             "The probe registry totals **93**.",
+            # The round-16 review's bypass, verbatim.
+            "There are 93 <em>registered</em> probes.",
             # And the original drift sentence as it really shipped, wrapped.
             "`python3 tools/run_probes.py --list` is the authoritative count\n"
             "and listing of registered probes — it's grown over time\n"
@@ -3867,6 +3893,11 @@ def test_the_readme_states_no_registry_total() -> None:
             "`run_probes.PROBE_TIMEOUT_OVERRIDES` and "
             "`save_compat_migration` name 3600 between them.",
             "The span is 2*3 wide.",
+            # A comparison is not an opening tag, so nothing downstream of
+            # it is swallowed as markup.
+            "With `--jobs > 1` the spans are laid out from it instead of "
+            "from the default `9400`, and a declared count `N` reserves "
+            "`base … base + N - 1`.",
             "Adding a future multi-port probe is one row in that table, and "
             "`tools/test_run_probes.py` validates every row against the live "
             "registry.",
