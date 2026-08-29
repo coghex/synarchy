@@ -14,10 +14,16 @@
 --     affects smoothness, never which frame is correct.
 --   * Selecting a different ENTRY resets the clock; a resize (setPanel)
 --     deliberately does not — the phase survives a reflow.
---   * Non-loop end-of-clip policy: HOLD the last frame, the same clamp
---     Unit.Render.pickFrame applies in game. Buildings default to
---     loop=false (Engine.Asset.YamlBuildings' own default), unlike the
---     units viewer's loop=true.
+--   * End-of-clip policy (#1833): the preview ALWAYS replays. Frame
+--     N-1 is followed, after its own normal duration, by frame 0
+--     again, indefinitely — for every clip, whatever its authored
+--     `loop` says, which matters most here because buildings default
+--     to loop=false (Engine.Asset.YamlBuildings' own default), unlike
+--     the units viewer's loop=true. The wrap lives in the index
+--     computation, never in the clock: entryStart is not restarted at
+--     a cycle boundary, which is what keeps the phase across a resize.
+--     The source `loop` value is still reported verbatim by dump()
+--     (below); only gameplay (Unit.Render.pickFrame) still clamps.
 --   * A STATIC entry has no active playback at all: one frame, no clock
 --     advance (previewManager.dump() reports no `playback` for it).
 local scale = require("scripts.ui.scale")
@@ -31,12 +37,14 @@ local nextId = 1
 -- scripts/ui/unit_animation_view.lua's copy of it) — the probe
 -- cross-checks the dump's reported index against wall time, so a
 -- divergence here shows up as a failing gate rather than silently.
-local function frameIndexAt(looping, fps, frameCount, elapsed)
+-- srcLoop is the entry's AUTHORED loop value; the preview replays
+-- either way (#1833), so it is taken and deliberately never read,
+-- exactly as the Haskell original takes and ignores it.
+local function frameIndexAt(srcLoop, fps, frameCount, elapsed)
     if frameCount <= 1 then return 0 end
     local rate = math.max(0, fps or 0)
     local raw = math.floor(math.max(0, elapsed or 0) * rate)
-    if looping then return raw % frameCount end
-    return math.min(raw, frameCount - 1)
+    return raw % frameCount
 end
 
 -- Fit (w,h) inside (boxW,boxH) preserving aspect ratio — the same rule
