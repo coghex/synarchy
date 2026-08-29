@@ -40,7 +40,10 @@ GLFW, no swapchain) and asserts the mode end to end:
    has seen it; loading its chunks (structure physically visible) alone
    does not change the icon; spawning a player-faction unit at the ruin
    flips ONLY that ruin's icon to its ruin TYPE icon (a second, unseen
-   ruin keeps the unknown marker); the icon stays legible at a second map
+   ruin keeps the unknown marker) — measured over a BOUNDED region
+   around the icon, with the reveal's own shipped notification card
+   dismissed first so it neither covers the icon nor supplies the
+   changed pixels (#1765); the icon stays legible at a second map
    zoom level; rotating the camera keeps the pipeline rendering (the
    icon's screen-upright invariant across all 4 facings is proven
    exactly, at the math level, by the pure Hspec group "Location map
@@ -104,6 +107,26 @@ def png_differs(path_a: str, path_b: str, min_fraction: float = 0.001) -> bool:
         return changed >= min_fraction * a.width * a.height
 
 
+def png_region_changed_pixels(path_a: str, path_b: str, box):
+    """Changed-pixel count inside box=(x, y, w, h) — the BOUNDED
+    counterpart of png_differs, which counts the whole frame. Returns
+    None when the two captures aren't comparable (missing, or different
+    sizes), so a caller can tell "nothing changed here" apart from "these
+    two frames could not be compared at all"."""
+    from PIL import Image, ImageChops
+    x, y, w, h = box
+    try:
+        with Image.open(path_a) as a, Image.open(path_b) as b:
+            if a.size != b.size:
+                return None
+            ra = a.convert("RGBA").crop((x, y, x + w, y + h))
+            rb = b.convert("RGBA").crop((x, y, x + w, y + h))
+            diff = ImageChops.difference(ra, rb)
+            return sum(diff.convert("L").histogram()[1:])
+    except Exception:
+        return None
+
+
 # --------------------------------------------------------------------------
 # UI helpers (F2 inject + F3 widget oracle)
 # --------------------------------------------------------------------------
@@ -134,6 +157,100 @@ def screenshot(port: int, path: str) -> bool:
     got = send_json(port, f"return debug.captureScreenshot('{path}')",
                     timeout=30.0)
     return isinstance(got, dict) and got.get("path") == path
+
+
+# --------------------------------------------------------------------------
+# Notification-popup helpers (#1765)
+# --------------------------------------------------------------------------
+# A popup notification is a real, screen-CENTRED, pointer-blocking card
+# (scripts/popup.lua) that stays up until dismissed. Any phase here that
+# compares screenshots has to get it out of the frame first, or it both
+# supplies the changed pixels the comparison is looking for and covers
+# the thing being compared.
+def notification_popup_enabled(port: int, category: str) -> bool:
+    """Whether `category` currently raises a popup, read from the
+    EFFECTIVE merged configuration (engine.getNotificationCfg — the same
+    view the settings tab edits), never from the tracked
+    data/notification_categories.yaml default. A developer's own
+    config/notifications.local.yaml override is merged in by
+    Engine.Asset.YamlNotifications, so the shipped `popup: true` is not a
+    guarantee on every machine — which is exactly why the callers below
+    only ever WAIT for a card when this says one is coming, while still
+    proving the frame is card-free either way."""
+    cfg = send_json(port, "return engine.getNotificationCfg()", timeout=10.0)
+    for entry in cfg if isinstance(cfg, list) else []:
+        if isinstance(entry, dict) and entry.get("id") == category:
+            return bool(entry.get("popup"))
+    return False
+
+
+def popup_counts(port: int) -> tuple[int, int]:
+    """(active cards, queued entries) from scripts/popup.lua's own
+    counters. (0, 0) when the module isn't loaded — a menu-only or
+    pre-bootstrap state, where there is nothing on screen to dismiss."""
+    got = send_json(
+        port,
+        "local ok, p = pcall(require, 'scripts.popup'); "
+        "if not ok or type(p) ~= 'table' then return {active = 0, queued = 0} end; "
+        "return {active = p.activeCount(), queued = p.queueLength()}",
+        timeout=10.0)
+    if not isinstance(got, dict):
+        return (0, 0)
+    try:
+        return (int(got.get("active", 0)), int(got.get("queued", 0)))
+    except (TypeError, ValueError):
+        return (0, 0)
+
+
+def popup_ok_buttons(port: int) -> list[dict]:
+    """Every live popup card's own OK control, from the F3 widget oracle
+    — located by the name scripts/popup.lua gives it ("popup_ok_<id>"),
+    so an unrelated dialog that happens to label a button "OK" is never
+    mistaken for a notification card."""
+    return [w for w in widgets(port)
+            if str(w.get("name") or "").startswith("popup_ok_")]
+
+
+def dismiss_popups(port: int, attempts: int = 6) -> tuple[int, int]:
+    """Clear every notification card, and return the resulting
+    (active, queued) counts so the caller can assert the frame is
+    card-free.
+
+    Clicking each card's own OK control at the oracle-reported bounds is
+    the primary path: it is exactly what a player does, and it exercises
+    the real dismissal wiring rather than reaching around it. The
+    scripts/popup.lua API fallback exists only so that "the popup is gone
+    before the capture" is a guarantee and not a best effort — a card
+    whose control the oracle cannot see would otherwise leave the
+    comparison below silently measuring the wrong thing."""
+    for _ in range(attempts):
+        if popup_counts(port) == (0, 0):
+            return (0, 0)
+        buttons = popup_ok_buttons(port)
+        if not buttons:
+            break
+        b = buttons[0].get("bounds") or {}
+        x = int(b.get("x", 0) + b.get("w", 0) / 2)
+        y = int(b.get("y", 0) + b.get("h", 0) / 2)
+        send(port, f"return input.click({x}, {y})", timeout=10.0)
+        time.sleep(0.2)
+    if popup_counts(port) != (0, 0):
+        send(port,
+             "local ok, p = pcall(require, 'scripts.popup'); "
+             "if ok and type(p) == 'table' then p.dismissAll() end; return 'ok'",
+             timeout=10.0)
+        time.sleep(0.2)
+    return popup_counts(port)
+
+
+def check_no_popup(port: int, what: str) -> bool:
+    """Clear every notification card and assert the frame really is
+    card-free, naming what is about to be captured and the counts that
+    were still standing if it is not."""
+    active, queued = dismiss_popups(port)
+    return check(f"no notification card covers the {what}",
+                 (active, queued) == (0, 0),
+                 f"active={active}, queued={queued}")
 
 
 # --------------------------------------------------------------------------
@@ -386,6 +503,47 @@ def list_locations(port: int, page: str = "main_world") -> list[dict]:
     return got if isinstance(got, list) else []
 
 
+# The location icon's own on-screen size, in LOGICAL (window, not
+# framebuffer) pixels: src/World/Render/Zoom/Icons.hs's
+# locationIconTargetPixels, which iconWorldSize holds constant across
+# every zoom level and DPI scale.
+ICON_LOGICAL_PX = 32
+
+# Side of the bounded region the type-icon comparison measures, as a
+# multiple of the icon itself. The icon quad is centred on its anchor
+# tile's world position (makeLocationIconQuads draws it at
+# gridToWorld(anchor) minus half its size) and camera.goToTile puts the
+# camera on that same world position, so the icon sits at the frame
+# centre; three icons wide leaves a full icon of slack on either side
+# for the projection's own sub-pixel rounding while still excluding
+# everything else on screen.
+ICON_ROI_SCALE = 3
+
+# How much of the icon's own area must change for the marker to count as
+# having resolved into the type icon. The two shipped bitmaps
+# (assets/textures/icons/location/location_unknown.png and .../ruin.png)
+# differ in 593 of their 1024 texels, so an eighth of the icon's area is
+# a ~4.6x margin below the real signal while staying far above anything
+# terrain or antialiasing contributes to a box this small.
+ICON_MIN_CHANGED_FRACTION = 0.125
+
+
+def icon_roi(png_w: int, png_h: int, logical_h: int):
+    """The centred (x, y, w, h) box, in the capture's OWN pixels, that
+    contains the location icon.
+
+    Offscreen boots seed windowSize and framebufferSize from the same
+    --size (app/App/Offscreen.hs), so the scale below is 1 today; it is
+    derived from the capture rather than assumed so the box stays right
+    if a capture ever comes back at a different scale."""
+    scale = (png_h / logical_h) if logical_h > 0 else 1.0
+    side = max(8, int(round(ICON_LOGICAL_PX * ICON_ROI_SCALE * scale)))
+    side = min(side, png_w, png_h)
+    x = (png_w - side) // 2
+    y = (png_h - side) // 2
+    return (x, y, side, side), scale
+
+
 def zoom_fade_end(port: int) -> float:
     r = send(port, "return camera.getZoomFadeEnd()")
     return float(r)
@@ -495,6 +653,23 @@ def location_map_icons_phase(port: int, w: int, h: int, shots: str):
           bool(control_still_hidden)
           and not control_still_hidden.get("discovered"))
 
+    # -- #1765: `location_discovery` ships as a POPUP category
+    # (data/notification_categories.yaml), so the reveal above normally
+    # raises a screen-centred notification card. Left up it defeats the
+    # comparison below twice over: it changes far more pixels than the
+    # icon does, and it covers the very icon being compared. Wait for it
+    # (the event is delivered asynchronously, so "not up yet" is not the
+    # same as "not coming"), dismiss it through its own OK control, and
+    # prove the frame is card-free BEFORE capturing. A machine whose
+    # config/notifications.local.yaml has turned the category's popup
+    # off is tolerated — there is simply nothing to wait for — but the
+    # card-free assertion still has to hold.
+    if notification_popup_enabled(port, "location_discovery"):
+        arrived = poll_until(10.0, lambda: popup_counts(port)[0] > 0)
+        check("the discovery notification card is raised (the shipped "
+              "location_discovery popup)", bool(arrived))
+    check_no_popup(port, "type-icon capture")
+
     time.sleep(0.3)
     shot_discovered = os.path.join(shots, "icon_type.png")
     if check("type-icon screenshot answers",
@@ -503,13 +678,41 @@ def location_map_icons_phase(port: int, w: int, h: int, shots: str):
         # right before this unit spawned) rather than 'shot_unknown'
         # — see the note above on why a terrain-stable baseline is the
         # only pixel-diff pair that isolates the discovery-driven change.
-        check("the icon frame visibly changes once the ruin is seen — the "
-              "shared unknown marker resolves into the ruin type icon",
-              png_differs(shot_loaded, shot_discovered, min_fraction=0.001))
+        #
+        # #1765: and compared over a BOUNDED box around the icon rather
+        # than the whole frame. The reasoning the terrain note above
+        # gives for the previous comparison applies here unchanged: a
+        # whole-frame diff passes on any visible change anywhere, so it
+        # cannot distinguish "the marker resolved into the type icon"
+        # from "something else on screen moved". Both captures come from
+        # the same camera position and zoom, so the identical box in each
+        # frames the same icon.
+        st = png_stats(shot_discovered)
+        if check("type-icon capture is readable", bool(st)):
+            box, scale = icon_roi(st[0], st[1], h)
+            min_changed = max(
+                1, int(round(ICON_MIN_CHANGED_FRACTION
+                             * (ICON_LOGICAL_PX * scale) ** 2)))
+            changed = png_region_changed_pixels(shot_loaded, shot_discovered,
+                                                box)
+            detail = (f"region (x={box[0]}, y={box[1]}, w={box[2]}, "
+                      f"h={box[3]}): "
+                      + ("frames not comparable" if changed is None
+                         else f"{changed} of {box[2] * box[3]} px changed, "
+                              f"needed >= {min_changed}"))
+            print(f"    icon region diff — {detail}")
+            check("the icon itself visibly changes once the ruin is seen — "
+                  "the shared unknown marker resolves into the ruin type "
+                  "icon", changed is not None and changed >= min_changed,
+                  detail)
 
     # -- readable at a second, different map zoom level.
     set_zoom(port, full_zoom * 1.6)
     time.sleep(0.3)
+    # #1765: every downstream capture in this phase is taken under the
+    # same conditions, so each one clears any card that arrived since the
+    # last capture rather than inheriting it.
+    check_no_popup(port, "second-zoom capture")
     shot_zoom2 = os.path.join(shots, "icon_zoom2.png")
     if check("second-zoom-level screenshot answers",
              screenshot(port, shot_zoom2)):
@@ -524,10 +727,16 @@ def location_map_icons_phase(port: int, w: int, h: int, shots: str):
     center_on(port, tgx, tgy)
     set_zoom(port, full_zoom)
     time.sleep(0.3)
+    check_no_popup(port, "pre-rotation capture")
     shot_pre_rotate = os.path.join(shots, "icon_pre_rotate.png")
     screenshot(port, shot_pre_rotate)
     send(port, "camera.rotateCW(); return 'ok'")
     time.sleep(0.5)
+    # The rotation comparison stays a deliberate WHOLE-frame diff (it is
+    # a generic "the GPU path still renders and updates" check, not an
+    # icon assertion), which is exactly why it too must be free of a card
+    # that would satisfy it on its own.
+    check_no_popup(port, "post-rotation capture")
     shot_rotated = os.path.join(shots, "icon_rotated.png")
     if check("post-rotation screenshot answers", screenshot(port, shot_rotated)):
         check("the frame changes after rotating the camera",
