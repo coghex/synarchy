@@ -39,6 +39,7 @@ import Engine.Loop.Resource (validateDescriptorState, getFrameResources,
 import qualified Engine.Core.Queue as Q
 import Engine.Scene.Render
 import Engine.Scene.Types
+import Engine.Graphics.Solar (SolarBase(..), SolarPageTable, solarUniformEntries)
 import UI.Render (renderUIPages)
 import UI.Tooltip (updateTooltipState)
 import World.Types (chunkSize, WorldGenParams(..), WorldState(..))
@@ -61,6 +62,12 @@ computeAmbientLight sunAngle =
 --   'World.Render.Quads' uses when gen params aren't loaded yet) —
 --   there's always SOME UBO value even before a world finishes
 --   generating, since the shader divides by it.
+--
+--   Since #1869 this is the FALLBACK half of that phase, not all of it:
+--   geometry that names a world page divides by THAT page's own
+--   circumference from the published solar table. What still reads this
+--   is geometry belonging to no page — UI and generic scene sprites —
+--   plus any solar slot the frame's table does not describe.
 activeWorldCircumferenceTiles ∷ EngineEnv → IO Float
 activeWorldCircumferenceTiles env = do
     mWs ← activeWorldState env
@@ -284,8 +291,11 @@ renderSceneFrame imageIndex frameIdx resources device = do
             (V.mapMaybe (\case SpriteItem b → Just b; _ → Nothing))
             (V.fromList $ map snd $ Map.toAscList layeredBatches)
 
-    -- Use the LIVE camera for the view/projection matrices
-    updateUniformBufferForFrame frameIdx liveCamera
+    -- Use the LIVE camera for the view/projection matrices, and this
+    -- publication's OWN per-page solar table (#1869) — the one the
+    -- vertices above were stamped against, which is why it rides inside
+    -- 'LayeredQuads' rather than arriving through a ref of its own.
+    updateUniformBufferForFrame frameIdx liveCamera (lqSolar worldQuads)
 
     -- Prepare dynamic vertex buffer
     let totalVertices = V.sum $ V.map (fromIntegral . VS.length . rbVertices) batches
@@ -327,8 +337,8 @@ renderSceneFrame imageIndex frameIdx resources device = do
 -- | Update uniform buffer for current frame. Windowed, the live GLFW
 --   framebuffer/window sizes are queried each frame (they change under
 --   resize); offscreen (#650) the fixed target extent serves as both.
-updateUniformBufferForFrame ∷ Word32 → Camera2D → EngineM σ ()
-updateUniformBufferForFrame frameIdx camera = do
+updateUniformBufferForFrame ∷ Word32 → Camera2D → SolarPageTable → EngineM σ ()
+updateUniformBufferForFrame frameIdx camera solarTable = do
     state ← gets graphicsState
     case (vulkanDevice state, uniformBuffers state) of
         (Just device, Just buffers) → do
@@ -349,7 +359,8 @@ updateUniformBufferForFrame frameIdx camera = do
             env ← ask
             brightness ← liftIO $ readIORef (brightnessRef env)
             pixelSnap ← liftIO $ readIORef (pixelSnapRef env)
-            sunAngle ← liftIO $ readIORef (sunAngleRef env)
+            solarBase ← liftIO $ readIORef (sunAngleRef env)
+            let sunAngle = sbAngle solarBase
             defFmSlot ← liftIO $ readIORef (defaultFaceMapSlotRef env)
             worldCirc ← liftIO $ activeWorldCircumferenceTiles env
 
@@ -378,6 +389,16 @@ updateUniformBufferForFrame frameIdx camera = do
                               facingFloat
                               (fromIntegral defFmSlot)
                               worldCirc
+                              -- The LIVE base is passed, not just its
+                              -- angle: a world.setSunAngle override is
+                              -- overlaid onto every page of whatever table
+                              -- this frame is drawing, which may be a tick
+                              -- old. Slots the publication does not
+                              -- describe carry the same global pair a
+                              -- page-less vertex uses, so an out-of-range
+                              -- slot lights like a page-less one rather
+                              -- than by zero.
+                              (solarUniformEntries solarBase worldCirc solarTable)
 
             liftIO $ writeIORef (windowSizeRef env) (winWidth, winHeight)
             liftIO $ writeIORef (framebufferSizeRef env) (fbWidth, fbHeight)

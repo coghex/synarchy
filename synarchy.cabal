@@ -187,6 +187,7 @@ library
                      Engine.PlayerEvent.Emit
                      Engine.Graphics.Base
                      Engine.Graphics.Camera
+                     Engine.Graphics.Solar
                      Engine.Graphics.Screenshot
                      Engine.Graphics.Viewport
                      Engine.Graphics.Types
@@ -683,6 +684,7 @@ library
                      World.Render.HitTest
                      World.Render.QuadContext
                      World.Render.Quads
+                     World.Render.Solar
                      World.Render.WaterSlope
                      World.Render.CursorQuads
                      World.Render.TileQuads
@@ -1203,6 +1205,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Graphics.AmbientLight
                    Test.Headless.Graphics.Screenshot
                    Test.Headless.Graphics.UniformLayout
+                   Test.Headless.Graphics.VertexLayout
                    Test.Headless.Graphics.FontFallback
                    Test.Headless.Graphics.FontRepertoire
                    Test.Headless.Construct.Corners
@@ -1267,6 +1270,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Render.StructureSeam
                    Test.Headless.World.Render.PickSeam
                    Test.Headless.World.Render.QuadSnapshot
+                   Test.Headless.World.Render.SolarAttribution
                    Test.Headless.World.Render.SideFace
                    Test.Headless.World.Render.ZTrackSeam
                    Test.Headless.World.Render.SlopeBit

@@ -20,6 +20,7 @@ import Engine.PlayerEvent (PlayerEvent, EventStore, NotificationCfg)
 import qualified Combat.Types
 import Engine.ActionOutcome (ActionOutcome)
 import Engine.Scripting.Lua.Types
+import Engine.Graphics.Solar (SolarBase(..))
 import Engine.Graphics.Types
 import Engine.Graphics.Config
 import Engine.Graphics.Vulkan.Base
@@ -189,7 +190,12 @@ data EngineEnv = EngineEnv
   --   'worldPreviewRef' already use for the render thread.
   , pendingLoadRef      ∷ IORef (Maybe (Int, StagedSession))
   , worldQueue          ∷ Q.Queue WorldCommand
-  , sunAngleRef         ∷ IORef Float
+  , sunAngleRef         ∷ IORef SolarBase
+    -- ^ The process-global base sun angle plus whether
+    --   @world.setSunAngle@ is currently overriding it (#1869). Per-page
+    --   attribution rides with the published quads
+    --   ('Engine.Scene.Types.Batch.lqSolar'); this is what page-LESS
+    --   geometry and the Lua climate queries read.
   , worldPreviewRef     ∷ IORef (Maybe (Int, Int, BS.ByteString, Word64))
     -- ^ Pending world-preview pixel data for GPU upload, tagged with the
     --   generation it was enqueued under (issue #763;

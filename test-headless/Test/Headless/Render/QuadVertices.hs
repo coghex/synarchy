@@ -35,9 +35,12 @@ payload = QuadPayload
 -- | The expected vertex at one corner: the position and UV under test,
 --   plus the payload spelled out independently of 'payload'.
 at ∷ Float → Float → Float → Float → Vertex
+--   The solar page slot is not part of 'QuadPayload': attribution is
+--   stamped onto finished quads by 'World.Render' once the owning page
+--   is known (#1869), so every producer's own output is page-less here.
 at px py u v = Vertex (Vec2 px py) (Vec2 u v)
                       (Vec4 0.25 0.5 0.75 0.125)
-                      17 23 1 (packWorldUV 7 (-3))
+                      17 23 1 (packWorldUV 7 (-3)) 0
 
 spec ∷ Spec
 spec = do

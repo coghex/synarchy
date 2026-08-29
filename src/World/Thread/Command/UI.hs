@@ -11,10 +11,20 @@ import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..))
 import Engine.Core.Log (logInfo, logDebug, logWarn, LogCategory(..), LoggerState)
+import Engine.Graphics.Solar (maxSolarPages)
 import qualified Engine.Core.Queue as Q
 import Sim.Command.Types (SimCommand(..))
 import World.Types
 import World.Render.Zoom.Types (ZoomMapMode(..))
+
+-- | What one 'handleWorldShowCommand' actually did, decided inside the
+--   manager's own atomic update so the reason and the state it was
+--   decided from cannot disagree.
+data ShowOutcome
+    = ShowApplied         -- ^ visible now (or already was)
+    | ShowNoSuchPage      -- ^ no such page in @wmWorlds@
+    | ShowAtVisibleLimit  -- ^ 'maxSolarPages' pages are visible already
+    deriving (Eq, Show)
 
 handleWorldShowCommand ∷ WorldSimCapability → LoggerState → WorldPageId → IO ()
 handleWorldShowCommand wsc logger pageId = do
@@ -26,12 +36,21 @@ handleWorldShowCommand wsc logger pageId = do
     -- atomicModifyIORef' returns whether the world was found so the
     -- existence check and the visible-list mutation share one consistent
     -- snapshot of the manager.
-    found ← atomicModifyIORef' (wsWorldManagerRef wsc) $ \mgr' →
+    outcome ← atomicModifyIORef' (wsWorldManagerRef wsc) $ \mgr' →
       let mgr = completeSelectionChange mgr' in
         case lookup pageId (wmWorlds mgr) of
-            Nothing → (mgr, False)
+            Nothing → (mgr, ShowNoSuchPage)
             Just _
-                | pageId `elem` wmVisible mgr → (mgr, True)
+                | pageId `elem` wmVisible mgr → (mgr, ShowApplied)
+                -- Every visible page must be lit by its own clock and
+                -- circumference (#1869), and the render path can
+                -- describe exactly 'maxSolarPages' of them per frame.
+                -- Refusing here is what keeps that a contract rather
+                -- than a best effort: the alternative is a page drawn
+                -- with another page's sun, which is the defect #1869
+                -- exists to remove. No shipped flow reaches this.
+                | length (wmVisible mgr) ≥ maxSolarPages →
+                    (mgr, ShowAtVisibleLimit)
                 | otherwise →
                     -- #1602: the selection generation moves in the SAME
                     -- atomic update as the list it describes, and only on
@@ -39,12 +58,16 @@ handleWorldShowCommand wsc logger pageId = do
                     -- already-visible page must not invalidate a live
                     -- placement binding.
                     (bumpSelectionGen
-                        (mgr { wmVisible = pageId : wmVisible mgr }), True)
+                        (mgr { wmVisible = pageId : wmVisible mgr }), ShowApplied)
 
-    if not found
-    then logWarn logger CatWorld $
+    case outcome of
+      ShowNoSuchPage → logWarn logger CatWorld $
         "Ignoring world.show for nonexistent world: " <> unWorldPageId pageId
-    else do
+      ShowAtVisibleLimit → logWarn logger CatWorld $
+        "Ignoring world.show for " <> unWorldPageId pageId
+        <> ": already " <> tshow maxSolarPages
+        <> " visible worlds, the most one frame can light individually"
+      ShowApplied → do
         mgr ← readIORef (wsWorldManagerRef wsc)
         logDebug logger CatWorld $
             "Visible worlds after show: " <> tshow (length $ wmVisible mgr)
