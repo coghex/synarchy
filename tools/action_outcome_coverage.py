@@ -371,18 +371,35 @@ COMMIT_STARTING_REQUIRED = [
 ]
 
 
-def _game_chain_check(text: str) -> bool:
+def _game_chain_check(*texts: str) -> bool:
+    # The chain spans TWO files since #1875 split the world-entity
+    # fallback out of scripts/init_mouse.lua: the ordered tool/overlay
+    # claim guards and the two inactive-gameplay deadclick gates stay in
+    # init_mouse.lua, while the unit/item/building selection chain and
+    # the context-menu/move-order chain (with their own handler names and
+    # the off-world tile-menu deadclick) moved to init_mouse_entity.lua.
+    # Both are read here because the AREA is the whole chain — checking
+    # only one file would silently pass with half the routes deleted.
+    # Concatenated rather than checked per-file so no pattern has to
+    # encode which side of the split its route currently lives on; the
+    # window-bounded anchors are all local to one call site.
+    #
     # Three independent deadclick call sites today: the MOUSE_LEFT
     # inactive-gameplay gate, the MOUSE_RIGHT inactive-gameplay gate, and
     # the off-world no-selection tile-menu miss (review round 6 — the
     # count was stuck at 2, so the two original gates alone satisfied it
     # even with the third, newer site's hook removed/renamed). Bump this
-    # whenever a genuinely new deadclick site is added. The third site
-    # ALSO gets its own route-specific pattern (its "no tile under
-    # cursor" reason is unique among the three) so it stays covered even
-    # if a future fourth deadclick site changes what the plain count of 3
-    # would mean.
-    return bool(text) and _all_present(text, LAYER_A_GAME_CHAIN_HANDLERS) \
+    # whenever a genuinely new deadclick site is added. #1875's two
+    # off-band gates deliberately do NOT bump it: they pass the outcome
+    # through offBandOutcome(band), so neither spells a "deadclick"
+    # literal at the call. The third site ALSO gets its own
+    # route-specific pattern (its "no tile under cursor" reason is unique
+    # among the three) so it stays covered even if a future fourth
+    # deadclick site changes what the plain count of 3 would mean.
+    if not all(texts):
+        return False
+    text = "\n".join(texts)
+    return _all_present(text, LAYER_A_GAME_CHAIN_HANDLERS) \
         and _count_at_least(text, _ROC_CLICK + r'"deadclick"', 3) \
         and _all_present(text, [
             _ROC_CLICK + r'"deadclick"[\s\S]{0,40}?"no tile under cursor"'])
@@ -527,8 +544,12 @@ def _build_verbs() -> list[tuple[str, str, list[str], callable]]:
          [INPUT_MOUSE],
          lambda: _swallowed_routes_check(_read(INPUT_MOUSE))),
         ("A", "input click -> game-world tool/select/deadclick chain",
-         ["scripts/init_mouse.lua"],
-         lambda: _game_chain_check(_read("scripts/init_mouse.lua"))),
+         # #1875 split the world-entity fallback (selection chain,
+         # context menus, move orders) into init_mouse_entity.lua; the
+         # claim guards and the two gameplay-inactive gates stayed put.
+         ["scripts/init_mouse.lua", "scripts/init_mouse_entity.lua"],
+         lambda: _game_chain_check(_read("scripts/init_mouse.lua"),
+                                   _read("scripts/init_mouse_entity.lua"))),
         # --- Layer A (#730): non-click H1 input families — keyboard, text,
         # scroll/z-slice, drag. Each area's `_all_present_check` requires
         # EVERY registered domain literal, not just one, mirroring the
@@ -952,6 +973,28 @@ def _self_test() -> list[str]:
     expect("game chain: recordClick renamed away (literals kept) reads "
            "as a gap (review round 5)",
            _game_chain_check(chain_renamed_call), False)
+
+    # #1875: the chain spans TWO files now, so the check has to be
+    # satisfied by their UNION and by neither half alone. Without these,
+    # a version that read only one of the two would still pass every
+    # single-text case above while half the routes could be deleted.
+    _ROUTER_HANDLERS = {"debug_overlay", "debug_anim_panel", "build_tool",
+                        "mine_tool", "chop_tool", "till_tool", "plant_tool"}
+    _ENTITY_HANDLERS = set(_HANDLER_NAMES) - _ROUTER_HANDLERS
+    router_half = game_chain_fixture(_ROUTER_HANDLERS,
+                                     [_INACTIVE_GAMEPLAY, _INACTIVE_GAMEPLAY])
+    entity_half = game_chain_fixture(_ENTITY_HANDLERS,
+                                     ["no tile under cursor"])
+    expect("game chain: router half + entity half together read DONE "
+           "(#1875 split)",
+           _game_chain_check(router_half, entity_half), True)
+    expect("game chain: the router half alone reads gap (#1875 split)",
+           _game_chain_check(router_half), False)
+    expect("game chain: the entity half alone reads gap (#1875 split)",
+           _game_chain_check(entity_half), False)
+    expect("game chain: an unreadable/empty second file reads gap rather "
+           "than being ignored (#1875 split)",
+           _game_chain_check(chain_full, ""), False)
 
     # buildTool.commitPlacement: realistic fixture text (function-scoped,
     # hook-anchored `reason =`/`outcome = ` fields) rather than bare

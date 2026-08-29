@@ -148,6 +148,7 @@ import qualified Test.Headless.Blood.LuaApi as BloodLuaApi
 import qualified Test.Headless.UI.CreateWorldControls as CreateWorldControls
 import qualified Test.Headless.UI.Tooltip as UITooltip
 import qualified Test.Headless.UI.InputOwnership as UIInputOwnership
+import qualified Test.Headless.UI.ZoomBandInputGate as UIZoomBandInputGate
 import qualified Test.Headless.UI.ElementInputPolicy as UIElementInputPolicy
 import qualified Test.Headless.UI.ControlActivation as UIControlActivation
 import qualified Test.Headless.UI.HierarchyOwnership as UIHierarchyOwnership
@@ -619,6 +620,7 @@ main = hspec $ do
     describe "Create World player-facing controls" CreateWorldControls.spec
     describe "UI.Tooltip" UITooltip.spec
     describe "UI.InputOwnership" UIInputOwnership.spec
+    describe "zoom-band entity input gate" UIZoomBandInputGate.spec
     describe "UI.ElementInputPolicy" UIElementInputPolicy.spec
     describe "UI.ControlActivation" UIControlActivation.spec
     describe "UI hierarchy structural ownership" UIHierarchyOwnership.spec
