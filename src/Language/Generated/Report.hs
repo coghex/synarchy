@@ -149,7 +149,7 @@ buildSeedReport ∷ Catalogue → GeneratorVersion → Word64
                 → Either GeneratorError SeedReport
 buildSeedReport cat ver rawSeed = do
     prof ← generateProfile ver (LangSeed rawSeed)
-    let roots = assignLanguageRoots prof (conceptIds cat)
+    let roots = assignLanguageRoots prof (catOrdinals cat) (conceptIds cat)
         free  = lrFree roots
         bound = lrBound roots
         -- The same assignment with bound morphology suppressed: the

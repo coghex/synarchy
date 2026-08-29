@@ -22,8 +22,9 @@ Pipeline:
   2. one multimodal LLM call: the session digest + the player manual
      (the intended mental model) + screenshots of the friction turns,
      with a structured-output findings schema.
-  3. validation (enums, candidate coverage — one bounded repair pass
-     for anything unadjudicated) and deterministic rendering, so
+  3. validation (enums, candidate coverage, one verdict per candidate
+     — one bounded repair pass for anything unadjudicated or
+     conflictingly adjudicated) and deterministic rendering, so
      report.md and findings.json always agree.
 
 Usage:
@@ -1118,6 +1119,10 @@ def validate_findings(data: dict, candidates: list[dict],
             # unverified — it must not be presented as confident
             f["confidence"] = "low"
     data["findings"] = findings
+    # one candidate, one published verdict (#1873) — run BEFORE
+    # uncovered() is consulted, so a conflicted candidate reaches the
+    # repair pass exactly as an unadjudicated one does
+    reconcile_verdicts(data, warnings)
     missing = [c["cid"] for c in uncovered(data, candidates)]
     return data, warnings + ([f"unadjudicated candidates: {', '.join(missing)}"]
                              if missing else [])
@@ -1129,6 +1134,95 @@ def uncovered(data: dict, candidates: list[dict]) -> list[dict]:
     covered = {cid for f in data.get("findings", [])
                for cid in f.get("covers", [])}
     return [c for c in candidates if c["cid"] not in covered]
+
+
+def reconcile_verdicts(data: dict, warnings: list[str]) -> None:
+    """One friction candidate, one published verdict (#1873).
+
+    `validate_findings` grounds each finding independently and
+    `uncovered` reduces coverage to a set union, so two separately
+    valid findings could adjudicate the SAME candidate as `defect` and
+    `intended` at once — and the duplicate coverage *suppressed* the
+    repair pass instead of triggering it. Both verdicts were then
+    printed, one per report section, with no candidate id rendered to
+    tell the maintainer they described one observed moment.
+
+    Detection is by candidate identity over the evidence-VALID
+    `f["covers"]` (never the raw `evidence.candidate_ids`, which
+    deliberately retains stripped claims for audit), and it is
+    candidate-scoped: a finding covering C1 and C2 where only C1
+    conflicts keeps C2 and stays publishable.
+
+      * verdicts AGREE — published as-is with a warning. Two distinct
+        defects observed at one friction moment stay expressible; the
+        warning is the audit trail, not an error.
+      * verdicts DIFFER — the candidate's adjudication is withdrawn
+        from every claimant, which makes it uncovered so the existing
+        bounded repair pass re-asks for it. A claimant left covering
+        nothing is withdrawn from publication entirely, so neither
+        report.md nor findings.json presents a valid opposite-verdict
+        pair for one candidate.
+
+    Withdrawals are recorded on the finding (`conflict_withdrawn`) and
+    honoured on the repair round's re-validation: the first-pass
+    conflict is settled once, so the repair finding is the replacement
+    adjudication rather than a third party to the same argument. Their
+    warning is re-emitted from that record, so it survives a SUCCESSFUL
+    repair — necessary because `render_report` prints no candidate ids.
+    A conflict the repair round repeats simply leaves the candidate
+    unadjudicated; there is no second repair.
+
+    Deterministic by construction: candidates are walked in sorted id
+    order and claimants in `data["findings"]` order.
+    """
+    findings = data.get("findings") or []
+
+    # honour earlier rounds' withdrawals before anything else
+    for f in findings:
+        already = set(f.get("conflict_withdrawn") or [])
+        if already:
+            f["covers"] = [c for c in (f.get("covers") or [])
+                           if c not in already]
+
+    by_cid: dict[str, list[dict]] = {}
+    for f in findings:
+        for cid in f.get("covers") or []:
+            by_cid.setdefault(cid, []).append(f)
+
+    for cid in sorted(by_cid):
+        claimants = by_cid[cid]
+        if len(claimants) < 2:
+            continue
+        verdicts = {f["verdict"] for f in claimants}
+        if len(verdicts) == 1:
+            warnings.append(
+                f"candidate {cid} is adjudicated by {len(claimants)} findings "
+                f"that AGREE ({sorted(verdicts)[0]}): "
+                + "; ".join(repr(f["title"]) for f in claimants)
+                + " — all published (one friction moment can expose more "
+                  "than one distinct issue)")
+            continue
+        for f in claimants:
+            f["conflict_withdrawn"] = sorted(
+                set(f.get("conflict_withdrawn") or []) | {cid})
+            f["covers"] = [c for c in f["covers"] if c != cid]
+
+    withdrawn: dict[str, list[dict]] = {}
+    for f in findings:
+        for cid in f.get("conflict_withdrawn") or []:
+            withdrawn.setdefault(cid, []).append(f)
+    for cid in sorted(withdrawn):
+        warnings.append(
+            f"candidate {cid} was adjudicated CONFLICTINGLY by "
+            f"{len(withdrawn[cid])} findings ("
+            + "; ".join(f"{f['verdict']}: {f['title']!r}"
+                        for f in withdrawn[cid])
+            + ") — none of them publishes a verdict for it; whether the "
+              "bounded repair pass then adjudicated it is answered by "
+              "the unadjudicated-candidates warning")
+
+    data["findings"] = [f for f in findings
+                        if f.get("covers") or not f.get("conflict_withdrawn")]
 
 
 _SEV_RANK = {s: i for i, s in enumerate(SEVERITIES)}
@@ -2039,6 +2133,157 @@ def selftest() -> int:
         check("stripped finding is demoted to low confidence",
               all(f_["confidence"] == "low" for f_ in fab_data["findings"]
                   if f_["title"] == "fabricated"))
+
+        # ------------------------------------------------------------
+        # #1873: one candidate, one published verdict. Two separately
+        # VALID findings adjudicating the same friction candidate used
+        # to publish both (one per report section) while their
+        # duplicate coverage SUPPRESSED the repair pass — and the
+        # report prints no candidate ids, so the maintainer could not
+        # see the two sections described one observed moment.
+        # ------------------------------------------------------------
+        def _covering(data_, cid):
+            return [f_ for f_ in data_["findings"]
+                    if cid in f_.get("covers", [])]
+
+        class DupCritic(FakeCritic):
+            """Emits a SECOND finding for `cid`, cloned from the
+            mechanical one so it passes the identical evidence
+            discipline (same turns, same verbatim quote, same anchored
+            oracle) — the duplicate is valid, which is the whole point.
+            `flip` gives the clone the opposite verdict; `repeat` does
+            it again on the repair call; `also` consolidates a SECOND
+            candidate into the original finding instead of leaving it
+            its own, so only one of that finding's candidates
+            conflicts."""
+
+            def __init__(self, cid, flip=True, repeat=False, also=None,
+                         also_turn=None):
+                self.asks = 0
+                self.cid, self.flip, self.repeat = cid, flip, repeat
+                self.also, self.also_turn = also, also_turn
+
+            def adjudicate(self, digest, manual, frames, ask=None):
+                self.asks += 1
+                out = FakeCritic.adjudicate(self, digest, manual, frames, ask)
+                if ask is not None and not self.repeat:
+                    return out
+                base = next((f_ for f_ in out["findings"]
+                             if f_["evidence"]["candidate_ids"] == [self.cid]),
+                            None)
+                if base is None:
+                    return out
+                if self.also:
+                    base["evidence"]["candidate_ids"].append(self.also)
+                    base["evidence"]["turns"].append(self.also_turn)
+                    out["findings"] = [f_ for f_ in out["findings"]
+                                       if f_["evidence"]["candidate_ids"]
+                                       != [self.also]]
+                clone = json.loads(json.dumps(base))
+                clone["title"] = base["title"] + " (second reading)"
+                clone["evidence"]["candidate_ids"] = [self.cid]
+                clone["evidence"]["turns"] = [
+                    t for t in base["evidence"]["turns"]
+                    if t != self.also_turn]
+                if self.flip:
+                    clone["verdict"] = ("intended" if base["verdict"] == "defect"
+                                        else "defect")
+                out["findings"].append(clone)
+                return out
+
+        conf = DupCritic("C1", flip=True)
+        rpc, fpc = run_critic(tdir, conf,
+                              out_dir=os.path.join(tmp, "conflict"),
+                              max_frames=ONE_CALL_FRAMES)
+        with open(fpc) as f:
+            conf_data = json.load(f)
+        conf_report = open(rpc).read()
+        check("a conflicting duplicate adjudication TRIGGERS the repair "
+              "pass (duplicate coverage used to suppress it)",
+              conf.asks == 2, f"asks={conf.asks}")
+        check("...every candidate still ends adjudicated after repair",
+              not uncovered(conf_data, cands),
+              str([c["cid"] for c in uncovered(conf_data, cands)]))
+        check("...the conflicted candidate publishes exactly ONE verdict",
+              len(_covering(conf_data, "C1")) == 1,
+              json.dumps([(f_["title"], f_["verdict"])
+                          for f_ in _covering(conf_data, "C1")]))
+        check("...and neither losing finding reaches findings.json or "
+              "gets a report block (only the warning names them)",
+              not any(f_["title"].endswith("(second reading)")
+                      for f_ in conf_data["findings"])
+              and not any(line.startswith("### ") and "(second reading)" in line
+                          for line in conf_report.splitlines()),
+              json.dumps([f_["title"] for f_ in conf_data["findings"]]))
+        check("...with the conflict named in the report — candidate and "
+              "both verdicts — even though the repair succeeded",
+              "CONFLICTINGLY" in conf_report
+              and "candidate C1" in conf_report
+              and "defect: " in conf_report and "intended: " in conf_report,
+              conf_report[conf_report.find("## Critic warnings"):][:400])
+
+        conf2 = DupCritic("C1", flip=True, repeat=True)
+        rpc2, fpc2 = run_critic(tdir, conf2,
+                                out_dir=os.path.join(tmp, "conflict2"),
+                                max_frames=ONE_CALL_FRAMES)
+        with open(fpc2) as f:
+            conf2_data = json.load(f)
+        conf2_report = open(rpc2).read()
+        check("a conflict the repair response REPEATS gets no second "
+              "repair pass", conf2.asks == 2, f"asks={conf2.asks}")
+        check("...and the candidate ends honestly unadjudicated rather "
+              "than doubly published",
+              [c["cid"] for c in uncovered(conf2_data, cands)] == ["C1"]
+              and not _covering(conf2_data, "C1"),
+              json.dumps([(f_["title"], f_["verdict"], f_["covers"])
+                          for f_ in conf2_data["findings"]]))
+        check("...surfaced as BOTH an unadjudicated and a conflict warning",
+              "unadjudicated candidates: C1" in conf2_report
+              and "CONFLICTINGLY" in conf2_report)
+
+        agree = DupCritic("C1", flip=False)
+        rpa, fpa = run_critic(tdir, agree,
+                              out_dir=os.path.join(tmp, "agree"),
+                              max_frames=ONE_CALL_FRAMES)
+        with open(fpa) as f:
+            agree_data = json.load(f)
+        agree_report = open(rpa).read()
+        check("an AGREEING duplicate adjudication asks for NO repair",
+              agree.asks == 1, f"asks={agree.asks}")
+        check("...and keeps both findings published (one friction moment "
+              "can expose two distinct issues)",
+              len(_covering(agree_data, "C1")) == 2
+              and {f_["verdict"] for f_ in _covering(agree_data, "C1")}
+              == {"defect"},
+              json.dumps([(f_["title"], f_["verdict"])
+                          for f_ in _covering(agree_data, "C1")]))
+        check("...still surfaced as a warning rather than applied silently",
+              "AGREE" in agree_report and "candidate C1" in agree_report)
+
+        c2_turn = next(c["turn"] for c in cands if c["cid"] == "C2")
+        scoped = DupCritic("C1", flip=True, also="C2", also_turn=c2_turn)
+        rpsc, fpsc = run_critic(tdir, scoped,
+                                out_dir=os.path.join(tmp, "scoped"),
+                                max_frames=ONE_CALL_FRAMES)
+        with open(fpsc) as f:
+            scoped_data = json.load(f)
+        consolidated = [f_ for f_ in scoped_data["findings"]
+                        if f_["evidence"]["candidate_ids"] == ["C1", "C2"]]
+        check("a conflict is candidate-SCOPED: a finding consolidating "
+              "C1+C2 keeps its uncontested C2 and stays published",
+              len(consolidated) == 1
+              and consolidated[0]["covers"] == ["C2"],
+              json.dumps([(f_["title"], f_["evidence"]["candidate_ids"],
+                           f_["covers"]) for f_ in scoped_data["findings"]]))
+        check("...only the conflicted candidate is re-asked, and every "
+              "candidate ends adjudicated",
+              scoped.asks == 2 and not uncovered(scoped_data, cands),
+              f"asks={scoped.asks} uncovered="
+              + str([c["cid"] for c in uncovered(scoped_data, cands)]))
+        check("...and C2 keeps exactly one published verdict",
+              len(_covering(scoped_data, "C2")) == 1,
+              json.dumps([(f_["title"], f_["verdict"])
+                          for f_ in _covering(scoped_data, "C2")]))
 
         # anchoring unit checks against the note-less, outcome-derived
         # candidate (turn 6): the player still WROTE words that turn
