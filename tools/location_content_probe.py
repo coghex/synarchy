@@ -93,6 +93,7 @@ import os
 import re
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -121,24 +122,74 @@ class _PhaseAborted(Exception):
     surrounding `finally` still shuts the engine down in order."""
 
 
+def _make_owner_writable(top: str) -> None:
+    """Add owner write (and directory search) permission throughout the
+    freshly copied `config/` tree.
+
+    `shutil.copytree` reproduces the SOURCE's mode bits, so a checkout
+    whose `config/` is read-only — a read-only mount, a CI cache
+    restored read-only, an archive unpacked without write bits — would
+    otherwise hand this run a private copy it can neither write nor
+    delete: a directory needs owner write+search before any of its
+    entries can be unlinked, so `remove_isolated_root` would report
+    residue on a run that did nothing wrong. Only THIS invocation's copy
+    is relaxed; the source's own mode bits are never touched (#1729; the
+    tools/location_embark_probe.py pattern from #1569).
+    """
+    for path, dirs, files in os.walk(top):
+        for name in [None, *dirs, *files]:
+            target = path if name is None else os.path.join(path, name)
+            try:
+                mode = os.lstat(target).st_mode
+                if stat.S_ISLNK(mode):
+                    continue
+                extra = (stat.S_IRWXU if stat.S_ISDIR(mode)
+                         else stat.S_IRUSR | stat.S_IWUSR)
+                os.chmod(target, stat.S_IMODE(mode) | extra)
+            except OSError:
+                # Best effort: a mode this process cannot change is
+                # reported by the cleanup that actually trips over it,
+                # naming the path it failed on, rather than here.
+                pass
+
+
 def make_isolated_root(base: str) -> str:
     """A throwaway resource root for THIS invocation: the repository's
-    real scripts/assets/data/config symlinked in (read-only content, safe
-    to share) plus its OWN empty saves/ directory.
+    real scripts/assets/data symlinked in (read-only content, safe to
+    share), its `config/` COPIED without the developer's `*.local.yaml`
+    overrides, plus its OWN empty saves/ directory.
 
     Every boot belonging to the invocation is handed this root, so the
     fixtures saved and loaded here are never written into, and can never
     be satisfied by, a slot reachable from a normal `cabal run` (#1620
-    requirement 5; the tools/chop_probe.py pattern). The families are
-    SYMLINKS, and shutil.rmtree unlinks a symlink rather than descending
-    it, so teardown can never reach the repository's own directories.
+    requirement 5; the tools/chop_probe.py pattern). The CONTENT
+    families are SYMLINKS, and shutil.rmtree unlinks a symlink rather
+    than descending it, so teardown can never reach the repository's own
+    directories.
+
+    `config/` is NOT one of those families and must never be symlinked
+    (#1729). Engine initialization is itself a `config/` writer:
+    src/Engine/Asset/YamlNotifications.hs materializes
+    `notifications.local.yaml` from registry defaults whenever that file
+    is absent, and src/Engine/Core/Init.hs migrates tracked legacy
+    configuration into absent local files. Through an aliased `config/`
+    those writes land in the developer's checkout, and teardown — which
+    only unlinks the alias — leaves them there. Copying also keeps a
+    personal override from deciding what this run observes. The copy is
+    made owner-writable so a read-only source cannot produce a tree this
+    run is unable to remove.
     """
     root = os.path.join(base, "root")
     os.makedirs(root, exist_ok=True)
-    for family in ("scripts", "assets", "data", "config"):
+    for family in ("scripts", "assets", "data"):
         target = os.path.join(root, family)
         if not os.path.exists(target):
             os.symlink(os.path.join(REPO, family), target)
+    config_dst = os.path.join(root, "config")
+    if not os.path.exists(config_dst):
+        shutil.copytree(os.path.join(REPO, "config"), config_dst,
+                        ignore=shutil.ignore_patterns("*.local.yaml"))
+        _make_owner_writable(config_dst)
     os.makedirs(os.path.join(root, "saves"), exist_ok=True)
     return root
 
