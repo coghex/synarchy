@@ -13,14 +13,29 @@ model — to confirm:
   3. A species with no hunger/hydration config (bear_brown) computes all
      five values without error — the fracOf fallback (absent resource ⇒
      neutral, not penalized).
-  4. THE REGRESSION GUARD this issue calls for: even once pain has
-     tanked mood/emotional_pain/state_of_mind, the unit stays standing
+  4. THE REGRESSION GUARD this issue calls for: the unit stays standing
      and brain.isUnconscious/isDelirious/isConfused all stay false — the
      locomotor collapse machine and the AI's delirium gate key on
-     consciousness ALONE, unaffected by the new psychological layer.
+     consciousness ALONE, unaffected by the psychological layer.
      (physiological collapse itself is separately covered end-to-end by
      tools/collapse_crawl_probe.py and tools/concussion_revive_probe.py,
      which this change must also keep passing.)
+
+     Sampling that guard only after a single injury cannot detect the
+     regression it names (#1761): substituting state_of_mind for
+     consciousness changes an answer ONLY when the two land on opposite
+     sides of one of brain.lua's three thresholds, and one slash leaves
+     both comfortably above all three. So the guard now runs three
+     purpose-built fixtures that put state_of_mind squarely inside each
+     production band — [0.40,0.70), [0.15,0.40), [0,0.15) — while
+     consciousness is held at the top of its own. Each fixture reaches
+     that separation the way production does: consciousness stays high
+     through its OWN three inputs (core_temp / blood_oxygen /
+     salt_conc — pain is not one of them), and the depression is
+     written into mood and emotional_pain, which brain.tick blends
+     through computeStateOfMind. All three fixtures run even when an
+     earlier one fails, so a mutated brain.state exposes the wrong
+     answer in every band rather than only the first.
   5. The awareness/perception input (#350's "read from existing systems"
      list): brain.awareness(uid) reads the 'perception' stat instantly
      (no drift — same normalization Unit.LineOfSight uses), and an
@@ -42,6 +57,46 @@ from probelib import quit_engine, boot, send
 
 LOG = "/tmp/state_of_mind_probe_engine.log"
 PAIN_CEILING = 5.0  # brain.lua PAIN_CEILING — keep in lockstep
+
+# brain.lua's consciousness bands — keep in lockstep. The guard below reads
+# them as the boundaries of the three DISJOINT production intervals that
+# brain.state / isConfused / isDelirious / isUnconscious cut consciousness
+# into: [CONFUSED_BELOW,1] alert, [DELIRIOUS_BELOW,CONFUSED_BELOW) confused,
+# [UNCONSCIOUS_BELOW,DELIRIOUS_BELOW) delirious, [0,UNCONSCIOUS_BELOW) out.
+CONFUSED_BELOW    = 0.70
+DELIRIOUS_BELOW   = 0.40
+UNCONSCIOUS_BELOW = 0.15
+
+# The three regression-guard fixtures (#1761). Each drives state_of_mind
+# into ONE of the non-alert bands while consciousness stays >= 0.70, so a
+# predicate that read state_of_mind instead of consciousness would return
+# the `wrong_state` named here instead of "alert"/false.
+#
+# Targets are `mood - 0.5 * emotional_pain` (brain.lua's computeStateOfMind
+# wellbeing term, which state_of_mind then min()s against consciousness),
+# picked mid-band so the slow drift back toward a healthy mood target
+# between the write and the sample cannot walk a sample out of its band:
+#   0.75 - 0.5*0.40 = 0.55   0.57 - 0.5*0.60 = 0.27   0.46 - 0.5*0.80 = 0.06
+GUARD_BANDS = [
+    # label,         mood, emotional_pain, band low,          band high,         wrong state
+    ("confused",     0.75, 0.40,           DELIRIOUS_BELOW,   CONFUSED_BELOW,    "confused"),
+    ("delirious",    0.57, 0.60,           UNCONSCIOUS_BELOW, DELIRIOUS_BELOW,   "delirious"),
+    ("unconscious",  0.46, 0.80,           0.0,               UNCONSCIOUS_BELOW, "unconscious"),
+]
+
+# The "has production run yet?" marker. computeStateOfMind min()s a 0..1
+# wellbeing against a 0..1 consciousness, so it can never produce a value
+# above 1.0 — a stored state_of_mind that has dropped back into range can
+# only be a real brain.tick recomputation, never the probe's own write.
+#
+# It must be ABOVE the range, not below: unit.setStat clamps its argument at
+# >= 0 (`clamped = max 0 v`, src/Engine/Scripting/Lua/API/Units/Stats.hs),
+# so a negative marker would silently store 0.0 and read as an already-valid
+# value, making the wait vacuous. There is no upper clamp. band_fixture
+# re-reads the marker inside the same Lua chunk that wrote it and fails loudly
+# if it did not survive, so a future clamp change cannot quietly restore that
+# vacuum.
+RECOMPUTE_SENTINEL = 2.0
 
 
 def bootstrap(port):
@@ -86,6 +141,87 @@ def summary(port, uid):
 
 def close(a, b, tol=0.02):
     return abs(a - b) <= tol
+
+
+def gate_observation(port, uid):
+    """One Lua-side read of everything the guard asserts on.
+
+    Lua is single-threaded and the physiology tick runs on that same
+    thread, so no tick can interleave inside this chunk: consciousness,
+    state_of_mind, the pose and all four consciousness-keyed answers
+    below are necessarily the ones produced by the SAME brain.tick.
+    Reading them as separate console round trips (as this guard used to)
+    lets a tick land between the two halves, which is exactly what the
+    acceptance condition's "moment the gates were read" rules out.
+    """
+    return json.loads(send(port,
+        f"local u={uid} local b=require('scripts.brain') "
+        f"return {{c=b.consciousness(u), som=b.stateOfMind(u), "
+        f"mood=b.mood(u), ep=b.emotionalPain(u), pose=unit.getPose(u), "
+        f"uncon=b.isUnconscious(u), delir=b.isDelirious(u), "
+        f"conf=b.isConfused(u), state=b.state(u)}}"))
+
+
+def gate_text(g):
+    return (f"pose={g['pose']} uncon={g['uncon']} delir={g['delir']} "
+            f"conf={g['conf']} state={g['state']}")
+
+
+def gates_alert(g):
+    """The guard's assertion, unchanged in substance since #350."""
+    return (g["pose"] == "standing" and not g["uncon"] and not g["delir"]
+            and not g["conf"] and g["state"] == "alert")
+
+
+def stored_state_of_mind(port, uid):
+    """The raw stored stat, or None if it did not read back as a number."""
+    try:
+        return float(send(port, f"return unit.getStat({uid},'state_of_mind')"))
+    except (TypeError, ValueError):
+        return None
+
+
+def band_fixture(port, uid, mood, emotional_pain, timeout=8.0):
+    """Depress state_of_mind into one band, leaving consciousness alone.
+
+    Consciousness is re-affirmed through its own three inputs rather
+    than written directly, and the depression goes in through mood and
+    emotional_pain — the pair brain.tick actually blends — so the value
+    the guard samples is production's own, not one the next tick would
+    recompute away.
+
+    The out-of-range marker is what makes that last claim checkable: the
+    write and its read-back share ONE Lua chunk, so no tick can slip
+    between them and the read-back proves the marker really landed; the
+    wait then proves a real brain.tick replaced it before anything is
+    sampled. Returns ``(observation, None)``, or ``(None, reason)``.
+    """
+    landed = send(port, f"local u={uid} "
+                        f"unit.setStat(u,'core_temp',37.0) "
+                        f"unit.setStat(u,'blood_oxygen',1.0) "
+                        f"unit.setStat(u,'salt_conc',1.0) "
+                        f"unit.setStat(u,'mood',{mood}) "
+                        f"unit.setStat(u,'emotional_pain',{emotional_pain}) "
+                        f"unit.setStat(u,'state_of_mind',{RECOMPUTE_SENTINEL}) "
+                        f"return unit.getStat(u,'state_of_mind')")
+    try:
+        landed_val = float(landed)
+    except (TypeError, ValueError):
+        return None, (f"the recompute marker did not read back as a number "
+                      f"({landed!r}) — the wait below would prove nothing")
+    if landed_val <= 1.0:
+        return None, (f"unit.setStat stored {landed_val} for the "
+                      f"{RECOMPUTE_SENTINEL} recompute marker, which is inside "
+                      f"the producible 0..1 range — the wait below would pass "
+                      f"before brain.tick ever ran and prove nothing")
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        time.sleep(0.1)
+        current = stored_state_of_mind(port, uid)
+        if current is not None and current <= 1.0:
+            return gate_observation(port, uid), None
+    return None, ("brain.tick never replaced the recompute marker, so no "
+                  "production-computed state_of_mind was ever available")
 
 
 def main():
@@ -175,24 +311,64 @@ def main():
 
         # ---- 4. Regression guard: psychological tanking must NOT trip the
         # physiological collapse/delirium gates — those stay keyed on
-        # consciousness alone. (One table return, JSON-decoded, so the
-        # console's string-quoting doesn't need string-compare gymnastics.)
-        s2 = samples[-1]
-        gate = json.loads(send(P,
-            f"local u={uid} local b=require('scripts.brain') "
-            f"return {{pose=unit.getPose(u), uncon=b.isUnconscious(u), "
-            f"delir=b.isDelirious(u), conf=b.isConfused(u), state=b.state(u)}}"))
-        print(f"  post-pain gate check: state_of_mind={s2.get('stateOfMind'):.3f} gate={gate}")
-        guard_ok = (gate["pose"] == "standing" and not gate["uncon"] and not gate["delir"]
-                    and not gate["conf"] and gate["state"] == "alert"
-                    and s2.get("stateOfMind", 1.0) < s2.get("consciousness", 1.0))
-        if guard_ok:
-            print("  [pass] REGRESSION GUARD: collapse/delirious/confused gates stay off "
-                  "consciousness alone — unaffected by the depressed psychological layer "
-                  "(state_of_mind < consciousness, but pose/gates untouched)")
+        # consciousness alone.
+        #
+        # 4a. The injured unit from phase 2, as continuity: pain has moved
+        # the psychological layer, and none of the gates moved with it.
+        # This sample alone does NOT discriminate — both values are still
+        # above every threshold, so a substituted predicate would answer
+        # identically (#1761). The three band fixtures in 4b are what makes
+        # the substitution observable.
+        gate = gate_observation(P, uid)
+        print(f"  post-pain gate check: consciousness={gate['c']:.3f} "
+              f"state_of_mind={gate['som']:.3f} {gate_text(gate)}")
+        if gates_alert(gate) and gate["som"] < gate["c"]:
+            print("  [pass] pain depressed the psychological layer "
+                  f"({gate['som']:.3f} < {gate['c']:.3f}) without moving pose or any gate")
         else:
             ok = False
-            print(f"  [FAIL] psychological layer leaked into physiological gating: gate={gate}")
+            print(f"  [FAIL] post-pain gate check: {gate_text(gate)}")
+
+        # 4b. THE DISCRIMINATING GUARD (#1761): one fixture per production
+        # band. Consciousness is held at the top of its own band through
+        # core_temp / blood_oxygen / salt_conc, while mood and emotional
+        # pain drag state_of_mind below 0.70, then 0.40, then 0.15. In each
+        # one, reading state_of_mind where the code must read consciousness
+        # would answer "confused" / "delirious" / "unconscious" and flip the
+        # matching predicate — so the assertion below (unchanged in
+        # substance: standing, all three predicates false, state "alert")
+        # can now actually fail for the reason it names. Every band runs
+        # even after an earlier one fails, so a mutation is exposed in all
+        # three rather than only the first.
+        guard_uid = int(float(send(P, "local u=unit.spawn('acolyte',13,0); return u")))
+        print(f"  --- regression-guard band fixtures, uid={guard_uid} ---")
+        for label, mood, ep, low, high, wrong in GUARD_BANDS:
+            g, why = band_fixture(P, guard_uid, mood, ep)
+            if g is None:
+                ok = False
+                print(f"  [FAIL] {label} band (mood={mood}, emotional_pain={ep}): {why}")
+                continue
+            print(f"  {label} band: consciousness={g['c']:.3f} state_of_mind={g['som']:.3f} "
+                  f"(want [{low:.2f},{high:.2f}) with consciousness >= {CONFUSED_BELOW:.2f}) "
+                  f"mood={g['mood']:.3f} emotional_pain={g['ep']:.3f} {gate_text(g)}")
+            if not (low <= g["som"] < high and g["c"] >= CONFUSED_BELOW):
+                ok = False
+                print(f"  [FAIL] {label} band fixture did not separate the two values — "
+                      f"state_of_mind {g['som']:.3f} not in [{low:.2f},{high:.2f}) or "
+                      f"consciousness {g['c']:.3f} < {CONFUSED_BELOW:.2f}; "
+                      f"the guard would prove nothing at this sample")
+                continue
+            if gates_alert(g):
+                print(f"  [pass] REGRESSION GUARD ({label} band): state_of_mind "
+                      f"{g['som']:.3f} < {high:.2f} <= consciousness {g['c']:.3f}, and the "
+                      f"consciousness-keyed gates all still read alert — reading "
+                      f"state_of_mind here would have said \"{wrong}\"")
+            else:
+                ok = False
+                print(f"  [FAIL] psychological layer leaked into physiological gating in the "
+                      f"{label} band: consciousness={g['c']:.3f} state_of_mind={g['som']:.3f} "
+                      f"{gate_text(g)} (expected standing/false/false/false/alert; "
+                      f"\"{wrong}\" is the state_of_mind answer)")
 
         # ---- 5. Awareness/perception input, isolated from every other
         # driver: a fresh, gear-free unit (no pain, full hunger/stamina)
