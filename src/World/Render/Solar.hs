@@ -24,7 +24,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import Data.List (sort, nub)
 import Engine.Graphics.Solar
-    (SolarBase(..), SolarPageEntry(..), SolarPageTable(..)
+    ( SolarPageEntry(..), SolarPageTable(..)
     , maxSolarPages, solarPageNone, solarSlotVertexValue)
 import World.Chunk.Types (chunkSize)
 import World.Page.Types (WorldPageId(..))
@@ -51,10 +51,12 @@ canonicalSolarOrder = sort . nub
 -- | Assign each visible page the @solarPage@ value its geometry carries,
 --   numbering 'canonicalSolarOrder' from 1.
 --
---   Pages past 'maxSolarPages' are assigned 'solarPageNone' — the
---   pre-#1869 global attribution — rather than dropped or aliased onto
---   someone else's slot. No shipped flow reaches that; a debug console
---   or a save could.
+--   Pages past 'maxSolarPages' are assigned 'solarPageNone' rather than
+--   dropped or aliased onto someone else's slot. That branch is
+--   UNREACHABLE in a running engine — @world.show@ refuses to make more
+--   than 'maxSolarPages' pages visible and a load truncates to the same
+--   limit — and exists so this stays a total function over any list it
+--   is handed.
 solarSlotAssignment ∷ [WorldPageId] → HM.HashMap WorldPageId Word32
 solarSlotAssignment visible = HM.fromList
     [ (pageId, slotFor i)
@@ -74,28 +76,28 @@ solarSlotAssignment visible = HM.fromList
 --   pre-#1869 global path used, so a page mid-generation is lit exactly
 --   as it was before.
 buildSolarPageTable
-    ∷ SolarBase
+    ∷ Float
     → (WorldPageId → Maybe (Float, Maybe Int))
     → [WorldPageId]
     → SolarPageTable
-buildSolarPageTable base inputs visible = SolarPageTable $ V.fromList
-    [ pageSolarInputs base (inputs pageId)
+buildSolarPageTable fallbackAngle inputs visible = SolarPageTable $ V.fromList
+    [ pageSolarInputs fallbackAngle (inputs pageId)
     | pageId ← take maxSolarPages (canonicalSolarOrder visible) ]
 
--- | One page's entry.
+-- | One page's entry: that page's OWN clock angle and OWN
+--   circumference, with the given fallback angle standing in for a
+--   visible id that has no 'World.State.Types.WorldState' at all.
 --
---   The circumference is ALWAYS that page's own. The base angle is that
---   page's own clock too, unless @world.setSunAngle@ is overriding, in
---   which case every page takes the override as its base and keeps its
---   own circumference — the documented meaning of that page-less call
---   ("Engine.Scripting.Lua.API.World.Clock").
-pageSolarInputs ∷ SolarBase → Maybe (Float, Maybe Int) → SolarPageEntry
-pageSolarInputs base minputs = SolarPageEntry
-    { speSunAngle = if sbOverridden base then sbAngle base else ownAngle
+--   @world.setSunAngle@ is deliberately NOT applied here. It is a
+--   render-time override with a lifetime measured in single ticks, and
+--   the table a frame draws may be a tick old, so it is overlaid onto
+--   the table at upload instead
+--   ('Engine.Graphics.Solar.solarUniformEntries').
+pageSolarInputs ∷ Float → Maybe (Float, Maybe Int) → SolarPageEntry
+pageSolarInputs fallbackAngle minputs = SolarPageEntry
+    { speSunAngle = maybe fallbackAngle fst minputs
     , speCircumferenceTiles = circumferenceTilesFor (snd =≪ minputs)
     }
-  where
-    ownAngle = maybe (sbAngle base) fst minputs
 
 -- | A world's u-axis (gx-gy) circumference in tiles.
 --

@@ -57,6 +57,14 @@ solarPagesOffset = 368
 legacyTailPadding ∷ Int
 legacyTailPadding = solarPagesOffset - legacyPayloadSize
 
+-- | The whole block's size, restated from the std140 rules rather than
+--   read off the implementation: the fourteen scalar/matrix members end
+--   at 356, @solarPages@ starts at its own 16-byte-aligned 368 and runs
+--   16 bytes per element, and that already lands on the block's own
+--   16-byte alignment, so nothing is padded after it.
+expectedBlockSize ∷ Int
+expectedBlockSize = solarPagesOffset + 16 * maxSolarPages
+
 -- | The pre-#1072 @poke@, reproduced at its literal offsets. #1869's
 --   member is bound and ignored: this reproduces what the OLD instance
 --   wrote, and the prefix comparison below is exactly the claim that the
@@ -129,19 +137,19 @@ parseBlockMembers src =
 spec ∷ Spec
 spec = do
     describe "std140 metadata" $ do
-        it "reports size 496 and alignment 16, without forcing its argument" $ do
+        it "reports the std140 size and alignment 16, without forcing its argument" $ do
             -- The pair was inconsistent before #1072: alignment 16 against a
             -- sizeOf of 356, which std140 rounds up to 368. Passing `undefined`
             -- is not incidental — Data.Vector.Storable does exactly this, and
             -- these modules are compiled with Strict.
-            sizeOf (undefined ∷ UniformBufferObject) `shouldBe` 496
+            sizeOf (undefined ∷ UniformBufferObject) `shouldBe` expectedBlockSize
             alignment (undefined ∷ UniformBufferObject) `shouldBe` 16
         it "derives that size and alignment, not just reports them" $ do
-            uboStd140Size `shouldBe` 496
+            uboStd140Size `shouldBe` expectedBlockSize
             uboBaseAlignment `shouldBe` 16
-            -- #1869's vec4[8] ends the block on a 16-byte boundary, so
-            -- there is no trailing padding left to pay for.
-            uboPayloadSize `shouldBe` solarPagesOffset + 16 * maxSolarPages
+            -- #1869's vec4 array ends the block on a 16-byte boundary,
+            -- so there is no trailing padding left to pay for.
+            uboPayloadSize `shouldBe` expectedBlockSize
             uboStd140Size - uboPayloadSize `shouldBe` 0
 
     describe "member offsets" $ do

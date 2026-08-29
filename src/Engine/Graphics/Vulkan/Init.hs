@@ -350,7 +350,7 @@ createUniformBuffersForFrames device physicalDevice (width, height) descSets = d
           -- No page is visible at boot, so every solar slot seeds with
           -- the same global pair the page-less path uses (#1869); the
           -- first published frame replaces it.
-          (solarUniformEntries sunAngle worldCirc emptySolarPageTable)
+          (solarUniformEntries solarBase worldCirc emptySolarPageTable)
       uboSize = fromIntegral $ sizeOf uboData
       numFrames = gcMaxFrames defaultGraphicsConfig
 
@@ -362,7 +362,7 @@ createUniformBuffersForFrames device physicalDevice (width, height) descSets = d
                (fromIntegral width) (fromIntegral height)
                (if pixelSnap then 1.0 else 0.0)
                sunAngle ambientLight facing 0 worldCirc
-               (solarUniformEntries sunAngle worldCirc emptySolarPageTable))
+               (solarUniformEntries solarBase worldCirc emptySolarPageTable))
       pure (buffer, memory)
   
   modifyGraphicsState $ \gs → gs {

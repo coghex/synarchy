@@ -389,11 +389,16 @@ updateUniformBufferForFrame frameIdx camera solarTable = do
                               facingFloat
                               (fromIntegral defFmSlot)
                               worldCirc
-                              -- Slots this publication does not describe
-                              -- carry the same global pair a page-less
-                              -- vertex uses, so an out-of-range slot lights
-                              -- like a page-less one rather than by zero.
-                              (solarUniformEntries sunAngle worldCirc solarTable)
+                              -- The LIVE base is passed, not just its
+                              -- angle: a world.setSunAngle override is
+                              -- overlaid onto every page of whatever table
+                              -- this frame is drawing, which may be a tick
+                              -- old. Slots the publication does not
+                              -- describe carry the same global pair a
+                              -- page-less vertex uses, so an out-of-range
+                              -- slot lights like a page-less one rather
+                              -- than by zero.
+                              (solarUniformEntries solarBase worldCirc solarTable)
 
             liftIO $ writeIORef (windowSizeRef env) (winWidth, winHeight)
             liftIO $ writeIORef (framebufferSizeRef env) (fbWidth, fbHeight)

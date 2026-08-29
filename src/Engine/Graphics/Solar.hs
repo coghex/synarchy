@@ -101,15 +101,24 @@ newtype SolarPageTable = SolarPageTable
 emptySolarPageTable ∷ SolarPageTable
 emptySolarPageTable = SolarPageTable V.empty
 
--- | How many pages one frame can attribute individually.
+-- | How many pages one frame can attribute individually — and, because
+--   attributing every visible page is a CONTRACT rather than a
+--   best-effort, how many world pages may be visible at once.
 --
---   The UBO carries exactly this many @vec4@s, so it is a hard cap on
---   both sides. Visible-page sets are one or two pages in every shipped
---   flow; a set larger than this degrades gracefully rather than
---   failing — the pages past the cap fall back to 'solarPageNone', i.e.
---   the pre-#1869 global attribution.
+--   The UBO carries exactly this many @vec4@s, so the render side
+--   cannot describe more; rather than let a further page be lit by
+--   someone else's sun, "World.Thread.Command.UI"'s @world.show@
+--   REFUSES to make one visible past this limit and
+--   "World.Load.Publish" truncates a restored visible set to it, both
+--   with a warning. So the overflow branches downstream of here are
+--   defence in depth, not a policy.
+--
+--   Every shipped flow makes ONE page visible;
+--   @scripts/movement_arena.lua@'s debug helper is the one that reaches
+--   two. Sixteen is far past anything reachable, and costs 256 bytes of
+--   uniform buffer.
 maxSolarPages ∷ Int
-maxSolarPages = 8
+maxSolarPages = 16
 
 -- | The @solarPage@ value meaning \"this vertex belongs to no world
 --   page\": UI and generic scene sprites, and any page past
@@ -129,16 +138,34 @@ solarSlotVertexValue slot
 -- | The table as the UBO's fixed-length @vec4 solarPages[maxSolarPages]@:
 --   @x@ = base angle, @y@ = circumference, @z@\/@w@ unused (reserved).
 --
+--   THE @world.setSunAngle@ OVERRIDE IS APPLIED HERE, at upload, over
+--   whichever table the frame is drawing — not baked into the table
+--   when it is built. The two are published on different threads and at
+--   different rates: the world thread builds a table once per tick and
+--   the renderer may draw the PREVIOUS one, while the very next tick
+--   clears the override. An override baked in at build time would
+--   therefore reach the GPU only if it landed inside the microseconds
+--   between a tick's clock publication and that same tick's table
+--   build, which is to say never. Overlaid here it reaches every page
+--   of whatever table is actually being drawn, for exactly as long as
+--   'sbOverridden' stands.
+--
+--   The overlay replaces the ANGLE only: each page keeps its own
+--   circumference, so the longitude spread across a page is unchanged.
+--
 --   Every unused slot is filled with the caller's global fallback pair
 --   rather than zeroes, so a vertex naming a slot the table does not
 --   describe is lit exactly like a page-less one instead of being
 --   divided by zero. The shader still guards its index; this makes the
 --   guard's outcome meaningful rather than merely safe.
-solarUniformEntries ∷ Float            -- ^ fallback base angle
+solarUniformEntries ∷ SolarBase        -- ^ the frame's live base angle
                     → Float            -- ^ fallback circumference in tiles
                     → SolarPageTable
                     → V.Vector (V4 Float)
-solarUniformEntries fallbackAngle fallbackCirc (SolarPageTable entries) =
+solarUniformEntries base fallbackCirc (SolarPageTable entries) =
     V.generate maxSolarPages $ \i → case entries V.!? i of
-        Just e  → V4 (speSunAngle e) (max 1 (speCircumferenceTiles e)) 0 0
-        Nothing → V4 fallbackAngle (max 1 fallbackCirc) 0 0
+        Just e  → V4 (angleOf (speSunAngle e)) (max 1 (speCircumferenceTiles e)) 0 0
+        Nothing → V4 (sbAngle base) (max 1 fallbackCirc) 0 0
+  where
+    angleOf own | sbOverridden base = sbAngle base
+                | otherwise         = own

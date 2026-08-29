@@ -178,8 +178,9 @@ uboMemberOffsets = reverse (snd (foldl' step (0 ∷ Int, []) uboMembers))
         in (off + memberSize (umType m), off : acc)
 
 -- | Bytes actually occupied by members: the end of the last one, with no
---   trailing padding. 496 today (356 through @worldCircumferenceTiles@,
---   then 12 bytes of alignment padding and @solarPages@' 128).
+--   trailing padding: 356 through @worldCircumferenceTiles@, then 12
+--   bytes of alignment padding and @solarPages@' 16 bytes per
+--   'Engine.Graphics.Solar.maxSolarPages'.
 uboPayloadSize ∷ Int
 uboPayloadSize = foldl' step 0 uboMembers
   where
@@ -194,8 +195,9 @@ uboBaseAlignment =
     alignUp (maximum (1 : map (memberBaseAlignment . umType) uboMembers)) 16
 
 -- | Size of the block, which under std140 is 'uboPayloadSize' rounded up to
---   'uboBaseAlignment' — 496 today, which 'uboPayloadSize' already is a
---   multiple of, so there is no trailing padding at present.
+--   'uboBaseAlignment' — which 'uboPayloadSize' already is a multiple
+--   of while the block ends in a @vec4@ array, so there is no trailing
+--   padding at present.
 --
 --   This is what 'sizeOf' reports, so it is what the engine allocates per
 --   uniform buffer and what it puts in the descriptor's @range@

@@ -43,11 +43,12 @@ import Engine.Core.Capability.RenderView
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import Engine.Core.State (EngineEnv(..))
+import Linear (V4(..))
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..), defaultCamera)
 import Engine.Graphics.Solar
-    ( SolarPageEntry(..), SolarPageTable(..)
+    ( SolarBase, SolarPageEntry(..), SolarPageTable(..)
     , publishedSolar, overriddenSolar, maxSolarPages, solarPageNone
-    , solarSlotVertexValue )
+    , solarSlotVertexValue, solarUniformEntries )
 import Engine.Scene.Types (LayeredQuads(..), SortableQuad(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..))
 import Structure.Types (emptyChunkStructures)
@@ -66,6 +67,7 @@ import World.Save.Component.Page
     , toWorldGenParamsDTO, fromWorldGenParamsDTO )
 import World.State.Types
     (WorldManager(..), WorldState(..), emptyWorldManager, emptyWorldState)
+import World.Thread.Command.UI (handleWorldShowCommand)
 import World.Thread.Time (tickWorldTime)
 import World.Tile.Types (WorldTileData(..), emptyWorldTileData)
 import World.Time.Types (WorldTime(..), worldTimeToSunAngle)
@@ -106,6 +108,24 @@ slotTwo = 2
 
 testFb ∷ (Int, Int)
 testFb = (1920, 1080)
+
+-- | The angle @world.setSunAngle@ forces in the override examples.
+--   Deliberately neither page's own.
+forcedAngle ∷ Float
+forcedAngle = 0.9
+
+-- | The page-LESS fallback circumference the UBO carries beside the
+--   table — what a vertex naming no page divides by.
+fallbackCirc ∷ Float
+fallbackCirc = circumferenceTilesFor Nothing
+
+-- | The first @n@ uploaded @vec4@s, which is what the shader reads.
+uploaded ∷ Int → SolarBase → SolarPageTable → [V4 Float]
+uploaded n base = take n . V.toList . solarUniformEntries base fallbackCirc
+
+-- | The uploaded entry a page with these inputs must produce.
+uploadedEntry ∷ Float → SolarPageEntry → V4 Float
+uploadedEntry angle entry = V4 angle (speCircumferenceTiles entry) 0 0
 
 -- * Fixture geometry
 
@@ -261,6 +281,7 @@ spec = describe "per-page solar attribution (#1869)" $ aroundAll setup $ do
     reorderSpec
     livenessSpec
     degenerateSpec
+    limitSpec
     overrideSpec
     restoreSpec
   where
@@ -289,6 +310,8 @@ assignmentSpec = describe "the slot assignment" $ do
         -- the same 128-chunk default the pre-#1869 global path used.
         circumferenceTilesFor Nothing `shouldBe` fromIntegral (128 * chunkSize)
 
+    -- Unreachable in a running engine — 'limitSpec' below covers why —
+    -- but the assignment stays total over any list it is handed.
     it "gives pages past the table's length the page-less slot" $ \_ → do
         let ids = [ WorldPageId ("page_" <> tshow (100 + i ∷ Int))
                   | i ← [0 .. maxSolarPages] ]
@@ -428,23 +451,98 @@ degenerateSpec = describe "the single-page and empty-visible cases" $ do
             staticSlots quads `shouldBe` []
             lqDynamic quads `shouldSatisfy` V.null
 
+-- | Attributing EVERY visible page is a contract, not a best effort, so
+--   the number of pages that can be visible is the number one frame can
+--   describe. 'World.Thread.Command.UI.handleWorldShowCommand' — which
+--   is also the handler a load restores visibility through — enforces
+--   that, so the page-less overflow branch in 'solarSlotAssignment' is
+--   unreachable rather than a silent degradation.
+limitSpec ∷ SpecWith EngineEnv
+limitSpec = describe "the visible-page limit" $
+
+    it "refuses a show past what one frame can light, so no page overflows" $
+        \env → do
+            logger ← readIORef (loggerRef env)
+            pages ← forM [0 .. maxSolarPages] $ \i → do
+                ws ← emptyWorldState
+                setUpPage ws sizeOne timeOne
+                pure (WorldPageId ("limit_" <> tshow (100 + i ∷ Int)), ws)
+            installPages env terrainCamera [] pages
+            forM_ pages $ \(pid, _) →
+                handleWorldShowCommand (toWorldSimCapability env) logger pid
+            visible ← wmVisible ⊚ readIORef (worldManagerRef env)
+            -- One more page than the table holds was offered…
+            length pages `shouldBe` maxSolarPages + 1
+            -- …and exactly the last one attempted stayed hidden.
+            length visible `shouldBe` maxSolarPages
+            (fst (last pages) `elem` visible) `shouldBe` False
+            -- So every page that IS visible owns a distinct slot.
+            let slots = HM.elems (solarSlotAssignment visible)
+            filter (≡ solarPageNone) slots `shouldBe` []
+            length (nub slots) `shouldBe` maxSolarPages
+
 -- | Requirement 5: what the page-less @world.setSunAngle@ means now.
+--
+--   The override is applied where the table is UPLOADED, not where it
+--   is built. The two happen on different threads at different rates —
+--   the renderer may draw a table a tick old, and the very next tick
+--   clears the override — so an override baked in at build time could
+--   only ever reach the GPU by landing inside the microseconds between
+--   a tick publishing its clock and that same tick building its table.
 overrideSpec ∷ SpecWith EngineEnv
 overrideSpec = describe "world.setSunAngle's override window" $ do
 
-    it "gives every page the override as its base, keeping its own circumference" $
+    it "is not baked into the published table" $ \env → do
+        _ ← resetScene env terrainCamera [pageOne, pageTwo]
+        writeIORef (sunAngleRef env) (overriddenSolar forcedAngle)
+        quads ← updateWorldTiles env
+        tableOf quads `shouldBe` [entryOne, entryTwo]
+
+    it "overlays every page of the table the frame is actually drawing" $
         \env → do
             _ ← resetScene env terrainCamera [pageOne, pageTwo]
-            let forced = 0.9
-            writeIORef (sunAngleRef env) (overriddenSolar forced)
-            quads ← updateWorldTiles env
-            tableOf quads `shouldBe`
-                [ entryOne { speSunAngle = forced }
-                , entryTwo { speSunAngle = forced } ]
+            -- Published FIRST; the override arrives afterwards, which is
+            -- the only ordering a Lua caller can reliably produce.
+            published ← updateWorldTiles env
+            writeIORef (sunAngleRef env) (overriddenSolar forcedAngle)
+            base ← readIORef (sunAngleRef env)
+            uploaded 2 base (lqSolar published) `shouldBe`
+                [ uploadedEntry forcedAngle entryOne
+                , uploadedEntry forcedAngle entryTwo ]
+
+    it "keeps each page's own circumference while it stands" $ \env → do
+        _ ← resetScene env terrainCamera [pageOne, pageTwo]
+        published ← updateWorldTiles env
+        let forced = uploaded 2 (overriddenSolar forcedAngle) (lqSolar published)
+        map (\(V4 _ circ _ _) → circ) forced
+            `shouldBe` [ speCircumferenceTiles entryOne
+                       , speCircumferenceTiles entryTwo ]
+        -- Non-vacuous: the two circumferences differ, so "kept its own"
+        -- is a real claim.
+        speCircumferenceTiles entryOne
+            `shouldNotBe` speCircumferenceTiles entryTwo
+
+    it "leaves every page on its own angle while none stands" $ \env → do
+        _ ← resetScene env terrainCamera [pageOne, pageTwo]
+        published ← updateWorldTiles env
+        uploaded 2 (publishedSolar (worldTimeToSunAngle timeOne))
+                 (lqSolar published)
+            `shouldBe` [ uploadedEntry (speSunAngle entryOne) entryOne
+                       , uploadedEntry (speSunAngle entryTwo) entryTwo ]
+
+    it "fills slots the publication does not describe with the page-less pair" $
+        \env → do
+            _ ← resetScene env terrainCamera [pageOne]
+            published ← updateWorldTiles env
+            let base = publishedSolar (worldTimeToSunAngle timeOne)
+                rest = drop 1 (uploaded maxSolarPages base (lqSolar published))
+            rest `shouldBe` replicate (maxSolarPages - 1)
+                (V4 (worldTimeToSunAngle timeOne) fallbackCirc 0 0)
 
     it "lasts until the next visible-page clock publication" $ \env → do
         _ ← resetScene env terrainCamera [pageOne, pageTwo]
-        writeIORef (sunAngleRef env) (overriddenSolar 0.9)
+        published ← updateWorldTiles env
+        writeIORef (sunAngleRef env) (overriddenSolar forcedAngle)
         -- A world tick with the clock frozen: it advances nothing, and
         -- republishing the head page's angle is the whole of what ends
         -- the override.
@@ -452,8 +550,9 @@ overrideSpec = describe "world.setSunAngle's override window" $ do
         tickWorldTime env 0
         base ← readIORef (sunAngleRef env)
         base `shouldBe` publishedSolar (worldTimeToSunAngle timeOne)
-        quads ← updateWorldTiles env
-        tableOf quads `shouldBe` [entryOne, entryTwo]
+        uploaded 2 base (lqSolar published) `shouldBe`
+            [ uploadedEntry (speSunAngle entryOne) entryOne
+            , uploadedEntry (speSunAngle entryTwo) entryTwo ]
 
 -- | Requirement 4. A real save carries a page's clock and its generated
 --   size through 'PageCoreDTO'; this puts both pages' through that

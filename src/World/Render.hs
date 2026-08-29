@@ -16,7 +16,7 @@ import Engine.Core.Capability.RenderView
   (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Scene.Types (LayeredQuads(..), mergeSortedQuads, sortQuadsByLayer
                           , stampSolarPage)
-import Engine.Graphics.Solar (SolarPageTable, solarPageNone)
+import Engine.Graphics.Solar (SolarBase(..), SolarPageTable, solarPageNone)
 import World.Render.Solar (solarSlotAssignment, buildSolarPageTable)
 import qualified Data.HashMap.Strict as HM
 import Engine.Graphics.Camera (Camera2D(..))
@@ -271,9 +271,11 @@ updateWorldTiles env = do
 --   Both are derived from the SAME visible list in one read, so the
 --   stamps a frame's quads carry and the table published beside them
 --   can never describe different page sets. The base angle comes from
---   'wsSunAngleRef', which is what makes @world.setSunAngle@'s override
---   reach every page (see "Engine.Scripting.Lua.API.World.Clock"); each
---   page's own clock and world size come from its own 'WorldState'.
+--   'wsSunAngleRef' and stands in only for a visible id with no page
+--   state; each real page's own clock and world size come from its own
+--   'WorldState'. @world.setSunAngle@ is NOT applied here — it is
+--   overlaid onto whichever table the frame draws, at upload
+--   ('Engine.Graphics.Solar.solarUniformEntries').
 buildFrameSolar ∷ EngineEnv → WorldManager
                 → IO (WorldPageId → Word32, SolarPageTable)
 buildFrameSolar env worldManager = do
@@ -289,5 +291,6 @@ buildFrameSolar env worldManager = do
                     ( pageId
                     , (worldTimeToSunAngle wt, wgpWorldSize ⊚ mParams) )
     let slots = solarSlotAssignment visible
-        table = buildSolarPageTable solarBase (`HM.lookup` pageInputs) visible
+        table = buildSolarPageTable (sbAngle solarBase)
+                                    (`HM.lookup` pageInputs) visible
     return (\pageId → HM.lookupDefault solarPageNone pageId slots, table)
