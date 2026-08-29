@@ -83,6 +83,11 @@ units:
       # craft_job already use) is how a kitchen gets restocked.
       - { item: "water",           count: 20 }
       - { item: "coffee_grounds",  count: 20 }
+      # Starting expedition equipment (#1855): one field toolbox, which
+      # spawns already holding its three hand tools (see
+      # field_toolbox.yaml). 2.60 kg loaded — the tools are NOT carried
+      # loose; they only exist as the box's nested contents.
+      - { item: "field_toolbox",   count: 1 }
 
     # 8-part quadruped anchored to ~1.5 m shoulder height
     # (canine layout, scaled up).
