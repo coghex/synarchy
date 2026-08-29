@@ -365,9 +365,14 @@ python3 tools/world_check.py --quick
 # --resource-root on every boot, release on a pass, a phase-0 return, an
 # exception and a boot abort, residue as a failing check, a pre-existing
 # same-named save slot left byte-identical, and a read-only checkout
-# still yielding a removable tree. That probe is manual-only needs-gpu,
-# so without this companion the contract is only ever observed by a GPU
-# run neither gate can make; the companion boots nothing.
+# still yielding a removable tree. It also carries #1746's second
+# contract for the same probe: both of that probe's saves return the
+# API's own acceptance Boolean and then wait for their OWN request id to
+# reach SaveCaptureComplete, and a save that is refused, never reports a
+# request id, fails or times out suppresses every session that would
+# read the slot. That probe is manual-only needs-gpu, so without this
+# companion both contracts are only ever observed by a GPU run neither
+# gate can make; the companion boots nothing.
 # test_location_probe_config_isolation is #1729's: the private `config/`
 # tree tools/location_content_probe.py, location_overlay_probe.py and
 # location_stamp_idempotent_probe.py each stage, and that
@@ -449,6 +454,20 @@ python3 tools/world_check.py --quick
 # (item.getGroundForUnit, #1666) resolution contract and the plot-tile
 # scoping. That probe is manual-only and takes about eleven minutes;
 # this boots nothing.
+# test_probe_boot_logs is #1763's: tools/preview_probe.py and
+# tools/offscreen_probe.py each launch several engines in one run, and
+# probelib.boot opens its log truncating, so launches sharing a path
+# used to destroy each other's capture -- preview kept only the last of
+# about twenty-two, and offscreen's port-reusing restart overwrote the
+# long session that preceded it. This companion pins the allocation and
+# reporting halves: a distinct path per launch including a repeated
+# phase, earlier captures intact under a truncating open, the
+# three-engine lifecycle with its restart, a phase-to-path map that
+# survives a boot which exits before READY, and no preview call site
+# falling back to the shared per-port default. Both probes need a GPU
+# and are manual-only, so without this companion a re-shared log would
+# only ever be noticed by a dev-machine run; the companion boots
+# nothing.
 #
 # tools/test_deflake_diagnosis.py (#1437) is deliberately absent from
 # this list as well, and from the CI job it mirrors: that issue's
@@ -475,6 +494,7 @@ python3 tools/test_probe_root_cleanup.py
 python3 tools/test_flora_growth_probe.py
 python3 tools/test_movement_probe.py
 python3 tools/test_farm_ai_probe.py
+python3 tools/test_probe_boot_logs.py
 
 # The decision .github/workflows/review-gate.yml makes on every
 # synchronize push: keep `reviewed:approve` only when the push left the
