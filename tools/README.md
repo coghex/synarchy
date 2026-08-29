@@ -883,12 +883,18 @@ artifact resolves to a legacy `/tmp` name; the tree is released after a
 pass, an early return, an exception, a `probelib.boot` abort and a handled
 Ctrl-C; `--keep-artifacts` is opt-in, keeps whatever result the run's own
 checks produced, names where the artifacts are, and reports only what that
-run ACTUALLY produced (a pre-READY failure's retained tree is described as
-empty, not as holding fixtures and a save slot); a default failing run says
-its log went with the tree and points at the flag rather than leaving the
-operator chasing a deleted path; a cleanup that cannot finish makes an
-otherwise passing run non-zero; and an outside directory holding
-same-named decoys comes through byte-identical. It also pins what the
+run ACTUALLY produced (a directory that was never created — a tree whose
+staging failed part-way — says so, rather than being reported as empty); a
+default failing run says its log went with the tree and points at the flag
+rather than leaving the operator chasing a deleted path; a cleanup that
+cannot finish makes an otherwise passing run non-zero; a read-only
+checkout still yields a REMOVABLE tree, with the source's own modes
+untouched (`copytree` reproduces the source's mode bits, so a read-only
+`config/` would otherwise give this run a private copy whose entries
+cannot be unlinked — residue from a source it only read; the
+`_make_owner_writable` treatment is `location_embark_probe.py`'s, #1569);
+and an outside directory holding same-named decoys comes through
+byte-identical. It also pins what the
 probe still proves after the move: the registration ORDER placement hashes
 are indexed by — the sorted shipped flora, then `probe_berry`, then
 `probe_clover` — both fixture bodies by `sha256`, and `load_fixture_yaml`

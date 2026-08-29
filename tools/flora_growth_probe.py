@@ -44,12 +44,47 @@ retains the directory instead, and names it, for diagnosing a failure.
 Usage: python3 tools/flora_growth_probe.py [--port 9186] [--seed 42]
        [--size 64] [--plates 3] [--keep-artifacts]
 """
-import argparse, glob, os, shutil, socket, subprocess, sys, tempfile, time, uuid
+import argparse, glob, os, shutil, socket, stat, subprocess, sys, tempfile, \
+       time, uuid
 from probelib import (FixtureNotRegistered, boot, capture_request_id,
                       load_fixture_yaml, quit_engine, send, send_json,
                       wait_load_published, wait_save_complete)
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _make_owner_writable(top: str) -> None:
+    """Add owner write (and directory search) permission throughout a
+    freshly copied tree.
+
+    `shutil.copytree` reproduces the SOURCE's mode bits, so a checkout
+    whose `config/` is read-only — a CI cache restored read-only, a
+    read-only mount, an archive unpacked without write bits — yields a
+    private `config/` this run cannot use and cannot delete: a directory
+    needs owner write+search before any of its entries can be unlinked,
+    so `release_artifacts` would report residue and leave the whole tree
+    behind on a run that did nothing wrong. That matters more since
+    #1682 than it did under #1616, because the tree now holds this
+    run's fixtures and engine log as well as its saves. The copy is THIS
+    invocation's, so it is made writable regardless of what the source
+    happened to be; the source itself is never touched. Same treatment
+    `tools/location_embark_probe.py` gives its own copy (#1569).
+    """
+    for path, dirs, files in os.walk(top):
+        for name in [None, *dirs, *files]:
+            target = path if name is None else os.path.join(path, name)
+            try:
+                mode = os.lstat(target).st_mode
+                if stat.S_ISLNK(mode):
+                    continue
+                extra = stat.S_IRWXU if stat.S_ISDIR(mode) \
+                    else stat.S_IRUSR | stat.S_IWUSR
+                os.chmod(target, stat.S_IMODE(mode) | extra)
+            except OSError:
+                # Best effort: a mode this process cannot change is
+                # reported by the cleanup that actually trips over it,
+                # with the path it failed on, rather than here.
+                pass
 
 
 class RunArtifacts:
@@ -109,6 +144,7 @@ class RunArtifacts:
         if not os.path.exists(config_dst):
             shutil.copytree(os.path.join(REPO, "config"), config_dst,
                             ignore=shutil.ignore_patterns("*.local.yaml"))
+            _make_owner_writable(config_dst)
         os.makedirs(os.path.join(self.root, "saves"), exist_ok=True)
         os.makedirs(self.logs, exist_ok=True)
         os.makedirs(self.fixtures, exist_ok=True)
@@ -126,6 +162,24 @@ class RunArtifacts:
         handed to the ENGINE, which has chdir'd into `root`, so it is
         absolute for the same reason it always was."""
         return os.path.join(self.fixtures, f"{name}.yaml")
+
+
+def _describe_held(path: str) -> str:
+    """How the retention summary describes one artifact directory.
+
+    A path that does not EXIST is not the same as one that is empty: a
+    run that failed part-way through staging never created it, and
+    calling it empty would send the reader looking for a directory that
+    is not there — the same mistake as naming artifacts a failure is the
+    reason the run does not have.
+    """
+    if not os.path.exists(path):
+        return " (never created — the run ended before staging reached it)"
+    try:
+        held = sorted(os.listdir(path))
+    except OSError as exc:
+        return f" (unreadable: {exc})"
+    return f" ({', '.join(held)})" if held else " (empty)"
 
 
 def release_artifacts(art: RunArtifacts, keep: bool) -> bool:
@@ -156,13 +210,10 @@ def release_artifacts(art: RunArtifacts, keep: bool) -> bool:
         for label, path in (("engine log", art.logs),
                             ("fixtures", art.fixtures),
                             ("saves", os.path.join(art.root, "saves"))):
-            try:
-                held = sorted(os.listdir(path))
-            except OSError:
-                held = []
-            print(f"  {label:14} {path}"
-                  + (f" ({', '.join(held)})" if held else " (empty)"))
-        print(f"  {'resource root':14} {art.root}")
+            print(f"  {label:14} {path}{_describe_held(path)}")
+        print(f"  {'resource root':14} {art.root}"
+              + ("" if os.path.isdir(art.root)
+                 else " (never created)"))
         return True
     try:
         shutil.rmtree(art.base)

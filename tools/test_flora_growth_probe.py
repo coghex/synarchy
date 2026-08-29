@@ -20,7 +20,7 @@ fixture between another's write and the engine-side read of it while both
 interleaved into one truncated log. #1616 had already moved the SAVE slot
 into an invocation-owned root and explicitly left these behind.
 
-Seven properties are asserted directly rather than inferred, because each
+Nine properties are asserted directly rather than inferred, because each
 is a way the probe would leak, collide, or stop proving what it claims:
 
   * Two invocations share no path — not the fixtures, not the log, not
@@ -36,6 +36,14 @@ is a way the probe would leak, collide, or stop proving what it claims:
   * A default failing run says its log went with the tree and points at
     the flag, instead of leaving the operator chasing a deleted path.
   * Cleanup that cannot finish makes an otherwise passing run non-zero.
+  * A read-only checkout still yields a REMOVABLE tree. `copytree`
+    reproduces the source's mode bits, so a read-only `config/` would
+    otherwise produce a private copy whose entries cannot be unlinked —
+    residue, and a failing run, from a source the probe only read — and
+    the source's own modes stay exactly as they were.
+  * A staging failure's retained tree names no artifact that does not
+    exist: a directory that was never created is reported as such, not
+    as empty.
   * Registration ORDER is unchanged — the sorted real flora, then
     `probe_berry`, then `probe_clover` — because placement hashes are
     indexed by it; both fixture bodies are byte-for-byte what they were;
@@ -225,6 +233,94 @@ def test_release_does_not_follow_the_content_symlinks() -> None:
         expect(not os.path.exists(art.base), "the run's own tree is gone")
         expect(sorted(os.listdir(os.path.join(probe.REPO, "scripts"))) == before,
                "the real scripts/ is untouched — rmtree unlinked the symlink")
+
+
+@contextlib.contextmanager
+def read_only_checkout():
+    """A stand-in checkout whose `config/` (and a subdirectory of it) is
+    mode 0555, with `probe.REPO` pointed at it.
+
+    `shutil.copytree` reproduces the source's mode bits, so this is what
+    a read-only checkout — a CI cache restored read-only, a read-only
+    mount, an archive unpacked without write bits — hands the run: a
+    private `config/` whose entries cannot be unlinked. Always restored
+    to writable before teardown, so the fixture can remove itself.
+    """
+    repo = tempfile.mkdtemp(prefix="test_flora_growth_ro_repo_")
+    for family in ("scripts", "assets", "data"):
+        os.makedirs(os.path.join(repo, family))
+    config = os.path.join(repo, "config")
+    os.makedirs(os.path.join(config, "nested"))
+    for path in (os.path.join(config, "video_default.yaml"),
+                 os.path.join(config, "nested", "extra_default.yaml")):
+        with open(path, "w") as handle:
+            handle.write("tracked: default\n")
+        os.chmod(path, 0o444)
+    os.chmod(os.path.join(config, "nested"), 0o555)
+    os.chmod(config, 0o555)
+    original = probe.REPO
+    probe.REPO = repo
+    try:
+        yield repo
+    finally:
+        probe.REPO = original
+        for path, dirs, _files in os.walk(repo):
+            os.chmod(path, 0o755)
+            for name in dirs:
+                os.chmod(os.path.join(path, name), 0o755)
+        shutil.rmtree(repo, ignore_errors=True)
+
+
+def test_a_read_only_checkout_still_yields_a_removable_tree() -> None:
+    print("\ntest_a_read_only_checkout_still_yields_a_removable_tree")
+    with read_only_checkout():
+        art = probe.RunArtifacts(
+            tempfile.mkdtemp(prefix="test_flora_growth_ro_"))
+        try:
+            art.build()
+            config = os.path.join(art.root, "config")
+            expect(os.access(config, os.W_OK | os.X_OK),
+                   "the private config/ is writable by this run even though "
+                   "the source was not")
+            expect(os.access(os.path.join(config, "nested"), os.W_OK | os.X_OK),
+                   "...and so is a nested config directory")
+            expect(os.access(os.path.join(config, "video_default.yaml"),
+                             os.W_OK),
+                   "...and a copied config file, which the engine rewrites "
+                   "when it saves settings")
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                released = probe.release_artifacts(art, keep=False)
+            expect(released and not os.path.exists(art.base),
+                   f"the run removes its own tree instead of reporting "
+                   f"residue (said {out.getvalue().strip()!r})")
+        finally:
+            for path, dirs, _files in os.walk(art.base):
+                os.chmod(path, 0o755)
+                for name in dirs:
+                    os.chmod(os.path.join(path, name), 0o755)
+            shutil.rmtree(art.base, ignore_errors=True)
+
+
+def test_the_read_only_source_itself_is_never_modified() -> None:
+    print("\ntest_the_read_only_source_itself_is_never_modified")
+    with read_only_checkout() as repo:
+        config = os.path.join(repo, "config")
+        watched = (config, os.path.join(config, "nested"),
+                   os.path.join(config, "video_default.yaml"))
+        before = {path: os.stat(path).st_mode for path in watched}
+        art = probe.RunArtifacts(
+            tempfile.mkdtemp(prefix="test_flora_growth_ro2_"))
+        try:
+            art.build()
+            with contextlib.redirect_stdout(io.StringIO()):
+                probe.release_artifacts(art, keep=False)
+            after = {path: os.stat(path).st_mode for path in watched}
+            expect(before == after,
+                   "the checkout's own modes are untouched — only this "
+                   "run's copy is relaxed")
+        finally:
+            shutil.rmtree(art.base, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------
@@ -420,6 +516,47 @@ def test_retention_reports_what_the_run_actually_produced() -> None:
         expect("(empty)" not in text, "...and reports nothing as empty")
 
 
+def test_retention_after_a_staging_failure_names_nothing_absent() -> None:
+    print("\ntest_retention_after_a_staging_failure_names_nothing_absent")
+    # `build()` stages incrementally, so a permission, source or
+    # disk-space failure part-way through leaves a tree whose log,
+    # fixture and saves directories were never created. Reporting those
+    # as "(empty)" would name artifacts that do not exist at all.
+    base = tempfile.mkdtemp(prefix="test_flora_growth_partial_")
+    art = probe.RunArtifacts(base)
+    try:
+        os.makedirs(art.root)  # staging died right after the root itself
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            expect(probe.release_artifacts(art, keep=True),
+                   "retention after a staging failure is not a cleanup "
+                   "failure")
+        text = out.getvalue()
+        expect("(empty)" not in text,
+               f"a directory that was never created is not reported as "
+               f"empty (got {text!r})")
+        expect(text.count("never created") == 3,
+               f"each of the three absent artifact directories says so "
+               f"(got {text.count('never created')})")
+        expect(art.root in text and "resource root" in text,
+               "the root that DOES exist is still named")
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+    # And the mirror image: a tree staged all the way through, with
+    # nothing written into it yet, really is empty rather than absent.
+    with fresh_run() as art:
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            probe.release_artifacts(art, keep=True)
+        text = out.getvalue()
+        expect("never created" not in text,
+               "a fully staged tree reports no directory as missing")
+        expect(text.count("(empty)") == 3,
+               f"...and its three empty directories as empty "
+               f"(got {text.count('(empty)')})")
+
+
 # ---------------------------------------------------------------------
 # What the probe still proves
 # ---------------------------------------------------------------------
@@ -531,6 +668,8 @@ def main() -> int:
     test_no_artifact_keeps_a_legacy_fixed_tmp_name()
     test_release_never_touches_what_the_run_did_not_create()
     test_release_does_not_follow_the_content_symlinks()
+    test_a_read_only_checkout_still_yields_a_removable_tree()
+    test_the_read_only_source_itself_is_never_modified()
     test_a_passing_run_leaves_nothing()
     test_an_early_return_still_releases()
     test_an_exception_mid_run_still_releases()
@@ -540,6 +679,7 @@ def main() -> int:
     test_retention_keeps_a_passing_run_passing()
     test_retention_keeps_a_failing_run_failing()
     test_retention_reports_what_the_run_actually_produced()
+    test_retention_after_a_staging_failure_names_nothing_absent()
     test_the_fixture_bodies_are_byte_for_byte_unchanged()
     test_bootstrap_loads_real_flora_then_berry_then_clover()
     test_a_rejected_fixture_still_stops_the_probe_at_setup()
