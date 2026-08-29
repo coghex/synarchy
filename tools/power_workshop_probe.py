@@ -92,6 +92,12 @@ What it does (all against a single flat arena):
      issue's "Done when" calls for, driven by a real ACTIVE job's draw,
      not a synthetic map entry.
 
+The AI end-to-end step's two polls (claim, then working) are the only
+checks here that can expire, and a timeout used to print one bare
+[FAIL] line with nothing about why. Each now captures a four-family
+diagnostic bundle first — see craft_timeout_bundle (#1758). A passing
+run prints nothing extra.
+
 Usage: python3 tools/power_workshop_probe.py [--port 9361]
 Exit 0 = every check passed.
 """
@@ -99,6 +105,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import json
 import os
 import socket
 import subprocess
@@ -309,6 +316,64 @@ def first_network(port: int):
 def drain_of(port: int) -> float | None:
     net = first_network(port)
     return net.get("drainW") if isinstance(net, dict) else None
+
+
+TIMEOUT_BUNDLE_FAMILIES = ("bill", "network", "aiState", "position")
+
+
+def craft_timeout_bundle(port: int, bill_id, uid: int) -> dict:
+    """The state that classifies an expired step-6 AI poll (#1758).
+
+    The two polls narrow their query to one field (``claimant`` /
+    ``working``), so a timeout used to leave nothing behind. This keeps
+    the WHOLE record of every query it makes, and adds the one axis the
+    polls never read: the craft_job AI's own ``phase``.
+
+    Four state families, one console round trip each — ``craft.getBill``,
+    ``power.listNetworks`` and ``unit.getInfo`` each return their whole
+    record in a single call, so this is as close to one observation as
+    the debug console allows. Read-only throughout: it must not perturb
+    the scenario it is describing.
+
+    Every family key is written unconditionally, and each Lua-side field
+    falls back to ``false`` rather than ``nil``. Lua drops nil fields on
+    the way out, so an absent value would otherwise vanish from the
+    bundle entirely and read as "not captured" instead of "the engine
+    had nothing there".
+
+    Reading ``phase`` locates where the worker was SAMPLED, not
+    necessarily the root cause — ``scripts/unit_ai_craft.lua`` clears a
+    craft job on cancellation, reassignment, an off-page station, or
+    failed sourcing, so an absent ``craftJob`` does not prove the bill
+    was never selected.
+    """
+    return {
+        "bill": send_json(port, f"return craft.getBill({bill_id})"),
+        "network": first_network(port),
+        "aiState": send_json(port,
+            f"local s = require('scripts.unit_ai').getState({uid}); "
+            f"if not s then return nil end; local j = s.craftJob; "
+            f"return {{currentAction = s.currentAction or false, "
+            f"craftJob = j ~= nil, "
+            f"phase = j and j.phase or false, "
+            f"billId = j and j.billId or false, "
+            f"station = j and j.bid or false}}"),
+        "position": send_json(port, f"return unit.getInfo({uid})"),
+    }
+
+
+def emit_timeout_bundle(bundle) -> None:
+    """Print a captured `craft_timeout_bundle` beneath its [FAIL] line.
+
+    ``None`` means the poll succeeded, so a passing run's output is
+    byte-identical to before (#1758). One line per family, always all
+    four, so a missing family reads as an explicit ``null``.
+    """
+    if bundle is None:
+        return
+    for family in TIMEOUT_BUNDLE_FAMILIES:
+        print(f"    (debug) {family}: "
+              f"{json.dumps(bundle.get(family), sort_keys=True)}")
 
 
 def powered_for_recipe(port: int, bid: int, recipe: str) -> str:
@@ -591,7 +656,13 @@ def main() -> int:
         claimed = poll(port, 20, lambda: send_json(
             port, f"local b = craft.getBill({bill_id}); "
                   f"return b and b.claimant or -1") == uid)
+        # #1758: on a timeout, sample the classifying state HERE —
+        # before the working poll below sends another thing at the
+        # engine — and print it under the failure.
+        claim_bundle = (None if claimed
+                        else craft_timeout_bundle(port, bill_id, uid))
         passed = check(passed, claimed, "AI claims the bill")
+        emit_timeout_bundle(claim_bundle)
 
         # The station is a couple of tiles away, so fetch/walking is
         # brief but real — poll for the AI to actually reach "working"
@@ -600,7 +671,11 @@ def main() -> int:
         working = poll(port, 20, lambda: send_json(
             port, f"local b = craft.getBill({bill_id}); "
                   f"return b and b.working or false") is True)
+        # #1758: likewise — capture before the drain read that follows.
+        working_bundle = (None if working
+                          else craft_timeout_bundle(port, bill_id, uid))
         passed = check(passed, working, "AI reaches the working phase")
+        emit_timeout_bundle(working_bundle)
         passed = check(passed,
             drain_of(port) == PROBE_DRAIN_W,
             "drainW == 150W once the AI is actively working the bill",
