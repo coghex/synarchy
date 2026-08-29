@@ -500,8 +500,10 @@ library
                      Building.Placement
                      Building.HitTest
                      Structure.Types
+                     Structure.ArtCatalog
                      Structure.Facing
                      Structure.WallCatalog
+                     Structure.Wire
                      Structure.Render
                      Engine.Asset.YamlBuildings
                      Engine.Scripting.Lua.API.Buildings
@@ -513,6 +515,7 @@ library
                      Engine.Scripting.Lua.API.Buildings.Query
                      Engine.Scripting.Lua.API.Buildings.Selection
                      Engine.Scripting.Lua.API.Structure
+                     Engine.Scripting.Lua.API.StructureArt
                      Engine.Scripting.Lua.API.Construct
                      Engine.Scripting.Lua.API.Chop
                      Engine.Scripting.Lua.API.Till
@@ -718,6 +721,7 @@ library
                      World.Geology.Ore
                      World.Geology.Ore.Types
                      World.Mine.Types
+                     World.Construct.Art
                      World.Construct.Types
                      World.Construct.Apply
                      World.Chop.Types
@@ -1170,6 +1174,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.DesignationSeam
                    Test.Headless.World.StructureStage
                    Test.Headless.World.StructurePaletteResidue
+                   Test.Headless.Structure.ArtCatalog
                    Test.Headless.World.Spoil
                    Test.Headless.World.RenderedSurface
                    Test.Headless.World.IslandColumns
