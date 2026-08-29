@@ -37,7 +37,7 @@ No GitHub duplicate search was performed; that belongs to `process-report`.
 - [x] BUG-3. Headless boot survives without its only control listener — [#1190]
 - [x] BUG-4. Dump CLI silently substitutes defaults for malformed arguments — [#1191]
 - [x] BUG-5. Action-outcome audit fails strict Python warning compilation — [#1192]
-- [ ] BUG-6. Adding a concept id can change an existing concept's generated root
+- [x] BUG-6. Adding a concept id can change an existing concept's generated root — [#1868]
 
 ---
 
@@ -260,7 +260,7 @@ warning before normal output. `python3 -W error::SyntaxWarning -m compileall
 
 ## Generated languages and naming
 
-### BUG-6. Adding a concept id can change an existing concept's generated root
+### [#1868] BUG-6. Adding a concept id can change an existing concept's generated root
 
 > **Captured note:** Adding a new concept id to data/language/concepts.yaml can change an EXISTING concept's generated native root, because Language.Generated.Root.assignRoots folds over `sort ids` and resolves collisions against roots already placed. A newly added id that sorts earlier can claim a root an existing concept would have taken, forcing that existing concept to reroll to attempt+1. Reproduced via `cabal repl lib:synarchy`: on language seed 1337 (currentGeneratorVersion 5, 151 shipped concepts), adding one probe id changed GATE's root from "jyk" to "lhirav", and another changed ENVY's from "vra" to "jha" — 2 of 60 single-id probe additions; 0 of 60 on seeds 42, 7, 99 and 2718. Consequence: a previously persisted EtymologySource naming that concept no longer rebuilds to the stored name, so Language.Etymology's surface check (`rebuilt ≢ storedName`) reports EtySurfaceMismatch and the etymology reads as unavailable. Names themselves are unaffected — they are write-once (#1101). This contradicts src/Language/Semantic/Types.hs:8-12, which says ids "may be added, never renamed or reused" — i.e. ADDITION is presented as the safe operation, and it is not root-stable. Not ready to be an issue: the fix needs a design decision between (1) making assignment order-independent, which changes roots for existing seeds and needs a currentGeneratorVersion bump 5→6; (2) detecting rather than fixing, via a check that recomputes roots across a fixed seed panel before/after a catalogue change and fails when an existing concept's root moves; or (3) accepting and documenting additions as best-effort for etymology, which contradicts the stated contract. Related: #710 (root derivation), #713 (add-only rule), #1104 (persisted EtymologySource), #1717 (inventory ratchet — explicitly out of scope there), #1383/#1385 (pinned name vectors, a partial backstop covering only 6 of 151 concepts on one provenance).
 

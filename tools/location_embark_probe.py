@@ -89,6 +89,7 @@ import sys
 import tempfile
 import time
 import traceback
+from typing import NamedTuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from probelib import (boot, capture_request_id, clear_find_water, poll_until,
@@ -566,8 +567,41 @@ def locate_unit_pixel(port: int, uid: int, w: int, h: int,
     return (x1 + x2) // 2, (y1 + y2) // 2
 
 
+def live_selection(port: int) -> tuple[set[int], str]:
+    """The engine's CURRENT unit selection as a set of uids, beside the
+    raw text `unit.getSelected()` answered with.
+
+    The raw text is carried alongside deliberately: it is what the
+    failure diagnostics below quote, and quoting the parsed set instead
+    would hide the difference between an empty selection, a malformed
+    reply and a console error."""
+    raw = (send(port, "return unit.getSelected()") or "").strip()
+    return {int(n) for n in re.findall(r"\d+", raw)}, raw
+
+
+class SelectionOutcome(NamedTuple):
+    """What a `select_unit_via_click` run actually observed, not just
+    whether it worked.
+
+    `observed` is the LAST `unit.getSelected()` reply the run saw, and
+    `None` means no selection query was ever performed — the state a
+    zero-attempt (or never-located) run ends in, which is a different
+    fact from "the engine answered with an empty selection" and is
+    reported as such (#1770)."""
+    ok: bool
+    observed: str | None
+    clicks: int
+
+    def describe(self, uid: int) -> str:
+        if self.observed is None:
+            return (f"requested uid {uid}; no selection query performed "
+                    f"({self.clicks} click(s) issued)")
+        return (f"requested uid {uid}; unit.getSelected() last returned "
+                f"{self.observed!r} after {self.clicks} click(s)")
+
+
 def select_unit_via_click(port: int, uid: int, w: int, h: int,
-                           attempts: int = 5) -> bool:
+                           attempts: int = 5) -> SelectionOutcome:
     """Select the roster acolyte via a REAL `input.click`, located by
     `locate_unit_pixel` and confirmed via `unit.getSelected()` — the
     same player-facing left-click path `scripts/init_mouse.lua` routes
@@ -579,7 +613,20 @@ def select_unit_via_click(port: int, uid: int, w: int, h: int,
     out from under the shrinking box between successive
     `hitTestInRect` round trips) and converge on a stale pixel a real
     click then misses — the same risk `ensure_mobile` above already
-    accepts and retries around for the unit's spawn-formation walk."""
+    accepts and retries around for the unit's spawn-formation walk.
+
+    Success is the selection being EXACTLY `uid`, the same predicate
+    `require_selection` re-checks before every order below, so the two
+    cannot drift: a plain left click on a unit routes to `unit.select`,
+    which REPLACES the selection (`scripts/init_mouse.lua:313-334` —
+    only the Shift branch merges), so one uid is the real outcome of
+    the gesture under test rather than a stricter reading of it.
+
+    Returns a `SelectionOutcome` rather than a bare bool: the caller
+    treats a failure as a blocking precondition and has to be able to
+    report what the selection query answered with (#1770)."""
+    observed: str | None = None
+    clicks = 0
     for _ in range(attempts):
         pixel = locate_unit_pixel(port, uid, w, h)
         if not pixel:
@@ -587,11 +634,30 @@ def select_unit_via_click(port: int, uid: int, w: int, h: int,
         px, py = pixel
         send(port, f"return input.moveMouse({px}, {py})")
         send(port, f"return input.click({px}, {py}, 'left')")
+        clicks += 1
         time.sleep(0.2)
-        selected = send(port, "return unit.getSelected()")
-        if str(uid) in re.findall(r"\d+", selected):
-            return True
-    return False
+        ids, observed = live_selection(port)
+        if ids == {uid}:
+            return SelectionOutcome(True, observed, clicks)
+    return SelectionOutcome(False, observed, clicks)
+
+
+def require_selection(port: int, uid: int, what: str) -> bool:
+    """Gate a real right-click move order on the live selection being
+    EXACTLY `uid`.
+
+    `order_move_to` below takes no uid at all:
+    `scripts/init_mouse.lua`'s right-click handler reads the selection
+    at dispatch time and orders EVERY selected unit, while this phase's
+    visibility polls are pinned to one. Asserting the identity
+    immediately before each order is what makes "the orders and the
+    assertions concern the same unit" a checked fact for the whole
+    phase rather than an assumption a stray click, a deselect or a
+    death could quietly break (#1770)."""
+    ids, raw = live_selection(port)
+    return check(f"the live selection is exactly uid {uid} before {what}",
+                 ids == {uid},
+                 f"unit.getSelected() returned {raw!r}")
 
 
 def wait_for_hud_settle(port: int, seconds: float = 3.0) -> None:
@@ -989,8 +1055,22 @@ def session_local_and_discovery(port: int, w: int, h: int, shots: str,
 
     # -- step 15 (cont'd): select + order via REAL input, not
     # unitAi.commandMove/unit.setPos. --
-    check("select the roster acolyte via a real click",
-          select_unit_via_click(port, roster_uid, w, h))
+    outcome = select_unit_via_click(port, roster_uid, w, h)
+    if not check("select the roster acolyte via a real click",
+                 outcome.ok, outcome.describe(roster_uid)):
+        # A blocking precondition, in the same form as this phase's
+        # three above it (#1770). The move orders below carry no uid —
+        # init_mouse.lua's right-click handler steers whatever is
+        # selected — while every visibility poll here is pinned to
+        # `roster_uid`, so with the selection unproven the orders and
+        # the assertions can address different units. Ending here also
+        # spends none of the 180s of poll budget watching a unit that
+        # was never ordered, and returning None suppresses session (c)
+        # exactly as a failed save does: no move, discovery,
+        # visibility, icon or save work happens after this point.
+        return None
+    if not require_selection(port, roster_uid, "the approach move order"):
+        return None
     move_resolved = order_move_to(port, t["gx"], t["gy"], cx0, cy0)
     check("real right-click move order resolves the target ruin's anchor tile",
           move_resolved == (t["gx"], t["gy"]), f"got {move_resolved}")
@@ -1089,6 +1169,9 @@ def session_local_and_discovery(port: int, w: int, h: int, shots: str,
     # return leg past the poll budget. --
     outside_x = bounds["max_x"] + margin + 2
     outside_y = t["gy"]
+    if not require_selection(port, roster_uid,
+                             "the walk-out-of-sight move order"):
+        return None
     resolved_out = order_move_to(port, outside_x, outside_y, cx0, cy0)
     check("real move order to walk out of sight resolves a tile",
           resolved_out is not None)
@@ -1096,6 +1179,8 @@ def session_local_and_discovery(port: int, w: int, h: int, shots: str,
         90.0, lambda: not sees_location(port, roster_uid, bounds))
     check("the unit actually walks out of sight of the ruin", bool(left_margin))
 
+    if not require_selection(port, roster_uid, "the return move order"):
+        return None
     resolved_back = order_move_to(port, t["gx"], t["gy"], cx0, cy0)
     check("real move order back into the ruin resolves the anchor tile",
           resolved_back == (t["gx"], t["gy"]), f"got {resolved_back}")
