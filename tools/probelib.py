@@ -199,6 +199,22 @@ def _log_path(port: int, log: str | None) -> str:
     return log if log else f"/tmp/synarchy_probe_{port}.log"
 
 
+def _dispose_unowned(proc: subprocess.Popen) -> None:
+    """Kill a child nobody has taken ownership of yet, quietly.
+
+    Used only on the failure path inside ``boot`` before ``on_launch``
+    has completed. It never talks to the port: an engine that has not
+    printed READY is not known to be the listener there, and on a busy
+    port it definitely is not.
+    """
+    try:
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait(timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
 def boot(port: int, log: str | None = None, args: list[str] | None = None,
          ready_timeout: float = DEFAULT_READY_TIMEOUT,
          label: str = "engine",
@@ -226,6 +242,15 @@ def boot(port: int, log: str | None = None, args: list[str] | None = None,
     DIRECTLY rather than through ``quit_engine``: this function's own
     failure paths mean the port may belong to somebody else's instance,
     which is precisely why the boot failed.
+
+    Handing ownership over is itself guarded: anything raised between
+    the child existing and that hand-off completing — a ``Ctrl-C``
+    delivered in the middle of it, or a callback that itself fails —
+    kills the child here rather than leave it holding the port with
+    nobody downstream aware of it. The one instant that cannot be
+    covered from Python is the store of ``Popen``'s own return value:
+    an object has to be bound to a name by an instruction, and no
+    handler can name what has not been bound yet.
     """
     if port == GUI_PORT:
         sys.exit(f"refusing to boot on port {GUI_PORT} (the GUI port); pass a 9xxx port")
@@ -236,9 +261,20 @@ def boot(port: int, log: str | None = None, args: list[str] | None = None,
     # this is the historical `cabal run` invocation, so a probe run by
     # hand still needs no prior build step.
     cmd = probe_engine.engine_command([*mode, "--port", str(port), *(args or [])])
-    proc = subprocess.Popen(cmd, stdout=logf, stderr=subprocess.STDOUT)
-    if on_launch is not None:
-        on_launch(proc)
+    proc = None
+    try:
+        proc = subprocess.Popen(cmd, stdout=logf, stderr=subprocess.STDOUT)
+        if on_launch is not None:
+            on_launch(proc)
+    except BaseException:
+        # Ownership never completed, so nothing downstream knows this
+        # child exists — including the caller's own teardown guard. It
+        # is disposed of HERE, and by killing rather than by asking:
+        # there is no engine to ask yet, and the port may be somebody
+        # else's.
+        if proc is not None:
+            _dispose_unowned(proc)
+        raise
     proc._probe_log = logpath  # type: ignore[attr-defined]
     deadline = time.time() + ready_timeout
     while time.time() < deadline:

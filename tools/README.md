@@ -894,7 +894,9 @@ somebody else's instance holds it) — `probelib.boot` hands the handle
 over the statement after its `Popen` through an appended optional
 `on_launch`, because it then waits up to three minutes for READY and a
 caller learning of the engine only from the return value owns nothing
-for that whole span; a read-only
+for that whole span, and anything raised while that hand-off is in
+progress kills the child inside `boot` rather than let it escape holding
+the port; a read-only
 checkout still yields a REMOVABLE tree, with the source's own modes
 untouched (`copytree` reproduces the source's mode bits, so a read-only
 `config/` would otherwise give this run a private copy whose entries
