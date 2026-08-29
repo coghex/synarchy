@@ -387,6 +387,13 @@ def _scannable(section: str) -> str:
     than per line because a span here wraps across lines. Fenced blocks are
     passed through unchanged (their backticks are the fences), so a total
     smuggled into a shell comment is scanned too.
+
+    Prose is also UNWRAPPED. This file is hard-wrapped near 75 columns, so
+    every paragraph in it is soft line breaks the reader never sees; a rule
+    that stopped at one would be defeated by where a sentence happened to
+    fold. A BLANK line is a real break and is kept, which is what still
+    bounds a clause -- along with the "." and ";" the rules stop at, and
+    their own character cap.
     """
     chunks: list[str] = []
     run: list[str] = []
@@ -396,8 +403,13 @@ def _scannable(section: str) -> str:
         if not run:
             return
         blob = "\n".join(run)
-        chunks.append(blob if run_fenced
-                      else re.sub(r"`([^`]*)`", r" \1 ", blob, flags=re.S))
+        if run_fenced:
+            chunks.append(blob)
+            return
+        blob = re.sub(r"`([^`]*)`", r" \1 ", blob, flags=re.S)
+        # Unwrap soft line breaks; a blank line stays a break.
+        blob = re.sub(r"(?<!\n)\n(?![\n])", " ", blob)
+        chunks.append(blob)
 
     for line, fenced in _mark_fences(section.splitlines()):
         if run_fenced is None or fenced == run_fenced:
@@ -3643,6 +3655,10 @@ def test_the_readme_states_no_registry_total() -> None:
             "The probe tally is ninety-three.",
             "The registry holds ninety-three.",
             "The probe tally is 90+.",
+            # The same totals folded across a soft line break, which is how
+            # this hard-wrapped file would actually carry one.
+            "Probe count:\n93.",
+            "The probe registry\ntotals 90.",
             "The registry holds ninety-plus.",
             # Inverted: the quantity leads and the subject follows.
             "There are 93 entries in the probe registry.",
@@ -3695,6 +3711,7 @@ def test_the_readme_states_no_registry_total() -> None:
             "There are 90 or more probes.",
             "There are 90-ish probes.",
             "There are 90 or so probes.",
+            "There are 93 registered\nprobes.",
             "90 registered probes ship today.",
             "It registers 90 probes today.",
             "It lists ninety probes.",
@@ -3762,6 +3779,13 @@ def test_the_readme_states_no_registry_total() -> None:
             # The round-13 review's two bypasses, verbatim.
             "There are 90+ probes.",
             "There are 90-plus probes.",
+            # The round-14 review's bypass, verbatim.
+            "Probe count:\n93.",
+            # And the original drift sentence as it really shipped, wrapped.
+            "`python3 tools/run_probes.py --list` is the authoritative count\n"
+            "and listing of registered probes — it's grown over time\n"
+            "(currently in the mid-50s) and this doc doesn't try to\n"
+            "track the exact number.",
             # The round-2 review's bypass: the same totals, formatted.
             "There are `93 registered probes`.",
             "The probe registry totals `93`.",
@@ -3839,9 +3863,25 @@ def test_the_readme_states_no_registry_total() -> None:
             "This doc states no total of its own: a hand-written one drifted "
             "three times (#539, #721, #1584).",
             "Each of those two probes reserves a second port.",
-            "Two registered probes derive a second, concurrently live "
-            "listener from it: `debug_console_boot_probe.py` boots its "
-            "checks on `--port + 1`.",
+            # The section's own hardest accepts, in their REAL wrapping: a
+            # registry noun and a number in one unwrapped sentence, kept
+            # apart only by the rules' character cap and by what the number
+            # is glued to.
+            "A probe is handed one `--port`, but two\n"
+            "registered probes derive a second, concurrently live listener "
+            "from it:\n`debug_console_boot_probe.py` boots its "
+            "successful-bind and\nwidget-module checks on `--port + 1`, and "
+            "`offscreen_probe.py` starts a\nsecond offscreen engine on "
+            "`--port + 1` while the first is still up.",
+            "- **`--jobs N`, concurrent:** up to `N` probes run at once, "
+            "each its own\n  engine on its own reserved port span (#531, "
+            "#1571), cutting wall-time to\n  roughly `total / N`, bounded "
+            "by the slowest single probe.",
+            "**Timeouts are per probe.** Most registered probes use the "
+            "ordinary 900-second\ndefault. A scenario whose complete "
+            "expected workload structurally exceeds that\nclass declares a "
+            "validated key-specific default in\n"
+            "`run_probes.PROBE_TIMEOUT_OVERRIDES`.",
             "The whole plan is computed before the first subprocess exists, "
             "and a span that reaches 8008 is refused (exit 2)."):
         fired = rules_fired(benign)
