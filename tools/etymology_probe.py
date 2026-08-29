@@ -52,8 +52,19 @@ and exiting 0, because a required phase that never ran is not a phase
 that passed. Such a failure is reported as a ``FIXTURE`` line naming
 those generation parameters, kept distinct from an ordinary ``FAIL`` so
 a reader can tell "the world came up short" from "the UI behaved
-wrongly". The optional language-shape cases in phases 5 and 6 are
-genuinely data-dependent and still skip.
+wrongly".
+
+Phase 6 needs a precondition of a different kind, and fails the same way
+(#1608). Its overflow is not a property of the generated language: the
+phase MANUFACTURES it, by forcing a reduced framebuffer and a high UI
+scale before inspecting the world's own name and up to eight rivers. So
+"nothing overflowed" says the manufactured configuration stopped
+working — row population, panel sizing, scrollbar creation, the
+responsive envelope, UI-scale handling — and the six arrow and wheel
+routing checks below it never ran, which is a setup failure rather than
+a language that happened to come out short. Only phase 5's bound-form
+and recurrence cases are genuinely data-dependent, and only they still
+skip.
 
 Needs a GPU (Vulkan device) — manual-only, never CI-gated. ``--self-test``
 is the exception: it drives the fixture classification with synthetic
@@ -239,6 +250,73 @@ def river_fixture_cause(rivers, params: str) -> str | None:
                 f"so the fixture ({params}) supplied no named river entry "
                 f"point")
     return None
+
+
+#: Phase 6's forced configuration: the framebuffer it rebuilds the HUD
+#: at, and the UI scale it applies. Named once so the diagnostic that
+#: reports the configuration failing cannot drift from the values
+#: actually applied.
+SCROLL_FORCE_SIZE = (800, 600)
+SCROLL_FORCE_SCALE = 4.0
+
+#: What a setup diagnostic prints for a field the panel's dump did not
+#: carry. A malformed or absent dump carries none of the three phase 6
+#: judges, and the diagnostic still has to name each one rather than
+#: silently dropping it.
+UNAVAILABLE = "<unavailable>"
+
+
+def panel_overflows(d) -> bool:
+    """Whether a panel dump shows more rows than its window can hold —
+    the condition phase 6's forced configuration exists to manufacture,
+    and the one the real scroll controls only appear under.
+
+    Deliberately the SAME reading phase 6 has always used, absent-field
+    ``or 0`` included, so #1608 changes only what happens when nothing
+    overflows and never what the six arrow and wheel checks are entered
+    on (requirement 3).
+    """
+    return (isinstance(d, dict)
+            and (d.get("rowCount") or 0) > (d.get("visibleRows") or 0))
+
+
+def scroll_reading(d):
+    """The compact projection of a panel dump phase 6's diagnostic
+    quotes: the judged fields plus their open/available context.
+
+    Only keys the dump ACTUALLY carried appear, so the projection agrees
+    with the ``UNAVAILABLE`` labels beside it instead of contradicting
+    them: a field the dump omitted is absent here too, while one it
+    carried as an explicit null still reads as ``None``. A dump that is
+    not a table at all is quoted RAW, because then the shape itself is
+    the evidence.
+    """
+    if not isinstance(d, dict):
+        return d
+    return {k: d[k] for k in ("open", "rowCount", "visibleRows",
+                              "scrollbar", "available") if k in d}
+
+
+def scroll_fixture_cause(last, inspected: int) -> str:
+    """Why phase 6 has no overflowing panel to scroll (#1608).
+
+    Always reached with a reading that did NOT overflow, so this states
+    the cause rather than deciding whether there is one. Each of the
+    three judged fields is named explicitly even when the reading
+    carried none of them — an absent, errored or non-table dump prints
+    ``UNAVAILABLE`` for all three and keeps the raw response beside
+    them — so the diagnostic is legible whatever shape came back.
+    """
+    fields = " ".join(
+        f"{key}={last[key]!r}" if isinstance(last, dict) and key in last
+        else f"{key}={UNAVAILABLE}"
+        for key in ("rowCount", "visibleRows", "scrollbar"))
+    w, h = SCROLL_FORCE_SIZE
+    return (f"{fields}; none of the {inspected} inspected name(s) overflowed "
+            f"the panel's window under phase 6's forced {w}x{h} / UI scale "
+            f"{SCROLL_FORCE_SCALE} configuration, so the scrollbar handles "
+            f"the six arrow and wheel checks drive never appeared (last "
+            f"dump: {scroll_reading(last)!r})")
 
 
 def exit_code(failed_checks: int, failed_fixtures: int) -> int:
@@ -692,17 +770,42 @@ def phase6_scrolling(port: int) -> None:
     arrows are UI sprites, and the bare Lua backend has no textures, so
     it owns no clickable handles there. Here it does."""
     print("\n[6] the panel scrolls through the real input routing")
+    # Restoring the scale is UNCONDITIONAL cleanup, not a tail step: the
+    # forced-scale body below has several exits (the fixture failure, the
+    # missing-handles return, an exception out of any send), and every
+    # one of them must leave phase 7's resize checks running against the
+    # ordinary envelope rather than this phase's deliberate extreme. The
+    # 4.0 apply is inside the guard too, so a failure partway through it
+    # is covered as well; restoring a scale that never changed is a
+    # no-op.
+    try:
+        _phase6_forced_scale(port)
+    finally:
+        send(port, "engine.setUIScale(1.0)", timeout=15)
+
+
+def _phase6_forced_scale(port: int) -> None:
+    """Phase 6's body, everything it does at UI scale 4.0. Its caller
+    owns restoring the scale on every exit from it."""
     # A generated name has only a couple of morphemes, so its
     # decomposition fits comfortably at a normal size. Shrink the HUD to
-    # the supported envelope's formal minimum first: the panel now bounds
-    # its visible rows by the framebuffer, so the same content overflows
-    # and the real scroll controls appear.
-    # ...at a high UI scale, which is where the envelope is tightest and
-    # where a player would actually hit this.
-    send(port, "engine.setUIScale(4.0); "
-               "local hud = require('scripts.hud'); "
-               "hud.init(hud.texWorldSelect or 1, hud.boxTexSet or 2, 800, 600); "
-               "hud.createUI()", timeout=30)
+    # 800x600 — the responsive envelope's formal MINIMUM FRAMEBUFFER
+    # (scripts/ui/responsive.lua) — so the panel bounds its visible rows
+    # by a much smaller window, and force UI scale 4.0 so each row costs
+    # far more of it. The PAIR is deliberately out of envelope: at that
+    # height only scales 0.5-1.0 are fully supported, and 800x600@4x is
+    # the headless suite's own out-of-envelope exemplar
+    # (test-headless/Test/Headless/UI/ResponsiveMenus.hs). This is a
+    # manufactured extreme that makes short content overflow so the real
+    # scroll controls appear — not a configuration a supported player
+    # setup reaches, and not something a name at normal scale is
+    # expected to do.
+    w, h = SCROLL_FORCE_SIZE
+    send(port, f"engine.setUIScale({SCROLL_FORCE_SCALE}); "
+               f"local hud = require('scripts.hud'); "
+               f"hud.init(hud.texWorldSelect or 1, hud.boxTexSet or 2, "
+               f"{w}, {h}); "
+               f"hud.createUI()", timeout=30)
     targets = [("world", "nil")]
     rivers = send_json(port, "return world.getRivers()", timeout=45)
     for r in (rivers or [])[:8]:
@@ -710,21 +813,26 @@ def phase6_scrolling(port: int) -> None:
             targets.append(("river", str(r["id"])))
     scrollable = None
     last = None
+    inspected = 0
     for kind, ident in targets:
         send(port, "local ep = package.loaded['scripts.etymology_panel']; "
                    f"if ep then ep.openFor('{kind}', {ident}) end", timeout=15)
         d = panel_dump(port)
-        last = d if not isinstance(d, dict) else {
-            k: d.get(k) for k in ("open", "rowCount", "visibleRows",
-                                  "scrollbar", "available")}
-        if isinstance(d, dict) and (d.get("rowCount") or 0) > (
-                d.get("visibleRows") or 0):
+        last = d
+        inspected += 1
+        if panel_overflows(d):
             scrollable = d
             break
     if not scrollable:
-        print(f"  SKIP  no inspected name overflowed the panel's window "
-              f"(last dump: {last!r})")
-        send(port, "engine.setUIScale(1.0)", timeout=15)
+        # NOT a skip (#1608): the overflow is this phase's own doing, so
+        # its absence means the setup stopped working and the six checks
+        # below never ran. Counted as a FIXTURE failure, which exits
+        # non-zero exactly like a behavioural FAIL while still reading
+        # as "the phase was never asked" rather than "the UI misbehaved".
+        fixture_failure(
+            "phase 6's forced configuration produced no overflowing panel, "
+            "so its arrow and wheel routing checks never ran",
+            scroll_fixture_cause(last, inspected))
         return
 
     handles = scrollable.get("scrollHandles") or []
@@ -782,9 +890,6 @@ def phase6_scrolling(port: int) -> None:
         check((wheeled.get("after") or 0) > (wheeled.get("before") or 0),
               "and a wheel event over it advanced the view",
               f"got {wheeled!r}")
-    # Restore the scale so phase 7's resize checks run against the
-    # ordinary envelope rather than this phase's deliberate extreme.
-    send(port, "engine.setUIScale(1.0)", timeout=15)
 
 
 def phase8_lifecycle(port: int) -> None:
@@ -848,6 +953,12 @@ def self_test() -> int:
     reaches it. Both branches are therefore covered here, alike and
     deterministically, against the same decision functions and the same
     exit accounting a live run uses.
+
+    Phase 6's overflow precondition (#1608) is covered the same way, and
+    for the same reason: forcing a live run not to overflow means
+    breaking the configuration the phase depends on, so its readings are
+    driven here instead — including the malformed and absent dumps whose
+    diagnostic still has to name all three judged fields.
     """
     global failures, fixture_failures
     args = _FixtureArgs()
@@ -931,6 +1042,78 @@ def self_test() -> int:
         if is_empty_table(shape):
             problems.append(f"{shape!r} was misread as an empty table")
 
+    # --- phase 6's manufactured overflow (#1608) ----------------------
+    overflowing = {"open": True, "rowCount": 12, "visibleRows": 5,
+                   "scrollbar": {"handle": 3}, "available": True}
+    if not panel_overflows(overflowing):
+        problems.append("an overflowing panel was not read as overflowing")
+    for shape in ({"rowCount": 5, "visibleRows": 5},
+                  {"rowCount": 2, "visibleRows": 5},
+                  {"visibleRows": 5},
+                  {}, [], None, "attempt to index a nil value"):
+        if panel_overflows(shape):
+            problems.append(f"{shape!r} was misread as an overflowing panel")
+    # An absent field still reads as 0, exactly as it did before #1608:
+    # the entry condition for the six arrow and wheel checks is
+    # unchanged, and only the no-overflow path is new.
+    if not panel_overflows({"rowCount": 12}):
+        problems.append("the absent-field reading of a panel dump changed")
+
+    def expect_scroll_cause(label: str, last, inspected: int,
+                            expected: dict) -> None:
+        cause = scroll_fixture_cause(last, inspected)
+        # Requirement 2: all three judged fields are named, whatever
+        # shape the reading came back as.
+        for key, want in expected.items():
+            if f"{key}={want}" not in cause:
+                problems.append(
+                    f"{label}: cause does not name {key}={want}: {cause!r}")
+        if repr(scroll_reading(last)) not in cause:
+            problems.append(
+                f"{label}: cause drops the reading itself: {cause!r}")
+        if f"{inspected} inspected name(s)" not in cause:
+            problems.append(
+                f"{label}: cause does not say how many names were "
+                f"inspected: {cause!r}")
+
+    expect_scroll_cause(
+        "a panel that simply did not overflow",
+        {"open": True, "rowCount": 4, "visibleRows": 9, "scrollbar": None,
+         "available": True},
+        9, {"rowCount": "4", "visibleRows": "9", "scrollbar": "None"})
+    expect_scroll_cause(
+        "a dump missing the scrollbar field entirely",
+        {"open": True, "rowCount": 4, "visibleRows": 9},
+        3, {"rowCount": "4", "visibleRows": "9",
+            "scrollbar": UNAVAILABLE})
+    # A dump that is not a table at all carries none of the three, and
+    # the diagnostic still names each one rather than dropping them.
+    for label, last in (("an absent dump", None),
+                        ("a dump that errored into text",
+                         "attempt to index a nil value"),
+                        ("an empty table serialized as {}", {})):
+        expect_scroll_cause(label, last, 1,
+                            {"rowCount": UNAVAILABLE,
+                             "visibleRows": UNAVAILABLE,
+                             "scrollbar": UNAVAILABLE})
+    # The projection keeps a readable dump compact and quotes an
+    # unreadable one raw, so the raw response survives as context.
+    if scroll_reading(overflowing) != {
+            "open": True, "rowCount": 12, "visibleRows": 5,
+            "scrollbar": {"handle": 3}, "available": True}:
+        problems.append("the panel reading dropped a judged field")
+    if scroll_reading("boom") != "boom":
+        problems.append("an unreadable dump was not quoted raw")
+    # The projection must not invent a field the dump omitted, or it
+    # would print `scrollbar: None` beside a `scrollbar=<unavailable>`
+    # label and contradict it. An explicit null still reads as one.
+    if scroll_reading({"rowCount": 4, "visibleRows": 9}) != {
+            "rowCount": 4, "visibleRows": 9}:
+        problems.append("the panel reading invented a field the dump omitted")
+    if scroll_reading({"rowCount": 4, "scrollbar": None}) != {
+            "rowCount": 4, "scrollbar": None}:
+        problems.append("the panel reading dropped an explicit null")
+
     # --- requirement 4: the two failures stay distinguishable ---------
     before = (failures, fixture_failures)
     captured = io.StringIO()
@@ -1013,9 +1196,10 @@ def main() -> int:
 
     print()
     if fixture_failures:
-        print(f"etymology_probe: {fixture_failures} FIXTURE failure(s) — the "
-              f"generated world did not supply an entity a required phase "
-              f"needs, so that phase never ran")
+        print(f"etymology_probe: {fixture_failures} FIXTURE failure(s) — a "
+              f"required phase's precondition never held (the generated "
+              f"world supplied no entity it needs, or the configuration it "
+              f"manufactures stopped producing one), so that phase never ran")
     if failures:
         print(f"etymology_probe: {failures} check(s) FAILED")
     if exit_code(failures, fixture_failures):
