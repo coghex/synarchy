@@ -422,8 +422,10 @@ python3 tools/world_check.py --quick
 # since a boot fails on a busy port exactly because somebody else's
 # instance holds it. test_probelib owns the launcher half, including
 # that an interrupt or a failing callback DURING the hand-off kills the
-# child there rather than let it escape holding the port. It also pins
-# what the probe still proves:
+# child there rather than let it escape holding the port. The shutdown
+# is guarded the same way: quit_engine sends, waits and hard-kills, all
+# interruptible, so it runs inside a finally whose fallback kills the
+# engine outright. It also pins what the probe still proves:
 # the registration order placement hashes are indexed by (sorted real
 # flora, then probe_berry, then probe_clover), both fixture bodies by
 # sha256, and load_fixture_yaml still stopping the run at setup on a

@@ -896,7 +896,10 @@ over the statement after its `Popen` through an appended optional
 caller learning of the engine only from the return value owns nothing
 for that whole span, and anything raised while that hand-off is in
 progress kills the child inside `boot` rather than let it escape holding
-the port; a read-only
+the port, and the orderly shutdown runs inside a finally whose fallback
+kills the engine outright, because `quit_engine` sends, waits and
+hard-kills and an interrupt in any of those would otherwise unwind past
+a live engine; a read-only
 checkout still yields a REMOVABLE tree, with the source's own modes
 untouched (`copytree` reproduces the source's mode bits, so a read-only
 `config/` would otherwise give this run a private copy whose entries

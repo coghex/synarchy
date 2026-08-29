@@ -183,21 +183,33 @@ def _describe_held(path: str) -> str:
 
 
 def abandon_engine(proc) -> None:
-    """Dispose of an engine this run LAUNCHED but never took ownership
-    of, without talking to the port.
+    """Make sure an engine this run launched is dead, without talking to
+    the port. The last thing tried on either teardown path, and a no-op
+    on a handle that has already exited.
 
+    Two callers, for two different reasons.
+
+    An engine this run LAUNCHED but never took ownership of:
     `probelib.boot` hands the process over the moment it exists
     (`on_launch`) and only decides about READY up to three minutes
     later, so the handle can reach this run's teardown while `boot`
-    itself is still deciding — the path an interrupt takes when it lands
-    between the two. `boot` kills the process on both of its OWN failure
-    exits, so on those this is a no-op on an already-dead handle; it
-    exists for the exit `boot` never reached.
+    itself is still deciding. `boot` kills the process on both of its
+    OWN failure exits, so on those this finds it already gone; it exists
+    for the exit `boot` never reached.
 
-    Deliberately NOT `quit_engine`: that sends `engine.quit()` to the
-    PORT, and a boot fails on a busy port precisely because the port
-    belongs to somebody else's instance. Only a boot that RETURNED
-    proves this run's engine is the one listening there.
+    And as the FALLBACK under an orderly shutdown, because `quit_engine`
+    is itself interruptible — it sends, waits, then hard-kills, and a
+    Ctrl-C in any of those unwinds straight out of the teardown with the
+    engine possibly still running, while `main` goes on to delete the
+    tree it is writing into. `kill()` is a single syscall and SIGKILL
+    cannot be caught, so once it has landed the process is dead whatever
+    happens to the reap that follows.
+
+    Deliberately NOT `quit_engine` in either case: that sends
+    `engine.quit()` to the PORT, and a boot fails on a busy port
+    precisely because the port belongs to somebody else's instance. Only
+    a boot that RETURNED proves this run's engine is the one listening
+    there.
     """
     if proc.poll() is not None:
         return
@@ -751,7 +763,15 @@ def run_probe(args, art) -> bool:
         # released by the guard in `main`, on the failing path exactly
         # as on the passing one, and on an interrupted one too.
         if proc is not None:
-            quit_engine(port, proc)
+            # The orderly shutdown gets its own guard, because it is
+            # itself interruptible: `quit_engine` sends `engine.quit()`,
+            # waits out the exit, then hard-kills, and an interrupt in
+            # any of those would otherwise leave here with a live engine
+            # holding the port and the log this run is about to delete.
+            try:
+                quit_engine(port, proc)
+            finally:
+                abandon_engine(proc)
         elif launched:
             abandon_engine(launched[0])
 

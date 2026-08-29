@@ -473,8 +473,8 @@ class _StandInEngine:
         return f"<stand-in engine alive={self.alive} killed={self.killed}>"
 
 
-def drive_run_probe(art, boot_result, after_boot,
-                    launched_handle=None) -> tuple[list, BaseException | None]:
+def drive_run_probe(art, boot_result, after_boot, launched_handle=None,
+                    quit_raises=None) -> tuple[list, BaseException | None]:
     """Call the REAL `run_probe` with `boot`, `quit_engine` and
     `bootstrap` replaced, and report `(handles shut down, what
     propagated)`.
@@ -483,7 +483,9 @@ def drive_run_probe(art, boot_result, after_boot,
     exception it raises; `launched_handle` is what the stand-in registers
     through `on_launch` before either, standing for the process that
     already exists while `boot` is still deciding; `after_boot` runs in
-    `bootstrap`'s place, one statement past the boot.
+    `bootstrap`'s place, one statement past the boot; `quit_raises`
+    makes the orderly shutdown itself fail, which is what a Ctrl-C
+    delivered inside `quit_engine` looks like.
     """
     quits: list = []
 
@@ -498,6 +500,13 @@ def drive_run_probe(art, boot_result, after_boot,
 
     def stub_quit(_port, proc=None, **_kw):
         quits.append(proc)
+        if quit_raises is not None:
+            raise quit_raises()
+        # What the real one leaves behind: it waits out the exit and
+        # hard-kills if it has to, so a shutdown that COMPLETED always
+        # ends with a dead process.
+        if proc is not None:
+            proc.alive = False
 
     def stub_bootstrap(_port, _art):
         if after_boot is not None:
@@ -609,6 +618,34 @@ def test_an_engine_stranded_inside_boot_is_still_disposed_of() -> None:
            "a handle that has already exited is not killed again")
 
 
+def test_an_interrupt_during_the_shutdown_still_kills_the_engine() -> None:
+    print("\ntest_an_interrupt_during_the_shutdown_still_kills_the_engine")
+    # `quit_engine` sends `engine.quit()`, waits out the exit, then
+    # hard-kills — three interruptible steps. A Ctrl-C in any of them
+    # used to unwind straight out of the teardown with the engine still
+    # running, holding the port and the log `main` was about to delete.
+    for label, blow_up in (
+            ("a handled Ctrl-C", KeyboardInterrupt),
+            ("a socket failure", lambda: OSError("the console went away"))):
+        engine = _StandInEngine()
+
+        def finish():
+            raise SystemExit("checks finished")
+
+        with fresh_run() as art:
+            quits, raised = drive_run_probe(art, engine, finish,
+                                            launched_handle=engine,
+                                            quit_raises=blow_up)
+        expect(quits == [engine],
+               f"[{label}] the orderly shutdown really was attempted first "
+               f"(got {quits})")
+        expect(engine.killed,
+               f"[{label}] and when it did not finish, the engine was killed "
+               f"outright rather than left holding the port (got {engine})")
+        expect(raised is not None and not isinstance(raised, SystemExit),
+               f"[{label}] the interrupt still ends the run (got {raised!r})")
+
+
 def test_the_boot_itself_is_inside_the_teardown_guard() -> None:
     print("\ntest_the_boot_itself_is_inside_the_teardown_guard")
     # The two cases above enter through `bootstrap`, one line past the
@@ -622,9 +659,10 @@ def test_the_boot_itself_is_inside_the_teardown_guard() -> None:
     # INSIDE the guarded block, with the handle pre-set to None so a
     # boot that aborted still sends nothing.
     fn = ast.parse(inspect.getsource(probe.run_probe)).body[0]
-    guards = [node for node in ast.walk(fn) if isinstance(node, ast.Try)]
+    guards = [node for node in fn.body if isinstance(node, ast.Try)]
     expect(len(guards) == 1,
-           f"run_probe has exactly one teardown guard (found {len(guards)})")
+           f"run_probe has exactly one outermost teardown guard "
+           f"(found {len(guards)})")
     if len(guards) != 1:
         return
     guard = guards[0]
@@ -658,9 +696,17 @@ def test_the_boot_itself_is_inside_the_teardown_guard() -> None:
     expect(bool(booted) and any(kw.arg == "on_launch" for kw in booted[0].keywords),
            "the boot registers the process as it is LAUNCHED, so the span "
            "boot spends waiting for READY is covered too")
-    expect(len(calls(guard.finalbody, "abandon_engine")) == 1,
-           "and a handle that only ever got registered is disposed of "
-           "directly, never through the port")
+    expect(len(calls(guard.finalbody, "abandon_engine")) == 2,
+           "a handle that only ever got registered is disposed of directly, "
+           "and the orderly shutdown has a direct-kill fallback of its own")
+    inner = [node for node in ast.walk(ast.Module(body=guard.finalbody,
+                                                  type_ignores=[]))
+             if isinstance(node, ast.Try)]
+    expect(any(calls(g.body, "quit_engine") and calls(g.finalbody,
+                                                      "abandon_engine")
+               for g in inner),
+           "...and that fallback is a finally around quit_engine, which is "
+           "itself interruptible at every step")
 
 
 # ---------------------------------------------------------------------
@@ -902,6 +948,7 @@ def main() -> int:
     test_a_booted_engine_is_always_shut_down()
     test_a_boot_that_aborted_is_never_sent_quit()
     test_an_engine_stranded_inside_boot_is_still_disposed_of()
+    test_an_interrupt_during_the_shutdown_still_kills_the_engine()
     test_the_boot_itself_is_inside_the_teardown_guard()
     test_retention_keeps_a_passing_run_passing()
     test_retention_keeps_a_failing_run_failing()
