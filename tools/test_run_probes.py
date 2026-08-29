@@ -212,16 +212,19 @@ README_TOTAL_RULES: tuple[tuple[str, "re.Pattern[str]"], ...] = (
     # "currently 90", "as of today, 90", "now in the mid-50s"
     ("dated-quantity",
      re.compile(r"\b" + _AS_OF_NOW + r"\b[^.\n]{0,40}?" + _QUANTITY, re.I)),
-    # A registry SUBJECT and a quantity in the same clause, however they are
-    # joined: "the probe registry totals 90", "the registry consists of 93
-    # probes", "the registry has a current total of 93", "Probe count: 90",
-    # "the probe registry = 90". Deliberately NOT a list of verbs -- an
-    # enumeration is a list of the phrasings someone already thought of.
-    # The clause ends at "." or ";" or a line break, and the reach is capped,
-    # so a number later in the same sentence is not swept in.
+    # A registry SUBJECT and a quantity in the same clause, in EITHER order
+    # and however they are joined: "the probe registry totals 90", "the
+    # registry consists of 93 probes", "Probe count: 90", and inverted,
+    # "there are 93 entries in the probe registry". Deliberately NOT a list
+    # of verbs -- an enumeration is a list of the phrasings someone already
+    # thought of, and word order is just one more phrasing. The clause ends
+    # at "." or ";" or a line break, and the reach is capped, so a number
+    # elsewhere in the same sentence is not swept in.
     ("registry-quantity-clause",
-     re.compile(_REGISTRY_SUBJECT + r"[^.;\n]{0,80}?" + _APPROXIMATOR + r"?"
-                + _QUANTITY, re.I)),
+     re.compile(r"(?:" + _REGISTRY_SUBJECT + r"[^.;\n]{0,80}?"
+                + _APPROXIMATOR + r"?" + _QUANTITY
+                + r"|" + _APPROXIMATOR + r"?" + _QUANTITY
+                + r"[^.;\n]{0,80}?" + _REGISTRY_SUBJECT + r")", re.I)),
     # A quantity directly counting a PLAIN probe noun: "93 probes", "contains
     # 90 probes", "ninety registered probes". Small spelled-out numbers are
     # not quantities here, so "two registered probes" stays legal, and an
@@ -247,12 +250,15 @@ README_TOTAL_RULES: tuple[tuple[str, "re.Pattern[str]"], ...] = (
                 r"|totals?|totall?ed|numbers?|numbered|contains?|comprises?"
                 r"|includes?|consists?\s+of|carries|carry)\s+"
                 + _APPROXIMATOR + r"?" + _STANDALONE_NUMBER, re.I)),
-    # The registry OBJECT and a quantity in one clause: "the PROBES list has
-    # 93 entries". Same clause shape as `registry-quantity-clause`, but the
-    # subject is anchored case-sensitively, so only the tail is folded.
+    # The registry OBJECT and a quantity in one clause, in either order:
+    # "the PROBES list has 93 entries", "93 entries in PROBES". Same shape as
+    # `registry-quantity-clause`, but the object is anchored
+    # case-sensitively, so only the surrounding prose is folded.
     ("registry-object-quantity",
-     re.compile(_REGISTRY_OBJECT + r"(?i:[^.;\n]{0,80}?" + _APPROXIMATOR
-                + r"?" + _QUANTITY + r")")),
+     re.compile(r"(?:" + _REGISTRY_OBJECT + r"(?i:[^.;\n]{0,80}?"
+                + _APPROXIMATOR + r"?" + _QUANTITY + r")"
+                + r"|(?i:" + _APPROXIMATOR + r"?" + _QUANTITY
+                + r"[^.;\n]{0,80}?)" + _REGISTRY_OBJECT + r")")),
 )
 
 
@@ -3532,6 +3538,11 @@ def test_the_readme_states_no_registry_total() -> None:
             "The probe list has 93 entries.",
             "The list of registered probes has 93 entries.",
             "The probe table has 93 rows.",
+            # Inverted: the quantity leads and the subject follows.
+            "There are 93 entries in the probe registry.",
+            "There are 93 scripts in the registry.",
+            "It ships 93 in the probe list.",
+            "Ninety sit in the registry today.",
         ),
         # A quantity carried by an antecedent rather than a noun. The first
         # is verbatim the form round 4 of review found.
@@ -3551,6 +3562,9 @@ def test_the_readme_states_no_registry_total() -> None:
             "PROBES holds 93.",
             "The PROBES dict is 93 long.",
             "PROBES: 93.",
+            # Inverted, the same way.
+            "There are 93 entries in PROBES.",
+            "93 rows sit in `run_probes.PROBES`.",
         ),
         # A quantity reached directly by a verb of having or listing, with
         # neither a registry subject nor a noun.
@@ -3618,6 +3632,8 @@ def test_the_readme_states_no_registry_total() -> None:
             "The suite registers 93.",
             # The round-6 review's bypass, verbatim.
             "The PROBES list has 93 entries.",
+            # The round-7 review's bypass, verbatim.
+            "There are 93 entries in the probe registry.",
             # The round-2 review's bypass: the same totals, formatted.
             "There are `93 registered probes`.",
             "The probe registry totals `93`.",
@@ -3652,13 +3668,22 @@ def test_the_readme_states_no_registry_total() -> None:
             "probe process exists.",
             "`--retries N` re-runs a failed probe SOLO up to `N` more times.",
             "Ctrl-C exits 130 after terminating every probe still running.",
+            "This is the mode CI's selective gate (`tools/ci_probes.py`, "
+            "#530) relies on.",
+            "**Shared repository resources (#1322, #1444, #1570).** "
+            "`run_probes` declares two tables, which EVERY registered probe "
+            "holds in a shared interest.",
+            "Before #1571 the allocator used stride 1, so selecting "
+            "`debug_console_boot` immediately before `transactional_load` "
+            "under `--jobs 2` put both on 9401.",
+            "A declared count `N` reserves the contiguous span "
+            "`base … base + N - 1`, and `--jobs` lays the selected probes' "
+            "spans end to end.",
             "A `--port` that reaches 8008 stays build-free.",
             "`run_probes.PROBE_TIMEOUT_OVERRIDES` declares 3600 for one key.",
             "Adding a future multi-port probe is one row in that table, and "
             "`tools/test_run_probes.py` validates every row against the live "
             "registry.",
-            "Before #1571 the allocator used stride 1, so selecting "
-            "`debug_console_boot` put both on 9401.",
             "Cap `N` at (cores − 1) or so — each probe is a full engine "
             "process.",
             "`--list` shows the full probe registry but not CI status.",
