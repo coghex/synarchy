@@ -23,11 +23,24 @@ Checks (each on a fresh acolyte on a flat arena):
   E. combat COMMITS over a pending move: a unit under a move order that is
      attacked enters combat and stays there (attack_target out-ranks the
      pending follow_command, so engage's hand-off isn't yanked back).
+  F. the OTHER side of A's precondition: an over-capacity commandPickup is
+     refused, stores no pickupOrder, and leaves the pending move selected.
+
+A and F are two halves of one contract (#1736). commandPickup gates capacity
+at COMMAND time (#920) and, on refusal, deliberately stores no pickupOrder;
+pickupUtility then scores -inf, so follow_command (7.0) is the CORRECT winner.
+Check A used to send commandPickup, discard its Boolean result and poll — so
+on a weak carrying_capacity roll it read that correct outcome as a ladder
+regression. Both checks now STAGE the capacity answer explicitly (an additive
+carrying_capacity modifier sized off the carrier's own live load) and assert
+the admission decision before judging arbitration, so neither outcome depends
+on body generation and a phase A failure means a real arbitration regression.
 
 Run from the repo/worktree root (scripts/ resolve relative to CWD):
   python3 tools/follow_command_priority_probe.py [--port N] [--unit acolyte]
 
-Exit code 0 = all checks passed.
+Exit code 0 = all checks passed; 1 = a graded check failed; 2 = a fixture
+never established itself, so nothing downstream of it was graded.
 """
 from __future__ import annotations
 
@@ -109,6 +122,98 @@ def spawn_acolyte(port: int, unit: str, x: float, y: float) -> int:
     return uid
 
 
+def spawn_ground(port: int, def_name: str, x: int, y: int):
+    """Spawn one ground item; return its gid, or None after reporting."""
+    raw = send(port, f"return item.spawnGround('{def_name}', {x}, {y})")
+    try:
+        return int(float(raw))
+    except (ValueError, TypeError):
+        print(f"FAIL: could not spawn ground item '{def_name}' (got {raw!r})",
+              file=sys.stderr)
+        return None
+
+
+def stage_pickup(port: int, uid: int, gid: int, admit: bool,
+                 margin: float = 1.0):
+    """Stage the command-time capacity answer, command the pickup, and read
+    back what it decided — all in ONE console transaction.
+
+    Why staged at all (#1736): carrying_capacity is a per-body random roll
+    (~11-49 kg, src/Unit/Thread/Command/Body.hs) and an acolyte spawns
+    carrying most of its ~12 kg kit, so whether commandPickup admits a
+    10 kg chunk depends on body generation. Neither of this probe's two
+    pickup checks is about that. So each one pins the carrier's EFFECTIVE
+    capacity to its own live carried weight plus a stated spare:
+    ``g.weight + margin`` to admit, ``margin`` alone (< the item) to
+    refuse. The command-time gate still RUNS on the real numbers — it is
+    given a deterministic answer, not bypassed.
+
+    It is an additive stat MODIFIER rather than unit.setStat because the
+    physiology tick calls unit.recomputeBody on every body-mass change
+    (scripts/unit_resource_energy.lua), which rewrites the BASE stat and
+    would silently undo a set. Modifiers live beside the base
+    (uiModifiers) and survive it.
+
+    One transaction because the unit_ai tick is LIVE here: reading the
+    admission and the resulting pickupOrder in separate console round
+    trips lets the AI act between them.
+    """
+    spare = f"(g.weight + {margin})" if admit else f"{margin}"
+    lua = (
+        f"local ai=require('scripts.unit_ai'); "
+        f"local g,res=item.getGroundForUnit({uid},{gid}); "
+        f"local carried=unit.getCarryingWeight({uid}) or 0; "
+        f"local cap0=unit.getStat({uid},'carrying_capacity') or 0; "
+        f"if g then unit.addModifier({uid},'carrying_capacity',"
+        f"carried+{spare}-cap0,'probe_staged_capacity') end; "
+        f"local ok=(g~=nil) and ai.commandPickup({uid},{gid}) or false; "
+        f"local s=ai.getState({uid}); "
+        f"return {{present=(g~=nil), resolved=(res and true or false), "
+        f"weight=(g and g.weight or 0), carried=carried, "
+        f"capacity=(unit.getStat({uid},'carrying_capacity') or 0), "
+        f"accepted=(ok and true or false), "
+        f"order=((s and s.pickupOrder and s.pickupOrder.gid) or -1)}}")
+    return send_json(port, lua)
+
+
+def precondition_failure(staged, uid: int, gid: int, want_accepted: bool):
+    """Judge a `stage_pickup` result as SETUP, not behavior.
+
+    Returns a message when the staging did not establish what the check
+    is about to judge, or None when it did. An unestablished fixture is
+    an exit-2 stop, never a graded check (#1396): a check that never had
+    a live pickup order to score cannot say anything about the ladder.
+    """
+    if not isinstance(staged, dict):
+        return f"the staging transaction returned {staged!r}"
+    for key in ("present", "resolved", "weight", "carried", "capacity",
+                "accepted", "order"):
+        if key not in staged:
+            return f"the staging transaction omitted {key!r} ({staged!r})"
+    if not staged["present"]:
+        return (f"ground item {gid} is not on unit {uid}'s own page "
+                f"(page resolved: {staged['resolved']}) — the target must be "
+                f"present for the capacity gate to be what decides")
+    total = staged["carried"] + staged["weight"]
+    if want_accepted:
+        if not staged["accepted"]:
+            return (f"commandPickup REFUSED the order at the command-time "
+                    f"capacity gate (#920): {staged['carried']:.2f} kg carried "
+                    f"+ {staged['weight']:.2f} kg item = {total:.2f} kg over a "
+                    f"{staged['capacity']:.2f} kg capacity, so no pickupOrder "
+                    f"was stored and follow_command is the correct winner")
+        if staged["order"] != gid:
+            return (f"commandPickup returned true but the unit's pickupOrder "
+                    f"is {staged['order']}, not the staged gid {gid} — there "
+                    f"is no live order to score")
+    elif total <= staged["capacity"]:
+        return (f"the staging left the target liftable: {staged['carried']:.2f} "
+                f"kg carried + {staged['weight']:.2f} kg item = {total:.2f} kg "
+                f"within a {staged['capacity']:.2f} kg capacity, so a refusal "
+                f"would not be the capacity gate's doing")
+    return None
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--unit", default="acolyte")
@@ -139,24 +244,28 @@ def main() -> int:
         if ua < 0:
             print(f"FAIL: could not spawn '{args.unit}'", file=sys.stderr)
             return 2
-        # Drop a light item two tiles away.
+        # A 10 kg granite chunk two tiles away — NOT a light item, and
+        # that is the point: the staging below is what makes it liftable,
+        # not the def (#1736).
         ix, iy = int(sx) + 2, int(sy)
-        gid = send(args.port,
-                   f"return item.spawnGround('granite_chunk', {ix}, {iy})")
-        try:
-            gid = int(float(gid))
-        except (ValueError, TypeError):
-            print(f"FAIL: could not spawn ground item (got {gid!r})",
-                  file=sys.stderr)
+        gid = spawn_ground(args.port, "granite_chunk", ix, iy)
+        if gid is None:
             return 2
         # Move order to the far edge first, THEN an explicit pickup. Both
-        # commandedTask and pickupOrder are now live; pickup (8.0) must win.
+        # commandedTask and pickupOrder are now live; pickup (7.5) must
+        # win over follow_command (7.0).
         send(args.port,
              f"require('scripts.unit_ai').commandMove({ua},{far_x},{far_y}); "
              f"return 'moved'")
-        send(args.port,
-             f"require('scripts.unit_ai').commandPickup({ua},{gid}); "
-             f"return 'pickup'")
+        staged = stage_pickup(args.port, ua, gid, admit=True)
+        note = precondition_failure(staged, ua, gid, want_accepted=True)
+        if note:
+            print(f"FAIL: check A precondition — {note}", file=sys.stderr)
+            return 2
+        print(f"[A staged] carried {staged['carried']:.2f} kg + item "
+              f"{staged['weight']:.2f} kg vs a staged {staged['capacity']:.2f} kg "
+              f"capacity; commandPickup accepted, pickupOrder live on gid "
+              f"{staged['order']}")
         seen, hit = poll_for_action(args.port, ua, "pickup_ground", args.seconds)
         print(f"\n[A pickup-beats-move] action timeline: {' -> '.join(seen)}")
         checks.append(("pickup_ground wins over a pending move order", hit))
@@ -229,6 +338,41 @@ def main() -> int:
               f"  | tail: {' '.join(tail)}")
         checks.append(("combat reached over a pending move", hite))
         checks.append(("combat does NOT hand back to the stale move", not reverted))
+
+        # --- Check F: the command-time capacity refusal, asserted rather
+        # than observed. A's mirror image (#1736): commandPickup gates
+        # capacity at COMMAND time (#920), and a refusal deliberately
+        # stores no pickupOrder so a position hold survives it (#1216).
+        # pickupUtility then scores -inf, leaving the pending move order
+        # the correct winner -- which is exactly the outcome check A used
+        # to misread as a ladder regression. Staged over capacity here, so
+        # it is the capacity path and not commandPickup's separate
+        # missing/off-page-item refusal that is under test.
+        uf = spawn_acolyte(args.port, args.unit, sx, sy + 6)
+        gidf = spawn_ground(args.port, "granite_chunk",
+                            int(sx) + 2, int(sy) + 6)
+        if gidf is None:
+            return 2
+        send(args.port,
+             f"require('scripts.unit_ai').commandMove({uf},{far_x},{far_y}); "
+             f"return 'moved'")
+        refused = stage_pickup(args.port, uf, gidf, admit=False)
+        notef = precondition_failure(refused, uf, gidf, want_accepted=False)
+        if notef:
+            print(f"FAIL: check F precondition — {notef}", file=sys.stderr)
+            return 2
+        print(f"\n[F staged] carried {refused['carried']:.2f} kg + item "
+              f"{refused['weight']:.2f} kg vs a staged "
+              f"{refused['capacity']:.2f} kg capacity")
+        checks.append(("an over-capacity commandPickup returns false",
+                       refused["accepted"] is False))
+        checks.append(("a refused pickup stores no pickupOrder",
+                       refused["order"] == -1))
+        seenf, hitf = poll_for_action(args.port, uf, "follow_command",
+                                      args.seconds)
+        print(f"[F refusal-keeps-move] action timeline: {' -> '.join(seenf)}")
+        checks.append(("a refused pickup leaves the pending move selected",
+                       hitf))
 
         print("\n--- checks ---")
         all_ok = True
