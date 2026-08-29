@@ -75,7 +75,7 @@ the affected fields as unclassified.
 | `pendingLoadRef` | global | Exclude | — | Runtime-only single-slot staged-session handoff (#763) between `WorldLoadTransaction` (staging) and `WorldLoadPublish` (the atomic swap); never serialized, and always cleared before/after use. | `tools/transactional_load_probe.py` |
 | `inputThreadActiveRef` | global | Exclude | — | Runtime-only boot-mode flag (#763 round 4): True once `Engine.Input.Thread.startInputThread` actually launched (never happens under `App.Headless`); consulted to decide whether `SaveInput` belongs in a save/load transaction's owner set, never serialized. | `tools/transactional_load_probe.py`, `tools/save_barrier_probe.py` |
 | `worldQueue` | global | Exclude | — | transport queue; see contract §3 | none yet |
-| `sunAngleRef` | global | Rebuild | active page's world time | derived via `worldTimeToSunAngle` | none yet |
+| `sunAngleRef` | global | Rebuild | visible head page's world time | `SolarBase`, derived via `worldTimeToSunAngle` (#1869 added the `world.setSunAngle` override flag beside the angle; both are within-session render state) | none yet |
 | `worldPreviewRef` | global | Exclude | — | pending GPU upload payload | none yet |
 | `worldPreviewGenerationRef` | global | Exclude | — | runtime-only monotonic generation token used to suppress stale world-preview upload announcements; never serialized | `Test.Headless.Lua.PreviewGeneration` |
 | `zoomAtlasDataRef` | global | Exclude | — | pending GPU upload payload | none yet |

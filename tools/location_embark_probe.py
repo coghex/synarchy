@@ -618,8 +618,8 @@ def select_unit_via_click(port: int, uid: int, w: int, h: int,
     Success is the selection being EXACTLY `uid`, the same predicate
     `require_selection` re-checks before every order below, so the two
     cannot drift: a plain left click on a unit routes to `unit.select`,
-    which REPLACES the selection (`scripts/init_mouse.lua:313-334` —
-    only the Shift branch merges), so one uid is the real outcome of
+    which REPLACES the selection (`scripts/init_mouse_entity.lua:116-142`
+    — only the Shift branch merges), so one uid is the real outcome of
     the gesture under test rather than a stricter reading of it.
 
     Returns a `SelectionOutcome` rather than a bare bool: the caller
@@ -647,9 +647,9 @@ def require_selection(port: int, uid: int, what: str) -> bool:
     EXACTLY `uid`.
 
     `order_move_to` below takes no uid at all:
-    `scripts/init_mouse.lua`'s right-click handler reads the selection
-    at dispatch time and orders EVERY selected unit, while this phase's
-    visibility polls are pinned to one. Asserting the identity
+    `scripts/init_mouse_entity.lua`'s right-click handler reads the
+    selection at dispatch time and orders EVERY selected unit, while this
+    phase's visibility polls are pinned to one. Asserting the identity
     immediately before each order is what makes "the orders and the
     assertions concern the same unit" a checked fact for the whole
     phase rather than an assumption a stray click, a deselect or a

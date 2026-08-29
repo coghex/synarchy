@@ -61,7 +61,8 @@ import Language.Etymology.Source (EtymologySource)
 import Language.Semantic.Types (Catalogue, ConceptId(..), catalogueErrorText)
 import Language.Generated.Types
     ( LanguageProvenance(..), generatorVersionInt, langSeedText )
-import Language.Semantic.Catalogue (conceptCataloguePath, loadCatalogue)
+import Language.Semantic.Catalogue ( conceptCataloguePath
+                                   , conceptOrdinalPath, loadCatalogue )
 import Location.Instance
     ( LocationInstance(..), LocationInstanceId(..), instancesToList
     , isDiscoveredLifecycle )
@@ -547,7 +548,8 @@ resolveCatalogue backendState = do
 --   filesystem work.
 readCatalogueForEtymology ∷ IO (Either Text Catalogue)
 readCatalogueForEtymology = do
-    eRead ← try (loadCatalogue conceptCataloguePath ⌦ evaluate)
+    eRead ← try (loadCatalogue conceptCataloguePath conceptOrdinalPath
+                     ⌦ evaluate)
     pure $ case eRead of
         Left (ioErr ∷ IOException) → Left (describe (tshow ioErr))
         Right (Left cErr)          → Left (describe (catalogueErrorText cErr))

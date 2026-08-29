@@ -293,7 +293,8 @@ end
 
 -- Opts THIS press into box-selection's visual/commit behavior — called
 -- only by init_mouse.lua's "no tool claimed it" unit/item/building
--- select-or-deselect fallback (#730 review round 6), never by the
+-- select-or-deselect fallback (#730 review round 6, which #1875 moved
+-- to init_mouse_entity.lua behind its zoom-band gate), never by the
 -- debug/build/mine/chop/till/plant tool-claim branches or the
 -- gameplay-inactive deadclick, which have no box-select meaning.
 function dragSelect.armBoxSelect()
@@ -331,6 +332,29 @@ end
 local function recordDragOutcome(outcome, x, y, requested, applied, reason)
     local fx, fy = toFbCoords(x, y)
     recordDragOutcomeFb(outcome, fx, fy, requested, applied, reason)
+end
+
+-- #1875: a gesture that crosses DRAG_THRESHOLD resolves as ONE
+-- "input.drag" record and DISCARDS the deferred click (#730 — exactly
+-- one primary Layer A record per H1 action). That is correct for the
+-- record COUNT and wrong for its CONTENT when the press carried its own
+-- reason for having been declined at mouse-down: the off-band
+-- world-entity gate (scripts/init_mouse_entity.lua, whose reason names
+-- the actual press view band) and the two gameplay-inactive gates
+-- (scripts/init_mouse.lua) both do. Dropping that text left a dragged
+-- off-band press describable only as "no drag gesture is defined",
+-- which identifies nothing about WHY it was declined.
+--
+-- So the drag record carries the generic gesture text AND the press's
+-- own reason when there is one. `pending` is the deferred click about
+-- to be discarded; a press that carried no reason (an ordinary
+-- box-select, a tool claim) keeps exactly the text it had before.
+local function dragReason(generic, pending)
+    local pressReason = pending and pending.reason
+    if pressReason then
+        return generic .. "; " .. pressReason
+    end
+    return generic
 end
 
 -- F4 (#730): mirrors init_mouse.lua's own recordClick shape exactly,
@@ -436,11 +460,13 @@ function dragSelect.onMouseUp(button, x, y, downRoute)
                 -- them, so record that honestly instead of inventing a
                 -- fake box-selection outcome.
                 if downRoute ~= "swallowed" then
-                    recordDragOutcome("noop", x, y, 0, 0,
-                        "no drag gesture is defined for this input")
+                    recordDragOutcome("noop", x, y, 0, 0, dragReason(
+                        "no drag gesture is defined for this input",
+                        dragSelect.pendingClick))
                 else
-                    recordDragOutcome("noop", x, y, 0, 0,
-                        "release swallowed (focus loss / minimize)")
+                    recordDragOutcome("noop", x, y, 0, 0, dragReason(
+                        "release swallowed (focus loss / minimize)",
+                        dragSelect.pendingClick))
                 end
             else
                 -- Never crossed the drag threshold — this gesture is really
@@ -466,11 +492,13 @@ function dragSelect.onMouseUp(button, x, y, downRoute)
                 dragSelect.rightStartX, dragSelect.rightStartY, x, y)
             if wasDragging then
                 if downRoute ~= "swallowed" then
-                    recordDragOutcome("noop", x, y, 0, 0,
-                        "no drag gesture is defined for right-button game-world input")
+                    recordDragOutcome("noop", x, y, 0, 0, dragReason(
+                        "no drag gesture is defined for right-button game-world input",
+                        dragSelect.rightPendingClick))
                 else
-                    recordDragOutcome("noop", x, y, 0, 0,
-                        "release swallowed (focus loss / minimize)")
+                    recordDragOutcome("noop", x, y, 0, 0, dragReason(
+                        "release swallowed (focus loss / minimize)",
+                        dragSelect.rightPendingClick))
                 end
             else
                 if dragSelect.rightPendingClick then
@@ -502,7 +530,8 @@ function dragSelect.cancel()
     if dragSelect.state ~= "idle" then
         if dragSelect.state == "dragging" then
             recordDragOutcomeFb("noop", dragSelect.startFbX, dragSelect.startFbY,
-                0, 0, "cancelled (view transition)")
+                0, 0, dragReason("cancelled (view transition)",
+                                 dragSelect.pendingClick))
         elseif dragSelect.pendingClick then
             recordDeferredClick(dragSelect.pendingClick)
         end
@@ -518,7 +547,9 @@ function dragSelect.cancel()
     if dragSelect.rightState ~= "idle" then
         if dragSelect.rightState == "dragging" then
             recordDragOutcomeFb("noop", dragSelect.rightStartFbX,
-                dragSelect.rightStartFbY, 0, 0, "cancelled (view transition)")
+                dragSelect.rightStartFbY, 0, 0,
+                dragReason("cancelled (view transition)",
+                           dragSelect.rightPendingClick))
         elseif dragSelect.rightPendingClick then
             recordDeferredClick(dragSelect.rightPendingClick)
         end

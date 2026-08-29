@@ -160,7 +160,7 @@ mkNameSuggester cat prov
         Left gErr → Left (SuggestGenerator gErr)
         Right prof → Right NameSuggester
             { nsuProfile     = prof
-            , nsuRoots       = assignLanguageRoots prof ids
+            , nsuRoots       = assignLanguageRoots prof (catOrdinals cat) ids
             , nsuCatalogue   = cat
             , nsuHeads       = ids
             , nsuModifiers   = withForm FormModifier

@@ -260,7 +260,7 @@ python3 tools/bare_name_icon_asset_check.py
 # Cheap, no-engine guard (issue #1717): fails if a concept id
 # data/language/concepts.yaml has ever shipped is missing from it, or if
 # a new one arrived without being ratcheted into
-# docs/language/concept_id_baseline.json. A ConceptId is persisted
+# data/language/concept_id_baseline.json. A ConceptId is persisted
 # identity -- Language.Etymology reports one the catalogue no longer
 # carries as EtyInvalidConcept, losing that etymology in every existing
 # save -- and Language.Generated.Hash seeds each concept's native root
@@ -269,7 +269,10 @@ python3 tools/bare_name_icon_asset_check.py
 # aggregates (version, count, domains, balance, forms), and the naming
 # goldens cover only the handful of concepts their samples use.
 # Unconditional rather than path-selective: it is a two-file comparison
-# costing milliseconds, and either side can drift alone.
+# costing milliseconds, and either side can drift alone. Since #1868 the
+# artifact also records each id's append-only ORDINAL -- the order
+# Language.Generated.Root places concepts in -- and the audit fails an
+# artifact whose ordinals are no longer that append-only sequence.
 step "concept id inventory audit"
 python3 tools/concept_id_inventory_audit.py --self-test
 python3 tools/concept_id_inventory_audit.py
