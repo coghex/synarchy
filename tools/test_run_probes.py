@@ -101,16 +101,21 @@ def expect(cond: bool, msg: str) -> None:
 # listing and `ci_probes.py --status` for the derived counts, and any total
 # the document displays must be obtained mechanically instead.
 #
-# Scope is deliberately narrow and lexical. The rules below reject the shapes
-# a hand-maintained total actually takes in this section -- a vague decade
-# band, a DIGIT count of registered probes, an approximated number, and a
-# number pinned to "currently"/"as of" -- and nothing else. They are not a
-# general claim detector: spelled-out subset counts ("two registered probes
-# derive a second listener"), operational quantities (`--jobs 4`, the
-# 900-second default) and flag examples (`--port 9500`) are all legitimate
-# here and must keep passing. Every rule is mutation-tested against a crafted
-# violating section AND against the real file, because a rule with no proven
-# failing case is not a rule (#704, #1128, #1309).
+# Scope is lexical, and covers a total stated in either direction: a quantity
+# leading its noun ("90 registered probes"), a registry subject predicated on
+# a quantity ("the probe registry totals 90", "Probe count: 90"), and a
+# counting verb reaching a plain probe noun ("contains 90 probes"). A vague
+# decade band, an approximated number and a number pinned to
+# "currently"/"as of" are rejected on their own. Quantities count as such
+# spelled out at registry scale ("ninety") as well as in digits.
+#
+# What stays legal is what this section legitimately says: SMALL spelled-out
+# subset counts ("two registered probes derive a second listener", "Three
+# registered probes still drive Cabal"), operational quantities (`--jobs 4`,
+# the 900-second default, GUI port 8008) and flag examples (`--port 9500`).
+# Every rule is mutation-tested against a crafted violating section AND
+# against the real file, because a rule with no proven failing case is not a
+# rule (#704, #1128, #1309).
 
 README_PATH = Path(__file__).resolve().parent / "README.md"
 
@@ -125,39 +130,77 @@ _MAGNITUDE_BAND = (
     r"(?:\d0s|twenties|thirties|forties|fifties|sixties|seventies|eighties"
     r"|nineties)")
 
+# A number word only a REGISTRY total would reach. The small words this
+# section legitimately uses for subset counts ("two registered probes") are
+# deliberately absent, and so is "tens" ("low tens of minutes").
+_LARGE_NUMBER_WORD = (
+    r"(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundreds?)")
+
+# Any quantity a total can be stated as.
+_QUANTITY = r"(?:\d|" + _MAGNITUDE_BAND + r"|\b" + _LARGE_NUMBER_WORD + r"\b)"
+
 # A noun phrase naming the registry as a whole. Plain "probes" is NOT one:
 # "Run up to 4 probes concurrently" counts a concurrency limit, not the
 # registry.
 _REGISTRY_NOUN = (
-    r"(?:registered\s+probes?|probes?\s+registered|probe\s+registry"
+    r"(?:registered\s+probes?|probes?\s+(?:\w+\s+){0,2}registered"
+    r"|probe\s+registry"
     r"|probes?\s+in\s+the\s+registry|total\s+probes?"
     r"|probes?\s+in\s+total)")
 
+# The SUBJECT half of a predicated total ("the registry holds 90"), which is
+# wider than the noun above: a bare "registry" names the whole thing too.
+_REGISTRY_SUBJECT = (
+    r"(?:" + _REGISTRY_NOUN + r"|registry"
+    r"|number\s+of\s+(?:registered\s+)?probes?|probe\s+count"
+    r"|count\s+of\s+(?:registered\s+)?probes?)")
+
+# Predicates that put a number to a subject. ":" and "=" carry no word
+# boundary, so they are anchored separately from the verbs.
+_COUNT_VERB = (
+    r"(?:is|are|was|were|totals?|totall?ed|numbers?|numbered"
+    r"|stands?\s+at|sits?\s+at|holds?|has|have|contains?|includes?"
+    r"|comprises?|counts?|lists?|registers?|reach(?:es|ed)?|hits?|hit"
+    r"|comes?\s+to|came\s+to)")
+_COUNT_PREDICATE = r"(?:\b" + _COUNT_VERB + r"\b|[:=])"
+
 # "~90" has no word boundary before the tilde, so the two spellings need
-# separate anchoring; both end immediately before the digits.
+# separate anchoring; both end immediately before the quantity.
 _APPROXIMATOR = (
     r"(?:~\s*"
     r"|\b(?:about|around|roughly|approximately|nearly|almost|some"
     r"|close\s+to|more\s+than|over|upwards\s+of)\s+)")
 
 _AS_OF_NOW = (
-    r"(?:currently|today|at\s+present|as\s+of|right\s+now"
+    r"(?:currently|now|today|at\s+present|as\s+of|right\s+now"
     r"|at\s+the\s+moment|these\s+days)")
 
 README_TOTAL_RULES: tuple[tuple[str, "re.Pattern[str]"], ...] = (
     # "currently in the mid-50s", "low 30s", "high 80s"
     ("magnitude-band", re.compile(_MAGNITUDE_BAND, re.I)),
-    # "90 registered probes", "~90 registered probes", "90 total probes"
-    ("numeral-registry-count",
-     re.compile(_APPROXIMATOR + r"?\b\d+"
+    # "90 registered probes", "~90 registered probes", "90 total probes",
+    # "90 probes are registered", "ninety registered probes"
+    ("registry-count",
+     re.compile(_APPROXIMATOR + r"?(?:\b\d+|\b" + _LARGE_NUMBER_WORD + r"\b)"
                 r"(?:\s+[A-Za-z][A-Za-z-]*){0,2}\s+" + _REGISTRY_NOUN, re.I)),
-    # "around 90", "roughly 90", "~90"
+    # "around 90", "roughly 90", "~90", "about ninety"
     ("approximate-quantity",
-     re.compile(_APPROXIMATOR + r"\d+", re.I)),
-    # "currently 90", "as of today, 90"
+     re.compile(_APPROXIMATOR + r"(?:\d+|" + _LARGE_NUMBER_WORD + r"\b)",
+                re.I)),
+    # "currently 90", "as of today, 90", "now in the mid-50s"
     ("dated-quantity",
-     re.compile(r"\b" + _AS_OF_NOW + r"\b[^.\n]{0,40}?(?:\d|"
-                + _MAGNITUDE_BAND + r")", re.I)),
+     re.compile(r"\b" + _AS_OF_NOW + r"\b[^.\n]{0,40}?" + _QUANTITY, re.I)),
+    # "the probe registry totals 90", "the registry holds 90",
+    # "the number of registered probes is 90", "Probe count: 90"
+    ("registry-count-predicate",
+     re.compile(_REGISTRY_SUBJECT + r"(?:\s+\w+){0,2}\s*" + _COUNT_PREDICATE
+                + r"(?:\s+\w+){0,2}\s+" + _APPROXIMATOR + r"?" + _QUANTITY,
+                re.I)),
+    # "contains 90 probes", "there are 90 probes", "lists ninety probes"
+    ("counting-verb-probes",
+     re.compile(_COUNT_PREDICATE + r"\s+" + _APPROXIMATOR
+                + r"?(?:\d+|" + _LARGE_NUMBER_WORD + r"\b)"
+                r"(?:\s+\w+){0,2}\s+probes?\b", re.I)),
 )
 
 
@@ -3377,11 +3420,12 @@ def test_the_readme_states_no_registry_total() -> None:
             "The registry sits in the high 80s.",
             "The registry sits in the mid 50s.",
         ),
-        "numeral-registry-count": (
+        "registry-count": (
             "`--list` is the listing of the 90 registered probes.",
-            "There are 90 probes registered here.",
             "It reports 90 total probes.",
             "The probe registry holds 90 total probes.",
+            "90 probes are registered here.",
+            "There are ninety registered probes.",
         ),
         "approximate-quantity": (
             "It has grown to around 90 since then.",
@@ -3389,11 +3433,33 @@ def test_the_readme_states_no_registry_total() -> None:
             "It has grown to ~90 since then.",
             "It has grown to about 90 since then.",
             "It has grown to more than 80 since then.",
+            "It has grown to about ninety since then.",
         ),
         "dated-quantity": (
-            "The registry currently holds 90.",
-            "As of 2026 it holds 90.",
-            "It holds, at present, 90.",
+            "Today that number is 90.",
+            "As of 2026 it stood there.",
+            "It stood, at present, at 90.",
+            "It stands now in the mid-50s.",
+        ),
+        # The count stated the other way round -- subject first, quantity
+        # after a predicate. These three are verbatim the forms the round-1
+        # review found the narrower rules let through.
+        "registry-count-predicate": (
+            "The probe registry totals 90.",
+            "The number of registered probes is 90.",
+            "The registry holds 90.",
+            "Probe count: 90.",
+            "The probe registry = 90.",
+            "The registry stands at 90.",
+            "The registry has grown to ninety.",
+        ),
+        # A counting verb reaching a PLAIN probe noun, where neither the
+        # quantity nor the noun alone names the registry.
+        "counting-verb-probes": (
+            "There are 90 probes.",
+            "The registry contains 90 probes.",
+            "It registers 90 probes today.",
+            "It lists ninety probes.",
         ),
     }
     for rule, bodies in per_rule.items():
@@ -3424,7 +3490,11 @@ def test_the_readme_states_no_registry_total() -> None:
             "(currently in the high 80s) and this doc doesn't try to track "
             "the exact number.",
             "`python3 tools/ci_probes.py --status` reports 11 CI-eligible, "
-            "79 manual-only, 90 total registered probes."):
+            "79 manual-only, 90 total registered probes.",
+            # The round-1 review's three bypasses, verbatim.
+            "The probe registry totals 90.",
+            "The registry contains 90 probes.",
+            "The number of registered probes is 90."):
         expect(rules_fired(historical) != set(),
                f"the drift sentence is rejected: {historical[:60]!r}...")
 
@@ -3442,7 +3512,17 @@ def test_the_readme_states_no_registry_total() -> None:
             "Run everything, sequentially (slow — low tens of minutes).",
             "A span that covers the user's GUI port 8008 is refused.",
             "`run_probes.PROBE_PORT_SPANS` declares 2 for each of those two.",
-            "Concurrency cuts wall-time to roughly `total / N`."):
+            "Concurrency cuts wall-time to roughly `total / N`.",
+            "`tools/test_run_probes.py` validates every row against the live "
+            "registry.",
+            "An overlap-free parallel allocation over the whole registry.",
+            "Every registered probe holds `repo-config` in a shared interest.",
+            "The runner now resolves the executable ONCE, before a single "
+            "probe process exists.",
+            "`--retries N` re-runs a failed probe SOLO up to `N` more times.",
+            "Ctrl-C exits 130 after terminating every probe still running.",
+            "Cap `N` at (cores − 1) or so — each probe is a full engine "
+            "process."):
         fired = rules_fired(benign)
         expect(fired == set(),
                f"an operational quantity is accepted: {benign[:56]!r} "
