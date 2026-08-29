@@ -117,10 +117,10 @@ def expect(cond: bool, msg: str) -> None:
 # backticks removed, so "There are `93 registered probes`." is caught like
 # the unformatted sentence, and fenced blocks are scanned as written.
 #
-# The one shape outside lexical reach is a total carried entirely by an
-# antecedent ("The suite registers 93 of them."), which names neither the
-# registry nor a probe. The section is short and the rules cover every way
-# it has ever stated a total.
+# A total whose noun is only an antecedent ("The suite registers 93 of
+# them.") is covered too, by the partitive that carries the reference --
+# adjacency is required there, so the section's own "declares 2 for each of
+# those two" is untouched.
 #
 # What stays legal is what this section legitimately says: SMALL spelled-out
 # subset counts ("two registered probes derive a second listener", "Three
@@ -221,6 +221,24 @@ README_TOTAL_RULES: tuple[tuple[str, "re.Pattern[str]"], ...] = (
     ("quantified-probe-noun",
      re.compile(_BOUND_PREFIX + _APPROXIMATOR + r"?" + _STANDALONE_NUMBER
                 + r"(?:\s+\w+){0,2}\s+probes?\b", re.I)),
+    # A quantity whose noun is only an ANTECEDENT: "the suite registers 93 of
+    # them". The partitive must follow the number DIRECTLY -- that is what
+    # separates it from "declares 2 for each of those two", where the number
+    # counts something else entirely.
+    ("partitive-quantity",
+     re.compile(_APPROXIMATOR + r"?" + _STANDALONE_NUMBER
+                + r"\s+of\s+(?:them|these|those|the\s+(?:probes|registry"
+                r"|scripts|lot))\b", re.I)),
+    # A quantity reached DIRECTLY by a verb of having or listing, with no
+    # subject or noun to anchor it: "the suite registers 93". Adjacency is
+    # again what keeps the section's own numbers out -- "uses 3600 seconds",
+    # "exits 130", "reaches 8008" and "used stride 1" all say what their
+    # number is, and none of these verbs is how they say it.
+    ("counting-verb-quantity",
+     re.compile(r"\b(?:registers?|registered|lists?|ships?|holds?|counts?"
+                r"|totals?|totall?ed|numbers?|numbered|contains?|comprises?"
+                r"|includes?|consists?\s+of|carries|carry)\s+"
+                + _APPROXIMATOR + r"?" + _STANDALONE_NUMBER, re.I)),
 )
 
 
@@ -3478,6 +3496,24 @@ def test_the_readme_states_no_registry_total() -> None:
             "The probe total is 93.",
             "The total number of registered probes is 93.",
         ),
+        # A quantity carried by an antecedent rather than a noun. The first
+        # is verbatim the form round 4 of review found.
+        "partitive-quantity": (
+            "93 of them are registered.",
+            "The suite registers 93 of them.",
+            "It ships ninety of them.",
+            "Around 93 of these are registered.",
+            "It lists 93 of the probes.",
+            "The runner knows 93 of the registry.",
+        ),
+        # A quantity reached directly by a verb of having or listing, with
+        # neither a registry subject nor a noun.
+        "counting-verb-quantity": (
+            "The suite registers 93.",
+            "The runner holds 93.",
+            "It contains ninety.",
+            "The suite lists around 93.",
+        ),
         # A quantity counting a plain probe noun, with no registry subject
         # and no counting verb needed.
         "quantified-probe-noun": (
@@ -3513,6 +3549,10 @@ def test_the_readme_states_no_registry_total() -> None:
             # The round-3 review's two bypasses, verbatim.
             "The probe registry consists of 93 probes.",
             "The registry has a current total of 93 probes.",
+            # The round-4 review's bypass, verbatim, and the same total with
+            # the antecedent left implicit.
+            "The suite registers 93 of them.",
+            "The suite registers 93.",
             # The round-2 review's bypass: the same totals, formatted.
             "There are `93 registered probes`.",
             "The probe registry totals `93`.",
@@ -3536,7 +3576,8 @@ def test_the_readme_states_no_registry_total() -> None:
             "runtime is above 2300 seconds.",
             "Run everything, sequentially (slow — low tens of minutes).",
             "A span that covers the user's GUI port 8008 is refused.",
-            "`run_probes.PROBE_PORT_SPANS` declares 2 for each of those two.",
+            "`run_probes.PROBE_PORT_SPANS` declares 2 for each of those two, "
+            "and every other probe reserves its base alone.",
             "Concurrency cuts wall-time to roughly `total / N`.",
             "`tools/test_run_probes.py` validates every row against the live "
             "registry.",
@@ -3546,6 +3587,9 @@ def test_the_readme_states_no_registry_total() -> None:
             "probe process exists.",
             "`--retries N` re-runs a failed probe SOLO up to `N` more times.",
             "Ctrl-C exits 130 after terminating every probe still running.",
+            "A `--port` that reaches 8008 stays build-free.",
+            "Before #1571 the allocator used stride 1, so selecting "
+            "`debug_console_boot` put both on 9401.",
             "Cap `N` at (cores − 1) or so — each probe is a full engine "
             "process.",
             "`--list` shows the full probe registry but not CI status.",
