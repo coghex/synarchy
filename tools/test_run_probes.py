@@ -195,6 +195,14 @@ _REGISTRY_SUBJECT = (
     # the noun are counted, not spelled, so a new one needs no edit here.
     r"|" + _COUNT_NOUN + r"\s+of\s+(?:\w+\s+){0,3}?probes?\b)")
 
+# "all probes", "every registered probe" -- a universal quantifier names the
+# whole registry as surely as "the registry" does. It is a LEADING subject
+# only: trailing, "every probe" is just how this section refers to probes in
+# general ("exits 130 after terminating every probe still running"), and
+# "every OTHER probe" is a genuine subset, so neither may be reached
+# backwards from a number.
+_UNIVERSAL_PROBE_SUBJECT = r"(?:all|every)\s+(?:the\s+)?(?:registered\s+)?probes?"
+
 # The registry's own object, which names the whole thing as directly as any
 # English phrase does. It has to be matched CASE-SENSITIVELY: `PROBES` is
 # the identifier, and case-insensitively it is the word "probes", which this
@@ -238,7 +246,8 @@ README_TOTAL_RULES: tuple[tuple[str, "re.Pattern[str]"], ...] = (
     # at "." or ";" or a line break, and the reach is capped, so a number
     # elsewhere in the same sentence is not swept in.
     ("registry-quantity-clause",
-     re.compile(r"(?:" + _REGISTRY_SUBJECT + r"[^.;\n]{0,80}?"
+     re.compile(r"(?:(?:" + _REGISTRY_SUBJECT + r"|"
+                + _UNIVERSAL_PROBE_SUBJECT + r")[^.;\n]{0,80}?"
                 + _APPROXIMATOR + r"?" + _QUANTITY
                 + r"|" + _APPROXIMATOR + r"?" + _QUANTITY
                 + r"[^.;\n]{0,80}?" + _REGISTRY_SUBJECT + r")", re.I)),
@@ -3612,6 +3621,10 @@ def test_the_readme_states_no_registry_total() -> None:
             "The count of all probes is 93.",
             "The tally of every registered probe is 93.",
             "The number of all the probes is 93.",
+            "All probes, 93 in total, are registered.",
+            "All registered probes: 93.",
+            "Every registered probe is one of 93.",
+            "All the probes number ninety-three.",
             "The probes' count is 93.",
             "The probe headcount is 93.",
             "The probe tally is ninety-three.",
@@ -3724,6 +3737,8 @@ def test_the_readme_states_no_registry_total() -> None:
             "There are ninety-three probes.",
             # The round-10 review's bypass, verbatim.
             "The count of all probes is 93.",
+            # The round-12 review's bypass, verbatim.
+            "All probes, 93 in total, are registered.",
             # The round-2 review's bypass: the same totals, formatted.
             "There are `93 registered probes`.",
             "The probe registry totals `93`.",
@@ -3757,7 +3772,13 @@ def test_the_readme_states_no_registry_total() -> None:
             "The runner now resolves the executable ONCE, before a single "
             "probe process exists.",
             "`--retries N` re-runs a failed probe SOLO up to `N` more times.",
+            # These two pin the universal subject's LEADING-only position:
+            # both put "every probe" downstream of a number.
             "Ctrl-C exits 130 after terminating every probe still running.",
+            "`run_probes.PROBE_PORT_SPANS` declares 2 for each of those two, "
+            "and every other probe reserves its base alone.",
+            "The runner reaps each probe's process group on EVERY completion "
+            "path (#1323) — success, ordinary nonzero exit, timeout.",
             "This is the mode CI's selective gate (`tools/ci_probes.py`, "
             "#530) relies on.",
             "**Shared repository resources (#1322, #1444, #1570).** "
