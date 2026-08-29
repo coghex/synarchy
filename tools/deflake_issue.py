@@ -49,6 +49,25 @@ producer that already refused what it refuses: a batch that failed
 somewhere else, or stayed at or below X with every target present,
 reproduced nothing to attribute to the engine.
 
+Quoted content cannot forge the routing marker
+----------------------------------------------
+Everything this body quotes is arbitrary text — an engine log above all
+— and one of the things arbitrary text contains is an `issue-origin`
+marker. `approve_issues.issue_origin` scans the WHOLE raw body, fenced
+blocks included and case-insensitively, and RAISES on two markers naming
+different brands, so a quoted log carrying one would stop the filed
+issue entering the review gate at all: the one thing this route exists
+to do.
+
+So the assembled body passes through ONE funnel that breaks every
+HTML-comment opener, and only then are the two real markers appended.
+One funnel rather than an escape at each interpolation site, because a
+checklist covering the diagnosis prose, the evidence lines, the artifact
+paths, the command tokens and every quoted log is a checklist that
+eventually misses one. The finished text is then CHECKED — exactly one
+origin, exactly one publication key, exactly two comments — rather than
+trusted, because the cost of being wrong is silent.
+
 Every part of the body is required, so nothing is silently cut
 ------------------------------------------------------------
 The measurement facts, the provenance markers and at least one quoted
@@ -191,6 +210,19 @@ OPENS_PULL_REQUEST = {OUTCOME_PRODUCTION_DEFECT: False}
 # so it is a required input rather than a default.
 ORIGIN_MARKER = "issue-origin"
 ORIGINS = ("claude", "codex")
+
+# Everything this body quotes — engine logs above all — is arbitrary
+# text, and one of the things arbitrary text can contain is an
+# `issue-origin` marker. `approve_issues.py` scans the WHOLE raw body,
+# fenced blocks included, and RAISES on two markers naming different
+# brands: a quoted log carrying one would stop the filed issue entering
+# the review gate at all, which is the one thing this route exists to
+# do. So every untrusted character rendered into the body has its
+# HTML-comment OPENER broken before the two real markers are appended.
+# ASCII, visible, and reversible by eye — a reader sees what the log
+# said and the preamble says it was done.
+COMMENT_OPENER = "<!--"
+NEUTRAL_OPENER = "<! --"
 
 # The publication key's marker, and the string the key is derived over.
 # Versioned so a later change to what identifies a diagnosis cannot
@@ -408,6 +440,11 @@ def origin_marker(origin: str) -> str:
 
 
 ORIGIN_LINE = re.compile(rf"^<!--\s*{ORIGIN_MARKER}:(\w+)\s*-->$")
+# Deliberately `approve_issues.ORIGIN_RE`'s own shape: the gate scans the
+# WHOLE raw body, fences and all, case-insensitively, so this is what
+# the finished body is checked against before it is published.
+ORIGIN_ANYWHERE = re.compile(
+    rf"<!--\s*{ORIGIN_MARKER}:(claude|codex)\s*-->", re.IGNORECASE)
 
 
 def prose_lines(body) -> list:
@@ -441,6 +478,55 @@ def prose_lines(body) -> list:
             continue
         kept.append(stripped)
     return kept
+
+
+def neutralize(text: str) -> str:
+    """Break every HTML-comment opener in untrusted rendered content.
+
+    Applied to the WHOLE assembled body except the trailer this module
+    writes itself, rather than at each interpolation site: one funnel
+    cannot miss a field, and it makes "the only comments in this body
+    are the two we wrote" an invariant instead of a review checklist
+    covering the diagnosis prose, the evidence lines, the artifact
+    paths, the command tokens and every quoted log at once.
+    """
+    return text.replace(COMMENT_OPENER, NEUTRAL_OPENER)
+
+
+def require_one_marker_each(body: str, *, key: str, origin: str) -> None:
+    """The body carries this module's two markers and no other comment.
+
+    Asserted on the finished text rather than trusted from
+    `neutralize`, because the cost of being wrong is silent: a second
+    origin marker makes `approve_issues.issue_origin` raise, and the
+    filed issue never enters the review gate the whole route exists to
+    reach.
+    """
+    # Most specific first, so the message names the actual problem: the
+    # total-comment clause below is the strongest of the three and would
+    # otherwise answer for all of them.
+    origins = {found.lower() for found in ORIGIN_ANYWHERE.findall(body)}
+    if origins != {origin}:
+        raise NonSuccess(
+            f"the rendered issue body names the origin(s) "
+            f"{sorted(origins) or ['none']} where it must name exactly "
+            f"{origin!r}; `approve_issues.py` refuses a body with "
+            f"conflicting origin markers, and the filed issue would never "
+            f"enter the review gate")
+    keys = body.count(key_marker(key))
+    if keys != 1:
+        raise NonSuccess(
+            f"the rendered issue body carries {keys} "
+            f"`{PUBLICATION_MARKER}` markers where it must carry exactly "
+            f"one; a resume reconciles on that line")
+    comments = body.count(COMMENT_OPENER)
+    if comments != 2:
+        raise NonSuccess(
+            f"the rendered issue body carries {comments} HTML comment(s) "
+            f"where it must carry exactly two — this attempt's "
+            f"`{PUBLICATION_MARKER}` and its `{ORIGIN_MARKER}` marker; a "
+            f"third would be read as review-routing metadata this workflow "
+            f"did not write")
 
 
 def carries_key(body, key: str) -> bool:
@@ -643,7 +729,7 @@ def issue_title(handoff, diagnosis: dict) -> str:
     head = (f"{handoff.probe}: {baseline.failure_count}/"
             f"{baseline.requested_runs} runs fail on a production defect — "
             f"{diagnosis['summary']}")
-    head = " ".join(head.split())
+    head = neutralize(" ".join(head.split()))
     if len(head) > MAX_TITLE_CHARS:
         head = head[:MAX_TITLE_CHARS - 1].rstrip() + "…"
     return head
@@ -702,7 +788,10 @@ def _evidence_section(blocks: list) -> list:
              "Bounded excerpts read from the artifacts the harness retained "
              "for each non-PASS run. The paths are named so the full "
              "artifact can be found on the machine that measured it; the "
-             "quoted text is what a reviewer can read here.", ""]
+             "quoted text is what a reviewer can read here. An HTML-comment "
+             f"opener anywhere in quoted content is rendered as "
+             f"`{NEUTRAL_OPENER}`, so this issue carries exactly one "
+             f"review-routing marker: its own.", ""]
     for block in blocks:
         lines.append(f"#### {block['role']} run {block['index']} "
                      f"({block['outcome']}) — `{block['artifact_dir']}`")
@@ -802,8 +891,12 @@ def issue_body(handoff, *, diagnosis: dict, evidence: list, key: str,
         section = "\n".join(_evidence_section(evidence))
         if trimmed:
             section += note
-        body = fixed + section + closing
+        # ONE funnel: everything above this line is rendered from the
+        # handoff and is untrusted, and the trailer below is the only
+        # part this module writes as metadata.
+        body = neutralize(fixed + section) + closing
         if len(body) <= MAX_BODY_CHARS:
+            require_one_marker_each(body, key=key, origin=origin)
             return body, trimmed
         if len(evidence) <= 1:
             raise NonSuccess(

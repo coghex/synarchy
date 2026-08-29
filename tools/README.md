@@ -2540,6 +2540,16 @@ have all been pruned is REFUSED rather than filed on paths alone — but only an
 INCOMPLETE one ever collects evidence: a recorded outcome is checked first, so
 a resume works long after the artifact tree has been swept.
 
+**Quoted content cannot forge the routing marker.** An engine log is
+arbitrary text, and `approve_issues.issue_origin` scans the whole raw body —
+fenced blocks included — and RAISES on two markers naming different brands, so
+a quoted log carrying one would stop the filed issue entering the review gate
+at all. The assembled body therefore passes through one funnel that breaks
+every HTML-comment opener (rendering `<!--` as `<! --`) before the two real
+markers are appended, and `require_one_marker_each` then checks the finished
+text — exactly one origin, one publication key, two comments — rather than
+trusting that it did.
+
 **Nothing required is silently cut.** Only the second and later runs' evidence
 may be dropped to fit a tracker body; when even that is not enough the
 publication is refused, because a defect report published with its

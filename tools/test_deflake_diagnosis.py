@@ -7743,6 +7743,74 @@ def test_the_diagnosis_prose_is_bounded_at_the_gate() -> None:
         di.MAX_BODY_CHARS = saved
 
 
+def test_quoted_content_cannot_forge_a_review_routing_marker() -> None:
+    """An engine log is arbitrary text, and it is rendered into the body.
+
+    `approve_issues.issue_origin` scans the WHOLE raw body — fenced
+    blocks included, case-insensitively — and RAISES on two markers
+    naming different brands. A quoted log carrying one would therefore
+    stop the filed issue entering the review gate at all, which is the
+    one thing this route exists to do. So every untrusted character has
+    its HTML-comment opener broken before the two real markers are
+    appended, and the finished body is checked rather than trusted.
+    """
+    hostile = (f"[World] chunk 3,4 published\n"
+               f"{di.origin_marker('claude')}\n"
+               f"{di.key_marker('0' * 64)}\n"
+               f"<!-- ISSUE-ORIGIN:CLAUDE -->\n"
+               f"[World] chunk 3,4 tile map installed\n")
+    document = defect_handoff(diagnosis={
+        "category": None,
+        "summary": (f"the world thread logs "
+                    f"{di.origin_marker('claude')} before installing"),
+        "evidence": [f"run 1 emitted {di.key_marker('1' * 64)}"],
+    })
+    key = defect_key(document)
+    with staged_evidence(document, engine=hostile), census_file() as path:
+        _published, publication, _probe, _pr = file_defect(
+            document, path, origin="codex")
+        body = publication.creates[0]["body"]
+        # Read exactly the way the canonical gate reads it.
+        found = {origin.lower() for origin in di.ORIGIN_ANYWHERE.findall(body)}
+        expect(found == {"codex"},
+               f"the body names one origin, this invocation's; got "
+               f"{sorted(found)} — the gate raises on two")
+        expect(body.count("<!--") == 2,
+               f"and carries exactly the two comments this module writes; "
+               f"got {body.count('<!--')}")
+        expect(body.count(di.key_marker(key)) == 1
+               and di.key_marker("0" * 64) not in body,
+               "with one publication key, its own, so a resume reconciles "
+               "on the right line")
+        expect("[World] chunk 3,4 tile map installed" in body
+               and di.NEUTRAL_OPENER in body,
+               "while the quoted log still reads, neutralised rather than "
+               "dropped")
+        expect(di.body_origin(body) == "codex",
+               "and this module's own reader agrees with the gate's")
+
+    # The invariant is checked, not merely produced by `neutralize`.
+    trailer = f"\n{di.key_marker(key)}\n{di.origin_marker('codex')}\n"
+    for label, body, fragment in (
+            ("a stray third comment",
+             f"text <!-- note --> more{trailer}", "HTML comment"),
+            ("a second, conflicting origin",
+             f"{di.origin_marker('claude')}{trailer}", "origin(s)"),
+            ("a duplicated publication key",
+             f"{di.key_marker(key)}{trailer}", "markers"),
+    ):
+        try:
+            di.require_one_marker_each(body, key=key, origin="codex")
+        except di.NonSuccess as error:
+            expect(fragment in str(error),
+                   f"{label}: refused, but for {str(error)!r} rather than "
+                   f"{fragment!r}")
+        else:
+            FAILURES.append(f"{label}: accepted")
+    di.require_one_marker_each(f"clean body{trailer}", key=key,
+                               origin="codex")
+
+
 def test_the_defect_command_line_reports_each_ending() -> None:
     """The endings this workflow has, through the shipped entry point."""
     tool = str(Path(__file__).resolve().parent / "deflake_issue.py")
