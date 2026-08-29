@@ -517,15 +517,26 @@ def run_probe(args, art) -> bool:
     print(f"isolated resource root: {root}", flush=True)
     print(f"save slot: {slot}", flush=True)
 
-    # `boot` exits the probe outright when the engine dies before READY
-    # or never prints it, and disposes of the process it started on
-    # either of those paths itself. So the shutdown below guards only
-    # the code after a SUCCESSFUL boot: a boot that failed leaves no
-    # engine of this run's own, and an `engine.quit()` sent anyway would
-    # be aimed at whoever else holds the port — an instance that was
-    # already listening is exactly why a boot fails on a busy one.
-    proc = boot(port, art.engine_log, args=["--resource-root", root])
+    # The teardown guard is armed BEFORE the boot, not after it: `boot`
+    # hands back a LIVE engine, and an interrupt or an exception landing
+    # between that hand-back and an unarmed `try` would leave the
+    # process running with nothing left holding its handle. Arming first
+    # narrows that to the single assignment CPython cannot make atomic
+    # with the call it completes. (An interrupt taken INSIDE `boot`, in
+    # its READY poll, is `probelib`'s own exposure and is shared by every
+    # probe.)
+    #
+    # `proc` therefore stays None until `boot` has returned, and the
+    # shutdown is conditional on that. `boot` exits the probe outright
+    # when the engine dies before READY or never prints it, and disposes
+    # of the process it started on either of those paths itself — so a
+    # None here means this run owns no engine, and an `engine.quit()`
+    # sent anyway would be aimed at whoever else holds the port. An
+    # instance that was already listening is exactly why a boot fails on
+    # a busy one.
+    proc = None
     try:
+        proc = boot(port, art.engine_log, args=["--resource-root", root])
         bootstrap(port, art)
         send(port, f"world.init('probe', {args.seed}, {args.size}, {args.plates}); return 'ok'")
         send(port, "return world.waitForInit(300)", timeout=310)
@@ -708,8 +719,9 @@ def run_probe(args, art) -> bool:
         # engine is closing its own files, and only then may this run's
         # tree — every fixture, log line and save artifact in it — be
         # released by the guard in `main`, on the failing path exactly
-        # as on the passing one.
-        quit_engine(port, proc)
+        # as on the passing one, and on an interrupted one too.
+        if proc is not None:
+            quit_engine(port, proc)
 
 
 def main():

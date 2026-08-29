@@ -408,9 +408,15 @@ python3 tools/world_check.py --quick
 # disjoint paths for two invocations, no legacy /tmp name, release after
 # a pass, an early return, an exception, a boot abort and a handled
 # Ctrl-C, opt-in --keep-artifacts retaining on both a pass and a failure
-# and naming only what the run actually produced, a cleanup failure
-# making an otherwise clean run non-zero, and an outside same-named
-# decoy left byte-identical. It also pins what the probe still proves:
+# and naming only what the run actually produced (never calling a
+# directory that was never created empty), a cleanup failure making an
+# otherwise clean run non-zero, a read-only checkout still yielding a
+# removable tree with the source's own modes untouched, and an outside
+# same-named decoy left byte-identical. It pins the teardown boundary
+# structurally as well as behaviourally: the boot sits INSIDE the guard
+# whose finally shuts the engine down, because an interrupt taken at the
+# store of the handle boot just returned is between two bytecodes and no
+# line-level test can reach it. It also pins what the probe still proves:
 # the registration order placement hashes are indexed by (sorted real
 # flora, then probe_berry, then probe_clover), both fixture bodies by
 # sha256, and load_fixture_yaml still stopping the run at setup on a

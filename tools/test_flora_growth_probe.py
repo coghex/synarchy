@@ -20,7 +20,7 @@ fixture between another's write and the engine-side read of it while both
 interleaved into one truncated log. #1616 had already moved the SAVE slot
 into an invocation-owned root and explicitly left these behind.
 
-Nine properties are asserted directly rather than inferred, because each
+Ten properties are asserted directly rather than inferred, because each
 is a way the probe would leak, collide, or stop proving what it claims:
 
   * Two invocations share no path — not the fixtures, not the log, not
@@ -30,6 +30,10 @@ is a way the probe would leak, collide, or stop proving what it claims:
     deleted. Nor is any same-named file the run did not create.
   * The tree is released after a pass, an early return, an exception, a
     `probelib.boot` abort, and a handled Ctrl-C.
+  * An engine this run actually booted is ALWAYS shut down — including
+    when the very next statement after the boot is interrupted — while a
+    boot that aborted sends no `engine.quit()` at all, because a busy
+    port belongs to somebody else's engine.
   * Retention is opt-in, keeps the run's own success or failure result,
     names where the artifacts are, and describes what the run ACTUALLY
     produced rather than what a finished run usually would.
@@ -60,8 +64,10 @@ Exit codes: 0 = all tests passed, 1 = one or more failed.
 """
 from __future__ import annotations
 
+import ast
 import contextlib
 import hashlib
+import inspect
 import io
 import os
 import shutil
@@ -440,6 +446,149 @@ def test_cleanup_failure_fails_an_otherwise_clean_run() -> None:
                 real_rmtree(base, ignore_errors=True)
 
 
+class _StandInEngine:
+    """Stands in for the `subprocess.Popen` `probelib.boot` returns, so a
+    teardown assertion can name the exact handle that was shut down."""
+
+    def __repr__(self) -> str:  # pragma: no cover - diagnostics only
+        return "<stand-in engine>"
+
+
+def drive_run_probe(art, boot_result, after_boot) -> tuple[list, BaseException | None]:
+    """Call the REAL `run_probe` with `boot`, `quit_engine` and
+    `bootstrap` replaced, and report `(handles shut down, what
+    propagated)`.
+
+    `boot_result` is either the handle the stand-in boot returns or an
+    exception it raises; `after_boot` runs in `bootstrap`'s place, one
+    statement past the boot — which is exactly the transition an
+    interrupt must not be able to slip through.
+    """
+    quits: list = []
+
+    def stub_boot(_port, _log, args=None, **_kw):
+        if isinstance(boot_result, BaseException):
+            raise boot_result
+        return boot_result
+
+    def stub_quit(_port, proc=None, **_kw):
+        quits.append(proc)
+
+    def stub_bootstrap(_port, _art):
+        after_boot()
+
+    original = probe.boot, probe.quit_engine, probe.bootstrap
+    probe.boot, probe.quit_engine, probe.bootstrap = (
+        stub_boot, stub_quit, stub_bootstrap)
+    raised: BaseException | None = None
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            probe.run_probe(_Args(), art)
+    except BaseException as exc:  # noqa: BLE001 - the point of these cases
+        raised = exc
+    finally:
+        probe.boot, probe.quit_engine, probe.bootstrap = original
+    return quits, raised
+
+
+class _Args:
+    port = 9186
+    seed = 42
+    size = 64
+    plates = 3
+    keep_artifacts = False
+
+
+def test_a_booted_engine_is_always_shut_down() -> None:
+    print("\ntest_a_booted_engine_is_always_shut_down")
+    # The teardown guard has to be armed BEFORE the boot: `boot` hands
+    # back a LIVE engine, so anything raised at the very next statement
+    # would otherwise leave the process running with nothing holding its
+    # handle — the port and this run's files with it.
+    for label, blow_up in (
+            ("a handled Ctrl-C", KeyboardInterrupt),
+            ("an unexpected exception", lambda: RuntimeError("kaboom")),
+            ("a setup abort", lambda: SystemExit("setup gave up"))):
+        engine = _StandInEngine()
+
+        def raise_it():
+            raise blow_up()
+
+        with fresh_run() as art:
+            quits, raised = drive_run_probe(art, engine, raise_it)
+        expect(quits == [engine],
+               f"{label} one statement after the boot still shuts this "
+               f"run's engine down (got {quits})")
+        expect(raised is not None,
+               f"...and {label} still ends the run (got {raised!r})")
+
+
+def test_a_boot_that_aborted_is_never_sent_quit() -> None:
+    print("\ntest_a_boot_that_aborted_is_never_sent_quit")
+    # `probelib.boot` disposes of the process it started on both of its
+    # own failure paths, so this run owns no engine — and a busy port is
+    # exactly why a boot fails, which makes an `engine.quit()` sent
+    # anyway an attack on somebody else's instance.
+    def unreachable():
+        raise AssertionError("bootstrap ran after the boot had failed")
+
+    with fresh_run() as art:
+        quits, raised = drive_run_probe(
+            art, SystemExit("engine exited before READY"), unreachable)
+    expect(quits == [],
+           f"a boot abort sends no engine.quit() at whoever holds the "
+           f"port (got {quits})")
+    expect(isinstance(raised, SystemExit),
+           f"...and the abort still ends the run (got {raised!r})")
+
+
+def test_the_boot_itself_is_inside_the_teardown_guard() -> None:
+    print("\ntest_the_boot_itself_is_inside_the_teardown_guard")
+    # The two cases above enter through `bootstrap`, one line past the
+    # boot, and both shapes of this code protect that line. The window
+    # they CANNOT reach is the store of the handle `boot` just returned:
+    # CPython checks for a pending signal between bytecodes, so an
+    # interrupt taken there leaves a live engine bound to a local with
+    # no handler if the `try` starts only afterwards. Nothing at line
+    # granularity can observe that, so the property is asserted on the
+    # source the interpreter actually runs — the boot call must sit
+    # INSIDE the guarded block, with the handle pre-set to None so a
+    # boot that aborted still sends nothing.
+    fn = ast.parse(inspect.getsource(probe.run_probe)).body[0]
+    guards = [node for node in ast.walk(fn) if isinstance(node, ast.Try)]
+    expect(len(guards) == 1,
+           f"run_probe has exactly one teardown guard (found {len(guards)})")
+    if len(guards) != 1:
+        return
+    guard = guards[0]
+
+    def calls(nodes, name):
+        return [n for node in nodes for n in ast.walk(node)
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                and n.func.id == name]
+
+    before = [stmt for stmt in fn.body if stmt is not guard]
+    expect(not calls(before, "boot") and len(calls(guard.body, "boot")) == 1,
+           "the boot happens INSIDE the guard, so an interrupt at the "
+           "store of its handle still reaches the shutdown")
+    expect(len(calls(guard.finalbody, "quit_engine")) == 1,
+           "the guard's finally is what shuts the engine down")
+    presets = [stmt for stmt in before
+               if isinstance(stmt, ast.Assign)
+               and any(isinstance(t, ast.Name) and t.id == "proc"
+                       for t in stmt.targets)
+               and isinstance(stmt.value, ast.Constant)
+               and stmt.value.value is None]
+    expect(len(presets) == 1,
+           "the handle is None until the boot returns, so a boot that "
+           "aborted sends no engine.quit() at somebody else's instance")
+    expect(any(isinstance(node, ast.If) and "proc" in ast.dump(node.test)
+               and any(c.func.id == "quit_engine"  # type: ignore[union-attr]
+                       for c in calls([node], "quit_engine"))
+               for node in guard.finalbody),
+           "...and the shutdown is conditional on having one")
+
+
 # ---------------------------------------------------------------------
 # Opt-in retention
 # ---------------------------------------------------------------------
@@ -676,6 +825,9 @@ def main() -> int:
     test_a_boot_abort_still_releases_and_points_at_the_flag()
     test_a_keyboard_interrupt_still_releases()
     test_cleanup_failure_fails_an_otherwise_clean_run()
+    test_a_booted_engine_is_always_shut_down()
+    test_a_boot_that_aborted_is_never_sent_quit()
+    test_the_boot_itself_is_inside_the_teardown_guard()
     test_retention_keeps_a_passing_run_passing()
     test_retention_keeps_a_failing_run_failing()
     test_retention_reports_what_the_run_actually_produced()

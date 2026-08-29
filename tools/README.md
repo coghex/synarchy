@@ -887,7 +887,12 @@ run ACTUALLY produced (a directory that was never created — a tree whose
 staging failed part-way — says so, rather than being reported as empty); a
 default failing run says its log went with the tree and points at the flag
 rather than leaving the operator chasing a deleted path; a cleanup that
-cannot finish makes an otherwise passing run non-zero; a read-only
+cannot finish makes an otherwise passing run non-zero; an engine the run
+actually booted is always shut down, while a boot that ABORTED is never
+sent `engine.quit()` at all (a busy port is somebody else's instance) —
+pinned structurally too, because an interrupt taken at the store of the
+handle `boot` just returned falls between two bytecodes where no
+line-level test can reach it; a read-only
 checkout still yields a REMOVABLE tree, with the source's own modes
 untouched (`copytree` reproduces the source's mode bits, so a read-only
 `config/` would otherwise give this run a private copy whose entries
