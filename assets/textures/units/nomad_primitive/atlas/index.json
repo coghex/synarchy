@@ -188,6 +188,92 @@
       "atlas_digest": "6864901afec7ff0cf20ffb999f1c143814938f6c7b99ae09e676d762f579e94e"
     },
     {
+      "name": "crawling",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/nomad_primitive/atlas/crawling.png",
+      "atlas_width": 612,
+      "atlas_height": 340,
+      "cell_width": 68,
+      "cell_height": 68,
+      "columns": 9,
+      "rows": 5,
+      "flip": true,
+      "fps": 8.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 9
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "ea8132a9d9bcc41dbea5badb762ab6068e0447bba8efee815fbc4b86e1402eea",
+      "atlas_digest": "24aad34b53138a64b8803003064e20ba6c91d4a056d6fd6323dda2975dd4d76d"
+    },
+    {
+      "name": "crawling_idle",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/nomad_primitive/atlas/crawling_idle.png",
+      "atlas_width": 68,
+      "atlas_height": 340,
+      "cell_width": 68,
+      "cell_height": 68,
+      "columns": 1,
+      "rows": 5,
+      "flip": true,
+      "fps": 1.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 1
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 1
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 1
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 1
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 1
+        }
+      ],
+      "source_digest": "a56a65673270c9a457b15f9928fc1997d861829a31fd4213ab32e157ec539ee1",
+      "atlas_digest": "d2ee8866c09419981cc8a2cc025e05b3efd8e4213724a48ddcc1cbac7d4c6eb6"
+    },
+    {
       "name": "idle",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/nomad_primitive/atlas/idle.png",
