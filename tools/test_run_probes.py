@@ -198,7 +198,14 @@ _REGISTRY_NOUN = (
 _COUNT_NOUN = (
     r"(?:counts?|totals?|tall(?:y|ies)|numbers?|sizes?|lengths?|census(?:es)?"
     r"|head\s?counts?|inventor(?:y|ies)|rosters?|lists?|tables?"
-    r"|registr(?:y|ies)|populations?|amounts?)")
+    r"|registr(?:y|ies)|populations?|amounts?"
+    # The container is a count noun too: what "the probe collection" has 93
+    # of is the registry. Three words this section uses for a SUBSET are
+    # deliberately absent -- "a selection of the probes above", "a `--jobs`
+    # batch", and the process "group" a probe is reaped in.
+    r"|collections?|sets?|suites?|famil(?:y|ies)|catalogues?|catalogs?"
+    r"|indexe?s?|directories|directory|pools?|arrays?|bundles?|corpus(?:es)?"
+    r"|complements?)")
 
 _REGISTRY_SUBJECT = (
     r"(?:" + _REGISTRY_NOUN + r"|registry"
@@ -3689,6 +3696,11 @@ def test_the_readme_states_no_registry_total() -> None:
             "All the probes number ninety-three.",
             "The probes' count is 93.",
             "The probe headcount is 93.",
+            "The full probe collection has 93 members.",
+            "The probe suite has 93 members.",
+            "The collection of registered probes is 93 strong.",
+            "The probe catalogue holds 93.",
+            "The registry index is 93 long.",
             "The probe tally is ninety-three.",
             "The registry holds ninety-three.",
             "The probe tally is 90+.",
@@ -3836,6 +3848,8 @@ def test_the_readme_states_no_registry_total() -> None:
             "The probe registry totals **93**.",
             # The round-16 review's bypass, verbatim.
             "There are 93 <em>registered</em> probes.",
+            # The round-18 review's bypass, verbatim.
+            "The full probe collection has 93 members.",
             # And the original drift sentence as it really shipped, wrapped.
             "`python3 tools/run_probes.py --list` is the authoritative count\n"
             "and listing of registered probes — it's grown over time\n"
@@ -3903,6 +3917,14 @@ def test_the_readme_states_no_registry_total() -> None:
             "`run_probes.PROBE_TIMEOUT_OVERRIDES` and "
             "`save_compat_migration` name 3600 between them.",
             "The span is 2*3 wide.",
+            # The three subset words the count-noun class must NOT swallow.
+            # Each is placed exactly where a count noun would make it a
+            # registry subject, with a number in reach.
+            "Runs a selection of the probes above, 4 at a time, and prints "
+            "a per-probe PASS/FAIL summary.",
+            "The runner records every attempt it dispatches in a probe "
+            "batch of 4.",
+            "It reaps the probe group after 2 seconds.",
             # A comparison is not an opening tag, so nothing downstream of
             # it is swallowed as markup.
             "With `--jobs > 1` the spans are laid out from it instead of "
