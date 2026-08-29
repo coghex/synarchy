@@ -34,70 +34,145 @@ needs worldgen) and checks the DERIVED growth runtime end-to-end:
      slot lands in this run's own saves/ and is deleted with it — the
      developer's saves/ is never read, written or rotated (#1616).
 
+EVERY file this invocation creates — the two fixture YAMLs, the engine
+log, and that resource root with its saves — lives under one directory
+this process owns, and goes away again on every handled exit (#1682).
+Before that the two fixtures and the log were fixed `/tmp` names no run
+cleaned up, which two concurrent runs collided on. `--keep-artifacts`
+retains the directory instead, and names it, for diagnosing a failure.
+
 Usage: python3 tools/flora_growth_probe.py [--port 9186] [--seed 42]
-       [--size 64] [--plates 3]
+       [--size 64] [--plates 3] [--keep-artifacts]
 """
 import argparse, glob, os, shutil, socket, subprocess, sys, tempfile, time, uuid
 from probelib import (FixtureNotRegistered, boot, capture_request_id,
                       load_fixture_yaml, quit_engine, send, send_json,
                       wait_load_published, wait_save_complete)
 
-SPROOT = "/tmp"
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-def make_isolated_root(base: str) -> str:
-    """A throwaway resource root for one invocation (#1616): the
-    read-only content families symlinked, `config/` COPIED without the
-    developer's `*.local.yaml` overrides, and its OWN empty `saves/`.
+class RunArtifacts:
+    """Every file one invocation of this probe creates, under a single
+    directory that invocation owns (#1682).
 
-    `app/App/ResourceRoot.hs` chdirs the engine into this directory and
-    `World.Save.Serialize` resolves `saves` relative to it, so the round
-    trip below writes here instead of the developer's live `saves/` —
-    which is gitignored and therefore accumulates abandoned slots
-    silently. Copying `config/` rather than symlinking it keeps a
-    personal `config/save.local.yaml` out of the run: `scripts/init.lua`
-    loads the autosave scheduler, so a local autosave interval could
-    otherwise fire a competing save while this probe is winding the
-    calendar around and rotate slots underneath it.
+    `base` comes from `tempfile.mkdtemp`, so it is this process's alone
+    and disjoint from every other invocation's — which is what makes the
+    logical names inside it (`engine.log`, `probe_berry.yaml`,
+    `probe_clover.yaml`) safe to keep fixed. Two concurrent runs on
+    distinct `--port` values therefore write two disjoint trees: neither
+    can overwrite the other's fixture between its write and the
+    engine-side read of it, and neither can truncate the other's log.
+    `tools/run_probes.py --jobs N` and `tools/probe_flake.py`'s
+    machine-wide port lease both make that concurrency a supported mode,
+    not a hypothetical.
 
-    Only the SAVE slot moves here; the probe's own fixture YAML stays
-    where it already was, under `/tmp`.
+    Nothing this process did not create is ever named, so a file of the
+    same name outside the tree — a developer's own `/tmp/probe_berry.yaml`
+    — is not opened for writing, truncated, modified or removed. Before
+    #1682 the two fixtures and the engine log were exactly those fixed
+    `/tmp` names, written with a truncating `open(..., "w")` and cleaned
+    up by nothing; only the SAVE slot had moved into the run's own root
+    (#1616).
     """
-    root = os.path.join(base, "root")
-    os.makedirs(root, exist_ok=True)
-    for family in ("scripts", "assets", "data"):
-        target = os.path.join(root, family)
-        if not os.path.exists(target):
-            os.symlink(os.path.join(REPO, family), target)
-    config_dst = os.path.join(root, "config")
-    if not os.path.exists(config_dst):
-        shutil.copytree(os.path.join(REPO, "config"), config_dst,
-                        ignore=shutil.ignore_patterns("*.local.yaml"))
-    os.makedirs(os.path.join(root, "saves"), exist_ok=True)
-    return root
+
+    def __init__(self, base: str) -> None:
+        self.base = base
+        self.root = os.path.join(base, "root")
+        self.logs = os.path.join(base, "logs")
+        self.fixtures = os.path.join(base, "fixtures")
+
+    def build(self) -> str:
+        """Stage this invocation's throwaway resource root (#1616) and
+        the two artifact directories beside it, and answer with the root.
+
+        The read-only content families are symlinked; `config/` is
+        COPIED without the developer's `*.local.yaml` overrides; `saves/`
+        starts empty and belongs to this run.
+        `app/App/ResourceRoot.hs` chdirs the engine into that directory
+        and `World.Save.Serialize` resolves `saves` relative to it, so
+        the round trip below writes here instead of the developer's live
+        `saves/` — which is gitignored and therefore accumulates
+        abandoned slots silently. Copying `config/` rather than
+        symlinking it keeps a personal `config/save.local.yaml` out of
+        the run: `scripts/init.lua` loads the autosave scheduler, so a
+        local autosave interval could otherwise fire a competing save
+        while this probe is winding the calendar around and rotate slots
+        underneath it.
+        """
+        os.makedirs(self.root, exist_ok=True)
+        for family in ("scripts", "assets", "data"):
+            target = os.path.join(self.root, family)
+            if not os.path.exists(target):
+                os.symlink(os.path.join(REPO, family), target)
+        config_dst = os.path.join(self.root, "config")
+        if not os.path.exists(config_dst):
+            shutil.copytree(os.path.join(REPO, "config"), config_dst,
+                            ignore=shutil.ignore_patterns("*.local.yaml"))
+        os.makedirs(os.path.join(self.root, "saves"), exist_ok=True)
+        os.makedirs(self.logs, exist_ok=True)
+        os.makedirs(self.fixtures, exist_ok=True)
+        return self.root
+
+    @property
+    def engine_log(self) -> str:
+        """The engine's stdout/stderr capture. `probelib.boot` opens it
+        `"w"`, so this being invocation-owned is what stops a second run
+        truncating a first run's evidence."""
+        return os.path.join(self.logs, "engine.log")
+
+    def fixture(self, name: str) -> str:
+        """One of the probe's own inline flora fixtures. The path is
+        handed to the ENGINE, which has chdir'd into `root`, so it is
+        absolute for the same reason it always was."""
+        return os.path.join(self.fixtures, f"{name}.yaml")
 
 
-def remove_run_root(base: str) -> bool:
-    """Delete this invocation's own throwaway tree, save artifacts and
-    all, and say whether it is really gone.
+def release_artifacts(art: RunArtifacts, keep: bool) -> bool:
+    """Retire this invocation's artifact directory, once the engine it
+    booted has been through `quit_engine`, and say whether the run may
+    still report success.
+
+    Without `--keep-artifacts` the whole tree goes away — fixtures,
+    engine log and save slot together — and anything that SURVIVES makes
+    the run non-zero: a green result sitting beside leftover artifacts is
+    precisely the outcome this isolation exists to prevent, so it must
+    not be reported as a pass. With the flag the tree is retained and
+    named, and the run keeps whatever result its own checks produced.
 
     Only ever removes the directory THIS process made with
     `tempfile.mkdtemp`, so nothing pre-existing is at risk; `rmtree`
     unlinks the symlinked content families rather than recursing into
     them, so the real `scripts/`, `assets/` and `data/` are never
-    followed. A survivor makes the run non-zero: a green result sitting
-    beside leftover saves is precisely the outcome this isolation
-    exists to prevent, so it must not be reported as a pass.
+    followed.
     """
+    if keep:
+        # Each line names what this run ACTUALLY produced. A run that
+        # died before READY holds no fixtures and no save slot, and
+        # saying otherwise would send the reader looking for files the
+        # failure is the reason they do not have.
+        print(f"\nretained this run's artifacts (--keep-artifacts): "
+              f"{art.base}")
+        for label, path in (("engine log", art.logs),
+                            ("fixtures", art.fixtures),
+                            ("saves", os.path.join(art.root, "saves"))):
+            try:
+                held = sorted(os.listdir(path))
+            except OSError:
+                held = []
+            print(f"  {label:14} {path}"
+                  + (f" ({', '.join(held)})" if held else " (empty)"))
+        print(f"  {'resource root':14} {art.root}")
+        return True
     try:
-        shutil.rmtree(base)
+        shutil.rmtree(art.base)
     except OSError as exc:
-        print(f"  [FAIL] could not remove this run's resource root "
-              f"{base}: {exc}")
+        print(f"  [FAIL] could not remove this run's artifact directory "
+              f"{art.base}: {exc}")
         return False
-    if os.path.exists(base):
-        print(f"  [FAIL] this run's resource root survived removal: {base}")
+    if os.path.exists(art.base):
+        print(f"  [FAIL] this run's artifact directory survived removal: "
+              f"{art.base}")
         return False
     return True
 
@@ -250,7 +325,7 @@ PROBE_CLOVER_YAML = """flora:
 """
 
 
-def bootstrap(port):
+def bootstrap(port, art):
     for pattern, fn in [
         ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
         ("data/items/*.yaml",      "engine.loadItemYaml"),
@@ -292,7 +367,7 @@ def bootstrap(port):
     # The probe's own fruiting species — appended after the real flora
     # so their placement hashes (indexed by registration order) are
     # untouched. Max-tolerance worldGen: places on any seed.
-    berry_path = f"{SPROOT}/probe_berry.yaml"
+    berry_path = art.fixture("probe_berry")
     with open(berry_path, "w") as f:
         f.write(PROBE_BERRY_YAML)
     load_fixture_yaml(port, "engine.loadFloraYaml", berry_path)
@@ -300,7 +375,7 @@ def bootstrap(port):
     # probe_berry so both the real flora's indices and probe_berry's
     # own index stay untouched. Max-tolerance worldGen: places on any
     # seed, same as probe_berry.
-    clover_path = f"{SPROOT}/probe_clover.yaml"
+    clover_path = art.fixture("probe_clover")
     with open(clover_path, "w") as f:
         f.write(PROBE_CLOVER_YAML)
     load_fixture_yaml(port, "engine.loadFloraYaml", clover_path)
@@ -373,49 +448,34 @@ def growth_entry(port, gx, gy, species):
     return None
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--port", type=int, default=9186)
-    ap.add_argument("--seed", type=int, default=42)
-    ap.add_argument("--size", type=int, default=64)
-    ap.add_argument("--plates", type=int, default=3)
-    args = ap.parse_args()
+def run_probe(args, art) -> bool:
+    """Stage this run's own tree, boot an engine against it, and run
+    every check. Returns True when they all passed.
+
+    Split out of `main` (#1682) so the guard around it owns exactly one
+    thing — releasing this invocation's artifact directory — on every
+    path out of the run, however it ends.
+    """
     port = args.port
     passed = True
 
-    # This invocation owns its resource root and therefore its saves/
-    # (#1616): the round trip at the end writes a slot that no ordinary
-    # `cabal run` can reach, and the whole tree goes away below.
-    base = tempfile.mkdtemp(prefix="synarchy_flora_growth_")
+    root = art.build()
+    # Unique per invocation as well as per root, so the slot NAME alone
+    # identifies this run even in a log shared with another.
+    slot = f"flora_growth_check_{uuid.uuid4().hex[:8]}"
+    print(f"isolated resource root: {root}", flush=True)
+    print(f"save slot: {slot}", flush=True)
 
-    # The guard starts HERE, one statement after that directory exists
-    # (#1791), because everything between this point and the cleanup
-    # below can fail with invocation-owned state already on disk.
-    # `make_isolated_root` stages incrementally — the root, three
-    # symlinks, a copied `config/`, `saves/` — so a permission, source
-    # or disk-space failure part-way through leaves a partial tree that
-    # nothing outside this guard would remove. `boot` is inside for the
-    # same reason: it exits the probe outright when the engine dies
-    # before READY or never prints it, and that failure path would
-    # otherwise leave this run's root — the one thing the cleanup below
-    # exists to remove — sitting in the temp directory.
-    #
-    # A None handle is what `quit_engine` already expects when there is
-    # no live process to shut down, and it is initialised BEFORE the
-    # try, so a staging failure — which happens before any boot — sends
-    # no `engine.quit()` at an engine that is somebody else's.
-    proc = None
+    # `boot` exits the probe outright when the engine dies before READY
+    # or never prints it, and disposes of the process it started on
+    # either of those paths itself. So the shutdown below guards only
+    # the code after a SUCCESSFUL boot: a boot that failed leaves no
+    # engine of this run's own, and an `engine.quit()` sent anyway would
+    # be aimed at whoever else holds the port — an instance that was
+    # already listening is exactly why a boot fails on a busy one.
+    proc = boot(port, art.engine_log, args=["--resource-root", root])
     try:
-        root = make_isolated_root(base)
-        # Unique per invocation as well as per root, so the slot NAME alone
-        # identifies this run even in a log shared with another.
-        slot = f"flora_growth_check_{uuid.uuid4().hex[:8]}"
-        print(f"isolated resource root: {root}", flush=True)
-        print(f"save slot: {slot}", flush=True)
-
-        proc = boot(port, f"{SPROOT}/flora_growth_probe_engine.log",
-                    args=["--resource-root", root])
-        bootstrap(port)
+        bootstrap(port, art)
         send(port, f"world.init('probe', {args.seed}, {args.size}, {args.plates}); return 'ok'")
         send(port, "return world.waitForInit(300)", timeout=310)
         send(port, "world.show('probe'); return 'ok'")
@@ -454,7 +514,7 @@ def main():
             print(f"  [FAIL] probe_berry fixture not found in scan region "
                   f"— this is a fixture-placement regression, not a "
                   f"seed issue")
-            return 1
+            return False
         ef = growth_entry(port, *rasp, "probe_berry")
         ok2 = ef is not None and all(
             k in ef for k in ("age", "health", "generation", "stage",
@@ -582,7 +642,7 @@ def main():
         failure = save_and_reload(port, "probe", slot)
         if failure:
             print(f"  [FAIL] {failure}")
-            return 1
+            return False
         send(port, "world.show('probe'); return 'ok'")
         d5 = send_json(port, "return world.getDate('probe')")
         ok5 = isinstance(d5, dict) and d5.get("year") == 3 \
@@ -591,30 +651,91 @@ def main():
         print(f"  [{'PASS' if ok5 else 'FAIL'}] growth clock survives "
               f"save/load: {d5}")
 
-        print("\n" + ("ALL FLORA GROWTH CHECKS PASSED" if passed else "SOME FAILED"))
-        rc = 0 if passed else 1
+        return passed
     finally:
         # Orderly shutdown FIRST: the root must still exist while the
-        # engine is closing its own files, and only then does this run's
-        # tree (with every save artifact it created) go away — on the
-        # failing path exactly as on the passing one.
-        #
-        # Shut down ONLY an engine this run actually launched. `boot`
-        # already disposes of the process it started on either of its own
-        # failure paths, and leaves `proc` None — so a None here means
-        # the port belongs to somebody else (an instance that was already
-        # listening is exactly why a boot fails on a busy port), and
-        # `engine.quit()` would be aimed at their engine. Cleanup of the
-        # root stays unconditional: that directory is ours either way.
-        if proc is not None:
-            quit_engine(port, proc)
-        cleaned = remove_run_root(base)
-    return rc if cleaned else 1
+        # engine is closing its own files, and only then may this run's
+        # tree — every fixture, log line and save artifact in it — be
+        # released by the guard in `main`, on the failing path exactly
+        # as on the passing one.
+        quit_engine(port, proc)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--port", type=int, default=9186)
+    ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--size", type=int, default=64)
+    ap.add_argument("--plates", type=int, default=3)
+    ap.add_argument("--keep-artifacts", action="store_true",
+                    help="keep this run's artifact directory (its two "
+                         "fixture YAMLs, the engine log, and the isolated "
+                         "resource root with its saves) instead of deleting "
+                         "it, and name it in the summary — for diagnosing a "
+                         "failure")
+    args = ap.parse_args()
+
+    # This invocation owns every file it creates (#1682): the two
+    # fixture YAMLs, the engine log, and the resource root whose saves/
+    # the round trip at the end writes into (#1616), all under one
+    # directory `tempfile.mkdtemp` gave this process alone.
+    #
+    # The guard starts HERE, one statement after that directory exists
+    # (#1791), because everything between this point and the release
+    # below can fail with invocation-owned state already on disk.
+    # `RunArtifacts.build` stages incrementally — the root, three
+    # symlinks, a copied `config/`, `saves/`, then the log and fixture
+    # directories — so a permission, source or disk-space failure
+    # part-way through leaves a partial tree that nothing outside this
+    # guard would remove. `run_probe`'s `boot` is inside for the same
+    # reason: it exits the probe outright when the engine dies before
+    # READY, and that path would otherwise leave this run's tree sitting
+    # in the temp directory.
+    #
+    # A `finally` rather than a set of `except` clauses, so a handled
+    # Ctrl-C releases the tree on its way out and still ends the run the
+    # way an interrupt should, and an unexpected exception still prints
+    # its own traceback. Nothing can promise cleanup after an
+    # UNCATCHABLE termination (SIGKILL, a host failure) — which is why
+    # the names INSIDE the tree never have to be collision-proof on
+    # their own: the tree itself already is, so even that residue cannot
+    # collide with another run.
+    art = RunArtifacts(tempfile.mkdtemp(prefix="synarchy_flora_growth_"))
+    passed = False
+    try:
+        passed = run_probe(args, art)
+        print("\n" + ("ALL FLORA GROWTH CHECKS PASSED" if passed
+                      else "SOME FAILED"))
+    except SystemExit as exc:
+        # How `probelib.boot` ends a run whose engine died before READY
+        # or never printed it, and how a setup step gives up. Reported
+        # rather than allowed to exit, so the release below stays on the
+        # path and the summary names the abort.
+        print(f"\n  [FAIL] the run aborted before finishing: {exc}")
+    finally:
+        # Only ever after `run_probe`'s own `quit_engine`, which its
+        # `finally` has already run by the time control reaches here.
+        released = release_artifacts(art, args.keep_artifacts)
+        if not passed and not args.keep_artifacts:
+            # A failure's primary evidence is the engine log, and some
+            # paths above have already named it — `probelib.boot`'s
+            # abort message quotes the path verbatim. It has just been
+            # deleted with the rest of the tree, so say so here rather
+            # than leave the operator chasing a path that is no longer
+            # there.
+            print("  (this run's engine log, fixture YAMLs and save slot "
+                  "went with its artifact directory — re-run with "
+                  "--keep-artifacts to keep them)")
+    return 0 if passed and released else 1
 
 
 if __name__ == "__main__":
     try:
         sys.exit(main())
     except FixtureNotRegistered as exc:
+        # Raised by `load_fixture_yaml` when one of the two fixtures
+        # above registered nothing. `main`'s `finally` has already
+        # released this run's artifacts on the way out; this only turns
+        # the setup failure into a message rather than a traceback.
         print(f"\n{exc}")
         sys.exit(1)
