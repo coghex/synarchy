@@ -43,15 +43,17 @@ What a census record holds, for each probe:
   and stays one record however many times the recorder retries. The
   v2→v3 migration adds the empty log and nothing else.
 * `outcomes` — #1439 extends the file again, to `probe-census/v4`, with
-  an append-only log of a de-flake attempt's STABLE NON-SUCCESS
-  outcomes, written by `tools/deflake_outcome.py` once a diagnosis has
-  ended without a verified repair. A third separate collection for the
-  same reason the second one was: it is identified by its ATTEMPT
-  identity and stays one record however many times the workflow is
-  resumed, and it carries evidence — the measurement summaries the
-  outcome rests on, the diagnostic summary, and an advisory de-list
-  recommendation — that neither of the other two logs has a field for.
-  The v3→v4 migration adds the empty log and nothing else.
+  an append-only log of a de-flake attempt's endings that produced no
+  verified repair, written by `tools/deflake_outcome.py` for the three
+  STABLE NON-SUCCESS outcomes and by `tools/deflake_issue.py` (#1438)
+  for the production defect it files a tracker issue for. A third
+  separate collection for the same reason the second one was: it is
+  identified by its ATTEMPT identity and stays one record however many
+  times the workflow is resumed, and it carries evidence — the
+  measurement summaries the outcome rests on, the diagnostic summary,
+  an advisory de-list recommendation, and the filed issue's number, URL
+  and publication key — that neither of the other two logs has a field
+  for. The v3→v4 migration adds the empty log and nothing else.
 
 #1429 adds what those measurements MEAN over time. The newest cohort is
 the current statistic and displaces the previous one without deleting

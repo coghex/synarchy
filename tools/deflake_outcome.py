@@ -366,6 +366,64 @@ ROUTE_ROLES = {
     },
 }
 
+# What each of #1437's endings IS, in a sentence. A consumer that does
+# not own a route still has to say what it was handed, and a bare
+# identifier is not that; the workflow that DOES own it comes from
+# `deflake_diagnosis.ROUTE_OWNER` rather than from a second table here.
+ROUTE_ENDING = {
+    deflake_diagnosis.ROUTE_NO_TARGET:
+        "observed no non-PASS check at all",
+    deflake_diagnosis.ROUTE_CANNOT_REPRODUCE:
+        "could not reproduce the failure under the handoff's own condition",
+    deflake_diagnosis.ROUTE_PRODUCTION_DEFECT:
+        "identifies a production-code or shipped-script defect",
+    deflake_diagnosis.ROUTE_NO_CONFIDENT_FIX:
+        "reproduced the failure and established no one bounded probe-side "
+        "repair",
+    deflake_diagnosis.ROUTE_PARTIAL_IMPROVEMENT:
+        "measurably improved the failure count without passing the "
+        "acceptance gate",
+    deflake_diagnosis.ROUTE_REPAIR:
+        "is #1437's confidently diagnosed repair",
+    deflake_diagnosis.ROUTE_HANDOFF_REJECTED:
+        "never reached a diagnosis at all",
+}
+
+
+class RouteOwnership:
+    """Which of #1437's routes ONE consuming workflow owns.
+
+    Epic #1426 splits the non-repair endings across two sibling
+    consumers of the same `deflake-outcome-handoff/v1` envelope: this
+    module records the three STABLE outcomes (#1439), and
+    `tools/deflake_issue.py` files a tracker issue for the
+    production-defect ending (#1438). Everything the two share — the
+    producer record, the measurement binding, the descriptor, the
+    worktree boundary, the artifact rebuild — is checked by ONE entry
+    gate, and the owned-route table is the only part of it that differs.
+
+    So the gate takes the table as a parameter instead of existing
+    twice. A second copy would be the one that went stale, and a rule
+    duplicated into a sibling is a rule that sibling can weaken
+    privately. Nothing here imports, requires or stubs #1438: the
+    ownership object is data a caller supplies, and this module's own
+    `OWNED` is unchanged by anyone constructing another.
+    """
+
+    def __init__(self, *, issue: int, outcomes, roles: dict):
+        self.issue = issue
+        self.outcomes = tuple(outcomes)
+        self.roles = dict(roles)
+
+    def owns(self, route) -> bool:
+        return route in self.roles
+
+
+# This module's own ownership: the three routes that become a stable
+# outcome, judged on the roles each rests on.
+OWNED = RouteOwnership(issue=1439, outcomes=STABLE_OUTCOMES,
+                       roles=ROUTE_ROLES)
+
 # `tools/probe_flake.py`'s exit contract, taken from the module that
 # owns it. Each exit says whether a result document exists at all and,
 # when one does, what its own status must be — so "the document exists"
@@ -918,7 +976,8 @@ def _registered_probes() -> set:
     return {key for key, _script, _purpose in run_probes.PROBES}
 
 
-def require_diagnosis_outcome(document, *, worktrees=()) -> dict:
+def require_diagnosis_outcome(document, *, worktrees=(),
+                              owned: RouteOwnership = OWNED) -> dict:
     """#1437's producer record, held to the fields this consumer reads.
 
     Deliberately not a re-validation of the whole
@@ -926,6 +985,11 @@ def require_diagnosis_outcome(document, *, worktrees=()) -> dict:
     this module does not second-guess the parts it does not use. What is
     checked is that every field this classification rests on is present
     and means what it says.
+
+    `owned` is the ONE part of the gate that differs between epic
+    #1426's two sibling consumers, so it is a parameter rather than a
+    second copy of everything above it. It defaults to this module's own
+    three routes, which is what every call inside this file passes.
     """
     outcome = _require_object(document, "the diagnosis outcome")
     schema = outcome.get("schema")
@@ -942,24 +1006,25 @@ def require_diagnosis_outcome(document, *, worktrees=()) -> dict:
         raise HandoffError(
             f"the diagnosis outcome opens a pull request, so it is #1437's "
             f"repair ending and not a non-success this workflow records")
-    if route not in ROUTE_TO_OUTCOME:
+    if not owned.owns(route):
         owner = deflake_diagnosis.ROUTE_OWNER.get(route)
-        if owner == 1438:
+        ending = ROUTE_ENDING.get(route, f"declares the route {route!r}")
+        if owner is not None and owner != owned.issue:
             # A well-formed handoff for a route this workflow does not
-            # own. It is a non-success rather than a malformed input,
-            # and it names the owner rather than stubbing it: #1438 is a
-            # sibling in epic #1426, not a prerequisite, so ordering
-            # between the two must not be able to break this one.
+            # own but a SIBLING does. It is a non-success rather than a
+            # malformed input, and it names the owner rather than
+            # stubbing it: the siblings in epic #1426 are not each
+            # other's prerequisites, so ordering between them must not
+            # be able to break either one.
             raise NonSuccess(
-                f"the diagnosis identifies a production-code or "
-                f"shipped-script defect, which is #{owner}'s route: this "
-                f"attempt records none of the stable outcomes "
-                f"({', '.join(STABLE_OUTCOMES)}) and opens no pull request")
+                f"the diagnosis {ending}, which is #{owner}'s route: this "
+                f"attempt records none of the outcomes this workflow owns "
+                f"({', '.join(owned.outcomes)}) and opens no pull request")
         raise HandoffError(
             f"the route {route!r} is not one this workflow records; it hands "
             f"off to {'#%d' % owner if owner else 'nobody'}, and the routes "
             f"this workflow owns are "
-            f"{', '.join(sorted(ROUTE_TO_OUTCOME))}")
+            f"{', '.join(sorted(owned.roles))}")
     reason = outcome.get("reason")
     if reason not in deflake_diagnosis.ROUTE_REASONS.get(route, ()):
         raise HandoffError(
@@ -1409,8 +1474,13 @@ def _require_one_descriptor(measurements: dict, diagnosis: dict) -> None:
             raise HandoffError(str(error)) from None
 
 
-def require_handoff(document, *, worktrees=(), primary=None) -> Handoff:
-    """One `deflake-outcome-handoff/v1`, or the refusal that names why."""
+def require_handoff(document, *, worktrees=(), primary=None,
+                    owned: RouteOwnership = OWNED) -> Handoff:
+    """One `deflake-outcome-handoff/v1`, or the refusal that names why.
+
+    `owned` selects which of #1437's routes the caller answers; every
+    other rule below is the same for both of epic #1426's consumers.
+    """
     envelope = _require_object(document, "the outcome handoff")
     schema = envelope.get("schema")
     if schema != HANDOFF_SCHEMA:
@@ -1427,7 +1497,7 @@ def require_handoff(document, *, worktrees=(), primary=None) -> Handoff:
              + ([primary] if primary else [])
              if tree]
     diagnosis = require_diagnosis_outcome(envelope.get("diagnosis_outcome"),
-                                          worktrees=trees)
+                                          worktrees=trees, owned=owned)
     entries = envelope.get("measurements")
     if not isinstance(entries, list) or not entries:
         raise HandoffError(
@@ -1439,7 +1509,7 @@ def require_handoff(document, *, worktrees=(), primary=None) -> Handoff:
                                           seen=set(measurements),
                                           worktrees=trees)
         measurements[measurement.role] = measurement
-    roles = ROUTE_ROLES[diagnosis["route"]]
+    roles = owned.roles[diagnosis["route"]]
     for role in roles["required"]:
         if role not in measurements:
             raise HandoffError(
@@ -1521,12 +1591,17 @@ def _classify_cannot_reproduce(handoff: Handoff) -> dict:
     }
 
 
-def _require_reproduced(handoff: Handoff, baseline: Measurement) -> None:
+def require_reproduced(handoff: Handoff, baseline: Measurement) -> None:
     """The baseline reproduced the pattern the targets were named from.
 
-    #1437 asks this of EVERY route past the `cannot-reproduce` fork, in
-    two independent parts, and a consumer that asked only the first
-    would persist a diagnosis its own producer refuses:
+    Public because BOTH of epic #1426's consumers ask it: #1437 asks it
+    of every route past the `cannot-reproduce` fork, and
+    `production-defect` is one of those routes even though this module
+    does not own it. A private copy in the sibling would be a second
+    reading of one producer rule.
+
+    #1437 asks it in two independent parts, and a consumer that asked
+    only the first would persist a diagnosis its own producer refuses:
 
     * the batch is over X or lost a target, which is what makes it a
       reproduction at all; and
@@ -1569,7 +1644,7 @@ def _classify_no_confident_fix(handoff: Handoff) -> dict:
     clean measurement under a conclusion about causality it never
     supported.
     """
-    _require_reproduced(handoff, handoff.measurement(ROLE_BASELINE))
+    require_reproduced(handoff, handoff.measurement(ROLE_BASELINE))
     return {"recommendation": None, "comparison": None}
 
 
@@ -1589,7 +1664,7 @@ def _classify_partial_improvement(handoff: Handoff) -> dict:
     # The same qualification #1437 makes before either route: a repair
     # is only ever verified against a baseline that reproduced the
     # pattern, so "improved" has something to be an improvement ON.
-    _require_reproduced(handoff, baseline)
+    require_reproduced(handoff, baseline)
     conditions = []
     if baseline.requested_runs != verification.requested_runs:
         conditions.append(
