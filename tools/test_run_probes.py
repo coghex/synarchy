@@ -154,13 +154,26 @@ _LARGE_NUMBER_WORD = (
     r"(?:[-\s](?:one|two|three|four|five|six|seven|eight|nine))?"
     r"|hundreds?)")
 
+# Approximation written as a SUFFIX rather than a leading word: "90+",
+# "90-plus", "90 or more", "90-ish". These say the same thing as "around 90"
+# from the other side of the number, so the number token absorbs them --
+# which is also what lets "90-plus" be seen at all, since a bare number
+# refuses to be glued to a hyphenated word.
+_APPROX_SUFFIX = (
+    r"(?:\s*\+|[-\s]plus\b|-?ish\b"
+    r"|\s+or\s+(?:more|so|thereabouts)\b)")
+
 # A number standing on its OWN, which is what a count is. The lookarounds
 # drop numbers glued to something else: an identifier or hyphenated compound
 # ("900-second default", "utf-8") and a term of an expression ("`--port + 1`",
 # "base + N - 1"). Those are the two shapes this section's real numbers take
-# beside a registry noun.
+# beside a registry noun. An explicit approximate suffix is the exception --
+# it is punctuation ABOUT the count, not a different thing being counted.
 _STANDALONE_NUMBER = (
-    r"(?<![\w+*/-])(?:\d+(?![\w-])|" + _LARGE_NUMBER_WORD + r"\b)")
+    r"(?<![\w+*/-])(?:"
+    r"(?:\d+|" + _LARGE_NUMBER_WORD + r")" + _APPROX_SUFFIX +
+    r"|\d+(?![\w-])"
+    r"|" + _LARGE_NUMBER_WORD + r"\b)")
 
 # Any quantity a total can be stated as.
 _QUANTITY = r"(?:" + _STANDALONE_NUMBER + r"|" + _MAGNITUDE_BAND + r")"
@@ -3629,6 +3642,8 @@ def test_the_readme_states_no_registry_total() -> None:
             "The probe headcount is 93.",
             "The probe tally is ninety-three.",
             "The registry holds ninety-three.",
+            "The probe tally is 90+.",
+            "The registry holds ninety-plus.",
             # Inverted: the quantity leads and the subject follows.
             "There are 93 entries in the probe registry.",
             "There are 93 scripts in the registry.",
@@ -3675,6 +3690,11 @@ def test_the_readme_states_no_registry_total() -> None:
             "There are ninety-three probes.",
             "There are ninety three probes.",
             "About ninety-three probes are registered.",
+            "There are 90+ probes.",
+            "There are 90-plus probes.",
+            "There are 90 or more probes.",
+            "There are 90-ish probes.",
+            "There are 90 or so probes.",
             "90 registered probes ship today.",
             "It registers 90 probes today.",
             "It lists ninety probes.",
@@ -3739,6 +3759,9 @@ def test_the_readme_states_no_registry_total() -> None:
             "The count of all probes is 93.",
             # The round-12 review's bypass, verbatim.
             "All probes, 93 in total, are registered.",
+            # The round-13 review's two bypasses, verbatim.
+            "There are 90+ probes.",
+            "There are 90-plus probes.",
             # The round-2 review's bypass: the same totals, formatted.
             "There are `93 registered probes`.",
             "The probe registry totals `93`.",
@@ -3797,8 +3820,13 @@ def test_the_readme_states_no_registry_total() -> None:
             "Adding a future multi-port probe is one row in that table, and "
             "`tools/test_run_probes.py` validates every row against the live "
             "registry.",
+            # "1) or so" -- an approximate SUFFIX that does not touch its
+            # number, and a number that is not the count of anything.
             "Cap `N` at (cores − 1) or so — each probe is a full engine "
             "process.",
+            "```\n#probe-progress# 19:25:04 +0.0s   | phase | engine A\n"
+            "#probe-progress# 19:29:11 +247.2s | end   | chop attempt 1/2\n"
+            "```",
             "Total cost is roughly the sum of each probe's own boot + "
             "scenario time, and CI's selective gate (#530) relies on it.",
             "`--list` shows the full probe registry but not CI status.",
