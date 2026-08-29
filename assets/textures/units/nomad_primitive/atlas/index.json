@@ -102,6 +102,49 @@
       "atlas_digest": "f4cdcea3adca5e856896c267e738877b4890db3648cd5d224c1bbfc0f92b5aa8"
     },
     {
+      "name": "collapse",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/nomad_primitive/atlas/collapse.png",
+      "atlas_width": 612,
+      "atlas_height": 340,
+      "cell_width": 68,
+      "cell_height": 68,
+      "columns": 9,
+      "rows": 5,
+      "flip": true,
+      "fps": 10.0,
+      "loop": false,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 9
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "d810655978a64a76e203cee4522bd9f74a41e4080e01a4f00b02b3ef29ccbf82",
+      "atlas_digest": "3da343598dbca462e81a2365e10b8b09422fa5eca8846cd68a783529ae01da06"
+    },
+    {
       "name": "combat_hit_react_unarmed",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/nomad_primitive/atlas/combat_hit_react_unarmed.png",
@@ -272,6 +315,49 @@
       ],
       "source_digest": "a56a65673270c9a457b15f9928fc1997d861829a31fd4213ab32e157ec539ee1",
       "atlas_digest": "d2ee8866c09419981cc8a2cc025e05b3efd8e4213724a48ddcc1cbac7d4c6eb6"
+    },
+    {
+      "name": "death",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/nomad_primitive/atlas/death.png",
+      "atlas_width": 648,
+      "atlas_height": 340,
+      "cell_width": 72,
+      "cell_height": 68,
+      "columns": 9,
+      "rows": 5,
+      "flip": true,
+      "fps": 10.0,
+      "loop": false,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 9
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "023e6e623202d88b3b9107183f9e953dbe307160bac7d2e38fd77749ea9c156c",
+      "atlas_digest": "b638c1a3ce49a95d8d2823e3ff094bc47b648c966fd166a787ceb0759d9bb9de"
     },
     {
       "name": "idle",
