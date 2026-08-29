@@ -438,7 +438,7 @@ end
 -- window where a player verb races an automated one.
 --
 -- Called from the player's own ingress sites and from nowhere else --
--- scripts/init_mouse.lua's right-click move order, and
+-- scripts/init_mouse_entity.lua's right-click move order, and
 -- scripts/init_context_menu.lua's Attack / Pick up / Move here. It is
 -- deliberately NOT inside unitAi.commandMove / commandAttack /
 -- commandPickup: scripts/building_spawn.lua and
