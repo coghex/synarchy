@@ -353,7 +353,7 @@ def craft_timeout_bundle(port: int, bill_id, uid: int) -> dict:
         "aiState": send_json(port,
             f"local s = require('scripts.unit_ai').getState({uid}); "
             f"if not s then return nil end; local j = s.craftJob; "
-            f"return {{action = s.currentAction or false, "
+            f"return {{currentAction = s.currentAction or false, "
             f"craftJob = j ~= nil, "
             f"phase = j and j.phase or false, "
             f"billId = j and j.billId or false, "
