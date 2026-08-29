@@ -1000,7 +1000,7 @@ pre-execution rejections (2), port exhaustion (3) and harness errors (4) — a
 malformed, truncated, duplicate, out-of-order or unclassifiable protocol
 event, which is never reported as a probe pass.
 
-### `probe_census.py` — the probe census (#1425, #1428, #1430, #1492, #1434, #1441, #1439)
+### `probe_census.py` — the probe census (#1425, #1428, #1430, #1492, #1434, #1441, #1439, #1438)
 
 Builds, validates and updates `docs/probe_census.json`, now
 `probe-census/v4`: every registered probe exactly once, with its script, its
@@ -1009,8 +1009,9 @@ CI-eligible/manual-only classification, its protocol status (`legacy` or
 policy, the estimated worst-case duration, the current commit cohort, the
 archived cohorts, an append-only attempt log, an append-only log of claim
 ACQUISITIONS keyed for idempotency by acquisition token (#1434), and an
-append-only log of a de-flake attempt's STABLE NON-SUCCESS OUTCOMES keyed for
-idempotency by attempt identity (#1439). All three are separate collections
+append-only log of a de-flake attempt's non-repair OUTCOMES keyed for
+idempotency by attempt identity — the three stable ones (#1439) and the
+production defect a tracker issue was filed for (#1438). All three are separate collections
 on purpose: an attempt is a result ingestion and is deliberately
 non-idempotent, while recording one acquisition or one attempt outcome twice
 must stay one record — and an outcome carries evidence neither of the other
@@ -2235,8 +2236,11 @@ the probe and targets, the baseline SHA and X, the configuration manifest,
 references to the controlled results, the diagnosis evidence, the preservation
 attestations, and the repair commit and verification evidence when the route
 has them. A route with no batches states those halves as `null` rather than
-dropping the keys, so a consumer reads one shape. `deflake_outcome.py` below
-is #1439's consumer; #1438's is its own.
+dropping the keys, so a consumer reads one shape. `deflake_outcome.py` and
+`deflake_issue.py` below are its two consumers, and they read the same
+envelope through the same entry gate: `deflake_outcome.RouteOwnership` is the
+only part that differs, so every rule the two share is checked once rather
+than forked.
 
 The gate is `tools/test_deflake_diagnosis.py`, engine-free and document-only.
 It is deliberately NOT wired into `make ci` or GitHub CI — #1437's approved
@@ -2494,6 +2498,89 @@ diagnosis records they feed it are PRODUCED by `dd.evaluate` rather than
 hand-assembled, and the census they append to is a real seeded one in a
 temporary directory. Like #1437's, it is deliberately not wired into `make ci`
 or GitHub CI.
+
+### `deflake_issue.py` — file an issue when the bug is in the engine (#1438)
+
+The second outcome of diagnosis, and the one that must not be skipped. When
+#1437 routes an attempt to `production-defect` — the diagnosis is that
+PRODUCTION code or SHIPPED scripts are wrong, a real race rather than a racy
+test — this module files one review-ready tracker issue, records it in the
+probe's census row, and stops.
+
+```bash
+python3 tools/deflake_issue.py --handoff <document.json> --origin claude
+python3 tools/deflake_issue.py --handoff <document.json> --dry-run
+python3 tools/deflake_issue.py --handoff <document.json> --origin codex \
+    --census <path> --repo owner/name --json
+```
+
+An engine race that reaches a pull request as a probe adjustment is a bug
+converted into a permanent green light, so this route is TERMINAL: the probe
+is not touched, no production code is edited, and no pull request is opened.
+Both boundaries are injected parameters consulted through `CHANGES_THE_PROBE`
+and `OPENS_PULL_REQUEST`, so the silence is a branch a gate exercises rather
+than a call nobody happened to write — flipping either entry makes the
+injected spy fire.
+
+"Engine" means production Haskell under `src/`/`app/` and shipped Lua under
+`scripts/`; probe implementation under `tools/*_probe.py` is explicitly not
+that, and is #1437's repair route. Nothing here inspects a diff to decide: the
+CALLER's explicit diagnosis is the branch input, because the issue assigns
+that judgement to the calling agent and a second heuristic classifier would be
+a second opinion nobody asked for.
+
+**Evidence, not pathnames.** `probe_census.summarize_sample` stores retained
+artifacts as PATHS, and a path is machine-local — a reader of the filed issue
+cannot open it. So this module READS the retained FAIL and TIMEOUT
+directories (`events.jsonl`, `stdout.txt`, `engine/*`) and quotes bounded
+excerpts into the body: at most `MAX_EVIDENCE_RUNS` runs, `MAX_EVIDENCE_FILES_PER_RUN`
+files each, and the trailing `MAX_EXCERPT_LINES`/`MAX_EXCERPT_CHARS` of each,
+which is where an aborting probe's failure lands. An attempt whose artifacts
+have all been pruned is REFUSED rather than filed on paths alone. Beside them
+the body carries what the amendment names: the failure numerator, denominator
+and rate, the timeout count, every declared check's PASS/FAIL/MISSING tally,
+the measured commit, the requested and completed run counts, the RTS
+capability setting, the targets and X, the configuration manifest, and the
+`/deflake` command and directory.
+
+**It enters the review gate.** The body ends with the `issue-origin` marker
+`approve_issues.py` reads to route a new issue to the opposite agent brand.
+That brand is the INVOKING agent's, which no document can derive, so
+`--origin` is a required input rather than a default; no label is applied,
+because labelling is the review lane's.
+
+**Publication is idempotent, including across a crash.** A recorded outcome is
+the completion marker: a resume reuses the stored issue and does not reach the
+tracker at all. The window that marker cannot close is the one where creation
+TOOK EFFECT and its identity was never recorded — a timeout, a crash, or a
+census write that refused in between. So every diagnosis carries a stable
+`publication_key`, DERIVED from the attempt identity, probe, route and
+baseline commit rather than supplied, and written into the body as a marker
+line. It is reconciled against the tracker BEFORE anything is created, and the
+marker is verified in the returned body rather than trusted from a search
+index — a search matches text anywhere, and an issue that merely quotes a key
+is not the one filed under it. Two invocations of one brand-new attempt racing
+at the same instant can still both miss the reconcile; the census refuses the
+loser, so the durable history holds one outcome, and serializing the attempt
+itself is `probe_claim.py`'s (#1434) per-probe claim. The census's `flock` is
+deliberately NOT held across the remote call: one hung request would stall
+every unrelated census writer.
+
+**Failure leaves the attempt resumable.** A publication that fails, or a census
+write that refuses, records nothing, changes no bytes, and never falls through
+to the probe-adjustment or fix-PR path. The issue may exist remotely; the next
+invocation reconciles the key, finds it, and records it once.
+
+The census record is deliberately the same shape `deflake_outcome.py` writes
+plus an `issue` block (number, URL, publication key, origin) — one `outcomes`
+collection holds every ending of a de-flake attempt, and the schema pairs the
+two halves: `production-defect` REQUIRES `issue` and the three stable outcomes
+forbid it.
+
+The gate is `python3 tools/test_deflake_diagnosis.py` again — engine-free,
+GPU-free and network-free, with the tracker faked at the publication boundary
+so "exactly one issue" is a counted fact. Like #1437's and #1439's cases, it
+is deliberately not wired into `make ci` or GitHub CI.
 
 ### `ci_expensive_gates.py` — CI worldgen/graphical/unit-assets/save-compat selection
 
