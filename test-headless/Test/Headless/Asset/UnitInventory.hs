@@ -15,9 +15,9 @@
 --   file's animations decoded with real content: a file that failed to
 --   parse would satisfy a bare exclusion check by accident.
 --
---   The @asset_units:@ FORM remains supported — no shipped file uses it
---   today, so its decoder is exercised against temp fixtures below
---   rather than against the asset tree.
+--   The @asset_units:@ FORM remains supported for shipped art that is not
+--   yet a gameplay unit, and its decoder is also exercised against temp
+--   fixtures below.
 module Test.Headless.Asset.UnitInventory (spec) where
 
 import UPrelude
@@ -59,9 +59,11 @@ promotedUnits =
 gameplayUnits ∷ [Text]
 gameplayUnits = ["acolyte", "bear_brown", "red_squirrel", "technomule"]
 
--- | Every shipped unit, which since #1261 is every declaration.
-allUnits ∷ [Text]
-allUnits = gameplayUnits ⧺ [n | (n, _, _, _) ← promotedUnits]
+allGameplayUnits ∷ [Text]
+allGameplayUnits = gameplayUnits ⧺ [n | (n, _, _, _) ← promotedUnits]
+
+assetOnlyUnits ∷ [(Text, Int)]
+assetOnlyUnits = [("nomad_primitive", 7)]
 
 unitYamlPath ∷ Text → FilePath
 unitYamlPath name = "data" </> "units" </> T.unpack name <> ".yaml"
@@ -140,18 +142,31 @@ spec = do
                         uydSkills def `shouldBe` Map.empty
                     _ → pure ()
 
-        it "the gameplay units are unaffected — they still load, and the \
-           \registry is now exactly the seven shipped declarations" $ do
+        it "registers exactly the shipped gameplay declarations, excluding \
+           \the asset-only nomad" $ do
             logger ← silentLogger
-            loaded ← concat ⊚ forM allUnits (\name →
+            loaded ← concat ⊚ forM allGameplayUnits (\name →
                 map uydName ⊚ loadUnitYaml logger (unitYamlPath name))
-            sort loaded `shouldBe` sort allUnits
+            sort loaded `shouldBe` sort allGameplayUnits
+            nomadGameplay ← loadUnitYaml logger
+                (unitYamlPath "nomad_primitive")
+            map uydName nomadGameplay `shouldBe` []
 
-        it "no shipped YAML declares an asset-only entry any more" $ do
+        it "keeps each shipped asset-only declaration out of gameplay \
+           \while retaining its complete animation inventory" $ do
             logger ← silentLogger
-            forM_ allUnits $ \name → do
+            forM_ allGameplayUnits $ \name → do
                 assets ← loadUnitYamlAssets logger (unitYamlPath name)
                 map uyadName assets `shouldBe` []
+            forM_ assetOnlyUnits $ \(name, animCount) → do
+                assets ← loadUnitYamlAssets logger (unitYamlPath name)
+                case assets of
+                    [def] → do
+                        uyadName def `shouldBe` name
+                        Map.size (uyadAnimations def) `shouldBe` animCount
+                    other → expectationFailure
+                        ("expected exactly one asset-only declaration, got "
+                         <> show (length other))
 
     describe "the declaration form itself" $ do
         it "refuses a file that declares neither key, rather than \

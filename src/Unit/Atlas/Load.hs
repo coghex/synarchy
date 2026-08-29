@@ -42,9 +42,9 @@
 --
 --   Pass 3 SURVIVED TEX-6, which #1259 expected to retire it. Its cost
 --   is the whole reason it was provisional, and that cost was measured
---   here rather than assumed: decoding all 4,620 shipped source frames
---   across all seven units totals ~1.8 s of one-time unit-def loading
---   (bear_brown, the largest, 0.74 s), paid on the Lua thread while
+--   here rather than assumed: decoding the shipped gameplay corpus totals
+--   ~1.8 s of one-time unit-def loading (bear_brown, the largest, 0.74 s),
+--   paid on the Lua thread while
 --   YAMLs load and not on any frame. Since the source PNGs remain the
 --   tracked, hand-edited artwork (D-1), they remain something a
 --   developer can repaint without recompiling, and CI's asset gate only
@@ -58,8 +58,10 @@
 --   a handle, queues an upload, or publishes an 'Animation' for a unit
 --   whose index turns out to be broken three animations later.
 --
---   ALL SEVEN shipped units ship a compiled index: @acolyte@ from
---   #1260 (TEX-4)'s pilot, the remaining six from #1261 (TEX-6).
+--   Every shipped GAMEPLAY unit has a compiled index: @acolyte@ from
+--   #1260 (TEX-4)'s pilot and the original remaining six from #1261
+--   (TEX-6). Asset-only declarations are validated and previewed but never
+--   reach this gameplay registration boundary.
 module Unit.Atlas.Load
     ( loadUnitAtlasIndex
     , loadUnitAtlasIndexIn

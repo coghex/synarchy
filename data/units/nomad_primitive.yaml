@@ -221,7 +221,7 @@ asset_units:
             - "assets/textures/units/nomad_primitive/animations/injured_combat_hit_react_unarmed/north/frame_004.png"
       injured_combat_idle_unarmed:
         fps: 10
-        loop: false
+        loop: true
         flip: true
         frames:
           south:

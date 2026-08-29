@@ -16,11 +16,10 @@
 --   a temp tree in "Test.Headless.Unit.Atlas", and what those examples
 --   cover is everything downstream of it.
 --
---   The LAST examples inject nothing. Since #1261 all SEVEN shipped
---   units ship real compiled artifacts, so the production resolver runs
---   against each one's shipped index, shipped YAML and shipped source
---   art together. That is the one thing a canned selection can never
---   assert: that the three still agree.
+--   The LAST examples inject nothing. Every shipped GAMEPLAY unit has real
+--   compiled artifacts, so the production resolver runs against each one's
+--   shipped index, shipped YAML and shipped source art together. Asset-only
+--   declarations are intentionally outside this registration boundary.
 module Test.Headless.Unit.Atlas.Loader (spec) where
 
 import UPrelude
@@ -51,8 +50,8 @@ import Unit.Types
 fixtureUnit ∷ Text
 fixtureUnit = "spec_loader_unit"
 
--- Every shipped unit's own gameplay YAML — the real ones the game
--- loads, not fixtures (#1260 for acolyte, #1261 for the rest).
+-- Every shipped gameplay unit's own YAML — the real ones the game loads,
+-- not fixtures (#1260 for acolyte, #1261 for the original remainder).
 shippedUnits ∷ [Text]
 shippedUnits =
     [ "acolyte", "bear_brown", "red_squirrel", "technomule"
@@ -308,8 +307,7 @@ spec = describe "Unit.Atlas.Load — the real unit registration boundary" $ do
                     _ → expectationFailure
                         (T.unpack unitName ⧺ " failed to register")
 
-        it "registers the whole shipped animation corpus — the same 116 \
-           \tools/pack_atlas.py inventories" $ \env → do
+        it "registers the whole shipped gameplay animation corpus" $ \env → do
             totals ← forM shippedUnits $ \unitName → do
                 (_, _, mDef) ← runShipped env unitName
                 pure (maybe 0 (HM.size ∘ udAnimations) mDef)

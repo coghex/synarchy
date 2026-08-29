@@ -142,9 +142,8 @@ walks every PNG under
 FILESYSTEM-FIRST, so it covers trees no YAML mentions — and checks that each
 is owned by exactly one animation-frame declaration in `data/units/*.yaml`,
 under either the gameplay `units:` key or the asset-only `asset_units:` key.
-(The asset-only form is still supported, but no shipped file uses it since
-#1261 promoted `tiller`, `unknown_unit` and `white_tailed_deer` to real
-`units:` entries.)
+The asset-only form is supported for shipped art that should remain outside
+the gameplay registry while still being validated and previewable.
 Also enforces identifier safety, exact per-animation/per-direction
 containment (cross-unit, cross-animation and cross-direction references are
 each named), strict three-digit `frame_NNN.png` naming, contiguous
@@ -187,8 +186,7 @@ reports staleness, hand edits, missing atlases and tampered pixels. A unit
 with no index is valid to THIS tool — an uncompiled tree is a legitimate
 working-copy state — but not to the engine, which since #1261 refuses to
 register a unit that declares animations and ships no compiled artifacts.
-All seven shipped units are compiled and tracked (`acolyte` by TEX-4/#1260,
-the rest by TEX-6/#1261).
+Every shipped declaration, gameplay or asset-only, is compiled and tracked.
 
 PyYAML and Pillow are the dependencies, pinned in
 `tools/requirements-assets.txt`. Both are required by validation as well as

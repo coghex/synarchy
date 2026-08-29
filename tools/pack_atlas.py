@@ -45,12 +45,10 @@ Two declaration forms live under `data/units/`:
                 the gameplay unit registry, not listable or spawnable.
                 `name` and `animations` are mandatory; gameplay fields
                 are refused outright rather than ignored.
-                The form is still supported, but NO shipped file uses it
-                since #1261 (TEX-6) promoted `tiller`, `unknown_unit`
-                and `white_tailed_deer` to real `units:` entries — an
-                animation renders only through its compiled atlas now,
-                and the owner decision of 2026-08-11 kept all three as
-                preview targets.
+                The form remains supported for shipped art that must be
+                atlas-validated and previewable without registering as a
+                gameplay unit. Runtime registration follows the top-level
+                key rather than filesystem presence.
 
 A file may hold either key or both. A file holding neither is an error
 (that is what a mistyped top-level key looks like), and so is a key
@@ -183,9 +181,8 @@ STALENESS
 this tool validates declarations against art, and an uncompiled tree is
 a legitimate intermediate state of a working copy. The ENGINE is
 stricter — since #1261 it refuses to register a unit that declares
-animations and ships no compiled artifacts — and all seven shipped
-units are compiled and tracked (`acolyte` by TEX-4/#1260, the rest by
-TEX-6/#1261). Where an index DOES
+animations and ships no compiled artifacts. Every shipped declaration,
+gameplay or asset-only, is compiled and tracked. Where an index DOES
 exist it is regenerated from the sources and compared, so a stale
 source digest, a hand-edited or non-canonically serialized index, a
 missing indexed atlas, and an atlas whose pixels do not match its

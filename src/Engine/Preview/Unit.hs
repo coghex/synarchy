@@ -33,10 +33,9 @@
 --   PNG no declaration owns, which is where an undeclared folder is
 --   reported loudly and by path.
 --
---   All seven shipped trees are declared and compiled: @acolyte@ by
---   #1260, the other six by #1261, which also promoted @tiller@,
---   @unknown_unit@ and @white_tailed_deer@ from #1257's inventory-only
---   @asset_units:@ form to real @units:@ definitions.
+--   Every shipped tree is declared and compiled. Gameplay @units:@ and
+--   preview-only @asset_units:@ share this path deliberately; the top-level
+--   YAML key decides runtime registration, not whether the art can preview.
 module Engine.Preview.Unit
   ( UnitFocusError(..)
   , unitFocusErrorMessage
