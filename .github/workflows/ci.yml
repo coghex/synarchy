@@ -948,6 +948,21 @@ jobs:
       # and the plot-tile scoping. That probe is manual-only and takes
       # about eleven minutes; this boots nothing and runs in well under
       # a second.
+      # test_probe_boot_logs is #1763's: `tools/preview_probe.py` and
+      # `tools/offscreen_probe.py` each launch several engines in one
+      # run, and `probelib.boot` opens its log truncating, so launches
+      # sharing a path used to destroy each other's capture -- preview
+      # kept only the last of about twenty-two, and offscreen's
+      # port-reusing restart overwrote the long session that preceded
+      # it. This companion pins the allocation and reporting halves: a
+      # distinct path per launch including a repeated phase, earlier
+      # captures intact under a truncating open, the three-engine
+      # lifecycle with its restart, a phase-to-path map that survives a
+      # boot which exits before READY, and no preview call site falling
+      # back to the shared per-port default. Both probes need a GPU and
+      # are manual-only, so without this companion a re-shared log would
+      # only ever be noticed by a dev-machine run; the companion boots
+      # nothing and runs in well under a second.
       #
       # tools/test_deflake_diagnosis.py (#1437) is deliberately absent
       # too, and from tools/ci-local.sh's mirrored list: that issue's
@@ -974,6 +989,7 @@ jobs:
           python3 tools/test_probe_root_cleanup.py
           python3 tools/test_movement_probe.py
           python3 tools/test_farm_ai_probe.py
+          python3 tools/test_probe_boot_logs.py
 
       # The decision `.github/workflows/review-gate.yml` makes on every
       # synchronize push: keep `reviewed:approve` only when the push left
