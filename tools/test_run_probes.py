@@ -316,6 +316,11 @@ class ReadmeSectionError(Exception):
 # different-character run inside a block stays content.
 _FENCE_LINE = re.compile(r"^\s*(?P<fence>`{3,}|~{3,})(?P<info>.*)$")
 
+# A Markdown emphasis delimiter: a short run of "*" or "_" that is not
+# flanked by alphanumerics on BOTH sides. Intra-word runs are left alone,
+# which is what keeps `PROBE_PORT_SPANS` one token and "2*3" an expression.
+_EMPHASIS_RUN = re.compile(r"(?<![A-Za-z0-9])[*_]{1,3}|[*_]{1,3}(?![A-Za-z0-9])")
+
 
 def _mark_fences(lines: list[str]) -> list[tuple[str, bool]]:
     """Pair each line with whether it is fenced code (the fences included)."""
@@ -388,6 +393,14 @@ def _scannable(section: str) -> str:
     passed through unchanged (their backticks are the fences), so a total
     smuggled into a shell comment is scanned too.
 
+    Emphasis delimiters go the same way as the backticks, for the same
+    reason: "There are **93 registered probes**." displays a total, and the
+    stars are not part of it. A run is only a delimiter when it is NOT
+    flanked by alphanumerics on both sides, which is what leaves an
+    identifier's underscores (`PROBE_PORT_SPANS`) and an arithmetic "2*3"
+    intact -- the latter deliberately, since a term of an expression is not
+    a count.
+
     Prose is also UNWRAPPED. This file is hard-wrapped near 75 columns, so
     every paragraph in it is soft line breaks the reader never sees; a rule
     that stopped at one would be defeated by where a sentence happened to
@@ -407,6 +420,7 @@ def _scannable(section: str) -> str:
             chunks.append(blob)
             return
         blob = re.sub(r"`([^`]*)`", r" \1 ", blob, flags=re.S)
+        blob = _EMPHASIS_RUN.sub(" ", blob)
         # Unwrap soft line breaks; a blank line stays a break.
         blob = re.sub(r"(?<!\n)\n(?![\n])", " ", blob)
         chunks.append(blob)
@@ -3659,6 +3673,9 @@ def test_the_readme_states_no_registry_total() -> None:
             # this hard-wrapped file would actually carry one.
             "Probe count:\n93.",
             "The probe registry\ntotals 90.",
+            "The probe registry totals **93**.",
+            "*The registry holds 93.*",
+            "The probe tally is **ninety-three**.",
             "The registry holds ninety-plus.",
             # Inverted: the quantity leads and the subject follows.
             "There are 93 entries in the probe registry.",
@@ -3712,6 +3729,9 @@ def test_the_readme_states_no_registry_total() -> None:
             "There are 90-ish probes.",
             "There are 90 or so probes.",
             "There are 93 registered\nprobes.",
+            # Emphasis is display, not content.
+            "There are **93 registered probes**.",
+            "There are __93 registered probes__.",
             "90 registered probes ship today.",
             "It registers 90 probes today.",
             "It lists ninety probes.",
@@ -3781,6 +3801,9 @@ def test_the_readme_states_no_registry_total() -> None:
             "There are 90-plus probes.",
             # The round-14 review's bypass, verbatim.
             "Probe count:\n93.",
+            # The round-15 review's two bypasses, verbatim.
+            "There are **93 registered probes**.",
+            "The probe registry totals **93**.",
             # And the original drift sentence as it really shipped, wrapped.
             "`python3 tools/run_probes.py --list` is the authoritative count\n"
             "and listing of registered probes — it's grown over time\n"
@@ -3809,8 +3832,6 @@ def test_the_readme_states_no_registry_total() -> None:
             "runtime is above 2300 seconds.",
             "Run everything, sequentially (slow — low tens of minutes).",
             "A span that covers the user's GUI port 8008 is refused.",
-            "`run_probes.PROBE_PORT_SPANS` declares 2 for each of those two, "
-            "and every other probe reserves its base alone.",
             "Concurrency cuts wall-time to roughly `total / N`.",
             "`tools/test_run_probes.py` validates every row against the live "
             "registry.",
@@ -3841,6 +3862,11 @@ def test_the_readme_states_no_registry_total() -> None:
             "So a probe's port count is DATA -- `run_probes.PROBE_PORT_SPANS` "
             "declares 2 for each of those two.",
             "`run_probes.PROBE_TIMEOUT_OVERRIDES` declares 3600 for one key.",
+            # An identifier's underscores and an expression's star are not
+            # emphasis, so neither dissolves into a fake number.
+            "`run_probes.PROBE_TIMEOUT_OVERRIDES` and "
+            "`save_compat_migration` name 3600 between them.",
+            "The span is 2*3 wide.",
             "Adding a future multi-port probe is one row in that table, and "
             "`tools/test_run_probes.py` validates every row against the live "
             "registry.",
