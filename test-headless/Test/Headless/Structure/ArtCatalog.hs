@@ -531,6 +531,43 @@ warningSpec = describe "a failure" $ do
                 other → expectationFailure
                     ("expected exactly one warning, got: " <> show other)
 
+    it "names the pack for every malformed declared-kind entry" $
+        \(env, ls) → do
+            -- The `kinds` list is read BEFORE any art, and by then the
+            -- payload has already named its pack — so a fault here must
+            -- still name it. Both malformations of a kind entry are
+            -- covered: an unrecognised `kind`, and the missing
+            -- `buildable` boolean that must never be silently defaulted.
+            let cases =
+                    [ ( "unrecognised kind"
+                      , "{kind='doorway', buildable=true}"
+                      , Nothing )
+                    , ( "absent buildable"
+                      , "{kind='floor'}"
+                      , Just "kind 'floor'" )
+                    , ( "non-boolean buildable"
+                      , "{kind='floor', buildable='yes'}"
+                      , Just "kind 'floor'" ) ]
+            forM_ cases $ \(label, kindEntry, mKindText) → do
+                before ← readIORef (structureArtCatalogRef env)
+                (r, entries) ← withCapturedLog env $ evalDebug ls $ T.concat
+                    [ "return tostring(structure.registerPackArt{ "
+                    , "pack='warn_kinds', kinds={", kindEntry, "}, "
+                    , "art={{kind='floor', texture='a.png', texHandle=41, "
+                    , "facemap='f.png', faceHandle=42}} })" ]
+                r `shouldBe` "false"
+                readIORef (structureArtCatalogRef env)
+                    ⌦ \after → sacPacks after `shouldBe` sacPacks before
+                case warningsOf entries of
+                    [w] → forM_ ("pack 'warn_kinds'" : maybe [] pure mKindText)
+                        $ \needle → unless (needle `T.isInfixOf` w)
+                            $ expectationFailure
+                                (label <> ": the warning does not name "
+                                   <> show needle <> ": " <> T.unpack w)
+                    other → expectationFailure
+                        (label <> ": expected exactly one warning, got: "
+                           <> show other)
+
     it "replaces the generic asset warning for a tracked texture, once" $
         \(env, ls) → do
             evalDebug ls (registerFloorPack "failing_pack" "doomed.png" True)
@@ -717,6 +754,7 @@ buildable ls pack kind = do
 
 luaBool ∷ Bool → Text
 luaBool b = if b then "true" else "false"
+
 
 -- | Every four-neighbour combination and the connection variant it must
 --   draw, written out from @data/structure_packs/wire.yaml@'s own key

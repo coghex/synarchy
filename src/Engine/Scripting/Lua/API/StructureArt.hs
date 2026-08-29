@@ -118,7 +118,8 @@ structureRegisterPackArtFn env = do
                     fault "<unnamed>" Nothing "pack name"
                           "the payload has no `pack` string"
                 Just pack → do
-                    eKinds ← arrayField pack "kinds" "declared kinds" readKind
+                    eKinds ← arrayField pack "kinds" "declared kinds"
+                                        (readKind pack)
                     eArt   ← arrayField pack "art" "art entries" (readArt pack)
                     pure (PackArtRegistration pack <$> eKinds <*> eArt)
 
@@ -164,22 +165,28 @@ structureRegisterPackArtFn env = do
                     Left f  → pure (Left f)
                     Right v → go (i + 1) n (v : acc)
 
-    readKind ∷ Int → Lua.LuaE Lua.Exception (Either ArtFault (PieceKind, Bool))
-    readKind i = do
+    -- The pack name is threaded in rather than defaulted: by the time a
+    -- kind entry is read the payload has already NAMED its pack, and a
+    -- warning that says `pack '<unnamed>'` for a named payload fails the
+    -- requirement it exists to satisfy.
+    readKind ∷ Text → Int
+             → Lua.LuaE Lua.Exception (Either ArtFault (PieceKind, Bool))
+    readKind pack i = do
         mKind ← fieldString (-1) "kind"
         bTy   ← Lua.getfield (-1) "buildable"
         b     ← Lua.toboolean (-1)
         Lua.pop 1
         pure $ case mKind ⌦ pieceKindFromText of
-            Nothing → Left $ fault "<unnamed>" Nothing
+            Nothing → Left $ fault pack Nothing
                 ("declared kinds " <> tshow i)
                 "the entry names no recognised piece kind"
             Just kind
                 -- Absent or non-boolean `buildable` is malformed, never
                 -- a silent default: art and buildability are independent
                 -- answers and a caller must state both.
-                | bTy ≢ Lua.TypeBoolean → Left $ fault "<unnamed>" (Just kind)
-                    "buildable" "the entry has no `buildable` boolean"
+                | bTy ≢ Lua.TypeBoolean → Left $ fault pack (Just kind)
+                    ("buildable (declared kinds " <> tshow i <> ")")
+                    "the entry has no `buildable` boolean"
                 | otherwise → Right (kind, b)
 
     readArt ∷ Text → Int
