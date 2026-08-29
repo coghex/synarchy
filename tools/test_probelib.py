@@ -464,6 +464,19 @@ print("READY port=%s" % sys.argv[sys.argv.index("--port") + 1], flush=True)
 time.sleep(600)
 """
 
+# The same stand-in, but slow to become READY, so "the caller already
+# holds the handle while boot is still waiting" is a deterministic
+# observation rather than a race against the child's first write.
+SLOW_FAKE_ENGINE = """\
+#!/usr/bin/env python3
+import sys, time
+with open(sys.argv[sys.argv.index("--argv-log") + 1], "w") as fh:
+    fh.write("\\n".join(sys.argv))
+time.sleep(2)
+print("READY port=%s" % sys.argv[sys.argv.index("--port") + 1], flush=True)
+time.sleep(600)
+"""
+
 
 class engine_env:
     """Set (or clear) the runner->probe executable variable for one case."""
@@ -579,6 +592,118 @@ def test_boot_launches_the_supplied_executable() -> None:
                 proc.wait(timeout=10)
 
 
+def test_boot_registers_the_process_as_it_launches() -> None:
+    print("\n-- probelib.boot hands the handle over before it waits for READY")
+    # `boot` waits up to `ready_timeout` -- three minutes by default --
+    # for READY, so a caller that only learns about the process from the
+    # return value owns nothing for that whole span. An interrupt taken
+    # in it used to strand a live engine holding the port with nothing
+    # left holding its handle (#1682). `on_launch` closes that span.
+    with tempfile.TemporaryDirectory() as tmp:
+        exe = Path(tmp) / "slow-fake-synarchy"
+        exe.write_text(SLOW_FAKE_ENGINE)
+        exe.chmod(0o755)
+        argv_log = Path(tmp) / "argv.txt"
+        log = Path(tmp) / "engine.log"
+        port = 9458
+        seen: list = []
+        proc = None
+
+        def register(handle):
+            # What the caller's teardown guard sees, and when: the
+            # process must already be running, and READY must not be a
+            # precondition for learning about it.
+            seen.append((handle, handle.poll(),
+                         "READY" in (log.read_text() if log.exists() else "")))
+
+        with engine_env(str(exe)):
+            try:
+                proc = probelib.boot(port, log=str(log), ready_timeout=30.0,
+                                     args=["--argv-log", str(argv_log)],
+                                     on_launch=register)
+            except SystemExit as leaving:
+                expect(False, f"boot did not reach READY: {leaving}")
+        try:
+            expect(len(seen) == 1,
+                   f"the callback fires exactly once (got {len(seen)})")
+            if seen:
+                handle, alive, ready = seen[0]
+                expect(handle is proc,
+                       "with the very handle boot goes on to return")
+                expect(alive is None,
+                       f"while the process is already running (poll {alive})")
+                expect(ready is False,
+                       "and before READY, which is the span that used to be "
+                       "uncovered")
+            expect(getattr(proc, "_probe_log", None) == str(log),
+                   "and boot still records the log path it was given")
+        finally:
+            if proc is not None:
+                proc.kill()
+                proc.wait(timeout=10)
+
+
+def test_an_interrupt_during_the_hand_off_kills_the_child() -> None:
+    print("\n-- an interrupt mid-hand-off leaves no engine holding the port")
+    # The child exists the moment `Popen` returns, but nothing
+    # downstream knows about it until `on_launch` has completed. A
+    # `KeyboardInterrupt` delivered in between used to escape `boot`
+    # with a live engine holding the port and no handle anywhere — the
+    # caller's teardown guard has nothing to dispose of, and the probe
+    # then deletes the tree the engine is still writing into (#1682).
+    #
+    # The interrupt is injected AT the hand-off, which is where a
+    # pending signal is actually delivered: the callback is the first
+    # thing to run after the child exists.
+    for label, blow_up in (("a Ctrl-C", KeyboardInterrupt),
+                           ("a callback that itself fails",
+                            lambda: RuntimeError("registration failed"))):
+        with tempfile.TemporaryDirectory() as tmp:
+            exe = Path(tmp) / "slow-fake-synarchy"
+            exe.write_text(SLOW_FAKE_ENGINE)
+            exe.chmod(0o755)
+            argv_log = Path(tmp) / "argv.txt"
+            log = Path(tmp) / "engine.log"
+            seen: list = []
+
+            def interrupt(handle):
+                seen.append(handle)
+                raise blow_up()
+
+            raised: BaseException | None = None
+            with engine_env(str(exe)):
+                try:
+                    probelib.boot(9459, log=str(log), ready_timeout=30.0,
+                                  args=["--argv-log", str(argv_log)],
+                                  on_launch=interrupt)
+                except BaseException as exc:  # noqa: BLE001 - the point
+                    raised = exc
+            expect(len(seen) == 1,
+                   f"[{label}] the hand-off really was reached, so this is "
+                   f"not vacuous (got {seen})")
+            expect(raised is not None and not isinstance(raised, SystemExit),
+                   f"[{label}] the interrupt still ends the run rather than "
+                   f"being swallowed (got {raised!r})")
+            if seen:
+                expect(seen[0].poll() is not None,
+                       f"[{label}] and the child boot had already launched "
+                       f"is dead, not left holding the port "
+                       f"(poll {seen[0].poll()})")
+
+
+def test_boot_without_a_callback_is_unchanged() -> None:
+    print("\n-- probelib.boot's existing callers are untouched")
+    signature = inspect.signature(probelib.boot)
+    parameter = signature.parameters.get("on_launch")
+    expect(parameter is not None and parameter.default is None,
+           "on_launch is optional, so every probe that does not pass one "
+           "behaves exactly as before")
+    expect(list(signature.parameters)[:6]
+           == ["port", "log", "args", "ready_timeout", "label", "mode"],
+           f"and it was APPENDED, so no positional caller shifted "
+           f"(got {list(signature.parameters)})")
+
+
 def test_resolve_executable_builds_then_locates() -> None:
     print("\n-- resolve_executable builds first, then asks where it landed")
     with tempfile.TemporaryDirectory() as tmp:
@@ -633,6 +758,9 @@ def main() -> int:
     test_runner_mode_execs_the_resolved_binary()
     test_an_unusable_supplied_executable_is_refused()
     test_boot_launches_the_supplied_executable()
+    test_boot_registers_the_process_as_it_launches()
+    test_an_interrupt_during_the_hand_off_kills_the_child()
+    test_boot_without_a_callback_is_unchanged()
     test_resolve_executable_builds_then_locates()
     if FAILURES:
         print(f"\n{len(FAILURES)} test(s) failed:")
