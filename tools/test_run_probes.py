@@ -289,13 +289,17 @@ README_TOTAL_RULES: tuple[tuple[str, "re.Pattern[str]"], ...] = (
                 + _APPROXIMATOR + r"?" + _QUANTITY
                 + r"|" + _APPROXIMATOR + r"?" + _QUANTITY
                 + r"[^.;\n]{0,80}?" + _REGISTRY_SUBJECT + r")", re.I)),
-    # A quantity directly counting a PLAIN probe noun: "93 probes", "contains
-    # 90 probes", "ninety registered probes". Small spelled-out numbers are
-    # not quantities here, so "two registered probes" stays legal, and an
-    # explicit BOUND ("up to 4 probes") is exempt.
-    ("quantified-probe-noun",
+    # A quantity directly counting a plain member of the registry: "93
+    # probes", "contains 90 probes", "93 registered scripts", "ninety
+    # entries". The noun is the same class the compounds use -- `PROBES` is
+    # a registry of probe SCRIPTS, so counting its scripts counts it. Small
+    # spelled-out numbers are not quantities here, so "two registered
+    # probes" stays legal, and an explicit BOUND ("up to 4 probes") is
+    # exempt.
+    ("quantified-registry-noun",
      re.compile(_BOUND_PREFIX + _APPROXIMATOR + r"?" + _STANDALONE_NUMBER
-                + r"(?:\s+\w+){0,2}(?:\s+|-)probes?\b", re.I)),
+                + r"(?:\s+\w+){0,2}(?:\s+|-)" + _COUNTED_HEAD + r"\b",
+                re.I)),
     # A quantity whose noun is only an ANTECEDENT: "the suite registers 93 of
     # them". The partitive must follow the number DIRECTLY -- that is what
     # separates it from "declares 2 for each of those two", where the number
@@ -3801,9 +3805,9 @@ def test_the_readme_states_no_registry_total() -> None:
             "It contains ninety.",
             "The suite lists around 93.",
         ),
-        # A quantity counting a plain probe noun, with no registry subject
-        # and no counting verb needed.
-        "quantified-probe-noun": (
+        # A quantity counting a plain registry member, with no registry
+        # subject and no counting verb needed.
+        "quantified-registry-noun": (
             "There are 90 probes.",
             "There are ninety-three probes.",
             "There are ninety three probes.",
@@ -3828,6 +3832,11 @@ def test_the_readme_states_no_registry_total() -> None:
             "There are [93](https://example.test) registered probes.",
             "There are [93][count] registered probes.",
             "There are ![93](x.png) registered probes.",
+            # `PROBES` is a registry of probe scripts.
+            "There are 93 registered scripts.",
+            "There are 93 scripts.",
+            "There are ninety entries.",
+            "It holds 93 rows.",
             "It is a ninety-three-probe registry.",
             "90 registered probes ship today.",
             "It registers 90 probes today.",
@@ -3917,6 +3926,9 @@ def test_the_readme_states_no_registry_total() -> None:
             # The round-23 review's two bypasses, verbatim.
             "The probe script count is 93.",
             "The probe-script count is 93.",
+            # The round-24 review's two bypasses, verbatim.
+            "There are 93 registered scripts.",
+            "There are 93 scripts.",
             # And the original drift sentence as it really shipped, wrapped.
             "`python3 tools/run_probes.py --list` is the authoritative count\n"
             "and listing of registered probes — it's grown over time\n"
