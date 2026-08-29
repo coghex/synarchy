@@ -358,9 +358,13 @@ _MD_LINK = re.compile(
 # delimiters go the same way and its content is deliberately KEPT -- scanning
 # more than the reader sees is the safe direction here. The tag pattern needs
 # a letter straight after "<", so a bare comparison ("`--jobs > 1`") is not
-# mistaken for one.
+# mistaken for one, and its attribute run is quote-aware so a ">" inside an
+# attribute value does not truncate it.
+# The attribute run is quote-AWARE: a ">" inside a quoted attribute value
+# does not end the tag, so `<em title="x > y">` is one tag rather than a
+# truncated one that leaves "y\">" behind between a number and its noun.
 _HTML_MARKUP = re.compile(
-    r"<!--|-->|</?[A-Za-z][A-Za-z0-9-]*(?:\s[^<>]*?)?/?>")
+    r"""<!--|-->|</?[A-Za-z][A-Za-z0-9-]*(?:"[^"]*"|'[^']*'|[^>"'])*>""")
 
 # Quotation marks around displayed text. Same non-intra-word rule as the
 # formatting runs, so a possessive apostrophe survives ("a probe's port
@@ -3839,6 +3843,9 @@ def test_the_readme_states_no_registry_total() -> None:
             # Inline HTML renders to the same sentence.
             "There are 93 <em>registered</em> probes.",
             "There are <span class=\"x\">93 registered probes</span>.",
+            # A ">" inside a quoted attribute value does not end the tag.
+            "There are 93 <em title=\"x > y\">registered</em> scripts.",
+            "There are <span data-n='a > b'>93 probes</span>.",
             "There are &#57;&#51; registered probes.",
             # The attributive compound: the number counts the head noun.
             "A 93-probe registry is current.",
@@ -3892,6 +3899,8 @@ def test_the_readme_states_no_registry_total() -> None:
         "emphasis": "There are **93 registered probes**.",
         "link": "There are [93](https://example.test) registered probes.",
         "inline-html": "There are 93 <em>registered</em> probes.",
+        "inline-html-attribute":
+            "There are 93 <em title=\"x > y\">registered</em> scripts.",
         "entity": "There are &#57;&#51; registered probes.",
         "quotation": "There are \"93\" probes.",
         "soft-wrap": "Probe count:\n93.",
@@ -3899,8 +3908,9 @@ def test_the_readme_states_no_registry_total() -> None:
             "```bash\n# There are **93 registered probes**.\nrun\n```",
     }
     expect(set(by_normalization) == {
-        "inline-code", "emphasis", "link", "inline-html", "entity",
-        "quotation", "soft-wrap", "fenced-comment"},
+        "inline-code", "emphasis", "link", "inline-html",
+        "inline-html-attribute", "entity", "quotation", "soft-wrap",
+        "fenced-comment"},
         "every normalization category requirement 3 names has a case")
     for category, body in by_normalization.items():
         fired = rules_fired(body)
@@ -3976,6 +3986,8 @@ def test_the_readme_states_no_registry_total() -> None:
             "There are 93 scripts.",
             # The round-25 review's bypass, verbatim.
             "There are \"93\" probes.",
+            # The round-26 review's bypass, verbatim.
+            "There are 93 <em title=\"x > y\">registered</em> scripts.",
             # And the original drift sentence as it really shipped, wrapped.
             "`python3 tools/run_probes.py --list` is the authoritative count\n"
             "and listing of registered probes — it's grown over time\n"
