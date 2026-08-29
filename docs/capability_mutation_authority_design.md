@@ -21,7 +21,7 @@ concrete precondition
 
 - [x] EPIC. Make capability records enforce mutation authority, not just field visibility — [#1890]
 - [x] CMA-1. Gate every capability field's write sites against a checked-in writing-module map — [#1892]
-- [ ] CMA-2. Give `RenderHandoff` a structural mutation-authority boundary
+- [x] CMA-2. Give `ContentRegistries` a structural mutation-authority boundary — [#1896]
 - [ ] CMA-3. Record the pilot's verdict and the rollout recommendation
 
 ## Epic contract
@@ -34,7 +34,7 @@ concrete precondition
 - **Done when:** (1) the write-site gate runs in CI and `make ci`, rejecting both
   a write from a module outside a field's checked-in writing-module map and a
   mapped module that no longer writes that field (D-2a — module granularity, not
-  §5's roles); (2) `RenderHandoff` carries the structural boundary (D-6); and
+  §5's roles); (2) `ContentRegistries` carries the structural boundary (D-6a); and
   (3) the verdict and its evidence are recorded in
   `docs/engineenv_capability_inventory.md`. Rolling the boundary out to the
   remaining capabilities is deliberately a **separate arc**, opened only if the
@@ -145,9 +145,42 @@ roles; `worldPreviewRef` and `zoomAtlasDataRef` are written by both theirs; and
 `bloodDisposeQueue`'s only "reader" is `MainRender` *draining* it, which mutates
 — a read-only view over it would be meaningless.
 
-The pilot is nevertheless cheap: RenderHandoff's accessors appear in **6
-modules**, with 13 inline uses and 4 pass-on sites (all four the same
-`enqueueBloodDisposalForPage` call shape).
+RenderHandoff's accessors appear in **6 modules**, with 13 inline uses and 4
+pass-on sites (all four the same `enqueueBloodDisposalForPage` call shape).
+This section records the role-level view that informed D-6; the module-level
+view below is what superseded it in D-6a.
+
+### The §6.1 exemption removes most of `RenderHandoff`'s pilot surface
+
+D-4 exempts the 24 permanent full-access modules, and that interacts with D-6's
+pilot choice in a way neither decision anticipated. Two of `RenderHandoff`'s
+three role-level read-only relationships are held by §6.1 modules reading the
+**raw** `EngineEnv`, not the capability record:
+
+| Relationship | Reader | Access path | In scope? |
+|---|---|---|---|
+| `LuaThread` → `worldPreviewGenerationRef` | `Engine.Scripting.Lua.Thread.Dispatch:357` | raw `env` | No — §6.1 |
+| `MainRender` → `worldQuadsRef` | `Engine.Loop.Frame:233` | raw `env` | No — §6.1 |
+| `WorldThread` → `structureWallCatalogRef` | `Structure.Render:114` | `rhStructureWallCatalogRef` | Yes |
+
+A newtype on the capability record cannot reach a module that reads the raw
+field, so those two are out of scope twice over.
+
+Measured at **module** granularity — which is what the mechanism keys on, and
+which differs from the role view — the in-scope read-only surface per capability,
+§6.1 excluded, is:
+
+| Capability | Module-field pairs | Fields | Consumer modules |
+|---|---|---|---|
+| `WorldSim` | 36 | 7 | ~30 |
+| `RenderView` | 31 | 9 | ~12 |
+| `ContentRegistries` | 7 | 4 | ~5 |
+| `RenderHandoff` | 3 | 3 | 1 (`Structure.Render`) |
+
+Note `RenderHandoff`'s three in-scope pairs are `structureWallCatalogRef`,
+`texPaletteRef` and `texPaletteHandlesRef` — the latter two look read-write at
+role granularity because `LuaThread` and `WorldThread` both write them, but
+`Structure.Render` itself only reads them. All three sit in one module.
 
 ### The audit has no `--self-test` flag
 
@@ -413,7 +446,11 @@ this arc — it is Haskell dataflow analysis written in Python, and the project 
 burned long review cycles on hand-rolled analyzers before (PR #1309, 14 rounds;
 PR #1463, 7 rounds). The residue stays a reported number, not a resolved one.
 
-### D-6. `RenderHandoff` is the pilot capability
+### D-6. `RenderHandoff` is the pilot capability (SUPERSEDED by D-6a)
+
+**Superseded 2026-08-29** — see D-6a. The reasoning below was sound at role
+granularity but did not account for D-4's §6.1 exemption, which removes two of
+the three relationships it relied on.
 
 Approved 2026-08-29, promoting P-1 over EA-1's own suggestion of `WorldSim` or
 `UnitCombat`. Its eight fields are genuine single-producer / single-consumer
@@ -431,6 +468,35 @@ a small one — RenderHandoff's whole read-only surface is three relationships
 (see **Current state and evidence**). That is deliberate for a pilot, and
 CMA-3's verdict must say so explicitly rather than generalising
 `RenderHandoff`'s result to the multi-writer capabilities untested.
+
+### D-6a. `ContentRegistries` is the pilot capability
+
+Approved 2026-08-29, superseding D-6 after measurement showed `RenderHandoff`'s
+in-scope surface is 3 module-field pairs in a single module (`Structure.Render`).
+
+`ContentRegistries` has 7 in-scope module-field pairs across 4 fields and ~5
+consumer modules: `crItemManagerRef` (read by `Combat.Resolution`,
+`API.Items.Defs`, `API.Repair`, `Unit.Thread.Command.Spawn`),
+`crEquipmentClassManagerRef`, `crRecipeManagerRef` and `crSubstanceManagerRef`.
+
+**Rationale:**
+
+- Registries are content catalogues — loaded once at boot, read everywhere — so
+  read-only is the semantically obvious case rather than an imposed one.
+- It **exercises the pass-on pattern the newtype was chosen for** (D-7), which
+  `RenderHandoff` never would: `Unit/Thread/Movement.hs:170` and
+  `Combat/Wounds/Tick.hs:82` hand the accessor straight into a helper call, and
+  `Building/Knowledge/Live.hs:104` packs `crItemManagerRef reg` into a
+  multi-capability context record. A pilot that never crosses a module boundary
+  would not test the property D-7 exists to buy.
+- It stays comfortably within one PR, unlike `RenderView` (31 pairs) or
+  `WorldSim` (36 pairs, 24 modules on one field).
+
+**Consequences:**
+
+- The pilot is still a favourable case chosen deliberately, and CMA-3's verdict
+  must say so — D-6's caveat carries over unchanged.
+- `RenderHandoff` is no longer touched by this arc.
 
 ### D-7. The pilot's mechanism is a read-only reference newtype
 
@@ -455,13 +521,12 @@ Double` stays read-only wherever it is passed.
 - Full rollout would propagate the wrapper into helper signatures and shared
   context records. That cost is real and lands on the **rollout arc**, not this
   epic — it is precisely what CMA-3's verdict weighs.
-- The pilot demonstrates exactly **three** read-only relationships, because that
-  is RenderHandoff's whole read-only surface. Proving the mechanism works is not
-  the same as proving it is worth rolling out, and CMA-3 must not read three
-  successes as a mandate.
-- `structureWallCatalogRef` is the load-bearing demonstration: `LuaThread` writes
-  it and `WorldThread` reads it through a call chain into `Structure.Render` —
-  the case a record-level boundary misses and this one catches.
+- The pilot demonstrates 7 module-field pairs across `ContentRegistries`' 4
+  fields (D-6a). Proving the mechanism works is not the same as proving it is
+  worth rolling out, and CMA-3 must not read a successful pilot as a mandate.
+- The load-bearing demonstrations are the pass-on sites — `Unit/Thread/Movement.hs:170`,
+  `Combat/Wounds/Tick.hs:82`, and `Building/Knowledge/Live.hs:104`'s context
+  record — exactly the cases a record-level boundary misses and this one catches.
 
 **Rejected alternatives:** per-role capability views and accessor-only modules,
 both for the record-level escape above. Accessor-only modules additionally carry
@@ -567,33 +632,36 @@ additionally gated on a signoff checkpoint (Q-4).
 - **Note:** the audit is already invoked by CI and `make ci`, so the new check
   rides the existing invocation rather than adding a gate.
 
-### CMA-2. Give `RenderHandoff` a structural mutation-authority boundary
+### CMA-2. Give `ContentRegistries` a structural mutation-authority boundary
 
-- **Outcome:** a module that §5 records as a non-writer of a `RenderHandoff`
-  field cannot mutate it — a compile error, not a review catch.
-- **Scope:** introduce `ReadOnlyRef` (D-7); hand the wrapped form to the three
-  read-only relationships `RenderHandoff` actually has — `LuaThread` →
-  `worldPreviewGenerationRef`, `MainRender` → `worldQuadsRef`, `WorldThread` →
-  `structureWallCatalogRef`; migrate the 6 consumer modules; amend §2.1's
-  canonical capability-record convention to cover the wrapped form (§6.4's
-  approval procedure applies); and update CMA-1's writing-module map if any
-  accessor is renamed.
+- **Outcome:** a module that only reads a `ContentRegistries` field cannot
+  mutate it — a compile error, not a review catch — and the guarantee survives
+  the handle being passed into a helper or packed into a context record.
+- **Scope:** introduce `ReadOnlyRef` (D-7); hand the wrapped form to the 7
+  in-scope read-only module-field pairs across `ContentRegistries`' 4 fields
+  (`crItemManagerRef`, `crEquipmentClassManagerRef`, `crRecipeManagerRef`,
+  `crSubstanceManagerRef`); migrate the ~5 consumer modules, including the three
+  pass-on sites; amend §2.1's canonical capability-record convention to cover the
+  wrapped form (§6.4's approval procedure applies); and update CMA-1's
+  writing-module map if any accessor is renamed.
 - **Phase:** 2
 - **Depends on:** `CMA-1`
 - **Ordering:** `critical path`
-- **Relevant decisions:** D-2, D-6, D-7
+- **Relevant decisions:** D-2, D-6a, D-7
 - **Acceptance signals:**
   - A rejected mutation is demonstrated as a compile failure in the PR.
+  - The guarantee is shown to survive a pass-on: a read-only handle given to a
+    helper or stored in a context record still cannot be written.
   - No behavior change: the headless hspec suite and the worldgen baselines are
     untouched. A diff that moves either is doing something this arc did not
     intend.
   - Warning-clean `-Werror` builds of the library, executable, and both test
     suites.
-  - Every existing capability-audit boundary stays green.
-- **Out of scope:** any capability other than `RenderHandoff`; the §6.1 cohort;
-  rolling the boundary out further.
-- **Open questions:** `None` — Q-4 is resolved by D-7. This slice still depends
-  on CMA-1 landing first.
+  - Every existing capability-audit boundary stays green, CMA-1's gate included.
+- **Out of scope:** any capability other than `ContentRegistries`; the §6.1
+  cohort; rolling the boundary out further.
+- **Open questions:** `None` — Q-4 is resolved by D-7, and the pilot target by
+  D-6a. This slice depends on CMA-1 (#1892) landing first.
 
 ### CMA-3. Record the pilot's verdict and the rollout recommendation
 
