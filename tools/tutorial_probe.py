@@ -665,6 +665,10 @@ class SightSnapshot:
     uid: an unapplied teleport, a wrong page, a facing that excluded the
     pond and an AI that walked away all read differently, and "the unit
     could see it and the discovery did not fire" reads differently again.
+    Page and position are BOTH rendered as requested-vs-observed pairs,
+    because a unit that reached the right coordinates on the wrong page
+    is looking at a different page's tiles and is not a sight failure at
+    all.
 
     Every field is either a value or an EXPLICIT absence marker
     (``missing`` / ``unavailable`` / ``unknown``). A vanished unit, an AI
@@ -675,11 +679,13 @@ class SightSnapshot:
     """
 
     def __init__(self, label: str, uid: int, raw: str,
-                 requested: tuple[int, int], target: tuple[int, int]) -> None:
+                 requested: tuple[int, int], target: tuple[int, int],
+                 requested_page: str = PAGE) -> None:
         self.label = label
         self.uid = uid
         self.raw = raw
         self.requested = requested
+        self.requested_page = requested_page
         self.target = target
         self.fields: dict[str, str] = {}
         for part in raw.split(";"):
@@ -707,6 +713,17 @@ class SightSnapshot:
         return self.observed == self.requested
 
     @property
+    def page_applied(self) -> bool:
+        return self.fields.get("page") == self.requested_page
+
+    @property
+    def teleport_applied(self) -> bool:
+        """Both halves of what `unit.setPos` was asked for. A unit that
+        reached the right COORDINATES on the wrong page is not where the
+        caller sent it, and its field of view is a different page's."""
+        return self.page_applied and self.position_applied
+
+    @property
     def sees_target(self) -> bool | None:
         """True / False, or None when the engine could not answer."""
         answer = self.fields.get("target")
@@ -722,10 +739,10 @@ class SightSnapshot:
         if not self.unit_present:
             return (f"unit {self.uid} does not exist — unit.getInfo returned "
                     f"nil, so nothing about its sight can be read")
-        if not self.position_applied:
-            return (f"the requested position {self.requested} was NOT applied "
-                    f"— the unit is at {self.observed} on page "
-                    f"{self.get('page')}")
+        if not self.teleport_applied:
+            return (f"the requested teleport to {self.requested} on page "
+                    f"{self.requested_page} was NOT applied — the unit is at "
+                    f"{self.observed} on page {self.get('page')}")
         if self.sees_target is None:
             return ("the engine could not report a field of view for the unit "
                     f"(unit.getVisibleTiles: {self.get('fov')}), so its sight "
@@ -739,10 +756,12 @@ class SightSnapshot:
 
     def detail_lines(self) -> list[str]:
         return [
-            f"page={self.get('page')} pos=({self.get('gx')},{self.get('gy')}) "
-            f"z={self.get('gz')} facing={self.get('facing')} "
-            f"| requested pos=({self.requested[0]},{self.requested[1]}) "
-            f"[{'applied' if self.position_applied else 'NOT applied'}]",
+            f"observed page={self.get('page')} "
+            f"pos=({self.get('gx')},{self.get('gy')}) z={self.get('gz')} "
+            f"facing={self.get('facing')} | requested page="
+            f"{self.requested_page} pos=({self.requested[0]},"
+            f"{self.requested[1]}) "
+            f"[{'applied' if self.teleport_applied else 'NOT applied'}]",
             f"target water ({self.target[0]},{self.target[1]}) in field of "
             f"view: {self.get('target')} | unit.getVisibleTiles: "
             f"{self.get('fov')}, {self.get('fovCount')} tiles, "
@@ -764,8 +783,8 @@ class SightSnapshot:
 
 
 def sight_snapshot(port: int, uid: int, label: str,
-                   requested: tuple[int, int],
-                   target: tuple[int, int]) -> SightSnapshot:
+                   requested: tuple[int, int], target: tuple[int, int],
+                   requested_page: str = PAGE) -> SightSnapshot:
     """Capture one `SightSnapshot` in a single console round trip.
 
     One call, because the point is a COHERENT picture: position, facing,
@@ -807,7 +826,7 @@ def sight_snapshot(port: int, uid: int, label: str,
         "return table.concat(out, ';')"
     )
     return SightSnapshot(label, uid, send(port, lua, timeout=30.0),
-                         requested, target)
+                         requested, target, requested_page)
 
 
 def sight_failure(headline: str, *snapshots: SightSnapshot) -> str:
