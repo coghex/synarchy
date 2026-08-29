@@ -33,9 +33,14 @@ extra-doc-files:    CHANGELOG.md
 -- entries are enumerated (not globbed) on purpose: config/ also holds
 -- gitignored local runtime state (keybinds.local.yaml, video.local.yaml,
 -- notifications.local.yaml, #638/#786) that a glob would leak into the
--- tarball.
+-- tarball. data/language/concept_id_baseline.json is named explicitly
+-- because it is the one runtime resource under data/ that is not YAML:
+-- Language.Semantic.Catalogue loads it beside concepts.yaml (#1868), so
+-- omitting it would ship a source distribution that cannot build a
+-- catalogue at all.
 extra-source-files: cbits/*.h
                     data/**/*.yaml
+                    data/language/concept_id_baseline.json
                     assets/**/*.png
                     assets/**/*.ttf
                     scripts/**/*.lua

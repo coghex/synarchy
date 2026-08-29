@@ -8,13 +8,14 @@ module Test.Headless.Location.Naming (spec) where
 
 import UPrelude
 import Test.Hspec
-import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BC
 import Data.List (nub)
 import qualified Data.Map.Strict as M
 import qualified Data.Text as T
 import Language.Semantic.Types
-import Language.Semantic.Catalogue (conceptCataloguePath, parseCatalogue)
+import Language.Semantic.Catalogue ( conceptCataloguePath
+                                   , conceptOrdinalPath, loadCatalogue
+                                   , parseCatalogue )
 import Language.Generated.Types
     ( LanguageProvenance(..), LangSeed(..), GeneratorVersion(..)
     , currentGeneratorVersion )
@@ -78,9 +79,8 @@ provB = LanguageProvenance (LangSeed 0x0FF1CE0000000B2C) currentGeneratorVersion
 
 spec ∷ Spec
 spec = describe "Location naming" $ do
-    prodBytes ← runIO $ BS.readFile conceptCataloguePath
-    let cat = either (error ∘ T.unpack ∘ catalogueErrorText) id
-                     (parseCatalogue prodBytes)
+    prodCatE ← runIO $ loadCatalogue conceptCataloguePath conceptOrdinalPath
+    let cat = either (error ∘ T.unpack ∘ catalogueErrorText) id prodCatE
         namerOf prov = case mkLocationNamer cat prov of
             Left e  → error ("mkLocationNamer failed: " <> show e)
             Right n → n
@@ -119,6 +119,7 @@ spec = describe "Location naming" $ do
         it "two locations in ONE world share the language: every root a \
            \name is built from comes from that language's own assignment" $ do
             let roots = lrFree (assignLanguageRoots (profileOf provA)
+                                                    (catOrdinals cat)
                                                     (conceptIds cat))
                 -- Every rendered name is a compound of two of this
                 -- language's roots, so each name must contain at least
@@ -242,8 +243,12 @@ spec = describe "Location naming" $ do
         it "rejects a modifier concept with no modifier form -- the slot's \
            \required lexical form, not merely a known id" $ do
             -- A concept that exists but authors only a singular.
-            let partial = either (error ∘ T.unpack ∘ catalogueErrorText) id $
-                    parseCatalogue $ BC.pack $ unlines
+            let partialOrdinals =
+                    either (error ∘ T.unpack ∘ catalogueErrorText) id $
+                        mkConceptOrdinals [ (ConceptId "KEEP", 0)
+                                          , (ConceptId "ASH", 1) ]
+                partial = either (error ∘ T.unpack ∘ catalogueErrorText) id $
+                    parseCatalogue partialOrdinals $ BC.pack $ unlines
                         [ "version: 1"
                         , "concepts:"
                         , "  - id: KEEP"
