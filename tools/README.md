@@ -2533,7 +2533,13 @@ a second opinion nobody asked for.
 artifacts as PATHS, and a path is machine-local — a reader of the filed issue
 cannot open it. So this module READS the retained FAIL and TIMEOUT
 directories (`events.jsonl`, `stdout.txt`, `engine/*`) and quotes bounded
-excerpts into the body: at most `MAX_EVIDENCE_RUNS` runs, `MAX_EVIDENCE_FILES_PER_RUN`
+excerpts into the body. The tree is walked component by component from the
+declared artifact root with `O_NOFOLLOW` below it and the engine directory
+listed by descriptor, because what is found there is published: a symlinked
+`engine`, or a run directory substituted after #1437's canonical-path check
+passed, would otherwise publish whatever lives elsewhere as this probe's
+failure evidence. Files are opened `O_NONBLOCK` and required to be regular, so
+a FIFO cannot block the workflow. The bounds: at most `MAX_EVIDENCE_RUNS` runs, `MAX_EVIDENCE_FILES_PER_RUN`
 files each, and the trailing `MAX_EXCERPT_LINES`/`MAX_EXCERPT_CHARS` of each,
 which is where an aborting probe's failure lands. An attempt whose artifacts
 have all been pruned is REFUSED rather than filed on paths alone — but only an

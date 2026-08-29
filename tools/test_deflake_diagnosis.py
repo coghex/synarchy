@@ -37,6 +37,7 @@ from __future__ import annotations
 import contextlib
 import copy
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -7368,6 +7369,82 @@ def test_an_issue_with_no_readable_evidence_is_not_filed() -> None:
         body = publication.creates[0]["body"]
         expect(body.count("#### baseline run ") == 1,
                "one readable run is evidence enough, and only it is quoted")
+
+
+def test_a_symlinked_artifact_component_reaches_nothing() -> None:
+    """This module QUOTES what it finds into a published issue.
+
+    So a symlink under the declared artifact root is not a layout to
+    read through: `engine -> elsewhere` would otherwise have every
+    listing and open below it land there and publish whatever regular
+    files live there as this probe's failure evidence. #1437's own
+    canonical-path rule catches a run directory that was ALREADY a
+    symlink when the handoff was validated; every component is opened
+    `O_NOFOLLOW` anyway, which covers the rest of the tree and the race
+    between that validation and this read.
+    """
+    document = defect_handoff()
+    elsewhere = Path(tempfile.mkdtemp(prefix="deflake_elsewhere_"))
+    try:
+        (elsewhere / "secret.log").write_text("PRIVATE HOST STATE\n",
+                                              encoding="utf-8")
+        # Named the way a run directory's own files are named, so a
+        # substituted directory would really be READ by an
+        # implementation that followed the link rather than merely
+        # finding nothing there.
+        (elsewhere / "stdout.txt").write_text("PRIVATE HOST STATE\n",
+                                              encoding="utf-8")
+        runs = [Path(entry) for entry
+                in document["diagnosis_outcome"]["retained_artifacts"]]
+
+        # (a) `engine` is a symlink to somewhere else entirely.
+        with staged_evidence(document), census_file() as path:
+            shutil.rmtree(runs[0] / "engine")
+            (runs[0] / "engine").symlink_to(elsewhere)
+            _published, publication, _probe, _pr = file_defect(document, path)
+            body = publication.creates[0]["body"]
+            expect("PRIVATE HOST STATE" not in body,
+                   "a symlinked engine directory is not descended")
+            expect(DEFECT_STDOUT.strip() in body,
+                   "while the run's own real files are still quoted")
+
+        # (b) a symlinked artifact FILE, and a non-regular one. An open
+        # that blocked on the FIFO would hang the workflow, not merely
+        # read the wrong bytes.
+        with staged_evidence(document, only=1), census_file() as path:
+            (runs[0] / "stdout.txt").unlink()
+            (runs[0] / "stdout.txt").symlink_to(elsewhere / "secret.log")
+            log = runs[0] / "engine" / "engine-9101.log"
+            log.unlink()
+            if hasattr(os, "mkfifo"):
+                os.mkfifo(log)
+            _published, publication, _probe, _pr = file_defect(document, path)
+            body = publication.creates[0]["body"]
+            expect("PRIVATE HOST STATE" not in body,
+                   "a symlinked artifact file is not read")
+            expect(DEFECT_EVENTS.strip() in body,
+                   "and the real protocol stream beside it still is")
+
+        # (c) the run directory ITSELF substituted after validation —
+        # the race #1437's gate cannot see, since it validated the real
+        # path. Read directly, because a handoff declaring one would be
+        # refused at the gate instead of reaching this.
+        with staged_evidence(document, only=1):
+            root = str(runs[0].parent.parent)
+            substitute = runs[0].parent / "run-009"
+            substitute.symlink_to(elsewhere)
+            try:
+                expect(di.run_excerpts(root, str(substitute)) == [],
+                       "a substituted run directory yields no excerpt")
+                expect(di.open_run_directory(root, str(elsewhere)) is None,
+                       "and a run directory outside the declared root is "
+                       "not walked at all")
+                expect(len(di.run_excerpts(root, str(runs[0]))) >= 2,
+                       "while the genuine directory still reads")
+            finally:
+                substitute.unlink()
+    finally:
+        shutil.rmtree(elsewhere, ignore_errors=True)
 
 
 def test_the_quoted_evidence_is_bounded() -> None:

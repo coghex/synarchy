@@ -82,6 +82,20 @@ summary is the issue's own claim.
 
 Evidence, not pathnames
 -----------------------
+The artifact tree is walked component by component from the DECLARED
+artifact root, `O_NOFOLLOW` at every step below it, and the engine
+directory is listed by descriptor. Only the root is opened by path: it
+is the anchor the producer record declares and
+`require_artifact_reference` has already refused one inside a worktree.
+Everything below is traversed rather than resolved because what is found
+there is QUOTED INTO A PUBLISHED ISSUE — a symlinked `engine`
+directory, or a run directory substituted after #1437's own
+canonical-path check passed, would otherwise have every listing and open
+land somewhere else and publish whatever regular files live there as
+this probe's failure evidence. Each file is then opened `O_NONBLOCK` and
+required to be regular, so a FIFO planted at one of those names cannot
+block the workflow on an open.
+
 `probe_flake` retains a directory per FAIL and TIMEOUT run — the
 protocol event stream, the probe's stdout, and the engine logs — and
 `probe_census.summarize_sample` stores only their PATHS. Those paths are
@@ -161,6 +175,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -566,21 +581,74 @@ def body_origin(body):
 # ==========================================================================
 # Retained log evidence
 # ==========================================================================
-def _tail_text(path: Path) -> str | None:
-    """The tail of one retained artifact, or None if it cannot be read.
+def _open_directory(name, *, dir_fd=None):
+    """One directory component, opened WITHOUT following a symlink."""
+    try:
+        return os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                       dir_fd=dir_fd)
+    except (OSError, ValueError):
+        return None
 
-    Opened `O_NOFOLLOW`: `probe_flake` writes regular files into a
-    directory it created, so a symlink at one of these names is
-    tampering rather than a layout this reads through. Decoding replaces
-    undecodable bytes instead of raising — a macOS engine log carries
-    GLFW's junk, and evidence that exists must not be dropped because
-    one byte is not UTF-8.
+
+def open_run_directory(artifact_root: str, run_dir: str):
+    """A descriptor for one retained run directory, or None.
+
+    Walked component by component from the DECLARED artifact root, with
+    `O_NOFOLLOW` on every step below it. Only the root itself is opened
+    by path: it is the anchor the producer record declares, and
+    `require_artifact_reference` has already refused one inside any
+    worktree.
+
+    Everything under it is traversed by descriptor because this module
+    QUOTES what it finds into a published issue. `O_NOFOLLOW` on the
+    final file alone is not enough — a symlinked `engine` directory, or
+    a symlinked run directory, would have `os.listdir` and every open
+    below it land somewhere else entirely, and whatever regular files
+    live there would be read and published as this probe's failure
+    evidence. Refusing at every component closes that, and closes the
+    component race with it: nothing is re-resolved by path after the
+    first open.
     """
     try:
-        fd = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW)
-    except OSError:
+        relative = Path(run_dir).relative_to(Path(artifact_root))
+    except ValueError:
+        # #1437's artifact topology puts every run directory under the
+        # root its own result declares, so this is unreachable for an
+        # accepted handoff — and a path that is not under the anchor is
+        # one this has no safe way to walk.
+        return None
+    fd = _open_directory(artifact_root)
+    for part in relative.parts:
+        if fd is None:
+            return None
+        nxt = _open_directory(part, dir_fd=fd)
+        os.close(fd)
+        fd = nxt
+    return fd
+
+
+def _tail_text(name: str, *, dir_fd) -> str | None:
+    """The tail of one retained artifact, or None if it cannot be read.
+
+    Opened by NAME within its own directory's descriptor and with
+    `O_NOFOLLOW`, so neither the file nor any directory above it can be
+    a symlink to somewhere this has no business quoting.
+    `O_NONBLOCK` and the regular-file check are the other half: a FIFO
+    planted at one of these names would otherwise block the open until
+    someone wrote to it, and a directory would read as an error late
+    rather than a skip early. Decoding replaces undecodable bytes
+    instead of raising — a macOS engine log carries GLFW's junk, and
+    evidence that exists must not be dropped because one byte is not
+    UTF-8.
+    """
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                     dir_fd=dir_fd)
+    except (OSError, ValueError):
         return None
     try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
         size = os.lseek(fd, 0, os.SEEK_END)
         start = max(0, size - MAX_READ_BYTES)
         os.lseek(fd, start, os.SEEK_SET)
@@ -597,9 +665,13 @@ def _tail_text(path: Path) -> str | None:
     return text
 
 
-def excerpt(path: Path) -> dict | None:
-    """One bounded, quotable excerpt of one retained artifact."""
-    text = _tail_text(path)
+def excerpt(path: Path, name: str, *, dir_fd) -> dict | None:
+    """One bounded, quotable excerpt of one retained artifact.
+
+    `path` is the label the issue prints so a reader can find the whole
+    artifact; `name` and `dir_fd` are what is actually opened.
+    """
+    text = _tail_text(name, dir_fd=dir_fd)
     if text is None:
         return None
     lines = [line for line in text.splitlines() if line.strip()]
@@ -615,22 +687,47 @@ def excerpt(path: Path) -> dict | None:
             "text": body}
 
 
-def _run_evidence_paths(run_dir: Path) -> list:
-    """The files `probe_flake` retains under one run directory, in order.
+def run_excerpts(artifact_root: str, run_dir: str) -> list:
+    """The bounded excerpts one retained run directory yields, in order.
 
     The protocol stream first — it is what the checks were scored from —
     then the probe's own stdout, then whatever the engine logged. The
     engine directory is listed rather than guessed at, because its file
-    names come from the probe being measured.
+    names come from the probe being measured; it is listed BY
+    DESCRIPTOR, so a symlink standing in for it reaches nothing.
     """
-    paths = [run_dir / name for name in RUN_EVIDENCE_FILES]
-    engine = run_dir / ENGINE_LOG_DIR
+    excerpts: list = []
+    run_fd = open_run_directory(artifact_root, run_dir)
+    if run_fd is None:
+        return excerpts
+    display = Path(run_dir)
     try:
-        paths += sorted(entry for entry in engine.iterdir()
-                        if entry.is_file())
-    except OSError:
-        pass
-    return paths
+        for name in RUN_EVIDENCE_FILES:
+            if len(excerpts) >= MAX_EVIDENCE_FILES_PER_RUN:
+                return excerpts
+            found = excerpt(display / name, name, dir_fd=run_fd)
+            if found is not None:
+                excerpts.append(found)
+        engine_fd = _open_directory(ENGINE_LOG_DIR, dir_fd=run_fd)
+        if engine_fd is None:
+            return excerpts
+        try:
+            names = sorted(os.listdir(engine_fd))
+        except OSError:
+            names = []
+        try:
+            for name in names:
+                if len(excerpts) >= MAX_EVIDENCE_FILES_PER_RUN:
+                    break
+                found = excerpt(display / ENGINE_LOG_DIR / name, name,
+                                dir_fd=engine_fd)
+                if found is not None:
+                    excerpts.append(found)
+        finally:
+            os.close(engine_fd)
+    finally:
+        os.close(run_fd)
+    return excerpts
 
 
 def failing_runs(handoff) -> list:
@@ -655,7 +752,14 @@ def failing_runs(handoff) -> list:
                 continue
             found.append({"role": role, "index": run["index"],
                           "outcome": run["outcome"],
-                          "artifact_dir": directory})
+                          "artifact_dir": directory,
+                          # The anchor its own measurement declared, so
+                          # the walk below starts from a path the
+                          # producer record vouches for rather than from
+                          # whatever the run directory's parents are
+                          # today.
+                          "artifact_root": measurement.result[
+                              "artifact_root"]})
     return found
 
 
@@ -695,13 +799,7 @@ def collect_evidence(handoff) -> list:
     """
     blocks = []
     for run in failing_runs(handoff)[:MAX_EVIDENCE_RUNS]:
-        excerpts = []
-        for path in _run_evidence_paths(Path(run["artifact_dir"])):
-            if len(excerpts) >= MAX_EVIDENCE_FILES_PER_RUN:
-                break
-            found = excerpt(path)
-            if found is not None:
-                excerpts.append(found)
+        excerpts = run_excerpts(run["artifact_root"], run["artifact_dir"])
         if excerpts:
             blocks.append({**run, "excerpts": excerpts})
     if not blocks:
