@@ -172,6 +172,31 @@ def read_index(unit: str) -> dict:
         (UNITS_ROOT / unit / "atlas" / "index.json").read_text("utf-8"))
 
 
+def gameplay_names(documents: list[dict]) -> list[str]:
+    """Names under ``units:`` only; ``asset_units:`` never register.
+
+    Keeping this extraction separate makes the roster contract directly
+    self-testable without booting the engine.  A file stem is not a unit
+    declaration: one YAML may carry either declaration form (or both).
+    """
+    return sorted(
+        entry["name"]
+        for doc in documents
+        for entry in (doc.get("units") or [])
+    )
+
+
+def shipped_unit_documents() -> list[dict]:
+    return [
+        yaml.safe_load(path.read_text("utf-8"))
+        for path in sorted(DATA_UNITS.glob("*.yaml"))
+    ]
+
+
+def shipped_gameplay_roster() -> list[str]:
+    return gameplay_names(shipped_unit_documents())
+
+
 def read_declaration(unit: str) -> dict:
     """The unit's own YAML entry.
 
@@ -181,10 +206,16 @@ def read_declaration(unit: str) -> dict:
     the dead pose, judged against the `animations` this same entry
     declares.
     """
-    doc = yaml.safe_load((DATA_UNITS / f"{unit}.yaml").read_text("utf-8"))
-    for entry in doc.get("units") or []:
-        if entry.get("name") == unit:
-            return entry
+    matches = [
+        entry
+        for doc in shipped_unit_documents()
+        for entry in (doc.get("units") or [])
+        if entry.get("name") == unit
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        raise SystemExit(f"{unit}: duplicate `units:` declarations")
     raise SystemExit(f"{unit}: no `units:` entry named {unit!r}")
 
 
@@ -825,6 +856,18 @@ def self_test() -> int:
             failures.append(
                 f"{label}: expected a cause naming {needle!r}, got {cause!r}")
 
+    # A shipped YAML filename is not necessarily a registered unit.  The
+    # temporary asset-only nomad art used while #916 is delivered in stacked
+    # PRs must not poison this probe's gameplay roster.
+    expect("gameplay roster ignores asset-only declarations",
+           gameplay_names([
+               {"units": [{"name": "real"}]},
+               {"asset_units": [{"name": "preview_only"}]},
+               {"units": [{"name": "second"}],
+                "asset_units": [{"name": "also_preview_only"}]},
+           ]),
+           ["real", "second"])
+
     # --- terrain: a clean scan passes, each hazard is named ------------
     expect("flat dry footprint", terrain_cause({"cause": "ok", "tiles": 6400}, 0),
            None)
@@ -1176,7 +1219,7 @@ def main() -> int:
     if args.self_test:
         return self_test()
 
-    roster = sorted(p.stem for p in DATA_UNITS.glob("*.yaml"))
+    roster = shipped_gameplay_roster()
     if not roster:
         print("FAIL: no unit declarations under data/units/", file=sys.stderr)
         return SETUP_EXIT

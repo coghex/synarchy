@@ -444,13 +444,12 @@ instance FromJSON UnitYamlDef where
 --   exclusion is a property of WHICH LIST the entry is in rather than of
 --   a field it happens to omit or a decode it happens to fail.
 --
---   NO shipped file uses this form since #1261 (TEX-6) promoted
---   @tiller@, @unknown_unit@ and @white_tailed_deer@ to real @units:@
---   entries — with per-frame unit-animation loading retired, an
---   animation renders only through its compiled atlas, and the owner
---   decision of 2026-08-11 kept all three as preview targets. The form
---   remains supported for a tree that genuinely owns art without being
---   a unit, and its decoder is exercised against fixtures.
+--   #1261 (TEX-6) promoted @tiller@, @unknown_unit@ and
+--   @white_tailed_deer@ to real @units:@ entries, but the form remains
+--   supported for a tree that genuinely owns art without being a unit.
+--   Such a declaration is previewable and atlas-validated while staying
+--   outside the gameplay registry; both shipped entries and fixtures may
+--   exercise that boundary.
 data UnitYamlAssetDef = UnitYamlAssetDef
     { uyadName       ∷ !Text
       -- ^ must equal the asset directory name — @Engine.Preview.Unit@

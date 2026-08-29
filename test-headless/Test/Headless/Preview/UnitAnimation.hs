@@ -44,12 +44,12 @@ import Unit.Direction (Direction(..))
 realUnit ∷ String
 realUnit = "acolyte"
 
--- Every shipped unit tree. All seven are declared and compiled since
--- #1261, so each one must resolve through the production loader.
+-- Every shipped unit tree, gameplay and asset-only alike. Each one must
+-- resolve through the production preview loader.
 shippedUnits ∷ [String]
 shippedUnits =
     [ "acolyte", "bear_brown", "red_squirrel", "technomule"
-    , "tiller", "unknown_unit", "white_tailed_deer" ]
+    , "tiller", "unknown_unit", "white_tailed_deer", "nomad_primitive" ]
 
 -- One of the three trees #1261 promoted from #1257's inventory-only
 -- `asset_units:` form to a real `units:` definition. Its animations
@@ -707,10 +707,9 @@ spec = do
                         (\a → map pfdDirection (paDirs a)
                                 ≡ map directionDirName previewDirectionOrder)
 
-        -- #1261 requirement 2: ALL SEVEN preserved trees, every one of
-        -- their animations, through the production loader and the
-        -- generated index/cell metadata. Per-unit `it`s so a failure
-        -- names the tree that broke.
+        -- Every shipped tree, every one of its animations, through the
+        -- production loader and generated index/cell metadata. Per-unit
+        -- `it`s ensure a failure names the tree that broke.
         forM_ shippedUnits $ \unitName →
             it ("resolves " ⧺ unitName ⧺ ": every animation atlas-backed, \
                 \every frame a cell of its own animation's atlas") $ do
@@ -746,15 +745,18 @@ spec = do
             Map.lookup "idle" meta `shouldSatisfy` isJust
             fmap uyaFlip (Map.lookup "idle" meta) `shouldBe` Just True
 
-        it "extracts a promoted tree's metadata from its units: block \
-           \(the reader still accepts both declaration forms — the \
-           \inventory-only asset_units: form remains supported, it is \
-           \just that no shipped file uses it since #1261)" $ do
+        it "extracts a promoted tree's metadata from its units: block" $ do
             meta ← loadUnitAnimMeta (T.pack promotedUnit)
             sort (Map.keys meta) `shouldBe` ["idle", "run"]
             fmap uyaFlip (Map.lookup "idle" meta) `shouldBe` Just True
             fmap uyaFps  (Map.lookup "idle" meta) `shouldBe` Just 8
             fmap uyaLoop (Map.lookup "idle" meta) `shouldBe` Just True
+
+        it "extracts the shipped nomad metadata from its asset_units: block" $ do
+            meta ← loadUnitAnimMeta "nomad_primitive"
+            Map.size meta `shouldBe` 7
+            fmap uyaLoop (Map.lookup "injured_combat_idle_unarmed" meta)
+                `shouldBe` Just True
 
         it "is empty for a name no YAML file exists for at all" $ do
             meta ← loadUnitAnimMeta "definitely_not_a_unit_887"
