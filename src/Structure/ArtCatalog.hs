@@ -74,6 +74,8 @@ module Structure.ArtCatalog
       -- * Failure
     , ArtFault(..)
     , artFaultMessage
+    , ArtAssetFailure(..)
+    , artAssetFailureMessage
     , ArtFailureReport(..)
     , failPackArtPath
       -- * Resolution
@@ -85,6 +87,7 @@ module Structure.ArtCatalog
     ) where
 
 import UPrelude
+import Data.List (sortOn)
 import qualified Data.Map.Strict as M
 import qualified Data.Text as T
 import qualified Data.Set as S
@@ -196,11 +199,11 @@ data PackArt = PackArt
       --   (@build_work@ AND @materials@). A subset of 'pkKinds', and
       --   deliberately independent of whether the kind's art resolves.
     , pkArt       ∷ !(M.Map ArtKey PieceArt)
-    , pkFailures  ∷ !(HM.HashMap Text ArtFault)
-      -- ^ Terminal texture-load failures by PATH, recorded once each.
-      --   Non-empty means the whole pack resolves nothing; the map is
-      --   what makes the warning fire once per failed asset rather than
-      --   once per lookup.
+    , pkFailures  ∷ !(HM.HashMap Text Text)
+      -- ^ Terminal texture-load failures: the failed PATH → its reason,
+      --   recorded once each. Non-empty means the whole pack resolves
+      --   nothing; the map is also what makes the warning fire once per
+      --   failed asset rather than once per attempt or per lookup.
     } deriving (Show, Eq)
 
 -- | Every registered pack by NAME. Written by @LuaThread@ at pack load,
@@ -360,6 +363,34 @@ registerPackArt reg cat = case validate of
                         ("the texture handle is not a loaded handle ("
                           <> tshow h <> ")"))
 
+-- | One terminal asset failure, coalesced across every pack it newly
+--   invalidated. ONE value, not one per pack: a facemap can legitimately
+--   be shared between packs (@dungeon_1@'s floor and every @wire@
+--   connection both draw @facemap/floorface.png@), and a per-pack
+--   warning would then report a single load failure two or more times.
+--   The packs are listed inside the one line, so nothing is lost.
+data ArtAssetFailure = ArtAssetFailure
+    { aafPath   ∷ !Text
+    , aafReason ∷ !Text
+    , aafPacks  ∷ ![(Text, Maybe PieceKind, Text)]
+      -- ^ Pack, the kind that lost art, and the asset ROLE within it —
+      --   in pack-name order, so the line is stable across runs rather
+      --   than following hash order.
+    } deriving (Show, Eq)
+
+-- | The ONE warning line a terminal asset failure emits. Requirement
+--   7's pack \/ kind \/ asset triple is present for every pack the path
+--   belongs to, and the path itself is named once.
+artAssetFailureMessage ∷ ArtAssetFailure → Text
+artAssetFailureMessage f = mconcat
+    [ "structure art: texture '", aafPath f, "' failed to load ("
+    , aafReason f, ") -- these packs now resolve nothing: "
+    , T.intercalate "; "
+        [ mconcat [ "pack '", pack, "'"
+                  , maybe "" (\k → " kind '" <> pieceKindName k <> "'") mKind
+                  , " asset '", role, "'" ]
+        | (pack, mKind, role) ← aafPacks f ] ]
+
 -- | What 'failPackArtPath' observed.
 data ArtFailureReport = ArtFailureReport
     { afrTracked ∷ !Bool
@@ -367,43 +398,52 @@ data ArtFailureReport = ArtFailureReport
       --   uses this to decide whether the catalogue owns the diagnostic
       --   at all — an untracked path keeps whatever generic reporting it
       --   already had.
-    , afrNew     ∷ ![ArtFault]
-      -- ^ The (pack, path) failures this call recorded for the first
-      --   time — one warning each, and none on a repeat.
+    , afrFailure ∷ !(Maybe ArtAssetFailure)
+      -- ^ The single warning to emit, or 'Nothing' when every pack this
+      --   path belongs to had already recorded it — which is what makes
+      --   the diagnostic fire once per failed asset rather than once per
+      --   attempt, per lookup, or per frame.
     } deriving (Show, Eq)
 
 -- | Record a terminal texture-load failure by path. Every pack whose
 --   registered art names it stops resolving anything; a pack that
---   already recorded this exact path is left alone and reports nothing,
---   which is what deduplicates the warning.
+--   already recorded this exact path is left alone and contributes
+--   nothing to the warning.
 failPackArtPath ∷ Text → Text → StructureArtCatalog
                 → (StructureArtCatalog, ArtFailureReport)
 failPackArtPath path reason cat =
     ( StructureArtCatalog (HM.union (HM.fromList updated) (sacPacks cat))
-    , ArtFailureReport { afrTracked = not (null affected)
-                       , afrNew     = map snd fresh } )
+    , ArtFailureReport
+        { afrTracked = not (null affected)
+        , afrFailure = if null fresh then Nothing else Just ArtAssetFailure
+            { aafPath = path, aafReason = reason, aafPacks = fresh } } )
   where
-    affected = [ (n, p) | (n, p) ← HM.toList (sacPacks cat), usesPath p ]
-    usesPath p = or [ aaPath (paTexture a) ≡ path ∨ aaPath (paFacemap a) ≡ path
-                    | a ← M.elems (pkArt p) ]
-    fresh = [ (n, faultFor n p)
+    -- Sorted by pack name so the one line — and any test reading it —
+    -- sees a deterministic order rather than the hash map's.
+    affected = sortOn fst
+        [ (n, p) | (n, p) ← HM.toList (sacPacks cat), isJust (slotFor p) ]
+    fresh = [ (n, artKeyKind ∘ fst <$> slotFor p, roleFor p)
             | (n, p) ← affected, not (HM.member path (pkFailures p)) ]
-    updated = [ (n, p { pkFailures = HM.insert path (faultFor n p)
-                                              (pkFailures p) })
+    updated = [ (n, p { pkFailures = HM.insert path reason (pkFailures p) })
               | (n, p) ← affected ]
-    faultFor n p = ArtFault
-        { afPack   = n
-        , afKind   = artKeyKind <$> slotFor p
-        , afRole   = maybe "registered art" artKeyRole (slotFor p)
-        , afPath   = Just path
-        , afReason = reason }
-    -- The first slot of this pack that names the path, so the warning
-    -- can say WHICH kind lost its art. A path shared by several slots
-    -- (a facemap reused across kinds) names the lowest one; the pack is
-    -- refused whole either way, so the choice is diagnostic only.
+    roleFor p = case slotFor p of
+        Nothing          → "registered art"
+        Just (key, half) → artKeyRole key <> " " <> half
+    -- The first slot of this pack that names the path, and whether the
+    -- path is that slot's texture, its facemap, or both — so the warning
+    -- can say WHICH kind lost WHICH half. A path shared by several slots
+    -- (a facemap reused across a pack's kinds) names the lowest one; the
+    -- pack is invalidated whole either way, so the choice is diagnostic
+    -- only.
     slotFor p = listToMaybe
-        [ key | (key, a) ← M.toAscList (pkArt p)
-              , aaPath (paTexture a) ≡ path ∨ aaPath (paFacemap a) ≡ path ]
+        [ (key, half)
+        | (key, a) ← M.toAscList (pkArt p)
+        , let isTex  = aaPath (paTexture a) ≡ path
+              isFace = aaPath (paFacemap a) ≡ path
+        , isTex ∨ isFace
+        , let half | isTex ∧ isFace = "texture and facemap"
+                   | isTex          = "texture"
+                   | otherwise      = "facemap" ]
 
 -- * Resolution
 

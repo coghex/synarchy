@@ -593,6 +593,45 @@ warningSpec = describe "a failure" $ do
                     resolvedArtAt ls "failing_pack" "floor" Nothing (simpleTile 0)
             warningsOf again `shouldBe` []
 
+    it "coalesces a SHARED texture's failure into one warning naming \
+       \every pack it invalidated" $ \(env, ls) → do
+            -- A facemap legitimately belongs to more than one pack, so a
+            -- warning per affected pack would report ONE load failure
+            -- twice. Two synthetic packs share `shared_face.png`, which
+            -- is the shape the shipped packs really have (asserted
+            -- against the two pack YAMLs in the example below).
+            forM_ ["shared_a", "shared_b"] $ \pack →
+                evalDebug ls (T.concat
+                    [ "return tostring(structure.registerPackArt{ pack='"
+                    , pack, "', kinds={{kind='floor', buildable=true}}, "
+                    , "art={{kind='floor', texture='", pack, "_tex.png', "
+                    , "texHandle=41, facemap='shared_face.png', "
+                    , "faceHandle=42}} })" ])
+                    `shouldReturn` "true"
+            (_, entries) ← withCapturedLog env $
+                assetFailed env ls "shared_face.png"
+            case warningsOf entries of
+                [w] → forM_ [ "shared_face.png", "pack 'shared_a'"
+                            , "pack 'shared_b'", "kind 'floor'"
+                            , "floor facemap" ] $ \needle →
+                    unless (needle `T.isInfixOf` w) $ expectationFailure
+                        ("the warning does not name " <> show needle
+                           <> ": " <> T.unpack w)
+                other → expectationFailure
+                    ("expected exactly one warning, got: " <> show other)
+            -- both packs are invalidated, not just the one named first
+            forM_ ["shared_a", "shared_b"] $ \pack →
+                resolvedArtAt ls pack "floor" Nothing (simpleTile 0)
+                    `shouldReturn` Nothing
+
+    it "shares a facemap between the two shipped packs, which is what \
+       \makes that coalescing a real case" $ \(_, ls) → do
+        shared ← evalDebug ls
+            "local d = engine.loadYaml('data/structure_packs/dungeon_1.yaml'); \
+            \local w = engine.loadYaml('data/structure_packs/wire.yaml'); \
+            \return tostring(d.pieces.floor.facemap == w.facemap)"
+        shared `shouldBe` "true"
+
     it "keeps the generic warning for a texture no pack registered" $
         \(env, ls) → do
             (_, entries) ← withCapturedLog env $

@@ -15,7 +15,7 @@ import Engine.Core.Log (logWarn, logDebug, LogCategory(..))
 import Engine.Core.Thread
 import Engine.Core.State (EngineEnv(..))
 import Structure.ArtCatalog
-    (ArtFailureReport(..), artFaultMessage, failPackArtPath)
+    (ArtFailureReport(..), artAssetFailureMessage, failPackArtPath)
 import World.State.Types (requestSelectionChange)
 import Engine.Input.Types (keyToText, clickRouteText)
 import UI.Types (ElementHandle(..))
@@ -246,11 +246,12 @@ processLuaMsg env ls stateRef msg = case msg of
     -- per pack per path), which is what keeps a re-requested texture
     -- from warning once per attempt.
     report ← if assetType ≢ "texture"
-        then pure (ArtFailureReport False [])
+        then pure (ArtFailureReport False Nothing)
         else atomicModifyIORef' (structureArtCatalogRef env)
                                 (failPackArtPath path reason)
     if afrTracked report
-        then forM_ (afrNew report) $ logWarn logger CatAsset ∘ artFaultMessage
+        then forM_ (afrFailure report) $
+                 logWarn logger CatAsset ∘ artAssetFailureMessage
         else logWarn logger CatAsset $
                 "Asset load failed (" <> assetType <> ", handle " <> tshow handle
                   <> "): " <> path <> " -- " <> reason
