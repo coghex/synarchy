@@ -172,11 +172,22 @@ _REGISTRY_NOUN = (
 # The SUBJECT half of a stated total, wider than the noun above: a bare
 # "registry", and the count nouns a total gets attached to, name the whole
 # thing too.
+# A noun that IS a count. Enumerated once, then reused in every shape the
+# subject can take, so a synonym is added in one place instead of in three
+# -- "tally" was the round-8 bypass, and "probe tally", "tally of probes"
+# and "registry tally" all became reachable together.
+_COUNT_NOUN = (
+    r"(?:counts?|totals?|tall(?:y|ies)|numbers?|sizes?|lengths?|census(?:es)?"
+    r"|head\s?counts?|inventor(?:y|ies)|rosters?|lists?|tables?"
+    r"|registr(?:y|ies)|populations?|amounts?)")
+
 _REGISTRY_SUBJECT = (
     r"(?:" + _REGISTRY_NOUN + r"|registry"
     r"|(?:total\s+)?number\s+of\s+(?:registered\s+)?probes?"
-    r"|probe\s+(?:count|total|list|table|roster|inventory)"
-    r"|(?:count|list)\s+of\s+(?:registered\s+)?probes?)")
+    # "probe tally", "the probes' count", "the registry's size"
+    r"|(?:probes?|registry)(?:'s|')?\s+" + _COUNT_NOUN +
+    # "tally of the registered probes"
+    r"|" + _COUNT_NOUN + r"\s+of\s+(?:the\s+)?(?:registered\s+)?probes?)")
 
 # The registry's own object, which names the whole thing as directly as any
 # English phrase does. It has to be matched CASE-SENSITIVELY: `PROBES` is
@@ -3538,6 +3549,13 @@ def test_the_readme_states_no_registry_total() -> None:
             "The probe list has 93 entries.",
             "The list of registered probes has 93 entries.",
             "The probe table has 93 rows.",
+            "The probe tally is 93.",
+            "The probe census is 93.",
+            "The registry size is 93.",
+            "The registry's total is 93.",
+            "The tally of registered probes is 93.",
+            "The probes' count is 93.",
+            "The probe headcount is 93.",
             # Inverted: the quantity leads and the subject follows.
             "There are 93 entries in the probe registry.",
             "There are 93 scripts in the registry.",
@@ -3557,11 +3575,14 @@ def test_the_readme_states_no_registry_total() -> None:
         # The registry's own object as the subject. The first is verbatim the
         # form round 6 of review found.
         "registry-object-quantity": (
+            # First case fires this rule ALONE: "PROBES" with no count noun
+            # after it, so the case-insensitive subject cannot reach it, and
+            # no verb, probe noun or partitive to reach either.
+            "PROBES: 93.",
             "The PROBES list has 93 entries.",
             "`run_probes.PROBES` has 93 entries.",
             "PROBES holds 93.",
             "The PROBES dict is 93 long.",
-            "PROBES: 93.",
             # Inverted, the same way.
             "There are 93 entries in PROBES.",
             "93 rows sit in `run_probes.PROBES`.",
@@ -3634,6 +3655,8 @@ def test_the_readme_states_no_registry_total() -> None:
             "The PROBES list has 93 entries.",
             # The round-7 review's bypass, verbatim.
             "There are 93 entries in the probe registry.",
+            # The round-8 review's bypass, verbatim.
+            "The probe tally is 93.",
             # The round-2 review's bypass: the same totals, formatted.
             "There are `93 registered probes`.",
             "The probe registry totals `93`.",
@@ -3680,6 +3703,8 @@ def test_the_readme_states_no_registry_total() -> None:
             "`base … base + N - 1`, and `--jobs` lays the selected probes' "
             "spans end to end.",
             "A `--port` that reaches 8008 stays build-free.",
+            "So a probe's port count is DATA -- `run_probes.PROBE_PORT_SPANS` "
+            "declares 2 for each of those two.",
             "`run_probes.PROBE_TIMEOUT_OVERRIDES` declares 3600 for one key.",
             "Adding a future multi-port probe is one row in that table, and "
             "`tools/test_run_probes.py` validates every row against the live "
