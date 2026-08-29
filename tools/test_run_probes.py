@@ -3883,6 +3883,31 @@ def test_the_readme_states_no_registry_total() -> None:
                f"[{rule}] is the only rule {bodies[0]!r} needs "
                f"(fired {sorted(fired)})")
 
+    # Requirement 3 lists the normalization categories by name, so the
+    # matrix names them too: one representative prohibited total per
+    # category, proving no formatting path reaches the rules unnormalized.
+    # A plain-text mutation cannot prove any of these.
+    by_normalization = {
+        "inline-code": "The probe registry totals `93`.",
+        "emphasis": "There are **93 registered probes**.",
+        "link": "There are [93](https://example.test) registered probes.",
+        "inline-html": "There are 93 <em>registered</em> probes.",
+        "entity": "There are &#57;&#51; registered probes.",
+        "quotation": "There are \"93\" probes.",
+        "soft-wrap": "Probe count:\n93.",
+        "fenced-comment":
+            "```bash\n# There are **93 registered probes**.\nrun\n```",
+    }
+    expect(set(by_normalization) == {
+        "inline-code", "emphasis", "link", "inline-html", "entity",
+        "quotation", "soft-wrap", "fenced-comment"},
+        "every normalization category requirement 3 names has a case")
+    for category, body in by_normalization.items():
+        fired = rules_fired(body)
+        expect(fired != set(),
+               f"[{category}] a total survives normalization "
+               f"({body[:44]!r})")
+
     # The historical sentences, verbatim, as they actually shipped.
     for historical in (
             "`python3 tools/run_probes.py --list` is the authoritative count "
