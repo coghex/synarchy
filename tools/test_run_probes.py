@@ -331,6 +331,14 @@ class ReadmeSectionError(Exception):
 # different-character run inside a block stays content.
 _FENCE_LINE = re.compile(r"^\s*(?P<fence>`{3,}|~{3,})(?P<info>.*)$")
 
+# A Markdown link or image renders as its LABEL; the destination is not
+# displayed at all. Both forms need "](" or "][" with nothing between, which
+# is what leaves the progress block's "[1/1] persistence_contract_sweep.py"
+# and "[timeout 120s] TIMEOUT (120.0s)" alone -- a bracket followed by a
+# space is not a link.
+_MD_LINK = re.compile(
+    r"!?\[([^\]\n]*)\](?:\([^)\n]*\)|\[[^\]\n]*\])")
+
 # Inline HTML, which Markdown renders: the TAGS are markup and go, while
 # everything between them is displayed text and stays. An HTML comment's
 # delimiters go the same way and its content is deliberately KEPT -- scanning
@@ -419,6 +427,10 @@ def _scannable(section: str) -> str:
     passed through unchanged (their backticks are the fences), so a total
     smuggled into a shell comment is scanned too.
 
+    A link or image is reduced to its label, since that is the whole of what
+    the reader sees -- "There are [93](https://example.test) registered
+    probes." states the total as plainly as the unlinked sentence.
+
     Inline HTML is reduced to what it renders: entities are decoded, tags
     and comment delimiters are dropped, and the text between them is kept --
     "There are 93 <em>registered</em> probes." states the same total the
@@ -451,8 +463,9 @@ def _scannable(section: str) -> str:
         # Decoration, entities and tags are noise in BOTH runs: inside a
         # fence "**93**" is not emphasis, but it is not arithmetic either,
         # and the stars would hide the number just the same.
-        blob = _FORMATTING_RUN.sub(" ", _HTML_MARKUP.sub(
-            " ", html.unescape("\n".join(run))))
+        blob = html.unescape("\n".join(run))
+        blob = _MD_LINK.sub(r" \1 ", blob)
+        blob = _FORMATTING_RUN.sub(" ", _HTML_MARKUP.sub(" ", blob))
         if run_fenced:
             chunks.append(blob)
             return
@@ -3713,6 +3726,7 @@ def test_the_readme_states_no_registry_total() -> None:
             "The probe ledger has 93 entries.",
             "The listing of registered probes runs to 93.",
             "The probe line-up is 93 strong.",
+            "The [probe registry](https://example.test) totals 93.",
             "The probe tally is ninety-three.",
             "The registry holds ninety-three.",
             "The probe tally is 90+.",
@@ -3789,6 +3803,10 @@ def test_the_readme_states_no_registry_total() -> None:
             # The attributive compound: the number counts the head noun.
             "A 93-probe registry is current.",
             "A 93-probe suite ships today.",
+            # A link renders as its label.
+            "There are [93](https://example.test) registered probes.",
+            "There are [93][count] registered probes.",
+            "There are ![93](x.png) registered probes.",
             "It is a ninety-three-probe registry.",
             "90 registered probes ship today.",
             "It registers 90 probes today.",
@@ -3870,6 +3888,8 @@ def test_the_readme_states_no_registry_total() -> None:
             "A 93-probe registry is current.",
             # The round-20 review's bypass, verbatim.
             "The probe manifest has 93 entries.",
+            # The round-21 review's bypass, verbatim.
+            "There are [93](https://example.test) registered probes.",
             # And the original drift sentence as it really shipped, wrapped.
             "`python3 tools/run_probes.py --list` is the authoritative count\n"
             "and listing of registered probes — it's grown over time\n"
@@ -3971,9 +3991,12 @@ def test_the_readme_states_no_registry_total() -> None:
             # number, and a number that is not the count of anything.
             "Cap `N` at (cores − 1) or so — each probe is a full engine "
             "process.",
+            # A bracket followed by a space is not a link, so nothing after
+            # one is swallowed as a destination.
             "```\n#probe-progress# 19:25:04 +0.0s   | phase | engine A\n"
             "#probe-progress# 19:29:11 +247.2s | end   | chop attempt 1/2\n"
-            "```",
+            "[1/1] persistence_contract_sweep.py ... [timeout 120s] "
+            "TIMEOUT (120.0s)\n```",
             # Fenced identifiers keep their underscores through the same
             # normalization that strips a fenced "**".
             "```bash\npython3 tools/persistence_contract_sweep.py "
