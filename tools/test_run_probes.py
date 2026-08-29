@@ -221,8 +221,8 @@ _REGISTRY_SUBJECT = (
     # "probe-script count", "registry entry total". The middle word must be
     # something the registry HOLDS, which is what keeps the section's own "a
     # probe's PORT count" out -- a port is not a member of the registry.
-    r"|(?:probes?|registry)(?:'s|')?[\s-](?:" + _COUNTED_HEAD + r"[\s-])?"
-    + _COUNT_NOUN +
+    r"|(?:probes?|registry)(?:'s|')?(?:\s+|-)(?:" + _COUNTED_HEAD
+    + r"(?:\s+|-))?" + _COUNT_NOUN +
     # "tally of the registered probes", "count of all probes", "total
     # number of every registered probe" -- the qualifiers between "of" and
     # the noun are counted, not spelled, so a new one needs no edit here.
@@ -362,6 +362,14 @@ _MD_LINK = re.compile(
 _HTML_MARKUP = re.compile(
     r"<!--|-->|</?[A-Za-z][A-Za-z0-9-]*(?:\s[^<>]*?)?/?>")
 
+# Quotation marks around displayed text. Same non-intra-word rule as the
+# formatting runs, so a possessive apostrophe survives ("a probe's port
+# count") while the quotes in `There are "93" probes.` do not -- a quote is
+# no more part of the number than a star is.
+_QUOTE_RUN = re.compile(
+    r"(?<![A-Za-z0-9])[\"'\u201c\u201d\u2018\u2019\u00ab\u00bb]+"
+    r"|[\"'\u201c\u201d\u2018\u2019\u00ab\u00bb]+(?![A-Za-z0-9])")
+
 # A formatting run: one to three "*" or "_" not flanked by alphanumerics on
 # BOTH sides. In prose that is Markdown emphasis; in a fenced comment it is
 # someone writing emphasis where it does not render. Either way it is not
@@ -452,6 +460,10 @@ def _scannable(section: str) -> str:
     content too, since a shell comment can carry a total as easily as a
     paragraph can, and "**93**" hides its number in either.
 
+    Quotation marks go too, by the same non-intra-word rule that spares a
+    possessive apostrophe: `There are "93" probes.` displays a total, and
+    the quotes are no more part of the number than a star is.
+
     Emphasis delimiters go the same way as the backticks, for the same
     reason: "There are **93 registered probes**." displays a total, and the
     stars are not part of it. A run is only a delimiter when it is NOT
@@ -480,6 +492,7 @@ def _scannable(section: str) -> str:
         blob = html.unescape("\n".join(run))
         blob = _MD_LINK.sub(r" \1 ", blob)
         blob = _FORMATTING_RUN.sub(" ", _HTML_MARKUP.sub(" ", blob))
+        blob = _QUOTE_RUN.sub(" ", blob)
         if run_fenced:
             chunks.append(blob)
             return
@@ -3728,6 +3741,8 @@ def test_the_readme_states_no_registry_total() -> None:
             "All registered probes: 93.",
             "Every registered probe is one of 93.",
             "All the probes number ninety-three.",
+            # A possessive survives the quote strip; a TRAILING one is
+            # removed, which the widened separator absorbs.
             "The probes' count is 93.",
             "The probe headcount is 93.",
             "The full probe collection has 93 members.",
@@ -3837,6 +3852,11 @@ def test_the_readme_states_no_registry_total() -> None:
             "There are 93 scripts.",
             "There are ninety entries.",
             "It holds 93 rows.",
+            # Quoted, straight and curly, digits and words alike.
+            "There are \"93\" probes.",
+            "There are '93' registered scripts.",
+            "There are \u201c93\u201d probes.",
+            "There are \"ninety-three\" probes.",
             "It is a ninety-three-probe registry.",
             "90 registered probes ship today.",
             "It registers 90 probes today.",
@@ -3929,6 +3949,8 @@ def test_the_readme_states_no_registry_total() -> None:
             # The round-24 review's two bypasses, verbatim.
             "There are 93 registered scripts.",
             "There are 93 scripts.",
+            # The round-25 review's bypass, verbatim.
+            "There are \"93\" probes.",
             # And the original drift sentence as it really shipped, wrapped.
             "`python3 tools/run_probes.py --list` is the authoritative count\n"
             "and listing of registered probes — it's grown over time\n"
@@ -4018,6 +4040,9 @@ def test_the_readme_states_no_registry_total() -> None:
             "The runner records every attempt it dispatches in a probe "
             "batch of 4.",
             "It reaps the probe group after 2 seconds.",
+            # A possessive survives the quote strip. "own" is not something
+            # the registry holds, so this stays a sentence about one probe.
+            "The probe's own boot time is 2 seconds.",
             # "sum" is not a count noun either: the section's own sentence
             # puts it two words from a probe and sixty characters from a
             # number, and must stay clean.
