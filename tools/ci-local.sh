@@ -365,9 +365,14 @@ python3 tools/world_check.py --quick
 # --resource-root on every boot, release on a pass, a phase-0 return, an
 # exception and a boot abort, residue as a failing check, a pre-existing
 # same-named save slot left byte-identical, and a read-only checkout
-# still yielding a removable tree. That probe is manual-only needs-gpu,
-# so without this companion the contract is only ever observed by a GPU
-# run neither gate can make; the companion boots nothing.
+# still yielding a removable tree. It also carries #1746's second
+# contract for the same probe: both of that probe's saves return the
+# API's own acceptance Boolean and then wait for their OWN request id to
+# reach SaveCaptureComplete, and a save that is refused, never reports a
+# request id, fails or times out suppresses every session that would
+# read the slot. That probe is manual-only needs-gpu, so without this
+# companion both contracts are only ever observed by a GPU run neither
+# gate can make; the companion boots nothing.
 # test_location_probe_config_isolation is #1729's: the private `config/`
 # tree tools/location_content_probe.py, location_overlay_probe.py and
 # location_stamp_idempotent_probe.py each stage, and that
