@@ -41,7 +41,12 @@ stamp their own occupancy windows, so a probe declaring an exclusive
 interest is proved never to overlap ANY other probe -- the other config
 declaration or an ordinary engine-booting one, in either dispatch order --
 while two ordinary probes still overlap each other, across a conflicting
-probe that passes, one that fails, and one that times out.
+probe that passes, one that fails, and one that times out. And the
+`tools/README.md` guard (issue #1584): the `run_probes.py` section states
+no probe-registry total, each of the four lexical rules is shown to reject
+a crafted violating section and to leave the real file (and its
+operational quantities) alone, and a missing or ambiguous target section
+fails rather than scanning nothing.
 
 Usage:
   python3 tools/test_run_probes.py
@@ -52,6 +57,7 @@ from __future__ import annotations
 import ast
 import os
 import random
+import re
 import shutil
 import signal
 import socket
@@ -83,6 +89,171 @@ def expect(cond: bool, msg: str) -> None:
         print(f"  FAIL: {msg}")
     else:
         print(f"  OK:   {msg}")
+
+
+# --------------------------------------------------------------------------
+# The README's run_probes section states no registry total (issue #1584)
+# --------------------------------------------------------------------------
+# `tools/README.md` used to name a probe total in prose ("low 30s", then
+# "mid-50s") beside the very sentence calling `--list` authoritative. It
+# drifted three times (#539, #721, #1584), so the count is gone and this
+# guard keeps it gone: the reader is sent to `run_probes.py --list` for the
+# listing and `ci_probes.py --status` for the derived counts, and any total
+# the document displays must be obtained mechanically instead.
+#
+# Scope is deliberately narrow and lexical. The rules below reject the shapes
+# a hand-maintained total actually takes in this section -- a vague decade
+# band, a DIGIT count of registered probes, an approximated number, and a
+# number pinned to "currently"/"as of" -- and nothing else. They are not a
+# general claim detector: spelled-out subset counts ("two registered probes
+# derive a second listener"), operational quantities (`--jobs 4`, the
+# 900-second default) and flag examples (`--port 9500`) are all legitimate
+# here and must keep passing. Every rule is mutation-tested against a crafted
+# violating section AND against the real file, because a rule with no proven
+# failing case is not a rule (#704, #1128, #1309).
+
+README_PATH = Path(__file__).resolve().parent / "README.md"
+
+# The section this guard governs. Matched EXACTLY (after stripping) so a
+# renamed heading fails loudly rather than scanning nothing.
+RUN_PROBES_SECTION_HEADING = "### `run_probes.py` — opt-in aggregate runner"
+
+# A vague magnitude band -- the shape both historical drifts took. Bare
+# "tens" is excluded on purpose: "low tens of minutes" is real text here.
+_MAGNITUDE_BAND = (
+    r"(?:low|mid|high)[-\s]"
+    r"(?:\d0s|twenties|thirties|forties|fifties|sixties|seventies|eighties"
+    r"|nineties)")
+
+# A noun phrase naming the registry as a whole. Plain "probes" is NOT one:
+# "Run up to 4 probes concurrently" counts a concurrency limit, not the
+# registry.
+_REGISTRY_NOUN = (
+    r"(?:registered\s+probes?|probes?\s+registered|probe\s+registry"
+    r"|probes?\s+in\s+the\s+registry|total\s+probes?"
+    r"|probes?\s+in\s+total)")
+
+# "~90" has no word boundary before the tilde, so the two spellings need
+# separate anchoring; both end immediately before the digits.
+_APPROXIMATOR = (
+    r"(?:~\s*"
+    r"|\b(?:about|around|roughly|approximately|nearly|almost|some"
+    r"|close\s+to|more\s+than|over|upwards\s+of)\s+)")
+
+_AS_OF_NOW = (
+    r"(?:currently|today|at\s+present|as\s+of|right\s+now"
+    r"|at\s+the\s+moment|these\s+days)")
+
+README_TOTAL_RULES: tuple[tuple[str, "re.Pattern[str]"], ...] = (
+    # "currently in the mid-50s", "low 30s", "high 80s"
+    ("magnitude-band", re.compile(_MAGNITUDE_BAND, re.I)),
+    # "90 registered probes", "~90 registered probes", "90 total probes"
+    ("numeral-registry-count",
+     re.compile(_APPROXIMATOR + r"?\b\d+"
+                r"(?:\s+[A-Za-z][A-Za-z-]*){0,2}\s+" + _REGISTRY_NOUN, re.I)),
+    # "around 90", "roughly 90", "~90"
+    ("approximate-quantity",
+     re.compile(_APPROXIMATOR + r"\d+", re.I)),
+    # "currently 90", "as of today, 90"
+    ("dated-quantity",
+     re.compile(r"\b" + _AS_OF_NOW + r"\b[^.\n]{0,40}?(?:\d|"
+                + _MAGNITUDE_BAND + r")", re.I)),
+)
+
+
+class ReadmeSectionError(Exception):
+    """The guard could not locate exactly one target section.
+
+    Raised rather than returning an empty section: a guard that silently
+    scanned nothing would report a clean file forever.
+    """
+
+
+def _mark_fences(lines: list[str]) -> list[tuple[str, bool]]:
+    """Pair each line with whether it is fenced code (the fences included)."""
+    in_fence = False
+    marked: list[tuple[str, bool]] = []
+    for line in lines:
+        if line.lstrip().startswith("```"):
+            marked.append((line, True))
+            in_fence = not in_fence
+            continue
+        marked.append((line, in_fence))
+    return marked
+
+
+def readme_section(text: str,
+                   heading: str = RUN_PROBES_SECTION_HEADING) -> str:
+    """Return the body of `heading`'s section, its fenced code included.
+
+    The section ends at the next Markdown heading OUTSIDE a fence -- the
+    bash examples are full of `# comment` lines that would otherwise look
+    like one. A heading that is absent, or present more than once, raises.
+    """
+    marked = _mark_fences(text.splitlines())
+    starts = [index for index, (line, fenced) in enumerate(marked)
+              if not fenced and line.strip() == heading]
+    if not starts:
+        raise ReadmeSectionError(f"section heading not found: {heading!r}")
+    if len(starts) > 1:
+        raise ReadmeSectionError(
+            f"section heading is ambiguous: {heading!r} appears "
+            f"{len(starts)} times (lines "
+            f"{', '.join(str(index + 1) for index in starts)})")
+    start = starts[0]
+    end = len(marked)
+    for index in range(start + 1, len(marked)):
+        line, fenced = marked[index]
+        if not fenced and re.match(r"#{1,6} \S", line):
+            end = index
+            break
+    return "\n".join(line for line, _ in marked[start + 1:end])
+
+
+def _scannable(section: str) -> str:
+    """Drop inline code spans from prose, keeping fenced blocks verbatim.
+
+    Inline spans are identifiers and flags (`--port 9500`, `PROBE_PORT_SPANS`)
+    and never a prose count; they are also wrapped across lines here, so the
+    strip is done per prose RUN rather than per line. Fenced blocks are kept
+    so a total smuggled into a shell comment is still scanned.
+    """
+    chunks: list[str] = []
+    run: list[str] = []
+    run_fenced: bool | None = None
+
+    def flush() -> None:
+        if not run:
+            return
+        blob = "\n".join(run)
+        chunks.append(blob if run_fenced
+                      else re.sub(r"`[^`]*`", " ", blob, flags=re.S))
+
+    for line, fenced in _mark_fences(section.splitlines()):
+        if run_fenced is None or fenced == run_fenced:
+            run_fenced = fenced
+            run.append(line)
+        else:
+            flush()
+            run = [line]
+            run_fenced = fenced
+    flush()
+    return "\n".join(chunks)
+
+
+def readme_total_claim_problems(
+        text: str,
+        heading: str = RUN_PROBES_SECTION_HEADING) -> list[str]:
+    """Report every registry-total claim in `heading`'s section.
+
+    Raises ReadmeSectionError if that section cannot be located exactly once.
+    """
+    scannable = _scannable(readme_section(text, heading))
+    problems: list[str] = []
+    for rule, pattern in README_TOTAL_RULES:
+        for match in pattern.finditer(scannable):
+            problems.append(f"{rule}: {match.group(0)!r}")
+    return problems
 
 
 # --------------------------------------------------------------------------
@@ -3135,6 +3306,150 @@ def test_parallel_dispatch_and_retry_records_name_every_attempt() -> None:
         tree.cleanup()
 
 
+def test_the_readme_states_no_registry_total() -> None:
+    print("\n-- tools/README.md's run_probes section states no registry total")
+
+    # The shipped file, through the same helper the mutations use.
+    shipped = README_PATH.read_text(encoding="utf-8")
+    expect(readme_total_claim_problems(shipped) == [],
+           f"the shipped README section claims no registry total "
+           f"({readme_total_claim_problems(shipped)})")
+
+    section = readme_section(shipped)
+    expect("run_probes.py\n--list`" in section
+           and "`python3\ntools/ci_probes.py --status`" in section,
+           "it points at --list for the listing and ci_probes.py --status "
+           "for the counts")
+
+    # --- the section boundary itself -------------------------------------
+    # A guard that cannot find its target must fail, never scan "".
+    for broken, why in (
+            (shipped.replace(RUN_PROBES_SECTION_HEADING,
+                             "### `run_probes.py` — aggregate runner", 1),
+             "a renamed heading"),
+            (shipped.replace(RUN_PROBES_SECTION_HEADING, "", 1),
+             "a deleted heading")):
+        try:
+            readme_total_claim_problems(broken)
+            expect(False, f"{why} is refused")
+        except ReadmeSectionError as error:
+            expect("not found" in str(error), f"{why} is refused ({error})")
+    duplicated = shipped.replace(
+        RUN_PROBES_SECTION_HEADING,
+        f"{RUN_PROBES_SECTION_HEADING}\n\nstub\n\n"
+        f"{RUN_PROBES_SECTION_HEADING}", 1)
+    try:
+        readme_total_claim_problems(duplicated)
+        expect(False, "a duplicated heading is refused")
+    except ReadmeSectionError as error:
+        expect("ambiguous" in str(error),
+               f"a duplicated heading is refused ({error})")
+
+    # The scan stops at the next heading: an identical claim one section
+    # later is out of scope, and the same claim inside is caught.
+    heading_line = f"{RUN_PROBES_SECTION_HEADING}\n"
+    claim = "The registry holds 90 registered probes.\n"
+    outside = ("# Tools\n\n" + heading_line + "\nBody.\n\n"
+               "### `other.py`\n\n" + claim)
+    inside = ("# Tools\n\n" + heading_line + "\nBody. " + claim
+              + "\n### `other.py`\n\nUnrelated.\n")
+    expect(readme_total_claim_problems(outside) == [],
+           "a total claim in the NEXT section is out of scope")
+    expect(readme_total_claim_problems(inside) != [],
+           "the same claim inside the section is caught")
+    # A `# comment` line inside a fenced block is not a heading, so a claim
+    # after one is still inside the section.
+    fenced = ("# Tools\n\n" + heading_line + "\n```bash\n"
+              "# Run up to 4 probes concurrently\nrun\n```\n\n" + claim)
+    expect(readme_total_claim_problems(fenced) != [],
+           "a fenced `# comment` does not end the section early")
+
+    # --- one crafted violation per rule ----------------------------------
+    def rules_fired(body: str) -> set[str]:
+        doc = "# Tools\n\n" + heading_line + "\n" + body + "\n"
+        return {problem.split(":", 1)[0]
+                for problem in readme_total_claim_problems(doc)}
+
+    per_rule = {
+        "magnitude-band": (
+            "The registry sits in the mid-50s.",
+            "The registry sits in the low 30s.",
+            "The registry sits in the high 80s.",
+            "The registry sits in the mid 50s.",
+        ),
+        "numeral-registry-count": (
+            "`--list` is the listing of the 90 registered probes.",
+            "There are 90 probes registered here.",
+            "It reports 90 total probes.",
+            "The probe registry holds 90 total probes.",
+        ),
+        "approximate-quantity": (
+            "It has grown to around 90 since then.",
+            "It has grown to roughly 90 since then.",
+            "It has grown to ~90 since then.",
+            "It has grown to about 90 since then.",
+            "It has grown to more than 80 since then.",
+        ),
+        "dated-quantity": (
+            "The registry currently holds 90.",
+            "As of 2026 it holds 90.",
+            "It holds, at present, 90.",
+        ),
+    }
+    for rule, bodies in per_rule.items():
+        for body in bodies:
+            fired = rules_fired(body)
+            expect(rule in fired,
+                   f"[{rule}] rejects {body!r} (fired {sorted(fired)})")
+    # Each rule is independently load-bearing: the first case of each fires
+    # that rule ALONE, so no rule is carried by another.
+    for rule, bodies in per_rule.items():
+        fired = rules_fired(bodies[0])
+        expect(fired == {rule},
+               f"[{rule}] is the only rule {bodies[0]!r} needs "
+               f"(fired {sorted(fired)})")
+
+    # The historical sentences, verbatim, as they actually shipped.
+    for historical in (
+            "`python3 tools/run_probes.py --list` is the authoritative count "
+            "and listing of registered probes — it's grown over time "
+            "(currently in the low 30s) and this doc doesn't try to track "
+            "the exact number.",
+            "`python3 tools/run_probes.py --list` is the authoritative count "
+            "and listing of registered probes — it's grown over time "
+            "(currently in the mid-50s) and this doc doesn't try to track "
+            "the exact number.",
+            "`python3 tools/run_probes.py --list` is the authoritative count "
+            "and listing of registered probes — it's grown over time "
+            "(currently in the high 80s) and this doc doesn't try to track "
+            "the exact number.",
+            "`python3 tools/ci_probes.py --status` reports 11 CI-eligible, "
+            "79 manual-only, 90 total registered probes."):
+        expect(rules_fired(historical) != set(),
+               f"the drift sentence is rejected: {historical[:60]!r}...")
+
+    # --- the accepts the rules must not break ----------------------------
+    for benign in (
+            "```bash\npython3 tools/run_probes.py --jobs 4\n```",
+            "```bash\npython3 tools/run_probes.py --port 9500\n```",
+            "```bash\n# Run up to 4 probes concurrently\n"
+            "python3 tools/run_probes.py --jobs 4\n```",
+            "Two registered probes derive a second listener from `--port`.",
+            "Three registered probes legitimately still drive Cabal.",
+            "Most registered probes use the ordinary 900-second default.",
+            "`save_compat_migration` uses 3600 seconds because its measured "
+            "runtime is above 2300 seconds.",
+            "Run everything, sequentially (slow — low tens of minutes).",
+            "A span that covers the user's GUI port 8008 is refused.",
+            "`run_probes.PROBE_PORT_SPANS` declares 2 for each of those two.",
+            "Concurrency cuts wall-time to roughly `total / N`."):
+        fired = rules_fired(benign)
+        expect(fired == set(),
+               f"an operational quantity is accepted: {benign[:56]!r} "
+               f"(fired {sorted(fired)})")
+
+
+
 def main() -> int:
     test_the_synthetic_fixtures_are_valid_python()
     test_liveness_check_does_not_count_a_zombie_as_running()
@@ -3147,6 +3462,7 @@ def main() -> int:
     test_a_stopping_runner_launches_no_further_probe()
     test_reap_group_on_a_dead_group_is_a_noop()
     test_aggregate_exit_codes_unchanged()
+    test_the_readme_states_no_registry_total()
     test_timeout_overrides_are_validated_registry_data()
     test_key_specific_timeout_and_explicit_override_reach_execution()
     test_parallel_retry_reuses_the_key_specific_timeout()

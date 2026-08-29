@@ -515,9 +515,11 @@ script's header docstring for its exact flag set.
 
 Runs a selection of the probes above and prints a per-probe PASS/FAIL
 summary, exiting non-zero if any failed. `python3 tools/run_probes.py
---list` is the authoritative count and listing of registered probes — it's
-grown over time (currently in the mid-50s) and this doc doesn't try to
-track the exact number.
+--list` is the authoritative listing of registered probes, and `python3
+tools/ci_probes.py --status` prints the derived CI-eligible / manual-only
+/ total counts. This doc states no total of its own: a hand-written one
+drifted three times (#539, #721, #1584), so `tools/test_run_probes.py`
+fails if this section states one again.
 
 ```bash
 # Run everything, sequentially (slow — low tens of minutes)
