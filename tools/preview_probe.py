@@ -46,7 +46,9 @@ Checks:
      animation and restarts the clip; clicking a mirrored direction cell
      (located the same way) enlarges it and reports its real source
      direction; a resize preserves the animation, direction, and scroll
-     offset; only the requested unit's textures load. Since #1260
+     offset; a clip whose AUTHORED loop is false still reports
+     loop=false yet replays continuously past its own cycle (#1833);
+     only the requested unit's textures load. Since #1260
      acolyte is the atlas pilot, so the viewer must additionally report
      EVERY animation as atlas-backed, sample the compiled atlases named
      by the checked-in index with that index's own cell geometry and
@@ -75,7 +77,9 @@ Checks:
      entry; the frame index advances over wall time; a resize preserves
      the selection and scroll offset; clicking a STATIC row (located
      from the dump, never hardcoded coordinates) selects it and exposes
-     NO playback; only this building's textures load.
+     NO playback; an animation entry whose AUTHORED loop is false still
+     reports loop=false yet replays continuously past its own cycle
+     (#1833); only this building's textures load.
   6. Buildings with no built state (--preview buildings/cargo_hold_S,
      #888): the default falls back to the YAML's own sprite
      (`default.png`), and the `demolish/` folder the YAML never mentions
@@ -745,6 +749,59 @@ def poll_unit_ready(port: int, seconds: float = 15.0) -> dict:
     return got or dump(port)
 
 
+def check_forced_replay(port: int, what: str, selected_at: float,
+                       frame_count, fps) -> bool:
+    """#1833: preview playback REPLAYS every clip, whatever its authored
+    `loop` says — the source value stays truthful in the dump, but the
+    frame index wraps past the end instead of holding the last frame.
+
+    Deliberately latency-independent, because the tracked `loop: false`
+    cycles are short next to a TCP dump round trip (acolyte's
+    attack_quick_RH_dagger is 5 frames at 12 fps = 0.417 s, cargo_hold_S's
+    demolish 4 at 8 fps = 0.5 s). So this never tries to catch two samples
+    inside one cycle, and never demands a strictly decreasing consecutive
+    pair. Instead it waits until the clip is provably PAST its own end —
+    `selected_at` is taken only after a dump already reported the new
+    selection, and both viewers set their clock synchronously inside
+    setAnimation/setEntry, so the real clock origin is at or BEFORE it —
+    and then requires one sample below the final frame. Under the
+    pre-#1833 hold-at-end policy that index is pinned at frameCount-1
+    forever once the clip ends, so a single such sample is proof. The
+    index must also keep CHANGING, so a clip frozen on some other frame
+    cannot pass either.
+
+    fps is read from the dump and guarded: a non-positive effective fps
+    has no cycle period at all (frameIndexAt clamps rate to 0 and stays
+    on frame 0), so such a fixture is reported unusable rather than
+    divided by.
+    """
+    if not isinstance(frame_count, int) or frame_count < 2 \
+            or not isinstance(fps, (int, float)) or fps <= 0:
+        return check(f"{what}: replays continuously past its cycle", False,
+                     f"unusable fixture: frameCount={frame_count!r} fps={fps!r}")
+    cycle = frame_count / float(fps)
+    while time.monotonic() - selected_at <= cycle:
+        time.sleep(0.05)
+    seen: list[int] = []
+    deadline = time.time() + max(8.0, cycle * 6)
+    while time.time() < deadline:
+        idx = (dump(port).get("playback") or {}).get("frameIndex")
+        if isinstance(idx, int):
+            seen.append(idx)
+        if any(i < frame_count - 1 for i in seen) and len(set(seen)) > 1:
+            break
+        time.sleep(0.05)
+    ok_wrap = check(f"{what}: a sample taken past the {cycle:.3f} s cycle "
+                    "reports a frame below the last one (impossible while "
+                    "holding the end)",
+                    any(i < frame_count - 1 for i in seen),
+                    f"frameCount={frame_count} fps={fps} samples={seen}")
+    ok_moving = check(f"{what}: the index keeps advancing past the cycle "
+                      "boundary rather than settling on one frame",
+                      len(set(seen)) > 1, f"samples={seen}")
+    return ok_wrap and ok_moving
+
+
 def check_units_mode(port: int) -> bool:
     print("3. unit animation viewer (--preview units/acolyte)")
     unit = "acolyte"
@@ -889,6 +946,42 @@ def check_units_mode(port: int) -> bool:
                               f"playback=({d2_pb.get('animation')}, "
                               f"{d2_pb.get('fps')}, {d2_pb.get('loop')}) yaml={want2}")
 
+        # #1833: forced continuous replay. Pick a row whose SOURCE
+        # `loop` is false (acolyte has 26 of them) — under the
+        # pre-#1833 hold-at-end policy such a clip freezes on its last
+        # frame within half a second of selection, which is exactly the
+        # usability gap this viewer existed to hit.
+        d3 = poll_unit_ready(port)
+        loops = {e.get("label"): e.get("loop") for e in (d3.get("entries") or [])}
+        nonloop = next((r for r in (d3.get("rows") or [])
+                        if loops.get(r.get("label")) is False), None)
+        if nonloop is None:
+            ok_replay = check("a source loop:false animation replays "
+                              "continuously", False,
+                              "no visible loop:false row to click")
+        else:
+            click_element(port, nonloop.get("bounds") or {})
+            got = poll_until(10.0, lambda: (
+                (lambda s: s if (s.get("playback") or {}).get("animation")
+                    == nonloop["label"]
+                    and (s.get("playback") or {}).get("ready") else None)(
+                        dump(port))))
+            selected_at = time.monotonic()
+            pb3 = (got or dump(port)).get("playback") or {}
+            # Requirement 6: the dump still reports the AUTHORED value.
+            # Without this the replay check below would also pass on an
+            # implementation that simply forced every clip to loop=true.
+            ok_truthful = check("the replay fixture still reports its authored "
+                                "loop=false (or this check proves nothing)",
+                                pb3.get("animation") == nonloop["label"]
+                                and pb3.get("loop") is False,
+                                f"animation={pb3.get('animation')} "
+                                f"loop={pb3.get('loop')}")
+            ok_replay = check_forced_replay(
+                port, f"units/{unit} {nonloop['label']} (authored loop=false)",
+                selected_at, pb3.get("frameCount"), pb3.get("fps")) \
+                and ok_truthful
+
         # #1260: the atlas contract, checked against the compiled index
         # on disk. Deliberately LAST, after the animation switch and the
         # resize above, so it observes a viewer that has already
@@ -902,7 +995,8 @@ def check_units_mode(port: int) -> bool:
 
         return all([ok_mode, ok_filter, ok_entries, ok_default, ok_meta,
                     ok_dirs, ok_mirror, ok_advance, ok_select, ok_cell,
-                    ok_resize, ok_atlas, ok_trimmed, ok_no_gameplay])
+                    ok_resize, ok_replay, ok_atlas, ok_trimmed,
+                    ok_no_gameplay])
     finally:
         quit_engine(port, proc)
 
@@ -1273,13 +1367,53 @@ def check_buildings_mode(port: int) -> bool:
                               f"state={after_click.get('state')} "
                               f"playback={after_click.get('playback')}")
 
+        # #1833: forced continuous replay, on the buildings half. The
+        # portal's `appear` is 16 frames at 8 fps — a 2.0 s cycle, the
+        # widest tracked `loop: false` margin — and buildings DEFAULT to
+        # loop=false, so this is the half where holding the end bit
+        # hardest. Placed after the behavioural checks above and reading
+        # its rows from a FRESH dump, because those may have scrolled or
+        # reselected — and because it deliberately ends on an animation
+        # rather than the static selection ok_static needs.
+        cur = dump(port)
+        anim_loops = {e.get("label"): e.get("loop")
+                      for e in (cur.get("entries") or [])
+                      if e.get("animated") is True}
+        nonloop = next((r for r in (cur.get("rows") or [])
+                        if anim_loops.get(r.get("label")) is False), None)
+        if nonloop is None:
+            ok_replay = check("a loop:false animation entry replays "
+                              "continuously", False,
+                              "no visible loop:false animation row to click")
+        else:
+            click_element(port, nonloop.get("bounds") or {})
+            got = poll_until(10.0, lambda: (
+                (lambda s: s if (s.get("playback") or {}).get("entry")
+                    == nonloop["label"] and s.get("state") == "ready" else None)(
+                        dump(port))))
+            selected_at = time.monotonic()
+            pb2 = (got or dump(port)).get("playback") or {}
+            # Requirement 6: the dump still reports the AUTHORED value —
+            # without this the replay check would also pass on an
+            # implementation that forced every entry to loop=true.
+            ok_truthful = check("the replay fixture still reports its authored "
+                                "loop=false (or this check proves nothing)",
+                                pb2.get("entry") == nonloop["label"]
+                                and pb2.get("loop") is False,
+                                f"entry={pb2.get('entry')} loop={pb2.get('loop')}")
+            ok_replay = check_forced_replay(
+                port, f"buildings/{name} {nonloop['label']} (authored loop=false)",
+                selected_at, pb2.get("frameCount"), pb2.get("fps")) \
+                and ok_truthful
+
         # Requirement 1: only THIS building's textures (plus list chrome).
         root_prefix = os.path.join("assets", "textures", "buildings", name) + os.sep
         ok_trimmed = check_trimmed_loading(port, root_prefix, allow_chrome=True)
         ok_no_gameplay = check_no_gameplay_scripts_loaded(port)
 
         return all([ok_mode, ok_entries, ok_default, ok_meta, ok_advance,
-                    ok_resize, ok_static, ok_trimmed, ok_no_gameplay])
+                    ok_resize, ok_replay, ok_static, ok_trimmed,
+                    ok_no_gameplay])
     finally:
         quit_engine(port, proc)
 
