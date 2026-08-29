@@ -21,6 +21,7 @@ import Engine.Core.Capability.Render
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logDebugM, logDebugSM)
 import Engine.Graphics.Base
+import Engine.Graphics.Solar (SolarBase(..), emptySolarPageTable, solarUniformEntries)
 import Engine.Graphics.Config
 import Engine.Graphics.Camera
 import Engine.Graphics.Types
@@ -316,7 +317,8 @@ createUniformBuffersForFrames device physicalDevice (width, height) descSets = d
   camera ← liftIO $ readIORef cRef
   brightnessInt ← liftIO $ readIORef bRef
   pixelSnap ← liftIO $ readIORef psRef
-  sunAngle ← liftIO $ readIORef (wsSunAngleRef (toWorldSimCapability env))
+  solarBase ← liftIO $ readIORef (wsSunAngleRef (toWorldSimCapability env))
+  let sunAngle = sbAngle solarBase
   worldCirc ← liftIO $ activeWorldCircumferenceTiles env
 
   let uiCamera = defaultUICamera (fromIntegral width) (fromIntegral height)
@@ -345,6 +347,10 @@ createUniformBuffersForFrames device physicalDevice (width, height) descSets = d
           facing
           0  -- default face-map slot; set per-frame (#286)
           worldCirc
+          -- No page is visible at boot, so every solar slot seeds with
+          -- the same global pair the page-less path uses (#1869); the
+          -- first published frame replaces it.
+          (solarUniformEntries sunAngle worldCirc emptySolarPageTable)
       uboSize = fromIntegral $ sizeOf uboData
       numFrames = gcMaxFrames defaultGraphicsConfig
 
@@ -355,7 +361,8 @@ createUniformBuffersForFrames device physicalDevice (width, height) descSets = d
                (brightnessToMultiplier brightnessInt)
                (fromIntegral width) (fromIntegral height)
                (if pixelSnap then 1.0 else 0.0)
-               sunAngle ambientLight facing 0 worldCirc)
+               sunAngle ambientLight facing 0 worldCirc
+               (solarUniformEntries sunAngle worldCirc emptySolarPageTable))
       pure (buffer, memory)
   
   modifyGraphicsState $ \gs → gs {

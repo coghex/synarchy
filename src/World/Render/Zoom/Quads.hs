@@ -16,7 +16,7 @@ import Engine.Core.Capability.ContentRegistries
     (ContentRegistriesCapability(..), toContentRegistriesCapability)
 import Engine.Asset.Handle (TextureHandle(..), toInt)
 import Engine.Scene.Base (LayerId(..))
-import Engine.Scene.Types (SortableQuad(..))
+import Engine.Scene.Types (SortableQuad(..), stampSolarPage)
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..)
                                            , noFaceMapVertexId)
@@ -38,8 +38,16 @@ import World.Render.Zoom.Icons (locationIconTargetPixels, iconWorldSize
 
 -- * Generate Zoom Map Quads
 
-generateZoomMapQuads ∷ EngineEnv → Camera2D → Int → Int → IO (V.Vector SortableQuad)
-generateZoomMapQuads env camera fbW fbH = do
+-- | The zoom map is longitude-lit like every other world quad — its
+--   bake stamps packed world coordinates through 'mkVertexWorld' and it
+--   draws through the same bindless pipeline — so its terrain quads,
+--   its location icons and its cursor all take their OWN page's solar
+--   slot (#1869). The stamp lands on the finished per-page run, so a
+--   future zoom overlay is attributed correctly without being told to
+--   be.
+generateZoomMapQuads ∷ EngineEnv → (WorldPageId → Word32) → Camera2D → Int → Int
+                     → IO (V.Vector SortableQuad)
+generateZoomMapQuads env solarSlotOf camera fbW fbH = do
     worldManager ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
 
     let zoom = camZoom camera
@@ -51,9 +59,10 @@ generateZoomMapQuads env camera fbW fbH = do
             quads ← forM (wmVisible worldManager) $ \pageId →
                 case lookup pageId (wmWorlds worldManager) of
                     Just worldState →
-                        renderFromBaked env worldState camera
-                            fbW fbH zoomAlpha getZoomTexture
-                            (wsBakedZoomRef worldState) zoomMapLayer
+                        stampSolarPage (solarSlotOf pageId) ⊚
+                            renderFromBaked env worldState camera
+                                fbW fbH zoomAlpha getZoomTexture
+                                (wsBakedZoomRef worldState) zoomMapLayer
                     Nothing → return V.empty
             return $ V.concat quads
 
@@ -170,8 +179,9 @@ emitQuad entry (Vec4 cr cg cb alpha) dx dy layer =
         !baseY = bzeDrawY entry
         !xShift = dx - baseX
         !yShift = dy - baseY
-        shiftV (Vertex (Vec2 px py) uv _ aid fid flags wuv) =
-            Vertex (Vec2 (px + xShift) (py + yShift)) uv (Vec4 cr cg cb alpha) aid fid flags wuv
+        shiftV (Vertex (Vec2 px py) uv _ aid fid flags wuv sp) =
+            Vertex (Vec2 (px + xShift) (py + yShift)) uv (Vec4 cr cg cb alpha)
+                   aid fid flags wuv sp
         v0 = shiftV (bzeV0 entry)
         v1 = shiftV (bzeV1 entry)
         v2 = shiftV (bzeV2 entry)
