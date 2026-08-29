@@ -326,10 +326,12 @@ _FENCE_LINE = re.compile(r"^\s*(?P<fence>`{3,}|~{3,})(?P<info>.*)$")
 _HTML_MARKUP = re.compile(
     r"<!--|-->|</?[A-Za-z][A-Za-z0-9-]*(?:\s[^<>]*?)?/?>")
 
-# A Markdown emphasis delimiter: a short run of "*" or "_" that is not
-# flanked by alphanumerics on BOTH sides. Intra-word runs are left alone,
-# which is what keeps `PROBE_PORT_SPANS` one token and "2*3" an expression.
-_EMPHASIS_RUN = re.compile(r"(?<![A-Za-z0-9])[*_]{1,3}|[*_]{1,3}(?![A-Za-z0-9])")
+# A formatting run: one to three "*" or "_" not flanked by alphanumerics on
+# BOTH sides. In prose that is Markdown emphasis; in a fenced comment it is
+# someone writing emphasis where it does not render. Either way it is not
+# part of the number beside it. Intra-word runs are left alone, which keeps
+# `PROBE_PORT_SPANS` one token and "2*3" an expression.
+_FORMATTING_RUN = re.compile(r"(?<![A-Za-z0-9])[*_]{1,3}|[*_]{1,3}(?![A-Za-z0-9])")
 
 
 def _mark_fences(lines: list[str]) -> list[tuple[str, bool]]:
@@ -406,7 +408,9 @@ def _scannable(section: str) -> str:
     Inline HTML is reduced to what it renders: entities are decoded, tags
     and comment delimiters are dropped, and the text between them is kept --
     "There are 93 <em>registered</em> probes." states the same total the
-    plain sentence does.
+    plain sentence does. That pass and the formatting one run over FENCED
+    content too, since a shell comment can carry a total as easily as a
+    paragraph can, and "**93**" hides its number in either.
 
     Emphasis delimiters go the same way as the backticks, for the same
     reason: "There are **93 registered probes**." displays a total, and the
@@ -430,15 +434,17 @@ def _scannable(section: str) -> str:
     def flush() -> None:
         if not run:
             return
-        blob = "\n".join(run)
+        # Decoration, entities and tags are noise in BOTH runs: inside a
+        # fence "**93**" is not emphasis, but it is not arithmetic either,
+        # and the stars would hide the number just the same.
+        blob = _FORMATTING_RUN.sub(" ", _HTML_MARKUP.sub(
+            " ", html.unescape("\n".join(run))))
         if run_fenced:
             chunks.append(blob)
             return
-        blob = html.unescape(blob)
-        blob = _HTML_MARKUP.sub(" ", blob)
+        # Prose only: a backtick delimits inline code here rather than a
+        # block, and a line break inside a paragraph is soft.
         blob = re.sub(r"`([^`]*)`", r" \1 ", blob, flags=re.S)
-        blob = _EMPHASIS_RUN.sub(" ", blob)
-        # Unwrap soft line breaks; a blank line stays a break.
         blob = re.sub(r"(?<!\n)\n(?![\n])", " ", blob)
         chunks.append(blob)
 
@@ -3841,7 +3847,11 @@ def test_the_readme_states_no_registry_total() -> None:
             "`90 registered probes` are listed here.",
             "The registry holds `ninety`.",
             "It is `currently in the mid-50s`.",
-            "```bash\n# There are 93 registered probes\nrun\n```"):
+            "```bash\n# There are 93 registered probes\nrun\n```",
+            # The round-17 review's bypass, verbatim: formatting markers in
+            # a fenced comment.
+            "```bash\n# There are **93 registered probes**.\nrun\n```",
+            "```bash\n# The probe registry totals <b>93</b>.\nrun\n```"):
         expect(rules_fired(historical) != set(),
                f"the drift sentence is rejected: {historical[:60]!r}...")
 
@@ -3908,6 +3918,10 @@ def test_the_readme_states_no_registry_total() -> None:
             "```\n#probe-progress# 19:25:04 +0.0s   | phase | engine A\n"
             "#probe-progress# 19:29:11 +247.2s | end   | chop attempt 1/2\n"
             "```",
+            # Fenced identifiers keep their underscores through the same
+            # normalization that strips a fenced "**".
+            "```bash\npython3 tools/persistence_contract_sweep.py "
+            "--jobs 4\npython3 tools/run_probes.py --port 9500\n```",
             "Total cost is roughly the sum of each probe's own boot + "
             "scenario time, and CI's selective gate (#530) relies on it.",
             "`--list` shows the full probe registry but not CI status.",
