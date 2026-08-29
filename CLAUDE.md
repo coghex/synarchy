@@ -1304,8 +1304,8 @@ the entire runtime distinction: `units:` (a gameplay unit — registers,
 loads textures, lists, spawns; `name` + `sprite` mandatory) and
 `asset_units:` (asset-only: exactly `name` + `animations`, as a
 WHITELIST explicitly enforced by BOTH decoders; nothing registers,
-loads, lists, or spawns them — NO shipped file uses this form since
-#1261, but it stays supported and fixture-tested). A file holding
+loads, lists, or spawns them; shipped asset-only art remains validated,
+previewable, and fixture-tested). A file holding
 NEITHER key is refused rather than decoded as zero units (that is what a
 mistyped top-level key looks like), and so is a key present with an
 explicit `null` (aeson's `.:?` reads that as absent). Three decoders

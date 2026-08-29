@@ -457,7 +457,7 @@
       "rows": 5,
       "flip": true,
       "fps": 10.0,
-      "loop": false,
+      "loop": true,
       "directions": [
         {
           "direction": "south",
@@ -485,7 +485,7 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "0c42520871223288e1549d727a80b484af6e57548d967b0e55a7c1b2cddf97d1",
+      "source_digest": "1814d801545404325b4b72eb57aff2baa2d811665e8f344f427ca04eaa82dfe5",
       "atlas_digest": "50be82b4e7d7234c41f6dadc415e3ac3aaa0cd6dba5394d6c6ae677220225f29"
     },
     {
