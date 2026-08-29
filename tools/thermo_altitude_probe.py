@@ -85,6 +85,20 @@ ARENA_PAGE = "arena"
 # instead of failing loudly (#1757).
 PLATE_COUNT = 5
 
+# `World.Generate.Config.Normalize` clamps and rounds BOTH generation
+# inputs before a world exists, so what a launch is ASKED for is not
+# always what it generates: `normalizeWorldSize` rounds up to a multiple
+# of `minimumWorldSize`, itself `max regionSize climateRegionSize` =
+# `max 8 4` (`src/World/Region/Types.hs:26`,
+# `src/World/Weather/Types.hs:49`), and `normalizePlateCount` is `max 1`.
+# Both launches apply the SAME normalization — `world.init` through
+# `Engine.Scripting.Lua.API.World.Lifecycle` and `--dump` through
+# `app/Main.hs` — so they still agree with each other whatever is
+# requested; the probe mirrors it only so its REPORT names the world that
+# was actually generated. At the default `--size 128` this is the
+# identity, but `--size 129` generates 136 (#1757).
+MINIMUM_WORLD_SIZE = 8
+
 # Ice tiles are sampled a handful at a time; the whole dumped region
 # would be a few thousand console round trips for no extra signal.
 ICE_SAMPLE_LIMIT = 8
@@ -124,6 +138,38 @@ class DumpFailure(Exception):
     as MISSING would look exactly like a legitimately unsampleable
     region.
     """
+
+
+def normalize_world_size(size):
+    """The world size the engine generates for a requested `size`.
+
+    Mirrors `World.Generate.Config.Normalize.normalizeWorldSize`.
+    """
+    size = max(MINIMUM_WORLD_SIZE, size)
+    remainder = size % MINIMUM_WORLD_SIZE
+    return size if remainder == 0 else size + MINIMUM_WORLD_SIZE - remainder
+
+
+def normalize_plate_count(plates):
+    """The plate count the engine generates for `plates`.
+
+    Mirrors `World.Generate.Config.Normalize.normalizePlateCount`.
+    """
+    return max(1, plates)
+
+
+def world_gen_params(args):
+    """The world BOTH launches generate, as the engine will resolve it.
+
+    `world_size` and `plates` are post-normalization — the world that
+    actually exists — while `requested_world_size` keeps what was typed,
+    so a normalized run reports the generated world without hiding the
+    request that produced it.
+    """
+    return {"seed": args.seed,
+            "requested_world_size": args.size,
+            "world_size": normalize_world_size(args.size),
+            "plates": normalize_plate_count(PLATE_COUNT)}
 
 
 def fnum(port, lua):
@@ -262,13 +308,18 @@ def _run(args, port, rep):
     # diagnostic's human text and discards its detail dict, and
     # `ice_agreement` — the check these parameters matter most to — is
     # the one allowed to end up MISSING. Both spellings therefore carry
-    # all three values, so whichever channel a reader has, the world
-    # that was measured is on it (#1757).
+    # every value, so whichever channel a reader has, the world that was
+    # measured is on it (#1757). The sizes reported are the engine's
+    # POST-normalization ones, since a request the engine rounds up would
+    # otherwise name a world that was never generated.
+    params = world_gen_params(args)
+    requested = ("" if params["world_size"] == params["requested_world_size"]
+                 else f" (requested {params['requested_world_size']})")
     rep.info(
-        f"world generation parameters: seed {args.seed}, "
-        f"world size {args.size}, plates {PLATE_COUNT} "
-        f"(both engine launches)",
-        {"seed": args.seed, "world_size": args.size, "plates": PLATE_COUNT})
+        f"world generation parameters: seed {params['seed']}, "
+        f"world size {params['world_size']}{requested}, "
+        f"plates {params['plates']} (both engine launches)",
+        params)
     proc = boot_console(port, rep)
     try:
         send(port, f'world.init("{WORLD_PAGE}",{args.seed},{args.size},'

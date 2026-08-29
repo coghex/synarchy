@@ -2133,8 +2133,12 @@ def _thermo_console(sweep: str):
 
 
 def _drive_thermo(rep, sweep: str, dump_returncode: int = 0,
-                  dump_stdout: str = "[]"):
-    """Run the real `_run` against fake launches; return `(rc, launches)`."""
+                  dump_stdout: str = "[]", seed: int = 42, size: int = 128):
+    """Run the real `_run` against fake launches; return `(rc, launches)`.
+
+    `seed`/`size` are the requested generation inputs, so a caller can
+    drive a size the engine NORMALIZES (#1757).
+    """
     import types
     import thermo_altitude_probe as thermo  # type: ignore
 
@@ -2169,7 +2173,8 @@ def _drive_thermo(rep, sweep: str, dump_returncode: int = 0,
     thermo.subprocess = types.SimpleNamespace(run=fake_run,
                                               PIPE=subprocess.PIPE)
     try:
-        args = argparse.Namespace(port=9171, seed=42, size=128, describe=False)
+        args = argparse.Namespace(port=9171, seed=seed, size=size,
+                                  describe=False)
         rc = thermo._run(args, args.port, rep)
     finally:
         (thermo.boot, thermo.quit_engine, thermo.send, thermo.time,
@@ -2186,6 +2191,20 @@ def _thermo_init_params(console_lua):
         if match:
             return tuple(int(group) for group in match.groups())
     return None
+
+
+def _thermo_reported_line(printed):
+    """The one standalone line naming the world-generation parameters."""
+    lines = [line for line in printed.splitlines()
+             if "seed" in line and "plates" in line]
+    return lines
+
+
+def _thermo_spoken(line, labels=("seed", "world size", "plates")):
+    """The integers a standalone parameter line names, by label."""
+    return tuple(int(found.group(1)) if found else None
+                 for found in (re.search(rf"{label}\s+(-?\d+)", line)
+                               for label in labels))
 
 
 def _thermo_dump_params(cmd):
@@ -2399,20 +2418,83 @@ def test_thermo_altitude_standalone() -> None:
     expect(standalone_init == (42, 128, thermo.PLATE_COUNT),
            f"the standalone drive generates the same single-sourced world "
            f"(got {standalone_init})")
-    parameter_lines = [line for line in printed.splitlines()
-                       if "seed" in line and "plates" in line]
+    parameter_lines = _thermo_reported_line(printed)
     expect(len(parameter_lines) == 1,
            f"standalone output carries exactly one world-parameter line "
            f"(got {parameter_lines})")
     line = parameter_lines[0] if parameter_lines else ""
-    spoken = tuple(
-        int(found.group(1)) if found else None
-        for found in (re.search(rf"{label}\s+(-?\d+)", line)
-                      for label in ("seed", "world size", "plates")))
+    spoken = _thermo_spoken(line)
     expect(spoken == standalone_init,
            f"the standalone parameter line names seed, world size and plate "
            f"count by value (read {spoken} from {line!r}, launched "
            f"{standalone_init})")
+    expect("requested" not in line,
+           f"a size the engine does not normalize is reported plainly, with "
+           f"no request/effective split (got {line!r})")
+
+    # A size the engine NORMALIZES: `normalizeWorldSize` rounds 129 up to
+    # 136, so reporting the REQUEST would name a world that was never
+    # generated. Both launches still receive the same raw request and
+    # normalize it identically, so they still generate ONE world (#1757).
+    expect((thermo.normalize_world_size(129),
+            thermo.normalize_world_size(128),
+            thermo.normalize_world_size(1),
+            thermo.normalize_world_size(thermo.MINIMUM_WORLD_SIZE))
+           == (136, 128, thermo.MINIMUM_WORLD_SIZE, thermo.MINIMUM_WORLD_SIZE),
+           "the probe mirrors normalizeWorldSize: round up to a multiple of "
+           "the minimum, and clamp below it")
+    expect(thermo.normalize_plate_count(thermo.PLATE_COUNT)
+           == thermo.PLATE_COUNT,
+           f"the probe's own plate count is already normal "
+           f"(got {thermo.normalize_plate_count(thermo.PLATE_COUNT)})")
+
+    normalizing = io.StringIO()
+    with tempfile.TemporaryDirectory() as tmp:
+        events = Path(tmp) / "events.jsonl"
+        normalizing_rep = probe_protocol.Reporter(
+            thermo.DESCRIPTOR, events_path=str(events), engine_log_dir=tmp,
+            stream=normalizing)
+        rc, odd_launches = _drive_thermo(normalizing_rep, sweep, size=129)
+        normalizing_rep.close()
+        odd_events, _outcomes = probe_protocol.parse_event_stream(
+            events.read_text(encoding="utf-8"), thermo.DESCRIPTOR)
+        expect(rc == 0, f"the normalizing drive still exits 0 (got {rc})")
+        odd_init = _thermo_init_params(odd_launches.get("console_lua", []))
+        odd_dump = _thermo_dump_params(odd_launches.get("dump", {}).get("cmd", []))
+        expect(odd_init == odd_dump == (42, 129, thermo.PLATE_COUNT),
+               f"both launches still request the identical world, normalizing "
+               f"or not (console {odd_init}, dump {odd_dump})")
+        odd_reported = [event.detail for event in odd_events
+                        if isinstance(event, probe_protocol.DiagnosticEvent)
+                        and {"seed", "world_size", "plates"} <= set(event.detail)]
+        expect(len(odd_reported) == 1,
+               f"the normalizing run reports its parameters exactly once "
+               f"(got {len(odd_reported)})")
+        if odd_reported:
+            expect(odd_reported[0].get("world_size") == 136
+                   and odd_reported[0].get("requested_world_size") == 129,
+                   f"the structured report names the GENERATED size 136 and "
+                   f"keeps the requested 129 (got {odd_reported[0]})")
+
+    odd_lines = _thermo_reported_line(normalizing.getvalue())
+    expect(len(odd_lines) == 0,
+           f"protocol mode still prints no parameter line (got {odd_lines})")
+
+    plain = io.StringIO()
+    rc, _ = _drive_thermo(
+        probe_protocol.Reporter(thermo.DESCRIPTOR, stream=plain),
+        sweep, size=129)
+    odd_lines = _thermo_reported_line(plain.getvalue())
+    expect(len(odd_lines) == 1,
+           f"the normalizing standalone run prints one parameter line "
+           f"(got {odd_lines})")
+    odd_line = odd_lines[0] if odd_lines else ""
+    expect(_thermo_spoken(odd_line) == (42, 136, thermo.PLATE_COUNT),
+           f"standalone names the GENERATED world size, not the request "
+           f"(read {_thermo_spoken(odd_line)} from {odd_line!r})")
+    expect(_thermo_spoken(odd_line, ("requested",)) == (129,),
+           f"and still names the request that produced it "
+           f"(got {odd_line!r})")
 
     # The non-empty sampling path, also engine-free: a warm ice tile fails.
     stream = io.StringIO()
