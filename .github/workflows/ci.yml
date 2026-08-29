@@ -947,10 +947,15 @@ jobs:
       # still yielding a removable tree with the source's own modes
       # untouched, and an outside same-named decoy left byte-identical.
       # It pins the teardown boundary structurally as well as
-      # behaviourally: the boot sits INSIDE the guard whose finally
-      # shuts the engine down, because an interrupt taken at the store
-      # of the handle `boot` just returned is between two bytecodes and
-      # no line-level test can reach it. It also pins what the
+      # behaviourally, because `probelib.boot` waits up to three minutes
+      # for READY and a caller that learns of the engine only from the
+      # return value owns nothing for that whole span: `boot` now hands
+      # the handle over the statement after its `Popen` (`on_launch`, an
+      # appended optional parameter no existing caller passes), and the
+      # probe disposes of an engine it merely LAUNCHED directly rather
+      # than through the port, since a boot fails on a busy port exactly
+      # because somebody else's instance holds it. `test_probelib` owns
+      # the launcher half. It also pins what the
       # probe still proves: the registration order placement hashes are
       # indexed by (sorted real flora, then `probe_berry`, then
       # `probe_clover`), both fixture bodies by sha256, and

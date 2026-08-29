@@ -182,6 +182,33 @@ def _describe_held(path: str) -> str:
     return f" ({', '.join(held)})" if held else " (empty)"
 
 
+def abandon_engine(proc) -> None:
+    """Dispose of an engine this run LAUNCHED but never took ownership
+    of, without talking to the port.
+
+    `probelib.boot` hands the process over the moment it exists
+    (`on_launch`) and only decides about READY up to three minutes
+    later, so the handle can reach this run's teardown while `boot`
+    itself is still deciding — the path an interrupt takes when it lands
+    between the two. `boot` kills the process on both of its OWN failure
+    exits, so on those this is a no-op on an already-dead handle; it
+    exists for the exit `boot` never reached.
+
+    Deliberately NOT `quit_engine`: that sends `engine.quit()` to the
+    PORT, and a boot fails on a busy port precisely because the port
+    belongs to somebody else's instance. Only a boot that RETURNED
+    proves this run's engine is the one listening there.
+    """
+    if proc.poll() is not None:
+        return
+    proc.kill()
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        print(f"  [FAIL] the engine this run launched (pid {proc.pid}) did "
+              f"not die when killed")
+
+
 def release_artifacts(art: RunArtifacts, keep: bool) -> bool:
     """Retire this invocation's artifact directory, once the engine it
     booted has been through `quit_engine`, and say whether the run may
@@ -517,26 +544,29 @@ def run_probe(args, art) -> bool:
     print(f"isolated resource root: {root}", flush=True)
     print(f"save slot: {slot}", flush=True)
 
-    # The teardown guard is armed BEFORE the boot, not after it: `boot`
-    # hands back a LIVE engine, and an interrupt or an exception landing
-    # between that hand-back and an unarmed `try` would leave the
-    # process running with nothing left holding its handle. Arming first
-    # narrows that to the single assignment CPython cannot make atomic
-    # with the call it completes. (An interrupt taken INSIDE `boot`, in
-    # its READY poll, is `probelib`'s own exposure and is shared by every
-    # probe.)
+    # TWO records of the same engine, because they answer two different
+    # questions and the gap between them is where a live process used to
+    # be stranded.
     #
-    # `proc` therefore stays None until `boot` has returned, and the
-    # shutdown is conditional on that. `boot` exits the probe outright
-    # when the engine dies before READY or never prints it, and disposes
-    # of the process it started on either of those paths itself — so a
-    # None here means this run owns no engine, and an `engine.quit()`
-    # sent anyway would be aimed at whoever else holds the port. An
-    # instance that was already listening is exactly why a boot fails on
-    # a busy one.
+    # `launched` is filled by `probelib.boot` itself, in the statement
+    # after its `Popen` (#1682) — so this run holds the handle from the
+    # moment the OS process exists, rather than only once `boot` returns,
+    # which on a hung boot is `ready_timeout` (three minutes) later. An
+    # interrupt anywhere in that span therefore still finds something to
+    # dispose of.
+    #
+    # `proc` is set only when `boot` RETURNED, which is the separate
+    # claim that this run's engine is the one now listening on `port`.
+    # Only then may teardown send `engine.quit()` there: a boot fails on
+    # a busy port precisely because somebody else's instance holds it,
+    # and shutting THAT down is the damage this split exists to prevent.
+    # The guard is opened before either, so nothing between here and the
+    # `finally` can escape it.
+    launched: list = []
     proc = None
     try:
-        proc = boot(port, art.engine_log, args=["--resource-root", root])
+        proc = boot(port, art.engine_log, args=["--resource-root", root],
+                    on_launch=launched.append)
         bootstrap(port, art)
         send(port, f"world.init('probe', {args.seed}, {args.size}, {args.plates}); return 'ok'")
         send(port, "return world.waitForInit(300)", timeout=310)
@@ -722,6 +752,8 @@ def run_probe(args, art) -> bool:
         # as on the passing one, and on an interrupted one too.
         if proc is not None:
             quit_engine(port, proc)
+        elif launched:
+            abandon_engine(launched[0])
 
 
 def main():

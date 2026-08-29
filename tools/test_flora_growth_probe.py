@@ -30,10 +30,12 @@ is a way the probe would leak, collide, or stop proving what it claims:
     deleted. Nor is any same-named file the run did not create.
   * The tree is released after a pass, an early return, an exception, a
     `probelib.boot` abort, and a handled Ctrl-C.
-  * An engine this run actually booted is ALWAYS shut down — including
-    when the very next statement after the boot is interrupted — while a
-    boot that aborted sends no `engine.quit()` at all, because a busy
-    port belongs to somebody else's engine.
+  * An engine this run LAUNCHED is always disposed of, including when
+    the interrupt lands inside `probelib.boot` — which hands the handle
+    over the statement after its `Popen` and only decides about READY up
+    to three minutes later. Only a boot that RETURNED may be shut down
+    through the PORT, because a boot fails on a busy port precisely
+    because somebody else's instance holds it.
   * Retention is opt-in, keeps the run's own success or failure result,
     names where the artifacts are, and describes what the run ACTUALLY
     produced rather than what a finished run usually would.
@@ -447,26 +449,49 @@ def test_cleanup_failure_fails_an_otherwise_clean_run() -> None:
 
 
 class _StandInEngine:
-    """Stands in for the `subprocess.Popen` `probelib.boot` returns, so a
-    teardown assertion can name the exact handle that was shut down."""
+    """Stands in for the `subprocess.Popen` `probelib.boot` launches, so a
+    teardown assertion can name the exact handle that was disposed of and
+    say HOW — killed directly, or asked to quit through the port."""
+
+    pid = 4242
+
+    def __init__(self, alive: bool = True) -> None:
+        self.alive = alive
+        self.killed = False
+
+    def poll(self):
+        return None if self.alive else 0
+
+    def kill(self) -> None:
+        self.killed = True
+        self.alive = False
+
+    def wait(self, timeout=None) -> int:
+        return 0
 
     def __repr__(self) -> str:  # pragma: no cover - diagnostics only
-        return "<stand-in engine>"
+        return f"<stand-in engine alive={self.alive} killed={self.killed}>"
 
 
-def drive_run_probe(art, boot_result, after_boot) -> tuple[list, BaseException | None]:
+def drive_run_probe(art, boot_result, after_boot,
+                    launched_handle=None) -> tuple[list, BaseException | None]:
     """Call the REAL `run_probe` with `boot`, `quit_engine` and
     `bootstrap` replaced, and report `(handles shut down, what
     propagated)`.
 
     `boot_result` is either the handle the stand-in boot returns or an
-    exception it raises; `after_boot` runs in `bootstrap`'s place, one
-    statement past the boot — which is exactly the transition an
-    interrupt must not be able to slip through.
+    exception it raises; `launched_handle` is what the stand-in registers
+    through `on_launch` before either, standing for the process that
+    already exists while `boot` is still deciding; `after_boot` runs in
+    `bootstrap`'s place, one statement past the boot.
     """
     quits: list = []
 
-    def stub_boot(_port, _log, args=None, **_kw):
+    def stub_boot(_port, _log, args=None, on_launch=None, **_kw):
+        # What `probelib.boot` does: hand the handle over the statement
+        # after its own `Popen`, long before it decides about READY.
+        if on_launch is not None and launched_handle is not None:
+            on_launch(launched_handle)
         if isinstance(boot_result, BaseException):
             raise boot_result
         return boot_result
@@ -475,7 +500,8 @@ def drive_run_probe(art, boot_result, after_boot) -> tuple[list, BaseException |
         quits.append(proc)
 
     def stub_bootstrap(_port, _art):
-        after_boot()
+        if after_boot is not None:
+            after_boot()
 
     original = probe.boot, probe.quit_engine, probe.bootstrap
     probe.boot, probe.quit_engine, probe.bootstrap = (
@@ -515,10 +541,14 @@ def test_a_booted_engine_is_always_shut_down() -> None:
             raise blow_up()
 
         with fresh_run() as art:
-            quits, raised = drive_run_probe(art, engine, raise_it)
+            quits, raised = drive_run_probe(art, engine, raise_it,
+                                            launched_handle=engine)
         expect(quits == [engine],
                f"{label} one statement after the boot still shuts this "
-               f"run's engine down (got {quits})")
+               f"run's engine down through the port (got {quits})")
+        expect(not engine.killed,
+               f"...through engine.quit(), not a kill — the boot returned, "
+               f"so the port is this run's ({label})")
         expect(raised is not None,
                f"...and {label} still ends the run (got {raised!r})")
 
@@ -526,20 +556,57 @@ def test_a_booted_engine_is_always_shut_down() -> None:
 def test_a_boot_that_aborted_is_never_sent_quit() -> None:
     print("\ntest_a_boot_that_aborted_is_never_sent_quit")
     # `probelib.boot` disposes of the process it started on both of its
-    # own failure paths, so this run owns no engine — and a busy port is
-    # exactly why a boot fails, which makes an `engine.quit()` sent
-    # anyway an attack on somebody else's instance.
+    # own failure paths, so the handle it registered is already dead —
+    # and a busy port is exactly why a boot fails, which makes an
+    # `engine.quit()` sent anyway an attack on somebody else's instance.
     def unreachable():
         raise AssertionError("bootstrap ran after the boot had failed")
 
+    dead = _StandInEngine(alive=False)
     with fresh_run() as art:
         quits, raised = drive_run_probe(
-            art, SystemExit("engine exited before READY"), unreachable)
+            art, SystemExit("engine exited before READY"), unreachable,
+            launched_handle=dead)
     expect(quits == [],
            f"a boot abort sends no engine.quit() at whoever holds the "
            f"port (got {quits})")
+    expect(not dead.killed,
+           "and nothing is killed twice — boot already disposed of it")
     expect(isinstance(raised, SystemExit),
            f"...and the abort still ends the run (got {raised!r})")
+
+
+def test_an_engine_stranded_inside_boot_is_still_disposed_of() -> None:
+    print("\ntest_an_engine_stranded_inside_boot_is_still_disposed_of")
+    # THE window this split exists for. `probelib.boot` registers the
+    # process the statement after its `Popen` and then waits up to
+    # `ready_timeout` — three minutes — for READY. An interrupt anywhere
+    # in that span leaves a LIVE engine that `boot` never got to decide
+    # about, and that no `proc = boot(...)` assignment will ever name.
+    for label, blow_up in (("a handled Ctrl-C", KeyboardInterrupt),
+                           ("an unexpected exception",
+                            lambda: RuntimeError("kaboom"))):
+        stranded = _StandInEngine()
+        with fresh_run() as art:
+            quits, raised = drive_run_probe(art, blow_up(), None,
+                                            launched_handle=stranded)
+        expect(stranded.killed,
+               f"{label} inside boot still disposes of the engine it had "
+               f"already launched (got {stranded})")
+        expect(quits == [],
+               f"...directly, never through the port — boot never returned, "
+               f"so the listener there may be somebody else's ({label})")
+        expect(raised is not None,
+               f"...and {label} still ends the run (got {raised!r})")
+
+    # An already-dead stranded handle is left alone rather than killed
+    # again, so the disposal is not merely unconditional.
+    already_gone = _StandInEngine(alive=False)
+    with fresh_run() as art:
+        drive_run_probe(art, KeyboardInterrupt(), None,
+                        launched_handle=already_gone)
+    expect(not already_gone.killed,
+           "a handle that has already exited is not killed again")
 
 
 def test_the_boot_itself_is_inside_the_teardown_guard() -> None:
@@ -587,6 +654,13 @@ def test_the_boot_itself_is_inside_the_teardown_guard() -> None:
                        for c in calls([node], "quit_engine"))
                for node in guard.finalbody),
            "...and the shutdown is conditional on having one")
+    booted = calls(guard.body, "boot")
+    expect(bool(booted) and any(kw.arg == "on_launch" for kw in booted[0].keywords),
+           "the boot registers the process as it is LAUNCHED, so the span "
+           "boot spends waiting for READY is covered too")
+    expect(len(calls(guard.finalbody, "abandon_engine")) == 1,
+           "and a handle that only ever got registered is disposed of "
+           "directly, never through the port")
 
 
 # ---------------------------------------------------------------------
@@ -827,6 +901,7 @@ def main() -> int:
     test_cleanup_failure_fails_an_otherwise_clean_run()
     test_a_booted_engine_is_always_shut_down()
     test_a_boot_that_aborted_is_never_sent_quit()
+    test_an_engine_stranded_inside_boot_is_still_disposed_of()
     test_the_boot_itself_is_inside_the_teardown_guard()
     test_retention_keeps_a_passing_run_passing()
     test_retention_keeps_a_failing_run_failing()

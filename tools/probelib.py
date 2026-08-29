@@ -33,6 +33,7 @@ import socket
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 
 import probe_engine
 
@@ -201,7 +202,9 @@ def _log_path(port: int, log: str | None) -> str:
 def boot(port: int, log: str | None = None, args: list[str] | None = None,
          ready_timeout: float = DEFAULT_READY_TIMEOUT,
          label: str = "engine",
-         mode: tuple[str, ...] = ("--headless",)) -> subprocess.Popen:
+         mode: tuple[str, ...] = ("--headless",),
+         on_launch: Callable[[subprocess.Popen], None] | None = None,
+         ) -> subprocess.Popen:
     """Launch an engine on ``port`` and block until it prints READY.
 
     Exits the probe (non-zero) if the engine dies before READY or never
@@ -211,6 +214,18 @@ def boot(port: int, log: str | None = None, args: list[str] | None = None,
     ``("--preview", "units/acolyte")`` for a preview-mode boot (#632) — the
     debug console (and its READY print) starts the same way regardless of
     boot profile, so only the launch flags differ.
+
+    ``on_launch``, when given, is handed the process the instant it
+    exists — before the READY wait, and therefore before either of this
+    function's own failure exits — so a caller's teardown guard can own
+    the engine from as early as Python allows instead of only once this
+    returns, which on a hung boot is ``ready_timeout`` (three minutes by
+    default) later. That gap is what lets an interrupt strand a live
+    engine holding the port with nothing left holding its handle
+    (#1682). A caller that registers this way must dispose of the handle
+    DIRECTLY rather than through ``quit_engine``: this function's own
+    failure paths mean the port may belong to somebody else's instance,
+    which is precisely why the boot failed.
     """
     if port == GUI_PORT:
         sys.exit(f"refusing to boot on port {GUI_PORT} (the GUI port); pass a 9xxx port")
@@ -222,6 +237,8 @@ def boot(port: int, log: str | None = None, args: list[str] | None = None,
     # hand still needs no prior build step.
     cmd = probe_engine.engine_command([*mode, "--port", str(port), *(args or [])])
     proc = subprocess.Popen(cmd, stdout=logf, stderr=subprocess.STDOUT)
+    if on_launch is not None:
+        on_launch(proc)
     proc._probe_log = logpath  # type: ignore[attr-defined]
     deadline = time.time() + ready_timeout
     while time.time() < deadline:
