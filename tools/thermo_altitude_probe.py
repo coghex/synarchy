@@ -31,6 +31,12 @@ to end up MISSING (`rep.skip`), and `probe-result/v1` rejects a check that
 arrives after a missing predecessor. Arena safety therefore runs before it, and
 the arena is hidden again afterwards to hand the generated page back.
 
+Ice agreement spans this probe's TWO engine launches — the ice coordinates come
+from a `--dump` process and the ambient readings from the debug-console world —
+so both launches take seed, world size and plate count from the same place
+(`PLATE_COUNT` below) and the run reports all three up front. Sampling one
+world's ice positions in a differently generated world is the bug #1757 fixed.
+
 This probe implements the shared `probe-result/v1` protocol (#1425/#1474):
 `--describe` prints its ordered, stable check declaration without booting
 anything, and when a harness supplies an event-stream path it reports through
@@ -64,6 +70,20 @@ DUMP_LOG = f"{SPROOT}/{DUMP_LOG_NAME}"
 
 WORLD_PAGE = "t308"
 ARENA_PAGE = "arena"
+
+# The tectonic plate count BOTH engine launches generate with, and the
+# probe's ONE source for it. `ice_agreement` samples the console
+# engine's `world.getAmbientAt` at coordinates taken from the separate
+# `--dump` engine's ice payload, and `World.Weather.Ambient`'s whole
+# altitude correction is plate-derived (`elevationAtGlobal seed plates
+# worldSize`), so the two engines must agree on this or the check
+# compares two different worlds. It used to be a literal in the console
+# path only: with `--plates` absent the dump fell back to the engine's
+# `defaultPlatesFor worldSize` (9 at the default --size 128) while the
+# console asked for 5, and the same seed's first five plates being a
+# prefix of its nine is exactly why that passed on partial coincidence
+# instead of failing loudly (#1757).
+PLATE_COUNT = 5
 
 # Ice tiles are sampled a handful at a time; the whole dumped region
 # would be a few thousand console round trips for no extra signal.
@@ -133,10 +153,17 @@ def dump_command(seed, size, cx, cy, engine_args):
     aggregate runner's already-resolved executable when there is one, and
     otherwise the same `cabal run` this always used. The engine's own
     arguments, and their order, are identical either way.
+
+    `--plates` is passed EXPLICITLY, from the same `PLATE_COUNT` the
+    console launch initializes with, so this engine cannot silently
+    resolve a different plate count through `defaultPlatesFor` (#1757).
+    `--plates` is the canonical spelling; `--ages` is only a legacy
+    alias.
     """
     return probe_engine.engine_command(
         ["--dump=terrain,ice",
          "--seed", str(seed), "--worldSize", str(size),
+         "--plates", str(PLATE_COUNT),
          "--region", f"{cx - 3},{cy - 3},{cx + 3},{cy + 3}",
          *engine_args])
 
@@ -230,9 +257,22 @@ def main():
 
 def _run(args, port, rep):
     passed = True
+    # Reported BEFORE anything can fail, and as a diagnostic of its own
+    # rather than a field of a check's detail: standalone mode prints a
+    # diagnostic's human text and discards its detail dict, and
+    # `ice_agreement` — the check these parameters matter most to — is
+    # the one allowed to end up MISSING. Both spellings therefore carry
+    # all three values, so whichever channel a reader has, the world
+    # that was measured is on it (#1757).
+    rep.info(
+        f"world generation parameters: seed {args.seed}, "
+        f"world size {args.size}, plates {PLATE_COUNT} "
+        f"(both engine launches)",
+        {"seed": args.seed, "world_size": args.size, "plates": PLATE_COUNT})
     proc = boot_console(port, rep)
     try:
-        send(port, f'world.init("{WORLD_PAGE}",{args.seed},{args.size},5); '
+        send(port, f'world.init("{WORLD_PAGE}",{args.seed},{args.size},'
+                   f'{PLATE_COUNT}); '
                    f'return "ok"')
         for _ in range(180):
             if send(port, 'local p=world.getInitProgress(); return p').strip() == "3":
