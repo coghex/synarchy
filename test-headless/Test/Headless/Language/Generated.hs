@@ -353,9 +353,9 @@ foreignExtended prof w =
 
 spec ∷ Spec
 spec = describe "Generated language names" $ do
-    prodBytes ← runIO $ BS.readFile conceptCataloguePath
-    let prodCat = either (error ∘ T.unpack ∘ catalogueErrorText) id
-                         (parseCatalogue prodBytes)
+    prodCatE ← runIO $ loadCatalogue conceptCataloguePath conceptOrdinalPath
+    let prodCat = either (error ∘ T.unpack ∘ catalogueErrorText) id prodCatE
+        prodOrds = catOrdinals prodCat
 
         -- Every canonical expression's native rendering for one seed,
         -- assigning roots over the COMPLETE production catalogue (#710
@@ -368,7 +368,7 @@ spec = describe "Generated language names" $ do
         -- roots plus whatever bound forms this version's selection
         -- accepted. Empty bound map below generator version 4.
         rootsFor ∷ Profile → LanguageRoots
-        rootsFor prof = assignLanguageRoots prof (conceptIds prodCat)
+        rootsFor prof = assignLanguageRoots prof prodOrds (conceptIds prodCat)
 
         renderingsFor ∷ Profile → [Either Text Text]
         renderingsFor prof =
@@ -620,18 +620,277 @@ spec = describe "Generated language names" $ do
             let sigs = map (profileSignature ∘ buildProfileV1 ∘ LangSeed) [0 .. 49]
             length (nub sigs) `shouldSatisfy` (≥ 48)
 
-    describe "concept roots (requirements 7, 8, 16)" $ do
+    describe "concept roots (requirements 7, 8, 16; #1868 placement order)" $ do
         it "assigns the same roots regardless of the input list's order" $ do
             let prof = buildProfileV1 (LangSeed 99)
                 ids  = conceptIds prodCat
-            assignRoots prof ids `shouldBe` assignRoots prof (reverse ids)
+            assignRoots prof prodOrds ids
+                `shouldBe` assignRoots prof prodOrds (reverse ids)
 
         it "has zero root collisions over the complete production catalogue, for several seeds" $ do
             let seeds = [0, 1, 7, 42, 99, 12345, 999999]
                 collisionsFor sd =
                     countDuplicateRoots (assignRoots (buildProfileV1 (LangSeed sd))
+                                                      prodOrds
                                                       (conceptIds prodCat))
             map collisionsFor seeds `shouldBe` map (const 0) seeds
+
+        -- #1868. Placement moved from ascending id order to the
+        -- catalogue's recorded append-only ordinal. The next three
+        -- cases are what make that safe: the assignment is UNCHANGED
+        -- for today's catalogue, an ADDITION no longer moves anything,
+        -- and one seed's whole map is pinned so a future reordering
+        -- fails loudly rather than quietly re-rooting every language.
+        --
+        -- Every case runs the whole PANEL — each supported generator
+        -- version crossed with a seed spread — not just the current
+        -- version, because Language.Etymology rebuilds the profile at
+        -- the SOURCE's recorded version before assigning roots from the
+        -- current catalogue, so a historical version's assignment is
+        -- exactly as load-bearing as version 5's.
+        let panelSeeds = [0, 1, 7, 42, 99, 1337, 2718, 12345, 999999, 31337]
+            panel = [ (ver, sd, prof)
+                    | ver ← supportedGeneratorVersions
+                    , sd  ← panelSeeds
+                    , Right prof ← [generateProfile ver (LangSeed sd)] ]
+            prodIds = conceptIds prodCat
+            -- The placement this issue REPLACED, written out rather
+            -- than referenced: it is the reference the identity case
+            -- below compares against, and the adversarial twin that
+            -- proves the addition case is not vacuous.
+            -- Takes (and ignores) the ordinals so it shares
+            -- 'movedUnder' with the real assignment below: the two are
+            -- driven through one comparison, not two similar ones.
+            ascendingIdPlacement ∷ Profile → ConceptOrdinals → [ConceptId]
+                                 → M.Map ConceptId Text
+            ascendingIdPlacement prof _ords ids = foldl' step M.empty (sort ids)
+              where
+                step acc cid =
+                    let used = S.fromList (map T.toLower (M.elems acc))
+                        pick attempt =
+                            let cand = generateRoot prof cid attempt
+                            in if S.member (T.toLower cand) used
+                               then pick (attempt + 1)
+                               else cand
+                    in M.insert cid (pick (0 ∷ Int)) acc
+            -- One added id, ratcheted the way --update-baseline would:
+            -- appended after every recorded ordinal.
+            withProbe pid =
+                either (error ∘ T.unpack ∘ catalogueErrorText) id $
+                    mkConceptOrdinals (zip prodIds [0 ..]
+                                       ⧺ [(pid, length prodIds)])
+            probeIds = [ cid (T.pack ("APROBE" ⧺ show n))
+                       | n ← [1 .. 30 ∷ Int] ]
+            movedUnder place ords pid (_, _, prof) =
+                let before = place prof ords prodIds
+                    after  = place prof (withProbe pid) (pid : prodIds)
+                in [ c | c ← prodIds, M.lookup c before ≢ M.lookup c after ]
+
+        it "assigns exactly what ascending-id placement did, for every \
+           \supported version and seed" $ do
+            -- Requirement 2. The seeded ordinals ARE ascending-id rank,
+            -- so introducing them changed no existing world's roots and
+            -- needed no currentGeneratorVersion bump. That identity is
+            -- also what makes blessing the golden below safe.
+            panel `shouldSatisfy` ((≡ 50) ∘ length)
+            [ (generatorVersionInt ver, langSeedWord (profSeed prof))
+              | (ver, _, prof) ← panel
+              , assignRoots prof prodOrds prodIds
+                  ≢ ascendingIdPlacement prof prodOrds prodIds ] `shouldBe` []
+
+        it "leaves every existing concept's root untouched when an id is \
+           \added, for every supported version and seed" $ do
+            -- Requirement 3, the defect itself. Scope: this is the FREE
+            -- root. From version 4 on, bound-form selection ranks the
+            -- complete current concept set, so an addition can still
+            -- move a bound form (#1096) — deliberately out of scope.
+            [ (generatorVersionInt ver, langSeedWord (profSeed prof), pid, moved)
+              | entry@(ver, _, prof) ← panel
+              , pid ← probeIds
+              , let moved = movedUnder assignRoots prodOrds pid entry
+              , not (null moved) ] `shouldBe` []
+
+        it "would have caught the defect: ascending-id placement DOES \
+           \move incumbents over the same panel" $ do
+            -- Without this the case above could pass because the panel
+            -- is too small to contain a collision, rather than because
+            -- ordinal placement fixed anything.
+            let movers = [ (generatorVersionInt ver, pid, moved)
+                         | entry@(ver, _, _) ← panel
+                         , pid ← probeIds
+                         , let moved = movedUnder ascendingIdPlacement
+                                                  prodOrds pid entry
+                         , not (null moved) ]
+            length movers `shouldSatisfy` (≥ 20)
+
+        it "pins one seed's complete root map (generator version 5, \
+           \seed 1337)" $ do
+            -- Blessed from current output, which requirement 2's
+            -- identity above makes safe: this map is byte-identical to
+            -- what ascending-id placement produced before #1868. Any
+            -- later change to placement order, the ordinal artifact, or
+            -- collision resolution fails here naming the concepts that
+            -- moved.
+            let prof = case generateProfile (GeneratorVersion 5)
+                                            (LangSeed 1337) of
+                    Right p → p
+                    Left e  → error ("test setup: " <> show e)
+                golden ∷ [(Text, Text)]
+                golden =
+                  [ ("AMBER", "jikry")
+                  , ("ANGEL", "lav")
+                  , ("ASH", "ijhi")
+                  , ("AUTUMN", "lhyry")
+                  , ("BAY", "lip")
+                  , ("BEAR", "vpy")
+                  , ("BLADE", "vtivpi")
+                  , ("BLESSING", "wakwi")
+                  , ("BOAR", "yhiphy")
+                  , ("BONE", "jyhra")
+                  , ("BRIDGE", "vtyjpa")
+                  , ("BRONZE", "jwyła")
+                  , ("CAVERN", "łijti")
+                  , ("CLAW", "walti")
+                  , ("CLAY", "yhitap")
+                  , ("CLIFF", "vpiir")
+                  , ("CLOUD", "rilky")
+                  , ("COAL", "jalti")
+                  , ("COMET", "wiav")
+                  , ("COPPER", "łwi")
+                  , ("COURAGE", "łwijij")
+                  , ("CROSSING", "vłi")
+                  , ("CROWN", "yjril")
+                  , ("CURSE", "hita")
+                  , ("DAWN", "hiłwa")
+                  , ("DEMON", "lpajta")
+                  , ("DESPAIR", "phiła")
+                  , ("DESTINY", "jyvwy")
+                  , ("DOUBT", "vłita")
+                  , ("DREAM", "ryti")
+                  , ("DUSK", "atipał")
+                  , ("EARTH", "ławkiw")
+                  , ("ECLIPSE", "lihal")
+                  , ("EMBER", "ywipy")
+                  , ("ENVY", "vra")
+                  , ("EXILE", "jahy")
+                  , ("EYE", "awilty")
+                  , ("FAITH", "wili")
+                  , ("FAMINE", "ikłak")
+                  , ("FANG", "lyh")
+                  , ("FATE", "tiyt")
+                  , ("FEAR", "wyljri")
+                  , ("FEATHER", "hałi")
+                  , ("FIRE", "vił")
+                  , ("FORD", "waik")
+                  , ("FROST", "pyvyw")
+                  , ("GATE", "jyk")
+                  , ("GHOST", "tyłyt")
+                  , ("GLASS", "wiiw")
+                  , ("GLORY", "łak")
+                  , ("GOD", "łhiiv")
+                  , ("GOLD", "kałar")
+                  , ("GREED", "łarvhi")
+                  , ("GRIEF", "vryji")
+                  , ("HARBOR", "ilijpa")
+                  , ("HAVEN", "kipyp")
+                  , ("HAWK", "avivy")
+                  , ("HEART", "jywit")
+                  , ("HEARTH", "talav")
+                  , ("HOLLOW", "lłi")
+                  , ("HONOR", "yłijwa")
+                  , ("HOPE", "lwi")
+                  , ("HORIZON", "kayp")
+                  , ("HORN", "pyha")
+                  , ("HOUND", "łiri")
+                  , ("ICE", "ivly")
+                  , ("IRON", "lra")
+                  , ("ISLE", "łyv")
+                  , ("JOY", "łiap")
+                  , ("KEEP", "ilwy")
+                  , ("KING", "ritta")
+                  , ("LAND", "tip")
+                  , ("LEAD", "irivłi")
+                  , ("LEGEND", "jpa")
+                  , ("LIGHTNING", "riak")
+                  , ("LION", "jhalpa")
+                  , ("MANE", "piji")
+                  , ("MARSH", "hijir")
+                  , ("MEMORY", "kaji")
+                  , ("MERCY", "kyviw")
+                  , ("MIDNIGHT", "jil")
+                  , ("MIST", "vhyij")
+                  , ("MOON", "jwyky")
+                  , ("MYTH", "phy")
+                  , ("NIGHT", "tyvpi")
+                  , ("NOON", "awihyl")
+                  , ("OATH", "wapky")
+                  , ("OBSIDIAN", "arjra")
+                  , ("OMEN", "tyw")
+                  , ("ORACLE", "hijta")
+                  , ("OWL", "pyly")
+                  , ("PEAK", "pyj")
+                  , ("PLAGUE", "vikaj")
+                  , ("PRIDE", "pył")
+                  , ("PROPHET", "viyp")
+                  , ("QUARTZ", "ałłi")
+                  , ("QUEEN", "vtiwyj")
+                  , ("RAGE", "jwakha")
+                  , ("RAIN", "alkyp")
+                  , ("RAINBOW", "yrhal")
+                  , ("RAVEN", "wiwah")
+                  , ("REALM", "wakyr")
+                  , ("RELIC", "jawkry")
+                  , ("RIDGE", "ikikar")
+                  , ("RIVER", "łaj")
+                  , ("RUIN", "yvaw")
+                  , ("SALT", "ral")
+                  , ("SANCTUARY", "illła")
+                  , ("SAND", "kra")
+                  , ("SERPENT", "hah")
+                  , ("SHADOW", "yhita")
+                  , ("SHAME", "kyaw")
+                  , ("SILENCE", "katvy")
+                  , ("SILVER", "payh")
+                  , ("SKULL", "tiij")
+                  , ("SKY", "aryj")
+                  , ("SLOTH", "kylki")
+                  , ("SMOKE", "aklyl")
+                  , ("SORROW", "jwiyv")
+                  , ("SOUL", "ralta")
+                  , ("SPIDER", "hypkyl")
+                  , ("SPIRE", "ltypi")
+                  , ("SPIRIT", "alwal")
+                  , ("SPRING", "lhi")
+                  , ("STAG", "khiat")
+                  , ("STAR", "kylvri")
+                  , ("STEEL", "yjikyw")
+                  , ("STONE", "yhihyl")
+                  , ("STORM", "ripki")
+                  , ("SUMMER", "jały")
+                  , ("SUN", "łałi")
+                  , ("TALON", "iłyv")
+                  , ("THRESHOLD", "vwi")
+                  , ("THRONE", "wyłrył")
+                  , ("THUNDER", "ijilły")
+                  , ("TIDE", "jiłyj")
+                  , ("TIN", "jyh")
+                  , ("TITAN", "jwy")
+                  , ("TOWER", "hytyv")
+                  , ("TRIUMPH", "wyvy")
+                  , ("TUSK", "kytyt")
+                  , ("VALE", "ikral")
+                  , ("VALOR", "jhi")
+                  , ("WALL", "tiwaw")
+                  , ("WATER", "pav")
+                  , ("WIND", "hawi")
+                  , ("WINTER", "łakyt")
+                  , ("WITCH", "vtykik")
+                  , ("WOLF", "lpi")
+                  , ("WRAITH", "apipi")
+                  , ("WRATH", "iłjah")
+                  ]
+            M.toList (assignRoots prof prodOrds prodIds)
+                `shouldBe` [ (cid c, r) | (c, r) ← golden ]
 
     describe "every #709 name form renders natively (requirement 10)" $ do
         let prof  = buildProfileV1 (LangSeed 7)
@@ -1280,8 +1539,9 @@ spec = describe "Generated language names" $ do
                     `shouldBe` boundSelectionOrder p (reverse ids)
                 boundSelectionOrder p ids
                     `shouldBe` boundSelectionOrder p shuffled
-                lrBound (assignLanguageRoots p ids)
-                    `shouldBe` lrBound (assignLanguageRoots p (reverse ids))
+                lrBound (assignLanguageRoots p prodOrds ids)
+                    `shouldBe` lrBound (assignLanguageRoots p prodOrds
+                                                            (reverse ids))
 
         it "visits every concept exactly once, in a total order" $ do
             -- The (rank, ConceptId) tie-break is what makes the order
@@ -1408,7 +1668,7 @@ spec = describe "Generated language names" $ do
             let offenders =
                     [ profSeed p
                     | (p, lr) ← take 64 v4Assignments
-                    , lrFree lr ≢ assignRoots p (conceptIds prodCat) ]
+                    , lrFree lr ≢ assignRoots p prodOrds (conceptIds prodCat) ]
             offenders `shouldBe` []
 
         it "ranks by a value domain-separated from root generation" $ do

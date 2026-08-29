@@ -17,6 +17,8 @@ module Engine.Scene.Types.Batch
   , mergeSortedQuads
   , LayeredQuads(..)
   , emptyLayeredQuads
+  , setQuadSolarPage
+  , stampSolarPage
   ) where
 
 import UPrelude
@@ -31,7 +33,8 @@ import qualified Data.Set as Set
 import Data.Ord (comparing)
 import Engine.Scene.Base (ObjectId, LayerId)
 import Engine.Asset.Handle (TextureHandle(..), FontHandle)
-import Engine.Graphics.Vulkan.Types.Vertex (Vertex)
+import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..))
+import Engine.Graphics.Solar (SolarPageTable, emptySolarPageTable)
 import Engine.Graphics.Font.Data (GlyphInstance)
 import qualified Vulkan.Core10 as Vk
 
@@ -88,10 +91,36 @@ drawableToQuad dobj = SortableQuad
 data LayeredQuads = LayeredQuads
     { lqStatic  ∷ !(Map.Map LayerId (V.Vector SortableQuad))
     , lqDynamic ∷ !(V.Vector SortableQuad)
+    , lqSolar   ∷ !SolarPageTable
+      -- ^ The per-page solar attribution these quads' @solarPage@ slots
+      --   index into (#1869). It rides HERE, inside the one immutable
+      --   value the world thread publishes, precisely because the
+      --   renderer may draw a frame from the PREVIOUS publication: a
+      --   table reaching the UBO by any other route could describe a
+      --   different visible set than the vertices being drawn.
     } deriving (Show)
 
 emptyLayeredQuads ∷ LayeredQuads
-emptyLayeredQuads = LayeredQuads Map.empty V.empty
+emptyLayeredQuads = LayeredQuads Map.empty V.empty emptySolarPageTable
+
+-- | Attribute one quad's four corners to a solar page slot (#1869).
+--
+--   Attribution is applied HERE, to finished quads, rather than
+--   threaded through every quad producer: the producers are per-page
+--   loops already, so one stamp at the point the page is known keeps a
+--   single assignment site and makes a new producer correct by default
+--   instead of silently page-less.
+setQuadSolarPage ∷ Word32 → SortableQuad → SortableQuad
+setQuadSolarPage slot q = q
+    { sqV0 = (sqV0 q) { solarPage = slot }
+    , sqV1 = (sqV1 q) { solarPage = slot }
+    , sqV2 = (sqV2 q) { solarPage = slot }
+    , sqV3 = (sqV3 q) { solarPage = slot }
+    }
+
+-- | 'setQuadSolarPage' over a whole run.
+stampSolarPage ∷ Word32 → V.Vector SortableQuad → V.Vector SortableQuad
+stampSolarPage slot = V.map (setQuadSolarPage slot)
 
 -- | Group quads by layer and depth-sort each layer's run.
 sortQuadsByLayer ∷ V.Vector SortableQuad → Map.Map LayerId (V.Vector SortableQuad)

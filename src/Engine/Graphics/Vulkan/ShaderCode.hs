@@ -27,6 +27,10 @@ import Engine.Graphics.Vulkan.Texture.Limits
 -- generated from the same definition. Before #1072 four shaders spelled the
 -- block out and three of them were two members behind.
 import Engine.Graphics.Vulkan.Uniform.Layout (uboGlslBlock)
+-- The per-page solar table's length, interpolated for the same reason
+-- (#1869): the shader's bounds guard and the Haskell side's table must
+-- name the SAME cap, and the UBO member is declared from this value too.
+import Engine.Graphics.Solar (maxSolarPages)
 
 -- | Font vertex shader (instanced rendering, world camera / NDC)
 fontVertexShaderCode ∷ BS.ByteString
@@ -80,6 +84,7 @@ bindlessVertexShaderCode = $(compileShaderQ Nothing "vert" Nothing [glsl|
     layout(location = 4) in float inFaceMapIndex;
     layout(location = 5) in uint inRenderFlags;
     layout(location = 6) in uint inWorldUV;
+    layout(location = 7) in uint inSolarPage;
 
     ${uboGlslBlock}
 
@@ -131,8 +136,24 @@ bindlessVertexShaderCode = $(compileShaderQ Nothing "vert" Nothing [glsl|
         // real input — so no fract() is needed anywhere in the pipeline.
         int rawU = int(inWorldUV & 0xFFFFu);
         if (rawU >= 32768) rawU -= 65536;
-        float circumference = max(ubo.worldCircumferenceTiles, 1.0);
-        fragSunAngle = ubo.sunAngle + float(rawU) / circumference;
+        // Per-page attribution (#1869): several world pages can be
+        // visible at once, each advancing on its own clock and
+        // generated at its own size. inSolarPage names which one owns
+        // this vertex — 0 means none (UI and generic scene sprites,
+        // which keep the single global pair they have always used),
+        // n > 0 selects ubo.solarPages[n - 1]. The index is clamped
+        // rather than trusted: the table has a fixed length on both
+        // sides and every unused slot holds the global fallback pair,
+        // so an out-of-range slot lights exactly like a page-less one.
+        float baseSunAngle = ubo.sunAngle;
+        float circumferenceTiles = ubo.worldCircumferenceTiles;
+        if (inSolarPage > 0u) {
+            uint slot = min(inSolarPage, ${maxSolarPages}u) - 1u;
+            baseSunAngle = ubo.solarPages[slot].x;
+            circumferenceTiles = ubo.solarPages[slot].y;
+        }
+        float circumference = max(circumferenceTiles, 1.0);
+        fragSunAngle = baseSunAngle + float(rawU) / circumference;
 
         fragCameraFacing = ubo.cameraFacing;
         fragRenderFlags = inRenderFlags;

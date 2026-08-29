@@ -32,7 +32,8 @@ import Engine.Scripting.Lua.API.YamlTextures
     (isTextureNameRegistered, loadAndRegister, resolveTexturePath)
 import Engine.Asset.YamlLocations
 import Language.Semantic.Types (ConceptId(..), catalogueErrorText)
-import Language.Semantic.Catalogue (conceptCataloguePath, loadCatalogue)
+import Language.Semantic.Catalogue ( conceptCataloguePath
+                                   , conceptOrdinalPath, loadCatalogue )
 import Location.Anchor (locationAnchorText)
 import Location.Naming (locationNamingErrors)
 import Location.Types
@@ -75,6 +76,7 @@ loadLocationYamlFn core regs env backendState = do
                 -- every world forever.
                 namingErrs ← if null defs then pure [] else do
                     eCat ← loadCatalogue conceptCataloguePath
+                                         conceptOrdinalPath
                     pure $ case eCat of
                         Left err → [ "concept catalogue "
                                      <> T.pack conceptCataloguePath

@@ -46,7 +46,8 @@ import Language.Generated.Types
 import Language.Generated.Orthography (outputInventory)
 import Language.Semantic.Types (Catalogue, NameExpr, catalogueErrorText)
 import Language.Etymology.Source (decodeNameExpr, encodeNameExpr)
-import Language.Semantic.Catalogue (conceptCataloguePath, loadCatalogue)
+import Language.Semantic.Catalogue ( conceptCataloguePath
+                                   , conceptOrdinalPath, loadCatalogue )
 import Language.Suggest
     ( NameSuggester, NameSuggestion(..), mkNameSuggester, suggestNameAt
     , suggestErrorText, worldLanguageSeed )
@@ -471,6 +472,7 @@ resolveSuggestion backendState seed ordinal = do
         StepBuild cat  → build cat
         StepReadCatalogue → do
             eCat ← readCatalogueForSuggestions conceptCataloguePath
+                                               conceptOrdinalPath
             case eCat of
                 Left msg → do
                     writeIORef (lbsLanguageCache backendState)
@@ -512,15 +514,15 @@ resolveSuggestion backendState seed ordinal = do
 --   fault after the caller has cached it. Only 'IOException' is caught:
 --   an async exception delivered to this thread is not a catalogue
 --   problem and must not be recorded as one.
-readCatalogueForSuggestions ∷ FilePath → IO (Either Text Catalogue)
-readCatalogueForSuggestions path = do
-    eRead ← try (loadCatalogue path ⌦ evaluate)
+readCatalogueForSuggestions ∷ FilePath → FilePath → IO (Either Text Catalogue)
+readCatalogueForSuggestions catPath ordPath = do
+    eRead ← try (loadCatalogue catPath ordPath ⌦ evaluate)
     pure $ case eRead of
         Left (ioErr ∷ IOException) → Left (describe (tshow ioErr))
         Right (Left cErr)          → Left (describe (catalogueErrorText cErr))
         Right (Right cat)          → Right cat
   where
-    describe why = "concept catalogue " <> T.pack path
+    describe why = "concept catalogue " <> T.pack catPath
         <> " could not be loaded, so no name can be suggested: " <> why
 
 -- | world.initArena(pageId) — create flat test arena, no geology

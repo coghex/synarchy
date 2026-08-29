@@ -18,7 +18,7 @@ import Engine.Core.State (EngineEnv, buildingGhostRef, buildingManagerRef
 import Engine.Core.Capability.RenderView
   (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Asset.Handle (TextureHandle(..), toInt)
-import Engine.Scene.Types (SortableQuad(..))
+import Engine.Scene.Types (SortableQuad(..), setQuadSolarPage)
 import Engine.Graphics.Camera (CameraFacing(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..)
                                           , QuadPayload(..), quadVertices
@@ -30,6 +30,7 @@ import World.Grid (tileWidth, tileHeight, tileSideHeight
                   , worldLayer, applyFacingF, baseTileW, baseTileH)
 import Unit.Direction (Direction(..))
 import World.State.Types (wmVisible)
+import World.Page.Types (WorldPageId(..))
 import Building.Types
 
 -- | Pick a frame for a building at the given POSIX time. Mirrors
@@ -89,8 +90,12 @@ pickBuildingFrame now inst def =
                           | otherwise                                  = timeIdx
                     in fs V.! idx
 
-renderBuildingQuads ∷ EngineEnv → CameraFacing → Int → Int → Float → IO (V.Vector SortableQuad)
-renderBuildingQuads env facing zSlice effDepth tileAlpha = do
+-- | Like 'Unit.Render.renderUnitQuads', one sweep over every visible
+--   page's buildings, so each instance's quad takes ITS OWN page's
+--   solar slot (#1869).
+renderBuildingQuads ∷ EngineEnv → (WorldPageId → Word32) → CameraFacing → Int
+                    → Int → Float → IO (V.Vector SortableQuad)
+renderBuildingQuads env solarSlotOf facing zSlice effDepth tileAlpha = do
     bm ← readIORef (buildingManagerRef env)
     -- Render only the visible worlds' buildings — buildings are
     -- world-scoped so a hidden world's must not draw here (#76).
@@ -122,7 +127,9 @@ renderBuildingQuads env facing zSlice effDepth tileAlpha = do
                                 in case buildingToQuad lookupSlot defFmSlot facing
                                                 zSlice effDepth tileAlpha isSel inst mDef
                                                 now texSizes of
-                                    Just sq → sq : acc
+                                    Just sq →
+                                        setQuadSolarPage
+                                            (solarSlotOf (biPage inst)) sq : acc
                                     Nothing → acc
                               ) [] instances
                     return quads
@@ -252,8 +259,13 @@ ghostTint valid
 
 -- | Render the ghost preview if one is set. Returns at most one quad,
 --   in a vector for caller convenience. Tinted via 'ghostTint'.
-renderGhostQuad ∷ EngineEnv → CameraFacing → Int → IO (V.Vector SortableQuad)
-renderGhostQuad env facing zSlice = do
+--
+--   The ghost has no page of its own — it previews a placement on
+--   whichever page is active — so it takes the ACTIVE page's solar slot
+--   (#1869), which is the page the placement will land on.
+renderGhostQuad ∷ EngineEnv → Word32 → CameraFacing → Int
+                → IO (V.Vector SortableQuad)
+renderGhostQuad env solarSlot facing zSlice = do
     mGhost ← readIORef (buildingGhostRef env)
     case mGhost of
         Nothing → return V.empty
@@ -322,7 +334,8 @@ renderGhostQuad env facing zSlice = do
                                             , qpFlags     = 0
                                             , qpWorldUV   = wuv
                                             }
-                            in return $ V.singleton SortableQuad
+                            in return $ V.singleton
+                                $ setQuadSolarPage solarSlot SortableQuad
                                 { sqSortKey = sortKey
                                 , sqV0      = v0
                                 , sqV1      = v1

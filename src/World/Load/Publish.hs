@@ -21,6 +21,7 @@ module World.Load.Publish
     , resetTransientState
     ) where
 
+import Engine.Graphics.Solar (maxSolarPages)
 import UPrelude
 import Engine.Core.Capability.WorldSim (toWorldSimCapability)
 import qualified Data.HashMap.Strict as HM
@@ -215,7 +216,23 @@ publishStagedSession env logger requestId staged = do
     -- matching resolveActiveWorld's "first visible wins" rule: a load
     -- must always make its own primary page active, exactly like a
     -- fresh world.show would.
-    let wantVisible = dedupPageIds (ssActivePage staged : ssVisiblePages staged)
+    --
+    -- Truncated to the visible-page limit (#1869) BEFORE the loop, not
+    -- left to handleWorldShowCommand's own refusal: the loop shows in
+    -- reverse so the primary lands at the head, which means the primary
+    -- is shown LAST and a refusal at the limit would drop precisely the
+    -- page a load must always make active. 'ssActivePage' heads
+    -- 'wantVisible', so taking a prefix always keeps it. No save written
+    -- by this engine can exceed the limit, since every entry got there
+    -- through a show that enforced it.
+    let allWanted = dedupPageIds (ssActivePage staged : ssVisiblePages staged)
+        wantVisible = take maxSolarPages allWanted
+    when (length allWanted > length wantVisible) $
+        logWarn logger CatWorld $
+            "Restoring only " <> tshow (length wantVisible) <> " of "
+            <> tshow (length allWanted)
+            <> " saved visible worlds: the most one frame can light "
+            <> "individually"
     forM_ (reverse wantVisible) $ \pid →
         handleWorldShowCommand (toWorldSimCapability env) logger pid
 
