@@ -309,3 +309,208 @@ asset_units:
             - "assets/textures/units/nomad_primitive/animations/injured_attack_quick_unarmed/north/frame_002.png"
             - "assets/textures/units/nomad_primitive/animations/injured_attack_quick_unarmed/north/frame_003.png"
             - "assets/textures/units/nomad_primitive/animations/injured_attack_quick_unarmed/north/frame_004.png"
+      idle:
+        fps: 6
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/nomad_primitive/animations/idle/south/frame_000.png"
+            - "assets/textures/units/nomad_primitive/animations/idle/south/frame_001.png"
+            - "assets/textures/units/nomad_primitive/animations/idle/south/frame_002.png"
+            - "assets/textures/units/nomad_primitive/animations/idle/south/frame_003.png"
+            - "assets/textures/units/nomad_primitive/animations/idle/south/frame_004.png"
+            - "assets/textures/units/nomad_primitive/animations/idle/south/frame_005.png"
+            - "assets/textures/units/nomad_primitive/animations/idle/south/frame_006.png"
+            - "assets/textures/units/nomad_primitive/animations/idle/south/frame_007.png"
+          south-east:
+            - "assets/textures/units/nomad_primitive/animations/idle/south-east/frame_000.png"
+            - "assets/textures/units/nomad_primitive/animations/idle/south-east/frame_001.png"
+            - "assets/textures/units/nomad_primitive/animations/idle/south-east/frame_002.png"
+            - "assets/textures/units/nomad_primitive/animations/idle/south-east/frame_003.png"
+            - "assets/textures/units/nomad_primitive/animations/idle/south-east/frame_004.png"
+            - "assets/textures/units/nomad_primitive/animations/idle/south-east/frame_005.png"
+            - "assets/textures/units/nomad_primitive/animations/idle/south-east/frame_006.png"
+            - "assets/textures/units/nomad_primitive/animations/idle/south-east/frame_007.png"
+          east:
+            - "assets/textures/units/nomad_primitive/animations/idle/east/frame_000.png"
+            - "assets/textures/units/nomad_primitive/animations/idle/east/frame_001.png"
+            - "assets/textures/units/nomad_primitive/animations/idle/east/frame_002.png"
+            - "assets/textures/units/nomad_primitive/animations/idle/east/frame_003.png"
+            - "assets/textures/units/nomad_primitive/animations/idle/east/frame_004.png"
+            - "assets/textures/units/nomad_primitive/animations/idle/east/frame_005.png"
+            - "assets/textures/units/nomad_primitive/animations/idle/east/frame_006.png"
+            - "assets/textures/units/nomad_primitive/animations/idle/east/frame_007.png"
+          north-east:
+            - "assets/textures/units/nomad_primitive/animations/idle/north-east/frame_000.png"
+            - "assets/textures/units/nomad_primitive/animations/idle/north-east/frame_001.png"
+            - "assets/textures/units/nomad_primitive/animations/idle/north-east/frame_002.png"
+            - "assets/textures/units/nomad_primitive/animations/idle/north-east/frame_003.png"
+            - "assets/textures/units/nomad_primitive/animations/idle/north-east/frame_004.png"
+            - "assets/textures/units/nomad_primitive/animations/idle/north-east/frame_005.png"
+            - "assets/textures/units/nomad_primitive/animations/idle/north-east/frame_006.png"
+            - "assets/textures/units/nomad_primitive/animations/idle/north-east/frame_007.png"
+          north:
+            - "assets/textures/units/nomad_primitive/animations/idle/north/frame_000.png"
+            - "assets/textures/units/nomad_primitive/animations/idle/north/frame_001.png"
+            - "assets/textures/units/nomad_primitive/animations/idle/north/frame_002.png"
+            - "assets/textures/units/nomad_primitive/animations/idle/north/frame_003.png"
+            - "assets/textures/units/nomad_primitive/animations/idle/north/frame_004.png"
+            - "assets/textures/units/nomad_primitive/animations/idle/north/frame_005.png"
+            - "assets/textures/units/nomad_primitive/animations/idle/north/frame_006.png"
+            - "assets/textures/units/nomad_primitive/animations/idle/north/frame_007.png"
+      walk:
+        fps: 8
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/nomad_primitive/animations/walk/south/frame_000.png"
+            - "assets/textures/units/nomad_primitive/animations/walk/south/frame_001.png"
+            - "assets/textures/units/nomad_primitive/animations/walk/south/frame_002.png"
+            - "assets/textures/units/nomad_primitive/animations/walk/south/frame_003.png"
+            - "assets/textures/units/nomad_primitive/animations/walk/south/frame_004.png"
+            - "assets/textures/units/nomad_primitive/animations/walk/south/frame_005.png"
+            - "assets/textures/units/nomad_primitive/animations/walk/south/frame_006.png"
+            - "assets/textures/units/nomad_primitive/animations/walk/south/frame_007.png"
+          south-east:
+            - "assets/textures/units/nomad_primitive/animations/walk/south-east/frame_000.png"
+            - "assets/textures/units/nomad_primitive/animations/walk/south-east/frame_001.png"
+            - "assets/textures/units/nomad_primitive/animations/walk/south-east/frame_002.png"
+            - "assets/textures/units/nomad_primitive/animations/walk/south-east/frame_003.png"
+            - "assets/textures/units/nomad_primitive/animations/walk/south-east/frame_004.png"
+            - "assets/textures/units/nomad_primitive/animations/walk/south-east/frame_005.png"
+            - "assets/textures/units/nomad_primitive/animations/walk/south-east/frame_006.png"
+            - "assets/textures/units/nomad_primitive/animations/walk/south-east/frame_007.png"
+          east:
+            - "assets/textures/units/nomad_primitive/animations/walk/east/frame_000.png"
+            - "assets/textures/units/nomad_primitive/animations/walk/east/frame_001.png"
+            - "assets/textures/units/nomad_primitive/animations/walk/east/frame_002.png"
+            - "assets/textures/units/nomad_primitive/animations/walk/east/frame_003.png"
+            - "assets/textures/units/nomad_primitive/animations/walk/east/frame_004.png"
+            - "assets/textures/units/nomad_primitive/animations/walk/east/frame_005.png"
+            - "assets/textures/units/nomad_primitive/animations/walk/east/frame_006.png"
+            - "assets/textures/units/nomad_primitive/animations/walk/east/frame_007.png"
+          north-east:
+            - "assets/textures/units/nomad_primitive/animations/walk/north-east/frame_000.png"
+            - "assets/textures/units/nomad_primitive/animations/walk/north-east/frame_001.png"
+            - "assets/textures/units/nomad_primitive/animations/walk/north-east/frame_002.png"
+            - "assets/textures/units/nomad_primitive/animations/walk/north-east/frame_003.png"
+            - "assets/textures/units/nomad_primitive/animations/walk/north-east/frame_004.png"
+            - "assets/textures/units/nomad_primitive/animations/walk/north-east/frame_005.png"
+            - "assets/textures/units/nomad_primitive/animations/walk/north-east/frame_006.png"
+            - "assets/textures/units/nomad_primitive/animations/walk/north-east/frame_007.png"
+          north:
+            - "assets/textures/units/nomad_primitive/animations/walk/north/frame_000.png"
+            - "assets/textures/units/nomad_primitive/animations/walk/north/frame_001.png"
+            - "assets/textures/units/nomad_primitive/animations/walk/north/frame_002.png"
+            - "assets/textures/units/nomad_primitive/animations/walk/north/frame_003.png"
+            - "assets/textures/units/nomad_primitive/animations/walk/north/frame_004.png"
+            - "assets/textures/units/nomad_primitive/animations/walk/north/frame_005.png"
+            - "assets/textures/units/nomad_primitive/animations/walk/north/frame_006.png"
+            - "assets/textures/units/nomad_primitive/animations/walk/north/frame_007.png"
+      run:
+        fps: 12
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/nomad_primitive/animations/run/south/frame_000.png"
+            - "assets/textures/units/nomad_primitive/animations/run/south/frame_001.png"
+            - "assets/textures/units/nomad_primitive/animations/run/south/frame_002.png"
+            - "assets/textures/units/nomad_primitive/animations/run/south/frame_003.png"
+            - "assets/textures/units/nomad_primitive/animations/run/south/frame_004.png"
+            - "assets/textures/units/nomad_primitive/animations/run/south/frame_005.png"
+            - "assets/textures/units/nomad_primitive/animations/run/south/frame_006.png"
+            - "assets/textures/units/nomad_primitive/animations/run/south/frame_007.png"
+          south-east:
+            - "assets/textures/units/nomad_primitive/animations/run/south-east/frame_000.png"
+            - "assets/textures/units/nomad_primitive/animations/run/south-east/frame_001.png"
+            - "assets/textures/units/nomad_primitive/animations/run/south-east/frame_002.png"
+            - "assets/textures/units/nomad_primitive/animations/run/south-east/frame_003.png"
+            - "assets/textures/units/nomad_primitive/animations/run/south-east/frame_004.png"
+            - "assets/textures/units/nomad_primitive/animations/run/south-east/frame_005.png"
+            - "assets/textures/units/nomad_primitive/animations/run/south-east/frame_006.png"
+            - "assets/textures/units/nomad_primitive/animations/run/south-east/frame_007.png"
+          east:
+            - "assets/textures/units/nomad_primitive/animations/run/east/frame_000.png"
+            - "assets/textures/units/nomad_primitive/animations/run/east/frame_001.png"
+            - "assets/textures/units/nomad_primitive/animations/run/east/frame_002.png"
+            - "assets/textures/units/nomad_primitive/animations/run/east/frame_003.png"
+            - "assets/textures/units/nomad_primitive/animations/run/east/frame_004.png"
+            - "assets/textures/units/nomad_primitive/animations/run/east/frame_005.png"
+            - "assets/textures/units/nomad_primitive/animations/run/east/frame_006.png"
+            - "assets/textures/units/nomad_primitive/animations/run/east/frame_007.png"
+          north-east:
+            - "assets/textures/units/nomad_primitive/animations/run/north-east/frame_000.png"
+            - "assets/textures/units/nomad_primitive/animations/run/north-east/frame_001.png"
+            - "assets/textures/units/nomad_primitive/animations/run/north-east/frame_002.png"
+            - "assets/textures/units/nomad_primitive/animations/run/north-east/frame_003.png"
+            - "assets/textures/units/nomad_primitive/animations/run/north-east/frame_004.png"
+            - "assets/textures/units/nomad_primitive/animations/run/north-east/frame_005.png"
+            - "assets/textures/units/nomad_primitive/animations/run/north-east/frame_006.png"
+            - "assets/textures/units/nomad_primitive/animations/run/north-east/frame_007.png"
+          north:
+            - "assets/textures/units/nomad_primitive/animations/run/north/frame_000.png"
+            - "assets/textures/units/nomad_primitive/animations/run/north/frame_001.png"
+            - "assets/textures/units/nomad_primitive/animations/run/north/frame_002.png"
+            - "assets/textures/units/nomad_primitive/animations/run/north/frame_003.png"
+            - "assets/textures/units/nomad_primitive/animations/run/north/frame_004.png"
+            - "assets/textures/units/nomad_primitive/animations/run/north/frame_005.png"
+            - "assets/textures/units/nomad_primitive/animations/run/north/frame_006.png"
+            - "assets/textures/units/nomad_primitive/animations/run/north/frame_007.png"
+      combat_idle_unarmed:
+        fps: 8
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/nomad_primitive/animations/combat_idle_unarmed/south/frame_000.png"
+            - "assets/textures/units/nomad_primitive/animations/combat_idle_unarmed/south/frame_001.png"
+            - "assets/textures/units/nomad_primitive/animations/combat_idle_unarmed/south/frame_002.png"
+            - "assets/textures/units/nomad_primitive/animations/combat_idle_unarmed/south/frame_003.png"
+            - "assets/textures/units/nomad_primitive/animations/combat_idle_unarmed/south/frame_004.png"
+            - "assets/textures/units/nomad_primitive/animations/combat_idle_unarmed/south/frame_005.png"
+            - "assets/textures/units/nomad_primitive/animations/combat_idle_unarmed/south/frame_006.png"
+            - "assets/textures/units/nomad_primitive/animations/combat_idle_unarmed/south/frame_007.png"
+            - "assets/textures/units/nomad_primitive/animations/combat_idle_unarmed/south/frame_008.png"
+          south-east:
+            - "assets/textures/units/nomad_primitive/animations/combat_idle_unarmed/south-east/frame_000.png"
+            - "assets/textures/units/nomad_primitive/animations/combat_idle_unarmed/south-east/frame_001.png"
+            - "assets/textures/units/nomad_primitive/animations/combat_idle_unarmed/south-east/frame_002.png"
+            - "assets/textures/units/nomad_primitive/animations/combat_idle_unarmed/south-east/frame_003.png"
+            - "assets/textures/units/nomad_primitive/animations/combat_idle_unarmed/south-east/frame_004.png"
+            - "assets/textures/units/nomad_primitive/animations/combat_idle_unarmed/south-east/frame_005.png"
+            - "assets/textures/units/nomad_primitive/animations/combat_idle_unarmed/south-east/frame_006.png"
+            - "assets/textures/units/nomad_primitive/animations/combat_idle_unarmed/south-east/frame_007.png"
+            - "assets/textures/units/nomad_primitive/animations/combat_idle_unarmed/south-east/frame_008.png"
+          east:
+            - "assets/textures/units/nomad_primitive/animations/combat_idle_unarmed/east/frame_000.png"
+            - "assets/textures/units/nomad_primitive/animations/combat_idle_unarmed/east/frame_001.png"
+            - "assets/textures/units/nomad_primitive/animations/combat_idle_unarmed/east/frame_002.png"
+            - "assets/textures/units/nomad_primitive/animations/combat_idle_unarmed/east/frame_003.png"
+            - "assets/textures/units/nomad_primitive/animations/combat_idle_unarmed/east/frame_004.png"
+            - "assets/textures/units/nomad_primitive/animations/combat_idle_unarmed/east/frame_005.png"
+            - "assets/textures/units/nomad_primitive/animations/combat_idle_unarmed/east/frame_006.png"
+            - "assets/textures/units/nomad_primitive/animations/combat_idle_unarmed/east/frame_007.png"
+            - "assets/textures/units/nomad_primitive/animations/combat_idle_unarmed/east/frame_008.png"
+          north-east:
+            - "assets/textures/units/nomad_primitive/animations/combat_idle_unarmed/north-east/frame_000.png"
+            - "assets/textures/units/nomad_primitive/animations/combat_idle_unarmed/north-east/frame_001.png"
+            - "assets/textures/units/nomad_primitive/animations/combat_idle_unarmed/north-east/frame_002.png"
+            - "assets/textures/units/nomad_primitive/animations/combat_idle_unarmed/north-east/frame_003.png"
+            - "assets/textures/units/nomad_primitive/animations/combat_idle_unarmed/north-east/frame_004.png"
+            - "assets/textures/units/nomad_primitive/animations/combat_idle_unarmed/north-east/frame_005.png"
+            - "assets/textures/units/nomad_primitive/animations/combat_idle_unarmed/north-east/frame_006.png"
+            - "assets/textures/units/nomad_primitive/animations/combat_idle_unarmed/north-east/frame_007.png"
+            - "assets/textures/units/nomad_primitive/animations/combat_idle_unarmed/north-east/frame_008.png"
+          north:
+            - "assets/textures/units/nomad_primitive/animations/combat_idle_unarmed/north/frame_000.png"
+            - "assets/textures/units/nomad_primitive/animations/combat_idle_unarmed/north/frame_001.png"
+            - "assets/textures/units/nomad_primitive/animations/combat_idle_unarmed/north/frame_002.png"
+            - "assets/textures/units/nomad_primitive/animations/combat_idle_unarmed/north/frame_003.png"
+            - "assets/textures/units/nomad_primitive/animations/combat_idle_unarmed/north/frame_004.png"
+            - "assets/textures/units/nomad_primitive/animations/combat_idle_unarmed/north/frame_005.png"
+            - "assets/textures/units/nomad_primitive/animations/combat_idle_unarmed/north/frame_006.png"
+            - "assets/textures/units/nomad_primitive/animations/combat_idle_unarmed/north/frame_007.png"
+            - "assets/textures/units/nomad_primitive/animations/combat_idle_unarmed/north/frame_008.png"
