@@ -8,13 +8,13 @@ PR #262's cursor teardown, #257's arena editor teardown, #256's placement teardo
 
 ## Status
 
-- [ ] PRR-1. Zoom-map clicks still act on invisible world entities
-- [ ] PRR-2. Deterministic baseline hashes are recorded but never enforced
-- [ ] PRR-3. FLOATING_LAVA measures depth rather than floating containment
+- [x] PRR-1. Zoom-map clicks still act on invisible world entities — [#1875]
+- [x] PRR-2. Deterministic baseline hashes are recorded but never enforced — [no-issue]
+- [x] PRR-3. FLOATING_LAVA measures depth rather than floating containment — [#1876]
 
 ## 1. Zoom-map gameplay routing
 
-### PRR-1. Zoom-map clicks still act on invisible world entities
+### [#1875] PRR-1. Zoom-map clicks still act on invisible world entities
 
 > **Captured note:** Gate entity selection, context menus, drag selection, and move orders on the zoomed-in world view as well as menu/modal ownership. A click intended for the zoom map or fade band must not hit-test or command world-view entities that are not being rendered there.
 
@@ -43,7 +43,17 @@ PR #262's cursor teardown, #257's arena editor teardown, #256's placement teardo
 
 ## 2. Deterministic world-baseline identity
 
-### PRR-2. Deterministic baseline hashes are recorded but never enforced
+### [no-issue] PRR-2. Deterministic baseline hashes are recorded but never enforced
+
+> **Disposition:** No issue — fixed on master by #1361 / PR #1455 (commit
+> `78028474`, merged 2026-08-20, after this report was captured).
+> `tools/world_check.py:205-282` adds `check_baseline_hash`, called from
+> `check_seed` at `:422` at every `--runs` setting, comparing each current
+> canonical dump hash against `baseline["determinism"]["hashes"]`; a mismatch
+> FAILs naming the seed and both hashes, and the racy / no-hash shapes get an
+> explicit banner rather than a silent pass. `tools/test_audit.py:1329-1480`
+> pins it through the real `check_seed`, including a `matId` change invisible to
+> every statistic (60/60 groups pass).
 
 > **Captured note:** Compare each deterministic current dump with the canonical content hash stored in its tracked baseline. Aggregate tile, elevation, fluid, and issue counts are useful diagnostics, but they must not allow content-different deterministic output to pass without the required rebaseline.
 
@@ -70,7 +80,7 @@ PR #262's cursor teardown, #257's arena editor teardown, #256's placement teardo
 
 ## 3. Lava containment classification
 
-### PRR-3. FLOATING_LAVA measures depth rather than floating containment
+### [#1876] PRR-3. FLOATING_LAVA measures depth rather than floating containment
 
 > **Captured note:** Classify lava as floating/perched from its relationship to its pool boundary and surrounding terrain, not from fluid-column depth alone. Deep contained pools and small genuine spills must not share one count whose large threshold hides the distinction.
 

@@ -8,13 +8,13 @@ The current tilling path and its later dedicated art, wire builder, page-owned p
 
 ## Status
 
-- [ ] PRR-1. Secondary visible worlds inherit the active page's solar uniforms
-- [ ] PRR-2. Create World advertises sizes with unsafe whole-world memory bounds
-- [ ] PRR-3. Powered-workshop probe descriptions document the superseded consumer model
+- [x] PRR-1. Secondary visible worlds inherit the active page's solar uniforms — [#1869]
+- [ ] PRR-2. Create World advertises sizes with unsafe whole-world memory bounds — [deferred]: no isolated w512/w1024 residency measurement
+- [x] PRR-3. Powered-workshop probe descriptions document the superseded consumer model — [#1871]
 
 ## 1. Multi-world rendering
 
-### PRR-1. Secondary visible worlds inherit the active page's solar uniforms
+### [#1869] PRR-1. Secondary visible worlds inherit the active page's solar uniforms
 
 > **Captured note:** Preserve page identity through world rendering far enough to apply each visible page's own clock and circumference. The renderer batches every page in `wmVisible` together, but the one frame UBO carries only the head page's `sunAngle` and world size, so secondary pages with different clocks or sizes are lit as if they belonged to the active page.
 
@@ -42,7 +42,9 @@ The current tilling path and its later dedicated art, wire builder, page-owned p
 
 ## 2. World-generation resource bounds
 
-### PRR-2. Create World advertises sizes with unsafe whole-world memory bounds
+### [deferred] PRR-2. Create World advertises sizes with unsafe whole-world memory bounds
+
+> **Deferred:** No isolated peak-residency measurement exists above w256, so the issue cannot state which advertised sizes it gates or what threshold it gates on — the only w512 datapoint (PR #508) ran two generations concurrently and was killed at 63/64 GB. Clears when one isolated generation each at `--worldSize 512` and `--worldSize 1024` has been run on the reference machine with `+RTS -s` and its maximum residency recorded, which is the owner's scheduling call on a shared box.
 
 > **Captured note:** Give world size an explicit supported resource boundary. The normal Create World picker advertises 512 and 1024 chunks, while generation materializes quadratic whole-world bordered caches whose raw vector payload alone reaches several to tens of GiB. Reject or clearly preflight sizes beyond a measured budget, or redesign the pipeline so an ordinary menu choice cannot exhaust the host.
 
@@ -68,7 +70,7 @@ The current tilling path and its later dedicated art, wire builder, page-owned p
 
 ## 3. Probe documentation
 
-### PRR-3. Powered-workshop probe descriptions document the superseded consumer model
+### [#1871] PRR-3. Powered-workshop probe descriptions document the superseded consumer model
 
 > **Captured note:** Update the probe registry and README to describe the behavior `power_workshop_probe.py` now exercises: recipe-level `power_draw` that becomes demand only for an actively worked bill. The current summaries still call it a `requires_power` workshop consumer, a field/model that #590 deliberately superseded for crafting.
 
