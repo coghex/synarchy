@@ -14,7 +14,7 @@ Repository-wide counts were used only to establish scale and were not treated as
 
 ## Status
 
-- [ ] EA-1. Capability projections narrow visibility without enforcing ownership
+- [ ] EA-1. Capability projections narrow visibility without enforcing ownership — [deferred]: epic not yet filed from its design document
 - [ ] EA-2. Inter-thread queues have neither workload bounds nor backlog telemetry
 - [ ] EA-3. The Lua API is a large manually maintained runtime ABI
 - [ ] EA-4. Persistence discards structured information and decodes components twice
@@ -25,7 +25,9 @@ Repository-wide counts were used only to establish scale and were not treated as
 
 ## Ownership and scheduling
 
-### EA-1. Capability projections narrow visibility without enforcing ownership
+### [deferred] EA-1. Capability projections narrow visibility without enforcing ownership
+
+> **Deferred:** Approved on 2026-08-29 as an epic rather than a single issue — the mechanism is an unresolved design decision (per-role views, a read-only reference newtype, or accessor-only modules) that changes §2.1's canonical capability convention and every later slice, and it lands across thirteen records plus `tools/engine_env_capability_audit.py`. No tracker artifact exists yet: the arc goes to `/design-epic` for capture in a design document, whose `EPIC` entry is filed downstream through `/process-design-doc`. Clears when that epic exists in `coghex/synarchy`, at which point this entry takes its `[#N]`.
 
 The completed `EngineEnv` capability split materially reduces accidental field reach, but its records remain projections of publicly accessible mutable containers. They enforce which fields a consumer can name, not which operations or thread roles are permitted on those fields. Correct writer ownership and multi-field protocols therefore continue to depend on documentation, audits, and reviewer knowledge.
 
