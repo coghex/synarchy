@@ -297,8 +297,8 @@ function M.register(aiState)
     })
 
     -- The unit-AI family's TRANSIENT coordination tables (#1329): the
-    -- five coordinate claim registries plus repairClaims and
-    -- repairPriority, none of which lives in aiState and none of which
+    -- five coordinate claim registries, repairClaims/repairPriority, and
+    -- #916's three same-tick encounter overlays. None lives in aiState or
     -- is persisted. registerResetHook fires unconditionally on every
     -- load -- including a load whose envelope carries no data for this
     -- module family at all -- which is exactly the contract these need:
@@ -341,8 +341,10 @@ function M.register(aiState)
     teardown.register("unit_ai", function()
         local n = 0
         for k in pairs(aiState) do aiState[k] = nil; n = n + 1 end
+        local transient = claimsLib.resetAll()
         engine.logInfo("Unit AI: cleared " .. n
-            .. " AI state row(s) on session teardown")
+            .. " AI state row(s) and " .. transient
+            .. " transient coordination entries on session teardown")
     end)
 end
 

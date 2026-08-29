@@ -7,8 +7,8 @@ location's chunk loads, end to end:
 
   1. Visiting a `ruin_small` (#91: a partially-collapsed room) spawns
      its contents — two `ruin_common` loot-table rolls, as ground
-     items — per ruin, and NO units or buildings (units in ruins are
-     deferred by design). #921 removed the two fixed-position `radio` /
+     items — plus its persisted uniform 0..3 `nomad_primitive` encounter
+     roll per ruin, and no buildings. #921 removed the two fixed-position `radio` /
      `canteen_steel_2l` entries this used to also expect: a ruin
      guarantees NO specific item, so the only assertion left about
      WHICH items appear is that each resolves to a registered def. The
@@ -527,6 +527,7 @@ def spawn_counts(port: int) -> dict:
         counts[name] = counts.get(name, 0) + 1
     return {
         "acolyte": unit_count(port, "acolyte"),
+        "nomad_primitive": unit_count(port, "nomad_primitive"),
         "cargo_hold_S": building_count(port, "cargo_hold_S"),
         "ground_total": len(items),
         "ground_by_name": counts,
@@ -739,13 +740,22 @@ def run(args, root: str, token: str) -> int:
 
             # Content spawning has its own settle time — poll briefly
             # for the expected ground-item count.
-            # Each ruin (#91, #921): 2 loot_table rolls, both ground
-            # items; no fixed items, NO units or buildings.
+            # Each ruin (#91, #921, #916): 2 loot-table ground items and
+            # its one persisted uniform 0..3 nomad roll; no fixed items or
+            # buildings.
             want_ground = GROUND_PER_RUIN * len(ruins)
+            want_nomads = sum(int((e.get("encounter") or {}).get(
+                "rolled_count", 0)) for e in ruins)
             counts1 = {}
             for _ in range(20):
                 counts1 = spawn_counts(args.port)
-                if counts1["ground_total"] >= want_ground:
+                current = {int(e["instance_id"]): e for e in placed(args.port, "wa")}
+                rosters_ready = all(
+                    bool((current.get(int(e["instance_id"]), {}).get("encounter")
+                          or {}).get("roster_complete")) for e in ruins)
+                if (counts1["ground_total"] >= want_ground
+                        and counts1["nomad_primitive"] >= want_nomads
+                        and rosters_ready):
                     break
                 time.sleep(0.5)
             print(f"  spawned: {counts1}")
@@ -759,11 +769,54 @@ def run(args, root: str, token: str) -> int:
                     f"expected {want_ground} ground item(s), got "
                     f"{counts1['ground_total']} ({counts1['ground_by_name']})")
 
-            if counts1["acolyte"] == 0 and counts1["cargo_hold_S"] == 0:
-                print("PASS: no units or buildings spawned (out of scope for #91 ruins)")
+            current = {int(e["instance_id"]): e for e in placed(args.port, "wa")}
+            roster_errors = []
+            for ruin in ruins:
+                iid = int(ruin["instance_id"])
+                encounter = (current.get(iid, {}).get("encounter") or {})
+                rolled = int(encounter.get("rolled_count", -1))
+                occupants = encounter.get("occupants") or []
+                homes = {(o.get("home_x"), o.get("home_y"))
+                         for o in occupants}
+                bounds = current.get(iid, {}).get("bounds") or {}
+                homes_in_bounds = all(
+                    bounds.get("min_x") <= o.get("home_x") <= bounds.get("max_x")
+                    and bounds.get("min_y") <= o.get("home_y") <= bounds.get("max_y")
+                    for o in occupants)
+                if (not encounter.get("roster_complete")
+                        or len(occupants) != rolled
+                        or len(homes) != rolled
+                        or not homes_in_bounds):
+                    roster_errors.append((iid, rolled, len(occupants),
+                                          len(homes), homes_in_bounds,
+                                          encounter.get("roster_complete")))
+            if (counts1["acolyte"] == 0
+                    and counts1["nomad_primitive"] == want_nomads
+                    and counts1["cargo_hold_S"] == 0
+                    and not roster_errors):
+                print(f"PASS: persisted encounter rolls spawned exactly "
+                      f"{want_nomads} nomad(s), with complete per-ruin rosters "
+                      f"on distinct in-bounds home tiles and no unrelated "
+                      f"units/buildings")
             else:
                 failures.append(
-                    f"ruin_small spawned units/buildings it shouldn't: {counts1}")
+                    f"ruin_small encounter mismatch: expected {want_nomads} nomads "
+                    f"and complete rosters, got counts={counts1}, "
+                    f"roster_errors={roster_errors}")
+
+            action_policy = send(
+                args.port,
+                "local A=require('scripts.unit_ai_actions'); return "
+                "tostring(A.has('nomad_primitive','ruin_engage')) .. ',' .. "
+                "tostring(A.has('nomad_primitive','engage')) .. ',' .. "
+                "tostring(A.has('nomad_primitive','attack_target'))")
+            if action_policy.strip('"') == "true,false,true":
+                print("PASS: nomads acquire targets only through ruin_engage "
+                      "while retaining universal attack execution")
+            else:
+                failures.append(
+                    "nomad action inventory bypasses encounter acquisition: "
+                    f"{action_policy!r}")
 
             # #921: the ruin guarantees NOTHING specific. `radio` and
             # `canteen_steel_2l` (spawn-only starting equipment) were the
@@ -1492,8 +1545,10 @@ def run(args, root: str, token: str) -> int:
                                 f"hidden page 'sw2' — building.list() returned: {blist!r}")
                         # unit content (a KNOWN id) spawns too — the
                         # unit-kind dispatch path, moved here now that
-                        # ruin_small itself is unit-free (#91). The spawn
-                        # happened while 'sw2' was hidden; unit.list is
+                        # This fixture's fixed acolyte exercises the ordinary
+                        # unit-kind dispatch in addition to ruin_small's ranged
+                        # nomad entries. The spawn happened while 'sw2' was hidden;
+                        # unit.list is
                         # active-world-only (#377), so show sw2 to observe
                         # it — the hidden-spawn property is already proven.
                         send(args.port, "world.show('sw2'); return 'ok'")

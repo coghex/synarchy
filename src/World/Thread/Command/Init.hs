@@ -43,7 +43,8 @@ import Language.Semantic.Catalogue (conceptCataloguePath, loadCatalogue)
 import Language.Semantic.Types (catalogueErrorText)
 import Location.Types (allLocations)
 import Location.Instance
-    (buildLocationInstances, emptyLocationInstances, locationGeometryErrorText)
+    (buildLocationInstancesWithSeed, emptyLocationInstances
+    , locationGeometryErrorText)
 import Language.Naming (Namer, mkNamer)
 import World.River.Identity (timelineRiverFeatureIds)
 import World.River.Naming (buildRiverNames)
@@ -254,8 +255,9 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     -- the generation feed — and drops BOTH the overlay and the instance
     -- table together, so no wrapped or inverted box is ever written to
     -- wsGenParamsRef and the two never disagree about what was placed.
-    (overlay, instances) ← case buildLocationInstances namer locRegistry
-                                                       placedOverlay of
+    (overlay, instances) ← case buildLocationInstancesWithSeed
+                                      (wgpSeed params0) namer locRegistry
+                                      placedOverlay of
         Right built → pure (placedOverlay, built)
         Left err → do
             let msg = "Placed-location geometry is not representable — \

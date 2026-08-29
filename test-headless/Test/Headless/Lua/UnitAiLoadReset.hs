@@ -144,6 +144,7 @@ prelude = lns
     , "CONSTRUCT = require('scripts.unit_ai_construct')"
     , "require('scripts.unit_ai_farm')"
     , "REPAIR = require('scripts.unit_ai_repair')"
+    , "require('scripts.unit_ai_encounter')"
     , "AI = package.loaded['scripts.unit_ai']"
     , "CLAIMS = require('scripts.unit_ai_claims')"
     , "CORE = require('scripts.unit_ai_core')"
@@ -327,11 +328,12 @@ spec = describe "unit AI load reset (#1329)" $ do
             ]
     it "tracks every transient registry the unit-AI family owns" $
         runsOk $ prelude <> "\n" <> lns
-            [ "-- Seven: dig, chop, construct, till and plant coordinate claims, plus"
-            , "-- repairClaims and repairPriority. A new registry that forgets"
+            [ "-- Ten: dig, chop, construct, till and plant coordinate claims,"
+            , "-- repairClaims/repairPriority, and three encounter tick overlays."
+            , "-- A new registry that forgets"
             , "-- claimsLib.track() would silently survive every load, so pin the count."
-            , "assert(CLAIMS.trackedCount() == 7,"
-            , "       'expected 7 tracked registries, got ' .. CLAIMS.trackedCount())"
+            , "assert(CLAIMS.trackedCount() == 10,"
+            , "       'expected 10 tracked registries, got ' .. CLAIMS.trackedCount())"
             ]
     it "preserves same-page timeout and dead-claimant release" $
         runsOk $ prelude <> "\n" <> lns

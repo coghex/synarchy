@@ -727,6 +727,7 @@ instanceOf e lc = LocationInstance
     , liEtymology       = eeSource e
     , liLifecycle       = lc
     , liContentsSpawned = False
+    , liEncounter       = Nothing
     }
 
 riverNameOf ∷ EtyEntity → RiverName

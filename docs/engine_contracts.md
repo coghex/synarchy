@@ -1112,7 +1112,9 @@ name.
 
 ### Persistence
 
-`world-pages` v7 (v6 frozen by #1230 as
+`world-pages` v8 (v7 frozen by #916 as
+`PageCoreDTOv7`/`WorldGenParamsDTOv6`/`LocationInstancesDTOv4`/
+`LocationInstanceDTOv4`; v6 frozen by #1230 as
 `PageCoreDTOv6`/`WorldGenParamsDTOv5`/`LocationInstancesDTOv3`), with
 `PageCoreDTOv5`/`WorldGenParamsDTOv4`/`WorldIdentityDTOv2`/
 `LocationInstanceDTOv2`/`RiverNameDTOv1` frozen — every historical shape
@@ -1130,22 +1132,45 @@ this is the rest.
 An instance stores definition id, anchor, resolved absolute bounds,
 display name + optional gloss, a one-time content-spawn flag, and
 lifecycle `unknown → hinted → discovered → active → cleared → depleted`.
-`wgpLocationStamped` stays chunk-keyed (#424). Nothing drives an
-instance past `discovered`; `hinted` is deliberately unreachable but
-must NOT be deleted (the enum is positionally serialized and
-append-only).
+`wgpLocationStamped` stays chunk-keyed (#424). `hinted` is deliberately
+unreachable but must NOT be deleted (the enum is positionally serialized
+and append-only). #916's ruin encounters are the first runtime owner of
+`active` and `cleared`: first autonomous aggression activates an encounter
+(without revealing an unknown location), while first sight exposes an already
+activated ruin as `active`; a zero-occupant or death-cleared ruin is exposed as
+`cleared`.
+
+A generated `ruin_small` also stores its one-time uniform 0–3 occupant
+roll. Once content spawning completes, its exact nomad roster is durable:
+each entry carries the unit id, distinct home tile, and guard-policy state. A zero
+roll starts cleared but remains undiscovered until sight. A positive roster
+clears only when every originally assigned unit is exactly dead; collapsed,
+crawling, absent, or disengaged occupants keep it uncleared. Missing ids
+remain in the roster, while an occupant resolved on another page is a hard
+load-integrity error. Hand-stamped locations without a placed instance do
+not acquire an encounter.
 
 Queries: `world.listPlacedLocations([pageId])` (extended, not
 repurposed — `id` is still the DEFINITION id), `getLocationInstance`,
 `setLocationLifecycle`, `markLocationContentsSpawnedById`
-(`instance_id`/`lifecycle`/`name`/`contents_spawned` are the new
-fields); the coordinate-addressed `hasSpawnedLocationContents`/
-`markLocationContentsSpawned` remain compatibility wrappers resolving to
-the chunk's first instance.
+(`instance_id`/`lifecycle`/`name`/`contents_spawned` are instance
+fields, and `encounter` exposes the roll, roster-complete/death-only/
+cleared policy, activation/current-episode/feedback state, and per-occupant
+state). Encounter spawning registers the exact roster through
+`world.registerLocationEncounterOccupants`, one successful prefix at a time;
+an interrupted retry preserves that prefix and allocates only its missing
+slots. Guard AI updates persisted
+engagement/return state through `world.setLocationEncounterOccupantState` and
+the encounter-wide, once-per-episode notification state through
+`world.setLocationEncounterEpisodeState`. The coordinate-addressed
+`hasSpawnedLocationContents`/`markLocationContentsSpawned` remain
+compatibility wrappers resolving to the chunk's first instance.
 
-Persistence: `world-pages` v7, with a frozen v1 DTO whose per-chunk
-flags decode PENDING and resolve against the registry at the load path's
-content-validation stage (`resolveLegacyLocations`).
+Persistence: `world-pages` v8, with v7's pre-encounter location record
+frozen as `LocationInstanceDTOv4`; migration adds no encounter rather than
+letting current content reinterpret a materialized world. The frozen v1 DTO's
+per-chunk flags still decode PENDING and resolve against the registry at the
+load path's content-validation stage (`resolveLegacyLocations`).
 
 ---
 

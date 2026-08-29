@@ -17,6 +17,7 @@ import World.Chunk.Types (ChunkCoord(..))
 import World.Material.Id (MaterialId(..))
 import World.Material (MaterialRegistry)
 import Building.Types (BuildingId(..))
+import Unit.Types (UnitId)
 import World.Page.Types (WorldPageId(..), WorldIdentity(..))
 import World.Render.Zoom.Types (ZoomMapMode(..))
 import World.Tool.Types (ToolMode(..))
@@ -367,6 +368,23 @@ data WorldCommand
         --   lifecycle and of the chunk-keyed stamp flag (#424). The world
         --   thread is the sole owner of WorldGenParams; Lua queues this
         --   rather than mutating wsGenParamsRef directly.
+    | WorldRegisterLocationEncounterOccupants
+        !WorldPageId !LocationInstanceId ![(UnitId, (Float, Float))]
+        -- ^ Persist the exact unit ids and spawn homes allocated for one
+        --   placed location's ranged encounter. The world queue orders this
+        --   before the matching contents-spawn marker, and the instance
+        --   mutation is idempotent once the complete roster is installed.
+    | WorldSetLocationEncounterOccupantState
+        !WorldPageId !LocationInstanceId !UnitId !Bool !Bool
+        -- ^ worldId, location instance id, occupant id, engaged, returning.
+        --   Mirrors the guard's durable participation/return state into the
+        --   placed instance independently of runtime-unit resolution.
+    | WorldSetLocationEncounterEpisodeState
+        !WorldPageId !LocationInstanceId !Bool !Bool !Bool
+        -- ^ worldId, location instance id, episode active,
+        --   aggression-announced, disengage-announced. The notice flags are
+        --   encounter-wide so several guards joining one episode cannot
+        --   produce one event each; activation also drives visible lifecycle.
     | WorldSetLocationLifecycle WorldPageId LocationInstanceId LocationLifecycle
         -- ^ worldId, location instance id, requested lifecycle state
         --   (#911). Applied only when it moves the instance STRICTLY

@@ -1308,6 +1308,8 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.TutorialEvaluation
                    Test.Headless.Lua.UnitAiLocations
                    Test.Headless.Lua.UnitAiHold
+                   Test.Headless.Lua.UnitAiCombatMove
+                   Test.Headless.Lua.UnitAiEncounter
                    Test.Headless.Lua.UnitAiStall
                    Test.Headless.Lua.UnitAiHarvest
                    Test.Headless.Lua.UnitAiLogisticsTargets

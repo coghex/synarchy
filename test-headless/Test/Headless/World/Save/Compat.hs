@@ -63,7 +63,8 @@ import Location.Types (emptyLocationRegistry)
 import Location.Bounds (AbsBounds(..))
 import World.Chunk.Types (ChunkCoord(..))
 import Location.Instance
-    ( LocationInstance(..), LocationInstances(..), LocationInstanceId(..)
+    ( LocationEncounter(..), LocationEncounterOccupant(..)
+    , LocationInstance(..), LocationInstances(..), LocationInstanceId(..)
     , LocationLifecycle(..), instancesToList )
 import World.Save.Snapshot
     (SessionSnapshot(..), PageSnapshot(..), LiveCameraSnapshot(..))
@@ -78,12 +79,15 @@ import World.Save.Component.Page
     , toWorldGenParamsDTOv4
     , PageCoreDTOv5(..), WorldPagesDTOv5(..)
     , PageCoreDTOv6(..), WorldPagesDTOv6(..)
+    , PageCoreDTOv7(..), WorldPagesDTOv7(..)
     , WorldGenParamsDTOv5(..), toWorldGenParamsDTOv5
+    , toWorldGenParamsDTOv6
     , WorldPages(..), WorldIdentityDTO(..), WorldIdentityDTOv1(..)
     , WorldIdentityDTOv2(..)
     , LanguageProvenanceDTO(..), toEtymologySourceDTO, basePageSnapshots
     , migrateWorldPagesV1, migrateWorldPagesV2, migrateWorldPagesV3
-    , migrateWorldPagesV4, migrateWorldPagesV5, migrateWorldPagesV6 )
+    , migrateWorldPagesV4, migrateWorldPagesV5, migrateWorldPagesV6
+    , migrateWorldPagesV7 )
 import World.Save.Component.WorldGen
     ( LocationInstanceDTOv3(..), LocationInstancesDTOv3(..)
     , toLocationInstancesDTOv3, toRiverNamesDTO )
@@ -802,7 +806,7 @@ spec = do
                                             (GeneratorVersion 1))
 
         it "a frozen v6 page core carrying a NONZERO discovery margin \
-           \migrates to v7 preserving every other instance field \
+           \migrates through the canonical value preserving every other instance field \
            \EXACTLY -- allocator, id, definition, chunk, anchor, bounds, \
            \name, gloss, etymology, lifecycle and contents-spawned -- \
            \while the margin itself has no live counterpart left to \
@@ -858,6 +862,19 @@ spec = do
                     map (rvnEtymology ∘ snd) (riversOf pages "legacy_page")
                         `shouldBe` [Just ashenRiverSource]
 
+        it "a frozen pre-#916 v7 page preserves every stored location \
+           \field and gains NO encounter during the v7-to-v8 migration" $ do
+            let dto = WorldPagesDTOv7 [legacyPageCoreV7]
+            case S.decode (S.encode dto) ∷ Either String WorldPagesDTOv7 of
+                Left err → expectationFailure err
+                Right dto' → do
+                    let pages = migrateWorldPagesV7 dto'
+                        insts = instancesOf pages "legacy_page"
+                    insts `shouldBe` HM.elems (lisById richInstances)
+                    map liEncounter insts `shouldBe` [Nothing]
+                    map (lisNextId ∘ wgpLocationInstances ∘ pgsGenParams)
+                        (HM.elems (wpBase pages)) `shouldBe` [7]
+
         it "a frozen v5 page core comes back with NO etymology source on \
            \its page identity, its location, or its river, while every \
            \name and gloss it stored survives EXACTLY -- a save written \
@@ -893,7 +910,7 @@ spec = do
                                             (LangSeed 0xABCDEF0123456789)
                                             (GeneratorVersion 1))
 
-        it "the CURRENT v7 page core round-trips an etymology source on \
+        it "the CURRENT v8 page core round-trips an etymology source on \
            \its page identity, its location, AND its river -- so the v5 \
            \absences above are real decode outcomes, not fields nothing \
            \ever writes" $ do
@@ -909,7 +926,7 @@ spec = do
                     map (rvnEtymology ∘ snd) (riversOf pages "legacy_page")
                         `shouldBe` [Just ashenRiverSource]
 
-        it "the CURRENT v7 page core round-trips a river's name AND gloss, \
+        it "the CURRENT v8 page core round-trips a river's name AND gloss, \
            \keyed by its feature id -- so the v4 absence above is a real \
            \decode outcome, not a table that is always empty" $ do
             let dto = WorldPagesDTO [currentPageCoreRivers]
@@ -922,7 +939,7 @@ spec = do
                                            (Just "Ashen River")
                                            (Just ashenRiverSource)) ]
 
-        it "the CURRENT v7 page core round-trips a location's name AND \
+        it "the CURRENT v8 page core round-trips a location's name AND \
            \gloss -- so the v3 absence above is a real decode outcome, \
            \not a field that is always Nothing" $ do
             let dto = WorldPagesDTO [currentPageCoreNamed]
@@ -934,7 +951,19 @@ spec = do
                     map liDisplayName insts `shouldBe` ["Vashenkoro"]
                     map liGloss insts `shouldBe` [Just "Ashen Keep"]
 
-        it "the CURRENT v7 page core round-trips a present provenance -- \
+        it "the CURRENT v8 page core round-trips a complete ruin encounter \
+           \including typed occupant identity, home, policy, status and \
+           \one-shot feedback latches" $ do
+            let dto = WorldPagesDTO [currentPageCoreEncounter]
+            case S.decode (S.encode dto) ∷ Either String WorldPagesDTO of
+                Left err → expectationFailure err
+                Right dto' →
+                    map liEncounter
+                        (instancesOf (basePageSnapshots dto') "legacy_page")
+                    `shouldBe` map liEncounter
+                        (HM.elems (lisById encounterInstances))
+
+        it "the CURRENT v8 page core round-trips a present provenance -- \
            \so the two absences above are a real decode outcome, not a \
            \field that is always Nothing" $ do
             let dto = WorldPagesDTO [currentPageCore]
@@ -1586,6 +1615,7 @@ legacyNamedInstances = LocationInstances
         , liEtymology       = Nothing
         , liLifecycle       = LifecycleDiscovered
         , liContentsSpawned = True
+        , liEncounter       = Nothing
         }
     , lisPendingLegacy = Nothing
     }
@@ -1640,6 +1670,12 @@ currentPageCoreNamed = currentPageCore
         { wgpLocationInstances = namedLocationInstances }
     }
 
+currentPageCoreEncounter ∷ PageCoreDTO
+currentPageCoreEncounter = currentPageCore
+    { pcGenParams = toWorldGenParamsDTO defaultWorldGenParams
+        { wgpLocationInstances = encounterInstances }
+    }
+
 -- | #1230 fixture: one fully-populated placed location, as a
 --   @world-pages@ v6 save holds it. Every field the migration must
 --   carry across is set to something a default could not produce — a
@@ -1663,8 +1699,33 @@ richInstances = LocationInstances
         , liEtymology       = Just keepSource
         , liLifecycle       = LifecycleCleared
         , liContentsSpawned = True
+        , liEncounter       = Nothing
         }
     , lisPendingLegacy = Nothing
+    }
+
+encounterInstances ∷ LocationInstances
+encounterInstances = richInstances
+    { lisById = HM.map (\inst → inst
+        { liLifecycle = LifecycleActive
+        , liEncounter = Just LocationEncounter
+            { leRolledCount = 2
+            , leOccupants =
+                [ LocationEncounterOccupant (UnitId 41) (79.5, 111.0)
+                    True False
+                , LocationEncounterOccupant (UnitId 42) (81.0, 113.5)
+                    False True
+                ]
+            , leRosterComplete = True
+            , leDeathOnlyClearance = True
+            , leActivated = True
+            , leEpisodeActive = True
+            , leAggressionAnnounced = True
+            , leDisengageAnnounced = False
+            , leCleared = False
+            , leClearEventEmitted = False
+            }
+        }) (lisById richInstances)
     }
 
 -- | 'richInstances' encoded into the FROZEN v6 wire shape carrying a
@@ -1698,6 +1759,23 @@ legacyPageCoreV6 = PageCoreDTOv6
                                (Just (LanguageProvenanceDTO
                                           0xABCDEF0123456789 1))
                                (Just (toEtymologySourceDTO keepSource)))
+    }
+
+-- | The immediate pre-#916 current shape: identical page data over the
+--   frozen location-instance DTO with no encounter field.
+legacyPageCoreV7 ∷ PageCoreDTOv7
+legacyPageCoreV7 = PageCoreDTOv7
+    { pc7PageId = WorldPageId "legacy_page"
+    , pc7GenParams = toWorldGenParamsDTOv6 defaultWorldGenParams
+        { wgpLocationInstances = richInstances }
+    , pc7CameraX = 1, pc7CameraY = 2
+    , pc7TimeHour = 12, pc7TimeMinute = 30
+    , pc7DateYear = 1, pc7DateMonth = 2, pc7DateDay = 3
+    , pc7MapMode = ZMDefault
+    , pc7Identity = Just (WorldIdentityDTO "Legacy World"
+        (Just "an old gloss")
+        (Just (LanguageProvenanceDTO 0xABCDEF0123456789 1))
+        (Just (toEtymologySourceDTO keepSource)))
     }
 
 -- | #1104 fixture: a pre-#1104 (@world-pages@ v5) page core whose

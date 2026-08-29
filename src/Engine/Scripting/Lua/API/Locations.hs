@@ -155,6 +155,8 @@ loadLocationYamlFn core regs env backendState = do
         , lconPosition = (\p → (lypX p, lypY p)) ⊚ lycPosition c
         , lconFaction  = lycFaction c
         , lconRolls    = lycRolls c
+        , lconCountRange = (\r → (lycrMin r, lycrMax r)) ⊚ lycCountRange c
+        , lconClearance = lycClearance c
         }
     toBounds b = RelBounds
         { rbMinX = lybMinX b, rbMinY = lybMinY b
@@ -234,6 +236,18 @@ locationListDefsFn regs = do
             Lua.setfield (-2) "count"
             Lua.pushinteger (fromIntegral (lconRolls c))
             Lua.setfield (-2) "rolls"
+            case lconCountRange c of
+                Just (lo, hi) → do
+                    Lua.newtable
+                    Lua.pushinteger (fromIntegral lo)
+                    Lua.setfield (-2) "min"
+                    Lua.pushinteger (fromIntegral hi)
+                    Lua.setfield (-2) "max"
+                    Lua.setfield (-2) "count_range"
+                Nothing → return ()
+            forM_ (lconClearance c) $ \policy → do
+                Lua.pushstring (TE.encodeUtf8 policy)
+                Lua.setfield (-2) "clearance"
             case lconPosition c of
                 Just (px, py) → do
                     Lua.newtable
