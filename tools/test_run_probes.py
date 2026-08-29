@@ -211,7 +211,8 @@ _COUNT_NOUN = (
     # batch", and the process "group" a probe is reaped in.
     r"|collections?|sets?|suites?|famil(?:y|ies)|catalogues?|catalogs?"
     r"|indexe?s?|directories|directory|pools?|arrays?|bundles?|corpus(?:es)?"
-    r"|complements?)")
+    r"|complements?|manifests?|listings?|ledgers?|enumerations?|line-?ups?"
+    r"|series|rolls?|sheets?)")
 
 _REGISTRY_SUBJECT = (
     r"(?:" + _REGISTRY_NOUN + r"|registry"
@@ -3708,6 +3709,10 @@ def test_the_readme_states_no_registry_total() -> None:
             "The probe catalogue holds 93.",
             "The registry index is 93 long.",
             "A 93-entry probe list is current.",
+            "The probe manifest has 93 entries.",
+            "The probe ledger has 93 entries.",
+            "The listing of registered probes runs to 93.",
+            "The probe line-up is 93 strong.",
             "The probe tally is ninety-three.",
             "The registry holds ninety-three.",
             "The probe tally is 90+.",
@@ -3863,6 +3868,8 @@ def test_the_readme_states_no_registry_total() -> None:
             "The full probe collection has 93 members.",
             # The round-19 review's bypass, verbatim.
             "A 93-probe registry is current.",
+            # The round-20 review's bypass, verbatim.
+            "The probe manifest has 93 entries.",
             # And the original drift sentence as it really shipped, wrapped.
             "`python3 tools/run_probes.py --list` is the authoritative count\n"
             "and listing of registered probes — it's grown over time\n"
@@ -3943,6 +3950,15 @@ def test_the_readme_states_no_registry_total() -> None:
             "The runner records every attempt it dispatches in a probe "
             "batch of 4.",
             "It reaps the probe group after 2 seconds.",
+            # "sum" is not a count noun either: the section's own sentence
+            # puts it two words from a probe and sixty characters from a
+            # number, and must stay clean.
+            "Total cost is roughly the sum of each probe's own boot + "
+            "scenario time, and CI's selective gate (#530) relies on it.",
+            # A hyphenated word that merely BEGINS with a count noun is not
+            # one -- "manifest-wide" describes a path, not a total.
+            "`save_compat_migration` uses 3600 seconds because its "
+            "manifest-wide two-process path is slow.",
             # A comparison is not an opening tag, so nothing downstream of
             # it is swallowed as markup.
             "With `--jobs > 1` the spans are laid out from it instead of "
