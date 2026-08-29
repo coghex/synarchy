@@ -49,10 +49,12 @@ module Test.Headless.Structure.ArtCatalog (spec) where
 
 import UPrelude
 import Test.Hspec
-import Test.Headless.Harness.Isolation (withIsolatedResourceRoot)
+import Test.Headless.Harness.Isolation
+    (withExclusiveTempDirectory, withIsolatedResourceRoot)
 import Control.Exception (finally)
 import Data.IORef (newIORef, readIORef, writeIORef, modifyIORef')
 import Data.List (nub, sort)
+import System.FilePath ((</>))
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
 import qualified Data.Vector as V
@@ -631,6 +633,94 @@ warningSpec = describe "a failure" $ do
             \local w = engine.loadYaml('data/structure_packs/wire.yaml'); \
             \return tostring(d.pieces.floor.facemap == w.facemap)"
         shared `shouldBe` "true"
+
+    it "tells every Lua listener the diagnostic is already reported" $
+        \(env, ls) → do
+            -- The duplicate this closes: `onAssetFailed` still reaches
+            -- `scripts/world_view.lua` through `ui_manager`, and that
+            -- handler logs its own "World texture failed to load" line.
+            -- One tracked failure must still be ONE observable warning,
+            -- so the broadcast carries a fifth `reported` argument.
+            --
+            -- Observed through the REAL broadcast, by a module
+            -- registered the REAL way (`engine.loadScript`, the same
+            -- route `scripts/init_loader.lua` uses), which echoes the
+            -- flag it was handed. The echo is this fixture's own line —
+            -- the assertion separates it from the catalogue's.
+            evalDebug ls (registerFloorPack "listener_pack" "listener.png" True)
+                `shouldReturn` "true"
+            withExclusiveTempDirectory "artcatalog_listener" $ \dir → do
+                let observer = dir </> "asset_failure_observer.lua"
+                writeFile observer $ unlines
+                    [ "local M = {}"
+                    , "function M.onAssetFailed(t, h, path, reason, reported)"
+                    , "  engine.logWarn('observer ' .. tostring(path)"
+                    , "    .. ' reported=' .. tostring(reported))"
+                    , "end"
+                    , "return M" ]
+                -- Killed at the end: a loadScript'd module lives for the
+                -- session, and a lingering observer would add its line to
+                -- every later example's warning count.
+                sid ← evalDebug ls $ T.concat
+                    [ "return tostring(engine.loadScript('", T.pack observer
+                    , "', 3600.0))" ]
+                sid `shouldNotBe` "nil"
+                let isEcho = T.isInfixOf "observer "
+                    -- The logger prefixes each line with its source, so
+                    -- compare from the echo's own first word.
+                    echoes = map (snd ∘ T.breakOn "observer ")
+                           ∘ filter isEcho
+                    others = filter (not ∘ isEcho)
+                -- A registered path: the catalogue owns the diagnostic,
+                -- and Lua is told so.
+                (_, first) ← withCapturedLog env $
+                    assetFailed env ls "listener.png"
+                echoes (warningsOf first)
+                    `shouldBe` ["observer listener.png reported=true"]
+                length (others (warningsOf first)) `shouldBe` 1
+                -- A REPEAT emits no catalogue line at all, and Lua is
+                -- still told the asset is spoken for — otherwise the
+                -- suppressed duplicate comes back by the other route.
+                (_, again) ← withCapturedLog env $
+                    assetFailed env ls "listener.png"
+                echoes (warningsOf again)
+                    `shouldBe` ["observer listener.png reported=true"]
+                others (warningsOf again) `shouldBe` []
+                -- An untracked path keeps the generic engine line, and
+                -- Lua keeps its own.
+                (_, untracked) ← withCapturedLog env $
+                    assetFailed env ls "not_registered_anywhere.png"
+                echoes (warningsOf untracked) `shouldBe`
+                    ["observer not_registered_anywhere.png reported=false"]
+                length (others (warningsOf untracked)) `shouldBe` 1
+                runLua ls ("engine.killScript(" <> sid <> ");")
+
+    it "keeps world_view's readiness accounting while suppressing its \
+       \duplicate line" $ \(env, ls) → do
+        -- The production handler itself (`scripts/world_view.lua`), not
+        -- a paraphrase of it. `reported` must suppress the LINE and
+        -- nothing else: the count it advances is the gate #1690 exists
+        -- to settle, and a failure that stopped counting would stall
+        -- boot forever.
+        runLua ls "local wv = require('scripts.world_view'); \
+                  \wv.texturesNeeded = 1000; wv.texturesLoadedCount = 0; \
+                  \wv.seenHandles = {}; wv.allHandles = {};"
+        (_, quiet) ← withCapturedLog env $ runLua ls
+            "require('scripts.world_view')\
+            \  .onAssetFailed('texture', 7001, 'wv_quiet.png', 'boom', true);"
+        warningsOf quiet `shouldBe` []
+        evalDebug ls "return require('scripts.world_view').texturesLoadedCount"
+            `shouldReturn` "1"
+        (_, loud) ← withCapturedLog env $ runLua ls
+            "require('scripts.world_view')\
+            \  .onAssetFailed('texture', 7002, 'wv_loud.png', 'boom', false);"
+        case warningsOf loud of
+            [w] → ("World texture failed to load: wv_loud.png"
+                     `T.isInfixOf` w) `shouldBe` True
+            other → expectationFailure
+                ("expected world_view's own warning, got: " <> show other)
+        evalDebug ls "return require('scripts.world_view').texturesLoadedCount"
+            `shouldReturn` "2"
 
     it "keeps the generic warning for a texture no pack registered" $
         \(env, ls) → do

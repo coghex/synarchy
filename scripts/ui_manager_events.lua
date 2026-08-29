@@ -69,11 +69,15 @@ end
 -- the readiness gate they wait on and boot stalls.
 -----------------------------------------------------------
 
-function uiManager.onAssetFailed(assetType, handle, path, reason)
+-- `reported` (#1842) rides through unchanged: the engine has already
+-- logged a better-contextualised line for this asset, so a handler that
+-- would log its own must skip it. Forwarding it is not optional -- a
+-- handler that never receives it logs the duplicate.
+function uiManager.onAssetFailed(assetType, handle, path, reason, reported)
     if worldView.onAssetFailed then
-        worldView.onAssetFailed(assetType, handle, path, reason)
+        worldView.onAssetFailed(assetType, handle, path, reason, reported)
     end
     if testArena.onAssetFailed then
-        testArena.onAssetFailed(assetType, handle, path, reason)
+        testArena.onAssetFailed(assetType, handle, path, reason, reported)
     end
 end

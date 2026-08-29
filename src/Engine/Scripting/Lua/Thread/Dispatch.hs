@@ -255,11 +255,20 @@ processLuaMsg env ls stateRef msg = case msg of
         else logWarn logger CatAsset $
                 "Asset load failed (" <> assetType <> ", handle " <> tshow handle
                   <> "): " <> path <> " -- " <> reason
+    -- The fifth argument says the diagnostic is ALREADY REPORTED. Every
+    -- Lua handler still runs — a failure has to settle whatever
+    -- readiness gate is waiting on it, or boot stalls — but the ones
+    -- that log a line of their own skip it, so a tracked structure-art
+    -- failure stays at exactly one observable warning however many
+    -- modules are listening. `afrTracked`, not `afrFailure`: a repeat
+    -- for an asset already recorded emits nothing here either, and Lua
+    -- re-announcing it would be the duplicate by another route.
     broadcastToModules ls "onAssetFailed"
       [ ScriptString assetType
       , ScriptNumber (fromIntegral handle)
       , ScriptString path
       , ScriptString reason
+      , ScriptBool (afrTracked report)
       ]
   LuaCharInput fid c →
     broadcastToModules ls "onCharInput"
