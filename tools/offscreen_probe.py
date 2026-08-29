@@ -53,6 +53,12 @@ GLFW, no swapchain) and asserts the mode end to end:
 
 Needs a GPU (Vulkan device) — manual-only, never CI-gated.
 
+Every engine this probe launches writes its OWN log (#1763) — including
+the third, which restarts on the first engine's port and used to
+overwrite that long session's capture. Each path is printed when it is
+allocated and again in a closing summary naming the launch that wrote
+it.
+
 Usage: python3 tools/offscreen_probe.py [--port 9418] [--size 1280x720]
        [--skip-worldgen]
 """
@@ -61,6 +67,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import tempfile
 import time
@@ -909,13 +916,42 @@ class Engines:
     handle to whatever now holds a reused port. Registering each handle
     the moment it boots — before the fallible work that follows it — and
     dropping it again on a deliberate stop keeps the set exact.
+
+    Each launch also gets its OWN log (#1763). `probelib.boot`'s default
+    path is derived from the port and opened truncating, so the third
+    engine — which deliberately restarts on the FIRST one's port — used
+    to overwrite the capture of the long session that preceded it: the
+    loading screen, worldgen, gameplay and icon discovery, replaced by
+    the brief load-and-check that follows. Allocation happens here, in
+    the one place every launch passes through, so the count follows the
+    launches actually made rather than the three call sites (the third
+    is conditional, and `--skip-worldgen` makes two).
     """
+
+    LOG_DIR = "/tmp"
+    LOG_PREFIX = "offscreen_probe_engine"
 
     def __init__(self) -> None:
         self._live: dict[int, object] = {}
+        self._logs: list[tuple[str, int, str]] = []
 
-    def start(self, port: int, **kw) -> None:
-        self._live[port] = boot(port, **kw)
+    def _allocate_log(self, port: int, phase: str) -> str:
+        """Reserve (and announce) this launch's own log path.
+
+        Announced immediately rather than only in the closing summary:
+        `boot` calls `sys.exit` when an engine dies before READY, and a
+        failed boot is precisely the one whose log a reader wants.
+        """
+        ordinal = len(self._logs) + 1
+        slug = re.sub(r"[^a-z0-9]+", "-", phase.lower()).strip("-") or "boot"
+        path = os.path.join(self.LOG_DIR,
+                            f"{self.LOG_PREFIX}_{ordinal:02d}_{slug}.log")
+        self._logs.append((phase, port, path))
+        print(f"  engine log [{ordinal:02d}] {phase} (port {port}): {path}")
+        return path
+
+    def start(self, port: int, phase: str, **kw) -> None:
+        self._live[port] = boot(port, log=self._allocate_log(port, phase), **kw)
 
     def stop(self, port: int) -> None:
         """Deliberate shutdown; a later boot may reuse this port."""
@@ -926,6 +962,16 @@ class Engines:
     def stop_all(self) -> None:
         for port in reversed(list(self._live)):
             self.stop(port)
+
+    def report_logs(self) -> None:
+        """Name every log this run wrote, against the launch that wrote it."""
+        if not self._logs:
+            print("\nno engine was booted, so this run wrote no engine logs")
+            return
+        print(f"\nengine logs from this run ({len(self._logs)} boot"
+              f"{'' if len(self._logs) == 1 else 's'}):")
+        for ordinal, (phase, port, path) in enumerate(self._logs, start=1):
+            print(f"  {ordinal:02d}. {phase} (port {port}): {path}")
 
 
 def main() -> int:
@@ -944,11 +990,16 @@ def main() -> int:
         return _run(args, w, h, shots, engines)
     finally:
         engines.stop_all()
+        # After stop_all, and in a `finally`, so the map survives the runs
+        # that do not reach the summary at the end of `_run` — including a
+        # `boot` that exits before its engine ever printed READY.
+        engines.report_logs()
 
 
 def _run(args, w: int, h: int, shots: str, engines: Engines) -> int:
     print(f"== offscreen boot (port {args.port}, {args.size}) ==")
-    engines.start(args.port, mode=("--offscreen",),
+    engines.start(args.port, phase="main session (menu, worldgen, gameplay)",
+                  mode=("--offscreen",),
                   args=["--size", args.size], label="offscreen engine")
 
     # -- 1. real UI flow: the loading screen finishes and the menu's
@@ -986,7 +1037,8 @@ def _run(args, w: int, h: int, shots: str, engines: Engines) -> int:
     # this probe (#1571).
     port2 = args.port + 1
     print(f"== parallel second instance (port {port2}) ==")
-    engines.start(port2, mode=("--offscreen",),
+    engines.start(port2, phase="parallel second instance",
+                  mode=("--offscreen",),
                   args=["--size", args.size], label="second offscreen engine")
     menu2 = poll_until(60.0, lambda: find_widget(port2, "Create World"))
     check("second instance reaches its own menu", bool(menu2))
@@ -1047,7 +1099,8 @@ def _run(args, w: int, h: int, shots: str, engines: Engines) -> int:
     # state (not the one-off in-process view) actually round-trips.
     if icon_target:
         print("== fresh restart -> load (icon persistence, #781) ==")
-        engines.start(args.port, mode=("--offscreen",),
+        engines.start(args.port, phase="icon-reload restart",
+                      mode=("--offscreen",),
                       args=["--size", args.size],
                       label="offscreen engine (icon reload)")
         location_map_icons_reload_check(args.port, *icon_target)
