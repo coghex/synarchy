@@ -23,7 +23,19 @@ Checks:
   3. STATE thought: a unit in high pain rolls a "state"-category thought
      within one forced tick, and its mood_delta measurably moves "mood".
   4. ENVIRONMENTAL thought: with world.getAmbientAt monkey-patched to an
-     arctic reading, a unit rolls an "environmental"-category thought.
+     arctic reading, a unit rolls THE COLD THOUGHT specifically (#1759) —
+     not merely something in the "environmental" category. Four entries
+     share that category behind four independent triggers, and the day/
+     night predicates partition every non-nil sun angle, so one of them
+     is always eligible beside `cold`; asserting the category alone
+     passes on the daylight thought while no cold thought ever fired.
+     The phase therefore establishes every precondition that decides
+     which environmental entries compete (ambient, sun angle, and the
+     unit's mood, the last re-applied per roll because brain.tick drifts
+     it back between round trips) and asserts on the emitted text, the
+     identity thought.emit actually publishes. Selection itself is
+     untouched: the cold thought still has to win a normal weighted roll
+     against the day thought and the always-eligible "random" entries.
   5. State-of-mind biases selection: with a synthetic two-entry catalogue
      (one negative-valence, one positive-valence, equal base weight,
      neither triggered), a low-mood unit draws the negative entry far
@@ -42,6 +54,34 @@ import argparse, glob, socket, subprocess, sys, time
 from probelib import quit_engine, boot, send
 
 LOG = "/tmp/thought_probe_engine.log"
+
+# The exact identity phase 4 asserts on. thought.emit publishes category
+# and text only (scripts/thoughts.lua's tick) — never the catalogue
+# entry's `id` — so the text IS the identity available on the wire, and
+# this is data/thoughts.yaml's `cold_bite` verbatim.
+COLD_THOUGHT = "environmental|The cold bites at any exposed skin."
+
+# Phase 4's controlled preconditions.
+#   -15.0 C  makes `cold` eligible and `hot` not.
+#   sunAngle 0.5 is noon, so `day` is the one deterministic environmental
+#            competitor and `night` never is. The two predicates partition
+#            every non-nil angle, so one of them is ALWAYS eligible: the
+#            point is to fix WHICH one competes, not to remove it.
+#   mood 0.5 is moodBiasFactor's neutral point — every valence scores
+#            exactly 1.0 there, so no entry gets a thumb on the scale in
+#            either direction, and the value sits well inside the stable
+#            band (mental_state's STRESSED_BELOW 0.35 / EUPHORIC_ABOVE
+#            0.90) so no mental-state entries join the pool either.
+COLD_AMBIENT_C = -15.0
+NOON_SUN_ANGLE = 0.5
+PHASE4_MOOD = 0.5
+
+# The cold thought must still WIN a normal weighted roll against the day
+# thought and the four always-eligible "random" entries, so the poll runs
+# long enough for that to be a near-certainty rather than a coin flip.
+# At the weights above it takes ~8 rolls on average; the cap is only ever
+# paid on a genuine failure.
+PHASE4_ATTEMPTS = 120
 
 
 def bootstrap(port):
@@ -94,22 +134,54 @@ def main():
         n = send(P, "return require('scripts.thoughts').loadCatalogue()")
         passed &= check("catalogue has entries", int(float(n)) >= 10, n)
 
-        # A category being ELIGIBLE doesn't mean it wins any given roll —
+        # A thought being ELIGIBLE doesn't mean it wins any given roll —
         # it competes in the same weighted pool as the always-eligible
         # "random" entries (that's by design: a cold environment doesn't
         # suppress ambient thoughts, it just adds to the pool). So poll a
-        # few atomic rolls and accept the first one that lands the
-        # expected category, rather than asserting on a single roll.
-        def roll_until(uid, want_prefix, attempts=20):
+        # few atomic rolls and accept the first one `matches`, rather
+        # than asserting on a single roll.
+        #
+        # Each attempt drains the stream BEFORE forcing the tick and then
+        # keeps only the event whose target is THIS unit, so a leftover
+        # event from an earlier phase, or one another unit's background
+        # tick queued in between, can never be misread as this roll's
+        # outcome (the engine's thought stream is global, and every phase
+        # plus unit_resources' own ticking share it).
+        #
+        # `mood`, when given, is re-applied inside each roll's own chunk:
+        # a one-time assignment would not hold, because unit_resources'
+        # background update calls brain.tick between console round trips
+        # and drifts mood back toward its physiological target. A Lua
+        # chunk can't be interleaved, so pinning it here means the roll
+        # that follows sees exactly this value.
+        #
+        # Returns (hit, samples): `hit` is the matching outcome or None,
+        # and `samples` is EVERY attempt's outcome in order — including
+        # the 'NONE' of a roll that fired nothing for this unit — so an
+        # exhausted poll can report the whole sample set instead of only
+        # the last attempt.
+        def roll_until(uid, matches, attempts=20, mood=None):
+            pin = "" if mood is None else f"unit.setStat({uid},'mood',{mood}); "
+            samples = []
             for _ in range(attempts):
                 r = send(P,
+                    f"thought.drainEvents(); "
                     f"unit.setStat({uid},'thought_next_at',0); "
+                    f"{pin}"
                     f"require('scripts.thoughts').tick({uid}, unit.getInfo({uid}), 0.2); "
-                    f"local e=thought.drainEvents(); if #e<1 then return 'NONE' end; "
-                    f"return e[1].kind..'|'..e[1].payload.text")
-                if r.startswith(want_prefix):
-                    return r
-            return r
+                    f"local e=thought.drainEvents(); "
+                    f"for _,ev in ipairs(e) do if ev.target=={uid} then "
+                    f"return ev.kind..'|'..ev.payload.text end end; "
+                    f"return 'NONE'")
+                samples.append(r)
+                if matches(r):
+                    return r, samples
+            return None, samples
+
+        def report_samples(samples):
+            print(f"  polled {len(samples)} roll(s), every outcome in order:")
+            for i, s in enumerate(samples, 1):
+                print(f"    {i:3d}. {s}")
 
         print("3. STATE thought: high pain -> 'state' category + mood moves")
         uid = int(float(send(P, "local u=unit.spawn('acolyte',1,0); return u")))
@@ -119,22 +191,65 @@ def main():
         for part in ("l_forearm", "r_forearm", "l_thigh", "r_thigh", "torso"):
             send(P, f"return unit.injure({uid},'{part}','slash',0.9,0.0)")
         moodBefore = float(send(P, f"return require('scripts.brain').mood({uid})"))
-        r = roll_until(uid, "state|")
+        # Pass criterion unchanged (the category is the claim here); only
+        # the failure REPORTING improves, and no mood is pinned — this
+        # phase asserts that mood MOVES.
+        hit, samples = roll_until(uid, lambda r: r.startswith("state|"))
         moodAfter = float(send(P, f"return require('scripts.brain').mood({uid})"))
-        print(f"  fired: {r}  mood {moodBefore:.4f} -> {moodAfter:.4f}")
-        passed &= check("fired a 'state' thought", r.startswith("state|"), r)
+        print(f"  fired: {hit or 'NONE'}  mood {moodBefore:.4f} -> {moodAfter:.4f}")
+        if hit is None:
+            report_samples(samples)
+        passed &= check("fired a 'state' thought", hit is not None,
+                        hit or f"{len(samples)} rolls, none in the 'state' category")
         passed &= check("mood measurably moved", abs(moodAfter - moodBefore) > 0.005,
                          f"{moodBefore:.4f} -> {moodAfter:.4f}")
 
-        print("4. ENVIRONMENTAL thought: arctic ambient -> 'environmental' category")
+        print("4. ENVIRONMENTAL thought: arctic ambient -> the COLD thought")
         uid2 = int(float(send(P, "local u=unit.spawn('acolyte',3,0); return u")))
         time.sleep(0.8)
+        # Establish the conditions that decide which environmental
+        # entries compete, so the outcome rides neither the arena's
+        # incidental time of day nor the unit's live mood (see the
+        # COLD_AMBIENT_C / NOON_SUN_ANGLE / PHASE4_MOOD notes above).
+        # Nothing here edits the catalogue, a trigger, a weight, a
+        # valence or the mood-bias curve: the cold thought still wins by
+        # ordinary weighted selection or not at all.
         send(P, "_ORIG_AMBIENT = world.getAmbientAt; "
-                "world.getAmbientAt = function(gx,gy) return -15.0 end; return 'ok'")
-        r = roll_until(uid2, "environmental|")
-        send(P, "world.getAmbientAt = _ORIG_AMBIENT; return 'ok'")
-        print(f"  fired: {r}")
-        passed &= check("fired an 'environmental' thought", r.startswith("environmental|"), r)
+                "_ORIG_SUNANGLE = world.getSunAngleAt; "
+                f"world.getAmbientAt = function(gx,gy) return {COLD_AMBIENT_C} end; "
+                f"world.getSunAngleAt = function(gx,gy) return {NOON_SUN_ANGLE} end; "
+                "return 'ok'")
+        try:
+            hit, samples = roll_until(uid2, lambda r: r == COLD_THOUGHT,
+                                      attempts=PHASE4_ATTEMPTS, mood=PHASE4_MOOD)
+            # Read the preconditions back through the very predicates
+            # selection uses, while the patches are still installed. The
+            # sample list alone cannot separate "cold was never eligible"
+            # from "cold was eligible and lost every roll" — identical
+            # non-cold samples come out of both — so eligibility is
+            # reported from the controlled inputs instead of inferred.
+            ctx = send(P,
+                f"local i=unit.getInfo({uid2}); "
+                f"local th=require('scripts.thoughts'); "
+                f"local a=world.getAmbientAt(i.gridX,i.gridY); "
+                f"local s=world.getSunAngleAt(i.gridX,i.gridY); "
+                f"return 'ambient='..tostring(a)..' sunAngle='..tostring(s)"
+                f"..' coldEligible='..tostring(th.TRIGGERS.cold({{ambient=a}}))"
+                f"..' dayEligible='..tostring(th.TRIGGERS.day({{sunAngle=s}}))"
+                f"..' nightEligible='..tostring(th.TRIGGERS.night({{sunAngle=s}}))")
+        finally:
+            # Restore before phase 5, which reuses this same Lua process.
+            send(P, "world.getAmbientAt = _ORIG_AMBIENT; "
+                    "world.getSunAngleAt = _ORIG_SUNANGLE; return 'ok'")
+        print(f"  fired: {hit or 'NONE'}")
+        print(f"  preconditions: pinnedMood={PHASE4_MOOD} {ctx}")
+        if hit is None:
+            report_samples(samples)
+        passed &= check("fired the COLD environmental thought", hit is not None,
+                        hit or f"{len(samples)} rolls, none cold; {ctx}")
+        r = send(P, "return tostring(world.getAmbientAt == _ORIG_AMBIENT)"
+                    "..'|'..tostring(world.getSunAngleAt == _ORIG_SUNANGLE)")
+        passed &= check("phase 4's world patches are restored", r == "true|true", r)
 
         print("5. state of mind biases selection (mood-weighted valence)")
         send(P, "require('scripts.thoughts').catalogue = {"
