@@ -293,7 +293,8 @@ end
 
 -- Opts THIS press into box-selection's visual/commit behavior — called
 -- only by init_mouse.lua's "no tool claimed it" unit/item/building
--- select-or-deselect fallback (#730 review round 6), never by the
+-- select-or-deselect fallback (#730 review round 6, which #1875 moved
+-- to init_mouse_entity.lua behind its zoom-band gate), never by the
 -- debug/build/mine/chop/till/plant tool-claim branches or the
 -- gameplay-inactive deadclick, which have no box-select meaning.
 function dragSelect.armBoxSelect()
