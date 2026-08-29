@@ -164,17 +164,17 @@ _APPROX_SUFFIX = (
     r"(?:\s*\+|[-\s]plus\b|-?ish\b"
     r"|\s+or\s+(?:more|so|thereabouts)\b)")
 
+# The head of an attributive compound that counts the registry itself:
+# "a 93-PROBE registry", "a 93-ENTRY list". Naming the head is what keeps
+# "900-second" out -- a second is not something the registry holds.
+_COUNTED_HEAD = r"(?:probe|entry|entries|script|member|row|slot)s?"
+
 # A number standing on its OWN, which is what a count is. The lookarounds
 # drop numbers glued to something else: an identifier or hyphenated compound
 # ("900-second default", "utf-8") and a term of an expression ("`--port + 1`",
 # "base + N - 1"). Those are the two shapes this section's real numbers take
 # beside a registry noun. An explicit approximate suffix is the exception --
 # it is punctuation ABOUT the count, not a different thing being counted.
-# The head of an attributive compound that counts the registry itself:
-# "a 93-PROBE registry", "a 93-ENTRY list". Naming the head is what keeps
-# "900-second" out -- a second is not something the registry holds.
-_COUNTED_HEAD = r"(?:probe|entry|entries|script|member|row|slot)s?"
-
 _STANDALONE_NUMBER = (
     r"(?<![\w+*/-])(?:"
     r"(?:\d+|" + _LARGE_NUMBER_WORD + r")" + _APPROX_SUFFIX +
@@ -216,8 +216,13 @@ _COUNT_NOUN = (
 
 _REGISTRY_SUBJECT = (
     r"(?:" + _REGISTRY_NOUN + r"|registry"
-    # "probe tally", "the probes' count", "the registry's size"
-    r"|(?:probes?|registry)(?:'s|')?\s+" + _COUNT_NOUN +
+    # "probe tally", "the probes' count", "the registry's size", and with
+    # what is being counted named in between: "probe script count",
+    # "probe-script count", "registry entry total". The middle word must be
+    # something the registry HOLDS, which is what keeps the section's own "a
+    # probe's PORT count" out -- a port is not a member of the registry.
+    r"|(?:probes?|registry)(?:'s|')?[\s-](?:" + _COUNTED_HEAD + r"[\s-])?"
+    + _COUNT_NOUN +
     # "tally of the registered probes", "count of all probes", "total
     # number of every registered probe" -- the qualifiers between "of" and
     # the noun are counted, not spelled, so a new one needs no edit here.
@@ -3736,6 +3741,10 @@ def test_the_readme_states_no_registry_total() -> None:
             "The list has 93 entries.",
             "The table has 93 rows.",
             "The count is 93.",
+            "The probe script count is 93.",
+            "The probe-script count is 93.",
+            "The registry entry total is 93.",
+            "The probe member count is ninety-three.",
             "The probe tally is ninety-three.",
             "The registry holds ninety-three.",
             "The probe tally is 90+.",
@@ -3905,6 +3914,9 @@ def test_the_readme_states_no_registry_total() -> None:
             # The round-22 review's two bypasses, verbatim.
             "There are 93 entries in the list.",
             "The list has 93 entries.",
+            # The round-23 review's two bypasses, verbatim.
+            "The probe script count is 93.",
+            "The probe-script count is 93.",
             # And the original drift sentence as it really shipped, wrapped.
             "`python3 tools/run_probes.py --list` is the authoritative count\n"
             "and listing of registered probes — it's grown over time\n"
@@ -3975,6 +3987,9 @@ def test_the_readme_states_no_registry_total() -> None:
             "nothing in the allocator knows any probe by name, and "
             "`--jobs 2` still works.",
             "A `--port` that reaches 8008 stays build-free.",
+            # A PORT is not something the registry holds, so this stays a
+            # sentence about ports even with a count noun two words from a
+            # probe and a number fifty characters on.
             "So a probe's port count is DATA -- `run_probes.PROBE_PORT_SPANS` "
             "declares 2 for each of those two.",
             "`run_probes.PROBE_TIMEOUT_OVERRIDES` declares 3600 for one key.",
