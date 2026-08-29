@@ -188,11 +188,12 @@ _COUNT_NOUN = (
 
 _REGISTRY_SUBJECT = (
     r"(?:" + _REGISTRY_NOUN + r"|registry"
-    r"|(?:total\s+)?number\s+of\s+(?:registered\s+)?probes?"
     # "probe tally", "the probes' count", "the registry's size"
     r"|(?:probes?|registry)(?:'s|')?\s+" + _COUNT_NOUN +
-    # "tally of the registered probes"
-    r"|" + _COUNT_NOUN + r"\s+of\s+(?:the\s+)?(?:registered\s+)?probes?)")
+    # "tally of the registered probes", "count of all probes", "total
+    # number of every registered probe" -- the qualifiers between "of" and
+    # the noun are counted, not spelled, so a new one needs no edit here.
+    r"|" + _COUNT_NOUN + r"\s+of\s+(?:\w+\s+){0,3}?probes?\b)")
 
 # The registry's own object, which names the whole thing as directly as any
 # English phrase does. It has to be matched CASE-SENSITIVELY: `PROBES` is
@@ -3559,6 +3560,9 @@ def test_the_readme_states_no_registry_total() -> None:
             "The registry size is 93.",
             "The registry's total is 93.",
             "The tally of registered probes is 93.",
+            "The count of all probes is 93.",
+            "The tally of every registered probe is 93.",
+            "The number of all the probes is 93.",
             "The probes' count is 93.",
             "The probe headcount is 93.",
             "The probe tally is ninety-three.",
@@ -3669,6 +3673,8 @@ def test_the_readme_states_no_registry_total() -> None:
             "The probe tally is 93.",
             # The round-9 review's bypass, verbatim.
             "There are ninety-three probes.",
+            # The round-10 review's bypass, verbatim.
+            "The count of all probes is 93.",
             # The round-2 review's bypass: the same totals, formatted.
             "There are `93 registered probes`.",
             "The probe registry totals `93`.",
@@ -3723,6 +3729,8 @@ def test_the_readme_states_no_registry_total() -> None:
             "registry.",
             "Cap `N` at (cores − 1) or so — each probe is a full engine "
             "process.",
+            "Total cost is roughly the sum of each probe's own boot + "
+            "scenario time, and CI's selective gate (#530) relies on it.",
             "`--list` shows the full probe registry but not CI status.",
             "With `--jobs > 1` the spans are laid out from it instead of "
             "from the default `9400`.",
