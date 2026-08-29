@@ -188,7 +188,16 @@ MANUAL_ONLY_REASONS: dict[str, tuple[Reason, ...]] = {
     "follow_command_priority": (Reason(FLAKY, "a struck goal-bound unit occasionally treats "
                                               "an ally instead of engaging combat, failing "
                                               "'combat reached over a pending move' "
-                                              "(1/3 solo runs, #724)"),),
+                                              "(1/3 solo runs, #724). #1736 retired the "
+                                              "OTHER recorded failure mode: the pickup check "
+                                              "discarded commandPickup's Boolean, so a weak "
+                                              "carrying_capacity roll refusing a 10 kg chunk "
+                                              "at the command-time gate (#920) read as a "
+                                              "ladder regression; both pickup checks now "
+                                              "stage the capacity answer and stop at exit 2 "
+                                              "on an unestablished fixture. What is still "
+                                              "GRADED rides on combat/treatment arbitration "
+                                              "timing, which is the #724 flake above"),),
     "repair_ai": (Reason(FLAKY, "repair-AI claim/fetch/work timing flakes with a DIFFERENT "
                                 "failing-check set each run (3/3 solo runs failed, no two "
                                 "alike, #724) — not #489 (whetstone), which is long fixed "
