@@ -143,6 +143,178 @@
       ],
       "source_digest": "3f765428d009c86f209f0ea552bfb4764b9e1ee897220fdd7c067ee0717a1e7a",
       "atlas_digest": "1559638892333fdf650eeba356524a582575d06e2d511ee68fcb76649eb43e11"
+    },
+    {
+      "name": "injured_attack_heavy_unarmed",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/nomad_primitive/atlas/injured_attack_heavy_unarmed.png",
+      "atlas_width": 576,
+      "atlas_height": 320,
+      "cell_width": 64,
+      "cell_height": 64,
+      "columns": 9,
+      "rows": 5,
+      "flip": true,
+      "fps": 10.0,
+      "loop": false,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 9
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "4039ef480173383107b0e09b4eb20656ecf0c480cee652a963adf18100a69f96",
+      "atlas_digest": "c29eb08ccccea46d1ad07bb0eccdf7555d4ef8d2ddfcb446b4aa55bb497ad46d"
+    },
+    {
+      "name": "injured_attack_quick_unarmed",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/nomad_primitive/atlas/injured_attack_quick_unarmed.png",
+      "atlas_width": 320,
+      "atlas_height": 320,
+      "cell_width": 64,
+      "cell_height": 64,
+      "columns": 5,
+      "rows": 5,
+      "flip": true,
+      "fps": 10.0,
+      "loop": false,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 5
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 5
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 5
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 5
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 5
+        }
+      ],
+      "source_digest": "f80325f91e6134f67a596c4bbe3587597b5c04afee7bcc50a38390fd4cecbac5",
+      "atlas_digest": "c2541272834716a724fe552443225d980bf09e5f970cb561d34e157667f0aceb"
+    },
+    {
+      "name": "injured_combat_hit_react_unarmed",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/nomad_primitive/atlas/injured_combat_hit_react_unarmed.png",
+      "atlas_width": 320,
+      "atlas_height": 320,
+      "cell_width": 64,
+      "cell_height": 64,
+      "columns": 5,
+      "rows": 5,
+      "flip": true,
+      "fps": 10.0,
+      "loop": false,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 5
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 5
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 5
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 5
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 5
+        }
+      ],
+      "source_digest": "e934b69bf734fefb2765851d246768f1fc66365f47a9dd5635ea1f6f1557ae32",
+      "atlas_digest": "e4e92ad0ad528de95824f0dd181135c4d076d3d69923fcfed303cb4836a58431"
+    },
+    {
+      "name": "injured_combat_idle_unarmed",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/nomad_primitive/atlas/injured_combat_idle_unarmed.png",
+      "atlas_width": 576,
+      "atlas_height": 320,
+      "cell_width": 64,
+      "cell_height": 64,
+      "columns": 9,
+      "rows": 5,
+      "flip": true,
+      "fps": 10.0,
+      "loop": false,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 9
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "0c42520871223288e1549d727a80b484af6e57548d967b0e55a7c1b2cddf97d1",
+      "atlas_digest": "50be82b4e7d7234c41f6dadc415e3ac3aaa0cd6dba5394d6c6ae677220225f29"
     }
   ]
 }
