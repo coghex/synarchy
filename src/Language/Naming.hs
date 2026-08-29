@@ -64,7 +64,8 @@ mkNamer cat prov = do
     prof ← generateProfile (lpVersion prov) (lpSeed prov)
     pure Namer
         { nmrProfile   = prof
-        , nmrRoots     = assignLanguageRoots prof (conceptIds cat)
+        , nmrRoots     = assignLanguageRoots prof (catOrdinals cat)
+                                              (conceptIds cat)
         , nmrCatalogue = cat
         }
 

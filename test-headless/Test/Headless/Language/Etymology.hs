@@ -18,12 +18,12 @@ module Test.Headless.Language.Etymology (spec) where
 
 import UPrelude
 import Test.Hspec
-import qualified Data.ByteString as BS
 import qualified Data.Map.Strict as M
 import qualified Data.Text as T
 import Language.Semantic.Types
 import Language.Semantic.English (renderGloss)
-import Language.Semantic.Catalogue (conceptCataloguePath, parseCatalogue)
+import Language.Semantic.Catalogue ( conceptCataloguePath
+                                   , conceptOrdinalPath, loadCatalogue )
 import Language.Generated.Types
     ( GeneratorVersion(..), LangSeed(..), LanguageProvenance(..)
     , CompoundOrder(..), GenitiveOrder(..), Profile(..)
@@ -69,7 +69,8 @@ profileFor prov = case generateProfile (lpVersion prov) (lpSeed prov) of
     Left e  → error ("test setup: profile: " <> show e)
 
 rootsFor ∷ Catalogue → LanguageProvenance → LanguageRoots
-rootsFor cat prov = assignLanguageRoots (profileFor prov) (conceptIds cat)
+rootsFor cat prov = assignLanguageRoots (profileFor prov) (catOrdinals cat)
+                                        (conceptIds cat)
 
 -- | The name a language really renders for an expression, and the gloss
 --   the catalogue really renders for it — i.e. exactly what the engine
@@ -308,7 +309,8 @@ spec = beforeAll loadRealCatalogue $ do
             it ("covers profCompoundOrder = " <> show o
                 <> " for BOTH compound forms") $ \cat → do
                 let prof  = withCompoundOrder o (profileFor provA)
-                    roots = assignLanguageRoots prof (conceptIds cat)
+                    roots = assignLanguageRoots prof (catOrdinals cat)
+                                                (conceptIds cat)
                     surfaceOf expr = case renderNative prof roots expr of
                         Right t → t
                         Left e  → error (show e)
@@ -323,7 +325,8 @@ spec = beforeAll loadRealCatalogue $ do
             it ("covers the INDEPENDENT genitive pmOrder = " <> show o) $
                 \cat → do
                 let prof  = withGenitiveOrder o (profileFor provA)
-                    roots = assignLanguageRoots prof (conceptIds cat)
+                    roots = assignLanguageRoots prof (catOrdinals cat)
+                                                (conceptIds cat)
                     surface = case renderNative prof roots possE of
                         Right t → t
                         Left e  → error (show e)
@@ -702,8 +705,8 @@ spec = beforeAll loadRealCatalogue $ do
 
 loadRealCatalogue ∷ IO Catalogue
 loadRealCatalogue = do
-    bytes ← BS.readFile conceptCataloguePath
-    case parseCatalogue bytes of
+    loaded ← loadCatalogue conceptCataloguePath conceptOrdinalPath
+    case loaded of
         Right cat → pure cat
         Left err  → error ("test setup: catalogue: " <> show err)
 

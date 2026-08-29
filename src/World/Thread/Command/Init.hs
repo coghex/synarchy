@@ -39,7 +39,8 @@ import World.Geology (buildTimeline)
 import World.Geology.Log (formatPlatesSummary)
 import World.Plate (generatePlates, elevationAtGlobal)
 import Language.Generated.Types (generatorErrorText)
-import Language.Semantic.Catalogue (conceptCataloguePath, loadCatalogue)
+import Language.Semantic.Catalogue ( conceptCataloguePath
+                                   , conceptOrdinalPath, loadCatalogue )
 import Language.Semantic.Types (catalogueErrorText)
 import Location.Types (allLocations)
 import Location.Instance
@@ -423,7 +424,7 @@ resolvePageNamer
 resolvePageNamer logger identity = case wiLanguage =≪ identity of
     Nothing   → pure Nothing
     Just prov → do
-        eCat ← loadCatalogue conceptCataloguePath
+        eCat ← loadCatalogue conceptCataloguePath conceptOrdinalPath
         case eCat of
             Left cErr → do
                 logWarn logger CatWorld $

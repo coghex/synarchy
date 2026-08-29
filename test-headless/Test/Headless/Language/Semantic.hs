@@ -10,7 +10,7 @@ import UPrelude
 import Test.Hspec
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BC
-import Data.List (nub, sort)
+import Data.List (intersperse, nub, sort)
 import qualified Data.Map.Strict as M
 import qualified Data.Text as T
 import Language.Semantic.Types
@@ -22,7 +22,7 @@ import Language.Semantic.English
 -- without touching the (intentionally total) production catalogue.
 partialCat ∷ Catalogue
 partialCat = either (error ∘ T.unpack ∘ catalogueErrorText) id $
-    parseCatalogue $ yamlOf
+    parseFixture ["WOLF", "HEART"]
         [ "version: 1"
         , "concepts:"
         , "  - id: WOLF"
@@ -39,19 +39,39 @@ partialCat = either (error ∘ T.unpack ∘ catalogueErrorText) id $
 yamlOf ∷ [String] → BS.ByteString
 yamlOf = BC.pack ∘ unlines
 
+-- | Parse a fixture catalogue against a placement order recording
+--   @ordIds@ at ordinals @0..@.
+--
+--   Since #1868 a catalogue is TWO inputs, so a fixture supplies both.
+--   The validation fixtures below pass an EMPTY order deliberately: the
+--   YAML is validated first, so each still fails on the defect it is
+--   about rather than on the id-set disagreement that would follow it.
+parseFixture ∷ [Text] → [String] → Either CatalogueError Catalogue
+parseFixture ordIds = parseCatalogue (fixtureOrdinals ordIds) ∘ yamlOf
+
+fixtureOrdinals ∷ [Text] → ConceptOrdinals
+fixtureOrdinals ordIds =
+    either (error ∘ T.unpack ∘ catalogueErrorText) id $
+        mkConceptOrdinals (zip (map ConceptId ordIds) [0 ..])
+
 cid ∷ Text → ConceptId
 cid = ConceptId
 
 spec ∷ Spec
 spec = describe "Semantic proper names" $ do
     prodBytes ← runIO $ BS.readFile conceptCataloguePath
-    let prodCat = either (error ∘ T.unpack ∘ catalogueErrorText) id
-                         (parseCatalogue prodBytes)
+    prodOrdBytes ← runIO $ BS.readFile conceptOrdinalPath
+    -- The catalogue is TWO shipped files since #1868, and both are read
+    -- here from the production paths the engine itself loads them from.
+    let prodOrds = either (error ∘ T.unpack ∘ catalogueErrorText) id
+                          (parseConceptOrdinals prodOrdBytes)
+        prodCat = either (error ∘ T.unpack ∘ catalogueErrorText) id
+                         (parseCatalogue prodOrds prodBytes)
         gloss   = renderGloss prodCat
 
     describe "production catalogue" $ do
         it "parses and validates" $
-            case parseCatalogue prodBytes of
+            case parseCatalogue prodOrds prodBytes of
                 Left err → expectationFailure $ T.unpack (catalogueErrorText err)
                 Right _  → pure ()
 
@@ -145,14 +165,14 @@ spec = describe "Semantic proper names" $ do
     describe "determinism" $
         it "reparsing the same catalogue bytes yields an equal catalogue and equal glosses" $ do
             let reparsed = either (error ∘ T.unpack ∘ catalogueErrorText) id
-                                  (parseCatalogue prodBytes)
+                                  (parseCatalogue prodOrds prodBytes)
             reparsed `shouldBe` prodCat
             renderGloss reparsed (Of (cid "EYE") Plural (cid "STORM"))
                 `shouldBe` gloss (Of (cid "EYE") Plural (cid "STORM"))
 
     describe "catalogue validation failures" $ do
         it "rejects a duplicate concept id" $ do
-            let r = parseCatalogue $ yamlOf
+            let r = parseFixture []
                     [ "version: 1"
                     , "concepts:"
                     , "  - { id: WOLF, domain: creature, singular: wolf }"
@@ -161,7 +181,7 @@ spec = describe "Semantic proper names" $ do
             r `shouldBe` Left (DuplicateConceptId (cid "WOLF"))
 
         it "rejects an empty lexical form, naming the concept and the form" $ do
-            let r = parseCatalogue $ yamlOf
+            let r = parseFixture []
                     [ "version: 1"
                     , "concepts:"
                     , "  - { id: WOLF, domain: creature, singular: wolf, plural: \"\" }"
@@ -175,7 +195,7 @@ spec = describe "Semantic proper names" $ do
                 Right _ → expectationFailure "catalogue should have been rejected"
 
         it "rejects a lexical form containing whitespace" $ do
-            let r = parseCatalogue $ yamlOf
+            let r = parseFixture []
                     [ "version: 1"
                     , "concepts:"
                     , "  - { id: WOLF, domain: creature, singular: \"dire wolf\" }"
@@ -184,7 +204,7 @@ spec = describe "Semantic proper names" $ do
                                                   "form contains whitespace")
 
         it "rejects an unknown domain" $ do
-            let r = parseCatalogue $ yamlOf
+            let r = parseFixture []
                     [ "version: 1"
                     , "concepts:"
                     , "  - { id: WOLF, domain: color, singular: wolf }"
@@ -192,7 +212,7 @@ spec = describe "Semantic proper names" $ do
             r `shouldBe` Left (UnknownDomain (cid "WOLF") "color")
 
         it "rejects a malformed concept id" $ do
-            let r = parseCatalogue $ yamlOf
+            let r = parseFixture []
                     [ "version: 1"
                     , "concepts:"
                     , "  - { id: wolf, domain: creature, singular: wolf }"
@@ -202,20 +222,20 @@ spec = describe "Semantic proper names" $ do
                 other → expectationFailure $ "expected InvalidConceptId, got " ⧺ show other
 
         it "rejects a non-positive version" $ do
-            let r = parseCatalogue $ yamlOf
+            let r = parseFixture []
                     [ "version: 0"
                     , "concepts: []"
                     ]
             r `shouldBe` Left (InvalidVersion 0)
 
         it "rejects unparseable YAML descriptively" $ do
-            let r = parseCatalogue "version: ["
+            let r = parseFixture [] ["version: ["]
             case r of
                 Left (CatalogueYamlError _) → pure ()
                 other → expectationFailure $ "expected CatalogueYamlError, got " ⧺ show other
 
         it "rejects an entry missing the mandatory singular form" $ do
-            let r = parseCatalogue $ yamlOf
+            let r = parseFixture []
                     [ "version: 1"
                     , "concepts:"
                     , "  - { id: WOLF, domain: creature }"
@@ -225,7 +245,7 @@ spec = describe "Semantic proper names" $ do
                 other → expectationFailure $ "expected CatalogueYamlError, got " ⧺ show other
 
         it "rejects two concepts sharing an identical singular form" $ do
-            let r = parseCatalogue $ yamlOf
+            let r = parseFixture []
                     [ "version: 1"
                     , "concepts:"
                     , "  - { id: WOLF, domain: creature, singular: wolf }"
@@ -239,13 +259,102 @@ spec = describe "Semantic proper names" $ do
                 Right _ → expectationFailure "catalogue should have been rejected"
 
         it "rejects a duplicate singular form even when the case differs" $ do
-            let r = parseCatalogue $ yamlOf
+            let r = parseFixture []
                     [ "version: 1"
                     , "concepts:"
                     , "  - { id: WOLF, domain: creature, singular: wolf }"
                     , "  - { id: HOUND, domain: creature, singular: Wolf }"
                     ]
             r `shouldBe` Left (DuplicateSingularForm "Wolf" (cid "WOLF") (cid "HOUND"))
+
+    -- #1868. The placement order is a SECOND shipped file, read at run
+    -- time from the resource root beside the catalogue. These cases
+    -- drive the production reader (`parseConceptOrdinals` /
+    -- `parseCatalogue` / `loadCatalogue`), not an in-memory stand-in,
+    -- because the thing that could silently regress is the integration:
+    -- an artifact that failed to load and quietly fell back to
+    -- ascending-id placement would still produce a working catalogue
+    -- and would move roots the moment a concept was added.
+    describe "concept placement order (#1868)" $ do
+        let ordinalJson ∷ [String] → BS.ByteString
+            ordinalJson = BC.pack ∘ unlines
+            entry i n = "    { \"id\": \"" ⧺ i ⧺ "\", \"ordinal\": "
+                        ⧺ n ⧺ " }"
+            doc entries = ordinalJson $
+                [ "{", "  \"version\": 2,", "  \"concepts\": [" ]
+                ⧺ intersperse "    ," entries ⧺ [ "  ]", "}" ]
+
+        it "the shipped artifact records exactly the shipped concepts" $ do
+            ordinalCount prodOrds `shouldBe` conceptCount prodCat
+            ordinalIds prodOrds `shouldBe` conceptIds prodCat
+
+        it "the shipped ordinals are the append-only sequence 0..n-1" $ do
+            let recorded = [ n | c ← ordinalIds prodOrds
+                               , Just n ← [conceptOrdinal c prodOrds] ]
+            sort recorded `shouldBe` [0 .. ordinalCount prodOrds - 1]
+
+        it "the catalogue carries the artifact's order, loaded from the \
+           \production paths" $ do
+            loaded ← loadCatalogue conceptCataloguePath conceptOrdinalPath
+            case loaded of
+                Left err → expectationFailure $
+                    T.unpack (catalogueErrorText err)
+                Right cat → do
+                    catOrdinals cat `shouldBe` prodOrds
+                    cat `shouldBe` prodCat
+
+        it "rejects malformed JSON descriptively" $
+            case parseConceptOrdinals "{ \"version\": " of
+                Left (OrdinalJsonError _) → pure ()
+                other → expectationFailure $
+                    "expected OrdinalJsonError, got " ⧺ show other
+
+        it "rejects a schema version it cannot read" $
+            parseConceptOrdinals (ordinalJson
+                [ "{ \"version\": 1, \"ids\": [\"WOLF\"] }" ])
+                `shouldBe` Left (UnsupportedOrdinalVersion 1)
+
+        it "rejects a non-integer ordinal" $
+            case parseConceptOrdinals (doc [ entry "WOLF" "\"0\"" ]) of
+                Left (OrdinalJsonError _) → pure ()
+                other → expectationFailure $
+                    "expected OrdinalJsonError, got " ⧺ show other
+
+        it "rejects a malformed concept id" $
+            case parseConceptOrdinals (doc [ entry "wolf" "0" ]) of
+                Left (InvalidConceptId raw _) → raw `shouldBe` "wolf"
+                other → expectationFailure $
+                    "expected InvalidConceptId, got " ⧺ show other
+
+        it "rejects a repeated id" $
+            parseConceptOrdinals (doc [ entry "WOLF" "0", entry "WOLF" "1" ])
+                `shouldBe` Left (DuplicateOrdinalId (cid "WOLF"))
+
+        it "rejects two concepts claiming one ordinal" $ do
+            let r = parseConceptOrdinals
+                        (doc [ entry "WOLF" "0", entry "HEART" "0" ])
+            r `shouldBe` Left (DuplicateOrdinal 0 (cid "WOLF") (cid "HEART"))
+            case r of
+                Left err → do
+                    catalogueErrorText err `shouldSatisfy` T.isInfixOf "WOLF"
+                    catalogueErrorText err `shouldSatisfy` T.isInfixOf "HEART"
+                Right _ → expectationFailure "should have been rejected"
+
+        it "rejects a catalogue the artifact does not record, naming both \
+           \directions of the disagreement" $ do
+            let r = parseFixture ["WOLF", "MOON"]
+                    [ "version: 1"
+                    , "concepts:"
+                    , "  - { id: WOLF, domain: creature, singular: wolf }"
+                    , "  - { id: HEART, domain: creature, singular: heart }"
+                    ]
+            r `shouldBe` Left (OrdinalCatalogueMismatch [cid "HEART"]
+                                                        [cid "MOON"])
+            case r of
+                Left err → do
+                    catalogueErrorText err `shouldSatisfy` T.isInfixOf "HEART"
+                    catalogueErrorText err `shouldSatisfy` T.isInfixOf "MOON"
+                Right _ → expectationFailure "should have been rejected"
 
     describe "rendering failures (no silent fallback)" $ do
         it "an unknown concept id is a descriptive error, not raw-id text" $ do

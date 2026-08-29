@@ -44,7 +44,6 @@ module Test.Headless.Language.EtymologyPageScope (spec) where
 
 import UPrelude
 import Test.Hspec
-import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
 import Data.IORef (newIORef, readIORef, writeIORef)
@@ -61,7 +60,8 @@ import Language.Generated.Render (renderNative)
 import Language.Generated.Root (assignLanguageRoots)
 import Language.Generated.Types
     ( LangSeed(..), LanguageProvenance(..), Profile, currentGeneratorVersion )
-import Language.Semantic.Catalogue (conceptCataloguePath, parseCatalogue)
+import Language.Semantic.Catalogue ( conceptCataloguePath
+                                   , conceptOrdinalPath, loadCatalogue )
 import Language.Semantic.English (renderGloss)
 import Language.Semantic.Types
 import Location.Bounds (AbsBounds(..))
@@ -252,7 +252,7 @@ nameOf cat prov expr =
            (renderNative profile roots expr)
   where
     profile = profileFor prov
-    roots   = assignLanguageRoots profile (conceptIds cat)
+    roots   = assignLanguageRoots profile (catOrdinals cat) (conceptIds cat)
 
 glossOf ∷ Catalogue → NameExpr → Maybe Text
 glossOf cat expr =
@@ -261,8 +261,8 @@ glossOf cat expr =
 
 loadRealCatalogue ∷ IO Catalogue
 loadRealCatalogue = do
-    bytes ← BS.readFile conceptCataloguePath
-    case parseCatalogue bytes of
+    loaded ← loadCatalogue conceptCataloguePath conceptOrdinalPath
+    case loaded of
         Right cat → pure cat
         Left err  → error ("test setup: catalogue: " <> show err)
 
