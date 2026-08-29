@@ -10,7 +10,7 @@ PR #832's committed building-footprint expansion, #831's tile-Z UI-wiring regres
 
 - [x] PRR-1. Soil receivers can credit a high neighbour that cannot shed any soil — [#1591]
 - [x] PRR-2. Slot-aware occupancy still stores only one pending construction job per tile — [#1595]
-- [ ] PRR-3. The location-content probe shares four fixed temporary fixture paths and never cleans them — [deferred]: NCT-22 unprocessed
+- [x] PRR-3. The location-content probe shares four fixed temporary fixture paths and never cleans them — [#1884]
 - [x] PRR-4. A freshwater tile above four lower neighbours is still forced back to a flat slope — [#1600]
 - [x] PRR-5. The save barrier can snapshot Lua before processing causal messages produced by acknowledged owners — [no-issue]
 - [x] PRR-6. Negative-infinite pathing cost is clamped to a free step — [#1603]
@@ -71,9 +71,7 @@ PR #832's committed building-footprint expansion, #831's tile-Z UI-wiring regres
 
 ## 3. Location-probe temporary ownership
 
-### [deferred] PRR-3. The location-content probe shares four fixed temporary fixture paths and never cleans them
-
-> **Deferred:** Open issue #1569 assigns this probe's artifact ownership to NCT-22 in `docs/non_ci_test_audit_findings.md`, so filing this half alone would split one probe's cleanup across two conflicting PRs — clears when NCT-22 is processed, at which point this finding's five `/tmp` fixture paths and its shared log path fold into the `location_content_probe.py` issue that produces.
+### [#1884] PRR-3. The location-content probe shares four fixed temporary fixture paths and never cleans them
 
 > **Captured note:** Put all probe-generated location and loot definitions in an invocation-owned temporary directory, pass those unique paths to the engine, and clean them from an outer `finally`. Fixed `/tmp` names are shared across runs and survive every exit path.
 

@@ -305,6 +305,22 @@ constructionSites path = do
             (l : _) → T.isPrefixOf "{" l
             []      → False
 
+-- | The three hand tools the field toolbox ships stocked with (#1855),
+--   as (name, sprite, (display name, weight, bulk, kind, category,
+--   make, material)). @kind@ is @"misc"@ because the definitions author
+--   no @kind:@ at all — that IS the non-equippable kind.
+toolMetadata ∷ [(Text, Text, (Text, Float, Float, Text, Text, Text, Text))]
+toolMetadata =
+    [ ( "crescent_wrench", "assets/textures/items/tool/wrench_1.png"
+      , ("Crescent Wrench", 0.5, 0.6, "misc", "Tools", "factory", "steel") )
+    , ( "hammer", "assets/textures/items/tool/hammer.png"
+      , ("Hammer", 0.8, 1.2, "misc", "Tools", "factory", "steel") )
+    , ( "phillips_screwdriver"
+      , "assets/textures/items/tool/screwdriver_1.png"
+      , ("Phillips Screwdriver", 0.1, 0.2, "misc", "Tools", "factory"
+        , "steel") )
+    ]
+
 -- | The engine's shipped loot-table YAML conversion, kept here so the
 --   toolbox test rolls the live table rather than an in-test approximation.
 toLootTableDef ∷ LootTableYamlDef → LootTableDef
@@ -729,6 +745,43 @@ spec = do
                     sort ids `shouldBe` [1 .. 30]
 
     describe "field toolbox content" $ do
+        it "loads the three shipped hand-tool definitions with their exact \
+           \authored metadata" $ do
+            logger ← silentLogger
+            yamlDefs ← loadItemYaml logger "data/items/hand_tools.yaml"
+            mapM_ (\d → doesFileExist (T.unpack (iydSprite d))
+                          `shouldReturn` True)
+                  yamlDefs
+
+            [ (iydName d, iydSprite d) | d ← yamlDefs ] `shouldBe`
+                [ (name, sprite) | (name, sprite, _) ← toolMetadata ]
+
+            mgr ← shippedItems
+            forM_ toolMetadata $ \(name, _, expected) →
+                case lookupItemDef name mgr of
+                    Nothing → expectationFailure
+                        (T.unpack name
+                         <> " missing from the shipped item registry")
+                    Just def → do
+                        ( idDisplayName def, idWeight def, idBulk def
+                          , idKind def, idCategory def, idMake def
+                          , idMaterial def )
+                            `shouldBe` expected
+                        -- A fixed scalar `weight:` decodes to WeightFixed,
+                        -- so the def carries NO {mean, range} spec: every
+                        -- instance masses exactly idWeight.
+                        idWeightSpec def `shouldBe` Nothing
+                        -- Ordinary and non-equippable: `kind` left at its
+                        -- "misc" default, no weapon/armor block, and
+                        -- `unequippable` (which means an accessory that
+                        -- cannot be REMOVED) untouched.
+                        idWeapon def `shouldBe` Nothing
+                        idArmor def `shouldBe` Nothing
+                        idUnequippable def `shouldBe` False
+                        idDefaultContents def `shouldBe` []
+                        idStorage def `shouldBe` Nothing
+                        idContainer def `shouldBe` Nothing
+
         it "loads and materialises the shipped definition's exact Contents view" $ do
             logger ← silentLogger
             yamlDefs ← loadItemYaml logger "data/items/field_toolbox.yaml"
@@ -755,15 +808,18 @@ spec = do
                                    , "container", "Tools", "factory"
                                    , "steel" )
                     idContainer def `shouldBe` Nothing
+                    -- Requirement 3: still no container-capacity or
+                    -- portable-storage block; the box is inspectable
+                    -- content, not player-managed storage.
                     idStorage def `shouldBe` Nothing
                     let authored =
                             [ ( iceItem e, iceCount e
                               , iceFill e, iceContents e )
                             | e ← idDefaultContents def ]
                     authored `shouldBe`
-                        [ ("whetstone", 1, Nothing, Nothing)
-                        , ("steel_hardware", 4, Nothing, Nothing)
-                        , ("wiring", 1, Nothing, Nothing)
+                        [ ("crescent_wrench", 1, Nothing, Nothing)
+                        , ("hammer", 1, Nothing, Nothing)
+                        , ("phillips_screwdriver", 1, Nothing, Nothing)
                         ]
 
             inst ← mintWith mgr pristineItem "field_toolbox"
@@ -773,39 +829,79 @@ spec = do
                 Just toolbox → do
                     let children = iiContents toolbox
                         ids = map iiInstanceId (allInstances toolbox)
+                    -- Three DISTINCT child instances in the authored
+                    -- order, each with its own id — not a flattened stack.
                     map iiDefName children `shouldBe`
-                        [ "whetstone", "steel_hardware", "steel_hardware"
-                        , "steel_hardware", "steel_hardware", "wiring" ]
-                    length children `shouldBe` 6
-                    length (nub ids) `shouldBe` 7
+                        [ "crescent_wrench", "hammer", "phillips_screwdriver" ]
+                    length children `shouldBe` 3
+                    length (nub ids) `shouldBe` 4
+                    -- 1.20 kg empty case + 0.50 + 0.80 + 0.10 of tools.
                     itemTotalWeight mgr toolbox `shouldSatisfy`
-                        (\weight → abs (weight - 2.8) < 1.0e-5)
+                        (\weight → abs (weight - 2.6) < 1.0e-5)
                     rows ← groupedContentRows mgr children
-                    sort rows `shouldBe` sort
-                        [ ("whetstone", "Whetstone", 1)
-                        , ("steel_hardware", "Steel Hardware", 4)
-                        , ("wiring", "Wiring", 1)
+                    rows `shouldBe`
+                        [ ("crescent_wrench", "Crescent Wrench", 1)
+                        , ("hammer", "Hammer", 1)
+                        , ("phillips_screwdriver", "Phillips Screwdriver", 1)
                         ]
 
-        it "materialises the field toolbox selected by its pinned ruin roll" $ do
+        it "is no longer reachable from the shipped ruin loot table" $ do
             shipped ← Yaml.decodeFileEither
                 "data/loot_tables/ruin_common.yaml"
             case shipped of
                 Left err → expectationFailure (show err)
                 Right yamlDef → do
                     let table = toLootTableDef yamlDef
-                        context = LootRollContext
-                            { lrcWorldSeed = 42, lrcInstanceId = 4
-                            , lrcEntryIndex = 1, lrcRollIndex = 2 }
-                        selected = rollLootTableFor table context
-                    selected `shouldBe` Just "field_toolbox"
-                    mgr ← shippedItems
-                    inst ← case selected of
-                        Nothing → pure Nothing
-                        Just name → mintWith mgr pristineItem name
-                    (map iiDefName ∘ iiContents <$> inst) `shouldBe` Just
-                        [ "whetstone", "steel_hardware", "steel_hardware"
-                        , "steel_hardware", "steel_hardware", "wiring" ]
+                    map ltyeId (ltydEntries yamlDef)
+                        `shouldNotContain` ["field_toolbox"]
+                    -- and no context in a wide sweep of the roll space
+                    -- selects it either, which the entry list alone
+                    -- would not prove if the roller ignored the table.
+                    let rolled =
+                            [ rollLootTableFor table
+                                LootRollContext
+                                    { lrcWorldSeed = seed
+                                    , lrcInstanceId = i
+                                    , lrcEntryIndex = e
+                                    , lrcRollIndex = r }
+                            | seed ← [42, 1337], i ← [1 .. 20]
+                            , e ← [1 .. 5], r ← [1 .. 5] ]
+                    nub rolled `shouldNotContain` [Just "field_toolbox"]
+
+    describe "field toolbox starting loadout" $ do
+        it "gives the shipped technomule exactly one field toolbox and no \
+           \loose hand tools" $ do
+            logger ← silentLogger
+            defs ← loadUnitYaml logger "data/units/technomule.yaml"
+            let carried = [ (uyieItem e, uyieCount e)
+                          | d ← defs, e ← uydStartingInventory d ]
+            [ c | (n, c) ← carried, n ≡ "field_toolbox" ] `shouldBe` [1]
+            [ n | (n, _) ← carried
+                , n `elem` [ tn | (tn, _, _) ← toolMetadata ] ]
+                `shouldBe` []
+
+        it "materialises that entry as one toolbox holding the three tools" $ do
+            logger ← silentLogger
+            defs ← loadUnitYaml logger "data/units/technomule.yaml"
+            mgr ← shippedItems
+            -- The same mint boundary Unit.Thread.Command.Spawn's
+            -- buildStartingInventory delegates to, driven by the unit
+            -- def's own authored entries.
+            boxes ← sequence
+                [ mintWith mgr pristineItem (uyieItem e)
+                | d ← defs, e ← uydStartingInventory d
+                , uyieItem e ≡ "field_toolbox"
+                , _ ← [1 .. max 1 (uyieCount e)] ]
+            case boxes of
+                [Just toolbox] → do
+                    map iiDefName (iiContents toolbox) `shouldBe`
+                        [ "crescent_wrench", "hammer"
+                        , "phillips_screwdriver" ]
+                    itemTotalWeight mgr toolbox `shouldSatisfy`
+                        (\weight → abs (weight - 2.6) < 1.0e-5)
+                other → expectationFailure
+                    ("expected exactly one materialized field toolbox, got "
+                     <> show (length other))
 
     describe "no other production mint site (requirement 10)" $ do
         it "every mint module reaches the materializer" $ do

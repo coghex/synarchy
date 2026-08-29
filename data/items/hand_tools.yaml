@@ -1,0 +1,37 @@
+items:
+  # The technomule's field-toolbox loadout (#1855): three ordinary,
+  # non-equippable reusable hand tools. `kind:` is deliberately omitted
+  # so each defaults to "misc" — the non-equippable kind (see
+  # Item.Types.idKind). `unequippable:` is a DIFFERENT thing (a worn
+  # accessory that cannot be taken off) and must not appear here.
+  #
+  # Functionally neutral for now: no crafting, construction, repair or
+  # combat system consumes them yet, and they carry no tool-purpose
+  # classification. Weights are fixed scalars, not {mean, range} specs,
+  # so every instance masses the same.
+  - name: "crescent_wrench"
+    display_name: "Crescent Wrench"
+    sprite: "assets/textures/items/tool/wrench_1.png"
+    weight: 0.5      # kg
+    bulk: 0.6        # litres of external bulk
+    category: Tools
+    make: factory
+    material: steel
+
+  - name: "hammer"
+    display_name: "Hammer"
+    sprite: "assets/textures/items/tool/hammer.png"
+    weight: 0.8      # kg
+    bulk: 1.2        # litres of external bulk
+    category: Tools
+    make: factory
+    material: steel
+
+  - name: "phillips_screwdriver"
+    display_name: "Phillips Screwdriver"
+    sprite: "assets/textures/items/tool/screwdriver_1.png"
+    weight: 0.1      # kg
+    bulk: 0.2        # litres of external bulk
+    category: Tools
+    make: factory
+    material: steel
