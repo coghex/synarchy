@@ -143,11 +143,16 @@ _MAGNITUDE_BAND = (
     r"(?:\d0s|twenties|thirties|forties|fifties|sixties|seventies|eighties"
     r"|nineties)")
 
-# A number word only a REGISTRY total would reach. The small words this
-# section legitimately uses for subset counts ("two registered probes") are
-# deliberately absent, and so is "tens" ("low tens of minutes").
+# A number word only a REGISTRY total would reach, written as one token
+# whether it is hyphenated or spaced ("ninety-three", "ninety three"). A
+# tens word is required to open it, so the small words this section
+# legitimately uses for subset counts stay unreachable: "two registered
+# probes" and "drifted three times" match nothing here, and neither does
+# "tens" ("low tens of minutes").
 _LARGE_NUMBER_WORD = (
-    r"(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundreds?)")
+    r"(?:(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)"
+    r"(?:[-\s](?:one|two|three|four|five|six|seven|eight|nine))?"
+    r"|hundreds?)")
 
 # A number standing on its OWN, which is what a count is. The lookarounds
 # drop numbers glued to something else: an identifier or hyphenated compound
@@ -3556,6 +3561,8 @@ def test_the_readme_states_no_registry_total() -> None:
             "The tally of registered probes is 93.",
             "The probes' count is 93.",
             "The probe headcount is 93.",
+            "The probe tally is ninety-three.",
+            "The registry holds ninety-three.",
             # Inverted: the quantity leads and the subject follows.
             "There are 93 entries in the probe registry.",
             "There are 93 scripts in the registry.",
@@ -3599,6 +3606,9 @@ def test_the_readme_states_no_registry_total() -> None:
         # and no counting verb needed.
         "quantified-probe-noun": (
             "There are 90 probes.",
+            "There are ninety-three probes.",
+            "There are ninety three probes.",
+            "About ninety-three probes are registered.",
             "90 registered probes ship today.",
             "It registers 90 probes today.",
             "It lists ninety probes.",
@@ -3657,6 +3667,8 @@ def test_the_readme_states_no_registry_total() -> None:
             "There are 93 entries in the probe registry.",
             # The round-8 review's bypass, verbatim.
             "The probe tally is 93.",
+            # The round-9 review's bypass, verbatim.
+            "There are ninety-three probes.",
             # The round-2 review's bypass: the same totals, formatted.
             "There are `93 registered probes`.",
             "The probe registry totals `93`.",
@@ -3718,6 +3730,9 @@ def test_the_readme_states_no_registry_total() -> None:
             "`save_compat_migration` uses `PROBE_TIMEOUT_OVERRIDES`' 3600 s.",
             "Run up to 4 probes concurrently, each its own engine.",
             "Up to `N` probes run at once, each on its own port span.",
+            "This doc states no total of its own: a hand-written one drifted "
+            "three times (#539, #721, #1584).",
+            "Each of those two probes reserves a second port.",
             "Two registered probes derive a second, concurrently live "
             "listener from it: `debug_console_boot_probe.py` boots its "
             "checks on `--port + 1`.",
