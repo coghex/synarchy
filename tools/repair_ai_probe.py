@@ -44,7 +44,11 @@ it IS the machinery under test, unlike movement_probe which neutralises it):
      priority-first comparison overrides its normal severity ordering (the
      inverse of phase 1). Also checks isRepairPriority's before/after state
      and that the flag self-clears once the prioritized item is actually
-     repaired.
+     repaired. The ordering is judged from ONE observed timeline
+     (observe_repair_ordering, #1767): completing the flagged job is what
+     frees the AI onto the other item, so "the other item is still
+     untouched" -- read after the fact -- is a property CORRECT follow-on
+     work destroys.
   9. priority_gating : #303 review — an item above BOTH thresholds can't be
      offered/shown as "priority" even if flagged at the backend, since the
      AI would never actually act on it. Pure Lua checks against synthetic
@@ -233,12 +237,11 @@ def build_station(port: int, def_name: str, gx: int, gy: int,
     return bid
 
 
-def force_item_state(port: int, uid: int, def_name: str,
-                      cond: float, sharp: float) -> int:
-    """Add def_name to uid's inventory and force its condition/sharpness to
-    exact values via the double-repairItem trick (delta is ADDITIVE and
-    clamped, not a set — floor both axes at 0 first, then apply a precise
-    positive delta from that known floor). Returns the new instanceId."""
+def add_item_instance(port: int, uid: int, def_name: str) -> int:
+    """Add def_name to uid's inventory and return the new instanceId,
+    leaving its condition/sharpness alone (a fresh item is HEALTHY, so it
+    is not a repair candidate yet). Extracted from force_item_state so a
+    phase can open its own candidate window deliberately."""
     send(port, f"unit.addItem({uid}, '{def_name}'); return 'ok'")
     # unit.spawn's default loadout seeding can still be settling on a
     # just-created unit (e.g. spawn_mule has no internal wait, unlike
@@ -250,7 +253,32 @@ def force_item_state(port: int, uid: int, def_name: str,
         f"return #out > 0 and out or false"))
     if not ids:
         sys.exit(f"unit {uid} never received {def_name}")
-    iid = int(ids[-1])
+    return int(ids[-1])
+
+
+def _force_state_lua(uid: int, iid: int, cond: float, sharp: float) -> str:
+    """The double-repairItem trick for ONE instance: the delta is ADDITIVE
+    and clamped, not a set, so floor both axes at 0 first and then apply a
+    precise positive delta from that known floor."""
+    return (f"unit.repairItem({uid}, {iid}, -1000, -1000); "
+            f"unit.repairItem({uid}, {iid}, {cond}, {sharp}); ")
+
+
+def force_item_states(port: int, uid: int, states) -> None:
+    """Force several already-held instances to exact condition/sharpness in
+    ONE console round trip, so they all become repair candidates at the
+    same instant instead of several round trips (and several live AI ticks)
+    apart. `states` is an iterable of (instanceId, cond, sharp)."""
+    lua = "".join(_force_state_lua(uid, iid, cond, sharp)
+                  for iid, cond, sharp in states)
+    send(port, lua + "return 'ok'")
+
+
+def force_item_state(port: int, uid: int, def_name: str,
+                      cond: float, sharp: float) -> int:
+    """Add def_name to uid's inventory and force its condition/sharpness to
+    exact values. Returns the new instanceId."""
+    iid = add_item_instance(port, uid, def_name)
     send(port, f"unit.repairItem({uid}, {iid}, -1000, -1000); return 'ok'")
     send(port, f"unit.repairItem({uid}, {iid}, {cond}, {sharp}); return 'ok'")
     return iid
@@ -311,6 +339,190 @@ def repair_job_of(port: int, uid: int):
         f"local j = s and s.repairJob; if not j then return nil end; "
         f"return {{instanceId=j.instanceId, fromGround=(j.fromGround==true), "
         f"        onMule=(j.onMule==true), phase=tostring(s.repairPhase)}}")
+
+
+def repair_ordering_sample(port: int, uid: int, first: int, second: int):
+    """Both repair candidates' claims AND conditions in ONE console round
+    trip, so an ordering verdict rests on a single instant rather than on
+    two reads separated by live AI work.
+
+    ``claim`` is unitAi.getRepairClaimant's uid (-1 for unclaimed),
+    ``job`` the instanceId of the unit's live repairJob (-1 for none) and
+    ``cond`` the instance's condition wherever it currently sits (-1 if it
+    is not on this unit at all) -- the same inventory/loadout/accessory
+    walk item_state does, inlined so the whole snapshot is one request.
+    ``action`` is what the AI is actually doing, so a run in which it never
+    claims EITHER candidate (the #724 timing flake this probe is
+    manual-only for) reads as such instead of looking like an ordering
+    defect.
+    """
+    return send_json(port,
+        f"local ai=require('scripts.unit_ai'); local s=ai.getState({uid}); "
+        f"local j = s and s.repairJob; "
+        f"local function cond(iid) "
+        f"  for _,it in ipairs(unit.getInventory({uid}) or {{}}) do "
+        f"    if it.instanceId==iid then return it.condition end end; "
+        f"  for _,it in pairs(equipment.getLoadout({uid}) or {{}}) do "
+        f"    if it.instanceId==iid then return it.condition end end; "
+        f"  for _,it in ipairs(equipment.getAccessories({uid}) or {{}}) do "
+        f"    if it.instanceId==iid then return it.condition end end; "
+        f"  return -1 end; "
+        f"return {{job=(j and j.instanceId or -1), "
+        f"  action=tostring(s and s.currentAction), "
+        f"  phase=tostring(s and s.repairPhase), "
+        f"  firstClaim=(ai.getRepairClaimant({first}) or -1), "
+        f"  secondClaim=(ai.getRepairClaimant({second}) or -1), "
+        f"  firstCond=cond({first}), secondCond=cond({second})}}")
+
+
+def _ordering_side(sample, iid: int, claim_key: str, cond_key: str,
+                   seen_degraded: bool):
+    """(engaged?, restored?, description) for one candidate in one snapshot.
+
+    Engagement is POSITIVE evidence that the AI has acted on THIS
+    instance: it holds the repair claim, it is the live repairJob's
+    target, or it has been RESTORED — seen below full condition earlier in
+    this run and at full condition now. Nothing here is inferred from the
+    other candidate's state, and a candidate that has simply never been
+    degraded is not "restored": full condition only counts as evidence
+    once a repair could have produced it.
+    """
+    claim = int(float(sample.get(claim_key, -1)))
+    cond = float(sample.get(cond_key, -1))
+    job = int(float(sample.get("job", -1)))
+    restored = seen_degraded and cond >= 100
+    engaged = claim >= 0 or job == iid or restored
+    return engaged, restored, (f"claimed_by={'-' if claim < 0 else claim}, "
+                               f"is_job={'yes' if job == iid else 'no'}, "
+                               f"cond={cond:g}")
+
+
+def observe_repair_ordering(port: int, uid: int, first: int, second: int,
+                            first_label: str, second_label: str,
+                            seconds: float, open_window=None):
+    """Classify which of two repair candidates the AI worked on FIRST by
+    watching ONE timeline, and keep watching until `first` is restored.
+
+    `open_window` is called ONCE, after the baseline snapshot and before
+    the first polling cycle, and is what turns the two instances into
+    repair candidates. Sampling therefore starts strictly before the AI
+    can have engaged either of them: a console round trip is ~0.3s and the
+    AI claims a job within that, so a caller that made the candidates
+    first and only then began observing would already have missed the
+    claim.
+
+    Two independent reads cannot decide this ordering. Completing the
+    flagged job is precisely what releases the AI onto the other item — on
+    a successful repair.repairAt, scripts/unit_ai_repair.lua clears the
+    priority flag and frees the job in the same tick — and one successful
+    repair visit restores an item atomically to full condition
+    (src/Engine/Scripting/Lua/API/Repair.hs). So "the other item is still
+    untouched", sampled a poll interval later, is a property that CORRECT
+    follow-on work destroys; a run whose ordering was right fails it.
+
+    The verdict is drawn from the FIRST ordering event this loop sees — a
+    claim, a live repairJob target, or a restoration — and it is always
+    positive evidence about one instance, never the absence of evidence
+    about the other:
+
+      "first"        -- `first` was engaged before `second`: the ordering
+                        this phase requires.
+      "second"       -- `second` was engaged first: the inversion this
+                        phase exists to reject.
+      "inconclusive" -- the first ordering event was missed (the AI was
+                        already engaged when the window opened, both
+                        candidates first appear engaged in the same
+                        snapshot, or nothing was ever observed). Never
+                        read as either ordering.
+
+    Returns {verdict, reason, events, first_repaired, second_repaired}.
+    """
+    events: list[str] = []
+    verdict = None
+    reason = ""
+    started = time.time()
+    degraded = {"first": False, "second": False}
+    last_key = [None]
+
+    def record(sample):
+        for side, cond_key in (("first", "firstCond"), ("second", "secondCond")):
+            cond = float(sample.get(cond_key, -1))
+            if 0 <= cond < 100:
+                degraded[side] = True
+        fe, fr, fd = _ordering_side(sample, first, "firstClaim", "firstCond",
+                                    degraded["first"])
+        se, sr, sd = _ordering_side(sample, second, "secondClaim", "secondCond",
+                                    degraded["second"])
+        # Dedupe on the ORDERING-relevant state only, so the log is one
+        # line per transition; the AI's action/phase rides along as
+        # context without turning every wander step into a new entry.
+        key = f"{first_label}({fd})  {second_label}({sd})"
+        if not events or last_key[0] != key:
+            last_key[0] = key
+            events.append(f"t={time.time() - started:5.1f}s  {key}  "
+                          f"ai(action={sample.get('action')}, "
+                          f"repair_phase={sample.get('phase')})")
+        return (fe, fr), (se, sr)
+
+    # Admissible precondition (#1736's shape): the window has to OPEN with
+    # neither candidate engaged, or the first ordering event already
+    # happened off-camera and nothing observed later can name it.
+    base = repair_ordering_sample(port, uid, first, second)
+    if base is None:
+        return {"verdict": "inconclusive", "events": events,
+                "reason": "the unit reported no AI state when the ordering "
+                          "window opened",
+                "first_repaired": False, "second_repaired": False}
+    (base_first, _), (base_second, _) = record(base)
+    if base_first or base_second:
+        engaged = ", ".join(
+            label for label, hit in ((first_label, base_first),
+                                     (second_label, base_second)) if hit)
+        verdict = "inconclusive"
+        reason = (f"the AI was already engaged with {engaged} when the "
+                  f"ordering window opened, so the first ordering event "
+                  f"was missed")
+
+    if open_window is not None:
+        open_window()
+        started = time.time()
+    first_repaired = second_repaired = False
+    deadline = started + seconds
+    while not first_repaired and time.time() < deadline:
+        # Same defensive unpause poll_until does: any unit_warning pauses
+        # this repo's engine, which would otherwise freeze the timeline.
+        send(port, "engine.setPaused(false); return 'ok'")
+        sample = repair_ordering_sample(port, uid, first, second)
+        if sample is not None:
+            (hit_first, res_first), (hit_second, res_second) = record(sample)
+            if verdict is None and (hit_first or hit_second):
+                if hit_first and hit_second:
+                    verdict = "inconclusive"
+                    reason = (f"{first_label} and {second_label} both first "
+                              f"appear engaged in the same snapshot, so "
+                              f"neither can be named first")
+                elif hit_first:
+                    verdict = "first"
+                    reason = (f"{first_label} was engaged first, with "
+                              f"{second_label} not yet claimed, targeted or "
+                              f"restored")
+                else:
+                    verdict = "second"
+                    reason = (f"{second_label} was engaged first, with "
+                              f"{first_label} not yet claimed, targeted or "
+                              f"restored")
+            first_repaired = first_repaired or res_first
+            second_repaired = second_repaired or res_second
+        time.sleep(0.3)
+
+    if verdict is None:
+        verdict = "inconclusive"
+        reason = (f"no ordering event was observed within {seconds:g}s -- "
+                  f"neither candidate was ever seen claimed, targeted or "
+                  f"restored")
+    return {"verdict": verdict, "reason": reason, "events": events,
+            "first_repaired": first_repaired,
+            "second_repaired": second_repaired}
 
 
 def ground_state(port: int, iid: int):
@@ -614,8 +826,15 @@ def phase_player_priority(port: int) -> None:
     # severity, lower) that the player flags as priority. Phase 1 proves
     # the unflagged ordering picks the broken weapon first; this phase
     # proves flagging the armor inverts that.
-    axe = force_item_state(port, uid, "axe_steel", cond=0.0, sharp=100.0)
-    gam = force_item_state(port, uid, "wool_gambeson", cond=5.0, sharp=100.0)
+    # Both items go in HEALTHY first, so neither is a repair candidate yet
+    # and the AI cannot claim either (#1736's admissible precondition).
+    # Degrading a broken axe into the inventory several console round trips
+    # before the flag lands gives the live AI time to claim it, and once
+    # s.repairJob is set repairUtility returns the in-progress lock and
+    # never re-scans — the flag then arrives too late to invert anything
+    # and the phase proves nothing (observed on master, #1767).
+    axe = add_item_instance(port, uid, "axe_steel")
+    gam = add_item_instance(port, uid, "wool_gambeson")
 
     check("item starts unflagged", send(port,
         f"local ai=require('scripts.unit_ai'); "
@@ -627,14 +846,36 @@ def phase_player_priority(port: int) -> None:
         f"return ai.isRepairPriority({gam})") == "true"
     check("unitAi.setRepairPriority flags the armor instance", flagged)
 
-    gam_done = poll_until(port, 120,
-        lambda: (item_state(port, uid, gam) or {}).get("cond") == 100)
-    check("player-prioritized armor (lower severity) repaired FIRST",
-          gam_done is not None)
+    # ONE timeline, not two reads (#1767). The old oracle waited for the
+    # armor to hit 100 and then required the axe to still be at exactly 0
+    # -- but the armor reaching 100 is the very event that clears the
+    # priority flag and frees the job, so the AI is then correctly free to
+    # start on the axe, and a single repair visit restores it atomically.
+    # The ordering is now decided by the FIRST claim/target/restoration
+    # event observed on either instance, which correct follow-on work
+    # cannot invalidate.
+    #
+    # The observer opens the candidate window itself: it baselines both
+    # instances while they are still healthy (so neither CAN be engaged),
+    # then degrades both in ONE round trip. The two candidates therefore
+    # appear at the same instant with the flag already in place, and
+    # sampling is already running when the AI makes its first pick.
+    ordering = observe_repair_ordering(
+        port, uid, gam, axe, "armor", "weapon", seconds=120,
+        open_window=lambda: force_item_states(
+            port, uid, [(axe, 0.0, 100.0), (gam, 5.0, 100.0)]))
+    check("player-prioritized armor (lower severity) repaired",
+          ordering["first_repaired"])
 
-    axe_mid = item_state(port, uid, axe)
-    check("higher-severity weapon untouched while the priority job ran",
-          axe_mid is not None and axe_mid["cond"] == 0)
+    armor_first = ordering["verdict"] == "first"
+    if not armor_first:
+        print(f"      ordering verdict: {ordering['verdict']} -- "
+              f"{ordering['reason']}")
+        print("      observations the ordering was judged on:")
+        for line in ordering["events"]:
+            print(f"        {line}")
+    check("the flagged armor was claimed/repaired before any work on the "
+          "higher-severity weapon", armor_first)
 
     check("priority flag self-clears once the item is actually repaired",
           send(port, f"local ai=require('scripts.unit_ai'); "

@@ -515,9 +515,11 @@ script's header docstring for its exact flag set.
 
 Runs a selection of the probes above and prints a per-probe PASS/FAIL
 summary, exiting non-zero if any failed. `python3 tools/run_probes.py
---list` is the authoritative count and listing of registered probes — it's
-grown over time (currently in the mid-50s) and this doc doesn't try to
-track the exact number.
+--list` is the authoritative listing of registered probes, and `python3
+tools/ci_probes.py --status` prints the derived CI-eligible / manual-only
+/ total counts. This doc states no total of its own: a hand-written one
+drifted three times (#539, #721, #1584), so `tools/test_run_probes.py`
+fails if this section states one again.
 
 ```bash
 # Run everything, sequentially (slow — low tens of minutes)
@@ -857,6 +859,69 @@ network-free, under a second; blocking CI step alongside
 
 ```bash
 python3 tools/test_probe_root_cleanup.py
+```
+
+### `test_flora_growth_probe.py` — the flora probe's artifact ownership (#1682)
+
+`flora_growth_probe.py` already owned an isolated resource root and
+removed it on every exit path (#1616, #1791) — but only its SAVE slot had
+moved there. Its two fixture YAMLs and its engine log stayed at the fixed,
+process-global names `/tmp/probe_berry.yaml`, `/tmp/probe_clover.yaml` and
+`/tmp/flora_growth_probe_engine.log`. Each was written with a truncating
+`open(..., "w")` (`probelib.boot` opens the log the same way), none carried
+a PID, port or any other invocation identity, and nothing removed any of
+them. Two concurrent runs — a supported mode, between `run_probes.py
+--jobs N` and `probe_flake.py`'s machine-wide port lease — collided on all
+three, one overwriting a fixture between another's write and the
+engine-side read of it while both interleaved into one truncated log; a
+developer's own same-named file was truncated outright. All three now live
+inside the directory the invocation already owned, so nothing the probe
+writes can collide with another run or with a file it did not create.
+
+`python3 tools/test_flora_growth_probe.py` drives the probe's REAL `main()`
+with `run_probe` substituted, so the guard's own paths are exercised
+without an engine: two invocations share no fixture, log or root path; no
+artifact resolves to a legacy `/tmp` name; the tree is released after a
+pass, an early return, an exception, a `probelib.boot` abort and a handled
+Ctrl-C; `--keep-artifacts` is opt-in, keeps whatever result the run's own
+checks produced, names where the artifacts are, and reports only what that
+run ACTUALLY produced (a directory that was never created — a tree whose
+staging failed part-way — says so, rather than being reported as empty); a
+default failing run says its log went with the tree and points at the flag
+rather than leaving the operator chasing a deleted path; a cleanup that
+cannot finish makes an otherwise passing run non-zero; an engine the run
+LAUNCHED is always disposed of, while only a boot that RETURNED may be
+shut down through the PORT (a boot fails on a busy port exactly because
+somebody else's instance holds it) — `probelib.boot` hands the handle
+over the statement after its `Popen` through an appended optional
+`on_launch`, because it then waits up to three minutes for READY and a
+caller learning of the engine only from the return value owns nothing
+for that whole span, and anything raised while that hand-off is in
+progress kills the child inside `boot` rather than let it escape holding
+the port, and the orderly shutdown runs inside a finally whose fallback
+kills the engine outright, because `quit_engine` sends, waits and
+hard-kills and an interrupt in any of those would otherwise unwind past
+a live engine; a read-only
+checkout still yields a REMOVABLE tree, with the source's own modes
+untouched (`copytree` reproduces the source's mode bits, so a read-only
+`config/` would otherwise give this run a private copy whose entries
+cannot be unlinked — residue from a source it only read; the
+`_make_owner_writable` treatment is `location_embark_probe.py`'s, #1569);
+and an outside directory holding same-named decoys comes through
+byte-identical. It also pins what the
+probe still proves after the move: the registration ORDER placement hashes
+are indexed by — the sorted shipped flora, then `probe_berry`, then
+`probe_clover` — both fixture bodies by `sha256`, and `load_fixture_yaml`
+still stopping the run at setup on a fixture that registers nothing
+(#1342).
+
+The probe is manual-only and worldgen-heavy, so without this companion the
+contract is only ever observed by a run that generates a world.
+Engine-free, GPU-free, network-free, about a second; blocking CI step
+alongside `test_probe_root_cleanup.py`.
+
+```bash
+python3 tools/test_flora_growth_probe.py
 ```
 
 ### `test_location_probe_config_isolation.py` — the location probes' private `config/` (#1729)
