@@ -81,6 +81,7 @@ import subprocess
 import sys
 import threading
 import time
+from typing import NamedTuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import probe_engine  # noqa: E402
@@ -848,6 +849,165 @@ def engine_preflight(namespace=None, environ=None, *, announce=None) -> str:
             REPO_ROOT, run=ENGINE_PREFLIGHT_RUNNER)
 
 
+# ── Durable progress records (#1768) ──────────────────────────────────
+#
+# A probe's stdout is a PIPE this runner drains only when the child ends
+# (`run_one` below), and the child is launched as a plain `python3` with
+# no `-u`, so an ordinary `print` sits in the child's own block buffer
+# until it fills. When a slow probe is SIGKILLed at `--timeout`, that
+# buffer dies with it and the artifact the operator reads names no phase
+# at all.
+#
+# The fix is ONE convention, used by every producer that wants a record
+# to survive termination, and recognized by the failure presentation at
+# the other end. A progress record is a single flushed line:
+#
+#   #probe-progress# HH:MM:SS +12.3s | phase | engine A | build ... 'gen1'
+#   #probe-progress# HH:MM:SS +0.1s  | begin | chop (chop_probe.py) attempt 1/2 | dispatched
+#   #probe-progress# HH:MM:SS +45.2s | end   | chop (chop_probe.py) attempt 1/2 | PASS (45.1s)
+#
+# The four fields are the stamped marker, the KIND, the IDENTITY, and
+# free-text detail. `begin` and `end` carry the SAME identity, which is
+# what makes the in-flight set at termination derivable: every `begin`
+# with no matching `end` is a nested attempt that never finished.
+#
+# The marker deliberately does not start with `[`: the runner's own
+# verdict announcements do (`[3/12] chop_probe.py ... PASS`), and
+# `tools/test_run_probes.py`'s `progress_lines` helper counts those by
+# that shape. Keeping the two apart means a progress record can never be
+# miscounted as a verdict.
+PROGRESS_MARKER = "#probe-progress#"
+PROGRESS_SEP = " | "
+PROGRESS_KINDS = ("phase", "begin", "end")
+
+
+class ProgressRecord(NamedTuple):
+    """One parsed progress record: `stamp` is `HH:MM:SS +<elapsed>s`."""
+    stamp: str
+    kind: str
+    identity: str
+    detail: str
+
+
+def format_progress(kind: str, identity: str, detail: str, *,
+                    elapsed: float, now: float) -> str:
+    """Render one progress record in the ONE shared convention.
+
+    Both halves of the timing evidence are carried: a wall-clock time, so
+    records from two processes sharing this pipe (a sweep and the runner
+    it nests) can be ordered against each other, and an offset from the
+    emitting producer's own start, so how long the last named phase
+    occupied before a timeout is readable without arithmetic.
+    """
+    if kind not in PROGRESS_KINDS:
+        raise ValueError(f"unknown progress kind {kind!r}; "
+                         f"expected one of {PROGRESS_KINDS}")
+    stamp = f"{time.strftime('%H:%M:%S', time.localtime(now))} +{elapsed:.1f}s"
+    return PROGRESS_SEP.join(
+        [f"{PROGRESS_MARKER} {stamp}", kind, identity, detail])
+
+
+def parse_progress(line: str) -> ProgressRecord | None:
+    """One progress record, or None for any other line of child output."""
+    text = line.strip()
+    if not text.startswith(PROGRESS_MARKER + " "):
+        return None
+    fields = text.split(PROGRESS_SEP)
+    if len(fields) < 4:
+        return None
+    stamp = fields[0][len(PROGRESS_MARKER):].strip()
+    kind = fields[1].strip()
+    if kind not in PROGRESS_KINDS:
+        return None
+    # Detail is rejoined rather than taken as fields[3]: free text may
+    # itself contain the separator, and only the first three fields are
+    # structural.
+    return ProgressRecord(stamp, kind, fields[2].strip(),
+                          PROGRESS_SEP.join(fields[3:]).strip())
+
+
+def attempt_identity(key: str, script: str, attempt: int, total: int) -> str:
+    """The identity a nested attempt's `begin` and `end` records share.
+
+    Names the registered probe KEY, its script, and which attempt of how
+    many this is — so the record is self-describing, and so the pairing
+    is exact even when one probe is retried while another is dispatched.
+    """
+    return f"{key} ({script}) attempt {attempt}/{total}"
+
+
+class ProgressEmitter:
+    """Emits progress records against one producer's own start time.
+
+    Every record is flushed as it is written. That is the whole point:
+    the emitting process is a probe (or a runner nested inside one) whose
+    stdout is a pipe nobody reads until it exits, so an unflushed record
+    would die in its buffer at `--timeout` — exactly the loss #1768 is
+    about.
+    """
+
+    def __init__(self, start: float | None = None) -> None:
+        self.start = time.time() if start is None else start
+
+    def emit(self, kind: str, identity: str, detail: str) -> str:
+        now = time.time()
+        line = format_progress(kind, identity, detail,
+                               elapsed=now - self.start, now=now)
+        # `file` is left at its default so a caller redirecting
+        # `sys.stdout` (this suite's own drivers do) still captures it.
+        print(line, flush=True)
+        return line
+
+    def phase(self, identity: str, detail: str) -> str:
+        return self.emit("phase", identity, detail)
+
+    def begin(self, identity: str, detail: str = "dispatched") -> str:
+        return self.emit("begin", identity, detail)
+
+    def end(self, identity: str, detail: str) -> str:
+        return self.emit("end", identity, detail)
+
+
+def progress_attribution(out: str) -> list[str]:
+    """Attribution lines for a failing probe's DEFAULT presentation.
+
+    Reads the complete captured output — which `run_one` holds in full —
+    and returns only a short summary: the latest phase the child entered,
+    and every nested attempt it started without finishing. The ordinary
+    `--tail` context is printed beside this, unchanged; the complete
+    capture is deliberately NOT dumped.
+
+    A capture holding no progress records yields nothing at all, so every
+    probe that emits none has exactly the failure presentation it always
+    had.
+    """
+    records = [record for record in
+               (parse_progress(line) for line in out.splitlines())
+               if record is not None]
+    if not records:
+        return []
+    lines: list[str] = []
+    phases = [record for record in records if record.kind == "phase"]
+    if phases:
+        last = phases[-1]
+        lines.append(f"progress: latest phase entered at {last.stamp}: "
+                     f"{last.identity} -- {last.detail}")
+    # Insertion order is dispatch order, which is the order an operator
+    # wants the still-running set named in.
+    started: dict[str, ProgressRecord] = {}
+    for record in records:
+        if record.kind == "begin":
+            started[record.identity] = record
+        elif record.kind == "end":
+            started.pop(record.identity, None)
+    if started:
+        lines.append(f"progress: {len(started)} nested probe attempt(s) "
+                     f"still in flight when this run ended:")
+        for identity, record in started.items():
+            lines.append(f"    {identity}, dispatched at {record.stamp}")
+    return lines
+
+
 # farm_ai_probe.py's O(n^2) TCP tile scan over natural terrain (#336) is the
 # slowest probe in the ordinary runtime class at ~11.5 min solo on a warm dev
 # machine (#721), so the shared default needs real margin above that. A probe
@@ -1502,6 +1662,13 @@ def main() -> int:
     n = len(chosen)
     results: dict[str, tuple[str, str, float, str]] = {}  # key -> (script, status, elapsed, out)
     wall_start = time.time()
+    # #1768: the runner's own half of the shared progress convention. Its
+    # records go to this process's stdout, which — when this runner is
+    # NESTED inside a probe (the persistence sweep runs one) — is that
+    # probe's captured pipe, so they survive the outer runner's timeout
+    # kill and name which attempts were in flight.
+    progress = ProgressEmitter(wall_start)
+    total_attempts = args.retries + 1
     groups = ProbeGroups()
 
     try:
@@ -1524,6 +1691,13 @@ def main() -> int:
                 note = f"  [passed on retry {attempts}]" if status == "PASS" and attempts > 1 else ""
                 print(f"{status} ({elapsed:.1f}s){note}")
                 if status != "PASS" and args.tail > 0:
+                    # #1768: the attribution first, then the ordinary tail
+                    # as context. The attribution is drawn from the
+                    # COMPLETE capture, so a phase record that more than
+                    # `--tail` lines followed is still named; nothing else
+                    # of the capture is printed.
+                    for ln in progress_attribution(out):
+                        print(f"    {ln}")
                     for ln in out.splitlines()[-args.tail:]:
                         print(f"    {ln}")
                 results[key] = (script, status, elapsed, out)
@@ -1619,6 +1793,14 @@ def main() -> int:
                                 foreign = busy
                                 continue
                             ledger.acquire(need_exclusive, need_shared)
+                            # Emitted BEFORE the work item is queued (and
+                            # so before any engine boots), on the
+                            # dispatching thread: the parallel path
+                            # otherwise says nothing about a probe until
+                            # it completes, which is precisely what makes
+                            # a timeout here unattributable.
+                            progress.begin(attempt_identity(
+                                probe[0], probe[1], 1, total_attempts))
                             fut = ex.submit(work, i, probe)
                             running[fut] = (need_exclusive, need_shared, hold)
                             futs.append(fut)
@@ -1664,6 +1846,9 @@ def main() -> int:
                             hold.release()
                             done += 1
                             key, script, status, elapsed, out, timeout = fut.result()
+                            progress.end(
+                                attempt_identity(key, script, 1, total_attempts),
+                                f"{status} ({elapsed:.1f}s)")
                             print(f"[{done}/{n}] {script} ... "
                                   f"[timeout {format_timeout(timeout)}] "
                                   f"{status} ({elapsed:.1f}s)")
@@ -1699,11 +1884,19 @@ def main() -> int:
                     for r in range(1, args.retries + 1):
                         # A solo retry is another full probe execution, so it
                         # takes the cross-process hold like any other (#1436).
+                        # The parallel batch was attempt 1, so this is
+                        # attempt r+1 — and it gets the same before/after
+                        # pair, so a timeout DURING a retry is attributed
+                        # exactly as a timeout during the batch is.
+                        retry_identity = attempt_identity(
+                            key, script, r + 1, total_attempts)
+                        progress.begin(retry_identity, "solo retry")
                         with resource_hold(key, namespace, announce=waiting):
                             ok, timed_out, elapsed, out = run_one(
                                 script, parallel_base, timeout, groups,
                                 hold_env=descendant_hold_env(key, namespace))
                         status = "TIMEOUT" if timed_out else ("PASS" if ok else "FAIL")
+                        progress.end(retry_identity, f"{status} ({elapsed:.1f}s)")
                         print(f"  {script} solo retry {r}/{args.retries} ... "
                               f"[timeout {format_timeout(timeout)}] "
                               f"{status} ({elapsed:.1f}s)")
@@ -1716,6 +1909,13 @@ def main() -> int:
                     r = results[key]
                     if r[1] != "PASS":
                         print(f"\n--- {r[0]} ({r[1]}) ---")
+                        # The same #1768 attribution the sequential path
+                        # prints: `--jobs` is the OTHER default failure
+                        # presentation, and the guarantee has to hold on
+                        # both or it silently lapses whenever a probe is
+                        # selected inside a parallel run.
+                        for ln in progress_attribution(r[3]):
+                            print(f"    {ln}")
                         for ln in r[3].splitlines()[-args.tail:]:
                             print(f"    {ln}")
     except KeyboardInterrupt:

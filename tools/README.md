@@ -573,6 +573,43 @@ over a probe that's genuinely broken. `--tail N` prints the last `N` lines
 of a failing probe's captured output for a quicker look without re-running
 it by hand.
 
+**Progress records and timeout attribution (#1768).** A probe's stdout is a
+pipe the runner drains only when the child exits, and the child is a plain
+`python3` with no `-u` — so ordinary `print` output sits in the child's own
+block buffer and is LOST when a hung probe is SIGKILLed at `--timeout`. A
+long probe that wants a phase to survive that emits a *progress record*
+instead: one flushed line in the single convention `run_probes.py` defines
+(`PROGRESS_MARKER`, `ProgressEmitter`, `parse_progress`) and its failure
+presentation reads back.
+
+```
+#probe-progress# 19:25:04 +0.0s   | phase | engine A                            | build the scenario, save 'gen1'
+#probe-progress# 19:25:04 +0.1s   | begin | chop (chop_probe.py) attempt 1/2    | dispatched
+#probe-progress# 19:29:11 +247.2s | end   | chop (chop_probe.py) attempt 1/2    | PASS (247.1s)
+```
+
+The fields are the stamped marker (wall clock plus an offset from the
+emitting producer's own start), the KIND, the IDENTITY, and free text.
+`begin` and `end` share an identity, so every `begin` with no matching
+`end` is an attempt that never finished. Two producers use this today:
+`persistence_contract_sweep.py` records each of its long phases, and the
+runner itself records every attempt it dispatches in a `--jobs` batch or
+retries solo — which is what makes the probes active inside a NESTED
+runner nameable when the outer one times out.
+
+Above the ordinary `--tail` context, a failing probe's report therefore
+also prints a short attribution drawn from the COMPLETE capture — the
+latest phase the child entered, and every attempt still in flight:
+
+```
+[1/1] persistence_contract_sweep.py ... [timeout 120s] TIMEOUT (120.0s)
+    progress: latest phase entered at 19:25:04 +0.0s: engine A -- build the representative scenario, save 'gen1'
+    ... the ordinary last-25 lines follow, unchanged ...
+```
+
+The complete capture is never dumped, and a probe emitting no progress
+records has exactly the failure presentation it always had.
+
 **Timeouts are per probe.** Most registered probes use the ordinary 900-second
 default. A scenario whose complete expected workload structurally exceeds that
 class declares a validated key-specific default in
