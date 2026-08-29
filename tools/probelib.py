@@ -33,6 +33,7 @@ import socket
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 
 import probe_engine
 
@@ -198,10 +199,28 @@ def _log_path(port: int, log: str | None) -> str:
     return log if log else f"/tmp/synarchy_probe_{port}.log"
 
 
+def _dispose_unowned(proc: subprocess.Popen) -> None:
+    """Kill a child nobody has taken ownership of yet, quietly.
+
+    Used only on the failure path inside ``boot`` before ``on_launch``
+    has completed. It never talks to the port: an engine that has not
+    printed READY is not known to be the listener there, and on a busy
+    port it definitely is not.
+    """
+    try:
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait(timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
 def boot(port: int, log: str | None = None, args: list[str] | None = None,
          ready_timeout: float = DEFAULT_READY_TIMEOUT,
          label: str = "engine",
-         mode: tuple[str, ...] = ("--headless",)) -> subprocess.Popen:
+         mode: tuple[str, ...] = ("--headless",),
+         on_launch: Callable[[subprocess.Popen], None] | None = None,
+         ) -> subprocess.Popen:
     """Launch an engine on ``port`` and block until it prints READY.
 
     Exits the probe (non-zero) if the engine dies before READY or never
@@ -211,6 +230,27 @@ def boot(port: int, log: str | None = None, args: list[str] | None = None,
     ``("--preview", "units/acolyte")`` for a preview-mode boot (#632) — the
     debug console (and its READY print) starts the same way regardless of
     boot profile, so only the launch flags differ.
+
+    ``on_launch``, when given, is handed the process the instant it
+    exists — before the READY wait, and therefore before either of this
+    function's own failure exits — so a caller's teardown guard can own
+    the engine from as early as Python allows instead of only once this
+    returns, which on a hung boot is ``ready_timeout`` (three minutes by
+    default) later. That gap is what lets an interrupt strand a live
+    engine holding the port with nothing left holding its handle
+    (#1682). A caller that registers this way must dispose of the handle
+    DIRECTLY rather than through ``quit_engine``: this function's own
+    failure paths mean the port may belong to somebody else's instance,
+    which is precisely why the boot failed.
+
+    Handing ownership over is itself guarded: anything raised between
+    the child existing and that hand-off completing — a ``Ctrl-C``
+    delivered in the middle of it, or a callback that itself fails —
+    kills the child here rather than leave it holding the port with
+    nobody downstream aware of it. The one instant that cannot be
+    covered from Python is the store of ``Popen``'s own return value:
+    an object has to be bound to a name by an instruction, and no
+    handler can name what has not been bound yet.
     """
     if port == GUI_PORT:
         sys.exit(f"refusing to boot on port {GUI_PORT} (the GUI port); pass a 9xxx port")
@@ -221,7 +261,20 @@ def boot(port: int, log: str | None = None, args: list[str] | None = None,
     # this is the historical `cabal run` invocation, so a probe run by
     # hand still needs no prior build step.
     cmd = probe_engine.engine_command([*mode, "--port", str(port), *(args or [])])
-    proc = subprocess.Popen(cmd, stdout=logf, stderr=subprocess.STDOUT)
+    proc = None
+    try:
+        proc = subprocess.Popen(cmd, stdout=logf, stderr=subprocess.STDOUT)
+        if on_launch is not None:
+            on_launch(proc)
+    except BaseException:
+        # Ownership never completed, so nothing downstream knows this
+        # child exists — including the caller's own teardown guard. It
+        # is disposed of HERE, and by killing rather than by asking:
+        # there is no engine to ask yet, and the port may be somebody
+        # else's.
+        if proc is not None:
+            _dispose_unowned(proc)
+        raise
     proc._probe_log = logpath  # type: ignore[attr-defined]
     deadline = time.time() + ready_timeout
     while time.time() < deadline:

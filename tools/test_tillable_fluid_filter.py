@@ -40,8 +40,17 @@ Decoding is the SHIPPED decoder: the console text is rendered the way
 `luaValueToText` renders it, put through `probelib.send`'s documented
 quote-strip, and handed to the real `probelib.send_json`.
 
-Covered, for `till_probe.find_tillable`, `plant_probe.find_tillable` and
-`farm_ai_probe.find_tillable`:
+Each probe's scan is named in `FINDERS` below, because they no longer
+share one shape: `till_probe` and `farm_ai_probe` expose
+`find_tillable`, which returns the first hit, while `plant_probe`
+exposes the generator `iter_tillable` (#1762), whose extra candidates
+its fixture selection needs when the first tile turns out to be
+climatically unusable. The SCAN itself — the lattice and the
+slope/fluid/flora filters, which is all this file covers — is identical
+across the three, so `first_tillable` adapts the two shapes rather than
+testing them differently.
+
+Covered, for each of those three scans:
   * a flat, flora-free WET candidate is rejected and the scan continues
     to the next, DRY lattice point;
   * with nothing wet anywhere the same scan returns that first candidate,
@@ -60,6 +69,7 @@ Exit codes: 0 = all tests passed, 1 = one or more failed.
 """
 from __future__ import annotations
 
+import inspect
 import json
 import re
 import sys
@@ -231,32 +241,47 @@ def drive(module, console, call):
 # the SECOND — so a scan that widened or reordered its lattice fails here
 # rather than passing vacuously.
 FINDERS = [
-    ("till_probe", till_probe, (-64, -64), (-64, -60)),
-    ("plant_probe", plant_probe, (-64, -64), (-64, -60)),
-    ("farm_ai_probe", farm_ai_probe, (-64, -64), (-64, -60)),
+    ("till_probe", till_probe, "find_tillable", (-64, -64), (-64, -60)),
+    ("plant_probe", plant_probe, "iter_tillable", (-64, -64), (-64, -60)),
+    ("farm_ai_probe", farm_ai_probe, "find_tillable", (-64, -64), (-64, -60)),
 ]
 
 
+def first_tillable(module, scan):
+    """`module.<scan>` reduced to "the first tillable point, or None".
+
+    A generator scan is advanced exactly once, so it walks precisely as
+    far as a first-hit finder would — and runs to exhaustion when
+    nothing qualifies, which is what the lattice test reads back.
+    """
+    fn = getattr(module, scan)
+    if inspect.isgeneratorfunction(fn):
+        return lambda *a, **kw: next(fn(*a, **kw), None)
+    return fn
+
+
 def test_a_wet_candidate_is_rejected_for_the_next_dry_one():
-    for name, module, wet, dry in FINDERS:
+    for name, module, scan, wet, dry in FINDERS:
         console = TerrainConsole({wet: Tile(fluid="river")})
-        found = drive(module, console, lambda: module.find_tillable(PORT))
-        check(f"{name}.find_tillable skips a flat, flora-free WET tile",
+        found = drive(module, console,
+                      lambda: first_tillable(module, scan)(PORT))
+        check(f"{name}.{scan} skips a flat, flora-free WET tile",
               found == dry, f"returned {found}, wanted {dry}")
-        check(f"{name}.find_tillable really queried the wet candidate",
+        check(f"{name}.{scan} really queried the wet candidate",
               console.queried("getFluidAt", *wet),
               "the wet tile was never asked about")
-        check(f"{name}.find_tillable collapses the multi-return before "
+        check(f"{name}.{scan} collapses the multi-return before "
               f"transport",
               console.uncaptured_fluid_calls() == [],
               str(console.uncaptured_fluid_calls()[:1]))
 
 
 def test_the_same_scan_returns_the_first_candidate_when_nothing_is_wet():
-    for name, module, wet, _dry in FINDERS:
+    for name, module, scan, wet, _dry in FINDERS:
         console = TerrainConsole()
-        found = drive(module, console, lambda: module.find_tillable(PORT))
-        check(f"{name}.find_tillable returns the first candidate when the "
+        found = drive(module, console,
+                      lambda: first_tillable(module, scan)(PORT))
+        check(f"{name}.{scan} returns the first candidate when the "
               f"whole lattice is dry",
               found == wet, f"returned {found}, wanted {wet}")
 
@@ -284,16 +309,18 @@ def test_a_wet_tile_never_decodes_as_a_table():
 
 
 def test_the_slope_and_flora_filters_are_unchanged():
-    for name, module, wet, dry in FINDERS:
+    for name, module, scan, wet, dry in FINDERS:
         sloped = TerrainConsole({wet: Tile(slope=1)})
-        found = drive(module, sloped, lambda: module.find_tillable(PORT))
-        check(f"{name}.find_tillable still rejects a sloped tile",
+        found = drive(module, sloped,
+                      lambda: first_tillable(module, scan)(PORT))
+        check(f"{name}.{scan} still rejects a sloped tile",
               found == dry, f"returned {found}, wanted {dry}")
         flora = TerrainConsole({wet: Tile(flora={"id": "oak"})})
-        found = drive(module, flora, lambda: module.find_tillable(PORT))
-        check(f"{name}.find_tillable still rejects a flora-bearing tile",
+        found = drive(module, flora,
+                      lambda: first_tillable(module, scan)(PORT))
+        check(f"{name}.{scan} still rejects a flora-bearing tile",
               found == dry, f"returned {found}, wanted {dry}")
-        check(f"{name}.find_tillable still reads flora as a table",
+        check(f"{name}.{scan} still reads flora as a table",
               flora.queried("getFloraAt", *wet),
               "the flora query never ran")
 
@@ -302,12 +329,13 @@ def test_the_sampling_lattices_are_unchanged():
     """Requirement 7: this issue touches the fluid predicate and nothing
     about WHERE each probe looks. Read the walked points back off a full
     dry sweep, which visits every one of them."""
-    for name, module, _first, _second in FINDERS:
+    for name, module, scan, _first, _second in FINDERS:
         # Nothing is tillable anywhere, so the scan runs to exhaustion.
         exhausted = TerrainConsole(
             {(x, y): Tile(slope=1)
              for x in range(-96, 97) for y in range(-96, 97)})
-        drive(module, exhausted, lambda: module.find_tillable(PORT))
+        drive(module, exhausted,
+              lambda: first_tillable(module, scan)(PORT))
         points = sorted({(int(m.group(2)), int(m.group(3)))
                          for m in (_POINT_QUERY.search(lua)
                                    for lua in exhausted.calls("getSlopeAt"))
@@ -315,7 +343,7 @@ def test_the_sampling_lattices_are_unchanged():
         expected = sorted((x, y)
                           for x in range(-64, 65, 4)
                           for y in range(-64, 65, 4))
-        check(f"{name}.find_tillable still walks its declared lattice",
+        check(f"{name}.{scan} still walks its declared lattice",
               points == expected,
               f"{len(points)} points, first {points[:1]}, last {points[-1:]}")
 

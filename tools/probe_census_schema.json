@@ -227,7 +227,7 @@
     },
 
     "outcome": {
-      "$comment": "Exactly what deflake_outcome.outcome_record() writes: one de-flake attempt's STABLE NON-SUCCESS outcome (#1439). `attempt` is the attempt identity and the idempotency key -- resuming an already-recorded attempt must remain one record, and the same identity carrying different evidence is refused rather than appended. The record is a RESUME point: it carries the summarized measurement evidence, artifact REFERENCES and the diagnostic summary, so a later reader never has to re-run the attempt to know what it established.",
+      "$comment": "One de-flake attempt's ending, written by exactly two workflows: deflake_outcome.outcome_record() for the three STABLE NON-SUCCESS outcomes (#1439), and deflake_issue.outcome_record() for the production-defect one it files a tracker issue for (#1438). ONE shape, because one `outcomes` collection holds every ending and a reader must not have to know which workflow wrote each entry. `attempt` is the attempt identity and the idempotency key -- resuming an already-recorded attempt must remain one record, and the same identity carrying different evidence is refused rather than appended. The record is a RESUME point: it carries the summarized measurement evidence, artifact REFERENCES and the diagnostic summary, so a later reader never has to re-run the attempt to know what it established.",
       "type": "object",
       "required": ["attempt", "outcome", "reason", "probe", "timestamp_utc",
                    "baseline_sha", "acceptable_failures", "targets",
@@ -238,8 +238,9 @@
       "properties": {
         "attempt": {"type": "string", "minLength": 1, "maxLength": 128},
         "outcome": {
-          "$comment": "The three STABLE outcomes. An operational error is deliberately not one of them: exit codes 2-4, an incomplete run set and malformed measurement data return an actionable non-success and record nothing at all.",
-          "enum": ["cannot-reproduce", "no-confident-fix", "partial-improvement"]
+          "$comment": "The three STABLE outcomes (#1439) and the filed production defect (#1438). An operational error is deliberately not one of them: exit codes 2-4, an incomplete run set and malformed measurement data return an actionable non-success and record nothing at all. `production-defect` is spelled as #1437's own route identifier, because that ending IS the route it was handed -- two vocabularies for one concept is how a census row stops being greppable against the diagnosis that produced it.",
+          "enum": ["cannot-reproduce", "no-confident-fix", "partial-improvement",
+                   "production-defect"]
         },
         "reason": {
           "$comment": "WHY #1437 took the route this outcome answers, in its own machine-readable vocabulary (deflake_diagnosis.REASONS). `outcome` says what was concluded; this says what the invocation actually established. A `cannot-reproduce` whose condition could not be recreated carries no de-list recommendation precisely because of this field. Deliberately NOT enumerated here: the vocabulary is tools/deflake_diagnosis.py's and grows with its routes, and a second copy in a data file would be the one that went stale.",
@@ -278,7 +279,34 @@
           "if": {"type": "null"},
           "then": true,
           "else": {"$ref": "#/$defs/outcome_comparison"}
+        },
+        "issue": {
+          "$comment": "The tracker issue a production defect was filed as (#1438). OPTIONAL rather than nullable-and-required, because #1439's three stable outcomes were written before this key existed and a stored one carries no `issue` at all; the allOf below is what makes it REQUIRED on a production-defect and FORBIDDEN on the other three, so absence is never an accident either way.",
+          "$ref": "#/$defs/outcome_issue"
         }
+      },
+      "allOf": [
+        {
+          "$comment": "A filed production defect names the issue it was filed as. Without this the ending could be recorded with no way back to the human-reviewed lane it exists to enter, which is the whole outcome.",
+          "if": {"required": ["outcome"],
+                 "properties": {"outcome": {"enum": ["production-defect"]}}},
+          "then": {"required": ["issue"]},
+          "else": {"not": {"required": ["issue"]}}
+        }
+      ]
+    },
+
+    "outcome_issue": {
+      "$comment": "Exactly what deflake_issue.require_issue_identity() stores: the tracker issue this attempt was filed as, the STABLE publication key it was filed under, and the issue-origin brand the canonical review gate routes on. The key is what a resume reconciles against the tracker, so an issue created before a crash is reused rather than duplicated; it is DERIVED from the handoff, never supplied by a caller. `origin` IS enumerated here, unlike the sibling `reason` field: that vocabulary is tools/deflake_diagnosis.py's and grows with its routes, while this one is the closed pair approve_issues.py's own ORIGIN_RE matches, and tools/test_deflake_diagnosis.py holds the two spellings to each other.",
+      "type": "object",
+      "required": ["number", "url", "publication_key", "origin"],
+      "additionalProperties": false,
+      "properties": {
+        "number": {"type": "integer", "minimum": 1},
+        "url": {"type": "string", "minLength": 1, "maxLength": 2048,
+                "pattern": "^https://"},
+        "publication_key": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "origin": {"enum": ["claude", "codex"]}
       }
     },
 

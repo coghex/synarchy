@@ -441,7 +441,7 @@ instance, defaulting to its own historical fixed port when unset (#723).
 | `crop_probe.py` | #334 | worldgen (isolated resource root) | Row-crop natural placement (`tomato_plant`) + groundcover `world.plantCropAt` (`wheat`) into a `CropPlot`, growth under the real clock, harvest, refusal for a row_crop species, save/load round-trip. |
 | `debug_console_boot_probe.py` | #1190, #1365 | none (no world and no GPU in any boot: every failing boot dies before the engine action, and the four normal boots quit as soon as they have answered — seconds in total) | Required-debug-console boot contract for the two windowless modes. `--headless`/`--offscreen` must FAIL when their only interactive control surface never comes up: port 0 (issue #46's "no TCP listener" sentinel, which belongs to `--dump` alone) is refused before a socket is touched, and a real `Left` from the listener — both an invalid service (`--port -1`) and a genuine `EADDRINUSE` against a port the probe itself holds — aborts the boot. Each case must exit non-zero on its own inside a bounded timeout, print NO `READY` marker on stdout, name the selected mode / effective port / specific cause on stderr, and leave cleanup EVIDENCE rather than a bare vanished process: the pre-thread Lua state's close and the exact worker count torn down (0 for headless, whose first worker is Lua; 1 for offscreen, which starts the input thread first) are each announced by the step that performs them, and offscreen must never reach its engine action, so Vulkan is never initialized. Also pins the two unchanged behaviours: `--dump` still exits 0 with valid JSON and its `READY port=0` marker, and a successful headless bind still reaches `engine.quit()` over the console and exits 0 — its FIRST post-READY command staying that quit (#1283), which is why the widget check below boots separately rather than querying it first. Since #1365 it is also the blocking CI gate for `scripts/ui/*`, and check 8 is what earns that: a normal headless boot is asked, over its own console, which `scripts.ui.*` modules `package.loaded` actually holds, and the gate fails both when one of the 28 modules a non-preview boot loads is absent AND when the boot logged any Lua load/init failure — because `callModuleFunction` and `engine.loadScript` both log and DISCARD a Lua error, so READY plus a clean exit is no evidence at all that the widget kit loaded. Each half of that signal has its own negative regression against a really-broken boot on an alternate resource root: a `focus_indicator` that raises after it has already self-registered into `package.loaded` (a live partial table the presence half cannot see, caught and NAMED by the log half), and a covered module no longer required anywhere in the boot (absent with nothing logged at all, which only the presence half sees). |
 | `disarm_probe.py` | #193 | arena | Disabled-hand auto-drop must re-fire. |
-| `etymology_probe.py` | #1104, #1604 | worldgen (size 64, one offscreen boot; `--self-test` boots nothing) | Name etymology through the REAL in-game UI, windowless: a world named through the genuine `world.suggestName` -> `world.init` path (so its stored name really was rendered from the expression stored beside it), then all three entry points — the world's own name, a discovered location, and a river reached by selecting one of its visible segments through `world.getRiverAt`'s stable-identity resolution — opening ONE panel, retargeted rather than duplicated. Every control is located through the name plate's and the panel's own `dump()` oracles and clicked with `input.click` at its real interactive bounds, never a hardcoded coordinate. Asserts populated content (stored name, whole gloss, morpheme rows carrying concept/role/realized spelling/canonical free spelling/English lemma) and re-derives #1104 requirement 3 ITSELF — the reported surface tokens must concatenate back to the stored name — rather than trusting the engine's own claim that they do; that a bound form reports its free spelling as ONE morpheme; that a recurrence entry leaks nothing beyond an entity kind and an already-visible name; the honest unavailable state for a CUSTOM-named world (stored name still shown, reason `custom`, no invented morphemes); and that a resize keeps the panel valid and pointed at the same entity while close leaves no rows or stale viewport handle. Phases 3 and 4 each require the fixture to SUPPLY their entity: since #1604 a world that placed no location, or generated no named river with segments, is a `FIXTURE` failure naming the seed, world size and plate count and exits non-zero, rather than a `SKIP` that let a required phase vanish from an `all checks passed` run — as does phase 3's precondition (`main_world` active, and the chunk load around the camera drained to a zero remainder, which is the world-thread synchronization point that makes an empty location list an answer about the world rather than about timing). Phase 5's bound-form/recurrence rows and phase 6's long-scroll case stay legitimately data-dependent and still skip. `--self-test` grades that classification with synthetic readings and no engine at all, which is the only coverage the missing-LOCATION branch can get — #997 places a guaranteed location on any world with land, so only a landless one reaches it; the missing-river branch also has a live fixture in `--size 8`, which generates no rivers at all. |
+| `etymology_probe.py` | #1104, #1604, #1608 | worldgen (size 64, one offscreen boot; `--self-test` boots nothing) | Name etymology through the REAL in-game UI, windowless: a world named through the genuine `world.suggestName` -> `world.init` path (so its stored name really was rendered from the expression stored beside it), then all three entry points — the world's own name, a discovered location, and a river reached by selecting one of its visible segments through `world.getRiverAt`'s stable-identity resolution — opening ONE panel, retargeted rather than duplicated. Every control is located through the name plate's and the panel's own `dump()` oracles and clicked with `input.click` at its real interactive bounds, never a hardcoded coordinate. Asserts populated content (stored name, whole gloss, morpheme rows carrying concept/role/realized spelling/canonical free spelling/English lemma) and re-derives #1104 requirement 3 ITSELF — the reported surface tokens must concatenate back to the stored name — rather than trusting the engine's own claim that they do; that a bound form reports its free spelling as ONE morpheme; that a recurrence entry leaks nothing beyond an entity kind and an already-visible name; the honest unavailable state for a CUSTOM-named world (stored name still shown, reason `custom`, no invented morphemes); and that a resize keeps the panel valid and pointed at the same entity while close leaves no rows or stale viewport handle. Phases 3 and 4 each require the fixture to SUPPLY their entity: since #1604 a world that placed no location, or generated no named river with segments, is a `FIXTURE` failure naming the seed, world size and plate count and exits non-zero, rather than a `SKIP` that let a required phase vanish from an `all checks passed` run — as does phase 3's precondition (`main_world` active, and the chunk load around the camera drained to a zero remainder, which is the world-thread synchronization point that makes an empty location list an answer about the world rather than about timing). Phase 6's long-scroll case is a fixture requirement too, for a different reason (#1608): the phase MANUFACTURES its overflow by rebuilding the HUD at 800x600 under UI scale 4.0 — deliberately out of envelope — so nothing overflowing means that configuration stopped working and the six arrow and wheel routing checks never ran, reported as a `FIXTURE` failure naming the last panel dump's `rowCount`, `visibleRows` and `scrollbar` (each labelled even when the dump carried none of them) rather than a `SKIP`; the forced scale is restored on every exit from the phase, the failing one included. Only phase 5's bound-form/recurrence rows stay legitimately data-dependent and still skip. `--self-test` grades that classification with synthetic readings and no engine at all — phase 6's overflow readings included, since making a live run stop overflowing means breaking the very configuration it depends on — and it is the only coverage the missing-LOCATION branch can get — #997 places a guaranteed location on any world with land, so only a landless one reaches it; the missing-river branch also has a live fixture in `--size 8`, which generates no rivers at all. |
 | `expedition_loop_probe.py` | #923 | worldgen (two real engine boots, isolated resource root) | **The expedition arc's final integrated gate** — the whole first expedition as ONE session, from an empty world to a reloaded save: `prepare -> travel -> discover -> extract -> return -> invest`. Eight independently-reported stages (`setup`, `prepare`, `travel`, `extract`, `return`, `save`, `load`, `control`), so a failure names which part of the loop broke. A real `acolyte_portal` placed through `building.canPlaceAt` delivers its OWN six-unit roster (`scripts/building_spawn.lua`); one acolyte secures water by its own `getVisibleTiles` FOV scan, completing the shipped `first_session` tree to its exact expected latched set; a traveller is provisioned off the technomule through `unit.transferItemToUnit`. Two travellers then share ONE identical ~30-tile leg — mustered to a single staging tile and held there by the pause (`unit.setFrozen` is render-only and would report stale positions while the sim kept walking them), then the same verb (`commandMove`) to the same destination, issued in one paused window from the same seeded hunger deficit, both verified inside their carrying capacity — and are measured together once BOTH are at the ruin in **one coherent snapshot** (a single paired read, revalidated with the simulation stopped, with the control's metrics taken inside that same stopped window — two separate `unit.getInfo` round trips would let a pair that was never inside together satisfy the test), differing ONLY in the food they carried (the canteen is left FULL on both: a dry one puts `refill_canteen` at its 7.5 peak, above `follow_command`, so an unwatered traveller correctly abandons the leg and walks to the lake the scout radioed about — a behavioural difference rather than the supply being measured). Five things that would otherwise leak into the comparison are levelled deliberately: the origin (a shared destination is not a shared journey — hunger drains with time on the road, and an early run departed from 36.4 vs 31.5 tiles out — and a shared *distance* is not enough either, since a radial band is satisfied anywhere on a circle, so the departure check asserts how far apart the two stand as well as how far each must walk; each is pinned on arrival by the pause, which remains valid and is now belt-and-braces: since #1216 a completed PLAYER move order holds position, so an arrived traveller no longer drifts on its own — but the pause is still what makes the paired read a single coherent instant, and a survival interrupt can still carry a held unit off its anchor mid-measurement), the verb (`commandMove` walks at `ordered` = comfort x 1.15 while `pickup_ground` walks at `comfort`, so the prepared traveller's retrieval order is issued only AFTER the measurement), encumbrance (an over-encumbered acolyte crawls and its order stall-times-out — calibration observation E1), the observation point (simultaneous containment: the two travellers arrive at different times, and the first one's hold can still be interrupted by its own physiology before the second lands), and the control's own loot target (see below). The prepared one eats en route through the ordinary AI — watched live as a real `eat_from_inventory` action, so the delta is attributed to a mechanism rather than inferred from a number — and the **unprepared control is measurably worse off at the same observation point** (a predetermined adverse delta in stomach fraction — the metric `docs/expedition_survival_calibration.md` measured actually goes live on a trip this length; water is reported as evidence rather than gated, see the module docstring), so the gate proves preparation matters rather than proving a walk succeeds. The control carries no retrieval target of its own — handing it the ruin's second loot roll would put the loot TABLE inside the experiment, since a ruin can roll food and a control that eats what it finds destroys the measurement. Approach promotes the location instance to `discovered` exactly once with one player event, and per-unit knowledge only for the units that went (the never-went-there control is eligibility-based rather than held: a stay-at-home colonist counts only if it was never observed at the ruin during the leg and is away from it at check time, so one that genuinely wanders to the ruin is excluded rather than read as a leak); the carrier picks up the ruin's OWN seed-stable loot roll (nothing is staged), walks home, and banks it in colony storage from an adjacent tile. A FRESH process then reloads and re-checks every durable identity — the same `(page, instance id)` still `discovered` with `contents_spawned`, the traveller's location knowledge, the exact completed objective-ID set, and the recovered item's instance id / definition / mutable properties / storage ownership — before a different colonist withdraws that exact instance, proving the recovered loot is ordinary colony stock. Never calls `world.setLocationLifecycle` (the expected end state is `discovered`; nothing in the shipped game drives an instance past it) and never stages an item. Prints a `FINGERPRINT` line (ruin instance, anchor, rolled loot, target, colony and water tiles, objective set, per-stage outcomes) so two consecutive fixed-seed runs can be diffed for identity AND result, not just compared on exit status; sampled measurements are printed separately and kept out of it. An unexpected operational failure (dead engine, socket timeout) is recorded against the stage it interrupted, so no run can traceback its way past a PASS summary. |
 | `expedition_retrieval_probe.py` | #920 | worldgen (two real engine boots, isolated resource root) | Player-driven remote retrieval and return, end to end against a `radio` the probe stages on the ground inside a real placed `ruin_small` (#921 made ruin contents weighted loot-table draws, so no ruin guarantees a specific item to target), using only the direct-RTS verbs a player already has (`commandPickup` / `commandMove` / adjacent `depositToCargo`) — no caravan or one-click retrieval interface. That final deposit is the LAX verb rather than a player gesture: #1249 retired the adjacent "Store in <cargo>" menu entry that made the identical call, so the Chebyshev-≤1 rule asserted around it here is this probe's own (the player's own way to bank it is a queued Store order). Capacity is legible BEFORE the trip (an over-capacity order is refused with a player-visible warning naming carrier and item, starts no journey, and the identical order is accepted once one ballast item is shed — so the gate is the live `getCarryingWeight` + ground-row `weight` sum, read since #1666 through `item.getGroundForUnit` on the carrier's own page); the carrier then travels tens of tiles over many ticks (no teleport), picks the item up through the real `pickup_ground` action, and the pickup lands a player-facing event naming the item and its carrier; a forced survival need (eating — hunger, not thirst: hydration feeds the consciousness model, so a thirst deep enough to outrank the order can knock the carrier out before it ever drinks) preempts the pending return order and the carrier keeps the item and resumes; the session is saved mid-inbound-leg, a FRESH process loads it with the same instance on the same carrier and the return intent still pending, finishes the walk, and deposits into colony storage; finally a different colonist withdraws that exact instance and drives an existing provenance-blind consumer with it (`notify_allies`' radio branch). Guards the two stall bugs it found: `pickup_timeout` and `maintainTask`'s `TASK_TIMEOUT_SEC` were total-trip budgets that abandoned still-progressing orders at ~21 and ~42 tiles. Both are STALL timers now, reset on a new closest approach and — since #1291 — charged only for time the unit was FREE to pursue the order, so the interruption above costs it nothing however long it lasts (`scripts/unit_ai_stall.lua`; hspec `--match "commanded order stall budget"`). |
 | `farm_ai_probe.py` | #336 | worldgen | Farm AI capstone: till -> plant -> grow -> auto-harvest end to end through the real acolyte AI stack, plus `world.plantRowCropAt` and the `findHarvestableFlora` CropPlot scan. |
@@ -861,6 +861,69 @@ network-free, under a second; blocking CI step alongside
 python3 tools/test_probe_root_cleanup.py
 ```
 
+### `test_flora_growth_probe.py` — the flora probe's artifact ownership (#1682)
+
+`flora_growth_probe.py` already owned an isolated resource root and
+removed it on every exit path (#1616, #1791) — but only its SAVE slot had
+moved there. Its two fixture YAMLs and its engine log stayed at the fixed,
+process-global names `/tmp/probe_berry.yaml`, `/tmp/probe_clover.yaml` and
+`/tmp/flora_growth_probe_engine.log`. Each was written with a truncating
+`open(..., "w")` (`probelib.boot` opens the log the same way), none carried
+a PID, port or any other invocation identity, and nothing removed any of
+them. Two concurrent runs — a supported mode, between `run_probes.py
+--jobs N` and `probe_flake.py`'s machine-wide port lease — collided on all
+three, one overwriting a fixture between another's write and the
+engine-side read of it while both interleaved into one truncated log; a
+developer's own same-named file was truncated outright. All three now live
+inside the directory the invocation already owned, so nothing the probe
+writes can collide with another run or with a file it did not create.
+
+`python3 tools/test_flora_growth_probe.py` drives the probe's REAL `main()`
+with `run_probe` substituted, so the guard's own paths are exercised
+without an engine: two invocations share no fixture, log or root path; no
+artifact resolves to a legacy `/tmp` name; the tree is released after a
+pass, an early return, an exception, a `probelib.boot` abort and a handled
+Ctrl-C; `--keep-artifacts` is opt-in, keeps whatever result the run's own
+checks produced, names where the artifacts are, and reports only what that
+run ACTUALLY produced (a directory that was never created — a tree whose
+staging failed part-way — says so, rather than being reported as empty); a
+default failing run says its log went with the tree and points at the flag
+rather than leaving the operator chasing a deleted path; a cleanup that
+cannot finish makes an otherwise passing run non-zero; an engine the run
+LAUNCHED is always disposed of, while only a boot that RETURNED may be
+shut down through the PORT (a boot fails on a busy port exactly because
+somebody else's instance holds it) — `probelib.boot` hands the handle
+over the statement after its `Popen` through an appended optional
+`on_launch`, because it then waits up to three minutes for READY and a
+caller learning of the engine only from the return value owns nothing
+for that whole span, and anything raised while that hand-off is in
+progress kills the child inside `boot` rather than let it escape holding
+the port, and the orderly shutdown runs inside a finally whose fallback
+kills the engine outright, because `quit_engine` sends, waits and
+hard-kills and an interrupt in any of those would otherwise unwind past
+a live engine; a read-only
+checkout still yields a REMOVABLE tree, with the source's own modes
+untouched (`copytree` reproduces the source's mode bits, so a read-only
+`config/` would otherwise give this run a private copy whose entries
+cannot be unlinked — residue from a source it only read; the
+`_make_owner_writable` treatment is `location_embark_probe.py`'s, #1569);
+and an outside directory holding same-named decoys comes through
+byte-identical. It also pins what the
+probe still proves after the move: the registration ORDER placement hashes
+are indexed by — the sorted shipped flora, then `probe_berry`, then
+`probe_clover` — both fixture bodies by `sha256`, and `load_fixture_yaml`
+still stopping the run at setup on a fixture that registers nothing
+(#1342).
+
+The probe is manual-only and worldgen-heavy, so without this companion the
+contract is only ever observed by a run that generates a world.
+Engine-free, GPU-free, network-free, about a second; blocking CI step
+alongside `test_probe_root_cleanup.py`.
+
+```bash
+python3 tools/test_flora_growth_probe.py
+```
+
 ### `test_location_probe_config_isolation.py` — the location probes' private `config/` (#1729)
 
 `location_content_probe.py`, `location_overlay_probe.py` and
@@ -1002,7 +1065,7 @@ pre-execution rejections (2), port exhaustion (3) and harness errors (4) — a
 malformed, truncated, duplicate, out-of-order or unclassifiable protocol
 event, which is never reported as a probe pass.
 
-### `probe_census.py` — the probe census (#1425, #1428, #1430, #1492, #1434, #1441, #1439)
+### `probe_census.py` — the probe census (#1425, #1428, #1430, #1492, #1434, #1441, #1439, #1438)
 
 Builds, validates and updates `docs/probe_census.json`, now
 `probe-census/v4`: every registered probe exactly once, with its script, its
@@ -1011,8 +1074,9 @@ CI-eligible/manual-only classification, its protocol status (`legacy` or
 policy, the estimated worst-case duration, the current commit cohort, the
 archived cohorts, an append-only attempt log, an append-only log of claim
 ACQUISITIONS keyed for idempotency by acquisition token (#1434), and an
-append-only log of a de-flake attempt's STABLE NON-SUCCESS OUTCOMES keyed for
-idempotency by attempt identity (#1439). All three are separate collections
+append-only log of a de-flake attempt's non-repair OUTCOMES keyed for
+idempotency by attempt identity — the three stable ones (#1439) and the
+production defect a tracker issue was filed for (#1438). All three are separate collections
 on purpose: an attempt is a result ingestion and is deliberately
 non-idempotent, while recording one acquisition or one attempt outcome twice
 must stay one record — and an outcome carries evidence neither of the other
@@ -2237,8 +2301,11 @@ the probe and targets, the baseline SHA and X, the configuration manifest,
 references to the controlled results, the diagnosis evidence, the preservation
 attestations, and the repair commit and verification evidence when the route
 has them. A route with no batches states those halves as `null` rather than
-dropping the keys, so a consumer reads one shape. `deflake_outcome.py` below
-is #1439's consumer; #1438's is its own.
+dropping the keys, so a consumer reads one shape. `deflake_outcome.py` and
+`deflake_issue.py` below are its two consumers, and they read the same
+envelope through the same entry gate: `deflake_outcome.RouteOwnership` is the
+only part that differs, so every rule the two share is checked once rather
+than forked.
 
 The gate is `tools/test_deflake_diagnosis.py`, engine-free and document-only.
 It is deliberately NOT wired into `make ci` or GitHub CI — #1437's approved
@@ -2496,6 +2563,124 @@ diagnosis records they feed it are PRODUCED by `dd.evaluate` rather than
 hand-assembled, and the census they append to is a real seeded one in a
 temporary directory. Like #1437's, it is deliberately not wired into `make ci`
 or GitHub CI.
+
+### `deflake_issue.py` — file an issue when the bug is in the engine (#1438)
+
+The second outcome of diagnosis, and the one that must not be skipped. When
+#1437 routes an attempt to `production-defect` — the diagnosis is that
+PRODUCTION code or SHIPPED scripts are wrong, a real race rather than a racy
+test — this module files one review-ready tracker issue, records it in the
+probe's census row, and stops.
+
+```bash
+python3 tools/deflake_issue.py --handoff <document.json> --origin claude
+python3 tools/deflake_issue.py --handoff <document.json> --dry-run
+python3 tools/deflake_issue.py --handoff <document.json> --origin codex \
+    --census <path> --repo owner/name --json
+```
+
+An engine race that reaches a pull request as a probe adjustment is a bug
+converted into a permanent green light, so this route is TERMINAL: the probe
+is not touched, no production code is edited, and no pull request is opened.
+Both boundaries are injected parameters consulted through `CHANGES_THE_PROBE`
+and `OPENS_PULL_REQUEST`, so the silence is a branch a gate exercises rather
+than a call nobody happened to write — flipping either entry makes the
+injected spy fire.
+
+"Engine" means production Haskell under `src/`/`app/` and shipped Lua under
+`scripts/`; probe implementation under `tools/*_probe.py` is explicitly not
+that, and is #1437's repair route. Nothing here inspects a diff to decide: the
+CALLER's explicit diagnosis is the branch input, because the issue assigns
+that judgement to the calling agent and a second heuristic classifier would be
+a second opinion nobody asked for.
+
+**Evidence, not pathnames.** `probe_census.summarize_sample` stores retained
+artifacts as PATHS, and a path is machine-local — a reader of the filed issue
+cannot open it. So this module READS the retained FAIL and TIMEOUT
+directories (`events.jsonl`, `stdout.txt`, `engine/*`) and quotes bounded
+excerpts into the body. The tree is walked component by component from the
+declared artifact root with `O_NOFOLLOW` below it and the engine directory
+listed by descriptor, because what is found there is published: a symlinked
+`engine`, or a run directory substituted after #1437's canonical-path check
+passed, would otherwise publish whatever lives elsewhere as this probe's
+failure evidence. Files are opened `O_NONBLOCK` and required to be regular, so
+a FIFO cannot block the workflow. The bounds: at most `MAX_EVIDENCE_RUNS` runs, `MAX_EVIDENCE_FILES_PER_RUN`
+files each, and the trailing `MAX_EXCERPT_LINES`/`MAX_EXCERPT_CHARS` of each,
+which is where an aborting probe's failure lands. An attempt whose artifacts
+have all been pruned is REFUSED rather than filed on paths alone — but only an
+attempt with no issue at ALL ever collects evidence. A recorded outcome and a
+reconciled publication key are both checked first, so either recovery works
+long after the artifact tree has been swept; earlier still is the route's own
+evidence check, which needs no artifact, so an unsupported handoff is refused
+without even a search.
+
+**Quoted content cannot forge the routing marker.** An engine log is
+arbitrary text, and `approve_issues.issue_origin` scans the whole raw body —
+fenced blocks included — and RAISES on two markers naming different brands, so
+a quoted log carrying one would stop the filed issue entering the review gate
+at all. The assembled body therefore passes through one funnel that breaks
+every HTML-comment opener (rendering `<!--` as `<! --`) before the two real
+markers are appended, and `require_one_marker_each` then checks the finished
+text — exactly one origin, one publication key, two comments — rather than
+trusting that it did.
+
+**Nothing required is silently cut.** Only the second and later runs' evidence
+may be dropped to fit a tracker body; when even that is not enough the
+publication is refused, because a defect report published with its
+measurements or its log evidence truncated away is what this workflow exists
+to prevent. #1437 bounds neither the diagnosis summary nor its evidence list,
+so `require_defect_diagnosis` bounds both here — refused rather than trimmed,
+since the summary is the issue's own claim. Beside them
+the body carries what the amendment names: the failure numerator, denominator
+and rate, the timeout count, every declared check's PASS/FAIL/MISSING tally,
+the measured commit, the requested and completed run counts, the RTS
+capability setting, the targets and X, the configuration manifest, and the
+`/deflake` command and directory.
+
+**It enters the review gate.** The body ends with the `issue-origin` marker
+`approve_issues.py` reads to route a new issue to the opposite agent brand.
+That brand is the INVOKING agent's, which no document can derive, so
+`--origin` is a required input rather than a default; no label is applied,
+because labelling is the review lane's.
+
+**Publication is idempotent, including across a crash.** A recorded outcome is
+the completion marker: a resume reuses the stored issue and does not reach the
+tracker at all. The window that marker cannot close is the one where creation
+TOOK EFFECT and its identity was never recorded — a timeout, a crash, or a
+census write that refused in between. So every diagnosis carries a stable
+`publication_key`, DERIVED from the attempt identity, probe, route and
+baseline commit rather than supplied, and written into the body as a marker
+line. It is reconciled against the tracker BEFORE anything is created, and the
+marker is verified in the returned body rather than trusted from a search
+index — a search matches text anywhere, and an issue that merely quotes a key
+is not the one filed under it. Since a filed issue QUOTES engine logs, only a
+standalone marker line outside every code fence counts. A reconciled issue
+also supplies its own `issue-origin` brand, read off that same body: the issue
+was filed by whoever filed it, so a Claude-origin creation resumed by a Codex
+invocation still routes to Claude's opposite brand, and one carrying the key
+with no readable origin marker is a publication failure rather than something
+to record under the caller's guess. Two invocations of one brand-new attempt racing
+at the same instant can still both miss the reconcile; the census refuses the
+loser, so the durable history holds one outcome, and serializing the attempt
+itself is `probe_claim.py`'s (#1434) per-probe claim. The census's `flock` is
+deliberately NOT held across the remote call: one hung request would stall
+every unrelated census writer.
+
+**Failure leaves the attempt resumable.** A publication that fails, or a census
+write that refuses, records nothing, changes no bytes, and never falls through
+to the probe-adjustment or fix-PR path. The issue may exist remotely; the next
+invocation reconciles the key, finds it, and records it once.
+
+The census record is deliberately the same shape `deflake_outcome.py` writes
+plus an `issue` block (number, URL, publication key, origin) — one `outcomes`
+collection holds every ending of a de-flake attempt, and the schema pairs the
+two halves: `production-defect` REQUIRES `issue` and the three stable outcomes
+forbid it.
+
+The gate is `python3 tools/test_deflake_diagnosis.py` again — engine-free,
+GPU-free and network-free, with the tracker faked at the publication boundary
+so "exactly one issue" is a counted fact. Like #1437's and #1439's cases, it
+is deliberately not wired into `make ci` or GitHub CI.
 
 ### `ci_expensive_gates.py` — CI worldgen/graphical/unit-assets/save-compat selection
 

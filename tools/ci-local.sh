@@ -365,9 +365,14 @@ python3 tools/world_check.py --quick
 # --resource-root on every boot, release on a pass, a phase-0 return, an
 # exception and a boot abort, residue as a failing check, a pre-existing
 # same-named save slot left byte-identical, and a read-only checkout
-# still yielding a removable tree. That probe is manual-only needs-gpu,
-# so without this companion the contract is only ever observed by a GPU
-# run neither gate can make; the companion boots nothing.
+# still yielding a removable tree. It also carries #1746's second
+# contract for the same probe: both of that probe's saves return the
+# API's own acceptance Boolean and then wait for their OWN request id to
+# reach SaveCaptureComplete, and a save that is refused, never reports a
+# request id, fails or times out suppresses every session that would
+# read the slot. That probe is manual-only needs-gpu, so without this
+# companion both contracts are only ever observed by a GPU run neither
+# gate can make; the companion boots nothing.
 # test_location_probe_config_isolation is #1729's: the private `config/`
 # tree tools/location_content_probe.py, location_overlay_probe.py and
 # location_stamp_idempotent_probe.py each stage, and that
@@ -396,6 +401,41 @@ python3 tools/world_check.py --quick
 # whoever else holds the port. All four probes are manual-only, so
 # without this companion the boundary is only ever observed by long
 # engine runs; the companion boots nothing.
+# test_flora_growth_probe is #1682's: the artifact ownership of
+# tools/flora_growth_probe.py, the other half of what #1616 started.
+# Its two fixture YAMLs and its engine log were fixed /tmp names --
+# probe_berry.yaml, probe_clover.yaml, flora_growth_probe_engine.log --
+# each written with a truncating open(..., "w"), carrying no invocation
+# identity and cleaned up by nothing, so two concurrent runs collided on
+# all three while a developer's same-named file was truncated outright.
+# All three now live under the one directory the invocation already
+# owned. This drives the probe's real main() with run_probe substituted:
+# disjoint paths for two invocations, no legacy /tmp name, release after
+# a pass, an early return, an exception, a boot abort and a handled
+# Ctrl-C, opt-in --keep-artifacts retaining on both a pass and a failure
+# and naming only what the run actually produced (never calling a
+# directory that was never created empty), a cleanup failure making an
+# otherwise clean run non-zero, a read-only checkout still yielding a
+# removable tree with the source's own modes untouched, and an outside
+# same-named decoy left byte-identical. It pins the teardown boundary
+# structurally as well as behaviourally, because probelib.boot waits up
+# to three minutes for READY and a caller that learns of the engine only
+# from the return value owns nothing for that whole span: boot now hands
+# the handle over the statement after its Popen (on_launch, an appended
+# optional parameter no existing caller passes), and the probe disposes
+# of an engine it merely LAUNCHED directly rather than through the port,
+# since a boot fails on a busy port exactly because somebody else's
+# instance holds it. test_probelib owns the launcher half, including
+# that an interrupt or a failing callback DURING the hand-off kills the
+# child there rather than let it escape holding the port. The shutdown
+# is guarded the same way: quit_engine sends, waits and hard-kills, all
+# interruptible, so it runs inside a finally whose fallback kills the
+# engine outright. It also pins what the probe still proves:
+# the registration order placement hashes are indexed by (sorted real
+# flora, then probe_berry, then probe_clover), both fixture bodies by
+# sha256, and load_fixture_yaml still stopping the run at setup on a
+# fixture that registers nothing. That probe is manual-only and
+# worldgen-heavy; the companion boots nothing.
 # test_movement_probe is #1586's: tools/movement_probe.py --list is a
 # metadata query answered from scripts/movement_arena.lua before any
 # boot(), for every --mode, and the derived view is held to the runtime
@@ -414,6 +454,20 @@ python3 tools/world_check.py --quick
 # (item.getGroundForUnit, #1666) resolution contract and the plot-tile
 # scoping. That probe is manual-only and takes about eleven minutes;
 # this boots nothing.
+# test_probe_boot_logs is #1763's: tools/preview_probe.py and
+# tools/offscreen_probe.py each launch several engines in one run, and
+# probelib.boot opens its log truncating, so launches sharing a path
+# used to destroy each other's capture -- preview kept only the last of
+# about twenty-two, and offscreen's port-reusing restart overwrote the
+# long session that preceded it. This companion pins the allocation and
+# reporting halves: a distinct path per launch including a repeated
+# phase, earlier captures intact under a truncating open, the
+# three-engine lifecycle with its restart, a phase-to-path map that
+# survives a boot which exits before READY, and no preview call site
+# falling back to the shared per-port default. Both probes need a GPU
+# and are manual-only, so without this companion a re-shared log would
+# only ever be noticed by a dev-machine run; the companion boots
+# nothing.
 #
 # tools/test_deflake_diagnosis.py (#1437) is deliberately absent from
 # this list as well, and from the CI job it mirrors: that issue's
@@ -437,8 +491,10 @@ python3 tools/test_deflake.py
 python3 tools/test_location_embark_probe.py
 python3 tools/test_location_probe_config_isolation.py
 python3 tools/test_probe_root_cleanup.py
+python3 tools/test_flora_growth_probe.py
 python3 tools/test_movement_probe.py
 python3 tools/test_farm_ai_probe.py
+python3 tools/test_probe_boot_logs.py
 
 # The decision .github/workflows/review-gate.yml makes on every
 # synchronize push: keep `reviewed:approve` only when the push left the

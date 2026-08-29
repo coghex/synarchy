@@ -11,7 +11,10 @@ waiting for a manual dev-machine run).
 
 Every check boots its own engine, so the whole run creates (and closes) a
 hidden window per target — around twenty-two of them, a few minutes end to
-end.
+end. Each of those boots writes its OWN log (#1763): the path is printed
+when it is allocated and again in a closing summary that maps every log
+back to the phase and target that wrote it, so a failing boot's output is
+still there afterwards.
 
 Checks:
   1. Boot profile + preview target over the debug console
@@ -113,11 +116,61 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from probelib import boot, quit_engine, send, send_json, poll_until
 
-LOG = "/tmp/preview_probe_engine.log"
+LOG_DIR = "/tmp"
+LOG_PREFIX = "preview_probe_engine"
+
+
+class BootLogs:
+    """One retained engine log per boot, plus the phase->path map (#1763).
+
+    `probelib.boot` opens its log truncating, so two boots pointed at one
+    path leave only the last boot's output. This probe boots far more
+    than once per phase — `check_units_roster` and
+    `check_canonical_dispatch_sweep` both loop, so a full run launches
+    one engine per shipped unit and one per swept category on top of the
+    fixed phases — and the same TARGET recurs across phases (`icons`,
+    `units/acolyte` and `structures/wire` are each browsed more than
+    once). A target-derived name therefore cannot be unique; every
+    allocation carries its own ordinal as well.
+
+    The mapping is printed the moment a path is handed out, not only in
+    the closing summary: `boot` calls `sys.exit` when an engine dies
+    before READY, and a failing run is exactly the run whose log a
+    reader needs to find.
+    """
+
+    def __init__(self, directory: str = LOG_DIR, prefix: str = LOG_PREFIX):
+        self._directory = directory
+        self._prefix = prefix
+        self._allocated: list[tuple[str, str]] = []
+
+    def allocate(self, phase: str) -> str:
+        """Reserve (and announce) this boot's own log path."""
+        ordinal = len(self._allocated) + 1
+        slug = re.sub(r"[^a-z0-9]+", "-", phase.lower()).strip("-") or "boot"
+        path = os.path.join(self._directory,
+                            f"{self._prefix}_{ordinal:02d}_{slug}.log")
+        self._allocated.append((phase, path))
+        print(f"  engine log [{ordinal:02d}] {phase}: {path}")
+        return path
+
+    def report(self) -> None:
+        """Name every log this run wrote, against the phase that wrote it."""
+        if not self._allocated:
+            print("\nno engine was booted, so this run wrote no engine logs")
+            return
+        print(f"\nengine logs from this run ({len(self._allocated)} boot"
+              f"{'' if len(self._allocated) == 1 else 's'}):")
+        for ordinal, (phase, path) in enumerate(self._allocated, start=1):
+            print(f"  {ordinal:02d}. {phase}: {path}")
+
+
+LOGS = BootLogs()
 
 # Every texture scripts.ui.list's list.init() (highlight.png) and its
 # scrollbar.init() (arrow buttons + track + the 9-slice scrolltab set,
@@ -248,7 +301,8 @@ def expected_entries(category: str) -> list[str]:
 
 def check_simple_list_mode(port: int) -> bool:
     print("1. boot profile/target + simple-category list mode (--preview icons)")
-    proc = boot(port, log=LOG, mode=("--preview", "icons"),
+    proc = boot(port, log=LOGS.allocate("1. icons list"),
+                mode=("--preview", "icons"),
                 label="preview engine (icons list)")
     try:
         expected = expected_entries("icons")
@@ -437,7 +491,8 @@ def check_simple_list_mode(port: int) -> bool:
 def check_focused_item_mode(port: int) -> bool:
     print("2. focused item mode (--preview icons/skill/climbing.png): no list")
     target = "icons/skill/climbing.png"
-    proc = boot(port, log=LOG, mode=("--preview", target),
+    proc = boot(port, log=LOGS.allocate(f"2. {target}"),
+                mode=("--preview", target),
                 label="preview engine (icons item)")
     try:
         d = poll_state(port, "ready")
@@ -693,7 +748,8 @@ def poll_unit_ready(port: int, seconds: float = 15.0) -> dict:
 def check_units_mode(port: int) -> bool:
     print("3. unit animation viewer (--preview units/acolyte)")
     unit = "acolyte"
-    proc = boot(port, log=LOG, mode=("--preview", f"units/{unit}"),
+    proc = boot(port, log=LOGS.allocate(f"3. units/{unit}"),
+                mode=("--preview", f"units/{unit}"),
                 label="preview engine (units)")
     try:
         expected = expected_unit_animations(unit)
@@ -867,7 +923,8 @@ def check_units_promoted(port: int) -> bool:
     """
     print("4. promoted declaration (--preview units/tiller): declared metadata")
     unit = "tiller"
-    proc = boot(port, log=LOG, mode=("--preview", f"units/{unit}"),
+    proc = boot(port, log=LOGS.allocate(f"4. units/{unit}"),
+                mode=("--preview", f"units/{unit}"),
                 label="preview engine (units, promoted)")
     try:
         yaml_path = os.path.join("data", "units", unit + ".yaml")
@@ -967,7 +1024,8 @@ def check_units_roster(port: int) -> bool:
           f"atlas-backed browsing")
     ok = True
     for unit in units:
-        proc = boot(port, log=LOG, mode=("--preview", f"units/{unit}"),
+        proc = boot(port, log=LOGS.allocate(f"4b. units/{unit}"),
+                    mode=("--preview", f"units/{unit}"),
                     label=f"preview engine (units/{unit})")
         try:
             d = poll_unit_ready(port)
@@ -1117,7 +1175,8 @@ def built_default_label(name: str) -> str | None:
 def check_buildings_mode(port: int) -> bool:
     print("5. buildings viewer (--preview buildings/acolyte_portal)")
     name = "acolyte_portal"
-    proc = boot(port, log=LOG, mode=("--preview", f"buildings/{name}"),
+    proc = boot(port, log=LOGS.allocate(f"5. buildings/{name}"),
+                mode=("--preview", f"buildings/{name}"),
                 label="preview engine (buildings)")
     try:
         meta = building_yaml(name)
@@ -1230,7 +1289,8 @@ def check_buildings_without_built(port: int) -> bool:
           "(--preview buildings/cargo_hold_S): sprite fallback + "
           "convention-recognized animation")
     name = "cargo_hold_S"
-    proc = boot(port, log=LOG, mode=("--preview", f"buildings/{name}"),
+    proc = boot(port, log=LOGS.allocate(f"6. buildings/{name}"),
+                mode=("--preview", f"buildings/{name}"),
                 label="preview engine (buildings, no built state)")
     try:
         meta = building_yaml(name)
@@ -1277,7 +1337,8 @@ def check_buildings_without_yaml(port: int) -> bool:
     print("7. building with NO data/buildings YAML (--preview buildings/dungeon_1): "
           "first-entry default, nested statics")
     name = "dungeon_1"
-    proc = boot(port, log=LOG, mode=("--preview", f"buildings/{name}"),
+    proc = boot(port, log=LOGS.allocate(f"7. buildings/{name}"),
+                mode=("--preview", f"buildings/{name}"),
                 label="preview engine (buildings, no yaml)")
     try:
         ok_fixture = check("the fixture really has no building YAML (or this "
@@ -1333,7 +1394,8 @@ def check_flat_grouped_item(port: int, category: str, item: str) -> bool:
     browser rooted at the item's own folder rather than given viewers of
     their own. This is a dispatch-level check by design — the browsing
     behavior itself is already gated by check 1."""
-    proc = boot(port, log=LOG, mode=("--preview", f"{category}/{item}"),
+    proc = boot(port, log=LOGS.allocate(f"8. {category}/{item}"),
+                mode=("--preview", f"{category}/{item}"),
                 label=f"preview engine ({category}/{item})")
     try:
         root = os.path.join("assets", "textures", category, item)
@@ -1380,7 +1442,8 @@ def check_canonical_dispatch_sweep(port: int) -> bool:
     ]
     results = []
     for target, want_mode in targets:
-        proc = boot(port, log=LOG, mode=("--preview", target),
+        proc = boot(port, log=LOGS.allocate(f"9. sweep {target}"),
+                    mode=("--preview", target),
                     label=f"preview engine (sweep {target})")
         try:
             d = poll_until(20.0, lambda: (
@@ -1405,18 +1468,25 @@ def main() -> int:
     # The variable is inherited only by this probe's engine subprocesses.
     os.environ["SYNARCHY_PREVIEW_HIDDEN"] = "1"
 
-    results = [
-        check_simple_list_mode(args.port),
-        check_focused_item_mode(args.port),
-        check_units_mode(args.port),
-        check_units_promoted(args.port),
-        check_units_roster(args.port),
-        check_buildings_mode(args.port),
-        check_buildings_without_built(args.port),
-        check_buildings_without_yaml(args.port),
-        check_flat_grouped_dispatch(args.port),
-        check_canonical_dispatch_sweep(args.port),
-    ]
+    # The summary runs in a `finally` because the interesting runs are
+    # the ones that do not reach the end: `probelib.boot` raises
+    # SystemExit when an engine dies before READY, and the log named
+    # here is what says why.
+    try:
+        results = [
+            check_simple_list_mode(args.port),
+            check_focused_item_mode(args.port),
+            check_units_mode(args.port),
+            check_units_promoted(args.port),
+            check_units_roster(args.port),
+            check_buildings_mode(args.port),
+            check_buildings_without_built(args.port),
+            check_buildings_without_yaml(args.port),
+            check_flat_grouped_dispatch(args.port),
+            check_canonical_dispatch_sweep(args.port),
+        ]
+    finally:
+        LOGS.report()
 
     passed = all(results)
     print(f"\n  {'PASS' if passed else 'FAIL'}: --preview real-boot browser"

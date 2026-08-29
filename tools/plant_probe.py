@@ -12,13 +12,31 @@ checks:
      6 expected labels (temperature/precipitation/humidity/altitude/
      slope/soil) with a fit in [0,1], the per-factor breakdown #335's
      planting screen shows as the "why is this good/bad here" read-out.
-  2. Soil actually gates suitability: forcing the tile's surface
-     material to a species-preferred soil (loam) vs a non-preferred one
-     (granite) via world.setCell flips the "soil" factor's fit between
-     1.0 and 0.0 and the overall score between nonzero and exactly 0.0
-     — proving data/flora/crops.yaml's new `soils:` list + the
-     name->id resolution in registerFloraSpecies actually take effect,
-     not just parse.
+  2. Soil actually gates suitability, in BOTH directions and for ONE
+     crop: forcing the tile's surface material to a species-preferred
+     soil (loam) vs a non-preferred one (granite) via world.setCell
+     flips that crop's "soil" factor between 1.0 and 0.0 AND its
+     overall score between strictly positive and exactly 0.0 — proving
+     data/flora/crops.yaml's `soils:` list + the name->id resolution in
+     registerFloraSpecies actually take effect, not just parse.
+
+     Both halves are load-bearing (#1762). `speciesFitnessDetail`
+     short-circuits to 0.0 for an excessive slope, a non-preferred
+     soil, OR any zeroed climate/altitude factor, and the soil test
+     comes FIRST — so a granite zero on its own is evidence of soil
+     gating only against a positive score for the SAME crop on loam.
+     Asserting only the granite zero (what this probe did before #1762)
+     stays green even if every preferred-soil score regressed to zero,
+     and that vacuous case was live: at the pinned seed, wheat scored
+     zero on loam with its soil fit at 1.0, so the wheat half of the
+     granite assertion re-asserted a value that was already zero.
+
+     The crop and tile are therefore SELECTED for the property the
+     contrast needs (`select_positive_fixture`) rather than taken from
+     whichever tile the scan reaches first: the fixture is a tillable
+     tile carrying a crop whose non-soil factors are all positive, with
+     the resulting positive loam score confirmed against the live
+     engine before any assertion runs.
   3. Designation refusal: plant.designate on an UNTILLED tile is
      refused (plant.getDesignationAt stays nil) — mirrors till's
      untillable-exclusion check.
@@ -81,6 +99,20 @@ GRANITE_NAME = "granite"
 FACTOR_NAMES = {"temperature", "precipitation", "humidity", "altitude",
                 "slope", "soil"}
 
+# Every factor except "soil". `speciesFitnessDetail` zeroes the overall
+# score when the slope gate fails, when the soil is non-preferred, or
+# when any of temperature/precipitation/humidity/altitude reaches 0.0 —
+# so a crop whose NON-soil factors are all positive is exactly a crop
+# that will score positive once its tile is forced to a preferred soil.
+# Soil is excluded because forcing loam is what the contrast then does.
+NON_SOIL_FACTORS = FACTOR_NAMES - {"soil"}
+
+# How many flat/dry/flora-free candidate tiles `select_positive_fixture`
+# will examine before giving up. The scan is one debug-console round
+# trip per factor read, and the pinned seed's first candidate already
+# carries a usable crop, so this only bounds the pathological case.
+MAX_FIXTURE_CANDIDATES = 40
+
 
 def bootstrap(port):
     for pattern, fn in [
@@ -96,9 +128,16 @@ def bootstrap(port):
             send(port, f"{fn}('{path}'); return 'ok'")
 
 
-def find_tillable(port, span=4):
-    """Scan sample points across the loaded region for a flat, dry,
-    flora-free tile; returns (gx, gy) or None.
+def iter_tillable(port, span=4):
+    """Scan sample points across the loaded region, yielding every
+    flat, dry, flora-free tile in scan order.
+
+    Yields rather than returning the first hit so `select_positive_fixture`
+    can keep walking when a candidate turns out to be climatically
+    unusable (#1762) — every tile it yields still carries the flat, dry,
+    flora-free preconditions the designation, cancellation, replacement
+    and save/load phases below rely on, so the selected fixture stays
+    usable for all of them.
 
     ``world.getFluidAt`` is a MULTI-RETURN query whose ARITY is the
     contract (`Engine.Scripting.Lua.API.WorldQuery.Fluid`): a fluid tile
@@ -123,8 +162,7 @@ def find_tillable(port, span=4):
             flora = send_json(port, f"return world.getFloraAt({sx},{sy})")
             if isinstance(flora, dict):
                 continue
-            return sx, sy
-    return None
+            yield sx, sy
 
 
 def till_and_wait(port, page, gx, gy, z):
@@ -169,6 +207,87 @@ def set_material_and_wait(port, page, gx, gy, z, mat_name, species, expect_fit):
     return False
 
 
+def factor_fits(row):
+    """{factor label: fit} for one `getPlantSuitability` row."""
+    if not isinstance(row, dict) or not isinstance(row.get("factors"), list):
+        return {}
+    return {f["factor"]: f["fit"] for f in row["factors"]
+            if isinstance(f, dict) and "factor" in f and "fit" in f}
+
+
+def non_soil_fits_positive(row):
+    """True when this row reports every NON-soil factor at a positive
+    fit — i.e. nothing but the soil gate can be holding its score at
+    zero. Material-independent, so it is read WITHOUT mutating the tile:
+    only the "soil" factor depends on the surface material."""
+    fits = factor_fits(row)
+    if not NON_SOIL_FACTORS <= fits.keys():
+        return False
+    return all(fits[name] > 0.0 for name in NON_SOIL_FACTORS)
+
+
+def select_positive_fixture(port, page):
+    """Choose the (tile, crop) pair the soil-gating contrast needs (#1762).
+
+    Walks `iter_tillable`'s candidates and, for each, asks
+    getPlantSuitability which crops have all their non-soil factors
+    positive. The first such tile is forced to loam and the candidate
+    crops' overall scores are re-read from the live engine; the first
+    crop that really does score above zero on the preferred soil becomes
+    the fixture. Nothing is asserted on a tile where no crop could grow —
+    requirement 5 — and nothing is inferred from the pre-mutation read:
+    the positive score is CONFIRMED before it is asserted against.
+
+    Returns ``(fixture, notes)``: ``fixture`` is
+    ``(gx, gy, z, crop, rows)`` on success and ``None`` when no
+    candidate could supply one, and ``notes`` records why each rejected
+    candidate was rejected so a failure names the reason rather than
+    just reporting that nothing was found.
+    """
+    notes = []
+    for seen, (gx, gy) in enumerate(iter_tillable(port), start=1):
+        if seen > MAX_FIXTURE_CANDIDATES:
+            notes.append(f"gave up after examining {MAX_FIXTURE_CANDIDATES} "
+                         f"tillable candidates")
+            break
+        # world.getSurfaceAt returns MULTIPLE Lua values (surfaceZ,
+        # terrainZ, fluidType, fluidSurface), not a table — capture just
+        # the first via a local (same quirk crop_probe.py's
+        # find_dry_tile documents).
+        z = send_json(port,
+                      f"local sz=world.getSurfaceAt({gx},{gy}); return sz")
+        rows = send_json(port, f"return world.getPlantSuitability({gx},{gy})")
+        if not isinstance(rows, list) or not rows:
+            notes.append(f"({gx},{gy}): getPlantSuitability returned no rows "
+                         f"({rows!r})")
+            continue
+        candidates = [r for r in rows if non_soil_fits_positive(r)]
+        if not candidates:
+            notes.append(f"({gx},{gy}): no crop has every non-soil factor "
+                         f"positive: "
+                         + "; ".join(f"{r.get('name')}={factor_fits(r)}"
+                                     for r in rows))
+            continue
+        # One forcing per tile: the material is shared by every crop, so
+        # poll it in on the first candidate and then re-read each one.
+        first = candidates[0]["name"]
+        if not set_material_and_wait(port, page, gx, gy, z,
+                                     LOAM_NAME, first, 1.0):
+            notes.append(f"({gx},{gy}): forcing loam never reached soil "
+                         f"fit 1.0 for {first}")
+            continue
+        for candidate in candidates:
+            crop = candidate["name"]
+            row = suitability_row(port, page, gx, gy, crop)
+            if row is not None and row["score"] > 0.0:
+                confirmed = send_json(
+                    port, f"return world.getPlantSuitability({gx},{gy})")
+                return (gx, gy, z, crop, confirmed), notes
+            notes.append(f"({gx},{gy}): {crop} still scores "
+                         f"{row['score'] if row else None} on loam: {row}")
+    return None, notes
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=9179)
@@ -199,32 +318,45 @@ def _run(port, proc, args, passed):
         send(port, "return world.loadChunksInRegion(-4, -4, 4, 4)", timeout=30)
         send(port, "return world.waitForChunks(120)", timeout=125)
 
-        found = find_tillable(port)
-        if not found:
-            print("  [FAIL] no flat, dry, flora-free tile in the loaded "
-                  "region (try another seed)")
+        # Select the fixture DELIBERATELY (#1762): a flat, dry,
+        # flora-free tile carrying a crop whose non-soil factors are all
+        # positive, forced to loam (in both shipped crops' crops.yaml
+        # `soils:` lists) with its positive score confirmed against the
+        # live engine. Requirement 5: never assert the granite zero
+        # against a tile where nothing could grow in the first place.
+        fixture, notes = select_positive_fixture(port, "probe")
+        for note in notes:
+            print(f"  (skipped candidate) {note}")
+        if fixture is None:
+            print("  [FAIL] no tillable tile in the loaded region carries a "
+                  "crop that scores above zero on preferred soil, so the "
+                  "granite contrast would prove nothing. Either every "
+                  "preferred-soil score regressed to zero, or this seed's "
+                  "tillable tiles are all climatically unsuitable — the "
+                  "skipped-candidate lines above name which.")
             return 1
-        tx, ty = found
-        # world.getSurfaceAt returns MULTIPLE Lua values (surfaceZ,
-        # terrainZ, fluidType, fluidSurface), not a table — capture just
-        # the first via a local (same quirk crop_probe.py's
-        # find_dry_tile documents).
-        z = send_json(port, f"local sz=world.getSurfaceAt({tx},{ty}); return sz")
-        print(f"  candidate tile at ({tx},{ty}), surfaceZ={z}")
+        tx, ty, z, crop, rows = fixture
+        print(f"  fixture tile ({tx},{ty}), surfaceZ={z}, crop={crop!r} "
+              f"(non-soil factors all positive, loam forced)")
 
-        # Force a known, species-preferred soil BEFORE any suitability
-        # assertions, so they're deterministic regardless of whatever
-        # material this seed's worldgen happened to put here (loam is
-        # in both tomato_plant's and wheat's crops.yaml `soils:` list).
-        okL = set_material_and_wait(port, "probe", tx, ty, z,
-                                     LOAM_NAME, "wheat", 1.0)
+        okL_row = suitability_row(port, "probe", tx, ty, crop)
+        okL_fits = factor_fits(okL_row)
+        okL = (okL_row is not None
+               and okL_row["score"] > 0.0
+               and okL_fits.get("soil") == 1.0)
         passed &= okL
-        print(f"  [{'PASS' if okL else 'FAIL'}] forcing loam soil: soil "
-              f"fit={soil_fit(port, 'probe', tx, ty, 'wheat')}")
+        print(f"  [{'PASS' if okL else 'FAIL'}] on loam, {crop} scores "
+              f"{okL_row['score'] if okL_row else None} > 0 with soil fit "
+              f"{okL_fits.get('soil')}")
+        if not okL:
+            # Requirement 4: the breakdown is what separates "soil
+            # gating regressed" from "this tile is climatically
+            # unsuitable for this crop" — a zero here with every
+            # non-soil fit still positive means the former.
+            print(f"      full factor breakdown for {crop}: {okL_row}")
 
         # --- 1. Suitability query lists every registered crop, with a
         #     6-factor breakdown per crop ---
-        rows = send_json(port, f"return world.getPlantSuitability({tx},{ty})")
         by_name = {r["name"]: r for r in rows} if isinstance(rows, list) else {}
         ok1 = ("tomato_plant" in by_name and "wheat" in by_name
                and by_name["tomato_plant"]["category"] == "row_crop"
@@ -246,22 +378,33 @@ def _run(port, proc, args, passed):
               f"all 6 labels with fit in [0,1]")
 
         # --- 2. Soil actually gates suitability (not just parses) ---
+        #     The SAME crop that just scored positive on loam must fall
+        #     to zero on granite, soil fit included — one contrast on
+        #     one tile, not two independent observations. Both shipped
+        #     crops are still required to zero, preserving the coverage
+        #     this check had before #1762.
         okG = set_material_and_wait(port, "probe", tx, ty, z,
-                                     GRANITE_NAME, "wheat", 0.0)
-        row_bad_wheat = suitability_row(port, "probe", tx, ty, "wheat")
-        row_bad_tomato = suitability_row(port, "probe", tx, ty, "tomato_plant")
+                                     GRANITE_NAME, crop, 0.0)
+        rows_bad = send_json(
+            port, f"return world.getPlantSuitability({tx},{ty})")
+        by_bad = ({r["name"]: r for r in rows_bad}
+                  if isinstance(rows_bad, list) else {})
+        row_bad = by_bad.get(crop)
         ok2 = (okG
-               and row_bad_wheat is not None and row_bad_wheat["score"] == 0.0
-               and row_bad_tomato is not None and row_bad_tomato["score"] == 0.0)
+               and row_bad is not None
+               and row_bad["score"] == 0.0
+               and factor_fits(row_bad).get("soil") == 0.0
+               and all(by_bad.get(n) is not None and by_bad[n]["score"] == 0.0
+                       for n in ("wheat", "tomato_plant")))
         passed &= ok2
         print(f"  [{'PASS' if ok2 else 'FAIL'}] granite (non-preferred soil) "
-              f"zeroes both crops' scores: wheat={row_bad_wheat}, "
-              f"tomato={row_bad_tomato}")
+              f"drops {crop} from a positive score to 0.0 with soil fit 0.0, "
+              f"and zeroes both shipped crops: {rows_bad}")
 
         # Restore loam so the rest of this probe (designation checks
         # below) runs against a species-preferred soil, matching the
         # deterministic setup at the top.
-        set_material_and_wait(port, "probe", tx, ty, z, LOAM_NAME, "wheat", 1.0)
+        set_material_and_wait(port, "probe", tx, ty, z, LOAM_NAME, crop, 1.0)
 
         # --- 3. Designation refused on an untilled tile ---
         pre = send_json(port, f"return world.isPlantable({tx},{ty})")
