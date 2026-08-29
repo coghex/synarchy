@@ -267,9 +267,11 @@ def readme_section(text: str,
                    heading: str = RUN_PROBES_SECTION_HEADING) -> str:
     """Return the body of `heading`'s section, its fenced code included.
 
-    The section ends at the next Markdown heading OUTSIDE a fence -- the
-    bash examples are full of `# comment` lines that would otherwise look
-    like one. A heading that is absent, or present more than once, raises.
+    The section ends at the next heading of the SAME OR HIGHER level, so a
+    child heading ("#### Details") stays INSIDE it rather than truncating
+    the scan. Only headings outside a fence count -- the bash examples are
+    full of `# comment` lines that would otherwise look like one. A heading
+    that is absent, or present more than once, raises.
     """
     marked = _mark_fences(text.splitlines())
     starts = [index for index, (line, fenced) in enumerate(marked)
@@ -282,10 +284,14 @@ def readme_section(text: str,
             f"{len(starts)} times (lines "
             f"{', '.join(str(index + 1) for index in starts)})")
     start = starts[0]
+    level = len(heading) - len(heading.lstrip("#"))
     end = len(marked)
     for index in range(start + 1, len(marked)):
         line, fenced = marked[index]
-        if not fenced and re.match(r"#{1,6} \S", line):
+        if fenced:
+            continue
+        following = re.match(r"(#{1,6}) \S", line)
+        if following and len(following.group(1)) <= level:
             end = index
             break
     return "\n".join(line for line, _ in marked[start + 1:end])
@@ -3441,6 +3447,20 @@ def test_the_readme_states_no_registry_total() -> None:
            "a total claim in the NEXT section is out of scope")
     expect(readme_total_claim_problems(inside) != [],
            "the same claim inside the section is caught")
+    # A CHILD heading does not end the section -- a total parked under one
+    # is still inside it -- while a sibling or parent heading does.
+    child = ("# Tools\n\n" + heading_line + "\nBody.\n\n#### Details\n\n"
+             + claim + "\n### `other.py`\n\nUnrelated.\n")
+    expect(readme_total_claim_problems(child) != [],
+           "a total under a CHILD heading is still in scope")
+    for level, where in (("###", "a sibling heading"),
+                         ("##", "a parent heading"),
+                         ("#", "a top-level heading")):
+        beyond = ("# Tools\n\n" + heading_line + "\nBody.\n\n"
+                  + f"{level} Elsewhere\n\n" + claim)
+        expect(readme_total_claim_problems(beyond) == [],
+               f"{where} ends the section")
+
     # A `# comment` line inside a fenced block is not a heading, so a claim
     # after one is still inside the section.
     fenced = ("# Tools\n\n" + heading_line + "\n```bash\n"
@@ -3479,15 +3499,13 @@ def test_the_readme_states_no_registry_total() -> None:
         # and 3 of review found the narrower, verb-enumerating rules let
         # through.
         "registry-quantity-clause": (
+            "Probe count: 90.",
             "The probe registry totals 90.",
             "The number of registered probes is 90.",
             "The probe registry consists of 93 probes.",
             "The registry has a current total of 93 probes.",
             "The registry has a current total of 93.",
             "The registry holds 90.",
-            "Probe count: 90.",
-            "Registered probes: 90.",
-            "The registry: 93.",
             "The probe registry = 90.",
             "The registry stands at 90.",
             "The registry is 93 strong.",
@@ -3495,6 +3513,8 @@ def test_the_readme_states_no_registry_total() -> None:
             "The registry, at the time of writing, holds 93.",
             "The probe total is 93.",
             "The total number of registered probes is 93.",
+            "Registered probes: 90.",
+            "The registry: 93.",
         ),
         # A quantity carried by an antecedent rather than a noun. The first
         # is verbatim the form round 4 of review found.
@@ -3525,6 +3545,23 @@ def test_the_readme_states_no_registry_total() -> None:
             "We ship 93 probes.",
         ),
     }
+
+    expect(set(per_rule) == {rule for rule, _ in README_TOTAL_RULES},
+           f"every rule has crafted violations "
+           f"(missing {sorted({r for r, _ in README_TOTAL_RULES} - set(per_rule))}, "
+           f"unknown {sorted(set(per_rule) - {r for r, _ in README_TOTAL_RULES})})")
+    for rule, bodies in per_rule.items():
+        for body in bodies:
+            fired = rules_fired(body)
+            expect(rule in fired,
+                   f"[{rule}] rejects {body!r} (fired {sorted(fired)})")
+    # Each rule is independently load-bearing: the first case of each fires
+    # that rule ALONE, so no rule is carried by another.
+    for rule, bodies in per_rule.items():
+        fired = rules_fired(bodies[0])
+        expect(fired == {rule},
+               f"[{rule}] is the only rule {bodies[0]!r} needs "
+               f"(fired {sorted(fired)})")
 
     # The historical sentences, verbatim, as they actually shipped.
     for historical in (
