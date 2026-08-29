@@ -2537,8 +2537,11 @@ excerpts into the body: at most `MAX_EVIDENCE_RUNS` runs, `MAX_EVIDENCE_FILES_PE
 files each, and the trailing `MAX_EXCERPT_LINES`/`MAX_EXCERPT_CHARS` of each,
 which is where an aborting probe's failure lands. An attempt whose artifacts
 have all been pruned is REFUSED rather than filed on paths alone — but only an
-INCOMPLETE one ever collects evidence: a recorded outcome is checked first, so
-a resume works long after the artifact tree has been swept.
+attempt with no issue at ALL ever collects evidence. A recorded outcome and a
+reconciled publication key are both checked first, so either recovery works
+long after the artifact tree has been swept; earlier still is the route's own
+evidence check, which needs no artifact, so an unsupported handoff is refused
+without even a search.
 
 **Quoted content cannot forge the routing marker.** An engine log is
 arbitrary text, and `approve_issues.issue_origin` scans the whole raw body —

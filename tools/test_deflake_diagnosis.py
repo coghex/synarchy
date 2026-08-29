@@ -7355,8 +7355,13 @@ def test_an_issue_with_no_readable_evidence_is_not_filed() -> None:
             lambda: file_defect(document, path, publication=publication),
             "no retained artifact",
             "an attempt whose artifacts have all been pruned")
+        # Searched, and correctly so: the reconcile runs BEFORE anything
+        # is rendered, so a retry whose issue already exists recovers
+        # even with its artifacts gone. Only the case with no issue to
+        # find reaches the evidence, and only then is there something to
+        # file at all.
         expect_nothing_published(path, before, publication,
-                                 "pruned artifacts", searched=0)
+                                 "pruned artifacts", searched=1)
     # One readable run is enough, and only what was read is quoted.
     with staged_evidence(document, only=1), census_file() as path:
         _published, publication, _probe, _pr = file_defect(document, path)
@@ -7597,6 +7602,49 @@ def test_a_recorded_defect_resumes_after_its_artifacts_are_pruned() -> None:
                "or any forbidden boundary")
 
 
+def test_a_crash_window_retry_recovers_after_the_artifacts_are_swept()\
+        -> None:
+    """The recovery path must not depend on the evidence either.
+
+    Issue creation took effect, the census refused, and the artifact
+    tree was swept before anyone retried. The issue is durable and the
+    publication key is on it, so the retry has everything it needs — but
+    only if the reconcile runs BEFORE the body is rendered. Rendering
+    first would refuse for want of evidence and strand an issue that
+    already exists.
+    """
+    document = defect_handoff()
+    publication = FakePublication()
+    with census_file() as path:
+        with staged_evidence(document):
+            healthy = json.loads(Path(path).read_text(encoding="utf-8"))
+            Path(path).write_text(
+                json.dumps(dict(healthy, schema=probe_census.SEED_SCHEMA)),
+                encoding="utf-8")
+            expect_not_filed(
+                lambda: file_defect(document, path,
+                                    publication=publication),
+                "exists", "a census that refused after the issue was created")
+            expect(len(publication.creates) == 1,
+                   "the issue was created before the census refused")
+
+        # The artifacts are gone now, and the census works again.
+        Path(path).write_text(json.dumps(healthy), encoding="utf-8")
+        published, _pub, probe_spy, pr_spy = file_defect(
+            document, path, publication=publication)
+        expect(published.reconciled is True and published.created is False,
+               f"the retry reconciles the issue that already exists; got "
+               f"{published.to_document()}")
+        expect(len(publication.creates) == 1,
+               f"creating nothing; got {len(publication.creates)} creation(s)")
+        recorded = stored_outcomes(path)
+        expect(len(recorded) == 1
+               and recorded[0]["issue"]["number"] == 901,
+               f"and records it exactly once; got {recorded}")
+        expect(probe_spy.calls == [] and pr_spy.calls == [],
+               "with neither forbidden boundary reached")
+
+
 def test_a_reconciled_issue_supplies_its_own_review_brand() -> None:
     """The brand is the ISSUE's, not the resuming invocation's.
 
@@ -7738,7 +7786,7 @@ def test_the_diagnosis_prose_is_bounded_at_the_gate() -> None:
                 "every part of it that is left is required",
                 "a body no trimming can fit")
             expect_nothing_published(path, before, publication,
-                                     "an unfittable body", searched=0)
+                                     "an unfittable body", searched=1)
     finally:
         di.MAX_BODY_CHARS = saved
 

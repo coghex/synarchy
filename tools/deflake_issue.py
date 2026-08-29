@@ -99,11 +99,7 @@ Publication is idempotent, including across a crash
 ---------------------------------------------------
 A recorded outcome is the completion marker: resuming an attempt the
 census already holds reuses its stored issue, touches the tracker not at
-all, and appends nothing. It is checked BEFORE anything is rendered,
-because rendering reads the retained artifacts off disk and those are
-transient — an attempt already recorded stays resumable long after its
-artifact tree has been pruned, which is most of what the durable record
-is for.
+all, and appends nothing.
 
 That alone is not enough, because the window that matters is the one
 where issue creation TOOK EFFECT and its identity was never durably
@@ -128,6 +124,16 @@ Codex invocation still routes to Claude's opposite brand, and recording
 the retry's brand would put a second, false answer in the durable
 history. An issue carrying this attempt's key but no readable origin
 marker is not one this workflow filed, and is a publication failure.
+
+BOTH recoveries run before anything is RENDERED. Rendering re-reads the
+retained artifacts off disk and those are transient, while an issue and
+a census record are durable — so an attempt that already reached the
+tracker resumes on what is durable, however long ago the artifact tree
+was swept. Only an attempt with no issue at all renders, which is the
+one case where there is genuinely something to file. What runs earlier
+still is the route's own evidence check, which needs no artifact: a
+handoff this route does not support is refused without so much as a
+search.
 
 What that does not cover, and deliberately: two invocations of one
 brand-new attempt running at the same instant can both miss the
@@ -1247,14 +1253,16 @@ def publish(handoff: Defect, *, census_path: Path, now: str,
             pull_request_publisher=forbidden_pull_request) -> Published:
     """File one issue for one diagnosed production defect, and record it.
 
-    The order is deliberate. The census is consulted FIRST, so a
-    completed attempt touches neither the tracker nor its own retained
-    artifacts — which are transient, while the record is durable. Only
-    an incomplete attempt renders, which is where its evidence is judged
-    and where a handoff this route does not support is refused before
-    anything is published. The publication key is then reconciled, so an
-    issue created before a crash is reused rather than duplicated. Only
-    then is one created, and only then is the outcome recorded.
+    The order is deliberate. The route's evidence is judged first, so a
+    handoff this route does not support is refused without touching the
+    tracker. The census is consulted next and the publication key
+    reconciled after it — both BEFORE anything is rendered, because
+    rendering re-reads the retained artifacts and those are transient
+    while an issue and a census record are durable. An attempt that
+    already reached the tracker therefore resumes on what is durable,
+    however long ago its artifact tree was swept. Only an attempt with
+    no issue at all renders, and that is the one case where there is
+    genuinely something to file.
 
     Nothing follows the record. The two publisher parameters are
     consulted through their tables and, under this route's policy, never
@@ -1265,12 +1273,21 @@ def publish(handoff: Defect, *, census_path: Path, now: str,
     key = publication_key(handoff)
     _delegate_timestamp(now)
 
-    # COMPLETION FIRST, before anything is rendered. Rendering reads the
-    # retained artifacts off disk, and those are transient: an attempt
-    # already recorded must stay resumable long after its artifact tree
-    # has been pruned, and a resume that re-collected evidence would
-    # fail on the one thing the durable record exists to make
-    # unnecessary.
+    # The route's own evidence is judged here, before the tracker is
+    # touched at all: a handoff this route does not support is refused
+    # without so much as a search. It needs no artifact on disk, which
+    # is what lets both recovery paths below run after the tree is gone.
+    require_supported(handoff)
+
+    # THEN completion, and THEN the reconcile — both before anything is
+    # rendered. Rendering reads the retained artifacts off disk and
+    # those are transient, while an issue and a census record are
+    # durable. So an attempt that already reached the tracker, whether
+    # its outcome was recorded or the census refused after the issue was
+    # created, resumes on what is durable rather than on evidence that
+    # may have been swept in between. Only an attempt with no issue at
+    # all renders, and that is the one case where there is genuinely
+    # something to file.
     complete = stored_record(path, handoff)
     created = False
     reconciled = False
@@ -1278,19 +1295,16 @@ def publish(handoff: Defect, *, census_path: Path, now: str,
     if complete is not None:
         issue = copy.deepcopy(complete["issue"])
     else:
-        # A handoff this route does not support never reaches the
-        # tracker: rendering is where the evidence is judged and where
-        # the artifacts have to be readable at all.
-        title, body, _evidence, trimmed = render(handoff, origin=origin,
-                                                 key=key)
         found = publication.find(key)
-        if found is None:
+        if found is not None:
+            issue = require_reconciled_issue(found, key)
+            reconciled = True
+        else:
+            title, body, _evidence, trimmed = render(handoff, origin=origin,
+                                                     key=key)
             issue = require_issue_identity(
                 publication.create(title=title, body=body), key, origin)
             created = True
-        else:
-            issue = require_reconciled_issue(found, key)
-            reconciled = True
 
     document = outcome_record(handoff, now=now, issue=issue)
     durable = True
