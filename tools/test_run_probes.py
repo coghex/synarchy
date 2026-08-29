@@ -221,7 +221,12 @@ _REGISTRY_SUBJECT = (
     # "tally of the registered probes", "count of all probes", "total
     # number of every registered probe" -- the qualifiers between "of" and
     # the noun are counted, not spelled, so a new one needs no edit here.
-    r"|" + _COUNT_NOUN + r"\s+of\s+(?:\w+\s+){0,3}?probes?\b)")
+    r"|" + _COUNT_NOUN + r"\s+of\s+(?:\w+\s+){0,3}?probes?\b"
+    # "the list", "the table" -- in this section the DEFINITE one is the
+    # registry, which is why "--list" is called authoritative two sentences
+    # earlier. The article must sit directly on the noun, so the section's
+    # own "A declared count `N`" (indefinite, and qualified) is not one.
+    r"|the\s+" + _COUNT_NOUN + r"\b)")
 
 # "all probes", "every registered probe" -- a universal quantifier names the
 # whole registry as surely as "the registry" does. It is a LEADING subject
@@ -3727,6 +3732,10 @@ def test_the_readme_states_no_registry_total() -> None:
             "The listing of registered probes runs to 93.",
             "The probe line-up is 93 strong.",
             "The [probe registry](https://example.test) totals 93.",
+            "There are 93 entries in the list.",
+            "The list has 93 entries.",
+            "The table has 93 rows.",
+            "The count is 93.",
             "The probe tally is ninety-three.",
             "The registry holds ninety-three.",
             "The probe tally is 90+.",
@@ -3775,6 +3784,9 @@ def test_the_readme_states_no_registry_total() -> None:
         # A quantity reached directly by a verb of having or listing, with
         # neither a registry subject nor a noun.
         "counting-verb-quantity": (
+            # First case fires this rule ALONE: the subject is a pronoun, so
+            # no count noun, probe noun or partitive can reach the number.
+            "It registers 93.",
             "The suite registers 93.",
             "The runner holds 93.",
             "It contains ninety.",
@@ -3890,6 +3902,9 @@ def test_the_readme_states_no_registry_total() -> None:
             "The probe manifest has 93 entries.",
             # The round-21 review's bypass, verbatim.
             "There are [93](https://example.test) registered probes.",
+            # The round-22 review's two bypasses, verbatim.
+            "There are 93 entries in the list.",
+            "The list has 93 entries.",
             # And the original drift sentence as it really shipped, wrapped.
             "`python3 tools/run_probes.py --list` is the authoritative count\n"
             "and listing of registered probes — it's grown over time\n"
@@ -3950,9 +3965,15 @@ def test_the_readme_states_no_registry_total() -> None:
             "Before #1571 the allocator used stride 1, so selecting "
             "`debug_console_boot` immediately before `transactional_load` "
             "under `--jobs 2` put both on 9401.",
+            # An INDEFINITE, qualified count noun is not the registry: this
+            # is the sentence that decides the definite article must sit
+            # directly on the noun.
             "A declared count `N` reserves the contiguous span "
             "`base … base + N - 1`, and `--jobs` lays the selected probes' "
             "spans end to end.",
+            "Adding a future multi-port probe is one row in that table: "
+            "nothing in the allocator knows any probe by name, and "
+            "`--jobs 2` still works.",
             "A `--port` that reaches 8008 stays build-free.",
             "So a probe's port count is DATA -- `run_probes.PROBE_PORT_SPANS` "
             "declares 2 for each of those two.",
