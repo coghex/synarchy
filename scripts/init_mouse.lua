@@ -1,7 +1,10 @@
--- Gameplay mouse routing for scripts/init.lua (#543): the tool-claim
--- chain, left-click selection dispatch, and right-click context-menu
--- / move-order dispatch. Per-target right-click menu construction
--- lives in scripts/init_context_menu.lua.
+-- Gameplay mouse routing for scripts/init.lua (#543): the ordered
+-- tool-claim chain, the armed debug placement modes, and the two
+-- gameplay-activity gates. The world-entity FALLBACK each button falls
+-- through to — left-click selection, right-click context menus and
+-- move orders — lives in scripts/init_mouse_entity.lua (#1875), behind
+-- the zoom-band gate that module owns; per-target right-click menu
+-- construction lives in scripts/init_context_menu.lua.
 local M = {}
 
 -- Mouse-button constants (match Engine.Scripting.Lua.Thread::LuaMouseDownEvent)
@@ -290,97 +293,16 @@ function M.onMouseDown(button, x, y)
             return
         end
 
-        -- Arm unit drag-select's BOX-SELECTION effect specifically
-        -- (click-vs-drag classification itself was already armed at
-        -- the top of this function, #730 review round 6). Forward-only
-        -- (handle*, not a broadcast) so it sits in THIS ordered claim
-        -- chain: every guard above — the debug overlay / anim panel /
-        -- build tool / mine tool, AND the debug armed-placement modes
-        -- (spawn / item / fluid / terrain / location / structure) that
-        -- each `return` above — has already consumed and bailed on its
-        -- own click. So a click eaten by any of them can no longer also
-        -- start a background box-selection (#114). Placed below those
-        -- returns rather than enumerating the armed* fields, so a
-        -- future armed mode stays shielded for free. It doesn't consume
-        -- the click — the single-unit selection / tile-cursor logic
-        -- below still runs; the drag only takes over on mouse-up if it
-        -- passes threshold. The gameplay-active gate (#154/#146 — a
-        -- box-select must never arm behind a menu / pause overlay) is
-        -- the early return at the top of this MOUSE_LEFT branch, so no
-        -- per-call check is needed.
-        dragSelect.armBoxSelect()
-
-        local id = unit.hitTestAt(x, y)
-        local shift = engine.isKeyDown("LeftShift")
-                      or engine.isKeyDown("RightShift")
-        if id then
-            -- Hit a unit. Shift adds to the current selection;
-            -- otherwise replace. The unit_info_panel watcher will
-            -- see the change next tick and push unit info into the
-            -- HUD panel + clear any tile cursor.
-            if shift then
-                local current = unit.getSelected() or {}
-                local seen = {}
-                local merged = {}
-                for _, uid in ipairs(current) do
-                    if not seen[uid] then
-                        seen[uid] = true
-                        table.insert(merged, uid)
-                    end
-                end
-                if not seen[id] then table.insert(merged, id) end
-                unit.setSelection(merged)
-            else
-                unit.select(id)
-            end
-            -- Selecting a unit takes over the info panel — deselect
-            -- any building/item so the panel doesn't flicker between
-            -- schemas.
-            building.deselect()
-            item.deselect()
-            recordClick("unit_select", nil, x, y)
-        else
-            -- No unit hit. Try a ground item (click priority:
-            -- units > items > buildings — moving things win).
-            local gid = item.hitTestAt(x, y)
-            if gid then
-                item.select(gid)
-                -- Ground-item selection is mutually exclusive with
-                -- unit/building selection (see World.Cursor.Types). Items
-                -- are single-select, so Shift carries no additive meaning
-                -- here — always clear the other domains, even on Shift.
-                unit.deselectAll()
-                building.deselect()
-                recordClick("item_select", nil, x, y)
-            else
-                -- No item. Try a building.
-                local bid = building.hitTestAt(x, y)
-                if bid then
-                    building.select(bid)
-                    -- Buildings are single-select and mutually exclusive
-                    -- with unit/item selection; clear the others
-                    -- unconditionally (Shift adds units, not buildings).
-                    item.deselect()
-                    unit.deselectAll()
-                    recordClick("building_select", nil, x, y)
-                else
-                    -- Click missed everything. With Shift held, keep
-                    -- the current selection (so shift-dragging from
-                    -- empty terrain can extend it). Otherwise deselect.
-                    -- Not a "deadclick" — an empty-terrain click is a
-                    -- recognized deselect gesture the player understands,
-                    -- not a phantom affordance; "noop" reflects that
-                    -- nothing was there to act on, without flagging it as
-                    -- a UX defect.
-                    if not shift then
-                        unit.deselectAll()
-                        building.deselect()
-                        item.deselect()
-                    end
-                    recordClick("deselect", "noop", x, y)
-                end
-            end
-        end
+        -- #1875: the world-entity fallback — box-select arming and the
+        -- unit/item/building hit-test selection chain — now lives in
+        -- scripts/init_mouse_entity.lua, behind the zoom-band gate that
+        -- module owns. Deliberately the LAST thing in this branch, so
+        -- every guard above keeps exactly the opportunity it has today:
+        -- the debug overlay / anim panel / build / mine / chop / till /
+        -- plant claim chain, and the six armed debug placement modes,
+        -- each of which already `return`ed on its own click.
+        require("scripts.init_mouse_entity")
+            .handleLeftPress(x, y, recordClick)
     elseif button == MOUSE_RIGHT then
         -- Right-click is a cancel for debug spawn mode (highest priority).
         if debugOverlay.armedDef then
@@ -423,66 +345,15 @@ function M.onMouseDown(button, x, y)
             return
         end
 
-        -- Per-target menu construction lives in init_context_menu.lua;
-        -- each try*Menu hit-tests its own target, shows the menu, and
-        -- returns true if it claimed the click. Building menus win over
-        -- unit menus win over item menus, matching the original inline
-        -- ordering.
-        local contextMenus = require("scripts.init_context_menu")
-        if contextMenus.tryBuildingMenu(x, y) then
-            recordClick("context_menu_building", nil, x, y)
-            return
-        end
-        if contextMenus.tryUnitMenu(x, y) then
-            recordClick("context_menu_unit", nil, x, y)
-            return
-        end
-        if contextMenus.tryItemMenu(x, y) then
-            recordClick("context_menu_item", nil, x, y)
-            return
-        end
-
-        -- Right-click is a move order when units are selected.
-        -- hud.onMouseDown also fires on right-click and clears the
-        -- tile cursor — that's fine, it doesn't touch unit selection.
-        local selected = unit.getSelected()
-        if selected and #selected > 0 then
-            -- Live pick at the click coords so the move order targets the
-            -- tile under the click, not the 0.1s-cached hover (#123).
-            local gx, gy = world.pickTile(x, y)
-            if gx and gy then
-                local tx = gx + 0.5
-                local ty = gy + 0.5
-                for _, uid in ipairs(selected) do
-                    -- Route through the AI so the command becomes a
-                    -- utility-scored candidate that high-priority needs
-                    -- (thirst, etc.) can interrupt and resume. No explicit
-                    -- speed → the "ordered" regime (a sustainable push above
-                    -- comfort); a hard-coded fast speed here exhausts the
-                    -- unit's stamina and collapses it mid-move. #1254: a
-                    -- PLAYER order, ending any Mode A session on this unit.
-                    require("scripts.transfer_session").notePlayerOrder(uid)
-                    require("scripts.unit_ai").commandMove(uid, tx, ty)
-                end
-                recordClick("move_order", nil, x, y)
-            else
-                -- Off-world right-click with a selection: no tile to
-                -- order to, and no tile menu either (that branch is the
-                -- `else` below, gated on no-selection).
-                recordClick("move_order", "noop", x, y, "no tile under cursor")
-            end
-        else
-            -- No selection → open the tile context menu. tryTileMenu
-            -- returns false on an off-world click (world.pickTile
-            -- misses) without opening anything — that's a genuine
-            -- deadclick, not an accepted context-menu open (review
-            -- round 5 found this recorded unconditionally as accepted).
-            if contextMenus.tryTileMenu(x, y) then
-                recordClick("context_menu_tile", nil, x, y)
-            else
-                recordClick(nil, "deadclick", x, y, "no tile under cursor")
-            end
-        end
+        -- #1875: the right-button world-entity fallback — per-target
+        -- context menus and move orders — now lives in
+        -- scripts/init_mouse_entity.lua, behind the same zoom-band gate.
+        -- Placed after the six armed-mode cancels above (whose dismissal
+        -- behavior is unchanged) and after the gameplay-activity gate,
+        -- immediately before the first thing that hit-tests or
+        -- move-orders a world entity.
+        require("scripts.init_mouse_entity")
+            .handleRightPress(x, y, recordClick)
     end
 end
 

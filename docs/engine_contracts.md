@@ -658,9 +658,21 @@ resize behavior below is part of the probe's contract.
   frame count, so unequal per-direction frame counts (four checked-in
   acolyte animations have them) stay phase-aligned. Selecting a different
   ANIMATION resets the clock; enlarging a different DIRECTION does not.
-  Non-loop end-of-clip HOLDS the last frame — the same clamp
-  `Unit.Render.pickFrame` applies in game. The frame index comes from a
-  wall clock, so the script tick rate only affects smoothness.
+  End-of-clip REPLAYS (#1833): frame `N-1` is followed, after its own
+  normal duration, by frame `0` again, indefinitely — for EVERY clip,
+  whatever its authored `loop` says, because the viewer exists to
+  inspect an animation and a short `loop: false` clip otherwise looked
+  static within half a second. The wrap is in the index computation
+  (`Engine.Preview.Unit.frameIndexAt`, which takes the source `loop`
+  and deliberately does not read it), never in the clock — nothing
+  restarts `animStart` at a cycle boundary, which is what preserves the
+  phase across a direction change and a resize. Gameplay is the
+  separate `Unit.Render.pickFrame` path and still HOLDS the last frame
+  of a non-looping clip. Past the first cycle, directions with unequal
+  frame counts wrap at different times and so no longer show the same
+  frame ordinal — the same modular behavior a `loop: true` clip already
+  had. An effective fps of 0 stays on frame 0. The frame index comes
+  from a wall clock, so the script tick rate only affects smoothness.
 - **Reflow:** a resize preserves the selected animation, selected
   direction, list scroll offset, AND playback phase.
 - **Pre-boot rejection:** an unknown unit, a name with path structure or
@@ -707,8 +719,13 @@ resize behavior below is part of the probe's contract.
 - **Playback defaults are `fps=8`, `loop=false`** — `BuildingYamlAnim`'s
   own, NOT the units viewer's `loop=true`. One wall clock per selected
   animation, reset on a real selection change but preserved across a
-  resize; non-loop end-of-clip HOLDS the last frame. A STATIC selection
-  has no playback at all.
+  resize; end-of-clip REPLAYS (#1833) on the units viewer's identical
+  terms — every animation entry repeats indefinitely regardless of its
+  authored `loop`, the wrap coming from the index rather than a
+  restarted `entryStart`. A STATIC selection has no playback at all,
+  and forced replay does not change that: `buildingAssetView.update`
+  still advances nothing outside `entry.animated`, so a static entry
+  keeps exposing no `playback` in the dump.
 
 ### The dump contract
 

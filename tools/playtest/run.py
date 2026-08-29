@@ -660,6 +660,7 @@ def selftest() -> int:
     replay — FakeEngine, ScriptedAgent, no window, no API, no build."""
     import inspect
     import socket
+    import subprocess
     import tempfile
     failures = []
 
@@ -1463,7 +1464,8 @@ def selftest() -> int:
         check("Codex JSONL token usage maps into the existing trace shape",
               usage == {"input_tokens": 123, "output_tokens": 67,
                         "cache_read_input_tokens": 45}, str(usage))
-        claude_turn, claude_usage = agent_mod._parse_claude_result(json.dumps({
+        (claude_turn, claude_usage,
+         claude_fallback) = agent_mod._parse_claude_result(json.dumps({
             "structured_output": {
                 "observation": "menu", "action": {"do": "wait"},
                 "expectation": "", "note": ""},
@@ -1484,6 +1486,131 @@ def selftest() -> int:
                   "input_tokens": 1984, "output_tokens": 64,
                   "cache_read_input_tokens": 1085,
                   "cache_creation_input_tokens": 0}, str(claude_usage))
+        check("a usable structured_output needs no fallback text",
+              claude_fallback == "", repr(claude_fallback))
+
+        # #1874: a player reply that parses as valid JSON but is not an
+        # object is a confused turn, not a crash. Driven through
+        # PlayerAgent.decide with only the provider process faked, so the
+        # whole production path runs — including _parse_claude_result's
+        # own fallback handoff — and the checks assert the observable
+        # turn rather than a helper's return value.
+        shot = os.path.join(tmp, "reply_shape_frame.png")
+        with open(shot, "wb") as f:
+            f.write(b"\x89PNG\r\n\x1a\n")
+        codex_usage_stdout = (
+            '{"type":"thread.started"}\n'
+            '{"type":"turn.completed","usage":{"input_tokens":123,'
+            '"cached_input_tokens":45,"output_tokens":67}}\n')
+        codex_expected_usage = {"input_tokens": 123, "output_tokens": 67,
+                                "cache_read_input_tokens": 45}
+        claude_model_usage = {
+            "claude-sonnet-5": {
+                "inputTokens": 2, "outputTokens": 52,
+                "cacheReadInputTokens": 1085, "cacheCreationInputTokens": 0}}
+        claude_expected_usage = {
+            "input_tokens": 1087, "output_tokens": 52,
+            "cache_read_input_tokens": 1085, "cache_creation_input_tokens": 0}
+
+        def decide_with_reply(backend, stdout="", file_text=None):
+            """One real decide() turn against a faked provider process."""
+            profile_name = ("codex-luna" if backend == "codex-cli"
+                            else "claude-sonnet")
+            player = object.__new__(agent_mod.PlayerAgent)
+            player.provider_bin = "/nonexistent/provider"
+            player.player_profile = profile_name
+            player.backend = backend
+            player.persona = p
+            player.manual = "MANUAL"
+            player.profile = dict(agent_mod.PLAYER_PROFILES[profile_name])
+            player.model = player.profile["model"]
+            player.effort = player.profile["effort"]
+            player.decision_timeout = 30.0
+            player.needs_llm = True
+
+            def fake_run(command, **kwargs):
+                if file_text is not None:
+                    out_path = command[
+                        command.index("--output-last-message") + 1]
+                    with open(out_path, "w", encoding="utf-8") as handle:
+                        handle.write(file_text)
+                return subprocess.CompletedProcess(command, 0, stdout, "")
+
+            saved_run = agent_mod.subprocess.run
+            agent_mod.subprocess.run = fake_run
+            try:
+                return player.decide(shot, (1280, 720), [], 1)
+            finally:
+                agent_mod.subprocess.run = saved_run
+
+        def check_unusable_reply(label, turn, raw, usage):
+            check(label,
+                  turn["action"] == {"do": "wait"}
+                  and turn["observation"] == ""
+                  and turn["expectation"] == ""
+                  and turn["note"] == agent_mod.NON_OBJECT_NOTE
+                  and turn["note"] != agent_mod.NOT_JSON_NOTE
+                  and turn["raw"] == raw
+                  and turn["usage"] == usage, str(turn))
+
+        # Falsy non-object through the Codex path, which reaches
+        # normalize_turn outside decide's parse-exception handler.
+        check_unusable_reply(
+            "a falsy non-object Codex reply is a recorded wait, not a crash",
+            decide_with_reply("codex-cli", stdout=codex_usage_stdout,
+                              file_text="[]"),
+            "[]", codex_expected_usage)
+        check_unusable_reply(
+            "a scalar Codex reply is a recorded wait, not a crash",
+            decide_with_reply("codex-cli", stdout=codex_usage_stdout,
+                              file_text='"wait"'),
+            '"wait"', codex_expected_usage)
+
+        # Claude: a non-mapping structured_output falls back to `result`,
+        # which is itself valid non-object JSON. Before #1874 this left
+        # _parse_claude_result returning a list and crashed normalize_turn.
+        check_unusable_reply(
+            "a non-object Claude fallback is a recorded wait, not a crash",
+            decide_with_reply("claude-cli", stdout=json.dumps({
+                "structured_output": [],
+                "result": "[1, 2]",
+                "modelUsage": claude_model_usage})),
+            "[1, 2]", claude_expected_usage)
+        # A `null` fallback: valid JSON of the wrong type, which before
+        # #1874 was misreported as malformed JSON with the text erased.
+        check_unusable_reply(
+            "a null Claude fallback keeps its text and its own note",
+            decide_with_reply("claude-cli", stdout=json.dumps({
+                "result": "null", "modelUsage": claude_model_usage})),
+            "null", claude_expected_usage)
+
+        # The narrow guard: text that is not JSON at all still gets the
+        # existing malformed-JSON wait, and a well-formed object still
+        # becomes its own turn with usage intact.
+        not_json_turn = decide_with_reply(
+            "codex-cli", stdout=codex_usage_stdout, file_text="sorry, no idea")
+        check("unparseable reply text keeps the malformed-JSON wait",
+              not_json_turn["action"] == {"do": "wait"}
+              and not_json_turn["note"] == agent_mod.NOT_JSON_NOTE
+              and not_json_turn["raw"] == "sorry, no idea"
+              and not_json_turn["usage"] == codex_expected_usage,
+              str(not_json_turn))
+        good_turn = decide_with_reply("claude-cli", stdout=json.dumps({
+            "structured_output": {
+                "observation": "menu", "action": {"do": "scroll", "dy": -1},
+                "expectation": "list moves", "note": "trying"},
+            "modelUsage": claude_model_usage}))
+        check("a well-formed structured reply still becomes its own turn",
+              good_turn["action"] == {"do": "scroll", "dy": -1}
+              and good_turn["observation"] == "menu"
+              and good_turn["note"] == "trying"
+              and good_turn["usage"] == claude_expected_usage,
+              str(good_turn))
+        non_object_fallback = agent_mod._parse_claude_result(
+            json.dumps({"result": "[]"}))
+        check("_parse_claude_result never hands back a non-mapping turn",
+              non_object_fallback[0] is None
+              and non_object_fallback[2] == "[]", str(non_object_fallback))
 
         # 7. event-log progress (#699, #1714): the engine-side store
         # appends, moves coalesced updates to the tail, and drops from the
