@@ -458,6 +458,42 @@ refusalSpec = describe "registration" $ do
         resolvedArtAt ls "repeat_pack" "floor" Nothing (simpleTile 0)
             `shouldReturn` Just (("a.png", 41), ("face.png", 42))
 
+    it "refuses a sparse `kinds` or `art` array rather than silently \
+       \dropping what is past the gap" $ \(env, ls) → do
+        -- `rawlen` answers a BORDER, so `{[1]=a, [3]=b}` can report 1.
+        -- Walking to that border would accept a pack that is missing a
+        -- declared kind (or an art slot) as if it were complete — the
+        -- partial registration the all-or-nothing rule refuses.
+        let sparse label body = do
+                before ← readIORef (structureArtCatalogRef env)
+                (r, entries) ← withCapturedLog env $ evalDebug ls body
+                r `shouldBe` "false"
+                readIORef (structureArtCatalogRef env)
+                    ⌦ \after → sacPacks after `shouldBe` sacPacks before
+                case warningsOf entries of
+                    [w] → forM_ ["pack 'sparse_pack'", "sparse"] $ \needle →
+                        unless (needle `T.isInfixOf` w) $ expectationFailure
+                            (label <> ": the warning does not name "
+                               <> show needle <> ": " <> T.unpack w)
+                    other → expectationFailure
+                        (label <> ": expected exactly one warning, got: "
+                           <> show other)
+        sparse "sparse kinds" $ T.concat
+            [ "return tostring(structure.registerPackArt{ pack='sparse_pack', "
+            , "kinds={[1]={kind='floor', buildable=true}, "
+            ,        "[3]={kind='ceiling', buildable=true}}, "
+            , "art={{kind='floor', texture='a.png', texHandle=41, "
+            , "facemap='f.png', faceHandle=42}} })" ]
+        sparse "sparse art" $ T.concat
+            [ "return tostring(structure.registerPackArt{ pack='sparse_pack', "
+            , "kinds={{kind='floor', buildable=true}}, "
+            , "art={[1]={kind='floor', texture='a.png', texHandle=41, "
+            ,           "facemap='f.png', faceHandle=42}, "
+            ,      "[3]={kind='ceiling', texture='c.png', texHandle=41, "
+            ,           "facemap='f.png', faceHandle=42}} })" ]
+        resolvedArtAt ls "sparse_pack" "floor" Nothing (simpleTile 0)
+            `shouldReturn` Nothing
+
     it "resolves nothing for an unregistered pack" $ \(_, ls) →
         resolvedArtAt ls "no_such_pack" "floor" Nothing (simpleTile 0)
             `shouldReturn` Nothing

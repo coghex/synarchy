@@ -39,6 +39,7 @@ import Engine.Core.Capability.RenderHandoff
 import Engine.Core.Log (LogCategory(..), logWarn)
 import Engine.Core.State (EngineEnv, loggerRef)
 import Engine.Scripting.Lua.API.Structure (resolveStructurePage)
+import Engine.Scripting.Lua.Util (isDenseArray)
 import Structure.ArtCatalog
 import Structure.Facing (WallEdge(..), wallCapsFromCode)
 import Structure.Wire
@@ -148,8 +149,21 @@ structureRegisterPackArtFn env = do
               → (Int → Lua.LuaE Lua.Exception (Either ArtFault α))
               → Lua.LuaE Lua.Exception (Either ArtFault [α])
     readArray pack role readOne = do
-        n ← Lua.rawlen (-1)
-        go 1 (fromIntegral n) []
+        -- `rawlen` reports a BORDER, not a count: a sparse table
+        -- (`{[1]=a, [3]=b}`) can answer 1, and walking to that border
+        -- would silently drop everything past the hole — a registration
+        -- accepted as complete while missing a declared kind or an art
+        -- slot, which is precisely the partial pack the all-or-nothing
+        -- rule exists to refuse. Reject the whole payload instead.
+        dense ← isDenseArray (-1)
+        if not dense
+          then pure ∘ Left $
+              fault pack Nothing role
+                    "the array is sparse (it has a gap in its indices), so \
+                    \some entries would be silently dropped"
+          else do
+            n ← Lua.rawlen (-1)
+            go 1 (fromIntegral n) []
       where
         go i n acc
             | i > n = pure (Right (reverse acc))
