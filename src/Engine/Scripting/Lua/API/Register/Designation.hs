@@ -5,6 +5,7 @@ module Engine.Scripting.Lua.API.Register.Designation
 import Engine.Core.Capability.WorldSim (toWorldSimCapability)
 import Engine.Scripting.Lua.API.Internal (registerLuaFunction)
 import Engine.Scripting.Lua.API.Structure
+import Engine.Scripting.Lua.API.StructureArt
 import Engine.Scripting.Lua.API.Construct
 import Engine.Scripting.Lua.API.Chop
 import Engine.Scripting.Lua.API.Till
@@ -33,6 +34,11 @@ registerDesignationAPI env = do
   registerLuaFunction "setPaletteHandle" (structureSetPaletteHandleFn env)
   registerLuaFunction "paletteCount" (structurePaletteCountFn env)
   registerLuaFunction "registerWallFamily" (structureRegisterWallFamilyFn env)
+  registerLuaFunction "registerPackArt" (structureRegisterPackArtFn env)
+  registerLuaFunction "isPackKindBuildable" (structurePackKindBuildableFn env)
+  registerLuaFunction "resolvePieceArt" (structureResolvePieceArtFn env)
+  registerLuaFunction "wireShape"    structureWireShapeFn
+  registerLuaFunction "wireNeighbors" (structureWireNeighborsFn env)
   registerLuaFunction "floorZAt" (structureFloorZAtFn env)
   registerLuaFunction "hasAt"    (structureHasAtFn env)
   registerLuaFunction "getAt"    (structureGetAtFn env)

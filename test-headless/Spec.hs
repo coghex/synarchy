@@ -197,6 +197,7 @@ import qualified Test.Headless.World.Render.SolarAttribution as SolarAttribution
 import qualified Test.Headless.World.DesignationSeam as DesignationSeam
 import qualified Test.Headless.World.StructureStage as StructureStage
 import qualified Test.Headless.World.StructurePaletteResidue as StructurePaletteResidue
+import qualified Test.Headless.Structure.ArtCatalog as StructureArtCatalog
 import qualified Test.Headless.World.Render.SideFace as RenderSideFace
 import qualified Test.Headless.World.Render.ZTrackSeam as ZTrackSeam
 import qualified Test.Headless.World.Render.SlopeBit as RenderSlopeBit
@@ -690,6 +691,13 @@ main = hspec $ do
     -- structure.place used to leave behind — its own engine so the
     -- "nothing was queued" half is an assertion on an undrained queue.
     StructurePaletteResidue.spec
+
+    -- #1842: the unplaced-piece art catalogue. Its own headless engine
+    -- for the same reason as the two above -- the placement it compares
+    -- against is read off the undrained WorldSetStructure -- plus the
+    -- real scripts/structures.lua and scripts/wire.lua, so parity is
+    -- against the builder rather than a table written in the test.
+    StructureArtCatalog.spec
 
     -- #1602: its own headless engine (no worker threads), so a queued
     -- BuildingSpawn / WorldDesignateConstruct stays in its queue and

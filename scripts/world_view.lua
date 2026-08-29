@@ -264,10 +264,18 @@ end
 -- texturesLoadedCount short of texturesNeeded forever and the world
 -- would never be created. The missing texture draws as the undefined
 -- texture; a boot that never finishes is strictly worse.
-function worldView.onAssetFailed(assetType, handle, path, reason)
+--
+-- `reported` (#1842) says the ENGINE already emitted a diagnostic that
+-- names this asset with more context than this line could -- which pack,
+-- kind and role lost it. Skip the duplicate line, never the gate work:
+-- the readiness accounting below is the whole reason this callback
+-- exists, and suppressing it would be the boot stall described above.
+function worldView.onAssetFailed(assetType, handle, path, reason, reported)
     if assetType ~= "texture" then return end
-    engine.logWarn("World texture failed to load: " .. tostring(path)
-        .. " (" .. tostring(reason) .. ")")
+    if not reported then
+        engine.logWarn("World texture failed to load: " .. tostring(path)
+            .. " (" .. tostring(reason) .. ")")
+    end
     worldView.onAssetLoaded(assetType, handle, path)
 end
 
