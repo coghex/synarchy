@@ -27,6 +27,25 @@ is a way the probe would leak, or has leaked:
     otherwise produce a private copy whose entries cannot be unlinked —
     residue, and a failing run, from a source the probe only read.
 
+The second contract (issue #1746) is the probe's two saves. Both slots
+are read by a LATER session — one of them by a fresh process — and
+`engine.saveWorld` only ACCEPTS synchronously, so neither the API's own
+Boolean nor the request-specific `SaveCaptureComplete` may be skipped.
+These tests drive `save_and_wait` and `run_probe` against stubbed
+console responses (no engine, no port) and pin:
+
+  * A refused save fails the probe, names the engine log, and never
+    waits on a request that does not exist.
+  * A missing request id fails the probe without calling
+    `wait_save_complete` — `probelib.capture_request_id` is documented
+    to return None on timeout.
+  * A `SaveFailed` terminal phase, and a wait that times out with no
+    status at all, both fail with the request id and what was observed.
+  * The success path reports the request id and the terminal phase.
+  * A failed save SUPPRESSES every session that would read the slot,
+    rather than letting the missing file resurface as a load timeout in
+    a later session.
+
 No engine, no world, no GPU: every test here runs against temporary
 directories in well under a second.
 
@@ -475,6 +494,263 @@ def test_release_failure_fails_an_otherwise_clean_run() -> None:
         real_rmtree(base, ignore_errors=True)
 
 
+# ---------------------------------------------------------------------
+# Durable saves (#1746)
+# ---------------------------------------------------------------------
+@contextlib.contextmanager
+def stub_save(accepted: str, request_id, completion):
+    """Replace the three console-facing names `save_and_wait` composes
+    with fixed answers, and record what it actually called.
+
+    `accepted` is what `engine.saveWorld` returns over the console,
+    `request_id` what `capture_request_id` yields (None models its
+    documented timeout), and `completion` the `(ok, status)` pair
+    `wait_save_complete` returns. The recorder is what lets a test
+    assert that a step was SKIPPED — waiting on a request id that was
+    never captured is the specific mistake being ruled out.
+    """
+    calls: dict[str, list] = {"send": [], "capture": [], "wait": []}
+    original = (probe.send, probe.capture_request_id, probe.wait_save_complete)
+
+    def fake_send(port, lua):
+        calls["send"].append(lua)
+        return accepted
+
+    def fake_capture(port, status_lua, *a, **k):
+        calls["capture"].append(status_lua)
+        return request_id
+
+    def fake_wait(port, rid, *a, **k):
+        calls["wait"].append(rid)
+        return completion
+
+    probe.send = fake_send
+    probe.capture_request_id = fake_capture
+    probe.wait_save_complete = fake_wait
+    probe.failures.clear()
+    probe.set_log("/nonexistent/engine_stub.log")
+    try:
+        yield calls
+    finally:
+        (probe.send, probe.capture_request_id,
+         probe.wait_save_complete) = original
+        probe.failures.clear()
+        probe.set_log(None)
+
+
+def test_a_refused_save_fails_and_never_waits() -> None:
+    print("\ntest_a_refused_save_fails_and_never_waits")
+    with stub_save("false", 7, (True, {"id": 7, "phase": "SaveCaptureComplete"})) as calls:
+        with captured() as out:
+            ok = probe.save_and_wait(9420, "ew", probe.SAVE_BASE, "phase 0")
+        text = out.getvalue()
+        expect(ok is False, "a refused engine.saveWorld returns False")
+        expect(len(probe.failures) == 1,
+               f"...and records exactly one failure (got {probe.failures})")
+        expect(probe.failures and "'false'" in probe.failures[0],
+               f"...naming the value the API actually returned "
+               f"(got {probe.failures})")
+        expect(probe.failures and "engine_stub.log" in probe.failures[0],
+               "...and the engine log holding the validation reason")
+        expect(probe.SAVE_BASE in text, "the failing check names the slot")
+        expect(not calls["capture"] and not calls["wait"],
+               "a request that was never accepted is never waited on")
+
+
+def test_a_missing_request_id_fails_without_waiting() -> None:
+    print("\ntest_a_missing_request_id_fails_without_waiting")
+    with stub_save("true", None, (True, {"phase": "SaveCaptureComplete"})) as calls:
+        with captured():
+            ok = probe.save_and_wait(9420, "ew", probe.SAVE_LOCAL, "session b")
+        expect(ok is False, "no request id is a failure, not a pass")
+        expect(len(probe.failures) == 1
+               and "request id" in probe.failures[0]
+               and probe.SAVE_LOCAL in probe.failures[0],
+               f"...reported with the slot it belongs to "
+               f"(got {probe.failures})")
+        expect(probe.failures and "engine_stub.log" in probe.failures[0],
+               "...and the engine log to read it in")
+        expect(calls["capture"] == ["return engine.getSaveStatus()"],
+               f"the id is captured from getSaveStatus (got {calls['capture']})")
+        expect(not calls["wait"],
+               "wait_save_complete is not called without an id to wait on")
+
+
+def test_a_failed_or_timed_out_save_fails_with_what_was_observed() -> None:
+    print("\ntest_a_failed_or_timed_out_save_fails_with_what_was_observed")
+    failed = {"id": 11, "phase": "SaveFailed", "message": "disk full"}
+    with stub_save("true", 11, (False, failed)) as calls:
+        with captured():
+            ok = probe.save_and_wait(9420, "ew", probe.SAVE_LOCAL, "session b")
+        expect(ok is False, "a SaveFailed terminal phase is a failure")
+        expect(calls["wait"] == [11],
+               f"the wait is tied to THIS request id (got {calls['wait']})")
+        expect(len(probe.failures) == 1
+               and "11" in probe.failures[0]
+               and "SaveFailed" in probe.failures[0]
+               and probe.SAVE_LOCAL in probe.failures[0],
+               f"the failure names the save, its request id and the observed "
+               f"status (got {probe.failures})")
+
+    # probelib.wait_save_complete returns (False, None) when the console
+    # never reported a status for the request at all before its deadline.
+    with stub_save("true", 12, (False, None)):
+        with captured():
+            ok = probe.save_and_wait(9420, "ew", probe.SAVE_BASE, "phase 0")
+        expect(ok is False, "a wait timeout is a failure, not a pass")
+        expect(len(probe.failures) == 1
+               and "12" in probe.failures[0]
+               and probe.SAVE_BASE in probe.failures[0],
+               f"...still naming which save and which request "
+               f"(got {probe.failures})")
+
+
+def test_a_completed_save_reports_its_request_and_phase() -> None:
+    print("\ntest_a_completed_save_reports_its_request_and_phase")
+    done = {"id": 4, "phase": "SaveCaptureComplete"}
+    with stub_save("true", 4, (True, done)) as calls:
+        with captured() as out:
+            ok = probe.save_and_wait(9420, "ew", probe.SAVE_BASE, "phase 0")
+        text = out.getvalue()
+        expect(ok is True, "a completed save returns True")
+        expect(not probe.failures,
+               f"...and records no failure (got {probe.failures})")
+        expect(calls["send"] == ["return engine.saveWorld('ew', "
+                                f"'{probe.SAVE_BASE}')"],
+               f"the API's own result is returned, not a literal "
+               f"(got {calls['send']})")
+        expect(calls["wait"] == [4],
+               f"completion is waited on for this request (got {calls['wait']})")
+        expect("request 4" in text and "SaveCaptureComplete" in text,
+               f"the output names the request id and terminal phase "
+               f"(got {text!r})")
+
+
+class _Args:
+    """The subset of the parsed command line `run_probe` reads."""
+
+    def __init__(self, keep_artifacts: bool = False) -> None:
+        self.seed = 42
+        self.alt_seeds = "7"
+        self.size = 64
+        self.port = 9420
+        self.win_size = "1280x720"
+        self.keep_artifacts = keep_artifacts
+
+
+@contextlib.contextmanager
+def stub_sessions(prepare):
+    """Run `run_probe` with its engine boots and its three sessions
+    replaced, recording which sessions ran.
+
+    `prepare` stands in for `prepare_fixture` and returns its
+    `(seed, ruins)` pair. Everything the sessions themselves do needs a
+    GPU; what these tests are about is which of them the run REACHES.
+    """
+    ran: list[str] = []
+    original = (probe.prepare_fixture, probe.boot, probe.quit_engine,
+                probe.session_ghost_and_remote,
+                probe.session_local_and_discovery,
+                probe.session_reload_check)
+    state: dict[str, object] = {"local_result": True}
+
+    probe.prepare_fixture = lambda *a, **k: prepare()
+    probe.boot = lambda *a, **k: object()
+    probe.quit_engine = lambda *a, **k: None
+
+    def ghost(*_a, **_k):
+        ran.append("a")
+
+    def local(*_a, **_k):
+        ran.append("b")
+        return state["local_result"]
+
+    def reload_check(*_a, **_k):
+        ran.append("c")
+
+    probe.session_ghost_and_remote = ghost
+    probe.session_local_and_discovery = local
+    probe.session_reload_check = reload_check
+    probe.failures.clear()
+    try:
+        yield ran, state
+    finally:
+        (probe.prepare_fixture, probe.boot, probe.quit_engine,
+         probe.session_ghost_and_remote, probe.session_local_and_discovery,
+         probe.session_reload_check) = original
+        probe.failures.clear()
+
+
+def _drive_run_probe(prepare, local_result=True):
+    """`run_probe` on a throwaway artifact tree; returns
+    `(sessions that ran, captured output, failures recorded)`.
+
+    The failure list is SNAPSHOT here rather than read from
+    `probe.failures` afterwards: `stub_sessions` clears that module
+    global on its way out, so an assertion made after the fixture closes
+    would be asserting about an empty list whatever the run recorded.
+    """
+    art = probe.RunArtifacts(tempfile.mkdtemp(prefix="test_embark_gate_"))
+    try:
+        with stub_sessions(prepare) as (ran, state):
+            state["local_result"] = local_result
+            with captured() as out:
+                probe.run_probe(_Args(), 1280, 720, art)
+            return list(ran), out.getvalue(), list(probe.failures)
+    finally:
+        shutil.rmtree(art.base, ignore_errors=True)
+
+
+def test_a_failed_fixture_save_suppresses_every_dependent_session() -> None:
+    print("\ntest_a_failed_fixture_save_suppresses_every_dependent_session")
+    ruins = [{"id": "ruin_small", "cx": 0, "cy": 0, "gx": 0, "gy": 0,
+              "bounds": {}},
+             {"id": "ruin_small", "cx": 1, "cy": 1, "gx": 8, "gy": 8,
+              "bounds": {}}]
+    # A qualifying seed whose SAVE failed: prepare_fixture reports the
+    # ruins it found but no seed, because the fixture is not on disk.
+    ran, text, recorded = _drive_run_probe(lambda: (None, ruins))
+    expect(ran == [],
+           f"sessions (a), (b) and (c) all read a slot that was never "
+           f"published, so none of them runs (got {ran})")
+    expect("skipped" in text and probe.SAVE_BASE in text,
+           f"...and the run says so, naming the slot (got {text!r})")
+    expect(not [f for f in recorded if "ruin_small" in f],
+           f"the save failure is not misreported as a worldgen shortfall "
+           f"(got {recorded})")
+    expect("[PASS] a candidate seed placed at least two ruin_small" in text,
+           f"...the worldgen check having actually passed (got {text!r})")
+
+    # The pre-existing "no seed qualified" path still reads that way.
+    ran, text, recorded = _drive_run_probe(lambda: (None, []))
+    expect(ran == [], f"no qualifying seed still runs no session (got {ran})")
+    expect(any("ruin_small" in f for f in recorded),
+           f"...and is still recorded as a worldgen shortfall (got {recorded})")
+    expect("[FAIL] a candidate seed placed at least two ruin_small" in text,
+           f"...and reported as one (got {text!r})")
+
+
+def test_a_failed_session_b_save_suppresses_only_session_c() -> None:
+    print("\ntest_a_failed_session_b_save_suppresses_only_session_c")
+    ruins = [{"id": "ruin_small", "cx": 0, "cy": 0, "gx": 0, "gy": 0,
+              "bounds": {}},
+             {"id": "ruin_small", "cx": 1, "cy": 1, "gx": 8, "gy": 8,
+              "bounds": {}}]
+    ran, text, _recorded = _drive_run_probe(lambda: (42, ruins),
+                                            local_result=False)
+    expect(ran == ["a", "b"],
+           f"session (c) loads SAVE_LOCAL in a fresh process, so a session "
+           f"(b) that published nothing stops it (got {ran})")
+    expect("session (c) skipped" in text and probe.SAVE_LOCAL in text,
+           f"...and the reason names the save, not the load (got {text!r})")
+
+    ran, _text, _recorded = _drive_run_probe(lambda: (42, ruins),
+                                             local_result=True)
+    expect(ran == ["a", "b", "c"],
+           f"a durable session (b) save still runs the reload check "
+           f"(got {ran})")
+
+
 def main() -> int:
     test_root_symlinks_content_and_copies_config()
     test_a_read_only_checkout_still_yields_a_removable_tree()
@@ -493,12 +769,19 @@ def main() -> int:
     test_a_failing_run_can_retain_on_request()
     test_a_passing_run_can_retain_on_request()
     test_release_failure_fails_an_otherwise_clean_run()
+    test_a_refused_save_fails_and_never_waits()
+    test_a_missing_request_id_fails_without_waiting()
+    test_a_failed_or_timed_out_save_fails_with_what_was_observed()
+    test_a_completed_save_reports_its_request_and_phase()
+    test_a_failed_fixture_save_suppresses_every_dependent_session()
+    test_a_failed_session_b_save_suppresses_only_session_c()
     if FAILURES:
         print(f"\n{len(FAILURES)} test(s) failed:")
         for failure in FAILURES:
             print(f"  {failure}")
         return 1
-    print("\nAll location_embark_probe artifact-ownership tests passed")
+    print("\nAll location_embark_probe artifact-ownership and durable-save "
+          "tests passed")
     return 0
 
 
