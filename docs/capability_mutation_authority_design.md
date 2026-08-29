@@ -20,20 +20,21 @@ concrete precondition
 ## Processing status
 
 - [x] EPIC. Make capability records enforce mutation authority, not just field visibility — [#1890]
-- [ ] CMA-1. Check every capability field's write sites against its declared writer set
+- [x] CMA-1. Gate every capability field's write sites against a checked-in writing-module map — [#1892]
 - [ ] CMA-2. Give `RenderHandoff` a structural mutation-authority boundary
 - [ ] CMA-3. Record the pilot's verdict and the rollout recommendation
 
 ## Epic contract
 
-- **Goal:** The capability inventory's declared writer set for every field is
-  checked against the code by a blocking gate, and one capability additionally
-  carries a structural boundary making a non-writer's mutation a compile error —
-  with an explicit, evidence-backed verdict on whether that boundary is worth
-  rolling out further.
+- **Goal:** Every capability field's writing modules are pinned by a blocking
+  gate that fails on an undeclared writer or a stale declaration, and one
+  capability additionally carries a structural boundary making a non-writer's
+  mutation a compile error — with an explicit, evidence-backed verdict on
+  whether that boundary is worth rolling out further.
 - **Done when:** (1) the write-site gate runs in CI and `make ci`, rejecting both
-  a code write outside a field's declared writer set and a declared writer entry
-  no code backs; (2) `RenderHandoff` carries the structural boundary (D-6); and
+  a write from a module outside a field's checked-in writing-module map and a
+  mapped module that no longer writes that field (D-2a — module granularity, not
+  §5's roles); (2) `RenderHandoff` carries the structural boundary (D-6); and
   (3) the verdict and its evidence are recorded in
   `docs/engineenv_capability_inventory.md`. Rolling the boundary out to the
   remaining capabilities is deliberately a **separate arc**, opened only if the
@@ -87,6 +88,73 @@ So the inventory can claim `pathingConfigRef` has no writers, or that
 `worldQuadsRef` is written only by `WorldThread`, and a change that falsifies
 either claim passes every gate. This is the same drift class issue #1669 closed
 for the field *count*, still open for the ownership *claims*.
+
+### §5 declares ROLES; a source scan yields MODULES; nothing maps between them
+
+Established while attempting to draft CMA-1, and the reason D-2a amends D-2.
+
+- The audit carries no role→module mapping. `RENDER_MAIN_ONLY_MODULES` (14
+  modules) and `INPUT_LUA_ONLY_MODULES` are per-*capability* import allowlists
+  for the two §3.1 boundaries. `THREAD_ROLES` is nine bare strings consumed only
+  by the cell-grammar validator.
+- The mapping is not well-defined at module granularity. §3.1 names
+  `World.Render.BloodQuads` as deliberately dual-domain, and it writes
+  `textureSystemRef` at `src/World/Render/BloodQuads.hs:111`. That field's §5 row
+  disambiguates only in prose — annotating that BloodQuads' upload/dispose
+  functions run on `MainRender`, "NOT the world thread's `updateWorldTiles`
+  quad-building path" — and cites lines 76 and 161, not 111. The role is a
+  property of the **function**, not the module.
+- Of the 87 §5 rows: **43 declare two or more writer roles**, 41 exactly one, 3
+  none.
+
+### Passing the raw handle onward is the dominant idiom
+
+Measured on `master@19af28ea`, across `src/` + `app/`, over all 103 capability
+accessors: of **321** accessor uses, **208** read or write inline and **113
+(35%) pass the handle onward** — into helper parameters, and into context
+records that mix several capabilities:
+
+```haskell
+-- src/Building/Knowledge/Live.hs:102-105
+{ coBuildings = bcBuildingManagerRef bld
+, coWorlds    = wsWorldManagerRef sim
+, coItems     = crItemManagerRef reg
+, coGameTime  = wsGameTimeRef sim }
+
+-- src/Building/Thread/Command.hs:80
+forgetContainerEverywhere (wsWorldManagerRef sim) bid
+```
+
+This is the measurement D-7 turns on: any boundary drawn at the *record* is
+gone the moment the `IORef` is extracted, and a third of all uses do exactly
+that.
+
+### `RenderHandoff`'s read-only surface is three relationships, not eight
+
+Derived from §5's own Readers/Writers cells for the eight
+`world-sim-render-handoff` handoff fields:
+
+| Role | Read-only on |
+|---|---|
+| `LuaThread` | `worldPreviewGenerationRef` |
+| `MainRender` | `worldQuadsRef` |
+| `WorldThread` | `structureWallCatalogRef` |
+
+`texPaletteRef` and `texPaletteHandlesRef` are read *and* written by both their
+roles; `worldPreviewRef` and `zoomAtlasDataRef` are written by both theirs; and
+`bloodDisposeQueue`'s only "reader" is `MainRender` *draining* it, which mutates
+— a read-only view over it would be meaningless.
+
+The pilot is nevertheless cheap: RenderHandoff's accessors appear in **6
+modules**, with 13 inline uses and 4 pass-on sites (all four the same
+`enqueueBloodDisposalForPage` call shape).
+
+### The audit has no `--self-test` flag
+
+`main()` parses no arguments at all. The self-test is a separate 2,010-line
+`tools/test_engine_env_capability_audit.py`, which is what `make ci` and CI run
+alongside the audit — the project's usual `test_<tool>.py` convention. Any
+acceptance command naming `engine_env_capability_audit.py --self-test` is wrong.
 
 ### The mutation surface is small enough to audit
 
@@ -148,8 +216,8 @@ the arc works from live numbers:
 
 ### In scope
 
-- A write-site gate that checks §5's declared writer sets against the code
-  (CMA-1).
+- A write-site gate pinning each field's writing modules, both directions
+  (CMA-1, D-2a).
 - One pilot capability carrying a structural authority boundary (CMA-2), and a
   recorded verdict on rollout (CMA-3).
 - The changes those imply to `tools/engine_env_capability_audit.py`, its
@@ -221,27 +289,81 @@ the audit tool. Compressing it into one issue would hand a solver a guess.
 
 ### D-2. The gate comes first; the structural mechanism is chosen afterward
 
-Approved 2026-08-29. CMA-1 extends `tools/engine_env_capability_audit.py` to
-locate each field's actual write sites and reject any whose module is outside
-§5's declared writer set, with a checked-in **both-directions** module map of
-exactly the shape `RENDER_MAIN_ONLY_MODULES` already uses — so a stale declared
-entry fails as loudly as an undeclared write. The type-level mechanism is not
-chosen now; it is chosen for CMA-2 with the gate's own findings in hand.
+Approved 2026-08-29, and **amended the same day** — see D-2a, which supersedes
+this entry's original module-versus-role wording.
 
-**Rationale:** the gate closes the §5-drift hole on its own, ships without
-Haskell churn, and makes every later slice verifiable. Choosing the structural
-mechanism before knowing which fields actually have clean writer sets would be
-choosing blind.
+CMA-1 extends `tools/engine_env_capability_audit.py` to locate each field's
+actual write sites and check them against a checked-in **both-directions** map
+of exactly the shape `RENDER_MAIN_ONLY_MODULES` already uses, so a stale
+declared entry fails as loudly as an undeclared write. The type-level mechanism
+is not chosen now; it is chosen for CMA-2 with the gate's own findings in hand.
+
+**Rationale:** the gate closes the drift hole on its own, ships without Haskell
+churn, and makes every later slice verifiable. Choosing the structural mechanism
+before knowing which fields actually have clean writer sets would be choosing
+blind.
 
 **Consequences:**
 
 - The gate reasons about **direct** write sites. A `writeIORef` reached by
   passing a capability handle into a helper is not attributable by a textual
-  scan, and this limitation was explicit when the option was chosen. Q-5 asks
-  whether CMA-1 must nonetheless *detect* such indirection.
+  scan, and this limitation was explicit when the option was chosen. D-5 settles
+  how CMA-1 treats that residue.
 - An audit is what EA-1 names as the inadequate status quo, so CMA-1 alone does
   not discharge the finding. CMA-2 is what answers it.
-- Resolves Q-1 only as far as CMA-1. The pilot's mechanism is Q-4.
+- Resolves Q-1 only as far as CMA-1. The pilot's mechanism is D-7, settled
+  ahead of CMA-1 because its deciding evidence was directly measurable.
+
+### D-2a. The gate checks writer MODULES, not §5's writer ROLES
+
+Approved 2026-08-29, amending D-2 after investigation showed its original
+wording was not implementable. D-2 said the gate would "reject any [write] whose
+module is outside §5's declared writer set" — but §5 declares **thread roles**
+and a source scan yields **modules**, and the repository carries no mapping
+between them.
+
+The gate therefore maintains **its own checked-in field → writing-modules map**,
+independent of §5's role cells, checked in both directions: a write from a module
+not in a field's map fails, and a mapped module that no longer writes that field
+fails too.
+
+**Rationale — why role-level is not available:**
+
+- No role→module mapping exists. `RENDER_MAIN_ONLY_MODULES` and
+  `INPUT_LUA_ONLY_MODULES` are per-*capability* import allowlists for two
+  specific §3.1 boundaries; `THREAD_ROLES` is nine bare strings used only to
+  validate cell grammar.
+- The mapping is not merely missing, it is **not well-defined at module
+  granularity**. §3.1 names `World.Render.BloodQuads` as deliberately
+  dual-domain; it writes `textureSystemRef` at
+  `src/World/Render/BloodQuads.hs:111`, and that field's §5 row resolves the
+  role only in prose, annotating that BloodQuads' upload/dispose functions run on
+  `MainRender` and not the world thread's `updateWorldTiles` path. The role
+  differs **per function**, not per module.
+- Scale: of the 87 §5 rows, **43 declare two or more writer roles**, 41 exactly
+  one, and 3 none. The ambiguous case is the majority.
+
+**Consequences:**
+
+- The gate verifies a **weaker and different property** than D-2's original
+  wording claimed: "the set of modules writing this field is what we last
+  declared", not "§5's role claim is true". That is the honest description and
+  the epic's own `Done when` must not overstate it.
+- §5's Readers/Writers cells stay prose, still unverified by machine. CMA-1
+  narrows the drift hole rather than closing it: a *new* writer cannot appear
+  unnoticed, but an already-wrong role claim stays wrong.
+- The map is a ratchet seeded from today's real write sites, so CMA-1's first
+  live run is also the first inventory of them.
+
+**Rejected alternatives:**
+
+- **Role-level checking as D-2 literally said.** Needs a per-*function* role
+  map because of dual-domain modules. That is its own arc at least, and it is
+  the thing CMA-2's structural mechanism may make unnecessary.
+- **Cross-checking declared modules against §5's citations.** §5's citations are
+  illustrative rather than exhaustive — the `textureSystemRef` row cites
+  BloodQuads lines 76 and 161 but not the write at 111 — so this would be noisy
+  in both directions.
 
 ### D-3. Bounded arc: gate, one pilot, then stop and reassess
 
@@ -304,16 +426,55 @@ drained by `MainRender` — so mostly one writer role per field.
 the tree (`unitManagerRef` has four writer roles, `statRNGRef` four), where an
 authority boundary would narrow almost nothing and so would prove nothing.
 
-**Consequences:** the pilot demonstrates the mechanism on a favourable case. That
-is deliberate for a pilot, and CMA-3's verdict must say so explicitly rather than
-generalising `RenderHandoff`'s result to the multi-writer capabilities untested.
+**Consequences:** the pilot demonstrates the mechanism on a favourable case, and
+a small one — RenderHandoff's whole read-only surface is three relationships
+(see **Current state and evidence**). That is deliberate for a pilot, and
+CMA-3's verdict must say so explicitly rather than generalising
+`RenderHandoff`'s result to the multi-writer capabilities untested.
+
+### D-7. The pilot's mechanism is a read-only reference newtype
+
+Approved 2026-08-29, resolving Q-4. CMA-2 introduces a `ReadOnlyRef a` wrapping
+an `IORef a` and exporting only a read primitive — no write primitive at all —
+and `RenderHandoff` hands non-writer roles the wrapped form.
+
+**Rationale — the pass-on measurement decides it.** 113 of 321 capability-accessor
+uses (35%) pass the raw handle onward, into helper parameters and into context
+records that mix several capabilities. Per-role views and accessor-only modules
+both draw their boundary at the *record*, and that boundary ends the moment the
+`IORef` is extracted — so a third of all uses would walk straight through it,
+and `Building.Knowledge.Live`'s four-capability context record defeats them
+outright. A newtype travels with the handle, so `coGameTime :: ReadOnlyRef
+Double` stays read-only wherever it is passed.
+
+**Consequences:**
+
+- A new abstraction with no precedent in the tree (no `ReadOnly`/`RO`/`Readable`
+  newtype exists under `src/`). CMA-2 establishes both the type and the
+  convention for using it.
+- Full rollout would propagate the wrapper into helper signatures and shared
+  context records. That cost is real and lands on the **rollout arc**, not this
+  epic — it is precisely what CMA-3's verdict weighs.
+- The pilot demonstrates exactly **three** read-only relationships, because that
+  is RenderHandoff's whole read-only surface. Proving the mechanism works is not
+  the same as proving it is worth rolling out, and CMA-3 must not read three
+  successes as a mandate.
+- `structureWallCatalogRef` is the load-bearing demonstration: `LuaThread` writes
+  it and `WorldThread` reads it through a call chain into `Structure.Render` —
+  the case a record-level boundary misses and this one catches.
+
+**Rejected alternatives:** per-role capability views and accessor-only modules,
+both for the record-level escape above. Accessor-only modules additionally carry
+the largest churn, since each of the 113 pass-on sites would become an
+owner-module call.
 
 ## Open questions
 
 ### Q-1. What is the enforcement mechanism?
 
-**Resolved by D-2** for CMA-1 (a write-site gate). The structural mechanism for
-the pilot remains open as Q-4.
+**Resolved by D-2** for CMA-1 (a write-site gate), as amended by **D-2a**
+(module granularity, not §5's roles). The structural mechanism for the pilot was
+then settled separately as Q-4 → **D-7**.
 
 ### Q-2. How far does the arc go?
 
@@ -325,8 +486,11 @@ the pilot remains open as Q-4.
 
 ### Q-4. Which structural mechanism does the pilot use?
 
-Deliberately deferred by D-2 until CMA-1's gate exists and has reported. The
-three candidates carried forward from Q-1:
+**Resolved by D-7** — a read-only reference newtype. Settled ahead of CMA-1
+rather than after it, because the deciding evidence (the 35% pass-on rate) was
+directly measurable without the gate.
+
+The three candidates it chose between, kept for the record:
 
 - **Per-role capability views** — extends §3.1's landed two-interface pattern.
   No new abstractions, but omitting an accessor removes *read* access too, since
@@ -342,23 +506,18 @@ three candidates carried forward from Q-1:
   non-owners, mediating writes through owner-module verbs. Strongest
   encapsulation, largest churn.
 
-**Affected slice:** CMA-2 only. **Stop/ask behavior:** CMA-2 is not filed until
-CMA-1 has landed and this question is answered with explicit signoff; a
-`/process-design-doc` run that reaches CMA-2 with Q-4 open must stop and ask
-rather than pick a mechanism.
-
-**What resolves it:** a user decision informed by CMA-1's report — specifically,
-how many fields have clean single-role writer sets and how much indirection the
-gate found.
+**Affected slice:** CMA-2 only, and the fence is lifted: with D-7 signed off,
+CMA-2 no longer stops and asks. It still depends on CMA-1 landing first.
 
 ## Verification strategy
 
 *(Arc-level; per-slice acceptance is added during processing.)*
 
-- `tools/engine_env_capability_audit.py --self-test` plus its own CI and
-  `make ci` runs stay green, and gain coverage for whatever this arc adds. Note
-  the project's ratchet convention: a new audited constant needs the self-test
-  extended in the same PR, not just the audit.
+- `tools/engine_env_capability_audit.py` and its separate self-test
+  `tools/test_engine_env_capability_audit.py` both stay green in CI and
+  `make ci`, and gain coverage for whatever this arc adds. Note the project's
+  ratchet convention: a new audited constant needs the self-test extended in
+  the same PR, not just the audit.
 - The existing capability boundaries keep passing unchanged: §3.1's render and
   input boundaries, §6.1's permanent-importer equality check, and the E8
   projection check.
@@ -376,34 +535,34 @@ gate found.
 Three slices, strictly sequential: each depends on the one before, and CMA-2 is
 additionally gated on a signoff checkpoint (Q-4).
 
-### CMA-1. Check every capability field's write sites against its declared writer set
+### CMA-1. Gate every capability field's write sites against a checked-in writing-module map
 
 - **Outcome:** `tools/engine_env_capability_audit.py` rejects a capability-field
-  write from a module outside that field's §5 writer set, and rejects a declared
-  writer entry no code backs. The indirection residue is counted and listed on
-  every run.
-- **Scope:** the write-site check; its checked-in both-directions module map; the
-  §6.1 exemption; the residue scan; the tool's `--self-test` extended to cover
-  all four behaviors; and any §5 writer-cell corrections the first live run
-  surfaces, made in the same PR.
+  write from a module outside that field's checked-in writing-module map, and
+  rejects a mapped module that no longer writes that field. The indirection
+  residue is counted and listed on every run.
+- **Scope:** the write-site check; its checked-in both-directions field →
+  writing-modules map, seeded from the real write sites; the §6.1 exemption; the
+  residue scan; and matching cases in
+  `tools/test_engine_env_capability_audit.py`.
 - **Phase:** 1
 - **Depends on:** `none`
 - **Ordering:** `critical path` — CMA-2's mechanism choice and CMA-3's verdict
   both read this slice's output.
-- **Relevant decisions:** D-2, D-4, D-5
+- **Relevant decisions:** D-2, D-2a, D-4, D-5
 - **Acceptance signals:**
-  - `python3 tools/engine_env_capability_audit.py --self-test` passes with new
-    cases for each of: a write outside the declared set (rejected); a declared
-    writer with no backing write (rejected); a §6.1 module's write (not reported
-    as a violation); a handle passed to a helper (reported as residue, not a
+  - `python3 tools/test_engine_env_capability_audit.py` passes with new cases for
+    each of: a write from an unmapped module (rejected); a mapped module with no
+    backing write (rejected); a §6.1 module's write (not reported as a
+    violation); a handle passed to a helper (reported as residue, not a
     violation).
-  - The audit runs green against the live tree, having either confirmed §5's
-    writer cells or corrected them.
-  - The residue count is printed on every run.
+  - `python3 tools/engine_env_capability_audit.py` runs green against the live
+    tree with the seeded map, and prints the residue count.
   - The existing §3.1 render/input boundaries, §6.1 equality check, E8 projection
     check, and §1 field-total check all stay green.
 - **Out of scope:** any Haskell change; constraining the §6.1 cohort; resolving
-  a residue entry to an originating module.
+  a residue entry to an originating module; correcting or machine-verifying §5's
+  Readers/Writers role cells, which stay prose (D-2a).
 - **Open questions:** `None`
 - **Note:** the audit is already invoked by CI and `make ci`, so the new check
   rides the existing invocation rather than adding a gate.
@@ -412,14 +571,17 @@ additionally gated on a signoff checkpoint (Q-4).
 
 - **Outcome:** a module that §5 records as a non-writer of a `RenderHandoff`
   field cannot mutate it — a compile error, not a review catch.
-- **Scope:** the Q-4 mechanism applied to `RenderHandoffCapability`'s eight
-  fields; the §2.1 canonical-convention amendment if the mechanism changes the
-  convention (§6.4's approval procedure applies); the audit ratcheted to enforce
-  the new shape.
+- **Scope:** introduce `ReadOnlyRef` (D-7); hand the wrapped form to the three
+  read-only relationships `RenderHandoff` actually has — `LuaThread` →
+  `worldPreviewGenerationRef`, `MainRender` → `worldQuadsRef`, `WorldThread` →
+  `structureWallCatalogRef`; migrate the 6 consumer modules; amend §2.1's
+  canonical capability-record convention to cover the wrapped form (§6.4's
+  approval procedure applies); and update CMA-1's writing-module map if any
+  accessor is renamed.
 - **Phase:** 2
 - **Depends on:** `CMA-1`
 - **Ordering:** `critical path`
-- **Relevant decisions:** D-2, D-6; mechanism pending **Q-4**
+- **Relevant decisions:** D-2, D-6, D-7
 - **Acceptance signals:**
   - A rejected mutation is demonstrated as a compile failure in the PR.
   - No behavior change: the headless hspec suite and the worldgen baselines are
@@ -430,9 +592,8 @@ additionally gated on a signoff checkpoint (Q-4).
   - Every existing capability-audit boundary stays green.
 - **Out of scope:** any capability other than `RenderHandoff`; the §6.1 cohort;
   rolling the boundary out further.
-- **Open questions:** **Q-4** — this slice is not filed until CMA-1 has landed
-  and Q-4 is signed off. A `/process-design-doc` run reaching CMA-2 with Q-4 open
-  stops and asks.
+- **Open questions:** `None` — Q-4 is resolved by D-7. This slice still depends
+  on CMA-1 landing first.
 
 ### CMA-3. Record the pilot's verdict and the rollout recommendation
 
