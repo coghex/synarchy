@@ -915,18 +915,21 @@ pre-execution rejections (2), port exhaustion (3) and harness errors (4) — a
 malformed, truncated, duplicate, out-of-order or unclassifiable protocol
 event, which is never reported as a probe pass.
 
-### `probe_census.py` — the probe census (#1425, #1428, #1430, #1492, #1434, #1441)
+### `probe_census.py` — the probe census (#1425, #1428, #1430, #1492, #1434, #1441, #1439)
 
 Builds, validates and updates `docs/probe_census.json`, now
-`probe-census/v3`: every registered probe exactly once, with its script, its
+`probe-census/v4`: every registered probe exactly once, with its script, its
 CI-eligible/manual-only classification, its protocol status (`legacy` or
 `probe-result/v1`) and one census record holding the acceptable-failure
 policy, the estimated worst-case duration, the current commit cohort, the
-archived cohorts, an append-only attempt log and — since #1434 — an
-append-only log of claim ACQUISITIONS, keyed for idempotency by acquisition
-token. Claims are a separate collection from `attempts` on purpose: an
-attempt is a result ingestion and is deliberately non-idempotent, while
-recording one acquisition twice must stay one record. The census lives in the
+archived cohorts, an append-only attempt log, an append-only log of claim
+ACQUISITIONS keyed for idempotency by acquisition token (#1434), and an
+append-only log of a de-flake attempt's STABLE NON-SUCCESS OUTCOMES keyed for
+idempotency by attempt identity (#1439). All three are separate collections
+on purpose: an attempt is a result ingestion and is deliberately
+non-idempotent, while recording one acquisition or one attempt outcome twice
+must stay one record — and an outcome carries evidence neither of the other
+two has a field for. The census lives in the
 worktree whose branch is `docs-wip`, resolved BY BRANCH the way
 `tools/docs_land.sh` does — never a hard-coded path and never the primary
 checkout.
@@ -1132,15 +1135,17 @@ untouched, it leaves `--promotion-candidates`' manual-only report, and it
 accepts no further samples.
 
 `--print` never touches the docs worktree. `--seed` is the ONLY operation that
-migrates: it creates an absent census, migrates a `probe-census/v1` or
-`/v2` one losslessly — the v2 step adds only the empty claim log, keeping
-every policy field, cohort, sample and attempt — and reconciles inventory
+migrates: it creates an absent census, migrates a `probe-census/v1`, `/v2` or
+`/v3` one losslessly — the v2 step adds only the empty claim log and the v3
+step only the empty outcome log, keeping every policy field, cohort, sample,
+attempt and claim — and reconciles inventory
 drift — appending newly registered
 probes, refreshing inventory metadata, retaining a row whose probe left the
 registry for a person to dispose of, and archiving a `current` cohort when a
 probe becomes CI-eligible. It never regenerates accumulated census data.
-`--record`, `probe_census.record_claim` and both policy operations refuse,
-naming `--seed`, when the census is absent or still on an older schema.
+`--record`, `probe_census.record_claim`, `probe_census.record_outcome` and
+both policy operations refuse, naming `--seed`, when the census is absent or
+still on an older schema.
 
 Every mutation is one locked read-modify-write: a cross-process `flock` keyed
 by the resolved target, held from the read through serialization and the
@@ -2118,11 +2123,24 @@ module's own malformed-input rejection, never allowed to escape as a traceback.
 needs a source-clean repair worktree and a verification whose `commit_sha` is
 the repair commit being proposed.
 
-**Routes.** `repair-pr` is the only one that opens a pull request, and the
-`Diagnosis` session enforces at most one per invocation. `handoff-rejected`
-stops at the gate; `no-target`, `cannot-reproduce`, `no-confident-fix` and
-`partial-improvement` hand off to #1439; `production-defect` hands off to
-#1438 and does not touch the probe.
+**Routes, and the reason each was taken.** `repair-pr` is the only one that
+opens a pull request, and the `Diagnosis` session enforces at most one per
+invocation. `handoff-rejected` stops at the gate; `no-target`,
+`cannot-reproduce`, `no-confident-fix` and `partial-improvement` hand off to
+#1439; `production-defect` hands off to #1438 and does not touch the probe.
+
+The route alone is ambiguous in both directions that matter, so the emitted
+record also carries a machine-readable `reason` from a closed vocabulary
+(`REASONS`, with `ROUTE_REASONS` saying which route can be reached for which).
+`cannot-reproduce` is reached by a controlled batch that ran under the
+handoff's own recorded condition and observed nothing, by one whose
+configuration could not be recreated from the manifest, and by one that never
+became a controlled measurement — three different findings, and only the first
+says anything about the PROBE. `partial-improvement` is reached by four gate
+failures, of which `verification-not-comparable` and
+`verification-not-a-controlled-measurement` are facts about the INVOCATION
+rather than about either result document, so a consumer handed only the
+documents could never derive them.
 
 Emitting a handoff means emitting `deflake-diagnosis-outcome/v1`, and #1437
 owns that PRODUCER record: the route, its owning issue, the identity of the
@@ -2132,8 +2150,8 @@ the probe and targets, the baseline SHA and X, the configuration manifest,
 references to the controlled results, the diagnosis evidence, the preservation
 attestations, and the repair commit and verification evidence when the route
 has them. A route with no batches states those halves as `null` rather than
-dropping the keys, so a consumer reads one shape. What #1438 and #1439 then do
-with it is theirs to define.
+dropping the keys, so a consumer reads one shape. `deflake_outcome.py` below
+is #1439's consumer; #1438's is its own.
 
 The gate is `tools/test_deflake_diagnosis.py`, engine-free and document-only.
 It is deliberately NOT wired into `make ci` or GitHub CI — #1437's approved
@@ -2163,6 +2181,234 @@ What stays out of everything, exactly as for `deflake.py`, is the REAL
 engine-booting measurement: a diagnosis consumes twenty ten-run batches' worth
 of wall clock and is supplemental manual pull-request evidence, never a merge
 gate.
+
+### `deflake_outcome.py` — the non-success outcomes of a de-flake attempt (#1439)
+
+Consumes one `deflake-outcome-handoff/v1` for one exact registered probe and
+one de-flake attempt, decides whether the evidence supports a STABLE
+non-success outcome, and appends that outcome durably to the probe's census
+row. It reuses `probe_census.update`'s locked read-modify-write and adds no
+second state store, no second write path and no second lock.
+
+```bash
+python3 tools/deflake_outcome.py --handoff <document.json>
+python3 tools/deflake_outcome.py --handoff <document.json> --census <path> --json
+```
+
+The handoff embeds #1437's `deflake-diagnosis-outcome/v1` record, the attempt
+identity, the diagnostic or attempted-fix summary, and one entry per
+measurement — its ROLE (`handoff`, `baseline`, `verification`), its
+`tools/probe_flake.py` EXIT CODE, and the `probe-flake-result/v1` document
+that exit wrote, if it wrote one. Exit 0 and 3 exits are not interchangeable
+and neither are their documents, which is why the exit travels with the
+result rather than being inferred from it.
+
+**The route is not the whole finding.** #1437's machine-readable `reason` is
+carried, validated against its own route, and cross-checked against the
+documents wherever it can be: a record naming a measurement-visible condition
+its own evidence denies has contradicted itself and is not a stable outcome,
+while one naming a condition the documents cannot see is taken on the
+producer's word, which is where that finding was actually made.
+
+**Three stable outcomes, and everything else.** `cannot-reproduce` — the
+designated pre-fix measurement is complete, trustworthy and observed nothing
+wrong at all; it appends the outcome plus an ADVISORY de-list recommendation.
+The other two `cannot-reproduce` reasons record their evidence and NO
+recommendation: a batch that passed under a configuration the invocation could
+not recreate passed somewhere else, and de-listing a probe on that would
+promote a measurement the producer itself says was not the condition.
+`no-confident-fix` — the failure reproduced, and the evidence establishes no
+one probe-side cause. "Reproduced" is #1437's own two-part qualification and is
+asked of every route past the `cannot-reproduce` fork: over X or a lost target,
+AND at least one TARGET actually non-PASS, since failures confined to unrelated
+checks satisfy the aggregate while demonstrating nothing about the checks under
+diagnosis. `partial-improvement` — a repair candidate measurably
+improved the failure count and still failed #1437's acceptance gate. None of
+the three opens a pull request: the publisher boundary is a table every route
+is looked up in, so the gate can inject a spy and prove the silence rather
+than resting on the call not having been written.
+
+Everything else is an ACTIONABLE NON-SUCCESS that records nothing, publishes
+nothing and exits non-zero — a production-code or shipped-script defect (which
+names #1438, a sibling in epic #1426 that this workflow neither requires nor
+stubs), every operational error, and a census write that refused. A malformed
+handoff is a REJECTION (exit 2) instead: it never reached a classification, so
+it is not one of the three and must not be recorded as one.
+
+**Operational errors are not "cannot reproduce".** `probe_flake.py`'s exit
+contract is preserved rather than paraphrased — exit 0 is a valid measurement
+whatever rate it observed, 2 is a rejection before execution, 3 is port
+exhaustion, and 4 is an untrustworthy harness result. Exits 2 and 3 write NO
+document; exit 4 DOES write one, whose own `status` is `harness-error` with a
+populated `error` and `error_run` and a null rate. So a document that merely
+exists and parses establishes nothing, and every classification reads the
+document's own `status`, `error_run`, `completed_runs` and per-check tallies.
+Every declared measurement goes through #1437's CANONICAL result gate first,
+not just the census validator it starts with:
+`deflake_diagnosis.require_result` adds the run indices, the artifact topology
+and the retention pairing on top of declared shape and the cross-field
+invariants. `probe_flake.measure` deletes a run's directory the moment it
+passes and keeps every unsuccessful one, so a non-PASS run with a null
+`artifact_dir` is producer-impossible — and a `no-confident-fix` recorded from
+one would be a failure nobody can diagnose stored as the evidence FOR a
+diagnosis.
+
+`error_run` gets its own clause because `probe_flake` keeps a harness-error
+run OUT of `runs`, so an all-PASS run list is not on its own evidence of a
+trustworthy batch.
+
+A document that contradicts ITSELF is refused before any route is classified,
+not only before `cannot-reproduce`. `probe_census.validate_result` binds
+`check_counts` to `runs` and refuses a PASS run carrying a FAIL check, but
+nothing binds `failure_count`, `timeout_count` or `failure_rate` to the run
+list — so an all-PASS batch under a forged failure count is schema-valid and
+would read as a REPRODUCED failure, which is what `no-confident-fix` and
+`partial-improvement` rest on. The three totals are reconciled against the run
+list using `probe_flake.Measurement`'s own arithmetic — and so is
+`completed_runs`, which the producer writes as `len(runs)` and which makes the
+rest mean anything, since a nine-run batch claiming ten completed satisfies
+`completed_runs == requested_runs` and would be stored as ten of ten. The
+remaining defect
+predicate then reads the RUN LIST and the PER-CHECK TALLIES, which are
+genuinely independent of each other (a run can time out after emitting every
+check, and a check can go MISSING across an all-PASS batch) rather than reading
+a total the reconciliation has already bound.
+
+**The record has to agree with itself first.** #1437's record states the
+input identity twice — its `handoff` section carries the probe, commit, X and
+targets of the `/deflake` invocation consumed, and the top-level fields derive
+from that same handoff, `baseline_sha` being `handoff.commit_sha`. Each
+duplicated field is re-parsed with its twin's grammar and required to match, so
+a record whose handoff identifies one commit while its top-level field, its
+baseline reference and the supplied measurement all name another is refused
+rather than stored as an attempt about a baseline the producer never diagnosed.
+
+**One attempt reports against one declared contract.** A batch's descriptor is
+what it reports against and the identity binding cannot see it — a result can
+keep its probe, targets, commit, instant and every artifact path while swapping
+or relabelling an unrelated declared check, which #1437 rejects outright. #1437's
+record carries the whole ordered descriptor beside the identifier list, and
+every supplied measurement is held to it through that module's own
+`require_descriptor` — against the RECORD rather than a sibling measurement,
+since the routes carrying one baseline have no sibling and are the ones that
+record a de-list recommendation. The
+targets are held to that same descriptor: one it never declared cannot be among
+the measurement's own non-PASS identifiers.
+
+**The measurement is the one that diagnosis judged.** Binding on the probe
+alone would admit any well-formed batch of that probe — one taken at another
+commit or another instant, supplied under a diagnosis that judged a different
+one, leaving the census holding two conflicting accounts of a single attempt.
+Each declared measurement is held to EVERY field of the producer record's
+reference for its role that a result document also reports — the commit, the
+instant, the artifact root, the invocation directory and the ordered retained
+artifacts. The commit and the instant alone are not an identity: two batches of
+one probe at one commit differ in where they wrote, which is exactly why
+`probe_flake.new_invocation_dir` stamps a fresh directory per invocation, and a
+substitute agreeing on the first two would still hand the census another
+batch's artifacts as this attempt's evidence. The pre-fix roles are held again
+to the `baseline_sha` the census row is about to record: an independent
+statement, since a producer record whose reference and `baseline_sha` disagreed
+would satisfy either alone. A role the producer ran no batch for carries a
+`null` reference, and a measurement supplied for it describes work the
+invocation did not do.
+
+**The run count is the measurement's own.** Completeness is `completed_runs ==
+requested_runs` and the ceiling is X out of that measurement's own requested
+count. Ten is the standard configured N, and hard-coding it here would
+misclassify a measurement taken at any other one.
+
+**A lower failure rate is not success.** `partial-improvement` is numeric on
+both halves: both batches complete and trustworthy, taken at the SAME run
+count and the SAME RTS capability count, the verification's failure count
+strictly lower, and the verification STILL failing #1437's acceptance gate for
+the reason #1437 named. `verification-over-tolerance` is re-derived from the
+failure count and `verification-missing-rule` by CALLING
+`deflake_diagnosis.missing_problems`, whose scoped rule has four clauses of
+which only one is about targets — a PASSING run omitting a NON-target check
+fails it too, and a paraphrase of "no target went MISSING" would call such a
+verification passing while `evaluate` had just routed it here. The other two
+reasons are the producer's to make and are recorded on its word. A record whose
+own evidence denies the measurement-visible condition it names is refused, and
+`unmet_condition` is DERIVED from the reason rather than accepted as free text.
+
+**The de-list recommendation is advisory, and only that.** Nothing here edits
+`tools/ci_probes.py`, removes a manual-only reason, changes a classification
+or promotes a probe. `MANUAL_ONLY_REASONS` models a probe's grounds as several
+INDEPENDENT `Reason` records, so "it turned out not to be flaky" is one of
+them and the rest still stand; acting on the recommendation is a person's
+decision taken with all of them in view.
+
+**Paths are bounded, not merely absolute.** Every artifact reference this module
+would store is refused if it lies inside a worktree — the live registered ones
+AND the comparison worktrees the producer record declares, because `/deflake`
+removes those when it finishes and an artifact that sat inside one was still
+inside a worktree when it was written. Each declared worktree is required and
+held to #1437's canonical spelling: a boundary compared in one spelling while
+the paths it bounds are written in another covers nothing, and a section that
+declared none would contribute no boundary while looking like a record that
+had one. Neither may contain the other, since two labels are not two states.
+
+What that cannot establish is that a named directory ever WAS a worktree —
+nothing else in the record identifies those directories, and both are usually
+gone by the time an outcome is recorded. The declared worktrees are an
+ADDITIONAL boundary the record supplies about itself: they can only add
+refusals, never lift one, and the guarantee rests on the live registered
+worktrees and the primary checkout, which no document can edit. Containment is compared over resolved
+path forms, so a `..` segment or a symlinked spelling of the same place is the
+same place. `probe_flake.check_artifact_root` enforces this at measurement
+time; restating it here is what stops a self-consistent handoff putting a
+worktree-resident tree into a durable record.
+
+Absolute is also not the same as usable, so every recorded path goes through
+`deflake_diagnosis.require_path` first — including the ones stored without ever
+being resolved, a `/deflake` command token and a configuration manifest entry
+among them, because those are evidence too. An embedded NUL makes
+`Path.resolve()` raise `ValueError` from `lstat` rather than `OSError`, so such
+a string passes an absoluteness test, names no location for the containment
+check to find, and would be stored while the CLI printed a traceback.
+
+**The artifact list is rebuilt, not believed.** #1437 produces its top-level
+`retained_artifacts` by accumulating every batch it ran, in role order,
+deduplicated, so the field is derived and the entry gate reconstructs it from
+the same per-batch references. Checking each path individually only asks
+whether each names a legal place; an unrelated directory appended to the list
+alone would still be stored as this attempt's evidence.
+
+**Durable, idempotent, and destroying nothing.** The stored record is a RESUME
+point — attempt identity, probe, timestamp, baseline commit, X, targets, the
+configuration manifest both batches read, the exact command and directory of
+the `/deflake` invocation consumed (neither of which any census field has ever
+held: `ingest_result` drops the command and the invocation directory, and
+nothing stores the manifest), one summary per measurement (commit, timestamp, run counts, failure and timeout
+counts, rate, RTS capabilities, per-run outcomes, per-check PASS/FAIL/MISSING
+tallies), the retained artifact REFERENCES, the summary, and the
+route-specific evidence. Recording is idempotent on the attempt identity: a
+resume installs the identical bytes and appends nothing, while the same
+identity carrying different evidence is refused rather than appended past.
+Idempotency is the WHOLE record, and exactly one field is not derived from the
+handoff — `timestamp_utc` comes from a clock, which reads differently on a
+retry — so a retry reuses the instant the stored attempt was first stamped
+with instead of restamping itself into a conflict. That lookup happens INSIDE
+the census transaction, under the same lock the append is made under (through
+`probe_census.record_outcome_installed`'s `reconcile` hook), so two concurrent
+invocations of one new attempt serialize and the loser rebuilds against what
+the winner actually committed; running the command twice over one handoff
+succeeds twice and appends once, concurrently or not. A
+write that refuses leaves the census byte-identical, records no outcome and
+returns an actionable non-success without reaching a publisher. The one
+failure that is NOT a refusal is `CensusDurabilityUnconfirmed`, raised after
+the replacement: the record is already what a later reader parses, so it is
+reported and never retried. Only path references are stored — raw stdout,
+protocol streams and engine logs stay in the harness's artifact tree outside
+every worktree.
+
+The gate is `python3 tools/test_deflake_diagnosis.py`, the same engine-free,
+document-only self-test #1437 owns, extended with this module's cases: the
+diagnosis records they feed it are PRODUCED by `dd.evaluate` rather than
+hand-assembled, and the census they append to is a real seeded one in a
+temporary directory. Like #1437's, it is deliberately not wired into `make ci`
+or GitHub CI.
 
 ### `ci_expensive_gates.py` — CI worldgen/graphical/unit-assets/save-compat selection
 

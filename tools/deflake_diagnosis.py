@@ -320,22 +320,34 @@ Exactly one per invocation, and only the first opens a pull request:
 * `cannot-reproduce` — the controlled baseline reproduced neither an
   over-X result nor a MISSING target, or its configuration could not be
   recreated from the handoff's manifest, or another process held the
-  probe's declared resources. Handed off to #1439.
+  probe's declared resources. Handed off to #1439. Those are three
+  different findings and the emitted `reason` says which: only the
+  first is a statement about the PROBE, and #1439 recommends a de-list
+  from that one alone.
 * `production-defect` — the assertion is right and the product is
   wrong. The probe is not touched; handed off to #1438.
 * `no-confident-fix` — several failures with no one established
   probe-side cause. Handed off to #1439.
 * `partial-improvement` — the repaired batch improved but stayed above
-  X, or the batch became invalid. Handed off to #1439.
+  X, violated the scoped MISSING rule, was not comparable to the
+  baseline, or never became a controlled measurement. Handed off to
+  #1439, with the `reason` naming which — the last two are facts about
+  the INVOCATION rather than about either result document, so a
+  consumer handed only the documents could not derive them.
 
 Emitting a handoff here means emitting `deflake-diagnosis-outcome/v1`:
-the route, the owning issue, the identity of the `/deflake` invocation
-consumed, the probe and targets, the baseline SHA and X, the
+the route, the machine-readable REASON it was taken for, the owning
+issue, the identity of the `/deflake` invocation consumed, the probe and
+targets, the baseline SHA and X, the
 configuration manifest, references to the controlled results, the
 diagnosis evidence, the preservation attestations, and the repair and
 verification evidence when the route has them. #1437 owns that PRODUCER
 record; what #1438 and #1439 DO with it is theirs to define, this module
 does not invent their contracts, and filing an issue is not its job.
+`tools/deflake_outcome.py` is #1439's consumer: it takes this record,
+re-checks the evidence for itself, and appends one stable non-success
+outcome to the probe's census row — or returns an actionable
+non-success. It opens no pull request either.
 
 The handoff this module CONSUMES is #1659's, in #1659's own spelling:
 `invocation.argv`/`cwd`/`timeout` and a bare `configuration` list — and
@@ -696,6 +708,59 @@ ROUTE_OWNER = {
 # The one route that may touch the probe's source. Every other route
 # stops without a repair PR and emits its declared handoff.
 ROUTES_THAT_CHANGE_CODE = frozenset({ROUTE_REPAIR})
+
+# WHY the route was taken, in a vocabulary a consumer can act on (#1439).
+#
+# The `detail` beside it is prose for a person; this is the same fact for
+# a program. A route alone is not enough downstream: `cannot-reproduce`
+# is reached both by a controlled batch that ran under the handoff's own
+# condition and observed nothing, and by one whose condition could not be
+# recreated at all — and a consumer that treated those alike would
+# recommend de-listing a probe on the strength of a measurement taken
+# somewhere else. Only this module knows which branch it took, so it says
+# so rather than leaving a reader to parse a sentence.
+REASON_NO_NON_PASS_CHECK = "measurement-observed-no-non-pass-check"
+REASON_CONFIGURATION_NOT_RECREATED = "configuration-not-recreated"
+REASON_BASELINE_NOT_CONTROLLED = "baseline-not-a-controlled-measurement"
+REASON_BASELINE_OBSERVED_NOTHING = "baseline-observed-nothing"
+REASON_DIAGNOSIS_DECLARED = "diagnosis-declared"
+REASON_VERIFICATION_NOT_CONTROLLED = \
+    "verification-not-a-controlled-measurement"
+REASON_VERIFICATION_NOT_COMPARABLE = "verification-not-comparable"
+REASON_VERIFICATION_MISSING_RULE = "verification-missing-rule"
+REASON_VERIFICATION_OVER_TOLERANCE = "verification-over-tolerance"
+REASON_VERIFICATION_ACCEPTED = "verification-accepted"
+
+REASONS = (REASON_NO_NON_PASS_CHECK, REASON_CONFIGURATION_NOT_RECREATED,
+           REASON_BASELINE_NOT_CONTROLLED, REASON_BASELINE_OBSERVED_NOTHING,
+           REASON_DIAGNOSIS_DECLARED, REASON_VERIFICATION_NOT_CONTROLLED,
+           REASON_VERIFICATION_NOT_COMPARABLE,
+           REASON_VERIFICATION_MISSING_RULE,
+           REASON_VERIFICATION_OVER_TOLERANCE, REASON_VERIFICATION_ACCEPTED)
+
+# Which reasons each route can actually be reached by. A route/reason
+# pair outside this table is a producer record that contradicts itself,
+# and a consumer is entitled to say so.
+ROUTE_REASONS = {
+    ROUTE_NO_TARGET: (REASON_NO_NON_PASS_CHECK,),
+    ROUTE_CANNOT_REPRODUCE: (REASON_CONFIGURATION_NOT_RECREATED,
+                             REASON_BASELINE_NOT_CONTROLLED,
+                             REASON_BASELINE_OBSERVED_NOTHING),
+    ROUTE_PRODUCTION_DEFECT: (REASON_DIAGNOSIS_DECLARED,),
+    ROUTE_NO_CONFIDENT_FIX: (REASON_DIAGNOSIS_DECLARED,),
+    ROUTE_PARTIAL_IMPROVEMENT: (REASON_VERIFICATION_NOT_CONTROLLED,
+                                REASON_VERIFICATION_NOT_COMPARABLE,
+                                REASON_VERIFICATION_MISSING_RULE,
+                                REASON_VERIFICATION_OVER_TOLERANCE),
+    ROUTE_REPAIR: (REASON_VERIFICATION_ACCEPTED,),
+}
+
+# The `cannot-reproduce` reasons that mean the batch really did run
+# under the handoff's own recorded condition. Only these say anything
+# about the PROBE; the others say the invocation could not establish the
+# condition, which is a fact about the attempt.
+CONTROLLED_REASONS = frozenset({REASON_NO_NON_PASS_CHECK,
+                                REASON_BASELINE_OBSERVED_NOTHING})
 
 EXIT_OK = 0
 EXIT_REJECTED = 2
@@ -1988,7 +2053,18 @@ class Outcome:
                  owner_issue=None, opens_pull_request: bool = False,
                  targets=(), baseline_failures=None,
                  verification_failures=None, acceptable_failures=None,
-                 artifacts=(), notes=(), handoff=None, source=None):
+                 artifacts=(), notes=(), handoff=None, source=None,
+                 reason=None):
+        if reason not in ROUTE_REASONS.get(route, ()):
+            # Not a defensive check: the route and the reason are two
+            # halves of one statement, and a pair this module could not
+            # have produced is a bug here rather than something a
+            # consumer should be asked to reconcile.
+            raise AssertionError(
+                f"the {route!r} route cannot be reached for the reason "
+                f"{reason!r}; its reasons are "
+                f"{', '.join(ROUTE_REASONS.get(route, ()))}")
+        self.reason = reason
         self.handoff = handoff
         # The diagnosis document this outcome was derived from, kept so
         # the emitted artifact can carry its evidence, attestations and
@@ -2043,6 +2119,15 @@ class Outcome:
             "acceptable_failures": self.handoff.acceptable_failures,
             "targets": list(self.handoff.targets),
             "expected_checks": list(self.handoff.expected_checks),
+            # The WHOLE descriptor, labels included. The identifier list
+            # above is the stable contract, but a label is the check's
+            # stated MEANING, and a consumer holding a supplied
+            # measurement to identifiers alone would accept a batch that
+            # relabelled one to describe a different assertion. A route
+            # with a single measurement has nothing else to compare it
+            # against, so the record has to carry it.
+            "expected_descriptor": _deep_copy(
+                self.handoff.expected_descriptor),
             "timestamp_utc": result.get("timestamp_utc"),
             "artifact_root": result.get("artifact_root"),
             "invocation_dir": result.get("invocation_dir"),
@@ -2069,6 +2154,8 @@ class Outcome:
         return {
             "schema": OUTCOME_SCHEMA,
             "route": self.route,
+            # WHY, for a program. `detail` says the same thing in prose.
+            "reason": self.reason,
             "probe": self.probe,
             "detail": self.detail or None,
             "owner_issue": self.owner_issue,
@@ -2090,6 +2177,11 @@ class Outcome:
             "attestations": source.get("attestations"),
             "repair": source.get("repair"),
         }
+
+
+def _deep_copy(value):
+    """A copy no later mutation of the original can reach through."""
+    return json.loads(json.dumps(value))
 
 
 def _require_canonical(path, what: str) -> None:
@@ -2541,6 +2633,7 @@ def evaluate(document, *, worktrees=(), primary=None) -> Outcome:
                     f"result here describes work the route forbids")
         return Outcome(
             ROUTE_NO_TARGET, probe=handoff.probe,
+            reason=REASON_NO_NON_PASS_CHECK,
             owner_issue=ROUTE_OWNER[ROUTE_NO_TARGET],
             detail=(f"the handoff's {RUN_COUNT}-run measurement observed no "
                     f"non-PASS check, so it identifies nothing to diagnose"),
@@ -2606,7 +2699,9 @@ def evaluate(document, *, worktrees=(), primary=None) -> Outcome:
                   + "; ".join(config_problems))
         if route == ROUTE_CANNOT_REPRODUCE:
             _require_evidence(document, route)
-            return Outcome(route, detail=detail, **common)
+            return Outcome(route, detail=detail,
+                           reason=REASON_CONFIGURATION_NOT_RECREATED,
+                           **common)
         raise RouteRefused(
             f"{detail}; recorded bytes that cannot be recovered exactly are "
             f"the {ROUTE_CANNOT_REPRODUCE!r} outcome for "
@@ -2655,7 +2750,8 @@ def evaluate(document, *, worktrees=(), primary=None) -> Outcome:
         if baseline_invalid:
             return Outcome(route, detail=(
                 "the controlled baseline never became a measurement: "
-                + "; ".join(baseline_invalid)), **common)
+                + "; ".join(baseline_invalid)),
+                reason=REASON_BASELINE_NOT_CONTROLLED, **common)
         if reproduced == probe_census.TOLERANCE_OVER and hit:
             raise RouteRefused(
                 f"the controlled baseline DID reproduce an over-tolerance "
@@ -2675,7 +2771,8 @@ def evaluate(document, *, worktrees=(), primary=None) -> Outcome:
         return Outcome(route, detail=(
             f"the controlled baseline observed {baseline_failures}/"
             f"{RUN_COUNT} failures against an X of "
-            f"{handoff.acceptable_failures}"), **common)
+            f"{handoff.acceptable_failures}"),
+            reason=REASON_BASELINE_OBSERVED_NOTHING, **common)
 
     # EITHER qualification is enough (approved correction, 2026-08-24):
     # the batch is over tolerance, or a target was reproducibly MISSING.
@@ -2708,7 +2805,7 @@ def evaluate(document, *, worktrees=(), primary=None) -> Outcome:
                 f"result here means a repair was attempted and the route is "
                 f"mislabelled")
         return Outcome(route, detail=_evidence_detail(document, route),
-                       **common)
+                       reason=REASON_DIAGNOSIS_DECLARED, **common)
 
     verification_section = document.get("verification")
     if verification_section is None:
@@ -2807,9 +2904,9 @@ def evaluate(document, *, worktrees=(), primary=None) -> Outcome:
     # above X, contains any MISSING result, becomes invalid, or only
     # partially improves the rate" is ONE list, and every entry on it
     # goes to #1439 rather than to a pull request.
-    problems = verification_invalid + comparability + missing_problems(
-        verification, targets=set(handoff.targets),
-        what="the verification batch")
+    missing = missing_problems(verification, targets=set(handoff.targets),
+                               what="the verification batch")
+    problems = verification_invalid + comparability + missing
     state = probe_census.tolerance_state(
         handoff.acceptable_failures, verification["requested_runs"],
         verification["completed_runs"], verification_failures)
@@ -2824,12 +2921,16 @@ def evaluate(document, *, worktrees=(), primary=None) -> Outcome:
                 f"intact; that is an accepted verification, so "
                 f"{ROUTE_PARTIAL_IMPROVEMENT!r} is not its outcome")
         _require_evidence(document, route)
-        reason = ("; ".join(problems) if problems else
-                  f"stayed above the X of {handoff.acceptable_failures}")
+        explanation = ("; ".join(problems) if problems else
+                       f"stayed above the X of "
+                       f"{handoff.acceptable_failures}")
         return Outcome(route, detail=(
             f"the verification batch went from {baseline_failures} to "
             f"{verification_failures} failures out of {RUN_COUNT} but "
-            f"{reason}"), **common)
+            f"{explanation}"),
+            reason=_verification_reason(verification_invalid, comparability,
+                                        missing, state),
+            **common)
 
     # The repair route: everything above held, so the remaining questions
     # are the ones about the repair itself.
@@ -2852,7 +2953,32 @@ def evaluate(document, *, worktrees=(), primary=None) -> Outcome:
     return Outcome(route, opens_pull_request=True, detail=(
         f"{baseline_failures}/{RUN_COUNT} before, {verification_failures}/"
         f"{RUN_COUNT} after, against an X of "
-        f"{handoff.acceptable_failures}"), **common)
+        f"{handoff.acceptable_failures}"),
+        reason=REASON_VERIFICATION_ACCEPTED, **common)
+
+
+def _verification_reason(invalid, comparability, missing, state) -> str:
+    """Which half of the acceptance gate the verification actually failed.
+
+    In the order the gate builds its problem list, so the reason names
+    the FIRST thing that made the batch unacceptable rather than the
+    last thing checked. `state` is consulted only once none of the three
+    problem groups fired, which is exactly the case the count decides.
+
+    Not derivable downstream: whether the two comparison worktrees held
+    the same configuration, and whether the batch ran under control, are
+    facts about the invocation rather than about either result document,
+    so a consumer handed only the documents could not tell an
+    over-tolerance verification from an incomparable one.
+    """
+    if invalid:
+        return REASON_VERIFICATION_NOT_CONTROLLED
+    if comparability:
+        return REASON_VERIFICATION_NOT_COMPARABLE
+    if missing:
+        return REASON_VERIFICATION_MISSING_RULE
+    del state
+    return REASON_VERIFICATION_OVER_TOLERANCE
 
 
 def _accumulate(artifacts, document) -> list:

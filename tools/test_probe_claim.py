@@ -829,11 +829,24 @@ def test_claims_are_not_measurements() -> None:
 
 
 def test_schema_migration_is_lossless() -> None:
-    """v1 and v2 censuses migrate to v3 keeping every accumulated field."""
-    print("\n-- the v2 -> v3 migration loses nothing --")
+    """v1 and v2 censuses migrate keeping every accumulated field.
+
+    The claim log arrived in `probe-census/v3`, which is the version
+    this pins; the CURRENT schema moves on as later issues extend the
+    record, and the migration this covers has to keep working every
+    time it does.
+    """
+    print("\n-- the v2 -> current migration loses nothing --")
     with registry():
-        expect(probe_census.CENSUS_SCHEMA == "probe-census/v3",
-               "the current census schema is probe-census/v3")
+        expect(probe_census.CLAIM_SCHEMA == "probe-census/v3",
+               "the claim log arrived in probe-census/v3")
+        expect(probe_census.CENSUS_SCHEMA in probe_census.MIGRATABLE_SCHEMAS
+               and probe_census.MIGRATABLE_SCHEMAS.index(
+                   probe_census.CLAIM_SCHEMA)
+               < probe_census.MIGRATABLE_SCHEMAS.index(
+                   probe_census.CENSUS_SCHEMA),
+               f"...and every later schema still migrates from it; got "
+               f"{probe_census.MIGRATABLE_SCHEMAS}")
 
         cohort = {"commit_sha": COMMIT_A, "samples": []}
         attempt = {"timestamp_utc": "2026-08-20T05:00:00Z",
@@ -861,10 +874,12 @@ def test_schema_migration_is_lossless() -> None:
         probe_census.validate_document(migrated, probe_census.CENSUS_SCHEMA,
                                        "the migrated census")
         record = migrated["probes"][0]["census"]
-        expect(migrated["schema"] == "probe-census/v3",
-               "the migrated document is probe-census/v3")
-        expect(record["claims"] == [],
-               "the migration adds an EMPTY claim log")
+        expect(migrated["schema"] == probe_census.CENSUS_SCHEMA,
+               f"the migrated document is "
+               f"{probe_census.CENSUS_SCHEMA}")
+        expect(record["claims"] == [] and record["outcomes"] == [],
+               "the migration adds an EMPTY claim log, and #1439's equally "
+               "empty outcome log beside it")
         for field, value in (("acceptable_failures", 3),
                              ("acceptable_failures_justification",
                               "three known races"),
@@ -874,7 +889,8 @@ def test_schema_migration_is_lossless() -> None:
                    f"the migration preserves `{field}` exactly")
         expect(record["current"] == {"commit_sha": COMMIT_B, "samples": []},
                "the migration preserves the current cohort exactly")
-        expect(v2["probes"][0]["census"].get("claims") is None,
+        expect(v2["probes"][0]["census"].get("claims") is None
+               and v2["probes"][0]["census"].get("outcomes") is None,
                "and it does not mutate the document it migrated FROM")
 
         again = probe_census.migrate_document(migrated)
@@ -888,7 +904,8 @@ def test_schema_migration_is_lossless() -> None:
         with_claims["probes"][0]["census"]["claims"] = [kept]
         expect(probe_census.migrate_document(with_claims)["probes"][0]
                ["census"]["claims"] == [kept],
-               "migrating a v3 census never truncates its existing claims")
+               "re-migrating a current census never truncates its existing "
+               "claims")
 
         v1 = {"schema": "probe-census/v1",
               "probes": [{"key": "alpha", "script": "alpha_probe.py",
@@ -898,7 +915,8 @@ def test_schema_migration_is_lossless() -> None:
         probe_census.validate_document(from_v1, probe_census.CENSUS_SCHEMA,
                                        "the migrated v1 census")
         expect(from_v1["probes"][0]["census"] == probe_census.empty_census(),
-               "a v1 seed still migrates straight to the empty v3 record")
+               "a v1 seed still migrates straight to the empty current "
+               "record")
 
     with registry(), scratch_repo() as (_main, _other, census):
         # The migration through the real writer, on disk, is what an
@@ -911,19 +929,22 @@ def test_schema_migration_is_lossless() -> None:
             for key, script, _p in SYNTHETIC[1:]]
         for row in v2["probes"][1:]:
             row["census"].pop("claims")
+            row["census"].pop("outcomes")
         census.write_text(json.dumps(v2, indent=2, sort_keys=True) + "\n",
                           encoding="utf-8")
         probe_census.ensure_document(census)
         stored = json.loads(census.read_text(encoding="utf-8"))
-        expect(stored["schema"] == "probe-census/v3",
+        expect(stored["schema"] == probe_census.CENSUS_SCHEMA,
                "`--seed` migrates a stored v2 census in place")
         alpha = probe_census.find_entry(stored, "alpha")["census"]
         expect(alpha["acceptable_failures"] == 3
                and alpha["history"] == [cohort] and alpha["attempts"] == [attempt],
                "...keeping every policy field, cohort and attempt it held")
         expect(all(probe_census.find_entry(stored, key)["census"]["claims"] == []
+                   and probe_census.find_entry(
+                       stored, key)["census"]["outcomes"] == []
                    for key, _s, _p in SYNTHETIC),
-               "...and giving every row an empty claim log")
+               "...and giving every row an empty claim and outcome log")
 
 
 # ==========================================================================
