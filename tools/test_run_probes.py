@@ -175,8 +175,16 @@ _REGISTRY_NOUN = (
 _REGISTRY_SUBJECT = (
     r"(?:" + _REGISTRY_NOUN + r"|registry"
     r"|(?:total\s+)?number\s+of\s+(?:registered\s+)?probes?"
-    r"|probe\s+(?:count|total)"
-    r"|count\s+of\s+(?:registered\s+)?probes?)")
+    r"|probe\s+(?:count|total|list|table|roster|inventory)"
+    r"|(?:count|list)\s+of\s+(?:registered\s+)?probes?)")
+
+# The registry's own object, which names the whole thing as directly as any
+# English phrase does. It has to be matched CASE-SENSITIVELY: `PROBES` is
+# the identifier, and case-insensitively it is the word "probes", which this
+# section says twenty times about individual probes.
+_REGISTRY_OBJECT = (
+    r"(?:run_probes\.)?PROBES"
+    r"(?:\s+(?:list|dict|table|map|registry|roster))?")
 
 # "~90" has no word boundary before the tilde, so the two spellings need
 # separate anchoring; both end immediately before the quantity.
@@ -239,6 +247,12 @@ README_TOTAL_RULES: tuple[tuple[str, "re.Pattern[str]"], ...] = (
                 r"|totals?|totall?ed|numbers?|numbered|contains?|comprises?"
                 r"|includes?|consists?\s+of|carries|carry)\s+"
                 + _APPROXIMATOR + r"?" + _STANDALONE_NUMBER, re.I)),
+    # The registry OBJECT and a quantity in one clause: "the PROBES list has
+    # 93 entries". Same clause shape as `registry-quantity-clause`, but the
+    # subject is anchored case-sensitively, so only the tail is folded.
+    ("registry-object-quantity",
+     re.compile(_REGISTRY_OBJECT + r"(?i:[^.;\n]{0,80}?" + _APPROXIMATOR
+                + r"?" + _QUANTITY + r")")),
 )
 
 
@@ -3515,6 +3529,9 @@ def test_the_readme_states_no_registry_total() -> None:
             "The total number of registered probes is 93.",
             "Registered probes: 90.",
             "The registry: 93.",
+            "The probe list has 93 entries.",
+            "The list of registered probes has 93 entries.",
+            "The probe table has 93 rows.",
         ),
         # A quantity carried by an antecedent rather than a noun. The first
         # is verbatim the form round 4 of review found.
@@ -3525,6 +3542,15 @@ def test_the_readme_states_no_registry_total() -> None:
             "Around 93 of these are registered.",
             "It lists 93 of the probes.",
             "The runner knows 93 of the registry.",
+        ),
+        # The registry's own object as the subject. The first is verbatim the
+        # form round 6 of review found.
+        "registry-object-quantity": (
+            "The PROBES list has 93 entries.",
+            "`run_probes.PROBES` has 93 entries.",
+            "PROBES holds 93.",
+            "The PROBES dict is 93 long.",
+            "PROBES: 93.",
         ),
         # A quantity reached directly by a verb of having or listing, with
         # neither a registry subject nor a noun.
@@ -3590,6 +3616,8 @@ def test_the_readme_states_no_registry_total() -> None:
             # the antecedent left implicit.
             "The suite registers 93 of them.",
             "The suite registers 93.",
+            # The round-6 review's bypass, verbatim.
+            "The PROBES list has 93 entries.",
             # The round-2 review's bypass: the same totals, formatted.
             "There are `93 registered probes`.",
             "The probe registry totals `93`.",
@@ -3625,6 +3653,10 @@ def test_the_readme_states_no_registry_total() -> None:
             "`--retries N` re-runs a failed probe SOLO up to `N` more times.",
             "Ctrl-C exits 130 after terminating every probe still running.",
             "A `--port` that reaches 8008 stays build-free.",
+            "`run_probes.PROBE_TIMEOUT_OVERRIDES` declares 3600 for one key.",
+            "Adding a future multi-port probe is one row in that table, and "
+            "`tools/test_run_probes.py` validates every row against the live "
+            "registry.",
             "Before #1571 the allocator used stride 1, so selecting "
             "`debug_console_boot` put both on 9401.",
             "Cap `N` at (cores − 1) or so — each probe is a full engine "
