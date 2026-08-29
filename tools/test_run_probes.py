@@ -157,7 +157,8 @@ def probe_src(root: Path, name: str, *, exit_code: int = 0,
               descendant: bool = True, hold_port: int = 0,
               dwell: float = 0.0,
               handshake_delay: float = 0.0,
-              bind_span: int = 0, bind_delay: float = 0.0) -> str:
+              bind_span: int = 0, bind_delay: float = 0.0,
+              progress: "tuple[tuple[str, str, str], ...]" = ()) -> str:
     """A synthetic probe that boots a synthetic 'engine' the way probelib does.
 
     ``ignore_term`` and ``engine_ignores_term`` are independent on purpose:
@@ -183,6 +184,14 @@ def probe_src(root: Path, name: str, *, exit_code: int = 0,
 
     Every probe records the ``--port`` it was handed to ``<name>.port``,
     one line per attempt.
+
+    ``progress`` is a sequence of ``(kind, identity, detail)`` triples the
+    probe emits, in order, BEFORE its ``tail_lines`` -- through the real
+    ``run_probes.ProgressEmitter``, never a hand-copied string, so these
+    cases exercise the shipped convention on both sides (#1768). Emitting
+    them first is what lets a case bury them under more than ``--tail``
+    ordinary lines and still require the failure presentation to surface
+    them.
     """
     pidfile = root / f"{name}.enginepid"
     startedfile = root / f"{name}.started"
@@ -278,6 +287,18 @@ def probe_src(root: Path, name: str, *, exit_code: int = 0,
             "    _blog.flush()",
             "    os.fsync(_blog.fileno())",
         ]
+    if progress:
+        # The real module, imported from the REAL tools directory: a
+        # synthetic copy of the record format would let the producer and
+        # the consumer drift apart without a test noticing.
+        lines += [
+            f"sys.path.insert(0, {str(Path(__file__).resolve().parent)!r})",
+            "import run_probes as _run_probes",
+            "_progress = _run_probes.ProgressEmitter()",
+        ]
+        for kind, identity, detail in progress:
+            lines.append(
+                f"_progress.emit({kind!r}, {identity!r}, {detail!r})")
     for i in range(tail_lines):
         lines.append(f"print('diagnostic line {i}')")
     lines.append("sys.stdout.flush()")
@@ -2794,6 +2815,8 @@ def test_the_synthetic_fixtures_are_valid_python() -> None:
             "no engine": {"descendant": False},
             "port holder": {"hold_port": 9999},
             "dwelling": {"dwell": 0.25, "descendant": False},
+            "progress": {"progress": (("phase", "engine A", "build it"),),
+                         "tail_lines": 2, "descendant": False},
         }
         for label, kw in variants.items():
             try:
@@ -2844,6 +2867,272 @@ def test_group_running_ignores_a_zombie_only_group() -> None:
     finally:
         live.kill()
         live.wait()
+
+
+
+# --------------------------------------------------------------------------
+# Durable progress records and timeout attribution (#1768)
+#
+# The loss these cases are about is invisible to every other test here: a
+# probe's phase output is block-buffered in the child, so a `--timeout`
+# SIGKILL discards it and the failure artifact names no phase at all. The
+# pure cases below pin the ONE shared convention (`run_probes.py` defines
+# it; `persistence_contract_sweep.py` and the runner's own nested-attempt
+# records both use it), and the subprocess cases prove it survives a real
+# forced termination and reaches the DEFAULT failure presentation on both
+# of that presentation's two paths.
+# --------------------------------------------------------------------------
+class ProgressStub:
+    """Stands in for "this line is not a progress record" in a filter."""
+    kind = ""
+
+
+def progress_records(out: str) -> list[run_probes.ProgressRecord]:
+    """Every progress record in some output, in order."""
+    return [record for record in
+            (run_probes.parse_progress(line) for line in out.splitlines())
+            if record is not None]
+
+
+def record_pairs(out: str) -> list[tuple[str, str]]:
+    """`(kind, identity)` for every progress record, in order."""
+    return [(record.kind, record.identity) for record in progress_records(out)]
+
+
+def test_progress_records_round_trip_and_stay_out_of_the_verdict_shape() -> None:
+    print("\n-- a progress record round-trips, and can never be miscounted "
+          "as a verdict announcement")
+    now = time.time()
+    line = run_probes.format_progress(
+        "phase", "engine A", "build the scenario, save 'gen1'",
+        elapsed=12.34, now=now)
+    record = run_probes.parse_progress(line)
+    expect(record is not None, f"the rendered record parses back ({line!r})")
+    expect(record.kind == "phase" and record.identity == "engine A",
+           f"with its kind and identity intact (got {record!r})")
+    expect(record.detail == "build the scenario, save 'gen1'",
+           f"and its detail intact (got {record.detail!r})")
+    expect("+12.3s" in record.stamp,
+           f"the stamp carries the elapsed offset (got {record.stamp!r})")
+    expect(":" in record.stamp,
+           f"and a wall-clock time, so two producers sharing one pipe can "
+           f"be ordered against each other (got {record.stamp!r})")
+
+    # Free text may contain the field separator; only the first three
+    # fields are structural.
+    awkward = run_probes.format_progress(
+        "end", "chop (chop_probe.py) attempt 1/2", "FAIL | exit 1",
+        elapsed=1.0, now=now)
+    expect(run_probes.parse_progress(awkward).detail == "FAIL | exit 1",
+           "a detail containing the separator survives the round trip")
+    expect(run_probes.parse_progress(awkward).identity
+           == "chop (chop_probe.py) attempt 1/2",
+           "and the identity is not confused by it")
+
+    expect(run_probes.parse_progress("[3/12] chop_probe.py ... PASS (4.0s)")
+           is None,
+           "an ordinary verdict announcement is not a progress record")
+    expect(run_probes.parse_progress("diagnostic line 7") is None,
+           "and neither is ordinary probe output")
+
+    # The other direction, which is the one that could break a shipped
+    # test: `progress_lines` counts a verdict by "starts with [ and
+    # contains ' <script> ... '". A progress record naming a script must
+    # not match that shape.
+    dispatch = run_probes.format_progress(
+        "begin", run_probes.attempt_identity("chop", "chop_probe.py", 1, 2),
+        "dispatched", elapsed=0.1, now=now)
+    expect(progress_lines(dispatch, "chop_probe.py") == 0,
+           f"a dispatch record naming a script is not counted as that "
+           f"probe's verdict ({dispatch!r})")
+
+    try:
+        run_probes.format_progress("nonsense", "x", "y", elapsed=0.0, now=now)
+    except ValueError:
+        expect(True, "an unknown record kind is refused at the source")
+    else:
+        expect(False, "an unknown record kind should be refused at the source")
+
+
+def test_progress_attribution_derives_the_in_flight_set() -> None:
+    print("\n-- attribution names the latest phase and every attempt "
+          "started without finishing")
+    now = time.time()
+
+    def line(kind, identity, detail, elapsed):
+        return run_probes.format_progress(kind, identity, detail,
+                                          elapsed=elapsed, now=now)
+
+    expect(run_probes.progress_attribution("") == [],
+           "a capture with no progress records yields no attribution at all")
+    expect(run_probes.progress_attribution("just some probe output\n") == [],
+           "and neither does ordinary probe output")
+
+    alpha = run_probes.attempt_identity("chop", "chop_probe.py", 1, 2)
+    beta = run_probes.attempt_identity("till", "till_probe.py", 1, 2)
+    gamma = run_probes.attempt_identity("till", "till_probe.py", 2, 2)
+    capture = "\n".join([
+        line("phase", "engine A", "build the scenario", 0.1),
+        "some ordinary output",
+        line("phase", "engine C", "load 'gen2', save 'gen3'", 300.0),
+        line("phase", "cross-probes", "running 11 probe(s)", 500.0),
+        line("begin", alpha, "dispatched", 500.1),
+        line("begin", beta, "dispatched", 500.2),
+        line("end", beta, "FAIL (10.0s)", 510.2),
+        line("begin", gamma, "solo retry", 510.3),
+    ]) + "\n"
+    got = run_probes.progress_attribution(capture)
+    text = "\n".join(got)
+    expect(any("cross-probes" in ln for ln in got),
+           f"the LATEST phase is named, not the first (got {got!r})")
+    expect("engine A" not in text and "engine C" not in text,
+           f"and the superseded phases are not (got {got!r})")
+    expect("+500.0s" in text,
+           f"with the offset that quantifies how long it occupied "
+           f"(got {got!r})")
+    expect(any(alpha in ln for ln in got) and any(gamma in ln for ln in got),
+           f"both attempts started without an end are named (got {got!r})")
+    expect(beta not in text,
+           f"and the attempt that completed is NOT reported in flight "
+           f"(got {got!r})")
+    expect(text.index(alpha) < text.index(gamma),
+           "the in-flight attempts are listed in dispatch order")
+
+    # A retry that finishes clears only its own attempt.
+    finished = capture + line("end", gamma, "PASS (5.0s)", 515.0) + "\n"
+    remaining = "\n".join(run_probes.progress_attribution(finished))
+    expect(alpha in remaining and gamma not in remaining,
+           f"completing the retry leaves only the still-running attempt "
+           f"(got {remaining!r})")
+
+
+def test_progress_survives_a_forced_timeout_outside_the_ordinary_tail() -> None:
+    print("\n-- a phase record emitted before a SIGKILL timeout reaches the "
+          "default failure report, even buried under more than --tail lines")
+    tree = Tree()
+    try:
+        # 40 ordinary lines after the record, against the default
+        # `--tail 25`: the record is provably outside the tail, so only
+        # the attribution can surface it. The probe and its engine both
+        # ignore SIGTERM, so this is the real escalate-to-SIGKILL path.
+        tree.add("slow", progress=(("phase", "engine C",
+                                    "fresh process, load 'gen2', save 'gen3'"),),
+                 tail_lines=40, hang=True, ignore_term=True,
+                 engine_ignores_term=True)
+        rc, out = _main_with(tree, ["--timeout", "3"])
+        expect(rc == 1, f"the timed-out run still fails (exit {rc})")
+        expect("TIMEOUT" in out, "and is reported as a TIMEOUT")
+        expect("progress: latest phase entered at" in out,
+               f"the attribution line is printed:\n{out}")
+        expect("engine C" in out and "load 'gen2', save 'gen3'" in out,
+               f"naming the phase that was active at the kill:\n{out}")
+        expect(run_probes.PROGRESS_MARKER not in out,
+               f"the raw record is NOT reprinted -- it fell outside the "
+               f"25-line tail:\n{out}")
+        expect("diagnostic line 39" in out,
+               "the ordinary tail is preserved as context")
+        expect("diagnostic line 0" not in out,
+               f"and the complete capture is NOT dumped:\n{out}")
+    finally:
+        tree.cleanup()
+
+
+def test_in_flight_attempts_are_derivable_from_the_default_report() -> None:
+    print("\n-- a timeout names every nested attempt started without a "
+          "completion, and no completed one")
+    tree = Tree()
+    try:
+        # A probe standing in for the sweep: it enters a phase, then its
+        # nested runner dispatches two attempts into the SAME pipe and
+        # completes one before everything is killed. The records are the
+        # real ones -- `probe_src` emits them through
+        # `run_probes.ProgressEmitter` -- so this is the shipped
+        # convention crossing a real process boundary and a real SIGKILL.
+        finished = run_probes.attempt_identity("chop", "chop_probe.py", 1, 2)
+        running = run_probes.attempt_identity("till", "till_probe.py", 1, 2)
+        retrying = run_probes.attempt_identity("chop", "chop_probe.py", 2, 2)
+        tree.add("nested",
+                 progress=(("phase", "cross-probes", "running 2 probe(s)"),
+                           ("begin", finished, "dispatched"),
+                           ("begin", running, "dispatched"),
+                           ("end", finished, "FAIL (1.0s)"),
+                           ("begin", retrying, "solo retry")),
+                 tail_lines=40, hang=True, ignore_term=True,
+                 engine_ignores_term=True)
+        rc, out = _main_with(tree, ["--timeout", "3"])
+        expect(rc == 1, f"the run fails (exit {rc})")
+        expect("2 nested probe attempt(s) still in flight" in out,
+               f"the in-flight count is reported:\n{out}")
+        expect(running in out,
+               f"the attempt still running is named ({running!r}):\n{out}")
+        expect(retrying in out,
+               f"and so is the solo retry in flight ({retrying!r}):\n{out}")
+        expect(out.count(finished) == 0,
+               f"the attempt that completed is not reported in flight:\n{out}")
+        expect("cross-probes" in out,
+               f"and the phase it happened in is still named:\n{out}")
+        expect("diagnostic line 0" not in out,
+               "without dumping the complete capture")
+    finally:
+        tree.cleanup()
+
+
+def test_parallel_dispatch_and_retry_records_name_every_attempt() -> None:
+    print("\n-- the parallel path records every attempt before it begins, "
+          "and the solo retry too, without disturbing the verdict lines")
+    tree = Tree()
+    try:
+        tree.add("alpha", dwell=0.3, descendant=False)
+        tree.add("beta", exit_code=1, tail_lines=40, descendant=False,
+                 progress=(("phase", "engine A", "build the scenario"),))
+        rc, out = _main_with(tree, ["--jobs", "2", "--retries", "1"])
+        expect(rc == 1, f"the failing probe still fails the run (exit {rc})")
+
+        pairs = record_pairs(out)
+        alpha_1 = run_probes.attempt_identity("alpha", "alpha_probe.py", 1, 2)
+        beta_1 = run_probes.attempt_identity("beta", "beta_probe.py", 1, 2)
+        beta_2 = run_probes.attempt_identity("beta", "beta_probe.py", 2, 2)
+        for kind, identity in (("begin", alpha_1), ("end", alpha_1),
+                               ("begin", beta_1), ("end", beta_1),
+                               ("begin", beta_2), ("end", beta_2)):
+            expect((kind, identity) in pairs,
+                   f"the runner emitted a {kind} record for {identity!r} "
+                   f"(got {pairs!r})")
+        expect(pairs.index(("begin", beta_1)) < pairs.index(("end", beta_1))
+               < pairs.index(("begin", beta_2)),
+               f"the batch attempt is recorded before it begins and the "
+               f"retry only after it ended (got {pairs!r})")
+        expect(pairs.count(("begin", beta_1)) == 1,
+               f"exactly one dispatch record per attempt (got {pairs!r})")
+
+        # The shipped concurrency tests count verdict announcements by
+        # shape; the new records must not join that count.
+        expect(progress_lines(out, "alpha_probe.py") == 1
+               and progress_lines(out, "beta_probe.py") == 1,
+               "each probe still announces exactly one verdict")
+
+        # Requirement 4 on the OTHER default failure path: the parallel
+        # end-of-run tail block.
+        block = out.split("--- beta_probe.py (FAIL) ---")[-1]
+        expect("progress: latest phase entered at" in block
+               and "engine A" in block,
+               f"the parallel failure block carries the attribution too:\n{out}")
+        expect("diagnostic line 0" not in block,
+               "and still does not dump the complete capture")
+
+        # Close the loop: the records the runner ACTUALLY printed, read
+        # back by the real consumer. Dropping the completions is what a
+        # kill mid-batch leaves behind, and both dispatches must then be
+        # reported in flight.
+        mid_batch = "\n".join(
+            line for line in out.splitlines()
+            if (run_probes.parse_progress(line) or ProgressStub).kind != "end")
+        derived = "\n".join(run_probes.progress_attribution(mid_batch))
+        expect(alpha_1 in derived and beta_1 in derived and beta_2 in derived,
+               f"the runner's own records derive the in-flight set when the "
+               f"completions are missing (got {derived!r})")
+    finally:
+        tree.cleanup()
 
 
 def main() -> int:
@@ -2908,6 +3197,11 @@ def main() -> int:
     test_gui_port_refusal_covers_the_whole_span()
     test_port_with_jobs_bases_the_parallel_allocation()
     test_a_two_port_probe_never_takes_its_neighbours_base()
+    test_progress_records_round_trip_and_stay_out_of_the_verdict_shape()
+    test_progress_attribution_derives_the_in_flight_set()
+    test_progress_survives_a_forced_timeout_outside_the_ordinary_tail()
+    test_in_flight_attempts_are_derivable_from_the_default_report()
+    test_parallel_dispatch_and_retry_records_name_every_attempt()
     if FAILURES:
         print(f"\n{len(FAILURES)} test(s) failed:")
         for failure in FAILURES:

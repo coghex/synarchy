@@ -88,10 +88,57 @@ from pathlib import Path
 from probelib import (boot, quit_engine, send, send_json, wait_load_published,
                        wait_save_complete, capture_request_id)
 from persistence_snapshot import compare_session_files
-from run_probes import PROBES as REGISTERED_PROBES
+from run_probes import PROBES as REGISTERED_PROBES, ProgressEmitter
 from save_compat_audit import dump_canonical_summary
 
 REPO = Path(__file__).resolve().parent.parent
+
+# ── Durable phase records (#1768) ─────────────────────────────────────
+#
+# This sweep spends most of its (900 s default) budget inside four long
+# phases, and until #1768 it named them with unflushed `=== ... ===`
+# prose. `tools/run_probes.py` launches it as a plain `python3` into a
+# pipe it drains only at exit, so at a timeout those lines died in this
+# process's own block buffer and the failure artifact named no phase at
+# all. Every phase entry now goes through `announce_phase` below, which
+# emits ONE flushed record in the shared convention `run_probes.py`
+# defines and its failure presentation recognizes.
+#
+# `SWEEP_PHASE_IDENTITIES` is that presentation's contract, not a
+# comment: `announce_phase` refuses an identity missing from it, so a new
+# long phase cannot be added without joining the list the engine-free
+# tests check.
+SWEEP_PHASE_ENGINE_A = "engine A"
+SWEEP_PHASE_COMPARISON = "comparison"
+SWEEP_PHASE_CROSS_PROBES = "cross-probes"
+# The three fresh-process load->save cycles (requirement 9), which the
+# main loop walks as the letters B, C and D.
+SWEEP_CYCLE_LETTERS = "BCD"
+
+
+def engine_cycle_phase(letter: str) -> str:
+    """The phase identity of one fresh-process load->save cycle."""
+    return f"engine {letter}"
+
+
+SWEEP_PHASE_IDENTITIES = (
+    [SWEEP_PHASE_ENGINE_A]
+    + [engine_cycle_phase(letter) for letter in SWEEP_CYCLE_LETTERS]
+    + [SWEEP_PHASE_COMPARISON, SWEEP_PHASE_CROSS_PROBES]
+)
+
+
+def announce_phase(progress: ProgressEmitter, identity: str,
+                   detail: str) -> str:
+    """Emit one durable sweep phase record, flushed before the work starts."""
+    if identity not in SWEEP_PHASE_IDENTITIES:
+        raise ValueError(
+            f"{identity!r} is not a declared sweep phase; add it to "
+            f"SWEEP_PHASE_IDENTITIES so the runner's timeout attribution "
+            f"and tools/test_persistence_contract_sweep.py both know it")
+    return progress.phase(identity, detail)
+
+
 PAGE = "contract_sweep_page"
 # A page that only ever exists in a fresh, PRE-load live session -- never
 # part of any save this suite writes -- used once (round-5 review) to
@@ -479,7 +526,8 @@ def assert_reset_policy(chk: Checks, port: int, when: str) -> None:
            f"{when}: tile selection is empty (got {tile!r})")
 
 
-def run_cross_referenced_probes(chk: Checks, keys: list[str], jobs: int) -> None:
+def run_cross_referenced_probes(chk: Checks, keys: list[str], jobs: int,
+                                progress: ProgressEmitter) -> None:
     """Actually RUN the domain-specific and assembled-failure-contract
     probes this sweep cross-references (requirement 11/13), via the
     existing aggregate runner -- round-1 review: a file-existence check
@@ -488,9 +536,10 @@ def run_cross_referenced_probes(chk: Checks, keys: list[str], jobs: int) -> None
         chk.ok(False, "cross-referenced probes were skipped (--skip-cross-probes) "
                        "-- requirement 11/13 coverage is NOT exercised by this run")
         return
-    print(f"=== running {len(keys)} cross-referenced probe(s) via "
-          f"run_probes.py --only ... --exact --jobs {jobs} --retries 1 "
-          f"(this is slow) ===")
+    announce_phase(progress, SWEEP_PHASE_CROSS_PROBES,
+                   f"running {len(keys)} cross-referenced probe(s) via "
+                   f"run_probes.py --only ... --exact --jobs {jobs} "
+                   f"--retries 1 (this is slow)")
     # --retries 1 matches CI's own convention for a parallel --jobs run
     # (see CLAUDE.md's CI probe-gate section): running probes pairwise
     # risks the SAME parallel-engine-contention flake CI's own gate
@@ -533,6 +582,9 @@ def main() -> int:
     args = ap.parse_args()
     port = args.port
     chk = Checks()
+    # #1768: every phase offset below is measured from here -- argument
+    # parsing onward is this run's whole occupancy of the runner's budget.
+    progress = ProgressEmitter()
 
     # Registry-drift guard (#1321) -- unconditional, cheap, and engine-free:
     # a stale SELECTABLE_CROSS_REFERENCED_PROBE_KEYS entry must fail loudly
@@ -565,7 +617,8 @@ def main() -> int:
     try:
         root = make_isolated_root(tmpdir)
 
-        print("=== engine A: build the representative scenario, save 'gen1' ===")
+        announce_phase(progress, SWEEP_PHASE_ENGINE_A,
+                       "build the representative scenario, save 'gen1'")
         proc = boot_probe(root, port, os.path.join(tmpdir, "engineA.log"))
         portal_bid, atk, tgt, beta_uid = build_rich_scenario(
             chk, port, args.seed, args.world_size, args.plates)
@@ -585,10 +638,11 @@ def main() -> int:
         # three) -----------------------------------------------------────
         gen_paths = [gen1_path]
         prev_slot = "gen1"
-        for i, letter in enumerate("BCD", start=2):
+        for i, letter in enumerate(SWEEP_CYCLE_LETTERS, start=2):
             next_slot = f"gen{i}"
-            print(f"=== engine {letter}: fresh process, load '{prev_slot}', "
-                  f"save '{next_slot}' ===")
+            announce_phase(progress, engine_cycle_phase(letter),
+                           f"fresh process, load '{prev_slot}', "
+                           f"save '{next_slot}'")
             proc = boot_probe(root, port, os.path.join(tmpdir, f"engine{letter}.log"))
             bootstrap_defs(port)
             load_ai_stack(port)
@@ -684,8 +738,9 @@ def main() -> int:
             proc = None
             prev_slot = next_slot
 
-        print(f"=== comparing {len(gen_paths)} generations through the real "
-              f"production codec ===")
+        announce_phase(progress, SWEEP_PHASE_COMPARISON,
+                       f"comparing {len(gen_paths)} generations through the "
+                       f"real production codec")
         ok, detail = compare_session_files([Path(p) for p in gen_paths])
         chk.ok(ok, f"all {len(gen_paths)} generations are structurally IDENTICAL "
                    f"across three real fresh-process save->load->save cycles of "
@@ -708,7 +763,7 @@ def main() -> int:
             print(f"  (not run: {', '.join(skipped_flaky)} -- isolated but "
                   f"independently flaky per `tools/ci_probes.py --status`; "
                   f"list it explicitly in --cross-probe-keys to also run it)")
-    run_cross_referenced_probes(chk, keys, args.cross_probe_jobs)
+    run_cross_referenced_probes(chk, keys, args.cross_probe_jobs, progress)
 
     print(f"\n{'PASS' if chk.failed == 0 else 'FAIL'}: {chk.failed} check(s) failed")
     return 0 if chk.failed == 0 else 1
