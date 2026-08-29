@@ -287,16 +287,37 @@ class ReadmeSectionError(Exception):
     """
 
 
+# Markdown has TWO code fences, and a tilde one hid a total from an earlier
+# revision of this guard: `###` inside it read as the next heading, ending
+# the section early. A fence closes only on its OWN character, and only on a
+# run at least as long as the one that opened it, so a shorter or
+# different-character run inside a block stays content.
+_FENCE_LINE = re.compile(r"^\s*(?P<fence>`{3,}|~{3,})(?P<info>.*)$")
+
+
 def _mark_fences(lines: list[str]) -> list[tuple[str, bool]]:
     """Pair each line with whether it is fenced code (the fences included)."""
-    in_fence = False
     marked: list[tuple[str, bool]] = []
+    open_char: str | None = None
+    open_length = 0
     for line in lines:
-        if line.lstrip().startswith("```"):
-            marked.append((line, True))
-            in_fence = not in_fence
-            continue
-        marked.append((line, in_fence))
+        match = _FENCE_LINE.match(line)
+        if match:
+            fence = match.group("fence")
+            char, length = fence[0], len(fence)
+            if open_char is None:
+                # A backtick fence's info string may not contain a backtick;
+                # that shape is inline code, not an opening fence.
+                if not (char == "`" and "`" in match.group("info")):
+                    marked.append((line, True))
+                    open_char, open_length = char, length
+                    continue
+            elif (char == open_char and length >= open_length
+                  and not match.group("info").strip()):
+                marked.append((line, True))
+                open_char = None
+                continue
+        marked.append((line, open_char is not None))
     return marked
 
 
@@ -3504,6 +3525,34 @@ def test_the_readme_states_no_registry_total() -> None:
               "# Run up to 4 probes concurrently\nrun\n```\n\n" + claim)
     expect(readme_total_claim_problems(fenced) != [],
            "a fenced `# comment` does not end the section early")
+
+    # Markdown's OTHER fence. A tilde block whose content opens with `###`
+    # ended the section early in an earlier revision, hiding the total the
+    # same block displayed.
+    for opener, closer, why in (
+            ("~~~bash", "~~~", "a tilde fence"),
+            ("````bash", "````", "a four-backtick fence"),
+            ("~~~~", "~~~~", "a four-tilde fence")):
+        block = ("# Tools\n\n" + heading_line + f"\n{opener}\n###\n"
+                 "# There are 93 registered probes.\nrun\n"
+                 f"{closer}\n\n### `other.py`\n\nUnrelated.\n")
+        expect(readme_total_claim_problems(block) != [],
+               f"{why} keeps its content in scope")
+    # A fence closes only on its OWN character, and only on a run at least
+    # as long as the opener -- otherwise the rest of the block escapes.
+    for inner, why in (("```", "a shorter backtick run"),
+                       ("~~~", "a different fence character")):
+        block = ("# Tools\n\n" + heading_line + "\n````bash\n"
+                 f"{inner}\n###\n# There are 93 registered probes.\n"
+                 "````\n\n### `other.py`\n\nUnrelated.\n")
+        expect(readme_total_claim_problems(block) != [],
+               f"{why} does not close the block ({why})")
+    # A line of inline code is not an opening fence, so the prose after it
+    # is still prose and still scanned.
+    inline_run = ("# Tools\n\n" + heading_line + "\n```a``` is inline.\n\n"
+                  + claim)
+    expect(readme_total_claim_problems(inline_run) != [],
+           "a backtick run with code in its info string is not a fence")
 
     # --- one crafted violation per rule ----------------------------------
     def rules_fired(body: str) -> set[str]:
