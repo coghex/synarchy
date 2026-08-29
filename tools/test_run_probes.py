@@ -170,9 +170,15 @@ _APPROX_SUFFIX = (
 # "base + N - 1"). Those are the two shapes this section's real numbers take
 # beside a registry noun. An explicit approximate suffix is the exception --
 # it is punctuation ABOUT the count, not a different thing being counted.
+# The head of an attributive compound that counts the registry itself:
+# "a 93-PROBE registry", "a 93-ENTRY list". Naming the head is what keeps
+# "900-second" out -- a second is not something the registry holds.
+_COUNTED_HEAD = r"(?:probe|entry|entries|script|member|row|slot)s?"
+
 _STANDALONE_NUMBER = (
     r"(?<![\w+*/-])(?:"
     r"(?:\d+|" + _LARGE_NUMBER_WORD + r")" + _APPROX_SUFFIX +
+    r"|\d+(?=-" + _COUNTED_HEAD + r"\b)"
     r"|\d+(?![\w-])"
     r"|" + _LARGE_NUMBER_WORD + r"\b)")
 
@@ -278,7 +284,7 @@ README_TOTAL_RULES: tuple[tuple[str, "re.Pattern[str]"], ...] = (
     # explicit BOUND ("up to 4 probes") is exempt.
     ("quantified-probe-noun",
      re.compile(_BOUND_PREFIX + _APPROXIMATOR + r"?" + _STANDALONE_NUMBER
-                + r"(?:\s+\w+){0,2}\s+probes?\b", re.I)),
+                + r"(?:\s+\w+){0,2}(?:\s+|-)probes?\b", re.I)),
     # A quantity whose noun is only an ANTECEDENT: "the suite registers 93 of
     # them". The partitive must follow the number DIRECTLY -- that is what
     # separates it from "declares 2 for each of those two", where the number
@@ -3701,6 +3707,7 @@ def test_the_readme_states_no_registry_total() -> None:
             "The collection of registered probes is 93 strong.",
             "The probe catalogue holds 93.",
             "The registry index is 93 long.",
+            "A 93-entry probe list is current.",
             "The probe tally is ninety-three.",
             "The registry holds ninety-three.",
             "The probe tally is 90+.",
@@ -3774,6 +3781,10 @@ def test_the_readme_states_no_registry_total() -> None:
             "There are 93 <em>registered</em> probes.",
             "There are <span class=\"x\">93 registered probes</span>.",
             "There are &#57;&#51; registered probes.",
+            # The attributive compound: the number counts the head noun.
+            "A 93-probe registry is current.",
+            "A 93-probe suite ships today.",
+            "It is a ninety-three-probe registry.",
             "90 registered probes ship today.",
             "It registers 90 probes today.",
             "It lists ninety probes.",
@@ -3850,6 +3861,8 @@ def test_the_readme_states_no_registry_total() -> None:
             "There are 93 <em>registered</em> probes.",
             # The round-18 review's bypass, verbatim.
             "The full probe collection has 93 members.",
+            # The round-19 review's bypass, verbatim.
+            "A 93-probe registry is current.",
             # And the original drift sentence as it really shipped, wrapped.
             "`python3 tools/run_probes.py --list` is the authoritative count\n"
             "and listing of registered probes — it's grown over time\n"
@@ -3877,7 +3890,12 @@ def test_the_readme_states_no_registry_total() -> None:
             "python3 tools/run_probes.py --jobs 4\n```",
             "Two registered probes derive a second listener from `--port`.",
             "Three registered probes legitimately still drive Cabal.",
+            # The compound head is named, so an ordinary hyphenated unit is
+            # still not a count: a second is not something the registry
+            # holds, and neither is a process.
             "Most registered probes use the ordinary 900-second default.",
+            "Its manifest-wide 2-process path is slow, and 120-second "
+            "timeouts stay available.",
             "`save_compat_migration` uses 3600 seconds because its measured "
             "runtime is above 2300 seconds.",
             "Run everything, sequentially (slow — low tens of minutes).",
