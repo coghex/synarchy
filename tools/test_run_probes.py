@@ -109,6 +109,10 @@ def expect(cond: bool, msg: str) -> None:
 # "currently"/"as of" are rejected on their own. Quantities count as such
 # spelled out at registry scale ("ninety") as well as in digits.
 #
+# Nothing the reader sees is exempt: inline code is scanned with its
+# backticks removed, so "There are `93 registered probes`." is caught like
+# the unformatted sentence, and fenced blocks are scanned as written.
+#
 # What stays legal is what this section legitimately says: SMALL spelled-out
 # subset counts ("two registered probes derive a second listener", "Three
 # registered probes still drive Cabal"), operational quantities (`--jobs 4`,
@@ -254,12 +258,15 @@ def readme_section(text: str,
 
 
 def _scannable(section: str) -> str:
-    """Drop inline code spans from prose, keeping fenced blocks verbatim.
+    """Return the section's DISPLAYED text: nothing is exempt from the rules.
 
-    Inline spans are identifiers and flags (`--port 9500`, `PROBE_PORT_SPANS`)
-    and never a prose count; they are also wrapped across lines here, so the
-    strip is done per prose RUN rather than per line. Fenced blocks are kept
-    so a total smuggled into a shell comment is still scanned.
+    Inline code spans keep their content and lose only their backticks --
+    "There are `93 registered probes`." is a total the reader sees, so it is
+    a total the rules must see. The backticks become spaces so a span's edge
+    cannot fuse two tokens, and the substitution is done per prose RUN rather
+    than per line because a span here wraps across lines. Fenced blocks are
+    passed through unchanged (their backticks are the fences), so a total
+    smuggled into a shell comment is scanned too.
     """
     chunks: list[str] = []
     run: list[str] = []
@@ -270,7 +277,7 @@ def _scannable(section: str) -> str:
             return
         blob = "\n".join(run)
         chunks.append(blob if run_fenced
-                      else re.sub(r"`[^`]*`", " ", blob, flags=re.S))
+                      else re.sub(r"`([^`]*)`", r" \1 ", blob, flags=re.S))
 
     for line, fenced in _mark_fences(section.splitlines()):
         if run_fenced is None or fenced == run_fenced:
@@ -3494,7 +3501,14 @@ def test_the_readme_states_no_registry_total() -> None:
             # The round-1 review's three bypasses, verbatim.
             "The probe registry totals 90.",
             "The registry contains 90 probes.",
-            "The number of registered probes is 90."):
+            "The number of registered probes is 90.",
+            # The round-2 review's bypass: the same totals, formatted.
+            "There are `93 registered probes`.",
+            "The probe registry totals `93`.",
+            "`90 registered probes` are listed here.",
+            "The registry holds `ninety`.",
+            "It is `currently in the mid-50s`.",
+            "```bash\n# There are 93 registered probes\nrun\n```"):
         expect(rules_fired(historical) != set(),
                f"the drift sentence is rejected: {historical[:60]!r}...")
 
@@ -3522,7 +3536,12 @@ def test_the_readme_states_no_registry_total() -> None:
             "`--retries N` re-runs a failed probe SOLO up to `N` more times.",
             "Ctrl-C exits 130 after terminating every probe still running.",
             "Cap `N` at (cores − 1) or so — each probe is a full engine "
-            "process."):
+            "process.",
+            "`--list` shows the full probe registry but not CI status.",
+            "With `--jobs > 1` the spans are laid out from it instead of "
+            "from the default `9400`.",
+            "`debug_console_boot_probe.py` boots its checks on `--port + 1`.",
+            "`save_compat_migration` uses `PROBE_TIMEOUT_OVERRIDES`' 3600 s."):
         fired = rules_fired(benign)
         expect(fired == set(),
                f"an operational quantity is accepted: {benign[:56]!r} "
