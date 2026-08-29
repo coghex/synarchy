@@ -2536,7 +2536,17 @@ directories (`events.jsonl`, `stdout.txt`, `engine/*`) and quotes bounded
 excerpts into the body: at most `MAX_EVIDENCE_RUNS` runs, `MAX_EVIDENCE_FILES_PER_RUN`
 files each, and the trailing `MAX_EXCERPT_LINES`/`MAX_EXCERPT_CHARS` of each,
 which is where an aborting probe's failure lands. An attempt whose artifacts
-have all been pruned is REFUSED rather than filed on paths alone. Beside them
+have all been pruned is REFUSED rather than filed on paths alone — but only an
+INCOMPLETE one ever collects evidence: a recorded outcome is checked first, so
+a resume works long after the artifact tree has been swept.
+
+**Nothing required is silently cut.** Only the second and later runs' evidence
+may be dropped to fit a tracker body; when even that is not enough the
+publication is refused, because a defect report published with its
+measurements or its log evidence truncated away is what this workflow exists
+to prevent. #1437 bounds neither the diagnosis summary nor its evidence list,
+so `require_defect_diagnosis` bounds both here — refused rather than trimmed,
+since the summary is the issue's own claim. Beside them
 the body carries what the amendment names: the failure numerator, denominator
 and rate, the timeout count, every declared check's PASS/FAIL/MISSING tally,
 the measured commit, the requested and completed run counts, the RTS
@@ -2559,7 +2569,13 @@ baseline commit rather than supplied, and written into the body as a marker
 line. It is reconciled against the tracker BEFORE anything is created, and the
 marker is verified in the returned body rather than trusted from a search
 index — a search matches text anywhere, and an issue that merely quotes a key
-is not the one filed under it. Two invocations of one brand-new attempt racing
+is not the one filed under it. Since a filed issue QUOTES engine logs, only a
+standalone marker line outside every code fence counts. A reconciled issue
+also supplies its own `issue-origin` brand, read off that same body: the issue
+was filed by whoever filed it, so a Claude-origin creation resumed by a Codex
+invocation still routes to Claude's opposite brand, and one carrying the key
+with no readable origin marker is a publication failure rather than something
+to record under the caller's guess. Two invocations of one brand-new attempt racing
 at the same instant can still both miss the reconcile; the census refuses the
 loser, so the durable history holds one outcome, and serializing the attempt
 itself is `probe_claim.py`'s (#1434) per-probe claim. The census's `flock` is

@@ -49,6 +49,18 @@ producer that already refused what it refuses: a batch that failed
 somewhere else, or stayed at or below X with every target present,
 reproduced nothing to attribute to the engine.
 
+Every part of the body is required, so nothing is silently cut
+------------------------------------------------------------
+The measurement facts, the provenance markers and at least one quoted
+excerpt are what make the issue reviewable, and a tracker body has a
+size limit. Only the SECOND and later runs' evidence may be dropped to
+fit; when even that is not enough the publication is REFUSED, because a
+defect report published with its measurements or its log evidence
+truncated away is the thing this workflow exists to prevent. #1437
+bounds neither the diagnosis summary nor its evidence list, so those are
+bounded at this gate instead — refused rather than trimmed, since the
+summary is the issue's own claim.
+
 Evidence, not pathnames
 -----------------------
 `probe_flake` retains a directory per FAIL and TIMEOUT run — the
@@ -68,10 +80,16 @@ Publication is idempotent, including across a crash
 ---------------------------------------------------
 A recorded outcome is the completion marker: resuming an attempt the
 census already holds reuses its stored issue, touches the tracker not at
-all, and appends nothing. That alone is not enough, because the window
-that matters is the one where issue creation TOOK EFFECT and its
-identity was never durably recorded — a timeout, a crash, or a census
-write that refused between the two.
+all, and appends nothing. It is checked BEFORE anything is rendered,
+because rendering reads the retained artifacts off disk and those are
+transient — an attempt already recorded stays resumable long after its
+artifact tree has been pruned, which is most of what the durable record
+is for.
+
+That alone is not enough, because the window that matters is the one
+where issue creation TOOK EFFECT and its identity was never durably
+recorded — a timeout, a crash, or a census write that refused between
+the two.
 
 So every diagnosis carries a stable PUBLICATION KEY, derived from the
 handoff rather than supplied by a caller, and written into the issue
@@ -80,7 +98,17 @@ against the tracker: an issue already carrying it IS this attempt's
 issue, and it is recorded rather than duplicated. The marker is verified
 in the returned body rather than trusted from a search index, because a
 search matches text anywhere and an issue that merely QUOTES a key is
-not the one that was filed under it.
+not the one that was filed under it — and since a filed issue quotes
+engine logs, a marker inside a code fence is evidence about some other
+issue, so only a standalone line outside every fence counts.
+
+A reconciled issue also supplies its OWN `issue-origin` brand, read off
+that same body. The brand decides which agent reviews it, and the issue
+was filed by whoever filed it: a Claude-origin creation resumed by a
+Codex invocation still routes to Claude's opposite brand, and recording
+the retry's brand would put a second, false answer in the durable
+history. An issue carrying this attempt's key but no readable origin
+marker is not one this workflow filed, and is a publication failure.
 
 What that does not cover, and deliberately: two invocations of one
 brand-new attempt running at the same instant can both miss the
@@ -188,6 +216,15 @@ MAX_READ_BYTES = 262144
 # measurement table — and the trim says so on the record.
 MAX_BODY_CHARS = 60000
 MAX_TITLE_CHARS = 240
+# #1437 requires a diagnosis summary and at least one evidence line and
+# bounds NEITHER, so an accepted producer record can carry prose longer
+# than a whole issue body. Bounded HERE rather than truncated later: the
+# summary is what the issue is about and the evidence is what makes it
+# reviewable, so silently cutting either would publish a defect report
+# whose own claim had been trimmed away.
+MAX_DIAGNOSIS_SUMMARY = 4000
+MAX_DIAGNOSIS_EVIDENCE = 20
+MAX_DIAGNOSIS_EVIDENCE_ITEM = 1000
 
 # The per-run artifact layout `probe_flake.measure` creates, in the
 # order a reader wants it: what the probe declared, what it printed, and
@@ -269,12 +306,32 @@ def require_defect_diagnosis(document) -> dict:
         raise HandoffError(
             "the diagnosis records no evidence; the evidence is what makes "
             "the filed issue reviewable rather than asserted")
+    if len(evidence) > MAX_DIAGNOSIS_EVIDENCE:
+        raise HandoffError(
+            f"the diagnosis states {len(evidence)} evidence lines, over the "
+            f"{MAX_DIAGNOSIS_EVIDENCE} an issue body carries; the evidence "
+            f"is published whole rather than trimmed, so a longer list is "
+            f"refused instead of being cut down to one that no longer says "
+            f"what the diagnosis said")
+    for position, item in enumerate(evidence):
+        if len(item) > MAX_DIAGNOSIS_EVIDENCE_ITEM:
+            raise HandoffError(
+                f"the diagnosis's evidence line {position + 1} is "
+                f"{len(item)} characters, over the "
+                f"{MAX_DIAGNOSIS_EVIDENCE_ITEM} an issue body carries; a log "
+                f"belongs in the retained artifacts this workflow quotes "
+                f"from, not in the evidence list")
     summary = section.get("summary")
     if not isinstance(summary, str) or not summary.strip():
         raise HandoffError(
             "the diagnosis states no `summary`; the issue title and its "
             "opening line are that sentence, and neither is this workflow's "
             "to invent")
+    if len(summary) > MAX_DIAGNOSIS_SUMMARY:
+        raise HandoffError(
+            f"the diagnosis `summary` is {len(summary)} characters, over the "
+            f"{MAX_DIAGNOSIS_SUMMARY} an issue body carries; the summary is "
+            f"the issue's own claim and is published whole")
     category = section.get("category")
     if category is not None and not isinstance(category, str):
         raise HandoffError(
@@ -350,15 +407,68 @@ def origin_marker(origin: str) -> str:
     return f"<!-- {ORIGIN_MARKER}:{origin} -->"
 
 
+ORIGIN_LINE = re.compile(rf"^<!--\s*{ORIGIN_MARKER}:(\w+)\s*-->$")
+
+
+def prose_lines(body) -> list:
+    """The body's own lines, with every fenced code block removed.
+
+    An issue this workflow files QUOTES engine logs, and a quoted log is
+    arbitrary text: it can contain any line at all, this module's own
+    marker line included. A marker found inside a fence is therefore
+    evidence about some other issue, not a statement about this one —
+    which is exactly how a tracker search turns a duplicate report into
+    a reconciled publication.
+
+    Fences are matched the way `_fence` writes them: three or more
+    backticks open a block, and a run at least as long closes it. An
+    unterminated fence swallows the rest of the body, which is the safe
+    direction — an unclosed quote is not a place to read a marker from.
+    """
+    if not isinstance(body, str):
+        return []
+    kept: list = []
+    fence = 0
+    for line in body.splitlines():
+        stripped = line.strip()
+        run = len(stripped) - len(stripped.lstrip("`"))
+        if fence:
+            if run >= fence and not stripped.lstrip("`").strip():
+                fence = 0
+            continue
+        if run >= 3:
+            fence = run
+            continue
+        kept.append(stripped)
+    return kept
+
+
 def carries_key(body, key: str) -> bool:
     """Whether a fetched issue body really was filed under `key`.
 
     A tracker search matches text anywhere, so an issue that merely
-    QUOTES a key — a duplicate report, a comment pasted into a body —
-    would come back from it. The marker line is what the publisher
-    writes, and matching it exactly is what separates the two.
+    QUOTES a key — a duplicate report, a log excerpt, a comment pasted
+    into a body — comes back from it. What the publisher writes is one
+    STANDALONE marker line outside every code fence, and matching that
+    rather than a substring is what separates the two.
     """
-    return isinstance(body, str) and key_marker(key) in body
+    return key_marker(key) in prose_lines(body)
+
+
+def body_origin(body):
+    """The `issue-origin` brand a fetched issue body actually carries.
+
+    Read from the ISSUE rather than from the invoking caller, because a
+    reconciled issue was filed by whoever filed it: a Claude-origin
+    creation whose census write failed, resumed by a Codex invocation,
+    still routes to Claude's opposite brand, and recording the retry's
+    own brand would put a second, false answer in the durable history.
+    """
+    for line in prose_lines(body):
+        found = ORIGIN_LINE.match(line)
+        if found is not None and found.group(1) in ORIGINS:
+            return found.group(1)
+    return None
 
 
 # ==========================================================================
@@ -676,29 +786,37 @@ def issue_body(handoff, *, diagnosis: dict, evidence: list, key: str,
 
     fixed = "\n".join(head) + "\n"
     closing = "\n".join(tail)
-    budget = MAX_BODY_CHARS - len(fixed) - len(closing)
-    section = "\n".join(_evidence_section(evidence))
+    note = ("\n_Evidence from further runs was omitted to keep this body "
+            "within the tracker's size limit; the retained artifact paths "
+            "above name every one._\n")
+    # What the body may not be published WITHOUT: the measurement facts,
+    # the provenance markers, and at least one quoted excerpt. So the
+    # only thing that may be dropped to fit is the SECOND and later
+    # runs' evidence — and when even that is not enough, this refuses
+    # rather than slicing. A published body missing its measurements, or
+    # missing the log evidence entirely, is the defect report this
+    # workflow exists to prevent, and truncating one silently is worse
+    # than not filing it.
     trimmed = False
-    while evidence and len(section) > budget:
+    while True:
+        section = "\n".join(_evidence_section(evidence))
+        if trimmed:
+            section += note
+        body = fixed + section + closing
+        if len(body) <= MAX_BODY_CHARS:
+            return body, trimmed
+        if len(evidence) <= 1:
+            raise NonSuccess(
+                f"the issue body is {len(body)} characters against the "
+                f"{MAX_BODY_CHARS} a tracker accepts, and every part of it "
+                f"that is left is required: the measurement evidence, the "
+                f"provenance markers, and one quoted excerpt. Nothing here "
+                f"will publish a defect report with its measurements or its "
+                f"log evidence cut away, so shorten the diagnosis prose or "
+                f"the `/deflake` invocation this handoff records and file "
+                f"again")
         evidence = evidence[:-1]
         trimmed = True
-        section = ("\n".join(_evidence_section(evidence)) if evidence else "")
-    if trimmed:
-        section += ("\n_Evidence from further runs was omitted to keep this "
-                    "body within the tracker's size limit; the retained "
-                    "artifact paths above name every one._\n")
-    body = fixed + section + closing
-    if len(body) > MAX_BODY_CHARS:
-        # The fixed half alone is over budget — a diagnosis stating very
-        # many evidence lines, say. Clamped rather than left to the
-        # tracker to reject, and it says so, because a body that failed
-        # to post would leave the attempt stuck rather than filed.
-        note = ("\n\n_This body was truncated to fit the tracker's size "
-                "limit._\n")
-        body = body[:MAX_BODY_CHARS - len(note) - len(closing)] + note \
-            + closing
-        trimmed = True
-    return body, trimmed
 
 
 # ==========================================================================
@@ -710,6 +828,12 @@ class Publication:
     Two operations and no more: RECONCILE a publication key against the
     tracker, and CREATE one issue. Nothing here edits an issue, labels
     one, or closes one — the review lane owns an issue once it exists.
+
+    `find` answers with the issue's `number`, `url` AND `body`, or None.
+    The body is not a convenience: it is what proves the match is the
+    marker line rather than a quotation, and it is where the issue's own
+    `issue-origin` brand is read from. `create` answers with `number`
+    and `url`, since this workflow wrote that body itself.
     """
 
     def find(self, key: str):
@@ -773,7 +897,8 @@ class GitHubPublication(Publication):
         if not matches:
             return None
         return {"number": matches[0].get("number"),
-                "url": matches[0].get("url")}
+                "url": matches[0].get("url"),
+                "body": matches[0].get("body")}
 
     def create(self, *, title: str, body: str):
         handle, name = tempfile.mkstemp(prefix="deflake_issue_",
@@ -803,7 +928,18 @@ class GitHubPublication(Publication):
 
 
 def require_issue_identity(value, key: str, origin: str) -> dict:
-    """The tracker's answer, held to a shape the census can store."""
+    """A CREATED issue, held to a shape the census can store.
+
+    `origin` is the caller's here, and correctly so: this workflow wrote
+    that body and put the marker in it. A RECONCILED issue is the other
+    case, and it reads its brand off the issue instead.
+    """
+    number, url = _require_number_and_url(value)
+    return {"number": number, "url": url, "publication_key": key,
+            "origin": origin}
+
+
+def _require_number_and_url(value) -> tuple:
     if not isinstance(value, dict):
         raise PublicationFailed(
             f"the publication boundary answered with "
@@ -818,6 +954,35 @@ def require_issue_identity(value, key: str, origin: str) -> dict:
         raise PublicationFailed(
             f"the publication boundary answered with the issue URL {url!r}, "
             f"which is not an absolute https URL a reviewer can open")
+    return number, url
+
+
+def require_reconciled_issue(value, key: str) -> dict:
+    """An EXISTING issue this attempt was already filed as.
+
+    Held to more than a created one, because nothing here wrote it: the
+    marker line has to be in the fetched body — a search index match is
+    not evidence — and the recorded brand is the one the ISSUE carries,
+    not the one the resuming invocation happens to run under. An issue
+    with no readable origin marker is not one this workflow filed, so it
+    is a publication failure rather than something to record under a
+    guess.
+    """
+    number, url = _require_number_and_url(value)
+    body = value.get("body")
+    if not carries_key(body, key):
+        raise PublicationFailed(
+            f"the publication boundary answered with issue #{number}, whose "
+            f"body carries no `{PUBLICATION_MARKER}` line for {key}; a "
+            f"tracker search matches text anywhere, so an issue that only "
+            f"quotes the key is not the one this attempt was filed as")
+    origin = body_origin(body)
+    if origin is None:
+        raise PublicationFailed(
+            f"issue #{number} carries this attempt's publication key but no "
+            f"readable `{ORIGIN_MARKER}` marker, so it is not one this "
+            f"workflow filed and the brand its review routes on cannot be "
+            f"recorded")
     return {"number": number, "url": url, "publication_key": key,
             "origin": origin}
 
@@ -989,12 +1154,14 @@ def publish(handoff: Defect, *, census_path: Path, now: str,
             pull_request_publisher=forbidden_pull_request) -> Published:
     """File one issue for one diagnosed production defect, and record it.
 
-    The order is deliberate. The evidence is judged first, so a handoff
-    the route does not support never reaches the tracker. The census is
-    consulted next, so a completed attempt touches the tracker not at
-    all. The publication key is then reconciled, so an issue created
-    before a crash is reused rather than duplicated. Only then is one
-    created, and only then is the outcome recorded.
+    The order is deliberate. The census is consulted FIRST, so a
+    completed attempt touches neither the tracker nor its own retained
+    artifacts — which are transient, while the record is durable. Only
+    an incomplete attempt renders, which is where its evidence is judged
+    and where a handoff this route does not support is refused before
+    anything is published. The publication key is then reconciled, so an
+    issue created before a crash is reused rather than duplicated. Only
+    then is one created, and only then is the outcome recorded.
 
     Nothing follows the record. The two publisher parameters are
     consulted through their tables and, under this route's policy, never
@@ -1004,25 +1171,32 @@ def publish(handoff: Defect, *, census_path: Path, now: str,
     path = Path(census_path)
     key = publication_key(handoff)
     _delegate_timestamp(now)
-    # Rendered FIRST, because rendering is where the route's evidence is
-    # judged and where the retained artifacts have to be readable at
-    # all. A handoff this route does not support never reaches the
-    # tracker.
-    title, body, _evidence, trimmed = render(handoff, origin=origin, key=key)
 
+    # COMPLETION FIRST, before anything is rendered. Rendering reads the
+    # retained artifacts off disk, and those are transient: an attempt
+    # already recorded must stay resumable long after its artifact tree
+    # has been pruned, and a resume that re-collected evidence would
+    # fail on the one thing the durable record exists to make
+    # unnecessary.
     complete = stored_record(path, handoff)
     created = False
     reconciled = False
+    trimmed = False
     if complete is not None:
         issue = copy.deepcopy(complete["issue"])
     else:
+        # A handoff this route does not support never reaches the
+        # tracker: rendering is where the evidence is judged and where
+        # the artifacts have to be readable at all.
+        title, body, _evidence, trimmed = render(handoff, origin=origin,
+                                                 key=key)
         found = publication.find(key)
         if found is None:
             issue = require_issue_identity(
                 publication.create(title=title, body=body), key, origin)
             created = True
         else:
-            issue = require_issue_identity(found, key, origin)
+            issue = require_reconciled_issue(found, key)
             reconciled = True
 
     document = outcome_record(handoff, now=now, issue=issue)

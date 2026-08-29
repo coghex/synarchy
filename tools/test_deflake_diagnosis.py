@@ -6883,6 +6883,10 @@ class FakePublication(di.Publication):
                  answer=None):
         self.finds: list = []
         self.creates: list = []
+        # `key -> {"number", "url", "body"}`, because the real boundary
+        # answers with the body: it is what proves the match is the
+        # marker LINE rather than a quotation, and where the issue's own
+        # origin brand is read from.
         self.issues = dict(issues or {})
         self.find_error = find_error
         self.create_error = create_error
@@ -6915,7 +6919,7 @@ class FakePublication(di.Publication):
                  "url": f"https://github.com/coghex/synarchy/issues/{number}"}
         key = self.filed_key(body)
         if key is not None:
-            self.issues[key] = issue
+            self.issues[key] = dict(issue, body=body)
         return copy.deepcopy(issue)
 
 
@@ -7262,18 +7266,13 @@ def test_an_attempt_identity_already_used_elsewhere_files_nothing() -> None:
                "and the census was left byte-identical")
 
 
-def test_a_reconcile_matches_the_marker_and_not_a_quotation() -> None:
-    """A tracker search matches text anywhere; the marker is what filed it."""
+def test_a_reconcile_answering_with_an_unusable_identity_files_nothing()\
+        -> None:
+    """The tracker's answer is validated, not taken on trust."""
     document = defect_handoff()
     key = defect_key(document)
-    expect(di.carries_key(f"prose\n{di.key_marker(key)}\nmore", key),
-           "the marker line is what a filed issue carries")
-    expect(not di.carries_key(f"a duplicate of {key}, see above", key),
-           "an issue that merely quotes the key was not filed under it")
     expect(not di.carries_key(None, key),
-           "and a missing body matches nothing")
-    # A reconcile answering with an unusable identity is a publication
-    # failure, not a silently accepted issue.
+           "a missing body matches no publication key")
     with staged_evidence(document), census_file() as path:
         before = Path(path).read_bytes()
         publication = FakePublication(issues={key: {"number": 0,
@@ -7566,6 +7565,182 @@ def test_the_census_schema_pairs_the_outcome_with_its_issue() -> None:
             FAILURES.append("a stable outcome was recorded carrying an issue")
         expect(not stored_outcomes(path),
                "and nothing was stored by that refusal either")
+
+
+def test_a_recorded_defect_resumes_after_its_artifacts_are_pruned() -> None:
+    """The durable record outlives the evidence it was built from.
+
+    Retained artifacts live in the harness's tree outside every worktree
+    and are swept like any other scratch. A resume that re-collected
+    evidence would fail on exactly the thing the census record exists to
+    make unnecessary, so completion is checked before anything is
+    rendered at all.
+    """
+    document = defect_handoff()
+    with census_file() as path:
+        with staged_evidence(document):
+            first, _publication, _probe, _pr = file_defect(document, path)
+        # The artifact tree is gone now, and `collect_evidence` would
+        # refuse over it. The completed attempt must not care.
+        before = Path(path).read_bytes()
+        again, publication, probe_spy, pr_spy = file_defect(
+            document, path, origin="codex", now="2026-09-01T08:00:00Z")
+        expect(again.resumed is True and again.record == first.record,
+               f"a recorded attempt resumes on the record alone; got "
+               f"{again.to_document()}")
+        expect(publication.finds == [] and publication.creates == [],
+               "without reaching the tracker")
+        expect(Path(path).read_bytes() == before
+               and len(stored_outcomes(path)) == 1,
+               "and without touching the census")
+        expect(probe_spy.calls == [] and pr_spy.calls == [],
+               "or any forbidden boundary")
+
+
+def test_a_reconciled_issue_supplies_its_own_review_brand() -> None:
+    """The brand is the ISSUE's, not the resuming invocation's.
+
+    A Claude-origin creation whose census write failed, resumed under a
+    Codex invocation, still routes to Claude's opposite brand. Recording
+    the retry's own brand would put a second, false answer in the
+    durable history — and it is the answer the review gate acts on.
+    """
+    document = defect_handoff()
+    key = defect_key(document)
+    with staged_evidence(document), census_file() as path:
+        publication = FakePublication()
+        healthy = json.loads(Path(path).read_text(encoding="utf-8"))
+        Path(path).write_text(
+            json.dumps(dict(healthy, schema=probe_census.SEED_SCHEMA)),
+            encoding="utf-8")
+        expect_not_filed(
+            lambda: file_defect(document, path, publication=publication,
+                                origin="claude"),
+            "exists", "a census that refused after the issue was created")
+
+        Path(path).write_text(json.dumps(healthy), encoding="utf-8")
+        published, _pub, _probe, _pr = file_defect(
+            document, path, publication=publication, origin="codex")
+        expect(published.reconciled is True
+               and published.record["issue"]["origin"] == "claude",
+               f"the reconciled issue's own brand is recorded; got "
+               f"{published.record['issue']}")
+
+    # An issue carrying the key but no readable origin marker is not one
+    # this workflow filed, so it is a publication failure rather than
+    # something to record under the caller's guess.
+    with staged_evidence(document), census_file() as path:
+        before = Path(path).read_bytes()
+        publication = FakePublication(issues={key: {
+            "number": 77,
+            "url": "https://github.com/coghex/synarchy/issues/77",
+            "body": f"someone else's issue\n{di.key_marker(key)}\n"}})
+        expect_not_filed(
+            lambda: file_defect(document, path, publication=publication),
+            di.ORIGIN_MARKER,
+            "a reconciled issue with no origin marker")
+        expect_nothing_published(path, before, publication,
+                                 "an unbranded reconcile")
+
+
+def test_a_key_quoted_inside_a_code_fence_is_not_a_reconcile() -> None:
+    """A filed issue QUOTES engine logs, and a log can say anything.
+
+    So the marker has to be a standalone line outside every fence: a
+    duplicate report that pasted this body into a code block would
+    otherwise be reconciled as the publication, and the real defect
+    would never be filed.
+    """
+    document = defect_handoff()
+    key = defect_key(document)
+    marker = di.key_marker(key)
+    expect(di.carries_key(f"prose\n{marker}\nmore", key),
+           "a standalone marker line is what a filed issue carries")
+    expect(not di.carries_key(f"```\n{marker}\n```\n", key),
+           "one inside a fence is a quotation of some other issue")
+    expect(not di.carries_key(f"see {marker} above", key),
+           "and one embedded in a sentence is not a marker line at all")
+    expect(di.carries_key(f"````\nlog\n````\n{marker}\n", key),
+           "a longer fence closes, so what follows it is read again")
+    expect(not di.carries_key(f"```\nlog\n{marker}\n", key),
+           "while an unterminated fence swallows the rest, which is the "
+           "safe direction")
+    expect(di.body_origin(f"```\n{di.origin_marker('codex')}\n```\n") is None
+           and di.body_origin(di.origin_marker("codex")) == "codex",
+           "and the origin marker is read under the same rule")
+
+    with staged_evidence(document), census_file() as path:
+        before = Path(path).read_bytes()
+        quoted = FakePublication(issues={key: {
+            "number": 88,
+            "url": "https://github.com/coghex/synarchy/issues/88",
+            "body": f"a duplicate report:\n\n```\n{marker}\n```\n"}})
+        expect_not_filed(
+            lambda: file_defect(document, path, publication=quoted),
+            "carries no", "an issue that only quotes the key in a fence")
+        expect_nothing_published(path, before, quoted,
+                                 "a quoted-key reconcile")
+
+
+def test_the_diagnosis_prose_is_bounded_at_the_gate() -> None:
+    """#1437 bounds neither the summary nor the evidence list; this does.
+
+    Refused rather than trimmed: the summary is the issue's own claim
+    and the evidence is what makes it reviewable, so a body that cut
+    either down would publish a defect report whose claim had been
+    edited by the publisher.
+    """
+    cases = (
+        ("a summary longer than a body",
+         {"summary": "z" * (di.MAX_DIAGNOSIS_SUMMARY + 1),
+          "evidence": ["run 1's log"], "category": None},
+         "`summary` is"),
+        ("more evidence lines than a body carries",
+         {"summary": "the world thread raced",
+          "evidence": ["line"] * (di.MAX_DIAGNOSIS_EVIDENCE + 1),
+          "category": None},
+         "evidence lines, over the"),
+        ("one evidence line longer than a body carries",
+         {"summary": "the world thread raced",
+          "evidence": ["z" * (di.MAX_DIAGNOSIS_EVIDENCE_ITEM + 1)],
+          "category": None},
+         "evidence line 1 is"),
+    )
+    for label, block, fragment in cases:
+        document = defect_handoff(diagnosis=block)
+        with census_file() as path:
+            before = Path(path).read_bytes()
+            publication = FakePublication()
+            try:
+                file_defect(document, path, publication=publication)
+            except di.HandoffError as error:
+                expect(fragment in str(error),
+                       f"{label}: rejected, but for {str(error)!r} rather "
+                       f"than {fragment!r}")
+            except di.NonSuccess as error:
+                FAILURES.append(f"{label}: refused the EVIDENCE ({error}) "
+                                f"where the input should have been rejected")
+            else:
+                FAILURES.append(f"{label}: accepted")
+            expect_nothing_published(path, before, publication, label,
+                                     searched=0)
+    # And a body that still cannot fit refuses rather than publishing one
+    # with its measurements or its log evidence sliced away.
+    document = defect_handoff()
+    saved = di.MAX_BODY_CHARS
+    di.MAX_BODY_CHARS = 400
+    try:
+        with staged_evidence(document), census_file() as path:
+            before = Path(path).read_bytes()
+            publication = FakePublication()
+            expect_not_filed(
+                lambda: file_defect(document, path, publication=publication),
+                "every part of it that is left is required",
+                "a body no trimming can fit")
+            expect_nothing_published(path, before, publication,
+                                     "an unfittable body", searched=0)
+    finally:
+        di.MAX_BODY_CHARS = saved
 
 
 def test_the_defect_command_line_reports_each_ending() -> None:
