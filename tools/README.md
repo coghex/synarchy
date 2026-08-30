@@ -3055,23 +3055,28 @@ main-thread-only, so the Lua thread reads a ref the render thread
 publishes, and the script forces a publish (a no-op `setResolution`)
 before sampling.
 
-From a `borderless` start it is the #1731 gate, and that start asserts
-the same round trip plus one more thing. `defaultWindowConfig` now asks
-GLFW for borderless as well as fullscreen, so such a boot comes up
-undecorated and monitor-sized; applying the mode at creation consumes
-the first-switch caching opportunity, so `createWindow` seeds the
-windowed cache from the decorated window it made at the CONFIGURED size
-immediately before mutating it. The `windowed` leg must therefore reach
-that saved resolution rather than `defaultWindowState`'s 800x600
-fallback — which is what distinguishes a correct startup seed from an
-incorrect one, since `getVideoConfig()` reports the QUEUED target mode
-independently of what the render thread applied and so round-trips
-either way. Run that start from a non-default saved resolution.
+From a `borderless` start it is the #1731 gate and from a `fullscreen`
+start the #1882 one; they are the same gate, and each asserts one thing
+beyond the round trip. `defaultWindowConfig` asks GLFW for borderless as
+well as fullscreen, and either mode is applied to the decorated window
+`createWindow` just made; applying it there consumes the first-switch
+caching opportunity, so `createWindow` seeds the windowed cache from
+that decorated window at the CONFIGURED size immediately before mutating
+it. The `windowed` leg must therefore reach that saved resolution rather
+than `defaultWindowState`'s 800x600 fallback — which is what
+distinguishes a correct startup seed from an incorrect one, since
+`getVideoConfig()` reports the QUEUED target mode independently of what
+the render thread applied and so round-trips either way. Run both starts
+from a non-default saved resolution.
 
-A `fullscreen` start remains reported but not asserted: no windowed
-window was ever on screen, so its `windowed` leg legitimately lands on
-the fallback. That gap is `PRR-2` in
-`docs/project_review_909-874.md`, tracked separately.
+That leg is asserted on SIZE only: configuration persists no position,
+and the size comparison against the config is a proxy — a window manager
+need not honour the requested size exactly. The authoritative seed
+contract, position included, is pinned headlessly by
+`Graphics.WindowMode`'s `bootPos`/`bootSize` fixture. A `fullscreen`
+start additionally leaves its OUTER round trip reported but not
+asserted, because its return leg re-enters fullscreen rather than
+restoring a cached windowed window.
 
 Every setting it touches is captured from the LIVE config first and
 restored at the end — never to a hardcoded default, since a user's

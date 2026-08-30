@@ -146,6 +146,16 @@
         9
       ]
     },
+    "LAVA_RIM_INCOMPLETE": {
+      "min": 10,
+      "max": 10,
+      "median": 10,
+      "all": [
+        10,
+        10,
+        10
+      ]
+    },
     "MID_RIVER_CLIFF": {
       "min": 94,
       "max": 94,
@@ -215,6 +225,7 @@
       "FLOATING_WATER": 69,
       "ISLAND_1TILE": 1,
       "ISOLATED_FLUID": 9,
+      "LAVA_RIM_INCOMPLETE": 10,
       "MID_RIVER_CLIFF": 94,
       "MULTI_ISLAND": 9,
       "RIVER_CHUNK_GAP": 7,
@@ -1148,6 +1159,58 @@
           "x": 44,
           "y": 41,
           "details": "lake surf=251 surrounded by dry"
+        }
+      ],
+      "LAVA_RIM_INCOMPLETE": [
+        {
+          "x": -48,
+          "y": -64,
+          "details": "lava fluidSurf=8 unjudged at 1 off-region nbr(s)"
+        },
+        {
+          "x": -47,
+          "y": -64,
+          "details": "lava fluidSurf=8 unjudged at 1 off-region nbr(s)"
+        },
+        {
+          "x": -46,
+          "y": -64,
+          "details": "lava fluidSurf=8 unjudged at 1 off-region nbr(s)"
+        },
+        {
+          "x": -45,
+          "y": -64,
+          "details": "lava fluidSurf=8 unjudged at 1 off-region nbr(s)"
+        },
+        {
+          "x": -44,
+          "y": -64,
+          "details": "lava fluidSurf=8 unjudged at 1 off-region nbr(s)"
+        },
+        {
+          "x": -43,
+          "y": -64,
+          "details": "lava fluidSurf=8 unjudged at 1 off-region nbr(s)"
+        },
+        {
+          "x": -42,
+          "y": -64,
+          "details": "lava fluidSurf=8 unjudged at 1 off-region nbr(s)"
+        },
+        {
+          "x": -41,
+          "y": -64,
+          "details": "lava fluidSurf=8 unjudged at 1 off-region nbr(s)"
+        },
+        {
+          "x": -40,
+          "y": -64,
+          "details": "lava fluidSurf=8 unjudged at 1 off-region nbr(s)"
+        },
+        {
+          "x": -39,
+          "y": -64,
+          "details": "lava fluidSurf=8 unjudged at 1 off-region nbr(s)"
         }
       ],
       "MID_RIVER_CLIFF": [
