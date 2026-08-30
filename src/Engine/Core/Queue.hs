@@ -33,6 +33,22 @@
 --   branch: an enqueue adds one clock read, one machine-word-sized
 --   wrapper and one counter update, and nothing on any path logs or
 --   builds a label per message.
+--
+--   == Never force a queued element inside a transaction
+--
+--   Every binding below that names an element, or a list of them, is
+--   explicitly LAZY, and each must stay that way. This module enables
+--   @Strict@, so an ordinary binding is a strict pattern; stm, by
+--   contrast, deliberately hands back an UNFORCED element — its
+--   'readTQueue' takes the read side from @let (z:zs) = reverse ys@,
+--   carrying the comment /"NB. lazy: we want the transaction to be
+--   short, otherwise it will conflict"/. Forcing such a value inside the
+--   transaction runs that @reverse@ there, walking the whole write-side
+--   backlog while concurrent producers keep touching the same 'TQueue' —
+--   so the transaction can be invalidated repeatedly, or starve,
+--   precisely under the overload this telemetry exists to diagnose.
+--   Every counter update here is O(1); making one of these bindings
+--   strict is what would make a dequeue O(backlog).
 module Engine.Core.Queue where
 
 import UPrelude
@@ -129,20 +145,27 @@ writeQueue q val = do
         writeTQueue (queueTQueue q) (Timestamped now val)
         STM.modifyTVar' (queueCounters q) countEnqueue
 
+-- | Lazy binding: see the module header. The element is forced by
+--   whoever consumes the result, outside the transaction — which is
+--   where it was forced before the counters existed.
 readQueue ∷ Queue α → IO α
 readQueue q = STM.atomically $ do
-    ts ← readTQueue (queueTQueue q)
+    ~ts ← readTQueue (queueTQueue q)
     STM.modifyTVar' (queueCounters q) (countDequeue 1)
     return (tsValue ts)
 
 -- | An unsuccessful read leaves every counter untouched: the empty
 --   branch commits no write at all.
+--
+--   Deciding WHICH branch to take costs nothing — 'tryReadTQueue' wraps
+--   the element in a 'Just' without forcing it — so only the element
+--   binder needs the module header's lazy treatment.
 tryReadQueue ∷ Queue α → IO (Maybe α)
 tryReadQueue q = STM.atomically $ do
     mts ← tryReadTQueue (queueTQueue q)
     case mts of
-      Nothing → return Nothing
-      Just ts → do
+      Nothing  → return Nothing
+      Just ~ts → do
           STM.modifyTVar' (queueCounters q) (countDequeue 1)
           return (Just (tsValue ts))
 
@@ -159,7 +182,7 @@ readQueueTimeout ∷ Int → Queue α → IO (Maybe α)
 readQueueTimeout micros q = do
     delayVar ← STM.registerDelay micros
     STM.atomically $ STM.orElse
-        (do ts ← readTQueue (queueTQueue q)
+        (do ~ts ← readTQueue (queueTQueue q)
             STM.modifyTVar' (queueCounters q) (countDequeue 1)
             return (Just (tsValue ts)))
         (do timedOut ← STM.readTVar delayVar
@@ -221,17 +244,18 @@ data QueueStats = QueueStats
 --   they cannot disagree with each other or with the queue's contents.
 --
 --   No element enters or leaves: 'tryPeekTQueue' puts back exactly what
---   it took. It can still perform the 'TQueue''s own amortized
---   read-side rebalance, which is the same work any 'readQueue' on an
---   empty read side does and is charged the same way — a snapshot never
---   adds a traversal of its own.
-readQueueSampleSTM ∷ Queue α → STM.STM (QueueCounters, Maybe Word64)
+--   it took, unforced. The head is handed BACK rather than reduced to
+--   its timestamp here, because reading that field would force the
+--   element — see the module header. 'queueStats' extracts it once the
+--   transaction has committed.
+readQueueSampleSTM ∷ Queue α → STM.STM (QueueCounters, Maybe (Timestamped α))
 readQueueSampleSTM q = do
     counters ← STM.readTVar (queueCounters q)
     oldest   ← tryPeekTQueue (queueTQueue q)
-    return (counters, oldestEnqueuedAt oldest)
+    return (counters, oldest)
 
 -- | The head's enqueue instant, keeping no reference to its payload.
+--   Forces the element, so it belongs OUTSIDE any transaction.
 oldestEnqueuedAt ∷ Maybe (Timestamped α) → Maybe Word64
 oldestEnqueuedAt Nothing   = Nothing
 oldestEnqueuedAt (Just ts) = let at = tsEnqueuedAt ts in Just at
@@ -248,8 +272,9 @@ oldestEnqueuedAt (Just ts) = let at = tsEnqueuedAt ts in Just at
 --   can never be negative.
 queueStats ∷ Queue α → IO QueueStats
 queueStats q = do
-    (counters, oldestAt) ← STM.atomically (readQueueSampleSTM q)
+    (counters, oldest) ← STM.atomically (readQueueSampleSTM q)
     now ← getMonotonicTimeNSec
+    let oldestAt = oldestEnqueuedAt oldest
     return QueueStats
         { qsDepth       = qcDepth counters
         , qsEnqueued    = qcEnqueued counters
