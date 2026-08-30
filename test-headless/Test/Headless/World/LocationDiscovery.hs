@@ -37,8 +37,10 @@ import Location.Types
     )
 import Location.Overlay.Types (LocationOverlay)
 import Location.Instance
-    ( LocationInstance(..), LocationLifecycle(..), buildLocationInstances
-    , instancesToList )
+    ( LocationEncounter(..), LocationEncounterOccupant(..)
+    , LocationInstance(..), LocationInstanceId(..), LocationInstances(..)
+    , LocationLifecycle(..), buildLocationInstances, instancesToList
+    , setLocationEncounterEpisodeState )
 import Location.Bounds (RelBounds(..))
 import Test.Headless.Location.Fixture (expectGeometry)
 import Unit.Direction (Direction(..))
@@ -239,6 +241,48 @@ eventsFor ∷ EngineEnv → Word32 → IO [PlayerEvent]
 eventsFor env uid =
     filter ((≡ Just uid) . peUid) ∘ map seEvent ⊚ readEventLog env
 
+eventsOnPage ∷ EngineEnv → Text → IO [PlayerEvent]
+eventsOnPage env page =
+    filter ((≡ Just page) . peSourcePage) ∘ map seEvent ⊚ readEventLog env
+
+encounterParams ∷ [LocationEncounterOccupant] → WorldGenParams
+encounterParams occupants = pageParams
+    { wgpLocationInstances = base
+        { lisById = HM.singleton (liId inst) inst
+        }
+    }
+  where
+    base = wgpLocationInstances pageParams
+    original = case instancesToList base of
+        (one:_) → one
+        [] → error "location encounter fixture has no base instance"
+    encounter = LocationEncounter
+        { leRolledCount = length occupants
+        , leOccupants = occupants
+        , leRosterComplete = True
+        , leDeathOnlyClearance = True
+        , leActivated = False
+        , leEpisodeActive = False
+        , leAggressionAnnounced = False
+        , leDisengageAnnounced = False
+        , leCleared = null occupants
+        , leClearEventEmitted = null occupants
+        }
+    inst = original { liEncounter = Just encounter }
+
+occupantAt ∷ UnitId → (Float, Float) → LocationEncounterOccupant
+occupantAt uid home = LocationEncounterOccupant uid home False False
+
+newEncounterPage
+    ∷ EngineEnv → WorldPageId → [LocationEncounterOccupant] → IO WorldState
+newEncounterPage env pageId occupants = do
+    ws ← emptyWorldState
+    writeIORef (wsGenParamsRef ws) $ Just (encounterParams occupants)
+    writeIORef (worldManagerRef env) $ emptyWorldManager
+        { wmWorlds = [(pageId, ws)]
+        , wmVisible = [pageId] }
+    pure ws
+
 spec ∷ Spec
 spec = beforeAll initEnv $
     describe "Location discovery (#780) — tickLocationDiscovery" $ do
@@ -269,6 +313,132 @@ spec = beforeAll initEnv $
             lifecyclesOf mp2 `shouldBe` Just [LifecycleDiscovered]
             evs2 ← eventsFor env 101
             length evs2 `shouldBe` 1
+
+        it "a zero-occupant ruin stays unknown until sight, then appears \
+           \cleared without emitting a fake clearance event" $ \env → do
+            let pageId = WorldPageId "disc_zero_encounter"
+            ws ← newEncounterPage env pageId []
+            writeIORef (unitManagerRef env) $ emptyUnitManager
+                { umInstances = HM.singleton (UnitId 701)
+                    (testUnit pageId FactionPlayer 8 8) }
+
+            before ← readIORef (wsGenParamsRef ws)
+            lifecyclesOf before `shouldBe` Just [LifecycleUnknown]
+            tickLocationDiscovery env pageId ws
+            after ← readIORef (wsGenParamsRef ws)
+            lifecyclesOf after `shouldBe` Just [LifecycleCleared]
+            evs ← eventsOnPage env "disc_zero_encounter"
+            map peCategory evs `shouldBe` ["location_discovery"]
+
+        it "an occupied ruin stays discovered until aggression, then clears \
+           \once only after every assigned UID is on-page and exactly dead" $
+           \env → do
+            let pageId = WorldPageId "disc_death_only_encounter"
+                uidA = UnitId 711
+                uidB = UnitId 712
+            ws ← newEncounterPage env pageId
+                [occupantAt uidA (7, 8), occupantAt uidB (9, 8)]
+            let player = testUnit pageId FactionPlayer 8 8
+                nomadA pose = (testUnit pageId FactionHostile 7 8)
+                    { uiPose = pose }
+                nomadB page pose = (testUnit page FactionHostile 9 8)
+                    { uiPose = pose }
+                publish a b = writeIORef (unitManagerRef env) $
+                    emptyUnitManager { umInstances = HM.fromList
+                        [(UnitId 710, player), (uidA, a), (uidB, b)] }
+
+            publish (nomadA "standing") (nomadB pageId "collapsed")
+            tickLocationDiscovery env pageId ws
+            readIORef (wsGenParamsRef ws) >>= (\p →
+                lifecyclesOf p `shouldBe` Just [LifecycleDiscovered])
+
+            -- First aggression is the activation edge. The encounter
+            -- command uses this pure mutation on the world thread.
+            readIORef (wsGenParamsRef ws) >>= mapM_ (\p →
+                writeIORef (wsGenParamsRef ws) $ Just p
+                    { wgpLocationInstances = setLocationEncounterEpisodeState
+                        (LocationInstanceId 1) True True False
+                        (wgpLocationInstances p) })
+            readIORef (wsGenParamsRef ws) >>= (\p →
+                lifecyclesOf p `shouldBe` Just [LifecycleActive])
+
+            -- Collapsed/crawling is not death, and a wrong-page occupant
+            -- is equally non-clearable at runtime.
+            publish (nomadA "dead") (nomadB pageId "collapsed")
+            tickLocationDiscovery env pageId ws
+            readIORef (wsGenParamsRef ws) >>= (\p →
+                lifecyclesOf p `shouldBe` Just [LifecycleActive])
+            publish (nomadA "dead")
+                (nomadB (WorldPageId "somewhere_else") "dead")
+            tickLocationDiscovery env pageId ws
+            readIORef (wsGenParamsRef ws) >>= (\p →
+                lifecyclesOf p `shouldBe` Just [LifecycleActive])
+
+            publish (nomadA "dead") (nomadB pageId "dead")
+            tickLocationDiscovery env pageId ws
+            tickLocationDiscovery env pageId ws
+            readIORef (wsGenParamsRef ws) >>= (\p →
+                lifecyclesOf p `shouldBe` Just [LifecycleCleared])
+            evs ← eventsOnPage env "disc_death_only_encounter"
+            map peCategory evs `shouldBe`
+                ["location_discovery", "location_clearance"]
+
+        it "keeps a pre-discovery defeat private, then emits discovery and \
+           \the deferred occupied-clear edge exactly once on first sight" $
+           \env → do
+            let pageId = WorldPageId "disc_hidden_clear_encounter"
+                uidA = UnitId 716
+            ws ← newEncounterPage env pageId [occupantAt uidA (7, 8)]
+            writeIORef (unitManagerRef env) $ emptyUnitManager
+                { umInstances = HM.singleton uidA
+                    ((testUnit pageId FactionHostile 7 8) { uiPose = "dead" }) }
+
+            tickLocationDiscovery env pageId ws
+            readIORef (wsGenParamsRef ws) >>= (\p →
+                lifecyclesOf p `shouldBe` Just [LifecycleUnknown])
+            eventsOnPage env "disc_hidden_clear_encounter" `shouldReturn` []
+
+            writeIORef (unitManagerRef env) $ emptyUnitManager
+                { umInstances = HM.fromList
+                    [ (uidA, (testUnit pageId FactionHostile 7 8)
+                        { uiPose = "dead" })
+                    , (UnitId 715, testUnit pageId FactionPlayer 8 8)
+                    ] }
+            tickLocationDiscovery env pageId ws
+            tickLocationDiscovery env pageId ws
+            readIORef (wsGenParamsRef ws) >>= (\p →
+                lifecyclesOf p `shouldBe` Just [LifecycleCleared])
+            evs ← eventsOnPage env "disc_hidden_clear_encounter"
+            map peCategory evs `shouldBe`
+                ["location_discovery", "location_clearance"]
+
+        it "a missing assigned UID stays in the death-only roster and \
+           \keeps the encounter uncleared" $ \env → do
+            let pageId = WorldPageId "disc_missing_encounter"
+                uidA = UnitId 721
+                uidMissing = UnitId 722
+            ws ← newEncounterPage env pageId
+                [occupantAt uidA (7, 8), occupantAt uidMissing (9, 8)]
+            -- Aggression before discovery is remembered without leaking the
+            -- site. First sight still emits discovery and exposes active.
+            readIORef (wsGenParamsRef ws) >>= mapM_ (\p →
+                writeIORef (wsGenParamsRef ws) $ Just p
+                    { wgpLocationInstances = setLocationEncounterEpisodeState
+                        (LocationInstanceId 1) True True False
+                        (wgpLocationInstances p) })
+            readIORef (wsGenParamsRef ws) >>= (\p →
+                lifecyclesOf p `shouldBe` Just [LifecycleUnknown])
+            writeIORef (unitManagerRef env) $ emptyUnitManager
+                { umInstances = HM.fromList
+                    [ (UnitId 720, testUnit pageId FactionPlayer 8 8)
+                    , (uidA, (testUnit pageId FactionHostile 7 8)
+                        { uiPose = "dead" })
+                    ] }
+            tickLocationDiscovery env pageId ws
+            params ← readIORef (wsGenParamsRef ws)
+            lifecyclesOf params `shouldBe` Just [LifecycleActive]
+            evs ← eventsOnPage env "disc_missing_encounter"
+            map peCategory evs `shouldBe` ["location_discovery"]
 
         it "a non-player unit standing ON the location discovers \
            \nothing and emits no event" $ \env → do

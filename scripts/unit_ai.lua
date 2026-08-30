@@ -86,6 +86,7 @@ local needs        = require("scripts.unit_ai_needs")
 local water         = require("scripts.unit_ai_water")
 local combat        = require("scripts.unit_ai_combat")
 local combatAttack  = require("scripts.unit_ai_combat_attack")
+local encounter     = require("scripts.unit_ai_encounter")
 -- The lunge state machine (#1713). Required HERE and not only through
 -- the attack module because tickOne calls its airborne observer before
 -- the transition short-circuit returns; see the note at that call.
@@ -160,10 +161,11 @@ function unitAi.setConfig(defName, cfg)
     config[defName] = cfg
 end
 
-function unitAi.registerActions(defName, ambientActions)
+function unitAi.registerActions(defName, ambientActions, options)
     local list = {}
+    local excluded = (options and options.excludeUniversal) or {}
     for _, a in ipairs(UNIVERSAL_ACTIONS) do
-        table.insert(list, a)
+        if not excluded[a.name] then table.insert(list, a) end
     end
     for _, a in ipairs(ambientActions or {}) do
         table.insert(list, a)
@@ -231,6 +233,8 @@ unitAi.registerActions("technomule", {
     transfer.action, transfer.escortAction,
 })
 
+encounter.register(needs)
+
 -- Load species satellite scripts. Each one defines its candidates
 -- and calls unitAi.registerActions + unitAi.setConfig to plug into
 -- the dispatch loop. Done at load time so all defs are wired by
@@ -279,7 +283,7 @@ local function tickOne(uid, defName)
 
     local s = core.ensureState(uid)
     core.seedInitialGoal(s, defName)
-    core.maintainTask(uid, s)
+    combat.completeCommandedTask(uid, s, core.maintainTask(uid, s))
     -- Stamina-adaptive follow_command pacing (#999): runs unconditionally
     -- every tick, like maintainTask above, rather than through the
     -- switch/idle execute gate below — that gate deliberately avoids

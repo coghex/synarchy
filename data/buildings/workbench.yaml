@@ -32,3 +32,17 @@ buildings:
       - forge
       - assemble
       - repair_sharpness
+
+    state_animations:
+      appearing: workbench-construct
+
+    animations:
+      workbench-construct:
+        fps: 4
+        loop: false
+        frames:
+          default:
+            - "assets/textures/buildings/workbench/construct/frame_001.png"
+            - "assets/textures/buildings/workbench/construct/frame_002.png"
+            - "assets/textures/buildings/workbench/construct/frame_003.png"
+            - "assets/textures/buildings/workbench/construct/frame_004.png"

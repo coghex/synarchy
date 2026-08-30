@@ -290,7 +290,12 @@ local function maintainTask(uid, s)
         if task.player then s.holdAnchor = { x = task.x, y = task.y } end
         watchdog[uid] = nil
         s.commandedTask = nil
-        return
+        -- Return the completed task for the dispatcher's post-arrival
+        -- handoff. This module stays dependency-free: the caller decides
+        -- whether task-specific state (such as a combat withdrawal) also
+        -- needs to be retired. Timeout and disappearance still return nil,
+        -- so neither can masquerade as a successful arrival.
+        return task
     end
 
     -- Timeout. The deadline resets ONLY on a new closest approach --

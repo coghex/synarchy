@@ -34,7 +34,8 @@ import World.Save.Reference
 import World.Save.Integrity
 import World.Save.Snapshot
 import World.Save.Component.Types
-    (craftBillsComponentId, powerNodesComponentId, transferOrdersComponentId)
+    ( craftBillsComponentId, powerNodesComponentId, transferOrdersComponentId
+    , worldPagesComponentId )
 import World.Save.Envelope.Types (ComponentId(..))
 import World.Save.Component.Entities
     ( CraftBillDTO(..), CraftBillDTOv1(..), migrateCraftBillDTOv1
@@ -43,7 +44,13 @@ import World.Save.Component.Entities
 import World.Save.Types
     ( BuildingSnapshot(..), BuildingInstanceSnapshot(..)
     , UnitSnapshot(..), UnitInstanceSnapshot(..) )
-import World.Generate.Types (defaultWorldGenParams)
+import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
+import Location.Bounds (AbsBounds(..))
+import Location.Instance
+    ( LocationEncounter(..), LocationEncounterOccupant(..)
+    , LocationInstance(..), LocationInstances(..), LocationInstanceId(..)
+    , LocationLifecycle(..) )
+import World.Chunk.Types (ChunkCoord(..))
 import World.Page.Types (WorldPageId(..))
 import World.Render.Zoom.Types (ZoomMapMode(..))
 import Engine.Graphics.Camera (CameraFacing(..))
@@ -211,6 +218,42 @@ wellFormedOrderPage pid = (minimalPage pid)
         (HM.singleton (BuildingId 1) minimalBuilding) 100
     , pgsTransferOrders = orderWith (UnitId 1) (EndpointUnit (UnitId 1))
                               (EndpointBuilding (BuildingId 1)) 500
+    }
+
+pageWithEncounter ∷ WorldPageId → UnitId → PageSnapshot
+pageWithEncounter pid uid = (minimalPage pid)
+    { pgsGenParams = defaultWorldGenParams
+        { wgpLocationInstances = LocationInstances
+            { lisNextId = 2
+            , lisById = HM.singleton (LocationInstanceId 1) LocationInstance
+                { liId = LocationInstanceId 1
+                , liDefId = "ruin_small"
+                , liChunk = ChunkCoord 0 0
+                , liAnchor = (8, 8)
+                , liBounds = AbsBounds 6 6 10 10
+                , liDisplayName = "Small Ruin"
+                , liGloss = Nothing
+                , liEtymology = Nothing
+                , liLifecycle = LifecycleActive
+                , liContentsSpawned = True
+                , liEncounter = Just LocationEncounter
+                    { leRolledCount = 1
+                    , leOccupants =
+                        [ LocationEncounterOccupant uid (8, 8)
+                            True False ]
+                    , leRosterComplete = True
+                    , leDeathOnlyClearance = True
+                    , leActivated = True
+                    , leEpisodeActive = True
+                    , leAggressionAnnounced = True
+                    , leDisengageAnnounced = False
+                    , leCleared = False
+                    , leClearEventEmitted = False
+                    }
+                }
+            , lisPendingLegacy = Nothing
+            }
+        }
     }
 
 buildSnap ∷ WorldPageId → [PageSnapshot] → SessionSnapshot
@@ -454,6 +497,49 @@ spec = do
                     , pgsPowerNodes = nodeWithBuilding (PowerNodeId 1) (BuildingId 1) }
                 snap = buildSnap page1 [p1]
             sessionIntegrityErrors snap `shouldBe` []
+
+    describe "integrity graph — placed ruin encounter occupants (#916)" $ do
+        it "accepts a roster UID that resolves on the encounter's own page" $ do
+            let uid = UnitId 5
+                p1 = (pageWithEncounter page1 uid)
+                    { pgsUnits = UnitSnapshot
+                        (HM.singleton uid minimalUnit) 100 }
+                snap = buildSnap page1 [p1]
+            sessionIntegrityErrors snap `shouldBe` []
+            sessionIntegrityWarnings snap `shouldBe` []
+
+        it "hard-fails a roster UID that resolves only on another page, \
+           \naming the world-pages v8 occupant path" $ do
+            let uid = UnitId 5
+                p1 = pageWithEncounter page1 uid
+                p2 = (minimalPage page2)
+                    { pgsUnits = UnitSnapshot
+                        (HM.singleton uid minimalUnit) 100 }
+                snap = buildSnap page1 [p1, p2]
+            case sessionIntegrityErrors snap of
+                [e] → do
+                    ieCode e `shouldBe` "wrong-page"
+                    ieComponent e `shouldBe` worldPagesComponentId
+                    ieVersion e `shouldBe` 8
+                    ieRefKind e `shouldBe` RefUnit
+                    iePath e `shouldSatisfy` T.isInfixOf
+                        "locations[1].encounter.occupants[0].unit"
+                other → expectationFailure
+                    ("expected one encounter wrong-page finding, got " <> show other)
+
+        it "retains an absent roster UID as a tolerated dangling reference \
+           \that is reported but never promoted to a load error" $ do
+            let snap = buildSnap page1 [pageWithEncounter page1 (UnitId 999)]
+            sessionIntegrityErrors snap `shouldBe` []
+            case sessionIntegrityWarnings snap of
+                [d] → do
+                    ieCode d `shouldBe` "dangling-reference"
+                    ieComponent d `shouldBe` worldPagesComponentId
+                    ieRefValue d `shouldBe` "999"
+                    ieMessage d `shouldSatisfy` T.isInfixOf
+                        "roster membership is retained"
+                other → expectationFailure
+                    ("expected one encounter dangling warning, got " <> show other)
 
     -- #1246: a transfer order puts FOUR durable references into the
     -- graph -- the acting unit, both endpoints, and every requested item
@@ -811,4 +897,3 @@ spec = do
                 rendered = renderIntegrityError e
             T.isInfixOf "craft-bills" rendered `shouldBe` True
             T.isInfixOf "wrong-page" rendered `shouldBe` True
-

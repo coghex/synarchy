@@ -46,6 +46,17 @@ data LocationContent = LocationContent
                                       --   (defaults to "hostile" when omitted)
     , lconRolls    ∷ !Int             -- ^ "loot_table" only: how many times
                                       --   to roll the table (defaults to 1)
+    , lconCountRange ∷ !(Maybe (Int, Int))
+                                      -- ^ "unit" only: inclusive uniform
+                                      --   encounter count range. Distinct
+                                      --   from the always-positive authored
+                                      --   'lconCount' multiplicity because
+                                      --   zero is a meaningful encounter
+                                      --   outcome, not an empty spawn entry.
+    , lconClearance ∷ !(Maybe Text)    -- ^ Encounter-only authored terminal
+                                      --   policy. #916 supports explicit
+                                      --   @death_only@; it is not a global
+                                      --   default for future encounters.
     } deriving (Show, Eq, Generic)
 
 -- | The authored naming scheme a definition's placed instances draw

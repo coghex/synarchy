@@ -78,8 +78,9 @@ locations:
     # content lifecycle. There is no disable-by-zero — delete or comment
     # out an entry you do not want.
     # A scavenge scene (#91): 2 rolls of common ruin loot, scattered
-    # where the occupants left them. Units in ruins are a future issue —
-    # none here by design.
+    # where the occupants left them, plus #916's one-time uniform roll
+    # of 0–3 primitive nomads. `count_range` is intentionally distinct
+    # from positive `count`: zero is a real cleared-encounter outcome.
     #
     # #921: nothing here is a fixed `kind: item` entry any more. A ruin
     # guarantees NO specific item — its contents come solely from the
@@ -91,3 +92,5 @@ locations:
     # once per instance (#948) — the draw is fixed, just not authored.
     contents:
       - { kind: loot_table, id: ruin_common, rolls: 2 }
+      - { kind: unit, id: nomad_primitive, faction: hostile,
+          count_range: { min: 0, max: 3 }, clearance: death_only }
