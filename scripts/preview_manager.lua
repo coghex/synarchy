@@ -336,6 +336,31 @@ local function layoutPanelSprite()
     readyState = "ready"
 end
 
+-- Release a dead borrowed handle and re-point the surface at a live one.
+--
+-- Deliberately NOT folded into onAssetFailed's three "is this failure
+-- ours?" tests: a request that created the surface and was then
+-- abandoned (the user selected something else before it resolved)
+-- matches NONE of them — it is no longer pendingHandle, it never
+-- reached viewHandles or textureCache because it never resolved — so
+-- checking it after them would strand the surface on a dead handle for
+-- the rest of the session, since adoptZoomSurfaceTexture refuses to
+-- replace a non-nil one.
+--
+-- Prefers a handle known live right now; failing that it leaves the
+-- record nil, and the next request adopts — which re-points this same
+-- element rather than building a second one.
+local function rebindZoomSurfaceTexture(deadHandle)
+    zoomSurfaceTexture = nil
+    local live = nil
+    if currentHandle and currentHandle ~= deadHandle then
+        live = currentHandle
+    elseif pendingHandle and pendingHandle ~= deadHandle then
+        live = pendingHandle
+    end
+    adoptZoomSurfaceTexture(live)
+end
+
 -- Adopt a new multiplier and push it everywhere that renders at it.
 -- A no-op when the value is unchanged, which is what makes input at a
 -- limit cost nothing but still be consumed by the capturing surface.
@@ -780,6 +805,17 @@ function previewManager.onAssetFailed(assetType, handle, path, reason, reported)
     local isPending = (pendingHandle ~= nil) and handle == pendingHandle
     local isInView = viewHandles[handle] == true
     local wasCached = textureCache[path] == handle
+
+    -- #1907, BEFORE the ownership test below. The zoom surface borrows a
+    -- handle purely to exist, and the request it borrowed from can be
+    -- abandoned (a new selection) and only THEN fail — at which point it
+    -- is none of pending/in-view/cached, so the early return would skip
+    -- it and leave the surface bound to a dead texture permanently. The
+    -- ELEMENT is deliberately never deleted here: it carries the wheel
+    -- capture, and "empty" is terminal by design (#1690), so tearing it
+    -- down would make zoom unrecoverable for the rest of the session.
+    if zoomSurfaceTexture == handle then rebindZoomSurfaceTexture(handle) end
+
     if not (isPending or isInView or wasCached) then return end
 
     if not reported then
@@ -803,12 +839,6 @@ function previewManager.onAssetFailed(assetType, handle, path, reason, reported)
     -- wheel input would keep asking the engine to size a texture that
     -- will never resolve.
     if currentHandle == handle then currentHandle = nil end
-    -- The zoom surface borrows a handle purely to exist; a dead one is
-    -- invisible either way, but release it so the next request re-points
-    -- the surface at a live texture. The ELEMENT is deliberately left
-    -- alone — deleting it would take the wheel-capturing surface down
-    -- with it, and zoom must survive a failed load.
-    if zoomSurfaceTexture == handle then zoomSurfaceTexture = nil end
 
     -- ...but only a CURRENT waiter settles the view.
     if isPending or isInView then

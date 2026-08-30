@@ -659,6 +659,77 @@ spec = do
       , "    'the surface reuses the item texture handle, not a new chrome load')"
       ]
 
+    -- The nastiest ordering, and the one the three ownership tests in
+    -- onAssetFailed all miss: the request that CREATED the surface is
+    -- abandoned (a new selection supersedes it) and only THEN fails. It
+    -- is no longer pendingHandle, and it never reached viewHandles or
+    -- textureCache because it never resolved -- so a release placed
+    -- after those tests never runs, and adoptZoomSurfaceTexture refuses
+    -- to replace a non-nil record, stranding the surface on a dead
+    -- texture for the rest of the session.
+    it "rebinds the surface when the request it borrowed is abandoned \
+       \first and fails afterwards" $ runsOk $ lns
+      [ harness
+      , "local browse = { mode = 'list', entries = {"
+      , "    { label = 'a.png', path = 'assets/textures/icons/a.png' },"
+      , "    { label = 'b.png', path = 'assets/textures/icons/b.png' } } }"
+      , "local pm = bootPreview(browse, { category = 'icons' })"
+      , "local surface = pm.dump().zoom.surface"
+      , "local abandoned = LAST_HANDLE"
+      , "assert(elements[surface].tex == abandoned,"
+      , "    'the surface borrowed the first request')"
+      , "-- The user selects B while A is STILL in flight, so A never"
+      , "-- resolves: it reaches neither viewHandles nor textureCache."
+      , "assetBrowserStub.selectEntry(1, 'assets/textures/icons/b.png')"
+      , "local live = LAST_HANDLE"
+      , "assert(live ~= abandoned, 'B really is a second request')"
+      , "-- ...and only NOW does the abandoned request fail."
+      , "pm.onAssetFailed('texture', abandoned,"
+      , "    'assets/textures/icons/a.png', 'no bindless slot')"
+      , "assert(elements[surface] ~= nil, 'the surface element survives')"
+      , "assert(elements[surface].tex ~= abandoned,"
+      , "    'and is no longer bound to the dead handle')"
+      , "assert(elements[surface].tex == live,"
+      , "    'it rebound to the in-flight request, got '"
+      , "    .. tostring(elements[surface].tex))"
+      , "-- B completing must still be able to settle the view, and the"
+      , "-- wheel must still zoom throughout."
+      , "resolveTexture(pm)"
+      , "assert(pm.dump().state == 'ready', 'B still resolves normally')"
+      , "assert(pm.dump().zoom.surface == surface, 'same surface element')"
+      , "pm.onUIScroll(surface, 0, 2)"
+      , "assert(pm.dump().zoom.multiplier < pz.MAX,"
+      , "    'and the wheel still zooms after the stale failure')"
+      ]
+
+    -- With nothing live to rebind to, the record is released rather than
+    -- left pointing at a dead handle, so the NEXT request adopts and
+    -- re-points this same element instead of building a second one.
+    it "releases the borrowed handle even when no live one is available \
+       \yet, and the next request re-points the same surface"
+      $ runsOk $ lns
+      [ harness
+      , "local browse = { mode = 'list', entries = {"
+      , "    { label = 'a.png', path = 'assets/textures/icons/a.png' },"
+      , "    { label = 'b.png', path = 'assets/textures/icons/b.png' } } }"
+      , "local pm = bootPreview(browse, { category = 'icons' })"
+      , "local surface = pm.dump().zoom.surface"
+      , "local dead = LAST_HANDLE"
+      , "-- The one and only request fails while it is still the pending"
+      , "-- one, so nothing live exists to rebind to at that moment."
+      , "pm.onAssetFailed('texture', dead,"
+      , "    'assets/textures/icons/a.png', 'no bindless slot')"
+      , "assert(elements[surface] ~= nil, 'the surface element survives')"
+      , "assetBrowserStub.selectEntry(1, 'assets/textures/icons/b.png')"
+      , "assert(pm.dump().zoom.surface == surface,"
+      , "    'the next request re-points the SAME element, never a second')"
+      , "assert(elements[surface].tex == LAST_HANDLE,"
+      , "    'and it now holds the new live handle, got '"
+      , "    .. tostring(elements[surface].tex))"
+      , "pm.onUIScroll(surface, 0, 2)"
+      , "assert(pm.dump().zoom.multiplier < pz.MAX, 'zoom still works')"
+      ]
+
   describe "zoom follows preview-object identity" $ do
     it "a different texture in a BARE simple-category browser is a \
        \different preview object and resets the multiplier" $ runsOk $ lns

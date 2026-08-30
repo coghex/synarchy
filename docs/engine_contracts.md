@@ -783,8 +783,13 @@ drift onto different math.
   broadcasts. A zoom performed during that load is applied to the
   texture when it finally arrives. If the borrowed request then FAILS
   (#1690), only the handle is released — the element is left alone and
-  re-pointed at the next live handle, because deleting it would take
-  wheel capture down with it and `"empty"` is terminal by design.
+  re-pointed at a live handle, because deleting it would take wheel
+  capture down with it and `"empty"` is terminal by design. That release
+  runs BEFORE `onAssetFailed`'s three "is this failure ours?" tests, not
+  after: a request that created the surface and was then ABANDONED (a
+  new selection superseded it before it resolved) is none of pending,
+  in-view or cached, so a check placed after them never runs and the
+  surface stays bound to a dead texture for the rest of the session.
 - **Wheel response.** `dy < 0` ENLARGES toward `1` and `dy > 0` SHRINKS
   toward `1/8` — the gameplay convention (`Engine.Loop.Camera`: `dy > 0`
   zooms out, `dy < 0` zooms in, `camZoom` being the viewport
