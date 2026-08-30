@@ -70,6 +70,7 @@ import qualified Test.Headless.Unit.Atlas as UnitAtlas
 import qualified Test.Headless.Unit.Atlas.Loader as UnitAtlasLoader
 import qualified Test.Headless.Preview.UnitAnimation as PreviewUnitAnimation
 import qualified Test.Headless.Preview.Building as PreviewBuilding
+import qualified Test.Headless.Preview.Zoom as PreviewZoom
 import qualified Test.Headless.World.Save.Sanitize as SaveSanitize
 import qualified Test.Headless.World.Save.Serialize as SaveSerialize
 import qualified Test.Headless.World.Save.Envelope as SaveEnvelope
@@ -488,6 +489,7 @@ main = hspec $ do
     describe "Preview.Discovery" PreviewDiscovery.spec
     describe "Preview.UnitAnimation" PreviewUnitAnimation.spec
     describe "Preview.Building" PreviewBuilding.spec
+    describe "Preview.Zoom" PreviewZoom.spec
     describe "Bindless texture filter rebinding" BindlessRebind.spec
     describe "Bindless texture release" BindlessRelease.spec
     describe "bindless registration failure" $ do
