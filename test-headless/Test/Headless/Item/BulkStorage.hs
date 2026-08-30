@@ -56,16 +56,16 @@ shippedItemDir = "data/items"
 
 -- | The CURRENT shipped inventory, pinned deliberately (#1233
 --   requirement 5 + its review's completeness clause): proving that
---   "some" definitions loaded is not proving the 65-definition migration
---   happened, so the numbers are asserted rather than derived from
+--   "some" definitions loaded is not proving the full 66-definition
+--   inventory was loaded, so the numbers are asserted rather than derived from
 --   whatever happens to be on disk.
 --
 --   __Adding or removing an item definition is expected to fail this
 --   spec.__ That is the ratchet working: update these two numbers in the
 --   same change, having confirmed the new definition authors a bulk.
 shippedFileCount, shippedDefCount ∷ Int
-shippedFileCount = 37
-shippedDefCount  = 65
+shippedFileCount = 38
+shippedDefCount  = 66
 
 -- | @docs/portable_loot_containers.md@'s "First industrial-profile bulk
 --   calibration" table, verbatim. These eight values are the calibration
