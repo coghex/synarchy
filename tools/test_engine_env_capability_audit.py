@@ -39,6 +39,7 @@ from engine_env_capability_audit import (  # type: ignore
     scan_capability_writes, audit_writer_modules, format_residue,
     tokenize_haskell, parse_imports, imports_name,
     local_binding_regions, _first_argument_head,
+    _infix_left_operand_head,
 )
 from persistence_inventory_audit import extract_record_fields  # type: ignore
 
@@ -2106,7 +2107,7 @@ whereHelper env = writeIORef (fieldOne env) 3
   where
     fieldOne _ = error "the equation's own helper"
 
--- A lambda binder shadows its body.
+-- A lambda binder shadows its own body.
 viaLambda ∷ EngineEnv → IO ()
 viaLambda env = withRef (\\fieldOne → writeIORef (fieldOne env) 4)
 
@@ -2138,6 +2139,59 @@ siblings env = viaParameter (fieldThree env) >> direct
   where
     viaParameter fieldThree = writeIORef (fieldThree env) 9
     direct = writeIORef (fieldThree env) 10
+"""
+
+# A lambda binder must not outlive the bracket that closes its body,
+# and a backslash inside a STRING is not a lambda at all. Both would
+# silently swallow the write below.
+_LAMBDA_ESCAPE = """\
+module LambdaEscape.Mod where
+
+import Engine.Core.State (EngineEnv, fieldOne, fieldTwo)
+
+afterLambda ∷ EngineEnv → IO ()
+afterLambda env = do
+    withRef (\\fieldOne → pure (fieldOne env))
+    writeIORef (fieldOne env) 1
+
+afterStringLiteral ∷ EngineEnv → IO ()
+afterStringLiteral env = do
+    putStrLn "\\\\fieldTwo -> not a lambda"
+    writeIORef (fieldTwo env) 2
+"""
+
+# Any two-argument function may be written infix, so a backticked
+# primitive is the same direct write with its arguments swapped --
+# qualified spelling included.
+_INFIX_WRITER = """\
+module Infix.Mod where
+
+import qualified Data.IORef as Ref
+import Engine.Core.State (EngineEnv, fieldOne)
+import Engine.Core.Capability.Fake (FakeCapability(..), toFakeCapability)
+
+raw ∷ EngineEnv → IO ()
+raw env = (fieldOne env) `writeIORef` 1
+
+viaCapability ∷ EngineEnv → IO ()
+viaCapability env = (fkFieldTwo (toFakeCapability env)) `Ref.writeIORef` 2
+"""
+
+# Variable and as-pattern `case` alternatives bind just as much as a
+# constructor application does.
+_CASE_PATTERNS = """\
+module CasePattern.Mod where
+
+import Engine.Core.State (EngineEnv, fieldOne, fieldTwo)
+
+bareVariable ∷ EngineEnv → (EngineEnv → IORef Int) → IO ()
+bareVariable env source = case source of
+    fieldOne → writeIORef (fieldOne env) 1
+
+asPattern ∷ EngineEnv → [EngineEnv → IORef Text] → IO ()
+asPattern env sources = case sources of
+    whole@(fieldTwo : _) → writeIORef (fieldTwo env) 2 >> use whole
+    [] → pure ()
 """
 
 # A visible type application is not the value argument. Legal under
@@ -2258,6 +2312,9 @@ def _writer_sources(**modules: str) -> dict[str, str]:
         "qualOnly": "src/QualOnly/Mod.hs",
         "shadow": "src/Shadow/Mod.hs",
         "typeApp": "src/TypeApp/Mod.hs",
+        "lambdaEscape": "src/LambdaEscape/Mod.hs",
+        "infix": "src/Infix/Mod.hs",
+        "casePattern": "src/CasePattern/Mod.hs",
         "explicit": "src/Explicit/Mod.hs",
         "multiline": "src/Multi/Mod.hs",
     }
@@ -2471,6 +2528,47 @@ def test_locally_shadowed_accessors_are_not_writes():
            f"got: {sorted(writes['fieldThree'])}")
 
 
+def test_a_lambda_binder_stops_at_its_own_body():
+    """A lambda's parameters scope over the lambda, not over the rest of
+    the layout block: after `withRef (\\fieldOne -> ...)` the next
+    statement's `fieldOne` is the accessor again. And a backslash inside
+    a STRING opens no lambda at all. Either mistake swallows a real
+    write in silence."""
+    writes, _ = _scan(_writer_sources(lambdaEscape=_LAMBDA_ESCAPE))
+    expect(writes["fieldOne"] == {"LambdaEscape.Mod"},
+           f"the write after the lambda's closing bracket is real, got: "
+           f"{sorted(writes['fieldOne'])}")
+    expect(writes["fieldTwo"] == {"LambdaEscape.Mod"},
+           f"a backslash inside a string literal is not a lambda, got: "
+           f"{sorted(writes['fieldTwo'])}")
+
+
+def test_backticked_infix_mutations_are_writes():
+    """Any two-argument function may be written infix, so
+    ``(fieldOne env) `writeIORef` 1`` is the same direct write with its
+    arguments swapped. A scan that only looked to the RIGHT of the
+    primitive would miss it in silence."""
+    writes, _ = _scan(_writer_sources(infix=_INFIX_WRITER))
+    expect(writes["fieldOne"] == {"Infix.Mod"},
+           f"a backticked raw-accessor write must be attributed, got: "
+           f"{sorted(writes['fieldOne'])}")
+    expect(writes["fieldTwo"] == {"Infix.Mod"},
+           f"a backticked, qualified, capability-accessor write must be "
+           f"attributed too, got: {sorted(writes['fieldTwo'])}")
+
+
+def test_case_patterns_bind_variables_and_as_patterns():
+    """A `case` alternative binds through a bare variable pattern and
+    through an as-pattern, not only through a constructor application.
+    Missing either turns a legal local binding into a spurious
+    violation."""
+    writes, _ = _scan(_writer_sources(casePattern=_CASE_PATTERNS))
+    expect(writes["fieldOne"] == set() and writes["fieldTwo"] == set(),
+           f"neither a bare-variable nor an as-pattern alternative may "
+           f"be attributed, got: fieldOne={sorted(writes['fieldOne'])}, "
+           f"fieldTwo={sorted(writes['fieldTwo'])}")
+
+
 def test_visible_type_applications_are_skipped():
     """`writeIORef @Int (fieldOne env) 1` is a direct write. A scan that
     expects the accessor immediately after the primitive stops at the
@@ -2516,6 +2614,17 @@ def test_binding_regions_are_lexical():
            f"a column-0 lambda binder must stop at its own declaration, "
            f"got: {sorted(clamped.get('ref', ()))}")
 
+    # A type signature's own arrow must not bind its subject, nor a
+    # lowercase type variable that happens to share an accessor's name.
+    annotated = local_binding_regions(
+        "run env = convert\n"
+        "  where\n"
+        "    convert :: ref -> Int\n"
+        "    convert = undefined\n")
+    expect("ref" not in annotated,
+           f"a `::` annotation is not a `case` alternative, got: "
+           f"{sorted(annotated.get('ref', ()))}")
+
 
 def test_a_first_argument_must_be_applied():
     """`_first_argument_head` directly, on the two halves of the rule:
@@ -2542,6 +2651,21 @@ def test_a_first_argument_must_be_applied():
     expect(head_of("writeIORef @Int fieldOne 1") is None,
            "stepping over a type application must not turn a bare "
            "argument into an application")
+
+    def infix_head_of(text):
+        tokens = tokenize_haskell(text)
+        index = next(i for i, token in enumerate(tokens)
+                     if token.text.endswith("writeIORef"))
+        return _infix_left_operand_head(tokens, index)
+
+    expect(infix_head_of("(fieldOne env) `writeIORef` 1") == 1,
+           "a backticked primitive's left operand is its accessor")
+    expect(infix_head_of("(fieldOne) `writeIORef` 1") is None,
+           "an unapplied left operand is not an accessor application")
+    expect(infix_head_of("writeIORef (fieldOne env) 1") is None,
+           "a prefix application has no infix left operand")
+    expect(infix_head_of("(fieldOne env) `writeIORef 1") is None,
+           "an unterminated backtick is not an infix application")
 
 
 def test_a_later_binder_cannot_hide_an_earlier_write():
@@ -2893,6 +3017,9 @@ def main() -> int:
         test_out_of_scope_names_are_not_writes,
         test_comments_and_bare_arguments_are_not_writes,
         test_locally_shadowed_accessors_are_not_writes,
+        test_a_lambda_binder_stops_at_its_own_body,
+        test_backticked_infix_mutations_are_writes,
+        test_case_patterns_bind_variables_and_as_patterns,
         test_visible_type_applications_are_skipped,
         test_binding_regions_are_lexical,
         test_a_first_argument_must_be_applied,

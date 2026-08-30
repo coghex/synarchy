@@ -119,6 +119,7 @@ the SS6 ratchet holds, 1 = one or more violations found.
 """
 from __future__ import annotations
 
+import bisect
 import re
 import sys
 from pathlib import Path
@@ -1904,11 +1905,12 @@ def audit_ratchet(unrestricted: set[str], doc_temporary: dict[str, set[str]],
 # write is detected only where an `IORef` mutation primitive is applied
 # DIRECTLY to a known accessor application -- `writeIORef (accessor
 # handle) ...`, bare or qualified (`State.fieldOne`, under the module's
-# own name or an `as` alias; see `parse_imports`). Three gates keep a
-# textual match honest -- import scope under the exact spelling used,
-# lexical shadowing by a local binding (`local_binding_regions`), and an
-# APPLIED first argument (`_first_argument_head`). Mutation through a
-# queue, a `TVar`, an `MVar`, an opaque
+# own name or an `as` alias; see `parse_imports`), prefix or
+# backticked-infix. Three gates keep a textual match honest -- import
+# scope under the exact spelling used, lexical shadowing by a local
+# binding (`local_binding_regions`), and an APPLIED argument
+# (`_first_argument_head` / `_infix_left_operand_head`). Mutation
+# through a queue, a `TVar`, an `MVar`, an opaque
 # internally-synchronized handle (`SaveBarrier`, `LoadStatusRef`), or a
 # helper that took the `IORef` as an argument is NOT a write this scan
 # can see, and is deliberately out of this slice: full interprocedural
@@ -2214,9 +2216,16 @@ _INLINE_LET_RE = re.compile(r"(?<![A-Za-z0-9_'])let(?![A-Za-z0-9_'])")
 _LET_BINDING_RE = re.compile(r"[ \t]*([^={\n]*?)=(?!=)")
 _LAMBDA_BINDER_RE = re.compile(r"\\\s*([^\n{}=]*?)(?:->|→)")
 _MONADIC_BINDER_RE = re.compile(r"[ \t]*\(?([^(){}=\n]*?)\)?[ \t]*(?:<-|←)")
+# A `case`/`\case` alternative's pattern: everything left of the arrow.
+# Deliberately broad -- a bare variable (`fieldOne → ...`), a
+# constructor application, an as-pattern (`whole@(x:xs) → ...`) and a
+# tuple or list pattern all bind. The character class excludes `=` and
+# `\`, so an equation and a lambda cannot be read as an alternative,
+# and a segment carrying a `::`/`∷` is rejected outright so a type
+# signature's own arrow never binds its subject.
 _CASE_ALT_RE = re.compile(
-    r"[ \t]*(?:([A-Z][A-Za-z0-9_.']*(?:[ \t]+[a-z_][A-Za-z0-9_']*)+)"
-    r"|\(([^)=]*)\))[ \t]*(?:->|→)")
+    r"[ \t]*([A-Za-z_][A-Za-z0-9_'@().,:\[\]| \t]*?)[ \t]*(?:->|→)")
+_TYPE_ANNOTATION_RE = re.compile(r"::|∷")
 _WHERE_RE = re.compile(r"(?<![A-Za-z0-9_'])where(?![A-Za-z0-9_'])")
 
 _IMPORT_DECL_RE = re.compile(
@@ -2567,24 +2576,87 @@ def local_binding_regions(code: str) -> dict[str, set[int]]:
                     for name in names[1:]:
                         bind(name, i, declaration)
 
-        for parameters in _LAMBDA_BINDER_RE.findall(line):
-            for name in _HS_IDENT_RE.findall(parameters):
-                bind(name, i, block)
-
         monadic = _MONADIC_BINDER_RE.match(line)
         if monadic:
             for name in _HS_IDENT_RE.findall(monadic.group(1)):
                 bind(name, i, block)
 
         alternative = _CASE_ALT_RE.match(line)
-        if alternative:
-            pattern = alternative.group(1) or alternative.group(2) or ""
-            for name in _HS_IDENT_RE.findall(pattern):
+        if alternative and not _TYPE_ANNOTATION_RE.search(
+                alternative.group(1)):
+            for name in _HS_IDENT_RE.findall(alternative.group(1)):
                 if name[:1].islower() or name[:1] == "_":
                     bind(name, i, declaration)
 
+    _bind_lambda_parameters(code, lines, block_end, top_level_end, bind)
     _extend_where_declarations(lines, indents, declaration_end, bind)
     return regions
+
+
+def _bind_lambda_parameters(code: str, lines: list[str],
+                            block_end: list[int], top_level_end: list[int],
+                            bind) -> None:
+    """Bind each lambda's parameters over its own BODY.
+
+    A lambda body ends where the bracket enclosing it closes, not where
+    its layout block does: after `withRef (\\fieldOne -> pure fieldOne)`
+    the next statement's `fieldOne` is the accessor again. So the
+    enclosing bracket is tracked as the source is walked -- the innermost
+    one open at the backslash -- and the region ends on the line its
+    partner closes. A lambda with no enclosing bracket (`forM_ xs $
+    \\item -> do ...`) genuinely does run to the end of its block, which
+    is the fallback.
+
+    String and character literals are stepped over, so a `\\` inside one
+    is not a lambda and a bracket inside one does not unbalance the
+    walk."""
+    starts = _line_start_offsets(lines)
+    stack: list[int] = []
+    partners: dict[int, int] = {}
+    lambdas: list[tuple[int, int | None]] = []
+    i, n = 0, len(code)
+    while i < n:
+        ch = code[i]
+        if ch == '"':
+            i += 1
+            while i < n and code[i] != '"':
+                i += 2 if code[i] == "\\" else 1
+            i += 1
+            continue
+        if ch == "'":
+            literal = _CHAR_LITERAL_RE.match(code, i)
+            if literal:
+                i = literal.end()
+                continue
+        elif ch in "([":
+            stack.append(i)
+        elif ch in ")]":
+            if stack:
+                partners[stack.pop()] = i
+        elif ch == "\\":
+            lambdas.append((i, stack[-1] if stack else None))
+        i += 1
+
+    for offset, opener in lambdas:
+        binder = _LAMBDA_BINDER_RE.match(code, offset)
+        if binder is None:
+            continue
+        line = bisect.bisect_right(starts, offset) - 1
+        closer = partners.get(opener) if opener is not None else None
+        if closer is None:
+            end = block_end[line]
+        else:
+            end = bisect.bisect_right(starts, closer)
+        for name in _HS_IDENT_RE.findall(binder.group(1)):
+            bind(name, line, min(end, top_level_end[line]))
+
+
+def _line_start_offsets(lines: list[str]) -> list[int]:
+    """Each line's absolute character offset in the joined source."""
+    offsets = [0]
+    for line in lines[:-1]:
+        offsets.append(offsets[-1] + len(line) + 1)
+    return offsets
 
 
 def _extend_where_declarations(lines: list[str], indents: list[int | None],
@@ -2657,6 +2729,51 @@ def _skip_type_atom(tokens: list[Token], index: int) -> int:
     return index
 
 
+def _infix_left_operand_head(tokens: list[Token], index: int) -> int | None:
+    """Token index of the head identifier of a BACKTICKED primitive's
+    left operand -- ``(accessor handle) `writeIORef` value`` -- or
+    `None`.
+
+    Haskell lets any two-argument function be written infix, so this is
+    the same direct write as the prefix form with the arguments swapped,
+    and a scan that only looked to the RIGHT of the primitive would miss
+    it silently. `tokens[index]` is the primitive itself, so its
+    backticks sit at `index - 1` and `index + 1`. The operand must be a
+    parenthesized application, for exactly the reason
+    `_first_argument_head` requires one."""
+    if index == 0 or tokens[index - 1] != ("punc", "`", tokens[index - 1].line):
+        return None
+    if (index + 1 >= len(tokens)
+            or tokens[index + 1].kind != "punc"
+            or tokens[index + 1].text != "`"):
+        return None
+    j = index - 2
+    if j < 0 or tokens[j].kind != "punc" or tokens[j].text != ")":
+        return None
+    depth = 0
+    while j >= 0:
+        token = tokens[j]
+        if token.kind == "punc" and token.text == ")":
+            depth += 1
+        elif token.kind == "punc" and token.text == "(":
+            depth -= 1
+            if depth == 0:
+                break
+        j -= 1
+    if j < 0:
+        return None
+    head = j + 1
+    if head >= len(tokens) or tokens[head].kind != "id":
+        return None
+    following = tokens[head + 1] if head + 1 < len(tokens) else None
+    if following is None:
+        return None
+    applied = (following.kind == "id"
+               or (following.kind == "punc"
+                   and following.text in ("(", "[", "$")))
+    return head if applied else None
+
+
 def _first_argument_head(tokens: list[Token], index: int) -> int | None:
     """Token index of the head identifier of `tokens[index]`'s first
     argument, when that argument is an APPLICATION -- `prim (accessor
@@ -2726,9 +2843,10 @@ def scan_capability_writes(
     honest: the identifier must be in scope in that module under the
     exact spelling used (`parse_imports`/`imports_name`) and not
     shadowed at that line by a local binding
-    (`local_binding_regions`), and it must head an APPLIED first
-    argument of an `IORef` mutation primitive
-    (`_first_argument_head`).
+    (`local_binding_regions`), and it must head an APPLIED argument of
+    an `IORef` mutation primitive -- the first argument of a prefix
+    application (`_first_argument_head`), or the left operand of a
+    backticked infix one (`_infix_left_operand_head`).
 
     `permanent`/`definer` are SS6.1's cohort (D-4), excluded from the
     write map -- their authority is not what this boundary constrains.
@@ -2794,6 +2912,8 @@ def scan_capability_writes(
             if primitive not in IOREF_ACCESS_PRIMITIVES:
                 continue
             head = _first_argument_head(tokens, index)
+            if head is None:
+                head = _infix_left_operand_head(tokens, index)
             if head is None:
                 continue
             inline_heads.add(head)

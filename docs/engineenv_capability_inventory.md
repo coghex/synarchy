@@ -1213,9 +1213,10 @@ already-wrong role cell stays wrong until someone reads it (D-2a).
 an `IORef` mutation primitive is applied directly to a known accessor
 application — `writeIORef (accessor handle) …`, whether through the
 field's own `EngineEnv` accessor or through any capability-record
-accessor projecting it, and whether or not the expression spans
-several lines. Accessor *and* primitive are each recognized qualified
-(`State.fieldOne`, `Ref.writeIORef`) as readily as bare. Mutation through a queue, a `TVar`, an `MVar`, an
+accessor projecting it, prefix or backticked-infix, and whether or not
+the expression spans several lines. Accessor *and* primitive are each
+recognized qualified (`State.fieldOne`, `Ref.writeIORef`) as readily as
+bare. Mutation through a queue, a `TVar`, an `MVar`, an
 opaque internally-synchronized handle (`SaveBarrier`, `LoadStatusRef`),
 or a helper that was *given* the `IORef` is invisible to a textual scan
 and is deliberately out of scope: resolving it means interprocedural
@@ -1266,8 +1267,9 @@ purpose — none is asked to be complete by itself:
    permissive direction of that mistake *suppresses a real write
    silently*: a `let` — wherever on its line it is written, including
    nested after an equation's own `=` — shadows the statements below it
-   and nothing above; an equation's parameters reach that equation
-   only; and a
+   and nothing above; a lambda's parameters reach the bracket that
+   closes its body and no further; an equation's parameters reach that
+   equation only; and a
    `where` block's own declarations are the single form that reaches
    backwards, over the enclosing declaration — their parameters and
    nested `let`s do not come with them. Every region is clamped to its
@@ -1275,11 +1277,14 @@ purpose — none is asked to be complete by itself:
    claim the rest of the file. The model errs toward shadowing *less*:
    an unrecognized binding form leaves a write attributed, which is a
    loud violation naming module and field, never a silent miss.
-3. **Applied position.** The accessor must head the first argument of a
+3. **Applied position.** The accessor must head an argument of a
    mutation primitive *and* that argument must be an application —
    `prim (accessor handle) …`, with any visible type application
    (`prim @Int (accessor handle) …`, legal under GHC2024's default
-   `TypeApplications`) stepped over first. This is a type argument, not a
+   `TypeApplications`) stepped over first. Haskell lets any
+   two-argument function be written infix, so the backticked form
+   ``(accessor handle) `prim` value`` is the same write with its
+   arguments swapped and is read from the left operand. This is a type argument, not a
    heuristic: every accessor projects out of a handle
    (`EngineEnv -> IORef a`), so it can never itself be the `IORef` the
    primitive takes, and a *bare* identifier there always denotes some
