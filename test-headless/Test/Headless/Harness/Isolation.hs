@@ -32,8 +32,11 @@
 --
 --   Isolation is established BEFORE the engine boots, not after: engine
 --   initialization is itself a writer ('Engine.Core.Init.migrateLegacyConfig'
---   can materialize an absent @config/keybinds.local.yaml@ or
---   @config/video.local.yaml@ from the tracked pre-#786 files, and
+--   writes @config/keybinds.legacy-neutral.local@ /
+--   @config/video.legacy-neutral.local@ when it recognizes the tracked
+--   pre-#786 files as neutral placeholders, and would materialize
+--   @config/keybinds.local.yaml@ / @config/video.local.yaml@ outright
+--   from a legacy file carrying real values; and
 --   'Engine.Asset.YamlNotifications.loadOverrides' materializes an absent
 --   @config/notifications.local.yaml@), so a fixture that only intervened
 --   after 'Test.Headless.Harness.withHeadlessEngine' returned would

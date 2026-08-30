@@ -1107,6 +1107,25 @@ before touching each area:
   the legacy file decodes against the real target schema; failures fall
   back to defaults and never touch a valid local file.
 
+  **A neutral placeholder is NOT promoted (#1937).** Those tracked legacy
+  files hold the versioned default's own content, and copying that was
+  never a no-op — it froze the then-current defaults as durable local
+  state that outranks the template for ever after, so a revised shipped
+  value never reached anyone who booted once and never saved. Video and
+  keybindings therefore pass a `LegacyNeutralityCheck`: a legacy file
+  whose DECODED value (not its bytes) equals the tracked
+  `_default.yaml`'s is recognized, not copied — the local file stays
+  absent and the log line is deliberately not the migration line. The
+  determination is recorded in a gitignored
+  `config/*.legacy-neutral.local` so a LATER revision of that template
+  cannot make the untouched placeholder look like player state; a legacy
+  file the player really edited still migrates, with the unchanged
+  `Migrated legacy config <legacy> -> <local>` message. Notifications get
+  no check (`Nothing`) and keep the unconditional copy: they have no
+  tracked template to be neutral against, and an absent overrides file
+  already defers to `data/notification_categories.yaml`. Gates: hspec
+  `--match "config"`, `tools/config_migration_probe.py`.
+
   **A headless spec that drives a production path which WRITES `config/`
   must wrap `Test.Headless.Harness.Isolation.withIsolatedResourceRoot`
   AROUND `withHeadlessEngine`** (#1357, enforcing #1266's "tests never

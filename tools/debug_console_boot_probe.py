@@ -184,7 +184,8 @@ LUA_LOAD_FAILURE_MARKS = ("Failed to load Lua script:", "Lua error in ")
 # The four resource families `App.ResourceRoot` validates. `scripts` is the
 # tree check 8's negatives mutate, so it is COPIED; `config` is copied too
 # because a boot WRITES into it (`Engine.Core.Init.migrateLegacyConfig`
-# materializes `*.local.yaml`), and symlinking it would mutate the developer's
+# materializes `*.local.yaml`, or #1937's `*.legacy-neutral.local` record),
+# and symlinking it would mutate the developer's
 # own gitignored runtime state. The two read-only families are symlinked —
 # `doesDirectoryExist` follows links, and `assets/` is far too large to copy
 # three times per run.

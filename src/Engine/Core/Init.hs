@@ -6,6 +6,7 @@ module Engine.Core.Init
   , EngineInitResult(..)
   , resolveConfigPath
   , migrateLegacyConfig
+  , LegacyNeutralityCheck(..)
   ) where
 
 import UPrelude
@@ -34,7 +35,9 @@ import Engine.Core.Log (initLogger, defaultLogConfig, LogConfig(..)
                        , LogBackend(..), LoggerState, logInfo, logWarn
                        , LogCategory(..))
 import System.IO (stdout)
-import System.Directory (doesFileExist, copyFile)
+import System.Directory (doesFileExist, copyFile, createDirectoryIfMissing)
+import System.FilePath (takeDirectory)
+import qualified Data.ByteString as BS
 import Engine.Core.State
 import Engine.Save.Barrier (newSaveBarrier)
 import Engine.Load.Status (newLoadStatusRef)
@@ -76,44 +79,94 @@ data EngineInitResult = EngineInitResult
 --   template (#638). @config/video.local.yaml@ / @config/keybinds.local.yaml@
 --   (#786) are gitignored player state written by the settings UI's
 --   Save actions; a fresh clone has neither, so boot falls back to the
---   tracked @_default.yaml@ template until the first Save (or a
---   'migrateLegacyConfig' upgrade) creates the local file.
+--   tracked @_default.yaml@ template until the first Save creates the
+--   local file.
+--
+--   A 'migrateLegacyConfig' upgrade also creates it — but ONLY when the
+--   legacy file it found actually carries player state (#1937). A legacy
+--   file that merely restates the template leaves this resolving the
+--   template, on that boot and on every later one, so a revision of the
+--   template still reaches a player who has never saved.
 resolveConfigPath ∷ FilePath → FilePath → IO FilePath
 resolveConfigPath localPath defaultPath = do
   hasLocal ← doesFileExist localPath
   return $ if hasLocal then localPath else defaultPath
 
+-- | The two reference points that let 'migrateLegacyConfig' tell a
+--   NEUTRAL PLACEHOLDER legacy file apart from one carrying real player
+--   state (#1937). A subsystem that has no such reference (notifications,
+--   which resolves an absent overrides file from the
+--   @data/notification_categories.yaml@ registry rather than from a
+--   tracked template) passes 'Nothing' and keeps the unconditional
+--   copy-if-valid behaviour.
+data LegacyNeutralityCheck = LegacyNeutralityCheck
+  { lncDefaultPath ∷ FilePath
+    -- ^ The tracked @_default.yaml@ template 'resolveConfigPath' would
+    --   resolve if the legacy file were not there. Comparison is against
+    --   this file DECODED as the subsystem's own config type, never
+    --   against its bytes: formatting, key order, comments and omitted
+    --   fields that the decoder defaults are all irrelevant to whether
+    --   the legacy file says anything the template does not.
+  , lncRecordPath  ∷ FilePath
+    -- ^ Gitignored record of a legacy file already judged neutral, so
+    --   the determination SURVIVES a later revision of the template. It
+    --   is a verbatim copy of the legacy file as it stood when the
+    --   judgement was made, and it is compared DECODED too — a legacy
+    --   file whose meaning is unchanged is still the placeholder that
+    --   was judged, however it is spelled. Without it, revising the
+    --   template would make the untouched placeholder look like player
+    --   state on the very next boot and get promoted after all, which
+    --   is the defect this whole mechanism exists to stop.
+  }
+
 -- | One-time upgrade from the pre-#786 tracked config layout.
 --   @config/video.yaml@ / @config/keybinds.yaml@ / @config/notifications.yaml@
 --   are kept tracked with content equal to the versioned default/registry
 --   (never a real player's values) purely so a readable legacy file
---   always exists at first boot for this to migrate — a plain
---   unmodified update sees no-op-equivalent content here, and a player
---   who actually saved through the old settings UI has a LOCALLY
---   MODIFIED copy of one of these paths, which git itself refuses to
---   silently overwrite during an update (it errors rather than
---   deleting), so their real values survive on disk until the update
---   is resolved by hand — at which point this picks them up.
+--   always exists at first boot for this to migrate. A player who
+--   actually saved through the old settings UI has a LOCALLY MODIFIED
+--   copy of one of these paths, which git itself refuses to silently
+--   overwrite during an update (it errors rather than deleting), so
+--   their real values survive on disk until the update is resolved by
+--   hand — at which point this picks them up.
+--
+--   Copying that tracked stand-in was never a no-op, because the copy
+--   is DURABLE (#1937): it made the then-current template into
+--   gitignored local state that outranks the template for ever after,
+--   so a later revision of a shipped value never reached anyone who
+--   booted once and never saved. (A newly ADDED field or action still
+--   reached them — both decoders default what the file omits — but a
+--   changed value for an already-shipped key did not.) So when a
+--   'LegacyNeutralityCheck' is supplied, a legacy file that says
+--   nothing its subsystem would not already resolve without it is
+--   RECOGNISED rather than copied: the local file is left absent, the
+--   determination is recorded, and the log line says so in words that
+--   are not the migration line. A legacy file with genuinely different
+--   content still migrates, exactly as before, and still logs
+--   @Migrated legacy config \<legacy\> -> \<local\>@.
 --
 --   If the current-format local file is already present, this never
 --   runs — that single existence gate is what makes migration
---   idempotent (the copy it makes on first boot is what every later
---   boot finds) and what guarantees a newer local file always wins
---   over a stale legacy one. The legacy file is validated by decoding
---   it as the SAME type its subsystem's own loader expects (passed in
---   via @Proxy@) rather than merely checking it's syntactically valid
---   YAML — a file that parses fine as YAML but is missing a field the
---   real loader requires (e.g. video's @resolution@) must not be
---   copied and logged as a successful migration, since that would
---   silently mask a load failure the loader would otherwise report,
---   AND permanently block any future migration attempt (the existence
---   gate above would see the copied-but-unusable local file and never
---   look at legacy again). A legacy file that fails this check
---   (malformed, partial, schema-incomplete, or unreadable) is left
---   untouched and logged rather than copied, so it falls back to the
---   versioned default/registry exactly like a missing legacy file.
-migrateLegacyConfig ∷ ∀ a. FromJSON a ⇒ Proxy a → LoggerState → FilePath → FilePath → IO ()
-migrateLegacyConfig _ logger legacyPath localPath = do
+--   idempotent (the copy it makes is what every later boot finds) and
+--   what guarantees a newer local file always wins over a stale legacy
+--   one; nothing below re-examines, rewrites or removes it. The legacy
+--   file is validated by decoding it as the SAME type its subsystem's
+--   own loader expects (passed in via @Proxy@) rather than merely
+--   checking it's syntactically valid YAML — a file that parses fine as
+--   YAML but is missing a field the real loader requires (e.g. video's
+--   @resolution@) must not be copied and logged as a successful
+--   migration, since that would silently mask a load failure the loader
+--   would otherwise report, AND permanently block any future migration
+--   attempt (the existence gate above would see the copied-but-unusable
+--   local file and never look at legacy again). A legacy file that
+--   fails this check (malformed, partial, schema-incomplete, or
+--   unreadable) is left untouched and logged rather than copied, so it
+--   falls back to the versioned default/registry exactly like a missing
+--   legacy file.
+migrateLegacyConfig ∷ ∀ a. (FromJSON a, Eq a)
+                    ⇒ Proxy a → LoggerState → Maybe LegacyNeutralityCheck
+                    → FilePath → FilePath → IO ()
+migrateLegacyConfig _ logger mCheck legacyPath localPath = do
   hasLocal ← doesFileExist localPath
   unless hasLocal $ do
     hasLegacy ← doesFileExist legacyPath
@@ -122,16 +175,84 @@ migrateLegacyConfig _ logger legacyPath localPath = do
         eVal ← Yaml.decodeFileEither legacyPath
         case (eVal ∷ Either Yaml.ParseException a) of
           Left err → ioError $ userError $ show err
-          Right _  → copyFile legacyPath localPath
-      case (outcome ∷ Either SomeException ()) of
-        Right () → logInfo logger CatInit $
+          Right val → case mCheck of
+            Nothing → True <$ copyFile legacyPath localPath
+            Just check → do
+              neutral ← legacyIsNeutral check val
+              if neutral
+                then False <$ recordNeutralLegacy logger legacyPath
+                                                  (lncRecordPath check)
+                else True  <$ copyFile legacyPath localPath
+      case (outcome ∷ Either SomeException Bool) of
+        Right True → logInfo logger CatInit $
           "Migrated legacy config " <> T.pack legacyPath
             <> " -> " <> T.pack localPath
+        Right False → logInfo logger CatInit $
+          "Legacy config " <> T.pack legacyPath
+            <> " carries no player state (it resolves to the same "
+            <> "values as the versioned default); leaving "
+            <> T.pack localPath
+            <> " absent so later default changes still apply"
         Left e → logWarn logger CatInit $
           "Legacy config " <> T.pack legacyPath
             <> " could not be migrated (malformed, partial, "
             <> "schema-incomplete, or unreadable); falling back to "
             <> "the versioned default: " <> T.pack (displayException e)
+
+-- | Decode @path@ as one subsystem's own config type. 'Nothing' when the
+--   file is absent, unreadable, or fails that decode — none of which can
+--   PROVE a legacy file neutral, so every one of them leaves
+--   'migrateLegacyConfig' migrating exactly as it did before #1937.
+--   Suppression is only ever reached by a positive match.
+decodeConfigMaybe ∷ ∀ b. FromJSON b ⇒ FilePath → IO (Maybe b)
+decodeConfigMaybe path = do
+  exists ← doesFileExist path
+  if not exists
+    then return Nothing
+    else do
+      outcome ← try (Yaml.decodeFileEither path)
+      return $ case (outcome ∷ Either SomeException
+                              (Either Yaml.ParseException b)) of
+        Right (Right v) → Just v
+        _               → Nothing
+
+-- | Is this decoded legacy value a neutral placeholder — either
+--   equivalent to the template the boot would resolve without it, or
+--   equivalent to the legacy content a previous boot already judged
+--   neutral? The second arm is what keeps a revision of the template
+--   from re-promoting an untouched placeholder.
+legacyIsNeutral ∷ ∀ b. (FromJSON b, Eq b) ⇒ LegacyNeutralityCheck → b → IO Bool
+legacyIsNeutral check val = do
+  mDefault ← decodeConfigMaybe (lncDefaultPath check)
+  if mDefault ≡ Just val
+    then return True
+    else do
+      mRecorded ← decodeConfigMaybe (lncRecordPath check)
+      return (mRecorded ≡ Just val)
+
+-- | Persist "this exact legacy content was judged neutral" as a verbatim
+--   copy of the legacy file at the gitignored record path. Rewritten
+--   only when the content actually differs, so a repeat boot touches no
+--   file at all. A failure to write is a warning, never a boot failure:
+--   the next boot simply re-derives the judgement from the template.
+recordNeutralLegacy ∷ LoggerState → FilePath → FilePath → IO ()
+recordNeutralLegacy logger legacyPath recordPath = do
+  outcome ← try $ do
+    legacyBytes ← BS.readFile legacyPath
+    hasRecord ← doesFileExist recordPath
+    stale ← if hasRecord
+              then (≢ legacyBytes) ⊚ BS.readFile recordPath
+              else return True
+    when stale $ do
+      createDirectoryIfMissing True (takeDirectory recordPath)
+      BS.writeFile recordPath legacyBytes
+  case (outcome ∷ Either SomeException ()) of
+    Right () → return ()
+    Left e   → logWarn logger CatInit $
+      "Could not record the neutral-placeholder determination for "
+        <> T.pack legacyPath <> " at " <> T.pack recordPath
+        <> "; a later change to the versioned default may re-examine it: "
+        <> T.pack (displayException e)
 
 -- | Allocate every 'IORef', queue, and subsystem, then bundle into
 --   'EngineEnv'. Logs to stdout (the graphical default).
@@ -174,6 +295,9 @@ initializeEngineWith logBackend = do
   
   inputStateRef ← newIORef defaultInputState
   migrateLegacyConfig (Proxy ∷ Proxy KeyBindingConfig) logger
+    (Just LegacyNeutralityCheck
+       { lncDefaultPath = "config/keybinds_default.yaml"
+       , lncRecordPath  = "config/keybinds.legacy-neutral.local" })
     "config/keybinds.yaml" "config/keybinds.local.yaml"
   keybindsPath ← resolveConfigPath "config/keybinds.local.yaml" "config/keybinds_default.yaml"
   keyBindings ← loadKeyBindings logger keybindsPath
@@ -181,6 +305,9 @@ initializeEngineWith logBackend = do
   currentKeyDownRef ← newIORef Nothing
 
   migrateLegacyConfig (Proxy ∷ Proxy VideoConfigFile) logger
+    (Just LegacyNeutralityCheck
+       { lncDefaultPath = "config/video_default.yaml"
+       , lncRecordPath  = "config/video.legacy-neutral.local" })
     "config/video.yaml" "config/video.local.yaml"
   videoConfigPath ← resolveConfigPath "config/video.local.yaml" "config/video_default.yaml"
   videoConfig ← loadVideoConfig logger videoConfigPath
@@ -271,7 +398,12 @@ initializeEngineWith logBackend = do
   -- safe; the emitters that exist today are the world thread and the
   -- Lua thread, via Engine.PlayerEvent.emitEvent. The cfg IORef
   -- is updated at runtime by the Phase 2 notifications settings tab.
-  migrateLegacyConfig (Proxy ∷ Proxy OverridesFile) logger
+  -- Notifications get no 'LegacyNeutralityCheck' (#1937): they have no
+  -- tracked @_default.yaml@ to be neutral AGAINST, and an absent
+  -- overrides file already defers to the
+  -- @data/notification_categories.yaml@ registry both before and after
+  -- any registry revision, so the copy here was already harmless.
+  migrateLegacyConfig (Proxy ∷ Proxy OverridesFile) logger Nothing
     "config/notifications.yaml" "config/notifications.local.yaml"
   (notificationCfg0, notificationOrder) ← loadNotificationCfg logger
                         "data/notification_categories.yaml"
