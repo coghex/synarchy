@@ -50,10 +50,19 @@
 -- through the frame paths its YAML animation declares, never by equal
 -- names). scripts/ui/building_asset_view.lua owns the panel sprite and
 -- the animation clock.
+--
+-- #1907 adds centered bounded zoom, the one piece of state that spans
+-- every mode: ONE multiplier per session, previewZoom.MAX (the aspect
+-- fit) down to previewZoom.MIN, applied to whichever pane the mode owns
+-- and captured on ONE invisible scroll-capturing surface over the main
+-- preview region. It follows the preview OBJECT rather than the
+-- selected sprite -- see the state block below and
+-- docs/engine_contracts.md §Centered bounded zoom.
 local assetBrowser = require("scripts.ui.asset_browser")
 local list = require("scripts.ui.list")
 local unitAnimationView = require("scripts.ui.unit_animation_view")
 local buildingAssetView = require("scripts.ui.building_asset_view")
+local previewZoom = require("scripts.ui.preview_zoom")
 
 -- #886: self-register into the require cache (the same convention
 -- scripts/unit_ai.lua and scripts/debug.lua use) so the debug console
@@ -93,6 +102,67 @@ local buildingData = nil   -- the resolved PreviewBuilding table
 local buildingViewId = nil
 local selectedEntry = nil
 
+-----------------------------------------------------------
+-- Centered bounded zoom (#1907). scripts/ui/preview_zoom.lua owns the
+-- limits and the arithmetic; this module owns the one LIVE multiplier a
+-- preview session has, the surface the wheel is captured on, and the
+-- reset-versus-preserve rule.
+--
+-- The multiplier follows the preview OBJECT, not every subordinate
+-- sprite selection: a unit's animation/direction, a building's entry, a
+-- flora stage, a structure piece, playback and a resize all preserve
+-- it; only a different texture in a BARE simple-category browser (and a
+-- new session) resets it to previewZoom.MAX.
+-----------------------------------------------------------
+
+local zoomMultiplier = previewZoom.MAX
+-- The bare-category browser's current preview object (its selected
+-- path). nil in every other mode, where the object never changes within
+-- a session.
+local zoomObjectKey = nil
+-- The invisible, scroll-CAPTURING element over the main preview region.
+-- It exists because a wheel event only reaches Lua as onUIScroll when
+-- routeScroll finds a scroll-capturing element under the cursor: with
+-- none, a plain wheel arrives as one broadcast and a Shift wheel as a
+-- different one, which could not satisfy Requirement 6's plain/Shift
+-- parity. Capture ONLY (#743's three policies are independent) — never
+-- clickable, never pointer-blocking, so direction-cell and list-row
+-- clicks keep working exactly as before.
+local zoomSurfaceId = nil
+local zoomSurfaceKey = nil   -- guards redundant geometry writes
+-- A texture handle this session has ALREADY requested, reused at alpha
+-- 0 for the surface above. UI.newSprite needs some handle; taking one
+-- already in flight keeps trimmed loading exact — in particular focused
+-- ITEM mode, where the probe allows no chrome at all because that mode
+-- never calls assetBrowser.init(), so list.getChromeTexture() would be
+-- a NEW load there.
+--
+-- Taken from the REQUEST, not from the completion: an upload is
+-- asynchronous, and waiting for it would leave list and focused-item
+-- mode with no capturing surface for the whole load — a window in which
+-- a wheel over the preview pane never reaches onUIScroll at all and
+-- leaks to the gameplay/z-slice broadcasts instead of zooming.
+local zoomSurfaceTexture = nil
+-- engine.getPreviewTarget(), read once. false means "asked, and there
+-- is none" so a nil answer is not re-asked every frame.
+local previewTargetCache = nil
+-- The handle the list/item panel sprite is currently showing, so a zoom
+-- change can re-fit it without waiting for another load.
+local currentHandle = nil
+
+-- Adopt 'handle' as the invisible surface's texture, re-pointing a
+-- surface that already exists. The surface is alpha 0, so WHICH texture
+-- it holds is immaterial; what matters is that it holds one this
+-- session already asked for (never a fresh load, which would break
+-- trimmed loading) and never one that has since died. Re-pointing
+-- rather than recreating is what keeps the surface — and therefore
+-- zoom — continuously live across a failed request.
+local function adoptZoomSurfaceTexture(handle)
+    if not handle or zoomSurfaceTexture then return end
+    zoomSurfaceTexture = handle
+    if zoomSurfaceId then UI.setSpriteTexture(zoomSurfaceId, handle) end
+end
+
 -- path -> texture handle, for entries already uploaded; never evicted
 -- (see the module comment above).
 local textureCache = {}
@@ -131,6 +201,7 @@ local function acquireTexture(path)
     local handle = engine.loadTexture(path)
     textureCache[path] = handle
     table.insert(loadedPaths, path)
+    adoptZoomSurfaceTexture(handle)
     return handle
 end
 
@@ -163,13 +234,175 @@ local function requestTexture(path)
     pendingPath = path
     pendingHandle = engine.loadTexture(path)
     table.insert(loadedPaths, path)
+    -- Immediately, not on completion: see zoomSurfaceTexture's comment.
+    -- A wheel that arrives while this upload is still in flight must
+    -- still zoom, and the multiplier it sets is applied to the texture
+    -- when applyTexture finally fits it.
+    adoptZoomSurfaceTexture(pendingHandle)
+end
+
+-----------------------------------------------------------
+-- Zoom plumbing (#1907)
+-----------------------------------------------------------
+
+-- The rect the wheel zooms over AND the denominator every pane's fit is
+-- taken against. Unit mode deliberately reports the viewer's ENLARGED
+-- sub-rect rather than panelBounds: the panel also holds the direction
+-- strip, which the enlarged sprite must never overlap and whose cells
+-- keep their existing fixed sizing.
+local function currentZoomRegion()
+    if mode == "unit" and animViewId then
+        return unitAnimationView.getZoomRegion(animViewId) or panelBounds
+    elseif mode == "building" and buildingViewId then
+        return buildingAssetView.getZoomRegion(buildingViewId) or panelBounds
+    end
+    return panelBounds
+end
+
+-- Create (once) and re-place the invisible scroll-capturing surface over
+-- the current zoom region. Idempotent and keyed on the region geometry,
+-- so calling it from every layout path costs one table compare per tick
+-- when nothing moved.
+local function syncZoomSurface()
+    if not page then return end
+    local region = currentZoomRegion()
+    if type(region) ~= "table" then return end
+    if not (previewZoom.isFinite(region.x) and previewZoom.isFinite(region.y)
+            and previewZoom.isFinite(region.width)
+            and previewZoom.isFinite(region.height))
+        or region.width <= 0 or region.height <= 0 then
+        return
+    end
+
+    if not zoomSurfaceId then
+        -- No texture requested yet (the very first frames of a session):
+        -- try again on the next layout rather than loading one just for
+        -- an invisible element, which would break trimmed loading.
+        if not zoomSurfaceTexture then return end
+        zoomSurfaceId = UI.newSprite("preview_zoom_surface",
+            region.width, region.height, zoomSurfaceTexture,
+            0.0, 0.0, 0.0, 0.0, page)
+        UI.addToPage(page, zoomSurfaceId, region.x, region.y)
+        -- Scroll capture ONLY: no UI.setClickable, no
+        -- UI.setPointerBlocking. #743 made those three policies
+        -- independent, and that is exactly what lets this sit over the
+        -- preview region without swallowing a click.
+        UI.setScrollCapture(zoomSurfaceId, true)
+        UI.setVisible(zoomSurfaceId, true)
+        zoomSurfaceKey = nil
+    end
+
+    local key = tostring(region.x) .. "," .. tostring(region.y) .. ","
+        .. tostring(region.width) .. "," .. tostring(region.height)
+    if key == zoomSurfaceKey then return end
+    zoomSurfaceKey = key
+    UI.setSize(zoomSurfaceId, region.width, region.height)
+    UI.setPosition(zoomSurfaceId, region.x, region.y)
+end
+
+-- Re-fit list/item mode's single panel sprite. Split out of
+-- applyTexture (below) because a zoom change must re-fit the texture
+-- already on screen, with no new load and no second copy of the
+-- centering arithmetic.
+local function layoutPanelSprite()
+    if not panelBounds or not currentHandle then return end
+    local size = engine.getTextureSize(currentHandle)
+    -- Shouldn't happen on the applyTexture path: onAssetLoaded only
+    -- fires once the upload (and its textureSizeRef entry) is already
+    -- complete. Defensive, and load-bearing on the zoom path, which can
+    -- run before a re-requested texture has resolved.
+    if not size or not size.width or not size.height
+        or size.width <= 0 or size.height <= 0 then
+        return
+    end
+
+    local rect = previewZoom.fitRect(panelBounds, size.width, size.height,
+                                     zoomMultiplier)
+    -- A degenerate panel (a heavily shrunk preview window) yields no
+    -- valid rect at all; leave the previous geometry alone rather than
+    -- writing an inverted or zero one.
+    if not rect then return end
+
+    if not spriteId then
+        spriteId = UI.newSprite("preview_target_sprite", rect.width, rect.height,
+            currentHandle, 1.0, 1.0, 1.0, 1.0, page)
+        UI.addToPage(page, spriteId, rect.x, rect.y)
+    else
+        UI.setSpriteTexture(spriteId, currentHandle)
+        UI.setSize(spriteId, rect.width, rect.height)
+        UI.setPosition(spriteId, rect.x, rect.y)
+        UI.setVisible(spriteId, true)
+    end
+    readyState = "ready"
+end
+
+-- Release a dead borrowed handle and re-point the surface at a live one.
+--
+-- Deliberately NOT folded into onAssetFailed's three "is this failure
+-- ours?" tests: a request that created the surface and was then
+-- abandoned (the user selected something else before it resolved)
+-- matches NONE of them — it is no longer pendingHandle, it never
+-- reached viewHandles or textureCache because it never resolved — so
+-- checking it after them would strand the surface on a dead handle for
+-- the rest of the session, since adoptZoomSurfaceTexture refuses to
+-- replace a non-nil one.
+--
+-- Prefers a handle known live right now; failing that it leaves the
+-- record nil, and the next request adopts — which re-points this same
+-- element rather than building a second one.
+local function rebindZoomSurfaceTexture(deadHandle)
+    zoomSurfaceTexture = nil
+    local live = nil
+    if currentHandle and currentHandle ~= deadHandle then
+        live = currentHandle
+    elseif pendingHandle and pendingHandle ~= deadHandle then
+        live = pendingHandle
+    end
+    adoptZoomSurfaceTexture(live)
+end
+
+-- Adopt a new multiplier and push it everywhere that renders at it.
+-- A no-op when the value is unchanged, which is what makes input at a
+-- limit cost nothing but still be consumed by the capturing surface.
+local function setZoomMultiplier(multiplier)
+    local wanted = previewZoom.clamp(multiplier)
+    if wanted == zoomMultiplier then return end
+    zoomMultiplier = wanted
+    if animViewId then unitAnimationView.setZoom(animViewId, zoomMultiplier) end
+    if buildingViewId then
+        buildingAssetView.setZoom(buildingViewId, zoomMultiplier)
+    end
+    layoutPanelSprite()
+end
+
+-- engine.getPreviewTarget(), read once per session.
+local function previewTarget()
+    if previewTargetCache == nil then
+        previewTargetCache =
+            (engine.getPreviewTarget and engine.getPreviewTarget()) or false
+    end
+    return previewTargetCache or nil
+end
+
+-- Requirement 9's discriminator, and the reason it is not the mode
+-- string: `mode == "list"` backs BOTH a bare simple category (icons,
+-- items, ui, world) and a flora/<name> / structures/<name> item folder
+-- (#888 routes those into the same browser). engine.getPreviewTarget()
+-- omits `item` for a bare category and only for a bare category, which
+-- is exactly the distinction Requirement 9 draws — so no new engine
+-- field is needed to tell "a different texture" from "another stage of
+-- the same grouped object".
+local function isBareCategory()
+    local t = previewTarget()
+    return t ~= nil and t.item == nil
 end
 
 -- Fit 'handle' (already-uploaded texture at 'path') into panelBounds
 -- with nearest-neighbour scaling (forced in previewManager.init below —
 -- NOT assumed from the default video config, which is only nearest
--- until a user's own persisted config/video.local.yaml picks "linear")
--- and aspect ratio preserved (Requirement 3).
+-- until a user's own persisted config/video.local.yaml picks "linear"),
+-- aspect ratio preserved (Requirement 3), centered, at the session's
+-- current zoom multiplier (#1907).
 function previewManager.applyTexture(handle, path)
     textureCache[path] = handle
     -- List/item mode's panel shows exactly ONE texture, so this handle
@@ -177,33 +410,25 @@ function previewManager.applyTexture(handle, path)
     -- (#1690). Selecting a second entry therefore stops the first one's
     -- in-flight request from being able to settle this view.
     viewHandles = { [handle] = true }
+    currentHandle = handle
+    adoptZoomSurfaceTexture(handle)
     if not panelBounds then return end
-    local size = engine.getTextureSize(handle)
-    -- Shouldn't happen: onAssetLoaded only fires once the upload (and
-    -- its textureSizeRef entry) is already complete. Defensive only.
-    if not size or size.width <= 0 or size.height <= 0 then return end
-
-    local fitScale = math.min(panelBounds.width / size.width,
-                               panelBounds.height / size.height)
-    local dw = size.width * fitScale
-    local dh = size.height * fitScale
-    local dx = panelBounds.x + (panelBounds.width - dw) / 2
-    local dy = panelBounds.y + (panelBounds.height - dh) / 2
-
-    if not spriteId then
-        spriteId = UI.newSprite("preview_target_sprite", dw, dh,
-            handle, 1.0, 1.0, 1.0, 1.0, page)
-        UI.addToPage(page, spriteId, dx, dy)
-    else
-        UI.setSpriteTexture(spriteId, handle)
-        UI.setSize(spriteId, dw, dh)
-        UI.setPosition(spriteId, dx, dy)
-        UI.setVisible(spriteId, true)
-    end
-    readyState = "ready"
+    layoutPanelSprite()
+    syncZoomSurface()
 end
 
 local function onEntrySelected(path, _label, _index)
+    -- Requirement 9. In a BARE simple-category browser each texture IS
+    -- the preview object, so selecting a different one resets the zoom;
+    -- in a flora/structures item folder the grouped object is the item,
+    -- so every stage/piece preserves it. Only a genuine selection
+    -- reaches here at all — a resize rebuild restores through
+    -- assetBrowser.selectEntrySilently, which fires no onSelect, which
+    -- is what makes a resize preserve the multiplier for free.
+    if isBareCategory() and path ~= zoomObjectKey then
+        zoomObjectKey = path
+        setZoomMultiplier(previewZoom.MAX)
+    end
     requestTexture(path)
 end
 
@@ -262,6 +487,10 @@ local function buildListUI(browseEntries, fbW, fbH, restoreSelectedPath, restore
     if restoreScroll and restoreScroll > 0 then
         assetBrowser.setScrollOffset(browserId, restoreScroll)
     end
+    -- #1907: install the wheel-capturing surface as soon as the UI
+    -- exists, not a tick later — the selection above has already
+    -- REQUESTED its texture, which is all the surface needs.
+    syncZoomSurface()
 end
 
 -- Recompute the focused-item panel geometry and, if the texture already
@@ -280,6 +509,7 @@ local function refitFocusedPanel(fbW, fbH)
             previewManager.applyTexture(cached, focusedEntry.path)
         end
     end
+    syncZoomSurface()
 end
 
 local function buildFocusedUI(entry, fbW, fbH)
@@ -287,6 +517,9 @@ local function buildFocusedUI(entry, fbW, fbH)
     focusedEntry = entry
     refitFocusedPanel(fbW, fbH)
     requestTexture(entry.path)
+    -- After the request, not before it: requestTexture is what primes
+    -- the handle the surface borrows (#1907).
+    syncZoomSurface()
 end
 
 -----------------------------------------------------------
@@ -370,6 +603,10 @@ local function buildUnitUI(unit, fbW, fbH, restoreAnim, restoreScroll, restoreDi
             panel = panelBounds,
             requestTexture = requestViewTexture,
             chromeTexture = list.getChromeTexture(),
+            -- #1907: a unit is ONE preview object, so the view is
+            -- created at whatever the session's multiplier already is
+            -- (MAX on a fresh session) and never resets it itself.
+            zoom = zoomMultiplier,
         })
     else
         unitAnimationView.setPanel(animViewId, panelBounds)
@@ -393,6 +630,7 @@ local function buildUnitUI(unit, fbW, fbH, restoreAnim, restoreScroll, restoreDi
     if restoreScroll and restoreScroll > 0 then
         assetBrowser.setScrollOffset(browserId, restoreScroll)
     end
+    syncZoomSurface()
 end
 
 -----------------------------------------------------------
@@ -464,6 +702,9 @@ local function buildBuildingUI(building, fbW, fbH, restoreEntry, restoreScroll)
             page = page,
             panel = panelBounds,
             requestTexture = requestViewTexture,
+            -- #1907: a building is ONE preview object — same rule as
+            -- the units viewer above.
+            zoom = zoomMultiplier,
         })
     else
         buildingAssetView.setPanel(buildingViewId, panelBounds)
@@ -484,6 +725,7 @@ local function buildBuildingUI(building, fbW, fbH, restoreEntry, restoreScroll)
     if restoreScroll and restoreScroll > 0 then
         assetBrowser.setScrollOffset(browserId, restoreScroll)
     end
+    syncZoomSurface()
 end
 
 function previewManager.init(scriptId)
@@ -563,6 +805,17 @@ function previewManager.onAssetFailed(assetType, handle, path, reason, reported)
     local isPending = (pendingHandle ~= nil) and handle == pendingHandle
     local isInView = viewHandles[handle] == true
     local wasCached = textureCache[path] == handle
+
+    -- #1907, BEFORE the ownership test below. The zoom surface borrows a
+    -- handle purely to exist, and the request it borrowed from can be
+    -- abandoned (a new selection) and only THEN fail — at which point it
+    -- is none of pending/in-view/cached, so the early return would skip
+    -- it and leave the surface bound to a dead texture permanently. The
+    -- ELEMENT is deliberately never deleted here: it carries the wheel
+    -- capture, and "empty" is terminal by design (#1690), so tearing it
+    -- down would make zoom unrecoverable for the rest of the session.
+    if zoomSurfaceTexture == handle then rebindZoomSurfaceTexture(handle) end
+
     if not (isPending or isInView or wasCached) then return end
 
     if not reported then
@@ -581,6 +834,11 @@ function previewManager.onAssetFailed(assetType, handle, path, reason, reported)
         pendingHandle = nil
         pendingPath = nil
     end
+    -- #1907: a zoom step re-fits the panel sprite from currentHandle,
+    -- so a dead handle must stop being the current one too — otherwise
+    -- wheel input would keep asking the engine to size a texture that
+    -- will never resolve.
+    if currentHandle == handle then currentHandle = nil end
 
     -- ...but only a CURRENT waiter settles the view.
     if isPending or isInView then
@@ -593,6 +851,14 @@ end
 -- frame is correct, so a slow or bursty tick can't desynchronize the
 -- direction row from the enlarged sprite.
 function previewManager.update(dt)
+    -- #1907: the wheel-capturing surface is created lazily (it reuses a
+    -- handle this session already asked for, so no session ever loads a
+    -- texture just for it), and in unit mode its region is a sub-rect
+    -- the viewer recomputes on every reflow. Syncing here — BEFORE the
+    -- list/item early return below — is what makes it appear and stay
+    -- placed in every mode without a per-mode call site.
+    syncZoomSurface()
+
     -- Unit/building readiness signal: the panel sprite has a real,
     -- uploaded texture fitted to the panel. Same meaning "ready"
     -- carries in list/item mode, so poll_state works uniformly across
@@ -629,6 +895,10 @@ function previewManager.shutdown()
         UI.deleteElement(spriteId)
         spriteId = nil
     end
+    if zoomSurfaceId then
+        UI.deleteElement(zoomSurfaceId)
+        zoomSurfaceId = nil
+    end
     if page then
         UI.deletePage(page)
         page = nil
@@ -647,6 +917,14 @@ function previewManager.shutdown()
     loadedPaths = {}
     pendingHandle = nil
     pendingPath = nil
+    -- #1907: zoom is session state and is never persisted, so a new
+    -- session always starts at previewZoom.MAX.
+    zoomMultiplier = previewZoom.MAX
+    zoomObjectKey = nil
+    zoomSurfaceKey = nil
+    zoomSurfaceTexture = nil
+    previewTargetCache = nil
+    currentHandle = nil
 end
 
 -----------------------------------------------------------
@@ -670,7 +948,24 @@ function previewManager.onScrollDown(elemHandle)
     return assetBrowser.handleCallback("onScrollDown", elemHandle)
 end
 
+-- Requirement 5-7. The engine has already decided WHICH surface owns
+-- this event (Engine.Input.Thread.Scroll.dispatchScrollEvent ->
+-- routeScroll picks the single topmost in-scope scroll-capturing
+-- element), so this only has to dispatch on the handle it was given:
+-- the zoom surface zooms, a list element scrolls the list, and neither
+-- can reach the other even at a limit. shiftHeld is deliberately
+-- ignored — Requirement 6 makes plain and Shift-modified wheel behave
+-- identically over the preview region, and both arrive here by the
+-- identical path precisely BECAUSE the region owns a capturing surface.
+--
+-- The browserId guard is scoped to the list-forwarding branch: focused
+-- ITEM mode never builds a browser, so an unscoped early return would
+-- make Requirement 8's focused-item zoom unreachable.
 function previewManager.onUIScroll(elemHandle, dx, dy, _shiftHeld)
+    if zoomSurfaceId and elemHandle == zoomSurfaceId then
+        setZoomMultiplier(previewZoom.step(zoomMultiplier, dy))
+        return true
+    end
     if not browserId then return end
     assetBrowser.onScroll(elemHandle, dx, dy)
 end
@@ -725,6 +1020,11 @@ function previewManager.onFramebufferResize(width, height)
         end
         buildBuildingUI(buildingData, width, height, selectedEntry, prevScroll)
     end
+    -- #1907: the multiplier is untouched by a resize (nothing above
+    -- writes it, and every mode's restore path is the SILENT one that
+    -- fires no onSelect) — but the fitted size it multiplies, and the
+    -- surface's own rect, are both recomputed from the new region.
+    syncZoomSurface()
 end
 
 -----------------------------------------------------------
@@ -734,11 +1034,45 @@ end
 -- discovery, selection, or scrolling.
 -----------------------------------------------------------
 
+-- #1907 Requirement 11: engine-authoritative zoom state, in EVERY
+-- mode, sufficient for automated input to locate the real zoom surface
+-- and verify the result — the live multiplier and its two limits, the
+-- region the wheel is captured over (which is also the fit
+-- denominator), the surface's own element handle, and the selected
+-- sprite's ACTUAL rendered bounds. The bounds come from
+-- UI.getElementInfo rather than this module's own arithmetic, the same
+-- engine-is-the-authority rule scripts/ui/list.lua's dump already
+-- follows, so a probe can prove containment and centering against what
+-- is really on screen.
+local function zoomDump()
+    local sprite = nil
+    if mode == "unit" and animViewId then
+        local view = unitAnimationView.dump(animViewId)
+        sprite = view and view.zoom and view.zoom.sprite or nil
+    elseif mode == "building" and buildingViewId then
+        local view = buildingAssetView.dump(buildingViewId)
+        sprite = view and view.zoom and view.zoom.sprite or nil
+    elseif spriteId then
+        local info = UI.getElementInfo(spriteId)
+        sprite = info and { x = info.x, y = info.y,
+                            w = info.width, h = info.height } or nil
+    end
+    return {
+        multiplier = zoomMultiplier,
+        min = previewZoom.MIN,
+        max = previewZoom.MAX,
+        region = currentZoomRegion(),
+        surface = zoomSurfaceId,
+        sprite = sprite,
+    }
+end
+
 function previewManager.dump()
     local out = {
         mode = mode,
         state = readyState,
         loadedPaths = loadedPaths,
+        zoom = zoomDump(),
     }
     if mode == "list" then
         -- The FULL discovered entry list, not just entryCount + the

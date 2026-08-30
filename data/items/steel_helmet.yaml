@@ -1,0 +1,14 @@
+items:
+  - name: "steel_helmet"
+    display_name: "Steel Helmet"
+    sprite: "assets/textures/items/wearable/helmet_steel.png"
+    weight: 1.5
+    bulk: 3.0        # litres of external bulk
+    kind: helmet
+    category: Armor
+    make: acolyte
+    material: steel
+    quality: { min: 50, max: 75 }
+    armor:
+      thickness: 2
+      covers: [head]
