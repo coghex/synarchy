@@ -22,6 +22,10 @@
 --   consumers that read the event's 'GLFW.ModifierKeys' field and
 --   consumers that poll held-key state (engine.isKeyDown's shift-click
 --   checks) observe the modifier exactly as they would a physical one.
+--   That holds for a SPLIT hold's modifiers too (#1927): its claim
+--   ('InputGestureHold') dispatches the same real key presses the bare
+--   'modDowns' events did, and its end dispatches the same real
+--   releases — only the ownership bookkeeping around them is new.
 --
 --   Modifier LIFETIME (#697): the releases are not injected inline —
 --   the input thread drains a whole sequence before the Lua thread
@@ -49,6 +53,27 @@
 --   to drain too and dispatches its broadcast, all before returning.
 --   So by the time one input.* call acks, nothing belonging to it is
 --   left pending on either queue for the next call to race.
+--
+--   Split-hold modifier OWNERSHIP (#1927): the fence above resolves a
+--   TAP's modifiers, whose whole lifetime is one sequence. A SPLIT
+--   hold's is not — its down and up halves are independent verb calls
+--   — and before #1927 each half parsed its own modifier list, with no
+--   record connecting them. That produced two opposite defects, both
+--   live-reproduced in @docs/project_review_693-682.md@ PRR-1: an up
+--   half that omitted the list released nothing, leaking the hold's
+--   own modifier held forever; an up half that repeated it fired an
+--   UNCONDITIONAL release, dropping a modifier an independent hold
+--   still owned. Fixed by making the down half CLAIM its modifiers
+--   under the gesture ('InputGestureHold', keyed by the held key or
+--   button — 'Engine.Input.Types.InjectGesture') and the up half end
+--   that claim ('InputGestureEnd'), with the input thread resolving
+--   what to actually release: exactly the gesture's own claim, and
+--   only for keys no other owner still holds
+--   ('Engine.Input.Types.keyHeldByOtherOwner'). The up-half builders
+--   therefore take no modifier list at all. Ownership is deliberately
+--   dropped only by the FENCED release, so #697's contract still holds
+--   for split holds: the up half's own callbacks see the modifier
+--   held.
 module Engine.Input.Inject
   ( resolveButton
   , resolveMods
@@ -78,7 +103,7 @@ import qualified Control.Concurrent.STM as STM
 import Control.Concurrent.STM.TVar (TVar)
 import qualified Engine.Core.Queue as Q
 import Engine.Input.Bindings (parseKeyName)
-import Engine.Input.Types (InputEvent(..))
+import Engine.Input.Types (InputEvent(..), InjectGesture(..))
 
 -- | \"left\" | \"right\" | \"middle\" (case-insensitive) → GLFW button.
 resolveButton ∷ Text → Maybe GLFW.MouseButton
@@ -190,28 +215,43 @@ clickSequence pos@(x, y) btn mm =
       ]
     ⧺ deferModUps mm
 
--- | Press without release (drags, holds). Modifier keys go down here
---   and come back up in the matching 'mouseUpSequence', so a
---   shift-drag holds shift across the whole gesture.
+-- | A split hold's modifier CLAIM (#1927) — what 'modDowns' is to a
+--   tap. The keys are still pressed for real (routing, broadcasts and
+--   modifier flags unchanged); what differs is that the hold is
+--   recorded against the gesture, so the matching up half can release
+--   exactly these keys without being told them again and without
+--   touching an independent hold of the same modifier. Empty for a
+--   modifier-free hold, keeping plain split sequences identical.
+gestureHold ∷ InjectGesture → ([GLFW.Key], GLFW.ModifierKeys) → [InputEvent]
+gestureHold _ ([], _) = []
+gestureHold gesture (ks, m) = [InputGestureHold gesture ks m]
+
+-- | Press without release (drags, holds). Modifier keys are claimed by
+--   THIS gesture here and released by the matching 'mouseUpSequence'
+--   from that claim (#1927), so a shift-drag holds shift across the
+--   whole gesture and the release half needs no modifier list of its
+--   own.
 mouseDownSequence ∷ (Double, Double) → GLFW.MouseButton
                   → ([GLFW.Key], GLFW.ModifierKeys) → [InputEvent]
 mouseDownSequence pos@(x, y) btn mm =
-    modDowns mm
+    gestureHold (GestureMouse btn) mm
     ⧺ [ InputCursorMove x y
       , InputMouseEvent btn pos GLFW.MouseButtonState'Pressed
       ]
 
--- | Release (ends a drag started by 'mouseDownSequence'). Modifier
---   ups are deferred so the release's own callbacks still observe the
---   modifier held (#697) — like a human letting go of shift only after
---   the mouse button.
-mouseUpSequence ∷ (Double, Double) → GLFW.MouseButton
-                → ([GLFW.Key], GLFW.ModifierKeys) → [InputEvent]
-mouseUpSequence pos@(x, y) btn mm =
+-- | Release (ends a drag started by 'mouseDownSequence'). Takes no
+--   modifier list (#1927): the matching down half's claim is what gets
+--   released, resolved by the input thread — so a caller can neither
+--   leak a modifier by omitting the list nor over-release one by
+--   repeating it. The release is still fenced behind this sequence's
+--   own callbacks (#697), so they observe the modifier held — like a
+--   human letting go of shift only after the mouse button.
+mouseUpSequence ∷ (Double, Double) → GLFW.MouseButton → [InputEvent]
+mouseUpSequence pos@(x, y) btn =
     [ InputCursorMove x y
     , InputMouseEvent btn pos GLFW.MouseButtonState'Released
+    , InputGestureEnd (GestureMouse btn) noMods
     ]
-    ⧺ deferModUps mm
 
 -- | Wheel scroll. Routed against the CURRENT cursor position (like a
 --   real wheel event) — callers targeting a specific element should
@@ -229,17 +269,30 @@ keyTapSequence k mm@(_, m) =
       ]
     ⧺ deferModUps mm
 
--- | Hold a key down (camera pan etc.). Modifiers go down first and
---   stay held until the matching 'keyUpSequence'.
+-- | Hold a key down (camera pan etc.). Modifiers are claimed by THIS
+--   gesture first and stay held until the matching 'keyUpSequence'
+--   releases that claim (#1927).
 keyDownSequence ∷ GLFW.Key → ([GLFW.Key], GLFW.ModifierKeys) → [InputEvent]
 keyDownSequence k mm@(_, m) =
-    modDowns mm ⧺ [InputKeyEvent k GLFW.KeyState'Pressed m]
+    gestureHold (GestureKey k) mm ⧺ [InputKeyEvent k GLFW.KeyState'Pressed m]
 
--- | Release a held key (and its modifiers after it, deferred behind
---   the release's own Lua callbacks, #697).
-keyUpSequence ∷ GLFW.Key → ([GLFW.Key], GLFW.ModifierKeys) → [InputEvent]
-keyUpSequence k mm@(_, m) =
-    [InputKeyEvent k GLFW.KeyState'Released m] ⧺ deferModUps mm
+-- | Release a held key, and — after it, fenced behind the release's
+--   own Lua callbacks (#697) — whatever modifiers the matching
+--   'keyDownSequence' claimed (#1927). Takes no modifier list: see
+--   'mouseUpSequence'.
+--
+--   The primary release event therefore carries 'noMods' in its own
+--   'GLFW.ModifierKeys' field, exactly as it did before #1927 for the
+--   (only) callers that omitted the list. That field is not how a
+--   modifier's HELD state is observed — 'Engine.Input.Types.keyHeld'
+--   is, and it correctly reports the claim as still held here — and
+--   the key-up broadcast ('Engine.Scripting.Lua.Types.LuaKeyUpEvent')
+--   carries no modifier flags to Lua at all.
+keyUpSequence ∷ GLFW.Key → [InputEvent]
+keyUpSequence k =
+    [ InputKeyEvent k GLFW.KeyState'Released noMods
+    , InputGestureEnd (GestureKey k) noMods
+    ]
 
 -- | Character input, one char event per character — the GLFW *char*
 --   path text fields listen on, distinct from key events. Only a
