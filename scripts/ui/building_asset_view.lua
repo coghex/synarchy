@@ -26,7 +26,14 @@
 --     (below); only gameplay (Unit.Render.pickFrame) still clamps.
 --   * A STATIC entry has no active playback at all: one frame, no clock
 --     advance (previewManager.dump() reports no `playback` for it).
+--
+-- Zoom (#1907): the panel sprite renders at the owner's session
+-- multiplier times its fit to the WHOLE panel (there is no direction
+-- strip to exclude, unlike the units viewer). This view never resets
+-- the multiplier -- a building is ONE preview object, so a static- or
+-- animation-entry change preserves it.
 local scale = require("scripts.ui.scale")
+local previewZoom = require("scripts.ui.preview_zoom")
 
 local buildingAssetView = {}
 
@@ -47,25 +54,21 @@ local function frameIndexAt(srcLoop, fps, frameCount, elapsed)
     return raw % frameCount
 end
 
--- Fit (w,h) inside (boxW,boxH) preserving aspect ratio — the same rule
--- previewManager.applyTexture uses for a focused simple-category
--- texture (nearest-neighbour is forced session-wide by
--- previewManager.init).
-local function fitRect(box, w, h)
-    if not w or not h or w <= 0 or h <= 0 then return nil end
-    local s = math.min(box.width / w, box.height / h)
-    local dw, dh = w * s, h * s
-    return {
-        x = box.x + (box.width - dw) / 2,
-        y = box.y + (box.height - dh) / 2,
-        width = dw, height = dh,
-    }
+-- Fit (w,h) inside (boxW,boxH) preserving aspect ratio, CENTERED, at
+-- 'multiplier' times the fitted scale — the same rule (and since #1907
+-- the same implementation) previewManager and the units viewer use.
+-- Nearest-neighbour is forced session-wide by previewManager.init.
+local function fitRect(box, w, h, multiplier)
+    return previewZoom.fitRect(box, w, h, multiplier or previewZoom.MAX)
 end
 
 -- params:
 --   page, panel = {x,y,width,height}
 --   requestTexture = function(path) -> textureHandle  (the owner's
 --     cache + trimmed-loading bookkeeping; called once per frame path)
+--   zoom = initial zoom multiplier (#1907); the OWNER holds the live
+--     value (it survives an entry change, playback and a resize),
+--     this view only renders at whatever it was last told.
 --   uiscale, zIndex
 function buildingAssetView.new(params)
     local id = nextId
@@ -76,6 +79,7 @@ function buildingAssetView.new(params)
         page = params.page,
         panel = params.panel,
         requestTexture = params.requestTexture,
+        zoom = previewZoom.clamp(params.zoom),
         uiscale = params.uiscale or scale.get(),
         zIndex = params.zIndex or 1,
         entry = nil,       -- the PreviewBuildingEntry table from getPreviewBrowse
@@ -119,13 +123,13 @@ function buildingAssetView.reflow(id)
     UI.setVisible(v.spriteId, true)
 
     local size = engine.getTextureSize(handle)
-    local rect = size and fitRect(v.panel, size.width, size.height)
+    local rect = size and fitRect(v.panel, size.width, size.height, v.zoom)
     if rect then
         UI.setSize(v.spriteId, rect.width, rect.height)
         UI.setPosition(v.spriteId, rect.x, rect.y)
         v.ready = true
         v.fitKey = tostring(v.frameIndex) .. "|" .. tostring(v.panel.width)
-            .. "x" .. tostring(v.panel.height)
+            .. "x" .. tostring(v.panel.height) .. "@" .. tostring(v.zoom)
     else
         v.fitKey = nil
     end
@@ -153,6 +157,26 @@ function buildingAssetView.setPanel(id, panel)
     v.panel = panel
     v.fitKey = nil
     buildingAssetView.reflow(id)
+end
+
+-- #1907. Deliberately does NOT touch entryStart or the selection: zoom
+-- follows the preview OBJECT (this building), so it survives an entry
+-- change, playback and a resize, and only a new preview session resets
+-- it.
+function buildingAssetView.setZoom(id, multiplier)
+    local v = views[id]
+    if not v then return end
+    v.zoom = previewZoom.clamp(multiplier)
+    v.fitKey = nil
+    buildingAssetView.reflow(id)
+end
+
+-- The rect the wheel zooms over and the fit denominator: this viewer
+-- draws one sprite over the WHOLE panel (there is no direction strip to
+-- exclude, unlike the units viewer's own getZoomRegion).
+function buildingAssetView.getZoomRegion(id)
+    local v = views[id]
+    return v and v.panel or nil
 end
 
 -- Advance to the frame 'now' implies. Cheap on a steady tick: the
@@ -186,6 +210,20 @@ function buildingAssetView.dump(id)
         frameCount = #(e.frames or {}),
         fps = e.fps,
         ready = v.ready,
+    }
+    -- #1907 Requirement 11: the zoom region and the sprite's ACTUAL
+    -- rendered bounds, read back from UI.getElementInfo rather than
+    -- restated from this module's own arithmetic, so a probe verifies
+    -- where the sprite really is.
+    local info = v.spriteId and UI.getElementInfo(v.spriteId)
+    out.zoom = {
+        multiplier = v.zoom,
+        min = previewZoom.MIN,
+        max = previewZoom.MAX,
+        region = v.panel,
+        sprite = info and {
+            x = info.x, y = info.y, w = info.width, h = info.height,
+        } or nil,
     }
     -- Assigned, never written as `x and y or z`: both fields can
     -- legitimately BE false, and Lua's and/or collapses that to the
