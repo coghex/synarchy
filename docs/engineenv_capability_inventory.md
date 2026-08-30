@@ -1213,11 +1213,12 @@ already-wrong role cell stays wrong until someone reads it (D-2a).
 an `IORef` mutation primitive is applied directly to a known accessor
 application — `writeIORef (accessor handle) …`, whether through the
 field's own `EngineEnv` accessor or through any capability-record
-accessor projecting it, and whether or not the expression spans several
-lines. Mutation through a queue, a `TVar`, an `MVar`, an opaque
-internally-synchronized handle (`SaveBarrier`, `LoadStatusRef`), or a
-helper that was *given* the `IORef` is invisible to a textual scan and
-is deliberately out of scope: resolving it means interprocedural
+accessor projecting it, bare or qualified (`State.fieldOne`, under the
+module's own name or an `as` alias), and whether or not the expression
+spans several lines. Mutation through a queue, a `TVar`, an `MVar`, an
+opaque internally-synchronized handle (`SaveBarrier`, `LoadStatusRef`),
+or a helper that was *given* the `IORef` is invisible to a textual scan
+and is deliberately out of scope: resolving it means interprocedural
 dataflow over Haskell source, written in Python, which this arc rejects
 outright (D-5).
 
@@ -1240,24 +1241,38 @@ evidence CMA-2's pilot and CMA-3's verdict turn on: a small residue
 means a textual gate is nearly sufficient, a large one argues for a
 mechanism that travels with the handle.
 
-**Three gates keep a textual match honest**, and they are independent
-on purpose — neither is asked to be complete by itself:
+**Two gates keep a textual match honest**, and they are independent on
+purpose — neither is asked to be complete by itself:
 
 1. **Import scope.** The identifier must actually reach the accessor in
    that module: imported by name, through a `(..)` wildcard or a bare
-   import, or defined by the module itself.
-   `src/Unit/Thread/Movement.hs` writes a local `utsRef` parameter
-   while importing `Engine.Core.State` for the `EngineEnv` *type*
-   alone, so the identical name there is not the field.
-2. **Local shadowing.** An equation parameter, `let`/`where` binding,
-   lambda binder or monadic bind that shares an accessor's name shadows
-   it, confined to its own top-level declaration block. This heuristic
-   is over-approximate in one direction only: it can drop a write site,
-   never invent one.
-3. **Position.** The accessor must head the first argument of a
-   mutation primitive. Naming one in a comment, in Haddock, or in an
-   import list is not using it — commentary and import declarations are
-   stripped before the scan.
+   import, or defined by the module itself. A qualified spelling must
+   additionally resolve through a prefix that module's own imports
+   establish *for the owning module* — an alias replaces the module
+   name rather than joining it. `src/Unit/Thread/Movement.hs` writes a
+   local `utsRef` parameter while importing `Engine.Core.State` for the
+   `EngineEnv` *type* alone, so the identical name there is not the
+   field.
+2. **Applied position.** The accessor must head the first argument of a
+   mutation primitive *and* that argument must be an application —
+   `prim (accessor handle) …`. This is a type argument, not a
+   heuristic: every accessor projects out of a handle
+   (`EngineEnv -> IORef a`), so it can never itself be the `IORef` the
+   primitive takes, and a *bare* identifier there always denotes some
+   local binding sharing its name. Naming an accessor in a comment, in
+   Haddock, or in an import list is not using it either — commentary
+   and import declarations are stripped before the scan.
+
+Deliberately **no local-binder scan**. Any binder heuristic must decide
+a binding's lexical scope, and getting that wrong in the permissive
+direction *suppresses a real write silently* — a binder declared below
+the write it masks is enough. Requiring the application costs nothing
+real and cannot fail that way. Its one blind spot is a record wildcard
+or field pun over a capability record (`RenderCapability{..}`), which
+puts a genuine `IORef` under a bare accessor name; nothing in the tree
+does that, and such a use is not dropped silently — with no application
+to consume it inline, it appears in the residue like every other
+unattributable use.
 
 **Maintaining it.** Adding an entry is a deliberate act, not a
 maintenance edit: it declares that a capability-narrowed module now

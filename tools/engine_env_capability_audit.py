@@ -1903,7 +1903,11 @@ def audit_ratchet(unrestricted: set[str], doc_temporary: dict[str, set[str]],
 # __Scope: direct IORef mutation only (D-2's consequences, D-5).__ A
 # write is detected only where an `IORef` mutation primitive is applied
 # DIRECTLY to a known accessor application -- `writeIORef (accessor
-# handle) ...`. Mutation through a queue, a `TVar`, an `MVar`, an opaque
+# handle) ...`, bare or qualified (`State.fieldOne`, under the module's
+# own name or an `as` alias; see `imported_symbols`). The APPLICATION is
+# required rather than assumed, which is also what makes a local-binder
+# scan unnecessary -- see `_first_argument_head` for why that is a type
+# argument. Mutation through a queue, a `TVar`, an `MVar`, an opaque
 # internally-synchronized handle (`SaveBarrier`, `LoadStatusRef`), or a
 # helper that took the `IORef` as an argument is NOT a write this scan
 # can see, and is deliberately out of this slice: full interprocedural
@@ -2187,11 +2191,12 @@ _IMPORT_WILDCARD_RE = re.compile(r"\(\s*\.\.\s*\)")
 # text, so a record construction or update -- `env { fooRef = r }`, or a
 # continuation line starting with `,` or `{` -- is never mistaken for
 # one. Group 1 is the bound name, group 2 its parameter text.
-_EQUATION_LHS_RE = re.compile(
-    r"^[ \t]*([a-z_][A-Za-z0-9_']*)((?:[ \t]+[^={\n]*?)?)=(?!=)", re.MULTILINE)
-_LAMBDA_BINDER_RE = re.compile(r"\\\s*([^\n{}=]*?)(?:->|→)")
-_MONADIC_BINDER_RE = re.compile(
-    r"^[ \t]*\(?([^(){}=\n]*?)\)?[ \t]*(?:<-|←)", re.MULTILINE)
+# An import's module name and its optional `as` alias. Which of the two
+# may prefix a qualified use is a language rule, not a preference: an
+# aliased import REPLACES the module name as the qualifier.
+_IMPORT_ALIAS_RE = re.compile(
+    r"^import\s+(?:qualified\s+)?([A-Z][A-Za-z0-9_.']*)"
+    r"(?:\s+as\s+([A-Z][A-Za-z0-9_.']*))?")
 
 
 class Token(NamedTuple):
@@ -2239,8 +2244,22 @@ def tokenize_haskell(text: str) -> list[Token]:
             continue
         ident = _HS_IDENT_RE.match(text, i)
         if ident:
-            tokens.append(Token("id", ident.group(0), line))
-            i = ident.end()
+            # Haskell lexes `Mod.name` with NO intervening space as one
+            # QUALIFIED name whenever the prefix is a conid, so
+            # `State.fieldOne` must not degrade into `State`, `.`,
+            # `fieldOne` -- that is how a qualified write would slip the
+            # scan. Composition (`f . g`, and `f.g` on a lowercase head)
+            # keeps its own tokens.
+            end = ident.end()
+            component = ident.group(0)
+            while component[:1].isupper() and end < n and text[end] == ".":
+                nxt = _HS_IDENT_RE.match(text, end + 1)
+                if nxt is None:
+                    break
+                component = nxt.group(0)
+                end = nxt.end()
+            tokens.append(Token("id", text[i:end], line))
+            i = end
             continue
         if ch == '"':
             j = i + 1
@@ -2281,23 +2300,37 @@ def prepared_source(text: str) -> str:
     return strip_import_declarations(_strip_haskell_comments(text))
 
 
-def imported_symbols(source_text: str) -> dict[str, set[str] | None]:
-    """`{module: set of explicitly imported names}`, with `None` meaning
-    unrestricted -- a bare import, or one whose list carries a `(..)`
-    wildcard or a `hiding` clause, none of which enumerates what it
-    brings into scope. A module ABSENT from the result is not imported
-    at all, which is a third answer and not the same as `None`.
+def imported_symbols(source_text: str
+                     ) -> tuple[dict[str, set[str] | None], dict[str, str]]:
+    """`({module: set of explicitly imported names}, {qualifier: module})`.
 
-    This is what decides whether an identifier at a write site can even
+    In the first map, `None` means unrestricted -- a bare import, or one
+    whose list carries a `(..)` wildcard or a `hiding` clause, none of
+    which enumerates what it brings into scope. A module ABSENT from it
+    is not imported at all, which is a third answer and not the same as
+    `None`.
+
+    The second map is what makes a QUALIFIED use resolvable:
+    `writeIORef (State.fieldOne env) ...` names the field just as much
+    as the unqualified spelling does, and dropping it would be a silent
+    hole in the gate rather than a conservative miss. Which prefix is
+    legal is a language rule -- `import qualified M as N` makes `N` the
+    only qualifier, an unaliased import makes `M` itself one -- so the
+    alias replaces the module name rather than joining it.
+
+    Together these decide whether an identifier at a write site can even
     BE the accessor: `src/Unit/Thread/Movement.hs` writes a local
-    `utsRef` parameter while importing only the `EngineEnv` TYPE, so the
-    identical name there is not the field."""
+    `utsRef` parameter while importing `Engine.Core.State` for the
+    `EngineEnv` TYPE alone, so the identical name there is not the
+    field."""
     scopes: dict[str, set[str] | None] = {}
+    qualifiers: dict[str, str] = {}
     for chunk in _import_chunks(_strip_haskell_comments(source_text)):
-        head = _IMPORT_HEAD_RE.match(chunk)
+        head = _IMPORT_ALIAS_RE.match(chunk)
         if not head:
             continue
-        module = head.group(1)
+        module, alias = head.group(1), head.group(2)
+        qualifiers[alias or module] = module
         body = chunk[head.end():]
         if ("(" not in body or "hiding" in body
                 or _IMPORT_WILDCARD_RE.search(body)):
@@ -2306,7 +2339,7 @@ def imported_symbols(source_text: str) -> dict[str, set[str] | None]:
         names = set(_HS_IDENT_RE.findall(body))
         existing = scopes.get(module, set())
         scopes[module] = None if existing is None else (existing | names)
-    return scopes
+    return scopes, qualifiers
 
 
 def capability_accessor_map(sources: dict[str, str], live_fields: list[str]
@@ -2339,58 +2372,47 @@ def capability_accessor_map(sources: dict[str, str], live_fields: list[str]
     return accessors
 
 
-def declaration_block_binders(code: str) -> dict[int, frozenset[str]]:
-    """`{1-based line: names bound locally in that line's top-level
-    declaration block}`.
-
-    A block runs from a column-0 declaration line to the line before the
-    next one, so a parameter named after an accessor in one function
-    cannot mask a real write in another. Within a block the binders are
-    equation left-hand sides and their parameters (top-level, `where`
-    and `let` alike), lambda binders, and monadic `<-`/`←` binders.
-
-    Deliberately over-approximate in ONE direction only: it may name
-    something that is not really a binder, which can only DROP a write
-    site from the scan, never invent one."""
-    lines = code.split("\n")
-    starts = [i for i, line in enumerate(lines)
-              if line[:1].isalpha() or line[:1] == "_"]
-    if not starts:
-        starts = [0]
-    if starts[0] != 0:
-        starts.insert(0, 0)
-    bounds = starts + [len(lines)]
-
-    binders_by_line: dict[int, frozenset[str]] = {}
-    for index in range(len(bounds) - 1):
-        start, end = bounds[index], bounds[index + 1]
-        block = "\n".join(lines[start:end])
-        binders: set[str] = set()
-        for name, params in _EQUATION_LHS_RE.findall(block):
-            binders.add(name)
-            binders.update(_HS_IDENT_RE.findall(params))
-        for params in _LAMBDA_BINDER_RE.findall(block):
-            binders.update(_HS_IDENT_RE.findall(params))
-        for pattern in _MONADIC_BINDER_RE.findall(block):
-            binders.update(_HS_IDENT_RE.findall(pattern))
-        frozen = frozenset(binders)
-        for line_number in range(start + 1, end + 1):
-            binders_by_line[line_number] = frozen
-    return binders_by_line
-
-
 def _first_argument_head(tokens: list[Token], index: int) -> int | None:
     """Token index of the head identifier of `tokens[index]`'s first
-    argument, or `None`. Handles `prim (accessor handle) ...`,
-    `prim $ accessor handle`, and a bare `prim ref ...`; leading `(`s
-    are peeled, so `prim ((accessor handle)) ...` resolves the same."""
+    argument, when that argument is an APPLICATION -- `prim (accessor
+    handle) ...` or `prim $ accessor handle`, with leading `(`s peeled
+    so `prim ((accessor handle)) ...` resolves the same. Otherwise
+    `None`.
+
+    __Requiring the application is what replaces guessing at local
+    scope, and it is a type argument rather than a heuristic.__ Every
+    accessor here projects out of a handle -- `EngineEnv -> IORef a`,
+    or `XCapability -> IORef a` -- so it cannot itself BE the `IORef` a
+    mutation primitive takes. A BARE identifier in that position
+    therefore never denotes the accessor; it denotes some local binding
+    that happens to share its name, exactly like
+    `src/Unit/Thread/Movement.hs`'s `utsRef` parameter. Nothing is
+    suppressed by scanning for binders, so no binder anywhere -- least
+    of all one introduced AFTER the write it would have masked -- can
+    hide a real write. That is the failure mode of every block- or
+    line-scoped binder heuristic, and this rule does not have it.
+
+    The one construct that could put a genuine `IORef` under an
+    accessor's bare name is a record wildcard or field pun over a
+    capability record (`RenderCapability{..}`). Nothing in the tree does
+    that today, and such a use is not silently dropped: with no
+    application to consume it inline it surfaces in the pass-on residue,
+    like every other use the scan cannot attribute (D-5)."""
     j = index + 1
+    grouped = False
     while (j < len(tokens) and tokens[j].kind == "punc"
            and tokens[j].text in ("$", "(")):
+        grouped = True
         j += 1
-    if j < len(tokens) and tokens[j].kind == "id":
-        return j
-    return None
+    if not grouped or j >= len(tokens) or tokens[j].kind != "id":
+        return None
+    following = tokens[j + 1] if j + 1 < len(tokens) else None
+    if following is None:
+        return None
+    applied = (following.kind == "id"
+               or (following.kind == "punc"
+                   and following.text in ("(", "[", "$")))
+    return j if applied else None
 
 
 def scan_capability_writes(
@@ -2403,12 +2425,14 @@ def scan_capability_writes(
 
     Both a RAW `EngineEnv` accessor (a narrow-import consumer) and a
     CAPABILITY-record accessor canonicalize onto the same `EngineEnv`
-    field, so the two consumer shapes are one boundary. Three gates keep
-    a textual match honest: the identifier must be in scope in that
-    module (imported under a name that reaches it, or defined by it), it
-    must not be shadowed by a local binder in its own declaration block,
-    and it must head the first argument of an `IORef` mutation
-    primitive.
+    field, so the two consumer shapes are one boundary, and each is
+    recognized qualified (`State.fieldOne`, under the module's own name
+    or an `as` alias) as readily as bare. Two gates keep a textual match
+    honest: the identifier must be in scope in that module under the
+    spelling used, and it must head an APPLIED first argument of an
+    `IORef` mutation primitive -- see `_first_argument_head` for why the
+    application is a type argument rather than a heuristic, and why no
+    local-binder scan is needed or wanted.
 
     `permanent`/`definer` are SS6.1's cohort (D-4), excluded from the
     write map -- their authority is not what this boundary constrains.
@@ -2431,29 +2455,36 @@ def scan_capability_writes(
 
     for relpath, text in sorted(sources.items()):
         module = module_identifier(relpath)
-        scopes = imported_symbols(text)
+        scopes, qualifiers = imported_symbols(text)
         code = prepared_source(text)
         tokens = tokenize_haskell(code)
-        binders_by_line = declaration_block_binders(code)
 
-        def canonical_field(name: str, line: int) -> str | None:
-            """The `EngineEnv` field `name` canonicalizes to at `line`,
-            or `None` when it is shadowed or simply not in scope."""
-            if name in binders_by_line.get(line, frozenset()):
-                return None
-            if name in raw_fields:
-                field, owner = name, STATE_MODULE
+        def resolve(name: str) -> tuple[str, str, str] | None:
+            """`(EngineEnv field, owning module, base accessor name)` for
+            an occurrence spelled `name` here, or `None` when it names no
+            accessor this module can reach. A qualified spelling must
+            resolve through a qualifier the module's own imports
+            establish, and must name the module that actually exports
+            the accessor -- `Other.fieldOne` is not this field."""
+            qualifier, _, base = name.rpartition(".")
+            if base in raw_fields:
+                field, owner = base, STATE_MODULE
             else:
-                entry = accessors.get(name)
+                entry = accessors.get(base)
                 if entry is None:
                     return None
                 field, owner = entry
-            if module == owner:
-                return field
+            if qualifier:
+                if qualifiers.get(qualifier) != owner:
+                    return None
+            elif module == owner:
+                return field, owner, base
             if owner not in scopes:
                 return None
             symbols = scopes[owner]
-            return field if symbols is None or name in symbols else None
+            if symbols is not None and base not in symbols:
+                return None
+            return field, owner, base
 
         inline_heads: set[int] = set()
         for index, token in enumerate(tokens):
@@ -2465,18 +2496,22 @@ def scan_capability_writes(
             inline_heads.add(head)
             if token.text not in IOREF_WRITE_PRIMITIVES or module in exempt:
                 continue
-            field = canonical_field(tokens[head].text, tokens[head].line)
-            if field is not None:
-                writes[field].add(module)
+            resolved = resolve(tokens[head].text)
+            if resolved is not None:
+                writes[resolved[0]].add(module)
 
         for index, token in enumerate(tokens):
-            if token.kind != "id" or token.text not in accessors:
+            if token.kind != "id":
                 continue
-            field, owner = accessors[token.text]
-            if module == owner or index in inline_heads:
+            resolved = resolve(token.text)
+            if resolved is None:
+                continue
+            field, owner, base = resolved
+            if (not owner.startswith(CAPABILITY_MODULE_PREFIX)
+                    or module == owner or index in inline_heads):
                 continue
             residue.append(
-                Occurrence(relpath, token.line, token.text, field, module))
+                Occurrence(relpath, token.line, base, field, module))
 
     residue.sort()
     return writes, residue

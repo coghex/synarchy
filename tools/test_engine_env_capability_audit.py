@@ -1988,18 +1988,89 @@ tick ∷ EngineEnv → IORef Int → IO ()
 tick _ fieldOne = writeIORef fieldOne 5
 """
 
-# `fieldOne` is bound by a `case` alternative -- a pattern
-# `local_binders` deliberately does not model -- so ONLY the import
-# scope gate stands between this and a false attribution.
-_CASE_SHADOWED = """\
-module CaseShadow.Mod where
+# A module-local helper that shares an accessor's name and is APPLIED
+# exactly like the real thing, so nothing about the write's SHAPE
+# distinguishes it. `Engine.Core.State` is imported for the `EngineEnv`
+# type alone, which is the only reason this is not the field -- the
+# import-scope gate on its own.
+_LOCAL_HOMONYM = """\
+module Homonym.Mod where
 
 import Engine.Core.State (EngineEnv)
 
-tick ∷ Maybe (IORef Int) → IO ()
-tick slot = case slot of
-    Just fieldOne → writeIORef fieldOne 5
-    Nothing → pure ()
+fieldOne ∷ EngineEnv → IORef Int
+fieldOne _ = error "this module's own helper, not the accessor"
+
+tick ∷ EngineEnv → IO ()
+tick env = writeIORef (fieldOne env) 5
+"""
+
+# The regression for a binder introduced AFTER the write it would have
+# masked. A block-scoped binder heuristic drops `bump`'s real write
+# because `helper`'s `let fieldOne` is collected for the whole
+# declaration; requiring an APPLIED first argument cannot, because it
+# consults no binder at all.
+_LATE_BINDER = """\
+module LateBinder.Mod where
+
+import Engine.Core.State (EngineEnv, fieldOne)
+
+bump ∷ EngineEnv → IO ()
+bump env = do
+    writeIORef (fieldOne env) 1
+    helper
+  where
+    helper = do
+      let fieldOne _ = pure ()
+      fieldOne ()
+"""
+
+# Qualified spellings, through the module's own name and through an
+# `as` alias. Both name the field exactly as the bare spelling does.
+_QUALIFIED_WRITER = """\
+module Qualified.Mod where
+
+import qualified Engine.Core.State as State
+import qualified Engine.Core.Capability.Fake as Cap
+
+bumpRaw ∷ State.EngineEnv → IO ()
+bumpRaw env = writeIORef (State.fieldTwo env) 4
+
+bumpCapability ∷ State.EngineEnv → IO ()
+bumpCapability env =
+    writeIORef (Cap.fkFieldOne (Cap.toFakeCapability env)) 5
+"""
+
+# The two ways a qualified spelling must NOT resolve: a prefix this
+# module establishes for a different module, and the aliased module's
+# own name, which the alias replaces.
+_MISQUALIFIED = """\
+module Misqualified.Mod where
+
+import qualified Engine.Core.State as State
+import qualified Data.Map as Other
+
+wrongModule ∷ State.EngineEnv → IO ()
+wrongModule env = writeIORef (Other.fieldTwo env) 6
+
+replacedName ∷ State.EngineEnv → IO ()
+replacedName env = writeIORef (Engine.Core.State.fieldTwo env) 7
+"""
+
+# A bare first argument: never the accessor (it projects out of a
+# handle, so it cannot BE the `IORef`), and for a capability accessor
+# it surfaces in the residue rather than being silently dropped.
+_BARE_ARGUMENT = """\
+module Bare.Mod where
+
+import Engine.Core.State (EngineEnv, fieldTwo)
+import Engine.Core.Capability.Fake (FakeCapability(..))
+
+viaWildcard ∷ FakeCapability → Int → IO ()
+viaWildcard FakeCapability{..} newValue = writeIORef fkFieldOne newValue
+
+viaParenthesizedLocal ∷ IORef Text → IO ()
+viaParenthesizedLocal fieldTwo = writeIORef (fieldTwo) 9
 """
 
 # The same two writes, but importing the accessors BY NAME rather than
@@ -2050,7 +2121,11 @@ def _writer_sources(**modules: str) -> dict[str, str]:
         "permanent": "src/Permanent/Mod.hs",
         "trap": "src/Trap/Mod.hs",
         "narrow": "src/Narrow/Mod.hs",
-        "caseShadow": "src/CaseShadow/Mod.hs",
+        "homonym": "src/Homonym/Mod.hs",
+        "lateBinder": "src/LateBinder/Mod.hs",
+        "qualified": "src/Qualified/Mod.hs",
+        "misqualified": "src/Misqualified/Mod.hs",
+        "bare": "src/Bare/Mod.hs",
         "explicit": "src/Explicit/Mod.hs",
         "multiline": "src/Multi/Mod.hs",
     }
@@ -2205,14 +2280,14 @@ def test_passed_on_handle_is_residue_not_a_write():
 
 
 def test_out_of_scope_names_are_not_writes():
-    """The import-scope gate, on its own. `CaseShadow.Mod` binds
-    `fieldOne` in a `case` alternative -- a pattern `local_binders`
-    deliberately does not model -- so the only thing standing between
-    that identifier and a false attribution is that
+    """The import-scope gate, on its own. `Homonym.Mod` defines its own
+    `fieldOne` helper and APPLIES it exactly the way a real write
+    applies the accessor, so the write's shape says nothing; the only
+    thing that distinguishes it from the field is that
     `Engine.Core.State` is imported for the `EngineEnv` TYPE alone. The
     two gates are independent on purpose: neither is asked to be
     complete by itself."""
-    writes, residue = _scan(_writer_sources(caseShadow=_CASE_SHADOWED))
+    writes, residue = _scan(_writer_sources(homonym=_LOCAL_HOMONYM))
     expect(writes["fieldOne"] == set(),
            f"a name the module never imported cannot be the accessor, "
            f"got: {sorted(writes['fieldOne'])}")
@@ -2221,21 +2296,90 @@ def test_out_of_scope_names_are_not_writes():
            f"no residue, got: {residue}")
 
 
-def test_comments_and_shadowed_locals_are_not_writes():
-    """The two false-positive gates, in the same fixture as the residue
-    case so one module proves all three: commentary that NAMES a write
-    does not perform one, and an equation's own parameter is not the
-    accessor it shares a name with."""
+def test_comments_and_bare_arguments_are_not_writes():
+    """The two remaining false-positive gates, in the same fixture as
+    the residue case so one module proves all three: commentary that
+    NAMES a write does not perform one, and a BARE first argument is
+    never the accessor (`shadowed`'s parameter here) because an accessor
+    projects out of a handle and so cannot itself be the `IORef`."""
     writes, residue = _scan(_writer_sources(trap=_TRAP_MODULE,
                                             narrow=_TYPE_ONLY_IMPORTER))
     expect(writes["fieldOne"] == set() and writes["fieldTwo"] == set(),
-           f"neither a commented-out write, a locally shadowed name, nor a "
+           f"neither a commented-out write, a bare local argument, nor a "
            f"type-only import may produce a write, got: fieldOne="
            f"{sorted(writes['fieldOne'])}, fieldTwo="
            f"{sorted(writes['fieldTwo'])}")
     expect(all(item.module != "Narrow.Mod" for item in residue),
            f"a module that never names a capability accessor contributes "
            f"no residue, got: {residue}")
+
+
+def test_a_later_binder_cannot_hide_an_earlier_write():
+    """A binder introduced AFTER the write it would have masked must not
+    suppress it. This is the failure mode of any block-scoped binder
+    heuristic -- `bump` writes `(fieldOne env)`, and its own `where`
+    clause later binds a local `fieldOne` -- and the applied-argument
+    rule cannot have it, because it consults no binder at all."""
+    writes, _ = _scan(_writer_sources(lateBinder=_LATE_BINDER))
+    expect(writes["fieldOne"] == {"LateBinder.Mod"},
+           f"the applied write must survive a same-block local binder "
+           f"declared below it, got: {sorted(writes['fieldOne'])}")
+
+
+def test_qualified_accessors_are_resolved():
+    """A qualified spelling names the field exactly as the bare one
+    does, through the module's own name or an `as` alias, so it must be
+    attributed rather than silently missed -- otherwise
+    `import qualified Engine.Core.State as State` is a hole in the
+    gate."""
+    writes, _ = _scan(_writer_sources(qualified=_QUALIFIED_WRITER))
+    expect(writes["fieldTwo"] == {"Qualified.Mod"},
+           f"`State.fieldTwo` must resolve to the raw field, got: "
+           f"{sorted(writes['fieldTwo'])}")
+    expect(writes["fieldOne"] == {"Qualified.Mod"},
+           f"`Cap.fkFieldOne` must resolve through the capability "
+           f"projection, got: {sorted(writes['fieldOne'])}")
+
+    violations = audit_writer_modules(
+        writes, _WRITER_FIELDS,
+        declared={f: frozenset() for f in _WRITER_FIELDS})
+    expect(len(violations) == 2 and all("Qualified.Mod" in v
+                                        for v in violations),
+           f"an undeclared qualified write must be a violation like any "
+           f"other, got: {violations}")
+
+
+def test_a_qualifier_must_name_the_owning_module():
+    """The other half of qualified resolution: a prefix bound to a
+    DIFFERENT module does not name this field, and an `as` alias
+    REPLACES the module's own name as a qualifier rather than joining
+    it. Neither line may be attributed."""
+    writes, _ = _scan(_writer_sources(misqualified=_MISQUALIFIED))
+    expect(writes["fieldTwo"] == set(),
+           f"neither a foreign qualifier nor an alias-replaced module "
+           f"name may resolve to the field, got: "
+           f"{sorted(writes['fieldTwo'])}")
+
+
+def test_a_bare_argument_surfaces_as_residue():
+    """A bare accessor name in a mutation primitive's first argument is
+    never attributed -- and when it is a CAPABILITY accessor (the record
+    wildcard the rule's one blind spot needs) it is not silently
+    dropped either: with no application to consume it inline, it lands
+    in the pass-on residue where D-5 can count it."""
+    writes, residue = _scan(_writer_sources(bare=_BARE_ARGUMENT))
+    expect(writes["fieldOne"] == set() and writes["fieldTwo"] == set(),
+           f"a bare first argument must never be attributed, got: "
+           f"fieldOne={sorted(writes['fieldOne'])}, "
+           f"fieldTwo={sorted(writes['fieldTwo'])}")
+    bare = [item for item in residue if item.module == "Bare.Mod"]
+    # `(fieldTwo)` is parenthesized but never applied -- the grouping
+    # test alone would let it through, so both halves of the rule are
+    # exercised here.
+    expect(len(bare) == 1 and bare[0].accessor == "fkFieldOne"
+           and bare[0].field == "fieldOne",
+           f"the wildcard-bound capability accessor must be reported as "
+           f"residue rather than dropped, got: {bare}")
 
 
 def test_import_declarations_are_not_uses():
@@ -2452,7 +2596,11 @@ def main() -> int:
         test_permanent_module_writes_are_exempt,
         test_passed_on_handle_is_residue_not_a_write,
         test_out_of_scope_names_are_not_writes,
-        test_comments_and_shadowed_locals_are_not_writes,
+        test_comments_and_bare_arguments_are_not_writes,
+        test_a_later_binder_cannot_hide_an_earlier_write,
+        test_qualified_accessors_are_resolved,
+        test_a_qualifier_must_name_the_owning_module,
+        test_a_bare_argument_surfaces_as_residue,
         test_import_declarations_are_not_uses,
         test_multiline_expressions_are_scanned,
         test_tokenizer_skips_literals_and_keeps_line_numbers,
