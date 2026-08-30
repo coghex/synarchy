@@ -1319,6 +1319,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Building.PortalSpawnBinding
                    Test.Headless.Building.Placement
                    Test.Headless.Building.RemoteWarning
+                   Test.Headless.Building.WorkbenchConstruction
                    Test.Headless.Lua.SaveModules
                    Test.Headless.Lua.SharedHelpers
                    Test.Headless.Lua.SaveBridge
