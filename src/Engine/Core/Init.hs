@@ -189,8 +189,9 @@ initializeEngineWith logBackend = do
   windowPosRef ← newIORef (0, 0)
   -- Seeded by Engine.Graphics.Window.GLFW.createWindow from what GLFW
   -- actually did, not from vcWindowMode: a fullscreen OR borderless
-  -- request can degrade to a plain window, and a successful borderless
-  -- creation also seeds the windowed cache there (#907, #1731).
+  -- request can degrade to a plain window, and a creation that DID apply
+  -- either mode also seeds the windowed cache there, from the decorated
+  -- window it sampled before mutating (#907, #1731, #1882).
   windowStateRef ← newIORef defaultWindowState
   framebufferSizeRef ← newIORef (vcWidth videoConfig, vcHeight videoConfig)
   framebufferMinimizeGenRef ← newIORef 0
