@@ -2235,10 +2235,17 @@ _IMPORT_DECL_RE = re.compile(
 
 
 class Token(NamedTuple):
-    """One identifier or single-character punctuation token."""
+    """One identifier or single-character punctuation token.
+
+    `offset` is what makes shadowing precise: a binding's scope starts
+    where the binding is WRITTEN, which is a position and not a line --
+    `writeIORef (fieldOne env) 1 >> (let fieldOne _ = ref in ...)` is
+    one line carrying a real write and, after it, a binding that does
+    not reach back over it."""
     kind: str   # "id" | "punc"
     text: str
     line: int   # 1-based
+    offset: int
 
 
 class ImportDecl(NamedTuple):
@@ -2309,7 +2316,7 @@ def tokenize_haskell(text: str) -> list[Token]:
                     break
                 component = nxt.group(0)
                 end = nxt.end()
-            tokens.append(Token("id", text[i:end], line))
+            tokens.append(Token("id", text[i:end], line, i))
             i = end
             continue
         if ch == '"':
@@ -2330,7 +2337,7 @@ def tokenize_haskell(text: str) -> list[Token]:
             if literal:
                 i = literal.end()
                 continue
-        tokens.append(Token("punc", ch, line))
+        tokens.append(Token("punc", ch, line, i))
         i += 1
     return tokens
 
@@ -2501,8 +2508,8 @@ def _top_level_ends(indents: list[int | None]) -> list[int]:
     return ends
 
 
-def local_binding_regions(code: str) -> dict[str, set[int]]:
-    """`{locally bound name: the 1-based lines it shadows}`.
+def local_binding_regions(code: str) -> dict[str, list[tuple[int, int]]]:
+    """`{locally bound name: the half-open character ranges it shadows}`.
 
     A name bound by a `let`, a `where`, a lambda, a `<-` bind, a `case`
     alternative or an equation's parameter list legally SHADOWS an
@@ -2526,6 +2533,10 @@ def local_binding_regions(code: str) -> dict[str, set[int]]:
     a binder heuristic that silently drops a real write: a `let` inside
     a `where` helper must not mask a write in the parent body ABOVE it.
 
+    Ranges are measured in CHARACTERS rather than lines, because a
+    binding written midway through a line does not reach back over what
+    precedes it there.
+
     The model is approximate in the direction of shadowing LESS -- an
     unrecognized binding form leaves a write attributed, which surfaces
     as a loud violation naming module and field, never as a silent
@@ -2534,13 +2545,15 @@ def local_binding_regions(code: str) -> dict[str, set[int]]:
     indents = _line_indents(lines)
     block_end, declaration_end = _layout_ends(indents)
     top_level_end = _top_level_ends(indents)
-    regions: dict[str, set[int]] = {}
+    starts = _line_start_offsets(lines)
+    regions: dict[str, list[tuple[int, int]]] = {}
 
-    def bind(name: str, start: int, end_exclusive: int) -> None:
-        # 1-based, and `start + 1` because a binding does not shadow
-        # anything on its own left-hand side.
-        regions.setdefault(name, set()).update(
-            range(start + 1, min(end_exclusive, len(lines)) + 1))
+    def bind(name: str, start_offset: int, end_line: int) -> None:
+        """Shadow `name` from `start_offset` to the start of `end_line`
+        (a line index, exclusive)."""
+        end = starts[end_line] if end_line < len(starts) else len(code)
+        if end > start_offset:
+            regions.setdefault(name, []).append((start_offset, end))
 
     for i, line in enumerate(lines):
         if indents[i] is None:
@@ -2552,12 +2565,13 @@ def local_binding_regions(code: str) -> dict[str, set[int]]:
         equation = _BINDING_LHS_RE.match(line)
         if equation and equation.group(1) != "let":
             head, parameters = equation.group(1), equation.group(2)
-            bind(head, i, block)
+            bind(head, starts[i], block)
             for name in _HS_IDENT_RE.findall(parameters):
-                bind(name, i, declaration)
+                bind(name, starts[i], declaration)
 
         opening = _INLINE_LET_RE.search(line)
         if opening:
+            keyword = starts[i] + opening.start()
             for segment in line[opening.end():].split(";"):
                 binding = _LET_BINDING_RE.match(segment)
                 if not binding:
@@ -2570,32 +2584,33 @@ def local_binding_regions(code: str) -> dict[str, set[int]]:
                 names = _HS_IDENT_RE.findall(text)
                 if text.strip()[:1] in ("(", "["):
                     for name in names:
-                        bind(name, i, block)
+                        bind(name, keyword, block)
                 elif names:
-                    bind(names[0], i, block)
+                    bind(names[0], keyword, block)
                     for name in names[1:]:
-                        bind(name, i, declaration)
+                        bind(name, keyword, declaration)
 
         monadic = _MONADIC_BINDER_RE.match(line)
         if monadic:
             for name in _HS_IDENT_RE.findall(monadic.group(1)):
-                bind(name, i, block)
+                bind(name, starts[i], block)
 
         alternative = _CASE_ALT_RE.match(line)
         if alternative and not _TYPE_ANNOTATION_RE.search(
                 alternative.group(1)):
             for name in _HS_IDENT_RE.findall(alternative.group(1)):
                 if name[:1].islower() or name[:1] == "_":
-                    bind(name, i, declaration)
+                    bind(name, starts[i], declaration)
 
     _bind_lambda_parameters(code, lines, declaration_end, top_level_end, bind)
-    _bind_let_block_declarations(lines, indents, block_end, bind)
-    _extend_where_declarations(lines, indents, declaration_end, bind)
+    _bind_let_block_declarations(lines, indents, starts, block_end, bind)
+    _extend_where_declarations(lines, indents, starts, declaration_end, bind)
     return regions
 
 
 def _bind_let_block_declarations(lines: list[str], indents: list[int | None],
-                                 block_end: list[int], bind) -> None:
+                                 starts: list[int], block_end: list[int],
+                                 bind) -> None:
     """Widen a `let` block's declarations to the `let`'s own layout
     block.
 
@@ -2614,12 +2629,13 @@ def _bind_let_block_declarations(lines: list[str], indents: list[int | None],
         column = indents[i]
         if column is None:
             continue
-        keyword = _INLINE_LET_RE.search(line)
-        if keyword is None:
+        opening = _INLINE_LET_RE.search(line)
+        if opening is None:
             continue
-        tail = line[keyword.end():]
+        keyword = starts[i] + opening.start()
+        tail = line[opening.end():]
         if tail.strip():
-            group_column = keyword.end() + len(tail) - len(tail.lstrip())
+            group_column = opening.end() + len(tail) - len(tail.lstrip())
         else:
             group_column = None
             for j in range(i + 1, len(lines)):
@@ -2642,7 +2658,7 @@ def _bind_let_block_declarations(lines: list[str], indents: list[int | None],
             declaration = _BINDING_LHS_RE.match(lines[j])
             if declaration is None or declaration.group(1) == "let":
                 continue
-            bind(declaration.group(1), j, block_end[i])
+            bind(declaration.group(1), keyword, block_end[i])
 
 
 def _bind_lambda_parameters(code: str, lines: list[str],
@@ -2704,7 +2720,7 @@ def _bind_lambda_parameters(code: str, lines: list[str],
         else:
             end = bisect.bisect_right(starts, closer)
         for name in _HS_IDENT_RE.findall(binder.group(1)):
-            bind(name, line, min(end, top_level_end[line]))
+            bind(name, offset, min(end, top_level_end[line]))
 
 
 def _line_start_offsets(lines: list[str]) -> list[int]:
@@ -2716,7 +2732,8 @@ def _line_start_offsets(lines: list[str]) -> list[int]:
 
 
 def _extend_where_declarations(lines: list[str], indents: list[int | None],
-                               declaration_end: list[int], bind) -> None:
+                               starts: list[int], declaration_end: list[int],
+                               bind) -> None:
     """Widen each `where` block's own declaration names to the whole
     enclosing declaration -- the one binding form that reaches lines
     ABOVE where it is written.
@@ -2743,7 +2760,7 @@ def _extend_where_declarations(lines: list[str], indents: list[int | None],
         tail = line[_WHERE_RE.search(line).end():]
         inline = _BINDING_LHS_RE.match(tail)
         if inline:
-            bind(inline.group(1), owner, end)
+            bind(inline.group(1), starts[owner], end)
 
         block_column: int | None = None
         for j in range(w + 1, len(lines)):
@@ -2758,7 +2775,7 @@ def _extend_where_declarations(lines: list[str], indents: list[int | None],
                 continue
             declaration = _BINDING_LHS_RE.match(lines[j])
             if declaration:
-                bind(declaration.group(1), owner, end)
+                bind(declaration.group(1), starts[owner], end)
 
 
 def _skip_type_atom(tokens: list[Token], index: int) -> int:
@@ -2811,10 +2828,18 @@ def _past_primitive_parentheses(tokens: list[Token], index: int) -> int:
                                or tokens[k].text in (")", "]")):
         openers = 0
     j = index + 1
-    while (openers > 0 and j < len(tokens) and tokens[j].kind == "punc"
-           and tokens[j].text == ")"):
-        openers -= 1
-        j += 1
+    while j < len(tokens) and tokens[j].kind == "punc":
+        if tokens[j].text == "@":
+            # `(writeIORef @Int) (accessor handle) v` -- the type
+            # application sits INSIDE the parentheses, so it has to be
+            # stepped over before the closer can be.
+            j = _skip_type_atom(tokens, j + 1)
+            continue
+        if openers > 0 and tokens[j].text == ")":
+            openers -= 1
+            j += 1
+            continue
+        break
     return j
 
 
@@ -2828,37 +2853,22 @@ def _infix_left_operand_head(tokens: list[Token], index: int) -> int | None:
     and a scan that only looked to the RIGHT of the primitive would miss
     it silently. `tokens[index]` is the primitive itself, so its
     backticks sit at `index - 1` and `index + 1`. The operand must be a
-    parenthesized application, for exactly the reason
-    `_first_argument_head` requires one -- with any redundant nesting
-    around it peeled, since extra parentheses change nothing."""
-    if index == 0 or tokens[index - 1] != ("punc", "`", tokens[index - 1].line):
+    application, for exactly the reason `_first_argument_head` requires
+    one. It need not be PARENTHESIZED, since a backtick operator binds
+    looser than application: ``fieldOne env `writeIORef` 1`` is the
+    same write. `_operand_head` finds the head either way, so a
+    trailing `)` that closes an ARGUMENT
+    (``fkFieldOne (toFakeCapability env) `writeIORef` v``) is not
+    mistaken for one closing the whole operand."""
+    if (index == 0 or tokens[index - 1].kind != "punc"
+            or tokens[index - 1].text != "`"):
         return None
     if (index + 1 >= len(tokens)
             or tokens[index + 1].kind != "punc"
             or tokens[index + 1].text != "`"):
         return None
-    j = index - 2
-    if j < 0 or tokens[j].kind != "punc" or tokens[j].text != ")":
-        return None
-    depth = 0
-    while j >= 0:
-        token = tokens[j]
-        if token.kind == "punc" and token.text == ")":
-            depth += 1
-        elif token.kind == "punc" and token.text == "(":
-            depth -= 1
-            if depth == 0:
-                break
-        j -= 1
-    if j < 0:
-        return None
-    head = j + 1
-    # `((accessor handle)) `prim` v` wraps the operand twice; the extra
-    # parentheses change nothing, so peel them.
-    while (head < len(tokens) and tokens[head].kind == "punc"
-           and tokens[head].text == "("):
-        head += 1
-    if head >= len(tokens) or tokens[head].kind != "id":
+    head = _operand_head(tokens, index - 2)
+    if head is None or head >= index - 1 or tokens[head].kind != "id":
         return None
     following = tokens[head + 1] if head + 1 < len(tokens) else None
     if following is None:
@@ -2867,6 +2877,59 @@ def _infix_left_operand_head(tokens: list[Token], index: int) -> int | None:
                or (following.kind == "punc"
                    and following.text in ("(", "[", "$")))
     return head if applied else None
+
+
+def _operand_head(tokens: list[Token], last: int) -> int | None:
+    """Index of the head identifier of the application ENDING at
+    `tokens[last]`, or `None`.
+
+    Walks left over ATOMS only -- an identifier, or a balanced `(`/`[`
+    group -- so an operator, a `$`, a comma or an equals ends the
+    operand where it stands. `(fieldOne env)`, `fieldOne env` and
+    `fkFieldOne (toFakeCapability env)` therefore all resolve to their
+    own head, which is the point: whether the operand is parenthesized
+    says nothing about where its head is, and a trailing `)` may be
+    closing an ARGUMENT rather than the whole operand.
+
+    When the walk ends having consumed nothing but one group, that group
+    IS the operand, so its head lies inside it and the search descends
+    (peeling any redundant nesting on the way)."""
+    head: int | None = None
+    group_open: int | None = None
+    j = last
+    while j >= 0:
+        token = tokens[j]
+        if token.kind == "id":
+            head, group_open = j, None
+            j -= 1
+            continue
+        if token.kind == "punc" and token.text in (")", "]"):
+            depth = 0
+            k = j
+            while k >= 0:
+                current = tokens[k]
+                if current.kind == "punc" and current.text in (")", "]"):
+                    depth += 1
+                elif current.kind == "punc" and current.text in ("(", "["):
+                    depth -= 1
+                    if depth == 0:
+                        break
+                k -= 1
+            if k < 0:
+                break
+            head, group_open = None, k
+            j = k - 1
+            continue
+        break
+    if head is not None:
+        return head
+    if group_open is None:
+        return None
+    inner = group_open + 1
+    while (inner < len(tokens) and tokens[inner].kind == "punc"
+           and tokens[inner].text == "("):
+        inner += 1
+    return inner if inner < len(tokens) else None
 
 
 def _first_argument_head(tokens: list[Token], index: int) -> int | None:
@@ -2969,13 +3032,14 @@ def scan_capability_writes(
         tokens = tokenize_haskell(code)
         shadows = local_binding_regions(code)
 
-        def resolve(name: str, line: int) -> tuple[str, str, str] | None:
+        def resolve(name: str, offset: int) -> tuple[str, str, str] | None:
             """`(EngineEnv field, owning module, base accessor name)` for
-            an occurrence spelled `name` at `line`, or `None` when it
-            names no accessor this module can reach there --
-            `Other.fieldOne` is not this field, a bare `fieldOne` is not
-            it in a module that imports the owner `qualified`, and
-            neither is one a local binding shadows at that line."""
+            an occurrence spelled `name` at character `offset`, or
+            `None` when it names no accessor this module can reach
+            there -- `Other.fieldOne` is not this field, a bare
+            `fieldOne` is not it in a module that imports the owner
+            `qualified`, and neither is one a local binding shadows at
+            that position."""
             qualifier, _, base = name.rpartition(".")
             if base in raw_fields:
                 field, owner = base, STATE_MODULE
@@ -2984,7 +3048,9 @@ def scan_capability_writes(
                 if entry is None:
                     return None
                 field, owner = entry
-            if not qualifier and line in shadows.get(base, ()):
+            if not qualifier and any(
+                    start <= offset < end
+                    for start, end in shadows.get(base, ())):
                 return None
             if not qualifier and module == owner:
                 return field, owner, base
@@ -3014,14 +3080,14 @@ def scan_capability_writes(
             inline_heads.add(head)
             if primitive not in IOREF_WRITE_PRIMITIVES or module in exempt:
                 continue
-            resolved = resolve(tokens[head].text, tokens[head].line)
+            resolved = resolve(tokens[head].text, tokens[head].offset)
             if resolved is not None:
                 writes[resolved[0]].add(module)
 
         for index, token in enumerate(tokens):
             if token.kind != "id":
                 continue
-            resolved = resolve(token.text, token.line)
+            resolved = resolve(token.text, token.offset)
             if resolved is None:
                 continue
             field, owner, base = resolved

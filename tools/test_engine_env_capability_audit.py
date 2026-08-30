@@ -2092,6 +2092,12 @@ patternLet env pair = do
     let (_, fieldOne) = pair
     writeIORef (fieldOne env) 4
 
+-- A binding written AFTER a use on the same line does not reach back
+-- over it, so this write is real.
+sameLine ∷ EngineEnv → IORef Text → IO ()
+sameLine env ref =
+    writeIORef (fieldTwo env) 9 >> (let fieldTwo _ = ref in pure ())
+
 -- A LAYOUT `let`, whose bindings begin on the following line.
 layoutLet ∷ EngineEnv → IORef Int → IO ()
 layoutLet env ref = do
@@ -2196,7 +2202,22 @@ raw env = (fieldOne env) `writeIORef` 1
 
 viaCapability ∷ EngineEnv → IO ()
 viaCapability env = (fkFieldTwo (toFakeCapability env)) `Ref.writeIORef` 2
+"""
 
+# A backtick operator binds looser than application, so an infix
+# operand needs no parentheses at all.
+_BARE_OPERAND = """\
+module BareOperand.Mod where
+
+import qualified Data.IORef as Ref
+import Engine.Core.State (EngineEnv, fieldThree)
+import Engine.Core.Capability.Fake (FakeCapability(..), toFakeCapability)
+
+raw ∷ EngineEnv → IO ()
+raw env = fieldThree env `writeIORef` 1
+
+viaCapability ∷ EngineEnv → IO ()
+viaCapability env = fkFieldOne (toFakeCapability env) `Ref.writeIORef` 2
 """
 
 # Redundant parentheses change nothing -- around the primitive in a
@@ -2258,13 +2279,17 @@ asPattern env sources = case sources of
 _TYPE_APPLICATION = """\
 module TypeApp.Mod where
 
-import Engine.Core.State (EngineEnv, fieldOne, fieldTwo)
+import Engine.Core.State (EngineEnv, fieldOne, fieldTwo, fieldThree)
 
 simple ∷ EngineEnv → IO ()
 simple env = writeIORef @Int (fieldOne env) 1
 
 grouped ∷ EngineEnv → IO ()
 grouped env = writeIORef @(IORef Text) (fieldTwo env) 2
+
+-- The type application sits INSIDE parentheses around the primitive.
+insideParentheses ∷ EngineEnv → IO ()
+insideParentheses env = (writeIORef @Int) (fieldThree env) 3
 """
 
 # A mutation primitive is itself under a qualifier too. Missing this
@@ -2372,6 +2397,7 @@ def _writer_sources(**modules: str) -> dict[str, str]:
         "typeApp": "src/TypeApp/Mod.hs",
         "lambdaEscape": "src/LambdaEscape/Mod.hs",
         "infix": "src/Infix/Mod.hs",
+        "bareOperand": "src/BareOperand/Mod.hs",
         "parens": "src/Parens/Mod.hs",
         "nestedLet": "src/NestedLet/Mod.hs",
         "casePattern": "src/CasePattern/Mod.hs",
@@ -2620,6 +2646,16 @@ def test_backticked_infix_mutations_are_writes():
            f"a backticked, qualified, capability-accessor write must be "
            f"attributed too, got: {sorted(writes['fieldTwo'])}")
 
+    bare, _ = _scan(_writer_sources(bareOperand=_BARE_OPERAND))
+    expect(bare["fieldThree"] == {"BareOperand.Mod"},
+           f"an UNPARENTHESIZED left operand is the same write -- a "
+           f"backtick binds looser than application, got: "
+           f"{sorted(bare['fieldThree'])}")
+    expect(bare["fieldOne"] == {"BareOperand.Mod"},
+           f"and the same holds for a bare capability-accessor operand "
+           f"under a qualified primitive, got: "
+           f"{sorted(bare['fieldOne'])}")
+
 
 
 def test_case_patterns_bind_variables_and_as_patterns():
@@ -2672,14 +2708,23 @@ def test_visible_type_applications_are_skipped():
     expect(writes["fieldTwo"] == {"TypeApp.Mod"},
            f"a parenthesized type application must be stepped over "
            f"whole, got: {sorted(writes['fieldTwo'])}")
+    expect(writes["fieldThree"] == {"TypeApp.Mod"},
+           f"a type application INSIDE parentheses around the primitive "
+           f"must be stepped over before the closer, got: "
+           f"{sorted(writes['fieldThree'])}")
 
 
 def test_binding_regions_are_lexical():
-    """`local_binding_regions` directly, on the two extents Haskell's
-    layout rule distinguishes: a `do`-block `let` reaches the statements
-    BELOW it (line 4) and nothing above it (line 2), and an equation
-    parameter reaches its own equation (line 5) and no further
-    (line 6)."""
+    """`local_binding_regions` directly, on the extents Haskell's layout
+    rule distinguishes and on the POSITION a binding starts at: a
+    `do`-block `let` reaches the statements BELOW it and nothing above,
+    an equation parameter reaches its own equation and no further, and a
+    binding written midway through a line does not reach back over what
+    precedes it there."""
+    def shadowed(regions, name, offset):
+        return any(start <= offset < end
+                   for start, end in regions.get(name, ()))
+
     code = ("first env = do\n"                       # 1
             "    writeIORef (ref env) 1\n"           # 2
             "    let ref _ = undefined\n"            # 3
@@ -2689,22 +2734,37 @@ def test_binding_regions_are_lexical():
     regions = local_binding_regions(code)
     expect("let" not in regions,
            f"`let` is a keyword, never a bound name, got: "
-           f"{sorted(regions.get('let', ()))}")
-    expect(regions.get("ref") == {3, 4, 5},
-           f"the `let` must cover its own line and the statement below "
-           f"it, the parameter its own equation, and neither the write "
-           f"above nor the one in the next declaration; got: "
-           f"{sorted(regions.get('ref', ()))}")
+           f"{regions.get('let')}")
+    expect(not shadowed(regions, "ref", code.index("(ref env) 1") + 1),
+           "the write ABOVE the `let` is not shadowed by it")
+    expect(shadowed(regions, "ref", code.index("(ref env) 2") + 1),
+           "the statement below the `let` is inside its block")
+    expect(shadowed(regions, "ref", code.index("pure ref") + 5),
+           "an equation's parameter shadows within that equation")
+    expect(not shadowed(regions, "ref", code.index("(ref env) 3") + 1),
+           "and reaches no further than it")
 
     # A binder written on a COLUMN-0 line has no layout block to the
     # left of it, so without the top-level clamp its region would run to
     # the end of the file and silently swallow every later write.
-    clamped = local_binding_regions(
-        "one env = withRef (\\ref → writeIORef (ref env) 1)\n"   # 1
-        "two env = writeIORef (ref env) 2\n")                      # 2
-    expect(clamped.get("ref") == {1},
-           f"a column-0 lambda binder must stop at its own declaration, "
-           f"got: {sorted(clamped.get('ref', ()))}")
+    clamped = ("one env = withRef (\\ref → writeIORef (ref env) 1)\n"
+               "two env = writeIORef (ref env) 2\n")
+    regions = local_binding_regions(clamped)
+    expect(shadowed(regions, "ref", clamped.index("(ref env) 1") + 1),
+           "the lambda shadows its own body")
+    expect(not shadowed(regions, "ref", clamped.index("(ref env) 2") + 1),
+           "a column-0 lambda binder must stop at its own declaration")
+
+    # A binding written AFTER a use on the same line does not reach back
+    # over it.
+    sameLine = "bump env ref = writeIORef (fieldOne env) 1 " \
+               ">> (let fieldOne _ = ref in pure ())\n"
+    regions = local_binding_regions(sameLine)
+    expect(not shadowed(regions, "fieldOne",
+                        sameLine.index("(fieldOne env) 1") + 1),
+           "a later same-line `let` does not shadow the write before it")
+    expect(shadowed(regions, "fieldOne", sameLine.index("let fieldOne") + 4),
+           "but it does shadow from where it is written")
 
     # A type signature's own arrow must not bind its subject, nor a
     # lowercase type variable that happens to share an accessor's name.
@@ -2715,7 +2775,7 @@ def test_binding_regions_are_lexical():
         "    convert = undefined\n")
     expect("ref" not in annotated,
            f"a `::` annotation is not a `case` alternative, got: "
-           f"{sorted(annotated.get('ref', ()))}")
+           f"{annotated.get('ref')}")
 
 
 def test_a_first_argument_must_be_applied():
@@ -2758,6 +2818,17 @@ def test_a_first_argument_must_be_applied():
            "a prefix application has no infix left operand")
     expect(infix_head_of("(fieldOne env) `writeIORef 1") is None,
            "an unterminated backtick is not an infix application")
+    expect(infix_head_of("fieldOne env `writeIORef` 1") == 0,
+           "an unparenthesized applied operand is read back to its head")
+    expect(infix_head_of("fieldOne `writeIORef` 1") is None,
+           "an unapplied bare operand is not an accessor application")
+    expect(infix_head_of("x >> fieldOne env `writeIORef` 1") == 3,
+           "the walk stops at the operator, not at the start of the line")
+    expect(infix_head_of("fkFieldOne (cap env) `writeIORef` 1") == 0,
+           "a trailing `)` closing an ARGUMENT is not the operand's own")
+    expect(infix_head_of("(pick cfg) fieldOne `writeIORef` 1") == 1,
+           "a group to the LEFT of an identifier is the application's "
+           "head, so the identifier is its argument, not the accessor")
 
 
 def test_a_later_binder_cannot_hide_an_earlier_write():
