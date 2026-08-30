@@ -1,8 +1,8 @@
 -- Transient unit-AI coordination registries (#1329).
 --
--- Ten module-local tables coordinate unit AI transiently: the
+-- Eleven module-local tables coordinate unit AI transiently: the
 -- five coordinate claim registries (dig, chop, construct, till, plant),
--- repairClaims and repairPriority, plus #916's three same-tick encounter
+-- repairClaims and repairPriority, plus #916's four same-tick encounter
 -- episode overlays. None of them is persisted, and
 -- until #1329 nothing cleared them when a load replaced the session.
 -- Both id allocators REWIND across a load -- World/Load/Publish.hs

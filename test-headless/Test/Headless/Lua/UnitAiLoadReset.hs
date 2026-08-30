@@ -1,11 +1,11 @@
--- | The "unit AI load reset" gate (#1329): the unit-AI family's SEVEN
+-- | The "unit AI load reset" gate (#1329): the unit-AI family's ELEVEN
 --   transient coordination registries -- the five coordinate claim
---   tables (@dig@, @chop@, @construct@, @till@, @plant@), plus
---   @repairClaims@ and @repairPriority@ -- are cleared when a save load
---   replaces the session, and each coordinate key names the PAGE its
---   tile belongs to.
+--   tables (@dig@, @chop@, @construct@, @till@, @plant@),
+--   @repairClaims@ and @repairPriority@, plus #916's four same-tick
+--   encounter episode overlays -- are cleared when a save load replaces
+--   the session, and each coordinate key names the PAGE its tile belongs to.
 --
---   None of the seven lives in @aiState@, so none of them is persisted
+--   None of the eleven lives in @aiState@, so none of them is persisted
 --   and none was reached by @unitAi.onSaveLoaded@. Both id allocators
 --   rewind across a load (@World.Load.Publish@ assigns
 --   @nextItemInstanceIdRef@ straight from the save; @umNextId@ likewise),
@@ -328,12 +328,12 @@ spec = describe "unit AI load reset (#1329)" $ do
             ]
     it "tracks every transient registry the unit-AI family owns" $
         runsOk $ prelude <> "\n" <> lns
-            [ "-- Ten: dig, chop, construct, till and plant coordinate claims,"
-            , "-- repairClaims/repairPriority, and three encounter tick overlays."
+            [ "-- Eleven: dig, chop, construct, till and plant coordinate claims,"
+            , "-- repairClaims/repairPriority, and four encounter tick overlays."
             , "-- A new registry that forgets"
             , "-- claimsLib.track() would silently survive every load, so pin the count."
-            , "assert(CLAIMS.trackedCount() == 10,"
-            , "       'expected 10 tracked registries, got ' .. CLAIMS.trackedCount())"
+            , "assert(CLAIMS.trackedCount() == 11,"
+            , "       'expected 11 tracked registries, got ' .. CLAIMS.trackedCount())"
             ]
     it "preserves same-page timeout and dead-claimant release" $
         runsOk $ prelude <> "\n" <> lns
