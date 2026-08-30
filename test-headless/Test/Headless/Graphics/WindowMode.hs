@@ -20,12 +20,14 @@
 --   Since #1731 this file also covers what CREATION establishes.
 --   'Engine.Core.Defaults.defaultWindowConfig' now asks GLFW for
 --   borderless as well as fullscreen, so a boot has three
---   distinguishable outcomes rather than one Boolean; and a successful
---   borderless creation must additionally SEED the windowed-geometry
---   cache, because applying the mode at creation consumes the
---   first-switch caching opportunity the transition path otherwise
---   relies on. 'applyWindowCreation' is that whole decision, and it is
---   equally window-free.
+--   distinguishable outcomes rather than one Boolean; and a creation
+--   that APPLIED either non-windowed mode must additionally SEED the
+--   windowed-geometry cache, because applying the mode at creation
+--   consumes the first-switch caching opportunity the transition path
+--   otherwise relies on. #1731 covered borderless and #1882 extended
+--   the same seed to fullscreen, whose decorated window is sampled at
+--   the same moment by the same caller. 'applyWindowCreation' is that
+--   whole decision, and it is equally window-free.
 module Test.Headless.Graphics.WindowMode (spec) where
 
 import UPrelude
@@ -262,18 +264,17 @@ spec = do
             wsAppliedMode boot `shouldBe` Windowed
             windowModeAlreadyApplied boot Windowed `shouldBe` True
 
-        -- A fullscreen boot that SUCCEEDED does switch, and has no
-        -- windowed geometry to restore but the seeded fallback — which is
-        -- the honest answer, since no windowed window was ever on screen.
-        -- (That gap is PRR-2, deliberately out of #1731's scope.)
+        -- A fullscreen boot that SUCCEEDED does switch, and since #1882
+        -- it has real geometry to restore: the decorated window
+        -- createWindow sampled before setFullscreen ran, not the
+        -- pre-window fallback.
         it "treats a real fullscreen boot's windowed request as a switch" $ do
             let boot = createdWith CreatedFullscreen
             wsAppliedMode boot `shouldBe` Fullscreen
             windowModeAlreadyApplied boot Windowed `shouldBe` False
             leavingWindowedMode (wsAppliedMode boot) Windowed `shouldBe` False
             (wsWindowedPos boot, wsWindowedSize boot)
-                `shouldBe` ( wsWindowedPos defaultWindowState
-                           , wsWindowedSize defaultWindowState )
+                `shouldBe` (bootPos, bootSize)
 
     -- #1731. Before it, `defaultWindowConfig` asked GLFW only for
     -- fullscreen: a borderless-configured boot came up as an ordinary
@@ -331,6 +332,67 @@ spec = do
         it "lets a failed borderless boot cache on its first switch" $ do
             let ws = drain (createdWith CreatedPlain)
                        [ (BorderlessWindowed, userPos, userSize)
+                       , (Windowed, monitorPos, monitorSize) ]
+            (wsWindowedPos ws, wsWindowedSize ws)
+                `shouldBe` (userPos, userSize)
+
+    -- #1882. A successful FULLSCREEN creation is structurally the same
+    -- case as the borderless one above: `setFullscreen` runs on the
+    -- decorated window `createWindow` just made, so applying the mode at
+    -- creation consumes the first-switch caching opportunity and the
+    -- boot's first `Windowed` request is an ENTRY that
+    -- `applyWindowModeTransition` never caches for. #1731 seeded only
+    -- borderless, leaving that request to restore `defaultWindowState`'s
+    -- (100,100) / 800x600 fallback and teleport a user who had saved a
+    -- custom resolution.
+    describe "fullscreen creation (#1882)" $ do
+        -- Requirement 1. The seed comes from the live pre-mutation
+        -- decorated window, which is why `bootPos`/`bootSize` are
+        -- distinct from both the user and monitor fixtures: a seed taken
+        -- from the wrong source, or not taken at all, is visible here.
+        it "seeds the windowed cache from the pre-mutation decorated window" $ do
+            let boot = createdWith CreatedFullscreen
+            (wsWindowedPos boot, wsWindowedSize boot)
+                `shouldBe` (bootPos, bootSize)
+
+        -- Requirement 2. A fullscreen request that could not be applied
+        -- leaves the plain decorated window on screen, so it records
+        -- `Windowed`, its first `Windowed` request stays inert, and there
+        -- is nothing to seed — graceful degradation is unchanged.
+        it "does not seed the cache when setFullscreen could not run" $ do
+            let boot = createdWith CreatedPlain
+            wsAppliedMode boot `shouldBe` Windowed
+            windowModeAlreadyApplied boot Windowed `shouldBe` True
+            (wsWindowedPos boot, wsWindowedSize boot)
+                `shouldBe` ( wsWindowedPos defaultWindowState
+                           , wsWindowedSize defaultWindowState )
+
+        -- The seed is what the first transition to Windowed actually
+        -- restores — the symptom the issue reports, stated end to end.
+        it "restores that seed on the first switch to windowed" $ do
+            let ws = drain (createdWith CreatedFullscreen)
+                       [ (Windowed, monitorPos, monitorSize) ]
+            (wsWindowedPos ws, wsWindowedSize ws)
+                `shouldBe` (bootPos, bootSize)
+            wsAppliedMode ws `shouldBe` Windowed
+
+        -- And it is not sticky: once the user has a real windowed
+        -- window, the ordinary transition cache takes over from it.
+        it "hands the cache back to the transition path after that" $ do
+            let ws = drain (createdWith CreatedFullscreen)
+                       [ (Windowed, monitorPos, monitorSize)
+                       -- ... user drags/resizes the restored window ...
+                       , (Fullscreen, userPos, userSize)
+                       , (Windowed, monitorPos, monitorSize) ]
+            (wsWindowedPos ws, wsWindowedSize ws)
+                `shouldBe` (userPos, userSize)
+
+        -- Requirement 3: a plain boot is untouched. It IS the windowed
+        -- state, so its own first switch away caches the live geometry
+        -- exactly as before and the creation seed never applies.
+        it "lets a plain boot cache on its first switch away" $ do
+            let ws = drain (createdWith CreatedPlain)
+                       [ (Fullscreen, userPos, userSize)
                        , (Windowed, monitorPos, monitorSize) ]
             (wsWindowedPos ws, wsWindowedSize ws)
                 `shouldBe` (userPos, userSize)

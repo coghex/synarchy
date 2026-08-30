@@ -86,6 +86,16 @@
     }
   },
   "auditEnvelope": {
+    "DEEP_LAVA_COLUMN": {
+      "min": 11,
+      "max": 11,
+      "median": 11,
+      "all": [
+        11,
+        11,
+        11
+      ]
+    },
     "FLAT_ISOLATED_WATER": {
       "min": 3,
       "max": 3,
@@ -104,16 +114,6 @@
         1875,
         1875,
         1875
-      ]
-    },
-    "FLOATING_LAVA": {
-      "min": 11,
-      "max": 11,
-      "median": 11,
-      "all": [
-        11,
-        11,
-        11
       ]
     },
     "FLOATING_WATER": {
@@ -199,9 +199,9 @@
   },
   "representativeAudit": {
     "summary": {
+      "DEEP_LAVA_COLUMN": 11,
       "FLAT_ISOLATED_WATER": 3,
       "FLOATING_LAKE": 1875,
-      "FLOATING_LAVA": 11,
       "FLOATING_WATER": 157,
       "ISOLATED_FLUID": 5,
       "MID_RIVER_CLIFF": 71,
@@ -212,6 +212,63 @@
       "WATER_WATER_CLIFF": 2767
     },
     "issues": {
+      "DEEP_LAVA_COLUMN": [
+        {
+          "x": -9,
+          "y": 68,
+          "details": "lava fluidSurf=1 terrainZ=-15 depth=16"
+        },
+        {
+          "x": -5,
+          "y": 71,
+          "details": "lava fluidSurf=1 terrainZ=-22 depth=23"
+        },
+        {
+          "x": -4,
+          "y": 72,
+          "details": "lava fluidSurf=1 terrainZ=-27 depth=28"
+        },
+        {
+          "x": -3,
+          "y": 73,
+          "details": "lava fluidSurf=1 terrainZ=-32 depth=33"
+        },
+        {
+          "x": -2,
+          "y": 74,
+          "details": "lava fluidSurf=1 terrainZ=-37 depth=38"
+        },
+        {
+          "x": -1,
+          "y": 73,
+          "details": "lava fluidSurf=1 terrainZ=-37 depth=38"
+        },
+        {
+          "x": 0,
+          "y": 69,
+          "details": "lava fluidSurf=1 terrainZ=-30 depth=31"
+        },
+        {
+          "x": 0,
+          "y": 70,
+          "details": "lava fluidSurf=1 terrainZ=-32 depth=33"
+        },
+        {
+          "x": 0,
+          "y": 72,
+          "details": "lava fluidSurf=1 terrainZ=-38 depth=39"
+        },
+        {
+          "x": 1,
+          "y": 70,
+          "details": "lava fluidSurf=1 terrainZ=-36 depth=37"
+        },
+        {
+          "x": 1,
+          "y": 71,
+          "details": "lava fluidSurf=1 terrainZ=-38 depth=39"
+        }
+      ],
       "FLAT_ISOLATED_WATER": [
         {
           "x": 65,
@@ -9604,63 +9661,6 @@
           "x": 70,
           "y": 69,
           "details": "lake fluidSurf=0 terrainZ=-16 depth=16"
-        }
-      ],
-      "FLOATING_LAVA": [
-        {
-          "x": -9,
-          "y": 68,
-          "details": "lava fluidSurf=1 terrainZ=-15 depth=16"
-        },
-        {
-          "x": -5,
-          "y": 71,
-          "details": "lava fluidSurf=1 terrainZ=-22 depth=23"
-        },
-        {
-          "x": -4,
-          "y": 72,
-          "details": "lava fluidSurf=1 terrainZ=-27 depth=28"
-        },
-        {
-          "x": -3,
-          "y": 73,
-          "details": "lava fluidSurf=1 terrainZ=-32 depth=33"
-        },
-        {
-          "x": -2,
-          "y": 74,
-          "details": "lava fluidSurf=1 terrainZ=-37 depth=38"
-        },
-        {
-          "x": -1,
-          "y": 73,
-          "details": "lava fluidSurf=1 terrainZ=-37 depth=38"
-        },
-        {
-          "x": 0,
-          "y": 69,
-          "details": "lava fluidSurf=1 terrainZ=-30 depth=31"
-        },
-        {
-          "x": 0,
-          "y": 70,
-          "details": "lava fluidSurf=1 terrainZ=-32 depth=33"
-        },
-        {
-          "x": 0,
-          "y": 72,
-          "details": "lava fluidSurf=1 terrainZ=-38 depth=39"
-        },
-        {
-          "x": 1,
-          "y": 70,
-          "details": "lava fluidSurf=1 terrainZ=-36 depth=37"
-        },
-        {
-          "x": 1,
-          "y": 71,
-          "details": "lava fluidSurf=1 terrainZ=-38 depth=39"
         }
       ],
       "FLOATING_WATER": [

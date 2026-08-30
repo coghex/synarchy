@@ -79,9 +79,22 @@ Headless skips the GUI data-loading step, so defs are registered by
 hand here (items/units/buildings/loot_tables/locations), same as
 tools/location_overlay_probe.py does for locations alone.
 
+EVERY file this invocation creates -- its five fixture YAMLs, its
+engine log, and the throwaway resource root with the save slots #1620
+already moved into it -- lives under ONE directory this process owns,
+and goes away again on every handled exit (#1884). Before that the
+fixtures and the log were fixed `/tmp` names no run cleaned up, which
+two concurrent runs collided on: `tools/run_probes.py --jobs N` and
+`tools/probe_flake.py`'s machine-wide port lease both make that
+concurrency a supported mode. `--keep-artifacts` retains the directory
+instead, and names it, for diagnosing a failure -- which matters more
+here than for an ordinary artifact, because the engine log is not only
+diagnostics: two checks below ASSERT against it.
+
 Usage:
   python3 tools/location_content_probe.py
   python3 tools/location_content_probe.py --seed 42 --size 64 --port 9190
+  python3 tools/location_content_probe.py --keep-artifacts
 
 Exit code 0 = all checks passed.
 """
@@ -103,8 +116,12 @@ from probelib import (FixtureNotRegistered, capture_request_id, quit_engine,
                       boot, load_fixture_yaml, send, wait_load_published,
                       wait_save_complete, load_ai_stack)
 
-LOG = "/tmp/location_content_engine.log"
 REPO = Path(__file__).resolve().parent.parent
+#: How a save/load failure message refers to the engine log when the
+#: caller supplied no path. Spelled as a constant so the f-strings below
+#: need no escaped quote inside their expression, which only Python 3.12
+#: onwards accepts (PEP 701).
+THIS_RUNS_LOG = "this run's engine log"
 #: Prefix of this invocation's throwaway resource root. The random
 #: suffix mkdtemp appends to it is also the per-invocation save-slot
 #: token, so the root and the slots it holds share one identity.
@@ -212,12 +229,165 @@ def remove_isolated_root(base: str) -> str | None:
     return None
 
 
-def boot_isolated(port: int, root: str, **kwargs):
-    return boot(port, log=LOG, args=["--resource-root", root], **kwargs)
+class RunArtifacts:
+    """Every file one invocation of this probe creates, under a single
+    directory that invocation owns (#1884).
+
+    `base` comes from `tempfile.mkdtemp`, so it is this process's alone
+    and disjoint from every other invocation's -- which is what makes
+    the logical names inside it (`engine.log`, `bogus.yaml`,
+    `quinoa.yaml`, ...) safe to keep fixed. #1620 had already moved the
+    SAVE slots into `root`; the fixtures and the log stayed behind as
+    fixed `/tmp` names -- `/tmp/location_content_engine.log` and the
+    five `/tmp/loc_content_probe_*.yaml` -- each written with a
+    truncating `open(..., "w")` (`probelib.boot` opens the log the same
+    way) and removed by nothing. Two concurrent runs collided on all
+    six: one could overwrite a fixture between another's write and the
+    engine-side read of it, and both interleaved into one truncated
+    log. That last one is not merely untidy here, because the log is
+    ASSERTED against -- the integrity-diagnostic read in phase 2 and
+    the warning read in phase 3 -- so a foreign truncation could turn a
+    passing phase into a failure or a failure into a pass.
+
+    Nothing this process did not create is ever named, so a file of the
+    same name outside the tree -- a developer's own
+    `/tmp/loc_content_probe_bogus.yaml` -- is not opened for writing,
+    truncated, modified or removed.
+    """
+
+    def __init__(self, base: str) -> None:
+        self.base = base
+        self.root = os.path.join(base, "root")
+        self.logs = os.path.join(base, "logs")
+        self.fixtures = os.path.join(base, "fixtures")
+        #: Every engine `boot_isolated` has LAUNCHED, registered the
+        #: statement after `probelib.boot`'s own `Popen` rather than
+        #: only once it returns -- which on a hung boot is
+        #: `ready_timeout` (three minutes) later. `main`'s guard walks
+        #: this before it removes anything, so no engine is still
+        #: writing into a tree that is being deleted.
+        self.launched: list = []
+
+    def build(self) -> str:
+        """Stage this invocation's throwaway resource root (#1620) and
+        the two artifact directories beside it, and answer with the root.
+
+        The root itself is still `make_isolated_root`'s -- unchanged, and
+        still the builder `tools/portal_ghost_probe.py` imports and
+        `tools/test_location_probe_config_isolation.py` pins.
+        """
+        root = make_isolated_root(self.base)
+        os.makedirs(self.logs, exist_ok=True)
+        os.makedirs(self.fixtures, exist_ok=True)
+        return root
+
+    @property
+    def engine_log(self) -> str:
+        """The engine's stdout/stderr capture, shared by every boot of
+        this invocation and truncated by each of them.
+
+        `probelib.boot` opens it `"w"`, so a boot still starts the log
+        empty -- the per-boot isolation phase 2's diagnostic read
+        depends on is exactly what it was. What changed is WHOSE log it
+        is: a second invocation now truncates its own, not this one's.
+        """
+        return os.path.join(self.logs, "engine.log")
+
+    def fixture(self, name: str) -> str:
+        """One of the probe's own inline YAML fixtures. The path is
+        handed to the ENGINE, which has chdir'd into `root`
+        (`App.ResourceRoot`), so it stays absolute for the same reason
+        it always was."""
+        return os.path.join(self.fixtures, f"{name}.yaml")
+
+
+def _describe_held(path: str) -> str:
+    """How the retention summary describes one artifact directory.
+
+    A path that does not EXIST is not the same as one that is empty: a
+    run that failed part-way through staging never created it, and
+    calling it empty would send the reader looking for a directory that
+    is not there.
+    """
+    if not os.path.exists(path):
+        return " (never created -- the run ended before staging reached it)"
+    try:
+        held = sorted(os.listdir(path))
+    except OSError as exc:
+        return f" (unreadable: {exc})"
+    return f" ({', '.join(held)})" if held else " (empty)"
+
+
+def abandon_engine(proc) -> None:
+    """Make sure an engine this run launched is dead, without talking to
+    the port. A no-op on a handle that has already exited.
+
+    Every phase below already shuts its own engine down through
+    `quit_engine` in a `finally`. This is the backstop for the windows
+    that reach past one: `probelib.boot` hands the process over the
+    moment it exists (`on_launch`) and only decides about READY up to
+    three minutes later, so an interrupt in that span leaves a live
+    engine no `proc = boot_isolated(...)` assignment will ever name; and
+    `quit_engine` is itself interruptible -- it sends, waits, then
+    hard-kills -- so a Ctrl-C inside it unwinds with the engine possibly
+    still running. Either way the process would still be writing into
+    the tree `main` is about to delete.
+
+    Deliberately NOT `quit_engine`: that sends `engine.quit()` to the
+    PORT, and a boot fails on a busy port precisely because the port
+    belongs to somebody else's instance. `kill()` is a single syscall
+    and SIGKILL cannot be caught, so once it has landed the process is
+    dead whatever happens to the reap that follows.
+    """
+    if proc.poll() is not None:
+        return
+    proc.kill()
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        print(f"FAIL: the engine this run launched (pid {proc.pid}) did not "
+              f"die when killed", file=sys.stderr)
+
+
+def release_artifacts(art: RunArtifacts, keep: bool) -> str | None:
+    """Retire this invocation's artifact directory -- fixtures, engine
+    log and resource root together -- and report a failure to remove it
+    rather than swallowing one. Returns None when the run may still
+    report its own result, else the message to fail with.
+
+    `--keep-artifacts` is the intentional exception to that removal
+    (#1884 requirement 5): the tree is retained and named, and the run
+    keeps whatever result its own checks produced. Without the flag the
+    removal is mandatory and #1620 requirement 6's reporting is exactly
+    as it was, because this delegates to `remove_isolated_root`.
+    """
+    if keep:
+        # Each line names what this run ACTUALLY produced. A run that
+        # died before READY holds no fixtures and no save slot, and
+        # saying otherwise would send the reader looking for files the
+        # failure is the reason they do not have.
+        print(f"\nretained this run's artifacts (--keep-artifacts): "
+              f"{art.base}")
+        for label, path in (("engine log", art.logs),
+                            ("fixtures", art.fixtures),
+                            ("saves", os.path.join(art.root, "saves"))):
+            print(f"  {label:14} {path}{_describe_held(path)}")
+        print(f"  {'resource root':14} {art.root}"
+              + ("" if os.path.isdir(art.root) else " (never created)"))
+        return None
+    return remove_isolated_root(art.base)
+
+
+def boot_isolated(port: int, art: RunArtifacts, **kwargs):
+    """The one funnel every boot in this file goes through, so the log
+    path and the launched-engine registration are decided once."""
+    return boot(port, log=art.engine_log,
+                args=["--resource-root", art.root],
+                on_launch=art.launched.append, **kwargs)
 
 
 def save_and_wait(port: int, page: str, slot: str,
-                  failures: list[str], log: str = LOG) -> bool:
+                  failures: list[str], log: str | None = None) -> bool:
     """engine.saveWorld, then tie completion to THIS request's own id.
 
     saveWorld only ACCEPTS synchronously — it returns false on a
@@ -226,12 +396,19 @@ def save_and_wait(port: int, page: str, slot: str,
     afterwards. So a sleep proves nothing, and a fixed slot name means a
     PRIOR generation of the same slot could satisfy the reader
     (#1620). Every reader here starts only after this returns True.
+
+    `log` names the engine log the failure message points at. It stays a
+    caller-supplied path -- `tools/portal_ghost_probe.py` passes its own
+    -- but no longer defaults to a module-global one, because since
+    #1884 the log belongs to the INVOCATION and only a caller holding
+    its `RunArtifacts` knows where it is.
     """
     accepted = send(port, f"return engine.saveWorld('{page}', '{slot}')").strip()
     if accepted != "true":
         failures.append(
             f"engine.saveWorld(page '{page}', slot '{slot}') was not accepted "
-            f"(returned {accepted!r}); the validation reason is logged in {log}")
+            f"(returned {accepted!r}); the validation reason is logged in "
+            f"{log or THIS_RUNS_LOG}")
         return False
     request_id = capture_request_id(port, "return engine.getSaveStatus()")
     if request_id is None:
@@ -250,7 +427,7 @@ def save_and_wait(port: int, page: str, slot: str,
 
 
 def load_and_wait(port: int, slot: str, failures: list[str],
-                  seconds: float = 60.0, log: str = LOG) -> bool:
+                  seconds: float = 60.0, log: str | None = None) -> bool:
     """engine.loadSave, then wait for THAT request id to publish.
 
     Issue #763: loadSave only ACCEPTS synchronously, and the saved page
@@ -262,7 +439,8 @@ def load_and_wait(port: int, slot: str, failures: list[str],
     if accepted != "true":
         failures.append(
             f"engine.loadSave('{slot}') was not accepted (returned "
-            f"{accepted!r}); the reason is logged in {log}")
+            f"{accepted!r}); the reason is logged in "
+            f"{log or THIS_RUNS_LOG}")
         return False
     request_id = capture_request_id(port, "return engine.getLoadStatus()")
     if request_id is None:
@@ -277,6 +455,99 @@ def load_and_wait(port: int, slot: str, failures: list[str],
                         f"publish: {status}")
         return False
     return True
+
+#: The probe's own inline YAML fixtures, as the exact bytes that reach
+#: disk (#1884). They were inline `fh.write(...)` calls at the phases
+#: that use them; only WHERE they are written moved, never WHAT they
+#: say. Placement and loot draws are order- and content-sensitive, so
+#: `tools/test_location_content_probe.py` pins these bodies by digest
+#: and pins the registration order of the calls that load them.
+
+#: Phase 3's unknown-content-id fixture. Deliberately full of unknown
+#: IDS, but no unknown KIND: #1708 closed that vocabulary at the YAML
+#: boundary, so an entry naming one would fail the whole file's decode
+#: and leave `bogus_ruin` unregistered.
+BOGUS_LOCATION_YAML = (
+    "locations:\n"
+    "  - id: bogus_ruin\n"
+    "    label: Bogus Ruin\n"
+    "    type: ruin\n"
+    "    builder: room_small\n"
+    "    anchor: []\n"
+    "    max_count: 0\n"
+    "    bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 }\n"
+    "    naming: { heads: [KEEP], modifiers: [ASH] }\n"
+    "    contents:\n"
+    "      - { kind: unit, id: does_not_exist, count: 1 }\n"
+    "      - { kind: loot_table, id: bogus_table, rolls: 1 }\n"
+)
+
+#: …and the loot table it rolls, whose only entry is an unregistered
+#: item id.
+BOGUS_LOOT_YAML = (
+    "id: bogus_table\n"
+    "entries:\n"
+    "  - id: item_that_does_not_exist\n"
+    "    weight: 1\n"
+)
+
+#: The fixed-position `kind: item` content phase 3 asserts to the exact
+#: tile. It keeps the `spawnItemContent` dispatch branch
+#: (scripts/locations.lua) under test: #921 removed the last SHIPPED use
+#: of it, and an untested branch is one edit from silently breaking for
+#: the loot-container work that will want it back. `position` is the
+#: part with no other coverage — a scattered entry lands anywhere in
+#: bounds, so only a fixed one can be asserted to the exact tile.
+FIXED_DEF, FIXED_OX, FIXED_OY = "radio", -1, 2
+
+#: A single-entry loot table forces quinoa_sack to spawn through the
+#: real content-spawn path (locations.spawnContents -> loot.rollFor ->
+#: item.spawnGround) whatever the roll context, rather than depending on
+#: whether ruin_common's 2/13-weight entry happens to be the one this
+#: instance's draw selects (#800). #948 made that draw seed-stable
+#: rather than random, but it is still weight-dependent — which entry a
+#: given instance lands on is not something to assert on here.
+QUINOA_LOCATION_YAML = (
+    "locations:\n"
+    "  - id: probe_quinoa_ruin\n"
+    "    label: Quinoa Probe Ruin\n"
+    "    type: ruin\n"
+    "    builder: room_small\n"
+    "    anchor: []\n"
+    "    max_count: 0\n"
+    "    bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 }\n"
+    "    naming: { heads: [KEEP], modifiers: [ASH] }\n"
+    "    contents:\n"
+    "      - { kind: loot_table, id: probe_quinoa_table, rolls: 1 }\n"
+    f"      - {{ kind: item, id: {FIXED_DEF}, count: 1, "
+    f"position: {{x: {FIXED_OX}, y: {FIXED_OY}}} }}\n"
+)
+
+QUINOA_LOOT_YAML = (
+    "id: probe_quinoa_table\n"
+    "entries:\n"
+    "  - id: quinoa_sack\n"
+    "    weight: 1\n"
+)
+
+#: Phase 4's DENSE location (one per land chunk, like
+#: tools/location_overlay_probe.py's DENSE_YAML), which guarantees
+#: content at the SYNCHRONOUS centre chunk (0,0).
+DENSE_LOCATION_YAML = (
+    "locations:\n"
+    "  - id: dense_ruin\n"
+    "    label: Dense Ruin\n"
+    "    type: ruin\n"
+    "    builder: room_small\n"
+    "    anchor: [waterside]\n"
+    "    max_count: 100000\n"
+    "    min_spacing: 1\n"
+    "    bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 }\n"
+    "    naming: { heads: [KEEP], modifiers: [ASH] }\n"
+    "    contents:\n"
+    "      - { kind: building, id: cargo_hold_S, count: 1, position: {x: 0, y: 0} }\n"
+    "      - { kind: unit, id: acolyte, count: 1, faction: hostile, position: {x: 1, y: 1} }\n"
+)
 
 #: A location-instance id no page will ever have allocated (#915) —
 #: used to stage a memory whose (page, id) cannot resolve after a load.
@@ -671,31 +942,74 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--size", type=int, default=64)
     ap.add_argument("--port", type=int, default=9190)
+    ap.add_argument("--keep-artifacts", action="store_true",
+                    help="keep this run's artifact directory (its five "
+                         "fixture YAMLs, the engine log, and the isolated "
+                         "resource root with its save slots) instead of "
+                         "deleting it, and name it in the summary — for "
+                         "diagnosing a failure")
     args = ap.parse_args()
 
-    # One throwaway resource root per invocation, and slot names carrying
-    # that root's own random token, so two concurrent runs cannot collide
-    # and no developer-visible save slot is created, mutated or rotated
-    # (#1620 requirement 5).
-    base = tempfile.mkdtemp(prefix=ROOT_PREFIX)
+    # One artifact directory per invocation, holding the throwaway
+    # resource root (#1620 requirement 5 — slot names carry that root's
+    # own random token, so no developer-visible save slot is created,
+    # mutated or rotated) AND, since #1884, the five fixture YAMLs and
+    # the engine log that used to be fixed /tmp names.
+    #
+    # The guard starts HERE, one statement after that directory exists,
+    # because everything between this point and the release below can
+    # fail with invocation-owned state already on disk: `build` stages
+    # incrementally — the root, three symlinks, a copied `config/`,
+    # `saves/`, then the log and fixture directories — so a permission,
+    # source or disk-space failure part-way through leaves a partial
+    # tree that nothing outside this guard would remove.
+    art = RunArtifacts(tempfile.mkdtemp(prefix=ROOT_PREFIX))
     # The WHOLE random suffix, not the text after the last underscore:
     # mkdtemp's alphabet includes '_', so splitting on it can throw most
     # of the entropy away (and can leave nothing at all).
-    token = os.path.basename(base)[len(ROOT_PREFIX):]
+    token = os.path.basename(art.base)[len(ROOT_PREFIX):]
+    rc = 1
     try:
-        rc = run(args, make_isolated_root(base), token)
+        art.build()
+        rc = run(args, art, token)
+    except SystemExit as exc:
+        # How `probelib.boot` ends a run whose engine died before READY
+        # or never printed it. Reported rather than allowed to exit, so
+        # the release below stays on the path and the summary names the
+        # abort. A `finally` alone would still release, but the run's
+        # own result would be lost with the propagating exit.
+        print(f"FAIL: the run aborted before finishing: {exc}",
+              file=sys.stderr)
     finally:
+        # Every engine this run LAUNCHED must be dead before its files
+        # go: each phase already quits its own in a `finally`, but that
+        # leaves two windows — an interrupt inside `probelib.boot`'s
+        # three-minute READY wait, and one inside `quit_engine` itself,
+        # which sends, waits, then hard-kills. `abandon_engine` is a
+        # no-op on a handle that has already exited, so the orderly
+        # shutdowns above are untouched.
+        for proc in art.launched:
+            abandon_engine(proc)
         # Reported, never swallowed, and reported even when `run` is
-        # leaving by an exception (boot() exits the process on a dead
-        # engine) — a root that survived is exactly the artifact #1620
-        # requirement 6 forbids.
-        leftover = remove_isolated_root(base)
+        # leaving by an exception — a root that survived is exactly the
+        # artifact #1620 requirement 6 forbids, and since #1884 the
+        # fixtures and log inside it are covered by the same removal.
+        leftover = release_artifacts(art, args.keep_artifacts)
         if leftover:
             print(f"FAIL: {leftover}", file=sys.stderr)
+        elif rc != 0 and not args.keep_artifacts:
+            # A failure's primary evidence is the engine log, and some
+            # paths above have already named it — `probelib.boot`'s
+            # abort message quotes the path verbatim. It has just been
+            # deleted with the rest of the tree, so say so here rather
+            # than leave the operator chasing a path that is gone.
+            print("  (this run's engine log and fixture YAMLs went with its "
+                  "artifact directory — re-run with --keep-artifacts to keep "
+                  "them)")
     return 1 if leftover else rc
 
 
-def run(args, root: str, token: str) -> int:
+def run(args, art: RunArtifacts, token: str) -> int:
     slot_content = f"loc_content_probe_{token}"
     slot_naming = f"loc_naming_probe_{token}"
 
@@ -716,7 +1030,7 @@ def run(args, root: str, token: str) -> int:
     sibling_keys: tuple[str, ...] = ()
 
     # ---- Phase 1: content spawns when a ruin's chunk loads. ----
-    proc = boot_isolated(args.port, root)
+    proc = boot_isolated(args.port, art)
     try:
         load_defs(args.port)
         gen_world(args.port, "wa", args.seed, args.size)
@@ -1031,7 +1345,7 @@ def run(args, root: str, token: str) -> int:
             # save must be COMPLETE — not merely accepted — before that
             # process boots (#1620).
             saved_content = save_and_wait(args.port, "wa", slot_content,
-                                          failures)
+                                          failures, log=art.engine_log)
     finally:
         quit_engine(args.port, proc)
 
@@ -1046,7 +1360,7 @@ def run(args, root: str, token: str) -> int:
     #      ruin got which reward. ----
     if ruins and loot1 and not failures:
         for label, reverse in (("same order", False), ("reversed order", True)):
-            proc = boot_isolated(args.port, root)
+            proc = boot_isolated(args.port, art)
             try:
                 load_defs(args.port)
                 gen_world(args.port, "wa", args.seed, args.size)
@@ -1072,7 +1386,7 @@ def run(args, root: str, token: str) -> int:
     #      NOT respawn (one-time flag persisted, independent of the
     #      structure.hasAt geometry check). ----
     if ruins and saved_content and not failures:
-        proc = boot_isolated(args.port, root)
+        proc = boot_isolated(args.port, art)
         try:
             load_defs(args.port)
             # #915: the unit AI stack must be loaded BEFORE the load, so
@@ -1084,7 +1398,8 @@ def run(args, root: str, token: str) -> int:
             # Issue #763: engine.loadSave only ACCEPTS synchronously -- the
             # saved page ("wa", its own id verbatim -- no more main_world
             # remap) doesn't exist live until the transaction publishes.
-            if not load_and_wait(args.port, slot_content, failures):
+            if not load_and_wait(args.port, slot_content, failures,
+                                 log=art.engine_log):
                 raise _PhaseAborted
             send(args.port, "world.show('wa'); return 'ok'")
             time.sleep(1.0)
@@ -1171,15 +1486,18 @@ def run(args, root: str, token: str) -> int:
                 # survives every hop from the references() hook to
                 # World.Save.Integrity (the save_modules flatteners
                 # rebuild each edge field by field, and an id alone
-                # resolves against nothing for a per-page kind). LOG is
-                # truncated per boot, so this names only this load.
+                # resolves against nothing for a per-page kind). The
+                # log is this INVOCATION's (#1884) and probelib.boot
+                # truncates it per boot, so this names only this load —
+                # and no concurrent run can interleave into it.
                 try:
-                    with open(LOG, encoding="utf-8", errors="replace") as fh:
+                    with open(art.engine_log, encoding="utf-8",
+                              errors="replace") as fh:
                         diags = [ln.strip() for ln in fh
                                  if "integrity diagnostic" in ln
                                  and "location_instance" in ln]
                 except OSError as e:
-                    diags = [f"could not read {LOG}: {e}"]
+                    diags = [f"could not read {art.engine_log}: {e}"]
                 want_bits = ("lua.unit_ai", f"page=wa,id={DANGLING_ID}",
                              "knownLocations", "location_instance")
                 if len(diags) == 1 and all(b in diags[0] for b in want_bits):
@@ -1246,72 +1564,21 @@ def run(args, root: str, token: str) -> int:
     #      YAML boundary, so an entry naming one would fail the whole
     #      file's decode and leave bogus_ruin unregistered, taking the
     #      unknown-ID checks below down with it. ----
-    bogus_yaml = "/tmp/loc_content_probe_bogus.yaml"
+    bogus_yaml = art.fixture("bogus")
     with open(bogus_yaml, "w") as fh:
-        fh.write(
-            "locations:\n"
-            "  - id: bogus_ruin\n"
-            "    label: Bogus Ruin\n"
-            "    type: ruin\n"
-            "    builder: room_small\n"
-            "    anchor: []\n"
-            "    max_count: 0\n"
-            "    bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 }\n"
-            "    naming: { heads: [KEEP], modifiers: [ASH] }\n"
-            "    contents:\n"
-            "      - { kind: unit, id: does_not_exist, count: 1 }\n"
-            "      - { kind: loot_table, id: bogus_table, rolls: 1 }\n"
-        )
-    bogus_loot_yaml = "/tmp/loc_content_probe_bogus_loot.yaml"
+        fh.write(BOGUS_LOCATION_YAML)
+    bogus_loot_yaml = art.fixture("bogus_loot")
     with open(bogus_loot_yaml, "w") as fh:
-        fh.write(
-            "id: bogus_table\n"
-            "entries:\n"
-            "  - id: item_that_does_not_exist\n"
-            "    weight: 1\n"
-        )
-    # A single-entry loot table forces quinoa_sack to spawn through the
-    # real content-spawn path (locations.spawnContents -> loot.rollFor ->
-    # item.spawnGround) whatever the roll context, rather than depending
-    # on whether ruin_common's 2/13-weight entry happens to be the one
-    # this instance's draw selects (#800). #948 made that draw seed-stable
-    # rather than random, but it is still weight-dependent — which entry a
-    # given instance lands on is not something to assert on here.
-    #
-    # The second entry keeps the fixed-position `kind: item` dispatch
-    # branch (scripts/locations.lua spawnItemContent) under test: #921
-    # removed the last SHIPPED use of it, and an untested branch is one
-    # edit from silently breaking for the loot-container work that will
-    # want it back. `position` is the part with no other coverage — a
-    # scattered entry lands anywhere in bounds, so only a fixed one can
-    # be asserted to the exact tile.
-    quinoa_yaml = "/tmp/loc_content_probe_quinoa.yaml"
-    FIXED_DEF, FIXED_OX, FIXED_OY = "radio", -1, 2
+        fh.write(BOGUS_LOOT_YAML)
+    # Why this fixture's single-entry loot table and fixed-position item
+    # are what they are: see QUINOA_LOCATION_YAML above.
+    quinoa_yaml = art.fixture("quinoa")
     with open(quinoa_yaml, "w") as fh:
-        fh.write(
-            "locations:\n"
-            "  - id: probe_quinoa_ruin\n"
-            "    label: Quinoa Probe Ruin\n"
-            "    type: ruin\n"
-            "    builder: room_small\n"
-            "    anchor: []\n"
-            "    max_count: 0\n"
-            "    bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 }\n"
-            "    naming: { heads: [KEEP], modifiers: [ASH] }\n"
-            "    contents:\n"
-            "      - { kind: loot_table, id: probe_quinoa_table, rolls: 1 }\n"
-            f"      - {{ kind: item, id: {FIXED_DEF}, count: 1, "
-            f"position: {{x: {FIXED_OX}, y: {FIXED_OY}}} }}\n"
-        )
-    quinoa_loot_yaml = "/tmp/loc_content_probe_quinoa_loot.yaml"
+        fh.write(QUINOA_LOCATION_YAML)
+    quinoa_loot_yaml = art.fixture("quinoa_loot")
     with open(quinoa_loot_yaml, "w") as fh:
-        fh.write(
-            "id: probe_quinoa_table\n"
-            "entries:\n"
-            "  - id: quinoa_sack\n"
-            "    weight: 1\n"
-        )
-    proc = boot_isolated(args.port, root)
+        fh.write(QUINOA_LOOT_YAML)
+    proc = boot_isolated(args.port, art)
     try:
         load_defs(args.port)
         # These four fixtures are DELIBERATELY full of unknown IDS, but the
@@ -1339,7 +1606,7 @@ def run(args, root: str, token: str) -> int:
                   "the engine")
         else:
             failures.append(f"spawnContents with bogus content misbehaved: {r!r} / {alive!r}")
-        log_text = open(LOG, errors="replace").read()
+        log_text = open(art.engine_log, errors="replace").read()
         if ("unknown unit content" in log_text
                 and "rolled unknown item id" in log_text):
             print("PASS: the unknown unit id AND the "
@@ -1347,7 +1614,7 @@ def run(args, root: str, token: str) -> int:
         else:
             failures.append(
                 "expected warnings for unknown unit id AND unknown loot "
-                f"roll not both found in {LOG}")
+                f"roll not both found in {art.engine_log}")
 
         # #800: the registry-based validation replacing the old hardcoded
         # loot_names allowlist. First, force quinoa_sack through the real
@@ -1427,24 +1694,10 @@ def run(args, root: str, token: str) -> int:
     #      active/visible status — so this needs no chunk loading on the
     #      hidden page (world.loadChunksInRegion only targets the active
     #      world, so a hidden page can't otherwise be force-loaded here). ----
-    dense_yaml = "/tmp/loc_content_probe_dense.yaml"
+    dense_yaml = art.fixture("dense")
     with open(dense_yaml, "w") as fh:
-        fh.write(
-            "locations:\n"
-            "  - id: dense_ruin\n"
-            "    label: Dense Ruin\n"
-            "    type: ruin\n"
-            "    builder: room_small\n"
-            "    anchor: [waterside]\n"
-            "    max_count: 100000\n"
-            "    min_spacing: 1\n"
-            "    bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 }\n"
-            "    naming: { heads: [KEEP], modifiers: [ASH] }\n"
-            "    contents:\n"
-            "      - { kind: building, id: cargo_hold_S, count: 1, position: {x: 0, y: 0} }\n"
-            "      - { kind: unit, id: acolyte, count: 1, faction: hostile, position: {x: 1, y: 1} }\n"
-        )
-    proc = boot_isolated(args.port, root)
+        fh.write(DENSE_LOCATION_YAML)
+    proc = boot_isolated(args.port, art)
     try:
         # Registries only — NOT ruin_small.yaml, which would contend with
         # dense_ruin for chunk (0,0) and make the placement non-deterministic
@@ -1575,7 +1828,7 @@ def run(args, root: str, token: str) -> int:
     #      own generated language, falls back to the definition label
     #      when the world has none, and both survive save/load. ----
     named: dict[int, tuple[str, str | None]] = {}
-    proc = boot_isolated(args.port, root)
+    proc = boot_isolated(args.port, art)
     try:
         load_defs(args.port)
         gen_named_world(args.port, "ln", args.seed, args.size)
@@ -1623,16 +1876,17 @@ def run(args, root: str, token: str) -> int:
 
             # The fresh process below reads this fixture (#1620).
             saved_naming = save_and_wait(args.port, "ln", slot_naming,
-                                         failures)
+                                         failures, log=art.engine_log)
     finally:
         quit_engine(args.port, proc)
 
     if named and saved_naming and not failures:
-        proc = boot_isolated(args.port, root)
+        proc = boot_isolated(args.port, art)
         try:
             load_defs(args.port)
             load_ai_stack(args.port)
-            if not load_and_wait(args.port, slot_naming, failures):
+            if not load_and_wait(args.port, slot_naming, failures,
+                                 log=art.engine_log):
                 raise _PhaseAborted
             send(args.port, "world.show('ln'); return 'ok'")
             time.sleep(1.0)

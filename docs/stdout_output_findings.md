@@ -12,25 +12,25 @@ Two proportionate observations were used instead of a full CI run: Hspec's dry-r
 
 ## Status
 
-- [ ] STDOUT-1. Headless CI prints every passing Hspec example
-- [ ] STDOUT-2. Cabal build progress grows linearly with the project
-- [ ] STDOUT-3. Audit companion tests print every successful assertion
-- [ ] STDOUT-4. Probe-orchestration self-tests print every successful assertion
-- [ ] STDOUT-5. Module-budget guards print every passing file
-- [ ] STDOUT-6. Headless fixtures inherit the production stdout logger
-- [ ] STDOUT-7. The parity spec prints its passing diagnostic unconditionally
-- [ ] STDOUT-8. Notification-registry success is logged on every engine allocation
-- [ ] STDOUT-9. Content loading reports the same success at multiple layers
-- [ ] STDOUT-10. Lua module lifecycle boilerplate is logged at Info
-- [ ] STDOUT-11. Worldgen tectonic and climate banners are ordinary Info logs
-- [ ] STDOUT-12. Worker and engine startup emit paired lifecycle lines
-- [ ] STDOUT-13. Internal Lua state and action telemetry bypasses Debug
+- [x] STDOUT-1. Headless CI prints every passing Hspec example — [#1916]
+- [x] STDOUT-2. Cabal build progress grows linearly with the project — [#1920]
+- [x] STDOUT-3. Audit companion tests print every successful assertion — [#1922]
+- [x] STDOUT-4. Probe-orchestration self-tests print every successful assertion — [#1922]
+- [x] STDOUT-5. Module-budget guards print every passing file — [#1924]
+- [x] STDOUT-6. Headless fixtures inherit the production stdout logger — [#1925]
+- [x] STDOUT-7. The parity spec prints its passing diagnostic unconditionally — [#1926]
+- [x] STDOUT-8. Notification-registry success is logged on every engine allocation — [#1928]
+- [x] STDOUT-9. Content loading reports the same success at multiple layers — [#1930]
+- [ ] STDOUT-10. Lua module lifecycle boilerplate is logged at Info — [deferred]: conflicts with #1930
+- [x] STDOUT-11. Worldgen tectonic and climate banners are ordinary Info logs — [#1933]
+- [x] STDOUT-12. Worker and engine startup emit paired lifecycle lines — [#1934]
+- [x] STDOUT-13. Internal Lua state and action telemetry bypasses Debug — [#1935]
 
 ---
 
 ## CI runner and gate presentation
 
-### STDOUT-1. Headless CI prints every passing Hspec example
+### [#1916] STDOUT-1. Headless CI prints every passing Hspec example
 
 The headless suite uses Hspec's default formatter while both CI entry points request direct test output. That combination prints the description of every successful example, so the log's routine success volume grows with a suite that already contains thousands of examples and visually separates failures from their surrounding context.
 
@@ -48,7 +48,7 @@ The headless suite uses Hspec's default formatter while both CI entry points req
 - **Scope and constraints:** Keep CI and `make ci` presentation aligned. This finding concerns Hspec formatting, not suppressing application logs captured during a failed example.
 - **Remaining uncertainty:** The preferred compact Hspec formatter and whether CI should attach a full verbose transcript need product/maintainer choice.
 
-### STDOUT-2. Cabal build progress grows linearly with the project
+### [#1920] STDOUT-2. Cabal build progress grows linearly with the project
 
 CI's warning-clean builds and test invocation use Cabal's normal verbosity. On a cold or invalidated build, Cabal prints the build plan and a numbered compile line for every module; the amount of successful-path output therefore scales with a library that already has hundreds of modules.
 
@@ -66,7 +66,7 @@ CI's warning-clean builds and test invocation use Cabal's normal verbosity. On a
 - **Scope and constraints:** Warning visibility is load-bearing because the project deliberately builds with `-Werror`. CI/local command parity and the usefulness of cold-build diagnostics must be preserved.
 - **Remaining uncertainty:** Cabal verbosity should be validated on both success and a representative compile failure before standardizing the exact flag.
 
-### STDOUT-3. Audit companion tests print every successful assertion
+### [#1922] STDOUT-3. Audit companion tests print every successful assertion
 
 The Python audit companion tests use `expect` helpers that print an `OK:` record for every passing case. The main audit self-test runs dozens of groups, and the wider companion corpus contains hundreds of direct success-printing assertions, turning a passing invariant check into a long assertion transcript rather than a concise summary.
 
@@ -84,7 +84,7 @@ The Python audit companion tests use `expect` helpers that print an `OK:` record
 - **Scope and constraints:** Apply a consistent contract across audit companion tests without weakening assertion coverage, exit codes, or failure messages. Avoid a mechanical rewrite that makes failures harder to localize.
 - **Remaining uncertainty:** The exact script inventory and whether a shared helper can provide the policy should be re-established when this finding is processed.
 
-### STDOUT-4. Probe-orchestration self-tests print every successful assertion
+### [#1922] STDOUT-4. Probe-orchestration self-tests print every successful assertion
 
 The probe runner, census, claim, and deflake self-tests repeat the same success-printing `expect` pattern at still larger scale. CI runs these tools as gate self-tests, so their internal assertion narration competes with the actual failure and selection information that the probe infrastructure is meant to expose.
 
@@ -102,7 +102,7 @@ The probe runner, census, claim, and deflake self-tests repeat the same success-
 - **Scope and constraints:** Do not suppress probe subprocess output that a test is explicitly validating, and preserve the distinction between self-test presentation and real probe execution logs.
 - **Remaining uncertainty:** Some self-tests may rely on captured stdout as part of their contract; processing should classify those cases before centralizing the helper behavior.
 
-### STDOUT-5. Module-budget guards print every passing file
+### [#1924] STDOUT-5. Module-budget guards print every passing file
 
 Both module-budget gates print one success line for every governed module and then print a summary. These are ratchet checks whose useful successful result is the aggregate pass; enumerating every file makes routine output grow whenever another module family is brought under a budget.
 
@@ -123,7 +123,7 @@ Both module-budget gates print one success line for every governed module and th
 
 ## Headless test-owned output
 
-### STDOUT-6. Headless fixtures inherit the production stdout logger
+### [#1925] STDOUT-6. Headless fixtures inherit the production stdout logger
 
 The ordinary headless test harness initializes each engine with the production logger, whose default backend writes Info and above to stdout. Tests that do not care about logs therefore inherit runtime boot chatter automatically, and suites with many independent engine allocations multiply it.
 
@@ -142,7 +142,7 @@ The ordinary headless test harness initializes each engine with the production l
 - **Scope and constraints:** Tests that assert log behavior need an explicit capture path. Failure-time diagnostics should remain recoverable, and production initialization semantics must not be changed accidentally.
 - **Remaining uncertainty:** Whether quiet fixtures should discard logs, buffer them for failure reporting, or route them through Hspec is a design choice for processing.
 
-### STDOUT-7. The parity spec prints its passing diagnostic unconditionally
+### [#1926] STDOUT-7. The parity spec prints its passing diagnostic unconditionally
 
 One world-generation parity test writes its calculated comparison directly to stdout before making its assertions. The values are valuable when the assertion fails, but on success the line is an implementation diagnostic embedded in the middle of the test formatter's output.
 
@@ -162,7 +162,7 @@ One world-generation parity test writes its calculated comparison directly to st
 
 ## Runtime boot and load logging
 
-### STDOUT-8. Notification-registry success is logged on every engine allocation
+### [#1928] STDOUT-8. Notification-registry success is logged on every engine allocation
 
 Notification registry construction emits an Info message after normal successful loading. Because the registry is part of engine initialization, the same low-information confirmation appears in headless tests, probes, and application boots even though callers already learn about failure through the error path.
 
@@ -179,7 +179,7 @@ Notification registry construction emits an Info message after normal successful
 - **Scope and constraints:** This should not hide malformed YAML, duplicate registration, missing-resource, or other actionable failures.
 - **Remaining uncertainty:** A useful structured success metric, such as the loaded entry count, may justify debug-level retention but was not assessed here.
 
-### STDOUT-9. Content loading reports the same success at multiple layers
+### [#1930] STDOUT-9. Content loading reports the same success at multiple layers
 
 Several asset families log successful loading both in the Haskell/YAML owner and in the Lua loader that consumes or registers the same content. A normal boot can therefore report one logical operation twice, often once as a count and again as a lifecycle sentence, without adding actionable information at Info level.
 
@@ -198,7 +198,9 @@ Several asset families log successful loading both in the Haskell/YAML owner and
 - **Scope and constraints:** Preserve errors, validation failures, missing references, and counts that are genuinely needed as a user-facing boot health signal. The finding is about duplicate success narration, not removing observability.
 - **Remaining uncertainty:** Each asset family's intended ownership boundary should be mapped during processing; the examples establish a category, not an exhaustive loader list.
 
-### STDOUT-10. Lua module lifecycle boilerplate is logged at Info
+### [deferred] STDOUT-10. Lua module lifecycle boilerplate is logged at Info
+
+> **Deferred:** 15 of the 48 lifecycle-shaped `engine.logInfo` calls sit in the eight loader scripts #1930 already rewrites, under a directly conflicting instruction — #1930 keeps one aggregate Info line per family, which a blanket demotion would delete. Precondition: #1930 merges, after which the remaining 33 non-loader sites can be scoped against the Info/Debug boundary it establishes. Already settled and not blocking: `CatLua` is reachable via `ENGINE_DEBUG=Lua`/`all` (#1915's gap is `CatWorld`/`CatRender`/`CatUnit`), and the in-game log panels read `engine.getEventLog()`, a separate stream.
 
 The main Lua initializer loads a large module graph whose components frequently announce routine `load`, `initialize`, and `ready` transitions with `engine.logInfo`. The Lua logging API maps all of those calls to the single `CatLua` Info stream even though it already exposes a debug-level operation, so normal startup is dominated by deterministic lifecycle boilerplate.
 
@@ -217,7 +219,7 @@ The main Lua initializer loads a large module graph whose components frequently 
 - **Scope and constraints:** Warnings, errors, and messages that mark externally observable server/application readiness are not candidates for blanket demotion. `ENGINE_DEBUG` category reachability must be considered before depending on a new or existing category.
 - **Remaining uncertainty:** The exact allowlist of meaningful Info milestones needs per-call-site review; this report deliberately identifies the category rather than pre-dispositioning every Lua log call.
 
-### STDOUT-11. Worldgen tectonic and climate banners are ordinary Info logs
+### [#1933] STDOUT-11. Worldgen tectonic and climate banners are ordinary Info logs
 
 World generation emits multi-line tectonic and weather summaries through the normal Info logger as well as through the generation-log channel. These deterministic banners account for a substantial block of every relevant probe or headless run even when the caller did not request world-generation diagnostics.
 
@@ -233,7 +235,7 @@ World generation emits multi-line tectonic and weather summaries through the nor
 - **Scope and constraints:** Preserve generation progress consumers and any protocol/UI surface that relies on `sendGenLog`. Only the duplicate ordinary Info emission is clearly in scope here.
 - **Remaining uncertainty:** Whether any external automation parses the human-readable Info banner should be checked before changing it.
 
-### STDOUT-12. Worker and engine startup emit paired lifecycle lines
+### [#1934] STDOUT-12. Worker and engine startup emit paired lifecycle lines
 
 The generic worker primitive emits both `Starting …` and `… started` at Info, while top-level headless lifecycle code adds its own engine start/shutdown messages. These pairs are useful during a startup race investigation but are repetitive in healthy runs, especially when several workers and many short-lived fixture engines are involved.
 
@@ -255,7 +257,7 @@ The generic worker primitive emits both `Starting …` and `… started` at Info
 
 ## Runtime diagnostic telemetry
 
-### STDOUT-13. Internal Lua state and action telemetry bypasses Debug
+### [#1935] STDOUT-13. Internal Lua state and action telemetry bypasses Debug
 
 Several Lua UI and gameplay modules log mutable state snapshots and frequent user actions with `engine.logInfo`. These messages are diagnostics rather than application milestones, and some can occur once per edit or placement, so an ordinary interactive or automated run accumulates data that belongs behind explicit debug selection.
 

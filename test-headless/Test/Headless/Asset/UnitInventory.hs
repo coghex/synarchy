@@ -63,7 +63,7 @@ allGameplayUnits ∷ [Text]
 allGameplayUnits = gameplayUnits ⧺ [n | (n, _, _, _) ← promotedUnits]
 
 assetOnlyUnits ∷ [(Text, Int)]
-assetOnlyUnits = [("nomad_primitive", 7)]
+assetOnlyUnits = [("nomad_primitive", 13)]
 
 unitYamlPath ∷ Text → FilePath
 unitYamlPath name = "data" </> "units" </> T.unpack name <> ".yaml"

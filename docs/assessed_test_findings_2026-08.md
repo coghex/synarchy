@@ -37,16 +37,16 @@ remote state was changed while drafting this report.
 
 ## Status
 
-- [ ] AT-1. Lunge cancellation fixtures spawn on unloaded terrain
-- [ ] AT-2. Item-list probe continues after a failed reach precondition
-- [ ] AT-3. Direct probe boots count cold compilation as engine readiness
-- [ ] AT-4. HUD bitmap glyphs collapse at east/west camera facings
+- [x] AT-1. Lunge cancellation fixtures spawn on unloaded terrain — [#1909]
+- [x] AT-2. Item-list probe continues after a failed reach precondition — [#1911]
+- [x] AT-3. Direct probe boots count cold compilation as engine readiness — [#1913]
+- [x] AT-4. HUD bitmap glyphs collapse at east/west camera facings — [no-issue]
 
 ---
 
 ## Scenario preconditions
 
-### AT-1. Lunge cancellation fixtures spawn on unloaded terrain
+### [#1909] AT-1. Lunge cancellation fixtures spawn on unloaded terrain
 
 The lunge probe stages its timeout and never-lift cases outside the flat
 arena's loaded chunk footprint. Those cases therefore depend on the engine's
@@ -81,7 +81,7 @@ those cancellation paths is weaker than the probe claims.
   terrain changed the state-machine result; it shows that those two cases do
   not establish the representative physical setup they claim.
 
-### AT-2. Item-list probe continues after a failed reach precondition
+### [#1911] AT-2. Item-list probe continues after a failed reach precondition
 
 The unit-to-unit escort branch requires the source and target to be outside
 the transfer contract's reach before creating the session. After four live
@@ -121,7 +121,7 @@ approach and hold failures can therefore be reported from an invalid fixture.
 
 ## Probe launch lifecycle
 
-### AT-3. Direct probe boots count cold compilation as engine readiness
+### [#1913] AT-3. Direct probe boots count cold compilation as engine readiness
 
 A probe invoked directly without `SYNARCHY_PROBE_ENGINE_EXE` launches
 `cabal run` and starts the fixed 180-second `READY` deadline immediately.
@@ -171,7 +171,19 @@ of surviving compiler descendants.
 
 ## Rendered UI isolation
 
-### AT-4. HUD bitmap glyphs collapse at east/west camera facings
+### [no-issue] AT-4. HUD bitmap glyphs collapse at east/west camera facings
+
+> **Disposition:** No issue — the finding's own retained captures refute it. In
+> all four of `wall_face{south,north,west,east}.png` and the `toolbar_face*.png`
+> crops, the hamburger and all six toolbar glyphs render full-size and legible;
+> each control's 60×60 box has identical glyph-ink pixel counts and a 60-pixel
+> horizontal extent at every facing, and every pixel differing between any two
+> facings falls in the outermost 6-pixel rounded-corner margin where the rotated
+> world shows through — zero differing interior pixels. The four full frames are
+> mutually distinct, so the rotation did occur. The code agrees: the bindless UI
+> vertex shader applies only `ubo.uiProj` (framebuffer-size only), `rotateCW`
+> leaves `camRotation` at 0, and `src/UI/` contains no reference to camera
+> facing at all.
 
 A real offscreen Vulkan session captured the same HUD at all four world-camera
 facings. The hamburger and six left-toolbar bitmap glyphs were legible facing

@@ -146,6 +146,16 @@
         43
       ]
     },
+    "LAVA_RIM_INCOMPLETE": {
+      "min": 3,
+      "max": 3,
+      "median": 3,
+      "all": [
+        3,
+        3,
+        3
+      ]
+    },
     "MID_RIVER_CLIFF": {
       "min": 83,
       "max": 83,
@@ -215,6 +225,7 @@
       "FLOATING_WATER": 117,
       "ISLAND_1TILE": 1,
       "ISOLATED_FLUID": 43,
+      "LAVA_RIM_INCOMPLETE": 3,
       "MID_RIVER_CLIFF": 83,
       "MULTI_ISLAND": 16,
       "RIVER_CHUNK_GAP": 11,
@@ -1973,6 +1984,23 @@
           "x": 74,
           "y": -51,
           "details": "lake surf=28 surrounded by dry"
+        }
+      ],
+      "LAVA_RIM_INCOMPLETE": [
+        {
+          "x": -21,
+          "y": -64,
+          "details": "lava fluidSurf=1 unjudged at 1 off-region nbr(s)"
+        },
+        {
+          "x": 27,
+          "y": 79,
+          "details": "lava fluidSurf=1 unjudged at 1 off-region nbr(s)"
+        },
+        {
+          "x": 28,
+          "y": 79,
+          "details": "lava fluidSurf=1 unjudged at 1 off-region nbr(s)"
         }
       ],
       "MID_RIVER_CLIFF": [
