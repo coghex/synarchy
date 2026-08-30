@@ -70,6 +70,8 @@ module World.Save.Envelope
     , decodeSaveEnvelopeMetadata
     , GenerationFailure(..)
     , renderGenerationFailure
+    , LoadProgress(..)
+    , generationFailureProgress
     , decodeSessionEnvelopeClassified
     , decodeSaveEnvelopeMetadataClassified
     , foreignOptionalComponentIds
@@ -92,7 +94,8 @@ import World.Save.Component
     (componentKnownIds, componentRequiredIds
     , encodeComponentSpecs, assembleSnapshot)
 import World.Save.Component.Types
-    (ComponentError, renderComponentError, metadataComponentId
+    (ComponentError(..), ComponentPhase(..), renderComponentError
+    , metadataComponentId
     , luaComponentPrefix)
 import World.Save.Compat.SessionV90
     ( sessionComponentId, sessionComponentVersion
@@ -216,8 +219,8 @@ decodeSaveEnvelopeMetadata luaKnownNames bytes =
         Right meta     → Right meta
         Left modernErr → case tryLegacyMetadataFallbacks bytes of
             NotLegacyShaped         → Left modernErr
-            LegacyShapedButFailed e → Left e
-            LegacyDecoded meta      → Right meta
+            LegacyShapedButFailed _ e → Left e
+            LegacyDecoded meta        → Right meta
 
 -- | Decode + validate the envelope, decode the metadata component, then
 --   reconstruct the complete, cross-validated 'SessionSnapshot' from all
@@ -242,7 +245,7 @@ decodeSessionEnvelope luaKnownNames luaRequiredNames bytes =
         Right result   → Right result
         Left modernErr → case tryLegacyEnvelopeFallbacks bytes of
             NotLegacyShaped         → Left modernErr
-            LegacyShapedButFailed e → Left e
+            LegacyShapedButFailed _ e  → Left e
             LegacyDecoded (meta, snap) → Right (meta, snap, [], True)
   where
     decodeModern = do
@@ -265,8 +268,27 @@ decodeSessionEnvelope luaKnownNames luaRequiredNames bytes =
 --   the genuine, actionable reason, not noise to discard).
 data LegacyDecodeResult a
     = NotLegacyShaped
-    | LegacyShapedButFailed !Text
+    | LegacyShapedButFailed !LoadProgress !Text
+      -- ^ The 'LoadProgress' states how far this legacy candidate
+      --   actually got (issue #1919). It is NOT decoration: both
+      --   fallbacks run real component machinery — B1's
+      --   'decodeSessionV90'/'migrateSessionV90' and B2's
+      --   'assembleSnapshot' all yield 'ComponentError's — whose phases
+      --   would otherwise be flattened into the accompanying 'Text' and
+      --   lost, exactly as the substring parser this issue removed used
+      --   to recover them.
     | LegacyDecoded !a
+
+-- | A legacy failure that reached real per-component work: keep the
+--   phases AND render the same text as before, from the SAME error list.
+legacyComponentFailure ∷ [ComponentError] → (LoadProgress, Text)
+legacyComponentFailure errs =
+    (ReachedComponents (map cePhase errs), renderComponentErrors errs)
+
+-- | A legacy failure at the envelope/metadata/structure level — nothing
+--   per-component was reached.
+legacyEnvelopeFailure ∷ Text → (LoadProgress, Text)
+legacyEnvelopeFailure t = (ReachedEnvelope, t)
 
 -- | Recognize and migrate a pre-#760 B1 envelope (issue #766,
 --   save-overhaul C4): a single required @"session"@ component wrapping
@@ -283,15 +305,16 @@ decodeLegacySessionEnvelope
 decodeLegacySessionEnvelope bytes =
     case decodeLegacyStructureAndMetadata bytes of
         Nothing              → NotLegacyShaped
-        Just (Left e)        → LegacyShapedButFailed e
+        Just (Left e)        → LegacyShapedButFailed ReachedEnvelope e
         Just (Right (decoded, meta)) →
-            either LegacyShapedButFailed LegacyDecoded $ do
-                payload ← maybe (Left "legacy session component payload missing")
+            either (uncurry LegacyShapedButFailed) LegacyDecoded $ do
+                payload ← maybe (Left (legacyEnvelopeFailure
+                                        "legacy session component payload missing"))
                                 Right
                                 (HM.lookup sessionComponentId (dePayloads decoded))
-                sd   ← either (Left . renderComponentError) Right
+                sd   ← either (Left . legacyComponentFailure . pure) Right
                               (decodeSessionV90 payload)
-                snap ← either (Left . renderComponentErrors) Right
+                snap ← either (Left . legacyComponentFailure) Right
                               (migrateSessionV90 meta sd)
                 pure (meta, snap)
 
@@ -308,7 +331,7 @@ decodeLegacySessionMetadata ∷ BS.ByteString → LegacyDecodeResult SaveMetadat
 decodeLegacySessionMetadata bytes =
     case decodeLegacyStructureAndMetadata bytes of
         Nothing               → NotLegacyShaped
-        Just (Left e)         → LegacyShapedButFailed e
+        Just (Left e)         → LegacyShapedButFailed ReachedEnvelope e
         Just (Right (_, meta)) → LegacyDecoded meta
 
 -- | Shared structural step for both legacy entry points above: validate
@@ -529,7 +552,7 @@ decodeB2SessionMetadata ∷ BS.ByteString → LegacyDecodeResult SaveMetadata
 decodeB2SessionMetadata bytes =
     case decodeB2StructureAndMetadata bytes of
         Nothing                → NotLegacyShaped
-        Just (Left e)          → LegacyShapedButFailed e
+        Just (Left e)          → LegacyShapedButFailed ReachedEnvelope e
         Just (Right (_, meta)) → LegacyDecoded meta
 
 -- | Recognize and migrate a #760-era envelope (issue #766, requirement
@@ -569,27 +592,33 @@ decodeB2SessionEnvelope
 decodeB2SessionEnvelope bytes =
     case decodeB2StructureAndMetadata bytes of
         Nothing → NotLegacyShaped
-        Just (Left e) → LegacyShapedButFailed e
+        Just (Left e) → LegacyShapedButFailed ReachedEnvelope e
         Just (Right (decoded, meta)) →
-            either LegacyShapedButFailed LegacyDecoded $ do
-                snap ← either (Left . renderComponentErrors) Right
+            either (uncurry LegacyShapedButFailed) LegacyDecoded $ do
+                -- The ONE step here that runs the real component
+                -- machinery, and therefore the one whose phases must
+                -- survive rather than be flattened into text (#1919).
+                snap ← either (Left . legacyComponentFailure) Right
                               (assembleSnapshot meta decoded)
                 luaStatePayload ←
-                    maybe (Left "lua-state component payload missing") Right
+                    maybe (Left (legacyEnvelopeFailure
+                                  "lua-state component payload missing")) Right
                           (HM.lookup luaStateComponentId (dePayloads decoded))
                 luaModules ← either
-                    (\err → Left ("legacy save's opaque \"lua-state\" blob \
-                                  \is malformed (expected the frozen v1 \
-                                  \HashMap Text Text shape): "
-                                  <> T.pack err))
+                    (\err → Left (legacyEnvelopeFailure
+                                  ("legacy save's opaque \"lua-state\" blob \
+                                   \is malformed (expected the frozen v1 \
+                                   \HashMap Text Text shape): "
+                                   <> T.pack err)))
                     Right
                     (S.decode luaStatePayload ∷ Either String (HM.HashMap Text Text))
                 when (not (HM.null luaModules)) $
-                    Left "legacy save carries a non-empty pre-#761 opaque \
+                    Left (legacyEnvelopeFailure
+                         "legacy save carries a non-empty pre-#761 opaque \
                          \\"lua-state\" blob that this build can no longer \
                          \interpret (the pre-#761 Lua deserializer was \
                          \removed) -- refusing to migrate rather than \
-                         \silently discard persisted Lua state"
+                         \silently discard persisted Lua state")
                 pure (meta, snap)
 
 -- | Try the B1 legacy fallback, then the B2 one, in that order --
@@ -774,18 +803,56 @@ data GenerationFailure
         -- ^ Absent, truncated, bad framing, or a checksum failure — the
         --   kind of damage an interrupted publish can actually leave
         --   behind. Safe to fall back to a previous generation.
-    | GenerationIncompatible !Text
+    | GenerationIncompatible !LoadProgress !Text
         -- ^ The bytes are structurally coherent (checksums agree) but
         --   this build cannot interpret them as a valid session: an
         --   unsupported envelope/component version, an unknown/missing
         --   required component, or an assembly/content-validation
         --   failure. Never a fallback trigger — reporting the real
         --   compatibility problem beats silently rolling back progress.
+        --
+        --   The 'LoadProgress' states how far this candidate actually
+        --   got, STRUCTURALLY (issue #1919) — never 'ReachedNothing',
+        --   since reaching this constructor at all means the envelope's
+        --   own framing and checksums already agreed.
     deriving (Show, Eq)
 
+-- | How far a failed load candidate structurally got before failing
+--   (issue #1919). This is carried alongside the rendered message rather
+--   than recovered FROM it: the load-status layer used to substring-match
+--   phase words out of 'renderComponentError' output, so an unrelated
+--   reword in this layer silently degraded @engine.getLoadStatus()@'s
+--   @failedAtPhase@ to a conservative guess. Diagnostics stay rendered at
+--   the presentation edge; progress travels as data.
+data LoadProgress
+    = ReachedNothing
+      -- ^ Never obtained a coherent candidate at all: missing,
+      --   unreadable, symlink-rejected, truncated, bad framing, or a
+      --   checksum mismatch — every 'GenerationCorrupt' shape, plus the
+      --   storage-level refusals that never produce a
+      --   'GenerationFailure' in the first place.
+    | ReachedEnvelope
+      -- ^ The envelope itself was structurally coherent, but the failure
+      --   was NOT a per-component one: an unsupported envelope version,
+      --   an unknown/missing required component, a metadata-component
+      --   failure, a legacy-shaped candidate this build could not
+      --   migrate, or a post-assembly content check.
+    | ReachedComponents ![ComponentPhase]
+      -- ^ Assembly reported per-component failures, carrying each one's
+      --   own 'ComponentPhase'. The list is every phase present in the
+      --   (already capped) failure list, so a mixed-phase result can be
+      --   resolved to the FURTHEST point every component reached.
+    deriving (Show, Eq)
+
+-- | The structured progress a 'GenerationFailure' represents. Total, so
+--   a new failure shape cannot silently inherit someone else's phase.
+generationFailureProgress ∷ GenerationFailure → LoadProgress
+generationFailureProgress (GenerationCorrupt _)             = ReachedNothing
+generationFailureProgress (GenerationIncompatible prog _)   = prog
+
 renderGenerationFailure ∷ GenerationFailure → Text
-renderGenerationFailure (GenerationCorrupt t)      = t
-renderGenerationFailure (GenerationIncompatible t) = t
+renderGenerationFailure (GenerationCorrupt t)        = t
+renderGenerationFailure (GenerationIncompatible _ t) = t
 
 -- | Classifies exactly why 'decodeEnvelope' failed. 'True' ⇒ the failure
 --   is the shape routine storage corruption takes (missing/truncated/
@@ -833,7 +900,8 @@ decodeClassifiedEnvelope luaKnownNames luaRequiredNames bytes =
         Left err
           | isRecoverableEnvelopeError err
                       → Left (GenerationCorrupt (renderEnvelopeError err))
-          | otherwise → Left (GenerationIncompatible (renderEnvelopeError err))
+          | otherwise → Left (GenerationIncompatible ReachedEnvelope
+                                 (renderEnvelopeError err))
         Right decoded → Right decoded
 
 -- | 'decodeSaveEnvelopeMetadata', classified per 'GenerationFailure' —
@@ -847,12 +915,13 @@ decodeSaveEnvelopeMetadataClassified luaKnownNames bytes =
         Right meta     → Right meta
         Left modernErr → case tryLegacyMetadataFallbacks bytes of
             NotLegacyShaped         → Left modernErr
-            LegacyShapedButFailed e → Left (GenerationIncompatible e)
-            LegacyDecoded meta      → Right meta
+            LegacyShapedButFailed prog e → Left (GenerationIncompatible prog e)
+            LegacyDecoded meta           → Right meta
   where
     decodeModern = do
         decoded ← decodeClassifiedEnvelope luaKnownNames HS.empty bytes
-        either (Left . GenerationIncompatible) Right (decodeMetadataComponent decoded)
+        either (Left . GenerationIncompatible ReachedEnvelope) Right
+               (decodeMetadataComponent decoded)
 
 -- | 'decodeSessionEnvelope', classified per 'GenerationFailure' — the
 --   full decode 'World.Save.Storage.selectLoadGeneration' uses to decide,
@@ -874,16 +943,24 @@ decodeSessionEnvelopeClassified luaKnownNames luaRequiredNames bytes =
         Right result   → Right result
         Left modernErr → case tryLegacyEnvelopeFallbacks bytes of
             NotLegacyShaped            → Left modernErr
-            LegacyShapedButFailed e    → Left (GenerationIncompatible e)
-            LegacyDecoded (meta, snap) → Right (meta, snap, [], True)
+            LegacyShapedButFailed prog e →
+                Left (GenerationIncompatible prog e)
+            LegacyDecoded (meta, snap)   → Right (meta, snap, [], True)
   where
     decodeModern = do
         decoded ← decodeClassifiedEnvelope luaKnownNames luaRequiredNames bytes
-        meta ← either (Left . GenerationIncompatible) Right
+        meta ← either (Left . GenerationIncompatible ReachedEnvelope) Right
                       (decodeMetadataComponent decoded)
-        snap ← either (Left . GenerationIncompatible . renderComponentErrors)
-                      Right (assembleSnapshot meta decoded)
+        snap ← either (Left . componentFailure) Right
+                      (assembleSnapshot meta decoded)
         pure (meta, snap, extractLuaComponents decoded, False)
+    -- Issue #1919: the SAME 'ComponentError' list supplies both halves —
+    -- the rendered text (byte-for-byte what it always was) and the
+    -- structured phases — so the two can never disagree, and rendering
+    -- stays a presentation step rather than the transport.
+    componentFailure errs =
+        GenerationIncompatible (ReachedComponents (map cePhase errs))
+                               (renderComponentErrors errs)
 
 -- | Decode the @"metadata"@ component, rejecting an unsupported schema
 --   version before touching its bytes. The descriptor/payload "missing"

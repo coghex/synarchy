@@ -77,6 +77,7 @@ module World.Save.Component.Types
     , ComponentError(..)
     , renderComponentError
     , ComponentCodec(..)
+    , ComponentFold
     , RegisteredComponent(..)
     , registerComponent
     , ComponentSpec(..)
@@ -164,18 +165,29 @@ data ComponentCodec a = ComponentCodec
     , ccValidate  ∷ a → [ComponentError]
     }
 
+-- | What one prepared component contributes to assembly: a fold from
+--   the in-progress snapshot to the snapshot with this component's
+--   ALREADY-DECODED contribution written in (or the assembly errors it
+--   found — e.g. a page-set mismatch).
+--
+--   The decoded value is captured in this closure rather than re-derived,
+--   which is what makes 'rcPrepare' the single decode of a component's
+--   payload (issue #1919).
+type ComponentFold =
+    SessionSnapshot → Either [ComponentError] SessionSnapshot
+
 -- | The type-erased registry entry. Erasing @a@ lets one heterogeneous
---   list drive every uniform pass — encode from a snapshot, decode +
---   self-validate each present component ('rcDecodeErrors'), AND fold each
---   component's decoded contribution back onto the in-progress snapshot
---   during assembly ('rcApply'). Because 'rcApply' is a MANDATORY field,
---   a component cannot be added to 'World.Save.Component.saveComponentRegistry'
---   without also providing its assembly step: a registered-but-unassembled
---   component (written to disk + required by the reader, yet silently
---   ignored on load) is therefore structurally impossible. Every field is
---   built from the same concrete 'ComponentCodec', so a component's
---   encode / decode / validate / assemble contributions can never drift
---   apart (they share the exact same 'ccDecode'/'ccValidate').
+--   list drive every uniform pass — encode from a snapshot, and decode +
+--   self-validate + prepare each present component's assembly fold
+--   ('rcPrepare'). Because 'rcPrepare' is a MANDATORY field built from a
+--   MANDATORY fold argument to 'registerComponent', a component cannot be
+--   added to 'World.Save.Component.saveComponentRegistry' without also
+--   providing its assembly step: a registered-but-unassembled component
+--   (written to disk + required by the reader, yet silently ignored on
+--   load) is therefore structurally impossible. Every field is built from
+--   the same concrete 'ComponentCodec', so a component's encode / decode /
+--   validate / assemble contributions can never drift apart (they share
+--   the exact same 'ccDecode'/'ccValidate').
 data RegisteredComponent = RegisteredComponent
     { rcId           ∷ !ComponentId
     , rcVersion      ∷ !Word32
@@ -183,19 +195,24 @@ data RegisteredComponent = RegisteredComponent
     , rcRequired     ∷ !Bool
     , rcDeps         ∷ ![ComponentId]
     , rcEncode       ∷ SessionSnapshot → BS.ByteString
-    , rcDecodeErrors ∷ DecodedEnvelope → [ComponentError]
+    , rcPrepare      ∷ DecodedEnvelope
+                       → Either [ComponentError] ComponentFold
       -- ^ Decode + component-local-validate this component from a
-      --   structurally-valid envelope, returning EVERY failure (empty ⇒
-      --   the component is well-formed). Drives assembly's all-or-nothing
-      --   decode pass without needing the concrete decoded value.
-    , rcApply        ∷ DecodedEnvelope → SessionSnapshot
-                       → Either [ComponentError] SessionSnapshot
-      -- ^ Decode this component (again, from the already-validated
-      --   envelope) and FOLD its contribution onto the in-progress
-      --   snapshot. This is what makes the registry authoritative for
-      --   assembly (requirement 6): 'World.Save.Component.assembleSnapshot'
-      --   iterates the registry calling this, rather than hard-coding a
-      --   separate, drift-prone apply sequence.
+      --   structurally-valid envelope EXACTLY ONCE, returning either
+      --   EVERY failure it found or the 'ComponentFold' that writes the
+      --   value just decoded onto the in-progress snapshot (issue #1919).
+      --
+      --   This one field replaced a @rcDecodeErrors@/@rcApply@ pair that
+      --   each ran their own 'decodeComponentValue', so a load in which
+      --   every component decoded successfully paid for a second full
+      --   cereal decode of every registered payload. The all-or-nothing
+      --   contract that pair existed to serve is unchanged and needs no
+      --   second decode: 'World.Save.Component.assembleSnapshot' calls
+      --   this once per registered component, collects every 'Left'
+      --   before folding anything, and only then runs the 'Right' folds
+      --   in dependency order. The registry stays type-erased — @a@
+      --   never escapes this closure — which is what still lets ONE
+      --   heterogeneous list drive every uniform pass.
     }
 
 -- | Register a component: build every 'RegisteredComponent' field from its
@@ -209,11 +226,11 @@ data RegisteredComponent = RegisteredComponent
 --   An OPTIONAL component (@ccRequired = False@, first used by #1087's
 --   @"container-knowledge"@ and joined by #1246's @"transfer-orders"@)
 --   that is entirely ABSENT from the envelope
---   contributes nothing and reports nothing: its decode pass is empty
---   and its fold is skipped, leaving whatever default the foundational
---   components already installed. That is decided HERE, once, from
---   'ccRequired' — not per component — so "optional" can never mean two
---   different things in two places. Note the distinction the
+--   contributes nothing and reports nothing: it prepares to the identity
+--   fold WITHOUT decoding anything at all, leaving whatever default the
+--   foundational components already installed. That is decided HERE,
+--   once, from 'ccRequired' — not per component — so "optional" can
+--   never mean two different things in two places. Note the distinction the
 --   'componentAbsent' guard draws: absence is checked at the MANIFEST
 --   level, so a component that IS declared but whose payload is
 --   malformed, truncated, or encoded at an unsupported version still
@@ -229,14 +246,11 @@ registerComponent cc fold = RegisteredComponent
     , rcRequired     = ccRequired cc
     , rcDeps         = ccDeps cc
     , rcEncode       = ccEncode cc
-    , rcDecodeErrors = \de →
-        if optionalAndAbsent de then []
-        else either id (const []) (decodeComponentValue cc de)
-    , rcApply        = \de snap →
-        if optionalAndAbsent de then Right snap
+    , rcPrepare      = \de →
+        if optionalAndAbsent de then Right (\snap → Right snap)
         else do
             a ← decodeComponentValue cc de
-            fold (encodedVersionOf cc de) a snap
+            Right (fold (encodedVersionOf cc de) a)
     }
   where
     optionalAndAbsent de =
