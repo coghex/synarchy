@@ -1249,12 +1249,12 @@ purpose — none is asked to be complete by itself:
    actually reach the accessor in that module: imported by name,
    through a `(..)` wildcard or a bare import, or defined by the module
    itself. Each `import` declaration is kept separate rather than
-   merged into one answer per module, because the three things that
-   decide this are per-declaration language rules — `qualified`
-   removes the *unqualified* spelling from scope entirely, an `as`
-   alias *replaces* the module name as the qualifier rather than
-   joining it, and one module is legitimately imported twice on
-   different terms. So under `import qualified Engine.Core.State as
+   merged into one answer per module, because the things that decide
+   this are per-declaration language rules — `qualified` removes the
+   *unqualified* spelling from scope entirely, an `as` alias
+   *replaces* the module name as the qualifier rather than joining it,
+   a `hiding` clause takes its own names back out, and one module is
+   legitimately imported twice on different terms. So under `import qualified Engine.Core.State as
    State` only `State.fieldOne` is the field and a bare `fieldOne` is
    something the module defined itself, while
    `src/Unit/Thread/Movement.hs` writes a local `utsRef` parameter

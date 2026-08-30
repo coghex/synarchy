@@ -2204,6 +2204,23 @@ viaCapability ∷ EngineEnv → IO ()
 viaCapability env = (fkFieldTwo (toFakeCapability env)) `Ref.writeIORef` 2
 """
 
+# `hiding` brings in everything EXCEPT the listed names, which is how a
+# module legally defines its own `fieldOne` while importing the rest.
+_HIDING_IMPORTER = """\
+module Hiding.Mod where
+
+import Engine.Core.State hiding (fieldOne)
+
+fieldOne ∷ EngineEnv → IORef Int
+fieldOne _ = error "this module's own helper, not the accessor"
+
+shadowed ∷ EngineEnv → IO ()
+shadowed env = writeIORef (fieldOne env) 1
+
+visible ∷ EngineEnv → IO ()
+visible env = writeIORef (fieldTwo env) 2
+"""
+
 # A backtick operator binds looser than application, so an infix
 # operand needs no parentheses at all.
 _BARE_OPERAND = """\
@@ -2397,6 +2414,7 @@ def _writer_sources(**modules: str) -> dict[str, str]:
         "typeApp": "src/TypeApp/Mod.hs",
         "lambdaEscape": "src/LambdaEscape/Mod.hs",
         "infix": "src/Infix/Mod.hs",
+        "hiding": "src/Hiding/Mod.hs",
         "bareOperand": "src/BareOperand/Mod.hs",
         "parens": "src/Parens/Mod.hs",
         "nestedLet": "src/NestedLet/Mod.hs",
@@ -2889,6 +2907,29 @@ def test_qualified_mutation_primitives_are_recognized():
            f"primitive, got: {sorted(writes['fieldOne'])}")
 
 
+def test_a_hiding_clause_removes_a_name_from_scope():
+    """`hiding` brings in everything EXCEPT the listed names, so a
+    module that hides `fieldOne` and defines its own is not writing the
+    field -- while everything it did NOT hide stays in scope. Treating
+    a `hiding` import as simply unrestricted loses that."""
+    writes, _ = _scan(_writer_sources(hiding=_HIDING_IMPORTER))
+    expect(writes["fieldOne"] == set(),
+           f"a hidden name is out of scope, so the module's own helper "
+           f"is not the accessor, got: {sorted(writes['fieldOne'])}")
+    expect(writes["fieldTwo"] == {"Hiding.Mod"},
+           f"a `hiding` clause must not remove anything it did not "
+           f"name, got: {sorted(writes['fieldTwo'])}")
+
+    declarations = parse_imports(
+        "import Engine.Core.State hiding (fieldOne)\n")
+    expect(not imports_name(declarations, "Engine.Core.State",
+                            "fieldOne", ""),
+           "the hidden name is not in scope")
+    expect(imports_name(declarations, "Engine.Core.State",
+                        "fieldTwo", ""),
+           "everything else still is")
+
+
 def test_a_qualified_only_import_excludes_the_bare_spelling():
     """`qualified` removes the UNQUALIFIED spelling from scope entirely,
     so a module-local homonym is not the field even though the owner is
@@ -3192,6 +3233,7 @@ def main() -> int:
         test_qualified_accessors_are_resolved,
         test_a_qualifier_must_name_the_owning_module,
         test_qualified_mutation_primitives_are_recognized,
+        test_a_hiding_clause_removes_a_name_from_scope,
         test_a_qualified_only_import_excludes_the_bare_spelling,
         test_import_declarations_record_qualification_and_alias,
         test_a_bare_argument_surfaces_as_residue,

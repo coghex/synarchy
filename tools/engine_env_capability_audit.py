@@ -2228,6 +2228,7 @@ _CASE_ALT_RE = re.compile(
 _TYPE_ANNOTATION_RE = re.compile(r"::|∷")
 _WHERE_RE = re.compile(r"(?<![A-Za-z0-9_'])where(?![A-Za-z0-9_'])")
 
+_IMPORT_HIDING_RE = re.compile(r"(?<![A-Za-z0-9_'])hiding(?![A-Za-z0-9_'])")
 _IMPORT_DECL_RE = re.compile(
     r"^import\s+(?P<pre>qualified\s+)?(?P<module>[A-Z][A-Za-z0-9_.']*)"
     r"(?P<post>\s+qualified\b)?"
@@ -2257,11 +2258,15 @@ class ImportDecl(NamedTuple):
     all: `import qualified M as N` puts only `N.f` in scope, never `f`,
     which is why the two flags cannot be collapsed into one map.
     `names` is `None` for an import whose list does not enumerate what
-    it brings in (bare, `(..)`-carrying, or `hiding`)."""
+    it brings in (bare, `(..)`-carrying, or `hiding`), and `hidden`
+    carries a `hiding` clause's own names -- an import that brings in
+    everything EXCEPT those, which is how a module legally defines its
+    own `fieldOne` while still importing the rest."""
     module: str
     qualified: bool
     qualifier: str
     names: frozenset[str] | None
+    hidden: frozenset[str]
 
 
 class Occurrence(NamedTuple):
@@ -2373,7 +2378,9 @@ def parse_imports(source_text: str) -> list[ImportDecl]:
     name there is not the field; and under
     `import qualified Engine.Core.State as State` only `State.fieldOne`
     is the field, while a bare `fieldOne` is necessarily something the
-    module defined itself."""
+    module defined itself. A `hiding` clause is recorded rather than
+    waved through, for the same reason: a module that hides `fieldOne`
+    and defines its own is not writing the field."""
     declarations: list[ImportDecl] = []
     for chunk in _import_chunks(_strip_haskell_comments(source_text)):
         head = _IMPORT_DECL_RE.match(chunk)
@@ -2383,13 +2390,21 @@ def parse_imports(source_text: str) -> list[ImportDecl]:
         alias = head.group("alias")
         qualified = bool(head.group("pre") or head.group("post"))
         body = chunk[head.end():]
-        if ("(" not in body or "hiding" in body
-                or _IMPORT_WILDCARD_RE.search(body)):
+        hiding = _IMPORT_HIDING_RE.search(body)
+        hidden: frozenset[str] = frozenset()
+        if hiding is not None:
+            # Everything EXCEPT the listed names. A `hiding (T(..))`
+            # names the type, not its fields, so a field hidden that way
+            # is not recorded -- which can only leave a write attributed
+            # (a loud violation), never hide one.
+            hidden = frozenset(_HS_IDENT_RE.findall(body[hiding.end():]))
             names: frozenset[str] | None = None
+        elif "(" not in body or _IMPORT_WILDCARD_RE.search(body):
+            names = None
         else:
             names = frozenset(_HS_IDENT_RE.findall(body))
         declarations.append(
-            ImportDecl(module, qualified, alias or module, names))
+            ImportDecl(module, qualified, alias or module, names, hidden))
     return declarations
 
 
@@ -2407,6 +2422,8 @@ def imports_name(declarations: list[ImportDecl], module: str, name: str,
             if declaration.qualifier != qualifier:
                 continue
         elif declaration.qualified:
+            continue
+        if name in declaration.hidden:
             continue
         if declaration.names is None or name in declaration.names:
             return True
