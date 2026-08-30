@@ -46,12 +46,18 @@ import World.Save.Envelope
     ( decodeSaveEnvelopeMetadata, decodeSessionEnvelope, encodeSessionSnapshot
     , metadataComponentId, metadataComponentVersion
     , legacyMetadataComponentVersion, currentEnvelopeVersion
-    , foreignOptionalComponentIds, LuaComponentSpec(..) )
+    , foreignOptionalComponentIds, LuaComponentSpec(..)
+    , decodeSessionEnvelopeClassified, generationFailureProgress
+    , LoadProgress(..) )
+import World.Save.Serialize (loadPhaseFor)
+import Engine.Load.Status (LoadPhase(..))
 import World.Save.Envelope.Codec
     (decodeEnvelope, encodeEnvelope, dePayloads, deManifest)
 import World.Save.Envelope.Types
     (defaultEnvelopeLimits, ComponentId(..), emComponents, cdId, cdVersion, cdRequired)
-import World.Save.Component.Types (ComponentError(..))
+import World.Save.Component.Types
+    (ComponentError(..), ComponentPhase(..), coreSessionComponentId
+    , worldPagesComponentId)
 import World.Save.Compat.SessionV90
 import World.Save.Compat.MetadataV1 (SaveMetadataV1(..))
 import World.Save.Types
@@ -1348,6 +1354,72 @@ spec = do
                     luaComponents `shouldBe` []
             foreignOptionalComponentIds HS.empty bytes `shouldBe` []
 
+        -- Issue #1919, review round 1. Both legacy fallbacks run REAL
+        -- component machinery (B1's decodeSessionV90/migrateSessionV90,
+        -- B2's assembleSnapshot), so their failures carry
+        -- 'ComponentPhase's just as the modern path's do. Those phases
+        -- used to survive only because the load-status layer
+        -- substring-matched them back out of the rendered text; now they
+        -- must be transported structurally through
+        -- 'decodeSessionEnvelopeClassified' or 'failedAtPhase' silently
+        -- regresses for exactly these saves.
+        it "carries a B2 assembly failure's COMPONENT phases through the \
+           \classified path, not a flattened envelope-level guess" $ do
+            bytes ← BS.readFile
+                "test-headless/data/save-compat/b2-split-haskell-lua-state.bin"
+            -- An empty page set: every component still decodes, and only
+            -- validation/assembly rejects it -- the phases the pre-#1919
+            -- substring parser reported as LoadComponentsMigrated.
+            let tampered = replaceB2ComponentSpec bytes worldPagesComponentId
+                               (versionOfB2Component bytes worldPagesComponentId)
+                               True
+                               (S.encode (WorldPagesDTO []))
+                luaNames = HS.fromList ["unit_ai", "building_spawn"]
+            case decodeSessionEnvelopeClassified luaNames luaNames tampered of
+                Right _ → expectationFailure
+                    "expected an empty B2 page set to be refused"
+                Left failure → do
+                    let progress = generationFailureProgress failure
+                    case progress of
+                        ReachedComponents phases →
+                            phases `shouldSatisfy`
+                                all (\ph → ph ≡ ValidatePhase ∨ ph ≡ AssemblePhase)
+                        other → expectationFailure
+                            ("expected component progress, got " <> show other)
+                    loadPhaseFor progress `shouldBe` LoadComponentsMigrated
+
+        it "carries a B2 per-component DECODE failure's phase through the \
+           \classified path" $ do
+            bytes ← BS.readFile
+                "test-headless/data/save-compat/b2-split-haskell-lua-state.bin"
+            let tampered = replaceB2ComponentSpec bytes coreSessionComponentId
+                               999 True
+                               (payloadOfB2Component bytes coreSessionComponentId)
+                luaNames = HS.fromList ["unit_ai", "building_spawn"]
+            case decodeSessionEnvelopeClassified luaNames luaNames tampered of
+                Right _ → expectationFailure
+                    "expected an unsupported core-session version to be refused"
+                Left failure → do
+                    generationFailureProgress failure
+                        `shouldBe` ReachedComponents [DecodePhase]
+                    loadPhaseFor (generationFailureProgress failure)
+                        `shouldBe` LoadEnvelopeValidated
+
+        it "still reports a genuinely NON-component B2 failure at the \
+           \envelope level -- a malformed lua-state blob never reached a \
+           \component phase, so it must not borrow one" $ do
+            bytes ← BS.readFile
+                "test-headless/data/save-compat/b2-split-haskell-lua-state.bin"
+            let tampered = replaceB2LuaStateSpec bytes 1 True (BS.pack [1, 2, 3])
+                luaNames = HS.fromList ["unit_ai", "building_spawn"]
+            case decodeSessionEnvelopeClassified luaNames luaNames tampered of
+                Right _ → expectationFailure
+                    "expected a malformed lua-state blob to be refused"
+                Left failure → do
+                    generationFailureProgress failure `shouldBe` ReachedEnvelope
+                    loadPhaseFor (generationFailureProgress failure)
+                        `shouldBe` LoadEnvelopeValidated
+
         it "refuses to migrate a B2-shaped envelope whose \"lua-state\" \
            \blob decodes to a WELL-FORMED but NON-EMPTY HashMap Text Text \
            \(round-18 review: the real pre-#761 sdLuaModules/ \
@@ -1495,6 +1567,23 @@ payloadOfB2Component bytes cid =
         Right decoded → HM.lookupDefault
             (error ("test setup: payload missing for " <> show cid)) cid
             (dePayloads decoded)
+
+-- | The tracked B2 fixture's own declared schema version for one
+--   component id -- so a test replacing that component's PAYLOAD keeps
+--   its real historical version rather than hard-coding a number that
+--   would silently drift into an unsupported-version test instead.
+versionOfB2Component ∷ BS.ByteString → ComponentId → Word32
+versionOfB2Component bytes cid =
+    case decodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion
+             knownAllB2Ids HS.empty bytes of
+        Left e → error ("test setup: versionOfB2Component: decode: " <> show e)
+        Right decoded → case findDesc decoded of
+            Just v  → v
+            Nothing → error ("test setup: descriptor missing for " <> show cid)
+  where
+    findDesc decoded =
+        listToMaybe [ cdVersion d | d ← emComponents (deManifest decoded)
+                                  , cdId d ≡ cid ]
 
 -- | The exact id set the tracked B2 fixture carries -- see its own
 --   manifest entry's components[] list.
