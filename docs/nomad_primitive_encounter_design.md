@@ -11,6 +11,12 @@ feedback, and focused verification.
 
 Design state: `exploring`
 
+Implementation authority is now the approved #916 specification. This document
+retains the earlier alternative exploration, but where it differs from that
+handoff the issue wins: every `ruin_small` rolls 0–3 occupants, the authored
+policy is death-only, ordinary player Move is the withdrawal interaction, and
+nomads start unarmed with no inventory drops.
+
 Status legend: `[ ]` unprocessed · `[#N]` linked to issue N · `[no-issue]`
 reviewed and deliberately not tracked separately · `[deferred]` blocked on a
 concrete precondition
@@ -383,11 +389,10 @@ acquired. Pursuit ends at the encounter-relative leash or under the approved
 withdrawal/disengagement conditions, clears combat state, and returns a living
 nomad toward its home behavior.
 
-The parent expedition design already decides that an encounter's hostile half
-is complete only when every assigned hostile is dead or incapacitated. Driving
-nomads away or disengaging does not clear it. The separate #917 design adds the
-guaranteed-significant-item half before the owning location itself becomes
-`cleared`.
+The approved #916 handoff makes the first ruin policy death-only: collapsed,
+crawling, missing, or disengaged nomads remain assigned and prevent clearance.
+The separate #917 design may later add a guaranteed-significant-item half
+before the owning location itself becomes `cleared`.
 
 ### Documentation impact
 

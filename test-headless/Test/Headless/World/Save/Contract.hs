@@ -426,6 +426,7 @@ richLocationInstances = LocationInstances
                 , esLanguage = richProvenance }
             , liLifecycle       = LifecycleDiscovered
             , liContentsSpawned = True
+            , liEncounter       = Nothing
             })
         , (LocationInstanceId 2, LocationInstance
             { liId              = LocationInstanceId 2
@@ -438,6 +439,7 @@ richLocationInstances = LocationInstances
             , liEtymology       = Nothing
             , liLifecycle       = LifecycleUnknown
             , liContentsSpawned = False
+            , liEncounter       = Nothing
             })
         ]
     , lisPendingLegacy = Nothing

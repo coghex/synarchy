@@ -12,6 +12,7 @@ import UPrelude
 import Test.Hspec
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
+import Data.List (find, nub, sort)
 import qualified Data.Serialize as S
 import qualified Data.Text as T
 import Location.Bounds (AbsBounds(..), RelBounds(..), translateBounds)
@@ -19,8 +20,9 @@ import Location.Instance
 import Location.Overlay.Types (LocationOverlay, emptyLocationOverlay)
 import Test.Headless.Location.Fixture (expectGeometry)
 import Location.Types
-    ( LocationDef(..), LocationNaming(..), LocationRegistry
+    ( LocationContent(..), LocationDef(..), LocationNaming(..), LocationRegistry
     , emptyLocationRegistry, registerLocation )
+import Unit.Types (UnitId(..))
 import World.Chunk.Types (ChunkCoord(..))
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import World.Page.Types (WorldPageId(..))
@@ -49,6 +51,15 @@ testNaming = LocationNaming
 ruinDef, campDef ∷ LocationDef
 ruinDef = mkDef "ruin" "Small Ruin" (RelBounds (-2) (-2) 2 2)
 campDef = mkDef "camp" "Old Camp"   (RelBounds (-1) (-1) 1 1)
+
+encounterDef ∷ LocationDef
+encounterDef = (mkDef "ruin_small" "Small Ruin"
+                    (RelBounds (-2) (-2) 2 2))
+    { ldContents =
+        [ LocationContent "unit" "nomad_primitive" 1 Nothing
+            (Just "hostile") 1 (Just (0, 3)) (Just "death_only")
+        ]
+    }
 
 mkDef ∷ Text → Text → RelBounds → LocationDef
 mkDef lid label bounds = LocationDef
@@ -455,6 +466,125 @@ spec = describe "Location instance identity" $ do
             markLocationContentsSpawned (LocationInstanceId 99) instances3
                 `shouldBe` instances3
 
+    describe "persistent ranged encounters (#916)" $ do
+        let iid = LocationInstanceId 1
+            make seed = expectGeometry
+                (newLocationInstanceWithSeed seed Nothing iid
+                    (ChunkCoord 0 0) encounterDef)
+            rolled seed = leRolledCount .
+                fromMaybe (error "encounter fixture missing") . liEncounter $
+                    make seed
+            seedFor n = fromMaybe (error "encounter outcome fixture missing")
+                (find ((≡ n) . rolled) [0 .. 255])
+
+        it "rolls one stable inclusive 0..3 count from only the page seed \
+           \and stable instance id" $ do
+            map rolled [0 .. 255] `shouldSatisfy`
+                all (\n → n ≥ 0 ∧ n ≤ 3)
+            -- Every authored outcome is reachable; the implementation's
+            -- modulo over a stateless 64-bit avalanche is the uniform draw.
+            sort (nub (map rolled [0 .. 255])) `shouldBe` [0, 1, 2, 3]
+            map rolled [0 .. 255] `shouldBe` map rolled [0 .. 255]
+
+        it "treats a zero roll as internally clear without revealing it \
+           \or inventing a clearance event" $ do
+            let seed0 = seedFor 0
+                inst = make seed0
+                encounter = fromMaybe (error "encounter fixture missing")
+                    (liEncounter inst)
+            liLifecycle inst `shouldBe` LifecycleUnknown
+            encounterDiscoveryLifecycle inst `shouldBe` LifecycleCleared
+            leRosterComplete encounter `shouldBe` True
+            leCleared encounter `shouldBe` True
+            leClearEventEmitted encounter `shouldBe` True
+            leOccupants encounter `shouldBe` []
+
+        it "persists the exact allocated roster and homes once, then \
+           \refuses a chunk-load retry that tries to replace them" $ do
+            let seed2 = seedFor 2
+                inst = make seed2
+                initial = emptyLocationInstances
+                    { lisNextId = 2, lisById = HM.singleton iid inst }
+                first = registerLocationEncounterOccupants iid
+                    [(UnitId 11, (7, 8)), (UnitId 12, (9, 10))] initial
+                retry = registerLocationEncounterOccupants iid
+                    [(UnitId 21, (1, 2)), (UnitId 22, (3, 4))] first
+                encounter = liEncounter =<< lookupLocationInstance iid retry
+            fmap leRosterComplete encounter `shouldBe` Just True
+            fmap (map (\o → (leoUnitId o, leoHome o)) . leOccupants) encounter
+                `shouldBe` Just
+                    [(UnitId 11, (7, 8)), (UnitId 12, (9, 10))]
+
+        it "extends an interrupted registered prefix without replacing or \
+           \duplicating its already-created occupant" $ do
+            let seed2 = seedFor 2
+                inst = make seed2
+                initial = emptyLocationInstances
+                    { lisNextId = 2, lisById = HM.singleton iid inst }
+                prefix = registerLocationEncounterOccupants iid
+                    [(UnitId 11, (7, 8))] initial
+                resumed = registerLocationEncounterOccupants iid
+                    [(UnitId 11, (7, 8)), (UnitId 12, (9, 10))] prefix
+                encounter = liEncounter =<< lookupLocationInstance iid resumed
+            fmap leRosterComplete encounter `shouldBe` Just True
+            fmap (map (\o → (leoUnitId o, leoHome o)) . leOccupants) encounter
+                `shouldBe` Just
+                    [(UnitId 11, (7, 8)), (UnitId 12, (9, 10))]
+
+        it "keeps an overlong or duplicate roster incomplete instead of \
+           \silently clearing against a truncated membership" $ do
+            let seed2 = seedFor 2
+                inst = make seed2
+                initial = emptyLocationInstances
+                    { lisNextId = 2, lisById = HM.singleton iid inst }
+                duplicate = registerLocationEncounterOccupants iid
+                    [(UnitId 11, (7, 8)), (UnitId 11, (9, 10))] initial
+                overlong = registerLocationEncounterOccupants iid
+                    [ (UnitId 11, (7, 8)), (UnitId 12, (9, 10))
+                    , (UnitId 13, (11, 12)) ] initial
+                complete lis = leRosterComplete ⊚
+                    (liEncounter =<< lookupLocationInstance iid lis)
+            complete duplicate `shouldBe` Just False
+            complete overlong `shouldBe` Just False
+
+        it "updates one roster member's persisted guard episode state \
+           \without changing membership, and marks clearance only once" $ do
+            let seed1 = seedFor 1
+                inst = make seed1
+                initial = emptyLocationInstances
+                    { lisNextId = 2, lisById = HM.singleton iid inst }
+                rostered = registerLocationEncounterOccupants iid
+                    [(UnitId 11, (7, 8))] initial
+                engaged = adjustLocationEncounterOccupant iid (UnitId 11)
+                    (\o → o { leoEngaged = True }) rostered
+                episodic = setLocationEncounterEpisodeState iid True True False
+                    engaged
+                occupant = lookupLocationInstance iid episodic
+                    >>= liEncounter >>= encounterOccupant (UnitId 11)
+                encounter = liEncounter =<< lookupLocationInstance iid episodic
+            fmap leoUnitId occupant `shouldBe` Just (UnitId 11)
+            fmap leoHome occupant `shouldBe` Just (7, 8)
+            fmap leoEngaged occupant `shouldBe` Just True
+            fmap leActivated encounter `shouldBe` Just True
+            fmap leEpisodeActive encounter `shouldBe` Just True
+            fmap leAggressionAnnounced encounter `shouldBe` Just True
+            -- Activation before discovery is remembered without revealing
+            -- the location; ordinary sight later exposes it as active.
+            fmap liLifecycle (lookupLocationInstance iid episodic)
+                `shouldBe` Just LifecycleUnknown
+            fmap encounterDiscoveryLifecycle
+                (lookupLocationInstance iid episodic)
+                `shouldBe` Just LifecycleActive
+            markLocationEncounterCleared iid episodic `shouldSatisfy` isJust
+            let cleared = fromMaybe (error "expected clearance edge")
+                    (markLocationEncounterCleared iid episodic)
+            (leClearEventEmitted ⊚
+                (liEncounter =<< lookupLocationInstance iid cleared))
+                `shouldBe` Just False
+            markLocationEncounterClearEventEmitted iid cleared
+                `shouldSatisfy` isJust
+            markLocationEncounterCleared iid cleared `shouldBe` Nothing
+
     describe "pre-#911 chunk-set migration" $ do
         let migrated = expectGeometry
                 (resolveLegacyLocationInstances registry overlay3 legacyFlags)
@@ -466,6 +596,16 @@ spec = describe "Location instance identity" $ do
         it "maps each chunk's discovered / contents-spawned marker onto the \
            \instance occupying it, and nothing else" $
             stateOf migrated `shouldBe` expectedMigratedState
+
+        it "does not invent encounters from current definitions while \
+           \reconstructing a pre-encounter save" $ do
+            let historicalRegistry = registerLocation encounterDef
+                    emptyLocationRegistry
+                historicalOverlay = HM.singleton (ChunkCoord 0 0) "ruin_small"
+                out = expectGeometry (resolveLegacyLocationInstances
+                    historicalRegistry historicalOverlay
+                    (pendingLegacyFlags mempty mempty))
+            map liEncounter (instancesToList out) `shouldBe` [Nothing]
 
         it "resolves each instance's bounds / name against the \
            \registered definition" $

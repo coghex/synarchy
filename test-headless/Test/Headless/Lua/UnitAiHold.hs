@@ -429,7 +429,8 @@ spec = describe "position hold after a completed move order" $ do
                 , "  .. tostring(spec.version))"
                 , "aiState[1] = { currentAction = 'hold_position',"
                 , "  holdAnchor = { x = 12, y = -3, stalledFor = 4.5,"
-                , "                 stallSeenAt = 90, bestDist = 2 } }"
+                , "                 stallSeenAt = 90, bestDist = 2,"
+                , "                 combatWithdrawalCompletedAt = 87.5 } }"
                 , "local payload = codec.encode(spec.snapshot())"
                 , "local decoded = spec.decode(spec.version, codec.decode(payload))"
                 , "for k in pairs(aiState) do aiState[k] = nil end"
@@ -439,7 +440,8 @@ spec = describe "position hold after a completed move order" $ do
                 , "assert(a.x == 12 and a.y == -3,"
                 , "  'at the same anchor: ' .. tostring(a.x) .. ',' .. tostring(a.y))"
                 , "assert(a.stalledFor == 4.5 and a.stallSeenAt == 90"
-                , "       and a.bestDist == 2,"
+                , "       and a.bestDist == 2"
+                , "       and a.combatWithdrawalCompletedAt == 87.5,"
                 , "  'with its return accounting intact')"
                 ]
 

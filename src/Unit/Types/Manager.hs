@@ -15,6 +15,7 @@ import UPrelude
 import GHC.Generics (Generic)
 import Data.Hashable (Hashable)
 import Data.Serialize (Serialize)
+import Control.DeepSeq (NFData)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import World.Page.Types (WorldPageId(..))
@@ -26,7 +27,7 @@ newtype UnitId = UnitId { unUnitId ∷ Word32 }
     deriving stock (Show, Eq, Ord, Generic)
     -- anyclass (Generic-default) matches what GHC picked implicitly;
     -- same wire bytes as the raw Word32, so no save bump.
-    deriving anyclass (Hashable, Serialize)
+    deriving anyclass (Hashable, NFData, Serialize)
 
 -- | Holds all unit definitions and all spawned instances.
 --   Lives behind an IORef in EngineEnv.
