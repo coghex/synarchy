@@ -1292,6 +1292,7 @@ test-suite synarchy-test-headless
                    Test.Headless.App.Cli
                    Test.Headless.App.ChunkRegion
                    Test.Headless.App.PreviewConfig
+                   Test.Headless.Core.LogCategoryEnv
                    Test.Headless.Core.LogMonad
                    Test.Headless.Core.LogParity
                    Test.Headless.Core.LoopStartup

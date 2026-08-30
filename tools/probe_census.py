@@ -54,6 +54,12 @@ What a census record holds, for each probe:
   an advisory de-list recommendation, and the filed issue's number, URL
   and publication key — that neither of the other two logs has a field
   for. The v3→v4 migration adds the empty log and nothing else.
+* `deferred` — v5's nullable maintainer decision. When present it states
+  both why the probe cannot produce meaningful evidence yet and the
+  condition that makes it ready to resume. The selector excludes the
+  probe before claiming or running it; all existing policy, measurements,
+  claims and outcomes remain intact. The v4→v5 migration adds null and
+  nothing else.
 
 #1429 adds what those measurements MEAN over time. The newest cohort is
 the current statistic and displaces the previous one without deleting
@@ -94,11 +100,12 @@ state them directly: accepted attempts reconcile against retained
 samples; `accepted` agrees with `status`; a harness error never reports
 completing every requested run; `check_counts` is keyed by exactly the
 descriptor's checks and each entry is the tally `runs` shows; a PASS run
-carries no FAIL check; and a cohort holds one commit's samples. Each
-rejects state no real run could have written, and each runs on both
-sides of a mutation exactly as the schema does. They are distinct from
-#1429's SEMANTIC checks, which stay narrow by design: only the commit
-identity, timestamp and counts the cohort arithmetic itself consumes.
+carries no FAIL check; a cohort holds one commit's samples; and a deferral
+has both non-blank human-facing fields. Each rejects state no real run
+could have written, and each runs on both sides of a mutation exactly as
+the schema does. They are distinct from #1429's SEMANTIC checks, which
+stay narrow by design: only the commit identity, timestamp and counts the
+cohort arithmetic itself consumes.
 
 THE ACCEPTABLE-FAILURE POLICY IS CODE TOO (#1430), and asymmetric. The
 schema bounds X to 0..9 while still admitting the null a pre-policy
@@ -146,7 +153,7 @@ errors; 1 inventory drift and every controlled refusal.
 Usage:
   python3 tools/probe_census.py --print            # the manifest, to stdout
   python3 tools/probe_census.py --seed             # create/migrate in docs-wip
-  # A stored probe-census/v1, /v2 or /v3 census migrates in place here,
+  # A stored probe-census/v1 through /v4 census migrates in place here,
   # losing no policy field, cohort, sample, attempt, claim or outcome;
   # `--record` and the policy operations refuse an unmigrated census by
   # name.
@@ -175,6 +182,10 @@ Usage:
   python3 tools/probe_census.py --probe KEY --set-acceptable-failures 0 \
       --clear-justification
   python3 tools/probe_census.py --probe KEY --set-estimate 480
+  python3 tools/probe_census.py --defer --probe KEY \
+      --reason "the required content is not implemented" \
+      --resume-when "the planned content assets merge"
+  python3 tools/probe_census.py --resume --probe KEY
 """
 from __future__ import annotations
 
@@ -198,14 +209,16 @@ import probe_flake  # noqa: E402
 import probe_protocol  # noqa: E402
 import run_probes  # noqa: E402
 
-CENSUS_SCHEMA = "probe-census/v4"
+CENSUS_SCHEMA = "probe-census/v5"
+OUTCOME_SCHEMA = "probe-census/v4"
 CLAIM_SCHEMA = "probe-census/v3"
 RECORD_SCHEMA = "probe-census/v2"
 SEED_SCHEMA = "probe-census/v1"
 # The schema `--print`, `--seed` and `--validate` speak. Kept under the
 # #1425 name too, because that is what the manifest helpers are called.
 MANIFEST_SCHEMA = CENSUS_SCHEMA
-MIGRATABLE_SCHEMAS = (SEED_SCHEMA, RECORD_SCHEMA, CLAIM_SCHEMA, CENSUS_SCHEMA)
+MIGRATABLE_SCHEMAS = (SEED_SCHEMA, RECORD_SCHEMA, CLAIM_SCHEMA,
+                      OUTCOME_SCHEMA, CENSUS_SCHEMA)
 
 MANIFEST_RELPATH = "docs/probe_census.json"
 DOCS_BRANCH = "docs-wip"
@@ -256,7 +269,8 @@ SCHEMA_DEFINITIONS = {
     SEED_SCHEMA: "census_v1",
     RECORD_SCHEMA: "census_v2",
     CLAIM_SCHEMA: "census_v3",
-    CENSUS_SCHEMA: "census_v4",
+    OUTCOME_SCHEMA: "census_v4",
+    CENSUS_SCHEMA: "census_v5",
     RESULT_SCHEMA: "flake_result_v1",
 }
 
@@ -785,6 +799,21 @@ def _rule_cohort_holds_one_commit(census, where, name) -> list[str]:
     return problems
 
 
+def _rule_deferral_is_actionable(census, where, name) -> list[str]:
+    """A deferral says both why work stops and what makes it resumable."""
+    deferred = census.get("deferred")
+    if deferred is None:
+        return []
+    problems = []
+    for field in ("reason", "resume_when"):
+        value = deferred.get(field) if isinstance(deferred, dict) else None
+        if not isinstance(value, str) or not value.strip():
+            problems.append(
+                f"at {where}.deferred.{field}, {name} has no non-blank "
+                f"deferral {field.replace('_', ' ')}")
+    return problems
+
+
 # The stored rules, in report order: the whole-record reconciliation
 # names data loss, so it leads.
 CENSUS_RULES = (
@@ -792,6 +821,7 @@ CENSUS_RULES = (
     _rule_accepted_derives_from_status,
     _rule_attempt_leaves_a_run_uncompleted,
     _rule_cohort_holds_one_commit,
+    _rule_deferral_is_actionable,
 )
 
 
@@ -901,6 +931,7 @@ def empty_census() -> dict:
         "attempts": [],
         "claims": [],
         "outcomes": [],
+        "deferred": None,
     }
 
 
@@ -1238,24 +1269,24 @@ def _rows(document, what: str) -> list:
 
 
 def migrate_document(document) -> dict:
-    """A `probe-census/v1`, `/v2`, `/v3` or `/v4` document, as `/v4`.
+    """A `probe-census/v1` through `/v5` document, as `/v5`.
 
     Lossless in every step: every existing row survives, in the same
     order, with its existing inventory values, and every policy field,
     cohort, sample, attempt and claim is carried through untouched. The
     v1 migration adds the exact empty census record; it never
     regenerates the inventory from the live registry, because the seeded
-    document is migration INPUT. The v2 migration adds ONLY the empty
-    `claims` log (#1434) and the v3 migration ONLY the empty `outcomes`
-    log (#1439) — a record that already carries one keeps it exactly as
-    it is, so re-migrating an already-migrated document is a no-op
-    rather than a truncation. Each addition is tested field by field
+    document is migration INPUT. Later migrations add ONLY their empty
+    fields: `claims` (#1434), `outcomes` (#1439), then `deferred` here.
+    A record that already carries one keeps it exactly as it is, so
+    re-migrating an already-migrated document is a no-op rather than a
+    truncation. Each addition is tested field by field
     rather than by the document's declared schema string, so a census
     written by an older tool and a census hand-repaired halfway through
     a migration both come out whole.
 
     A row missing its `census` field, or carrying a non-object one, is
-    left exactly as it is rather than repaired: in a v2, v3 or v4
+    left exactly as it is rather than repaired: in a v2 through v5
     document that is a declared-schema violation for the validator to
     report, and silently inserting an empty record here would erase the
     evidence on the next write.
@@ -1272,11 +1303,12 @@ def migrate_document(document) -> dict:
         if schema == SEED_SCHEMA and "census" not in row:
             row["census"] = empty_census()
         census = row.get("census")
-        if isinstance(census, dict) and not {"claims", "outcomes"} <= set(
-                census):
+        if isinstance(census, dict) and not {
+                "claims", "outcomes", "deferred"} <= set(census):
             census = dict(census)
             census.setdefault("claims", [])
             census.setdefault("outcomes", [])
+            census.setdefault("deferred", None)
             row["census"] = census
         migrated.append(row)
     result = dict(document)
@@ -1738,6 +1770,72 @@ def set_policy(document: dict, probe: str, *,
     return updated, probe
 
 
+def require_deferral_text(value, what: str) -> str:
+    """A non-blank deferral sentence, preserved verbatim."""
+    if not isinstance(value, str) or not value.strip():
+        raise CensusError(f"{what} must be a non-blank string, got {value!r}")
+    if len(value) > 4000:
+        raise CensusError(f"{what} is longer than 4000 characters")
+    return value
+
+
+def require_deferral(value, what: str):
+    """A complete deferral object or null, for selector-facing reads."""
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise CensusError(f"{what} must be an object or null, got {value!r}")
+    expected = {"reason", "resume_when"}
+    if set(value) != expected:
+        raise CensusError(
+            f"{what} must contain exactly {sorted(expected)}, got "
+            f"{sorted(value) if all(isinstance(k, str) for k in value) else list(value)!r}")
+    return {
+        "reason": require_deferral_text(value["reason"], f"{what}.reason"),
+        "resume_when": require_deferral_text(
+            value["resume_when"], f"{what}.resume_when"),
+    }
+
+
+def set_deferral(document: dict, probe: str, *, reason=KEEP,
+                 resume_when=KEEP, resume: bool = False) -> tuple[dict, str]:
+    """Defer or resume one probe without changing any retained evidence.
+
+    Deferring requires both human-facing fields in one operation. Resuming
+    clears only the current availability gate; measurements, attempts,
+    claims, outcomes and policy remain byte-for-byte equal.
+    """
+    entries = _rows(document, "census")
+    target_row(document, probe, "a deferral update")
+    if resume:
+        if reason is not KEEP or resume_when is not KEEP:
+            raise CensusError(
+                "resuming a probe cannot also supply a deferral reason or "
+                "resume condition")
+        deferred = None
+    else:
+        if reason is KEEP or resume_when is KEEP:
+            raise CensusError(
+                "deferring a probe requires both a reason and a resume "
+                "condition")
+        deferred = {
+            "reason": require_deferral_text(reason, "the deferral reason"),
+            "resume_when": require_deferral_text(
+                resume_when, "the deferral resume condition"),
+        }
+    rows = [dict(entry) for entry in entries]
+    for row in rows:
+        if row.get("key") != probe:
+            continue
+        census = _deep_copy(row["census"])
+        census["deferred"] = deferred
+        row["census"] = census
+        break
+    updated = dict(document)
+    updated["probes"] = rows
+    return updated, probe
+
+
 # ==========================================================================
 # Cohort semantics: the current statistic, its age, and staleness (#1429)
 # ==========================================================================
@@ -2024,11 +2122,15 @@ def summarize_entry(entry, *, now, stale_after_seconds) -> dict:
     census = entry.get("census")
     acceptable = (census.get("acceptable_failures")
                   if isinstance(census, dict) else None)
+    deferred = require_deferral(
+        census.get("deferred") if isinstance(census, dict) else None,
+        f"probe {probe!r} `deferred`")
     summary = {
         "key": probe,
         "script": entry.get("script"),
         "classification": entry.get("classification"),
         "acceptable_failures": acceptable,
+        "deferred": deferred,
         # A record with no measurement is compared against nothing, so
         # the policy neither passes nor breaches: it does not apply yet.
         "tolerance": TOLERANCE_NOT_COMPARABLE,
@@ -2903,6 +3005,10 @@ CLAIM_FIELDS = ("claims",)
 # idempotent on its attempt identity, and may not create a cohort, a
 # sample, an attempt or a claim on its way in.
 OUTCOME_FIELDS = ("outcomes",)
+# A maintainer-controlled availability gate. It neither rewrites policy
+# nor discards evidence; it only tells the selector to pause this row until
+# the recorded resume condition is satisfied.
+DEFERRAL_FIELDS = ("deferred",)
 
 # Each mutating aspect, the record fields it exclusively owns, and the
 # operation a reader should be told about when a candidate touched a
@@ -2914,12 +3020,14 @@ ASPECT_FIELDS = {
     "measurements": MEASUREMENT_FIELDS,
     "claims": CLAIM_FIELDS,
     "outcomes": OUTCOME_FIELDS,
+    "deferral": DEFERRAL_FIELDS,
 }
 ASPECT_LABEL = {
     "policy": "a policy update",
     "measurements": "a measurement ingestion",
     "claims": "a claim acquisition",
     "outcomes": "a diagnosis outcome",
+    "deferral": "a deferral update",
 }
 # The aspects whose append-only logs `_append_only` compares. A policy
 # update appends nothing, so it is not one of them.
@@ -3021,7 +3129,7 @@ def _check_preserved(before, after, touched) -> list[str]:
         if inventory:
             # Reconciliation refreshes inventory columns and may archive
             # a cohort on CI promotion. It never touches policy and
-            # never loses a measurement.
+            # never changes a deferral or loses a measurement.
             problems += _append_only(key, was, now)
             for field in POLICY_FIELDS:
                 if now.get(field) == was.get(field):
@@ -3037,6 +3145,11 @@ def _check_preserved(before, after, touched) -> list[str]:
                 problems.append(
                     f"probe {key!r}: reconciliation changed policy field "
                     f"`{field}`")
+            for field in DEFERRAL_FIELDS:
+                if now.get(field) != was.get(field):
+                    problems.append(
+                        f"probe {key!r}: reconciliation changed deferral "
+                        f"field `{field}`")
             continue
         allowed = set(touched.get(key) or ())
         if not allowed:
@@ -3397,6 +3510,16 @@ def record_policy(path: Path, probe: str, **fields) -> str:
     return probe
 
 
+def record_deferral(path: Path, probe: str, **fields) -> str:
+    """Durably defer or resume one probe through the census writer."""
+    def mutate(before):
+        document = require_current_schema(before, path)
+        candidate, key = set_deferral(document, probe, **fields)
+        return candidate, {key: {"deferral"}}
+    update(path, mutate)
+    return probe
+
+
 def seed(repo_root: str | None = None) -> Path:
     """#1425's entry point. It no longer regenerates over an existing file."""
     path = manifest_path(repo_root)
@@ -3466,8 +3589,9 @@ def _companion_arguments(args) -> dict | None:
     setting_x = args.set_acceptable_failures is not None
     setting_estimate = args.set_estimate is not None
     policy = setting_x or setting_estimate
+    deferral = args.defer or args.resume
     # `is not None`, not truthiness: `--probe ""` was still supplied.
-    if args.probe is not None and not policy and not args.summary:
+    if args.probe is not None and not policy and not deferral and not args.summary:
         # The second clause only when it is the mode actually selected:
         # a `--print --probe X` should not be told about a mode it did
         # not ask for.
@@ -3475,7 +3599,7 @@ def _companion_arguments(args) -> dict | None:
                "because which probes qualify is the question it answers"
                if args.promotion_candidates else "")
         raise CensusError(
-            "--probe is only used by --summary, "
+            "--probe is only used by --summary, --defer, --resume, "
             "--set-acceptable-failures and --set-estimate" + why)
     # The evaluation time, the horizon and the machine-readable form
     # belong to the two READING modes, and to both of them equally:
@@ -3498,6 +3622,10 @@ def _companion_arguments(args) -> dict | None:
         raise CensusError(
             "--clear-justification is only valid with "
             "--set-acceptable-failures")
+    if args.reason is not None and not args.defer:
+        raise CensusError("--reason is only valid with --defer")
+    if args.resume_when is not None and not args.defer:
+        raise CensusError("--resume-when is only valid with --defer")
     # Requirements 2 and 3 prescribe contradictory writes together, so
     # this pair is refused rather than silently resolved either way.
     if args.justification is not None and args.clear_justification:
@@ -3541,6 +3669,24 @@ def _companion_arguments(args) -> dict | None:
             "justification": justification,
         }
     return {"estimate": _optional_number(args.set_estimate, "--set-estimate")}
+
+
+def _deferral_arguments(args) -> dict | None:
+    """The `set_deferral` keywords selected by the CLI, or None."""
+    if not args.defer and not args.resume:
+        return None
+    if not args.probe:
+        raise CensusError("--probe KEY is required for a deferral update")
+    if args.resume:
+        return {"resume": True}
+    if args.reason is None or args.resume_when is None:
+        raise CensusError(
+            "--defer requires both --reason and --resume-when")
+    return {
+        "reason": require_deferral_text(args.reason, "--reason"),
+        "resume_when": require_deferral_text(
+            args.resume_when, "--resume-when"),
+    }
 
 
 def _summary_arguments(args) -> dict:
@@ -3603,6 +3749,8 @@ def render_summary(summaries: list[dict]) -> str:
         else:
             commit = measured_at = age = runs = fails = "-"
             state = "unmeasured"
+        if summary["deferred"] is not None:
+            state = "deferred"
         lines.append(f"{summary['key']:<34}{measured_at:<22}"
                      f"{age:>9}{runs:>7}{fails:>6}{acceptable:>4}"
                      f"{_rate_text(summary):>8}"
@@ -3644,9 +3792,15 @@ def main(argv: list[str] | None = None) -> int:
     group.add_argument("--set-estimate", metavar="SECONDS",
                        help="store the estimated worst-case duration for "
                             "--probe (a number of seconds, or `none`)")
+    group.add_argument("--defer", action="store_true",
+                       help="exclude --probe from de-flake selection while "
+                            "preserving its measurements and classification")
+    group.add_argument("--resume", action="store_true",
+                       help="clear --probe's deferral so the selector may "
+                            "consider it again")
     ap.add_argument("--probe",
                     help="the probe key --summary reports on, or a policy "
-                         "update acts on")
+                         "or deferral update acts on")
     # argparse `%`-interpolates a help string, so the strftime spelling
     # of TIMESTAMP_FORMAT cannot appear in one: `%Y` raises on 3.14 and
     # would raise at `--help` time on older interpreters. The literal
@@ -3669,6 +3823,11 @@ def main(argv: list[str] | None = None) -> int:
                          f"never implied by omitting --justification, and "
                          f"valid only while setting X to "
                          f"{MIN_ACCEPTABLE_FAILURES}")
+    ap.add_argument("--reason",
+                    help="non-blank explanation stored by --defer")
+    ap.add_argument("--resume-when", dest="resume_when",
+                    help="non-blank condition that makes --probe ready to "
+                         "resume")
     args = ap.parse_args(argv)
 
     # Argument validation runs FIRST, for every operation. `--print`
@@ -3676,6 +3835,7 @@ def main(argv: list[str] | None = None) -> int:
     # through which a misused companion flag passes unreported.
     try:
         fields = _companion_arguments(args)
+        deferral_fields = _deferral_arguments(args)
         summary_arguments = (_summary_arguments(args)
                              if args.summary or args.promotion_candidates
                              else {})
@@ -3708,6 +3868,11 @@ def main(argv: list[str] | None = None) -> int:
             probe = record_result(path, result)
             print(f"recorded a {result.get('status')} measurement for "
                   f"{probe} in {path}")
+            return 0
+        if deferral_fields is not None:
+            record_deferral(path, args.probe, **deferral_fields)
+            action = "resumed" if args.resume else "deferred"
+            print(f"{action} {args.probe} in {path}")
             return 0
         if fields is not None:
             record_policy(path, args.probe, **fields)
