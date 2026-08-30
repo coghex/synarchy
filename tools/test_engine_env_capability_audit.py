@@ -2312,6 +2312,43 @@ viaComposition ∷ EngineEnv → IO ()
 viaComposition env = modifyIORef' (chooseRef . pick $ env) id
 """
 
+# A primitive handed to another function UNPARENTHESIZED is still
+# being handed on: the tokens after it are that function's arguments,
+# not its own. The capability half must also keep its residue entry,
+# which a phantom inline use would swallow.
+_UNPARENTHESIZED_VALUE = """\
+module PassedOn.Mod where
+
+import Data.IORef
+
+import Engine.Core.State (EngineEnv, fieldOne)
+import Engine.Core.Capability.Fake (FakeCapability(..), toFakeCapability)
+
+raw ∷ EngineEnv → IO ()
+raw env = withLogging writeIORef (fieldOne env) 1
+
+viaCapability ∷ EngineEnv → IO ()
+viaCapability env =
+    withLogging writeIORef (fkFieldTwo (toFakeCapability env)) 2
+"""
+
+# A keyword lexes as an identifier but applies to nothing, so a
+# primitive after one IS in head position -- the shape at
+# `src/Unit/Thread/Movement/Climb.hs:86`.
+_AFTER_KEYWORD = """\
+module AfterKeyword.Mod where
+
+import Data.IORef
+
+import Engine.Core.State (EngineEnv, fieldThree)
+
+pick ∷ EngineEnv → Bool → IO ()
+pick env done =
+    if done
+        then pure ()
+        else writeIORef (fieldThree env) 1
+"""
+
 _PRIMITIVE_AS_VALUE = """\
 module AsValue.Mod where
 
@@ -2590,6 +2627,8 @@ def _writer_sources(**modules: str) -> dict[str, str]:
         "allPrims": "src/AllPrims/Mod.hs",
         "bareImport": "src/BareImport/Mod.hs",
         "unreadable": "src/Unreadable/Mod.hs",
+        "passedOn": "src/PassedOn/Mod.hs",
+        "afterKeyword": "src/AfterKeyword/Mod.hs",
         "recordDot": "src/RecordDot/Mod.hs",
         "composed": "src/Composed/Mod.hs",
         "asValue": "src/AsValue/Mod.hs",
@@ -3206,6 +3245,37 @@ def test_an_unreadable_mutation_site_blocks():
            f"and that must be a blocking violation, got: {violations}")
 
 
+def test_a_primitive_must_be_in_head_position():
+    """`withLogging writeIORef (fieldOne env) 1` hands the primitive to
+    `withLogging`. Reading the tokens after it as its own arguments
+    invents a write — and, with a capability accessor, hides that
+    accessor's pass-on residue entry behind a phantom inline use.
+
+    A KEYWORD before the primitive applies to nothing, so `else
+    writeIORef (...) ...` is head position; layout ends a statement
+    with no token at all, so a preceding identifier or bracket only
+    counts on the SAME line."""
+    scan = _full_scan(_writer_sources(passedOn=_UNPARENTHESIZED_VALUE))
+    expect(scan.writes["fieldOne"] == set()
+           and scan.writes["fieldTwo"] == set(),
+           f"a primitive being passed on writes nothing, got: "
+           f"fieldOne={sorted(scan.writes['fieldOne'])}, "
+           f"fieldTwo={sorted(scan.writes['fieldTwo'])}")
+    expect([site.kind for site in scan.sites
+            if site.module == "PassedOn.Mod"] == ["other", "other"],
+           "both sites classify as ordinary non-writes")
+    residue = [item for item in scan.residue
+               if item.module == "PassedOn.Mod"]
+    expect(len(residue) == 1 and residue[0].accessor == "fkFieldTwo",
+           f"and the capability accessor keeps its residue entry, got: "
+           f"{residue}")
+
+    writes, _ = _scan(_writer_sources(afterKeyword=_AFTER_KEYWORD))
+    expect(writes["fieldThree"] == {"AfterKeyword.Mod"},
+           f"while a primitive after a keyword is in head position, "
+           f"got: {sorted(writes['fieldThree'])}")
+
+
 def test_record_dot_access_is_unclassifiable():
     """`modifyIORef' (env.fieldOne) id` is a direct mutation the scan
     cannot read. Taking `env` as the argument head would make it a
@@ -3686,6 +3756,7 @@ def main() -> int:
         test_every_recognized_primitive_is_read,
         test_a_bare_import_brings_the_accessor_into_scope,
         test_an_unreadable_mutation_site_blocks,
+        test_a_primitive_must_be_in_head_position,
         test_record_dot_access_is_unclassifiable,
         test_a_primitive_used_as_a_value_is_not_unreadable,
         test_a_comment_marker_inside_a_string_is_text,

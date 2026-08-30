@@ -2669,6 +2669,34 @@ def _skip_type_atom(tokens: list[Token], index: int) -> int:
     return index
 
 
+# Keywords lex as identifiers but apply to nothing: `else
+# atomicModifyIORef' (...) ...` is a head-position use, and
+# `src/Unit/Thread/Movement/Climb.hs:86` is exactly that.
+_HASKELL_KEYWORDS = frozenset({
+    "case", "do", "else", "if", "in", "let", "of", "then", "where",
+})
+
+
+def in_head_position(tokens: list[Token], index: int) -> bool:
+    """True unless something is plainly APPLYING to `tokens[index]`.
+
+    `withLogging writeIORef (fieldOne env) 1` hands the primitive to
+    `withLogging`; reading the tokens after it as its own arguments
+    invents a write, and hides the accessor's pass-on residue entry
+    behind a phantom inline use. What applies to it is an identifier or
+    a closing bracket -- but only ON THE SAME LINE, because layout ends
+    a statement without any token saying so, and the previous
+    statement's last token is very often exactly one of those."""
+    if index == 0:
+        return True
+    previous = tokens[index - 1]
+    if previous.line != tokens[index].line:
+        return True
+    if previous.kind == "id":
+        return previous.text in _HASKELL_KEYWORDS
+    return not (previous.kind == "punc" and previous.text in (")", "]"))
+
+
 def _past_primitive_parentheses(tokens: list[Token], index: int) -> int:
     """Index of the first token after `tokens[index]` that is not a
     `)` closing a `(` written immediately before the primitive.
@@ -3032,6 +3060,13 @@ def scan_capability_writes(
             # imports, or a local homonym would fabricate a write.
             primitive = resolve_primitive(declarations, token.text)
             if primitive is None:
+                continue
+            if not in_head_position(tokens, index):
+                # Being passed on, not applied: no inline use to record,
+                # and the accessor beside it stays residue.
+                if primitive in IOREF_WRITE_PRIMITIVES:
+                    sites.append(MutationSite(
+                        relpath, token.line, module, "other", None))
                 continue
             head = _first_argument_head(tokens, index)
             if head is None:

@@ -1277,7 +1277,14 @@ binding forms:
    string's closing quote, which hid three real mutation sites further
    down the file.)
 
-The primitive is held to the same test as the accessor: a name is only
+The primitive must also be in HEAD position. `withLogging writeIORef
+(fieldOne env) 1` hands it to `withLogging`, and reading what follows
+as its own arguments would invent a write and hide the accessor's
+residue entry behind a phantom inline use. What applies to it is an
+identifier or a closing bracket on the *same line* — layout ends a
+statement with no token at all, and a keyword applies to nothing.
+
+The primitive is held to the same scope test as the accessor: a name is only
 `Data.IORef`'s `writeIORef` if that one reaches the module under the
 spelling written. A top-level homonym needs no special case — defining
 one beside an unqualified `import Data.IORef` is an ambiguous
