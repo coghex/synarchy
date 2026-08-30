@@ -44,13 +44,14 @@ end-to-end:
      built furnace (ore + coal consumed, 4 bars out), short-fuel
      refusal leaving the pantry untouched, and the bronze pair
      (copper + tin chunks → bronze bars).
-  8. Fabrication tier (#328): the shipped data/recipes/fabrication.yaml
-     set — all five recipes in the catalogue, shapes for a skill-tagged
+  8. Fabrication tier (#328/#1785): the shipped data/recipes/fabrication.yaml
+     set — all six recipes in the catalogue, shapes for skill-tagged
      tool recipe and an untagged stock recipe, each executed at the
      built workbench (bars consumed, tool/stock produced), and the
-     skill-tagged tools carry crafter quality like the dagger (#343) —
-     the fabricated axe's quality check is also mental-effectiveness-
-     neutral-pinned (#878), same as every phase-6 quality check.
+     skill-tagged tools and helmet carry crafter quality like the dagger
+     (#343) — the fabricated axe and helmet quality checks are also
+     mental-effectiveness-neutral-pinned (#878), same as every phase-6
+     quality check.
 
 Usage: python3 tools/craft_probe.py [--port 9317]
 """
@@ -568,12 +569,13 @@ def main():
         passed = check(passed, ok,
                        "furnace smelts bronze: copper+tin+coal -> 4 bars", msg)
 
-        # --- 8. Fabrication tier (#328) ---
+        # --- 8. Fabrication tier (#328 + #1785) ---
         names8 = send_json(port, "return craft.getNames()")
         fabs = {"forge_pick_steel", "forge_shovel_steel", "forge_axe_steel",
-                "forge_steel_plate", "forge_steel_hardware"}
+                "forge_steel_helmet", "forge_steel_plate",
+                "forge_steel_hardware"}
         ok = isinstance(names8, list) and fabs <= set(names8)
-        passed = check(passed, ok, "all five fabrication recipes in the catalogue",
+        passed = check(passed, ok, "all six fabrication recipes in the catalogue",
                        sorted(fabs - set(names8)) if isinstance(names8, list)
                        else names8)
         r = send_json(port, "return craft.get('forge_axe_steel')")
@@ -582,6 +584,14 @@ def main():
               and r.get("inputs") == [{"item": "steel_bar", "count": 2}]
               and r.get("outputs") == [{"item": "axe_steel", "count": 1}])
         passed = check(passed, ok, "axe shape (2 bars -> axe, smithing-tagged)", r)
+        r = send_json(port, "return craft.get('forge_steel_helmet')")
+        ok = (isinstance(r, dict) and r.get("station") == "forge"
+              and r.get("work") == 20 and r.get("skill") == "smithing"
+              and r.get("inputs") == [{"item": "steel_bar", "count": 2}]
+              and r.get("outputs") == [{"item": "steel_helmet", "count": 1}]
+              and "fuel" not in r and "knowledge" not in r)
+        passed = check(passed, ok,
+                       "helmet shape (2 bars -> helmet, smithing-tagged)", r)
         r = send_json(port, "return craft.get('forge_steel_plate')")
         ok = (isinstance(r, dict) and r.get("station") == "forge"
               and "skill" not in r
@@ -603,6 +613,7 @@ def main():
                 ("forge_pick_steel", "pick_steel", 2, 1),
                 ("forge_shovel_steel", "shovel_steel", 2, 1),
                 ("forge_axe_steel", "axe_steel", 2, 1),
+                ("forge_steel_helmet", "steel_helmet", 2, 1),
                 ("forge_steel_plate", "steel_plate", 1, 2),
                 ("forge_steel_hardware", "steel_hardware", 1, 4)]:
             ok, msg = fab_at(recipe_id, item_name, bars_needed, out_count)
@@ -610,30 +621,39 @@ def main():
                            f"workbench fabricates {item_name} ({bars_needed} bar(s) -> {out_count})",
                            msg)
 
-        # Skill-tagged tools carry crafter quality like the dagger (#343);
-        # smithing is already set to 55 from phase 6. This is also a
-        # #343 base-quality assertion, so it gets the same #878
-        # neutral-mental-effectiveness precondition (established +
-        # witnessed before, re-witnessed after) as every phase-6 check.
-        pre_ok, pre_d = neutral_mental_check(port, uid)
-        passed = check(passed, pre_ok,
-                       "neutral mental effectiveness before craft (fabricated axe)",
-                       pre_d)
-        before_ids = {d["id"] for d in instances_of(port, uid, "axe_steel")}
-        send(port, f"unit.addItem({uid},'steel_bar'); "
-                   f"unit.addItem({uid},'steel_bar'); return 'ok'")
-        ok_e, msg = execute_at(port, uid, "forge_axe_steel", bid_w)
-        post_eff, post_conc, post_ms = mental_diag(port, uid)
-        post_ok = abs(post_eff - 1.0) < 0.01
-        passed = check(passed, post_ok,
-                       "neutral mental effectiveness after craft (fabricated axe)",
-                       f"effectiveness={post_eff} concentration={post_conc} "
-                       f"mental_state={post_ms}")
-        fresh = [d for d in instances_of(port, uid, "axe_steel")
-                 if d["id"] not in before_ids]
-        ok = (ok_e and len(fresh) == 1 and abs(fresh[0]["qual"] - 55.0) < 0.01)
-        passed = check(passed, ok, "fabricated axe quality = smithing level 55",
-                       f"ok={ok_e} {msg} fresh={fresh}")
+        # Skill-tagged outputs carry crafter quality like the dagger (#343);
+        # smithing is already set to 55 from phase 6. These are also #343
+        # base-quality assertions, so both get the same #878 neutral-mental-
+        # effectiveness precondition as every phase-6 check.
+        def check_fabricated_quality(passed, recipe_id, item_name, label):
+            pre_ok, pre_d = neutral_mental_check(port, uid)
+            passed = check(
+                passed, pre_ok,
+                f"neutral mental effectiveness before craft ({label})", pre_d)
+            before_ids = {d["id"] for d in instances_of(port, uid, item_name)}
+            send(port, f"unit.addItem({uid},'steel_bar'); "
+                       f"unit.addItem({uid},'steel_bar'); return 'ok'")
+            ok_e, msg = execute_at(port, uid, recipe_id, bid_w)
+            post_eff, post_conc, post_ms = mental_diag(port, uid)
+            post_ok = abs(post_eff - 1.0) < 0.01
+            passed = check(
+                passed, post_ok,
+                f"neutral mental effectiveness after craft ({label})",
+                f"effectiveness={post_eff} concentration={post_conc} "
+                f"mental_state={post_ms}")
+            fresh = [d for d in instances_of(port, uid, item_name)
+                     if d["id"] not in before_ids]
+            ok = (ok_e and len(fresh) == 1
+                  and abs(fresh[0]["qual"] - 55.0) < 0.01)
+            return check(passed, ok,
+                         f"{label} quality = smithing level 55",
+                         f"ok={ok_e} {msg} fresh={fresh}")
+
+        passed = check_fabricated_quality(
+            passed, "forge_axe_steel", "axe_steel", "fabricated axe")
+        passed = check_fabricated_quality(
+            passed, "forge_steel_helmet", "steel_helmet",
+            "fabricated helmet")
 
         print("\n" + ("ALL CRAFT CHECKS PASSED" if passed else "SOME FAILED"))
         return 0 if passed else 1

@@ -145,6 +145,178 @@
       "atlas_digest": "1559638892333fdf650eeba356524a582575d06e2d511ee68fcb76649eb43e11"
     },
     {
+      "name": "combat_idle_unarmed",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/nomad_primitive/atlas/combat_idle_unarmed.png",
+      "atlas_width": 576,
+      "atlas_height": 320,
+      "cell_width": 64,
+      "cell_height": 64,
+      "columns": 9,
+      "rows": 5,
+      "flip": true,
+      "fps": 8.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 9
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "eac62a02dadd5058f2bac9c6669870663a257226f6d07ed3311f2c3c1bd8c40e",
+      "atlas_digest": "6864901afec7ff0cf20ffb999f1c143814938f6c7b99ae09e676d762f579e94e"
+    },
+    {
+      "name": "crawling",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/nomad_primitive/atlas/crawling.png",
+      "atlas_width": 612,
+      "atlas_height": 340,
+      "cell_width": 68,
+      "cell_height": 68,
+      "columns": 9,
+      "rows": 5,
+      "flip": true,
+      "fps": 8.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 9
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 9
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 9
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 9
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 9
+        }
+      ],
+      "source_digest": "ea8132a9d9bcc41dbea5badb762ab6068e0447bba8efee815fbc4b86e1402eea",
+      "atlas_digest": "24aad34b53138a64b8803003064e20ba6c91d4a056d6fd6323dda2975dd4d76d"
+    },
+    {
+      "name": "crawling_idle",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/nomad_primitive/atlas/crawling_idle.png",
+      "atlas_width": 68,
+      "atlas_height": 340,
+      "cell_width": 68,
+      "cell_height": 68,
+      "columns": 1,
+      "rows": 5,
+      "flip": true,
+      "fps": 1.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 1
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 1
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 1
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 1
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 1
+        }
+      ],
+      "source_digest": "a56a65673270c9a457b15f9928fc1997d861829a31fd4213ab32e157ec539ee1",
+      "atlas_digest": "d2ee8866c09419981cc8a2cc025e05b3efd8e4213724a48ddcc1cbac7d4c6eb6"
+    },
+    {
+      "name": "idle",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/nomad_primitive/atlas/idle.png",
+      "atlas_width": 512,
+      "atlas_height": 320,
+      "cell_width": 64,
+      "cell_height": 64,
+      "columns": 8,
+      "rows": 5,
+      "flip": true,
+      "fps": 6.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 8
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 8
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 8
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 8
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 8
+        }
+      ],
+      "source_digest": "c07de1628803fd33451e5f61eae5ca9690b5d817eb6a945ac30fda52263b4123",
+      "atlas_digest": "b64ff80d65c1f935c061318791d06adaad933f58ed6dfdc0cd2d46edeb84ac1e"
+    },
+    {
       "name": "injured_attack_heavy_unarmed",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/nomad_primitive/atlas/injured_attack_heavy_unarmed.png",
@@ -315,6 +487,92 @@
       ],
       "source_digest": "1814d801545404325b4b72eb57aff2baa2d811665e8f344f427ca04eaa82dfe5",
       "atlas_digest": "50be82b4e7d7234c41f6dadc415e3ac3aaa0cd6dba5394d6c6ae677220225f29"
+    },
+    {
+      "name": "run",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/nomad_primitive/atlas/run.png",
+      "atlas_width": 512,
+      "atlas_height": 320,
+      "cell_width": 64,
+      "cell_height": 64,
+      "columns": 8,
+      "rows": 5,
+      "flip": true,
+      "fps": 12.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 8
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 8
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 8
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 8
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 8
+        }
+      ],
+      "source_digest": "d6fcbe25d1068946525e91d479ef4b6f76fb6f644288b0fa6b8211dc154c64a7",
+      "atlas_digest": "00b4eb7f28e02acfda9481ab831010daec5620e577fbf8769a346c983c0dd0c9"
+    },
+    {
+      "name": "walk",
+      "storage_format": "png",
+      "atlas_path": "assets/textures/units/nomad_primitive/atlas/walk.png",
+      "atlas_width": 512,
+      "atlas_height": 320,
+      "cell_width": 64,
+      "cell_height": 64,
+      "columns": 8,
+      "rows": 5,
+      "flip": true,
+      "fps": 8.0,
+      "loop": true,
+      "directions": [
+        {
+          "direction": "south",
+          "row": 0,
+          "frame_count": 8
+        },
+        {
+          "direction": "north",
+          "row": 1,
+          "frame_count": 8
+        },
+        {
+          "direction": "north-east",
+          "row": 2,
+          "frame_count": 8
+        },
+        {
+          "direction": "east",
+          "row": 3,
+          "frame_count": 8
+        },
+        {
+          "direction": "south-east",
+          "row": 4,
+          "frame_count": 8
+        }
+      ],
+      "source_digest": "53da42da8024a829eb5eee18fbec9b18cfe09abc462a9630f11cbf07026cfc73",
+      "atlas_digest": "d94b60c112442d7e24bf517504fe54d787fcc4235c0744ffa66f4cc1ec359d71"
     }
   ]
 }

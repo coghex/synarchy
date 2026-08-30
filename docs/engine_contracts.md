@@ -1428,9 +1428,9 @@ session sits those out.
 A **new player order to a held unit** ends the session and then
 proceeds (signed off 2026-08-11 — player intent wins), through the one
 shared `notePlayerOrder` boundary called from the player's own ingress
-sites and NOWHERE else (`init_mouse.lua`'s right-click move order,
-`init_context_menu.lua`'s Attack / Pick up / Move here) — never from
-inside `unitAi.commandMove`/`commandAttack`/`commandPickup`, which
+sites and NOWHERE else (`init_mouse_entity.lua`'s right-click move
+order, `init_context_menu.lua`'s Attack / Pick up / Move here) — never
+from inside `unitAi.commandMove`/`commandAttack`/`commandPickup`, which
 `building_spawn.lua` and `unit_ai_combat.lua` also call for scripted and
 autonomous behaviour, and never from the escort's own approach. It runs
 BEFORE the command, since the teardown stops every unit it held.

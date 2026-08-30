@@ -8,13 +8,13 @@ PR #199's live-instance cargo measure passed its real headless probe (90 full ca
 
 ## Status
 
-- [ ] PRR-1. Unit Info clears other selections even when its captured target is stale
-- [ ] PRR-2. HUD hover keeps mutating the world behind modal gameplay screens
-- [ ] PRR-3. Main-menu sorting discards the engine's deterministic save-timestamp tiebreak
+- [x] PRR-1. Unit Info clears other selections even when its captured target is stale — [#1929]
+- [x] PRR-2. HUD hover keeps mutating the world behind modal gameplay screens — [#1931]
+- [x] PRR-3. Main-menu sorting discards the engine's deterministic save-timestamp tiebreak — [#1932]
 
 ## 1. Deferred context-menu selection
 
-### PRR-1. Unit Info clears other selections even when its captured target is stale
+### [#1929] PRR-1. Unit Info clears other selections even when its captured target is stale
 
 > **Captured note:** PR #187 made Unit Info clear the building and ground-item domains after `unit.select`, but it ignores the selection call's failure result; a target that disappears while its menu is open therefore clears valid selections without selecting the requested unit.
 
@@ -38,7 +38,7 @@ PR #199's live-instance cargo measure passed its real headless probe (90 full ca
 
 ## 2. Modal hover ownership
 
-### PRR-2. HUD hover keeps mutating the world behind modal gameplay screens
+### [#1931] PRR-2. HUD hover keeps mutating the world behind modal gameplay screens
 
 > **Captured note:** PR #174 gates hover only on `hud.visible`; pause and keep-world Settings deliberately leave that flag true while the canonical gameplay-input predicate is false, so moving over modal UI still pushes cursor hover into the underlying world.
 
@@ -62,7 +62,7 @@ PR #199's live-instance cargo measure passed its real headless probe (90 full ca
 
 ## 3. Save-list ordering
 
-### PRR-3. Main-menu sorting discards the engine's deterministic save-timestamp tiebreak
+### [#1932] PRR-3. Main-menu sorting discards the engine's deterministic save-timestamp tiebreak
 
 > **Captured note:** PR #163 normalized legacy timestamps and the engine sorts equal timestamps by slot name, but `main_menu.lua` sorts the already-ordered list again using timestamp alone; Lua's unstable sort can change which tied legacy slot becomes Continue.
 

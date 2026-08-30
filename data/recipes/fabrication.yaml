@@ -59,6 +59,17 @@ recipes:
     outputs:
       - item: axe_steel
 
+  - id: forge_steel_helmet
+    name: "Forge Steel Helmet"
+    station: forge
+    skill: smithing
+    inputs:
+      - item: steel_bar
+        count: 2
+    work: 20
+    outputs:
+      - item: steel_helmet
+
   - id: forge_steel_plate
     name: "Stamp Steel Plate"
     station: forge

@@ -8,7 +8,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "action_outcome",
@@ -23,7 +24,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "blood_decal",
@@ -38,7 +40,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "blood_impact",
@@ -53,7 +56,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "blood_gpu_lifecycle",
@@ -68,7 +72,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "bleeding_trail",
@@ -83,7 +88,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "ci-eligible",
       "key": "canteen_instance",
@@ -98,7 +104,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "ci-eligible",
       "key": "cargo_capacity",
@@ -113,7 +120,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "chop",
@@ -128,7 +136,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "circadian",
@@ -143,7 +152,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "circadian_species",
@@ -158,7 +168,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "collapse_crawl",
@@ -173,7 +184,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "combat_anim",
@@ -188,7 +200,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "concussion_revive",
@@ -203,7 +216,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "config_migration",
@@ -218,7 +232,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "config_state",
@@ -233,7 +248,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "construction",
@@ -248,7 +264,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "construction_blueprint_footprint",
@@ -263,7 +280,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "ci-eligible",
       "key": "content_registry",
@@ -278,7 +296,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "ci-eligible",
       "key": "consumable_effects",
@@ -293,7 +312,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "ci-eligible",
       "key": "cooking",
@@ -308,7 +328,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "ci-eligible",
       "key": "craft",
@@ -323,7 +344,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "craft_bill",
@@ -338,7 +360,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "crop",
@@ -353,7 +376,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "ci-eligible",
       "key": "debug_console_boot",
@@ -368,7 +392,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "disarm",
@@ -383,7 +408,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "expedition_loop",
@@ -398,7 +424,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "expedition_retrieval",
@@ -413,7 +440,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "farm_ai",
@@ -428,7 +456,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "flora_growth",
@@ -443,7 +472,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "follow_command_priority",
@@ -458,7 +488,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "foraging",
@@ -473,7 +504,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "ci-eligible",
       "key": "infection",
@@ -488,7 +520,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "injury_log",
@@ -503,7 +536,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "item_instance",
@@ -518,7 +552,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "item_temp",
@@ -533,7 +568,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "location_content",
@@ -548,7 +584,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "location_embark",
@@ -563,7 +600,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "location_overlay",
@@ -578,7 +616,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "location_stamp_idempotent",
@@ -593,7 +632,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "lua_orphan_prune",
@@ -608,7 +648,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "lua_strict_msg",
@@ -623,7 +664,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "machine_shop",
@@ -638,7 +680,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "meal_waste",
@@ -653,7 +696,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "ci-eligible",
       "key": "medic_coord",
@@ -668,7 +712,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "mental_efficiency",
@@ -683,7 +728,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "mental_state",
@@ -698,7 +744,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "movement",
@@ -713,7 +760,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "multiworld_save",
@@ -728,7 +776,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "offscreen",
@@ -743,7 +792,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "ci-eligible",
       "key": "persistence_contract",
@@ -758,7 +808,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "persistence_contract_sweep",
@@ -773,7 +824,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "persistence_integrity",
@@ -788,7 +840,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "physiology",
@@ -803,7 +856,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "plant",
@@ -818,7 +872,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "portal_ghost",
@@ -833,7 +888,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "portal_location",
@@ -848,7 +904,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "power",
@@ -863,7 +920,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "power_workshop",
@@ -878,7 +936,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "preview",
@@ -893,7 +952,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "ci-eligible",
       "key": "preview_cli",
@@ -908,7 +968,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "remote_warning_page_guard",
@@ -923,7 +984,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "ci-eligible",
       "key": "repair_item",
@@ -938,7 +1000,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "ci-eligible",
       "key": "repair",
@@ -953,7 +1016,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "etymology",
@@ -968,7 +1032,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "repair_ai",
@@ -983,7 +1048,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "resource_root",
@@ -998,7 +1064,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "river_naming",
@@ -1013,7 +1080,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "role",
@@ -1028,7 +1096,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "save_compat_migration",
@@ -1043,7 +1112,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "autosave",
@@ -1058,7 +1128,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "save_pause",
@@ -1073,7 +1144,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "save_barrier",
@@ -1088,7 +1160,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "save_storage",
@@ -1103,7 +1176,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "sleep",
@@ -1118,7 +1192,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "state_of_mind",
@@ -1133,7 +1208,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "text_encoding",
@@ -1148,7 +1224,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "thermo_altitude",
@@ -1163,7 +1240,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "thought",
@@ -1178,7 +1256,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "till",
@@ -1193,7 +1272,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "tutorial",
@@ -1208,7 +1288,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "tutorial_hud",
@@ -1223,7 +1304,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "item_list_widget",
@@ -1238,7 +1320,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "transactional_load",
@@ -1253,7 +1336,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "transfer_order",
@@ -1268,7 +1352,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "unified_transfer",
@@ -1283,7 +1368,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "transfer_context_menu",
@@ -1298,7 +1384,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "wire",
@@ -1477,7 +1564,8 @@
           ]
         },
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "position_hold",
@@ -1492,7 +1580,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "wander_hazard",
@@ -1507,7 +1596,8 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "retaliation_swap",
@@ -1522,13 +1612,46 @@
         "claims": [],
         "current": null,
         "estimated_worst_case_seconds": null,
-        "history": []
+        "history": [],
+        "outcomes": []
       },
       "classification": "manual-only",
       "key": "pause_speed",
       "protocol": "legacy",
       "script": "pause_speed_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": [],
+        "outcomes": []
+      },
+      "classification": "manual-only",
+      "key": "lunge",
+      "protocol": "legacy",
+      "script": "lunge_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "estimated_worst_case_seconds": null,
+        "history": [],
+        "outcomes": []
+      },
+      "classification": "manual-only",
+      "key": "structure_rotation",
+      "protocol": "legacy",
+      "script": "structure_rotation_probe.py"
     }
   ],
-  "schema": "probe-census/v3"
+  "schema": "probe-census/v4"
 }
