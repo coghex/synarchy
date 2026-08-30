@@ -15,6 +15,7 @@ local M = {}
 
 local LEASH_TILES = 12
 local SIGHT_MEMORY_SEC = 10
+local RETALIATION_WINDOW_SEC = 10
 local RETURN_UTILITY = 10
 local MEMORY_UTILITY = 8.5
 local ENGAGE_UTILITY = 8
@@ -24,6 +25,7 @@ local ENGAGE_UTILITY = 8
 -- same-process overlay until world.listPlacedLocations reflects them; the
 -- persisted encounter remains the save/load authority.
 local localEpisodeActive = claims.track({})
+local localEpisodeAggression = claims.track({})
 local localEpisodeDisengaged = claims.track({})
 local localParticipation = claims.track({})
 
@@ -49,6 +51,10 @@ end
 local function label(info)
     if info and info.name and info.name ~= "" then return info.name end
     return info and info.displayName or "unit"
+end
+
+local function locationIsDiscovered(binding)
+    return binding.location.discovered == true
 end
 
 -- Re-derive the persisted binding every thought tick. This deliberately has
@@ -226,13 +232,19 @@ local function guardExecute(uid, s)
         binding.location.encounter.disengage_announced,
         localEpisodeDisengaged, key)
     if episodeActive and not anyEngaged and not disengageAnnounced then
-        engine.emitEventForUnit("unit_event", string.format(
-            "%s disengaged at %s (%s)", label(binding.info),
-            binding.location.name, s.ruinDisengageReason or "returning"),
-            uid, binding.info.gridX, binding.info.gridY)
+        local visible = locationIsDiscovered(binding)
+        if visible then
+            engine.emitEventForUnit("unit_event", string.format(
+                "%s disengaged at %s (%s)", label(binding.info),
+                binding.location.name, s.ruinDisengageReason or "returning"),
+                uid, binding.info.gridX, binding.info.gridY)
+        end
+        local aggressionAnnounced = overlayValue(
+            binding.location.encounter.aggression_announced,
+            localEpisodeAggression, key)
         localEpisodeActive[key] = false
-        localEpisodeDisengaged[key] = true
-        persistEpisodeState(binding, false, true, true)
+        localEpisodeDisengaged[key] = visible
+        persistEpisodeState(binding, false, aggressionAnnounced, visible)
     end
     if atHome(binding.info, binding.occupant) then
         unit.stop(uid)
@@ -273,6 +285,30 @@ local function visibleHostile(uid, binding)
     return nil
 end
 
+local function recentHostileAttacker(uid, binding)
+    if binding.location.encounter.cleared then return nil end
+    local attacker = unit.getLastAttacker(uid)
+    if not attacker or attacker.uid == uid
+       or engine.gameTime() - (attacker.at or 0) > RETALIATION_WINDOW_SEC
+       or not unit.exists(attacker.uid)
+       or unit.getPose(attacker.uid) == "dead" then
+        return nil
+    end
+    local info = unit.getInfo(attacker.uid)
+    if not info or not page.same(binding.info.page, info.page)
+       or outsideLeash(info, binding.location.bounds)
+       or not relationIsHostile(uid, attacker.uid) then
+        return nil
+    end
+    return attacker.uid
+end
+
+local function hostileTarget(uid, binding)
+    local attacker = recentHostileAttacker(uid, binding)
+    if attacker then return attacker, false end
+    return visibleHostile(uid, binding), true
+end
+
 local function engageUtility(uid, s)
     if s.ruinReturning or core.isGoalActive(s, "retreat")
        or core.isGoalActive(s, "attack") then return -math.huge end
@@ -282,19 +318,25 @@ local function engageUtility(uid, s)
        or outsideLeash(binding.info, binding.location.bounds) then
         return -math.huge
     end
-    return visibleHostile(uid, binding) and ENGAGE_UTILITY or -math.huge
+    local target = hostileTarget(uid, binding)
+    return target and ENGAGE_UTILITY or -math.huge
 end
 
 local function engageExecute(uid, s)
     local binding = bindingFor(uid)
-    local target = binding and visibleHostile(uid, binding) or nil
+    local target, requiresSight = nil, true
+    if binding then target, requiresSight = hostileTarget(uid, binding) end
     if not target or not unit.exists(target) then return end
     local targetInfo = unit.getInfo(target)
     if not targetInfo or not page.same(binding.info.page, targetInfo.page)
-       or not relationIsHostile(uid, target) or not targetVisible(uid, targetInfo) then
+       or outsideLeash(targetInfo, binding.location.bounds)
+       or not relationIsHostile(uid, target)
+       or (requiresSight and not targetVisible(uid, targetInfo)) then
         return
     end
     s.ruinLastSeenAt = engine.gameTime()
+    s.ruinLastSeenX = targetInfo.gridX
+    s.ruinLastSeenY = targetInfo.gridY
     s.ruinEncounterCombat = true
     unitAi.commandAttack(uid, target)
     local key = encounterKey(binding)
@@ -303,13 +345,17 @@ local function engageExecute(uid, s)
     local isNewEpisode = not overlayValue(
         binding.location.encounter.episode_active, localEpisodeActive, key)
     if isNewEpisode then
+        local visible = locationIsDiscovered(binding)
         localEpisodeActive[key] = true
         localEpisodeDisengaged[key] = false
-        engine.emitEventForUnit("unit_event", string.format(
-            "%s at %s attacks %s because their faction relation is hostile",
-            label(binding.info), binding.location.name, label(targetInfo)),
-            uid, binding.info.gridX, binding.info.gridY)
-        persistEpisodeState(binding, true, true, false)
+        localEpisodeAggression[key] = visible
+        if visible then
+            engine.emitEventForUnit("unit_event", string.format(
+                "%s at %s attacks %s because their faction relation is hostile",
+                label(binding.info), binding.location.name, label(targetInfo)),
+                uid, binding.info.gridX, binding.info.gridY)
+        end
+        persistEpisodeState(binding, true, visible, false)
     end
     persistOccupantState(binding, uid, true, false)
 end
@@ -338,10 +384,11 @@ function M.register(needs)
         { name = "idle", utility = needs.idleUtility,
           execute = needs.idleExecute },
     }, {
-        -- Generic engage reacts to a recent hit without consulting faction
-        -- relation or sight. Ruin occupants acquire ONLY through the exact
-        -- hostile/same-page/visible rule above; retreat and attack execution
-        -- remain universal once that rule has selected a target.
+        -- Generic engage reacts to a recent hit without consulting faction,
+        -- page, or leash rules. Ruin occupants acquire ONLY through the
+        -- encounter-owned visible-hostile and qualified recent-attacker
+        -- sources above; retreat and attack execution remain universal once
+        -- those rules have selected a target.
         excludeUniversal = { engage = true },
     })
 end

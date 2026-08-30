@@ -28,6 +28,7 @@ lns = T.intercalate "\n"
 prelude ∷ Text
 prelude = lns
     [ "NOW, EVENTS, STOPS, MOVES, CLEARS = 0, 0, 0, 0, 0"
+    , "EVENT_MESSAGES, LAST_ATTACKER = {}, nil"
     , "COMMAND, STATES, EPISODES = nil, {}, {}"
     , "VISIBLE = { {x=5,y=5}, {x=7,y=5} }"
     , "IDS = {3,1,2}"
@@ -40,12 +41,14 @@ prelude = lns
     , "OCCUPANT = { uid=1, home_x=5, home_y=5,"
     , "  engaged=false, returning=false }"
     , "LOCATION = { instance_id=41, id='ruin_small', name='Old Ruin',"
+    , "  lifecycle='discovered', discovered=true,"
     , "  bounds={min_x=0,max_x=10,min_y=0,max_y=10},"
     , "  encounter={cleared=false,activated=false,episode_active=false,"
     , "    aggression_announced=false,disengage_announced=false,"
     , "    occupants={OCCUPANT}} }"
     , "engine = { gameTime=function() return NOW end,"
-    , "  emitEventForUnit=function() EVENTS=EVENTS+1 end }"
+    , "  emitEventForUnit=function(_,message,uid,x,y) EVENTS=EVENTS+1;"
+    , "    table.insert(EVENT_MESSAGES,{message=message,uid=uid,x=x,y=y}) end }"
     , "world = { listPlacedLocations=function() return {LOCATION} end,"
     , "  setLocationEncounterOccupantState=function(i,u,e,r,p)"
     , "    table.insert(STATES,{i=i,u=u,e=e,r=r,p=p}) end,"
@@ -57,6 +60,7 @@ prelude = lns
     , "  exists=function(uid) return INFO[uid] ~= nil end,"
     , "  getPose=function(uid) return POSE[uid] end,"
     , "  getFaction=function(uid) return uid end,"
+    , "  getLastAttacker=function() return LAST_ATTACKER end,"
     , "  getVisibleTiles=function() return VISIBLE end,"
     , "  getAllIds=function() return IDS end,"
     , "  clearAnimOverride=function() CLEARS=CLEARS+1 end,"
@@ -90,6 +94,7 @@ spec = describe "persistent ruin encounter AI (#916)" $ do
             , "assert(COMMAND == 2, 'target selection must be deterministic')"
             , "assert(s.ruinEncounterCombat == true)"
             , "assert(EVENTS == 1 and #STATES == 1 and #EPISODES == 1)"
+            , "assert(string.find(EVENT_MESSAGES[1].message, 'Old Ruin', 1, true))"
             , "assert(STATES[1].i == 41 and STATES[1].u == 1)"
             , "assert(STATES[1].e and not STATES[1].r)"
             , "assert(EPISODES[1].a and EPISODES[1].g and not EPISODES[1].d)"
@@ -106,6 +111,26 @@ spec = describe "persistent ruin encounter AI (#916)" $ do
             , "assert(EVENTS == 1, 'persisted active episode was ignored')"
             ]
 
+    it "keeps pre-discovery aggression and disengagement events private" $
+        runsOk $ lns
+            [ prelude
+            , "LOCATION.lifecycle='unknown'; LOCATION.discovered=false"
+            , "local s={}"
+            , "encounter.engageExecute(1,s)"
+            , "assert(COMMAND == 2 and EVENTS == 0)"
+            , "assert(#EPISODES == 1 and EPISODES[1].a"
+            , "  and not EPISODES[1].g and not EPISODES[1].d)"
+            , "LOCATION.encounter.episode_active=true"
+            , "LOCATION.encounter.aggression_announced=false"
+            , "OCCUPANT.engaged=true"
+            , "INFO[1].gridX=23; s.activeGoal='attack'; s.attackTargetUid=2"
+            , "assert(encounter.guardUtility(1,s) == 10)"
+            , "encounter.guardExecute(1,s)"
+            , "assert(EVENTS == 0, 'hidden disengagement leaked the ruin')"
+            , "local episode=EPISODES[#EPISODES]"
+            , "assert(not episode.a and not episode.g and not episode.d)"
+            ]
+
     it "rejects neutral, invisible, wrong-page, dead, and cleared targets" $
         runsOk $ lns
             [ prelude
@@ -119,6 +144,31 @@ spec = describe "persistent ruin encounter AI (#916)" $ do
             , "assert(encounter.engageUtility(1,{}) == -math.huge)"
             , "POSE[2]='standing'; LOCATION.encounter.cleared=true"
             , "assert(encounter.engageUtility(1,{}) == -math.huge)"
+            ]
+
+    it "retaliates against a fresh same-page hostile hit without requiring sight" $
+        runsOk $ lns
+            [ prelude
+            , "VISIBLE={}; LAST_ATTACKER={uid=2,at=0}; NOW=5"
+            , "local s={}"
+            , "assert(encounter.engageUtility(1,s) == 8)"
+            , "encounter.engageExecute(1,s)"
+            , "assert(COMMAND == 2, 'recent attacker was not acquired')"
+            , "assert(s.ruinLastSeenAt == 5 and s.ruinLastSeenX == 5"
+            , "  and s.ruinLastSeenY == 5)"
+            , "assert(s.ruinEncounterCombat == true)"
+            , "local function rejected(mut)"
+            , "  INFO[2]={gridX=5,gridY=5,page='world',name='near'}"
+            , "  POSE[2]='standing'; REL[2]='hostile'; NOW=5"
+            , "  LAST_ATTACKER={uid=2,at=0}; mut()"
+            , "  assert(encounter.engageUtility(1,{}) == -math.huge)"
+            , "end"
+            , "rejected(function() REL[2]='neutral' end)"
+            , "rejected(function() INFO[2].page='other' end)"
+            , "rejected(function() INFO[2].gridX=23 end)"
+            , "rejected(function() POSE[2]='dead' end)"
+            , "rejected(function() NOW=10.01 end)"
+            , "rejected(function() LOCATION.encounter.cleared=true end)"
             ]
 
     it "uses an inclusive 12-tile Chebyshev leash and suppresses reacquisition until home" $
@@ -192,7 +242,7 @@ spec = describe "persistent ruin encounter AI (#916)" $ do
             , "invalid(function() REL[2]='friendly' end)"
             ]
 
-    it "excludes generic hit retaliation from the nomad action list" $
+    it "keeps generic retaliation excluded after adding encounter-owned hit acquisition" $
         runsOk $ lns
             [ prelude
             , "encounter.register({idleUtility=function() return 0 end,"
