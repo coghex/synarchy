@@ -436,6 +436,19 @@ the field's concurrency primitive and its practical contract. **Init**
 to it (if anything) during engine teardown. **Notes** — migration
 dependencies, cross-references, or compatibility-boundary remarks.
 
+**What the audit checks about these cells.** The Readers and Writers
+columns are validated for *grammar* and *citation presence* — every
+role is one of §2.2's, and the row cites real source — never for
+truth. A role claim here is prose and stays prose. Since #1892 there
+is a second, independent mechanism that pins the same ownership
+question at a granularity a source scan can actually verify:
+`tools/engine_env_capability_audit.py`'s checked-in
+`CAPABILITY_WRITER_MODULES` map, which fixes each field's direct
+writing **modules** and rejects an undeclared write and a stale entry
+alike. Read §6.5 before you conclude that either half proves the
+other — they verify different things, and the map deliberately does
+not attempt the role claim.
+
 ### `core-init`
 
 | Field | Lifecycle | Readers | Writers | Sync | Init | Shutdown | Notes |
@@ -1080,7 +1093,13 @@ complete set of requirements:
     count and names the record's real first and last field. The audit
     re-derives all three from the live declaration, so a correct §5 row
     with a stale §1 block still fails (issue #1669).
-11. Whatever else the **live** audit rules require — read the tool, not
+11. A `CAPABILITY_WRITER_MODULES` entry for the field, mapping it to
+    the modules that directly write it — `frozenset()` when nothing
+    does, which is the common case for a field only
+    `Engine.Core.Init` seeds. The map's keys are checked against the
+    live record in both directions, so a new field with no entry
+    fails on its own. See §6.5.
+12. Whatever else the **live** audit rules require — read the tool, not
     just this list. The §3/§7.3 boundary checks, for instance, will
     reject a new field that a thread privately owns being placed on a
     worker-visible record.
@@ -1162,6 +1181,166 @@ An approved addition requires, in lockstep:
 
 The same policy governs any other future permanent exception —
 including a new §3/§7.3-style thread-private field owner.
+
+### 6.5 Writing-module authority and the pass-on residue (#1892, CMA-1)
+
+`tools/engine_env_capability_audit.py` carries a checked-in
+`CAPABILITY_WRITER_MODULES` map: for every live `EngineEnv` field, the
+production modules that **directly mutate** it. It is maintained the
+same way `RENDER_MAIN_ONLY_MODULES` is, and checked the same two ways —
+a write from a module the field's set does not list fails, and a mapped
+module that no longer writes the field fails just as loudly, so the map
+can never decay into a mere upper bound. Its **keys** are checked
+against the live record in both directions too.
+
+Design authority:
+[`capability_mutation_authority_design.md`](capability_mutation_authority_design.md)
+(CMA-1; decisions D-2, D-2a, D-4, D-5). Read it before widening any
+rule below.
+
+**What it proves, and what it does not.** §5 declares thread *roles*; a
+source scan yields *modules*; nothing in this repository maps between
+them, and at module granularity the mapping is not even well-defined —
+`World.Render.BloodQuads` is deliberately dual-domain (§3.1) and writes
+`textureSystemRef` from a `MainRender` function while its quad-building
+path runs on `WorldThread`, so the role is a property of the *function*.
+The map therefore verifies a weaker and different property: **the set of
+modules writing this field is what we last declared**, not "§5's role
+claim is true". A *new* writer can no longer appear unnoticed; an
+already-wrong role cell stays wrong until someone reads it (D-2a).
+
+**Scope: direct `IORef` mutation only.** A write is detected only where
+an `IORef` mutation primitive is applied directly to a known accessor
+application — `writeIORef (accessor handle) …`, whether through the
+field's own `EngineEnv` accessor or through any capability-record
+accessor projecting it, prefix or backticked-infix, and whether or not
+the expression spans several lines. Accessor *and* primitive are each
+recognized qualified (`State.fieldOne`, `Ref.writeIORef`) as readily as
+bare. Mutation through a queue, a `TVar`, an `MVar`, an
+opaque internally-synchronized handle (`SaveBarrier`, `LoadStatusRef`),
+or a helper that was *given* the `IORef` is invisible to a textual scan
+and is deliberately out of scope: resolving it means interprocedural
+dataflow over Haskell source, written in Python, which this arc rejects
+outright (D-5).
+
+**§6.1's cohort is exempt (D-4).** The permanent full-access modules
+hold whole-session orchestration authority by job description, and this
+boundary does not constrain them: their writes are neither reported as
+violations nor admitted into the map. The cohort this map governs is
+the capability-narrowed consumers.
+
+**The pass-on residue.** What the scan cannot attribute, it reports.
+Every capability-accessor use that is *not* a direct inline `IORef`
+read or write — a handle given to a helper, stored into a context
+record that mixes several capabilities, handed to a queue/`TVar`/`MVar`
+primitive, or composed point-free — is listed on every run as one line
+per source occurrence, with its path, line, accessor and canonical
+field. It is **non-blocking, counted but never resolved to an
+originating module**, and it is printed *before* every blocking check
+so a failure elsewhere never costs the measurement. That count is the
+evidence CMA-2's pilot and CMA-3's verdict turn on: a small residue
+means a textual gate is nearly sufficient, a large one argues for a
+mechanism that travels with the handle.
+
+**Two rules keep a textual match honest**, and neither models Haskell's
+binding forms:
+
+1. **Import scope, under the exact spelling used** — for the accessor
+   *and* for the primitive. A name is only `Data.IORef`'s `writeIORef`
+   if that one reaches the module under the spelling written; a
+   module-local homonym, or an unrelated module's qualified one, is a
+   different function whose argument mutates no `IORef`. For the
+   accessor the same rule applies: it must
+   actually reach that module — imported by name, through a bare
+   import, through the wildcard of the record it belongs to
+   (`EngineEnv(..)`, and not some other type's `(..)` in the same
+   list), or defined by the module itself. Each `import` declaration is kept separate rather than
+   merged into one answer per module, because the things that decide
+   this are per-declaration language rules — `qualified` removes the
+   *unqualified* spelling from scope entirely, an `as` alias
+   *replaces* the module name as the qualifier rather than joining it,
+   a `hiding` clause takes its own names back out, and one module is
+   legitimately imported twice on different terms.
+2. **Applied position.** The accessor must head an argument of a
+   mutation primitive *and* that argument must be an application —
+   `prim (accessor handle) …`. This is a type argument, not a
+   heuristic: every accessor projects out of a handle
+   (`EngineEnv -> IORef a`), so it can never itself be the `IORef` the
+   primitive takes, and a *bare* identifier there always denotes some
+   local binding sharing its name. Naming an accessor in a comment, in
+   Haddock, or in an import list is not using it either — commentary
+   and import declarations are stripped before the scan, and that
+   stripping is literal-aware: a `--` inside a string is text, block
+   comments nest, and a dash run continuing into a symbol is an
+   operator. (It has to be. `Engine.Scripting.Lua.Thread.Dispatch`
+   logs a literal `" -- "`, and truncating there also removed the
+   string's closing quote, which hid three real mutation sites further
+   down the file.)
+
+The primitive must also be in HEAD position. `withLogging writeIORef
+(fieldOne env) 1` hands it to `withLogging`, and reading what follows
+as its own arguments would invent a write and hide the accessor's
+residue entry behind a phantom inline use. What can apply to it is an
+identifier or a closing bracket, but a newline ends no application and
+layout ends a statement with no token at all, so three things decide
+it: a keyword applies to nothing; on the same line an identifier or
+bracket is applying; across lines, a continuation is indented past the
+line that opened the expression while a sibling statement is not. An
+operator SECTION applied prefix (`($) writeIORef …`) is a fourth case
+and an unreadable one — `($)` applies its arguments and `(.)` composes
+them, with opposite consequences — so it joins the blocking bucket
+rather than being modelled operator by operator.
+
+The primitive is held to the same scope test as the accessor: a name is only
+`Data.IORef`'s `writeIORef` if that one reaches the module under the
+spelling written. A top-level homonym needs no special case — defining
+one beside an unqualified `import Data.IORef` is an ambiguous
+occurrence at every use site, so it does not compile; `hiding
+(writeIORef)` and a local definition is the form that does, and the
+import test already decides it.
+
+**Deliberately no lexical scope analysis, and a closed form list
+instead.** Those two rules separate every case in this tree; the one
+near-miss, `src/Unit/Thread/Movement.hs`'s `utsRef` parameter, is
+excluded because that module imports `Engine.Core.State` for the
+`EngineEnv` *type* alone. The residue of the rules — a module that
+locally binds a name matching an accessor **and applies it to a
+handle** — goes on `SHADOW_EXEMPTIONS`, a checked-in
+`{(module, field): reason}` list that is **empty**. A locally shadowed
+*primitive* is the mirror of that case and goes to the same place: an
+exemption suppresses its module/field pair whatever name was shadowed
+to produce it. Each entry
+suppresses exactly its own pair, must name a live field, must carry a
+real reason, and fails once it stops suppressing anything.
+
+The alternative was modelling `let`/`where`/lambda/`<-`/`case` scopes.
+Measured against this tree that analysis changed the answer at **none**
+of the mutation sites, while its incompleteness was findable
+indefinitely — the forms are many, and such an analysis is only ever as
+complete as the last one someone thought of.
+
+**Every mutation site must classify, or the gate stops.** That is what
+makes the form list above CLOSED rather than aspirational. Each
+occurrence of a mutation primitive lands in exactly one bucket: an
+applied, in-scope, non-exempt accessor (attributed); a nameable head
+that is not this boundary's business — a local `IORef`, an unapplied
+accessor, one the module cannot reach, or the primitive used as a value
+rather than applied; or a site where an argument is plainly being
+formed and the scan cannot read it, which **fails the audit** naming
+file and line — `OverloadedRecordDot` access (`env.fieldOne`) is one
+such shape, rejected rather than misread as an application of `env`. There are no sites of the third kind today. A
+spelling outside the list therefore stops the gate instead of silently
+dropping a write — and the fix is to extend the scan and this list
+together, never to leave the site unread.
+
+**Maintaining it.** Adding a writing-module entry is a deliberate act,
+not a maintenance edit: it declares that a capability-narrowed module now
+holds write authority over that field. Removing one is what a narrowing
+migration owes the gate. Either direction, the audit names the exact
+module and field, so the edit is mechanical once the decision is made —
+run `python3 tools/engine_env_capability_audit.py` and read the
+violation. Do not silence a violation by widening a rule above; a
+surprising write is the finding, not the noise.
 
 ## 7. Migration roadmap
 

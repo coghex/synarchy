@@ -727,6 +727,110 @@ resize behavior below is part of the probe's contract.
   still advances nothing outside `entry.animated`, so a static entry
   keeps exposing no `playback` in the dump.
 
+### Centered bounded zoom (#1907)
+
+Every main preview display — the bare simple-category list's panel,
+focused-item mode, the units viewer's ENLARGED direction, the buildings
+viewer's static entries and animations, and the flora/structures item
+folders that reuse the shared browser — has ONE zoom multiplier per
+session. `scripts/ui/preview_zoom.lua` owns the limits and the
+arithmetic; every pane fits through its `fitRect`, so no two panes can
+drift onto different math.
+
+- **Limits.** `1` is the initial multiplier AND the maximum; `1/8` is
+  the minimum. The rendered scale is `multiplier × fit`, where `fit` is
+  the aspect-preserving fit-to-region scale. At `1` the complete texture
+  fills as much of its region as its aspect ratio permits; at `1/8` both
+  rendered dimensions are exactly one eighth of the fitted ones. There is
+  no zooming IN past the fit, which is why the complete texture is
+  inside its region at every multiplier by construction — never cropped,
+  never overlapping the asset list, the direction strip, or the window
+  margin.
+- **Centered, with no pan state.** Zoom is centered on the region.
+  There is no source point, no anchor and no translation: the cursor's
+  position within the region cannot affect where the texture lands. This
+  is deliberately NOT the gameplay camera's zoom, which is
+  source-anchored.
+- **The zoom REGION.** In unit mode it is `layout()`'s `enlarged`
+  sub-rect (`scripts/ui/unit_animation_view.lua`), never `panelBounds`
+  — the panel also holds the direction row. It is both the wheel's
+  capture rect and the fit denominator. Every other mode uses
+  `panelBounds`. The fit for an atlas-backed unit frame uses the
+  compiled index's own CELL dimensions, never the sheet's
+  (`frameSize` asks `engine.getTextureSize` only for residency).
+- **Input ownership.** The preview region owns an invisible element with
+  `UI.setScrollCapture(handle, true)` and nothing else — no
+  `UI.setClickable`, no `UI.setPointerBlocking`, because #743 made those
+  three policies independent and direction-cell/list-row clicks must
+  keep working. The capture is load-bearing for plain/Shift parity:
+  `Engine.Input.Thread.Scroll.dispatchScrollEvent` only reaches Lua as
+  `onUIScroll` when `routeScroll` finds a capturing surface; with none, a
+  plain wheel becomes `LuaScrollEvent` and a Shift wheel
+  `LuaZSliceScroll` — two different broadcasts. `previewManager.onUIScroll`
+  then dispatches on the ELEMENT HANDLE, so a list element scrolls the
+  list and the surface zooms, neither reaching the other even at a
+  limit. The `browserId` guard there is scoped to the list-forwarding
+  branch only, because focused-item mode never builds a browser.
+  The surface reuses a texture handle the session has ALREADY requested
+  (at alpha 0), never a fresh load — focused-item mode allows no chrome
+  at all (`tools/preview_probe.py`'s `allow_chrome=False`), so
+  `list.getChromeTexture()` there would break trimmed loading. It is
+  borrowed from the REQUEST, and the surface is installed as each mode's
+  UI is built, NOT when the upload completes: an upload is asynchronous,
+  so waiting for it would leave list and focused-item mode with no
+  capturing surface for the whole load — a window in which a wheel over
+  the pane never reaches `onUIScroll` and leaks to the gameplay/z-slice
+  broadcasts. A zoom performed during that load is applied to the
+  texture when it finally arrives. If the borrowed request then FAILS
+  (#1690), only the handle is released — the element is left alone and
+  re-pointed at a live handle, because deleting it would take wheel
+  capture down with it and `"empty"` is terminal by design. That release
+  runs BEFORE `onAssetFailed`'s three "is this failure ours?" tests, not
+  after: a request that created the surface and was then ABANDONED (a
+  new selection superseded it before it resolved) is none of pending,
+  in-view or cached, so a check placed after them never runs and the
+  surface stays bound to a dead texture for the rest of the session.
+- **Wheel response.** `dy < 0` ENLARGES toward `1` and `dy > 0` SHRINKS
+  toward `1/8` — the gameplay convention (`Engine.Loop.Camera`: `dy > 0`
+  zooms out, `dy < 0` zooms in, `camZoom` being the viewport
+  half-height), NOT the list-scroll convention. The response is
+  multiplicative in the delta, so a fractional delta moves less than a
+  whole one and an OS that splits one notch into several deltas totals
+  the same as one clean delta of that sum — the same decision
+  `zoomScrollScale` records for the camera. Both ends clamp EXACTLY, and
+  further input at a limit is consumed without changing the scale.
+- **Reset follows preview-OBJECT identity, not sprite selection.** A new
+  session starts at `1`. In a BARE simple-category browser each texture
+  is its own object, so selecting a different one resets to `1`. Within
+  `units/<name>`, `buildings/<name>`, `flora/<name>` or
+  `structures/<name>` the object is the unit/building/item, so another
+  animation, direction, entry, stage or piece PRESERVES the multiplier;
+  so do playback, frame changes, and a framebuffer resize (which
+  recomputes the fitted size from the new region). Zoom is never
+  persisted between sessions.
+  The discriminator is `engine.getPreviewTarget()`, not the mode string:
+  `mode == "list"` backs BOTH a bare category and a flora/structures
+  item folder, and `item` is omitted only for a bare category. No new
+  engine field was needed. Mechanically, only a genuine selection fires
+  `onSelect` — a resize restores via `assetBrowser.selectEntrySilently`,
+  which fires none — so resize preservation falls out of the existing
+  restore contract rather than needing its own flag.
+- **Not zoomed:** list thumbnails and unit direction-row cells keep
+  their existing fixed sizing.
+- **Degenerate geometry.** `previewZoom.fitRect` returns no rect at all
+  for a missing/non-finite/non-positive box or source size, and callers
+  then leave the previous geometry alone and retry — the same thing they
+  already did for an unresolved texture size, so a heavily shrunk window
+  can never write an inverted, negative or non-finite rect.
+
+Gates: hspec `--match "Preview.Zoom"` (CPU-only; drives the REAL
+`preview_zoom`/`preview_manager`/unit/building Lua in a stdlib-only
+interpreter, and is the only BLOCKING automated gate this feature has,
+since `preview_probe.py` is manual-only `needs-gpu`), plus
+`tools/preview_probe.py`'s phase 11, which drives real
+`input.moveMouse`/`input.scroll` over dump-reported bounds on all six
+display kinds.
+
 ### The dump contract
 
 `require("scripts.preview_manager").dump()` (self-registered into
@@ -763,6 +867,19 @@ each cell's own mirrored flag, source, frame index, sampled
 per-visible-row `rows` bounds/handles, and — for an animation selection
 ONLY — `playback` (`entry`, `frameIndex`, `frameCount`, effective
 `fps`/`loop`, `ready`).
+
+**Every mode** additionally carries `zoom` (#1907): `multiplier`, `min`,
+`max`, the `region` the wheel is captured over (unit mode's is the
+enlarged sub-rect, not `panelBounds`), the capturing `surface`'s element
+handle, and the selected `sprite`'s ACTUAL rendered bounds. Those bounds
+come from `UI.getElementInfo`, not the module's own arithmetic — the
+same engine-is-the-authority rule the direction cells' bounds follow —
+so a probe verifies containment and centering against what is really on
+screen. The unit and building views report the same block from their own
+`dump()`s too, which surfaces as `playback.zoom` wherever `playback`
+itself is reported — so a STATIC building entry, which by design exposes
+no `playback` at all, still reports its zoom at the top level like every
+other mode.
 
 ### Trimmed loading
 
