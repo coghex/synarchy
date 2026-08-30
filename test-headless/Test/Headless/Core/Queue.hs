@@ -279,22 +279,36 @@ spec = do
         stillHeld ← statsOf queue ≫= requireOldestAge
         (stillHeld - held) `shouldSatisfy` (≥ ageGapNs)
 
-        -- Enqueue a SECOND element a full gap after the first, then
-        -- remove the head. The age must be re-derived from whatever is
-        -- at the front now rather than carried forward from the element
-        -- that left.
+        -- The delay above also separates the two enqueues, so "newer"
+        -- is stamped at least one full gap after "older". Removing the
+        -- head must then re-derive the age from "newer"'s own timestamp
+        -- rather than carry the departed element's forward.
         writeQueue queue "newer"
+        t0 ← getMonotonicTimeNSec
         beforeRemoval ← statsOf queue ≫= requireOldestAge
-        -- Still the older element's: guaranteed at or past one gap.
+        removed ← readQueue queue
+        promoted ← statsOf queue ≫= requireOldestAge
+        t1 ← getMonotonicTimeNSec
+        removed `shouldBe` "older"
+
+        -- Still the older element's here, which 'threadDelay' guarantees
+        -- is at or past one gap. Checked before the bound below, which
+        -- subtracts one gap from it.
         beforeRemoval `shouldSatisfy` (≥ ageGapNs)
 
-        removed ← readQueue queue
-        removed `shouldBe` "older"
-        promoted ← statsOf queue ≫= requireOldestAge
-        -- Now the newer element's own, which was enqueued microseconds
-        -- ago: three orders of magnitude below the gap the departed
-        -- head had already accumulated.
-        promoted `shouldSatisfy` (< ageGapNs)
+        -- The bound the promoted age must respect, derived from clocks
+        -- this example read ITSELF rather than from any assumption about
+        -- how promptly it got scheduled. Writing @tA@\/@tB@ for the two
+        -- enqueue instants and @s@\/@u@ for the two snapshots (both
+        -- inside @[t0, t1]@): @beforeRemoval = s - tA@ and
+        -- @promoted = u - tB@, and @tB ≥ tA + gap@, so
+        -- @promoted ≤ (u - s) + beforeRemoval - gap@ and @u - s@ is at
+        -- most @t1 - t0@. A stall anywhere widens the right-hand side by
+        -- at least as much as the left, so a correct implementation
+        -- cannot fail this however the scheduler behaves — while an
+        -- implementation that kept the DEPARTED head's timestamp reports
+        -- @u - tA@, which exceeds the bound by a whole gap.
+        promoted `shouldSatisfy` (≤ (t1 - t0) + beforeRemoval - ageGapNs)
 
       it "leaves every counter unchanged when tryReadQueue finds nothing" $ do
         queue ← newQueue ∷ IO (Queue T.Text)
