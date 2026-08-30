@@ -1280,9 +1280,12 @@ binding forms:
 The primitive must also be in HEAD position. `withLogging writeIORef
 (fieldOne env) 1` hands it to `withLogging`, and reading what follows
 as its own arguments would invent a write and hide the accessor's
-residue entry behind a phantom inline use. What applies to it is an
-identifier or a closing bracket on the *same line* — layout ends a
-statement with no token at all, and a keyword applies to nothing.
+residue entry behind a phantom inline use. What can apply to it is an
+identifier or a closing bracket, but a newline ends no application and
+layout ends a statement with no token at all, so three things decide
+it: a keyword applies to nothing; on the same line an identifier or
+bracket is applying; across lines, a continuation is indented past the
+line that opened the expression while a sibling statement is not.
 
 The primitive is held to the same scope test as the accessor: a name is only
 `Data.IORef`'s `writeIORef` if that one reaches the module under the

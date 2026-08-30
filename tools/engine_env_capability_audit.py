@@ -2677,24 +2677,55 @@ _HASKELL_KEYWORDS = frozenset({
 })
 
 
-def in_head_position(tokens: list[Token], index: int) -> bool:
+def line_indents(code: str) -> list[int | None]:
+    """Indent column per 1-BASED line (index 0 unused), `None` for a
+    blank line. `in_head_position` reads it to tell a continuation from
+    a new statement."""
+    return [None] + [None if not line.strip()
+                     else len(line) - len(line.lstrip())
+                     for line in code.split("\n")]
+
+
+def in_head_position(tokens: list[Token], index: int,
+                     indents: list[int | None] | None = None) -> bool:
     """True unless something is plainly APPLYING to `tokens[index]`.
 
     `withLogging writeIORef (fieldOne env) 1` hands the primitive to
     `withLogging`; reading the tokens after it as its own arguments
     invents a write, and hides the accessor's pass-on residue entry
-    behind a phantom inline use. What applies to it is an identifier or
-    a closing bracket -- but only ON THE SAME LINE, because layout ends
-    a statement without any token saying so, and the previous
-    statement's last token is very often exactly one of those."""
+    behind a phantom inline use. What can apply to it is an identifier
+    or a closing bracket -- but a newline does not end an application,
+    and layout does not end a statement with any token, so the token
+    alone cannot decide it:
+
+    * a KEYWORD applies to nothing, wherever it sits, which is what
+      makes `else writeIORef (...) ...` and the `do` opening a block
+      both head position;
+    * on the SAME line, an identifier or closing bracket is applying;
+    * across lines, LAYOUT decides. A continuation is indented past the
+      line that opened the expression (`withLogging` on one line, the
+      primitive indented under it), while a sibling statement starts at
+      the same column or further left.
+
+    Without `indents` the across-lines case answers True, which keeps a
+    write visible rather than dropping it silently."""
     if index == 0:
         return True
     previous = tokens[index - 1]
-    if previous.line != tokens[index].line:
-        return True
     if previous.kind == "id":
-        return previous.text in _HASKELL_KEYWORDS
-    return not (previous.kind == "punc" and previous.text in (")", "]"))
+        if previous.text in _HASKELL_KEYWORDS:
+            return True
+    elif not (previous.kind == "punc" and previous.text in (")", "]")):
+        return True
+    if previous.line == tokens[index].line:
+        return False
+    if indents is None:
+        return True
+    # A token's own line is never blank, so `or 0` is a totality guard
+    # rather than a branch worth its own case.
+    here = indents[tokens[index].line] or 0
+    there = indents[previous.line] or 0
+    return here <= there
 
 
 def _past_primitive_parentheses(tokens: list[Token], index: int) -> int:
@@ -3021,6 +3052,7 @@ def scan_capability_writes(
         declarations = parse_imports(text)
         code = prepared_source(text)
         tokens = tokenize_haskell(code)
+        indents = line_indents(code)
 
         def resolve(name: str) -> tuple[str, str, str] | None:
             """`(EngineEnv field, owning module, base accessor name)` for
@@ -3061,7 +3093,7 @@ def scan_capability_writes(
             primitive = resolve_primitive(declarations, token.text)
             if primitive is None:
                 continue
-            if not in_head_position(tokens, index):
+            if not in_head_position(tokens, index, indents):
                 # Being passed on, not applied: no inline use to record,
                 # and the accessor beside it stays residue.
                 if primitive in IOREF_WRITE_PRIMITIVES:

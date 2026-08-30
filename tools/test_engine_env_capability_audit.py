@@ -2335,6 +2335,45 @@ viaCapability env =
 # A keyword lexes as an identifier but applies to nothing, so a
 # primitive after one IS in head position -- the shape at
 # `src/Unit/Thread/Movement/Climb.hs:86`.
+# The same hand-off spread over lines. A newline does not end an
+# application; the continuation is indented past the line that opened
+# it, and that is what distinguishes it from a sibling statement.
+_MULTILINE_VALUE = """\
+module MultiPassed.Mod where
+
+import Data.IORef
+
+import Engine.Core.State (EngineEnv, fieldOne)
+import Engine.Core.Capability.Fake (FakeCapability(..), toFakeCapability)
+
+raw ∷ EngineEnv → IO ()
+raw env = withLogging
+    writeIORef
+    (fieldOne env)
+    1
+
+viaCapability ∷ EngineEnv → IO ()
+viaCapability env = withLogging
+    writeIORef
+    (fkFieldTwo (toFakeCapability env))
+    2
+"""
+
+# Sibling statements at the same column are NOT continuations, however
+# the previous one ended -- and it very often ends in `)`.
+_SIBLING_STATEMENTS = """\
+module Siblings.Mod where
+
+import Data.IORef
+
+import Engine.Core.State (EngineEnv, fieldThree)
+
+run ∷ EngineEnv → IO ()
+run env = do
+    pure ()
+    writeIORef (fieldThree env) 1
+"""
+
 _AFTER_KEYWORD = """\
 module AfterKeyword.Mod where
 
@@ -2628,6 +2667,8 @@ def _writer_sources(**modules: str) -> dict[str, str]:
         "bareImport": "src/BareImport/Mod.hs",
         "unreadable": "src/Unreadable/Mod.hs",
         "passedOn": "src/PassedOn/Mod.hs",
+        "multiPassed": "src/MultiPassed/Mod.hs",
+        "siblings": "src/Siblings/Mod.hs",
         "afterKeyword": "src/AfterKeyword/Mod.hs",
         "recordDot": "src/RecordDot/Mod.hs",
         "composed": "src/Composed/Mod.hs",
@@ -3273,6 +3314,25 @@ def test_a_primitive_must_be_in_head_position():
     writes, _ = _scan(_writer_sources(afterKeyword=_AFTER_KEYWORD))
     expect(writes["fieldThree"] == {"AfterKeyword.Mod"},
            f"while a primitive after a keyword is in head position, "
+           f"got: {sorted(writes['fieldThree'])}")
+
+    # A newline does not end an application: the continuation is
+    # indented past the line that opened it.
+    scan = _full_scan(_writer_sources(multiPassed=_MULTILINE_VALUE))
+    expect(scan.writes["fieldOne"] == set()
+           and scan.writes["fieldTwo"] == set(),
+           f"a multiline hand-off writes nothing either, got: "
+           f"fieldOne={sorted(scan.writes['fieldOne'])}, "
+           f"fieldTwo={sorted(scan.writes['fieldTwo'])}")
+    expect(len([item for item in scan.residue
+                if item.module == "MultiPassed.Mod"]) == 1,
+           "and the capability accessor keeps its residue entry")
+
+    # …while a sibling statement at the same column is a new statement,
+    # however the previous one ended.
+    writes, _ = _scan(_writer_sources(siblings=_SIBLING_STATEMENTS))
+    expect(writes["fieldThree"] == {"Siblings.Mod"},
+           f"a statement following `pure ()` is not its continuation, "
            f"got: {sorted(writes['fieldThree'])}")
 
 
