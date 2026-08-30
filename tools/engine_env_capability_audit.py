@@ -1106,19 +1106,80 @@ ENGINE_ENV_TYPE = "EngineEnv"
 _IMPORT_LINE_RE = re.compile(r"^import\b")
 _IMPORT_HEAD_RE = re.compile(r"^import\s+(?:qualified\s+)?([A-Za-z][A-Za-z0-9_.']*)")
 _EXPLICIT_ENGINEENV_RE = re.compile(r"EngineEnv\s*\(\s*\.\.\s*\)")
-_BLOCK_COMMENT_RE = re.compile(r"\{-.*?-\}", re.DOTALL)
+# A character literal, including an escape. Used both to step over one
+# while stripping comments and to step over one while tokenizing.
+_CHAR_LITERAL_RE = re.compile(r"'(?:\\.|[^\\'])'")
+# The symbol characters a dash run may continue into. Per the Haskell
+# report `--` opens a comment only when the run of dashes is NOT
+# followed by one of these -- otherwise it is an operator such as
+# `-->`, and the code after it is code.
+_SYMBOL_CHARS = frozenset("!#$%&*+./<=>?@\\^|~:-")
 
 
 def _strip_haskell_comments(text: str) -> str:
-    """Strip `{- -}` block comments (newline-count preserved, so line
-    numbers/column-0 checks downstream stay meaningful) and `--` line
-    comments."""
-    text = _BLOCK_COMMENT_RE.sub(lambda m: "\n" * m.group(0).count("\n"), text)
-    lines = []
-    for line in text.split("\n"):
-        idx = line.find("--")
-        lines.append(line[:idx] if idx != -1 else line)
-    return "\n".join(lines)
+    """Blank `{- -}` and `--` comments, preserving every character
+    position: comment characters become spaces and newlines are kept,
+    so line numbers and the column-0 tests downstream are unaffected.
+
+    __Literal-aware, because a comment marker inside a string is
+    text.__ `let marker = "--" in writeIORef (fieldOne env) 1` is a
+    real write, and a scanner that stopped at that `--` would drop it
+    silently -- the exact failure mode this audit exists to prevent.
+    String and character literals are therefore stepped over, block
+    comments nest the way Haskell's do, and a dash run continuing into
+    a symbol character is an operator rather than a comment."""
+    out = list(text)
+    i, n = 0, len(text)
+    while i < n:
+        ch = text[i]
+        if ch == '"':
+            i += 1
+            while i < n and text[i] != '"':
+                i += 2 if text[i] == "\\" else 1
+            i += 1
+            continue
+        if ch == "'":
+            # A prime continues an identifier; only a `'` that does not
+            # follow one can open a character literal.
+            previous = text[i - 1] if i else ""
+            literal = (None if (previous.isalnum() or previous in "_'")
+                       else _CHAR_LITERAL_RE.match(text, i))
+            i = literal.end() if literal else i + 1
+            continue
+        if text.startswith("{-", i):
+            depth, j = 0, i
+            while j < n:
+                if text.startswith("{-", j):
+                    depth += 1
+                    j += 2
+                    continue
+                if text.startswith("-}", j):
+                    depth -= 1
+                    j += 2
+                    if depth == 0:
+                        break
+                    continue
+                j += 1
+            for k in range(i, min(j, n)):
+                if out[k] != "\n":
+                    out[k] = " "
+            i = j
+            continue
+        if text.startswith("--", i):
+            run = i
+            while run < n and text[run] == "-":
+                run += 1
+            if run < n and text[run] in _SYMBOL_CHARS:
+                i = run
+                continue
+            end = text.find("\n", i)
+            end = n if end == -1 else end
+            for k in range(i, end):
+                out[k] = " "
+            i = end
+            continue
+        i += 1
+    return "".join(out)
 
 
 def _import_chunks(text: str) -> list[str]:
@@ -2222,7 +2283,6 @@ CAPABILITY_WRITER_MODULES: dict[str, frozenset[str]] = {
 
 
 _HS_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_']*")
-_CHAR_LITERAL_RE = re.compile(r"'(?:\\.|[^\\'])'")
 _IMPORT_WILDCARD_RE = re.compile(
     r"([A-Z][A-Za-z0-9_']*)\s*\(\s*\.\.\s*\)")
 # An equation left-hand side (top-level, `where` or `let` alike),

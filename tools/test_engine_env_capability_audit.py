@@ -2420,6 +2420,28 @@ bump ∷ EngineEnv → IO ()
 bump env = writeIORef (A.sharedRef (A.toAlphaCapability env)) 1
 """
 
+# A comment marker inside a STRING is text. `src/Engine/Scripting/Lua/
+# Thread/Dispatch.hs:257` carries a real one -- `<> " -- " <> reason` --
+# and truncating there also removes the string's closing quote, which
+# desynchronises everything after it.
+_STRING_COMMENT_MARKER = """\
+module StringMarker.Mod where
+
+import Data.IORef
+
+import Engine.Core.State (EngineEnv, fieldOne, fieldTwo, fieldThree)
+
+marked ∷ EngineEnv → IO ()
+marked env = let marker = "--" in writeIORef (fieldOne env) 1
+
+afterwards ∷ EngineEnv → IO ()
+afterwards env = writeIORef (fieldTwo env) 2
+
+nested ∷ EngineEnv → IO ()
+nested env = {- outer {- inner -} still a comment -}
+    writeIORef (fieldThree env) 3
+"""
+
 # `T(..)` grants `T`'s selectors and nobody else's, so a wildcard on
 # some OTHER type in the same module puts no `EngineEnv` field in scope.
 _FOREIGN_WILDCARD = """\
@@ -2490,6 +2512,7 @@ def _writer_sources(**modules: str) -> dict[str, str]:
         "localPrim": "src/LocalPrim/Mod.hs",
         "alpha": "src/Engine/Core/Capability/Alpha.hs",
         "beta": "src/Engine/Core/Capability/Beta.hs",
+        "stringMarker": "src/StringMarker/Mod.hs",
         "foreignWildcard": "src/ForeignWildcard/Mod.hs",
         "owningWildcard": "src/OwningWildcard/Mod.hs",
         "collideA": "src/CollideA/Mod.hs",
@@ -3111,6 +3134,49 @@ def test_a_primitive_used_as_a_value_is_not_unreadable():
            "and blocks nothing")
 
 
+def test_a_comment_marker_inside_a_string_is_text():
+    """`let marker = "--" in writeIORef (fieldOne env) 1` is a real
+    write. Stripping at that `--` would drop it AND remove the string's
+    closing quote, desynchronising every literal after it -- which is
+    how three genuine mutation sites in
+    `Engine.Scripting.Lua.Thread.Dispatch` were invisible until this
+    was fixed. Block comments nest, too."""
+    writes, _ = _scan(_writer_sources(stringMarker=_STRING_COMMENT_MARKER))
+    expect(writes["fieldOne"] == {"StringMarker.Mod"},
+           f"the write after a string containing `--` must survive, got: "
+           f"{sorted(writes['fieldOne'])}")
+    expect(writes["fieldTwo"] == {"StringMarker.Mod"},
+           f"and so must everything after it, got: "
+           f"{sorted(writes['fieldTwo'])}")
+    expect(writes["fieldThree"] == {"StringMarker.Mod"},
+           f"a NESTED block comment must close where Haskell closes it, "
+           f"got: {sorted(writes['fieldThree'])}")
+
+    stripped = _strip_haskell_comments(
+        'a = "-- not a comment" -- but this is\n'
+        'b = x --> y\n'
+        'c = {- {- nested -} still -} kept\n')
+    expect('"-- not a comment"' in stripped and "but this is" not in stripped,
+           f"only the real comment is blanked, got: {stripped!r}")
+    expect("x --> y" in stripped,
+           f"a dash run continuing into a symbol is an operator, got: "
+           f"{stripped!r}")
+    expect("kept" in stripped and "nested" not in stripped
+           and "still" not in stripped,
+           f"a nested block comment closes at its own end, got: "
+           f"{stripped!r}")
+    expect(len(stripped.split("\n")) == 4,
+           "and every line position is preserved")
+
+    # A prime CONTINUES an identifier. Reading `x'` as opening a
+    # character literal consumes `' '` and leaves the following quote
+    # looking like a string opener, which swallows the rest of the file.
+    primed = _strip_haskell_comments("f x' '\"' = 1 -- gone\ng = 2\n")
+    expect("gone" not in primed and "g = 2" in primed,
+           f"a primed identifier must not open a character literal, got: "
+           f"{primed!r}")
+
+
 def test_a_wildcard_grants_only_its_own_type_s_selectors():
     """`import Engine.Core.State (WindowState(..))` brings in
     `WindowState`'s selectors, not `EngineEnv`'s -- so a module-local
@@ -3454,6 +3520,7 @@ def main() -> int:
         test_a_bare_import_brings_the_accessor_into_scope,
         test_an_unreadable_mutation_site_blocks,
         test_a_primitive_used_as_a_value_is_not_unreadable,
+        test_a_comment_marker_inside_a_string_is_text,
         test_a_wildcard_grants_only_its_own_type_s_selectors,
         test_one_selector_may_belong_to_two_capabilities,
         test_a_primitive_must_be_the_one_from_data_ioref,

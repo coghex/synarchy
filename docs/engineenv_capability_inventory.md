@@ -1269,7 +1269,13 @@ binding forms:
    primitive takes, and a *bare* identifier there always denotes some
    local binding sharing its name. Naming an accessor in a comment, in
    Haddock, or in an import list is not using it either — commentary
-   and import declarations are stripped before the scan.
+   and import declarations are stripped before the scan, and that
+   stripping is literal-aware: a `--` inside a string is text, block
+   comments nest, and a dash run continuing into a symbol is an
+   operator. (It has to be. `Engine.Scripting.Lua.Thread.Dispatch`
+   logs a literal `" -- "`, and truncating there also removed the
+   string's closing quote, which hid three real mutation sites further
+   down the file.)
 
 **Deliberately no lexical scope analysis, and a closed form list
 instead.** Those two rules separate every case in this tree; the one
