@@ -439,6 +439,36 @@ python3 tools/world_check.py --quick
 # sha256, and load_fixture_yaml still stopping the run at setup on a
 # fixture that registers nothing. That probe is manual-only and
 # worldgen-heavy; the companion boots nothing.
+# test_location_content_probe is #1884's: the artifact ownership of
+# tools/location_content_probe.py, the other half of what #1620 started.
+# Its five fixture YAMLs and its engine log were fixed /tmp names --
+# loc_content_probe_bogus.yaml, _bogus_loot.yaml, _quinoa.yaml,
+# _quinoa_loot.yaml, _dense.yaml and location_content_engine.log -- each
+# written with a truncating open(..., "w"), carrying no invocation
+# identity and cleaned up by nothing, so two concurrent runs collided on
+# all six while a developer's same-named file was truncated outright.
+# The log collision is the sharp one: the probe ASSERTS against that log
+# twice, so a foreign truncation could turn a passing phase into a
+# failure or a failure into a pass. All six now live under the one
+# directory the invocation already owned for its save slots. This drives
+# the probe's real main() with run substituted: disjoint paths for two
+# invocations, five absolute fixture paths inside the run's own tree, no
+# legacy /tmp name anywhere in the module, every one of those six legacy
+# paths left exactly as the run found it, release after a pass, a
+# failure, an early return, an exception, a _PhaseAborted, a boot abort
+# and a handled Ctrl-C, an engine the run merely LAUNCHED killed BEFORE
+# the tree it was writing into is removed, opt-in --keep-artifacts
+# retaining on a pass, a failure and a boot abort while naming only what
+# the run actually produced, a cleanup failure making an otherwise clean
+# run non-zero through #1620's own reporting, and an outside same-named
+# decoy left byte-identical. It also pins what the probe still proves:
+# all seven boots through the one funnel that hands each this
+# invocation's log and registers its process as it is launched, both
+# log-reading ASSERTIONS reading that same log, the five fixture bodies
+# by sha256, their registration order and loaders, load_fixture_yaml
+# still guarding every one of them, and the three helpers
+# portal_ghost_probe imports still intact. That probe is manual-only and
+# boots seven engines; the companion boots nothing.
 # test_movement_probe is #1586's: tools/movement_probe.py --list is a
 # metadata query answered from scripts/movement_arena.lua before any
 # boot(), for every --mode, and the derived view is held to the runtime
@@ -495,6 +525,7 @@ python3 tools/test_location_embark_probe.py
 python3 tools/test_location_probe_config_isolation.py
 python3 tools/test_probe_root_cleanup.py
 python3 tools/test_flora_growth_probe.py
+python3 tools/test_location_content_probe.py
 python3 tools/test_movement_probe.py
 python3 tools/test_farm_ai_probe.py
 python3 tools/test_probe_boot_logs.py
