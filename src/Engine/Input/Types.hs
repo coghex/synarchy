@@ -65,7 +65,103 @@ data InputState = InputState
       --   on a freshly-consumed press, consulted (in addition to that
       --   dispatch's own fresh consumption) on every dispatch for the
       --   same key, and removed on release regardless of outcome.
+    , inpInjectHolds ∷ Map.Map InjectGesture (Set.Set GLFW.Key)
+      -- ^ #1927: modifier keys each ACTIVE synthetic split hold is
+      --   currently bracketing — the ownership record 'inpKeyStates'
+      --   alone cannot express. 'inpKeyStates' keeps meaning exactly
+      --   what it always did (the DIRECT owner: real GLFW input, and
+      --   synthetic events not bracketing a split hold); a modifier is
+      --   PUBLISHED held when EITHER owner class holds it, which is
+      --   what 'keyHeld' — and therefore @engine.isKeyDown@ — answers.
+      --
+      --   Two opposite defects this closes, both live-reproduced in
+      --   @docs/project_review_693-682.md@ PRR-1: a split hold whose up
+      --   half omits the modifier list used to leak its own modifier
+      --   held forever, and a split hold that DID repeat the list used
+      --   to release a modifier an independent hold (an earlier
+      --   @input.keyDown(\"Shift\")@, or a physical press) still owned.
+      --   Ownership, not the up half's argument list, decides what a
+      --   gesture releases, so neither can happen: a gesture releases
+      --   exactly what it claimed, and only once no other owner holds
+      --   it.
+      --
+      --   Entries live from the down half's 'InputGestureHold' to the
+      --   up half's fenced 'InputGestureRelease' — deliberately spanning
+      --   the primary release's own Lua callbacks, so #697's fenced
+      --   contract still shows those callbacks the modifier as held.
+      --   Cleared wholesale by 'Engine.Input.State.clearHeldInput' on
+      --   focus loss / minimize, like every other held-input map.
     } deriving (Show, Eq)
+
+-- | Identity of a synthetic SPLIT hold (#1927). Its down and up halves
+--   are INDEPENDENT verb calls carrying no shared handle, so the
+--   gesture is keyed by the only thing both halves name: the held key
+--   ('Engine.Input.Inject.keyDownSequence' /
+--   'Engine.Input.Inject.keyUpSequence') or the held mouse button
+--   ('Engine.Input.Inject.mouseDownSequence' /
+--   'Engine.Input.Inject.mouseUpSequence').
+--
+--   Taps and clicks are deliberately NOT gestures: their modifiers
+--   never outlive one synthesized sequence, so #697's fence already
+--   resolves them and their behaviour is unchanged.
+data InjectGesture
+    = GestureKey GLFW.Key
+    | GestureMouse GLFW.MouseButton
+    deriving (Show, Eq, Ord)
+
+-- | Which owner class a key event's HOLD is attributed to (#1927) —
+--   the metadata 'Engine.Input.State.updateKeyState' needs to keep the
+--   two classes apart. Routing, broadcasts and every downstream
+--   consumer are identical either way; only the state attribution
+--   differs.
+data KeyHoldOwner
+    = OwnerDirect
+      -- ^ Real GLFW input, and every synthetic event that is not a
+      --   split hold's modifier bracket. Recorded in 'inpKeyStates',
+      --   exactly as before #1927.
+    | OwnerGesture InjectGesture
+      -- ^ A split hold's modifier bracket. Recorded in
+      --   'inpInjectHolds' under the owning gesture, so the direct
+      --   owner's own state is neither overwritten on claim nor
+      --   cleared on release.
+    deriving (Show, Eq, Ord)
+
+-- | Is this exact physical key PUBLISHED as held? True when the direct
+--   owner holds it ('inpKeyStates') or any active synthetic split hold
+--   brackets it ('inpInjectHolds') — the #1927 ownership union every
+--   held-key poller must ask, rather than reading 'inpKeyStates'
+--   directly.
+keyHeld ∷ InputState → GLFW.Key → Bool
+keyHeld state key =
+    directlyHeld state key
+    ∨ any (Set.member key) (Map.elems (inpInjectHolds state))
+
+-- | Would this key still be held after @gesture@ dropped its claim?
+--   The #1927 over-release guard: a gesture's up half emits a real key
+--   release ONLY when nothing else holds the key — one physical Shift
+--   produces no key-up while another owner is still pressing it.
+keyHeldByOtherOwner ∷ InputState → InjectGesture → GLFW.Key → Bool
+keyHeldByOtherOwner state gesture key =
+    directlyHeld state key
+    ∨ any (Set.member key)
+          (Map.elems (Map.delete gesture (inpInjectHolds state)))
+
+-- | The DIRECT owner's own hold for one key — 'inpKeyStates' read
+--   literally, with an absent entry meaning "never pressed", exactly
+--   as before #1927.
+directlyHeld ∷ InputState → GLFW.Key → Bool
+directlyHeld state key =
+    maybe False keyPressed (Map.lookup key (inpKeyStates state))
+
+-- | The modifier keys @gesture@ currently claims, in the order a
+--   matching release should emit them: the reverse of the ascending
+--   order 'InputGestureHold' claimed them in, mirroring the
+--   reverse-order releases 'Engine.Input.Inject' has always used for
+--   taps and clicks.
+gestureHeldKeys ∷ InputState → InjectGesture → [GLFW.Key]
+gestureHeldKeys state gesture =
+    reverse . Set.toAscList $
+        Map.findWithDefault Set.empty gesture (inpInjectHolds state)
 
 -- | F4 (#730): a ClickUI-routed (or middle-button camera-drag) press
 --   whose ONE action-outcome record is deferred until the matching
@@ -183,6 +279,38 @@ data InputEvent
       --   bare counter shared across calls could (#727 review).
       --   Never produced by GLFW callbacks.
     | InputBarrier Int
+      -- | A synthetic split hold's modifier CLAIM (#1927), emitted by
+      --   'Engine.Input.Inject.keyDownSequence' /
+      --   'Engine.Input.Inject.mouseDownSequence' in place of the bare
+      --   modifier presses those sequences used to emit. Each carried
+      --   key is still dispatched as a real key press — same routing,
+      --   same Lua broadcast, same 'GLFW.ModifierKeys' — but its HOLD
+      --   is attributed to the gesture ('inpInjectHolds') instead of
+      --   the direct owner, so the gesture can later release exactly
+      --   what it introduced and nothing else. Never produced by GLFW
+      --   callbacks; never emitted when the hold has no modifiers.
+    | InputGestureHold InjectGesture [GLFW.Key] GLFW.ModifierKeys
+      -- | A synthetic split hold ENDING (#1927), emitted by
+      --   'Engine.Input.Inject.keyUpSequence' /
+      --   'Engine.Input.Inject.mouseUpSequence' right after the
+      --   primary release. The up half cannot know what the down half
+      --   claimed, so this asks the INPUT THREAD — the one place that
+      --   knows — to resolve it: if the gesture holds nothing this is a
+      --   no-op (a modifier-free split hold behaves exactly as it did
+      --   before #1927, fence included: none), and otherwise it fences
+      --   an 'InputGestureRelease' through the Lua thread the same way
+      --   'InputFollowup' fences a tap's releases, so the primary
+      --   release's own callbacks still observe the modifier held
+      --   (#697). Never produced by GLFW callbacks.
+    | InputGestureEnd InjectGesture GLFW.ModifierKeys
+      -- | The fenced half of 'InputGestureEnd' (#1927), re-injected by
+      --   the Lua thread after the up half's broadcasts have run. Drops
+      --   the gesture's claim and emits a real key release for each
+      --   claimed key NO OTHER owner still holds — an independently
+      --   held modifier (an outstanding @input.keyDown(\"Shift\")@, or a
+      --   physical press) survives untouched. Never produced by GLFW
+      --   callbacks.
+    | InputGestureRelease InjectGesture GLFW.ModifierKeys
     deriving (Show, Eq)
 
 -- * Window events
@@ -415,4 +543,5 @@ defaultInputState = InputState
     , inpPendingActivation = Map.empty
     , inpCharBatch = Nothing
     , inpControlFocusConsumedKeys = Set.empty
+    , inpInjectHolds = Map.empty
     }

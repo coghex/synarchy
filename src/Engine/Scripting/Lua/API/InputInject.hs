@@ -39,15 +39,34 @@
 --   stale barrier from an earlier timed-out call could satisfy a
 --   later caller's wait) — see that function's haddock.
 --
+--   Split-hold modifier OWNERSHIP (#1927): a split hold's modifiers are
+--   declared ONCE, on its down half, and the engine remembers which
+--   gesture (that key, or that mouse button) introduced them. The
+--   matching up half therefore takes NO modifier list — passing one is
+--   an error naming the down half, not a silently ignored argument —
+--   and releases exactly that gesture's own claim:
+--
+--     * omitting the list can no longer leak the gesture's modifier
+--       held forever (there is no list to omit), and
+--     * a modifier that some OTHER owner still holds — an outstanding
+--       @input.keyDown("Shift")@, or a physical press — is not
+--       released by the gesture ending, in either direction: acquiring
+--       it during the gesture, or dropping it during the gesture, both
+--       resolve by ownership rather than by a snapshot.
+--
+--   A modifier-free split hold is unchanged (no claim, no fence), and
+--   so are @input.click@ / @input.key@: their modifiers never outlive
+--   one sequence, so #697's fence already resolved them.
+--
 --   Surface:
 --     input.moveMouse(x, y)
 --     input.click(x, y[, button[, mods]])      button: left|right|middle
 --     input.mouseDown(x, y[, button[, mods]])  mods: e.g. {"shift","ctrl"}
---     input.mouseUp(x, y[, button[, mods]])
+--     input.mouseUp(x, y[, button])            no mods: see #1927 above
 --     input.scroll(dx, dy)
 --     input.key(name[, mods])                  name: keyToText vocabulary
 --     input.keyDown(name[, mods])
---     input.keyUp(name[, mods])
+--     input.keyUp(name)                        no mods: see #1927 above
 --     input.type(text)
 module Engine.Scripting.Lua.API.InputInject
   ( inputMoveMouseFn
@@ -266,6 +285,27 @@ readModsArg idx = do
                         <> T.intercalate "," names
                         <> " (expected shift|ctrl|alt|super)"
 
+-- | #1927: the split-hold RELEASE verbs (@input.mouseUp@,
+--   @input.keyUp@) accept no modifier list at all. Ownership — not the
+--   caller's argument — decides what a gesture releases, so a list
+--   here could only be redundant (best case) or a lie about what the
+--   down half claimed. Rejecting it says so, rather than accepting and
+--   ignoring it: silently ignoring is exactly how the pre-#1927
+--   surface let a caller believe the up half controlled the release.
+--   @alternative@ names the verb that DOES take the list.
+rejectModsArg ∷ Lua.StackIndex → Text → Text
+              → Lua.LuaE Lua.Exception (Either Text ())
+rejectModsArg idx verbName alternative = do
+    ty ← Lua.ltype idx
+    if ty ≡ Lua.TypeNone ∨ ty ≡ Lua.TypeNil
+        then pure (Right ())
+        else pure . Left $
+            "input." <> verbName <> ": takes no mods argument — declare "
+            <> "a split hold's modifiers once on the matching "
+            <> alternative <> "; the release drops exactly that hold's "
+            <> "own modifiers, leaving any independently held modifier "
+            <> "(another input.keyDown, or physical input) untouched"
+
 -- | Read a Lua array of strings at the given stack index.
 readStringList ∷ Lua.StackIndex → Lua.LuaE Lua.Exception (Maybe [Text])
 readStringList idx = do
@@ -300,7 +340,10 @@ inputMoveMouseFn env ls stateRef = headlessGuard env $ do
             \pos → ackInject env ls stateRef (moveSequence pos)
         _ → pushError "input.moveMouse: x and y (numbers) required"
 
--- | Common body for click / mouseDown / mouseUp.
+-- | Common body for the MODIFIER-BEARING mouse verbs (click /
+--   mouseDown). @input.mouseUp@ is deliberately not one of them
+--   (#1927): it takes no modifier list, so it reads its own arguments
+--   below.
 mouseVerb ∷ ((Double, Double) → GLFW.MouseButton
              → ([GLFW.Key], GLFW.ModifierKeys) → [InputEvent])
           → Text → EngineEnv → LuaBackendState → IORef ThreadControl
@@ -328,9 +371,24 @@ inputMouseDownFn ∷ EngineEnv → LuaBackendState → IORef ThreadControl
                  → Lua.LuaE Lua.Exception Lua.NumResults
 inputMouseDownFn = mouseVerb mouseDownSequence "mouseDown"
 
+-- | input.mouseUp(x, y[, button]) — ends the split hold
+--   'inputMouseDownFn' started on that button, releasing the modifiers
+--   THAT call claimed (#1927). No mods argument: see 'rejectModsArg'.
 inputMouseUpFn ∷ EngineEnv → LuaBackendState → IORef ThreadControl
                → Lua.LuaE Lua.Exception Lua.NumResults
-inputMouseUpFn = mouseVerb mouseUpSequence "mouseUp"
+inputMouseUpFn env ls stateRef = headlessGuard env $ do
+    mx ← Lua.tonumber 1
+    my ← Lua.tonumber 2
+    eBtn ← readButtonArg 3
+    eNoMods ← rejectModsArg 4 "mouseUp" "input.mouseDown(x, y, button, mods)"
+    case (mx, my) of
+        (Just x, Just y) → case (eBtn, eNoMods) of
+            (Right btn, Right ()) →
+                withWindowCoords env (realToFrac x) (realToFrac y) $
+                    \pos → ackInject env ls stateRef (mouseUpSequence pos btn)
+            (Left err, _) → pushError err
+            (_, Left err) → pushError err
+        _ → pushError "input.mouseUp: x and y (numbers) required"
 
 -- | input.scroll(dx, dy) — wheel scroll at the current cursor position
 --   (moveMouse first to target a specific element).
@@ -344,7 +402,9 @@ inputScrollFn env ls stateRef = headlessGuard env $ do
             (scrollSequence (realToFrac dx) (realToFrac dy))
         _ → pushError "input.scroll: dx and dy (numbers) required"
 
--- | Common body for key / keyDown / keyUp.
+-- | Common body for the MODIFIER-BEARING key verbs (key / keyDown).
+--   @input.keyUp@ is deliberately not one of them (#1927): it takes no
+--   modifier list, so it reads its own arguments below.
 keyVerb ∷ (GLFW.Key → ([GLFW.Key], GLFW.ModifierKeys) → [InputEvent])
         → Text → EngineEnv → LuaBackendState → IORef ThreadControl
         → Lua.LuaE Lua.Exception Lua.NumResults
@@ -358,11 +418,17 @@ keyVerb buildSeq verbName env ls stateRef = headlessGuard env $ do
             let name = TE.decodeUtf8Lenient nameBS
             case (resolveKeyName name, eMods) of
                 (Just k, Right mm) → ackInject env ls stateRef (buildSeq k mm)
-                (Nothing, _) → pushError $
-                    "input." <> verbName <> ": unknown key name \""
-                    <> name <> "\" (use the keybind vocabulary, e.g. "
-                    <> "\"A\", \"Space\", \"Enter\", \"LeftShift\")"
+                (Nothing, _) → pushError (unknownKeyNameError verbName name)
                 (_, Left err) → pushError err
+
+-- | The one unknown-key message, shared by every key verb so
+--   @input.keyUp@'s own argument reading (#1927) cannot drift from
+--   'keyVerb'\'s.
+unknownKeyNameError ∷ Text → Text → Text
+unknownKeyNameError verbName name =
+    "input." <> verbName <> ": unknown key name \""
+    <> name <> "\" (use the keybind vocabulary, e.g. "
+    <> "\"A\", \"Space\", \"Enter\", \"LeftShift\")"
 
 inputKeyFn ∷ EngineEnv → LuaBackendState → IORef ThreadControl
            → Lua.LuaE Lua.Exception Lua.NumResults
@@ -372,9 +438,23 @@ inputKeyDownFn ∷ EngineEnv → LuaBackendState → IORef ThreadControl
                → Lua.LuaE Lua.Exception Lua.NumResults
 inputKeyDownFn = keyVerb keyDownSequence "keyDown"
 
+-- | input.keyUp(name) — ends the split hold 'inputKeyDownFn' started
+--   on that key, releasing the modifiers THAT call claimed (#1927). No
+--   mods argument: see 'rejectModsArg'.
 inputKeyUpFn ∷ EngineEnv → LuaBackendState → IORef ThreadControl
              → Lua.LuaE Lua.Exception Lua.NumResults
-inputKeyUpFn = keyVerb keyUpSequence "keyUp"
+inputKeyUpFn env ls stateRef = headlessGuard env $ do
+    mName ← Lua.tostring 1
+    eNoMods ← rejectModsArg 2 "keyUp" "input.keyDown(name, mods)"
+    case mName of
+        Nothing → pushError "input.keyUp: key name (string) required"
+        Just nameBS → do
+            let name = TE.decodeUtf8Lenient nameBS
+            case (resolveKeyName name, eNoMods) of
+                (Just k, Right ()) →
+                    ackInject env ls stateRef (keyUpSequence k)
+                (Nothing, _) → pushError (unknownKeyNameError "keyUp" name)
+                (_, Left err) → pushError err
 
 -- | input.type(text) — character events through the text-input path
 --   (needs a focused text field, like real typing). Non-char editing

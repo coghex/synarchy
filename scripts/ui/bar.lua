@@ -293,8 +293,11 @@ function bar.setFillColor(id, r, g, b_val, a)
     local b = bars[id]
     if not b then return end
 
-    UI.setSpriteColor(b.fillLeftId, r, g, b_val, a)
-    UI.setSpriteColor(b.fillCenterId, r, g, b_val, a)
+    -- UI.setColor is the registered verb (#1914); it dispatches on the
+    -- element's render-data variant, reaching the engine's internal
+    -- setSpriteColor for these two sprite handles.
+    UI.setColor(b.fillLeftId, r, g, b_val, a)
+    UI.setColor(b.fillCenterId, r, g, b_val, a)
 end
 
 -----------------------------------------------------------

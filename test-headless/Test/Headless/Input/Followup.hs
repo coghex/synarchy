@@ -38,85 +38,22 @@
 module Test.Headless.Input.Followup (spec) where
 
 import UPrelude
-import qualified Data.ByteString.Char8 as BS
-import qualified Data.Map.Strict as Map
-import qualified Data.Text as T
 import qualified Graphics.UI.GLFW as GLFW
-import qualified HsLua as Lua
 import Control.Concurrent (forkIO, killThread, threadDelay)
-import Control.Concurrent.STM (atomically)
-import Control.Concurrent.STM.TVar (modifyTVar', readTVarIO)
+import Control.Concurrent.STM.TVar (readTVarIO)
 import Control.Exception (finally)
 import Data.IORef (IORef, readIORef, writeIORef, newIORef, modifyIORef')
 import Data.List (findIndex)
 import Engine.Core.State (EngineEnv(..))
-import Engine.Core.Thread (ThreadControl(..))
 import qualified Engine.Core.Queue as Q
 import Engine.Input.Inject (clickSequence, noMods, waitForBarrier, newBarrierToken)
-import Engine.Input.Thread (processInputs, processInput)
+import Engine.Input.Thread (processInput)
 import Engine.Input.Types
-import Engine.Scripting.Lua.API (registerLuaAPI)
 import Engine.Scripting.Lua.API.InputInject (injectAndSettle, SettleResult(..))
-import Engine.Scripting.Lua.Script (loadModuleRef)
-import Engine.Scripting.Lua.Thread (createLuaBackendState)
 import Engine.Scripting.Lua.Thread.Dispatch (processLuaMsg, processLuaMsgs)
-import Engine.Scripting.Lua.Types (LuaMsg(..), LuaBackendState(..), LuaScript(..))
+import Engine.Scripting.Lua.Types (LuaMsg(..))
+import Test.Headless.Input.InjectHarness
 import Test.Hspec
-
-shiftMod ∷ ([GLFW.Key], GLFW.ModifierKeys)
-shiftMod = ([GLFW.Key'LeftShift], noMods { GLFW.modifierKeysShift = True })
-
-shiftState ∷ InputState → Maybe Bool
-shiftState st = keyPressed ⊚ Map.lookup GLFW.Key'LeftShift (inpKeyStates st)
-
--- | Drain every queued LuaMsg (nothing else consumes this queue
---   headless; earlier specs may have left worldgen chatter behind).
-drainLua ∷ EngineEnv → IO [LuaMsg]
-drainLua env = go []
-  where
-    go acc = do
-        m ← Q.tryReadQueue (luaQueue env)
-        case m of
-            Just msg → go (msg : acc)
-            Nothing  → pure (reverse acc)
-
--- | Reset the input-side state this spec touches and give the click
---   path a non-degenerate viewport (headless boots with zero sizes,
---   which would route every press as swallowed).
-resetInput ∷ EngineEnv → IO ()
-resetInput env = do
-    writeIORef (inputStateRef env) defaultInputState
-    writeIORef (windowSizeRef env) (1280, 720)
-    writeIORef (framebufferSizeRef env) (1280, 720)
-    _ ← drainLua env
-    pure ()
-
--- | One input-thread tick: drain the input queue through the real
---   'processInputs' (which also publishes to inputStateRef, #697).
-inputTick ∷ EngineEnv → IO ()
-inputTick env = do
-    st ← readIORef (inputStateRef env)
-    _ ← processInputs env st
-    pure ()
-
--- | Stand in for the un-started real input thread (#727 specs below):
---   pumps the REAL 'processInputs' on a tight poll for the duration of
---   the action, so 'injectAndSettle's blocking waits on
---   'inputProcessedRef' — which nothing headless would otherwise ever
---   advance — resolve promptly instead of running out their full
---   timeout.
-withFakeInputThread ∷ EngineEnv → IO α → IO α
-withFakeInputThread env act = do
-    stopRef ← newIORef False
-    let pump = do
-            stop ← readIORef stopRef
-            unless stop $ do
-                st ← readIORef (inputStateRef env)
-                _ ← processInputs env st
-                threadDelay 500
-                pump
-    tid ← forkIO pump
-    act `finally` (writeIORef stopRef True ≫ killThread tid)
 
 -- | Stand-in "input thread" for the #773 spec proving a synthesized
 --   action can be fully, genuinely processed WHILE 'injectAndSettle's
@@ -152,66 +89,6 @@ withBarrierWithholdingPump env heldRef act = do
     tid ← forkIO pump
     act `finally` (writeIORef stopRef True ≫ killThread tid)
 
--- | A real Lua backend + thread-control ref, with the FULL Lua API
---   registered (so @engine.isKeyDown@ etc. exist) and
---   scripts/input_followup_fixture.lua loaded as its one script — the
---   REAL 'broadcastToModules' dispatch path (#727 review: a
---   script-less backend proves the queue/timing mechanics but can
---   never show a real callback observing callback-time state, since
---   broadcasting to zero scripts is a no-op). Returns the fixture's
---   module ref so callers can read back what its callbacks captured
---   via 'readFixtureBool'.
-newTestLuaBackend ∷ EngineEnv → IO (LuaBackendState, IORef ThreadControl, Lua.Reference)
-newTestLuaBackend env = do
-    ls ← createLuaBackendState (luaToEngineQueue env) (luaQueue env)
-                                (assetPoolRef env) (nextObjectIdRef env)
-                                (inputStateRef env) (loggerRef env)
-    stateRef ← newIORef ThreadRunning
-    registerLuaAPI (lbsLuaState ls) env ls stateRef
-    eRef ← Lua.runWith (lbsLuaState ls) $
-        loadModuleRef "scripts/input_followup_fixture.lua"
-    ref ← case eRef of
-        Right r → pure r
-        Left err → error $
-            "failed to load scripts/input_followup_fixture.lua: "
-            ⧺ T.unpack err
-    atomically $ modifyTVar' (lbsScripts ls) $ Map.insert 1 LuaScript
-        { scriptId        = 1
-        , scriptPath      = "scripts/input_followup_fixture.lua"
-        , scriptTickRate  = 1000000  -- never auto-ticks during the test
-        , scriptNextTick  = 1000000
-        , scriptModuleRef = ref
-        , scriptPaused    = False
-        }
-    pure (ls, stateRef, ref)
-
--- | Read a boolean field off the fixture's @M.state@ table — what
---   scripts/input_followup_fixture.lua's callbacks captured via
---   @engine.isKeyDown@ at THEIR call time, i.e. what a real Lua
---   callback actually observed (#727 review), not a proxy.
---   'Nothing' if the field is absent/not a boolean (e.g. the callback
---   hasn't fired yet — the fixture leaves it @nil@).
-readFixtureBool ∷ LuaBackendState → Lua.Reference → BS.ByteString → IO (Maybe Bool)
-readFixtureBool ls ref field = Lua.runWith (lbsLuaState ls) $ do
-    _ ← Lua.getref Lua.registryindex ref ∷ Lua.LuaE Lua.Exception Lua.Type
-    tyState ← Lua.getfield (-1) (Lua.Name "state")
-    result ← if tyState ≡ Lua.TypeTable
-        then do
-            tyField ← Lua.getfield (-1) (Lua.Name field)
-            r ← if tyField ≡ Lua.TypeBoolean
-                    then Just ⊚ Lua.toboolean (-1)
-                    else pure Nothing
-            Lua.pop 1
-            pure r
-        else pure Nothing
-    Lua.pop 2
-    pure result
-
--- | Timeout for the #727 specs' 'injectAndSettle' calls — generous
---   relative to the 500us fake-pump poll interval above.
-settleTimeoutMicros ∷ Int
-settleTimeoutMicros = 5 * 1000 * 1000
-
 -- | Deliberately tiny — used only by the #773 "resumes only after the
 --   timeout" spec below, where NOTHING drains 'inputQueue' during the
 --   call. Any small timeout here times out DETERMINISTICALLY (there is
@@ -232,10 +109,6 @@ guaranteedTimeoutMicros = 1000
 --   wall-clock (three waits of this length in sequence).
 barrierWithholdTimeoutMicros ∷ Int
 barrierWithholdTimeoutMicros = 20000
-
-isFollowupMsg ∷ LuaMsg → Bool
-isFollowupMsg (LuaInjectFollowup _) = True
-isFollowupMsg _                     = False
 
 isMouseUpMsg ∷ LuaMsg → Bool
 isMouseUpMsg (LuaMouseUpEvent _ _ _ _) = True
