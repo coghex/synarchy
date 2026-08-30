@@ -206,6 +206,14 @@ def check_floating_fluid(grid: dict[tuple[int, int], dict[str, Any]],
     terrain). Ocean is excluded because it can naturally be any depth.
 
     Each fluid type gets its own category for clarity.
+
+    This predicate inspects ONE tile's own column and no neighbour, so it
+    measures fluid DEPTH, never floating geometry. The lava category is
+    named DEEP_LAVA_COLUMN for exactly that reason (#1876): a deep pool
+    sitting in a basin whose whole rim is at or above its surface is
+    correctly grown lava, not an artifact. Whether a lava pool is actually
+    supported by its rim is the separate, geometric
+    check_lava_rim_containment below.
     """
     for tile in grid.values():
         ft = tile["fluidType"]
@@ -216,13 +224,104 @@ def check_floating_fluid(grid: dict[tuple[int, int], dict[str, Any]],
         depth = tile["fluidSurf"] - tile["terrainZ"]
         if depth > FLOATING_FLUID_DEPTH:
             cat = {
-                "lava": "FLOATING_LAVA",
+                "lava": "DEEP_LAVA_COLUMN",
                 "river": "FLOATING_RIVER",
                 "lake": "FLOATING_LAKE",
             }.get(ft, "FLOATING_FLUID")
             issues.append(Issue(
                 cat, tile["x"], tile["y"],
                 f"{ft} fluidSurf={tile['fluidSurf']} terrainZ={tile['terrainZ']} depth={depth}",
+            ))
+
+
+def check_lava_rim_containment(grid: dict[tuple[int, int], dict[str, Any]],
+                               issues: list[Issue]) -> None:
+    """Lava tiles whose rim cannot hold the pool at its own surface (#1876).
+
+    `src/World/Magma/Pool.hs` grows a pool from a breach cluster's lowest
+    opening and floods "the connected region of terrain at or below that
+    level", with `floodPool`'s `grow` clamping the level below the basin's
+    spill saddle so the pool "can never sheet downhill out of the
+    depression". A correctly grown pool therefore has EVERY dry rim tile at
+    or above its surface, and this check tests exactly that invariant.
+
+    It is not vacuously true: `grow` also stops at the area cap
+    (`n >= poolArea`) and at the jittered radius bound (`withinRim`, whose
+    own comment describes growth as "radius-limited"), and either early-out
+    can leave a truncated pool with a lower dry rim tile beside it. Those
+    truncation artifacts are what this category counts.
+
+    Containment is a per-tile rim property, so no pool-connectivity pass is
+    needed. One offending lava tile emits AT MOST one occurrence however
+    many of its neighbours are lower.
+
+    Neighbour classification mirrors `World.Magma.Pool.isWater`:
+
+      * ocean/lake/river   — a water barrier the pool stops against, never
+                             a breach.
+      * the world-boundary sentinel (`beyondGlacier`, or terrainZ at the
+        Int64 floor) — also a barrier, and not readable terrain besides.
+      * lava               — a breach only when its own surface is STRICTLY
+                             lower: a higher pool draining into a lower one
+                             is the perched configuration this exists to
+                             catch. The occurrence is filed against the
+                             HIGHER tile.
+      * dry land           — a breach when its terrainZ is STRICTLY below
+                             this tile's fluidSurf. Equal elevation is
+                             contained.
+
+    A cardinal neighbour ABSENT from the dump window is not evidence of
+    either verdict: the tile gets one LAVA_RIM_INCOMPLETE record saying the
+    containment judgement could not be completed there. That record is
+    independent of LAVA_RIM_BREACH — a tile can be provably breached on one
+    present neighbour while another is off-window — but absence alone never
+    emits a breach.
+    """
+    for (x, y), tile in grid.items():
+        if tile["fluidType"] != "lava":
+            continue
+        surf = tile["fluidSurf"]
+        if surf is None:
+            continue
+        # A sentinel tile carries no readable terrain of its own, so its
+        # rim cannot be judged either — the same exclusion every other
+        # neighbour-reading check applies.
+        if tile.get("beyondGlacier") or tile["terrainZ"] <= INT64_MIN + 1:
+            continue
+
+        lower: list[str] = []
+        absent = 0
+        for nx, ny in neighbors4(x, y):
+            n = grid.get((nx, ny))
+            if n is None:
+                absent += 1
+                continue
+            if n.get("beyondGlacier") or n["terrainZ"] <= INT64_MIN + 1:
+                continue  # world-boundary sentinel — a barrier, per isWater
+            nft = n["fluidType"]
+            if nft == "lava":
+                nsurf = n["fluidSurf"]
+                if nsurf is not None and nsurf < surf:
+                    lower.append(f"({nx},{ny})lavaSurf={nsurf}")
+                continue
+            if nft is not None:
+                # ocean/lake/river — a water barrier, per isWater. Any
+                # neighbour that is not dry land is not rim, so an
+                # unrecognized fluid type is skipped the same way rather
+                # than being read as land.
+                continue
+            if n["terrainZ"] < surf:
+                lower.append(f"({nx},{ny})terrainZ={n['terrainZ']}")
+
+        if lower:
+            issues.append(Issue(
+                "LAVA_RIM_BREACH", x, y,
+                f"lava fluidSurf={surf} unsupported by {' '.join(lower)}",
+            ))
+        if absent:
+            issues.append(Issue(
+                "LAVA_RIM_INCOMPLETE", x, y,
+                f"lava fluidSurf={surf} unjudged at {absent} off-region nbr(s)",
             ))
 
 
@@ -918,6 +1017,7 @@ ALL_CHECKS = {
     "OCEAN_ON_LAND": check_ocean_on_land,
     "RIVER_UNDER_TERRAIN": check_fluid_under_terrain,  # also covers LAKE
     "FLOATING_FLUID": check_floating_fluid,
+    "LAVA_RIM_CONTAINMENT": check_lava_rim_containment,
     "TERRAIN_SPIKES_PITS": check_terrain_spikes_pits,
     "RIVER_CHUNK_GAP": check_river_chunk_gaps,
     "RIVER_MOUTH_DROP": check_river_mouth_drop,
@@ -978,7 +1078,9 @@ QUALITY_CATEGORIES = {
     "DRY_BELOW_SEA",         # ocean-connected dry tile (after BFS filter)
     "RIVER_UNDER_TERRAIN",   # underground river/aquifer
     "LAKE_UNDER_TERRAIN",    # underground/cave lake
-    "FLOATING_LAVA",
+    "DEEP_LAVA_COLUMN",      # deep lava column — depth only, not geometry
+    "LAVA_RIM_BREACH",       # lava unsupported by a lower dry/lava rim tile
+    "LAVA_RIM_INCOMPLETE",   # rim judgement incomplete at the region edge
     "FLOATING_RIVER",
     "FLOATING_LAKE",
     "FLOATING_FLUID",
@@ -1045,6 +1147,42 @@ QUALITY_THRESHOLDS = {
     "RIVER_CHUNK_GAP":       50,  # observed max 14
     "RIVER_MOUTH_DROP":      50,  # observed max 15
     "SUBMERGED_BUMP":        25,  # observed max 4
+
+    # The three lava metrics were measured across all 21 baselines on
+    # 2026-08-30, after #1876 split rim containment out of the old
+    # depth-only FLOATING_LAVA. The superseded 450/"observed max 301
+    # (seed 1337)" rationale predated the current generator: seed 1337
+    # carries no deep lava column at all today.
+    "DEEP_LAVA_COLUMN":      20,  # observed max 11 (seed 12321; seed 250
+                                  # is the only other non-zero, at 2).
+                                  # Column DEPTH only — a contained pool
+                                  # is supposed to be deep, exactly like
+                                  # FLOATING_LAKE. 1.5× obs-max is 16.5,
+                                  # rounded up per the policy above.
+    "LAVA_RIM_BREACH":        0,  # observed max 0 — NO baseline seed
+                                  # produces one, which is the
+                                  # World.Magma.Pool invariant holding:
+                                  # every grown pool's dry rim sits at or
+                                  # above its surface. 1.5× obs-max is 0,
+                                  # so the cap is 0 and any breach fails.
+                                  # It stays QUALITY rather than BUG
+                                  # because `grow`'s area/radius
+                                  # early-outs make a breach a generation
+                                  # TUNING artifact, not corruption —
+                                  # raising this is the evidence-backed
+                                  # response to a deliberate generator
+                                  # change, which BUG would forbid.
+    "LAVA_RIM_INCOMPLETE":   20,  # observed max 13 (seed 5050); 1.5× is
+                                  # 19.5, rounded up. Counts lava tiles
+                                  # whose containment could not be judged
+                                  # because a cardinal neighbour lay
+                                  # outside the dumped region, so it
+                                  # scales with how much lava meets the
+                                  # REQUESTED WINDOW's edge, not with
+                                  # world health. Calibrated for the
+                                  # baseline windows; a sweep over a
+                                  # different region legitimately
+                                  # measures a different value.
     # High-variance / by-design categories.
     "FLOATING_LAKE":       7000,  # observed max 5697 (seed 99) after the
                                   # continental-margin seabed (save v26)
@@ -1054,16 +1192,6 @@ QUALITY_THRESHOLDS = {
                                   # "floating lake" (deep water column)
                                   # count rises. High-variance metric,
                                   # recalibrated 2026-06-08.
-    "FLOATING_LAVA":        450,  # observed max 301 (seed 1337): a deep
-                                  # but FULLY CONTAINED lava pool (lava
-                                  # pools v3) — every dry tile bordering
-                                  # the pool sits at or above the lava
-                                  # surface, so nothing is perched/spilling;
-                                  # the metric just measures column depth,
-                                  # exactly like FLOATING_LAKE. The old 100
-                                  # ("not observed") predated deep lava
-                                  # pools. 1.5× obs-max per the calibration
-                                  # policy above. Recalibrated 2026-06-27.
     "FLOATING_RIVER":       300,  # not observed in baselines
     "FLOATING_FLUID":       300,  # generic fallback
     "ISLAND_1TILE":         100,  # not observed; small islands possible

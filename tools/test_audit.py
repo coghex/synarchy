@@ -435,11 +435,16 @@ def test_lake_under_terrain() -> None:
 
 def test_floating_fluid() -> None:
     print("test_floating_fluid")
-    # Lava with fluidSurf - terrainZ > 15
+    # Lava with fluidSurf - terrainZ > 15. The lava depth metric is named
+    # DEEP_LAVA_COLUMN (#1876) because that is all it measures; rim
+    # geometry is test_lava_rim_containment below.
     tiles = flat_grid(3, 3, -1, -1, terrainZ=-50, fluidType="lava", fluidSurf=5)
     result = audit_dump(tiles).to_dict()
-    expect(count_category(result, "FLOATING_LAVA") == 9,
-           f"FLOATING_LAVA count: {count_category(result, 'FLOATING_LAVA')}, expected 9")
+    expect(count_category(result, "DEEP_LAVA_COLUMN") == 9,
+           f"DEEP_LAVA_COLUMN count: "
+           f"{count_category(result, 'DEEP_LAVA_COLUMN')}, expected 9")
+    expect(count_category(result, "FLOATING_LAVA") == 0,
+           "FLOATING_LAVA must no longer name a depth-only lava count")
 
     # River with high depth
     tiles = flat_grid(3, 3, -1, -1, terrainZ=-50, fluidType="river", fluidSurf=5)
@@ -450,10 +455,157 @@ def test_floating_fluid() -> None:
     # Ocean at any depth should NOT trigger floating
     tiles = flat_grid(3, 3, -1, -1, terrainZ=-100, fluidType="ocean", fluidSurf=0)
     result = audit_dump(tiles).to_dict()
-    expect(count_category(result, "FLOATING_LAVA") == 0
+    expect(count_category(result, "DEEP_LAVA_COLUMN") == 0
            and count_category(result, "FLOATING_RIVER") == 0
            and count_category(result, "FLOATING_LAKE") == 0,
-           "deep ocean should not trigger FLOATING_*")
+           "deep ocean should not trigger the depth metrics")
+
+
+def issue_coords(result_dict: dict[str, Any], cat: str) -> list[tuple[int, int]]:
+    return sorted((i["x"], i["y"]) for i in result_dict["issues"].get(cat, []))
+
+
+def test_lava_rim_containment() -> None:
+    """Containment is rim geometry, not column depth (#1876).
+
+    The old FLOATING_LAVA predicate was `fluidSurf - terrainZ > 15` and
+    inspected no neighbour, so it counted every deep pool — including the
+    fully contained ones `World.Magma.Pool` is supposed to produce. These
+    cases drive the real audit and pin the contained-versus-breached
+    distinction the threshold raise in PR #255 established by hand and
+    never encoded.
+    """
+    print("test_lava_rim_containment")
+
+    # (a) The five-cell fixture from the issue: a 20-deep pool whose whole
+    #     dry rim sits AT the lava surface. Contained at any depth.
+    contained = [
+        tile(0, 0, terrainZ=-20, fluidType="lava", fluidSurf=0),
+        tile(-1, 0, terrainZ=0), tile(1, 0, terrainZ=0),
+        tile(0, -1, terrainZ=0), tile(0, 1, terrainZ=0),
+    ]
+    result = audit_dump(contained).to_dict()
+    expect(count_category(result, "LAVA_RIM_BREACH") == 0,
+           f"contained deep pool: LAVA_RIM_BREACH "
+           f"{count_category(result, 'LAVA_RIM_BREACH')}, expected 0")
+    expect(count_category(result, "LAVA_RIM_INCOMPLETE") == 0,
+           f"contained deep pool has all four neighbours present: "
+           f"LAVA_RIM_INCOMPLETE "
+           f"{count_category(result, 'LAVA_RIM_INCOMPLETE')}, expected 0")
+    # The depth metric survives the rename and still sees this column.
+    expect(count_category(result, "DEEP_LAVA_COLUMN") == 1,
+           f"contained deep pool is still a deep COLUMN: DEEP_LAVA_COLUMN "
+           f"{count_category(result, 'DEEP_LAVA_COLUMN')}, expected 1")
+
+    # (b) The same pool with ONE rim tile a single z lower is breached.
+    breached = [
+        tile(0, 0, terrainZ=-20, fluidType="lava", fluidSurf=0),
+        tile(-1, 0, terrainZ=-1), tile(1, 0, terrainZ=0),
+        tile(0, -1, terrainZ=0), tile(0, 1, terrainZ=0),
+    ]
+    result = audit_dump(breached).to_dict()
+    expect(issue_coords(result, "LAVA_RIM_BREACH") == [(0, 0)],
+           f"one dry rim tile below the surface breaches the pool: "
+           f"{issue_coords(result, 'LAVA_RIM_BREACH')}, expected [(0, 0)]")
+
+    # (c) Equal elevation is contained, strictly below is not — the exact
+    #     boundary, checked from both sides on the same geometry.
+    for rim_z, expected in ((0, 0), (-1, 1)):
+        tiles = [
+            tile(0, 0, terrainZ=-20, fluidType="lava", fluidSurf=0),
+            tile(-1, 0, terrainZ=rim_z), tile(1, 0, terrainZ=rim_z),
+            tile(0, -1, terrainZ=rim_z), tile(0, 1, terrainZ=rim_z),
+        ]
+        result = audit_dump(tiles).to_dict()
+        expect(count_category(result, "LAVA_RIM_BREACH") == expected,
+               f"rim at terrainZ={rim_z} vs fluidSurf=0: LAVA_RIM_BREACH "
+               f"{count_category(result, 'LAVA_RIM_BREACH')}, "
+               f"expected {expected}")
+
+    # (d) One offending TILE, not one offending edge: all four rim tiles
+    #     below the surface still emit a single occurrence.
+    tiles = [
+        tile(0, 0, terrainZ=-20, fluidType="lava", fluidSurf=0),
+        tile(-1, 0, terrainZ=-5), tile(1, 0, terrainZ=-5),
+        tile(0, -1, terrainZ=-5), tile(0, 1, terrainZ=-5),
+    ]
+    result = audit_dump(tiles).to_dict()
+    expect(count_category(result, "LAVA_RIM_BREACH") == 1,
+           f"four lower rim tiles are one offending lava tile: "
+           f"LAVA_RIM_BREACH {count_category(result, 'LAVA_RIM_BREACH')}, "
+           f"expected 1")
+
+    # (e) Water is a barrier the pool stops against, not a rim breach —
+    #     World.Magma.Pool.isWater treats ocean/lake/river the same way.
+    tiles = [
+        tile(0, 0, terrainZ=-20, fluidType="lava", fluidSurf=0),
+        tile(-1, 0, terrainZ=-30, fluidType="ocean", fluidSurf=0),
+        tile(1, 0, terrainZ=-10, fluidType="lake", fluidSurf=-5),
+        tile(0, -1, terrainZ=-10, fluidType="river", fluidSurf=-5),
+        tile(0, 1, terrainZ=0),
+    ]
+    result = audit_dump(tiles).to_dict()
+    expect(count_category(result, "LAVA_RIM_BREACH") == 0,
+           f"ocean/lake/river neighbours are barriers: LAVA_RIM_BREACH "
+           f"{count_category(result, 'LAVA_RIM_BREACH')}, expected 0")
+
+    # (f) The world-boundary sentinel is a barrier too, on both spellings.
+    tiles = [
+        tile(0, 0, terrainZ=-20, fluidType="lava", fluidSurf=0),
+        tile(-1, 0, terrainZ=INT64_MIN, beyondGlacier=True),
+        tile(1, 0, terrainZ=INT64_MIN),
+        tile(0, -1, terrainZ=0), tile(0, 1, terrainZ=0),
+    ]
+    result = audit_dump(tiles).to_dict()
+    expect(count_category(result, "LAVA_RIM_BREACH") == 0,
+           f"sentinel neighbours are barriers: LAVA_RIM_BREACH "
+           f"{count_category(result, 'LAVA_RIM_BREACH')}, expected 0")
+
+    # (g) A neighbour outside the dumped region proves nothing either way:
+    #     the tile records an incomplete judgement and no breach.
+    edge = [tile(0, 0, terrainZ=-20, fluidType="lava", fluidSurf=0)]
+    result = audit_dump(edge).to_dict()
+    expect(count_category(result, "LAVA_RIM_BREACH") == 0,
+           f"absent neighbours never emit a breach: LAVA_RIM_BREACH "
+           f"{count_category(result, 'LAVA_RIM_BREACH')}, expected 0")
+    expect(issue_coords(result, "LAVA_RIM_INCOMPLETE") == [(0, 0)],
+           f"a region-edge lava tile records one incomplete judgement: "
+           f"{issue_coords(result, 'LAVA_RIM_INCOMPLETE')}, "
+           f"expected [(0, 0)]")
+
+    # (h) The two records are independent: a tile can be provably breached
+    #     on a present neighbour while another is off-window.
+    tiles = [
+        tile(0, 0, terrainZ=-20, fluidType="lava", fluidSurf=0),
+        tile(1, 0, terrainZ=-5),
+    ]
+    result = audit_dump(tiles).to_dict()
+    expect(issue_coords(result, "LAVA_RIM_BREACH") == [(0, 0)]
+           and issue_coords(result, "LAVA_RIM_INCOMPLETE") == [(0, 0)],
+           f"breach and incomplete coexist: breach "
+           f"{issue_coords(result, 'LAVA_RIM_BREACH')}, incomplete "
+           f"{issue_coords(result, 'LAVA_RIM_INCOMPLETE')}, "
+           f"expected both [(0, 0)]")
+
+    # (i) A higher pool draining into a lower one is perched. The
+    #     occurrence is filed against the HIGHER tile, and the lower tile
+    #     — which is supported everywhere — reports nothing.
+    perched = flat_grid(4, 3, -1, -1, terrainZ=10, fluidType=None)
+    perched = make_tiles(perched)
+    for i, cell in enumerate(perched):
+        if (cell["x"], cell["y"]) == (0, 0):
+            perched[i] = tile(0, 0, terrainZ=0, fluidType="lava", fluidSurf=10)
+        elif (cell["x"], cell["y"]) == (1, 0):
+            perched[i] = tile(1, 0, terrainZ=0, fluidType="lava", fluidSurf=2)
+    result = audit_dump(perched).to_dict()
+    expect(issue_coords(result, "LAVA_RIM_BREACH") == [(0, 0)],
+           f"a lava neighbour with a strictly lower surface breaches the "
+           f"HIGHER tile: {issue_coords(result, 'LAVA_RIM_BREACH')}, "
+           f"expected [(0, 0)]")
+    expect(count_category(result, "LAVA_RIM_INCOMPLETE") == 0,
+           f"both perched-pair tiles have four present neighbours: "
+           f"LAVA_RIM_INCOMPLETE "
+           f"{count_category(result, 'LAVA_RIM_INCOMPLETE')}, expected 0")
 
 
 def test_terrain_spike() -> None:
@@ -739,7 +891,7 @@ def test_severity_classification() -> None:
     # The two dynamic dispatches must keep resolving; losing them would
     # shrink the inventory silently and re-open the fail-open hole.
     dynamic = {"RIVER_UNDER_TERRAIN", "LAKE_UNDER_TERRAIN",
-               "FLOATING_LAVA", "FLOATING_RIVER", "FLOATING_LAKE",
+               "DEEP_LAVA_COLUMN", "FLOATING_RIVER", "FLOATING_LAKE",
                "FLOATING_FLUID"}
     expect(dynamic <= every_cat,
            f"dynamically dispatched categories missing from the derived "
@@ -2078,6 +2230,7 @@ def main() -> int:
         test_river_under_terrain,
         test_lake_under_terrain,
         test_floating_fluid,
+        test_lava_rim_containment,
         test_terrain_spike,
         test_terrain_pit,
         test_terrain_pit_submerged,
