@@ -39,7 +39,7 @@ from engine_env_capability_audit import (  # type: ignore
     scan_capability_writes, audit_writer_modules, format_residue,
     tokenize_haskell, parse_imports, imports_name,
     local_binding_regions, _first_argument_head,
-    _infix_left_operand_head,
+    _infix_left_operand_head, _applied_head, _let_group_segments,
 )
 from persistence_inventory_audit import extract_record_fields  # type: ignore
 
@@ -2256,6 +2256,36 @@ passedOnward ∷ EngineEnv → IO ()
 passedOnward env = withLogging (writeIORef) (fieldThree env) 3
 """
 
+# Parentheses around the ACCESSOR itself, prefix and infix.
+_PARENTHESIZED_ACCESSOR = """\
+module ParenAccessor.Mod where
+
+import Engine.Core.State (EngineEnv, fieldOne, fieldTwo, fieldThree)
+
+prefix ∷ EngineEnv → IO ()
+prefix env = writeIORef ((fieldOne) env) 1
+
+infixForm ∷ EngineEnv → IO ()
+infixForm env = ((fieldTwo) env) `writeIORef` 2
+
+unapplied ∷ IORef Int → IO ()
+unapplied _ = writeIORef (fieldThree) 3
+"""
+
+# An EXPLICIT-brace binding group is the same `let`.
+_BRACED_LET = """\
+module BracedLet.Mod where
+
+import Engine.Core.State (EngineEnv, fieldOne, fieldTwo)
+
+shadowed ∷ EngineEnv → IORef Int → IO ()
+shadowed env ref = let { fieldOne _ = ref } in writeIORef (fieldOne env) 1
+
+grouped ∷ EngineEnv → IORef Text → IO ()
+grouped env ref =
+    let { other = ref; fieldTwo _ = other } in writeIORef (fieldTwo env) 2
+"""
+
 # A binding nested DEEPER than a `let` group's own column belongs to
 # that inner binding, not to the group, so it must not be widened to the
 # `let`'s block.
@@ -2417,6 +2447,8 @@ def _writer_sources(**modules: str) -> dict[str, str]:
         "hiding": "src/Hiding/Mod.hs",
         "bareOperand": "src/BareOperand/Mod.hs",
         "parens": "src/Parens/Mod.hs",
+        "parenAccessor": "src/ParenAccessor/Mod.hs",
+        "bracedLet": "src/BracedLet/Mod.hs",
         "nestedLet": "src/NestedLet/Mod.hs",
         "casePattern": "src/CasePattern/Mod.hs",
         "explicit": "src/Explicit/Mod.hs",
@@ -2705,6 +2737,35 @@ def test_redundant_parentheses_change_nothing():
            f"write, got: {sorted(writes['fieldThree'])}")
 
 
+def test_parentheses_around_the_accessor_change_nothing():
+    """`writeIORef ((fieldOne) env) 1` applies exactly what
+    `writeIORef (fieldOne env) 1` does, prefix or infix. Only the
+    closers balancing the openers stepped over are consumed, so a
+    genuinely unapplied `(fieldThree)` still is not a write."""
+    writes, _ = _scan(_writer_sources(parenAccessor=_PARENTHESIZED_ACCESSOR))
+    expect(writes["fieldOne"] == {"ParenAccessor.Mod"},
+           f"a parenthesized prefix accessor head is a write, got: "
+           f"{sorted(writes['fieldOne'])}")
+    expect(writes["fieldTwo"] == {"ParenAccessor.Mod"},
+           f"a parenthesized infix accessor head is a write, got: "
+           f"{sorted(writes['fieldTwo'])}")
+    expect(writes["fieldThree"] == set(),
+           f"an unapplied accessor is still not a write, got: "
+           f"{sorted(writes['fieldThree'])}")
+
+
+def test_a_braced_let_group_shadows():
+    """A binding group written with explicit braces and semicolons is
+    the same `let`: the braces are punctuation around the same
+    bindings, and every one of them shadows."""
+    writes, _ = _scan(_writer_sources(bracedLet=_BRACED_LET))
+    expect(writes["fieldOne"] == set() and writes["fieldTwo"] == set(),
+           f"neither a single braced binding nor a later one in the same "
+           f"group may be attributed, got: "
+           f"fieldOne={sorted(writes['fieldOne'])}, "
+           f"fieldTwo={sorted(writes['fieldTwo'])}")
+
+
 def test_a_deeper_binding_is_not_part_of_the_let_group():
     """Only the declarations at a `let` group's own column reach the
     `let`'s block. A `where` nested inside one of them binds for that
@@ -2813,6 +2874,8 @@ def test_a_first_argument_must_be_applied():
     expect(head_of("writeIORef (fieldOne) 1") is None,
            "a parenthesized but unapplied name is not an accessor "
            "application")
+    expect(head_of("writeIORef ((fieldOne) env) 1") == 3,
+           "parentheses around the accessor itself change nothing")
     expect(head_of("writeIORef fieldOne 1") is None,
            "a bare first argument is never an accessor application")
     expect(head_of("writeIORef @Int (fieldOne env) 1") == 4,
@@ -2844,9 +2907,42 @@ def test_a_first_argument_must_be_applied():
            "the walk stops at the operator, not at the start of the line")
     expect(infix_head_of("fkFieldOne (cap env) `writeIORef` 1") == 0,
            "a trailing `)` closing an ARGUMENT is not the operand's own")
+    expect(infix_head_of("((fieldOne) env) `writeIORef` 1") == 2,
+           "and the same holds for an infix operand's head")
     expect(infix_head_of("(pick cfg) fieldOne `writeIORef` 1") == 1,
            "a group to the LEFT of an identifier is the application's "
            "head, so the identifier is its argument, not the accessor")
+
+    # `_applied_head` consumes exactly the closers that balance the
+    # openers written directly before the accessor. Reading past them
+    # would let an unapplied accessor borrow whatever follows the group
+    # it sits in.
+    nested = tokenize_haskell("f ((fieldOne)) env")
+    head = next(i for i, token in enumerate(nested)
+                if token.text == "fieldOne")
+    expect(_applied_head(nested, head) == head,
+           "two openers before the accessor balance two closers, after "
+           "which `env` applies it")
+    trailing = tokenize_haskell("f (fieldOne)) env")
+    head = next(i for i, token in enumerate(trailing)
+                if token.text == "fieldOne")
+    expect(_applied_head(trailing, head) is None,
+           "one opener balances one closer, and the next token is "
+           "another closer, not an argument")
+
+
+def test_let_group_segments_handle_explicit_braces():
+    """A `let`'s binding group may be written with explicit braces and
+    semicolons. The opening brace is punctuation to drop, each `;`
+    starts another binding, and the closing brace ends the group so the
+    `in` expression after it contributes none."""
+    expect(_let_group_segments(" { a = p; b = q } in rest")
+           == [" a = p", " b = q "],
+           f"a braced group splits into its own bindings, got: "
+           f"{_let_group_segments(' { a = p; b = q } in rest')}")
+    expect(_let_group_segments(" a = p in rest") == [" a = p in rest"],
+           f"a layout group is unchanged, got: "
+           f"{_let_group_segments(' a = p in rest')}")
 
 
 def test_a_later_binder_cannot_hide_an_earlier_write():
@@ -3225,10 +3321,13 @@ def main() -> int:
         test_backticked_infix_mutations_are_writes,
         test_case_patterns_bind_variables_and_as_patterns,
         test_redundant_parentheses_change_nothing,
+        test_parentheses_around_the_accessor_change_nothing,
+        test_a_braced_let_group_shadows,
         test_a_deeper_binding_is_not_part_of_the_let_group,
         test_visible_type_applications_are_skipped,
         test_binding_regions_are_lexical,
         test_a_first_argument_must_be_applied,
+        test_let_group_segments_handle_explicit_braces,
         test_a_later_binder_cannot_hide_an_earlier_write,
         test_qualified_accessors_are_resolved,
         test_a_qualifier_must_name_the_owning_module,

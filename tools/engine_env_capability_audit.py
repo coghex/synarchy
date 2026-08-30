@@ -2589,7 +2589,7 @@ def local_binding_regions(code: str) -> dict[str, list[tuple[int, int]]]:
         opening = _INLINE_LET_RE.search(line)
         if opening:
             keyword = starts[i] + opening.start()
-            for segment in line[opening.end():].split(";"):
+            for segment in _let_group_segments(line[opening.end():]):
                 binding = _LET_BINDING_RE.match(segment)
                 if not binding:
                     continue
@@ -2651,6 +2651,8 @@ def _bind_let_block_declarations(lines: list[str], indents: list[int | None],
             continue
         keyword = starts[i] + opening.start()
         tail = line[opening.end():]
+        if tail.lstrip().startswith("{"):
+            tail = tail[:len(tail) - len(tail.lstrip())] + tail.lstrip()[1:]
         if tail.strip():
             group_column = opening.end() + len(tail) - len(tail.lstrip())
         else:
@@ -2795,6 +2797,36 @@ def _extend_where_declarations(lines: list[str], indents: list[int | None],
                 bind(declaration.group(1), starts[owner], end)
 
 
+def _applied_head(tokens: list[Token], head: int) -> int | None:
+    """`head` if the accessor at that index is APPLIED to something,
+    else `None`.
+
+    Parentheses around the accessor ITSELF change nothing --
+    `writeIORef ((fieldOne) env) 1` applies exactly what
+    `writeIORef (fieldOne env) 1` does -- so the closers balancing the
+    openers written directly before it are stepped over before the next
+    token is judged. Exactly that many are consumed and no more, so a
+    genuinely unapplied `(fieldOne)` still ends at its own closer
+    instead of reading whatever follows the group it sits in."""
+    peeled = 0
+    k = head - 1
+    while k >= 0 and tokens[k].kind == "punc" and tokens[k].text == "(":
+        peeled += 1
+        k -= 1
+    j = head + 1
+    while (peeled > 0 and j < len(tokens) and tokens[j].kind == "punc"
+           and tokens[j].text == ")"):
+        peeled -= 1
+        j += 1
+    if j >= len(tokens):
+        return None
+    following = tokens[j]
+    applied = (following.kind == "id"
+               or (following.kind == "punc"
+                   and following.text in ("(", "[", "$")))
+    return head if applied else None
+
+
 def _skip_type_atom(tokens: list[Token], index: int) -> int:
     """Index just past the type atom at `index` -- one identifier, or
     one balanced `(`/`[` group. Anything else is left where it is, so a
@@ -2887,13 +2919,7 @@ def _infix_left_operand_head(tokens: list[Token], index: int) -> int | None:
     head = _operand_head(tokens, index - 2)
     if head is None or head >= index - 1 or tokens[head].kind != "id":
         return None
-    following = tokens[head + 1] if head + 1 < len(tokens) else None
-    if following is None:
-        return None
-    applied = (following.kind == "id"
-               or (following.kind == "punc"
-                   and following.text in ("(", "[", "$")))
-    return head if applied else None
+    return _applied_head(tokens, head)
 
 
 def _operand_head(tokens: list[Token], last: int) -> int | None:
@@ -2949,6 +2975,21 @@ def _operand_head(tokens: list[Token], last: int) -> int | None:
     return inner if inner < len(tokens) else None
 
 
+def _let_group_segments(tail: str) -> list[str]:
+    """A `let`'s binding group, split into one segment per binding.
+
+    Layout is the usual spelling, but the group may also be written with
+    EXPLICIT braces and semicolons -- `let { a = p; b = q } in ...` --
+    in which case the braces are punctuation around the same bindings
+    and would otherwise make every one of them unparseable. The opening
+    brace is dropped and each segment ends at a closing one, so the `in`
+    expression after the group contributes no binding."""
+    stripped = tail.lstrip()
+    if stripped.startswith("{"):
+        tail = stripped[1:]
+    return [segment.split("}")[0] for segment in tail.split(";")]
+
+
 def _first_argument_head(tokens: list[Token], index: int) -> int | None:
     """Token index of the head identifier of `tokens[index]`'s first
     argument, when that argument is an APPLICATION -- `prim (accessor
@@ -2993,13 +3034,7 @@ def _first_argument_head(tokens: list[Token], index: int) -> int | None:
         break
     if not grouped or j >= len(tokens) or tokens[j].kind != "id":
         return None
-    following = tokens[j + 1] if j + 1 < len(tokens) else None
-    if following is None:
-        return None
-    applied = (following.kind == "id"
-               or (following.kind == "punc"
-                   and following.text in ("(", "[", "$")))
-    return j if applied else None
+    return _applied_head(tokens, j)
 
 
 def scan_capability_writes(

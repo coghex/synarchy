@@ -1267,7 +1267,8 @@ purpose — none is asked to be complete by itself:
    permissive direction of that mistake *suppresses a real write
    silently*. Regions are measured in characters, not lines, so a
    binding written midway through a line does not reach back over the
-   write before it: a `let` — wherever on its line it is written, including
+   write before it, and a binding group written with explicit braces
+   and semicolons binds the same as the layout spelling: a `let` — wherever on its line it is written, including
    nested after an equation's own `=` — shadows the statements below it
    and nothing above, its group's later bindings included; a lambda's
    parameters reach the bracket that closes its body — or, unbracketed,
@@ -1289,8 +1290,9 @@ purpose — none is asked to be complete by itself:
    ``accessor handle `prim` value`` is the same write with its
    arguments swapped and is read from the left operand — parenthesized
    or not, since a backtick binds looser than application. Redundant
-   parentheses — around the primitive in head position, or around the
-   operand — change nothing and are normalized away; one that something
+   parentheses — around the primitive in head position, around the
+   operand, or around the accessor itself — change nothing and are
+   normalized away; one that something
    else is *applying* to is a primitive being passed onward, which the
    residue reports rather than attributes. This is a type argument, not a
    heuristic: every accessor projects out of a handle
