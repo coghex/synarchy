@@ -2405,7 +2405,15 @@ def tokenize_haskell(text: str) -> list[Token]:
             j = i + 1
             while j < n and text[j] != '"':
                 if text[j] == "\\":
+                    # The ESCAPED character may itself be a newline: a
+                    # Haskell string gap is a backslash, whitespace
+                    # (newlines included) and another backslash. Missing
+                    # it reports every later token a line too early,
+                    # and a residue entry or a blocking site names the
+                    # wrong source line.
                     j += 1
+                    if j < n and text[j] == "\n":
+                        line += 1
                 elif text[j] == "\n":
                     line += 1
                 j += 1
@@ -2571,7 +2579,22 @@ def resolve_primitive(declarations: list[ImportDecl], name: str) -> str | None:
     exact spelling. A module-local `writeIORef`, or `Other.writeIORef`
     from an unrelated module, is a different function; attributing its
     argument would invent a write out of code that mutates no `IORef`
-    at all."""
+    at all.
+
+    __A TOP-LEVEL homonym is covered by the same rule, because Haskell
+    makes it so.__ Defining `writeIORef` beside an unqualified
+    `import Data.IORef` is an ambiguous occurrence at every use site --
+    that module does not compile -- so the only spellings that reach
+    here are the ones this test already decides: the import names the
+    primitive, or it does not (`hiding (writeIORef)`, an explicit list
+    without it, `qualified`), and a local definition then stands alone.
+
+    A LOCAL binding -- a `let`, a `where`, a lambda parameter -- can
+    legally shadow the imported primitive, and that is the mirror of an
+    accessor shadowed the same way. Both are `SHADOW_EXEMPTIONS`'
+    business, by requirement 7's deliberate choice: the exemption
+    suppresses the module/field pair whatever name was shadowed to
+    produce it, and no scope analysis is performed for either."""
     qualifier, _, base = name.rpartition(".")
     if base not in IOREF_ACCESS_PRIMITIVES:
         return None

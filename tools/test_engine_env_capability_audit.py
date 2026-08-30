@@ -2420,6 +2420,27 @@ bump ∷ EngineEnv → IO ()
 bump env = writeIORef (A.sharedRef (A.toAlphaCapability env)) 1
 """
 
+# A module may legally define its own `writeIORef` beside a `hiding`
+# import -- the only TOP-LEVEL form of that which compiles, since an
+# unqualified import plus a local definition is an ambiguous occurrence
+# at every use site. The local one mutates nothing.
+_SHADOWED_PRIMITIVE = """\
+module ShadowPrim.Mod where
+
+import Data.IORef hiding (writeIORef)
+
+import Engine.Core.State (EngineEnv, fieldOne, fieldTwo)
+
+writeIORef ∷ (EngineEnv → IORef Int) → Int → IO ()
+writeIORef _ _ = pure ()
+
+localHelper ∷ EngineEnv → IO ()
+localHelper env = writeIORef (fieldOne env) 1
+
+genuine ∷ EngineEnv → IO ()
+genuine env = modifyIORef' (fieldTwo env) (+ 1)
+"""
+
 # A comment marker inside a STRING is text. `src/Engine/Scripting/Lua/
 # Thread/Dispatch.hs:257` carries a real one -- `<> " -- " <> reason` --
 # and truncating there also removes the string's closing quote, which
@@ -2512,6 +2533,7 @@ def _writer_sources(**modules: str) -> dict[str, str]:
         "localPrim": "src/LocalPrim/Mod.hs",
         "alpha": "src/Engine/Core/Capability/Alpha.hs",
         "beta": "src/Engine/Core/Capability/Beta.hs",
+        "shadowPrim": "src/ShadowPrim/Mod.hs",
         "stringMarker": "src/StringMarker/Mod.hs",
         "foreignWildcard": "src/ForeignWildcard/Mod.hs",
         "owningWildcard": "src/OwningWildcard/Mod.hs",
@@ -3177,6 +3199,25 @@ def test_a_comment_marker_inside_a_string_is_text():
            f"{primed!r}")
 
 
+def test_token_lines_survive_a_string_gap():
+    """A Haskell string gap is a backslash, whitespace including
+    NEWLINES, and another backslash. Skipping the escaped character
+    without counting that newline reports every later token a line
+    early -- and a residue entry or a blocking site then names the
+    wrong source line, which is the one thing those reports exist to
+    give."""
+    tokens = tokenize_haskell('a = "start\\\n   \\end"\nb = 1\n')
+    lines = {token.text: token.line for token in tokens if token.kind == "id"}
+    expect(lines.get("a") == 1 and lines.get("b") == 3,
+           f"the gap spans one newline, so `b` sits on line 3, got: "
+           f"{lines}")
+
+    plain = tokenize_haskell('a = "one\\ntwo"\nb = 1\n')
+    expect({t.text: t.line for t in plain if t.kind == "id"}.get("b") == 2,
+           "while an escaped `\\n` inside a literal spans no newline "
+           "at all")
+
+
 def test_a_wildcard_grants_only_its_own_type_s_selectors():
     """`import Engine.Core.State (WindowState(..))` brings in
     `WindowState`'s selectors, not `EngineEnv`'s -- so a module-local
@@ -3262,6 +3303,22 @@ def test_a_primitive_must_be_the_one_from_data_ioref():
     expect(resolve_primitive(parse_imports("import Data.IORef\n"),
                              "writeIORef") == "writeIORef",
            "a bare import does")
+
+    # The only TOP-LEVEL homonym that compiles: `hiding` the primitive
+    # and defining one. An unqualified import beside a local definition
+    # is an ambiguous occurrence at every use site, so it cannot reach
+    # this scan at all. A LOCAL shadow -- a `let`, a `where`, a lambda
+    # parameter -- is the mirror of an accessor shadowed the same way,
+    # and requirement 7 sends both to SHADOW_EXEMPTIONS rather than to
+    # a scope analysis.
+    writes, _ = _scan(_writer_sources(shadowPrim=_SHADOWED_PRIMITIVE))
+    expect(writes["fieldOne"] == set(),
+           f"a hidden primitive leaves the module's own helper standing "
+           f"alone, and it mutates nothing, got: "
+           f"{sorted(writes['fieldOne'])}")
+    expect(writes["fieldTwo"] == {"ShadowPrim.Mod"},
+           f"while the primitives it did NOT hide still read, got: "
+           f"{sorted(writes['fieldTwo'])}")
 
 
 def test_a_shadow_exemption_suppresses_only_its_own_pair():
@@ -3521,6 +3578,7 @@ def main() -> int:
         test_an_unreadable_mutation_site_blocks,
         test_a_primitive_used_as_a_value_is_not_unreadable,
         test_a_comment_marker_inside_a_string_is_text,
+        test_token_lines_survive_a_string_gap,
         test_a_wildcard_grants_only_its_own_type_s_selectors,
         test_one_selector_may_belong_to_two_capabilities,
         test_a_primitive_must_be_the_one_from_data_ioref,

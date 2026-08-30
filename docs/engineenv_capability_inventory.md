@@ -1277,6 +1277,14 @@ binding forms:
    string's closing quote, which hid three real mutation sites further
    down the file.)
 
+The primitive is held to the same test as the accessor: a name is only
+`Data.IORef`'s `writeIORef` if that one reaches the module under the
+spelling written. A top-level homonym needs no special case — defining
+one beside an unqualified `import Data.IORef` is an ambiguous
+occurrence at every use site, so it does not compile; `hiding
+(writeIORef)` and a local definition is the form that does, and the
+import test already decides it.
+
 **Deliberately no lexical scope analysis, and a closed form list
 instead.** Those two rules separate every case in this tree; the one
 near-miss, `src/Unit/Thread/Movement.hs`'s `utsRef` parameter, is
@@ -1284,7 +1292,10 @@ excluded because that module imports `Engine.Core.State` for the
 `EngineEnv` *type* alone. The residue of the rules — a module that
 locally binds a name matching an accessor **and applies it to a
 handle** — goes on `SHADOW_EXEMPTIONS`, a checked-in
-`{(module, field): reason}` list that is **empty**. Each entry
+`{(module, field): reason}` list that is **empty**. A locally shadowed
+*primitive* is the mirror of that case and goes to the same place: an
+exemption suppresses its module/field pair whatever name was shadowed
+to produce it. Each entry
 suppresses exactly its own pair, must name a live field, must carry a
 real reason, and fails once it stops suppressing anything.
 
