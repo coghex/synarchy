@@ -177,14 +177,25 @@ readQueueTimeout micros q = do
 --   Correctness: every enqueue and every dequeue moves 'qcDepth' inside
 --   the same transaction as the queue mutation itself, so within THIS
 --   transaction the counter is exactly the number of elements
---   'flushTQueue' just captured. Cost: 'flushTQueue' hands back an
---   unforced list, so traversing it here would make the transaction
---   O(backlog) — and a long transaction that concurrent writers keep
---   invalidating could starve precisely under the producer overload
---   this telemetry exists to diagnose. Nothing below forces the list.
+--   'flushTQueue' just captured. Cost: the whole point is that the
+--   transaction stays O(1) in the backlog, exactly as it was before the
+--   counters existed.
+--
+--   Which is why the flushed list is bound LAZILY. Under this module's
+--   @Strict@ pragma a plain @items ←@ is a strict pattern, and stm
+--   builds 'flushTQueue''s result as @xs ++ reverse ys@ — so on the
+--   ordinary shape for a queue that has only been written to (an empty
+--   read side), forcing even its WHNF walks the entire write-side
+--   backlog inside the transaction. Concurrent 'writeQueue's touch that
+--   same 'TQueue', so a transaction that long can be invalidated
+--   repeatedly, or starve, precisely under the producer overload this
+--   telemetry exists to diagnose. With the lazy binding the transaction
+--   does one TVar read and at most one TVar write of its own, and every
+--   list cell is built outside STM by whoever consumes the result —
+--   which is where it was built before, too.
 flushQueue ∷ Queue α → IO [α]
 flushQueue q = STM.atomically $ do
-    items    ← flushTQueue (queueTQueue q)
+    ~items   ← flushTQueue (queueTQueue q)
     counters ← STM.readTVar (queueCounters q)
     when (qcDepth counters > 0) $
         STM.writeTVar (queueCounters q)
@@ -208,6 +219,12 @@ data QueueStats = QueueStats
 -- | The atomic half of a snapshot: the counters and the oldest
 --   undrained element's enqueue instant, read in ONE transaction so
 --   they cannot disagree with each other or with the queue's contents.
+--
+--   No element enters or leaves: 'tryPeekTQueue' puts back exactly what
+--   it took. It can still perform the 'TQueue''s own amortized
+--   read-side rebalance, which is the same work any 'readQueue' on an
+--   empty read side does and is charged the same way — a snapshot never
+--   adds a traversal of its own.
 readQueueSampleSTM ∷ Queue α → STM.STM (QueueCounters, Maybe Word64)
 readQueueSampleSTM q = do
     counters ← STM.readTVar (queueCounters q)
