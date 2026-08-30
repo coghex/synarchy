@@ -6,7 +6,7 @@ Verifies the boundary between versioned config *templates*
 (`config/video.local.yaml`, `config/keybinds.local.yaml`,
 `config/notifications.local.yaml`, `config/save.local.yaml`, gitignored)
 that the settings UI's Save actions write — plus #1937's gitignored
-`config/*.legacy-neutral.local` records, which are runtime state on the
+`config/*.legacy-neutral.local.yaml` records, which are runtime state on the
 same side of that boundary and are asserted here never to appear without
 a legacy file to judge:
 
@@ -79,8 +79,8 @@ LEGACY_FILES = [
 # "simulated fresh clone" must hide these too — and a fresh-clone boot,
 # having no legacy file to judge, must not create one.
 RECORD_FILES = [
-    "config/video.legacy-neutral.local",
-    "config/keybinds.legacy-neutral.local",
+    "config/video.legacy-neutral.local.yaml",
+    "config/keybinds.legacy-neutral.local.yaml",
 ]
 
 

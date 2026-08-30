@@ -1117,7 +1117,7 @@ before touching each area:
   `_default.yaml`'s is recognized, not copied — the local file stays
   absent and the log line is deliberately not the migration line. The
   determination is recorded in a gitignored
-  `config/*.legacy-neutral.local` so a LATER revision of that template
+  `config/*.legacy-neutral.local.yaml` so a LATER revision of that template
   cannot make the untouched placeholder look like player state; a legacy
   file the player really edited still migrates, with the unchanged
   `Migrated legacy config <legacy> -> <local>` message. Notifications get

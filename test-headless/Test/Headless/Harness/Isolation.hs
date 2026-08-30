@@ -32,8 +32,8 @@
 --
 --   Isolation is established BEFORE the engine boots, not after: engine
 --   initialization is itself a writer ('Engine.Core.Init.migrateLegacyConfig'
---   writes @config/keybinds.legacy-neutral.local@ /
---   @config/video.legacy-neutral.local@ when it recognizes the tracked
+--   writes @config/keybinds.legacy-neutral.local.yaml@ /
+--   @config/video.legacy-neutral.local.yaml@ when it recognizes the tracked
 --   pre-#786 files as neutral placeholders, and would materialize
 --   @config/keybinds.local.yaml@ / @config/video.local.yaml@ outright
 --   from a legacy file carrying real values; and

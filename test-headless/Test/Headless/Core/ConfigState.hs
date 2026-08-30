@@ -205,7 +205,7 @@ spec = do
                 let legacy = dir </> "legacy.yaml"
                     local  = dir </> "local.yaml"
                     deflt  = dir </> "default.yaml"
-                    record = dir </> "legacy-neutral.local"
+                    record = dir </> "legacy-neutral.local.yaml"
                 writeFile deflt  "required: 5\n"
                 writeFile legacy "required: 5\n"
                 migrateLegacyConfig probeCfg logger
@@ -223,7 +223,7 @@ spec = do
                 let legacy = dir </> "legacy.yaml"
                     local  = dir </> "local.yaml"
                     deflt  = dir </> "default.yaml"
-                    record = dir </> "legacy-neutral.local"
+                    record = dir </> "legacy-neutral.local.yaml"
                 -- Same decoded ProbeCfg, deliberately different bytes:
                 -- a comment, flow style, and an extra field the decoder
                 -- ignores. `cmp` would call these two files different.
@@ -243,7 +243,7 @@ spec = do
                 let legacy = dir </> "legacy.yaml"
                     local  = dir </> "local.yaml"
                     deflt  = dir </> "default.yaml"
-                    record = dir </> "legacy-neutral.local"
+                    record = dir </> "legacy-neutral.local.yaml"
                 writeFile deflt  "required: 5\n"
                 writeFile legacy "required: 42\n"
                 migrateLegacyConfig probeCfg logger
@@ -263,7 +263,7 @@ spec = do
                 let legacy = dir </> "legacy.yaml"
                     local  = dir </> "local.yaml"
                     deflt  = dir </> "default.yaml"
-                    record = dir </> "legacy-neutral.local"
+                    record = dir </> "legacy-neutral.local.yaml"
                     check  = Just (neutralityCheck deflt record)
                 writeFile deflt  "required: 5\n"
                 writeFile legacy "required: 5\n"
@@ -291,7 +291,7 @@ spec = do
                 let legacy = dir </> "legacy.yaml"
                     local  = dir </> "local.yaml"
                     deflt  = dir </> "default.yaml"
-                    record = dir </> "legacy-neutral.local"
+                    record = dir </> "legacy-neutral.local.yaml"
                     check  = Just (neutralityCheck deflt record)
                 writeFile deflt  "required: 5\n"
                 writeFile legacy "required: 5\n"
@@ -310,7 +310,7 @@ spec = do
                 let legacy = dir </> "legacy.yaml"
                     local  = dir </> "local.yaml"
                     deflt  = dir </> "default.yaml"
-                    record = dir </> "legacy-neutral.local"
+                    record = dir </> "legacy-neutral.local.yaml"
                 writeFile deflt  "required: 5\n"
                 writeFile legacy "required: 5\n"
                 writeFile local  "required: 9\n"
@@ -326,7 +326,7 @@ spec = do
                 let legacy = dir </> "legacy.yaml"
                     local  = dir </> "local.yaml"
                     deflt  = dir </> "default.yaml"
-                    record = dir </> "legacy-neutral.local"
+                    record = dir </> "legacy-neutral.local.yaml"
                 writeFile deflt  "required: 5\n"
                 writeFile legacy "required: [this, is: not, valid: {yaml"
                 migrateLegacyConfig probeCfg logger
@@ -342,7 +342,7 @@ spec = do
                 let legacy = dir </> "legacy.yaml"
                     local  = dir </> "local.yaml"
                     deflt  = dir </> "default.yaml"
-                    record = dir </> "legacy-neutral.local"
+                    record = dir </> "legacy-neutral.local.yaml"
                 (logger, _) ← capturingLogger
                 writeFile legacy "required: 5\n"   -- no default file at all
                 migrateLegacyConfig probeCfg logger

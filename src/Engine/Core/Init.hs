@@ -117,6 +117,13 @@ data LegacyNeutralityCheck = LegacyNeutralityCheck
     --   template would make the untouched placeholder look like player
     --   state on the very next boot and get promoted after all, which
     --   is the defect this whole mechanism exists to stop.
+    --
+    --   Its name ends in @.local.yaml@ deliberately: it is gitignored
+    --   per-machine runtime state that can decide what a boot resolves,
+    --   so every fixture that already hides the developer's own
+    --   @.local.yaml@ files under @config@ from an isolated run (the
+    --   probe resource-root builders' @ignore_patterns@, the de-flake
+    --   config manifest) covers it without being widened.
   }
 
 -- | One-time upgrade from the pre-#786 tracked config layout.
@@ -297,7 +304,7 @@ initializeEngineWith logBackend = do
   migrateLegacyConfig (Proxy ∷ Proxy KeyBindingConfig) logger
     (Just LegacyNeutralityCheck
        { lncDefaultPath = "config/keybinds_default.yaml"
-       , lncRecordPath  = "config/keybinds.legacy-neutral.local" })
+       , lncRecordPath  = "config/keybinds.legacy-neutral.local.yaml" })
     "config/keybinds.yaml" "config/keybinds.local.yaml"
   keybindsPath ← resolveConfigPath "config/keybinds.local.yaml" "config/keybinds_default.yaml"
   keyBindings ← loadKeyBindings logger keybindsPath
@@ -307,7 +314,7 @@ initializeEngineWith logBackend = do
   migrateLegacyConfig (Proxy ∷ Proxy VideoConfigFile) logger
     (Just LegacyNeutralityCheck
        { lncDefaultPath = "config/video_default.yaml"
-       , lncRecordPath  = "config/video.legacy-neutral.local" })
+       , lncRecordPath  = "config/video.legacy-neutral.local.yaml" })
     "config/video.yaml" "config/video.local.yaml"
   videoConfigPath ← resolveConfigPath "config/video.local.yaml" "config/video_default.yaml"
   videoConfig ← loadVideoConfig logger videoConfigPath

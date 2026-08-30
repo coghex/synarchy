@@ -991,7 +991,7 @@ writer: `Engine.Asset.YamlNotifications` materializes
 `config/notifications.local.yaml` from registry defaults whenever that file
 is absent, and `Engine.Core.Init.migrateLegacyConfig` copies a tracked
 legacy file over an absent local one — or, when that legacy file is a
-neutral placeholder (#1937), writes a `config/*.legacy-neutral.local`
+neutral placeholder (#1937), writes a `config/*.legacy-neutral.local.yaml`
 record instead. Through the alias those writes landed
 in the developer's own checkout, and teardown — which unlinks a symlink
 rather than descending it — then left them there. A personal `*.local.yaml`

@@ -444,7 +444,7 @@ PROBES = [
 # `Engine.Core.Init.migrateLegacyConfig` copies a present legacy file over
 # an absent local one for video/keybinds/notifications — or, for a
 # video/keybinds placeholder it judges neutral (#1937), writes a
-# `config/*.legacy-neutral.local` record instead. A foreign engine
+# `config/*.legacy-neutral.local.yaml` record instead. A foreign engine
 # booting while a config probe has removed the local files but has not yet
 # removed or installed every legacy file can therefore copy stale legacy
 # content, or materialize registry defaults, that the config probe then

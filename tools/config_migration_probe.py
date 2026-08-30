@@ -15,7 +15,7 @@ state that outranks the tracked template for ever after (#1937). Video
 and keybindings therefore carry a `LegacyNeutralityCheck`: a legacy file
 that says nothing its own `_default.yaml` would not already resolve is
 RECOGNISED, not copied, and the determination is recorded in a
-gitignored `*.legacy-neutral.local` file so a later revision of that
+gitignored `*.legacy-neutral.local.yaml` file so a later revision of that
 template cannot make the untouched placeholder look like player state.
 Notifications keep the unconditional copy — they have no tracked
 template to be neutral against, and an absent overrides file already
@@ -90,8 +90,8 @@ LEGACY_FILES = [
 # They are runtime state exactly like the *.local.yaml paths, so they
 # are backed up, cleared between fixtures, and restored the same way.
 RECORD_FILES = [
-    "config/video.legacy-neutral.local",
-    "config/keybinds.legacy-neutral.local",
+    "config/video.legacy-neutral.local.yaml",
+    "config/keybinds.legacy-neutral.local.yaml",
 ]
 # Tracked templates phase 0b revises in place (and restores).
 DEFAULT_FILES = [
@@ -513,7 +513,7 @@ def main() -> int:
         quit_engine(args.port, proc)
         proc = None
         passed &= check("no neutrality record is written for a malformed legacy file",
-                         not os.path.exists("config/video.legacy-neutral.local"))
+                         not os.path.exists("config/video.legacy-neutral.local.yaml"))
 
         print("4b. malformed legacy state does not destroy a valid newer local file")
         with open("config/video.local.yaml", "w") as f:

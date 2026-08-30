@@ -169,7 +169,7 @@ normalizeUIScale env =
 --   The wrapper ALSO establishes #1357's filesystem boundary, and does
 --   so OUTSIDE 'withHeadlessEngine': engine initialization is itself a
 --   config writer — 'Engine.Core.Init.migrateLegacyConfig' writes a
---   @*.legacy-neutral.local@ record for the tracked placeholders (and
+--   @*.legacy-neutral.local.yaml@ record for the tracked placeholders (and
 --   would materialize @config/video.local.yaml@ or
 --   @config/keybinds.local.yaml@ from a legacy file with real values),
 --   and notification overrides self-materialize — so isolating only
