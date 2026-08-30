@@ -2,11 +2,11 @@
 """The first expedition, end to end — the arc's final integrated gate (#923).
 
 `docs/expedition_gameplay_loop.md` step 9 asks for one scenario proving
-the whole loop holds together. Its original sketch included defeating an
-encounter and collecting a guaranteed progression reward; both are
-deliberately deferred (#916 needs unit art, #917 needs something to
-reveal or gate), so what this gate proves is the **man-versus-nature**
-loop the arc actually ships:
+the whole loop holds together. The ruin encounter now ships in #916, but
+this survival-control scenario deliberately selects a zero-occupant ruin;
+#917 still owns a guaranteed progression reward. What this gate proves is
+the **man-versus-nature** loop without hostile combat confounding the food
+control:
 
     prepare -> travel -> discover -> extract -> return -> invest
 
@@ -197,10 +197,11 @@ litres or kcal.
 WHAT IS DELIBERATELY NOT DONE
 -----------------------------
   * No lifecycle is manufactured. `world.setLocationLifecycle` is never
-    called. The expected end state is `discovered` with contents spawned
-    exactly once, because nothing in the shipped game drives an instance
-    past `discovered` yet (#911) — a gate that forced `cleared` would be
-    asserting its own writes.
+    called. The selected ruin's persisted zero-occupant encounter starts
+    clear internally but stays `unknown` until sight, then becomes
+    `cleared`; an occupied ruin would first become `discovered`, then
+    `active` on autonomous aggression, and remain so until every assigned
+    nomad is dead.
   * No item is staged in the ruin. The extraction target is whichever
     def the ruin's own two `ruin_common` rolls produced (#921 removed the
     fixed entries; #948 made the draw seed-stable per instance), chosen
@@ -850,18 +851,24 @@ def shore_tile(port: int, wx: int, wy: int):
 def pick_site(chk: Checks, port: int):
     """Choose the ruin and the colony site.
 
-    Ruins are considered in `world.listPlacedLocations`' own order —
+    Zero-occupant ruins are considered in `world.listPlacedLocations`' own order —
     which is the deterministic overlay order that allocated their
     instance ids (#911) — and the first one that yields a candidate wins.
     Returns (ruin, site) or None."""
-    ruins = poll_until(60.0, lambda: [
+    all_ruins = poll_until(60.0, lambda: [
         e for e in placed(port, PAGE)
         if isinstance(e, dict) and e.get("id") == "ruin_small"])
-    if not ruins:
+    if not all_ruins:
         chk.fail_setup("the world places at least one ruin_small")
         return None
-    print(f"  {len(ruins)} ruin_small placed: "
-          f"{[(e['instance_id'], e['gx'], e['gy']) for e in ruins]}", flush=True)
+    ruins = [e for e in all_ruins
+             if int((e.get("encounter") or {}).get("rolled_count", -1)) == 0]
+    print(f"  {len(all_ruins)} ruin_small placed: "
+          f"{[(e['instance_id'], e['gx'], e['gy'], (e.get('encounter') or {}).get('rolled_count')) for e in all_ruins]}", flush=True)
+    if not ruins:
+        chk.fail_setup("the world places a zero-occupant ruin_small so hostile "
+                       "combat cannot confound the food-control journey")
+        return None
 
     for ruin in ruins:
         gx, gy = int(ruin["gx"]), int(ruin["gy"])
@@ -1787,10 +1794,11 @@ def main() -> int:
             # -- discovery: lifecycle, player event, per-unit knowledge
             inst = poll_until(60.0, lambda: (
                 lambda i: i if isinstance(i, dict)
-                and i.get("lifecycle") == "discovered" else None)(
+                and i.get("lifecycle") in ("active", "cleared") else None)(
                     instance_by_id(port, PAGE, ruin_id)), interval=1.0)
             chk.ok(inst is not None,
-                   f"approaching the ruin promotes its instance to 'discovered' "
+                   f"approaching the ruin promotes its encounter lifecycle to "
+                   f"'active' or 'cleared' "
                    f"({(instance_by_id(port, PAGE, ruin_id) or {}).get('lifecycle')!r})")
             # The WHOLE log, deliberately not a slice from a mark taken
             # before departure. `Engine.PlayerEvent.Emit.pushBounded`
@@ -1799,7 +1807,7 @@ def main() -> int:
             # survive a busy session: once the buffer saturates, the
             # slice silently skips real entries, and if the mark is past
             # the new length it yields nothing at all (observed — a run
-            # whose lifecycle had demonstrably reached `discovered`
+            # whose lifecycle had demonstrably reached its visible encounter state
             # reported no event). Scanning the whole log is also exactly
             # as strict: the promotion is one-way, so an instance can
             # emit its discovery event only once per session.
@@ -2019,8 +2027,9 @@ def main() -> int:
 
             inst = instance_by_id(port, PAGE, int(ruin["instance_id"]))
             chk.ok(isinstance(inst, dict)
-                   and inst.get("lifecycle") == "discovered",
-                   f"the SAME page and location-instance id is still 'discovered' "
+                   and inst.get("lifecycle") in ("active", "cleared"),
+                   f"the SAME page and location-instance id retains its visible "
+                   f"encounter lifecycle "
                    f"after the restart ({PAGE}#{ruin['instance_id']} -> "
                    f"{(inst or {}).get('lifecycle')!r})")
             chk.ok(isinstance(inst, dict) and inst.get("contents_spawned") is True,

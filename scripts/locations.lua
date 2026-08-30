@@ -401,7 +401,8 @@ end
 -- Content spawning (#90)
 -----------------------------------------------------------
 -- Each LocationDef.contents entry (see data/locations/*.yaml):
---   { kind, id, count, rolls, position = {x,y} | nil, faction | nil }
+--   { kind, id, count, count_range, clearance, rolls,
+--     position = {x,y} | nil, faction | nil }
 -- `position` is a fixed offset from the anchor; when absent the entry
 -- scatters randomly within the location's footprint instead (a fresh
 -- roll per instance). `count` is how many to place ("loot_table" uses
@@ -436,20 +437,95 @@ local function contentOffset(def, entry)
     return math.random(b.min_x, b.max_x), math.random(b.min_y, b.max_y)
 end
 
-local function spawnUnitContent(def, entry, gx, gy, worldId)
+local function spawnUnitContent(def, entry, gx, gy, worldId, count)
     -- Named factionTag, not `faction`: `faction` is the engine's global
     -- relation/property table (#912), and shadowing it inside a spawn
     -- helper is a trap waiting for the next edit here.
     local factionTag = entry.faction or "hostile"
-    for _ = 1, (entry.count or 1) do
+    local occupants = {}
+    for _ = 1, (count or entry.count or 1) do
         local ox, oy = contentOffset(def, entry)
-        local uid = unit.spawn(entry.id, gx + ox, gy + oy, nil,
+        local homeX, homeY = gx + ox, gy + oy
+        local uid = unit.spawn(entry.id, homeX, homeY, nil,
                                factionTag, worldId)
         if uid == -1 then
             engine.logWarn("locations: unknown unit content '" ..
                 tostring(entry.id) .. "'")
+        else
+            occupants[#occupants + 1] = {
+                uid = uid, home_x = homeX, home_y = homeY,
+            }
         end
     end
+    return occupants
+end
+
+-- Ranged encounter occupants need distinct, replay-stable home tiles without
+-- consuming math.random's shared gameplay stream. The ruin builder lays a
+-- walkable floor on every tile in its authoritative bounds (its walls are
+-- cosmetic overlays), so a deterministic permutation of that rectangle is
+-- both the walkability set and the distinctness proof for ruin_small. The
+-- YAML boundary rejects a range whose maximum exceeds this capacity.
+local function encounterOffsets(def, rollCtx)
+    local offsets = {}
+    for ox = def.bounds.min_x, def.bounds.max_x do
+        for oy = def.bounds.min_y, def.bounds.max_y do
+            offsets[#offsets + 1] = { x = ox, y = oy }
+        end
+    end
+    local state = (math.abs(rollCtx.instance) * 73856093
+        + rollCtx.index * 19349663 + (rollCtx.seed or 0) % 2147483647)
+        % 2147483647
+    if state <= 0 then state = state + 2147483646 end
+    for i = #offsets, 2, -1 do
+        state = (state * 48271) % 2147483647
+        local j = (state % i) + 1
+        offsets[i], offsets[j] = offsets[j], offsets[i]
+    end
+    return offsets
+end
+
+local function spawnEncounterUnitContent(def, entry, gx, gy, worldId,
+                                         count, rollCtx, existing, persist)
+    local factionTag = entry.faction or "hostile"
+    local occupants = {}
+    local seen = {}
+    local offsets = encounterOffsets(def, rollCtx)
+    -- A prior interrupted attempt may already have durably registered a
+    -- prefix. Preserve those exact ids/homes and allocate only missing slots.
+    for _, occupant in ipairs(existing or {}) do
+        if #occupants >= count or seen[occupant.uid] then
+            -- A malformed overlong/duplicate roster stays incomplete. Never
+            -- reinterpret it as a valid prefix and silently burn the marker.
+            return false
+        end
+        seen[occupant.uid] = true
+        occupants[#occupants + 1] = {
+            uid = occupant.uid,
+            home_x = occupant.home_x,
+            home_y = occupant.home_y,
+        }
+    end
+    for index = #occupants + 1, count do
+        local offset = offsets[index]
+        if not offset then break end
+        local homeX, homeY = gx + offset.x, gy + offset.y
+        local uid = unit.spawn(entry.id, homeX, homeY, nil,
+                               factionTag, worldId)
+        if uid == -1 then
+            engine.logWarn("locations: unknown unit content '" ..
+                tostring(entry.id) .. "'")
+        else
+            occupants[#occupants + 1] = {
+                uid = uid, home_x = homeX, home_y = homeY,
+            }
+            -- Register every successful prefix immediately. A later retry
+            -- reads it from the placed instance and resumes at the next slot,
+            -- so an interruption cannot duplicate an already-created nomad.
+            persist(occupants)
+        end
+    end
+    return #occupants == count
 end
 
 -- NB item.spawnGround takes an explicit pageId (#90) so this works on
@@ -504,7 +580,7 @@ end
 local function dispatchContent(def, entry, gx, gy, worldId, rollCtx)
     local kind = entry.kind
     if kind == "unit" then
-        spawnUnitContent(def, entry, gx, gy, worldId)
+        return spawnUnitContent(def, entry, gx, gy, worldId)
     elseif kind == "item" then
         spawnItemContent(def, entry, gx, gy, worldId)
     elseif kind == "loot_table" then
@@ -522,6 +598,15 @@ local function dispatchContent(def, entry, gx, gy, worldId, rollCtx)
     end
 end
 
+local function placedInstanceAt(gx, gy, worldId)
+    for _, e in ipairs(world.listPlacedLocations(worldId) or {}) do
+        if e.gx == gx and e.gy == gy and e.instance_id then
+            return e
+        end
+    end
+    return nil
+end
+
 -- The stable identity this anchor's loot rolls key on (#948).
 --
 -- A location placed by the world-gen overlay owns a persisted instance
@@ -533,12 +618,8 @@ end
 -- uses — pushed into the NEGATIVE range, which allocated instance ids
 -- (they start at 1) can never occupy. Either way the id is durable
 -- state, never a counter or a load order.
-local function lootInstanceId(gx, gy, worldId)
-    for _, e in ipairs(world.listPlacedLocations(worldId) or {}) do
-        if e.gx == gx and e.gy == gy and e.instance_id then
-            return e.instance_id
-        end
-    end
+local function lootInstanceId(gx, gy, worldId, placed)
+    if placed then return placed.instance_id end
     return -(1 + ((gx * 73856093 + gy * 19349663) % 2147483647))
 end
 
@@ -550,6 +631,7 @@ function locations.spawnContents(id, gx, gy, worldId)
     if world.hasSpawnedLocationContents(gx, gy, worldId) then return end
     local def = locations.getDef(id)
     if def then
+        local placed = placedInstanceAt(gx, gy, worldId)
         -- Resolved once per spawn, after the one-time gate: both halves
         -- are durable per-page state, and neither depends on which
         -- chunks have loaded so far. A page with no gen params yet
@@ -557,11 +639,37 @@ function locations.spawnContents(id, gx, gy, worldId)
         -- still entropy-free.
         local rollCtx = {
             seed     = world.getSeed(worldId) or 0,
-            instance = lootInstanceId(gx, gy, worldId),
+            instance = lootInstanceId(gx, gy, worldId, placed),
         }
+        local encounterReady = true
+        -- Reserve/recover the ranged roster first even when its authored
+        -- entry follows ordinary content. The original entry indices stay
+        -- intact for #948's loot identity, while an incomplete encounter can
+        -- return without having spawned earlier loot that a retry would copy.
         for index, entry in ipairs(def.contents or {}) do
             rollCtx.index = index
-            dispatchContent(def, entry, gx, gy, worldId, rollCtx)
+            if entry.kind == "unit" and entry.count_range then
+                -- A ranged encounter belongs to a persisted placed
+                -- instance. Hand-stamped debug ruins have no such owner and
+                -- deliberately choose the zero-occupant outcome.
+                if placed and placed.encounter then
+                    encounterReady = spawnEncounterUnitContent(
+                        def, entry, gx, gy, worldId,
+                        placed.encounter.rolled_count, rollCtx,
+                        placed.encounter.occupants,
+                        function(roster)
+                            world.registerLocationEncounterOccupants(
+                                placed.instance_id, roster, worldId)
+                        end)
+                end
+            end
+        end
+        if not encounterReady then return end
+        for index, entry in ipairs(def.contents or {}) do
+            if not (entry.kind == "unit" and entry.count_range) then
+                rollCtx.index = index
+                dispatchContent(def, entry, gx, gy, worldId, rollCtx)
+            end
         end
     else
         engine.logWarn("locations: unknown location '" .. tostring(id) ..

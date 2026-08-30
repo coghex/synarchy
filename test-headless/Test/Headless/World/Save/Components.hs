@@ -12,6 +12,9 @@ module Test.Headless.World.Save.Components (spec) where
 import UPrelude
 import Test.Hspec
 import Control.Exception (ErrorCall(..), evaluate)
+import Data.IORef (IORef, newIORef, readIORef, modifyIORef')
+import Data.Either (isRight)
+import System.IO.Unsafe (unsafePerformIO)
 import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Serialize as S
@@ -22,7 +25,7 @@ import qualified Data.HashSet as HS
 import World.Save.Envelope
 import World.Save.Compat.MetadataV1 (SaveMetadataV1(..))
 import World.Save.Envelope.Codec
-    (encodeEnvelope, decodeEnvelope, deManifest, dePayloads)
+    (encodeEnvelope, decodeEnvelope, DecodedEnvelope(..))
 import World.Save.Envelope.Types
     (defaultEnvelopeLimits, ComponentId(..), EnvelopeManifest(..)
     , ComponentDescriptor(..))
@@ -554,7 +557,7 @@ richGenParams = canon defaultWorldGenParams
 -- | A page carrying data for the components 'richPage' leaves empty —
 --   craft bills, power nodes, ground items, a mine designation, and a
 --   world edit — so the full-envelope round trip below observes EVERY
---   registered component's assembly fold (a dropped 'rcApply' for any of
+--   registered component's assembly fold (a dropped fold for any of
 --   them would lose this data).
 fullPage ∷ WorldPageId → PageSnapshot
 fullPage pid = (richPage pid)
@@ -980,7 +983,7 @@ spec = do
         it "declares a stable id and current version of 1" $ do
             ccId coreSessionCodec `shouldBe` coreSessionComponentId
             ccVersion coreSessionCodec `shouldBe` 1
-            ccVersion worldPagesCodec `shouldBe` 7
+            ccVersion worldPagesCodec `shouldBe` 8
 
         it "rejects a NEWER unsupported version, naming the phase" $
             case ccDecode worldPagesCodec 999 (ccEncode worldPagesCodec richSnapshot) of
@@ -1116,7 +1119,8 @@ spec = do
     -- ('decodeComponentValue' 's own @ccDecode@ then @ccValidate@
     -- sequence) at EVERY carrier shape, so no historical version
     -- routes around the check: the current 'LocationInstanceDTO' rides
-    -- @world-pages@ v7, 'LocationInstanceDTOv3' rides v6,
+    -- @world-pages@ v8, frozen 'LocationInstanceDTOv4' rides v7,
+    -- 'LocationInstanceDTOv3' rides v6,
     -- 'LocationInstanceDTOv2' rides v4/v5 and 'LocationInstanceDTOv1'
     -- rides v2/v3 (one version per identical carrier shape suffices).
     -- @world-pages@ v1 predates persisted instances and carries no
@@ -1136,7 +1140,8 @@ spec = do
                             , liGloss           = Nothing
                             , liEtymology       = Nothing
                             , liLifecycle       = LifecycleUnknown
-                            , liContentsSpawned = False }
+                            , liContentsSpawned = False
+                            , liEncounter       = Nothing }
                     , lisPendingLegacy = Nothing } }
             -- One box per carrier, all inverted on x, so a failure names
             -- which version leaked rather than which coordinate did.
@@ -1146,8 +1151,16 @@ spec = do
             degenerate = AbsBounds 6 6 6 6
 
             bytesAt ∷ Word32 → AbsBounds → BS.ByteString
-            bytesAt 7 b = S.encode (WorldPagesDTO
+            bytesAt 8 b = S.encode (WorldPagesDTO
                 [ (pageCore page1) { pcGenParams = toWorldGenParamsDTO (gpWith b) } ])
+            bytesAt 7 b = S.encode (WorldPagesDTOv7
+                [ PageCoreDTOv7
+                    { pc7PageId = page1
+                    , pc7GenParams = toWorldGenParamsDTOv6 (gpWith b)
+                    , pc7CameraX = 0, pc7CameraY = 0
+                    , pc7TimeHour = 0, pc7TimeMinute = 0
+                    , pc7DateYear = 1, pc7DateMonth = 1, pc7DateDay = 1
+                    , pc7MapMode = ZMDefault, pc7Identity = Nothing } ])
             bytesAt 6 b = S.encode (WorldPagesDTOv6
                 [ PageCoreDTOv6
                     { pc6PageId = page1
@@ -1177,7 +1190,8 @@ spec = do
                     Right wp → Right (ccValidate worldPagesCodec wp)
 
             carriers ∷ [(String, Word32)]
-            carriers = [ ("v7 / LocationInstanceDTO",   7)
+            carriers = [ ("v8 / LocationInstanceDTO",   8)
+                       , ("v7 / LocationInstanceDTOv4", 7)
                        , ("v6 / LocationInstanceDTOv3", 6)
                        , ("v5 / LocationInstanceDTOv2", 5)
                        , ("v3 / LocationInstanceDTOv1", 3) ]
@@ -1337,13 +1351,13 @@ spec = do
                     DecodePhase
                     "unsupported schema version (reader supports v1, v2, v3)")
 
-        it "reports an unsupported version identically for a SEVEN-version \
+        it "reports an unsupported version identically for an EIGHT-version \
            \reader" $
-            decodeErrorOf worldPagesCodec 8 BS.empty
-                `shouldBe` Just (ComponentError worldPagesComponentId 8
+            decodeErrorOf worldPagesCodec 9 BS.empty
+                `shouldBe` Just (ComponentError worldPagesComponentId 9
                     DecodePhase
                     "unsupported schema version \
-                    \(reader supports v1, v2, v3, v4, v5, v6, v7)")
+                    \(reader supports v1, v2, v3, v4, v5, v6, v7, v8)")
 
         it "reports a malformed payload identically -- same component, \
            \supplied version, DecodePhase, and cereal-derived message -- at \
@@ -1771,7 +1785,7 @@ spec = do
 
     describe "registry is authoritative for assembly (blocker 2, round 6)" $ do
         -- assembleSnapshot is registry-driven: every registered component
-        -- carries a mandatory rcApply that assembly folds. A full session
+        -- prepares a mandatory fold that assembly runs. A full session
         -- populating EVERY component's data must reconstruct EXACTLY, so a
         -- component that were registered but not assembled would drop its
         -- data here.
@@ -1791,17 +1805,109 @@ spec = do
                 `shouldBe` componentKnownIds
 
         it "every registered component carries an assembly step \
-           \(rcApply is total over the registry, folding onto a snapshot)" $ do
+           \(rcPrepare is total over the registry, yielding a fold onto \
+           \a snapshot)" $ do
             -- Decode the full envelope, then confirm each registered
-            -- component's rcApply runs without error against the decoded
+            -- component's rcPrepare runs without error against the decoded
             -- payloads — the structural guarantee that registration and
-            -- assembly cannot diverge (rcApply is a mandatory field).
+            -- assembly cannot diverge (the fold is a mandatory argument to
+            -- registerComponent).
             let meta  = snapshotSaveMetadata (SaveRequestMeta "s" "t" False) fullSnapshot
                 bytes = encodeSessionSnapshot meta fullSnapshot []
             case decodeSessionEnvelope HS.empty HS.empty bytes of
                 Left err → expectationFailure (T.unpack err)
                 Right _  → length saveComponentRegistry `shouldBe`
                                HS.size componentKnownIds
+
+    -- Issue #1919. 'ccDecode' is a PURE function, so the only way to
+    -- observe how many times the registry invoked it is a side effect —
+    -- hence 'countedDecode''s 'unsafePerformIO'. These drive
+    -- 'registerComponent' directly because that is exactly where the
+    -- duplication lived: it used to build a @rcDecodeErrors@ and an
+    -- @rcApply@ that each ran their own 'decodeComponentValue', so a
+    -- successful load decoded every registered payload twice.
+    describe "a present component's payload decodes exactly once" $ do
+        let bytesFor ∷ Word32 → BS.ByteString
+            bytesFor = S.encode
+
+        it "a present REQUIRED component decodes ONCE in rcPrepare, and \
+           \running the fold it hands back decodes nothing further" $ do
+            ref ← newIORef (0 ∷ Int)
+            let rc = registerComponent (countingCodec ref True) rememberValue
+            case rcPrepare rc (decodeProbeEnvelope 1 (Just (bytesFor 7))) of
+                Left es → expectationFailure ("unexpected failure: " <> show es)
+                Right f → do
+                    readIORef ref `shouldReturn` 1
+                    -- Forcing the fold to WHNF runs its whole body; if it
+                    -- decoded again the counter would move.
+                    folded ← evaluate (isRight (f fullSnapshot))
+                    folded `shouldBe` True
+                    readIORef ref `shouldReturn` 1
+
+        it "an ABSENT optional component decodes ZERO times and prepares \
+           \to the identity fold" $ do
+            ref ← newIORef (0 ∷ Int)
+            let rc = registerComponent (countingCodec ref False) rememberValue
+            case rcPrepare rc (decodeProbeEnvelope 1 Nothing) of
+                Left es → expectationFailure ("unexpected failure: " <> show es)
+                Right f → do
+                    readIORef ref `shouldReturn` 0
+                    f fullSnapshot `shouldBe` Right fullSnapshot
+                    readIORef ref `shouldReturn` 0
+
+        it "a PRESENT but malformed optional component decodes ONCE and \
+           \fails exactly as a required one would -- absence is a \
+           \manifest-level question, not a payload-level one" $ do
+            refOpt ← newIORef (0 ∷ Int)
+            refReq ← newIORef (0 ∷ Int)
+            let junk    = BS.pack [0xff]
+                optional = registerComponent (countingCodec refOpt False)
+                                             rememberValue
+                required = registerComponent (countingCodec refReq True)
+                                             rememberValue
+                run rc  = rcPrepare rc (decodeProbeEnvelope 1 (Just junk))
+            case (run optional, run required) of
+                (Left optErrs, Left reqErrs) → do
+                    readIORef refOpt `shouldReturn` 1
+                    readIORef refReq `shouldReturn` 1
+                    map cePhase optErrs `shouldBe` [DecodePhase]
+                    optErrs `shouldBe` reqErrs
+                other → expectationFailure
+                    ("expected both to fail identically, got " <> show
+                        (fmap (const ()) (fst other), fmap (const ()) (snd other)))
+
+        it "a present component at an UNSUPPORTED encoded version decodes \
+           \once and reports a DecodePhase failure naming that version" $ do
+            ref ← newIORef (0 ∷ Int)
+            let rc = registerComponent (countingCodec ref True) rememberValue
+            case rcPrepare rc (decodeProbeEnvelope 9 (Just (bytesFor 7))) of
+                Right _ → expectationFailure "expected an unsupported-version failure"
+                Left es → do
+                    readIORef ref `shouldReturn` 1
+                    map cePhase   es `shouldBe` [DecodePhase]
+                    map ceVersion es `shouldBe` [9]
+
+        it "the whole authoritative registry prepares in ONE pass over a \
+           \real envelope, and those prepared folds reconstruct the \
+           \EXACT snapshot assembleSnapshot produces" $ do
+            -- The production registry's codecs cannot be instrumented, so
+            -- this pins the other half structurally: every component's
+            -- decoded value comes from its single rcPrepare, and folding
+            -- those in dependency order is what assembleSnapshot returns.
+            let meta  = snapshotSaveMetadata (SaveRequestMeta "s" "t" False) fullSnapshot
+                bytes = encodeSessionSnapshot meta fullSnapshot []
+            case decodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion
+                     (HS.insert metadataComponentId componentKnownIds)
+                     (HS.insert metadataComponentId componentRequiredIds)
+                     bytes of
+                Left err → expectationFailure (show err)
+                Right de → do
+                    let prepared = [ (rcId rc, rcPrepare rc de)
+                                   | rc ← saveComponentRegistry ]
+                    [ (cid, es) | (cid, Left es) ← prepared ] `shouldBe` []
+                    length [ () | (_, Right _) ← prepared ]
+                        `shouldBe` length saveComponentRegistry
+                    assembleSnapshot meta de `shouldBe` Right fullSnapshot
 
     describe "page-scoping (requirement 8)" $ do
         it "rejects a page-scoped slice set missing a page the authority \
@@ -2866,13 +2972,77 @@ elemIndex' x = go 0
         go i (y:ys) | x ≡ y = Just i
                     | otherwise = go (i+1) ys
 
+-- | The synthetic component id the issue #1919 decode-counting cases
+--   register under. Deliberately outside the production registry's id
+--   set: these cases exercise 'registerComponent''s contract, never the
+--   shipped components.
+decodeProbeComponentId ∷ ComponentId
+decodeProbeComponentId = ComponentId "decode-probe"
+
+-- | Count one decode of the probe component's payload.
+--
+--   'unsafePerformIO' is the point, not an accident: 'ccDecode' is a
+--   pure function, so a side effect is the only way to observe how many
+--   times the registry called it. NOINLINE keeps the shared 'IORef'
+--   from being duplicated into separate call sites, and GHC's CSE does
+--   not merge 'unsafePerformIO' applications (they carry a @State#@
+--   token), so two invocations can never be collapsed into the one this
+--   is asserting on.
+{-# NOINLINE countedDecode #-}
+countedDecode ∷ IORef Int → Word32 → BS.ByteString
+              → Either ComponentError Word32
+countedDecode ref ver bytes = unsafePerformIO $ do
+    modifyIORef' ref (+ 1)
+    pure $ if ver ≢ 1
+        then Left (ComponentError decodeProbeComponentId ver DecodePhase
+                     "unsupported schema version (reader supports v1)")
+        else case S.decode bytes of
+            Left err → Left (ComponentError decodeProbeComponentId ver DecodePhase
+                               ("malformed payload: " <> T.pack err))
+            Right w  → Right w
+
+-- | A one-field codec whose every decode is counted.
+countingCodec ∷ IORef Int → Bool → ComponentCodec Word32
+countingCodec ref required = ComponentCodec
+    { ccId        = decodeProbeComponentId
+    , ccVersion   = 1
+    , ccInputVers = [1]
+    , ccRequired  = required
+    , ccDeps      = []
+    , ccEncode    = const (S.encode (0 ∷ Word32))
+    , ccDecode    = countedDecode ref
+    , ccValidate  = const []
+    }
+
+-- | The probe's assembly fold. It only has to prove it RAN without
+--   decoding anything itself, so it leaves the snapshot alone.
+rememberValue ∷ Word32 → Word32 → SessionSnapshot
+              → Either [ComponentError] SessionSnapshot
+rememberValue _ver _value snap = Right snap
+
+-- | A hand-built 'DecodedEnvelope' carrying exactly the probe component,
+--   at @ver@, with @payload@ — or declaring it nowhere at all
+--   ('Nothing'), which is what an absent optional component looks like.
+--   Offsets/lengths/checksums are unread by this path (the envelope
+--   codec already verified them upstream), so they are left at zero.
+decodeProbeEnvelope ∷ Word32 → Maybe BS.ByteString → DecodedEnvelope
+decodeProbeEnvelope ver payload = DecodedEnvelope
+    { deVersion  = currentEnvelopeVersion
+    , deManifest = EnvelopeManifest
+        [ ComponentDescriptor
+            { cdId = decodeProbeComponentId, cdVersion = ver, cdRequired = True
+            , cdOffset = 0, cdLength = 0, cdChecksum = 0 }
+        | Just _ ← [payload] ]
+    , dePayloads = HM.fromList [ (decodeProbeComponentId, b) | Just b ← [payload] ]
+    }
+
 -- | A dummy registered component for cycle testing (its codec bodies are
 --   never exercised — dependencyOrder only reads id + deps).
 stubComponent ∷ ComponentId → [ComponentId] → RegisteredComponent
 stubComponent cid deps = RegisteredComponent
     { rcId = cid, rcVersion = 1, rcInputVers = [1], rcRequired = True
     , rcDeps = deps, rcEncode = const BS.empty
-    , rcDecodeErrors = const [], rcApply = \_ s → Right s }
+    , rcPrepare = const (Right (\s → Right s)) }
 
 -- | The component ids actually present in an encoded envelope's
 --   manifest — a genuine structural read, so a stray @"session"@

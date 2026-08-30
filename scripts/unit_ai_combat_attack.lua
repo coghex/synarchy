@@ -53,6 +53,9 @@ local COMBAT_ANIM_SUFFIX = {
         dagger  = "_RH_dagger",
         unarmed = "_unarmed",
     },
+    nomad_primitive = {
+        unarmed = "_unarmed",
+    },
     bear_brown = {
         unarmed = "",   -- bear anim files have no class suffix
     },
@@ -124,13 +127,13 @@ end
 local function attackTargetUtility(uid, s, params)
     if not isGoalActive(s, "attack") then return -math.huge end
     if not s.attackTargetUid then return -math.huge end
-    -- In the combat band (8.0), same as engage/retreat. commandAttack
-    -- sets the attack goal but leaves any pending commandedTask intact,
-    -- so the pursuit MUST out-rank follow_command (7.0) — otherwise a
-    -- stale move order would yank the unit straight back off the fight
-    -- the tick after engage hands over (#306). Dire SELF survival
-    -- (drink/eat scaling past 8) still pre-empts and resumes, and the
-    -- move resumes once the attack goal ends (target dead/gone/fled).
+    -- In the combat band (8.0), same as engage. A HUMAN move issued while
+    -- this goal is live scores 9.0 in unit_ai_combat.lua and interrupts us,
+    -- except while a committed swing finishes or when an in-range actor has
+    -- at least 4× the target's effectiveness. Scripted/internal moves retain
+    -- the ordinary 7.0 ladder. Retreat keeps its independent, potentially
+    -- higher utility. This is #916's replacement for the stale #306 claim
+    -- that every attack must always outrank every pending move.
     return 8.0
 end
 
@@ -201,7 +204,12 @@ local function attackTargetExecute(uid, s, params)
         -- execute function lash-out drives).
         local attPose = att and unit.getPose(att.uid)
         local attInfo = att and unit.getInfo(att.uid)
-        if att and att.uid ~= target and unit.exists(att.uid)
+        -- #916 ruin encounters own target acquisition completely: their
+        -- exact hostile/same-page/visible rule selected this target, so the
+        -- generic retaliation path must not swap to an arbitrary recent
+        -- attacker that never passed it.
+        if not s.ruinEncounterCombat
+           and att and att.uid ~= target and unit.exists(att.uid)
            and attPose ~= "dead" and attPose ~= "collapsed"
            and attInfo and attInfo.defName ~= "technomule"
            and (engine.gameTime() - (att.at or 0)) <= RETALIATE_WINDOW_SEC then

@@ -46,12 +46,18 @@ import World.Save.Envelope
     ( decodeSaveEnvelopeMetadata, decodeSessionEnvelope, encodeSessionSnapshot
     , metadataComponentId, metadataComponentVersion
     , legacyMetadataComponentVersion, currentEnvelopeVersion
-    , foreignOptionalComponentIds, LuaComponentSpec(..) )
+    , foreignOptionalComponentIds, LuaComponentSpec(..)
+    , decodeSessionEnvelopeClassified, generationFailureProgress
+    , LoadProgress(..) )
+import World.Save.Serialize (loadPhaseFor)
+import Engine.Load.Status (LoadPhase(..))
 import World.Save.Envelope.Codec
     (decodeEnvelope, encodeEnvelope, dePayloads, deManifest)
 import World.Save.Envelope.Types
     (defaultEnvelopeLimits, ComponentId(..), emComponents, cdId, cdVersion, cdRequired)
-import World.Save.Component.Types (ComponentError(..))
+import World.Save.Component.Types
+    (ComponentError(..), ComponentPhase(..), coreSessionComponentId
+    , worldPagesComponentId)
 import World.Save.Compat.SessionV90
 import World.Save.Compat.MetadataV1 (SaveMetadataV1(..))
 import World.Save.Types
@@ -63,7 +69,8 @@ import Location.Types (emptyLocationRegistry)
 import Location.Bounds (AbsBounds(..))
 import World.Chunk.Types (ChunkCoord(..))
 import Location.Instance
-    ( LocationInstance(..), LocationInstances(..), LocationInstanceId(..)
+    ( LocationEncounter(..), LocationEncounterOccupant(..)
+    , LocationInstance(..), LocationInstances(..), LocationInstanceId(..)
     , LocationLifecycle(..), instancesToList )
 import World.Save.Snapshot
     (SessionSnapshot(..), PageSnapshot(..), LiveCameraSnapshot(..))
@@ -78,12 +85,15 @@ import World.Save.Component.Page
     , toWorldGenParamsDTOv4
     , PageCoreDTOv5(..), WorldPagesDTOv5(..)
     , PageCoreDTOv6(..), WorldPagesDTOv6(..)
+    , PageCoreDTOv7(..), WorldPagesDTOv7(..)
     , WorldGenParamsDTOv5(..), toWorldGenParamsDTOv5
+    , toWorldGenParamsDTOv6
     , WorldPages(..), WorldIdentityDTO(..), WorldIdentityDTOv1(..)
     , WorldIdentityDTOv2(..)
     , LanguageProvenanceDTO(..), toEtymologySourceDTO, basePageSnapshots
     , migrateWorldPagesV1, migrateWorldPagesV2, migrateWorldPagesV3
-    , migrateWorldPagesV4, migrateWorldPagesV5, migrateWorldPagesV6 )
+    , migrateWorldPagesV4, migrateWorldPagesV5, migrateWorldPagesV6
+    , migrateWorldPagesV7 )
 import World.Save.Component.WorldGen
     ( LocationInstanceDTOv3(..), LocationInstancesDTOv3(..)
     , toLocationInstancesDTOv3, toRiverNamesDTO )
@@ -803,7 +813,7 @@ spec = do
                                             (GeneratorVersion 1))
 
         it "a frozen v6 page core carrying a NONZERO discovery margin \
-           \migrates to v7 preserving every other instance field \
+           \migrates through the canonical value preserving every other instance field \
            \EXACTLY -- allocator, id, definition, chunk, anchor, bounds, \
            \name, gloss, etymology, lifecycle and contents-spawned -- \
            \while the margin itself has no live counterpart left to \
@@ -859,6 +869,19 @@ spec = do
                     map (rvnEtymology ∘ snd) (riversOf pages "legacy_page")
                         `shouldBe` [Just ashenRiverSource]
 
+        it "a frozen pre-#916 v7 page preserves every stored location \
+           \field and gains NO encounter during the v7-to-v8 migration" $ do
+            let dto = WorldPagesDTOv7 [legacyPageCoreV7]
+            case S.decode (S.encode dto) ∷ Either String WorldPagesDTOv7 of
+                Left err → expectationFailure err
+                Right dto' → do
+                    let pages = migrateWorldPagesV7 dto'
+                        insts = instancesOf pages "legacy_page"
+                    insts `shouldBe` HM.elems (lisById richInstances)
+                    map liEncounter insts `shouldBe` [Nothing]
+                    map (lisNextId ∘ wgpLocationInstances ∘ pgsGenParams)
+                        (HM.elems (wpBase pages)) `shouldBe` [7]
+
         it "a frozen v5 page core comes back with NO etymology source on \
            \its page identity, its location, or its river, while every \
            \name and gloss it stored survives EXACTLY -- a save written \
@@ -894,7 +917,7 @@ spec = do
                                             (LangSeed 0xABCDEF0123456789)
                                             (GeneratorVersion 1))
 
-        it "the CURRENT v7 page core round-trips an etymology source on \
+        it "the CURRENT v8 page core round-trips an etymology source on \
            \its page identity, its location, AND its river -- so the v5 \
            \absences above are real decode outcomes, not fields nothing \
            \ever writes" $ do
@@ -910,7 +933,7 @@ spec = do
                     map (rvnEtymology ∘ snd) (riversOf pages "legacy_page")
                         `shouldBe` [Just ashenRiverSource]
 
-        it "the CURRENT v7 page core round-trips a river's name AND gloss, \
+        it "the CURRENT v8 page core round-trips a river's name AND gloss, \
            \keyed by its feature id -- so the v4 absence above is a real \
            \decode outcome, not a table that is always empty" $ do
             let dto = WorldPagesDTO [currentPageCoreRivers]
@@ -923,7 +946,7 @@ spec = do
                                            (Just "Ashen River")
                                            (Just ashenRiverSource)) ]
 
-        it "the CURRENT v7 page core round-trips a location's name AND \
+        it "the CURRENT v8 page core round-trips a location's name AND \
            \gloss -- so the v3 absence above is a real decode outcome, \
            \not a field that is always Nothing" $ do
             let dto = WorldPagesDTO [currentPageCoreNamed]
@@ -935,7 +958,19 @@ spec = do
                     map liDisplayName insts `shouldBe` ["Vashenkoro"]
                     map liGloss insts `shouldBe` [Just "Ashen Keep"]
 
-        it "the CURRENT v7 page core round-trips a present provenance -- \
+        it "the CURRENT v8 page core round-trips a complete ruin encounter \
+           \including typed occupant identity, home, policy, status and \
+           \one-shot feedback latches" $ do
+            let dto = WorldPagesDTO [currentPageCoreEncounter]
+            case S.decode (S.encode dto) ∷ Either String WorldPagesDTO of
+                Left err → expectationFailure err
+                Right dto' →
+                    map liEncounter
+                        (instancesOf (basePageSnapshots dto') "legacy_page")
+                    `shouldBe` map liEncounter
+                        (HM.elems (lisById encounterInstances))
+
+        it "the CURRENT v8 page core round-trips a present provenance -- \
            \so the two absences above are a real decode outcome, not a \
            \field that is always Nothing" $ do
             let dto = WorldPagesDTO [currentPageCore]
@@ -1348,6 +1383,72 @@ spec = do
                     luaComponents `shouldBe` []
             foreignOptionalComponentIds HS.empty bytes `shouldBe` []
 
+        -- Issue #1919, review round 1. Both legacy fallbacks run REAL
+        -- component machinery (B1's decodeSessionV90/migrateSessionV90,
+        -- B2's assembleSnapshot), so their failures carry
+        -- 'ComponentPhase's just as the modern path's do. Those phases
+        -- used to survive only because the load-status layer
+        -- substring-matched them back out of the rendered text; now they
+        -- must be transported structurally through
+        -- 'decodeSessionEnvelopeClassified' or 'failedAtPhase' silently
+        -- regresses for exactly these saves.
+        it "carries a B2 assembly failure's COMPONENT phases through the \
+           \classified path, not a flattened envelope-level guess" $ do
+            bytes ← BS.readFile
+                "test-headless/data/save-compat/b2-split-haskell-lua-state.bin"
+            -- An empty page set: every component still decodes, and only
+            -- validation/assembly rejects it -- the phases the pre-#1919
+            -- substring parser reported as LoadComponentsMigrated.
+            let tampered = replaceB2ComponentSpec bytes worldPagesComponentId
+                               (versionOfB2Component bytes worldPagesComponentId)
+                               True
+                               (S.encode (WorldPagesDTO []))
+                luaNames = HS.fromList ["unit_ai", "building_spawn"]
+            case decodeSessionEnvelopeClassified luaNames luaNames tampered of
+                Right _ → expectationFailure
+                    "expected an empty B2 page set to be refused"
+                Left failure → do
+                    let progress = generationFailureProgress failure
+                    case progress of
+                        ReachedComponents phases →
+                            phases `shouldSatisfy`
+                                all (\ph → ph ≡ ValidatePhase ∨ ph ≡ AssemblePhase)
+                        other → expectationFailure
+                            ("expected component progress, got " <> show other)
+                    loadPhaseFor progress `shouldBe` LoadComponentsMigrated
+
+        it "carries a B2 per-component DECODE failure's phase through the \
+           \classified path" $ do
+            bytes ← BS.readFile
+                "test-headless/data/save-compat/b2-split-haskell-lua-state.bin"
+            let tampered = replaceB2ComponentSpec bytes coreSessionComponentId
+                               999 True
+                               (payloadOfB2Component bytes coreSessionComponentId)
+                luaNames = HS.fromList ["unit_ai", "building_spawn"]
+            case decodeSessionEnvelopeClassified luaNames luaNames tampered of
+                Right _ → expectationFailure
+                    "expected an unsupported core-session version to be refused"
+                Left failure → do
+                    generationFailureProgress failure
+                        `shouldBe` ReachedComponents [DecodePhase]
+                    loadPhaseFor (generationFailureProgress failure)
+                        `shouldBe` LoadEnvelopeValidated
+
+        it "still reports a genuinely NON-component B2 failure at the \
+           \envelope level -- a malformed lua-state blob never reached a \
+           \component phase, so it must not borrow one" $ do
+            bytes ← BS.readFile
+                "test-headless/data/save-compat/b2-split-haskell-lua-state.bin"
+            let tampered = replaceB2LuaStateSpec bytes 1 True (BS.pack [1, 2, 3])
+                luaNames = HS.fromList ["unit_ai", "building_spawn"]
+            case decodeSessionEnvelopeClassified luaNames luaNames tampered of
+                Right _ → expectationFailure
+                    "expected a malformed lua-state blob to be refused"
+                Left failure → do
+                    generationFailureProgress failure `shouldBe` ReachedEnvelope
+                    loadPhaseFor (generationFailureProgress failure)
+                        `shouldBe` LoadEnvelopeValidated
+
         it "refuses to migrate a B2-shaped envelope whose \"lua-state\" \
            \blob decodes to a WELL-FORMED but NON-EMPTY HashMap Text Text \
            \(round-18 review: the real pre-#761 sdLuaModules/ \
@@ -1496,6 +1597,23 @@ payloadOfB2Component bytes cid =
             (error ("test setup: payload missing for " <> show cid)) cid
             (dePayloads decoded)
 
+-- | The tracked B2 fixture's own declared schema version for one
+--   component id -- so a test replacing that component's PAYLOAD keeps
+--   its real historical version rather than hard-coding a number that
+--   would silently drift into an unsupported-version test instead.
+versionOfB2Component ∷ BS.ByteString → ComponentId → Word32
+versionOfB2Component bytes cid =
+    case decodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion
+             knownAllB2Ids HS.empty bytes of
+        Left e → error ("test setup: versionOfB2Component: decode: " <> show e)
+        Right decoded → case findDesc decoded of
+            Just v  → v
+            Nothing → error ("test setup: descriptor missing for " <> show cid)
+  where
+    findDesc decoded =
+        listToMaybe [ cdVersion d | d ← emComponents (deManifest decoded)
+                                  , cdId d ≡ cid ]
+
 -- | The exact id set the tracked B2 fixture carries -- see its own
 --   manifest entry's components[] list.
 knownAllB2Ids ∷ HS.HashSet ComponentId
@@ -1587,6 +1705,7 @@ legacyNamedInstances = LocationInstances
         , liEtymology       = Nothing
         , liLifecycle       = LifecycleDiscovered
         , liContentsSpawned = True
+        , liEncounter       = Nothing
         }
     , lisPendingLegacy = Nothing
     }
@@ -1641,6 +1760,12 @@ currentPageCoreNamed = currentPageCore
         { wgpLocationInstances = namedLocationInstances }
     }
 
+currentPageCoreEncounter ∷ PageCoreDTO
+currentPageCoreEncounter = currentPageCore
+    { pcGenParams = toWorldGenParamsDTO defaultWorldGenParams
+        { wgpLocationInstances = encounterInstances }
+    }
+
 -- | #1230 fixture: one fully-populated placed location, as a
 --   @world-pages@ v6 save holds it. Every field the migration must
 --   carry across is set to something a default could not produce — a
@@ -1664,8 +1789,33 @@ richInstances = LocationInstances
         , liEtymology       = Just keepSource
         , liLifecycle       = LifecycleCleared
         , liContentsSpawned = True
+        , liEncounter       = Nothing
         }
     , lisPendingLegacy = Nothing
+    }
+
+encounterInstances ∷ LocationInstances
+encounterInstances = richInstances
+    { lisById = HM.map (\inst → inst
+        { liLifecycle = LifecycleActive
+        , liEncounter = Just LocationEncounter
+            { leRolledCount = 2
+            , leOccupants =
+                [ LocationEncounterOccupant (UnitId 41) (79.5, 111.0)
+                    True False
+                , LocationEncounterOccupant (UnitId 42) (81.0, 113.5)
+                    False True
+                ]
+            , leRosterComplete = True
+            , leDeathOnlyClearance = True
+            , leActivated = True
+            , leEpisodeActive = True
+            , leAggressionAnnounced = True
+            , leDisengageAnnounced = False
+            , leCleared = False
+            , leClearEventEmitted = False
+            }
+        }) (lisById richInstances)
     }
 
 -- | 'richInstances' encoded into the FROZEN v6 wire shape carrying a
@@ -1699,6 +1849,23 @@ legacyPageCoreV6 = PageCoreDTOv6
                                (Just (LanguageProvenanceDTO
                                           0xABCDEF0123456789 1))
                                (Just (toEtymologySourceDTO keepSource)))
+    }
+
+-- | The immediate pre-#916 current shape: identical page data over the
+--   frozen location-instance DTO with no encounter field.
+legacyPageCoreV7 ∷ PageCoreDTOv7
+legacyPageCoreV7 = PageCoreDTOv7
+    { pc7PageId = WorldPageId "legacy_page"
+    , pc7GenParams = toWorldGenParamsDTOv6 defaultWorldGenParams
+        { wgpLocationInstances = richInstances }
+    , pc7CameraX = 1, pc7CameraY = 2
+    , pc7TimeHour = 12, pc7TimeMinute = 30
+    , pc7DateYear = 1, pc7DateMonth = 2, pc7DateDay = 3
+    , pc7MapMode = ZMDefault
+    , pc7Identity = Just (WorldIdentityDTO "Legacy World"
+        (Just "an old gloss")
+        (Just (LanguageProvenanceDTO 0xABCDEF0123456789 1))
+        (Just (toEtymologySourceDTO keepSource)))
     }
 
 -- | #1104 fixture: a pre-#1104 (@world-pages@ v5) page core whose

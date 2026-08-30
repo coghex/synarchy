@@ -57,13 +57,12 @@ promotedUnits =
     ]
 
 gameplayUnits ∷ [Text]
-gameplayUnits = ["acolyte", "bear_brown", "red_squirrel", "technomule"]
+gameplayUnits =
+    [ "acolyte", "bear_brown", "nomad_primitive"
+    , "red_squirrel", "technomule" ]
 
 allGameplayUnits ∷ [Text]
 allGameplayUnits = gameplayUnits ⧺ [n | (n, _, _, _) ← promotedUnits]
-
-assetOnlyUnits ∷ [(Text, Int)]
-assetOnlyUnits = [("nomad_primitive", 13)]
 
 unitYamlPath ∷ Text → FilePath
 unitYamlPath name = "data" </> "units" </> T.unpack name <> ".yaml"
@@ -142,31 +141,18 @@ spec = do
                         uydSkills def `shouldBe` Map.empty
                     _ → pure ()
 
-        it "registers exactly the shipped gameplay declarations, excluding \
-           \the asset-only nomad" $ do
+        it "registers exactly the shipped gameplay declarations" $ do
             logger ← silentLogger
             loaded ← concat ⊚ forM allGameplayUnits (\name →
                 map uydName ⊚ loadUnitYaml logger (unitYamlPath name))
             sort loaded `shouldBe` sort allGameplayUnits
-            nomadGameplay ← loadUnitYaml logger
-                (unitYamlPath "nomad_primitive")
-            map uydName nomadGameplay `shouldBe` []
 
-        it "keeps each shipped asset-only declaration out of gameplay \
-           \while retaining its complete animation inventory" $ do
+        it "keeps every shipped gameplay declaration out of the \
+           \asset-only registry" $ do
             logger ← silentLogger
             forM_ allGameplayUnits $ \name → do
                 assets ← loadUnitYamlAssets logger (unitYamlPath name)
                 map uyadName assets `shouldBe` []
-            forM_ assetOnlyUnits $ \(name, animCount) → do
-                assets ← loadUnitYamlAssets logger (unitYamlPath name)
-                case assets of
-                    [def] → do
-                        uyadName def `shouldBe` name
-                        Map.size (uyadAnimations def) `shouldBe` animCount
-                    other → expectationFailure
-                        ("expected exactly one asset-only declaration, got "
-                         <> show (length other))
 
     describe "the declaration form itself" $ do
         it "refuses a file that declares neither key, rather than \
