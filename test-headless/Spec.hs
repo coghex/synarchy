@@ -179,6 +179,7 @@ import qualified Test.Headless.Lua.ShellInput as LuaShellInput
 import qualified Test.Headless.Lua.RandomStream as LuaRandomStream
 import qualified Test.Headless.Lua.InjuryNarration as LuaInjuryNarration
 import qualified Test.Headless.UI.Slider as UISlider
+import qualified Test.Headless.UI.BarFillColor as UIBarFillColor
 import qualified Test.Headless.UI.ClickCorrelation as UIClickCorrelation
 import qualified Test.Headless.UI.TransferContextMenu as UITransferContextMenu
 import qualified Test.Headless.UI.ItemList as UIItemList
@@ -214,6 +215,7 @@ import qualified Test.Headless.Graphics.BindlessPublish as BindlessPublish
 import qualified Test.Headless.Lua.AssetFailure as LuaAssetFailure
 import qualified Test.Headless.Core.ConfigState as ConfigState
 import qualified Test.Headless.Core.Queue as CoreQueue
+import qualified Test.Headless.Core.LogCategoryEnv as LogCategoryEnv
 import qualified Test.Headless.Core.LogMonad as LogMonad
 import qualified Test.Headless.Core.LogParity as LogParity
 import qualified Test.Headless.Core.LoopStartup as LoopStartup
@@ -665,6 +667,7 @@ main = hspec $ do
     describe "Lua random stream ownership" LuaRandomStream.spec
     describe "Lua injury narration" LuaInjuryNarration.spec
     UISlider.spec
+    UIBarFillColor.spec
     UIClickCorrelation.spec
     describe "World.Calendar" Calendar.spec
     describe "World.FloraGrowth" FloraGrowth.spec
@@ -718,6 +721,7 @@ main = hspec $ do
     describe "Render.ViewportGuard" ViewportGuard.spec
     describe "Render.QuadVertices" QuadVertices.spec
     describe "Core.ConfigState" ConfigState.spec
+    LogCategoryEnv.spec
     LogMonad.spec
     LogParity.spec
     LoopStartup.spec

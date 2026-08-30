@@ -1259,6 +1259,7 @@ test-suite synarchy-test-headless
                    Test.Headless.UI.TutorialHud
                    Test.Headless.UI.UnicodeTextEditing
                    Test.Headless.UI.Slider
+                   Test.Headless.UI.BarFillColor
                    Test.Headless.UI.ClickCorrelation
                    Test.Headless.UI.TransferContextMenu
                    Test.Headless.UI.ItemList
@@ -1292,6 +1293,7 @@ test-suite synarchy-test-headless
                    Test.Headless.App.Cli
                    Test.Headless.App.ChunkRegion
                    Test.Headless.App.PreviewConfig
+                   Test.Headless.Core.LogCategoryEnv
                    Test.Headless.Core.LogMonad
                    Test.Headless.Core.LogParity
                    Test.Headless.Core.LoopStartup

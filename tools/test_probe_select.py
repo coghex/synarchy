@@ -213,7 +213,7 @@ def measured(*, runs: int, failures: int, at: str, commit: str = COMMIT_A) -> di
 
 
 def entry(key: str, *, x: int | None = 0, current=None, history=(),
-          script: str | None = None) -> dict:
+          script: str | None = None, deferred=None) -> dict:
     """One census row, shaped exactly as `probe_census.empty_census` writes it."""
     record = {
         "acceptable_failures": x,
@@ -223,6 +223,8 @@ def entry(key: str, *, x: int | None = 0, current=None, history=(),
         "history": list(history),
         "attempts": [],
         "claims": [],
+        "outcomes": [],
+        "deferred": deferred,
     }
     return {"key": key, "script": script or f"{key}_probe.py",
             "classification": probe_census.MANUAL_ONLY,
@@ -558,14 +560,20 @@ def test_every_exclusion_beats_the_best_possible_rank() -> None:
         ("in flight", {"in_flight": ("aaa_excluded",)},
          select.REASON_IN_FLIGHT),
         ("claimed", {"claimed": ("aaa_excluded",)}, select.REASON_CLAIMED),
+        ("deferred", {}, select.REASON_DEFERRED),
         ("unclassified", {"manual_only": ("fallback",)},
          select.REASON_UNCLASSIFIED),
     ]
     for label, extra, reason in cases:
         # The excluded probe is unmeasured AND lexicographically first,
         # so it would win outright if the exclusion came after ranking.
+        excluded = entry("aaa_excluded", deferred={
+            "reason": "blocked on assets",
+            "resume_when": "the assets merge",
+        }) if label == "deferred" else None
+        rows = ((excluded,) if excluded is not None else ()) + (fallback,)
         selection = decide(keys=("aaa_excluded", "fallback"),
-                           census_document=census(fallback), **extra)
+                           census_document=census(*rows), **extra)
         check_equal(selection.probe, "fallback",
                     f"an {label} probe never wins")
         check_equal(reasons_for(selection, "aaa_excluded"), (reason,),
@@ -594,13 +602,27 @@ def test_the_legacy_reason_is_recorded_verbatim() -> None:
 
 def test_several_exclusions_are_all_recorded() -> None:
     """One probe may be excluded on more than one ground."""
-    selection = decide(keys=("stuck",), census_document=census(),
+    selection = decide(keys=("stuck",), census_document=census(entry(
+        "stuck", deferred={"reason": "waiting", "resume_when": "ready"})),
                        protocol={"stuck": probe_census.LEGACY},
                        in_flight=("stuck",), claimed=("stuck",))
     check_equal(reasons_for(selection, "stuck"),
-                (select.REASON_LEGACY, select.REASON_IN_FLIGHT,
+                (select.REASON_LEGACY, select.REASON_DEFERRED,
+                 select.REASON_IN_FLIGHT,
                  select.REASON_CLAIMED),
                 "every applicable exclusion is recorded, in the fixed order")
+
+
+def test_a_malformed_deferral_is_not_silently_skipped() -> None:
+    """Persistent eligibility data must be trustworthy before exclusion."""
+    document = census(entry(
+        "subject", deferred={"reason": "waiting", "resume_when": "   "}))
+    selection = decide(keys=("subject",), census_document=document,
+                       claimed=("subject",))
+    check_equal(selection.outcome, select.OUTCOME_MALFORMED,
+                "a malformed deferral is a census error even while claimed")
+    check(selection.error and "resume_when" in selection.error,
+          "the malformed field is named", repr(selection.error))
 
 
 def test_manual_only_is_key_membership_only() -> None:
@@ -1040,6 +1062,7 @@ def main() -> int:
         test_every_exclusion_beats_the_best_possible_rank,
         test_the_legacy_reason_is_recorded_verbatim,
         test_several_exclusions_are_all_recorded,
+        test_a_malformed_deferral_is_not_silently_skipped,
         test_manual_only_is_key_membership_only,
         test_a_key_in_both_classifications_is_excluded,
         test_unregistered_in_flight_and_claim_keys_are_irrelevant,
