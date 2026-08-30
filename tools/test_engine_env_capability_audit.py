@@ -2408,6 +2408,40 @@ toBetaCapability env = BetaCapability
   }
 """
 
+# A capability module may import `Engine.Core.State` under an alias and
+# project through the QUALIFIED accessor. Missing that spelling drops
+# the record's accessors from the map entirely, and every write made
+# through them with it.
+_QUALIFIED_PROJECTION = """\
+module Engine.Core.Capability.Gamma
+  ( GammaCapability(..)
+  , toGammaCapability
+  ) where
+
+import qualified Engine.Core.State as State
+
+data GammaCapability = GammaCapability
+  { gmFieldThree ∷ IORef Int
+  }
+
+toGammaCapability ∷ State.EngineEnv → GammaCapability
+toGammaCapability env = GammaCapability
+  { gmFieldThree = State.fieldThree env
+  }
+"""
+
+_GAMMA_CONSUMER = """\
+module Gamma.Mod where
+
+import Data.IORef
+
+import Engine.Core.State (EngineEnv)
+import Engine.Core.Capability.Gamma (GammaCapability(..), toGammaCapability)
+
+bump ∷ EngineEnv → IO ()
+bump env = writeIORef (gmFieldThree (toGammaCapability env)) 1
+"""
+
 _ALPHA_CONSUMER = """\
 module CollideA.Mod where
 
@@ -2537,6 +2571,8 @@ def _writer_sources(**modules: str) -> dict[str, str]:
         "stringMarker": "src/StringMarker/Mod.hs",
         "foreignWildcard": "src/ForeignWildcard/Mod.hs",
         "owningWildcard": "src/OwningWildcard/Mod.hs",
+        "gamma": "src/Engine/Core/Capability/Gamma.hs",
+        "gammaConsumer": "src/Gamma/Mod.hs",
         "collideA": "src/CollideA/Mod.hs",
         "collideB": "src/CollideB/Mod.hs",
         "qualHomonym": "src/QualHomonym/Mod.hs",
@@ -3245,6 +3281,25 @@ def test_a_wildcard_grants_only_its_own_type_s_selectors():
            "and the owning one grants everything it declares")
 
 
+def test_a_projection_may_name_its_accessor_qualified():
+    """A capability module may import `Engine.Core.State` under an
+    alias and project `gmFieldThree = State.fieldThree env`. If that
+    spelling is not parsed, the record's accessors never enter the map
+    and every write through them is classified as somebody else's."""
+    sources = _writer_sources(gamma=_QUALIFIED_PROJECTION,
+                              gammaConsumer=_GAMMA_CONSUMER)
+    accessors = capability_accessor_map(sources, _WRITER_FIELDS)
+    expect(accessors.get("gmFieldThree") == (
+        ("fieldThree", "Engine.Core.Capability.Gamma", "GammaCapability"),),
+           f"the qualified projection must canonicalize to the bare "
+           f"field, got: {accessors.get('gmFieldThree')}")
+
+    writes, _ = _scan(sources)
+    expect(writes["fieldThree"] == {"Gamma.Mod"},
+           f"and the write through it must be attributed, got: "
+           f"{sorted(writes['fieldThree'])}")
+
+
 def test_one_selector_may_belong_to_two_capabilities():
     """A selector name is only unique within its own record. Two
     capability modules may both export `sharedRef`, and the consumer's
@@ -3580,6 +3635,7 @@ def main() -> int:
         test_a_comment_marker_inside_a_string_is_text,
         test_token_lines_survive_a_string_gap,
         test_a_wildcard_grants_only_its_own_type_s_selectors,
+        test_a_projection_may_name_its_accessor_qualified,
         test_one_selector_may_belong_to_two_capabilities,
         test_a_primitive_must_be_the_one_from_data_ioref,
         test_a_shadow_exemption_suppresses_only_its_own_pair,

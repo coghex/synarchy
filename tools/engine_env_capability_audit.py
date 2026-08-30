@@ -1754,16 +1754,23 @@ SAVE_LOAD_FIELD_MAP = {
     "slNextItemInstanceIdRef": "nextItemInstanceIdRef",
 }
 
+# `field = accessor env`, with the accessor optionally QUALIFIED: a
+# capability module may import `Engine.Core.State` under an alias and
+# project `fkFieldOne = State.fieldOne env`. Missing that spelling
+# would drop the accessor from `capability_accessor_map` entirely, and
+# with it every write made through the record.
 _PROJECTION_BINDING_RE = re.compile(
     r"(?<![A-Za-z0-9_'])([A-Za-z][A-Za-z0-9_']*)\s*=\s*"
-    r"([A-Za-z][A-Za-z0-9_']*)\s+env(?![A-Za-z0-9_'])")
+    r"((?:[A-Z][A-Za-z0-9_']*\.)*[A-Za-z][A-Za-z0-9_']*)"
+    r"\s+env(?![A-Za-z0-9_'])")
 
 
 def parse_projection_bindings(source_text: str, projection: str
                               ) -> dict[str, str]:
     """`{capability field: EngineEnv accessor}` for every
     `field = accessor env` binding inside `projection`'s record
-    construction. Comments are stripped first, so a Haddock example
+    construction, the accessor reported BARE whether it was written
+    qualified or not. Comments are stripped first, so a Haddock example
     never counts as a binding. Returns `{}` if the projection is not
     defined in `source_text` at all."""
     code = _strip_haskell_comments(source_text)
@@ -1787,7 +1794,12 @@ def parse_projection_bindings(source_text: str, projection: str
             seen_open = True
         if seen_open and depth <= 0:
             break
-    return dict(_PROJECTION_BINDING_RE.findall("\n".join(body)))
+    # The qualifier says which module the accessor came from, which is
+    # already settled by the time we get here; the FIELD name is what
+    # every consumer wants, so it is returned bare.
+    return {field: accessor.rpartition(".")[2]
+            for field, accessor
+            in _PROJECTION_BINDING_RE.findall("\n".join(body))}
 
 
 def audit_save_load_projection(
@@ -2557,7 +2569,8 @@ def capability_accessor_map(sources: dict[str, str], live_fields: list[str]
         if not module.startswith(CAPABILITY_MODULE_PREFIX):
             continue
         match = re.search(
-            r"^(to[A-Za-z0-9_']*)\s*(?:∷|::)\s*EngineEnv\s*(?:→|->)\s*"
+            r"^(to[A-Za-z0-9_']*)\s*(?:∷|::)\s*"
+            r"(?:[A-Z][A-Za-z0-9_']*\.)*EngineEnv\s*(?:→|->)\s*"
             r"([A-Z][A-Za-z0-9_']*)", text, re.MULTILINE)
         if not match:
             continue
