@@ -33,9 +33,14 @@ extra-doc-files:    CHANGELOG.md
 -- entries are enumerated (not globbed) on purpose: config/ also holds
 -- gitignored local runtime state (keybinds.local.yaml, video.local.yaml,
 -- notifications.local.yaml, #638/#786) that a glob would leak into the
--- tarball.
+-- tarball. data/language/concept_id_baseline.json is named explicitly
+-- because it is the one runtime resource under data/ that is not YAML:
+-- Language.Semantic.Catalogue loads it beside concepts.yaml (#1868), so
+-- omitting it would ship a source distribution that cannot build a
+-- catalogue at all.
 extra-source-files: cbits/*.h
                     data/**/*.yaml
+                    data/language/concept_id_baseline.json
                     assets/**/*.png
                     assets/**/*.ttf
                     scripts/**/*.lua
@@ -182,6 +187,7 @@ library
                      Engine.PlayerEvent.Emit
                      Engine.Graphics.Base
                      Engine.Graphics.Camera
+                     Engine.Graphics.Solar
                      Engine.Graphics.Screenshot
                      Engine.Graphics.Viewport
                      Engine.Graphics.Types
@@ -500,8 +506,10 @@ library
                      Building.Placement
                      Building.HitTest
                      Structure.Types
+                     Structure.ArtCatalog
                      Structure.Facing
                      Structure.WallCatalog
+                     Structure.Wire
                      Structure.Render
                      Engine.Asset.YamlBuildings
                      Engine.Scripting.Lua.API.Buildings
@@ -513,6 +521,7 @@ library
                      Engine.Scripting.Lua.API.Buildings.Query
                      Engine.Scripting.Lua.API.Buildings.Selection
                      Engine.Scripting.Lua.API.Structure
+                     Engine.Scripting.Lua.API.StructureArt
                      Engine.Scripting.Lua.API.Construct
                      Engine.Scripting.Lua.API.Chop
                      Engine.Scripting.Lua.API.Till
@@ -678,6 +687,7 @@ library
                      World.Render.HitTest
                      World.Render.QuadContext
                      World.Render.Quads
+                     World.Render.Solar
                      World.Render.WaterSlope
                      World.Render.CursorQuads
                      World.Render.TileQuads
@@ -718,6 +728,7 @@ library
                      World.Geology.Ore
                      World.Geology.Ore.Types
                      World.Mine.Types
+                     World.Construct.Art
                      World.Construct.Types
                      World.Construct.Apply
                      World.Chop.Types
@@ -1170,6 +1181,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.DesignationSeam
                    Test.Headless.World.StructureStage
                    Test.Headless.World.StructurePaletteResidue
+                   Test.Headless.Structure.ArtCatalog
                    Test.Headless.World.Spoil
                    Test.Headless.World.RenderedSurface
                    Test.Headless.World.IslandColumns
@@ -1198,6 +1210,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Graphics.AmbientLight
                    Test.Headless.Graphics.Screenshot
                    Test.Headless.Graphics.UniformLayout
+                   Test.Headless.Graphics.VertexLayout
                    Test.Headless.Graphics.FontFallback
                    Test.Headless.Graphics.FontRepertoire
                    Test.Headless.Construct.Corners
@@ -1225,6 +1238,7 @@ test-suite synarchy-test-headless
                    Test.Headless.UI.CreateWorldControls
                    Test.Headless.UI.Tooltip
                    Test.Headless.UI.InputOwnership
+                   Test.Headless.UI.ZoomBandInputGate
                    Test.Headless.UI.ElementInputPolicy
                    Test.Headless.UI.ControlActivation
                    Test.Headless.UI.HierarchyOwnership
@@ -1261,6 +1275,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Render.StructureSeam
                    Test.Headless.World.Render.PickSeam
                    Test.Headless.World.Render.QuadSnapshot
+                   Test.Headless.World.Render.SolarAttribution
                    Test.Headless.World.Render.SideFace
                    Test.Headless.World.Render.ZTrackSeam
                    Test.Headless.World.Render.SlopeBit

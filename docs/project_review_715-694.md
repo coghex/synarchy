@@ -9,9 +9,9 @@ PR #714's modifier-lifetime fix, #712's semantic-name layer, #711's offscreen re
 ## Status
 
 - [x] PRR-1. Persona flavoring marks empty or non-string model output as successful — [#1701]
-- [ ] PRR-2. The registered F4 behavior probe no longer passes on master
-- [ ] PRR-3. The critic can publish conflicting verdicts for one friction candidate
-- [ ] PRR-4. Lenient player replies crash the harness on valid non-object JSON
+- [x] PRR-2. The registered F4 behavior probe no longer passes on master — [no-issue]
+- [x] PRR-3. The critic can publish conflicting verdicts for one friction candidate — [#1873]
+- [x] PRR-4. Lenient player replies crash the harness on valid non-object JSON — [#1874]
 
 ## 1. Persona flavor output validation
 
@@ -40,7 +40,9 @@ PR #714's modifier-lifetime fix, #712's semantic-name layer, #711's offscreen re
 
 ## 2. Action-outcome behavior probe drift
 
-### PRR-2. The registered F4 behavior probe no longer passes on master
+### [no-issue] PRR-2. The registered F4 behavior probe no longer passes on master
+
+> **Disposition:** No issue — both halves landed 2026-08-19. #1398 replaced the sparse coordinate sample with the authoritative `world.findHarvestableFlora(..., 'wood')` search covering the whole loaded region, and gave a wood-free region its own exit 2 rather than an ordinary contract failure; #1399 made the portal check drive #779's real confirmation — `remoteWarning`/`presented` with nothing spawned, then `establishHere()` recording `confirmed` and `commitPlacement`/`accepted`. `python3 tools/action_outcome_probe.py` now exits 0 with every check passing, verified twice on current master.
 
 > **Captured note:** Keep the real-engine action-outcome probe runnable against the world and build-tool semantics it is meant to certify. Its default fixtures currently leave the chop regression unexercised and drive portal placement only as far as the newer confirmation boundary.
 
@@ -65,7 +67,7 @@ PR #714's modifier-lifetime fix, #712's semantic-name layer, #711's offscreen re
 
 ## 3. Critic candidate adjudication
 
-### PRR-3. The critic can publish conflicting verdicts for one friction candidate
+### [#1873] PRR-3. The critic can publish conflicting verdicts for one friction candidate
 
 > **Captured note:** Enforce one coherent adjudication per friction candidate. A finding may legitimately cover several candidates, but one candidate must not independently satisfy multiple findings with conflicting `defect` and `intended` verdicts.
 
@@ -91,7 +93,7 @@ PR #714's modifier-lifetime fix, #712's semantic-name layer, #711's offscreen re
 
 ## 4. Lenient player reply parsing
 
-### PRR-4. Lenient player replies crash the harness on valid non-object JSON
+### [#1874] PRR-4. Lenient player replies crash the harness on valid non-object JSON
 
 > **Captured note:** Treat a valid JSON value that is not an object as unusable model output and downgrade it to the same recorded wait used for malformed JSON. The lenient path promises that a confused response becomes playtest data rather than terminating the session.
 

@@ -74,12 +74,13 @@ import Engine.Asset.Handle (TextureHandle)
 import Engine.Scene.Types (LayeredQuads)
 import Structure.Palette (TexPalette)
 import Structure.WallCatalog (StructureWallCatalog)
+import Structure.ArtCatalog (StructureArtCatalog)
 import World.Types (WorldState, BloodTextureHandles)
 import Engine.Core.State
   ( EngineEnv
   , worldPreviewRef, worldPreviewGenerationRef, zoomAtlasDataRef
   , worldQuadsRef, bloodDisposeQueue, texPaletteRef, texPaletteHandlesRef
-  , structureWallCatalogRef
+  , structureWallCatalogRef, structureArtCatalogRef
   )
 
 -- | The coupled render-handoff slice of @world-sim-render-handoff@: the
@@ -152,6 +153,19 @@ data RenderHandoffCapability = RenderHandoffCapability
     --   occupies at the current facing. Not persisted, and deliberately NOT
     --   cleared on load publish: it is keyed by path, so it stays valid
     --   across the palette replacement a load performs.
+  , rhStructureArtCatalogRef    ∷ IORef StructureArtCatalog
+    -- ^ Boot-process. Per-kind art for every UNPLACED structure piece
+    --   (#1842), keyed by pack NAME — the texture\/facemap pair the
+    --   build AI would place for each kind a pack offers, plus which
+    --   kinds carry complete @build:@ metadata. Written by @LuaThread@
+    --   (@structure.registerPackArt@, once per pack as
+    --   @scripts/structures.lua@ and @scripts/wire.lua@ read their pack
+    --   YAML; and by @structure.failPackArt@'s engine-side counterpart
+    --   when a registered texture terminally fails to load); read by
+    --   @WorldThread@'s construction render pass, which cannot call into
+    --   Lua. Not persisted and, like 'rhStructureWallCatalogRef', never
+    --   cleared: it is keyed by pack name and holds texture PATHS, so a
+    --   load's palette replacement cannot invalidate it.
   }
 
 -- | Total projection — every field aliases the identical live
@@ -166,4 +180,5 @@ toRenderHandoffCapability env = RenderHandoffCapability
   , rhTexPaletteRef             = texPaletteRef env
   , rhTexPaletteHandlesRef      = texPaletteHandlesRef env
   , rhStructureWallCatalogRef   = structureWallCatalogRef env
+  , rhStructureArtCatalogRef    = structureArtCatalogRef env
   }

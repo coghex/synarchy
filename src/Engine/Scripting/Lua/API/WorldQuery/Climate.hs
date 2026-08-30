@@ -10,6 +10,7 @@ module Engine.Scripting.Lua.API.WorldQuery.Climate
 import UPrelude
 import qualified HsLua as Lua
 import Data.IORef (readIORef)
+import Engine.Graphics.Solar (SolarBase(..))
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..))
 import World.Types
@@ -86,7 +87,10 @@ worldGetSunAngleAtFn wsc = do
             case mParams of
                 Nothing → Lua.pushnil >> return 1
                 Just p → do
-                    sunAngle ← Lua.liftIO (readIORef (wsSunAngleRef wsc))
+                    -- The process-global BASE angle (#1869): what
+                    -- world.setSunAngle overrides, and what the visible
+                    -- head page's clock publishes otherwise.
+                    sunAngle ← sbAngle ⊚ Lua.liftIO (readIORef (wsSunAngleRef wsc))
                     let localAngle = localSunAngle (wgpWorldSize p)
                                         (fromIntegral gx) (fromIntegral gy)
                                         sunAngle

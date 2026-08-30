@@ -553,15 +553,22 @@ end
 -- state for "there is nothing to show here", it is what previewManager.
 -- dump() already reports to a probe, and update() deliberately never
 -- overwrites it — so this settles once and stays settled.
-function previewManager.onAssetFailed(assetType, handle, path, reason)
+--
+-- `reported` (#1842): the engine already logged a better-contextualised
+-- line for this asset, so skip the duplicate one -- never the eviction
+-- and state work below, which is what makes a later selection reissue
+-- the request instead of reusing a dead handle.
+function previewManager.onAssetFailed(assetType, handle, path, reason, reported)
     if assetType ~= "texture" then return end
     local isPending = (pendingHandle ~= nil) and handle == pendingHandle
     local isInView = viewHandles[handle] == true
     local wasCached = textureCache[path] == handle
     if not (isPending or isInView or wasCached) then return end
 
-    engine.logWarn("Preview texture failed to load: " .. tostring(path)
-        .. " (" .. tostring(reason) .. ")")
+    if not reported then
+        engine.logWarn("Preview texture failed to load: " .. tostring(path)
+            .. " (" .. tostring(reason) .. ")")
+    end
 
     -- The handle is dead whoever was waiting on it. Drop it from both
     -- records so a later selection of this path issues a fresh request

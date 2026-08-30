@@ -166,10 +166,10 @@ behind the worldgen selector that gates `world_check --quick`: the
 contract lives in `tools/`, and a change that selector would not fire on
 can break it.
 
-**The concept-id-inventory audit (#1717).**
+**The concept-id-inventory audit (#1717, #1868).**
 `tools/concept_id_inventory_audit.py` pins every concept id
 `data/language/concepts.yaml` has shipped against
-`docs/language/concept_id_baseline.json`: a removal fails naming the id
+`data/language/concept_id_baseline.json`: a removal fails naming the id
 and why it is immutable, a rename fails as BOTH a removal and an
 addition, and a new id passes only through `--update-baseline`, a
 MONOTONIC ratchet that refuses any run which would drop a recorded id.
@@ -180,6 +180,40 @@ native root from the id string — and deliberately does NOT freeze the
 four authored English forms or the `domain`, which stay editable. That
 scope means same-string REPURPOSING is review policy, not something
 this gate can see. Contract comment: `src/Language/Semantic/Types.hs`.
+
+Since #1868 the artifact records one more thing, and it is not
+documentation: each id's append-only **ordinal**, which is the order
+`Language.Generated.Root.assignRoots` places concepts in. That is why
+the file lives under `data/` — `Language.Semantic.Catalogue` LOADS it at
+run time through the resource root beside `concepts.yaml`, both files
+are validated against each other, and a missing, malformed or
+disagreeing artifact rejects the catalogue rather than falling back to
+ascending-id, authored-YAML or caller order. `Catalogue` carries the
+result as `catOrdinals`, so root assignment stays pure and cannot be
+reached without it. The ordinal exists because a reroll mixes
+`attempt + 1` into the concept seed, so a displaced concept gets a
+completely different root, not a near variant: under the old
+ascending-id placement a newly ADDED id sorting before an incumbent
+could take that incumbent's root and silently cost every persisted
+`EtymologySource` naming it its etymology (the name itself is
+write-once, #1101, so nothing visible changed). The 151 seeded ordinals
+are ascending-id RANK, so the change was byte-identical for every
+existing language and needed no `currentGeneratorVersion` bump.
+
+Two rules are worth knowing before touching either side. The audit
+enforces the artifact's **shape** — ids unique, ordinals unique, and the
+recorded ordinals exactly `0..n-1` — while the Haskell reader enforces
+only what PLACEMENT needs (unique ids, unique ordinals, and id-set
+agreement with the catalogue); that split is deliberate, so the two
+enforcement points cannot drift into disagreeing about the same rule.
+And addition-stability is scoped to the FREE root: from generator
+version 4 on, bound-form selection ranks the complete current concept
+set (`Language.Generated.Bound`), so an addition can still move a bound
+form and the names that use one. Gates: `--match "concept roots"` (the
+identity against ascending-id placement over every supported version,
+the addition panel, its adversarial ascending-id twin, and a pinned
+full root map for seed 1337) and `--match "concept placement order"`
+(the artifact's own loading and every rejection).
 
 **One member of the save-compat self-test is path-selective on BOTH
 sides (#1360).** `tools/test_save_compat_audit.py` gained two flags that
@@ -624,9 +658,21 @@ resize behavior below is part of the probe's contract.
   frame count, so unequal per-direction frame counts (four checked-in
   acolyte animations have them) stay phase-aligned. Selecting a different
   ANIMATION resets the clock; enlarging a different DIRECTION does not.
-  Non-loop end-of-clip HOLDS the last frame — the same clamp
-  `Unit.Render.pickFrame` applies in game. The frame index comes from a
-  wall clock, so the script tick rate only affects smoothness.
+  End-of-clip REPLAYS (#1833): frame `N-1` is followed, after its own
+  normal duration, by frame `0` again, indefinitely — for EVERY clip,
+  whatever its authored `loop` says, because the viewer exists to
+  inspect an animation and a short `loop: false` clip otherwise looked
+  static within half a second. The wrap is in the index computation
+  (`Engine.Preview.Unit.frameIndexAt`, which takes the source `loop`
+  and deliberately does not read it), never in the clock — nothing
+  restarts `animStart` at a cycle boundary, which is what preserves the
+  phase across a direction change and a resize. Gameplay is the
+  separate `Unit.Render.pickFrame` path and still HOLDS the last frame
+  of a non-looping clip. Past the first cycle, directions with unequal
+  frame counts wrap at different times and so no longer show the same
+  frame ordinal — the same modular behavior a `loop: true` clip already
+  had. An effective fps of 0 stays on frame 0. The frame index comes
+  from a wall clock, so the script tick rate only affects smoothness.
 - **Reflow:** a resize preserves the selected animation, selected
   direction, list scroll offset, AND playback phase.
 - **Pre-boot rejection:** an unknown unit, a name with path structure or
@@ -673,8 +719,13 @@ resize behavior below is part of the probe's contract.
 - **Playback defaults are `fps=8`, `loop=false`** — `BuildingYamlAnim`'s
   own, NOT the units viewer's `loop=true`. One wall clock per selected
   animation, reset on a real selection change but preserved across a
-  resize; non-loop end-of-clip HOLDS the last frame. A STATIC selection
-  has no playback at all.
+  resize; end-of-clip REPLAYS (#1833) on the units viewer's identical
+  terms — every animation entry repeats indefinitely regardless of its
+  authored `loop`, the wrap coming from the index rather than a
+  restarted `entryStart`. A STATIC selection has no playback at all,
+  and forced replay does not change that: `buildingAssetView.update`
+  still advances nothing outside `entry.animated`, so a static entry
+  keeps exposing no `playback` in the dump.
 
 ### The dump contract
 

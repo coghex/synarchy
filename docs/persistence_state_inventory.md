@@ -75,7 +75,7 @@ the affected fields as unclassified.
 | `pendingLoadRef` | global | Exclude | — | Runtime-only single-slot staged-session handoff (#763) between `WorldLoadTransaction` (staging) and `WorldLoadPublish` (the atomic swap); never serialized, and always cleared before/after use. | `tools/transactional_load_probe.py` |
 | `inputThreadActiveRef` | global | Exclude | — | Runtime-only boot-mode flag (#763 round 4): True once `Engine.Input.Thread.startInputThread` actually launched (never happens under `App.Headless`); consulted to decide whether `SaveInput` belongs in a save/load transaction's owner set, never serialized. | `tools/transactional_load_probe.py`, `tools/save_barrier_probe.py` |
 | `worldQueue` | global | Exclude | — | transport queue; see contract §3 | none yet |
-| `sunAngleRef` | global | Rebuild | active page's world time | derived via `worldTimeToSunAngle` | none yet |
+| `sunAngleRef` | global | Rebuild | visible head page's world time | `SolarBase`, derived via `worldTimeToSunAngle` (#1869 added the `world.setSunAngle` override flag beside the angle; both are within-session render state) | none yet |
 | `worldPreviewRef` | global | Exclude | — | pending GPU upload payload | none yet |
 | `worldPreviewGenerationRef` | global | Exclude | — | runtime-only monotonic generation token used to suppress stale world-preview upload announcements; never serialized | `Test.Headless.Lua.PreviewGeneration` |
 | `zoomAtlasDataRef` | global | Exclude | — | pending GPU upload payload | none yet |
@@ -96,6 +96,7 @@ the affected fields as unclassified.
 | `texPaletteRef` | global | Persist exactly | — | `sdTexPalette` | `tools/persistence_contract_probe.py` (see §12) |
 | `texPaletteHandlesRef` | global | Exclude | `texPaletteRef` | runtime GPU translation table rebuilt from `texPaletteRef` | none yet |
 | `structureWallCatalogRef` | global | Rebuild | `data/structure_packs/*.yaml` wall art | directional wall sprites/cap facemaps per pack variant (#1712), re-registered from the pack YAML by `scripts/structures.lua` at every boot; keyed by texture PATH so it stays valid across the palette replacement a load performs | none yet |
+| `structureArtCatalogRef` | global | Rebuild | `data/structure_packs/*.yaml` per-kind art + `build:` blocks | per-kind texture/facemap pairs for UNPLACED structure pieces (#1842) plus which kinds carry complete build metadata, re-registered from the pack YAML by `scripts/structures.lua` and `scripts/wire.lua` at every boot; keyed by pack NAME and holding texture PATHS, so — like `structureWallCatalogRef` — it stays valid across the palette replacement a load performs, and registering it interns nothing into `texPaletteRef` | none yet |
 | `buildingQueue` | global | Exclude | — | transport queue; see contract §3 | none yet |
 | `combatQueue` | global | Exclude | — | transport queue; see contract §3 | none yet |
 | `combatEventsRef` | global | Exclude | — | explicitly not-persisted event stream to Lua | none yet |

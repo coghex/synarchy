@@ -9,7 +9,7 @@ The four capability refactors (#909, #906, #905, and #902) retain live-container
 ## Status
 
 - [x] PRR-1. Persisted borderless mode boots as a decorated window while reporting borderless — [#1731]
-- [ ] PRR-2. A fullscreen boot forgets its configured windowed geometry — [deferred]: behind #1731
+- [x] PRR-2. A fullscreen boot forgets its configured windowed geometry — [#1882]
 - [x] PRR-3. Stale simple-preview completions can create unbounded texture aliases — [no-issue]
 - [x] PRR-4. NaN XP can escape the mental-effectiveness clamps and corrupt combat and crafting — [#1733]
 
@@ -42,15 +42,7 @@ The four capability refactors (#909, #906, #905, and #902) retain live-container
 
 ## 2. First exit from startup fullscreen
 
-### [deferred] PRR-2. A fullscreen boot forgets its configured windowed geometry
-
-> **Deferred:** Blocked on sequencing behind #1731 — both repairs must seed the
-> windowed-geometry cache from the ordinary window `Engine.Graphics.Window.GLFW.createWindow`
-> owns *before* any mode attachment, in the same region (`src/Engine/Graphics/Window/GLFW.hs:84-118`,
-> whose existing samples are taken after `setFullscreen` and so capture fullscreen geometry).
-> Clears when #1731's PR merges: re-read that seeding — if it is unconditional, this finding is
-> already fixed and closes as `[no-issue]`; if it is gated on the borderless branch alone, file
-> the fullscreen case then.
+### [#1882] PRR-2. A fullscreen boot forgets its configured windowed geometry
 
 > **Captured note:** Seed the windowed-geometry cache from the ordinary window that startup creates immediately before a successful fullscreen attachment. PR #908 makes subsequent transitions restore the cache correctly, but the first `Fullscreen -> Windowed` transition still restores the hard-coded 800×600 fallback rather than the configured or pre-fullscreen geometry.
 

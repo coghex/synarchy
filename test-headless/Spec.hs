@@ -120,6 +120,7 @@ import qualified Test.Headless.Graphics.WindowMode as GraphicsWindowMode
 import qualified Test.Headless.Graphics.AmbientLight as AmbientLight
 import qualified Test.Headless.Graphics.Screenshot as GraphicsScreenshot
 import qualified Test.Headless.Graphics.UniformLayout as GraphicsUniformLayout
+import qualified Test.Headless.Graphics.VertexLayout as GraphicsVertexLayout
 import qualified Test.Headless.Graphics.FontFallback as GraphicsFontFallback
 import qualified Test.Headless.Graphics.FontRepertoire as GraphicsFontRepertoire
 import qualified Test.Headless.Construct.Corners as ConstructCorners
@@ -148,6 +149,7 @@ import qualified Test.Headless.Blood.LuaApi as BloodLuaApi
 import qualified Test.Headless.UI.CreateWorldControls as CreateWorldControls
 import qualified Test.Headless.UI.Tooltip as UITooltip
 import qualified Test.Headless.UI.InputOwnership as UIInputOwnership
+import qualified Test.Headless.UI.ZoomBandInputGate as UIZoomBandInputGate
 import qualified Test.Headless.UI.ElementInputPolicy as UIElementInputPolicy
 import qualified Test.Headless.UI.ControlActivation as UIControlActivation
 import qualified Test.Headless.UI.HierarchyOwnership as UIHierarchyOwnership
@@ -191,9 +193,11 @@ import qualified Test.Headless.World.Render.GroundItemSeam as GroundItemSeam
 import qualified Test.Headless.World.Render.StructureSeam as StructureSeam
 import qualified Test.Headless.World.Render.PickSeam as PickSeam
 import qualified Test.Headless.World.Render.QuadSnapshot as QuadSnapshot
+import qualified Test.Headless.World.Render.SolarAttribution as SolarAttribution
 import qualified Test.Headless.World.DesignationSeam as DesignationSeam
 import qualified Test.Headless.World.StructureStage as StructureStage
 import qualified Test.Headless.World.StructurePaletteResidue as StructurePaletteResidue
+import qualified Test.Headless.Structure.ArtCatalog as StructureArtCatalog
 import qualified Test.Headless.World.Render.SideFace as RenderSideFace
 import qualified Test.Headless.World.Render.ZTrackSeam as ZTrackSeam
 import qualified Test.Headless.World.Render.SlopeBit as RenderSlopeBit
@@ -593,6 +597,7 @@ main = hspec $ do
     describe "Graphics.computeAmbientLight" AmbientLight.spec
     describe "Graphics.Screenshot" GraphicsScreenshot.spec
     describe "Graphics.UniformLayout" GraphicsUniformLayout.spec
+    describe "Graphics.VertexLayout" GraphicsVertexLayout.spec
     describe "Graphics.FontFallback" GraphicsFontFallback.spec
     describe "Font SDF atlas repertoire" GraphicsFontRepertoire.spec
     describe "Construct.Corners" ConstructCorners.spec
@@ -615,6 +620,7 @@ main = hspec $ do
     describe "Create World player-facing controls" CreateWorldControls.spec
     describe "UI.Tooltip" UITooltip.spec
     describe "UI.InputOwnership" UIInputOwnership.spec
+    describe "zoom-band entity input gate" UIZoomBandInputGate.spec
     describe "UI.ElementInputPolicy" UIElementInputPolicy.spec
     describe "UI.ControlActivation" UIControlActivation.spec
     describe "UI hierarchy structural ownership" UIHierarchyOwnership.spec
@@ -669,6 +675,10 @@ main = hspec $ do
     -- camera can be rewritten between capture and build the way the
     -- main thread's pan integration does under the world thread.
     describe "World.Render.QuadSnapshot" QuadSnapshot.spec
+
+    -- #1869: same shape as the line above and for the same reason —
+    -- its own headless engine, two synthetic pages, no worker threads.
+    SolarAttribution.spec
     describe "World.DesignationSeam" DesignationSeam.spec
     describe "World.DesignationSeam (engine)" DesignationSeam.engineSpec
 
@@ -681,6 +691,13 @@ main = hspec $ do
     -- structure.place used to leave behind — its own engine so the
     -- "nothing was queued" half is an assertion on an undrained queue.
     StructurePaletteResidue.spec
+
+    -- #1842: the unplaced-piece art catalogue. Its own headless engine
+    -- for the same reason as the two above -- the placement it compares
+    -- against is read off the undrained WorldSetStructure -- plus the
+    -- real scripts/structures.lua and scripts/wire.lua, so parity is
+    -- against the builder rather than a table written in the test.
+    StructureArtCatalog.spec
 
     -- #1602: its own headless engine (no worker threads), so a queued
     -- BuildingSpawn / WorldDesignateConstruct stays in its queue and

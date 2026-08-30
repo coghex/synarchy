@@ -4,6 +4,12 @@
 --   profile's own consonant/vowel inventory and shapes — a pure
 --   function of (profile, concept id, retry attempt), never of
 --   spelling, lookup order, or any other concept's assignment.
+--
+--   Which concept wins a COLLISION is the one place order matters, and
+--   that order is the catalogue's recorded append-only
+--   'ConceptOrdinals' (#1868), supplied by the caller rather than read
+--   from disk here: this module stays pure, and there is no order it
+--   could reconstruct on its own.
 module Language.Generated.Root
     ( generateRoot
     , assignRoots
@@ -12,30 +18,49 @@ module Language.Generated.Root
     ) where
 
 import UPrelude
-import Data.List (sort)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import qualified Data.Text as T
-import Language.Semantic.Types (ConceptId(..))
+import Language.Semantic.Types (ConceptId(..), ConceptOrdinals, placementOrder)
 import Language.Generated.Types
 import Language.Generated.Hash
 import Language.Generated.Boundary (joinMorphemes, joinSyllables)
 import Language.Generated.Bound (LanguageRoots(..), assignBoundForms)
 
 -- | Assign every concept in @ids@ a stable, unique native root under
---   @prof@. Concepts are processed in ascending 'ConceptId' order — the
---   catalogue's own intrinsic order, not whatever order @ids@ happens
---   to arrive in — so two calls over the same concept set always agree
---   regardless of the caller's traversal order (#710 requirement 8).
+--   @prof@. Concepts are processed in the catalogue's recorded
+--   'ConceptOrdinals' placement order — the catalogue's own intrinsic
+--   order, not whatever order @ids@ happens to arrive in — so two calls
+--   over the same concept set always agree regardless of the caller's
+--   traversal order (#710 requirement 8).
 --
 --   A raw root that collides (case-insensitively) with an
 --   earlier-placed root in that canonical order is deterministically
 --   rerolled via an incrementing attempt counter until it is unique;
 --   the reroll depends only on (profile, concept id, attempt), so which
---   concept "already had" the colliding root is fixed by concept id
+--   concept "already had" the colliding root is fixed by placement
 --   order, not by request order (#710 requirement 16).
-assignRoots ∷ Profile → [ConceptId] → M.Map ConceptId Text
-assignRoots prof ids = foldl' place M.empty (sort ids)
+--
+--   The placement order is an APPEND-ONLY ordinal rather than ascending
+--   id order (#1868). That is how assignment currently works, and the
+--   reason is worth stating: because a reroll takes @attempt + 1@ into
+--   'Language.Generated.Hash.conceptSeed', a displaced concept does not
+--   get a near variant of its root — it gets an entirely different one.
+--   Under ascending-id placement a NEWLY ADDED id that sorted before an
+--   incumbent could take the root that incumbent would have had and
+--   displace it exactly that way, which silently costs every persisted
+--   'Language.Etymology.Source.EtymologySource' naming it its etymology
+--   (the name itself is write-once, #1101, so nothing visible changes).
+--   An appended ordinal cannot displace anything already placed, so
+--   today an addition leaves every existing concept's FREE root alone.
+--   Note the scope: from generator version 4 on, bound-form selection
+--   ranks the complete current concept set
+--   ('Language.Generated.Bound.assignBoundForms'), so an addition can
+--   still move a bound form and the rendered names that use one. This
+--   paragraph describes the mechanism as built; it is not a promise
+--   binding a future change to assignment.
+assignRoots ∷ Profile → ConceptOrdinals → [ConceptId] → M.Map ConceptId Text
+assignRoots prof ords ids = foldl' place M.empty (placementOrder ords ids)
   where
     place acc cid =
         let usedLower = S.fromList (map T.toLower (M.elems acc))
@@ -58,9 +83,9 @@ assignRoots prof ids = foldl' place M.empty (sort ids)
 --   change the catalogue. For any version below
 --   'Language.Generated.Bound.boundFormVersion' the bound map is empty
 --   and this is exactly 'assignRoots' in a wrapper.
-assignLanguageRoots ∷ Profile → [ConceptId] → LanguageRoots
-assignLanguageRoots prof ids =
-    let free = assignRoots prof ids
+assignLanguageRoots ∷ Profile → ConceptOrdinals → [ConceptId] → LanguageRoots
+assignLanguageRoots prof ords ids =
+    let free = assignRoots prof ords ids
     in LanguageRoots { lrFree = free, lrBound = assignBoundForms prof free }
 
 -- | The native root generated for one concept at one retry attempt.

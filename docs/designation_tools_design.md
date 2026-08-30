@@ -39,17 +39,17 @@ concrete precondition
 
 - [x] EPIC. Give each designation tool target-appropriate interaction and visual feedback — [#1837]
 - [x] DTV-9. Resolve structure-pack piece art engine-side for unplaced pieces — [#1842]
-- [ ] DTV-13. Make structure drag planning authoritative and self-clearing
-- [ ] DTV-10. Ghost planned buildings with their own art in both ghost states
-- [ ] DTV-11. Ghost planned structure pieces with their own art in both ghost states
-- [ ] DTV-5. Author Kitchen construction-progress art
-- [ ] DTV-6. Author Machine Shop construction-progress art
-- [ ] DTV-7. Author Workbench construction-progress art
-- [ ] DTV-8. Require progress art for every work-constructed building
-- [ ] DTV-12. Give every flora instance stable identity and exact mutable state
-- [ ] DTV-1. Make Chop a drag-box tool with tree-anchored designation markers
-- [ ] DTV-2. Render Till as a flat top-surface designation
-- [ ] DTV-3. Render the existing crop Plant job as a light-green tilled surface
+- [x] DTV-13. Make structure drag planning authoritative and self-clearing — [#1844]
+- [x] DTV-10. Ghost planned buildings with their own art in both ghost states — [#1845]
+- [x] DTV-11. Ghost planned structure pieces with their own art in both ghost states — [#1846]
+- [x] DTV-5. Author Kitchen construction-progress art — [#1848]
+- [x] DTV-6. Author Machine Shop construction-progress art — [#1849]
+- [x] DTV-7. Author Workbench construction-progress art — [#1850]
+- [x] DTV-8. Require progress art for every work-constructed building — [#1853]
+- [x] DTV-12. Give every flora instance stable identity and exact mutable state — [#1854]
+- [x] DTV-1. Make Chop a drag-box tool with tree-anchored designation markers — [#1856]
+- [x] DTV-2. Render Till as a flat top-surface designation — [#1857]
+- [x] DTV-3. Render the existing crop Plant job as a light-green tilled surface — [#1858]
 
 ## Epic contract
 
@@ -1245,6 +1245,8 @@ or generate missing frames.
 
 ### DTV-13. Make structure drag planning authoritative and self-clearing
 
+> Filed 2026-08-28 as #1844.
+
 - **Outcome:** Structure preview, partial commit and later invalidation use one
   64-tile candidate-plan contract, so a red candidate never commits and a
   committed job which becomes unbuildable does not remain stranded.
@@ -1276,6 +1278,8 @@ or generate missing frames.
 - **Open questions:** `None`
 
 ### DTV-10. Ghost planned buildings with their own art in both ghost states
+
+> Filed 2026-08-28 as #1845.
 
 - **Outcome:** A planned building appears as its own sprite at 25% while the
   player is placing it and 60% once designated, with no category marker and no
@@ -1313,6 +1317,8 @@ or generate missing frames.
 - **Open questions:** `None`
 
 ### DTV-11. Ghost planned structure pieces with their own art in both ghost states
+
+> Filed 2026-08-28 as #1846.
 
 - **Outcome:** A planned structure piece appears as its own art — through its
   real slot, facemap, camera-facing rotation and geometry — at 25% while
@@ -1359,6 +1365,8 @@ or generate missing frames.
 
 ### DTV-5. Author Kitchen construction-progress art
 
+> Filed 2026-08-28 as #1848.
+
 - **Outcome:** Kitchen has a user-authored construction sequence suitable for
   progress-driven rendering before its finished sprite appears.
 - **Scope:** One Kitchen progress sequence, source/output asset paths, dimension
@@ -1375,6 +1383,8 @@ or generate missing frames.
 - **Open questions:** Q-10
 
 ### DTV-6. Author Machine Shop construction-progress art
+
+> Filed 2026-08-28 as #1849.
 
 - **Outcome:** Machine Shop has a user-authored construction sequence suitable
   for progress-driven rendering before its finished sprite appears.
@@ -1394,6 +1404,8 @@ or generate missing frames.
 
 ### DTV-7. Author Workbench construction-progress art
 
+> Filed 2026-08-28 as #1850.
+
 - **Outcome:** Workbench has a user-authored construction sequence suitable for
   progress-driven rendering before its finished sprite appears.
 - **Scope:** One Workbench progress sequence, source/output asset paths,
@@ -1411,6 +1423,8 @@ or generate missing frames.
 - **Open questions:** Q-12
 
 ### DTV-8. Require progress art for every work-constructed building
+
+> Filed 2026-08-28 as #1853.
 
 - **Outcome:** Construction and appearance are distinct building lifecycles,
   and every work-constructed building is guaranteed to have target-specific
@@ -1436,6 +1450,8 @@ or generate missing frames.
 - **Open questions:** `None`
 
 ### DTV-12. Give every flora instance stable identity and exact mutable state
+
+> Filed 2026-08-28 as #1854.
 
 - **Outcome:** Every generated or player-planted `FloraInstance` has stable
   identity, and Chop designation plus harvest/regrowth state can address one
@@ -1472,6 +1488,8 @@ or generate missing frames.
 
 ### DTV-1. Make Chop a drag-box tool with tree-anchored designation markers
 
+> Filed 2026-08-28 as #1856.
+
 - **Outcome:** Chop uses the settled press-drag interaction and visibly marks
   exactly the eligible trees selected by that gesture.
 - **Scope:** Gesture lifecycle, selected-identity oracle, existing wood-tag
@@ -1492,6 +1510,8 @@ or generate missing frames.
 
 ### DTV-2. Render Till as a flat top-surface designation
 
+> Filed 2026-08-28 as #1857.
+
 - **Outcome:** Committed Till work reads as a two-dimensional ground treatment
   with no lit or visible vertical tile sides.
 - **Scope:** Explicit surface render path, settled mask/facemap pairing, final
@@ -1507,6 +1527,8 @@ or generate missing frames.
 - **Open questions:** `None`
 
 ### DTV-3. Render the existing crop Plant job as a light-green tilled surface
+
+> Filed 2026-08-28 as #1858.
 
 - **Outcome:** An existing crop Plant designation uses the same settled
   flat-surface language as Till, remains clearly distinct in light green, and

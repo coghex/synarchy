@@ -39,6 +39,7 @@ import Engine.Core.State
 import Engine.Save.Barrier (newSaveBarrier)
 import Engine.Load.Status (newLoadStatusRef)
 import Engine.Scene.Types (emptyLayeredQuads)
+import Engine.Graphics.Solar (publishedSolar)
 import Engine.Graphics.Vulkan.Sampler.Types (emptySamplerCache)
 import Engine.Core.Types
 import qualified Engine.Core.Queue as Q
@@ -54,6 +55,7 @@ import Unit.Sim.Types (emptyUnitThreadState)
 import Building.Types (emptyBuildingManager)
 import Structure.Palette (emptyTexPalette)
 import Structure.WallCatalog (emptyStructureWallCatalog)
+import Structure.ArtCatalog (emptyStructureArtCatalog)
 import Item.Types (emptyItemManager)
 import Equipment.Types (emptyEquipmentClassManager)
 import Substance.Types (emptySubstanceManager)
@@ -207,7 +209,8 @@ initializeEngineWith logBackend = do
   focusMgrRef ← newIORef createFocusManager
   textBuffersRef ← newIORef Map.empty
   fontCache ← newIORef defaultFontCache
-  sunAngleRef ← newIORef 0.25       -- start at noon
+  -- Start at noon, published rather than overridden (#1869).
+  sunAngleRef ← newIORef (publishedSolar 0.25)
   worldPreviewRef ← newIORef Nothing
   worldPreviewGenerationRef ← newIORef 0
   zoomAtlasDataRef ← newIORef Nothing
@@ -225,6 +228,7 @@ initializeEngineWith logBackend = do
   buildingManagerRef ← newIORef emptyBuildingManager
   texPaletteRef ← newIORef emptyTexPalette
   structureWallCatalogRef ← newIORef emptyStructureWallCatalog
+  structureArtCatalogRef ← newIORef emptyStructureArtCatalog
   texPaletteHandlesRef ← newIORef HM.empty
   buildingQueue ← Q.newQueue
   buildingGhostRef ← newIORef Nothing
@@ -333,6 +337,7 @@ initializeEngineWith logBackend = do
         , buildingManagerRef = buildingManagerRef
         , texPaletteRef      = texPaletteRef
         , structureWallCatalogRef = structureWallCatalogRef
+        , structureArtCatalogRef = structureArtCatalogRef
         , texPaletteHandlesRef = texPaletteHandlesRef
         , buildingQueue      = buildingQueue
         , combatQueue        = combatQueue

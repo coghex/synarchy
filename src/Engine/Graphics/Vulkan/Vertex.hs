@@ -17,7 +17,7 @@ import Vulkan.Zero
 getVertexBindingDescription ∷ VertexInputBindingDescription
 getVertexBindingDescription = zero
     { binding = 0
-    , stride = 48  -- = vertexTotalSize: 2+2+4+1+1 floats + 2 uints
+    , stride = 52  -- = vertexTotalSize: 2+2+4+1+1 floats + 3 uints
     , inputRate = VERTEX_INPUT_RATE_VERTEX
     }
 
@@ -27,7 +27,8 @@ getVertexBindingDescription = zero
 --   constant in "Engine.Graphics.Vulkan.Types.Vertex"
 --   (@vertexPositionOffset@, @vertexTexCoordOffset@, @vertexColorOffset@,
 --   @vertexAtlasIdOffset@, @vertexFaceMapIdOffset@,
---   @vertexRenderFlagsOffset@, @vertexWorldUVOffset@), which are exactly
+--   @vertexRenderFlagsOffset@, @vertexWorldUVOffset@,
+--   @vertexSolarPageOffset@), which are exactly
 --   the offsets the @Storable Vertex@ instance there peeks and pokes at.
 --   Those constants are the authority; nothing checks the agreement at
 --   compile time (#983).
@@ -76,5 +77,15 @@ getVertexAttributeDescriptions = V.fromList
         , binding = 0
         , format = FORMAT_R32_UINT
         , offset = 44  -- = vertexWorldUVOffset
+        }
+    , zero  -- Solar page slot — #1869 per-page day/night attribution.
+             -- 0 = none (the UBO's global sunAngle/circumference, which
+             -- is what UI and generic scene sprites keep); n > 0 selects
+             -- ubo.solarPages[n - 1]. Declared for every pipeline on this
+             -- binding; only the bindless world vertex shader reads it.
+        { location = 7
+        , binding = 0
+        , format = FORMAT_R32_UINT
+        , offset = 48  -- = vertexSolarPageOffset
         }
     ]

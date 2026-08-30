@@ -16,7 +16,6 @@ import UPrelude
 import Test.Hspec
 import Data.List (nub, sort)
 import Data.IORef (newIORef, readIORef)
-import qualified Data.ByteString as BS
 import qualified Data.Text as T
 import Language.Semantic.Types
 import Language.Semantic.Catalogue
@@ -69,9 +68,8 @@ firstSuggestion cat s =
 
 spec ∷ Spec
 spec = describe "world-name suggestions" $ do
-    prodBytes ← runIO $ BS.readFile conceptCataloguePath
-    let prodCat = either (error ∘ T.unpack ∘ catalogueErrorText) id
-                         (parseCatalogue prodBytes)
+    prodCatE ← runIO $ loadCatalogue conceptCataloguePath conceptOrdinalPath
+    let prodCat = either (error ∘ T.unpack ∘ catalogueErrorText) id prodCatE
 
     describe "language seed derived from the world seed" $ do
         -- Requirement 3, and the reviewer's injectivity clause: two
@@ -257,7 +255,10 @@ spec = describe "world-name suggestions" $ do
                     T.isInfixOf "unsupported language-generator version"
 
         it "refuses a catalogue with no concepts" $ do
-            let empty = Catalogue { catVersion = 1, catConcepts = mempty }
+            let noOrdinals = either (error ∘ T.unpack ∘ catalogueErrorText)
+                                    id (mkConceptOrdinals [])
+                empty = Catalogue { catVersion = 1, catConcepts = mempty
+                                  , catOrdinals = noOrdinals }
             case mkNameSuggester empty (provFor 42) of
                 Right _  → expectationFailure "suggested from an empty catalogue"
                 Left err → suggestErrorText err `shouldSatisfy`
@@ -307,7 +308,7 @@ spec = describe "world-name suggestions" $ do
         -- every press.
         it "turns an unreadable catalogue into a value, not an exception" $ do
             result ← readCatalogueForSuggestions
-                        "data/language/does_not_exist.yaml"
+                        "data/language/does_not_exist.yaml" conceptOrdinalPath
             case result of
                 Right _  → expectationFailure "read a nonexistent catalogue"
                 Left msg → do
@@ -316,12 +317,14 @@ spec = describe "world-name suggestions" $ do
 
         it "reports a catalogue it could read but not validate" $ do
             result ← readCatalogueForSuggestions "data/units/acolyte.yaml"
+                                                conceptOrdinalPath
             case result of
                 Right _  → expectationFailure "validated a unit definition"
                 Left msg → msg `shouldSatisfy` T.isInfixOf "could not be loaded"
 
         it "still reads the real catalogue" $ do
             result ← readCatalogueForSuggestions conceptCataloguePath
+                                                conceptOrdinalPath
             fmap catVersion result `shouldBe` Right (catVersion prodCat)
 
     -- #1272: the reroll chain is a replay from ordinal zero, so its

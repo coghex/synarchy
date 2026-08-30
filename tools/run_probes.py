@@ -268,7 +268,16 @@ PROBES = [
      "displacing refill interrupt that returns to the anchor, and the "
      "supersede/release/internal-move boundaries (#1216)"),
     ("power_workshop", "power_workshop_probe.py",
-     "requires_power workshop consumer: unpowered refusal, wired-uncharged gate, AI stall/resume, day/night balance (#361)"),
+     "job-dependent recipe power_draw: a station carrying no power_drain draws "
+     "only while a bill is claimed AND actively worked (cbWorking) — idle at "
+     "full generation is zero demand, a second recipe sums with the "
+     "already-active one, and a paused continuing bill loses claim and demand "
+     "once its permitted cycle completes; plus the unpowered craft.executeAt "
+     "refusal, the wired-but-uncharged gate, the craft_job AI stalling at 0 "
+     "progress while browned out then resuming, and battery storedWh "
+     "rising/falling over a simulated day/night. bdPowerDrain / "
+     "power.isBuildingPowered stay the hypothetical always-on non-crafting "
+     "device path, not what this exercises (#361, #590, #796)"),
     ("preview", "preview_probe.py",
      "--preview real-boot browser: simple-category list/focused-item "
      "discovery+selection+scroll+trimmed-loading via previewManager.dump() (#886), "

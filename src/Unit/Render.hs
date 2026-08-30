@@ -19,7 +19,7 @@ import Engine.Core.Capability.RenderView
     (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Core.State (EngineEnv, unitManagerRef)
 import Engine.Asset.Handle (TextureHandle(..), toInt)
-import Engine.Scene.Types (SortableQuad(..))
+import Engine.Scene.Types (SortableQuad(..), setQuadSolarPage)
 import Engine.Graphics.Camera (CameraFacing(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..)
                                           , QuadUV(..), QuadPayload(..)
@@ -31,6 +31,7 @@ import World.Grid (tileWidth, tileHeight, tileSideHeight
                   , worldLayer, applyFacing, applyFacingF
                   , baseTileW, baseTileH)
 import World.State.Types (wmVisible)
+import World.Page.Types (WorldPageId(..))
 import Unit.Types
 import Unit.Direction (mirrorDir)
 import Unit.Sprite (screenDirOf, resolveTexture)
@@ -132,8 +133,13 @@ pickFrame now cam inst def
               Just md → (\n → (md, n, True)) <$> storageFrameCount st md
               Nothing → Nothing
 
-renderUnitQuads ∷ EngineEnv → CameraFacing → Int → Int → Float → IO (V.Vector SortableQuad)
-renderUnitQuads env facing zSlice effDepth tileAlpha = do
+-- | Units are page-scoped, so each one's quad is attributed to ITS OWN
+--   page's sun rather than the visible head's (#1869) — the pass draws
+--   every visible page's units in one sweep, so the slot has to be
+--   resolved per instance here rather than stamped over the result.
+renderUnitQuads ∷ EngineEnv → (WorldPageId → Word32) → CameraFacing → Int → Int
+                → Float → IO (V.Vector SortableQuad)
+renderUnitQuads env solarSlotOf facing zSlice effDepth tileAlpha = do
     um ← readIORef (unitManagerRef env)
     -- Render only units of the VISIBLE worlds — units are world-scoped, so
     -- a hidden world's units must not draw over the active one (#78).
@@ -167,7 +173,9 @@ renderUnitQuads env facing zSlice effDepth tileAlpha = do
                                 in case unitToQuad lookupSlot defFmSlot facing
                                                 zSlice effDepth tileAlpha isSel inst
                                                 mDef now texSizes of
-                                    Just sq → sq : acc
+                                    Just sq →
+                                        setQuadSolarPage
+                                            (solarSlotOf (uiPage inst)) sq : acc
                                     Nothing → acc
                               ) [] instances
                     return quads
