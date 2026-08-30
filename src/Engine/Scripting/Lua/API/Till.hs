@@ -61,8 +61,8 @@ tillClearAnchorFn wsc = do
     return 0
 
 -- | till.designate(pageId, x1, y1, x2, y2) — commit the rectangle. Only
---   tillable tiles at the anchor's surface z (no fluid, no flora, not
---   already tilled) are designated.
+--   tillable tiles at the anchor's surface z (level ground, no fluid,
+--   no flora, not already tilled) are designated.
 tillDesignateFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
 tillDesignateFn wsc = do
     pageIdArg ← Lua.tostring 1
