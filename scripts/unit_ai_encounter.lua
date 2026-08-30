@@ -119,11 +119,27 @@ local function clearCombat(uid, s)
     s.attackTargetUid = nil
     s.committed = nil
     s.attackLastMoveTo = nil
+    s.retreatThreatUid = nil
+    s.retreatLastMoveTo = nil
     require("scripts.unit_ai_combat_lunge").clear(s)
     core.markGoalAccomplished(s, "attack")
+    core.markGoalAccomplished(s, "retreat")
     s.ruinEncounterCombat = nil
     unit.clearAnimOverride(uid)
     unit.stop(uid)
+end
+
+local function anyLivingEngaged(binding, key)
+    local participation = localParticipation[key]
+    for _, occupant in ipairs(binding.location.encounter.occupants or {}) do
+        if unit.exists(occupant.uid) and unit.getPose(occupant.uid) ~= "dead" then
+            local localState = participation and participation[occupant.uid]
+            local engaged = localState == "engaged"
+                or (localState == nil and occupant.engaged)
+            if engaged then return true end
+        end
+    end
+    return false
 end
 
 local function disengageReason(uid, s, binding)
@@ -199,6 +215,13 @@ local function guardUtility(uid, s)
         s.ruinDisengageReason = "returning to assigned post"
         return RETURN_UTILITY
     end
+    local key = encounterKey(binding)
+    local episodeActive = overlayValue(
+        binding.location.encounter.episode_active, localEpisodeActive, key)
+    if episodeActive and not anyLivingEngaged(binding, key) then
+        s.ruinDisengageReason = "no living guards remain engaged"
+        return RETURN_UTILITY
+    end
     return -math.huge
 end
 
@@ -207,8 +230,14 @@ local function guardExecute(uid, s)
     if not binding then return end
     local key = encounterKey(binding)
     local participation = participationFor(key)
-    if not s.ruinReturning then
+    local takingReturnOwnership = not s.ruinReturning
+    if takingReturnOwnership or core.isGoalActive(s, "attack")
+       or core.isGoalActive(s, "retreat")
+       or s.attackTargetUid ~= nil or s.retreatThreatUid ~= nil
+       or s.retreatLastMoveTo ~= nil or s.ruinEncounterCombat then
         clearCombat(uid, s)
+    end
+    if takingReturnOwnership then
         s.ruinReturning = true
         participation[uid] = "returning"
         persistOccupantState(binding, uid, false, true)
@@ -217,23 +246,15 @@ local function guardExecute(uid, s)
     -- The episode ends only after every surviving participant has broken
     -- contact. Local participation overlays queued writes so two guards
     -- disengaging in the same update still produce exactly one notice.
-    local anyEngaged = false
-    for _, occupant in ipairs(binding.location.encounter.occupants or {}) do
-        if unit.exists(occupant.uid) and unit.getPose(occupant.uid) ~= "dead" then
-            local localState = participation[occupant.uid]
-            local engaged = localState == "engaged"
-                or (localState == nil and occupant.engaged)
-            if engaged then anyEngaged = true; break end
-        end
-    end
+    local anyEngaged = anyLivingEngaged(binding, key)
     local episodeActive = overlayValue(
         binding.location.encounter.episode_active, localEpisodeActive, key)
     local disengageAnnounced = overlayValue(
         binding.location.encounter.disengage_announced,
         localEpisodeDisengaged, key)
-    if episodeActive and not anyEngaged and not disengageAnnounced then
+    if episodeActive and not anyEngaged then
         local visible = locationIsDiscovered(binding)
-        if visible then
+        if visible and not disengageAnnounced then
             engine.emitEventForUnit("unit_event", string.format(
                 "%s disengaged at %s (%s)", label(binding.info),
                 binding.location.name, s.ruinDisengageReason or "returning"),
@@ -242,9 +263,10 @@ local function guardExecute(uid, s)
         local aggressionAnnounced = overlayValue(
             binding.location.encounter.aggression_announced,
             localEpisodeAggression, key)
+        local announced = disengageAnnounced or visible
         localEpisodeActive[key] = false
-        localEpisodeDisengaged[key] = visible
-        persistEpisodeState(binding, false, aggressionAnnounced, visible)
+        localEpisodeDisengaged[key] = announced
+        persistEpisodeState(binding, false, aggressionAnnounced, announced)
     end
     if atHome(binding.info, binding.occupant) then
         unit.stop(uid)

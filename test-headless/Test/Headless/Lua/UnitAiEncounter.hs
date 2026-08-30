@@ -74,6 +74,7 @@ prelude = lns
     , "package.loaded['scripts.unit_ai_core'] = {"
     , "  isGoalActive=function(s,name) return s.activeGoal == name end,"
     , "  markGoalAccomplished=function(s,name)"
+    , "    s.goalStatus=s.goalStatus or {}; s.goalStatus[name]='accomplished';"
     , "    if s.activeGoal == name then s.activeGoal=nil end end }"
     , "package.loaded['scripts.unit_ai_page'] = {"
     , "  same=function(a,b) return a == b end }"
@@ -202,17 +203,69 @@ spec = describe "persistent ruin encounter AI (#916)" $ do
             , "assert(encounter.engageUtility(1,s) == 8)"
             ]
 
-    it "re-enters return-home cleanup from persisted returning state after load" $
+    it "cancels an active retreat when return takes ownership and after load" $
         runsOk $ lns
             [ prelude
-            , "INFO[1].gridX=9; OCCUPANT.returning=true"
-            , "LOCATION.encounter.episode_active=true"
-            , "LOCATION.encounter.aggression_announced=true"
-            , "local s={activeGoal='attack',attackTargetUid=2}"
+            , "INFO[1].gridX=23"
+            , "local s={ruinEncounterCombat=true,"
+            , "  activeGoal='retreat',retreatThreatUid=2,"
+            , "  retreatLastMoveTo={x=20,y=5}}"
             , "assert(encounter.guardUtility(1,s) == 10)"
             , "encounter.guardExecute(1,s)"
-            , "assert(s.ruinReturning and s.attackTargetUid == nil)"
+            , "assert(s.ruinReturning and s.activeGoal == nil)"
+            , "assert(s.retreatThreatUid == nil and s.retreatLastMoveTo == nil)"
+            , "assert(s.goalStatus.retreat == 'accomplished')"
+            , "assert(s.ruinEncounterCombat == nil)"
             , "assert(MOVES == 1 and CLEARS == 2)"
+            , "assert(#STATES == 1 and STATES[1].r and not STATES[1].e)"
+            , "INFO[1].gridX=9; OCCUPANT.returning=true"
+            , "MOVES=0; CLEARS=0; STATES={}"
+            , "local loaded={ruinReturning=true,ruinEncounterCombat=true,"
+            , "  activeGoal='retreat',retreatThreatUid=2,"
+            , "  retreatLastMoveTo={x=20,y=5}}"
+            , "assert(encounter.guardUtility(1,loaded) == 10)"
+            , "encounter.guardExecute(1,loaded)"
+            , "assert(loaded.ruinReturning and loaded.activeGoal == nil)"
+            , "assert(loaded.retreatThreatUid == nil"
+            , "  and loaded.retreatLastMoveTo == nil)"
+            , "assert(loaded.goalStatus.retreat == 'accomplished')"
+            , "assert(loaded.ruinEncounterCombat == nil)"
+            , "assert(MOVES == 1 and CLEARS == 2 and #STATES == 0)"
+            ]
+
+    it "ends a partial-death episode, permits re-entry, and reconciles it after load" $
+        runsOk $ lns
+            [ prelude
+            , "INFO[4]={gridX=6,gridY=5,page='world',name='survivor'}"
+            , "POSE[1]='dead'; POSE[4]='standing'; IDS={1,2,4}"
+            , "OCCUPANT.engaged=true"
+            , "local survivor={uid=4,home_x=6,home_y=5,"
+            , "  engaged=false,returning=false}"
+            , "table.insert(LOCATION.encounter.occupants,survivor)"
+            , "LOCATION.encounter.episode_active=true"
+            , "LOCATION.encounter.aggression_announced=true"
+            , "local s={}"
+            , "assert(encounter.guardUtility(4,s) == 10)"
+            , "encounter.guardExecute(4,s)"
+            , "assert(#EPISODES == 1 and not EPISODES[1].a"
+            , "  and EPISODES[1].g and EPISODES[1].d)"
+            , "LOCATION.encounter.episode_active=false"
+            , "LOCATION.encounter.disengage_announced=true"
+            , "encounter.engageExecute(4,s)"
+            , "assert(EVENTS == 2, 'a later re-entry suppressed aggression')"
+            , "assert(EPISODES[#EPISODES].a and EPISODES[#EPISODES].g"
+            , "  and not EPISODES[#EPISODES].d)"
+            , "require('scripts.unit_ai_claims').resetAll()"
+            , "EVENTS=0; STATES={}; EPISODES={}"
+            , "LOCATION.encounter.episode_active=true"
+            , "LOCATION.encounter.aggression_announced=true"
+            , "LOCATION.encounter.disengage_announced=false"
+            , "survivor.engaged=false; survivor.returning=false"
+            , "local loaded={}"
+            , "assert(encounter.guardUtility(4,loaded) == 10)"
+            , "encounter.guardExecute(4,loaded)"
+            , "assert(#EPISODES == 1 and not EPISODES[1].a"
+            , "  and EPISODES[1].g and EPISODES[1].d)"
             ]
 
     it "pursues only the last seen tile for ten seconds, then disengages \
