@@ -25,7 +25,11 @@ import Engine.Core.State (EngineEnv, activeWorldPageFrom)
 import Engine.PlayerEvent.Emit (emitEventFullOnPage)
 import Location.Discovery (DiscoveryHit(..), UnitSight(..), findDiscoveries)
 import Location.Instance
-    ( LocationInstance(..), LocationLifecycle(..), instancesToList
+    ( LocationEncounter(..), LocationEncounterOccupant(..)
+    , LocationInstance(..), LocationLifecycle(..), instancesToList
+    , lookupLocationInstance, encounterDiscoveryLifecycle
+    , isDiscoveredLifecycle
+    , markLocationEncounterCleared, markLocationEncounterClearEventEmitted
     , promoteLifecycle, setLocationLifecycle )
 import Unit.Faction (isPlayerOwned)
 import Unit.LineOfSight (visibleTilesOnPage)
@@ -79,8 +83,9 @@ tickLocationDiscovery env pageId@(WorldPageId pageText) ws = do
     case mParams of
         Nothing → pure ()
         Just p
-            | not (any promotable
-                       (instancesToList (wgpLocationInstances p))) → pure ()
+            | let placed = instancesToList (wgpLocationInstances p)
+            , not (any promotable placed ∨ any pendingClearance placed) →
+                pure ()
             | otherwise → do
                 -- Every discovery input — bounds, display name,
                 -- lifecycle — is stored on the instance itself (#911), so
@@ -97,6 +102,25 @@ tickLocationDiscovery env pageId@(WorldPageId pageText) ws = do
                         , uiPage inst ≡ pageId
                         , isPlayerOwned (uiFactionId inst)
                         ]
+                    clearable = filter (encounterDead um)
+                        (instancesToList (wgpLocationInstances p))
+                forM_ clearable $ \inst → do
+                    cleared ← atomicModifyIORef' (wsGenParamsRef ws) $ \mP →
+                        case mP of
+                            Just p' → case markLocationEncounterCleared (liId inst)
+                                                (wgpLocationInstances p') of
+                                Just instances' →
+                                    (Just p' { wgpLocationInstances = instances' }
+                                    , True)
+                                Nothing → (mP, False)
+                            Nothing → (mP, False)
+                    when (cleared ∧ isDiscoveredLifecycle (liLifecycle inst)) $
+                        emitEventFullOnPage env "location_clearance"
+                            "World.Thread.Discovery"
+                            ("Cleared: " <> liDisplayName inst)
+                            (if isActivePage then Just (liAnchor inst) else Nothing)
+                            Nothing
+                            (Just pageText)
                 sights ← forM pageUnits $ \(uid, inst) → do
                     tiles ← visibleTilesOnPage ws inst
                     pure UnitSight { usUnit    = uid
@@ -114,21 +138,59 @@ tickLocationDiscovery env pageId@(WorldPageId pageText) ws = do
                     -- #780's exactly-once contract even if two ticks raced.
                     promoted ← atomicModifyIORef' (wsGenParamsRef ws) $ \mP →
                         case mP of
-                            Just p' → case setLocationLifecycle (dhInstance hit)
-                                                LifecycleDiscovered
+                            Just p' → case lookupLocationInstance (dhInstance hit)
                                                 (wgpLocationInstances p') of
-                                Just instances' →
-                                    (Just p' { wgpLocationInstances = instances' }
-                                    , True)
+                                Just inst → case setLocationLifecycle (dhInstance hit)
+                                                (encounterDiscoveryLifecycle inst)
+                                                (wgpLocationInstances p') of
+                                    Just instances' →
+                                        (Just p' { wgpLocationInstances = instances' }
+                                        , True)
+                                    Nothing → (mP, False)
                                 Nothing → (mP, False)
                             Nothing → (mP, False)
-                    when promoted $
+                    when promoted $ do
                         emitEventFullOnPage env "location_discovery"
                             "World.Thread.Discovery"
                             ("Discovered: " <> dhLabel hit)
                             (if isActivePage then Just (dhAnchor hit) else Nothing)
                             (Just (unUnitId (dhUnit hit)))
                             (Just pageText)
+                        deferredClear ← atomicModifyIORef'
+                            (wsGenParamsRef ws) $ \mP → case mP of
+                                Just p' → case
+                                    markLocationEncounterClearEventEmitted
+                                        (dhInstance hit)
+                                        (wgpLocationInstances p') of
+                                    Just instances' →
+                                        (Just p' { wgpLocationInstances = instances' }
+                                        , True)
+                                    Nothing → (mP, False)
+                                Nothing → (mP, False)
+                        when deferredClear $
+                            emitEventFullOnPage env "location_clearance"
+                                "World.Thread.Discovery"
+                                ("Cleared: " <> dhLabel hit)
+                                (if isActivePage
+                                    then Just (dhAnchor hit) else Nothing)
+                                (Just (unUnitId (dhUnit hit)))
+                                (Just pageText)
   where
     promotable inst =
         isJust (promoteLifecycle (liLifecycle inst) LifecycleDiscovered)
+    pendingClearance inst = case liEncounter inst of
+        Just encounter → leDeathOnlyClearance encounter
+            ∧ leRolledCount encounter > 0
+            ∧ leRosterComplete encounter
+            ∧ not (leCleared encounter)
+        Nothing → False
+    encounterDead um inst = case liEncounter inst of
+        Just encounter → pendingClearance inst
+            ∧ length (leOccupants encounter) ≡ leRolledCount encounter
+            ∧ all occupantDead (leOccupants encounter)
+        Nothing → False
+      where
+        occupantDead occupant = case HM.lookup (leoUnitId occupant)
+                                           (umInstances um) of
+            Just unitInst → uiPage unitInst ≡ pageId ∧ uiPose unitInst ≡ "dead"
+            Nothing → False

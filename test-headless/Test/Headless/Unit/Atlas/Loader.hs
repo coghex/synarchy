@@ -54,7 +54,8 @@ fixtureUnit = "spec_loader_unit"
 -- not fixtures (#1260 for acolyte, #1261 for the original remainder).
 shippedUnits ∷ [Text]
 shippedUnits =
-    [ "acolyte", "bear_brown", "red_squirrel", "technomule"
+    [ "acolyte", "bear_brown", "nomad_primitive"
+    , "red_squirrel", "technomule"
     , "tiller", "unknown_unit", "white_tailed_deer" ]
 
 unitYamlPath ∷ Text → FilePath
@@ -63,7 +64,7 @@ unitYamlPath name = "data" </> "units" </> T.unpack name ⧺ ".yaml"
 -- The whole shipped corpus, pinned so a tree that silently stops
 -- registering shows up as a number rather than as nothing at all.
 shippedAnimationTotal ∷ Int
-shippedAnimationTotal = 116
+shippedAnimationTotal = 131
 
 -- | A minimal but REAL unit YAML, parsed by the engine's own decoder.
 --   Its frame paths deliberately do not exist. Nothing loads them since

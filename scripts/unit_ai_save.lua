@@ -167,8 +167,9 @@ function M.register(aiState)
         -- hold is never INFERRED from an arrived-and-cleared order,
         -- because the payload cannot say whether the order that ended
         -- was the player's or scripts/building_spawn.lua's walk-out.
-        -- The anchor carries no entity reference (two tile
-        -- coordinates plus this hold's own stall accounting), so
+        -- The anchor carries no entity reference (two tile coordinates,
+        -- this hold's own stall accounting, and its optional combat-
+        -- withdrawal completion cutoff), so
         -- unit_ai_save_refs.lua's field walk, the typed-reference
         -- graph and the dangling/wrong-page rules are untouched.
         -- v7 (issue #1737): a repairJob sourced from the GROUND carries
@@ -297,8 +298,8 @@ function M.register(aiState)
     })
 
     -- The unit-AI family's TRANSIENT coordination tables (#1329): the
-    -- five coordinate claim registries plus repairClaims and
-    -- repairPriority, none of which lives in aiState and none of which
+    -- five coordinate claim registries, repairClaims/repairPriority, and
+    -- #916's three same-tick encounter overlays. None lives in aiState or
     -- is persisted. registerResetHook fires unconditionally on every
     -- load -- including a load whose envelope carries no data for this
     -- module family at all -- which is exactly the contract these need:
@@ -341,8 +342,10 @@ function M.register(aiState)
     teardown.register("unit_ai", function()
         local n = 0
         for k in pairs(aiState) do aiState[k] = nil; n = n + 1 end
+        local transient = claimsLib.resetAll()
         engine.logInfo("Unit AI: cleared " .. n
-            .. " AI state row(s) on session teardown")
+            .. " AI state row(s) and " .. transient
+            .. " transient coordination entries on session teardown")
     end)
 end
 

@@ -36,8 +36,19 @@ isModifierKey key = key `elem`
     , GLFW.Key'LeftSuper, GLFW.Key'RightSuper
     ]
 
-updateKeyState ∷ InputState → GLFW.Key → GLFW.KeyState → GLFW.ModifierKeys → InputState
-updateKeyState state key keyState mods = state
+-- | Record one key event's HOLD under its owner (#1927).
+--
+--   'OwnerDirect' is exactly the pre-#1927 behaviour: a Boolean
+--   overwrite of this key's 'inpKeyStates' entry. That single Boolean
+--   is precisely what cannot express ownership — a split hold's
+--   modifier bracket and an independent hold of the same modifier
+--   overwrite each other — so 'OwnerGesture' keeps the bracket's hold
+--   in 'inpInjectHolds' instead, leaving the direct owner's own entry
+--   untouched in both directions: claiming does not overwrite it, and
+--   releasing does not clear it.
+updateKeyState ∷ KeyHoldOwner → InputState → GLFW.Key → GLFW.KeyState
+               → GLFW.ModifierKeys → InputState
+updateKeyState OwnerDirect state key keyState mods = state
     { inpKeyStates = Map.insert key newKeyState (inpKeyStates state) }
     where
         newKeyState = KeyState
@@ -46,6 +57,21 @@ updateKeyState state key keyState mods = state
             , keyMods = mods
             , keyTime = 0.0
             }
+updateKeyState (OwnerGesture gesture) state key keyState _mods
+    | held = state
+        { inpInjectHolds = Map.insertWith Set.union gesture
+            (Set.singleton key) (inpInjectHolds state) }
+    | otherwise = state
+        { inpInjectHolds = Map.update dropKey gesture (inpInjectHolds state) }
+    where
+        held = keyState ≡ GLFW.KeyState'Pressed
+             ∨ keyState ≡ GLFW.KeyState'Repeating
+        -- A gesture holding nothing must leave NO entry behind: the
+        -- input thread reads "does this gesture hold anything?" to
+        -- decide whether an up half fences at all, and a lingering
+        -- empty set would make a modifier-free split hold fence.
+        dropKey ks = let ks' = Set.delete key ks
+                     in if Set.null ks' then Nothing else Just ks'
 
 updateWindowState ∷ InputState → WindowEvent → InputState
 updateWindowState state (WindowFocus focused)
@@ -80,6 +106,11 @@ clearHeldInput state = state
     -- mouse buttons get one, via releaseHeldButtons below) — clear the
     -- tracking set too, or it leaks that key suppressed forever.
     , inpControlFocusConsumedKeys = Set.empty
+    -- #1927: a split hold's modifier claim is held input like any
+    -- other — the OS delivers no release for it across a focus loss
+    -- either, and its up half may never arrive, so it must not
+    -- outlive the clear that drops every other hold.
+    , inpInjectHolds    = Map.empty
     }
 
 -- | Emit the mouse-up events the OS swallows on a focus-loss / minimize

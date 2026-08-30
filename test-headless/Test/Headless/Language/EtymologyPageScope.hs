@@ -222,6 +222,7 @@ instanceFor cat prov expr = LocationInstance
     , liEtymology       = Just (sourceFor prov expr)
     , liLifecycle       = LifecycleDiscovered
     , liContentsSpawned = False
+    , liEncounter       = Nothing
     }
 
 riverNameFor ∷ Catalogue → LanguageProvenance → NameExpr → RiverName

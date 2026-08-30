@@ -4,6 +4,7 @@ module World.Save.Serialize
     , writeSaveFiles
     , loadWorld
     , listSaves
+    , saveListingOrder
     , SaveListing(..)
     , savesDirectory
     , saveExtension
@@ -310,8 +311,7 @@ listSaves logger luaKnownNames = do
     entries ← listDirectory savesDirectory
     results ← mapM tryEntry entries
     let oks = concat results
-    pure $ sortBy (comparing (Down . smTimestamp . slMetadata)
-                    <> comparing slName) oks
+    pure $ saveListingOrder oks
   where
     tryEntry entry = do
         let fullPath = savesDirectory </> entry
@@ -438,15 +438,43 @@ listSaves logger luaKnownNames = do
         , slRecovered = recovered
         }
 
+-- | The canonical order 'listSaves' publishes, and the ONLY ordering
+--   any consumer of a save listing may apply: newest first by
+--   'normalizeTimestamp'-canonicalized timestamp, ties broken by
+--   ascending slot name.
+--
+--   The tiebreak is what makes the order a function of the saves
+--   directory's CONTENT rather than of directory-enumeration order,
+--   and tied timestamps are reachable: two legacy second-precision
+--   saves both normalize to the same @…32.000000Z@, an unparseable
+--   timestamp is passed through untouched so two identical malformed
+--   strings tie as well, and the per-process monotonic clamp on new
+--   save timestamps ('Engine.Scripting.Lua.API.Save') cannot separate
+--   saves written by two different processes.
+--
+--   Exported so a consumer's ordering can be tested against this
+--   comparator itself rather than against a re-derived copy of it
+--   (#1932).
+saveListingOrder ∷ [SaveListing] → [SaveListing]
+saveListingOrder = sortBy (comparing (Down ∘ smTimestamp ∘ slMetadata)
+                            <> comparing slName)
+
 -- | Canonicalize a save timestamp to the fixed-width microsecond ISO
---   form (@%FT%T%6QZ@) used by the sort in 'listSaves' and by
---   @main_menu.lua@. Both consumers compare timestamps as raw strings,
---   so a legacy save written at second precision (@…32Z@) would sort
---   ahead of a newer fractional one (@…32.5Z@) purely because @'Z' >
---   '.'@. Parsing with @%Q@ (which accepts an optional fraction) and
---   reformatting puts every save — legacy, millisecond, microsecond or
---   picosecond — into one lexicographically comparable shape. Anything
---   that fails to parse is left untouched (#98).
+--   form (@%FT%T%6QZ@) used by 'saveListingOrder' — the one comparison
+--   a listed save's timestamp is ever put through. It compares
+--   timestamps as raw strings, so a legacy save written at second
+--   precision (@…32Z@) would sort ahead of a newer fractional one
+--   (@…32.5Z@) purely because @'Z' > '.'@. Parsing with @%Q@ (which
+--   accepts an optional fraction) and reformatting puts every save —
+--   legacy, millisecond, microsecond or picosecond — into one
+--   lexicographically comparable shape. Anything that fails to parse
+--   is left untouched (#98).
+--
+--   @main_menu.lua@ used to be a second consumer, re-sorting the
+--   listing on this string alone. It no longer compares timestamps at
+--   all: it holds 'saveListingOrder'\'s output verbatim (#1932), so
+--   that function's name tiebreak is no longer something a downstream
+--   consumer can discard.
 normalizeTimestamp ∷ Text → Text
 normalizeTimestamp ts =
     case parseTimeM True defaultTimeLocale "%FT%T%QZ" (T.unpack ts) of

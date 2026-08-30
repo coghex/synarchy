@@ -57,13 +57,17 @@ mainMenu.baseSizes = {
 function mainMenu.buildMenuItems()
     local items = {}
 
-    -- Check for saves
+    -- Check for saves. engine.listSaves() already publishes ONE
+    -- canonical order (newest timestamp first, ties broken by ascending
+    -- slot name -- World.Save.Serialize.saveListingOrder), and it is
+    -- held here verbatim: this list is what Continue picks its target
+    -- from and what ui_manager_menu.lua hands straight to
+    -- saveBrowser.show, so re-sorting it here on timestamp alone
+    -- discarded the engine's name tiebreak for tied rows and left both
+    -- surfaces in table.sort's implementation-dependent order (#1932).
     mainMenu.saves = engine.listSaves() or {}
 
     if #mainMenu.saves > 0 then
-        table.sort(mainMenu.saves, function(a, b)
-            return a.timestamp > b.timestamp
-        end)
         mainMenu.latestSave = mainMenu.saves[1].name
 
         table.insert(items, {

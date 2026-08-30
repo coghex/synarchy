@@ -1170,6 +1170,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Save.Contract
                    Test.Headless.Save.AutosaveGuards
                    Test.Headless.Save.AutosaveListing
+                   Test.Headless.Save.MenuListingOrder
                    Test.Headless.Save.Barrier
                    Test.Headless.Load.Status
                    Test.Headless.Save.Snapshot
@@ -1201,6 +1202,8 @@ test-suite synarchy-test-headless
                    Test.Headless.Input.Bindings
                    Test.Headless.Input.State
                    Test.Headless.Input.Inject
+                   Test.Headless.Input.InjectHarness
+                   Test.Headless.Input.InjectOwnership
                    Test.Headless.Input.Followup
                    Test.Headless.Graphics.SwapchainResize
                    Test.Headless.Input.LayerA
@@ -1242,6 +1245,7 @@ test-suite synarchy-test-headless
                    Test.Headless.UI.Tooltip
                    Test.Headless.UI.InputOwnership
                    Test.Headless.UI.ZoomBandInputGate
+                   Test.Headless.UI.HudHoverGate
                    Test.Headless.UI.UnitInfoRowSelection
                    Test.Headless.UI.ElementInputPolicy
                    Test.Headless.UI.ControlActivation
@@ -1297,6 +1301,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Core.LogCategoryEnv
                    Test.Headless.Core.LogMonad
                    Test.Headless.Core.LogParity
+                   Test.Headless.Core.LogThresholdEnv
                    Test.Headless.Core.LoopStartup
                    Test.Headless.Core.ShutdownAtlasRelease
                    Test.Headless.Core.WorkerLifecycle
@@ -1322,6 +1327,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Building.PortalSpawnBinding
                    Test.Headless.Building.Placement
                    Test.Headless.Building.RemoteWarning
+                   Test.Headless.Building.WorkbenchConstruction
                    Test.Headless.Lua.SaveModules
                    Test.Headless.Lua.SharedHelpers
                    Test.Headless.Lua.SaveBridge
@@ -1329,6 +1335,8 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.TutorialEvaluation
                    Test.Headless.Lua.UnitAiLocations
                    Test.Headless.Lua.UnitAiHold
+                   Test.Headless.Lua.UnitAiCombatMove
+                   Test.Headless.Lua.UnitAiEncounter
                    Test.Headless.Lua.UnitAiStall
                    Test.Headless.Lua.UnitAiHarvest
                    Test.Headless.Lua.UnitAiLogisticsTargets

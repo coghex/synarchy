@@ -2,6 +2,7 @@
 module Engine.Asset.YamlLocations
     ( LocationYamlPosition(..)
     , LocationYamlContent(..)
+    , LocationYamlCountRange(..)
     , LocationYamlBounds(..)
     , authoredLocationCoordinateLimit
     , LocationYamlNaming(..)
@@ -32,7 +33,24 @@ instance FromJSON LocationYamlPosition where
         ⊚ v .:? "x" .!= 0
         ⊛ v .:? "y" .!= 0
 
--- | One `{kind, id, count, position, faction, rolls}` content entry.
+-- | Inclusive uniform range for a unit-content encounter count (#916).
+--   This is deliberately a distinct key from @count@: the latter keeps
+--   its existing positive-multiplicity contract, while an encounter roll
+--   is allowed to produce zero occupants. The owning definition parser
+--   below validates ordering and attribution.
+data LocationYamlCountRange = LocationYamlCountRange
+    { lycrMin ∷ !Int
+    , lycrMax ∷ !Int
+    } deriving (Show, Eq, Generic)
+
+instance FromJSON LocationYamlCountRange where
+    parseJSON = withObject "LocationYamlCountRange" $ \v →
+        LocationYamlCountRange
+            ⊚ v .: "min"
+            ⊛ v .: "max"
+
+-- | One `{kind, id, count, count_range, clearance, position, faction, rolls}`
+--   content entry.
 --   `count` defaults to 1; `position`/`faction`/`rolls` are all
 --   optional (#90) — see 'Location.Types.LocationContent'.
 --
@@ -48,6 +66,8 @@ data LocationYamlContent = LocationYamlContent
     , lycPosition ∷ !(Maybe LocationYamlPosition)
     , lycFaction  ∷ !(Maybe Text)
     , lycRolls    ∷ !Int
+    , lycCountRange ∷ !(Maybe LocationYamlCountRange)
+    , lycClearance ∷ !(Maybe Text)
     } deriving (Show, Eq, Generic)
 
 instance FromJSON LocationYamlContent where
@@ -58,6 +78,8 @@ instance FromJSON LocationYamlContent where
         ⊛ v .:? "position"
         ⊛ v .:? "faction"
         ⊛ v .:? "rolls"    .!= 1
+        ⊛ v .:? "count_range"
+        ⊛ v .:? "clearance"
 
 -- | The authoritative spatial contract (#777): an inclusive,
 --   axis-aligned tile box relative to the location's anchor. Required
@@ -328,6 +350,52 @@ instance FromJSON LocationYamlDef where
                         <> " ('" <> lycId c <> "'): '" <> field
                         <> "' must be a positive integer, got "
                         <> tshow n))
+            forM_ (lycCountRange c) $ \range → do
+                unless (lycKind c ≡ "unit") $
+                    fail (T.unpack ("location '" <> lid
+                        <> "': content entry " <> tshow entryIx
+                        <> " ('" <> lycId c <> "'): 'count_range' is "
+                        <> "supported only for unit content"))
+                when (lycrMin range < 0) $
+                    fail (T.unpack ("location '" <> lid
+                        <> "': content entry " <> tshow entryIx
+                        <> " ('" <> lycId c <> "'): 'count_range.min' "
+                        <> "must be non-negative, got "
+                        <> tshow (lycrMin range)))
+                when (lycrMax range < lycrMin range) $
+                    fail (T.unpack ("location '" <> lid
+                        <> "': content entry " <> tshow entryIx
+                        <> " ('" <> lycId c <> "'): 'count_range.max' ("
+                        <> tshow (lycrMax range) <> ") is below min ("
+                        <> tshow (lycrMin range) <> ")"))
+                let tileCapacity =
+                        (toInteger (lybMaxX bounds)
+                            - toInteger (lybMinX bounds) + 1)
+                        * (toInteger (lybMaxY bounds)
+                            - toInteger (lybMinY bounds) + 1)
+                when (toInteger (lycrMax range) > tileCapacity) $
+                    fail (T.unpack ("location '" <> lid
+                        <> "': content entry " <> tshow entryIx
+                        <> " ('" <> lycId c <> "'): 'count_range.max' ("
+                        <> tshow (lycrMax range) <> ") exceeds the "
+                        <> tshow tileCapacity
+                        <> " distinct tiles inside the location bounds"))
+                case lycClearance c of
+                    Nothing → fail (T.unpack ("location '" <> lid
+                        <> "': content entry " <> tshow entryIx
+                        <> " ('" <> lycId c <> "'): 'count_range' requires "
+                        <> "an explicit 'clearance' policy"))
+                    Just policy → unless (policy ≡ "death_only") $
+                        fail (T.unpack ("location '" <> lid
+                            <> "': content entry " <> tshow entryIx
+                            <> " ('" <> lycId c <> "'): unsupported encounter "
+                            <> "clearance policy '" <> policy
+                            <> "' (supported: death_only)"))
+            when (isNothing (lycCountRange c) ∧ isJust (lycClearance c)) $
+                fail (T.unpack ("location '" <> lid
+                    <> "': content entry " <> tshow entryIx
+                    <> " ('" <> lycId c <> "'): 'clearance' is supported "
+                    <> "only with 'count_range'"))
             forM_ (lycPosition c) $ \p →
                 unless (relBoundsContains bounds (lypX p) (lypY p)) $
                     fail (T.unpack ("location '" <> lid <> "': content '"
@@ -335,6 +403,9 @@ instance FromJSON LocationYamlDef where
                         <> tshow (lypX p) <> ","
                         <> tshow (lypY p)
                         <> ") lies outside declared bounds"))
+        when (length [ () | c ← contents, isJust (lycCountRange c) ] > 1) $
+            fail (T.unpack ("location '" <> lid
+                <> "': at most one content entry may declare 'count_range'"))
         anchor ← mapM (parseAnchorTag lid) anchorText
         -- #1101: a pool that is present but empty would leave the
         -- definition with no concept to draw, which is authored data

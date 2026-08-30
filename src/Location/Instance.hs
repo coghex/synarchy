@@ -58,12 +58,18 @@ module Location.Instance
     , lifecycleFromName
     , isDiscoveredLifecycle
     , promoteLifecycle
+      -- * Encounters
+    , LocationEncounterOccupant(..)
+    , LocationEncounter(..)
+    , encounterDiscoveryLifecycle
+    , encounterOccupant
       -- * Records
     , LocationInstance(..)
     , LocationInstances(..)
     , LegacyLocationChunkFlags(..)
     , emptyLocationInstances
     , newLocationInstance
+    , newLocationInstanceWithSeed
       -- * Checked geometry construction
     , LocationGeometryError(..)
     , locationGeometryErrorText
@@ -77,10 +83,16 @@ module Location.Instance
     , locationInstanceBounds
       -- * Construction / mutation
     , buildLocationInstances
+    , buildLocationInstancesWithSeed
     , allocateLocationInstance
     , adjustLocationInstance
     , setLocationLifecycle
     , markLocationContentsSpawned
+    , registerLocationEncounterOccupants
+    , adjustLocationEncounterOccupant
+    , setLocationEncounterEpisodeState
+    , markLocationEncounterCleared
+    , markLocationEncounterClearEventEmitted
       -- * v1 chunk-set migration
     , pendingLegacyFlags
     , resolveLegacyLocationInstances
@@ -93,7 +105,7 @@ import UPrelude
 import GHC.Generics (Generic)
 import Control.DeepSeq (NFData)
 import Data.Hashable (Hashable)
-import Data.List (sortOn)
+import Data.List (find, sortOn)
 import Data.Serialize (Serialize)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
@@ -103,7 +115,10 @@ import Location.Bounds
 import Language.Etymology.Source (EtymologySource)
 import Location.Naming (LocationNamer, nameLocationInstance)
 import Location.Overlay.Types (LocationOverlay, overlayToList)
-import Location.Types (LocationDef(..), LocationRegistry, lookupLocation)
+import Location.Types
+    (LocationContent(..), LocationDef(..), LocationRegistry, lookupLocation)
+import Language.Generated.Hash (fmix64)
+import Unit.Types.Manager (UnitId)
 import World.Chunk.Types (ChunkCoord(..), chunkSize)
 
 -- * Identity ---------------------------------------------------------
@@ -133,10 +148,9 @@ firstLocationInstanceId = 1
 --   @CLAUDE.md@). Inserting or reordering a constructor silently
 --   corrupts saves.
 --
---   #911 lands the representation only. Nothing in the game yet moves
---   an instance past 'LifecycleDiscovered' — the encounter (step 4),
---   reward (step 5), and retrieval (step 6) issues are what these
---   states exist to serve.
+--   #916's ruin encounters now promote visible occupied locations to
+--   'LifecycleActive' and death-cleared (including zero-roll) locations to
+--   'LifecycleCleared'. Reward and retrieval remain later lifecycle work.
 --
 --   'LifecycleHinted' is deliberately unreachable today: nothing
 --   produces it, and #1230 removed the future information-reveal class
@@ -197,6 +211,56 @@ promoteLifecycle cur next
     | next > cur = Just next
     | otherwise  = Nothing
 
+-- * Encounters ------------------------------------------------------
+
+-- | One unit originally assigned to a placed-location encounter (#916).
+--   Membership survives a missing runtime unit: a dangling UID is still
+--   evidence that the death-only encounter has NOT been cleared. The home
+--   coordinate is recorded at the successful spawn and never inferred from
+--   the unit's later position.
+data LocationEncounterOccupant = LocationEncounterOccupant
+    { leoUnitId              ∷ !UnitId
+    , leoHome                ∷ !(Float, Float)
+    , leoEngaged             ∷ !Bool
+    , leoReturning           ∷ !Bool
+    } deriving (Show, Eq, Generic, NFData, Serialize)
+
+-- | Durable outcome and progress for one placed encounter. The clearance
+--   policy is deliberately ruin-local: @leDeathOnlyClearance@ is stored on
+--   the instance instead of changing the meaning of the shared location
+--   lifecycle. @leCleared@ records the encounter outcome separately from
+--   discovery, so a zero roll can remain visually unknown until first sight.
+data LocationEncounter = LocationEncounter
+    { leRolledCount        ∷ !Int
+    , leOccupants          ∷ ![LocationEncounterOccupant]
+    , leRosterComplete     ∷ !Bool
+    , leDeathOnlyClearance ∷ !Bool
+    , leActivated          ∷ !Bool
+      -- ^ Whether this encounter has ever entered combat. Kept separate
+      --   from discovery so pre-discovery aggression remains private while
+      --   first sight can still expose the location as active.
+    , leEpisodeActive      ∷ !Bool
+      -- ^ Whether at least one assigned survivor is in the current combat
+      --   episode. This may return to false without moving lifecycle back.
+    , leAggressionAnnounced ∷ !Bool
+    , leDisengageAnnounced  ∷ !Bool
+    , leCleared            ∷ !Bool
+    , leClearEventEmitted  ∷ !Bool
+    } deriving (Show, Eq, Generic, NFData, Serialize)
+
+-- | The first visible lifecycle for an instance. Discovery is still the
+--   single edge that emits @location_discovery@; an encounter outcome only
+--   chooses where that edge lands.
+encounterDiscoveryLifecycle ∷ LocationInstance → LocationLifecycle
+encounterDiscoveryLifecycle inst = case liEncounter inst of
+    Just e | leCleared e   → LifecycleCleared
+           | leActivated e → LifecycleActive
+    _                      → LifecycleDiscovered
+
+-- | Find one assigned occupant without dropping dangling membership.
+encounterOccupant ∷ UnitId → LocationEncounter → Maybe LocationEncounterOccupant
+encounterOccupant uid = find ((≡ uid) . leoUnitId) . leOccupants
+
 -- * Records ----------------------------------------------------------
 
 -- | One placed location. Everything gameplay needs to address it by id
@@ -239,6 +303,10 @@ data LocationInstance = LocationInstance
       -- ^ one-time content-spawn flag (#90), now per INSTANCE. Stays
       --   deliberately independent of 'liLifecycle' and of
       --   'World.Generate.Types.wgpLocationStamped' (#424).
+    , liEncounter       ∷ !(Maybe LocationEncounter)
+      -- ^ Optional placed-location encounter (#916), rolled once when the
+      --   overlay instance is built. Independent from discovery and the
+      --   generic content-spawn flag; historical saves decode with absence.
     } deriving (Show, Eq, Generic, NFData, Serialize)
 
 -- | A page's placed-location table plus its own id allocator.
@@ -374,7 +442,15 @@ locationInstanceGeometry coord def =
 newLocationInstance
     ∷ Maybe LocationNamer → LocationInstanceId → ChunkCoord → LocationDef
     → Either LocationGeometryError LocationInstance
-newLocationInstance namer iid coord def = do
+newLocationInstance = newLocationInstanceWithSeed 0
+
+-- | Seed-aware instance constructor used by real world placement. The
+--   compatibility wrapper above keeps tests and debug allocation honest with
+--   a fixed seed, while production includes the page's persisted world seed.
+newLocationInstanceWithSeed
+    ∷ Word64 → Maybe LocationNamer → LocationInstanceId → ChunkCoord → LocationDef
+    → Either LocationGeometryError LocationInstance
+newLocationInstanceWithSeed seed namer iid coord def = do
     (anchor, box) ← locationInstanceGeometry coord def
     let (name, gloss, ety) = nameLocationInstance namer def
                                  (unLocationInstanceId iid)
@@ -389,7 +465,37 @@ newLocationInstance namer iid coord def = do
         , liEtymology       = ety
         , liLifecycle       = LifecycleUnknown
         , liContentsSpawned = False
+        , liEncounter       = encounterFromDef seed iid def
         }
+
+-- | At most one ranged unit-content entry is accepted by the YAML boundary.
+--   Its inclusive range is rolled by a stateless avalanche hash over the
+--   persisted page seed and stable instance id: uniform over the authored
+--   span, independent of chunk/load order, and never rolled again.
+encounterFromDef ∷ Word64 → LocationInstanceId → LocationDef
+                 → Maybe LocationEncounter
+encounterFromDef seed iid def = case
+    [ (range, lconClearance c)
+    | c ← ldContents def, Just range ← [lconCountRange c] ] of
+        []          → Nothing
+        (((lo, hi), policy):_) →
+            let spanSize = fromIntegral (hi - lo + 1) ∷ Word64
+                rawId = fromIntegral (unLocationInstanceId iid) ∷ Word64
+                rolled = lo + fromIntegral
+                    (fmix64 (seed `xor` (rawId * 0xD6E8FEB86659FD93))
+                        `mod` spanSize)
+            in Just LocationEncounter
+                { leRolledCount        = rolled
+                , leOccupants          = []
+                , leRosterComplete     = rolled ≡ 0
+                , leDeathOnlyClearance = policy ≡ Just "death_only"
+                , leActivated          = False
+                , leEpisodeActive      = False
+                , leAggressionAnnounced = False
+                , leDisengageAnnounced  = False
+                , leCleared            = rolled ≡ 0
+                , leClearEventEmitted  = rolled ≡ 0
+                }
 
 -- * Queries ----------------------------------------------------------
 
@@ -440,7 +546,14 @@ locationInstanceBounds = map liBounds . instancesToList
 buildLocationInstances
     ∷ Maybe LocationNamer → LocationRegistry → LocationOverlay
     → Either LocationGeometryError LocationInstances
-buildLocationInstances namer registry overlay = do
+buildLocationInstances = buildLocationInstancesWithSeed 0
+
+-- | Production placement counterpart of 'buildLocationInstances', salted by
+--   the page's persisted world seed for one-time encounter rolls (#916).
+buildLocationInstancesWithSeed
+    ∷ Word64 → Maybe LocationNamer → LocationRegistry → LocationOverlay
+    → Either LocationGeometryError LocationInstances
+buildLocationInstancesWithSeed seed namer registry overlay = do
     built ← traverse mk entries
     pure LocationInstances
         { lisNextId        = firstLocationInstanceId + length entries
@@ -451,8 +564,8 @@ buildLocationInstances namer registry overlay = do
     entries = zip [firstLocationInstanceId ..] (overlayToList overlay)
     mk (n, (coord, lid)) = case lookupLocation lid registry of
         Nothing  → Right Nothing
-        Just def → Just ⊚ newLocationInstance namer (LocationInstanceId n)
-                                              coord def
+        Just def → Just ⊚ newLocationInstanceWithSeed seed namer
+                        (LocationInstanceId n) coord def
 
 -- | Add one instance under a freshly allocated id. The engine's own
 --   placement pass uses 'buildLocationInstances'; this is the seam a
@@ -503,6 +616,102 @@ markLocationContentsSpawned
 markLocationContentsSpawned iid =
     adjustLocationInstance iid (\i → i { liContentsSpawned = True })
 
+-- | Install the exact roster allocated by the content spawn. Repeating the
+--   call is an idempotent no-op once complete, so a chunk-load retry cannot
+--   replace the originally assigned membership or homes.
+registerLocationEncounterOccupants
+    ∷ LocationInstanceId → [(UnitId, (Float, Float))] → LocationInstances
+    → LocationInstances
+registerLocationEncounterOccupants iid assigned =
+    adjustLocationInstance iid $ \inst → inst
+        { liEncounter = case liEncounter inst of
+            Just e | not (leRosterComplete e) → Just e
+                { leOccupants =
+                    [ LocationEncounterOccupant uid home False False
+                    | (uid, home) ← take (leRolledCount e) assigned ]
+                , leRosterComplete =
+                    length assigned ≡ leRolledCount e
+                    ∧ HS.size (HS.fromList (map fst assigned))
+                        ≡ leRolledCount e
+                }
+            other → other
+        }
+
+-- | Mutate one persisted occupant row, preserving roster membership even
+--   when the live unit itself is unresolved.
+adjustLocationEncounterOccupant
+    ∷ LocationInstanceId → UnitId
+    → (LocationEncounterOccupant → LocationEncounterOccupant)
+    → LocationInstances → LocationInstances
+adjustLocationEncounterOccupant iid uid f =
+    adjustLocationInstance iid adjust
+  where
+    adjust inst = inst { liEncounter = alter ⊚ liEncounter inst }
+    alter e = e { leOccupants = map (\o → if leoUnitId o ≡ uid then f o else o)
+                                    (leOccupants e) }
+
+-- | Replace the encounter-wide episode state. Feedback flags live here,
+--   rather than on each occupant, because one ruin episode emits one initial
+--   aggression and one all-disengaged notice regardless of how many guards
+--   join it. Entering combat permanently records activation and promotes an
+--   already-visible location to @active@; an unknown location remains hidden
+--   until ordinary sight discovers it.
+setLocationEncounterEpisodeState
+    ∷ LocationInstanceId → Bool → Bool → Bool
+    → LocationInstances → LocationInstances
+setLocationEncounterEpisodeState iid active aggressionAnnounced
+        disengageAnnounced =
+    adjustLocationInstance iid $ \inst → case liEncounter inst of
+        Nothing → inst
+        Just e →
+            let lifecycle =
+                    if active ∧ isDiscoveredLifecycle (liLifecycle inst)
+                    then fromMaybe (liLifecycle inst)
+                           (promoteLifecycle (liLifecycle inst) LifecycleActive)
+                    else liLifecycle inst
+            in inst
+                { liLifecycle = lifecycle
+                , liEncounter = Just e
+                    { leActivated = leActivated e ∨ active
+                    , leEpisodeActive = active
+                    , leAggressionAnnounced = aggressionAnnounced
+                    , leDisengageAnnounced = disengageAnnounced
+                    }
+                }
+
+-- | Record death-only clearance. Returns 'Nothing' when the instance is
+--   absent/already clear; callers use that edge to emit exactly one clear
+--   event. Discovery is promoted only if it has already happened.
+markLocationEncounterCleared
+    ∷ LocationInstanceId → LocationInstances → Maybe LocationInstances
+markLocationEncounterCleared iid lis = do
+    inst ← lookupLocationInstance iid lis
+    e ← liEncounter inst
+    guard (not (leCleared e))
+    let visible = isDiscoveredLifecycle (liLifecycle inst)
+        nextLifecycle = if visible
+            then LifecycleCleared else liLifecycle inst
+    pure $ adjustLocationInstance iid (\i → i
+        { liLifecycle = nextLifecycle
+        , liEncounter = Just e
+            { leCleared = True
+            , leEpisodeActive = False
+            , leClearEventEmitted = visible
+            }
+        }) lis
+
+-- | Consume deferred clear feedback when a positive encounter was defeated
+--   before discovery. The outcome stays private until ordinary sight reveals
+--   the location; zero-roll encounters initialize with this edge consumed.
+markLocationEncounterClearEventEmitted
+    ∷ LocationInstanceId → LocationInstances → Maybe LocationInstances
+markLocationEncounterClearEventEmitted iid lis = do
+    inst ← lookupLocationInstance iid lis
+    e ← liEncounter inst
+    guard (leRolledCount e > 0 ∧ leCleared e ∧ not (leClearEventEmitted e))
+    pure $ adjustLocationInstance iid (\i → i
+        { liEncounter = Just e { leClearEventEmitted = True } }) lis
+
 -- * v1 chunk-set migration -------------------------------------------
 
 -- | Wrap the pre-#911 per-chunk flags for later resolution. Produces an
@@ -535,6 +744,12 @@ pendingLegacyFlags discovered spawned = emptyLocationInstances
 --   later payload carries its instances — and their already-rendered
 --   names — and never reaches this function at all.
 --
+--   The same historical boundary applies to encounters (#916): this
+--   migration necessarily consults today's definitions to recover the old
+--   instance table, but it must not let a newly-authored @count_range@
+--   retroactively populate a pre-encounter world. Reconstructed instances
+--   therefore explicitly discard the constructor's encounter roll.
+--
 --   #1796: the rebuild goes through the checked construction, so a
 --   legacy payload whose SAVED overlay names a chunk coordinate outside
 --   the representable envelope propagates that failure instead of
@@ -561,6 +776,7 @@ resolveLegacyLocationInstances registry overlay lis =
                 else LifecycleUnknown
         , liContentsSpawned =
             HS.member (liChunk inst) (llcContentsSpawned flags)
+        , liEncounter = Nothing
         }
 
 -- * Validation -------------------------------------------------------

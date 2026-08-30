@@ -133,6 +133,12 @@ registerWorldAPI env backendState = do
     (worldMarkLocationContentsSpawnedFn (toWorldSimCapability env))
   registerLuaFunction "markLocationContentsSpawnedById"
     (worldMarkLocationContentsSpawnedByIdFn (toWorldSimCapability env))
+  registerLuaFunction "registerLocationEncounterOccupants"
+    (worldRegisterLocationEncounterOccupantsFn (toWorldSimCapability env))
+  registerLuaFunction "setLocationEncounterOccupantState"
+    (worldSetLocationEncounterOccupantStateFn (toWorldSimCapability env))
+  registerLuaFunction "setLocationEncounterEpisodeState"
+    (worldSetLocationEncounterEpisodeStateFn (toWorldSimCapability env))
   registerLuaFunction "setLocationLifecycle"
     (worldSetLocationLifecycleFn (toWorldSimCapability env))
   registerLuaFunction "hasStampedLocation"
