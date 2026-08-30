@@ -153,6 +153,7 @@ import qualified Test.Headless.UI.CreateWorldControls as CreateWorldControls
 import qualified Test.Headless.UI.Tooltip as UITooltip
 import qualified Test.Headless.UI.InputOwnership as UIInputOwnership
 import qualified Test.Headless.UI.ZoomBandInputGate as UIZoomBandInputGate
+import qualified Test.Headless.UI.HudHoverGate as UIHudHoverGate
 import qualified Test.Headless.UI.UnitInfoRowSelection as UIUnitInfoRowSelection
 import qualified Test.Headless.UI.ElementInputPolicy as UIElementInputPolicy
 import qualified Test.Headless.UI.ControlActivation as UIControlActivation
@@ -644,6 +645,7 @@ main = hspec $ do
     describe "UI.Tooltip" UITooltip.spec
     describe "UI.InputOwnership" UIInputOwnership.spec
     describe "zoom-band entity input gate" UIZoomBandInputGate.spec
+    describe "hud hover gameplay-input gate" UIHudHoverGate.spec
     describe "Unit Info row selection gate" UIUnitInfoRowSelection.spec
     describe "UI.ElementInputPolicy" UIElementInputPolicy.spec
     describe "UI.ControlActivation" UIControlActivation.spec
