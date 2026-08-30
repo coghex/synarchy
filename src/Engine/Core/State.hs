@@ -668,13 +668,13 @@ data WindowState = WindowState
 --
 --   The geometry is a pre-window fallback and nothing more. A boot that
 --   comes up 'Windowed' replaces it the first time it switches away, and
---   a boot that comes up 'BorderlessWindowed' has 'applyWindowCreation'
---   seed it from the decorated window GLFW just made (#1731) — precisely
---   because applying borderless at creation consumes that first-switch
---   caching opportunity. Only a successful FULLSCREEN boot still reaches
---   a 'Windowed' request with this fallback intact, which is the honest
---   answer there: no windowed window was ever on screen (that gap is
---   @PRR-2@, tracked separately).
+--   a boot that comes up 'BorderlessWindowed' (#1731) or 'Fullscreen'
+--   (#1882) has 'applyWindowCreation' seed it from the decorated window
+--   GLFW just made — precisely because applying either mode at creation
+--   consumes that first-switch caching opportunity. That leaves exactly
+--   two ways these values are ever read: the window-less profiles
+--   above, and the window a 'CreatedPlain' boot is already living in
+--   before it first switches away.
 defaultWindowState ∷ WindowState
 defaultWindowState = WindowState
   { wsWindowedPos  = (100, 100)
@@ -721,29 +721,34 @@ appliedModeAtCreation CreatedBorderless = BorderlessWindowed
 appliedModeAtCreation CreatedPlain      = Windowed
 
 -- | Fold ONE window creation into the render-thread-owned 'WindowState':
---   record the mode GLFW actually came up in, and — only for a
---   successful borderless creation — seed the windowed-geometry cache.
+--   record the mode GLFW actually came up in, and — for a creation that
+--   APPLIED a non-windowed mode — seed the windowed-geometry cache.
 --
 --   The supplied position and size must be sampled from the live
 --   DECORATED window, after 'Engine.Graphics.Window.GLFW.createWindow'
---   made it but before any borderless mutation, so they describe a real
---   window on screen rather than the requested dimensions (configuration
---   persists no position at all).
+--   made it but before any mode mutation, so they describe the window
+--   that actually exists rather than the requested dimensions
+--   (configuration persists no position at all).
 --
---   Seeding is confined to 'CreatedBorderless' on purpose. A
---   'CreatedPlain' boot IS the windowed state, so its own first switch
---   away caches the live geometry and a seed here would be inert; a
---   'CreatedFullscreen' boot never had a windowed window on screen, so
---   there is nothing honest to seed and its behaviour is unchanged.
---   Borderless is the case that needs it: applying the mode at creation
---   (#1731) means the first switch to 'Windowed' is an ENTRY, and
---   'applyWindowModeTransition' never caches on the way in.
+--   Both non-plain outcomes need the seed, for one reason: applying the
+--   mode at creation means the first later switch to 'Windowed' is an
+--   ENTRY, and 'applyWindowModeTransition' never caches on the way in —
+--   so nothing else can ever fill the cache, and that switch would
+--   restore 'defaultWindowState'\'s (100,100) \/ 800x600 fallback.
+--   'CreatedBorderless' is #1731; 'CreatedFullscreen' is #1882, whose
+--   decorated window is the same one, sampled at the same moment, by the
+--   same caller.
+--
+--   'CreatedPlain' is excluded on purpose, and that covers a fullscreen
+--   or borderless request that could NOT be applied as well as one never
+--   made: such a boot IS the windowed state, so its own first switch
+--   away caches the live geometry and a seed here would be inert.
 applyWindowCreation ∷ WindowCreationOutcome → (Int, Int) → (Int, Int)
                     → WindowState → WindowState
 applyWindowCreation outcome decoratedPos decoratedSize ws = case outcome of
-    CreatedBorderless → seeded { wsWindowedPos  = decoratedPos
-                               , wsWindowedSize = decoratedSize }
-    _                 → seeded
+    CreatedPlain → seeded
+    _            → seeded { wsWindowedPos  = decoratedPos
+                          , wsWindowedSize = decoratedSize }
   where
     seeded = ws { wsAppliedMode = appliedModeAtCreation outcome }
 

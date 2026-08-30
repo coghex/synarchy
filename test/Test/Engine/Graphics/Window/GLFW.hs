@@ -78,9 +78,9 @@ import qualified Graphics.UI.GLFW as GLFW
 --   Both monitor-sized modes are excluded for the same reason: this
 --   suite runs attached to a human's desktop, and asking for either
 --   would resize and undecorate a real window mid-run. The pure
---   creation-outcome policy — including #1731's borderless branch and
---   its windowed-cache seed — is covered GPU-free by
---   'Test.Headless.Graphics.WindowMode'.
+--   creation-outcome policy — including the windowed-cache seed both
+--   non-plain branches take, #1731's borderless and #1882's fullscreen
+--   — is covered GPU-free by 'Test.Headless.Graphics.WindowMode'.
 createWindowConfig ∷ WindowConfig
 createWindowConfig = WindowConfig
   { wcWidth      = 641

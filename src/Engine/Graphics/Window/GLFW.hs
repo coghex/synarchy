@@ -87,9 +87,10 @@ createWindow config = do
         pure $ Window win
   let Window win = window
   -- The live DECORATED window, sampled before any mode mutation moves or
-  -- resizes it. This is what seeds the windowed-geometry cache when the
-  -- borderless branch below succeeds (#1731): applying borderless here
-  -- means the first switch to 'Windowed' is an ENTRY, and
+  -- resizes it. This is what seeds the windowed-geometry cache whenever
+  -- a mode branch below succeeds — borderless (#1731) or fullscreen
+  -- (#1882): applying either mode here means the first switch to
+  -- 'Windowed' is an ENTRY, and
   -- 'Engine.Core.State.applyWindowModeTransition' deliberately never
   -- caches on the way in — so without this seed that switch would
   -- restore 'defaultWindowState''s (100,100) / 800x600 fallback. The
