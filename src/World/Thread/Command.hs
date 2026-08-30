@@ -83,6 +83,9 @@ import World.Thread.Command.Edit (handleWorldDeleteTileCommand
                                  , handleWorldPlantRowCropAtCommand)
 import World.Thread.Command.Location
     (handleWorldMarkLocationContentsSpawnedCommand
+    ,handleWorldRegisterLocationEncounterOccupantsCommand
+    ,handleWorldSetLocationEncounterOccupantStateCommand
+    ,handleWorldSetLocationEncounterEpisodeStateCommand
     ,handleWorldSetLocationLifecycleCommand
     ,handleWorldMarkLocationStampedCommand)
 
@@ -236,6 +239,18 @@ handleWorldCommand env _ (WorldApplyFluids batch)
   = handleApplyFluidsCommand env batch
 handleWorldCommand env _ (WorldMarkLocationContentsSpawned pageId iid)
   = handleWorldMarkLocationContentsSpawnedCommand (toWorldSimCapability env) pageId iid
+handleWorldCommand env _ (WorldRegisterLocationEncounterOccupants pageId iid occupants)
+  = handleWorldRegisterLocationEncounterOccupantsCommand
+      (toWorldSimCapability env) pageId iid occupants
+handleWorldCommand env _ (WorldSetLocationEncounterOccupantState pageId iid uid
+        engaged returning)
+  = handleWorldSetLocationEncounterOccupantStateCommand
+      (toWorldSimCapability env) pageId iid uid engaged returning
+handleWorldCommand env _ (WorldSetLocationEncounterEpisodeState pageId iid
+        active aggressionAnnounced disengageAnnounced)
+  = handleWorldSetLocationEncounterEpisodeStateCommand
+      (toWorldSimCapability env) pageId iid active aggressionAnnounced
+      disengageAnnounced
 handleWorldCommand env _ (WorldSetLocationLifecycle pageId iid lifecycle)
   = handleWorldSetLocationLifecycleCommand (toWorldSimCapability env) pageId iid lifecycle
 handleWorldCommand env _ (WorldMarkLocationStamped pageId gx gy)
@@ -305,4 +320,3 @@ applyOneWriteback wtd fw =
                          , lcSideDeco          = fwSideDeco fw
                          }
             in wtd { wtdChunks = HM.insert (fwCoord fw) lc' (wtdChunks wtd) }
-

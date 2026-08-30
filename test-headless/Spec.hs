@@ -153,6 +153,7 @@ import qualified Test.Headless.UI.CreateWorldControls as CreateWorldControls
 import qualified Test.Headless.UI.Tooltip as UITooltip
 import qualified Test.Headless.UI.InputOwnership as UIInputOwnership
 import qualified Test.Headless.UI.ZoomBandInputGate as UIZoomBandInputGate
+import qualified Test.Headless.UI.HudHoverGate as UIHudHoverGate
 import qualified Test.Headless.UI.UnitInfoRowSelection as UIUnitInfoRowSelection
 import qualified Test.Headless.UI.ElementInputPolicy as UIElementInputPolicy
 import qualified Test.Headless.UI.ControlActivation as UIControlActivation
@@ -199,6 +200,7 @@ import qualified Test.Headless.World.Render.StructureSeam as StructureSeam
 import qualified Test.Headless.World.Render.PickSeam as PickSeam
 import qualified Test.Headless.World.Render.QuadSnapshot as QuadSnapshot
 import qualified Test.Headless.World.Render.SolarAttribution as SolarAttribution
+import qualified Test.Headless.World.Render.DesignationFaceMap as DesignationFaceMap
 import qualified Test.Headless.World.DesignationSeam as DesignationSeam
 import qualified Test.Headless.World.StructureStage as StructureStage
 import qualified Test.Headless.World.StructurePaletteResidue as StructurePaletteResidue
@@ -219,6 +221,7 @@ import qualified Test.Headless.Core.Queue as CoreQueue
 import qualified Test.Headless.Core.LogCategoryEnv as LogCategoryEnv
 import qualified Test.Headless.Core.LogMonad as LogMonad
 import qualified Test.Headless.Core.LogParity as LogParity
+import qualified Test.Headless.Core.LogThresholdEnv as LogThresholdEnv
 import qualified Test.Headless.Core.LoopStartup as LoopStartup
 import qualified Test.Headless.Core.ShutdownAtlasRelease as ShutdownAtlasRelease
 import qualified Test.Headless.Core.WorkerLifecycle as WorkerLifecycle
@@ -235,6 +238,8 @@ import qualified Test.Headless.Building.PageBinding as BuildingPageBinding
 import qualified Test.Headless.Building.PortalSpawnBinding as BuildingPortalSpawnBinding
 import qualified Test.Headless.Building.Placement as BuildingPlacement
 import qualified Test.Headless.Building.RemoteWarning as BuildingRemoteWarning
+import qualified Test.Headless.Building.WorkbenchConstruction
+    as WorkbenchConstruction
 import qualified Test.Headless.Save.AutosaveGuards as AutosaveGuards
 import qualified Test.Headless.Save.AutosaveListing as AutosaveListing
 import qualified Test.Headless.Save.MenuListingOrder as MenuListingOrder
@@ -259,6 +264,8 @@ import qualified Test.Headless.Lua.TutorialProgress as LuaTutorialProgress
 import qualified Test.Headless.Lua.TutorialEvaluation as LuaTutorialEvaluation
 import qualified Test.Headless.Lua.UnitAiLocations as LuaUnitAiLocations
 import qualified Test.Headless.Lua.UnitAiHold as LuaUnitAiHold
+import qualified Test.Headless.Lua.UnitAiCombatMove as LuaUnitAiCombatMove
+import qualified Test.Headless.Lua.UnitAiEncounter as LuaUnitAiEncounter
 import qualified Test.Headless.Lua.UnitAiStall as LuaUnitAiStall
 import qualified Test.Headless.Lua.UnitAiHarvest as LuaUnitAiHarvest
 import qualified Test.Headless.Lua.UnitAiLogisticsTargets as LuaUnitAiLogisticsTargets
@@ -503,6 +510,7 @@ main = hspec $ do
     describe "Preview.UnitAnimation" PreviewUnitAnimation.spec
     describe "Preview.Building" PreviewBuilding.spec
     describe "Preview.Zoom" PreviewZoom.spec
+    describe "Workbench construction animation" WorkbenchConstruction.spec
     describe "Bindless texture filter rebinding" BindlessRebind.spec
     describe "Bindless texture release" BindlessRelease.spec
     describe "bindless registration failure" $ do
@@ -567,6 +575,8 @@ main = hspec $ do
     LuaTutorialEvaluation.spec
     LuaUnitAiLocations.spec
     LuaUnitAiHold.spec
+    LuaUnitAiCombatMove.spec
+    LuaUnitAiEncounter.spec
     LuaUnitAiStall.spec
     LuaUnitAiHarvest.spec
     LuaUnitAiLogisticsTargets.spec
@@ -639,6 +649,7 @@ main = hspec $ do
     describe "UI.Tooltip" UITooltip.spec
     describe "UI.InputOwnership" UIInputOwnership.spec
     describe "zoom-band entity input gate" UIZoomBandInputGate.spec
+    describe "hud hover gameplay-input gate" UIHudHoverGate.spec
     describe "Unit Info row selection gate" UIUnitInfoRowSelection.spec
     describe "UI.ElementInputPolicy" UIElementInputPolicy.spec
     describe "UI.ControlActivation" UIControlActivation.spec
@@ -699,6 +710,7 @@ main = hspec $ do
     -- #1869: same shape as the line above and for the same reason —
     -- its own headless engine, two synthetic pages, no worker threads.
     SolarAttribution.spec
+    describe "World.Render.DesignationFaceMap" DesignationFaceMap.spec
     describe "World.DesignationSeam" DesignationSeam.spec
     describe "World.DesignationSeam (engine)" DesignationSeam.engineSpec
 
@@ -735,6 +747,7 @@ main = hspec $ do
     LogCategoryEnv.spec
     LogMonad.spec
     LogParity.spec
+    LogThresholdEnv.spec
     LoopStartup.spec
     ShutdownAtlasRelease.spec
     WorkerLifecycle.spec

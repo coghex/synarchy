@@ -752,9 +752,9 @@ spec = do
             fmap uyaFps  (Map.lookup "idle" meta) `shouldBe` Just 8
             fmap uyaLoop (Map.lookup "idle" meta) `shouldBe` Just True
 
-        it "extracts the shipped nomad metadata from its asset_units: block" $ do
+        it "extracts the shipped nomad metadata from its units: block" $ do
             meta ← loadUnitAnimMeta "nomad_primitive"
-            Map.size meta `shouldBe` 13
+            Map.size meta `shouldBe` 15
             fmap uyaLoop (Map.lookup "injured_combat_idle_unarmed" meta)
                 `shouldBe` Just True
 

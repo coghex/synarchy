@@ -9,6 +9,7 @@ module World.Save.Serialize
     , savesDirectory
     , saveExtension
     , sanitizeSaveName
+    , loadPhaseFor
     ) where
 
 import UPrelude
@@ -28,7 +29,9 @@ import World.Save.Envelope
     ( encodeSessionSnapshot, decodeSessionEnvelope
     , decodeSaveEnvelopeMetadata, decodeSaveEnvelopeMetadataClassified
     , GenerationFailure(..), renderGenerationFailure
+    , LoadProgress(..)
     , LuaComponentSpec(..) )
+import World.Save.Component.Types (ComponentPhase(..))
 import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotToSaveData)
 import qualified World.Save.Storage as Storage
 import Engine.Core.Log (LoggerState, LogCategory(..), logWarn)
@@ -138,10 +141,10 @@ writeSaveFiles rawName meta encoded luaKnownNames luaRequiredNames =
 --   envelope validation, component decode, migration, and snapshot
 --   assembly as one atomic, unobservable-from-outside call (issues
 --   #759-#762) — there is no LIVE checkpoint to report progress FROM
---   mid-flight — but a failure's rendered text already carries a real,
---   structured phase tag ('World.Save.Component.Types.ComponentPhase',
---   issue #760 requirement 6) naming which internal step failed; see
---   'phaseFor' below for how that's read back out after the fact.
+--   mid-flight — but a failure now CARRIES how far it got, as the
+--   structured 'LoadProgress' 'Storage.lfProgress' transports out of the
+--   decode layers (issue #1919); 'loadPhaseFor' below is the one place
+--   that turns it into a 'LoadPhase'.
 loadWorld
     ∷ LoggerState → Text → HS.HashSet Text → HS.HashSet Text
     → IO (Either (LoadPhase, Text)
@@ -170,45 +173,6 @@ loadWorld logger rawName luaKnownNames luaRequiredNames =
                             Left reason → return (Left (LoadPaused, reason))
                             Right ()    → decodeLegacyFile legacyPath
   where
-    -- A structurally coherent but incompatible candidate (schema
-    -- version, unknown/missing required component, or a
-    -- content/assembly-validation failure) carries this exact,
-    -- deliberately worded marker — see the private @incompatibleMessage@
-    -- helper in 'World.Save.Storage.selectLoadGenerationUnsafe' —
-    -- distinct from every "never got a valid candidate at all" failure
-    -- (missing/truncated/checksum-corrupt/symlinked), which never
-    -- mentions it. A future change to that wording only degrades this
-    -- classification back to the conservative 'LoadPaused' default, it
-    -- can't misreport a real failure as further along than it was.
-    reachedEnvelope ∷ Text → Bool
-    reachedEnvelope = T.isInfixOf "incompatible with this build"
-
-    -- Rather than collapsing every "coherent but
-    -- incompatible" failure into one bucket, this reads the SAME
-    -- per-component phase tag 'World.Save.Component.Types.ComponentPhase'
-    -- already carries for its own diagnostic purpose (issue #760
-    -- requirement 6: "an error names the failing phase, not just that
-    -- something broke") — 'renderComponentError' already renders it
-    -- inline (e.g. "[core-session v3 DecodePhase] ..."), so it survives
-    -- into 'Storage.selectLoadGeneration''s error text unchanged. This
-    -- reads that existing, already-structured signal rather than
-    -- inventing a new one, and needs no signature change to any of
-    -- Component/Envelope/Storage's well-tested decode machinery.
-    -- ValidatePhase and AssemblePhase both bottom out at the same
-    -- reported checkpoint ('LoadComponentsMigrated'): there is no
-    -- separate LoadPhase constructor between "every component migrated"
-    -- and "the whole session assembled", and a per-component ValidatePhase
-    -- failure or a cross-component/whole-session AssemblePhase failure
-    -- both mean every component individually got at least that far.
-    phaseFor ∷ Text → LoadPhase
-    phaseFor err
-        | "AssemblePhase" `T.isInfixOf` err = LoadComponentsMigrated
-        | "ValidatePhase" `T.isInfixOf` err = LoadComponentsMigrated
-        | "MigratePhase"  `T.isInfixOf` err = LoadComponentsDecoded
-        | "DecodePhase"   `T.isInfixOf` err = LoadEnvelopeValidated
-        | reachedEnvelope err                = LoadEnvelopeValidated
-        | otherwise                          = LoadPaused
-
     -- Validate sdWorlds cardinality (and every other load-bearing check)
     -- at DECODE time so the load API fails cleanly (Left → engine.loadSave
     -- returns false) before it pauses the engine, restores Lua state, or
@@ -219,7 +183,8 @@ loadWorld logger rawName luaKnownNames luaRequiredNames =
         selection ← Storage.selectLoadGeneration
             luaKnownNames luaRequiredNames dirPath name
         case selection of
-            Left err  → return (Left (phaseFor err, err))
+            Left failure → return (Left ( loadPhaseFor (Storage.lfProgress failure)
+                                        , Storage.lfMessage failure ))
             Right sel → do
                 -- Requirement 7: report whether the authoritative or the
                 -- previous generation was selected, and why. A recovered
@@ -240,12 +205,12 @@ loadWorld logger rawName luaKnownNames luaRequiredNames =
     -- transitional 'SaveData' shape the world-thread load path still
     -- consumes — using the AUTHORITATIVE metadata (name/timestamp) the
     -- metadata component carries, so a within-session re-load keys its
-    -- provenance under the same save name as before. A legacy file's
-    -- error text never carries the "incompatible with this build"
-    -- marker (it goes through 'decodeSessionEnvelope' directly, not
-    -- 'Storage.incompatibleMessage'), so this always reports the
-    -- conservative 'LoadPaused' default — genuinely all that's known
-    -- without deeper instrumentation of this rare, deprecated path.
+    -- provenance under the same save name as before. A legacy flat file
+    -- goes through the UNclassified 'decodeSessionEnvelope', which
+    -- produces no 'LoadProgress' at all, so this reports the
+    -- conservative 'LoadPaused' — genuinely all that's known without
+    -- deeper instrumentation of this rare, deprecated path, and exactly
+    -- what it reported before issue #1919.
     decodeLegacyFile path = do
         bytes ← BS.readFile path
         let result = do
@@ -259,6 +224,45 @@ loadWorld logger rawName luaKnownNames luaRequiredNames =
                           | c ← luaComponents ]
                      , isMigrated)
         return $ either (\err → Left (LoadPaused, err)) Right result
+
+-- | Turn the structured 'LoadProgress' a failed load carries into the
+--   'LoadPhase' @engine.getLoadStatus()@ reports as @failedAtPhase@
+--   (issue #1919). This replaced a substring match over the failure's
+--   RENDERED text, so a reword anywhere in the save stack can no longer
+--   change the reported phase, and a real failure can no longer fall
+--   through to 'LoadPaused' merely because no phase word happened to
+--   appear.
+--
+--   The mapping is exactly the one the parser implemented, preserved
+--   deliberately:
+--
+--     * 'ReachedNothing' — no coherent candidate was ever obtained
+--       (missing / unreadable / symlink-rejected / storage-corrupt, and
+--       the legacy flat-file path, which carries no progress) —
+--       'LoadPaused'.
+--     * 'ReachedEnvelope' — 'LoadEnvelopeValidated'.
+--     * 'ReachedComponents' — the FURTHEST point every component
+--       reached, by the parser's own precedence. 'AssemblePhase' and
+--       'ValidatePhase' both bottom out at 'LoadComponentsMigrated':
+--       there is no 'LoadPhase' constructor between "every component
+--       migrated" and "the whole session assembled", and a per-component
+--       validate failure or a cross-component assemble failure both mean
+--       every component individually got at least that far. A capped
+--       failure list mixing phases resolves to the furthest of them, as
+--       the substring match did when several phase words appeared in one
+--       message.
+loadPhaseFor ∷ LoadProgress → LoadPhase
+loadPhaseFor ReachedNothing  = LoadPaused
+loadPhaseFor ReachedEnvelope = LoadEnvelopeValidated
+loadPhaseFor (ReachedComponents phases)
+    | any migrated phases        = LoadComponentsMigrated
+    | MigratePhase `elem` phases = LoadComponentsDecoded
+    -- 'DecodePhase' — and the structurally unreachable empty list, which
+    -- still means the envelope itself was coherent — report the same
+    -- checkpoint the envelope-level failures do.
+    | otherwise                  = LoadEnvelopeValidated
+  where
+    migrated p = p ≡ AssemblePhase ∨ p ≡ ValidatePhase
 
 -- | One entry in 'listSaves''s result. 'slRecovered' is 'True' when the
 --   listed metadata came from a slot's PREVIOUS generation because its
@@ -364,7 +368,7 @@ listSaves logger luaKnownNames = do
                                 -- user has a chance of noticing.
                                 case decodeSaveEnvelopeMetadataClassified luaKnownNames bytes of
                                     Right meta → return [mkListing name meta False]
-                                    Left (GenerationIncompatible err) → do
+                                    Left (GenerationIncompatible _ err) → do
                                         logWarn logger CatWorld $
                                             "listSaves: skipping " <> name <> ": " <> err
                                         return []

@@ -1,6 +1,9 @@
 {-# LANGUAGE Strict #-}
 module World.Thread.Command.Location
     ( handleWorldMarkLocationContentsSpawnedCommand
+    , handleWorldRegisterLocationEncounterOccupantsCommand
+    , handleWorldSetLocationEncounterOccupantStateCommand
+    , handleWorldSetLocationEncounterEpisodeStateCommand
     , handleWorldSetLocationLifecycleCommand
     , handleWorldMarkLocationStampedCommand
     ) where
@@ -11,8 +14,11 @@ import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..))
 import Location.Instance
-    ( LocationInstanceId, LocationLifecycle
-    , markLocationContentsSpawned, setLocationLifecycle )
+    ( LocationEncounterOccupant(..), LocationInstanceId, LocationLifecycle
+    , adjustLocationEncounterOccupant
+    , markLocationContentsSpawned, registerLocationEncounterOccupants
+    , setLocationEncounterEpisodeState, setLocationLifecycle )
+import Unit.Types (UnitId)
 import World.Types
 import World.Generate.Coordinates (globalToChunk)
 
@@ -39,6 +45,37 @@ handleWorldMarkLocationContentsSpawnedCommand wsc pageId iid =
     withPageParams wsc pageId $ \params → params
         { wgpLocationInstances =
             markLocationContentsSpawned iid (wgpLocationInstances params) }
+
+handleWorldRegisterLocationEncounterOccupantsCommand
+    ∷ WorldSimCapability → WorldPageId → LocationInstanceId
+    → [(UnitId, (Float, Float))] → IO ()
+handleWorldRegisterLocationEncounterOccupantsCommand wsc pageId iid occupants =
+    withPageParams wsc pageId $ \params → params
+        { wgpLocationInstances = registerLocationEncounterOccupants iid occupants
+            (wgpLocationInstances params) }
+
+handleWorldSetLocationEncounterOccupantStateCommand
+    ∷ WorldSimCapability → WorldPageId → LocationInstanceId → UnitId
+    → Bool → Bool → IO ()
+handleWorldSetLocationEncounterOccupantStateCommand wsc pageId iid uid
+        engaged returning =
+    withPageParams wsc pageId $ \params → params
+        { wgpLocationInstances = adjustLocationEncounterOccupant iid uid
+            (\o → o { leoEngaged = engaged
+                    , leoReturning = returning
+                    }) (wgpLocationInstances params)
+        }
+
+handleWorldSetLocationEncounterEpisodeStateCommand
+    ∷ WorldSimCapability → WorldPageId → LocationInstanceId
+    → Bool → Bool → Bool → IO ()
+handleWorldSetLocationEncounterEpisodeStateCommand wsc pageId iid active
+        aggressionAnnounced disengageAnnounced =
+    withPageParams wsc pageId $ \params → params
+        { wgpLocationInstances = setLocationEncounterEpisodeState iid active
+            aggressionAnnounced disengageAnnounced
+            (wgpLocationInstances params)
+        }
 
 -- | Lifecycle promotion (#911) — see
 --   'World.Command.Types.WorldSetLocationLifecycle'. An unknown instance

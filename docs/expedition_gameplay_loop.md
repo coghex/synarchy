@@ -53,7 +53,7 @@ concrete precondition
   every location is marked on the zoom map by a shared question-mark symbol from
   world generation, resolves to its type icon only once a player-owned unit
   actually sees a tile the location occupies, and tints to a cleared state once
-  every assigned hostile is dead or incapacitated **and** every guaranteed
+  every assigned `ruin_small` hostile is exactly dead **and** every guaranteed
   significant item has been taken from it; and the tutorial plus end-to-end gate
   prove the completed loop across a fresh save/load process without regressing
   survival and retrieval.
@@ -110,9 +110,10 @@ concrete precondition
   first-session tutorial foundation, and the integrated man-versus-nature gate
   shipped in closed issues #919–#923. `tools/expedition_loop_probe.py` is the
   current end-to-end authority.
-- The current gate deliberately substitutes **survive the journey** for
-  confrontation and **bank ordinary colony stock** for advancement. Open issue
-  #916 owns the hostile-encounter slice and remains blocked on unit art.
+- The current integrated gate deliberately selects #916's zero-occupant outcome
+  so its survival comparison is not confounded by combat, while the shipped
+  runtime now owns the occupied branch's durable nomad encounters. It still
+  substitutes **bank ordinary colony stock** for advancement.
 - **#917 carries EXP-2, rewritten 2026-08-11.** It was originally filed around a
   recovered radio core that reveals distant locations; D-17 retires that idea
   outright. Per D-21 the issue kept its number and was rewritten in place to the
@@ -493,8 +494,9 @@ currently visible.
   runs the whole loop as one session, described under "9. Gate the full slice"
   below.
 
-**Steps 4 and 5 remain future work.** #916 (one hostile occupant and the first
-combat encounter) is blocked on unit art. #917 keeps step 5's slot but its
+**Step 4 is implemented by #916.** `ruin_small` now owns a uniform persistent
+0–3 nomad encounter, death-only clearance, and the first autonomous hostile
+combat loop. #917 keeps step 5's slot but its
 premise changed on 2026-08-11: it is no longer "a reward that changes what the
 colony can do" but "guaranteed significant contents that must be taken before a
 location counts as cleared" (D-17, D-18). Its issue body was rewritten to match
@@ -510,9 +512,10 @@ Each authored encounter owns a fixed, durable membership set established when
 the location spawns its hostile occupants. A hostile leaving the location's
 bounds remains a member; merely fleeing or being driven away cannot clear the
 site. The encounter promotes to `active` when ordinary hostility begins and to
-`cleared` only when every assigned hostile is dead or incapacitated. The
-promotion is one-way and exactly once, so returning later cannot recreate or
-re-clear the encounter.
+`cleared` only when its authored clearance policy is satisfied. `ruin_small`
+uses `death_only`, so collapsed, crawling, missing, or disengaged nomads still
+block it. The promotion is one-way and exactly once, so returning later cannot
+recreate or re-clear the encounter.
 
 Encounter membership and its terminal result must survive save/load. Adding
 that durable state follows the component-version and frozen-DTO migration rules
@@ -566,7 +569,8 @@ exactly one player-facing event, is page-scoped, and persists.
 
 A location is **cleared** when both halves hold:
 
-1. every hostile assigned to it is dead or incapacitated (D-9); and
+1. its authored encounter-completion policy is satisfied (`ruin_small` uses
+   death-only, so every assigned nomad must be exactly dead; D-9); and
 2. every **guaranteed significant item** it spawned has been taken — picked up
    at least once by any unit of any faction, latched per item and never
    un-latched (D-20).
@@ -650,11 +654,14 @@ The tutorial system may gain investigate, recover, return, or advancement rows
 only after the runtime can answer them from durable state. UI rows must not be
 used to invent progression state that gameplay and persistence do not own.
 
-### D-9. Clear an encounter only when every assigned hostile is dead or incapacitated
+### D-9. Make encounter completion an explicit per-location policy
 
 Being driven away, leaving the location bounds, or temporarily disengaging does
 not complete the encounter. The fixed membership set makes completion
 observable and prevents a retreat from silently converting into a cleared site.
+For the first `ruin_small` encounter, #916 deliberately chooses death-only:
+collapsed and crawling nomads are recoverable and remain uncleared. Future
+encounters may author a different terminal policy without changing that rule.
 
 ### D-10. ~~Use location intelligence to reveal nearby hidden locations in stages~~
 
@@ -775,9 +782,10 @@ itself and the site it completes, not a map-wide power the item confers.
 
 ### D-18. Clear a location on hostiles down AND significant items taken
 
-A location is cleared when every assigned hostile is dead or incapacitated
+A location is cleared when its authored hostile-completion policy is satisfied
 (D-9) **and** every guaranteed significant item it spawned has been taken from
-it. A location authored with only one of the two conditions clears on that one.
+it. A location authored with only one of the two conditions clears on that one;
+`ruin_small` currently has only its death-only hostile condition.
 
 *Consequence:* clearing becomes a genuine objective rather than a combat
 outcome, and a player who wins the fight but leaves the prize has not finished.
@@ -872,8 +880,9 @@ available.
 
 ### Q-2. What exact outcome completes the first encounter?
 
-Resolved by D-9: every hostile assigned to the encounter must be dead or
-incapacitated. Driving the occupants away does not clear the location.
+Resolved by D-9: the completion rule is authored per encounter. `ruin_small`
+uses death-only, so every assigned nomad must be exactly dead; collapsed,
+crawling, missing, or driven-away occupants do not clear it.
 
 ### Q-3. Which colony capability does the guaranteed reward change?
 
@@ -1052,8 +1061,8 @@ type icon its reveal resolves to.
 - **Relevant decisions:** D-1, D-2, D-5, D-9
 - **Acceptance signals:** The occupant spawns exactly once; ordinary hostility
   starts the encounter; retreat and re-entry are coherent; the location does
-  not clear while any assigned hostile remains capable; all assigned hostiles
-  dead or incapacitated advances it exactly once; and membership plus outcome
+  not clear while any assigned hostile remains alive; all assigned hostiles
+  exactly dead advances it exactly once; and membership plus outcome
   survive save/load.
 - **Out of scope:** Diplomacy, formations, reputation, respawning encounters,
   and procedural dungeons.
@@ -1317,22 +1326,25 @@ actually ships:
 spawn colony from a real portal roster
 → secure water, provision the party off the technomule
 → travel and discover the location by sight
-→ SURVIVE the journey (the encounter is deferred — #916)
+→ SURVIVE the journey through a zero-occupant ruin (the #916 encounter roll
+  is real, but this control path deliberately excludes combat)
 → extract the ruin's own loot-table output (no guaranteed reward — #917)
 → return and deposit into colony storage
 → save / reload in a fresh process
 → location, per-unit knowledge, objective and inventory state remain correct
 ```
 
-Two substitutions from the sketch above, both forced by the deferrals and
-neither hidden: "defeat or survive its encounter" is **survive the journey**,
-and "collect progression item → complete colony project" is **extract real loot
-→ bank it as usable colony stock**. What replaces the encounter as the arc's
-risk is survival, so the scenario runs a second, **unprepared control party**
-over the same route under the same orders from the same starting deficits,
-differing only in what it carried out of the colony. The control must end
-measurably worse off in named physiological metrics — otherwise the gate would
-be proving that walking works, not that preparation matters.
+The scenario selects a `ruin_small` whose persistent #916 encounter roll is
+zero. That keeps the survival control isolated from combat timing while still
+proving the shipped zero-occupant semantics: discovery reaches `cleared` from
+the start and remains so across reload without emitting a fake clearance. The
+remaining substitution is still explicit: "collect progression item → complete
+colony project" is **extract real loot → bank it as usable colony stock**. The
+scenario runs a second, **unprepared control party** over the same route under
+the same orders from the same starting deficits, differing only in what it
+carried out of the colony. The control must end measurably worse off in named
+physiological metrics — otherwise the gate would be proving that walking works,
+not that preparation matters.
 
 The probe reports eight independent stages (`setup`, `prepare`, `travel`,
 `extract`, `return`, `save`, `load`, `control`) so a failure names which part
@@ -1342,12 +1354,12 @@ by classification in `tools/ci_probes.py`: a real worldSize-64 generation plus
 two travellers walking ~30 tiles each way is too slow for a blocking per-PR
 gate, and it leans on AI arbitration timing.
 
-When #916 and #917 land, this scenario is where their verbs join the loop: the
-encounter belongs between travel and extract, and the guaranteed significant
-item turns the existing deposit assertion into a location that reaches
-`cleared`. (As of 2026-08-11 this replaces the earlier wording, "the progression
-project turns the existing deposit assertion into a capability change" — see
-D-17.)
+The hostile branch of #916 belongs between travel and extract, but remains out
+of this survival-control probe so combat cannot confound its food comparison.
+When #917 lands, its guaranteed significant item can strengthen the existing
+deposit assertion. (As of 2026-08-11 this replaces the earlier wording, "the
+progression project turns the existing deposit assertion into a capability
+change" — see D-17.)
 
 ## Deferred systems
 

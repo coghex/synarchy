@@ -41,7 +41,8 @@ import Engine.Core.State (EngineEnv, activeWorldStateFrom)
 import World.Types
 import Location.Discovery (AwarenessHit(..), UnitSight(..), findAwareness)
 import Location.Instance
-    ( LocationInstance(..), LocationInstanceId(..), LocationInstances
+    ( LocationEncounter(..), LocationEncounterOccupant(..)
+    , LocationInstance(..), LocationInstanceId(..), LocationInstances
     , instancesToList, instancesInChunk, lookupLocationInstance
     , isDiscoveredLifecycle, lifecycleName, emptyLocationInstances )
 import Location.Bounds (AbsBounds(..))
@@ -252,6 +253,39 @@ pushInstanceTable inst = do
     Lua.setfield (-2) "discovered"
     Lua.pushboolean (liContentsSpawned inst)
     Lua.setfield (-2) "contents_spawned"
+    forM_ (liEncounter inst) $ \encounter → do
+        Lua.newtable
+        pushIntField "rolled_count" (leRolledCount encounter)
+        Lua.pushboolean (leRosterComplete encounter)
+        Lua.setfield (-2) "roster_complete"
+        Lua.pushboolean (leDeathOnlyClearance encounter)
+        Lua.setfield (-2) "death_only_clearance"
+        Lua.pushboolean (leActivated encounter)
+        Lua.setfield (-2) "activated"
+        Lua.pushboolean (leEpisodeActive encounter)
+        Lua.setfield (-2) "episode_active"
+        Lua.pushboolean (leAggressionAnnounced encounter)
+        Lua.setfield (-2) "aggression_announced"
+        Lua.pushboolean (leDisengageAnnounced encounter)
+        Lua.setfield (-2) "disengage_announced"
+        Lua.pushboolean (leCleared encounter)
+        Lua.setfield (-2) "cleared"
+        Lua.newtable
+        forM_ (zip [1 ..] (leOccupants encounter)) $ \(index, occupant) → do
+            Lua.newtable
+            pushIntField "uid" (unUnitId (leoUnitId occupant))
+            let (homeX, homeY) = leoHome occupant
+            Lua.pushnumber (realToFrac homeX)
+            Lua.setfield (-2) "home_x"
+            Lua.pushnumber (realToFrac homeY)
+            Lua.setfield (-2) "home_y"
+            Lua.pushboolean (leoEngaged occupant)
+            Lua.setfield (-2) "engaged"
+            Lua.pushboolean (leoReturning occupant)
+            Lua.setfield (-2) "returning"
+            Lua.rawseti (-2) index
+        Lua.setfield (-2) "occupants"
+        Lua.setfield (-2) "encounter"
     Lua.newtable
     pushIntField "min_x" (abMinX ab)
     pushIntField "min_y" (abMinY ab)
