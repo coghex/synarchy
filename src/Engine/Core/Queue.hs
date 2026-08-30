@@ -43,12 +43,13 @@ import GHC.Clock (getMonotonicTimeNSec)
 -- | One queued element together with the monotonic-clock instant at
 --   which 'writeQueue' accepted it.
 --
---   The payload stays LAZY despite this module's @Strict@ pragma. A
---   'TQueue' stores whatever thunk its producer wrote, and forcing that
---   thunk at enqueue time would move the evaluation — and any exception
---   it raises — from the consumer thread onto the producer's. The
---   telemetry is supposed to observe the queues, not change where their
---   messages are forced.
+--   The payload field is lazy despite this module's @Strict@ pragma so
+--   that the wrapper introduces no forcing of its own. That deliberately
+--   changes nothing about WHERE a message is forced: @Strict@ already
+--   makes 'writeQueue''s own argument binder strict, exactly as it did
+--   before this wrapper existed, so a message still reaches WHNF on its
+--   producer's thread for precisely the reason it always did. A strict
+--   field would only add a second forcing point behind the first.
 data Timestamped α = Timestamped
     { tsEnqueuedAt ∷ Word64
       -- ^ 'getMonotonicTimeNSec', sampled immediately before the write.
@@ -167,14 +168,27 @@ readQueueTimeout micros q = do
 
 -- | Atomically remove and return the whole queue. Counts every removed
 --   element as dequeued, which is what keeps @depth == enqueued -
---   dequeued@ true for the five queues
---   "World.Load.Publish" flushes when it replaces a session. An empty
---   flush commits no counter write.
+--   dequeued@ true for the five queues "World.Load.Publish" flushes
+--   when it replaces a session. An empty flush commits no counter
+--   write.
+--
+--   The number removed is taken from 'qcDepth' rather than by measuring
+--   the drained list, and that is a correctness AND a cost decision.
+--   Correctness: every enqueue and every dequeue moves 'qcDepth' inside
+--   the same transaction as the queue mutation itself, so within THIS
+--   transaction the counter is exactly the number of elements
+--   'flushTQueue' just captured. Cost: 'flushTQueue' hands back an
+--   unforced list, so traversing it here would make the transaction
+--   O(backlog) — and a long transaction that concurrent writers keep
+--   invalidating could starve precisely under the producer overload
+--   this telemetry exists to diagnose. Nothing below forces the list.
 flushQueue ∷ Queue α → IO [α]
 flushQueue q = STM.atomically $ do
-    items ← flushTQueue (queueTQueue q)
-    let n = length items
-    when (n > 0) $ STM.modifyTVar' (queueCounters q) (countDequeue n)
+    items    ← flushTQueue (queueTQueue q)
+    counters ← STM.readTVar (queueCounters q)
+    when (qcDepth counters > 0) $
+        STM.writeTVar (queueCounters q)
+                      (countDequeue (qcDepth counters) counters)
     return (map tsValue items)
 
 -- | Everything one queue reports about itself, as of a single atomic
