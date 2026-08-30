@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/coghex/synarchy/blob/master/tools/probe_census_schema.json",
   "title": "The probe census and the flake-harness result it ingests",
-  "$comment": "The five ROOT definitions are `census_v1`, `census_v2`, `census_v3`, `census_v4` and `flake_result_v1`; tools/probe_census.py maps each declared schema string to one of them. They are deliberately not named after the schema strings themselves, because a JSON Pointer treats `/` as a separator and `#/$defs/probe-census/v2` would name nothing.",
+  "$comment": "The six ROOT definitions are `census_v1`, `census_v2`, `census_v3`, `census_v4`, `census_v5` and `flake_result_v1`; tools/probe_census.py maps each declared schema string to one of them. They are deliberately not named after the schema strings themselves, because a JSON Pointer treats `/` as a separator and `#/$defs/probe-census/v2` would name nothing.",
   "description": "The declared shape of every document tools/probe_census.py reads or writes (#1492). It replaces hand-rolled type, presence, closed-object, enum, length and range checking; it deliberately declares NO cross-field invariant -- those span fields, so no keyword expresses them and they live in tools/probe_census.py's census_invariants()/result_invariants() (#1493) -- and no parity with the live probe registry, which stays validate_manifest's report and --seed's repair. Every object here is closed: explicit `required` plus `additionalProperties: false`, with a nullable field REQUIRED and null-inclusive rather than optional, so deleting one is a violation rather than an absence. Enums are spelled as one-element `enum` rather than `const` on purpose: the library's const message names only the value it EXPECTED, while enum names the offending one.",
 
   "$defs": {
@@ -53,12 +53,23 @@
     },
 
     "census_v4": {
-      "$comment": "#1439's record: the v3 document with each row's census also carrying its append-only `outcomes` log. A de-flake attempt's stable non-success outcome is a DEDICATED collection rather than more `attempts` (which are result-ingestion attempts) or more `claims` (which are lock acquisitions): an outcome is recorded after a diagnosis, is keyed for idempotency by its attempt identity, and carries evidence neither of the other two logs has a field for.",
+      "$comment": "#1439's record: the v3 document with each row's census also carrying its append-only `outcomes` log. Frozen as migration input now that v5 adds deferral state.",
       "type": "object",
       "required": ["schema", "probes"],
       "additionalProperties": false,
       "properties": {
         "schema": {"enum": ["probe-census/v4"]},
+        "probes": {"type": "array", "items": {"$ref": "#/$defs/inventory_row_v4"}}
+      }
+    },
+
+    "census_v5": {
+      "$comment": "The v4 document with first-class per-probe deferral state. A deferred probe remains registered and keeps all measurement history, but the de-flake selector excludes it until a maintainer explicitly resumes it.",
+      "type": "object",
+      "required": ["schema", "probes"],
+      "additionalProperties": false,
+      "properties": {
+        "schema": {"enum": ["probe-census/v5"]},
         "probes": {"type": "array", "items": {"$ref": "#/$defs/inventory_row"}}
       }
     },
@@ -88,6 +99,20 @@
         "classification": {"$ref": "#/$defs/classification"},
         "protocol": {"$ref": "#/$defs/protocol_status"},
         "census": {"$ref": "#/$defs/census_record_v3"}
+      }
+    },
+
+    "inventory_row_v4": {
+      "$comment": "A stored v4 row. Frozen alongside census_v4 and never widened.",
+      "type": "object",
+      "required": ["key", "script", "classification", "protocol", "census"],
+      "additionalProperties": false,
+      "properties": {
+        "key": {"$ref": "#/$defs/probe_key"},
+        "script": {"$ref": "#/$defs/script_name"},
+        "classification": {"$ref": "#/$defs/classification"},
+        "protocol": {"$ref": "#/$defs/protocol_status"},
+        "census": {"$ref": "#/$defs/census_record_v4"}
       }
     },
 
@@ -167,8 +192,8 @@
         }
       }
     },
-    "census_record": {
-      "$comment": "Exactly the eight fields probe_census.empty_census() writes.",
+    "census_record_v4": {
+      "$comment": "A stored v4 record: the eight fields #1439 left behind, with no `deferred` state. Frozen because it is migration input.",
       "type": "object",
       "required": ["acceptable_failures", "acceptable_failures_justification",
                    "estimated_worst_case_seconds", "current", "history",
@@ -202,6 +227,60 @@
           "$comment": "#1439's append-only log of a de-flake attempt's STABLE NON-SUCCESS outcomes, keyed for idempotency by `attempt`. A repair that passed its gate is not here: it becomes a pull request, not a census row.",
           "type": "array", "items": {"$ref": "#/$defs/outcome"}
         }
+      }
+    },
+
+    "census_record": {
+      "$comment": "Exactly the nine fields probe_census.empty_census() writes.",
+      "type": "object",
+      "required": ["acceptable_failures", "acceptable_failures_justification",
+                   "estimated_worst_case_seconds", "current", "history",
+                   "attempts", "claims", "outcomes", "deferred"],
+      "additionalProperties": false,
+      "properties": {
+        "acceptable_failures": {
+          "$comment": "X (#1430): the failures a complete 10-run measurement may show and still be acceptable, so 0 through 9 -- an X of 10 would declare a probe that never passes acceptable. Still null-INCLUSIVE here, and only here: a census written before the policy existed holds nulls, and tools/probe_census.py's --seed has to be able to read one in order to initialize it to 0. policy_invariants() is what refuses a null on every candidate and on --validate.",
+          "type": ["integer", "null"], "minimum": 0, "maximum": 9
+        },
+        "acceptable_failures_justification": {
+          "type": ["string", "null"], "maxLength": 4000
+        },
+        "estimated_worst_case_seconds": {
+          "$comment": "Supplied metadata, distinct from a sample's OBSERVED worst_elapsed_seconds.",
+          "type": ["number", "null"], "minimum": 0, "maximum": 1000000000
+        },
+        "current": {
+          "$comment": "The current commit cohort, or null when nothing has been measured. Spelled as if/else rather than oneOf so a malformed cohort reports the field that is actually wrong instead of `is not valid under any of the given schemas`.",
+          "if": {"type": "null"},
+          "then": true,
+          "else": {"$ref": "#/$defs/cohort"}
+        },
+        "history": {"type": "array", "items": {"$ref": "#/$defs/cohort"}},
+        "attempts": {"type": "array", "items": {"$ref": "#/$defs/attempt"}},
+        "claims": {
+          "$comment": "#1434's append-only log of successful claim ACQUISITIONS, keyed for idempotency by `token`. Deliberately not `attempts`, which are result-ingestion attempts and are non-idempotent by design.",
+          "type": "array", "items": {"$ref": "#/$defs/claim"}
+        },
+        "outcomes": {
+          "$comment": "#1439's append-only log of a de-flake attempt's STABLE NON-SUCCESS outcomes, keyed for idempotency by `attempt`. A repair that passed its gate is not here: it becomes a pull request, not a census row.",
+          "type": "array", "items": {"$ref": "#/$defs/outcome"}
+        },
+        "deferred": {
+          "$comment": "Null when selectable. Otherwise the maintainer decision that temporarily removes this probe from de-flake selection without deleting it, changing CI classification, or discarding measurements.",
+          "if": {"type": "null"},
+          "then": true,
+          "else": {"$ref": "#/$defs/deferral"}
+        }
+      }
+    },
+
+    "deferral": {
+      "type": "object",
+      "required": ["reason", "resume_when"],
+      "additionalProperties": false,
+      "properties": {
+        "reason": {"type": "string", "minLength": 1, "maxLength": 4000},
+        "resume_when": {"type": "string", "minLength": 1, "maxLength": 4000}
       }
     },
 
