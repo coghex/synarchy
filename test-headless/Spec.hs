@@ -104,6 +104,7 @@ import qualified Test.Headless.Input.Bindings as InputBindings
 import qualified Test.Headless.Input.State as InputState
 import qualified Test.Headless.Input.Inject as InputInject
 import qualified Test.Headless.Input.Followup as InputFollowup
+import qualified Test.Headless.Input.InjectOwnership as InputInjectOwnership
 import qualified Test.Headless.Lua.DebugQueue as LuaDebugQueue
 import qualified Test.Headless.Lua.RenderQueue as LuaRenderQueue
 import qualified Test.Headless.Lua.PreviewGeneration as LuaPreviewGeneration
@@ -219,6 +220,7 @@ import qualified Test.Headless.Core.Queue as CoreQueue
 import qualified Test.Headless.Core.LogCategoryEnv as LogCategoryEnv
 import qualified Test.Headless.Core.LogMonad as LogMonad
 import qualified Test.Headless.Core.LogParity as LogParity
+import qualified Test.Headless.Core.LogThresholdEnv as LogThresholdEnv
 import qualified Test.Headless.Core.LoopStartup as LoopStartup
 import qualified Test.Headless.Core.ShutdownAtlasRelease as ShutdownAtlasRelease
 import qualified Test.Headless.Core.WorkerLifecycle as WorkerLifecycle
@@ -237,6 +239,7 @@ import qualified Test.Headless.Building.Placement as BuildingPlacement
 import qualified Test.Headless.Building.RemoteWarning as BuildingRemoteWarning
 import qualified Test.Headless.Save.AutosaveGuards as AutosaveGuards
 import qualified Test.Headless.Save.AutosaveListing as AutosaveListing
+import qualified Test.Headless.Save.MenuListingOrder as MenuListingOrder
 import qualified Test.Headless.Save.Barrier as SaveBarrier
 import qualified Test.Headless.Load.Status as LoadStatus
 import qualified Test.Headless.Save.Snapshot as SaveSnapshot
@@ -258,6 +261,8 @@ import qualified Test.Headless.Lua.TutorialProgress as LuaTutorialProgress
 import qualified Test.Headless.Lua.TutorialEvaluation as LuaTutorialEvaluation
 import qualified Test.Headless.Lua.UnitAiLocations as LuaUnitAiLocations
 import qualified Test.Headless.Lua.UnitAiHold as LuaUnitAiHold
+import qualified Test.Headless.Lua.UnitAiCombatMove as LuaUnitAiCombatMove
+import qualified Test.Headless.Lua.UnitAiEncounter as LuaUnitAiEncounter
 import qualified Test.Headless.Lua.UnitAiStall as LuaUnitAiStall
 import qualified Test.Headless.Lua.UnitAiHarvest as LuaUnitAiHarvest
 import qualified Test.Headless.Lua.UnitAiLogisticsTargets as LuaUnitAiLogisticsTargets
@@ -305,6 +310,14 @@ main = hspec $ do
         -- drive the #697 fence relay by hand (harness runs neither
         -- the input nor the Lua thread, so the queues are the test's).
         describe "Input.Followup" InputFollowup.spec
+        -- #1927: a split hold's modifier lifetime is a property of the
+        -- ownership record the INPUT THREAD keeps between two
+        -- independent verb calls, so it can only be asserted as state
+        -- against a live env — same technique as Input.Followup above.
+        -- The name keeps `--match "Input.Inject"` (the issue's focused
+        -- acceptance command) selecting it alongside the pure
+        -- sequence-shape group.
+        describe "Input.Inject ownership" InputInjectOwnership.spec
         -- Same technique as Input.Followup above: no world dependency
         -- at all, just the live EngineEnv's queues/refs to construct a
         -- real Lua backend and drive processLuaMsg directly.
@@ -548,6 +561,7 @@ main = hspec $ do
     describe "atomic save storage" SaveStorage.spec
     describe "persistence contract" SaveContract.spec
     describe "autosave staging slots (#1413)" AutosaveListing.spec
+    MenuListingOrder.spec
     describe "Save.Barrier" SaveBarrier.spec
     describe "Load.Status" LoadStatus.spec
     describe "Save.Snapshot" SaveSnapshot.spec
@@ -557,6 +571,8 @@ main = hspec $ do
     LuaTutorialEvaluation.spec
     LuaUnitAiLocations.spec
     LuaUnitAiHold.spec
+    LuaUnitAiCombatMove.spec
+    LuaUnitAiEncounter.spec
     LuaUnitAiStall.spec
     LuaUnitAiHarvest.spec
     LuaUnitAiLogisticsTargets.spec
@@ -726,6 +742,7 @@ main = hspec $ do
     LogCategoryEnv.spec
     LogMonad.spec
     LogParity.spec
+    LogThresholdEnv.spec
     LoopStartup.spec
     ShutdownAtlasRelease.spec
     WorkerLifecycle.spec

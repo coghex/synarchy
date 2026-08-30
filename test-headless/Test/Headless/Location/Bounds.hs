@@ -25,8 +25,8 @@ import Engine.Core.Log
     ( initLogger, defaultLogConfig, LogConfig(..), LogBackend(..)
     , LogCategory(..), LogLevel(..), LogEntry(..), LoggerState )
 import Engine.Asset.YamlLocations
-    ( LocationYamlBounds(..), LocationYamlContent(..), LocationYamlDef(..)
-    , LocationYamlFile(..), authoredLocationCoordinateLimit
+    ( LocationYamlBounds(..), LocationYamlContent(..), LocationYamlCountRange(..)
+    , LocationYamlDef(..), LocationYamlFile(..), authoredLocationCoordinateLimit
     , loadLocationYaml )
 import Location.Bounds
 
@@ -346,6 +346,65 @@ spec = describe "Location spatial bounds" $ do
                     \                rolls: null } ] }")
                 `shouldBe` Right [ ("canteen", 1, 1), ("raider", 1, 1) ]
 
+        it "parses a unit count_range whose zero lower bound is a real \
+           \encounter outcome (#916)" $
+            fmap (map (\c → (lycId c, lycCountRange c, lycClearance c))
+                    . lydContents)
+                (decodeDef
+                    "{ id: t, builder: b,\
+                    \  naming: { heads: [KEEP], modifiers: [ASH] },\
+                    \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
+                    \  contents: [ { kind: unit, id: nomad_primitive,\
+                    \                count_range: { min: 0, max: 3 },\
+                    \                clearance: death_only } ] }")
+                `shouldBe` Right
+                    [("nomad_primitive", Just (LocationYamlCountRange 0 3),
+                      Just "death_only")]
+
+        it "rejects count_range on non-unit content, a negative minimum, \
+           \an inverted or over-capacity range, and a second encounter" $ do
+            let wrap entries = BS.pack
+                    ("{ id: t, builder: b,"
+                    <> " naming: { heads: [KEEP], modifiers: [ASH] },"
+                    <> " bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },"
+                    <> " contents: [" <> entries <> "] }")
+            decodeDef (wrap
+                "{ kind: item, id: x, count_range: { min: 0, max: 3 } }")
+                `shouldSatisfy` rejectedNamingFields "t"
+                    ["content entry 1", "count_range", "only for unit"]
+            decodeDef (wrap
+                "{ kind: unit, id: x, count_range: { min: -1, max: 3 } }")
+                `shouldSatisfy` rejectedNamingFields "t"
+                    ["count_range.min", "non-negative", "-1"]
+            decodeDef (wrap
+                "{ kind: unit, id: x, count_range: { min: 3, max: 2 } }")
+                `shouldSatisfy` rejectedNamingFields "t"
+                    ["count_range.max", "below min"]
+            decodeDef (wrap
+                "{ kind: unit, id: x, count_range: { min: 0, max: 26 } }")
+                `shouldSatisfy` rejectedNamingFields "t"
+                    ["count_range.max", "26", "25 distinct tiles"]
+            decodeDef (wrap
+                "{ kind: unit, id: x, count_range: { min: 0, max: 3 } }")
+                `shouldSatisfy` rejectedNamingFields "t"
+                    ["count_range", "explicit", "clearance"]
+            decodeDef (wrap
+                ("{ kind: unit, id: x, count_range: { min: 0, max: 3 },"
+                <> " clearance: flee_only }"))
+                `shouldSatisfy` rejectedNamingFields "t"
+                    ["unsupported", "flee_only", "death_only"]
+            decodeDef (wrap
+                "{ kind: unit, id: x, clearance: death_only }")
+                `shouldSatisfy` rejectedNamingFields "t"
+                    ["clearance", "only with", "count_range"]
+            decodeDef (wrap
+                ("{ kind: unit, id: x, count_range: { min: 0, max: 1 },"
+                <> " clearance: death_only },"
+                <> "{ kind: unit, id: 'y', count_range: { min: 0, max: 1 },"
+                <> " clearance: death_only }"))
+                `shouldSatisfy` rejectedNamingFields "t"
+                    ["at most one", "count_range"]
+
         it "one non-positive multiplicity fails the WHOLE file's load \
            \(#1721) -- the surviving defs are not returned without it" $ do
             let goodOnly = "{ locations: [\
@@ -376,6 +435,12 @@ spec = describe "Location spatial bounds" $ do
                 Right lf → case lyfLocations lf of
                     [def] → do
                         lydBounds def `shouldBe` LocationYamlBounds (-2) (-2) 2 2
+                        [ (lycId c, lycCountRange c, lycClearance c)
+                          | c ← lydContents def, isJust (lycCountRange c) ]
+                            `shouldBe`
+                                [("nomad_primitive",
+                                  Just (LocationYamlCountRange 0 3),
+                                  Just "death_only")]
                     defs → expectationFailure
                         ("expected exactly one location def, got "
                             <> show (length defs))

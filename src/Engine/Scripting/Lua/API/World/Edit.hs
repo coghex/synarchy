@@ -10,6 +10,9 @@ module Engine.Scripting.Lua.API.World.Edit
     , worldSetCellFn
     , worldMarkLocationContentsSpawnedFn
     , worldMarkLocationContentsSpawnedByIdFn
+    , worldRegisterLocationEncounterOccupantsFn
+    , worldSetLocationEncounterOccupantStateFn
+    , worldSetLocationEncounterEpisodeStateFn
     , worldSetLocationLifecycleFn
     , worldMarkLocationStampedFn
     ) where
@@ -29,6 +32,7 @@ import Location.Instance
 import World.Generate.Coordinates (globalToChunk)
 import World.Types hiding (activeWorldPage)
 import World.Material (MaterialId(..), materialIdByName)
+import Unit.Types (UnitId(..))
 
 -- | The live page this call targets: the named one when a pageId string
 --   is given (even hidden), the active world otherwise. 'Nothing' when
@@ -99,6 +103,111 @@ worldMarkLocationContentsSpawnedByIdFn wsc = do
             return 0
         Nothing → return 0
 
+-- | world.registerLocationEncounterOccupants(instanceId, occupants
+--   [, pageId]) → bool. Each occupant is @{ uid, home_x, home_y }@. The
+--   whole dense roster is parsed before queueing, so malformed input can
+--   never persist a partial encounter membership.
+worldRegisterLocationEncounterOccupantsFn
+    ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldRegisterLocationEncounterOccupantsFn wsc = do
+    idArg ← Lua.tointeger 1
+    isRoster ← Lua.istable 2
+    pageArg ← Lua.tostring 3
+    mRoster ← if isRoster then readRoster else pure Nothing
+    queued ← case (idArg, mRoster) of
+        (Just rawId, Just roster) → Lua.liftIO $ do
+            mPid ← targetPage wsc pageArg
+            case mPid of
+                Nothing → pure False
+                Just pid → do
+                    Q.writeQueue (wsWorldQueue wsc) $
+                        WorldRegisterLocationEncounterOccupants pid
+                            (LocationInstanceId (fromIntegral rawId)) roster
+                    pure True
+        _ → pure False
+    Lua.pushboolean queued
+    return 1
+  where
+    readRoster = do
+        n ← Lua.rawlen 2
+        go 1 (fromIntegral n) []
+    go i n acc
+        | i > n = pure (Just (reverse acc))
+        | otherwise = do
+            ty ← Lua.rawgeti 2 (fromIntegral i)
+            mEntry ← if ty ≢ Lua.TypeTable then pure Nothing else do
+                uid ← integerField "uid"
+                hx ← numberField "home_x"
+                hy ← numberField "home_y"
+                pure $ case (uid, hx, hy) of
+                    (Just rawUid, Just x, Just y) | rawUid ≥ 0 →
+                        Just (UnitId (fromIntegral rawUid), (x, y))
+                    _ → Nothing
+            Lua.pop 1
+            maybe (pure Nothing) (\entry → go (i + 1) n (entry : acc)) mEntry
+    integerField name = do
+        _ ← Lua.getfield (-1) name
+        value ← Lua.tointeger (-1)
+        Lua.pop 1
+        pure value
+    numberField name = do
+        _ ← Lua.getfield (-1) name
+        value ← Lua.tonumber (-1)
+        Lua.pop 1
+        pure ((\(Lua.Number v) → realToFrac v) ⊚ value)
+
+-- | world.setLocationEncounterOccupantState(instanceId, uid, engaged,
+--   returning [, pageId]) → bool.
+--   The whole state row is replaced atomically on the world thread.
+worldSetLocationEncounterOccupantStateFn
+    ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldSetLocationEncounterOccupantStateFn wsc = do
+    idArg ← Lua.tointeger 1
+    uidArg ← Lua.tointeger 2
+    engaged ← Lua.toboolean 3
+    returning ← Lua.toboolean 4
+    pageArg ← Lua.tostring 5
+    queued ← case (idArg, uidArg) of
+        (Just rawId, Just rawUid) | rawId ≥ 0 ∧ rawUid ≥ 0 → Lua.liftIO $ do
+            mPid ← targetPage wsc pageArg
+            case mPid of
+                Nothing → pure False
+                Just pid → do
+                    Q.writeQueue (wsWorldQueue wsc) $
+                        WorldSetLocationEncounterOccupantState pid
+                            (LocationInstanceId (fromIntegral rawId))
+                            (UnitId (fromIntegral rawUid)) engaged returning
+                    pure True
+        _ → pure False
+    Lua.pushboolean queued
+    return 1
+
+-- | world.setLocationEncounterEpisodeState(instanceId, active,
+--   aggressionAnnounced, disengageAnnounced [, pageId]) → bool. Episode
+--   feedback belongs to the encounter, not to each participating occupant.
+worldSetLocationEncounterEpisodeStateFn
+    ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldSetLocationEncounterEpisodeStateFn wsc = do
+    idArg ← Lua.tointeger 1
+    active ← Lua.toboolean 2
+    aggressionAnnounced ← Lua.toboolean 3
+    disengageAnnounced ← Lua.toboolean 4
+    pageArg ← Lua.tostring 5
+    queued ← case idArg of
+        Just rawId | rawId ≥ 0 → Lua.liftIO $ do
+            mPid ← targetPage wsc pageArg
+            case mPid of
+                Nothing → pure False
+                Just pid → do
+                    Q.writeQueue (wsWorldQueue wsc) $
+                        WorldSetLocationEncounterEpisodeState pid
+                            (LocationInstanceId (fromIntegral rawId)) active
+                            aggressionAnnounced disengageAnnounced
+                    pure True
+        _ → pure False
+    Lua.pushboolean queued
+    return 1
+
 -- | world.setLocationLifecycle(instanceId, lifecycle [, pageId]) → bool
 --   (#911). @lifecycle@ is one of "unknown" / "hinted" / "discovered" /
 --   "active" / "cleared" / "depleted". Returns whether the request was
@@ -106,9 +215,8 @@ worldMarkLocationContentsSpawnedByIdFn wsc = do
 --   the world thread then applies it only if it moves the instance
 --   strictly forward, so a backward or same-state request changes
 --   nothing. Poll @world.getLocationInstance@ for the settled state.
---   This is how the states past @discovered@ are reachable
---   programmatically before the encounter/reward/retrieval gameplay
---   that will drive them exists.
+--   Encounters now drive @active@/@cleared@ themselves; this explicit
+--   editor remains for debug and later reward/retrieval lifecycle work.
 worldSetLocationLifecycleFn
     ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
 worldSetLocationLifecycleFn wsc = do
