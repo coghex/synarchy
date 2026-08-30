@@ -1121,7 +1121,7 @@ event, which is never reported as a probe pass.
 ### `probe_census.py` — the probe census (#1425, #1428, #1430, #1492, #1434, #1441, #1439, #1438)
 
 Builds, validates and updates `docs/probe_census.json`, now
-`probe-census/v4`: every registered probe exactly once, with its script, its
+`probe-census/v5`: every registered probe exactly once, with its script, its
 CI-eligible/manual-only classification, its protocol status (`legacy` or
 `probe-result/v1`) and one census record holding the acceptable-failure
 policy, the estimated worst-case duration, the current commit cohort, the
@@ -1129,8 +1129,11 @@ archived cohorts, an append-only attempt log, an append-only log of claim
 ACQUISITIONS keyed for idempotency by acquisition token (#1434), and an
 append-only log of a de-flake attempt's non-repair OUTCOMES keyed for
 idempotency by attempt identity — the three stable ones (#1439) and the
-production defect a tracker issue was filed for (#1438). All three are separate collections
-on purpose: an attempt is a result ingestion and is deliberately
+production defect a tracker issue was filed for (#1438). The record also has
+a nullable `deferred` decision: when present, its non-blank `reason` and
+`resume_when` condition keep the probe registered with all evidence intact
+while excluding it from de-flake selection. All three logs are separate
+collections on purpose: an attempt is a result ingestion and is deliberately
 non-idempotent, while recording one acquisition or one attempt outcome twice
 must stay one record — and an outcome carries evidence neither of the other
 two has a field for. The census lives in the
@@ -1156,6 +1159,10 @@ python3 tools/probe_census.py --probe KEY --set-acceptable-failures 7
 python3 tools/probe_census.py --probe KEY --set-acceptable-failures 0 \
     --clear-justification
 python3 tools/probe_census.py --probe KEY --set-estimate 480
+python3 tools/probe_census.py --defer --probe KEY \
+    --reason "the required content is not implemented" \
+    --resume-when "the planned content assets merge"
+python3 tools/probe_census.py --resume --probe KEY
 ```
 
 An X update that omits `--justification` never clears the stored text —
@@ -1339,17 +1346,17 @@ untouched, it leaves `--promotion-candidates`' manual-only report, and it
 accepts no further samples.
 
 `--print` never touches the docs worktree. `--seed` is the ONLY operation that
-migrates: it creates an absent census, migrates a `probe-census/v1`, `/v2` or
-`/v3` one losslessly — the v2 step adds only the empty claim log and the v3
-step only the empty outcome log, keeping every policy field, cohort, sample,
-attempt and claim — and reconciles inventory
-drift — appending newly registered
-probes, refreshing inventory metadata, retaining a row whose probe left the
-registry for a person to dispose of, and archiving a `current` cohort when a
-probe becomes CI-eligible. It never regenerates accumulated census data.
+migrates: it creates an absent census and migrates a `probe-census/v1`, `/v2`,
+`/v3` or `/v4` one losslessly — the v2→v3 transition adds only the empty claim
+log, v3→v4 only the empty outcome log, and v4→v5 only a null `deferred` field,
+keeping every policy field, cohort, sample, attempt, claim and outcome — and
+reconciles inventory drift — appending newly registered probes, refreshing
+inventory metadata, retaining a row whose probe left the registry for a person
+to dispose of, and archiving a `current` cohort when a probe becomes
+CI-eligible. It never regenerates accumulated census data.
 `--record`, `probe_census.record_claim`, `probe_census.record_outcome` and
-both policy operations refuse, naming `--seed`, when the census is absent or
-still on an older schema.
+the policy and deferral operations refuse, naming `--seed`, when the census is
+absent or still on an older schema.
 
 Every mutation is one locked read-modify-write: a cross-process `flock` keyed
 by the resolved target, held from the read through serialization and the
@@ -1361,11 +1368,11 @@ stream, no engine log. Exit codes: 2 for a missing or unusable docs worktree,
 
 Shape validation is DECLARED, in `tools/probe_census_schema.json` — a JSON
 Schema 2020-12 document, self-checked against that draft when it loads, that
-describes the v1 seed, the frozen v2 census, the current v3 census and the
-incoming `probe-flake-result/v1` document alike. The v2 root definition is
-FROZEN at the six-field record it really held: it now describes migration
-INPUT, so widening it would make every stored v2 census invalid for lacking
-the field migration exists to add. Every object in it is closed (`required` plus
+describes the v1 seed, frozen v2/v3/v4 censuses, the current v5 census and the
+incoming `probe-flake-result/v1` document alike. Each older root definition is
+FROZEN at the record it really held: it now describes migration INPUT, so
+widening it would make a stored older census invalid for lacking the field
+migration exists to add. Every object in it is closed (`required` plus
 `additionalProperties: false`, with a nullable field REQUIRED and
 null-inclusive rather than optional), so a deleted field is a violation rather
 than an absence. The stored census is checked before any operation transforms

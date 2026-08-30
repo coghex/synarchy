@@ -877,9 +877,10 @@ def test_schema_migration_is_lossless() -> None:
         expect(migrated["schema"] == probe_census.CENSUS_SCHEMA,
                f"the migrated document is "
                f"{probe_census.CENSUS_SCHEMA}")
-        expect(record["claims"] == [] and record["outcomes"] == [],
+        expect(record["claims"] == [] and record["outcomes"] == []
+               and record["deferred"] is None,
                "the migration adds an EMPTY claim log, and #1439's equally "
-               "empty outcome log beside it")
+               "empty outcome log plus v5's null deferral beside it")
         for field, value in (("acceptable_failures", 3),
                              ("acceptable_failures_justification",
                               "three known races"),
@@ -890,7 +891,8 @@ def test_schema_migration_is_lossless() -> None:
         expect(record["current"] == {"commit_sha": COMMIT_B, "samples": []},
                "the migration preserves the current cohort exactly")
         expect(v2["probes"][0]["census"].get("claims") is None
-               and v2["probes"][0]["census"].get("outcomes") is None,
+               and v2["probes"][0]["census"].get("outcomes") is None
+               and v2["probes"][0]["census"].get("deferred") is None,
                "and it does not mutate the document it migrated FROM")
 
         again = probe_census.migrate_document(migrated)
@@ -930,6 +932,7 @@ def test_schema_migration_is_lossless() -> None:
         for row in v2["probes"][1:]:
             row["census"].pop("claims")
             row["census"].pop("outcomes")
+            row["census"].pop("deferred")
         census.write_text(json.dumps(v2, indent=2, sort_keys=True) + "\n",
                           encoding="utf-8")
         probe_census.ensure_document(census)
@@ -943,8 +946,11 @@ def test_schema_migration_is_lossless() -> None:
         expect(all(probe_census.find_entry(stored, key)["census"]["claims"] == []
                    and probe_census.find_entry(
                        stored, key)["census"]["outcomes"] == []
+                   and probe_census.find_entry(
+                       stored, key)["census"]["deferred"] is None
                    for key, _s, _p in SYNTHETIC),
-               "...and giving every row an empty claim and outcome log")
+               "...and giving every row empty claim/outcome logs and a null "
+               "deferral")
 
 
 # ==========================================================================
