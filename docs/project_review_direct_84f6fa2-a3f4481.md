@@ -26,13 +26,13 @@ The next direct-history cursor is `ea2c03dd`.
 
 ## Status
 
-- [ ] PRR-4. `ENGINE_DEBUG` cannot enable every live log category
-- [ ] PRR-5. Logger timestamp and thread-ID configuration flags are inert
-- [ ] PRR-6. Category-specific log thresholds read hidden `Cat`-prefixed variables
+- [x] PRR-4. `ENGINE_DEBUG` cannot enable every live log category — [#1915]
+- [x] PRR-5. Logger timestamp and thread-ID configuration flags are inert — [#1917]
+- [x] PRR-6. Category-specific log thresholds read hidden `Cat`-prefixed variables — [#1918]
 
 ## 1. Debug-category environment control
 
-### PRR-4. `ENGINE_DEBUG` cannot enable every live log category
+### [#1915] PRR-4. `ENGINE_DEBUG` cannot enable every live log category
 
 > **Captured note:** `LogCategory` is enumerable, but both the text parser and
 > the special `ENGINE_DEBUG=all` value maintain separate hand-written subsets.
@@ -79,7 +79,7 @@ silently dropped, so `ENGINE_DEBUG=World,Unit` produces an empty enabled map and
 
 ## 2. Logger output configuration
 
-### PRR-5. Logger timestamp and thread-ID configuration flags are inert
+### [#1917] PRR-5. Logger timestamp and thread-ID configuration flags are inert
 
 > **Captured note:** `LogConfig` publicly exposes `lcShowTimestamp` and
 > `lcShowThreadId`, but initialization discards both values. Handle-formatted
@@ -130,7 +130,7 @@ formatting cases exercise only the default values.
 
 ## 3. Category-specific threshold environment control
 
-### PRR-6. Category-specific log thresholds read hidden `Cat`-prefixed variables
+### [#1918] PRR-6. Category-specific log thresholds read hidden `Cat`-prefixed variables
 
 > **Captured note:** The logger describes category-specific thresholds using
 > names such as `ENGINE_LOG_VULKAN`, but derives the actual key from

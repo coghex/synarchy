@@ -52,6 +52,7 @@ import qualified Test.Headless.Item.BuffYaml as ItemBuffYaml
 import qualified Test.Headless.Item.QualityTier as ItemQualityTier
 import qualified Test.Headless.Item.ContentsSignature as ItemContentsSig
 import qualified Test.Headless.Item.Condition as ItemCondition
+import qualified Test.Headless.Item.SteelHelmet as ItemSteelHelmet
 import qualified Test.Headless.Item.RepairFinite as ItemRepairFinite
 import qualified Test.Headless.Item.Materialize as ItemMaterialize
 import qualified Test.Headless.Item.BulkStorage as ItemBulkStorage
@@ -504,6 +505,7 @@ main = hspec $ do
 
     aroundAll withHeadlessEngine ItemDiscovery.spec
     aroundAll withHeadlessEngineNoWorld ItemCondition.spec
+    aroundAll withHeadlessEngineNoWorld ItemSteelHelmet.spec
     -- Own engine (#1772): the craft-identity gate installs its own
     -- single-page world manager and rewrites the item, recipe and unit
     -- manager refs, exactly like the ItemCondition gate above. It needs

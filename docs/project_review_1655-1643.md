@@ -8,12 +8,14 @@ PRs #1655, #1654, #1653, #1651, #1650, #1649, #1646, and #1644 retain their inte
 
 ## Status
 
-- [ ] PRR-1. Three isolated-root probes stage their trees outside the cleanup boundary
-- [ ] PRR-2. Four isolated-root probes can inherit undeletable config modes, and item-instance hides the failure
+- [x] PRR-1. Three isolated-root probes stage their trees outside the cleanup boundary — [no-issue]
+- [x] PRR-2. Four isolated-root probes can inherit undeletable config modes, and item-instance hides the failure — [#1912]
 
 ## 1. Isolated-root setup cleanup
 
-### PRR-1. Three isolated-root probes stage their trees outside the cleanup boundary
+### [no-issue] PRR-1. Three isolated-root probes stage their trees outside the cleanup boundary
+
+> **Disposition:** No issue — fixed after this report was written. Issue #1791 (commit `c8a2a526`, 2026-08-28) moved staging inside the cleanup guard in all three probes plus `foraging_probe.py`, and added `tools/test_probe_root_cleanup.py`, which injects a `copytree` failure after the root and symlinks exist and asserts the invocation base is gone — the exact coverage this finding asked for. Wired into both probe-runner self-test blocks, CI and `tools/ci-local.sh`; passing.
 
 > **Captured note:** Extend the failure-path guard in the farm-AI, flora-growth, and item-temperature probes around isolated-root construction itself. Each PR deliberately moved `boot` inside the cleanup-owning `try`, but `make_isolated_root` still mutates the invocation-owned tree before control reaches that guard.
 
@@ -39,7 +41,7 @@ PRs #1655, #1654, #1653, #1651, #1650, #1649, #1646, and #1644 retain their inte
 
 ## 2. Copied-config cleanup permissions
 
-### PRR-2. Four isolated-root probes can inherit undeletable config modes, and item-instance hides the failure
+### [#1912] PRR-2. Four isolated-root probes can inherit undeletable config modes, and item-instance hides the failure
 
 > **Captured note:** Make every invocation-owned config copy removable independently of the source checkout's permission bits, and make item-instance treat surviving residue as a failing check. These four helpers copy modes verbatim; three report deletion failure but leave the artifact, while item-instance passes `ignore_errors=True` and can return its already-computed green summary after cleanup silently did nothing.
 

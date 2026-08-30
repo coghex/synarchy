@@ -125,6 +125,16 @@
         30
       ]
     },
+    "LAVA_RIM_INCOMPLETE": {
+      "min": 13,
+      "max": 13,
+      "median": 13,
+      "all": [
+        13,
+        13,
+        13
+      ]
+    },
     "MID_RIVER_CLIFF": {
       "min": 52,
       "max": 52,
@@ -193,6 +203,7 @@
       "FLOATING_LAKE": 337,
       "FLOATING_WATER": 156,
       "ISOLATED_FLUID": 30,
+      "LAVA_RIM_INCOMPLETE": 13,
       "MID_RIVER_CLIFF": 52,
       "MULTI_ISLAND": 9,
       "RIVER_CHUNK_GAP": 10,
@@ -3144,6 +3155,73 @@
           "x": 64,
           "y": 43,
           "details": "lake surf=112 surrounded by dry"
+        }
+      ],
+      "LAVA_RIM_INCOMPLETE": [
+        {
+          "x": 41,
+          "y": -64,
+          "details": "lava fluidSurf=1 unjudged at 1 off-region nbr(s)"
+        },
+        {
+          "x": 63,
+          "y": 79,
+          "details": "lava fluidSurf=4 unjudged at 1 off-region nbr(s)"
+        },
+        {
+          "x": 64,
+          "y": 79,
+          "details": "lava fluidSurf=4 unjudged at 1 off-region nbr(s)"
+        },
+        {
+          "x": 65,
+          "y": 79,
+          "details": "lava fluidSurf=4 unjudged at 1 off-region nbr(s)"
+        },
+        {
+          "x": 66,
+          "y": 79,
+          "details": "lava fluidSurf=4 unjudged at 1 off-region nbr(s)"
+        },
+        {
+          "x": 67,
+          "y": 79,
+          "details": "lava fluidSurf=4 unjudged at 1 off-region nbr(s)"
+        },
+        {
+          "x": 68,
+          "y": 79,
+          "details": "lava fluidSurf=4 unjudged at 1 off-region nbr(s)"
+        },
+        {
+          "x": 69,
+          "y": 79,
+          "details": "lava fluidSurf=4 unjudged at 1 off-region nbr(s)"
+        },
+        {
+          "x": 70,
+          "y": 79,
+          "details": "lava fluidSurf=4 unjudged at 1 off-region nbr(s)"
+        },
+        {
+          "x": 71,
+          "y": 79,
+          "details": "lava fluidSurf=4 unjudged at 1 off-region nbr(s)"
+        },
+        {
+          "x": 72,
+          "y": 79,
+          "details": "lava fluidSurf=4 unjudged at 1 off-region nbr(s)"
+        },
+        {
+          "x": 73,
+          "y": 79,
+          "details": "lava fluidSurf=4 unjudged at 1 off-region nbr(s)"
+        },
+        {
+          "x": 74,
+          "y": 79,
+          "details": "lava fluidSurf=4 unjudged at 1 off-region nbr(s)"
         }
       ],
       "MID_RIVER_CLIFF": [

@@ -14,20 +14,18 @@ Repository-wide counts were used only to establish scale and were not treated as
 
 ## Status
 
-- [ ] EA-1. Capability projections narrow visibility without enforcing ownership — [deferred]: epic not yet filed from its design document
-- [ ] EA-2. Inter-thread queues have neither workload bounds nor backlog telemetry
+- [x] EA-1. Capability projections narrow visibility without enforcing ownership — [#1890]
+- [x] EA-2. Inter-thread queues have neither workload bounds nor backlog telemetry — [#1910]
 - [ ] EA-3. The Lua API is a large manually maintained runtime ABI
-- [ ] EA-4. Persistence discards structured information and decodes components twice
-- [ ] EA-5. Integrated and graphical behavior remains mostly outside blocking validation
-- [ ] EA-6. Dynamic scene assembly relies on unmeasured small-colony assumptions
+- [x] EA-4. Persistence discards structured information and decodes components twice — [#1919]
+- [ ] EA-5. Integrated and graphical behavior remains mostly outside blocking validation — [deferred]: #1426 census 3/91 migrated; no GPU host exists
+- [x] EA-6. Dynamic scene assembly relies on unmeasured small-colony assumptions — [#1921]
 
 ---
 
 ## Ownership and scheduling
 
-### [deferred] EA-1. Capability projections narrow visibility without enforcing ownership
-
-> **Deferred:** Approved on 2026-08-29 as an epic rather than a single issue — the mechanism is an unresolved design decision (per-role views, a read-only reference newtype, or accessor-only modules) that changes §2.1's canonical capability convention and every later slice, and it lands across thirteen records plus `tools/engine_env_capability_audit.py`. No tracker artifact exists yet: the arc goes to `/design-epic` for capture in a design document, whose `EPIC` entry is filed downstream through `/process-design-doc`. Clears when that epic exists in `coghex/synarchy`, at which point this entry takes its `[#N]`.
+### [#1890] EA-1. Capability projections narrow visibility without enforcing ownership
 
 The completed `EngineEnv` capability split materially reduces accidental field reach, but its records remain projections of publicly accessible mutable containers. They enforce which fields a consumer can name, not which operations or thread roles are permitted on those fields. Correct writer ownership and multi-field protocols therefore continue to depend on documentation, audits, and reviewer knowledge.
 
@@ -45,7 +43,7 @@ The completed `EngineEnv` capability split materially reduces accidental field r
 - **Scope and constraints:** Preserve the completed capability inventory and its audits. An incremental pilot around one domain such as `WorldSim` or `UnitCombat` is preferable to another repository-wide environment rewrite. Any new capability or `EngineEnv` field must follow the documented approval and inventory procedure.
 - **Remaining uncertainty:** This review did not enumerate every current mutation site or prove a live unauthorized-write defect. The finding concerns what the boundary can enforce, not evidence that every present consumer violates its documented role.
 
-### EA-2. Inter-thread queues have neither workload bounds nor backlog telemetry
+### [#1910] EA-2. Inter-thread queues have neither workload bounds nor backlog telemetry
 
 The common queue abstraction is an unbounded STM `TQueue`, and several important consumers drain until empty or flush the entire queue at once. No shared queue surface reports depth, high-water mark, message age, processing rate, or a per-tick budget. A producer that outpaces its consumer can therefore turn into unbounded memory growth, long-tail latency, or starvation without an engine-level diagnostic identifying the cause.
 
@@ -85,7 +83,7 @@ The Haskell/Lua boundary now comprises hundreds of functions registered by strin
 - **Scope and constraints:** Preserve Lua as the policy, UI, and high-level orchestration layer. Do not require a wholesale generated binding rewrite before proving the shape on one namespace. Telemetry labels must be fully qualified and low-cardinality; arguments and entity IDs must not become labels.
 - **Remaining uncertainty:** No runtime call-frequency or duration profile was captured, so the highest-volume functions and the present cost of boundary crossings are unknown.
 
-### EA-4. Persistence discards structured information and decodes components twice
+### [#1919] EA-4. Persistence discards structured information and decodes components twice
 
 The component persistence design provides strong versioning and validation, but its type-erased registry validates a component by decoding it and then decodes the same component again during assembly. Separately, the outer load API reconstructs structured progress by searching rendered error text for phase names and a compatibility phrase, even though the load-status subsystem itself already models phases explicitly.
 
@@ -107,7 +105,9 @@ The component persistence design provides strong versioning and validation, but 
 
 ## Validation and scale
 
-### EA-5. Integrated and graphical behavior remains mostly outside blocking validation
+### [deferred] EA-5. Integrated and graphical behavior remains mostly outside blocking validation
+
+> **Deferred:** Both halves of this finding's expected direction are currently unscopable, for different reasons. **Probe promotion** is owned by open epic #1426, whose arc landed the machinery — #1441 reports reliability-qualified candidates and explicitly leaves breadth, cost, runner support and the promotion decision to a human — but that report yields nothing yet: `docs/probe_census.json` (`probe-census/v3`, 91 rows) carries 88 `legacy` rows against 3 on `probe-result/v1`, and #1441 requires `probe-result/v1` plus a complete current cohort. **Periodic GPU execution** has no host: the project owner confirmed on 2026-08-30 that the only graphics-capable machine is a laptop that is frequently powered off, so there is no runner to schedule against at any cadence. Clears when enough census rows carry `probe-result/v1` for #1441's report to produce real candidates, or when a GPU-capable runner becomes available — whichever comes first; the residual simulated-time vertical-scenario work can then be scoped against what those actually leave uncovered.
 
 Headless logic coverage is extensive and the probe inventory has improved substantially, including the removal of all currently classified base-failing probes. Nevertheless, only a minority of registered behavior probes are suitable for blocking CI, while real graphical tests require manual execution on a graphics-capable machine.
 
@@ -126,7 +126,7 @@ Headless logic coverage is extensive and the probe inventory has improved substa
 - **Scope and constraints:** Preserve the honest CI-eligibility criteria and do not mask nondeterminism with retries or weaken assertions. GPU coverage can be periodic or pre-release rather than necessarily per pull request.
 - **Remaining uncertainty:** No full suite, manual-probe sweep, offscreen session, or graphical run was performed for this draft, so it does not claim a current validation failure.
 
-### EA-6. Dynamic scene assembly relies on unmeasured small-colony assumptions
+### [#1921] EA-6. Dynamic scene assembly relies on unmeasured small-colony assumptions
 
 Static terrain rendering has a strong cache and invalidation design, but dynamic world quads are regenerated on every world tick across visible pages. Comments explicitly justify some paths as cheap because they currently contain only a handful of objects, and the package defines no continuous performance-benchmark component establishing the colony sizes at which those assumptions remain safe.
 
