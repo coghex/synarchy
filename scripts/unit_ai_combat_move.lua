@@ -113,6 +113,14 @@ end
 -- paths; an impossible escape therefore leaves the attack intact to resume.
 local function completeCommandedTask(uid, s, task)
     if not task or not task.combatWithdrawal then return end
+    -- Scope the retaliation cutoff to the hold this withdrawal created.
+    -- incoming_hit may still carry the wound that prompted the player to
+    -- break contact; only a hit strictly AFTER arrival may reopen combat.
+    -- The anchor is durable player intent, so the cutoff survives save/load
+    -- and disappears naturally when an explicit command clears the hold.
+    if s.holdAnchor then
+        s.holdAnchor.combatWithdrawalCompletedAt = engine.gameTime()
+    end
     s.attackTargetUid = nil
     s.committed = nil
     s.attackLastMoveTo = nil

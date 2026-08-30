@@ -167,8 +167,9 @@ function M.register(aiState)
         -- hold is never INFERRED from an arrived-and-cleared order,
         -- because the payload cannot say whether the order that ended
         -- was the player's or scripts/building_spawn.lua's walk-out.
-        -- The anchor carries no entity reference (two tile
-        -- coordinates plus this hold's own stall accounting), so
+        -- The anchor carries no entity reference (two tile coordinates,
+        -- this hold's own stall accounting, and its optional combat-
+        -- withdrawal completion cutoff), so
         -- unit_ai_save_refs.lua's field walk, the typed-reference
         -- graph and the dangling/wrong-page rules are untouched.
         -- v7 (issue #1737): a repairJob sourced from the GROUND carries

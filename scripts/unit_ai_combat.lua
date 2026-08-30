@@ -212,6 +212,11 @@ local THREAT_SOURCES = {
         score = function(uid, s, params)
             local att = unit.getLastAttacker(uid)
             if not att then return nil end
+            local hold = s.holdAnchor
+            if hold and hold.combatWithdrawalCompletedAt
+               and (att.at or 0) <= hold.combatWithdrawalCompletedAt then
+                return nil
+            end
             if engine.gameTime() - (att.at or 0)
                > ENGAGE_WINDOW_SEC then return nil end
             if not unit.exists(att.uid) then return nil end
