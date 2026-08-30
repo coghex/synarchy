@@ -1241,8 +1241,8 @@ evidence CMA-2's pilot and CMA-3's verdict turn on: a small residue
 means a textual gate is nearly sufficient, a large one argues for a
 mechanism that travels with the handle.
 
-**Two gates keep a textual match honest**, and they are independent on
-purpose — neither is asked to be complete by itself:
+**Three gates keep a textual match honest**, and they are independent on
+purpose — none is asked to be complete by itself:
 
 1. **Import scope, under the exact spelling used.** The identifier must
    actually reach the accessor in that module: imported by name,
@@ -1258,7 +1258,22 @@ purpose — neither is asked to be complete by itself:
    something the module defined itself, while
    `src/Unit/Thread/Movement.hs` writes a local `utsRef` parameter
    under an import that names the `EngineEnv` *type* alone.
-2. **Applied position.** The accessor must head the first argument of a
+2. **Not locally shadowed.** A `let`, a `where` declaration, a lambda,
+   a `<-` bind, a `case` alternative or an equation parameter legally
+   shadows an import of the same name, so a write through one is a
+   write to the local binding. Each binding is given its own **lexical
+   region** rather than its whole enclosing declaration, because the
+   permissive direction of that mistake *suppresses a real write
+   silently*: a `let` shadows the statements below it and nothing
+   above; an equation's parameters reach that equation only; and a
+   `where` block's own declarations are the single form that reaches
+   backwards, over the enclosing declaration — their parameters and
+   nested `let`s do not come with them. Every region is clamped to its
+   top-level declaration, so a binder written on a column-0 line cannot
+   claim the rest of the file. The model errs toward shadowing *less*:
+   an unrecognized binding form leaves a write attributed, which is a
+   loud violation naming module and field, never a silent miss.
+3. **Applied position.** The accessor must head the first argument of a
    mutation primitive *and* that argument must be an application —
    `prim (accessor handle) …`. This is a type argument, not a
    heuristic: every accessor projects out of a handle
@@ -1268,16 +1283,11 @@ purpose — neither is asked to be complete by itself:
    Haddock, or in an import list is not using it either — commentary
    and import declarations are stripped before the scan.
 
-Deliberately **no local-binder scan**. Any binder heuristic must decide
-a binding's lexical scope, and getting that wrong in the permissive
-direction *suppresses a real write silently* — a binder declared below
-the write it masks is enough. Requiring the application costs nothing
-real and cannot fail that way. Its one blind spot is a record wildcard
-or field pun over a capability record (`RenderCapability{..}`), which
-puts a genuine `IORef` under a bare accessor name; nothing in the tree
-does that, and such a use is not dropped silently — with no application
-to consume it inline, it appears in the residue like every other
-unattributable use.
+The rule's one blind spot is a record wildcard or field pun over a
+capability record (`RenderCapability{..}`), which puts a genuine
+`IORef` under a bare accessor name; nothing in the tree does that, and
+such a use is not dropped silently — with no application to consume it
+inline, it appears in the residue like every other unattributable use.
 
 **Maintaining it.** Adding an entry is a deliberate act, not a
 maintenance edit: it declares that a capability-narrowed module now

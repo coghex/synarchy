@@ -38,6 +38,7 @@ from engine_env_capability_audit import (  # type: ignore
     CAPABILITY_WRITER_MODULES, capability_accessor_map,
     scan_capability_writes, audit_writer_modules, format_residue,
     tokenize_haskell, parse_imports, imports_name,
+    local_binding_regions, _first_argument_head,
 )
 from persistence_inventory_audit import extract_record_fields  # type: ignore
 
@@ -2020,9 +2021,10 @@ bump env = do
     writeIORef (fieldOne env) 1
     helper
   where
-    helper = do
-      let fieldOne _ = pure ()
-      fieldOne ()
+    helper = inner
+      where
+        fieldOne _ = pure ()
+        inner = fieldOne ()
 """
 
 # Qualified spellings, through the module's own name and through an
@@ -2055,6 +2057,70 @@ wrongModule env = writeIORef (Other.fieldTwo env) 6
 
 replacedName ∷ State.EngineEnv → IO ()
 replacedName env = writeIORef (Engine.Core.State.fieldTwo env) 7
+"""
+
+# Every binding form that legally shadows an imported accessor, each
+# paired in the same module with a real write the binding must NOT
+# reach. One fixture, because the whole point is that the two are
+# distinguished by scope rather than by shape.
+_SHADOWING = """\
+module Shadow.Mod where
+
+import Engine.Core.State (EngineEnv, fieldOne, fieldTwo, fieldThree)
+
+-- A `let ... in`, all on one line: the write is inside the binding's
+-- own scope.
+inlineLet ∷ EngineEnv → IORef Int → IO ()
+inlineLet env ref =
+    let fieldOne _ = ref in writeIORef (fieldOne env) 1
+
+-- A `do`-block `let` shadows the statements BELOW it -- across the
+-- blank line, which closes no layout block (and is what a stripped
+-- comment leaves behind).
+blockLet ∷ EngineEnv → IORef Int → IO ()
+blockLet env ref = do
+    let fieldOne _ = ref
+
+    writeIORef (fieldOne env) 2
+
+-- A `where` declaration reaches BACKWARDS over its whole equation.
+whereHelper ∷ EngineEnv → IO ()
+whereHelper env = writeIORef (fieldOne env) 3
+  where
+    fieldOne _ = error "the equation's own helper"
+
+-- A lambda binder shadows its body.
+viaLambda ∷ EngineEnv → IO ()
+viaLambda env = withRef (\\fieldOne → writeIORef (fieldOne env) 4)
+
+-- A `<-` bind shadows the statements below it.
+viaBind ∷ EngineEnv → IO ()
+viaBind env = do
+    fieldOne ← pure (const undefined)
+    writeIORef (fieldOne env) 5
+
+-- A `case` alternative binds only its own alternative.
+viaAlternative ∷ EngineEnv → Maybe Int → IO ()
+viaAlternative env slot = case slot of
+    Just fieldOne → writeIORef (fieldOne env) 6
+    Nothing → pure ()
+
+-- The control: an equation PARAMETER shadows its own equation only, so
+-- this sibling's write is the real thing.
+shadowedParameter ∷ (EngineEnv → IORef Text) → EngineEnv → IO ()
+shadowedParameter fieldTwo env = writeIORef (fieldTwo env) 7
+
+realWrite ∷ EngineEnv → IO ()
+realWrite env = writeIORef (fieldTwo env) 8
+
+-- Sibling `where` declarations: one takes a shadowing parameter, the
+-- other performs the real write. The parameter reaches its own
+-- equation and must not reach the sibling below it.
+siblings ∷ EngineEnv → IO ()
+siblings env = viaParameter (fieldThree env) >> direct
+  where
+    viaParameter fieldThree = writeIORef (fieldThree env) 9
+    direct = writeIORef (fieldThree env) 10
 """
 
 # A mutation primitive is itself under a qualifier too. Missing this
@@ -2158,6 +2224,7 @@ def _writer_sources(**modules: str) -> dict[str, str]:
         "bare": "src/Bare/Mod.hs",
         "qualPrim": "src/QualPrim/Mod.hs",
         "qualOnly": "src/QualOnly/Mod.hs",
+        "shadow": "src/Shadow/Mod.hs",
         "explicit": "src/Explicit/Mod.hs",
         "multiline": "src/Multi/Mod.hs",
     }
@@ -2346,6 +2413,82 @@ def test_comments_and_bare_arguments_are_not_writes():
            f"no residue, got: {residue}")
 
 
+def test_locally_shadowed_accessors_are_not_writes():
+    """Every binding form that legally shadows an imported accessor --
+    an inline `let ... in`, a `do`-block `let`, a `where` declaration
+    reaching backwards over its own equation, a lambda binder, a `<-`
+    bind, a `case` alternative and an equation parameter -- makes the
+    write a write to the LOCAL binding, not to the field.
+
+    The last equation is the control: a parameter reaches its own
+    equation and no further, so its sibling's write is real. Both
+    halves are asserted together because a model that suppressed
+    everything would pass the first half alone."""
+    writes, _ = _scan(_writer_sources(shadow=_SHADOWING))
+    expect(writes["fieldOne"] == set(),
+           f"no shadowed binding may be attributed to `fieldOne`, got: "
+           f"{sorted(writes['fieldOne'])}")
+    expect(writes["fieldTwo"] == {"Shadow.Mod"},
+           f"the sibling equation's unshadowed write must survive -- an "
+           f"equation parameter reaches its own equation only, got: "
+           f"{sorted(writes['fieldTwo'])}")
+    expect(writes["fieldThree"] == {"Shadow.Mod"},
+           f"the same holds one level down: a `where` declaration's "
+           f"parameter must not reach its sibling declaration's write, "
+           f"got: {sorted(writes['fieldThree'])}")
+
+
+def test_binding_regions_are_lexical():
+    """`local_binding_regions` directly, on the two extents Haskell's
+    layout rule distinguishes: a `do`-block `let` reaches the statements
+    BELOW it (line 4) and nothing above it (line 2), and an equation
+    parameter reaches its own equation (line 5) and no further
+    (line 6)."""
+    code = ("first env = do\n"                       # 1
+            "    writeIORef (ref env) 1\n"           # 2
+            "    let ref _ = undefined\n"            # 3
+            "    writeIORef (ref env) 2\n"           # 4
+            "second ref env = pure ref\n"            # 5
+            "third env = writeIORef (ref env) 3\n")  # 6
+    regions = local_binding_regions(code)
+    expect(regions.get("ref") == {3, 4, 5},
+           f"the `let` must cover its own line and the statement below "
+           f"it, the parameter its own equation, and neither the write "
+           f"above nor the one in the next declaration; got: "
+           f"{sorted(regions.get('ref', ()))}")
+
+    # A binder written on a COLUMN-0 line has no layout block to the
+    # left of it, so without the top-level clamp its region would run to
+    # the end of the file and silently swallow every later write.
+    clamped = local_binding_regions(
+        "one env = withRef (\\ref → writeIORef (ref env) 1)\n"   # 1
+        "two env = writeIORef (ref env) 2\n")                      # 2
+    expect(clamped.get("ref") == {1},
+           f"a column-0 lambda binder must stop at its own declaration, "
+           f"got: {sorted(clamped.get('ref', ()))}")
+
+
+def test_a_first_argument_must_be_applied():
+    """`_first_argument_head` directly, on the two halves of the rule:
+    the argument must be GROUPED (parenthesized, or reached through
+    `$`), and within that group the accessor must be APPLIED. A bare
+    `prim ref v` and a parenthesized-but-unapplied `prim (ref) v` are
+    both non-answers, and only the second distinguishes the halves."""
+    def head_of(text):
+        tokens = tokenize_haskell(text)
+        return _first_argument_head(tokens, 0)
+
+    expect(head_of("writeIORef (fieldOne env) 1") == 2,
+           "an applied accessor inside parens is the first-argument head")
+    expect(head_of("writeIORef $ fieldOne env") == 2,
+           "`$` groups the first argument just as parentheses do")
+    expect(head_of("writeIORef (fieldOne) 1") is None,
+           "a parenthesized but unapplied name is not an accessor "
+           "application")
+    expect(head_of("writeIORef fieldOne 1") is None,
+           "a bare first argument is never an accessor application")
+
+
 def test_a_later_binder_cannot_hide_an_earlier_write():
     """A binder introduced AFTER the write it would have masked must not
     suppress it. This is the failure mode of any block-scoped binder
@@ -2452,6 +2595,10 @@ def test_import_declarations_record_qualification_and_alias():
     expect(not imports_name(declarations, "Engine.Core.State", "fieldOne",
                             "Ref"),
            "a qualifier bound to another module resolves nothing here")
+    expect(not imports_name(declarations[:1], "Engine.Core.State",
+                            "fieldTwo", ""),
+           "an explicit list brings in the names it enumerates and no "
+           "others")
 
 
 def test_a_bare_argument_surfaces_as_residue():
@@ -2690,6 +2837,9 @@ def main() -> int:
         test_passed_on_handle_is_residue_not_a_write,
         test_out_of_scope_names_are_not_writes,
         test_comments_and_bare_arguments_are_not_writes,
+        test_locally_shadowed_accessors_are_not_writes,
+        test_binding_regions_are_lexical,
+        test_a_first_argument_must_be_applied,
         test_a_later_binder_cannot_hide_an_earlier_write,
         test_qualified_accessors_are_resolved,
         test_a_qualifier_must_name_the_owning_module,
