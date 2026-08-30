@@ -11,6 +11,7 @@ import Engine.Scripting.Lua.API.ActionOutcome
     (debugRecordOutcomeFn, debugDrainActionOutcomesFn)
 import Engine.Scripting.Lua.API.LoadGate
     (armLoadStageGateFn, releaseLoadStageGateFn, getLoadStageGateFn)
+import Engine.Scripting.Lua.API.QueueStats (getQueueStatsFn)
 import qualified HsLua as Lua
 
 -- | Populate the @debug@ global with engine debug verbs
@@ -36,6 +37,10 @@ registerDebugAPI env = do
   registerLuaFunction "armLoadStageGate" (armLoadStageGateFn env)
   registerLuaFunction "releaseLoadStageGate" (releaseLoadStageGateFn env)
   registerLuaFunction "getLoadStageGate" (getLoadStageGateFn env)
+  -- #1910: inter-thread queue telemetry. Read-only, world-free, and
+  -- answerable on a bare headless boot, so a backlog can be observed
+  -- from the moment the console comes up.
+  registerLuaFunction "getQueueStats" (getQueueStatsFn env)
 
   if isTbl
     then Lua.pop 1
