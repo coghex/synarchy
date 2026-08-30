@@ -13,12 +13,21 @@
 local M = package.loaded["scripts.input_followup_fixture"] or {}
 package.loaded["scripts.input_followup_fixture"] = M
 
+-- The flat fields report the LAST callback of their kind. That is
+-- enough for a click (its modifier release fires onKeyUp, not
+-- onMouseUp), but not for a key gesture: #1927's split hold broadcasts
+-- onKeyUp for its primary key and then, behind the #697 fence, for the
+-- modifier it releases — so a flat keyUpShift only ever reports the
+-- second one. The per-key tables keep both, indexed by the merged key
+-- name onKeyDown/onKeyUp receive ("W", "Shift", ...).
 function M.resetState()
     M.state = {
         mouseDownShift = nil,
         mouseUpShift   = nil,
         keyDownShift   = nil,
         keyUpShift     = nil,
+        keyDownShiftBy = {},
+        keyUpShiftBy   = {},
     }
 end
 M.resetState()
@@ -32,11 +41,15 @@ function M.onMouseUp(button, x, y, downRoute)
 end
 
 function M.onKeyDown(key)
-    M.state.keyDownShift = engine.isKeyDown("Shift")
+    local held = engine.isKeyDown("Shift")
+    M.state.keyDownShift = held
+    M.state.keyDownShiftBy[key] = held
 end
 
 function M.onKeyUp(key)
-    M.state.keyUpShift = engine.isKeyDown("Shift")
+    local held = engine.isKeyDown("Shift")
+    M.state.keyUpShift = held
+    M.state.keyUpShiftBy[key] = held
 end
 
 return M

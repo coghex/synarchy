@@ -36,7 +36,9 @@ import Engine.Core.Capability.InputView
     (InputViewCapability(..), toInputViewCapability)
 import Engine.Core.Capability.RenderView
     (RenderViewCapability(..), toRenderViewCapability)
-import Engine.Input.State (releaseHeldButtons, updateWindowState)
+import Control.Monad (foldM)
+import qualified Graphics.UI.GLFW as GLFW
+import Engine.Input.State (releaseHeldButtons, updateKeyState, updateWindowState)
 import Engine.Input.Types
 import Engine.Scripting.Lua.Types
 import qualified Engine.Core.Queue as Q
@@ -95,7 +97,7 @@ processInput env inpSt0 event = do
 dispatchInput ∷ EngineEnv → InputState → InputEvent → IO InputState
 dispatchInput env inpSt event = case event of
     InputKeyEvent glfwKey keyState mods →
-        dispatchKeyEvent env inpSt glfwKey keyState mods
+        dispatchKeyEvent env inpSt glfwKey keyState mods OwnerDirect
     InputCharEvent c →
         dispatchCharEvent env inpSt c
     InputMouseEvent btn pos state →
@@ -112,6 +114,45 @@ dispatchInput env inpSt event = case event of
     InputFollowup evs → do
         Q.writeQueue (ivLuaQueue (toInputViewCapability env)) (LuaInjectFollowup evs)
         return inpSt
+    -- Split-hold modifier CLAIM (#1927). Each key is dispatched as an
+    -- ordinary key press — same routing, same Lua broadcast, same
+    -- modifier flags as the bare 'InputKeyEvent's this replaced — but
+    -- attributed to the gesture, so the direct owner's own state for
+    -- that modifier is neither overwritten now nor cleared when the
+    -- gesture ends.
+    InputGestureHold gesture keys mods →
+        foldM (\st k → dispatchKeyEvent env st k GLFW.KeyState'Pressed mods
+                            (OwnerGesture gesture))
+              inpSt keys
+    -- Split-hold END (#1927). The up half cannot name what the down
+    -- half claimed, so the resolution happens HERE, against the live
+    -- ownership record. Nothing claimed → nothing to do, and in
+    -- particular no fence: a modifier-free split hold stays byte-for-
+    -- byte the sequence it was before #1927. Something claimed → fence
+    -- the release through the Lua thread exactly like 'InputFollowup'
+    -- does for a tap, so the primary release's own callbacks still see
+    -- the modifier held (#697). The claim itself deliberately survives
+    -- until that fenced release lands.
+    InputGestureEnd gesture mods → do
+        unless (null (gestureHeldKeys inpSt gesture)) $
+            Q.writeQueue (ivLuaQueue (toInputViewCapability env))
+                (LuaInjectFollowup [InputGestureRelease gesture mods])
+        return inpSt
+    -- The fenced half (#1927): drop the claim, and emit a REAL key
+    -- release only for keys no other owner still holds. One physical
+    -- Shift produces no key-up while an independent hold is still
+    -- pressing it, so neither does this — 'keyHeldByOtherOwner' is the
+    -- over-release guard, and the ownership drop happens on both
+    -- branches ('dispatchKeyEvent' performs it via 'updateKeyState' on
+    -- the releasing branch).
+    InputGestureRelease gesture mods →
+        foldM (\st k →
+                  if keyHeldByOtherOwner st gesture k
+                      then return (updateKeyState (OwnerGesture gesture) st k
+                                       GLFW.KeyState'Released mods)
+                      else dispatchKeyEvent env st k GLFW.KeyState'Released
+                               mods (OwnerGesture gesture))
+              inpSt (gestureHeldKeys inpSt gesture)
     -- Completion marker for synthetic injection (#727): everything
     -- queued ahead of this barrier (FIFO, this is the only consumer)
     -- has already been fully processed, side effects included, by the

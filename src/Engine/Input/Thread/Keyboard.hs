@@ -90,8 +90,15 @@ gameplayKeyHandler glfwKey bindings = case
 --   'Engine.Input.Thread.Dispatch') doesn't have to reindent this
 --   whole (pre-existing) body, which still drives everything below via
 --   the unqualified `inpSt` its own body already refers to.
-dispatchKeyEvent ∷ EngineEnv → InputState → GLFW.Key → GLFW.KeyState → GLFW.ModifierKeys → IO InputState
-dispatchKeyEvent env inpSt glfwKey keyState mods = do
+--   #1927: the trailing 'KeyHoldOwner' says which owner class this
+--   event's HOLD belongs to. It changes nothing above the very last
+--   line — routing, focus handling, F4 recording and every Lua
+--   broadcast are identical for both owners, which is exactly the
+--   point: a split hold's modifier bracket must still reach Lua and
+--   the UI as an ordinary key press, and only its STATE attribution
+--   differs (see 'Engine.Input.State.updateKeyState').
+dispatchKeyEvent ∷ EngineEnv → InputState → GLFW.Key → GLFW.KeyState → GLFW.ModifierKeys → KeyHoldOwner → IO InputState
+dispatchKeyEvent env inpSt glfwKey keyState mods owner = do
     -- Two independent focus systems checked here:
     --   1. FocusManager (focusManagerRef) — shell/console text input
     --   2. UIPageManager (uiManagerRef)   — UI widget text input
@@ -395,5 +402,5 @@ dispatchKeyEvent env inpSt glfwKey keyState mods = do
         result = if (textFocused ∨ controlFocusConsumed)
                     ∧ not (shouldTrackKeyStateWhileTextFocused glfwKey keyState)
             then inpSt
-            else updateKeyState inpSt glfwKey keyState mods
+            else updateKeyState owner inpSt glfwKey keyState mods
     return result { inpControlFocusConsumedKeys = outgoingConsumedKeys }

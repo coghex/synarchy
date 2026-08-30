@@ -36,7 +36,13 @@ asserts, end to end through the real pipeline:
      empty space → game scroll;
   7. drag: mouseDown + moveMouse + mouseUp — button reads held
      in between, and the release pairs with the press on the same
-     "game" route (no UI desync).
+     "game" route (no UI desync);
+  8. split-hold modifier OWNERSHIP (#1927): a modifier-bearing split
+     hold whose up half names NO modifier list still cleans up its own
+     modifier, a split hold nested inside an independent
+     input.keyDown("Shift") leaves that outer hold held, and the
+     release verbs refuse a mods argument outright (naming the down
+     half) rather than accepting one that cannot control the release.
 
 Run it from any screen (main menu is fine); the fixture cleans itself
 up afterwards. Exit code 0 = all checks passed.
@@ -230,6 +236,55 @@ def main() -> int:
         check("release pairs with the press on the 'game' route",
               bool(ups) and ups[-1]["route"] == "game",
               f"route={ups[-1]['route'] if ups else None}")
+
+        # 8. #1927 split-hold modifier ownership. The two live
+        # reproductions from docs/project_review_693-682.md PRR-1, run
+        # here against the real pipeline: before #1927 the first block
+        # left Shift stuck held, and the second released Shift out from
+        # under the outer hold.
+        expect_ok("modifier-bearing keyDown acks",
+                  lua('return input.keyDown("W", {"shift"})'))
+        check("split hold publishes its modifier between the halves",
+              lua('return engine.isKeyDown("Shift")') is True)
+        expect_ok("moveMouse mid-hold acks",
+                  lua(f"return input.moveMouse({dx}, {dy})"))
+        # The up half names NO modifier list — the ownership record,
+        # not this call's arguments, decides what gets released.
+        expect_ok("keyUp acks with no mods argument",
+                  lua('return input.keyUp("W")'))
+        check("split hold released its own modifier without a repeated list",
+              poll_until(lambda:
+                  lua('return engine.isKeyDown("Shift")') is False))
+        check("split hold released its primary key",
+              lua('return engine.isKeyDown("W")') is False)
+
+        expect_ok("independent shift hold acks",
+                  lua('return input.keyDown("Shift")'))
+        expect_ok("nested modifier-bearing mouseDown acks",
+                  lua(f'return input.mouseDown({ax}, {ay}, "left", {{"shift"}})'))
+        expect_ok("nested mouseUp acks",
+                  lua(f'return input.mouseUp({dx}, {dy})'))
+        check("independent modifier hold survives the nested split hold",
+              lua('return engine.isKeyDown("Shift")') is True)
+        expect_ok("independent shift release acks",
+                  lua('return input.keyUp("Shift")'))
+        check("independent modifier hold ends on its own release",
+              poll_until(lambda:
+                  lua('return engine.isKeyDown("Shift")') is False))
+
+        bad_key_up = lua('return input.keyUp("W", {"shift"})')
+        check("keyUp refuses a mods argument, naming keyDown",
+              isinstance(bad_key_up, dict)
+              and "input.keyDown" in str(bad_key_up.get("error", "")),
+              str(bad_key_up))
+        bad_mouse_up = lua(f'return input.mouseUp({dx}, {dy}, "left", {{"shift"}})')
+        check("mouseUp refuses a mods argument, naming mouseDown",
+              isinstance(bad_mouse_up, dict)
+              and "input.mouseDown" in str(bad_mouse_up.get("error", "")),
+              str(bad_mouse_up))
+        check("a refused release verb changed no held state",
+              lua('return engine.isKeyDown("Shift")') is False
+              and lua("return engine.isMouseButtonDown(1)") is False)
     finally:
         lua('return require("scripts.input_check_fixture").teardown()')
 

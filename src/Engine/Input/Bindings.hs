@@ -179,6 +179,11 @@ glfwKeyName GLFW.Key'LeftSuper    = "LeftSuper"
 glfwKeyName GLFW.Key'RightSuper   = "RightSuper"
 glfwKeyName k                     = keyToText (fromGLFWKey k)
 
+-- | Is the named key (merged or side-specific) currently held? Reads
+--   the PUBLISHED hold — 'Engine.Input.Types.keyHeld', the union of the
+--   direct owner's own state and any active synthetic split hold
+--   bracketing the key (#1927) — never 'inpKeyStates' alone, which
+--   knows only the direct half. This is what @engine.isKeyDown@ and
+--   @engine.isActionDown@ answer with.
 checkKeyDown ∷ Text → InputState → Bool
-checkKeyDown keyName state = any down (parseKeyName keyName)
-  where down k = maybe False keyPressed (Map.lookup k (inpKeyStates state))
+checkKeyDown keyName state = any (keyHeld state) (parseKeyName keyName)
