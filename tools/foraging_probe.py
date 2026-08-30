@@ -35,7 +35,7 @@ just persisted a live timer for).
 Usage: python3 tools/foraging_probe.py [--port 9173] [--seed 42]
        [--size 64] [--plates 3]
 """
-import argparse, glob, os, shutil, socket, subprocess, sys
+import argparse, glob, os, shutil, socket, stat, subprocess, sys
 import tempfile, time, uuid
 from probelib import (FixtureNotRegistered, boot, capture_request_id,
                       load_fixture_yaml, quit_engine, send, send_json,
@@ -43,6 +43,41 @@ from probelib import (FixtureNotRegistered, boot, capture_request_id,
 
 SPROOT = "/tmp"
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _make_owner_writable(top: str) -> None:
+    """Add owner write (and directory search) permission throughout a
+    freshly copied tree.
+
+    `shutil.copytree` reproduces the SOURCE's mode bits, so a checkout
+    whose `config/` is read-only -- a CI cache restored read-only, a
+    read-only mount, an archive unpacked without write bits -- yields a
+    private `config/` this run cannot use and cannot delete: unlinking a
+    child needs owner write+search on its parent directory, so
+    `remove_run_root` would report residue and leave the invocation's
+    whole tree, engine log and save slot behind after a run that did
+    nothing wrong (#1912). The copy is THIS invocation's, so it is made
+    writable regardless of what the source happened to be; the source
+    itself is never touched, and a symlink is skipped rather than
+    followed, so the content families it names keep their own modes.
+    Same treatment `tools/flora_growth_probe.py` and the four location
+    probes give their own copies.
+    """
+    for path, dirs, files in os.walk(top):
+        for name in [None, *dirs, *files]:
+            target = path if name is None else os.path.join(path, name)
+            try:
+                mode = os.lstat(target).st_mode
+                if stat.S_ISLNK(mode):
+                    continue
+                extra = stat.S_IRWXU if stat.S_ISDIR(mode) \
+                    else stat.S_IRUSR | stat.S_IWUSR
+                os.chmod(target, stat.S_IMODE(mode) | extra)
+            except OSError:
+                # Best effort: a mode this process cannot change is
+                # reported by the cleanup that actually trips over it,
+                # with the path it failed on, rather than here.
+                pass
 
 
 def make_isolated_root(base: str) -> str:
@@ -75,6 +110,7 @@ def make_isolated_root(base: str) -> str:
     if not os.path.exists(config_dst):
         shutil.copytree(os.path.join(REPO, "config"), config_dst,
                         ignore=shutil.ignore_patterns("*.local.yaml"))
+        _make_owner_writable(config_dst)
     os.makedirs(os.path.join(root, "saves"), exist_ok=True)
     return root
 

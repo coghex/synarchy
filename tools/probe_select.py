@@ -31,7 +31,8 @@ comparison against X/N and the rung ranking below.
 Eligibility, applied before any ranking
 ---------------------------------------
 A probe is eligible only when it is registered, classified manual-only,
-implements `probe-result/v1`, is not in flight, and is not claimed.
+implements `probe-result/v1`, is not deferred in the census, is not in
+flight, and is not claimed.
 Every exclusion is applied before ranking, so an excluded probe cannot
 win a rung however bad its numbers are.
 
@@ -148,12 +149,13 @@ RUNG_OVER_TOLERANCE = 2
 RUNG_STALE = 3
 
 # Every recorded reason a registered probe is not the selection. The
-# first five are exclusions applied before ranking; the last is the
+# first six are exclusions applied before ranking; the last is the
 # healthy terminal state, and is the one that makes `no-candidate`
 # readable.
 REASON_CI_ELIGIBLE = "ci-eligible"
 REASON_UNCLASSIFIED = "not classified manual-only"
 REASON_LEGACY = "requires protocol migration"
+REASON_DEFERRED = "deferred"
 REASON_IN_FLIGHT = "work already in flight"
 REASON_CLAIMED = "claimed by another agent"
 REASON_FRESH = "fresh within tolerance"
@@ -162,7 +164,7 @@ REASON_FRESH = "fresh within tolerance"
 # so the reason list is deterministic; it carries no precedence meaning,
 # because every one of them excludes on its own.
 EXCLUSION_ORDER = (REASON_CI_ELIGIBLE, REASON_UNCLASSIFIED, REASON_LEGACY,
-                   REASON_IN_FLIGHT, REASON_CLAIMED)
+                   REASON_DEFERRED, REASON_IN_FLIGHT, REASON_CLAIMED)
 _EXCLUSION_POSITION = {reason: position
                        for position, reason in enumerate(EXCLUSION_ORDER)}
 
@@ -312,7 +314,7 @@ def _protocol_of(protocol: dict, key: str) -> str:
 
 
 def _exclusions(key: str, *, manual_only, ci_eligible, protocol, in_flight,
-                claimed) -> tuple[str, ...]:
+                claimed, deferred) -> tuple[str, ...]:
     """Every ground on which `key` is excluded before ranking."""
     reasons = []
     if key in ci_eligible:
@@ -324,6 +326,8 @@ def _exclusions(key: str, *, manual_only, ci_eligible, protocol, in_flight,
         reasons.append(REASON_UNCLASSIFIED)
     if _protocol_of(protocol, key) != PROTOCOL_VERSION:
         reasons.append(REASON_LEGACY)
+    if key in deferred:
+        reasons.append(REASON_DEFERRED)
     if key in in_flight:
         reasons.append(REASON_IN_FLIGHT)
     if key in claimed:
@@ -520,12 +524,16 @@ def select_next_probe(*, registry, ci_eligible, manual_only, protocol, census,
     except probe_census.CensusError as error:
         return Selection(outcome=OUTCOME_MALFORMED, error=str(error))
 
+    deferred_keys = frozenset(
+        key for key, summary in summaries.items()
+        if summary.get("deferred") is not None)
     candidates = []
     skipped = []
     for key in keys:
         reasons = _exclusions(key, manual_only=manual_keys,
                               ci_eligible=ci_keys, protocol=protocol_map,
-                              in_flight=in_flight_keys, claimed=claimed_keys)
+                              in_flight=in_flight_keys, claimed=claimed_keys,
+                              deferred=deferred_keys)
         if reasons:
             skipped.append(Skip(key=key, reasons=reasons))
             continue

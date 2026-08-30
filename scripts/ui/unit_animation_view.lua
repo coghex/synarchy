@@ -35,7 +35,15 @@
 --     is what keeps the phase across a direction change and a resize.
 --     The source `loop` value is still reported verbatim by dump()
 --     (below); only gameplay (Unit.Render.pickFrame) still clamps.
+--
+-- Zoom (#1907): the ENLARGED sprite renders at the owner's session
+-- multiplier times its fit to layout()'s `enlarged` sub-rect (which is
+-- also the wheel's capture region -- getZoomRegion below). The
+-- direction ROW is deliberately untouched: cells keep their existing
+-- fixed sizing. This view never resets the multiplier -- a unit is ONE
+-- preview object, so an animation or direction change preserves it.
 local scale = require("scripts.ui.scale")
+local previewZoom = require("scripts.ui.preview_zoom")
 
 local unitAnimationView = {}
 
@@ -100,19 +108,16 @@ local function frameSize(frame, handle)
     return { width = frame.width, height = frame.height }
 end
 
--- Fit (w,h) inside (boxW,boxH) preserving aspect ratio — the same rule
--- previewManager.applyTexture uses for a focused simple-category
--- texture (Requirement 3: nearest-neighbour is forced session-wide by
--- previewManager.init, aspect ratio preserved here).
-local function fitRect(box, w, h)
-    if not w or not h or w <= 0 or h <= 0 then return nil end
-    local s = math.min(box.width / w, box.height / h)
-    local dw, dh = w * s, h * s
-    return {
-        x = box.x + (box.width - dw) / 2,
-        y = box.y + (box.height - dh) / 2,
-        width = dw, height = dh,
-    }
+-- Fit (w,h) inside (boxW,boxH) preserving aspect ratio, CENTERED, at
+-- 'multiplier' times the fitted scale — the same rule (and since #1907
+-- the same implementation) previewManager and the buildings viewer use.
+-- Requirement 3: nearest-neighbour is forced session-wide by
+-- previewManager.init; aspect ratio and containment come from here.
+--
+-- The direction ROW passes multiplier 1 deliberately: #1907 zooms the
+-- enlarged direction only, and cells keep their existing fixed sizing.
+local function fitRect(box, w, h, multiplier)
+    return previewZoom.fitRect(box, w, h, multiplier or previewZoom.MAX)
 end
 
 -----------------------------------------------------------
@@ -164,6 +169,9 @@ end
 --   requestTexture = function(path) -> textureHandle  (the owner's
 --     cache + trimmed-loading bookkeeping; called once per frame path)
 --   chromeTexture  = highlight.png handle, for the selected-cell marker
+--   zoom = initial zoom multiplier (#1907); the OWNER holds the live
+--     value (it survives an animation/direction change and a
+--     resize), this view only renders at whatever it was last told.
 --   uiscale, zIndex
 function unitAnimationView.new(params)
     local id = nextId
@@ -176,6 +184,7 @@ function unitAnimationView.new(params)
         panel = params.panel,
         requestTexture = params.requestTexture,
         chromeTexture = params.chromeTexture,
+        zoom = previewZoom.clamp(params.zoom),
         uiscale = params.uiscale or scale.get(),
         zIndex = params.zIndex or 1,
         anim = nil,          -- the PreviewAnim table from getPreviewBrowse
@@ -326,6 +335,29 @@ function unitAnimationView.setPanel(id, panel)
     unitAnimationView.reflow(id)
 end
 
+-- #1907. Deliberately does NOT touch animStart or the selection: zoom
+-- follows the preview OBJECT (this unit), so it survives an animation
+-- change, a direction change, playback and a resize, and only a new
+-- preview session resets it.
+function unitAnimationView.setZoom(id, multiplier)
+    local v = views[id]
+    if not v then return end
+    v.zoom = previewZoom.clamp(multiplier)
+    v.fitKey = nil
+    unitAnimationView.reflow(id)
+end
+
+-- The rect the wheel zooms over, and the fit denominator the enlarged
+-- sprite is sized against: layout()'s ENLARGED sub-rect, never the
+-- whole panel. The panel also holds the direction row, which #1907
+-- Requirement 3 forbids the enlarged sprite from overlapping and
+-- Requirement 8 keeps at its existing fixed cell sizing.
+function unitAnimationView.getZoomRegion(id)
+    local v = views[id]
+    if not v or not v.panel then return nil end
+    return layout(v).enlarged
+end
+
 -----------------------------------------------------------
 -- Geometry application
 -----------------------------------------------------------
@@ -384,7 +416,8 @@ function unitAnimationView.reflow(id)
         -- once rather than waiting for the next index change.
         local handle = applyFrame(v, v.enlargedId, frame, cell.mirrored)
         local size = frameSize(frame, handle)
-        local rect = size and fitRect(g.enlarged, size.width, size.height)
+        local rect = size and fitRect(g.enlarged, size.width, size.height,
+                                      v.zoom)
         if rect then
             UI.setSize(v.enlargedId, rect.width, rect.height)
             UI.setPosition(v.enlargedId, rect.x, rect.y)
@@ -398,7 +431,8 @@ function unitAnimationView.reflow(id)
     -- so update() retries next tick instead of freezing a placeholder.
     v.fitKey = allResolved
         and (tostring(v.direction) .. "|" .. tostring(v.panel.width)
-             .. "x" .. tostring(v.panel.height))
+             .. "x" .. tostring(v.panel.height)
+             .. "@" .. tostring(v.zoom))
         or nil
 end
 
@@ -525,6 +559,25 @@ function unitAnimationView.dump(id)
         texturePath = shownCell and shownCell.path or nil,
         cell = (shownCell and shownCell.width)
             and { width = shownCell.width, height = shownCell.height } or nil,
+    }
+    -- #1907 Requirement 11: enough engine-authoritative zoom state for
+    -- automated input to locate the real zoom surface and verify the
+    -- result. `region` is the sub-rect the wheel zooms over AND the fit
+    -- denominator (never panelBounds — see getZoomRegion); `sprite` is
+    -- the enlarged element's ACTUAL rendered bounds read back from
+    -- UI.getElementInfo, the same engine-is-the-authority rule the
+    -- direction cells' bounds already follow, so a probe checks where
+    -- the sprite really is rather than this module's own arithmetic.
+    local enlargedInfo = v.enlargedId and UI.getElementInfo(v.enlargedId)
+    out.zoom = {
+        multiplier = v.zoom,
+        min = previewZoom.MIN,
+        max = previewZoom.MAX,
+        region = unitAnimationView.getZoomRegion(id),
+        sprite = enlargedInfo and {
+            x = enlargedInfo.x, y = enlargedInfo.y,
+            w = enlargedInfo.width, h = enlargedInfo.height,
+        } or nil,
     }
     -- Assigned, never written as `x and y or z`: every field below can
     -- legitimately BE false, and Lua's and/or collapses that to the

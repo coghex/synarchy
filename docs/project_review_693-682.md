@@ -8,11 +8,11 @@ The lake-identification, hydrology-simulation, weather-generation, Lua-message, 
 
 ## Status
 
-- [ ] PRR-1. Synthetic split holds do not preserve modifier ownership
+- [x] PRR-1. Synthetic split holds do not preserve modifier ownership — [#1927]
 
 ## 1. Synthetic modifier lifetime across split holds
 
-### PRR-1. Synthetic split holds do not preserve modifier ownership
+### [#1927] PRR-1. Synthetic split holds do not preserve modifier ownership
 
 > **Captured note:** Give modifier keys an ownership-safe lifetime across `input.keyDown`/`keyUp` and `input.mouseDown`/`mouseUp`. A split gesture must neither leave its own modifiers stuck when the release omits a repeated `mods` list nor release a modifier that was already held independently.
 

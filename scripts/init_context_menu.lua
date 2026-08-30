@@ -117,7 +117,13 @@ function M.tryUnitMenu(x, y)
     local items = {
         { label = "Info",
           callback = function()
-              unit.select(targetUid)
+              -- #1929: targetUid was captured when the menu
+              -- opened, and the target can die or leave the page
+              -- before this fires. unit.select reports that
+              -- refusal and changes nothing, so the unconditional
+              -- deselects below must not run either (#1580's
+              -- stale-captured-target contract).
+              if not unit.select(targetUid) then return end
               -- Mirror the left-click unit-selection path:
               -- selecting a unit takes over the info panel,
               -- so clear any building/item selection to keep

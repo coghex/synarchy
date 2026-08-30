@@ -685,13 +685,30 @@ and the full `previewManager.dump()` contract (what lets a probe click a
 located row instead of a hardcoded coordinate) are in
 `docs/engine_contracts.md` §Preview mode.
 
+**Centered bounded zoom (#1907):** every main preview display has ONE
+per-session zoom multiplier, `1` (the initial value AND the maximum,
+i.e. the aspect fit) down to `1/8`, centered on its region with NO
+anchor, pan or crop — the complete texture is inside its region at every
+level by construction. The region owns a scroll-CAPTURING invisible
+element and nothing else (#743's three policies stay independent), which
+is what makes plain and Shift wheel identical; `dy < 0` ENLARGES, the
+gameplay camera's sign, not the list's. Reset follows preview-OBJECT
+identity — a different BARE-category texture resets, while another
+animation, direction, building entry, flora stage, structure piece,
+playback frame or a resize preserves — discriminated by
+`engine.getPreviewTarget()`'s `item`, never the mode string. Unit mode's
+region is the enlarged sub-rect, never `panelBounds`. Full contract:
+`docs/engine_contracts.md` §Centered bounded zoom.
+
 Gates: `tools/preview_cli_probe.py` (CI-eligible, no boot at all — every
 rejection above) and `tools/preview_probe.py` (manual-only, `needs-gpu` —
 discovery/selection/scroll/resize via the dump, forced nearest
-filtering, both viewers, and trimmed loading verified against the
-engine's own authoritative texture record). Pure logic: hspec
+filtering, both viewers, trimmed loading verified against the engine's
+own authoritative texture record, and zoom on all six display kinds via
+real `input.moveMouse`/`input.scroll`). Pure logic: hspec
 `--match "Preview.Discovery"` / `"Preview.UnitAnimation"` /
-`"Preview.Building"`.
+`"Preview.Building"` / `"Preview.Zoom"` — the last is the only BLOCKING
+automated gate zoom has, the probe being manual-only.
 
 ### Dump mode (no TCP, JSON to stdout)
 

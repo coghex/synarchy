@@ -473,7 +473,7 @@ instance, defaulting to its own historical fixed port when unset (#723).
 | `power_probe.py` | #358 | arena (isolated resource root) | Build-tool-routed power-node placement: `buildTool.commitPlacement` consumes an item off the selected unit for `power.*`-placeable defs, role/parameter reporting, `building.destroy` retires the host's node live (#1206), save → quit → restart → load reconnects the surviving nodes and restores none of the retired one. |
 | `power_workshop_probe.py` | #361, #590, #796 | arena | Job-dependent recipe `power_draw`: the synthetic workshop carries no `power_drain`, so demand exists only while a bill is claimed AND actively worked (`cbWorking`) — `drainW` 0 on claim alone, the recipe's draw once working, unchanged across a pause, 0 on release — and a fully generating station with no bill claimed still reports `drainW == 0`. Around that: unpowered `craft.executeAt` refusal, wired-but-uncharged still unpowered, noon flip powers it, a bare gate query for a second recipe summing its draw with the already-active bill's at the same station, a paused continuing bill whose completed cycle clears the claim and the demand with it (#796), `craft_job` AI stalls at 0 progress while browned out and resumes once powered, and battery `storedWh` rises/falls over a simulated day/night driven by that real active job's draw. `bdPowerDrain` / `power.isBuildingPowered` — #361's always-on building-consumer model — remain for a hypothetical non-crafting device and are trivially true throughout here, not what this probe exercises. |
 | `preview_cli_probe.py` | #886, #887, #888, #1012, #1086, #1191 | none (pre-boot only, no window/engine thread) | `--preview` CLI contract: every explicitly unexposed category name (`equipment`/`hud`/`facemap`/`utility`/`vegetation`) is an ordinary unknown-category error listing exactly the canonical set; every grouped category (`units`/`flora`/`buildings`/`structures`) with no item prints the "select a specific ..." guidance and exits 0; a bare `--preview` errors without falling through to a real boot; a nonexistent/directory/path-escaping simple-category item all reject before ever creating a window; and (#887) an unknown unit, a `units/<name>` carrying path structure or `.`/`..`/absolute traversal, and a unit directory with no `animations/` subtree all reject the same pre-boot way. And (#888) the remaining grouped categories reject the identical pre-boot way: an unknown `flora`/`buildings`/`structures` item, a name carrying path structure or `.`/`..`/absolute traversal, a symlinked item directory, and a FILE where a browsable item directory was expected (`flora/unknown_flora.png`). And (#1012/CH-58) one case per row of `incompatibleFlagTable`: a flag given to a boot mode that does not honour it exits 1 naming both the flag and the selected mode. And (#1191) present-but-malformed VALUES in a mode that DOES honour the flag: every affected spelling (`--seed`/`--worldSize`/`--plates`/`--ages`/`--port`), a flag with no operand at all, empty and unknown `--dump=` layer selections plus empty segments, and malformed and non-positive `--size` each exit 1 pre-boot naming the flag and the offending token, with nothing on stdout — plus the two orderings the fix must preserve (validation runs ahead of mode-specific early exits and regardless of consumption; mode-compatibility rejection still outranks it) and the requirement that omitting a flag still keeps its default. And (#1086) boot-mode PRECEDENCE: argv naming two competing mode selectors resolves to the higher-precedence one — one case per boundary of `language-report > dump > preview > offscreen > headless`, each asserted through the rejection's exact stderr line and exit code, which is what the single `App.Cli.selectBootMode` encoding makes trustworthy as a statement about the mode that would actually have booted; plus a real `--dump=Elevation,ICE` run proving an explicit, mixed-case layer selection still emits exactly those layers' tile fields and no others. |
-| `preview_probe.py` | #886, #887, #888 | hidden, non-activating real window (still needs GPU; no offscreen variant) | `--preview` real-boot browser (`SYNARCHY_PREVIEW_HIDDEN=1`, a hidden window per target, ~22 boots): simple-category list mode reports boot profile `"preview"` and the parsed target, its discovered entries (`require("scripts.preview_manager").dump()`) match an independently-computed filesystem expectation, the first entry auto-selects and resolves, clicking a different row (located from the dump's own row bounds) changes selection, wheel input changes the reported scroll offset, and a grow/shrink resize reflows without overflowing; focused item mode has no list while its texture resolves; every requested texture path stays under the browsed category's root (#886). Units viewer (#887): the animation list matches a filesystem-derived expectation exactly and in order, the default selection is `idle`/south, effective fps/loop match `data/units/<name>.yaml`, all eight direction cells appear in the game's order with the western three reporting their real mirror source, the frame index advances over wall time, a dump-located row click switches clips and a dump-located mirrored-cell click enlarges that direction, a resize preserves animation/direction/scroll, and a PROMOTED tree (`tiller`, declared under `asset_units:` by #1257 and under `units:` since #1261) reports its DECLARED fps=8/loop=true/flip=true with W/SW/NW mirrored from their eastern counterparts and is atlas-backed like any other unit. #1261 adds a roster phase: one boot per remaining declared unit (the list read from `data/units/`, never written in the probe), asserting the animation list still equals the filesystem expectation, every animation reports atlas storage naming its own compiled atlas from the index, and nothing outside that unit's own directory loaded. Buildings viewer (#888): the mixed animation-directory + loose-static entry list matches a filesystem+YAML expectation exactly and in order with each row's own static/animation identity, the default selection is the DIRECTORY holding `state_animations.built`'s declared frames (`idle`, not the YAML's `portal-idle` name), its fps/loop come from that entry, the frame index advances, a resize preserves selection/scroll, and a dump-located static-row click selects it and exposes no playback; a building with no `built` state falls back to its `sprite` and still recognizes a YAML-less `demolish/` folder by the numbered-frame convention at fps=8/loop=false; a building with no YAML at all (`dungeon_1`) surfaces its `damaged/` subtree as ordinary statics and defaults to its first entry; `flora/<name>` and `structures/wire` dispatch into the shared simple browser rooted at the item folder; and a final sweep proves every canonical category dispatches with no `placeholder` mode left anywhere. |
+| `preview_probe.py` | #886, #887, #888, #1907 | hidden, non-activating real window (still needs GPU; no offscreen variant) | `--preview` real-boot browser (`SYNARCHY_PREVIEW_HIDDEN=1`, a hidden window per target, ~28 boots): simple-category list mode reports boot profile `"preview"` and the parsed target, its discovered entries (`require("scripts.preview_manager").dump()`) match an independently-computed filesystem expectation, the first entry auto-selects and resolves, clicking a different row (located from the dump's own row bounds) changes selection, wheel input changes the reported scroll offset, and a grow/shrink resize reflows without overflowing; focused item mode has no list while its texture resolves; every requested texture path stays under the browsed category's root (#886). Units viewer (#887): the animation list matches a filesystem-derived expectation exactly and in order, the default selection is `idle`/south, effective fps/loop match `data/units/<name>.yaml`, all eight direction cells appear in the game's order with the western three reporting their real mirror source, the frame index advances over wall time, a dump-located row click switches clips and a dump-located mirrored-cell click enlarges that direction, a resize preserves animation/direction/scroll, and a PROMOTED tree (`tiller`, declared under `asset_units:` by #1257 and under `units:` since #1261) reports its DECLARED fps=8/loop=true/flip=true with W/SW/NW mirrored from their eastern counterparts and is atlas-backed like any other unit. #1261 adds a roster phase: one boot per remaining declared unit (the list read from `data/units/`, never written in the probe), asserting the animation list still equals the filesystem expectation, every animation reports atlas storage naming its own compiled atlas from the index, and nothing outside that unit's own directory loaded. Buildings viewer (#888): the mixed animation-directory + loose-static entry list matches a filesystem+YAML expectation exactly and in order with each row's own static/animation identity, the default selection is the DIRECTORY holding `state_animations.built`'s declared frames (`idle`, not the YAML's `portal-idle` name), its fps/loop come from that entry, the frame index advances, a resize preserves selection/scroll, and a dump-located static-row click selects it and exposes no playback; a building with no `built` state falls back to its `sprite` and still recognizes a YAML-less `demolish/` folder by the numbered-frame convention at fps=8/loop=false; a building with no YAML at all (`dungeon_1`) surfaces its `damaged/` subtree as ordinary statics and defaults to its first entry; `flora/<name>` and `structures/wire` dispatch into the shared simple browser rooted at the item folder; and a final sweep proves every canonical category dispatches with no `placeholder` mode left anywhere. Centered bounded zoom (#1907): one boot per display kind (bare list, focused item, unit enlarged, building, flora item, structure item), driving the REAL wheel pipeline with `input.moveMouse` + `input.scroll` over the dump-reported zoom REGION rather than any hardcoded coordinate — a session starts at multiplier 1, delta MAGNITUDE is honoured rather than reduced to a sign, both limits clamp exactly at 1/8 and 1 with further input consumed and stable, the rendered dimensions are one eighth of the fitted ones at the floor and exactly the fitted ones back at the ceiling, the sprite stays centered and wholly inside its region throughout, plain and a really-held-Shift wheel behave identically, a wheel over a located list row moves the list and never the zoom while a wheel over the pane moves the zoom and never the list (including once saturated), the object-identity rule resets on a different BARE-category texture and preserves for a unit animation / building entry / flora piece, and a resize preserves the multiplier while recomputing the region. |
 | `remote_warning_page_guard_probe.py` | #844 | arena (no worldgen) | Remote-settlement confirmation cross-page guard: `establishHere()` rejects a stale confirmation when the active world page changed while the modal was open (no spawn, `revalidationRejected` with reason `"active world changed"`), while the same-page happy path and `chooseAnotherSite()` cancel remain unaffected. |
 | `repair_item_probe.py` | #300 | worldgen | `unit.repairItem` primitive. |
 | `repair_probe.py` | #301 | arena | Repair policy layer (station-gated repair on top of #300). |
@@ -922,6 +922,61 @@ alongside `test_probe_root_cleanup.py`.
 python3 tools/test_flora_growth_probe.py
 ```
 
+### `test_location_content_probe.py` — the location-content probe's artifact ownership (#1884)
+
+The same split, one probe over. `location_content_probe.py` already owned
+an isolated resource root and removed it on every exit path (#1620) — but
+again only its SAVE slots had moved there. Its five fixture YAMLs and its
+engine log stayed at the fixed, process-global names
+`/tmp/loc_content_probe_bogus.yaml`, `…_bogus_loot.yaml`, `…_quinoa.yaml`,
+`…_quinoa_loot.yaml`, `…_dense.yaml` and
+`/tmp/location_content_engine.log`, each written with a truncating
+`open(..., "w")`, none carrying any invocation identity, and none removed
+by anything. Two concurrent runs collided on all six. The log collision is
+the sharp one here: this probe ASSERTS against that log twice — the
+integrity diagnostic after phase 2's load, and phase 3's two
+unknown-content warnings — so a foreign truncation could turn a passing
+phase into a failure or a failure into a pass, not merely muddle a
+post-mortem. All six now live inside the directory the invocation already
+owned.
+
+`python3 tools/test_location_content_probe.py` drives the probe's REAL
+`main()` with `run` substituted, so the guard's own paths are exercised
+without an engine: two invocations share no fixture, log or root path;
+all five fixture paths are absolute (the engine is chdir'd into the
+isolated root, so a relative one would resolve elsewhere) and inside the
+run's own tree; no `/tmp` literal is left in the module at all, and a
+real run leaves each of the six legacy paths exactly as it found it —
+absent if absent, byte-identical if a developer has one; the tree is
+released after a pass, a failure, an early return, an exception, a
+`_PhaseAborted`, a `probelib.boot` abort and a handled Ctrl-C; an engine
+the run merely LAUNCHED is killed BEFORE the tree it is writing into is
+removed, and killed directly rather than sent an `engine.quit()` that
+might reach somebody else's instance; `--keep-artifacts` is opt-in, keeps
+whatever result the run's own checks produced, names the retained
+directory, and reports only what that run ACTUALLY produced (a directory
+that was never created says so rather than being called empty); a default
+failing run says its log went with the tree and points at the flag; and a
+cleanup that cannot finish makes an otherwise passing run non-zero,
+through #1620's own `remove_isolated_root` reporting. It also pins what
+the probe still proves after the move: all seven boots go through the one
+funnel that hands each this invocation's log and registers its process as
+it is launched; both log-reading ASSERTIONS read that same log; the five
+fixture bodies are pinned by `sha256`; their registration order and
+loaders are unchanged (placement and loot draws are order- and
+content-sensitive); `load_fixture_yaml` still guards every one of them
+(#1342); and `make_isolated_root`, `remove_isolated_root` and
+`save_and_wait` are still the shapes `portal_ghost_probe.py` imports.
+
+The probe is manual-only and boots seven engines across several generated
+worlds, so without this companion the contract is only ever observed by a
+run nothing in CI can make. Engine-free, GPU-free, network-free, about a
+second; blocking CI step alongside `test_flora_growth_probe.py`.
+
+```bash
+python3 tools/test_location_content_probe.py
+```
+
 ### `test_location_probe_config_isolation.py` — the location probes' private `config/` (#1729)
 
 `location_content_probe.py`, `location_overlay_probe.py` and
@@ -1066,7 +1121,7 @@ event, which is never reported as a probe pass.
 ### `probe_census.py` — the probe census (#1425, #1428, #1430, #1492, #1434, #1441, #1439, #1438)
 
 Builds, validates and updates `docs/probe_census.json`, now
-`probe-census/v4`: every registered probe exactly once, with its script, its
+`probe-census/v5`: every registered probe exactly once, with its script, its
 CI-eligible/manual-only classification, its protocol status (`legacy` or
 `probe-result/v1`) and one census record holding the acceptable-failure
 policy, the estimated worst-case duration, the current commit cohort, the
@@ -1074,8 +1129,11 @@ archived cohorts, an append-only attempt log, an append-only log of claim
 ACQUISITIONS keyed for idempotency by acquisition token (#1434), and an
 append-only log of a de-flake attempt's non-repair OUTCOMES keyed for
 idempotency by attempt identity — the three stable ones (#1439) and the
-production defect a tracker issue was filed for (#1438). All three are separate collections
-on purpose: an attempt is a result ingestion and is deliberately
+production defect a tracker issue was filed for (#1438). The record also has
+a nullable `deferred` decision: when present, its non-blank `reason` and
+`resume_when` condition keep the probe registered with all evidence intact
+while excluding it from de-flake selection. All three logs are separate
+collections on purpose: an attempt is a result ingestion and is deliberately
 non-idempotent, while recording one acquisition or one attempt outcome twice
 must stay one record — and an outcome carries evidence neither of the other
 two has a field for. The census lives in the
@@ -1101,6 +1159,10 @@ python3 tools/probe_census.py --probe KEY --set-acceptable-failures 7
 python3 tools/probe_census.py --probe KEY --set-acceptable-failures 0 \
     --clear-justification
 python3 tools/probe_census.py --probe KEY --set-estimate 480
+python3 tools/probe_census.py --defer --probe KEY \
+    --reason "the required content is not implemented" \
+    --resume-when "the planned content assets merge"
+python3 tools/probe_census.py --resume --probe KEY
 ```
 
 An X update that omits `--justification` never clears the stored text —
@@ -1284,17 +1346,17 @@ untouched, it leaves `--promotion-candidates`' manual-only report, and it
 accepts no further samples.
 
 `--print` never touches the docs worktree. `--seed` is the ONLY operation that
-migrates: it creates an absent census, migrates a `probe-census/v1`, `/v2` or
-`/v3` one losslessly — the v2 step adds only the empty claim log and the v3
-step only the empty outcome log, keeping every policy field, cohort, sample,
-attempt and claim — and reconciles inventory
-drift — appending newly registered
-probes, refreshing inventory metadata, retaining a row whose probe left the
-registry for a person to dispose of, and archiving a `current` cohort when a
-probe becomes CI-eligible. It never regenerates accumulated census data.
+migrates: it creates an absent census and migrates a `probe-census/v1`, `/v2`,
+`/v3` or `/v4` one losslessly — the v2→v3 transition adds only the empty claim
+log, v3→v4 only the empty outcome log, and v4→v5 only a null `deferred` field,
+keeping every policy field, cohort, sample, attempt, claim and outcome — and
+reconciles inventory drift — appending newly registered probes, refreshing
+inventory metadata, retaining a row whose probe left the registry for a person
+to dispose of, and archiving a `current` cohort when a probe becomes
+CI-eligible. It never regenerates accumulated census data.
 `--record`, `probe_census.record_claim`, `probe_census.record_outcome` and
-both policy operations refuse, naming `--seed`, when the census is absent or
-still on an older schema.
+the policy and deferral operations refuse, naming `--seed`, when the census is
+absent or still on an older schema.
 
 Every mutation is one locked read-modify-write: a cross-process `flock` keyed
 by the resolved target, held from the read through serialization and the
@@ -1306,11 +1368,11 @@ stream, no engine log. Exit codes: 2 for a missing or unusable docs worktree,
 
 Shape validation is DECLARED, in `tools/probe_census_schema.json` — a JSON
 Schema 2020-12 document, self-checked against that draft when it loads, that
-describes the v1 seed, the frozen v2 census, the current v3 census and the
-incoming `probe-flake-result/v1` document alike. The v2 root definition is
-FROZEN at the six-field record it really held: it now describes migration
-INPUT, so widening it would make every stored v2 census invalid for lacking
-the field migration exists to add. Every object in it is closed (`required` plus
+describes the v1 seed, frozen v2/v3/v4 censuses, the current v5 census and the
+incoming `probe-flake-result/v1` document alike. Each older root definition is
+FROZEN at the record it really held: it now describes migration INPUT, so
+widening it would make a stored older census invalid for lacking the field
+migration exists to add. Every object in it is closed (`required` plus
 `additionalProperties: false`, with a nullable field REQUIRED and
 null-inclusive rather than optional), so a deleted field is a violation rather
 than an absence. The stored census is checked before any operation transforms
@@ -3000,23 +3062,28 @@ main-thread-only, so the Lua thread reads a ref the render thread
 publishes, and the script forces a publish (a no-op `setResolution`)
 before sampling.
 
-From a `borderless` start it is the #1731 gate, and that start asserts
-the same round trip plus one more thing. `defaultWindowConfig` now asks
-GLFW for borderless as well as fullscreen, so such a boot comes up
-undecorated and monitor-sized; applying the mode at creation consumes
-the first-switch caching opportunity, so `createWindow` seeds the
-windowed cache from the decorated window it made at the CONFIGURED size
-immediately before mutating it. The `windowed` leg must therefore reach
-that saved resolution rather than `defaultWindowState`'s 800x600
-fallback — which is what distinguishes a correct startup seed from an
-incorrect one, since `getVideoConfig()` reports the QUEUED target mode
-independently of what the render thread applied and so round-trips
-either way. Run that start from a non-default saved resolution.
+From a `borderless` start it is the #1731 gate and from a `fullscreen`
+start the #1882 one; they are the same gate, and each asserts one thing
+beyond the round trip. `defaultWindowConfig` asks GLFW for borderless as
+well as fullscreen, and either mode is applied to the decorated window
+`createWindow` just made; applying it there consumes the first-switch
+caching opportunity, so `createWindow` seeds the windowed cache from
+that decorated window at the CONFIGURED size immediately before mutating
+it. The `windowed` leg must therefore reach that saved resolution rather
+than `defaultWindowState`'s 800x600 fallback — which is what
+distinguishes a correct startup seed from an incorrect one, since
+`getVideoConfig()` reports the QUEUED target mode independently of what
+the render thread applied and so round-trips either way. Run both starts
+from a non-default saved resolution.
 
-A `fullscreen` start remains reported but not asserted: no windowed
-window was ever on screen, so its `windowed` leg legitimately lands on
-the fallback. That gap is `PRR-2` in
-`docs/project_review_909-874.md`, tracked separately.
+That leg is asserted on SIZE only: configuration persists no position,
+and the size comparison against the config is a proxy — a window manager
+need not honour the requested size exactly. The authoritative seed
+contract, position included, is pinned headlessly by
+`Graphics.WindowMode`'s `bootPos`/`bootSize` fixture. A `fullscreen`
+start additionally leaves its OUTER round trip reported but not
+asserted, because its return leg re-enters fullscreen rather than
+restoring a cached windowed window.
 
 Every setting it touches is captured from the LIVE config first and
 restored at the end — never to a hardcoded default, since a user's

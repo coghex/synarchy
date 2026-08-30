@@ -52,6 +52,7 @@ import qualified Test.Headless.Item.BuffYaml as ItemBuffYaml
 import qualified Test.Headless.Item.QualityTier as ItemQualityTier
 import qualified Test.Headless.Item.ContentsSignature as ItemContentsSig
 import qualified Test.Headless.Item.Condition as ItemCondition
+import qualified Test.Headless.Item.SteelHelmet as ItemSteelHelmet
 import qualified Test.Headless.Item.RepairFinite as ItemRepairFinite
 import qualified Test.Headless.Item.Materialize as ItemMaterialize
 import qualified Test.Headless.Item.BulkStorage as ItemBulkStorage
@@ -69,6 +70,7 @@ import qualified Test.Headless.Unit.Atlas as UnitAtlas
 import qualified Test.Headless.Unit.Atlas.Loader as UnitAtlasLoader
 import qualified Test.Headless.Preview.UnitAnimation as PreviewUnitAnimation
 import qualified Test.Headless.Preview.Building as PreviewBuilding
+import qualified Test.Headless.Preview.Zoom as PreviewZoom
 import qualified Test.Headless.World.Save.Sanitize as SaveSanitize
 import qualified Test.Headless.World.Save.Serialize as SaveSerialize
 import qualified Test.Headless.World.Save.Envelope as SaveEnvelope
@@ -102,6 +104,7 @@ import qualified Test.Headless.Input.Bindings as InputBindings
 import qualified Test.Headless.Input.State as InputState
 import qualified Test.Headless.Input.Inject as InputInject
 import qualified Test.Headless.Input.Followup as InputFollowup
+import qualified Test.Headless.Input.InjectOwnership as InputInjectOwnership
 import qualified Test.Headless.Lua.DebugQueue as LuaDebugQueue
 import qualified Test.Headless.Lua.RenderQueue as LuaRenderQueue
 import qualified Test.Headless.Lua.PreviewGeneration as LuaPreviewGeneration
@@ -150,6 +153,7 @@ import qualified Test.Headless.UI.CreateWorldControls as CreateWorldControls
 import qualified Test.Headless.UI.Tooltip as UITooltip
 import qualified Test.Headless.UI.InputOwnership as UIInputOwnership
 import qualified Test.Headless.UI.ZoomBandInputGate as UIZoomBandInputGate
+import qualified Test.Headless.UI.UnitInfoRowSelection as UIUnitInfoRowSelection
 import qualified Test.Headless.UI.ElementInputPolicy as UIElementInputPolicy
 import qualified Test.Headless.UI.ControlActivation as UIControlActivation
 import qualified Test.Headless.UI.HierarchyOwnership as UIHierarchyOwnership
@@ -176,6 +180,7 @@ import qualified Test.Headless.Lua.ShellInput as LuaShellInput
 import qualified Test.Headless.Lua.RandomStream as LuaRandomStream
 import qualified Test.Headless.Lua.InjuryNarration as LuaInjuryNarration
 import qualified Test.Headless.UI.Slider as UISlider
+import qualified Test.Headless.UI.BarFillColor as UIBarFillColor
 import qualified Test.Headless.UI.ClickCorrelation as UIClickCorrelation
 import qualified Test.Headless.UI.TransferContextMenu as UITransferContextMenu
 import qualified Test.Headless.UI.ItemList as UIItemList
@@ -211,8 +216,10 @@ import qualified Test.Headless.Graphics.BindlessPublish as BindlessPublish
 import qualified Test.Headless.Lua.AssetFailure as LuaAssetFailure
 import qualified Test.Headless.Core.ConfigState as ConfigState
 import qualified Test.Headless.Core.Queue as CoreQueue
+import qualified Test.Headless.Core.LogCategoryEnv as LogCategoryEnv
 import qualified Test.Headless.Core.LogMonad as LogMonad
 import qualified Test.Headless.Core.LogParity as LogParity
+import qualified Test.Headless.Core.LogThresholdEnv as LogThresholdEnv
 import qualified Test.Headless.Core.LoopStartup as LoopStartup
 import qualified Test.Headless.Core.ShutdownAtlasRelease as ShutdownAtlasRelease
 import qualified Test.Headless.Core.WorkerLifecycle as WorkerLifecycle
@@ -231,6 +238,7 @@ import qualified Test.Headless.Building.Placement as BuildingPlacement
 import qualified Test.Headless.Building.RemoteWarning as BuildingRemoteWarning
 import qualified Test.Headless.Save.AutosaveGuards as AutosaveGuards
 import qualified Test.Headless.Save.AutosaveListing as AutosaveListing
+import qualified Test.Headless.Save.MenuListingOrder as MenuListingOrder
 import qualified Test.Headless.Save.Barrier as SaveBarrier
 import qualified Test.Headless.Load.Status as LoadStatus
 import qualified Test.Headless.Save.Snapshot as SaveSnapshot
@@ -301,6 +309,14 @@ main = hspec $ do
         -- drive the #697 fence relay by hand (harness runs neither
         -- the input nor the Lua thread, so the queues are the test's).
         describe "Input.Followup" InputFollowup.spec
+        -- #1927: a split hold's modifier lifetime is a property of the
+        -- ownership record the INPUT THREAD keeps between two
+        -- independent verb calls, so it can only be asserted as state
+        -- against a live env — same technique as Input.Followup above.
+        -- The name keeps `--match "Input.Inject"` (the issue's focused
+        -- acceptance command) selecting it alongside the pure
+        -- sequence-shape group.
+        describe "Input.Inject ownership" InputInjectOwnership.spec
         -- Same technique as Input.Followup above: no world dependency
         -- at all, just the live EngineEnv's queues/refs to construct a
         -- real Lua backend and drive processLuaMsg directly.
@@ -489,6 +505,7 @@ main = hspec $ do
     describe "Preview.Discovery" PreviewDiscovery.spec
     describe "Preview.UnitAnimation" PreviewUnitAnimation.spec
     describe "Preview.Building" PreviewBuilding.spec
+    describe "Preview.Zoom" PreviewZoom.spec
     describe "Bindless texture filter rebinding" BindlessRebind.spec
     describe "Bindless texture release" BindlessRelease.spec
     describe "bindless registration failure" $ do
@@ -504,6 +521,7 @@ main = hspec $ do
 
     aroundAll withHeadlessEngine ItemDiscovery.spec
     aroundAll withHeadlessEngineNoWorld ItemCondition.spec
+    aroundAll withHeadlessEngineNoWorld ItemSteelHelmet.spec
     -- Own engine (#1772): the craft-identity gate installs its own
     -- single-page world manager and rewrites the item, recipe and unit
     -- manager refs, exactly like the ItemCondition gate above. It needs
@@ -542,6 +560,7 @@ main = hspec $ do
     describe "atomic save storage" SaveStorage.spec
     describe "persistence contract" SaveContract.spec
     describe "autosave staging slots (#1413)" AutosaveListing.spec
+    MenuListingOrder.spec
     describe "Save.Barrier" SaveBarrier.spec
     describe "Load.Status" LoadStatus.spec
     describe "Save.Snapshot" SaveSnapshot.spec
@@ -625,6 +644,7 @@ main = hspec $ do
     describe "UI.Tooltip" UITooltip.spec
     describe "UI.InputOwnership" UIInputOwnership.spec
     describe "zoom-band entity input gate" UIZoomBandInputGate.spec
+    describe "Unit Info row selection gate" UIUnitInfoRowSelection.spec
     describe "UI.ElementInputPolicy" UIElementInputPolicy.spec
     describe "UI.ControlActivation" UIControlActivation.spec
     describe "UI hierarchy structural ownership" UIHierarchyOwnership.spec
@@ -663,6 +683,7 @@ main = hspec $ do
     describe "Lua random stream ownership" LuaRandomStream.spec
     describe "Lua injury narration" LuaInjuryNarration.spec
     UISlider.spec
+    UIBarFillColor.spec
     UIClickCorrelation.spec
     describe "World.Calendar" Calendar.spec
     describe "World.FloraGrowth" FloraGrowth.spec
@@ -716,8 +737,10 @@ main = hspec $ do
     describe "Render.ViewportGuard" ViewportGuard.spec
     describe "Render.QuadVertices" QuadVertices.spec
     describe "Core.ConfigState" ConfigState.spec
+    LogCategoryEnv.spec
     LogMonad.spec
     LogParity.spec
+    LogThresholdEnv.spec
     LoopStartup.spec
     ShutdownAtlasRelease.spec
     WorkerLifecycle.spec

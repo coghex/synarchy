@@ -381,6 +381,37 @@ def test_no_qualifying_probe_is_a_successful_no_work_outcome() -> None:
         scratch.cleanup()
 
 
+def test_deferred_probes_are_never_claimed_or_measured() -> None:
+    print("\n-- deferred probes are excluded before claim or measurement")
+    scratch = Scratch()
+    try:
+        for probe in (PROBE, OTHER):
+            probe_census.record_deferral(
+                scratch.census, probe,
+                reason="the scenario's content is intentionally incomplete",
+                resume_when="the planned content assets merge")
+        measure = Recorder(measurement(scratch))
+        claims: list[str] = []
+
+        def claim_it(probe, **_kwargs):
+            claims.append(probe)
+            return FakeClaim(probe)
+
+        result = run(scratch, acquire_claim=claim_it, measure=measure)
+        expect(result.outcome == deflake.OUTCOME_NO_QUALIFYING_PROBE,
+               f"the lab reports no qualifying probe ({result.outcome})")
+        expect(claims == [], "no deferred probe is claimed")
+        expect(measure.calls == [], "no deferred probe is measured")
+        reasons = {entry["probe"]: entry["reasons"]
+                   for entry in result.skipped}
+        expect(reasons == {
+            PROBE: [probe_select.REASON_DEFERRED],
+            OTHER: [probe_select.REASON_DEFERRED]},
+            f"the exclusion is explicitly reported as deferred ({reasons})")
+    finally:
+        scratch.cleanup()
+
+
 def test_a_malformed_census_fails_before_anything_is_claimed() -> None:
     print("\n-- census data that cannot be ranked fails before any claim, "
           "resource, measurement or write")
@@ -1753,6 +1784,7 @@ def main() -> int:
     test_the_harness_is_told_ten_runs_and_four_capabilities()
     test_pass_fail_and_timeout_are_all_valid_observations()
     test_no_qualifying_probe_is_a_successful_no_work_outcome()
+    test_deferred_probes_are_never_claimed_or_measured()
     test_a_malformed_census_fails_before_anything_is_claimed()
     test_an_unreachable_census_at_selection_time_is_a_selector_error()
     test_exactly_one_probe_is_selected_per_invocation()
