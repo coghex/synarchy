@@ -7,12 +7,21 @@
 --   press pairs with a release, modifiers bracket the action — with
 --   the releases riding an 'InputFollowup' fence (#697) so they are
 --   processed only after the action's Lua callbacks have run).
+--
+--   #1927 split the modifier story in two. A TAP's modifiers still
+--   live entirely in one sequence and are asserted here as before. A
+--   SPLIT hold's now cross two independent verb calls, so its builders
+--   only CLAIM ('InputGestureHold') and END ('InputGestureEnd') — what
+--   is actually released is resolved by the input thread against the
+--   live ownership record, and is therefore asserted as STATE, by the
+--   env-driven "Input.Inject ownership" group
+--   ("Test.Headless.Input.InjectOwnership"), not as a list shape here.
 module Test.Headless.Input.Inject (spec) where
 
 import UPrelude
 import qualified Graphics.UI.GLFW as GLFW
 import Engine.Input.Inject
-import Engine.Input.Types (InputEvent(..))
+import Engine.Input.Types (InputEvent(..), InjectGesture(..))
 import Test.Hspec
 
 spec ∷ Spec
@@ -93,23 +102,25 @@ spec = do
                     "expected modifier press first and a followup fence last"
             length evs `shouldBe` 5
 
-        it "mouseDown holds its modifiers; mouseUp fences their release after" $ do
+        it "mouseDown claims its modifiers under the gesture; mouseUp ends that claim (#1927)" $ do
             let downs = mouseDownSequence pos GLFW.MouseButton'2 shiftMod
-                ups   = mouseUpSequence pos GLFW.MouseButton'2 shiftMod
+                ups   = mouseUpSequence pos GLFW.MouseButton'2
             downs `shouldBe`
-                [ InputKeyEvent GLFW.Key'LeftShift GLFW.KeyState'Pressed
-                    (snd shiftMod)
+                [ InputGestureHold (GestureMouse GLFW.MouseButton'2)
+                    [GLFW.Key'LeftShift] (snd shiftMod)
                 , InputCursorMove 100 50
                 , InputMouseEvent GLFW.MouseButton'2 pos
                     GLFW.MouseButtonState'Pressed
                 ]
+            -- The up half carries no modifier list of its own: what it
+            -- releases is the DOWN half's claim, resolved by the input
+            -- thread (which is where the ownership record lives). The
+            -- state-level proof of that is Input.Inject ownership.
             ups `shouldBe`
                 [ InputCursorMove 100 50
                 , InputMouseEvent GLFW.MouseButton'2 pos
                     GLFW.MouseButtonState'Released
-                , InputFollowup
-                    [ InputKeyEvent GLFW.Key'LeftShift
-                        GLFW.KeyState'Released noMods ]
+                , InputGestureEnd (GestureMouse GLFW.MouseButton'2) noMods
                 ]
 
         it "no inline modifier release outside the fence (#697)" $ do
@@ -123,8 +134,7 @@ spec = do
                     _                                        → False
                 sequences =
                     [ clickSequence pos GLFW.MouseButton'1 shiftMod
-                    , mouseUpSequence pos GLFW.MouseButton'1 shiftMod
-                    , keyUpSequence GLFW.Key'W shiftMod
+                    , keyTapSequence GLFW.Key'W shiftMod
                     ]
             forM_ sequences $ \evs → case reverse evs of
                 (InputFollowup ups : rest) → do
@@ -138,6 +148,26 @@ spec = do
                         `shouldBe` []
                     ups `shouldSatisfy` all inlineRelease
                 _ → expectationFailure "expected a trailing followup fence"
+
+        it "a split hold's release is fenced by the input thread, not inline (#1927)" $ do
+            -- Same #697 property for the split halves, which no longer
+            -- carry their own fence: neither half may release a
+            -- modifier inline. The DOWN half claims (no release at
+            -- all); the UP half only asks the input thread to end the
+            -- claim, and THAT is what fences (Input.Inject ownership
+            -- drives the real thread and asserts the resulting state).
+            let splitSeqs =
+                    [ mouseDownSequence pos GLFW.MouseButton'1 shiftMod
+                    , mouseUpSequence pos GLFW.MouseButton'1
+                    , keyDownSequence GLFW.Key'W shiftMod
+                    , keyUpSequence GLFW.Key'W
+                    ]
+                modifierRelease ev = case ev of
+                    InputKeyEvent k GLFW.KeyState'Released _ →
+                        k ≡ GLFW.Key'LeftShift
+                    _ → False
+            forM_ splitSeqs $ \evs →
+                filter modifierRelease evs `shouldBe` []
 
         it "multiple modifiers release in reverse order inside one fence" $ do
             let mm = ( [GLFW.Key'LeftShift, GLFW.Key'LeftControl]
@@ -163,16 +193,30 @@ spec = do
             let plainSeqs =
                     [ clickSequence pos GLFW.MouseButton'1 ([], noMods)
                     , mouseDownSequence pos GLFW.MouseButton'1 ([], noMods)
-                    , mouseUpSequence pos GLFW.MouseButton'1 ([], noMods)
+                    , mouseUpSequence pos GLFW.MouseButton'1
                     , keyTapSequence GLFW.Key'A ([], noMods)
                     , keyDownSequence GLFW.Key'A ([], noMods)
-                    , keyUpSequence GLFW.Key'A ([], noMods)
+                    , keyUpSequence GLFW.Key'A
                     ]
                 isFence ev = case ev of
                     InputFollowup _ → True
                     _               → False
             forM_ plainSeqs $ \evs →
                 filter isFence evs `shouldBe` []
+
+        it "a modifier-free split hold claims nothing (#1927)" $ do
+            -- The up half always asks the input thread to end its
+            -- gesture, but a hold that claimed nothing must resolve to
+            -- nothing there — no fence, no release, no Lua message —
+            -- which is what keeps plain split holds behaving exactly
+            -- as they did before #1927.
+            let isClaim ev = case ev of
+                    InputGestureHold{} → True
+                    _                  → False
+            filter isClaim (mouseDownSequence pos GLFW.MouseButton'1 ([], noMods))
+                `shouldBe` []
+            filter isClaim (keyDownSequence GLFW.Key'A ([], noMods))
+                `shouldBe` []
 
         it "key tap = press then release carrying the modifier flags" $
             keyTapSequence GLFW.Key'L ([], noMods) `shouldBe`
@@ -196,8 +240,18 @@ spec = do
         it "keyDown/keyUp split a hold into matching halves" $ do
             keyDownSequence GLFW.Key'W ([], noMods) `shouldBe`
                 [InputKeyEvent GLFW.Key'W GLFW.KeyState'Pressed noMods]
-            keyUpSequence GLFW.Key'W ([], noMods) `shouldBe`
-                [InputKeyEvent GLFW.Key'W GLFW.KeyState'Released noMods]
+            keyUpSequence GLFW.Key'W `shouldBe`
+                [ InputKeyEvent GLFW.Key'W GLFW.KeyState'Released noMods
+                , InputGestureEnd (GestureKey GLFW.Key'W) noMods
+                ]
+
+        it "keyDown claims its modifiers under the gesture (#1927)" $
+            keyDownSequence GLFW.Key'W shiftMod `shouldBe`
+                [ InputGestureHold (GestureKey GLFW.Key'W)
+                    [GLFW.Key'LeftShift] (snd shiftMod)
+                , InputKeyEvent GLFW.Key'W GLFW.KeyState'Pressed
+                    (snd shiftMod)
+                ]
 
         it "type emits one char event per character" $
             typeSequence "Hi!" `shouldBe`

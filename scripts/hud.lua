@@ -1122,15 +1122,20 @@ end
 -- Wheel hook (no UI element under cursor, no shift). Reconcile immediately
 -- so a transition the wheel itself crosses doesn't wait for the next tick.
 --
--- Gated on hud.visible, same as hud.update()/hud.onMouseDown(): uiManager
--- still routes game scrolls here in the plain "test_arena" loading/builder
--- state, where the HUD is hidden (hud.show() only runs for the
--- "test_arena_view"/"world_view" gameplay states). Without the gate, a
--- scroll there would run reconcileView()'s item.deselect() against
--- activeWorld behind the hidden HUD — the very wrong-world clear this
--- change moves engine-side for the hide path (#175). The per-tick driver
--- in hud.update() is gated the same way, so reconcile only ever runs while
--- the HUD owns the view.
+-- Gated on hud.visible, the same VISIBILITY half hud.update() and
+-- hud.onMouseDown() open with: uiManager still routes game scrolls here in
+-- the plain "test_arena" loading/builder state, where the HUD is hidden
+-- (hud.show() only runs for the "test_arena_view"/"world_view" gameplay
+-- states). Without the gate, a scroll there would run reconcileView()'s
+-- item.deselect() against activeWorld behind the hidden HUD — the very
+-- wrong-world clear this change moves engine-side for the hide path
+-- (#175). Visibility alone is the RIGHT gate for reconciliation
+-- specifically: hud.update()'s per-tick reconcile driver is gated the same
+-- way and deliberately keeps running behind a non-gameplay overlay
+-- (#1931), so reconcile only ever runs while the HUD owns the view, but
+-- never STOPS running while it does. The extra isGameplayInputActive()
+-- check hud.update() and hud.onMouseDown() also carry guards their CURSOR
+-- submissions specifically (hover / select), and onScroll makes none.
 function hud.onScroll(dx, dy)
     if not hud.visible then
         return
@@ -1143,11 +1148,11 @@ end
 -----------------------------------------------------------
 
 function hud.update(dt)
-    -- Don't push hover state while the HUD is hidden (e.g. a menu is
+    -- Don't touch the world at all while the HUD is hidden (e.g. a menu is
     -- open over a hidden gameplay view). hud.hide() leaves currentView
     -- intact so it can be restored on re-show, so this loop would
     -- otherwise keep mutating the hidden world's cursor/hover behind
-    -- the menu (#153). hud.visible is the authoritative gate.
+    -- the menu (#153).
     if not hud.visible then
         return
     end
@@ -1155,7 +1160,34 @@ function hud.update(dt)
     -- The camera crosses the band in the engine camera loop, which the
     -- wheel-timed onScroll can miss when momentum coasts past the band
     -- (#175). Idempotent: returns immediately when the band is unchanged.
+    --
+    -- This runs BEFORE the gameplay-input gate below, and deliberately so:
+    -- momentum can coast the camera across a band boundary while a
+    -- non-gameplay overlay is up, and reconcileView() is what swaps the
+    -- HUD pages and runs the `zoomBand` teardown sweep for that crossing.
+    -- Skipping it here would leave hud.currentView lagging the camera for
+    -- as long as the overlay stays open (#1931).
     hud.reconcileView()
+    -- hud.visible alone is NOT enough to push hover (#1931), for exactly
+    -- the reason hud.onMouseDown documents at length (#154): the pause
+    -- menu (scripts/pause_menu.lua) and keep-world Settings
+    -- (scripts/ui_manager_menu.lua) open as overlays that bypass
+    -- hud.hide(), and uiManager.update keeps ticking us regardless of
+    -- currentMenu, so hud.visible stays true while the world sits behind a
+    -- non-gameplay menu. The pushed position is not inert: the render pass
+    -- re-hit-tests it into the shared cursor state every frame
+    -- (src/World/Render/CursorQuads.hs), which also drives the
+    -- anchor→hover preview rectangle of an armed mine/construction/chop/
+    -- till designation — so without this gate, sweeping the pointer across
+    -- the modal drags the world's highlight and preview underneath it.
+    -- isGameplayInputActive() is false for those overlays, and it is the
+    -- same predicate the click path above and game.onKeyDown/onMouseDown
+    -- use. Nothing is cleared here: the last accepted hover simply stops
+    -- being updated, and gameplay resumes pushing from the live pointer
+    -- position on the first tick after the overlay closes.
+    if not require("scripts.ui_manager").isGameplayInputActive() then
+        return
+    end
     local mx, my = engine.getMousePosition()
     if mx and my then
         if hud.currentView == "zoomed_out" then

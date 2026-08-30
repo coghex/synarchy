@@ -69,6 +69,7 @@ module World.Save.Component.WorldGen
     , WorldGenParamsDTOv3(..)
     , WorldGenParamsDTOv4(..)
     , WorldGenParamsDTOv5(..)
+    , WorldGenParamsDTOv6(..)
     , NameExprDTO(..)
     , EtymologySourceDTO(..)
     , RiverNameDTO(..)
@@ -84,6 +85,10 @@ module World.Save.Component.WorldGen
     , LocationInstancesDTOv2(..)
     , LocationInstanceDTOv3(..)
     , LocationInstancesDTOv3(..)
+    , LocationInstanceDTOv4(..)
+    , LocationInstancesDTOv4(..)
+    , LocationEncounterOccupantDTO(..)
+    , LocationEncounterDTO(..)
     , TectonicPlateDTO(..)
     , CalendarConfigDTO(..)
     , SunConfigDTO(..)
@@ -117,10 +122,13 @@ module World.Save.Component.WorldGen
     , toWorldGenParamsDTOv4
     , fromWorldGenParamsDTOv5
     , toWorldGenParamsDTOv5
+    , fromWorldGenParamsDTOv6
+    , toWorldGenParamsDTOv6
     , toEtymologySourceDTO
     , fromEtymologySourceDTO
     , toRiverNamesDTO
     , toLocationInstancesDTOv3
+    , toLocationInstancesDTOv4
     ) where
 
 import UPrelude
@@ -153,10 +161,13 @@ import Language.Generated.Types
 import Language.Semantic.Types (ConceptId, GramNumber, NameExpr(..))
 import World.River.Naming (RiverName(..), RiverNames(..), emptyRiverNames)
 import Location.Instance
-    ( LocationInstance(..), LocationInstances(..), LocationInstanceId
+    ( LocationEncounter(..), LocationEncounterOccupant(..)
+    , LocationInstance(..), LocationInstances(..), LocationInstanceId
     , LocationLifecycle, pendingLegacyFlags, instancesToList
     , isDiscoveredLifecycle )
 import World.Chunk.Types (ChunkCoord)
+import Unit.Types.Manager (UnitId)
+import World.Save.Reference (SamePageRef(..))
 
 -- Small config / param records --------------------------------------
 
@@ -649,6 +660,73 @@ toAbsBoundsDTO b = AbsBoundsDTO (abMinX b) (abMinY b) (abMaxX b) (abMaxY b)
 fromAbsBoundsDTO ∷ AbsBoundsDTO → AbsBounds
 fromAbsBoundsDTO d = AbsBounds (abdMinX d) (abdMinY d) (abdMaxX d) (abdMaxY d)
 
+-- | Frozen mirror of one persisted encounter occupant. The unit id is a
+--   typed same-page reference: absence is tolerated by the shared integrity
+--   graph, while resolution on a different page is a hard load error.
+data LocationEncounterOccupantDTO = LocationEncounterOccupantDTO
+    { leodUnitId              ∷ !(SamePageRef UnitId)
+    , leodHomeX               ∷ !Float
+    , leodHomeY               ∷ !Float
+    , leodEngaged             ∷ !Bool
+    , leodReturning           ∷ !Bool
+    } deriving (Show, Eq, Generic, Serialize)
+
+data LocationEncounterDTO = LocationEncounterDTO
+    { ledRolledCount        ∷ !Int
+    , ledOccupants          ∷ ![LocationEncounterOccupantDTO]
+    , ledRosterComplete     ∷ !Bool
+    , ledDeathOnlyClearance ∷ !Bool
+    , ledActivated          ∷ !Bool
+    , ledEpisodeActive      ∷ !Bool
+    , ledAggressionAnnounced ∷ !Bool
+    , ledDisengageAnnounced  ∷ !Bool
+    , ledCleared            ∷ !Bool
+    , ledClearEventEmitted  ∷ !Bool
+    } deriving (Show, Eq, Generic, Serialize)
+
+toLocationEncounterDTO ∷ LocationEncounter → LocationEncounterDTO
+toLocationEncounterDTO e = LocationEncounterDTO
+    { ledRolledCount        = leRolledCount e
+    , ledOccupants          = map toOccupant (leOccupants e)
+    , ledRosterComplete     = leRosterComplete e
+    , ledDeathOnlyClearance = leDeathOnlyClearance e
+    , ledActivated          = leActivated e
+    , ledEpisodeActive      = leEpisodeActive e
+    , ledAggressionAnnounced = leAggressionAnnounced e
+    , ledDisengageAnnounced  = leDisengageAnnounced e
+    , ledCleared            = leCleared e
+    , ledClearEventEmitted  = leClearEventEmitted e
+    }
+  where
+    toOccupant o = LocationEncounterOccupantDTO
+        { leodUnitId              = SamePageRef (leoUnitId o)
+        , leodHomeX               = fst (leoHome o)
+        , leodHomeY               = snd (leoHome o)
+        , leodEngaged             = leoEngaged o
+        , leodReturning           = leoReturning o
+        }
+
+fromLocationEncounterDTO ∷ LocationEncounterDTO → LocationEncounter
+fromLocationEncounterDTO d = LocationEncounter
+    { leRolledCount        = ledRolledCount d
+    , leOccupants          = map fromOccupant (ledOccupants d)
+    , leRosterComplete     = ledRosterComplete d
+    , leDeathOnlyClearance = ledDeathOnlyClearance d
+    , leActivated          = ledActivated d
+    , leEpisodeActive      = ledEpisodeActive d
+    , leAggressionAnnounced = ledAggressionAnnounced d
+    , leDisengageAnnounced  = ledDisengageAnnounced d
+    , leCleared            = ledCleared d
+    , leClearEventEmitted  = ledClearEventEmitted d
+    }
+  where
+    fromOccupant o = LocationEncounterOccupant
+        { leoUnitId              = unSamePageRef (leodUnitId o)
+        , leoHome                = (leodHomeX o, leodHomeY o)
+        , leoEngaged             = leodEngaged o
+        , leoReturning           = leodReturning o
+        }
+
 -- | Frozen mirror of 'Location.Instance.LocationInstance' — a LIVE
 --   gameplay record by construction (its lifecycle and content-spawn
 --   flag are mutated in place, and the expedition arc adds encounter /
@@ -658,11 +736,11 @@ fromAbsBoundsDTO d = AbsBounds (abdMinX d) (abdMinY d) (abdMaxX d) (abdMaxY d)
 --   id and 'LocationLifecycle' a payload-free append-only enum, both
 --   reused as-is exactly like 'ChunkCoord' / 'ZoomMapMode'.
 --
---   This is the CURRENT shape, carried by @world-pages@ v7: #1101's
+--   This is the CURRENT shape, carried by @world-pages@ v8: #1101's
 --   English gloss beside the display name and #1104's optional
---   etymology source, and — since #1230 — NO discovery margin, the live
---   record having lost it when reveal became sight-based.
---   'LocationInstanceDTOv3' below is the frozen pre-#1230 shape (v6),
+--   etymology source, no discovery margin since #1230, and #916's optional
+--   persistent encounter. 'LocationInstanceDTOv4' below is the frozen
+--   pre-#916 shape (v7), 'LocationInstanceDTOv3' the pre-#1230 shape (v6),
 --   'LocationInstanceDTOv2' the pre-#1104 one and
 --   'LocationInstanceDTOv1' the pre-#1101 one.
 data LocationInstanceDTO = LocationInstanceDTO
@@ -677,6 +755,7 @@ data LocationInstanceDTO = LocationInstanceDTO
     , lidEtymology       ∷ !(Maybe EtymologySourceDTO)
     , lidLifecycle       ∷ !LocationLifecycle
     , lidContentsSpawned ∷ !Bool
+    , lidEncounter       ∷ !(Maybe LocationEncounterDTO)
     } deriving (Show, Eq, Generic, Serialize)
 
 toLocationInstanceDTO ∷ LocationInstance → LocationInstanceDTO
@@ -692,6 +771,7 @@ toLocationInstanceDTO i = LocationInstanceDTO
     , lidEtymology       = toEtymologySourceDTO <$> liEtymology i
     , lidLifecycle       = liLifecycle i
     , lidContentsSpawned = liContentsSpawned i
+    , lidEncounter       = toLocationEncounterDTO <$> liEncounter i
     }
 
 fromLocationInstanceDTO ∷ LocationInstanceDTO → LocationInstance
@@ -706,6 +786,7 @@ fromLocationInstanceDTO d = LocationInstance
     , liEtymology       = fromEtymologySourceDTO <$> lidEtymology d
     , liLifecycle       = lidLifecycle d
     , liContentsSpawned = lidContentsSpawned d
+    , liEncounter       = fromLocationEncounterDTO <$> lidEncounter d
     }
 
 -- | Frozen mirror of the per-page instance table: its allocator plus
@@ -728,6 +809,71 @@ fromLocationInstancesDTO ∷ LocationInstancesDTO → LocationInstances
 fromLocationInstancesDTO d = LocationInstances
     { lisNextId        = lisdNextId d
     , lisById          = HM.map fromLocationInstanceDTO (lisdById d)
+    , lisPendingLegacy = Nothing
+    }
+
+-- | The FROZEN @world-pages@ v7 location shape (#1230 through #916),
+--   preserved verbatim: every current field except the encounter added in
+--   v8. Historical instances migrate with @liEncounter = Nothing@; inventing
+--   a roll during load would make the loader/content version choose gameplay.
+data LocationInstanceDTOv4 = LocationInstanceDTOv4
+    { lid4Id              ∷ !LocationInstanceId
+    , lid4DefId           ∷ !Text
+    , lid4Chunk           ∷ !ChunkCoord
+    , lid4AnchorX         ∷ !Int
+    , lid4AnchorY         ∷ !Int
+    , lid4Bounds          ∷ !AbsBoundsDTO
+    , lid4DisplayName     ∷ !Text
+    , lid4Gloss           ∷ !(Maybe Text)
+    , lid4Etymology       ∷ !(Maybe EtymologySourceDTO)
+    , lid4Lifecycle       ∷ !LocationLifecycle
+    , lid4ContentsSpawned ∷ !Bool
+    } deriving (Show, Eq, Generic, Serialize)
+
+fromLocationInstanceDTOv4 ∷ LocationInstanceDTOv4 → LocationInstance
+fromLocationInstanceDTOv4 d = LocationInstance
+    { liId              = lid4Id d
+    , liDefId           = lid4DefId d
+    , liChunk           = lid4Chunk d
+    , liAnchor          = (lid4AnchorX d, lid4AnchorY d)
+    , liBounds          = fromAbsBoundsDTO (lid4Bounds d)
+    , liDisplayName     = lid4DisplayName d
+    , liGloss           = lid4Gloss d
+    , liEtymology       = fromEtymologySourceDTO <$> lid4Etymology d
+    , liLifecycle       = lid4Lifecycle d
+    , liContentsSpawned = lid4ContentsSpawned d
+    , liEncounter       = Nothing
+    }
+
+data LocationInstancesDTOv4 = LocationInstancesDTOv4
+    { lisd4NextId ∷ !Int
+    , lisd4ById   ∷ !(HM.HashMap LocationInstanceId LocationInstanceDTOv4)
+    } deriving (Show, Eq, Generic, Serialize)
+
+toLocationInstancesDTOv4 ∷ LocationInstances → LocationInstancesDTOv4
+toLocationInstancesDTOv4 l = LocationInstancesDTOv4
+    { lisd4NextId = lisNextId l
+    , lisd4ById   = HM.map toV4 (lisById l)
+    }
+  where
+    toV4 i = LocationInstanceDTOv4
+        { lid4Id              = liId i
+        , lid4DefId           = liDefId i
+        , lid4Chunk           = liChunk i
+        , lid4AnchorX         = fst (liAnchor i)
+        , lid4AnchorY         = snd (liAnchor i)
+        , lid4Bounds          = toAbsBoundsDTO (liBounds i)
+        , lid4DisplayName     = liDisplayName i
+        , lid4Gloss           = liGloss i
+        , lid4Etymology       = toEtymologySourceDTO <$> liEtymology i
+        , lid4Lifecycle       = liLifecycle i
+        , lid4ContentsSpawned = liContentsSpawned i
+        }
+
+fromLocationInstancesDTOv4 ∷ LocationInstancesDTOv4 → LocationInstances
+fromLocationInstancesDTOv4 d = LocationInstances
+    { lisNextId        = lisd4NextId d
+    , lisById          = HM.map fromLocationInstanceDTOv4 (lisd4ById d)
     , lisPendingLegacy = Nothing
     }
 
@@ -772,6 +918,7 @@ fromLocationInstanceDTOv1 d = LocationInstance
     , liEtymology       = Nothing
     , liLifecycle       = lid1Lifecycle d
     , liContentsSpawned = lid1ContentsSpawned d
+    , liEncounter       = Nothing
     }
 
 -- | The FROZEN pre-#1101 instance table. Structurally identical to
@@ -850,6 +997,7 @@ fromLocationInstanceDTOv2 d = LocationInstance
     , liEtymology       = Nothing
     , liLifecycle       = lid2Lifecycle d
     , liContentsSpawned = lid2ContentsSpawned d
+    , liEncounter       = Nothing
     }
 
 -- | The FROZEN pre-#1104 instance table. Structurally identical to
@@ -930,6 +1078,7 @@ fromLocationInstanceDTOv3 d = LocationInstance
     , liEtymology       = fromEtymologySourceDTO <$> lid3Etymology d
     , liLifecycle       = lid3Lifecycle d
     , liContentsSpawned = lid3ContentsSpawned d
+    , liEncounter       = Nothing
     }
 
 -- | The FROZEN pre-#1230 instance table. Structurally identical to
@@ -1174,6 +1323,94 @@ fromWorldGenParamsDTO d = withVolcanoCtx WorldGenParams
     , wgpLocationInstances       = fromLocationInstancesDTO (gpLocationInstances d)
     , wgpLocationStamped         = gpLocationStamped d
     , wgpRiverNames              = fromRiverNamesDTO (gpRiverNames d)
+    , wgpVolcanoCtx              = emptyVolcanoCtx
+    }
+
+-- Frozen pre-#916 worldgen params (@world-pages@ v7) ----------------
+
+-- | The FROZEN world-pages v7 worldgen shape. It is byte-for-byte the former
+--   current shape, except that its location table is named explicitly as the frozen
+--   pre-encounter 'LocationInstancesDTOv4'.
+data WorldGenParamsDTOv6 = WorldGenParamsDTOv6
+    { gp6Seed                    ∷ !Word64
+    , gp6WorldSize               ∷ !Int
+    , gp6PlateCount              ∷ !Int
+    , gp6Plates                  ∷ ![TectonicPlateDTO]
+    , gp6Calender                ∷ !CalendarConfigDTO
+    , gp6SunConfig               ∷ !SunConfigDTO
+    , gp6MoonConfig              ∷ !MoonConfigDTO
+    , gp6GeoTimeline             ∷ !GeoTimeline
+    , gp6OceanMap                ∷ !OceanMap
+    , gp6OceanDist               ∷ !OceanDistMap
+    , gp6ClimateParams           ∷ !ClimateParamsDTO
+    , gp6ClimateState            ∷ !ClimateStateDTO
+    , gp6ErosionIntensity        ∷ !Float
+    , gp6VolcanicActivity        ∷ !Float
+    , gp6LavaPoolDepth           ∷ !Int
+    , gp6LavaPoolRadius          ∷ !Int
+    , gp6WaterfallQuantum        ∷ !Int
+    , gp6OreLevers               ∷ !OreLeversDTO
+    , gp6TimelineParams          ∷ !TimelineParamsDTO
+    , gp6LocationOverlay         ∷ !LocationOverlay
+    , gp6LocationInstances       ∷ !LocationInstancesDTOv4
+    , gp6LocationStamped         ∷ !(HS.HashSet ChunkCoord)
+    , gp6RiverNames              ∷ !RiverNamesDTO
+    } deriving (Show, Eq, Generic, Serialize)
+
+toWorldGenParamsDTOv6 ∷ WorldGenParams → WorldGenParamsDTOv6
+toWorldGenParamsDTOv6 p = WorldGenParamsDTOv6
+    { gp6Seed                    = wgpSeed p
+    , gp6WorldSize               = wgpWorldSize p
+    , gp6PlateCount              = wgpPlateCount p
+    , gp6Plates                  = map toTectonicPlateDTO (wgpPlates p)
+    , gp6Calender                = toCalendarConfigDTO (wgpCalender p)
+    , gp6SunConfig               = toSunConfigDTO (wgpSunConfig p)
+    , gp6MoonConfig              = toMoonConfigDTO (wgpMoonConfig p)
+    , gp6GeoTimeline             = wgpGeoTimeline p
+    , gp6OceanMap                = wgpOceanMap p
+    , gp6OceanDist               = wgpOceanDist p
+    , gp6ClimateParams           = toClimateParamsDTO (wgpClimateParams p)
+    , gp6ClimateState            = toClimateStateDTO (wgpClimateState p)
+    , gp6ErosionIntensity        = wgpErosionIntensity p
+    , gp6VolcanicActivity        = wgpVolcanicActivity p
+    , gp6LavaPoolDepth           = wgpLavaPoolDepth p
+    , gp6LavaPoolRadius          = wgpLavaPoolRadius p
+    , gp6WaterfallQuantum        = wgpWaterfallQuantum p
+    , gp6OreLevers               = toOreLeversDTO (wgpOreLevers p)
+    , gp6TimelineParams          = toTimelineParamsDTO (wgpTimelineParams p)
+    , gp6LocationOverlay         = wgpLocationOverlay p
+    , gp6LocationInstances       = toLocationInstancesDTOv4
+                                      (wgpLocationInstances p)
+    , gp6LocationStamped         = wgpLocationStamped p
+    , gp6RiverNames              = toRiverNamesDTO (wgpRiverNames p)
+    }
+
+fromWorldGenParamsDTOv6 ∷ WorldGenParamsDTOv6 → WorldGenParams
+fromWorldGenParamsDTOv6 d = withVolcanoCtx WorldGenParams
+    { wgpSeed                    = gp6Seed d
+    , wgpWorldSize               = gp6WorldSize d
+    , wgpPlateCount              = gp6PlateCount d
+    , wgpPlates                  = map fromTectonicPlateDTO (gp6Plates d)
+    , wgpCalender                = fromCalendarConfigDTO (gp6Calender d)
+    , wgpSunConfig               = fromSunConfigDTO (gp6SunConfig d)
+    , wgpMoonConfig              = fromMoonConfigDTO (gp6MoonConfig d)
+    , wgpGeoTimeline             = gp6GeoTimeline d
+    , wgpOceanMap                = gp6OceanMap d
+    , wgpOceanDist               = gp6OceanDist d
+    , wgpClimateParams           = fromClimateParamsDTO (gp6ClimateParams d)
+    , wgpClimateState            = fromClimateStateDTO (gp6ClimateState d)
+    , wgpErosionIntensity        = gp6ErosionIntensity d
+    , wgpVolcanicActivity        = gp6VolcanicActivity d
+    , wgpLavaPoolDepth           = gp6LavaPoolDepth d
+    , wgpLavaPoolRadius          = gp6LavaPoolRadius d
+    , wgpWaterfallQuantum        = gp6WaterfallQuantum d
+    , wgpOreLevers               = fromOreLeversDTO (gp6OreLevers d)
+    , wgpTimelineParams          = fromTimelineParamsDTO (gp6TimelineParams d)
+    , wgpLocationOverlay         = gp6LocationOverlay d
+    , wgpLocationInstances       = fromLocationInstancesDTOv4
+                                      (gp6LocationInstances d)
+    , wgpLocationStamped         = gp6LocationStamped d
+    , wgpRiverNames              = fromRiverNamesDTO (gp6RiverNames d)
     , wgpVolcanoCtx              = emptyVolcanoCtx
     }
 

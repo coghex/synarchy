@@ -12,7 +12,8 @@ import Data.Maybe (mapMaybe)
 import Control.Monad (foldM)
 import System.Environment (lookupEnv)
 import Engine.Core.Log.Types
-  (LogLevel(..), LogCategory, allLogCategories, parseCategory)
+  ( LogLevel(..), LogCategory, allLogCategories, categoryEnvName
+  , parseCategory )
 
 parseLogLevel ∷ String → LogLevel
 parseLogLevel s = case map toLower s of
@@ -22,14 +23,32 @@ parseLogLevel s = case map toLower s of
   "error" → LevelError
   _       → LevelInfo
 
--- | Check @ENGINE_LOG_\<CATEGORY\>=\<level\>@ env vars
+-- | The @ENGINE_LOG_\<CATEGORY\>@ variable that sets one category's
+--   threshold. Derived from 'categoryEnvName' — the same @Cat@-stripped
+--   spelling 'parseCategory' accepts and 'Engine.Core.Log.Format'
+--   displays — so @CatVulkan@ is reached by @ENGINE_LOG_VULKAN@ and a
+--   category can never be displayable but unreachable.
+--
+--   It used to uppercase @show cat@ directly, which leaked the internal
+--   constructor prefix into the only advertised way to reach this
+--   surface: the documented @ENGINE_LOG_VULKAN@ did nothing and only the
+--   undocumented @ENGINE_LOG_CATVULKAN@ had any effect (#1918). No
+--   derived name is @ENGINE_LOG_LEVEL@, which
+--   'Engine.Core.Log.initLogger' reads separately as the global minimum.
+categoryLevelEnvVar ∷ LogCategory → String
+categoryLevelEnvVar =
+  ("ENGINE_LOG_" <>) ∘ map toUpper ∘ T.unpack ∘ categoryEnvName
+
+-- | Check @ENGINE_LOG_\<CATEGORY\>=\<level\>@ env vars, one per
+--   'LogCategory', spelled as 'categoryLevelEnvVar' derives them.
+--   A category with no variable set keeps whatever the supplied map
+--   already had for it, and so falls through to the global minimum.
 loadCategoryLevelsFromEnv ∷ Map.Map LogCategory LogLevel → IO (Map.Map LogCategory LogLevel)
 loadCategoryLevelsFromEnv initial = do
   foldM loadOne initial allLogCategories
   where
     loadOne acc cat = do
-      let envVar = "ENGINE_LOG_" <> map toUpper (show cat)
-      mLevel ← lookupEnv envVar
+      mLevel ← lookupEnv (categoryLevelEnvVar cat)
       case mLevel of
         Just lvl → return $ Map.insert cat (parseLogLevel lvl) acc
         Nothing  → return acc
