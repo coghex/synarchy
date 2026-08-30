@@ -1241,6 +1241,7 @@ test-suite synarchy-test-headless
                    Test.Headless.UI.Tooltip
                    Test.Headless.UI.InputOwnership
                    Test.Headless.UI.ZoomBandInputGate
+                   Test.Headless.UI.UnitInfoRowSelection
                    Test.Headless.UI.ElementInputPolicy
                    Test.Headless.UI.ControlActivation
                    Test.Headless.UI.HierarchyOwnership
