@@ -35,6 +35,9 @@ from engine_env_capability_audit import (  # type: ignore
     SAVE_LOAD_CAPABILITY_MODULE, SAVE_LOAD_CAPABILITY_FILE,
     SAVE_LOAD_FIELD_MAP, SAVE_LOAD_PROJECTION,
     _import_chunks, _strip_haskell_comments,
+    CAPABILITY_WRITER_MODULES, capability_accessor_map,
+    scan_capability_writes, audit_writer_modules, format_residue,
+    tokenize_haskell,
 )
 from persistence_inventory_audit import extract_record_fields  # type: ignore
 
@@ -1876,6 +1879,456 @@ def test_real_repo_end_state():
            "introducing a capability record with no real consumer")
 
 
+# ----- SS5 writing-module map (issue #1892, CMA-1) ----------------------
+#
+# The map pins each `EngineEnv` field's DIRECT writing modules, checked
+# in both directions. These fixtures exercise `scan_capability_writes`
+# and `audit_writer_modules` against a synthetic three-field production
+# tree -- never by editing a real module or the real map -- so each of
+# the scan's three honesty gates (import scope, local shadowing, and
+# "must head a mutation primitive's first argument") gets a case that
+# fails without it.
+
+_WRITER_FIELDS = ["fieldOne", "fieldTwo", "fieldThree"]
+_WRITER_PERMANENT = frozenset({"Permanent.Mod"})
+
+_FAKE_CAPABILITY = """\
+module Engine.Core.Capability.Fake
+  ( FakeCapability(..)
+  , toFakeCapability
+  ) where
+
+import Engine.Core.State (EngineEnv, fieldOne, fieldTwo)
+
+data FakeCapability = FakeCapability
+  { fkFieldOne ∷ IORef Int
+  , fkFieldTwo ∷ IORef Text
+  }
+
+toFakeCapability ∷ EngineEnv → FakeCapability
+toFakeCapability env = FakeCapability
+  { fkFieldOne = fieldOne env
+  , fkFieldTwo = fieldTwo env
+  }
+"""
+
+# A capability write (`fkFieldOne` -> `fieldOne`) and a raw-accessor
+# write (`fieldTwo`) from the same module: the two consumer shapes the
+# scan must treat as one boundary.
+_DECLARED_WRITER = """\
+module Consumer.Mod where
+
+import Engine.Core.State (EngineEnv, fieldTwo)
+import Engine.Core.Capability.Fake (FakeCapability(..), toFakeCapability)
+
+bumpCapability ∷ EngineEnv → IO ()
+bumpCapability env = writeIORef (fkFieldOne (toFakeCapability env)) 1
+
+bumpRaw ∷ EngineEnv → IO ()
+bumpRaw env = writeIORef (fieldTwo env) 2
+"""
+
+# Same write, from a module the map does not list.
+_UNDECLARED_WRITER = """\
+module Interloper.Mod where
+
+import Engine.Core.State (EngineEnv, fieldTwo)
+import Engine.Core.Capability.Fake (FakeCapability(..), toFakeCapability)
+
+sneakCapability ∷ EngineEnv → IO ()
+sneakCapability env = modifyIORef' (fkFieldOne (toFakeCapability env)) (+ 1)
+
+sneakRaw ∷ EngineEnv → IO ()
+sneakRaw env = writeIORef (fieldTwo env) 9
+"""
+
+# SS6.1's cohort (D-4): writes the same field, must not be reported and
+# must not be admitted into the map.
+_PERMANENT_WRITER = """\
+module Permanent.Mod where
+
+import Engine.Core.State
+
+seedEverything ∷ EngineEnv → IO ()
+seedEverything env = writeIORef (fieldOne env) 0
+"""
+
+# The three false-positive traps, one per honesty gate.
+_TRAP_MODULE = """\
+module Trap.Mod where
+
+import Engine.Core.State (EngineEnv, fieldTwo)
+import Engine.Core.Capability.Fake (FakeCapability(..), toFakeCapability)
+
+-- | Documentation may name a write it does not perform:
+--   writeIORef (fieldTwo env) 7 -- and so may this trailing comment.
+{- A block comment: modifyIORef' (fkFieldTwo (toFakeCapability env)) id -}
+documented ∷ EngineEnv → IO ()
+documented _ = pure ()
+
+-- `fieldTwo` here is this equation's OWN parameter, not the accessor.
+shadowed ∷ IORef Int → IO ()
+shadowed fieldTwo = writeIORef fieldTwo 3
+
+-- The handle is passed onward, never mutated inline: residue, and the
+-- module must not become a declared writer because of it.
+handOff ∷ EngineEnv → IO ()
+handOff env = someHelper (fkFieldTwo (toFakeCapability env))
+"""
+
+# `Engine.Core.State` is imported for the TYPE only, so an identically
+# named local is not the field -- the live shape of
+# `src/Unit/Thread/Movement.hs`'s `utsRef` parameter.
+_TYPE_ONLY_IMPORTER = """\
+module Narrow.Mod where
+
+import Engine.Core.State (EngineEnv)
+
+tick ∷ EngineEnv → IORef Int → IO ()
+tick _ fieldOne = writeIORef fieldOne 5
+"""
+
+# `fieldOne` is bound by a `case` alternative -- a pattern
+# `local_binders` deliberately does not model -- so ONLY the import
+# scope gate stands between this and a false attribution.
+_CASE_SHADOWED = """\
+module CaseShadow.Mod where
+
+import Engine.Core.State (EngineEnv)
+
+tick ∷ Maybe (IORef Int) → IO ()
+tick slot = case slot of
+    Just fieldOne → writeIORef fieldOne 5
+    Nothing → pure ()
+"""
+
+# The same two writes, but importing the accessors BY NAME rather than
+# through `FakeCapability(..)`: the import list itself then contains the
+# accessor tokens, so it is what proves an import declaration is not a
+# use. `fkFieldTwo` is imported and never used.
+_EXPLICIT_IMPORTER = """\
+module Explicit.Mod where
+
+import Engine.Core.State (EngineEnv)
+import Engine.Core.Capability.Fake
+  ( fkFieldOne
+  , fkFieldTwo
+  , toFakeCapability
+  )
+
+bump ∷ EngineEnv → IO ()
+bump env = writeIORef (fkFieldOne (toFakeCapability env)) 1
+"""
+
+# One expression, four lines: nothing here is findable by a line-wise
+# scan, matching the real
+# `Engine.Scripting.Lua.API.StructureArt`/`Engine.Input.Thread.Dispatch`
+# multiline mutations.
+_MULTILINE_WRITER = """\
+module Multi.Mod where
+
+import Engine.Core.State (EngineEnv)
+import Engine.Core.Capability.Fake (FakeCapability(..), toFakeCapability)
+
+bump ∷ EngineEnv → IO ()
+bump env =
+    atomicModifyIORef'
+        (fkFieldOne
+            (toFakeCapability env))
+        (\\n → (n + 1, ()))
+"""
+
+
+def _writer_sources(**modules: str) -> dict[str, str]:
+    """Synthetic production tree: the fake capability record plus
+    whichever consumer fixtures a case asks for, keyed by the relative
+    path `module_identifier` maps back to the module name."""
+    sources = {"src/Engine/Core/Capability/Fake.hs": _FAKE_CAPABILITY}
+    paths = {
+        "declared": "src/Consumer/Mod.hs",
+        "undeclared": "src/Interloper/Mod.hs",
+        "permanent": "src/Permanent/Mod.hs",
+        "trap": "src/Trap/Mod.hs",
+        "narrow": "src/Narrow/Mod.hs",
+        "caseShadow": "src/CaseShadow/Mod.hs",
+        "explicit": "src/Explicit/Mod.hs",
+        "multiline": "src/Multi/Mod.hs",
+    }
+    for key, body in modules.items():
+        sources[paths[key]] = body
+    return sources
+
+
+def _scan(sources: dict[str, str]):
+    return scan_capability_writes(
+        sources, _WRITER_FIELDS,
+        permanent=_WRITER_PERMANENT, definer="Engine.Core.State")
+
+
+def test_writer_map_canonicalizes_both_consumer_shapes():
+    """A capability accessor and the raw `EngineEnv` accessor it
+    projects canonicalize onto the SAME field, so one map covers both
+    consumer shapes."""
+    accessors = capability_accessor_map(
+        _writer_sources(), _WRITER_FIELDS)
+    expect(accessors == {"fkFieldOne": ("fieldOne",
+                                        "Engine.Core.Capability.Fake"),
+                         "fkFieldTwo": ("fieldTwo",
+                                        "Engine.Core.Capability.Fake")},
+           f"capability_accessor_map must derive each accessor's field and "
+           f"owner from the LIVE projection, got: {accessors}")
+
+    writes, _ = _scan(_writer_sources(declared=_DECLARED_WRITER))
+    expect(writes["fieldOne"] == {"Consumer.Mod"},
+           f"a `writeIORef (fkFieldOne ...)` must be attributed to "
+           f"`fieldOne`, got: {sorted(writes['fieldOne'])}")
+    expect(writes["fieldTwo"] == {"Consumer.Mod"},
+           f"a `writeIORef (fieldTwo env)` must be attributed to the same "
+           f"field through the raw accessor, got: "
+           f"{sorted(writes['fieldTwo'])}")
+    expect(writes["fieldThree"] == set(),
+           f"an unwritten field must map to the empty set, got: "
+           f"{sorted(writes['fieldThree'])}")
+
+
+def test_writer_map_accepts_a_declared_write():
+    """The permitted case: both writes are declared, so nothing fails."""
+    writes, _ = _scan(_writer_sources(declared=_DECLARED_WRITER))
+    declared = {"fieldOne": frozenset({"Consumer.Mod"}),
+                "fieldTwo": frozenset({"Consumer.Mod"}),
+                "fieldThree": frozenset()}
+    violations = audit_writer_modules(
+        writes, _WRITER_FIELDS, declared=declared)
+    expect(violations == [],
+           f"a fully declared write set must produce no violation, got: "
+           f"{violations}")
+
+
+def test_writer_map_rejects_an_undeclared_write():
+    """Requirement 1, through BOTH consumer shapes: a write from a
+    module the field's map does not list is a violation."""
+    writes, _ = _scan(_writer_sources(declared=_DECLARED_WRITER,
+                                      undeclared=_UNDECLARED_WRITER))
+    expect(writes["fieldOne"] == {"Consumer.Mod", "Interloper.Mod"},
+           f"the undeclared capability-accessor write must be detected, "
+           f"got: {sorted(writes['fieldOne'])}")
+    expect(writes["fieldTwo"] == {"Consumer.Mod", "Interloper.Mod"},
+           f"the undeclared raw-accessor write must be detected, got: "
+           f"{sorted(writes['fieldTwo'])}")
+
+    declared = {"fieldOne": frozenset({"Consumer.Mod"}),
+                "fieldTwo": frozenset({"Consumer.Mod"}),
+                "fieldThree": frozenset()}
+    violations = audit_writer_modules(
+        writes, _WRITER_FIELDS, declared=declared)
+    expect(len(violations) == 2 and all("Interloper.Mod" in v
+                                        for v in violations),
+           f"both undeclared writes must be reported, one per field, got: "
+           f"{violations}")
+
+
+def test_writer_map_rejects_a_stale_entry():
+    """Requirement 2 -- the both-directions half
+    `RENDER_MAIN_ONLY_MODULES` already has: a mapped module that no
+    longer writes the field fails as loudly as an undeclared write."""
+    writes, _ = _scan(_writer_sources(declared=_DECLARED_WRITER))
+    declared = {"fieldOne": frozenset({"Consumer.Mod", "Departed.Mod"}),
+                "fieldTwo": frozenset({"Consumer.Mod"}),
+                "fieldThree": frozenset()}
+    violations = audit_writer_modules(
+        writes, _WRITER_FIELDS, declared=declared)
+    expect(len(violations) == 1 and "Departed.Mod" in violations[0]
+           and "no longer writes" in violations[0],
+           f"a mapped module with no backing write must be reported, got: "
+           f"{violations}")
+
+
+def test_writer_map_keys_track_the_live_field_set():
+    """The reviewer's key-set requirement, both ways: a live field with
+    no map entry fails, and a map key that is no longer a field fails."""
+    writes, _ = _scan(_writer_sources())
+    missing = audit_writer_modules(
+        writes, _WRITER_FIELDS,
+        declared={"fieldOne": frozenset(), "fieldTwo": frozenset()})
+    expect(len(missing) == 1 and "fieldThree" in missing[0]
+           and "no entry in CAPABILITY_WRITER_MODULES" in missing[0],
+           f"a live field with no map entry must be reported, got: {missing}")
+
+    stale = audit_writer_modules(
+        writes, _WRITER_FIELDS,
+        declared={"fieldOne": frozenset(), "fieldTwo": frozenset(),
+                  "fieldThree": frozenset(), "fieldGone": frozenset()})
+    expect(len(stale) == 1 and "fieldGone" in stale[0]
+           and "remove the stale key" in stale[0],
+           f"a map key that is not a live field must be reported, got: "
+           f"{stale}")
+
+
+def test_permanent_module_writes_are_exempt():
+    """Requirement 4 (design decision D-4): SS6.1's 24 permanent
+    full-access modules hold whole-session orchestration authority by
+    job description, so their writes are neither violations nor map
+    entries."""
+    writes, residue = _scan(_writer_sources(permanent=_PERMANENT_WRITER))
+    expect(writes["fieldOne"] == set(),
+           f"a write from an SS6.1 permanent module must not enter the "
+           f"write map, got: {sorted(writes['fieldOne'])}")
+    violations = audit_writer_modules(
+        writes, _WRITER_FIELDS,
+        declared={f: frozenset() for f in _WRITER_FIELDS})
+    expect(violations == [],
+           f"an SS6.1 permanent module's write must not be a violation, "
+           f"got: {violations}")
+    expect(residue == [],
+           f"the permanent fixture uses raw accessors only, so it "
+           f"contributes no capability-accessor residue, got: {residue}")
+
+
+def test_passed_on_handle_is_residue_not_a_write():
+    """Requirement 5 (D-5): a handle handed to a helper is counted and
+    listed, never attributed and never a violation."""
+    writes, residue = _scan(_writer_sources(trap=_TRAP_MODULE))
+    expect(writes["fieldTwo"] == set(),
+           f"`Trap.Mod` performs no attributable write -- its only "
+           f"accessor use passes the handle onward, got: "
+           f"{sorted(writes['fieldTwo'])}")
+    passed = [item for item in residue if item.module == "Trap.Mod"]
+    expect(len(passed) == 1 and passed[0].accessor == "fkFieldTwo"
+           and passed[0].field == "fieldTwo"
+           and passed[0].relpath == "src/Trap/Mod.hs",
+           f"the passed-on handle must appear once in the residue with its "
+           f"path, accessor and canonical field, got: {passed}")
+    expect(audit_writer_modules(
+        writes, _WRITER_FIELDS,
+        declared={f: frozenset() for f in _WRITER_FIELDS}) == [],
+           "residue must never be reported as a violation")
+
+
+def test_out_of_scope_names_are_not_writes():
+    """The import-scope gate, on its own. `CaseShadow.Mod` binds
+    `fieldOne` in a `case` alternative -- a pattern `local_binders`
+    deliberately does not model -- so the only thing standing between
+    that identifier and a false attribution is that
+    `Engine.Core.State` is imported for the `EngineEnv` TYPE alone. The
+    two gates are independent on purpose: neither is asked to be
+    complete by itself."""
+    writes, residue = _scan(_writer_sources(caseShadow=_CASE_SHADOWED))
+    expect(writes["fieldOne"] == set(),
+           f"a name the module never imported cannot be the accessor, "
+           f"got: {sorted(writes['fieldOne'])}")
+    expect(residue == [],
+           f"the fixture names no capability accessor, so it contributes "
+           f"no residue, got: {residue}")
+
+
+def test_comments_and_shadowed_locals_are_not_writes():
+    """The two false-positive gates, in the same fixture as the residue
+    case so one module proves all three: commentary that NAMES a write
+    does not perform one, and an equation's own parameter is not the
+    accessor it shares a name with."""
+    writes, residue = _scan(_writer_sources(trap=_TRAP_MODULE,
+                                            narrow=_TYPE_ONLY_IMPORTER))
+    expect(writes["fieldOne"] == set() and writes["fieldTwo"] == set(),
+           f"neither a commented-out write, a locally shadowed name, nor a "
+           f"type-only import may produce a write, got: fieldOne="
+           f"{sorted(writes['fieldOne'])}, fieldTwo="
+           f"{sorted(writes['fieldTwo'])}")
+    expect(all(item.module != "Narrow.Mod" for item in residue),
+           f"a module that never names a capability accessor contributes "
+           f"no residue, got: {residue}")
+
+
+def test_import_declarations_are_not_uses():
+    """An import list names the accessor; naming one is not using one.
+    `Explicit.Mod` imports `fkFieldOne` and `fkFieldTwo` by name across
+    four lines and writes only the first, so the import declaration --
+    the one place both tokens appear together -- must register as
+    neither a write nor a residue use. It also drives
+    `imported_symbols`' explicit-name path, which `FakeCapability(..)`
+    never reaches."""
+    writes, residue = _scan(_writer_sources(explicit=_EXPLICIT_IMPORTER))
+    expect(writes["fieldOne"] == {"Explicit.Mod"},
+           f"an accessor imported by name must still be in scope at its "
+           f"write site, got: {sorted(writes['fieldOne'])}")
+    expect(writes["fieldTwo"] == set(),
+           f"`fkFieldTwo` appears only in the import list, so nothing may "
+           f"be attributed to `fieldTwo`, got: {sorted(writes['fieldTwo'])}")
+    named = [item for item in residue if item.module == "Explicit.Mod"]
+    expect(named == [],
+           f"an import declaration must not register as a use, got: {named}")
+
+
+def test_multiline_expressions_are_scanned():
+    """The scan reads complete EXPRESSIONS: a mutation whose accessor
+    argument sits three lines below the primitive is one token
+    sequence, exactly like the real `rhStructureArtCatalogRef` and
+    `rvFramebufferMinimizeGenRef` sites."""
+    writes, _ = _scan(_writer_sources(multiline=_MULTILINE_WRITER))
+    expect(writes["fieldOne"] == {"Multi.Mod"},
+           f"a four-line `atomicModifyIORef'` must be detected, got: "
+           f"{sorted(writes['fieldOne'])}")
+
+
+def test_tokenizer_skips_literals_and_keeps_line_numbers():
+    """String and character literals are consumed whole, so an accessor
+    name inside one is not a token; identifier primes stay part of the
+    identifier; and every token carries its own 1-based line, which is
+    what makes the residue report citable."""
+    tokens = tokenize_haskell(
+        'a = "fieldOne"\nb = \'x\'\nmodifyIORef\' c\n')
+    texts = [t.text for t in tokens if t.kind == "id"]
+    expect("fieldOne" not in texts,
+           f"an accessor name inside a string literal must not tokenize as "
+           f"an identifier, got: {texts}")
+    expect("modifyIORef'" in texts,
+           f"a primed identifier must tokenize whole, got: {texts}")
+    line = next(t.line for t in tokens if t.text == "modifyIORef'")
+    expect(line == 3,
+           f"`modifyIORef'` sits on line 3, got: {line}")
+
+
+def test_writer_map_against_the_real_repo():
+    """The live gate, asserted against the REAL tree and the REAL
+    checked-in map: every field is mapped, no undeclared write, no
+    stale entry, and the residue is a deterministic, non-empty
+    measurement."""
+    engine_env_source = (REPO_ROOT / ENGINE_ENV_FILE).read_text(
+        encoding="utf-8")
+    live_fields = extract_record_fields(engine_env_source,
+                                        ENGINE_ENV_PATTERN)
+    sources = scan_production_sources(REPO_ROOT)
+    writes, residue = scan_capability_writes(sources, live_fields)
+
+    expect(set(CAPABILITY_WRITER_MODULES) == set(live_fields),
+           f"CAPABILITY_WRITER_MODULES' keys must equal the live EngineEnv "
+           f"field set; extra: "
+           f"{sorted(set(CAPABILITY_WRITER_MODULES) - set(live_fields))}, "
+           f"missing: "
+           f"{sorted(set(live_fields) - set(CAPABILITY_WRITER_MODULES))}")
+
+    violations = audit_writer_modules(writes, live_fields)
+    expect(violations == [],
+           f"the real tree must have no undeclared or stale writing-module "
+           f"entry, got: {violations}")
+
+    exempt = set(PERMANENT_IMPORTERS) | {PERMANENT_DEFINER}
+    leaked = sorted({module
+                     for modules in CAPABILITY_WRITER_MODULES.values()
+                     for module in modules} & exempt)
+    expect(leaked == [],
+           f"no SS6.1 permanent module may appear in the map -- D-4 puts "
+           f"them outside this boundary entirely, got: {leaked}")
+
+    expect(residue and residue == sorted(residue),
+           "the residue must be non-empty and deterministically ordered")
+    expect(all(item.field in set(live_fields) for item in residue),
+           "every residue entry must canonicalize to a live EngineEnv field")
+
+    again, _ = scan_capability_writes(sources, live_fields)
+    expect(again == writes,
+           "the scan must be deterministic across runs")
+
+
 def main() -> int:
     tests = [
         test_complete_inventory_has_no_violations,
@@ -1991,6 +2444,19 @@ def main() -> int:
         test_section_bounds_keeps_subsections_inside_a_top_level_section,
         test_field_total_against_the_real_repo,
         test_real_repo_end_state,
+        test_writer_map_canonicalizes_both_consumer_shapes,
+        test_writer_map_accepts_a_declared_write,
+        test_writer_map_rejects_an_undeclared_write,
+        test_writer_map_rejects_a_stale_entry,
+        test_writer_map_keys_track_the_live_field_set,
+        test_permanent_module_writes_are_exempt,
+        test_passed_on_handle_is_residue_not_a_write,
+        test_out_of_scope_names_are_not_writes,
+        test_comments_and_shadowed_locals_are_not_writes,
+        test_import_declarations_are_not_uses,
+        test_multiline_expressions_are_scanned,
+        test_tokenizer_skips_literals_and_keeps_line_numbers,
+        test_writer_map_against_the_real_repo,
     ]
 
     for t in tests:

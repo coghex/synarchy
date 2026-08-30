@@ -93,6 +93,25 @@ unforgiving:
 SS6.4 documents the procedure for what to do instead (most new state
 does not belong on `EngineEnv` at all).
 
+Since issue #1892 (capability mutation-authority epic #1890, CMA-1) it
+also pins each field's direct WRITING MODULES. SS5's Writers cells are
+prose validated for grammar and citation presence only, so until this
+check the doc could claim a field has no writers at all and a change
+falsifying it passed every gate -- the drift class #1669 closed for the
+field COUNT, still open for the ownership CLAIMS.
+`CAPABILITY_WRITER_MODULES` is a checked-in, both-directions map of the
+same shape as `RENDER_MAIN_ONLY_MODULES`: an undeclared write fails, a
+stale entry fails, and the map's KEYS must equal the live field set.
+It scans DIRECT `IORef` mutation only, through the raw `EngineEnv`
+accessor and through any capability-record accessor projecting it
+alike; SS6.1's permanent cohort is exempt (design decision D-4); and
+every capability-accessor use the scan cannot attribute -- a handle
+passed to a helper, stored in a context record, or handed to a
+queue/`TVar`/`MVar` -- is printed as the non-blocking pass-on residue
+(D-5), ahead of every blocking check so a failure elsewhere never costs
+the measurement. See SS6.5 of the inventory doc and
+docs/capability_mutation_authority_design.md.
+
 Usage:
   python3 tools/engine_env_capability_audit.py
 Exit codes: 0 = every live EngineEnv field is validly classified and
@@ -1847,9 +1866,698 @@ def audit_ratchet(unrestricted: set[str], doc_temporary: dict[str, set[str]],
     return violations
 
 
+# ===========================================================================
+# SS5 writing-module map (issue #1892, capability mutation-authority
+# epic #1890 -- CMA-1)
+# ===========================================================================
+#
+# SS5 records a Writers cell for every `EngineEnv` field, and until this
+# section nothing checked one against the code: the cells were validated
+# for role GRAMMAR and citation PRESENCE only, so SS5 could claim a field
+# has no writers at all and a change falsifying that passed every gate.
+# This is the drift class #1669 closed for the field COUNT, still open
+# for the ownership CLAIMS.
+#
+# __What this checks, precisely.__ SS5 declares thread ROLES; a source
+# scan yields MODULES; the repository carries no mapping between them,
+# and (design decision D-2a in docs/capability_mutation_authority_design.md)
+# the mapping is not even well-defined at module granularity --
+# `World.Render.BloodQuads` is deliberately dual-domain and writes
+# `textureSystemRef` from a `MainRender` function while its quad-building
+# path runs on `WorldThread`, so the role is a property of the FUNCTION.
+# This section therefore maintains its own checked-in field ->
+# writing-modules map, independent of SS5's role cells, and verifies the
+# weaker, honest property "the set of modules writing this field is what
+# we last declared" -- NOT "SS5's role claim is true". SS5's
+# Readers/Writers cells stay prose (D-2a).
+#
+# Checked in BOTH directions, exactly like `RENDER_MAIN_ONLY_MODULES`
+# (issue #891) and the SS6 ratchet: an undeclared write fails, and a
+# mapped module that no longer writes the field fails just as loudly, so
+# the map can never decay into a mere upper bound. The map's KEYS are
+# checked both ways too -- they must equal the live `EngineEnv` field
+# set, so a newly added field cannot slip in unmapped and a removed one
+# cannot leave a stale key behind. `frozenset()` is the legitimate value
+# for a field with no detected in-scope direct write.
+#
+# __Scope: direct IORef mutation only (D-2's consequences, D-5).__ A
+# write is detected only where an `IORef` mutation primitive is applied
+# DIRECTLY to a known accessor application -- `writeIORef (accessor
+# handle) ...`. Mutation through a queue, a `TVar`, an `MVar`, an opaque
+# internally-synchronized handle (`SaveBarrier`, `LoadStatusRef`), or a
+# helper that took the `IORef` as an argument is NOT a write this scan
+# can see, and is deliberately out of this slice: full interprocedural
+# attribution is Haskell dataflow analysis written in Python, explicitly
+# rejected for this arc (D-5). What the scan cannot attribute it
+# REPORTS, as the non-blocking residue below.
+#
+# __The SS6.1 exemption (D-4).__ The 24 permanent full-access modules
+# (`PERMANENT_DEFINER` + `PERMANENT_IMPORTERS`) hold whole-session
+# orchestration authority by job description and this arc does not
+# constrain them, so their writes are neither reported as violations nor
+# admitted into the map. The boundary this section draws is the
+# capability-narrowed consumer cohort. The residue does NOT share that
+# exemption: it measures where a capability HANDLE escapes, which is
+# evidence for CMA-2's pilot no matter which module does it.
+
+# The `IORef` mutation primitives a direct write goes through. The
+# design measured `writeIORef`/`modifyIORef'`/`atomicModifyIORef'`; the
+# whole family is listed so a site that switches to a sibling primitive
+# stays visible instead of silently leaving the scan.
+IOREF_WRITE_PRIMITIVES = frozenset({
+    "writeIORef", "atomicWriteIORef",
+    "modifyIORef", "modifyIORef'",
+    "atomicModifyIORef", "atomicModifyIORef'",
+})
+
+# Reads are not authority-checked, but they DO consume a handle inline,
+# so they are what separates an inline use from a passed-onward one in
+# the residue classification below.
+IOREF_READ_PRIMITIVES = frozenset({"readIORef"})
+IOREF_ACCESS_PRIMITIVES = IOREF_WRITE_PRIMITIVES | IOREF_READ_PRIMITIVES
+
+CAPABILITY_MODULE_PREFIX = "Engine.Core.Capability."
+
+# docs/engineenv_capability_inventory.md SS5's writing-module map: for
+# every live `EngineEnv` field, the production modules that DIRECTLY
+# mutate it -- through the field's own accessor or through any
+# capability-record accessor projecting it. Seeded from the real write
+# sites present when issue #1892 landed, and maintained the same way
+# `RENDER_MAIN_ONLY_MODULES` is: `audit_writer_modules` rejects an
+# undeclared write AND a stale entry, so the map is an exact mirror of
+# the detected write set rather than an upper bound on it.
+#
+# `frozenset()` is a real, common answer -- 35 of the 88 fields have no
+# in-scope direct `IORef` write at all, either because nothing writes
+# them after `Engine.Core.Init` seeds them, because their only writers
+# are SS6.1 permanent modules (D-4), or because they are mutated through
+# a queue/`TVar`/opaque handle the scan deliberately does not follow
+# (D-5, and the residue report).
+#
+# Adding an entry is a deliberate act, not a maintenance edit: it
+# declares that a capability-narrowed module now holds write authority
+# over that field. Removing one is what a narrowing migration owes the
+# gate. Either way the audit names the exact module and field, so the
+# edit is mechanical once the decision is made -- see
+# docs/engineenv_capability_inventory.md SS6.4.
+CAPABILITY_WRITER_MODULES: dict[str, frozenset[str]] = {
+    "engineConfig": frozenset(),
+    "engineStateRef": frozenset(),
+    "videoConfigRef": frozenset({
+        "Engine.Scripting.Lua.API.Config",
+        "Engine.Scripting.Lua.Message.Video",
+    }),
+    "windowSizeRef": frozenset({
+        "Engine.Graphics.Window.GLFW",
+        "Engine.Input.Thread.Dispatch",
+        "Engine.Scripting.Lua.Message.Video",
+    }),
+    "windowPosRef": frozenset({
+        "Engine.Graphics.Window.GLFW",
+        "Engine.Scripting.Lua.Message.Video",
+    }),
+    "windowStateRef": frozenset({
+        "Engine.Graphics.Window.GLFW",
+        "Engine.Scripting.Lua.Message.Video",
+    }),
+    "framebufferSizeRef": frozenset({
+        "Engine.Graphics.Window.GLFW",
+        "Engine.Input.Thread.Dispatch",
+        "Engine.Scripting.Lua.Message.Video",
+    }),
+    "framebufferMinimizeGenRef": frozenset({"Engine.Input.Thread.Dispatch"}),
+    "fpsRef": frozenset(),
+    "brightnessRef": frozenset({"Engine.Scripting.Lua.Message.Video"}),
+    "pixelSnapRef": frozenset({
+        "Engine.Scripting.Lua.API.Config",
+        "Engine.Scripting.Lua.Message.Video",
+    }),
+    "textureFilterRef": frozenset({
+        "Engine.Scripting.Lua.API.Config",
+        "Engine.Scripting.Lua.Message.Video",
+    }),
+    "inputQueue": frozenset(),
+    "inputBarrierNextRef": frozenset(),
+    "inputBarrierRef": frozenset(),
+    "loggerRef": frozenset(),
+    "luaToEngineQueue": frozenset(),
+    "luaQueue": frozenset(),
+    "lifecycleRef": frozenset({
+        "Combat.Thread",
+        "Engine.Input.Thread",
+        "Engine.Loop.Mode",
+        "Engine.Scripting.Lua.API.Core",
+        "Sim.Thread",
+        "Unit.Thread",
+        "World.Thread",
+    }),
+    "assetPoolRef": frozenset(),
+    "textureNameRegistryRef": frozenset(),
+    "nextObjectIdRef": frozenset(),
+    "nextItemInstanceIdRef": frozenset(),
+    "fontCacheRef": frozenset(),
+    "inputStateRef": frozenset({"Engine.Input.Thread.Dispatch"}),
+    "keyBindingsRef": frozenset({"Engine.Scripting.Lua.API.Keybinds"}),
+    "currentKeyDownRef": frozenset(),
+    "textBuffersRef": frozenset({"Engine.Scripting.Lua.Message.Scene"}),
+    "cameraRef": frozenset({
+        "Engine.Scripting.Lua.API.Camera",
+        "World.Render",
+        "World.Thread.Command.Init",
+    }),
+    "uiCameraRef": frozenset({"Engine.Graphics.Vulkan.Recreate"}),
+    "uiManagerRef": frozenset({
+        "Engine.Input.Thread.Char",
+        "Engine.Input.Thread.Keyboard",
+        "Engine.Input.Thread.Mouse",
+        "Engine.Scripting.Lua.API.Config",
+        "Engine.Scripting.Lua.API.UI.Element",
+        "Engine.Scripting.Lua.API.UI.Focus",
+        "Engine.Scripting.Lua.API.UI.Hierarchy",
+        "Engine.Scripting.Lua.API.UI.Page",
+        "Engine.Scripting.Lua.API.UI.Property",
+        "Engine.Scripting.Lua.API.UI.TextInput",
+        "Engine.Scripting.Lua.API.UI.Tooltip",
+        "UI.Tooltip.State",
+    }),
+    "focusManagerRef": frozenset({"Engine.Scripting.Lua.API.ShellFocus"}),
+    "worldManagerRef": frozenset({
+        "Engine.Scripting.Lua.API.World.Lifecycle",
+        "World.Thread.Command.Basic",
+        "World.Thread.Command.Init",
+        "World.Thread.Command.UI",
+    }),
+    "hudActivePageRef": frozenset({"World.Thread.Cursor"}),
+    "loadStatusRef": frozenset(),
+    "pendingLoadRef": frozenset(),
+    "worldQueue": frozenset(),
+    "sunAngleRef": frozenset({
+        "Engine.Scripting.Lua.API.World.Clock",
+        "World.Thread.Time",
+    }),
+    "worldPreviewRef": frozenset({
+        "Engine.Scripting.Lua.Message.WorldTexture",
+        "World.Thread.Command.Init",
+    }),
+    "worldPreviewGenerationRef": frozenset({"World.Thread.Command.Init"}),
+    "zoomAtlasDataRef": frozenset({
+        "Engine.Scripting.Lua.Message.WorldTexture",
+        "World.Thread.Command.Init",
+    }),
+    "screenshotRequestQueue": frozenset(),
+    "worldQuadsRef": frozenset({
+        "World.Thread",
+        "World.Thread.Command.Basic",
+    }),
+    "textureSystemRef": frozenset({
+        "Engine.Asset.Manager",
+        "Engine.Graphics.Vulkan.Init",
+        "Engine.Scripting.Lua.Message.Texture",
+        "Engine.Scripting.Lua.Message.Video",
+        "Engine.Scripting.Lua.Message.WorldTexture",
+        "World.Render.BloodQuads",
+    }),
+    "samplerCacheRef": frozenset(),
+    "textureSizeRef": frozenset({
+        "Engine.Scripting.Lua.Message.Texture",
+        "World.Render.BloodQuads",
+    }),
+    "bloodDisposeQueue": frozenset(),
+    "defaultFaceMapSlotRef": frozenset({"Engine.Graphics.Vulkan.Init"}),
+    "floraCatalogRef": frozenset(),
+    "materialRegistryRef": frozenset({
+        "Engine.Scripting.Lua.API.YamlTextures",
+        "World.Thread.Command.Init",
+    }),
+    "unitManagerRef": frozenset({
+        "Combat.Resolution",
+        "Combat.Resolution.Wear",
+        "Combat.Wounds.Tick",
+        "Engine.Scripting.Lua.API.Craft.Execute",
+        "Engine.Scripting.Lua.API.Equipment.Accessory",
+        "Engine.Scripting.Lua.API.Equipment.Slot",
+        "Engine.Scripting.Lua.API.Items.Ground",
+        "Engine.Scripting.Lua.API.Power",
+        "Engine.Scripting.Lua.API.Units.Cargo",
+        "Engine.Scripting.Lua.API.Units.Combat",
+        "Engine.Scripting.Lua.API.Units.Equipment",
+        "Engine.Scripting.Lua.API.Units.Inventory",
+        "Engine.Scripting.Lua.API.Units.Medical",
+        "Engine.Scripting.Lua.API.Units.Selection",
+        "Engine.Scripting.Lua.API.Units.Spawn",
+        "Engine.Scripting.Lua.API.Units.Stats",
+        "Engine.Scripting.Lua.API.Units.Survival",
+        "Engine.Scripting.Lua.API.Units.Transfer",
+        "Engine.Scripting.Lua.API.Units.Yaml",
+        "Unit.Selection",
+        "Unit.Thread",
+        "Unit.Thread.Command.Lifecycle",
+        "Unit.Thread.Command.Pose",
+        "Unit.Thread.Command.Spawn",
+        "Unit.Thread.Movement",
+        "World.Thread.ItemTemp",
+    }),
+    "unitQueue": frozenset(),
+    "utsRef": frozenset(),
+    "statRNGRef": frozenset({
+        "Combat.Resolution",
+        "Combat.Wounds.Tick",
+        "Engine.Scripting.Lua.API.Forage.Harvest",
+        "Engine.Scripting.Lua.API.Units.Medical",
+        "Engine.Scripting.Lua.API.Units.Stats",
+        "Unit.Thread.Command.Spawn",
+        "Unit.Thread.Movement.Climb",
+    }),
+    "buildingManagerRef": frozenset({
+        "Building.Thread.Command",
+        "Engine.Scripting.Lua.API.Buildings.Progress",
+        "Engine.Scripting.Lua.API.Buildings.Selection",
+        "Engine.Scripting.Lua.API.Buildings.Spawn",
+        "Engine.Scripting.Lua.API.Buildings.Yaml",
+        "Engine.Scripting.Lua.API.Power",
+        "Engine.Scripting.Lua.API.Units.Cargo",
+        "Engine.Scripting.Lua.API.Units.Transfer",
+        "World.Thread.ItemTemp",
+    }),
+    "texPaletteRef": frozenset({"Engine.Scripting.Lua.API.Structure"}),
+    "texPaletteHandlesRef": frozenset({"Engine.Scripting.Lua.API.Structure"}),
+    "structureWallCatalogRef": frozenset({"Engine.Scripting.Lua.API.Structure"}),
+    "structureArtCatalogRef": frozenset({"Engine.Scripting.Lua.API.StructureArt"}),
+    "buildingQueue": frozenset(),
+    "combatQueue": frozenset(),
+    "combatEventsRef": frozenset({
+        "Combat.Resolution.Events",
+        "Combat.Wounds.Tick",
+        "Engine.Scripting.Lua.API.Combat",
+    }),
+    "injuryEventsRef": frozenset({"Engine.Scripting.Lua.API.Combat"}),
+    "thoughtEventsRef": frozenset({"Engine.Scripting.Lua.API.Combat"}),
+    "actionOutcomeRef": frozenset({"Engine.Scripting.Lua.API.ActionOutcome"}),
+    "buildingGhostRef": frozenset({"Engine.Scripting.Lua.API.Buildings.Spawn"}),
+    "worldGenConfigRef": frozenset({"Engine.Scripting.Lua.API.World.GenConfig"}),
+    "pathingConfigRef": frozenset(),
+    "simQueue": frozenset(),
+    "enginePausedRef": frozenset({"World.Pause"}),
+    "playerIntentGenRef": frozenset(),
+    "enginePauseGenRef": frozenset({"World.Pause"}),
+    "gameTimeRef": frozenset({"Unit.Thread"}),
+    "saveBarrierRef": frozenset(),
+    "inputThreadActiveRef": frozenset({"Engine.Input.Thread"}),
+    "lastSaveTimeRef": frozenset(),
+    "itemManagerRef": frozenset(),
+    "equipmentClassManagerRef": frozenset({"Engine.Scripting.Lua.API.Equipment.Class"}),
+    "substanceManagerRef": frozenset({"Engine.Scripting.Lua.API.Substance"}),
+    "infectionManagerRef": frozenset({"Engine.Scripting.Lua.API.Infection"}),
+    "recipeManagerRef": frozenset({"Engine.Scripting.Lua.API.Craft.Recipe"}),
+    "locationDefsRef": frozenset({"Engine.Scripting.Lua.API.Locations"}),
+    "lootTableRegistryRef": frozenset({"Engine.Scripting.Lua.API.LootTables"}),
+    "tutorialRegistryRef": frozenset({"Engine.Scripting.Lua.API.Tutorial"}),
+    "eventStoreRef": frozenset(),
+    "notificationCfgRef": frozenset({"Engine.Scripting.Lua.API.PlayerEvent"}),
+    "notificationOrder": frozenset(),
+    "popupQueueRef": frozenset(),
+}
+
+
+_HS_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_']*")
+_CHAR_LITERAL_RE = re.compile(r"'(?:\\.|[^\\'])'")
+_IMPORT_WILDCARD_RE = re.compile(r"\(\s*\.\.\s*\)")
+# An equation left-hand side (top-level, `where` or `let` alike),
+# anchored at the start of its line and forbidding `{` in the parameter
+# text, so a record construction or update -- `env { fooRef = r }`, or a
+# continuation line starting with `,` or `{` -- is never mistaken for
+# one. Group 1 is the bound name, group 2 its parameter text.
+_EQUATION_LHS_RE = re.compile(
+    r"^[ \t]*([a-z_][A-Za-z0-9_']*)((?:[ \t]+[^={\n]*?)?)=(?!=)", re.MULTILINE)
+_LAMBDA_BINDER_RE = re.compile(r"\\\s*([^\n{}=]*?)(?:->|→)")
+_MONADIC_BINDER_RE = re.compile(
+    r"^[ \t]*\(?([^(){}=\n]*?)\)?[ \t]*(?:<-|←)", re.MULTILINE)
+
+
+class Token(NamedTuple):
+    """One identifier or single-character punctuation token."""
+    kind: str   # "id" | "punc"
+    text: str
+    line: int   # 1-based
+
+
+class Occurrence(NamedTuple):
+    """One capability-accessor use the direct-write scan cannot
+    attribute. Ordered path-first so the report is deterministic."""
+    relpath: str
+    line: int
+    accessor: str
+    field: str
+    module: str
+
+
+def tokenize_haskell(text: str) -> list[Token]:
+    """Identifier / single-character-punctuation tokens over
+    ALREADY-comment-stripped Haskell source, with string and character
+    literals consumed whole and dropped.
+
+    Whitespace -- newlines included -- is skipped, which is what makes
+    every consumer below scan complete EXPRESSIONS rather than
+    individual lines: a mutation whose accessor argument sits on the
+    next line (`Engine.Input.Thread.Dispatch`'s `atomicModifyIORef'` of
+    `rvFramebufferMinimizeGenRef`, `Engine.Scripting.Lua.API.StructureArt`'s
+    `rhStructureArtCatalogRef` write) is one token sequence here.
+    Numeric literals degrade into punctuation tokens, which is harmless:
+    nothing downstream matches on them."""
+    tokens: list[Token] = []
+    i = 0
+    line = 1
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch == "\n":
+            line += 1
+            i += 1
+            continue
+        if ch.isspace():
+            i += 1
+            continue
+        ident = _HS_IDENT_RE.match(text, i)
+        if ident:
+            tokens.append(Token("id", ident.group(0), line))
+            i = ident.end()
+            continue
+        if ch == '"':
+            j = i + 1
+            while j < n and text[j] != '"':
+                if text[j] == "\\":
+                    j += 1
+                elif text[j] == "\n":
+                    line += 1
+                j += 1
+            i = min(j + 1, n)
+            continue
+        if ch == "'":
+            # An identifier's trailing prime is already consumed above,
+            # so a `'` reaching here opens a character literal (or is
+            # stray punctuation).
+            literal = _CHAR_LITERAL_RE.match(text, i)
+            if literal:
+                i = literal.end()
+                continue
+        tokens.append(Token("punc", ch, line))
+        i += 1
+    return tokens
+
+
+def strip_import_declarations(text: str) -> str:
+    """`text` with every top-level `import` declaration blanked (line
+    count preserved). An import list names accessors -- often the very
+    accessor a module writes -- and naming one is not using one."""
+    for chunk in _import_chunks(text):
+        text = text.replace(chunk, "\n" * chunk.count("\n"), 1)
+    return text
+
+
+def prepared_source(text: str) -> str:
+    """Comment-stripped, import-blanked source: what every scan below
+    reads. Haddock and `--` commentary can name any accessor without
+    counting as a use."""
+    return strip_import_declarations(_strip_haskell_comments(text))
+
+
+def imported_symbols(source_text: str) -> dict[str, set[str] | None]:
+    """`{module: set of explicitly imported names}`, with `None` meaning
+    unrestricted -- a bare import, or one whose list carries a `(..)`
+    wildcard or a `hiding` clause, none of which enumerates what it
+    brings into scope. A module ABSENT from the result is not imported
+    at all, which is a third answer and not the same as `None`.
+
+    This is what decides whether an identifier at a write site can even
+    BE the accessor: `src/Unit/Thread/Movement.hs` writes a local
+    `utsRef` parameter while importing only the `EngineEnv` TYPE, so the
+    identical name there is not the field."""
+    scopes: dict[str, set[str] | None] = {}
+    for chunk in _import_chunks(_strip_haskell_comments(source_text)):
+        head = _IMPORT_HEAD_RE.match(chunk)
+        if not head:
+            continue
+        module = head.group(1)
+        body = chunk[head.end():]
+        if ("(" not in body or "hiding" in body
+                or _IMPORT_WILDCARD_RE.search(body)):
+            scopes[module] = None
+            continue
+        names = set(_HS_IDENT_RE.findall(body))
+        existing = scopes.get(module, set())
+        scopes[module] = None if existing is None else (existing | names)
+    return scopes
+
+
+def capability_accessor_map(sources: dict[str, str], live_fields: list[str]
+                            ) -> dict[str, tuple[str, str]]:
+    """`{capability accessor: (EngineEnv field, defining module)}` for
+    every `Engine.Core.Capability.*` record, derived from the LIVE
+    projections (`parse_projection_bindings`) rather than a second
+    checked-in list, so this canonicalization cannot drift from the
+    records it describes.
+
+    Duplicate full/view accessors resolve independently: `Render`'s
+    `rcVideoConfigRef` and `RenderView`'s `rvVideoConfigRef` are separate
+    keys canonicalizing onto the same `videoConfigRef` field. A binding
+    whose right-hand side is not a live `EngineEnv` field is skipped
+    rather than invented -- `audit_save_load_projection` and the
+    boundary checks are where a mis-bound projection is caught."""
+    fields = set(live_fields)
+    accessors: dict[str, tuple[str, str]] = {}
+    for relpath, text in sorted(sources.items()):
+        module = module_identifier(relpath)
+        if not module.startswith(CAPABILITY_MODULE_PREFIX):
+            continue
+        match = re.search(r"^(to[A-Za-z0-9_']*)\s*(?:∷|::)", text, re.MULTILINE)
+        if not match:
+            continue
+        for capability_field, accessor in parse_projection_bindings(
+                text, match.group(1)).items():
+            if accessor in fields:
+                accessors[capability_field] = (accessor, module)
+    return accessors
+
+
+def declaration_block_binders(code: str) -> dict[int, frozenset[str]]:
+    """`{1-based line: names bound locally in that line's top-level
+    declaration block}`.
+
+    A block runs from a column-0 declaration line to the line before the
+    next one, so a parameter named after an accessor in one function
+    cannot mask a real write in another. Within a block the binders are
+    equation left-hand sides and their parameters (top-level, `where`
+    and `let` alike), lambda binders, and monadic `<-`/`←` binders.
+
+    Deliberately over-approximate in ONE direction only: it may name
+    something that is not really a binder, which can only DROP a write
+    site from the scan, never invent one."""
+    lines = code.split("\n")
+    starts = [i for i, line in enumerate(lines)
+              if line[:1].isalpha() or line[:1] == "_"]
+    if not starts:
+        starts = [0]
+    if starts[0] != 0:
+        starts.insert(0, 0)
+    bounds = starts + [len(lines)]
+
+    binders_by_line: dict[int, frozenset[str]] = {}
+    for index in range(len(bounds) - 1):
+        start, end = bounds[index], bounds[index + 1]
+        block = "\n".join(lines[start:end])
+        binders: set[str] = set()
+        for name, params in _EQUATION_LHS_RE.findall(block):
+            binders.add(name)
+            binders.update(_HS_IDENT_RE.findall(params))
+        for params in _LAMBDA_BINDER_RE.findall(block):
+            binders.update(_HS_IDENT_RE.findall(params))
+        for pattern in _MONADIC_BINDER_RE.findall(block):
+            binders.update(_HS_IDENT_RE.findall(pattern))
+        frozen = frozenset(binders)
+        for line_number in range(start + 1, end + 1):
+            binders_by_line[line_number] = frozen
+    return binders_by_line
+
+
+def _first_argument_head(tokens: list[Token], index: int) -> int | None:
+    """Token index of the head identifier of `tokens[index]`'s first
+    argument, or `None`. Handles `prim (accessor handle) ...`,
+    `prim $ accessor handle`, and a bare `prim ref ...`; leading `(`s
+    are peeled, so `prim ((accessor handle)) ...` resolves the same."""
+    j = index + 1
+    while (j < len(tokens) and tokens[j].kind == "punc"
+           and tokens[j].text in ("$", "(")):
+        j += 1
+    if j < len(tokens) and tokens[j].kind == "id":
+        return j
+    return None
+
+
+def scan_capability_writes(
+    sources: dict[str, str], live_fields: list[str], *,
+    permanent: frozenset[str] = PERMANENT_IMPORTERS,
+    definer: str = PERMANENT_DEFINER,
+) -> tuple[dict[str, set[str]], list[Occurrence]]:
+    """Pure core of the CMA-1 scan: `({EngineEnv field: writing
+    modules}, residue)`.
+
+    Both a RAW `EngineEnv` accessor (a narrow-import consumer) and a
+    CAPABILITY-record accessor canonicalize onto the same `EngineEnv`
+    field, so the two consumer shapes are one boundary. Three gates keep
+    a textual match honest: the identifier must be in scope in that
+    module (imported under a name that reaches it, or defined by it), it
+    must not be shadowed by a local binder in its own declaration block,
+    and it must head the first argument of an `IORef` mutation
+    primitive.
+
+    `permanent`/`definer` are SS6.1's cohort (D-4), excluded from the
+    write map -- their authority is not what this boundary constrains.
+    They are parameters so the self-test can drive small synthetic
+    fixtures instead of the real ~200-module tree.
+
+    The residue is every remaining CAPABILITY-accessor use -- a helper
+    argument, a context-record field, a queue/`TVar`/`MVar` handle, a
+    point-free composition -- i.e. exactly what the write scan cannot
+    attribute (D-5). Occurrences are counted individually, never
+    deduplicated to field/module pairs. An accessor's own defining
+    capability module is excluded, because its record declaration,
+    export list and projection are declarations rather than uses."""
+    exempt = set(permanent) | {definer}
+    accessors = capability_accessor_map(sources, live_fields)
+    raw_fields = set(live_fields)
+
+    writes: dict[str, set[str]] = {field: set() for field in live_fields}
+    residue: list[Occurrence] = []
+
+    for relpath, text in sorted(sources.items()):
+        module = module_identifier(relpath)
+        scopes = imported_symbols(text)
+        code = prepared_source(text)
+        tokens = tokenize_haskell(code)
+        binders_by_line = declaration_block_binders(code)
+
+        def canonical_field(name: str, line: int) -> str | None:
+            """The `EngineEnv` field `name` canonicalizes to at `line`,
+            or `None` when it is shadowed or simply not in scope."""
+            if name in binders_by_line.get(line, frozenset()):
+                return None
+            if name in raw_fields:
+                field, owner = name, STATE_MODULE
+            else:
+                entry = accessors.get(name)
+                if entry is None:
+                    return None
+                field, owner = entry
+            if module == owner:
+                return field
+            if owner not in scopes:
+                return None
+            symbols = scopes[owner]
+            return field if symbols is None or name in symbols else None
+
+        inline_heads: set[int] = set()
+        for index, token in enumerate(tokens):
+            if token.kind != "id" or token.text not in IOREF_ACCESS_PRIMITIVES:
+                continue
+            head = _first_argument_head(tokens, index)
+            if head is None:
+                continue
+            inline_heads.add(head)
+            if token.text not in IOREF_WRITE_PRIMITIVES or module in exempt:
+                continue
+            field = canonical_field(tokens[head].text, tokens[head].line)
+            if field is not None:
+                writes[field].add(module)
+
+        for index, token in enumerate(tokens):
+            if token.kind != "id" or token.text not in accessors:
+                continue
+            field, owner = accessors[token.text]
+            if module == owner or index in inline_heads:
+                continue
+            residue.append(
+                Occurrence(relpath, token.line, token.text, field, module))
+
+    residue.sort()
+    return writes, residue
+
+
+def audit_writer_modules(
+    writes: dict[str, set[str]], live_fields: list[str], *,
+    declared: dict[str, frozenset[str]] | None = None,
+) -> list[str]:
+    """Pure core of the both-directions map check: the map's keys equal
+    the live `EngineEnv` field set, every detected write is declared,
+    and every declared module still writes what it is mapped to."""
+    mapping = CAPABILITY_WRITER_MODULES if declared is None else declared
+    audit_name = Path(__file__).name
+    violations: list[str] = []
+
+    for field in sorted(set(live_fields) - set(mapping)):
+        violations.append(
+            f"`{field}` is a live `EngineEnv` field with no entry in "
+            f"CAPABILITY_WRITER_MODULES (tools/{audit_name}) -- every field "
+            f"carries a writing-module set, `frozenset()` included, so a new "
+            f"field cannot arrive unmapped (docs/{INVENTORY_PATH.name} "
+            f"SS6.4 step 11, SS6.5)")
+    for field in sorted(set(mapping) - set(live_fields)):
+        violations.append(
+            f"CAPABILITY_WRITER_MODULES maps `{field}`, which is not a live "
+            f"`EngineEnv` field -- remove the stale key")
+
+    for field in sorted(set(mapping) & set(live_fields)):
+        allowed = set(mapping[field])
+        actual = writes.get(field, set())
+        for module in sorted(actual - allowed):
+            violations.append(
+                f"`{module}` writes `{field}` but is not in that field's "
+                f"CAPABILITY_WRITER_MODULES set (tools/{audit_name}) -- "
+                f"either the write belongs somewhere else, or the map grows "
+                f"deliberately in the same change; see "
+                f"docs/{INVENTORY_PATH.name} SS6.5")
+        for module in sorted(allowed - actual):
+            violations.append(
+                f"`{module}` is mapped as a writer of `{field}` but no "
+                f"longer writes it -- remove the stale entry, the same way "
+                f"RENDER_MAIN_ONLY_MODULES is checked in both directions")
+    return violations
+
+
+def format_residue(residue: list[Occurrence]) -> list[str]:
+    """The non-blocking pass-on report (D-5), one line per SOURCE
+    OCCURRENCE -- never deduplicated, never resolved to an originating
+    module. This count is the evidence CMA-2's pilot and CMA-3's verdict
+    both turn on: a small residue means a textual gate is nearly
+    sufficient, a large one argues for a mechanism that travels with the
+    handle. It is printed on EVERY run, ahead of every blocking check,
+    so a failure elsewhere never costs the measurement."""
+    lines = [
+        f"capability-accessor pass-on residue: {len(residue)} use(s) the "
+        f"direct-write scan cannot attribute (non-blocking, reported not "
+        f"resolved -- design decision D-5):"
+    ]
+    lines.extend(
+        f"  - {item.relpath}:{item.line} `{item.accessor}` "
+        f"(-> `{item.field}`) in `{item.module}`"
+        for item in residue)
+    return lines
+
+
 def main() -> int:
     engine_env_source = (REPO_ROOT / ENGINE_ENV_FILE).read_text(encoding="utf-8")
     inventory_text = INVENTORY_PATH.read_text(encoding="utf-8")
+    live_fields = extract_record_fields(engine_env_source, ENGINE_ENV_PATTERN)
+    production_sources = scan_production_sources(REPO_ROOT)
+
+    # The pass-on residue is non-blocking evidence (D-5), so it is
+    # printed FIRST -- before any check that can `return 1` -- and the
+    # measurement survives a failure anywhere below it.
+    field_writes, residue = scan_capability_writes(
+        production_sources, live_fields)
+    for line in format_residue(residue):
+        print(line)
+    print()
+
     violations = audit(engine_env_source, inventory_text)
     if violations:
         print(f"{len(violations)} EngineEnv capability-inventory violation(s):")
@@ -1860,7 +2568,6 @@ def main() -> int:
               f"capability/thread-role/lifecycle vocabulary).")
         return 1
 
-    live_fields = extract_record_fields(engine_env_source, ENGINE_ENV_PATTERN)
     total_violations = audit_field_total(live_fields, inventory_text)
     if total_violations:
         print(f"{len(total_violations)} SS1 field-total/field-span "
@@ -1869,7 +2576,6 @@ def main() -> int:
             print(f"  - {v}")
         return 1
 
-    production_sources = scan_production_sources(REPO_ROOT)
     unrestricted = classify_production_sources(production_sources)
     doc_temporary = parse_temporary_boundary(inventory_text)
     ratchet_violations = audit_ratchet(unrestricted, doc_temporary)
@@ -1912,7 +2618,17 @@ def main() -> int:
             print(f"  - {v}")
         return 1
 
+    writer_violations = audit_writer_modules(field_writes, live_fields)
+    if writer_violations:
+        print(f"{len(writer_violations)} SS5 writing-module map "
+              f"violation(s):")
+        for v in writer_violations:
+            print(f"  - {v}")
+        return 1
+
     total_fields = len(live_fields)
+    mapped_fields = sum(1 for m in CAPABILITY_WRITER_MODULES.values() if m)
+    mapped_pairs = sum(len(m) for m in CAPABILITY_WRITER_MODULES.values())
     temporary_total = sum(len(m) for m in TEMPORARY_CEILING.values())
     print(f"engine-env capability-inventory audit: {total_fields} EngineEnv "
           f"field(s) all classified and agreeing with SS1's marked field "
@@ -1924,7 +2640,11 @@ def main() -> int:
           f"holding the full render capability and no non-owner naming "
           f"`engineStateRef` (SS3), {len(INPUT_LUA_ONLY_MODULES)} LuaThread "
           f"module(s) holding the full input capability and no non-owner "
-          f"naming `inputBarrierNextRef`/`currentKeyDownRef` (SS7.3)")
+          f"naming `inputBarrierNextRef`/`currentKeyDownRef` (SS7.3), "
+          f"{mapped_fields}/{total_fields} field(s) carrying a non-empty "
+          f"writing-module map covering {mapped_pairs} field-module pair(s) "
+          f"with no undeclared or stale entry (SS5), and {len(residue)} "
+          f"reported pass-on residue use(s)")
     return 0
 
 

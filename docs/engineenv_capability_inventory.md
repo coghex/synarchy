@@ -436,6 +436,19 @@ the field's concurrency primitive and its practical contract. **Init**
 to it (if anything) during engine teardown. **Notes** — migration
 dependencies, cross-references, or compatibility-boundary remarks.
 
+**What the audit checks about these cells.** The Readers and Writers
+columns are validated for *grammar* and *citation presence* — every
+role is one of §2.2's, and the row cites real source — never for
+truth. A role claim here is prose and stays prose. Since #1892 there
+is a second, independent mechanism that pins the same ownership
+question at a granularity a source scan can actually verify:
+`tools/engine_env_capability_audit.py`'s checked-in
+`CAPABILITY_WRITER_MODULES` map, which fixes each field's direct
+writing **modules** and rejects an undeclared write and a stale entry
+alike. Read §6.5 before you conclude that either half proves the
+other — they verify different things, and the map deliberately does
+not attempt the role claim.
+
 ### `core-init`
 
 | Field | Lifecycle | Readers | Writers | Sync | Init | Shutdown | Notes |
@@ -1080,7 +1093,13 @@ complete set of requirements:
     count and names the record's real first and last field. The audit
     re-derives all three from the live declaration, so a correct §5 row
     with a stale §1 block still fails (issue #1669).
-11. Whatever else the **live** audit rules require — read the tool, not
+11. A `CAPABILITY_WRITER_MODULES` entry for the field, mapping it to
+    the modules that directly write it — `frozenset()` when nothing
+    does, which is the common case for a field only
+    `Engine.Core.Init` seeds. The map's keys are checked against the
+    live record in both directions, so a new field with no entry
+    fails on its own. See §6.5.
+12. Whatever else the **live** audit rules require — read the tool, not
     just this list. The §3/§7.3 boundary checks, for instance, will
     reject a new field that a thread privately owns being placed on a
     worker-visible record.
@@ -1162,6 +1181,92 @@ An approved addition requires, in lockstep:
 
 The same policy governs any other future permanent exception —
 including a new §3/§7.3-style thread-private field owner.
+
+### 6.5 Writing-module authority and the pass-on residue (#1892, CMA-1)
+
+`tools/engine_env_capability_audit.py` carries a checked-in
+`CAPABILITY_WRITER_MODULES` map: for every live `EngineEnv` field, the
+production modules that **directly mutate** it. It is maintained the
+same way `RENDER_MAIN_ONLY_MODULES` is, and checked the same two ways —
+a write from a module the field's set does not list fails, and a mapped
+module that no longer writes the field fails just as loudly, so the map
+can never decay into a mere upper bound. Its **keys** are checked
+against the live record in both directions too.
+
+Design authority:
+[`capability_mutation_authority_design.md`](capability_mutation_authority_design.md)
+(CMA-1; decisions D-2, D-2a, D-4, D-5). Read it before widening any
+rule below.
+
+**What it proves, and what it does not.** §5 declares thread *roles*; a
+source scan yields *modules*; nothing in this repository maps between
+them, and at module granularity the mapping is not even well-defined —
+`World.Render.BloodQuads` is deliberately dual-domain (§3.1) and writes
+`textureSystemRef` from a `MainRender` function while its quad-building
+path runs on `WorldThread`, so the role is a property of the *function*.
+The map therefore verifies a weaker and different property: **the set of
+modules writing this field is what we last declared**, not "§5's role
+claim is true". A *new* writer can no longer appear unnoticed; an
+already-wrong role cell stays wrong until someone reads it (D-2a).
+
+**Scope: direct `IORef` mutation only.** A write is detected only where
+an `IORef` mutation primitive is applied directly to a known accessor
+application — `writeIORef (accessor handle) …`, whether through the
+field's own `EngineEnv` accessor or through any capability-record
+accessor projecting it, and whether or not the expression spans several
+lines. Mutation through a queue, a `TVar`, an `MVar`, an opaque
+internally-synchronized handle (`SaveBarrier`, `LoadStatusRef`), or a
+helper that was *given* the `IORef` is invisible to a textual scan and
+is deliberately out of scope: resolving it means interprocedural
+dataflow over Haskell source, written in Python, which this arc rejects
+outright (D-5).
+
+**§6.1's cohort is exempt (D-4).** The permanent full-access modules
+hold whole-session orchestration authority by job description, and this
+boundary does not constrain them: their writes are neither reported as
+violations nor admitted into the map. The cohort this map governs is
+the capability-narrowed consumers.
+
+**The pass-on residue.** What the scan cannot attribute, it reports.
+Every capability-accessor use that is *not* a direct inline `IORef`
+read or write — a handle given to a helper, stored into a context
+record that mixes several capabilities, handed to a queue/`TVar`/`MVar`
+primitive, or composed point-free — is listed on every run as one line
+per source occurrence, with its path, line, accessor and canonical
+field. It is **non-blocking, counted but never resolved to an
+originating module**, and it is printed *before* every blocking check
+so a failure elsewhere never costs the measurement. That count is the
+evidence CMA-2's pilot and CMA-3's verdict turn on: a small residue
+means a textual gate is nearly sufficient, a large one argues for a
+mechanism that travels with the handle.
+
+**Three gates keep a textual match honest**, and they are independent
+on purpose — neither is asked to be complete by itself:
+
+1. **Import scope.** The identifier must actually reach the accessor in
+   that module: imported by name, through a `(..)` wildcard or a bare
+   import, or defined by the module itself.
+   `src/Unit/Thread/Movement.hs` writes a local `utsRef` parameter
+   while importing `Engine.Core.State` for the `EngineEnv` *type*
+   alone, so the identical name there is not the field.
+2. **Local shadowing.** An equation parameter, `let`/`where` binding,
+   lambda binder or monadic bind that shares an accessor's name shadows
+   it, confined to its own top-level declaration block. This heuristic
+   is over-approximate in one direction only: it can drop a write site,
+   never invent one.
+3. **Position.** The accessor must head the first argument of a
+   mutation primitive. Naming one in a comment, in Haddock, or in an
+   import list is not using it — commentary and import declarations are
+   stripped before the scan.
+
+**Maintaining it.** Adding an entry is a deliberate act, not a
+maintenance edit: it declares that a capability-narrowed module now
+holds write authority over that field. Removing one is what a narrowing
+migration owes the gate. Either direction, the audit names the exact
+module and field, so the edit is mechanical once the decision is made —
+run `python3 tools/engine_env_capability_audit.py` and read the
+violation. Do not silence a violation by widening a rule above; a
+surprising write is the finding, not the noise.
 
 ## 7. Migration roadmap
 
