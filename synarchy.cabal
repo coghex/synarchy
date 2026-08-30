@@ -1200,6 +1200,8 @@ test-suite synarchy-test-headless
                    Test.Headless.Input.Bindings
                    Test.Headless.Input.State
                    Test.Headless.Input.Inject
+                   Test.Headless.Input.InjectHarness
+                   Test.Headless.Input.InjectOwnership
                    Test.Headless.Input.Followup
                    Test.Headless.Graphics.SwapchainResize
                    Test.Headless.Input.LayerA
