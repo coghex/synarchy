@@ -15,7 +15,6 @@ module Engine.Input.Thread.Scroll
 import UPrelude
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
-import qualified Data.Map.Strict as Map
 import qualified Graphics.UI.GLFW as GLFW
 import Data.IORef (readIORef)
 import Engine.Core.Log (logDebug, LogCategory(..))
@@ -59,7 +58,7 @@ dispatchScrollEvent env inpSt x y = do
     -- entry with keyPressed=False, so a nested left-then-right
     -- lookup would stop consulting RightShift after the first
     -- LeftShift press of the session.
-    let shiftDown k = maybe False keyPressed (Map.lookup k (inpKeyStates inpSt))
+    let shiftDown k = keyHeld inpSt k
         shiftHeld = shiftDown GLFW.Key'LeftShift ∨ shiftDown GLFW.Key'RightShift
         (rawX, rawY) = inpMousePos inpSt
 

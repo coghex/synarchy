@@ -41,6 +41,7 @@ import json
 import os
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -55,6 +56,41 @@ SLOT = "right_hand"
 PAGE = "arena"          # an ORDINARY generated page that merely carries that
                         # name (world.init, not world.initArena), so NB #365's
                         # arena-save prohibition does not apply.
+
+
+def _make_owner_writable(top: str) -> None:
+    """Add owner write (and directory search) permission throughout a
+    freshly copied tree.
+
+    `shutil.copytree` reproduces the SOURCE's mode bits, so a checkout
+    whose `config/` is read-only -- a CI cache restored read-only, a
+    read-only mount, an archive unpacked without write bits -- yields a
+    private `config/` this run cannot use and cannot delete: unlinking a
+    child needs owner write+search on its parent directory, so
+    `remove_run_root` would report residue and leave the invocation's
+    whole tree, engine log and save slot behind after a run that did
+    nothing wrong (#1912). The copy is THIS invocation's, so it is made
+    writable regardless of what the source happened to be; the source
+    itself is never touched, and a symlink is skipped rather than
+    followed, so the content families it names keep their own modes.
+    Same treatment `tools/flora_growth_probe.py` and the four location
+    probes give their own copies.
+    """
+    for path, dirs, files in os.walk(top):
+        for name in [None, *dirs, *files]:
+            target = path if name is None else os.path.join(path, name)
+            try:
+                mode = os.lstat(target).st_mode
+                if stat.S_ISLNK(mode):
+                    continue
+                extra = stat.S_IRWXU if stat.S_ISDIR(mode) \
+                    else stat.S_IRUSR | stat.S_IWUSR
+                os.chmod(target, stat.S_IMODE(mode) | extra)
+            except OSError:
+                # Best effort: a mode this process cannot change is
+                # reported by the cleanup that actually trips over it,
+                # with the path it failed on, rather than here.
+                pass
 
 
 def make_isolated_root(base: str) -> str:
@@ -82,8 +118,37 @@ def make_isolated_root(base: str) -> str:
     if not os.path.exists(config_dst):
         shutil.copytree(os.path.join(REPO, "config"), config_dst,
                         ignore=shutil.ignore_patterns("*.local.yaml"))
+        _make_owner_writable(config_dst)
     os.makedirs(os.path.join(root, "saves"), exist_ok=True)
     return root
+
+
+def remove_run_root(base: str) -> bool:
+    """Delete this invocation's own throwaway tree, save artifacts and
+    all, and say whether it is really gone.
+
+    Only ever removes the directory THIS process made with
+    `tempfile.mkdtemp`, so nothing pre-existing is at risk; `rmtree`
+    unlinks the symlinked content families rather than recursing into
+    them, so the real `scripts/`, `assets/` and `data/` are never
+    followed. A survivor makes the run non-zero: a green result sitting
+    beside leftover saves is precisely the outcome this isolation
+    exists to prevent, so it must not be reported as a pass (#1912).
+    Before that this probe removed the tree with `ignore_errors=True`
+    beneath an already-computed `return`, so a refused deletion was
+    swallowed and reported as every check passing. Same shape the three
+    sibling isolated-root probes already use.
+    """
+    try:
+        shutil.rmtree(base)
+    except OSError as exc:
+        print(f"  [FAIL] could not remove this run's resource root "
+              f"{base}: {exc}")
+        return False
+    if os.path.exists(base):
+        print(f"  [FAIL] this run's resource root survived removal: {base}")
+        return False
+    return True
 
 
 def bootstrap_defs(port: int) -> None:
@@ -267,6 +332,254 @@ def persist_phase(port: int, uid: int, slot: str) -> None:
           f"fresh={fresh} loaded_max={allmax}")
 
 
+def run_probe(args, tmpdir: str, slot: str, adopt) -> int:
+    """Every check in this probe, against a real engine rooted at
+    `tmpdir`, answered as an exit status.
+
+    `adopt` publishes the booted process to `main` the instant `boot`
+    hands one over, because `main` -- not this function -- owns shutting
+    the engine down and only then removing the tree it is running out
+    of. Answering with a status instead of exiting is what lets that
+    cleanup's own verdict override a passing run (#1912).
+    """
+    root = make_isolated_root(tmpdir)
+    proc = boot(args.port, log=LOG, args=["--resource-root", root])
+    adopt(proc)
+    bootstrap_defs(args.port)
+    send(args.port, f"world.init('{PAGE}', {args.seed}, {args.size}, 3); return 'ok'")
+    send(args.port, "return world.waitForInit(180)", timeout=190)
+    send(args.port, f"world.show('{PAGE}'); return 'ok'")
+    send(args.port, "return world.loadChunksInRegion(-1,-1,1,1)")
+    send(args.port, "return world.waitForChunks(120)", timeout=125)
+
+    flat = find_flat(args.port)
+    if not flat:
+        print("could not find flat ground", file=sys.stderr)
+        return 2
+    gx, gy = flat
+    uid = as_int(send(args.port,
+                      f"return unit.spawn('acolyte', {gx}+0.5, {gy}+0.5, nil, 'debug')"))
+    if uid <= 0:
+        print(f"spawn failed (uid={uid})", file=sys.stderr)
+        return 2
+    print(f"spawned acolyte uid={uid} at ({gx},{gy})")
+
+    # Add two identical-def weapons. Each is a genuine creation → distinct id.
+    send(args.port, f"return unit.addItem({uid}, '{WEAPON}', 0)")
+    send(args.port, f"return unit.addItem({uid}, '{WEAPON}', 0)")
+    inv = inventory(args.port, uid)
+    ps = picks(inv)
+
+    print("\n== IDENTITY ==")
+    check(f"two '{WEAPON}' in inventory", len(ps) >= 2,
+          f"found {len(ps)}")
+    if len(ps) < 2:
+        return summarize()
+    idA, idB = ps[0]["instanceId"], ps[1]["instanceId"]
+    qA, qB = ps[0].get("quality"), ps[1].get("quality")
+    check("instanceIds are distinct", idA != idB, f"idA={idA} idB={idB}")
+    check("instanceIds are non-zero", bool(idA) and bool(idB),
+          f"idA={idA} idB={idB}")
+
+    print("\n== TARGETING (equip the 2nd by id) ==")
+    ok = send(args.port,
+              f"return equipment.equip({uid}, '{SLOT}', '{WEAPON}', {idB})")
+    check("equip(...instanceId=idB) returned true", ok.strip() == "true", ok)
+    inv2 = inventory(args.port, uid)
+    ids2 = {it["instanceId"] for it in picks(inv2)}
+    check("the targeted instance (idB) left inventory", idB not in ids2,
+          f"remaining {WEAPON} ids={sorted(ids2)}")
+    check("the non-targeted instance (idA) stayed", idA in ids2,
+          f"remaining {WEAPON} ids={sorted(ids2)}")
+
+    # Confirm the equipped slot holds idB exactly.
+    eq_id = as_int(send(args.port,
+                        f"local lo=equipment.getLoadout({uid}); "
+                        f"local s=lo and lo['{SLOT}']; return s and s.instanceId or -1"))
+    check("equipped slot holds idB", eq_id == idB,
+          f"slot instanceId={eq_id} want {idB}")
+
+    print("\n== FALLBACK (equip with no id → first defName match) ==")
+    # idA is still loose; equipping by defName with no id should take it
+    # (and swap the currently-equipped idB back into inventory).
+    send(args.port, f"return equipment.equip({uid}, '{SLOT}', '{WEAPON}')")
+    eq_id2 = as_int(send(args.port,
+                         f"local lo=equipment.getLoadout({uid}); "
+                         f"local s=lo and lo['{SLOT}']; return s and s.instanceId or -1"))
+    check("no-id equip moved a real instance into the slot",
+          eq_id2 > 0, f"slot now {eq_id2}")
+
+    print("\n== MISMATCH GUARD (weapon defName + non-weapon id) ==")
+    # Add a canteen (kind: container) and try to equip it into the
+    # weapon slot using a WEAPON defName but the canteen's id. The kind
+    # gate must validate the popped instance, not the defName arg.
+    send(args.port, f"return unit.addItem({uid}, 'canteen_steel_2l', 0.5)")
+    inv3 = inventory(args.port, uid)
+    cans = [it for it in inv3 if it.get("defName") == "canteen_steel_2l"]
+    if not cans:
+        check("canteen present for mismatch test", False, "no canteen")
+    else:
+        can_id = cans[0]["instanceId"]
+        slot_before = as_int(send(args.port,
+            f"local lo=equipment.getLoadout({uid}); "
+            f"local s=lo and lo['{SLOT}']; return s and s.instanceId or -1"))
+        res = send(args.port,
+                   f"return equipment.equip({uid}, '{SLOT}', '{WEAPON}', {can_id})")
+        check("equip(weapon defName, canteen id) returns false",
+              res.strip() == "false", res)
+        slot_after = as_int(send(args.port,
+            f"local lo=equipment.getLoadout({uid}); "
+            f"local s=lo and lo['{SLOT}']; return s and s.instanceId or -1"))
+        check("canteen did NOT enter the weapon slot", slot_after != can_id,
+              f"slot now {slot_after}, canteen {can_id}")
+        check("weapon slot unchanged by the rejected equip",
+              slot_after == slot_before,
+              f"before {slot_before} after {slot_after}")
+        still = {it["instanceId"] for it in inventory(args.port, uid)
+                 if it.get("defName") == "canteen_steel_2l"}
+        check("canteen stayed in inventory after rejection", can_id in still,
+              f"canteen ids {sorted(still)}")
+
+        # Accessory analogue: equipAccessory must also refuse a
+        # non-accessory id (only kind: accessory belongs on uiAccessories).
+        acc_before = as_int(send(args.port,
+            f"return #(equipment.getAccessories({uid}) or {{}})"))
+        ares = send(args.port,
+            f"return equipment.equipAccessory({uid}, 'technogoggles', {can_id})")
+        check("equipAccessory(accessory defName, canteen id) returns false",
+              ares.strip() == "false", ares)
+        acc_after = as_int(send(args.port,
+            f"return #(equipment.getAccessories({uid}) or {{}})"))
+        check("canteen did NOT enter the accessory list",
+              acc_after == acc_before, f"accessories {acc_before} -> {acc_after}")
+        still2 = {it["instanceId"] for it in inventory(args.port, uid)
+                  if it.get("defName") == "canteen_steel_2l"}
+        check("canteen still in inventory after accessory rejection",
+              can_id in still2, f"canteen ids {sorted(still2)}")
+
+    print("\n== CONTAINER DIVERGENCE (#67A) ==")
+    # The technomule spawns with a PRE-STOCKED first_aid_kit, and since
+    # #1418 EVERY creation path materializes a container def's authored
+    # `contents:` -- `unit.addItem` included. So a second kit arrives
+    # stocked too, and the two are genuinely INTERCHANGEABLE.
+    #
+    # That makes one shared contentsKey the CORRECT answer, not a
+    # collapse: #67A's rule is that same-def containers merge until
+    # their internal state diverges (itemContentsSig hashes each
+    # child's defName/fill/quality/condition/weight/sharpness and
+    # never the instance id or tracked temperature (#1597), so two
+    # kits freshly minted from one definition MUST hash alike).
+    # What has to separate them is a real divergence, so this
+    # block draws bandages out of one kit through the shipped medical
+    # path and re-reads both.
+    muid = as_int(send(args.port,
+        f"return unit.spawn('technomule', {gx}+0.5, {gy}+0.5, nil, 'debug')"))
+    if muid <= 0:
+        check("spawn technomule", False, f"uid={muid}")
+    else:
+        kits = [it for it in inventory(args.port, muid)
+                if it.get("defName") == "first_aid_kit"]
+        stocked = kits[0] if kits else None
+        sk = (stocked or {}).get("contentsKey") or ""
+        check("technomule carries a stocked first_aid_kit",
+              stocked is not None and sk != "",
+              f"kits={len(kits)} contentsKey={sk[:16]!r}")
+        if stocked and sk != "":
+            stocked_id = stocked["instanceId"]
+            send(args.port, f"return unit.addItem({muid}, 'first_aid_kit')")
+            kits2 = [it for it in inventory(args.port, muid)
+                     if it.get("defName") == "first_aid_kit"]
+            keys2 = {(k.get("contentsKey") or "") for k in kits2}
+            ids2 = [k["instanceId"] for k in kits2]
+            check("unit.addItem now mints a STOCKED kit too (#1418)",
+                  len(kits2) >= 2 and "" not in keys2,
+                  f"keys={[(k['instanceId'], (k.get('contentsKey') or '')[:8]) for k in kits2]}")
+            check("two IDENTICALLY stocked kits share ONE contentsKey -- "
+                  "interchangeable until they diverge (#67A)",
+                  len(kits2) >= 2 and len(keys2) == 1,
+                  f"distinct keys={len(keys2)}")
+            check("...while still being distinct physical items",
+                  len(set(ids2)) == len(ids2) and len(ids2) >= 2,
+                  f"ids={sorted(ids2)}")
+            # The 1 L antiseptic bottle must report its FILLED mass
+            # (0.12 empty + 1.0 L × 1.0 ≈ 1.12 kg), not the empty-bottle
+            # def weight (0.12). Unconditional now: every kit is stocked,
+            # so nothing can skip this by there being no empty twin --
+            # and it runs BEFORE the treatment below, which spends a
+            # dose of that very bottle.
+            aw = content_weight(args.port, muid, "first_aid_kit",
+                                stocked_id, "antiseptic")
+            check("Contents weight includes bottle fill (~1.12, not 0.12)",
+                  aw > 1.1, f"antiseptic weight={aw}")
+
+            new_id = next((i for i in ids2 if i != stocked_id), None)
+            # NB: `check` reports, it does not answer -- it returns
+            # None, so it can never gate a block.
+            check("the second kit is located by its own id",
+                  new_id is not None, f"ids={sorted(ids2)}")
+            if new_id is not None:
+                rows = [contents_rows(args.port, muid, "first_aid_kit", i)
+                        for i in (stocked_id, new_id)]
+                check("getItemContents(either id) returns that kit's "
+                      "supplies", rows[0] == rows[1] > 0, f"rows={rows}")
+                before = [content_count(args.port, muid, "first_aid_kit",
+                                        i, "bandage")
+                          for i in (stocked_id, new_id)]
+                check("both kits report the same authored bandage count",
+                      before[0] == before[1] > 0, f"counts={before}")
+
+                # -- The divergence, through the shipped path that
+                #    actually draws a supply out of a kit: an acolyte
+                #    (the unit that KNOWS bleed_control) dresses a
+                #    wound, naming the mule as the explicit kit owner
+                #    so the bandages come out of the pair above.
+                #    consumeBandages spends from the FIRST carried kit
+                #    holding any, which is the mule's starting one.
+                #
+                #    A SEPARATE acolyte carries the wound: the one
+                #    under test above is the subject of the PERSIST
+                #    block below, and leaving it bleeding would put a
+                #    survival tick between that block and its own
+                #    assertions.
+                med = as_int(send(args.port,
+                    f"return unit.spawn('acolyte', {gx}+0.5, {gy}+0.5,"
+                    " nil, 'debug')"))
+                check("a second acolyte is spawned to carry the wound",
+                      med > 0, f"uid={med}")
+                send(args.port,
+                     f"return unit.injure({med}, 'head', 'cut', 0.4, 1.0)")
+                used = as_int(send(args.port,
+                    f"local r=unit.treatBleeding({med}, {med}, {muid}); "
+                    "return (r and r.bandagesUsed) or 0"))
+                check("treating a wound out of the mule's kit really "
+                      "spent bandages", used > 0, f"bandagesUsed={used}")
+
+                after = [content_count(args.port, muid, "first_aid_kit",
+                                       i, "bandage")
+                         for i in (stocked_id, new_id)]
+                check("getItemContents(id) answers about the EXACT kit "
+                      "asked for -- the drawn-from one lost supplies, "
+                      "its twin lost none",
+                      after[0] == before[0] - used and after[1] == before[1],
+                      f"before={before} after={after} used={used}")
+                kits3 = [it for it in inventory(args.port, muid)
+                         if it.get("defName") == "first_aid_kit"]
+                keys3 = {(k.get("contentsKey") or "") for k in kits3}
+                check("a REAL divergence splits the contentsKey, so the "
+                      "two kits stop merging in the UI",
+                      len(keys3) == 2,
+                      f"keys={[(k['instanceId'], (k.get('contentsKey') or '')[:8]) for k in kits3]}")
+                check("the diverged kits keep their distinct instance ids",
+                      sorted(k["instanceId"] for k in kits3)
+                          == sorted(ids2),
+                      f"{sorted(k['instanceId'] for k in kits3)} vs {sorted(ids2)}")
+
+    if not args.no_save:
+        persist_phase(args.port, uid, slot)
+
+    return summarize()
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--seed", type=int, default=42)
@@ -285,250 +598,27 @@ def main() -> int:
     tmpdir = tempfile.mkdtemp(prefix="item_instance_probe_")
     slot = f"issue67_probe_{os.getpid()}"
     proc = None
+
+    def adopt(process) -> None:
+        nonlocal proc
+        proc = process
+
     try:
-        root = make_isolated_root(tmpdir)
-        proc = boot(args.port, log=LOG, args=["--resource-root", root])
-        bootstrap_defs(args.port)
-        send(args.port, f"world.init('{PAGE}', {args.seed}, {args.size}, 3); return 'ok'")
-        send(args.port, "return world.waitForInit(180)", timeout=190)
-        send(args.port, f"world.show('{PAGE}'); return 'ok'")
-        send(args.port, "return world.loadChunksInRegion(-1,-1,1,1)")
-        send(args.port, "return world.waitForChunks(120)", timeout=125)
-
-        flat = find_flat(args.port)
-        if not flat:
-            print("could not find flat ground", file=sys.stderr)
-            return 2
-        gx, gy = flat
-        uid = as_int(send(args.port,
-                          f"return unit.spawn('acolyte', {gx}+0.5, {gy}+0.5, nil, 'debug')"))
-        if uid <= 0:
-            print(f"spawn failed (uid={uid})", file=sys.stderr)
-            return 2
-        print(f"spawned acolyte uid={uid} at ({gx},{gy})")
-
-        # Add two identical-def weapons. Each is a genuine creation → distinct id.
-        send(args.port, f"return unit.addItem({uid}, '{WEAPON}', 0)")
-        send(args.port, f"return unit.addItem({uid}, '{WEAPON}', 0)")
-        inv = inventory(args.port, uid)
-        ps = picks(inv)
-
-        print("\n== IDENTITY ==")
-        check(f"two '{WEAPON}' in inventory", len(ps) >= 2,
-              f"found {len(ps)}")
-        if len(ps) < 2:
-            return summarize()
-        idA, idB = ps[0]["instanceId"], ps[1]["instanceId"]
-        qA, qB = ps[0].get("quality"), ps[1].get("quality")
-        check("instanceIds are distinct", idA != idB, f"idA={idA} idB={idB}")
-        check("instanceIds are non-zero", bool(idA) and bool(idB),
-              f"idA={idA} idB={idB}")
-
-        print("\n== TARGETING (equip the 2nd by id) ==")
-        ok = send(args.port,
-                  f"return equipment.equip({uid}, '{SLOT}', '{WEAPON}', {idB})")
-        check("equip(...instanceId=idB) returned true", ok.strip() == "true", ok)
-        inv2 = inventory(args.port, uid)
-        ids2 = {it["instanceId"] for it in picks(inv2)}
-        check("the targeted instance (idB) left inventory", idB not in ids2,
-              f"remaining {WEAPON} ids={sorted(ids2)}")
-        check("the non-targeted instance (idA) stayed", idA in ids2,
-              f"remaining {WEAPON} ids={sorted(ids2)}")
-
-        # Confirm the equipped slot holds idB exactly.
-        eq_id = as_int(send(args.port,
-                            f"local lo=equipment.getLoadout({uid}); "
-                            f"local s=lo and lo['{SLOT}']; return s and s.instanceId or -1"))
-        check("equipped slot holds idB", eq_id == idB,
-              f"slot instanceId={eq_id} want {idB}")
-
-        print("\n== FALLBACK (equip with no id → first defName match) ==")
-        # idA is still loose; equipping by defName with no id should take it
-        # (and swap the currently-equipped idB back into inventory).
-        send(args.port, f"return equipment.equip({uid}, '{SLOT}', '{WEAPON}')")
-        eq_id2 = as_int(send(args.port,
-                             f"local lo=equipment.getLoadout({uid}); "
-                             f"local s=lo and lo['{SLOT}']; return s and s.instanceId or -1"))
-        check("no-id equip moved a real instance into the slot",
-              eq_id2 > 0, f"slot now {eq_id2}")
-
-        print("\n== MISMATCH GUARD (weapon defName + non-weapon id) ==")
-        # Add a canteen (kind: container) and try to equip it into the
-        # weapon slot using a WEAPON defName but the canteen's id. The kind
-        # gate must validate the popped instance, not the defName arg.
-        send(args.port, f"return unit.addItem({uid}, 'canteen_steel_2l', 0.5)")
-        inv3 = inventory(args.port, uid)
-        cans = [it for it in inv3 if it.get("defName") == "canteen_steel_2l"]
-        if not cans:
-            check("canteen present for mismatch test", False, "no canteen")
-        else:
-            can_id = cans[0]["instanceId"]
-            slot_before = as_int(send(args.port,
-                f"local lo=equipment.getLoadout({uid}); "
-                f"local s=lo and lo['{SLOT}']; return s and s.instanceId or -1"))
-            res = send(args.port,
-                       f"return equipment.equip({uid}, '{SLOT}', '{WEAPON}', {can_id})")
-            check("equip(weapon defName, canteen id) returns false",
-                  res.strip() == "false", res)
-            slot_after = as_int(send(args.port,
-                f"local lo=equipment.getLoadout({uid}); "
-                f"local s=lo and lo['{SLOT}']; return s and s.instanceId or -1"))
-            check("canteen did NOT enter the weapon slot", slot_after != can_id,
-                  f"slot now {slot_after}, canteen {can_id}")
-            check("weapon slot unchanged by the rejected equip",
-                  slot_after == slot_before,
-                  f"before {slot_before} after {slot_after}")
-            still = {it["instanceId"] for it in inventory(args.port, uid)
-                     if it.get("defName") == "canteen_steel_2l"}
-            check("canteen stayed in inventory after rejection", can_id in still,
-                  f"canteen ids {sorted(still)}")
-
-            # Accessory analogue: equipAccessory must also refuse a
-            # non-accessory id (only kind: accessory belongs on uiAccessories).
-            acc_before = as_int(send(args.port,
-                f"return #(equipment.getAccessories({uid}) or {{}})"))
-            ares = send(args.port,
-                f"return equipment.equipAccessory({uid}, 'technogoggles', {can_id})")
-            check("equipAccessory(accessory defName, canteen id) returns false",
-                  ares.strip() == "false", ares)
-            acc_after = as_int(send(args.port,
-                f"return #(equipment.getAccessories({uid}) or {{}})"))
-            check("canteen did NOT enter the accessory list",
-                  acc_after == acc_before, f"accessories {acc_before} -> {acc_after}")
-            still2 = {it["instanceId"] for it in inventory(args.port, uid)
-                      if it.get("defName") == "canteen_steel_2l"}
-            check("canteen still in inventory after accessory rejection",
-                  can_id in still2, f"canteen ids {sorted(still2)}")
-
-        print("\n== CONTAINER DIVERGENCE (#67A) ==")
-        # The technomule spawns with a PRE-STOCKED first_aid_kit, and since
-        # #1418 EVERY creation path materializes a container def's authored
-        # `contents:` -- `unit.addItem` included. So a second kit arrives
-        # stocked too, and the two are genuinely INTERCHANGEABLE.
-        #
-        # That makes one shared contentsKey the CORRECT answer, not a
-        # collapse: #67A's rule is that same-def containers merge until
-        # their internal state diverges (itemContentsSig hashes each
-        # child's defName/fill/quality/condition/weight/sharpness and
-        # never the instance id or tracked temperature (#1597), so two
-        # kits freshly minted from one definition MUST hash alike).
-        # What has to separate them is a real divergence, so this
-        # block draws bandages out of one kit through the shipped medical
-        # path and re-reads both.
-        muid = as_int(send(args.port,
-            f"return unit.spawn('technomule', {gx}+0.5, {gy}+0.5, nil, 'debug')"))
-        if muid <= 0:
-            check("spawn technomule", False, f"uid={muid}")
-        else:
-            kits = [it for it in inventory(args.port, muid)
-                    if it.get("defName") == "first_aid_kit"]
-            stocked = kits[0] if kits else None
-            sk = (stocked or {}).get("contentsKey") or ""
-            check("technomule carries a stocked first_aid_kit",
-                  stocked is not None and sk != "",
-                  f"kits={len(kits)} contentsKey={sk[:16]!r}")
-            if stocked and sk != "":
-                stocked_id = stocked["instanceId"]
-                send(args.port, f"return unit.addItem({muid}, 'first_aid_kit')")
-                kits2 = [it for it in inventory(args.port, muid)
-                         if it.get("defName") == "first_aid_kit"]
-                keys2 = {(k.get("contentsKey") or "") for k in kits2}
-                ids2 = [k["instanceId"] for k in kits2]
-                check("unit.addItem now mints a STOCKED kit too (#1418)",
-                      len(kits2) >= 2 and "" not in keys2,
-                      f"keys={[(k['instanceId'], (k.get('contentsKey') or '')[:8]) for k in kits2]}")
-                check("two IDENTICALLY stocked kits share ONE contentsKey -- "
-                      "interchangeable until they diverge (#67A)",
-                      len(kits2) >= 2 and len(keys2) == 1,
-                      f"distinct keys={len(keys2)}")
-                check("...while still being distinct physical items",
-                      len(set(ids2)) == len(ids2) and len(ids2) >= 2,
-                      f"ids={sorted(ids2)}")
-                # The 1 L antiseptic bottle must report its FILLED mass
-                # (0.12 empty + 1.0 L × 1.0 ≈ 1.12 kg), not the empty-bottle
-                # def weight (0.12). Unconditional now: every kit is stocked,
-                # so nothing can skip this by there being no empty twin --
-                # and it runs BEFORE the treatment below, which spends a
-                # dose of that very bottle.
-                aw = content_weight(args.port, muid, "first_aid_kit",
-                                    stocked_id, "antiseptic")
-                check("Contents weight includes bottle fill (~1.12, not 0.12)",
-                      aw > 1.1, f"antiseptic weight={aw}")
-
-                new_id = next((i for i in ids2 if i != stocked_id), None)
-                # NB: `check` reports, it does not answer -- it returns
-                # None, so it can never gate a block.
-                check("the second kit is located by its own id",
-                      new_id is not None, f"ids={sorted(ids2)}")
-                if new_id is not None:
-                    rows = [contents_rows(args.port, muid, "first_aid_kit", i)
-                            for i in (stocked_id, new_id)]
-                    check("getItemContents(either id) returns that kit's "
-                          "supplies", rows[0] == rows[1] > 0, f"rows={rows}")
-                    before = [content_count(args.port, muid, "first_aid_kit",
-                                            i, "bandage")
-                              for i in (stocked_id, new_id)]
-                    check("both kits report the same authored bandage count",
-                          before[0] == before[1] > 0, f"counts={before}")
-
-                    # -- The divergence, through the shipped path that
-                    #    actually draws a supply out of a kit: an acolyte
-                    #    (the unit that KNOWS bleed_control) dresses a
-                    #    wound, naming the mule as the explicit kit owner
-                    #    so the bandages come out of the pair above.
-                    #    consumeBandages spends from the FIRST carried kit
-                    #    holding any, which is the mule's starting one.
-                    #
-                    #    A SEPARATE acolyte carries the wound: the one
-                    #    under test above is the subject of the PERSIST
-                    #    block below, and leaving it bleeding would put a
-                    #    survival tick between that block and its own
-                    #    assertions.
-                    med = as_int(send(args.port,
-                        f"return unit.spawn('acolyte', {gx}+0.5, {gy}+0.5,"
-                        " nil, 'debug')"))
-                    check("a second acolyte is spawned to carry the wound",
-                          med > 0, f"uid={med}")
-                    send(args.port,
-                         f"return unit.injure({med}, 'head', 'cut', 0.4, 1.0)")
-                    used = as_int(send(args.port,
-                        f"local r=unit.treatBleeding({med}, {med}, {muid}); "
-                        "return (r and r.bandagesUsed) or 0"))
-                    check("treating a wound out of the mule's kit really "
-                          "spent bandages", used > 0, f"bandagesUsed={used}")
-
-                    after = [content_count(args.port, muid, "first_aid_kit",
-                                           i, "bandage")
-                             for i in (stocked_id, new_id)]
-                    check("getItemContents(id) answers about the EXACT kit "
-                          "asked for -- the drawn-from one lost supplies, "
-                          "its twin lost none",
-                          after[0] == before[0] - used and after[1] == before[1],
-                          f"before={before} after={after} used={used}")
-                    kits3 = [it for it in inventory(args.port, muid)
-                             if it.get("defName") == "first_aid_kit"]
-                    keys3 = {(k.get("contentsKey") or "") for k in kits3}
-                    check("a REAL divergence splits the contentsKey, so the "
-                          "two kits stop merging in the UI",
-                          len(keys3) == 2,
-                          f"keys={[(k['instanceId'], (k.get('contentsKey') or '')[:8]) for k in kits3]}")
-                    check("the diverged kits keep their distinct instance ids",
-                          sorted(k["instanceId"] for k in kits3)
-                              == sorted(ids2),
-                          f"{sorted(k['instanceId'] for k in kits3)} vs {sorted(ids2)}")
-
-
-        if not args.no_save:
-            persist_phase(args.port, uid, slot)
-
-        return summarize()
+        rc = run_probe(args, tmpdir, slot, adopt)
     finally:
         # Shut the engine down BEFORE deleting the root it is running
         # out of, then remove it -- passing or failing, that leaves no
-        # save artifact this run created behind.
+        # save artifact this run created behind. Nothing is returned
+        # from here: an exception on the way out (a `SystemExit` from
+        # `boot` included) keeps its own status rather than being
+        # masked by the cleanup verdict, which only ever applies to a
+        # run that actually reached an answer.
         if proc is not None:
             quit_engine(args.port, proc)
-        shutil.rmtree(tmpdir, ignore_errors=True)
+        cleaned = remove_run_root(tmpdir)
+    # A run whose own tree survives is not a pass, whatever the checks
+    # found: `remove_run_root` has already named the survivor (#1912).
+    return rc if cleaned else 1
 
 
 def summarize() -> int:

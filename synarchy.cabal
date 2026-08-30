@@ -1201,6 +1201,8 @@ test-suite synarchy-test-headless
                    Test.Headless.Input.Bindings
                    Test.Headless.Input.State
                    Test.Headless.Input.Inject
+                   Test.Headless.Input.InjectHarness
+                   Test.Headless.Input.InjectOwnership
                    Test.Headless.Input.Followup
                    Test.Headless.Graphics.SwapchainResize
                    Test.Headless.Input.LayerA
@@ -1242,6 +1244,7 @@ test-suite synarchy-test-headless
                    Test.Headless.UI.Tooltip
                    Test.Headless.UI.InputOwnership
                    Test.Headless.UI.ZoomBandInputGate
+                   Test.Headless.UI.UnitInfoRowSelection
                    Test.Headless.UI.ElementInputPolicy
                    Test.Headless.UI.ControlActivation
                    Test.Headless.UI.HierarchyOwnership
@@ -1259,6 +1262,7 @@ test-suite synarchy-test-headless
                    Test.Headless.UI.TutorialHud
                    Test.Headless.UI.UnicodeTextEditing
                    Test.Headless.UI.Slider
+                   Test.Headless.UI.BarFillColor
                    Test.Headless.UI.ClickCorrelation
                    Test.Headless.UI.TransferContextMenu
                    Test.Headless.UI.ItemList
@@ -1292,6 +1296,7 @@ test-suite synarchy-test-headless
                    Test.Headless.App.Cli
                    Test.Headless.App.ChunkRegion
                    Test.Headless.App.PreviewConfig
+                   Test.Headless.Core.LogCategoryEnv
                    Test.Headless.Core.LogMonad
                    Test.Headless.Core.LogParity
                    Test.Headless.Core.LoopStartup
