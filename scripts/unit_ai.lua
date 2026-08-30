@@ -283,7 +283,7 @@ local function tickOne(uid, defName)
 
     local s = core.ensureState(uid)
     core.seedInitialGoal(s, defName)
-    core.maintainTask(uid, s)
+    combat.completeCommandedTask(uid, s, core.maintainTask(uid, s))
     -- Stamina-adaptive follow_command pacing (#999): runs unconditionally
     -- every tick, like maintainTask above, rather than through the
     -- switch/idle execute gate below — that gate deliberately avoids

@@ -48,11 +48,19 @@ prelude = lns
     , "  combatEffectiveness=function(uid) return EFFECT[uid] end }"
     , "package.loaded['scripts.unit_ai_core'] = {"
     , "  isGoalActive=function(s,name) return s.activeGoal == name end,"
+    , "  markGoalAccomplished=function(s,name)"
+    , "    s.goalStatus=s.goalStatus or {}; s.goalStatus[name]='accomplished'"
+    , "    if s.activeGoal == name then s.activeGoal=nil end end,"
     , "  reportFailure=function() WARNINGS=WARNINGS+1 end }"
     , "package.loaded['scripts.unit_ai_pace'] = {"
     , "  initialPaceMode=function() return 'push' end,"
     , "  paceSpeed=function() return 1.0 end }"
-    , "package.loaded['scripts.unit_ai_stall'] = { noteWalk=function() end }"
+    , "package.loaded['scripts.movement_speed'] = {"
+    , "  comfort=function() return 1.0 end }"
+    , "LUNGE_CLEARS=0"
+    , "package.loaded['scripts.unit_ai_combat_lunge'] = { clear=function()"
+    , "  LUNGE_CLEARS=LUNGE_CLEARS+1 end }"
+    , "local stall = require('scripts.unit_ai_stall')"
     , "local move = require('scripts.unit_ai_combat_move')"
     ]
 
@@ -117,6 +125,8 @@ spec = describe "player move orders during combat (#916)" $ do
             , "NOW=1.99; assert(move.followCommandUtility(1,s) == 9)"
             , "NOW=2.0; assert(move.followCommandUtility(1,s) == -math.huge)"
             , "assert(s.commandedTask == nil and WARNINGS == 1 and STOPS == 1)"
+            , "assert(s.activeGoal == 'attack' and s.attackTargetUid == 2,"
+            , "  'failed movement proof must release the original combat')"
             , "assert(move.followCommandUtility(1,s) == -math.huge)"
             , "assert(WARNINGS == 1, 'the failed episode warns once')"
             ]
@@ -131,4 +141,29 @@ spec = describe "player move orders during combat (#916)" $ do
             , "assert(move.followCommandUtility(1,s) == 9)"
             , "assert(s.commandedTask ~= nil)"
             , "assert(s.commandedTask.combatMoveControlAt == nil)"
+            ]
+
+    it "ends the old attack on successful arrival and enters the resulting hold" $
+        runsOk $ lns
+            [ prelude
+            , "local hold = require('scripts.unit_ai_hold')"
+            , "local s = { activeGoal='attack', attackTargetUid=2, committed=true,"
+            , "  attackLastMoveTo={x=2,y=0}, goalStatus={attack='in_progress'},"
+            , "  commandedTask={x=10,y=0,player=true} }"
+            , "assert(move.followCommandUtility(1,s) == 9)"
+            , "move.followCommandExecute(1,s)"
+            , "assert(s.commandedTask.combatWithdrawal == true)"
+            , "POS[1].gridX=0.2; NOW=2"
+            , "assert(move.followCommandUtility(1,s) == 9)"
+            , "assert(s.commandedTask.combatMoveControlAt == nil)"
+            , "POS[1].gridX=10"
+            , "local completed = stall.maintainTask(1,s)"
+            , "move.completeCommandedTask(1,s,completed)"
+            , "assert(s.commandedTask == nil and s.holdAnchor.x == 10)"
+            , "assert(s.attackTargetUid == nil and s.committed == nil)"
+            , "assert(s.attackLastMoveTo == nil and s.activeGoal == nil)"
+            , "assert(s.goalStatus.attack == 'accomplished' and LUNGE_CLEARS == 1)"
+            , "assert(hold.holdUtility(1,s) == 7, 'arrival must enter the hold')"
+            , "hold.holdExecute(1,s)"
+            , "assert(STOPS == 2, 'handoff stops once, then hold maintains position')"
             ]

@@ -361,6 +361,7 @@ end
 M.FOLLOW_COMMAND_UTILITY = combatMove.FOLLOW_COMMAND_UTILITY
 M.followCommandUtility   = combatMove.followCommandUtility
 M.followCommandExecute   = combatMove.followCommandExecute
+M.completeCommandedTask  = combatMove.completeCommandedTask
 M.followCommandPaceTick  = pace.followCommandPaceTick
 M.retreatUtility         = retreatUtility
 M.retreatExecute         = retreatExecute

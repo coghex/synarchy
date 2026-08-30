@@ -87,6 +87,10 @@ local function followCommandExecute(uid, s)
             -- us enter. Release combat_idle / attack overrides so state-driven
             -- walking animates the withdrawal rather than sliding away.
             unit.clearAnimOverride(uid)
+            -- Durable across proof-window resets and save/load: arrival
+            -- must know this order genuinely took control from combat even
+            -- when its current two-second movement sample was just reset.
+            task.combatWithdrawal = true
             task.combatMoveControlAt = engine.gameTime()
             task.combatMoveStartX = info.gridX
             task.combatMoveStartY = info.gridY
@@ -101,8 +105,26 @@ local function followCommandExecute(uid, s)
     unit.moveTo(uid, task.x, task.y, pace.paceSpeed(uid, task.paceMode))
 end
 
+-- Successful arrival is the end of a player-directed withdrawal, not a
+-- one-tick interruption before attack_target wins again. The marker is set
+-- only when follow_command actually took control at utility 9, so a move
+-- postponed by a committed strike, active retreat, or high-confidence finish
+-- does not bypass those exceptions. maintainTask returns nil on both timeout
+-- paths; an impossible escape therefore leaves the attack intact to resume.
+local function completeCommandedTask(uid, s, task)
+    if not task or not task.combatWithdrawal then return end
+    s.attackTargetUid = nil
+    s.committed = nil
+    s.attackLastMoveTo = nil
+    require("scripts.unit_ai_combat_lunge").clear(s)
+    core.markGoalAccomplished(s, "attack")
+    unit.clearAnimOverride(uid)
+    unit.stop(uid)
+end
+
 M.FOLLOW_COMMAND_UTILITY = FOLLOW_COMMAND_UTILITY
 M.followCommandUtility = followCommandUtility
 M.followCommandExecute = followCommandExecute
+M.completeCommandedTask = completeCommandedTask
 
 return M
