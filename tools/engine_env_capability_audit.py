@@ -1946,6 +1946,15 @@ IOREF_ACCESS_PRIMITIVES = IOREF_WRITE_PRIMITIVES | IOREF_READ_PRIMITIVES
 
 CAPABILITY_MODULE_PREFIX = "Engine.Core.Capability."
 
+# Where the primitives come from. A name is only the `Data.IORef`
+# primitive if the module actually has THAT one in scope under the
+# spelling used -- the same rule the accessors are held to, and for the
+# same reason: a module may define its own `writeIORef`, or qualify an
+# unrelated module's homonym, and calling it is not an `IORef`
+# mutation. Every module in this tree that mutates one imports
+# `Data.IORef` bare.
+IOREF_MODULE = "Data.IORef"
+
 # docs/engineenv_capability_inventory.md SS5's writing-module map: for
 # every live `EngineEnv` field, the production modules that DIRECTLY
 # mutate it -- through the field's own accessor or through any
@@ -2460,6 +2469,23 @@ def capability_accessor_map(sources: dict[str, str], live_fields: list[str]
     return accessors
 
 
+def resolve_primitive(declarations: list[ImportDecl], name: str) -> str | None:
+    """The `Data.IORef` primitive `name` denotes here, or `None`.
+
+    Bare or qualified, the base name must be one of the recognized
+    primitives AND must reach this module from `Data.IORef` under that
+    exact spelling. A module-local `writeIORef`, or `Other.writeIORef`
+    from an unrelated module, is a different function; attributing its
+    argument would invent a write out of code that mutates no `IORef`
+    at all."""
+    qualifier, _, base = name.rpartition(".")
+    if base not in IOREF_ACCESS_PRIMITIVES:
+        return None
+    if not imports_name(declarations, IOREF_MODULE, base, qualifier):
+        return None
+    return base
+
+
 def _applied_head(tokens: list[Token], head: int) -> int | None:
     """`head` if the accessor at that index is APPLIED to something,
     else `None`.
@@ -2838,12 +2864,11 @@ def scan_capability_writes(
             # A mutation primitive is just as much itself under a
             # qualifier (`Ref.writeIORef`, from
             # `import qualified Data.IORef as Ref`), and missing one
-            # would be a SILENT hole in the gate. The prefix is not
-            # checked against `Data.IORef`: a false match here only
-            # means the first argument is examined, and that argument
-            # must still resolve to an in-scope accessor.
-            primitive = token.text.rpartition(".")[2]
-            if primitive not in IOREF_ACCESS_PRIMITIVES:
+            # would be a SILENT hole in the gate -- but it must be the
+            # `Data.IORef` one, resolved through this module's own
+            # imports, or a local homonym would fabricate a write.
+            primitive = resolve_primitive(declarations, token.text)
+            if primitive is None:
                 continue
             head = _first_argument_head(tokens, index)
             if head is None:

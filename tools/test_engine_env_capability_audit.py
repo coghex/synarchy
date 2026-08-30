@@ -40,7 +40,7 @@ from engine_env_capability_audit import (  # type: ignore
     tokenize_haskell, parse_imports, imports_name,
     _first_argument_head, _infix_left_operand_head, _applied_head,
     classify_mutation_site, audit_mutation_sites, audit_shadow_exemptions,
-    SHADOW_EXEMPTIONS,
+    SHADOW_EXEMPTIONS, resolve_primitive,
 )
 from persistence_inventory_audit import extract_record_fields  # type: ignore
 
@@ -1921,6 +1921,8 @@ toFakeCapability env = FakeCapability
 _DECLARED_WRITER = """\
 module Consumer.Mod where
 
+import Data.IORef
+
 import Engine.Core.State (EngineEnv, fieldTwo)
 import Engine.Core.Capability.Fake (FakeCapability(..), toFakeCapability)
 
@@ -1934,6 +1936,8 @@ bumpRaw env = writeIORef (fieldTwo env) 2
 # Same write, from a module the map does not list.
 _UNDECLARED_WRITER = """\
 module Interloper.Mod where
+
+import Data.IORef
 
 import Engine.Core.State (EngineEnv, fieldTwo)
 import Engine.Core.Capability.Fake (FakeCapability(..), toFakeCapability)
@@ -1950,6 +1954,8 @@ sneakRaw env = writeIORef (fieldTwo env) 9
 _PERMANENT_WRITER = """\
 module Permanent.Mod where
 
+import Data.IORef
+
 import Engine.Core.State
 
 seedEverything ∷ EngineEnv → IO ()
@@ -1959,6 +1965,8 @@ seedEverything env = writeIORef (fieldOne env) 0
 # The three false-positive traps, one per honesty gate.
 _TRAP_MODULE = """\
 module Trap.Mod where
+
+import Data.IORef
 
 import Engine.Core.State (EngineEnv, fieldTwo)
 import Engine.Core.Capability.Fake (FakeCapability(..), toFakeCapability)
@@ -1985,6 +1993,8 @@ handOff env = someHelper (fkFieldTwo (toFakeCapability env))
 _TYPE_ONLY_IMPORTER = """\
 module Narrow.Mod where
 
+import Data.IORef
+
 import Engine.Core.State (EngineEnv)
 
 tick ∷ EngineEnv → IORef Int → IO ()
@@ -1999,6 +2009,8 @@ tick _ fieldOne = writeIORef fieldOne 5
 _LOCAL_HOMONYM = """\
 module Homonym.Mod where
 
+import Data.IORef
+
 import Engine.Core.State (EngineEnv)
 
 fieldOne ∷ EngineEnv → IORef Int
@@ -2012,6 +2024,8 @@ tick env = writeIORef (fieldOne env) 5
 # `as` alias. Both name the field exactly as the bare spelling does.
 _QUALIFIED_WRITER = """\
 module Qualified.Mod where
+
+import Data.IORef
 
 import qualified Engine.Core.State as State
 import qualified Engine.Core.Capability.Fake as Cap
@@ -2030,6 +2044,8 @@ bumpCapability env =
 _MISQUALIFIED = """\
 module Misqualified.Mod where
 
+import Data.IORef
+
 import qualified Engine.Core.State as State
 import qualified Data.Map as Other
 
@@ -2045,6 +2061,8 @@ replacedName env = writeIORef (Engine.Core.State.fieldTwo env) 7
 _QUALIFIED_PRIMITIVE = """\
 module QualPrim.Mod where
 
+import Data.IORef
+
 import qualified Data.IORef as Ref
 import Engine.Core.State (EngineEnv, fieldOne)
 
@@ -2057,6 +2075,8 @@ bump env = Ref.writeIORef (fieldOne env) 1
 # is imported -- while `State.fieldTwo` in the same module is.
 _QUALIFIED_ONLY = """\
 module QualOnly.Mod where
+
+import Data.IORef
 
 import qualified Engine.Core.State as State
 
@@ -2076,6 +2096,8 @@ viaQualifier env = writeIORef (State.fieldTwo env) 3
 _BARE_ARGUMENT = """\
 module Bare.Mod where
 
+import Data.IORef
+
 import Engine.Core.State (EngineEnv, fieldTwo)
 import Engine.Core.Capability.Fake (FakeCapability(..))
 
@@ -2090,6 +2112,8 @@ viaParenthesizedLocal fieldTwo = writeIORef (fieldTwo) 9
 # module legally defines its own `fieldOne` while importing the rest.
 _HIDING_IMPORTER = """\
 module Hiding.Mod where
+
+import Data.IORef
 
 import Engine.Core.State hiding (fieldOne)
 
@@ -2109,6 +2133,8 @@ visible env = writeIORef (fieldTwo env) 2
 _INFIX_WRITER = """\
 module Infix.Mod where
 
+import Data.IORef
+
 import qualified Data.IORef as Ref
 import Engine.Core.State (EngineEnv, fieldOne)
 import Engine.Core.Capability.Fake (FakeCapability(..), toFakeCapability)
@@ -2124,6 +2150,8 @@ viaCapability env = (fkFieldTwo (toFakeCapability env)) `Ref.writeIORef` 2
 # operand needs no parentheses at all.
 _BARE_OPERAND = """\
 module BareOperand.Mod where
+
+import Data.IORef
 
 import qualified Data.IORef as Ref
 import Engine.Core.State (EngineEnv, fieldThree)
@@ -2143,6 +2171,8 @@ viaCapability env = fkFieldOne (toFakeCapability env) `Ref.writeIORef` 2
 _PARENTHESIZED = """\
 module Parens.Mod where
 
+import Data.IORef
+
 import Engine.Core.State (EngineEnv, fieldOne, fieldTwo, fieldThree)
 
 aroundThePrimitive ∷ EngineEnv → IO ()
@@ -2158,6 +2188,8 @@ passedOnward env = withLogging (writeIORef) (fieldThree env) 3
 # Parentheses around the ACCESSOR itself, prefix and infix.
 _PARENTHESIZED_ACCESSOR = """\
 module ParenAccessor.Mod where
+
+import Data.IORef
 
 import Engine.Core.State (EngineEnv, fieldOne, fieldTwo, fieldThree)
 
@@ -2177,6 +2209,8 @@ unapplied _ = writeIORef (fieldThree) 3
 _TYPE_APPLICATION = """\
 module TypeApp.Mod where
 
+import Data.IORef
+
 import Engine.Core.State (EngineEnv, fieldOne, fieldTwo, fieldThree)
 
 simple ∷ EngineEnv → IO ()
@@ -2195,6 +2229,8 @@ insideParentheses env = (writeIORef @Int) (fieldThree env) 3
 _STRICT_APPLICATION = """\
 module Strict.Mod where
 
+import Data.IORef
+
 import Engine.Core.State (EngineEnv, fieldOne, fieldTwo)
 
 strict ∷ EngineEnv → IO ()
@@ -2208,6 +2244,8 @@ lazyControl env = (writeIORef $ fieldTwo env) 2
 # closed set unnoticed.
 _ALL_PRIMITIVES = """\
 module AllPrims.Mod where
+
+import Data.IORef
 
 import Engine.Core.State (EngineEnv, fieldOne)
 
@@ -2225,6 +2263,8 @@ f env = atomicModifyIORef' (fieldOne env) (\\n → (n, ()))
 _BARE_IMPORTER = """\
 module BareImport.Mod where
 
+import Data.IORef
+
 import Engine.Core.State
 
 bump ∷ EngineEnv → IO ()
@@ -2237,6 +2277,8 @@ bump env = writeIORef (fieldOne env) 1
 _UNREADABLE = """\
 module Unreadable.Mod where
 
+import Data.IORef
+
 import Engine.Core.State (EngineEnv, fieldOne)
 
 unboxed ∷ EngineEnv → IO ()
@@ -2246,10 +2288,44 @@ unboxed env = writeIORef (# fieldOne env #) 1
 _PRIMITIVE_AS_VALUE = """\
 module AsValue.Mod where
 
+import Data.IORef
+
 import Engine.Core.State (EngineEnv, fieldOne)
 
 handedOn ∷ [IORef Int] → IO ()
 handedOn refs = mapM_ (writeIORef) refs
+"""
+
+# A module-local `writeIORef` is a different function, and calling it
+# mutates no `IORef`. Attributing its argument would invent a write out
+# of code that performs none.
+_LOCAL_PRIMITIVE = """\
+module LocalPrim.Mod where
+
+import Engine.Core.State (EngineEnv, fieldOne)
+
+writeIORef ∷ (EngineEnv → IORef Int) → Int → IO ()
+writeIORef _ _ = pure ()
+
+use ∷ EngineEnv → IO ()
+use env = writeIORef (fieldOne env) 1
+"""
+
+# The same, qualified: `Other.writeIORef` is whatever `Other` exports,
+# not `Data.IORef`'s. The control beside it proves the resolution is
+# not simply refusing every qualified spelling.
+_QUALIFIED_HOMONYM = """\
+module QualHomonym.Mod where
+
+import qualified Vendor.Refs as Other
+import qualified Data.IORef as Ref
+import Engine.Core.State (EngineEnv, fieldOne, fieldTwo)
+
+foreign ∷ EngineEnv → IO ()
+foreign env = Other.writeIORef (fieldOne env) 1
+
+genuine ∷ EngineEnv → IO ()
+genuine env = Ref.writeIORef (fieldTwo env) 2
 """
 
 # The same two writes, but importing the accessors BY NAME rather than
@@ -2258,6 +2334,8 @@ handedOn refs = mapM_ (writeIORef) refs
 # use. `fkFieldTwo` is imported and never used.
 _EXPLICIT_IMPORTER = """\
 module Explicit.Mod where
+
+import Data.IORef
 
 import Engine.Core.State (EngineEnv)
 import Engine.Core.Capability.Fake
@@ -2276,6 +2354,8 @@ bump env = writeIORef (fkFieldOne (toFakeCapability env)) 1
 # multiline mutations.
 _MULTILINE_WRITER = """\
 module Multi.Mod where
+
+import Data.IORef
 
 import Engine.Core.State (EngineEnv)
 import Engine.Core.Capability.Fake (FakeCapability(..), toFakeCapability)
@@ -2315,6 +2395,8 @@ def _writer_sources(**modules: str) -> dict[str, str]:
         "bareImport": "src/BareImport/Mod.hs",
         "unreadable": "src/Unreadable/Mod.hs",
         "asValue": "src/AsValue/Mod.hs",
+        "localPrim": "src/LocalPrim/Mod.hs",
+        "qualHomonym": "src/QualHomonym/Mod.hs",
         "parens": "src/Parens/Mod.hs",
         "parenAccessor": "src/ParenAccessor/Mod.hs",
         "explicit": "src/Explicit/Mod.hs",
@@ -2929,6 +3011,37 @@ def test_a_primitive_used_as_a_value_is_not_unreadable():
            "and blocks nothing")
 
 
+def test_a_primitive_must_be_the_one_from_data_ioref():
+    """The primitive is held to the same scope rule as the accessor. A
+    module-local `writeIORef`, or an unrelated module's qualified
+    homonym, is a different function whose argument mutates no `IORef`
+    -- attributing it would fabricate a write, and then an undeclared
+    writer or a stale map entry, out of code that performs none."""
+    writes, _ = _scan(_writer_sources(localPrim=_LOCAL_PRIMITIVE))
+    expect(writes["fieldOne"] == set(),
+           f"a module-local `writeIORef` is not the primitive, got: "
+           f"{sorted(writes['fieldOne'])}")
+
+    writes, _ = _scan(_writer_sources(qualHomonym=_QUALIFIED_HOMONYM))
+    expect(writes["fieldOne"] == set(),
+           f"`Other.writeIORef` is whatever `Other` exports, not "
+           f"`Data.IORef`'s, got: {sorted(writes['fieldOne'])}")
+    expect(writes["fieldTwo"] == {"QualHomonym.Mod"},
+           f"but the genuine qualified primitive in the same module must "
+           f"still be read, got: {sorted(writes['fieldTwo'])}")
+
+    declarations = parse_imports(
+        "import qualified Data.IORef as Ref\n")
+    expect(resolve_primitive(declarations, "Ref.writeIORef") == "writeIORef",
+           "a qualified primitive resolves through its alias")
+    expect(resolve_primitive(declarations, "writeIORef") is None,
+           "and a qualified-only import does not put the bare spelling "
+           "in scope")
+    expect(resolve_primitive(parse_imports("import Data.IORef\n"),
+                             "writeIORef") == "writeIORef",
+           "a bare import does")
+
+
 def test_a_shadow_exemption_suppresses_only_its_own_pair():
     """Requirement 7's mechanism. An exemption suppresses exactly the
     module/field pair it names -- the same module's other writes are
@@ -3185,6 +3298,7 @@ def main() -> int:
         test_a_bare_import_brings_the_accessor_into_scope,
         test_an_unreadable_mutation_site_blocks,
         test_a_primitive_used_as_a_value_is_not_unreadable,
+        test_a_primitive_must_be_the_one_from_data_ioref,
         test_a_shadow_exemption_suppresses_only_its_own_pair,
         test_shadow_exemptions_are_validated,
         test_writer_map_against_the_real_repo,

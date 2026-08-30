@@ -1245,8 +1245,13 @@ mechanism that travels with the handle.
 **Two rules keep a textual match honest**, and neither models Haskell's
 binding forms:
 
-1. **Import scope, under the exact spelling used.** The identifier must
-   actually reach the accessor in that module: imported by name,
+1. **Import scope, under the exact spelling used** — for the accessor
+   *and* for the primitive. A name is only `Data.IORef`'s `writeIORef`
+   if that one reaches the module under the spelling written; a
+   module-local homonym, or an unrelated module's qualified one, is a
+   different function whose argument mutates no `IORef`. For the
+   accessor the same rule applies: it must
+   actually reach that module — imported by name,
    through a `(..)` wildcard or a bare import, or defined by the module
    itself. Each `import` declaration is kept separate rather than
    merged into one answer per module, because the things that decide
