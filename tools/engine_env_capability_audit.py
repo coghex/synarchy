@@ -2588,14 +2588,66 @@ def local_binding_regions(code: str) -> dict[str, set[int]]:
                 if name[:1].islower() or name[:1] == "_":
                     bind(name, i, declaration)
 
-    _bind_lambda_parameters(code, lines, block_end, top_level_end, bind)
+    _bind_lambda_parameters(code, lines, declaration_end, top_level_end, bind)
+    _bind_let_block_declarations(lines, indents, block_end, bind)
     _extend_where_declarations(lines, indents, declaration_end, bind)
     return regions
 
 
+def _bind_let_block_declarations(lines: list[str], indents: list[int | None],
+                                 block_end: list[int], bind) -> None:
+    """Widen a `let` block's declarations to the `let`'s own layout
+    block.
+
+    A `let` opens a binding group whose declarations may sit on
+    FOLLOWING lines -- `let` alone on its line with the bindings
+    indented below it, or a second binding continuing under the first.
+    Each of those lines is an equation in its own right, so the per-line
+    scan already gave it a region, but that region is the deeper block
+    it is written in; what it actually scopes over is the `let`'s block,
+    which is where the statements that use it live.
+
+    Only the lines at the group's own column are widened, for the same
+    reason `_extend_where_declarations` restricts itself: anything
+    nested deeper belongs to that inner binding, not to this group."""
+    for i, line in enumerate(lines):
+        column = indents[i]
+        if column is None:
+            continue
+        keyword = _INLINE_LET_RE.search(line)
+        if keyword is None:
+            continue
+        tail = line[keyword.end():]
+        if tail.strip():
+            group_column = keyword.end() + len(tail) - len(tail.lstrip())
+        else:
+            group_column = None
+            for j in range(i + 1, len(lines)):
+                indent = indents[j]
+                if indent is None:
+                    continue
+                if indent > column:
+                    group_column = indent
+                break
+            if group_column is None:
+                continue
+        for j in range(i + 1, len(lines)):
+            indent = indents[j]
+            if indent is None:
+                continue
+            if indent < group_column:
+                break
+            if indent != group_column:
+                continue
+            declaration = _BINDING_LHS_RE.match(lines[j])
+            if declaration is None or declaration.group(1) == "let":
+                continue
+            bind(declaration.group(1), j, block_end[i])
+
+
 def _bind_lambda_parameters(code: str, lines: list[str],
-                            block_end: list[int], top_level_end: list[int],
-                            bind) -> None:
+                            declaration_end: list[int],
+                            top_level_end: list[int], bind) -> None:
     """Bind each lambda's parameters over its own BODY.
 
     A lambda body ends where the bracket enclosing it closes, not where
@@ -2603,9 +2655,13 @@ def _bind_lambda_parameters(code: str, lines: list[str],
     the next statement's `fieldOne` is the accessor again. So the
     enclosing bracket is tracked as the source is walked -- the innermost
     one open at the backslash -- and the region ends on the line its
-    partner closes. A lambda with no enclosing bracket (`forM_ xs $
-    \\item -> do ...`) genuinely does run to the end of its block, which
-    is the fallback.
+    partner closes.
+
+    A lambda with no enclosing bracket (`forM_ xs $ \\item -> do ...`)
+    ends at its own STATEMENT instead: the next sibling in the same
+    `do` block is outside it, so the fallback is the declaration extent
+    (the first line indented at or left of the lambda's), never the
+    block extent, which would run past every sibling below.
 
     String and character literals are stepped over, so a `\\` inside one
     is not a lambda and a bracket inside one does not unbalance the
@@ -2644,7 +2700,7 @@ def _bind_lambda_parameters(code: str, lines: list[str],
         line = bisect.bisect_right(starts, offset) - 1
         closer = partners.get(opener) if opener is not None else None
         if closer is None:
-            end = block_end[line]
+            end = declaration_end[line]
         else:
             end = bisect.bisect_right(starts, closer)
         for name in _HS_IDENT_RE.findall(binder.group(1)):
@@ -2729,6 +2785,39 @@ def _skip_type_atom(tokens: list[Token], index: int) -> int:
     return index
 
 
+def _past_primitive_parentheses(tokens: list[Token], index: int) -> int:
+    """Index of the first token after `tokens[index]` that is not a
+    `)` closing a `(` written immediately before the primitive.
+
+    `(writeIORef) (accessor handle) v` is the same application as the
+    unparenthesized form -- parentheses around a function name change
+    nothing -- so the closers have to be stepped over before the value
+    argument can be found.
+
+    Two conditions keep that from inventing an application. Only closers
+    balanced by openers DIRECTLY preceding the primitive are consumed,
+    so `foo (writeIORef ref v)` is untouched; and the outermost of those
+    openers must itself sit in head position -- nothing applying to it
+    on its left -- because in `withLogging (writeIORef) (accessor
+    handle) v` the primitive is an ARGUMENT being passed on, not the
+    function being applied, and what that callee does with it is exactly
+    the indirection D-5 reports rather than attributes."""
+    openers = 0
+    k = index - 1
+    while k >= 0 and tokens[k].kind == "punc" and tokens[k].text == "(":
+        openers += 1
+        k -= 1
+    if openers and k >= 0 and (tokens[k].kind == "id"
+                               or tokens[k].text in (")", "]")):
+        openers = 0
+    j = index + 1
+    while (openers > 0 and j < len(tokens) and tokens[j].kind == "punc"
+           and tokens[j].text == ")"):
+        openers -= 1
+        j += 1
+    return j
+
+
 def _infix_left_operand_head(tokens: list[Token], index: int) -> int | None:
     """Token index of the head identifier of a BACKTICKED primitive's
     left operand -- ``(accessor handle) `writeIORef` value`` -- or
@@ -2740,7 +2829,8 @@ def _infix_left_operand_head(tokens: list[Token], index: int) -> int | None:
     it silently. `tokens[index]` is the primitive itself, so its
     backticks sit at `index - 1` and `index + 1`. The operand must be a
     parenthesized application, for exactly the reason
-    `_first_argument_head` requires one."""
+    `_first_argument_head` requires one -- with any redundant nesting
+    around it peeled, since extra parentheses change nothing."""
     if index == 0 or tokens[index - 1] != ("punc", "`", tokens[index - 1].line):
         return None
     if (index + 1 >= len(tokens)
@@ -2763,6 +2853,11 @@ def _infix_left_operand_head(tokens: list[Token], index: int) -> int | None:
     if j < 0:
         return None
     head = j + 1
+    # `((accessor handle)) `prim` v` wraps the operand twice; the extra
+    # parentheses change nothing, so peel them.
+    while (head < len(tokens) and tokens[head].kind == "punc"
+           and tokens[head].text == "("):
+        head += 1
     if head >= len(tokens) or tokens[head].kind != "id":
         return None
     following = tokens[head + 1] if head + 1 < len(tokens) else None
@@ -2798,7 +2893,7 @@ def _first_argument_head(tokens: list[Token], index: int) -> int | None:
     that today, and such a use is not silently dropped: with no
     application to consume it inline it surfaces in the pass-on residue,
     like every other use the scan cannot attribute (D-5)."""
-    j = index + 1
+    j = _past_primitive_parentheses(tokens, index)
     grouped = False
     while j < len(tokens):
         token = tokens[j]

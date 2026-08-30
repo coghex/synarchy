@@ -1267,9 +1267,10 @@ purpose — none is asked to be complete by itself:
    permissive direction of that mistake *suppresses a real write
    silently*: a `let` — wherever on its line it is written, including
    nested after an equation's own `=` — shadows the statements below it
-   and nothing above; a lambda's parameters reach the bracket that
-   closes its body and no further; an equation's parameters reach that
-   equation only; and a
+   and nothing above, its group's later bindings included; a lambda's
+   parameters reach the bracket that closes its body — or, unbracketed,
+   its own statement — and no further; an equation's parameters reach
+   that equation only; and a
    `where` block's own declarations are the single form that reaches
    backwards, over the enclosing declaration — their parameters and
    nested `let`s do not come with them. Every region is clamped to its
@@ -1284,7 +1285,11 @@ purpose — none is asked to be complete by itself:
    `TypeApplications`) stepped over first. Haskell lets any
    two-argument function be written infix, so the backticked form
    ``(accessor handle) `prim` value`` is the same write with its
-   arguments swapped and is read from the left operand. This is a type argument, not a
+   arguments swapped and is read from the left operand. Redundant
+   parentheses — around the primitive in head position, or around the
+   operand — change nothing and are normalized away; one that something
+   else is *applying* to is a primitive being passed onward, which the
+   residue reports rather than attributes. This is a type argument, not a
    heuristic: every accessor projects out of a handle
    (`EngineEnv -> IORef a`), so it can never itself be the `IORef` the
    primitive takes, and a *bare* identifier there always denotes some

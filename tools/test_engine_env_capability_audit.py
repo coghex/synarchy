@@ -2092,6 +2092,20 @@ patternLet env pair = do
     let (_, fieldOne) = pair
     writeIORef (fieldOne env) 4
 
+-- A LAYOUT `let`, whose bindings begin on the following line.
+layoutLet ∷ EngineEnv → IORef Int → IO ()
+layoutLet env ref = do
+    let
+      fieldOne _ = ref
+    writeIORef (fieldOne env) 5
+
+-- A binding CONTINUING under the first one binds over the same block.
+continuedLet ∷ EngineEnv → IORef Int → IO ()
+continuedLet env ref = do
+    let other = ref
+        fieldOne _ = other
+    writeIORef (fieldOne env) 6
+
 -- A `do`-block `let` shadows the statements BELOW it -- across the
 -- blank line, which closes no layout block (and is what a stripped
 -- comment leaves behind).
@@ -2147,7 +2161,7 @@ siblings env = viaParameter (fieldThree env) >> direct
 _LAMBDA_ESCAPE = """\
 module LambdaEscape.Mod where
 
-import Engine.Core.State (EngineEnv, fieldOne, fieldTwo)
+import Engine.Core.State (EngineEnv, fieldOne, fieldTwo, fieldThree)
 
 afterLambda ∷ EngineEnv → IO ()
 afterLambda env = do
@@ -2158,6 +2172,13 @@ afterStringLiteral ∷ EngineEnv → IO ()
 afterStringLiteral env = do
     putStrLn "\\\\fieldTwo -> not a lambda"
     writeIORef (fieldTwo env) 2
+
+-- An UNBRACKETED lambda ends at its own statement: the sibling below
+-- it in the same `do` block is outside its body.
+afterUnbracketedLambda ∷ EngineEnv → [Int] → IO ()
+afterUnbracketedLambda env xs = do
+    forM_ xs $ \\fieldThree → pure (fieldThree env)
+    writeIORef (fieldThree env) 3
 """
 
 # Any two-argument function may be written infix, so a backticked
@@ -2175,6 +2196,43 @@ raw env = (fieldOne env) `writeIORef` 1
 
 viaCapability ∷ EngineEnv → IO ()
 viaCapability env = (fkFieldTwo (toFakeCapability env)) `Ref.writeIORef` 2
+
+"""
+
+# Redundant parentheses change nothing -- around the primitive in a
+# prefix application, and around an infix operand. But a parenthesized
+# primitive that something else is APPLYING to is an argument being
+# passed on, not a write here.
+_PARENTHESIZED = """\
+module Parens.Mod where
+
+import Engine.Core.State (EngineEnv, fieldOne, fieldTwo, fieldThree)
+
+aroundThePrimitive ∷ EngineEnv → IO ()
+aroundThePrimitive env = (writeIORef) (fieldOne env) 1
+
+aroundTheOperand ∷ EngineEnv → IO ()
+aroundTheOperand env = ((fieldTwo env)) `writeIORef` 2
+
+passedOnward ∷ EngineEnv → IO ()
+passedOnward env = withLogging (writeIORef) (fieldThree env) 3
+"""
+
+# A binding nested DEEPER than a `let` group's own column belongs to
+# that inner binding, not to the group, so it must not be widened to the
+# `let`'s block.
+_NESTED_LET = """\
+module NestedLet.Mod where
+
+import Engine.Core.State (EngineEnv, fieldOne)
+
+run ∷ EngineEnv → IO ()
+run env = do
+    let helper = inner
+          where
+            fieldOne _ = undefined
+            inner = fieldOne ()
+    writeIORef (fieldOne env) 1
 """
 
 # Variable and as-pattern `case` alternatives bind just as much as a
@@ -2314,6 +2372,8 @@ def _writer_sources(**modules: str) -> dict[str, str]:
         "typeApp": "src/TypeApp/Mod.hs",
         "lambdaEscape": "src/LambdaEscape/Mod.hs",
         "infix": "src/Infix/Mod.hs",
+        "parens": "src/Parens/Mod.hs",
+        "nestedLet": "src/NestedLet/Mod.hs",
         "casePattern": "src/CasePattern/Mod.hs",
         "explicit": "src/Explicit/Mod.hs",
         "multiline": "src/Multi/Mod.hs",
@@ -2541,6 +2601,10 @@ def test_a_lambda_binder_stops_at_its_own_body():
     expect(writes["fieldTwo"] == {"LambdaEscape.Mod"},
            f"a backslash inside a string literal is not a lambda, got: "
            f"{sorted(writes['fieldTwo'])}")
+    expect(writes["fieldThree"] == {"LambdaEscape.Mod"},
+           f"an unbracketed lambda ends at its own statement, so the "
+           f"sibling below it is a real write, got: "
+           f"{sorted(writes['fieldThree'])}")
 
 
 def test_backticked_infix_mutations_are_writes():
@@ -2557,6 +2621,7 @@ def test_backticked_infix_mutations_are_writes():
            f"attributed too, got: {sorted(writes['fieldTwo'])}")
 
 
+
 def test_case_patterns_bind_variables_and_as_patterns():
     """A `case` alternative binds through a bare variable pattern and
     through an as-pattern, not only through a constructor application.
@@ -2567,6 +2632,33 @@ def test_case_patterns_bind_variables_and_as_patterns():
            f"neither a bare-variable nor an as-pattern alternative may "
            f"be attributed, got: fieldOne={sorted(writes['fieldOne'])}, "
            f"fieldTwo={sorted(writes['fieldTwo'])}")
+
+
+def test_redundant_parentheses_change_nothing():
+    """Parentheses around a primitive in a prefix application, and
+    around an infix operand, are the same write. A primitive that
+    something else is APPLYING to is not: it is being passed onward,
+    which D-5 reports rather than attributes."""
+    writes, _ = _scan(_writer_sources(parens=_PARENTHESIZED))
+    expect(writes["fieldOne"] == {"Parens.Mod"},
+           f"`(writeIORef) (fieldOne env) 1` is a write, got: "
+           f"{sorted(writes['fieldOne'])}")
+    expect(writes["fieldTwo"] == {"Parens.Mod"},
+           f"a doubly parenthesized infix operand is a write, got: "
+           f"{sorted(writes['fieldTwo'])}")
+    expect(writes["fieldThree"] == set(),
+           f"a primitive handed to another function is not this module's "
+           f"write, got: {sorted(writes['fieldThree'])}")
+
+
+def test_a_deeper_binding_is_not_part_of_the_let_group():
+    """Only the declarations at a `let` group's own column reach the
+    `let`'s block. A `where` nested inside one of them binds for that
+    helper alone, so the write below the `let` is real."""
+    writes, _ = _scan(_writer_sources(nestedLet=_NESTED_LET))
+    expect(writes["fieldOne"] == {"NestedLet.Mod"},
+           f"a binding nested deeper than the `let` group must not mask "
+           f"the write below it, got: {sorted(writes['fieldOne'])}")
 
 
 def test_visible_type_applications_are_skipped():
@@ -3020,6 +3112,8 @@ def main() -> int:
         test_a_lambda_binder_stops_at_its_own_body,
         test_backticked_infix_mutations_are_writes,
         test_case_patterns_bind_variables_and_as_patterns,
+        test_redundant_parentheses_change_nothing,
+        test_a_deeper_binding_is_not_part_of_the_let_group,
         test_visible_type_applications_are_skipped,
         test_binding_regions_are_lexical,
         test_a_first_argument_must_be_applied,
