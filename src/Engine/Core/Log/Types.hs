@@ -2,6 +2,8 @@ module Engine.Core.Log.Types
   ( -- * Levels & categories
     LogLevel(..)
   , LogCategory(..)
+  , allLogCategories
+  , categoryEnvName
   , parseCategory
 
   -- * Backend & entries
@@ -59,31 +61,29 @@ data LogCategory
               --   category warnings from 'Engine.PlayerEvent.emitEvent').
   deriving (Show, Eq, Ord, Enum, Bounded)
 
+-- | Every 'LogCategory', in constructor order. The single enumeration
+--   both @ENGINE_DEBUG@ surfaces are derived from, so adding a
+--   constructor extends them without editing a table (#1915).
+allLogCategories ∷ [LogCategory]
+allLogCategories = [minBound .. maxBound]
+
+-- | A category's @ENGINE_DEBUG@ spelling, derived from the constructor
+--   name rather than a hand-maintained list: drop the @Cat@ prefix and
+--   lowercase the rest. This reproduces byte-for-byte all 22 spellings
+--   the former hand-written table accepted — @CatUI@'s @ui@ included —
+--   and is the lowercased form of what 'Engine.Core.Log.Format' already
+--   displays, so a category can never be displayable but unnameable.
+categoryEnvName ∷ LogCategory → Text
+categoryEnvName = T.toLower ∘ T.pack ∘ drop 3 ∘ show
+
+-- | Case-insensitive lookup over every derived name. Unrecognized names
+--   stay 'Nothing' (dropped silently by the caller), which is the
+--   pre-existing contract.
+categoryEnvNames ∷ Map.Map Text LogCategory
+categoryEnvNames = Map.fromList [(categoryEnvName c, c) | c ← allLogCategories]
+
 parseCategory ∷ Text → Maybe LogCategory
-parseCategory t = case T.toLower t of
-  "vulkan"      → Just CatVulkan
-  "graphics"    → Just CatGraphics
-  "render"      → Just CatRender
-  "shader"      → Just CatShader
-  "descriptor"  → Just CatDescriptor
-  "swapchain"   → Just CatSwapchain
-  "texture"     → Just CatTexture
-  "font"        → Just CatFont
-  "asset"       → Just CatAsset
-  "resource"    → Just CatResource
-  "lua"         → Just CatLua
-  "script"      → Just CatScript
-  "input"       → Just CatInput
-  "scene"       → Just CatScene
-  "ui"          → Just CatUI
-  "thread"      → Just CatThread
-  "system"      → Just CatSystem
-  "init"        → Just CatInit
-  "state"       → Just CatState
-  "general"     → Just CatGeneral
-  "test"        → Just CatTest
-  "event"       → Just CatEvent
-  _             → Nothing
+parseCategory t = Map.lookup (T.toLower t) categoryEnvNames
 
 data LogBackend
   = LogToHandle Handle            -- ^ Write to file handle (stdout, stderr, file)
