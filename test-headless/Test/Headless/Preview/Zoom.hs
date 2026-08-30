@@ -553,6 +553,95 @@ spec = do
       , "assertCentered('focused item', s.zoom.sprite, s.zoom.region)"
       ]
 
+    -- A texture upload is asynchronous. If the capturing surface only
+    -- appeared once onAssetLoaded landed, the whole load would be a
+    -- window in which a wheel over the preview pane never reached
+    -- onUIScroll at all -- routeScroll would find no capturing element
+    -- and the event would leak to the gameplay/z-slice broadcasts.
+    it "zooms while the first texture is still loading, in list mode -- \
+       \the surface is primed from the REQUEST, not the completion"
+      $ runsOk $ lns
+      [ harness
+      , "local browse = { mode = 'list', entries = {"
+      , "    { label = 'a.png', path = 'assets/textures/icons/a.png' } } }"
+      , "local pm = bootPreview(browse, { category = 'icons' })"
+      , "-- Deliberately NO resolveTexture: the upload is still in flight."
+      , "assert(pm.dump().state == 'loading', 'precondition: still loading')"
+      , "local d = pm.dump()"
+      , "assert(d.zoom.surface, 'the capturing surface exists during the load')"
+      , "assert(elements[d.zoom.surface].scrollCapture == true,"
+      , "    'and it really captures scroll')"
+      , "pm.onUIScroll(d.zoom.surface, 0, 2)"
+      , "local held = pm.dump().zoom.multiplier"
+      , "assert(held < pz.MAX,"
+      , "    'a wheel during the load must zoom, got ' .. tostring(held))"
+      , "-- ...and the multiplier it set is what the texture is fitted at"
+      , "-- once the upload finally lands."
+      , "resolveTexture(pm)"
+      , "local after = pm.dump()"
+      , "assert(after.state == 'ready', 'the load still completes normally')"
+      , "assert(after.zoom.multiplier == held, 'the multiplier survives')"
+      , "local fitted = pz.fitRect(after.zoom.region, 64, 32, held)"
+      , "assert(approx(after.zoom.sprite.w, fitted.width, 1e-6),"
+      , "    'the arriving texture is fitted AT that multiplier, got '"
+      , "    .. tostring(after.zoom.sprite.w) .. ' want '"
+      , "    .. tostring(fitted.width))"
+      , "assertContained('loaded at held zoom', after.zoom.sprite,"
+      , "    after.zoom.region)"
+      ]
+
+    it "zooms while the first texture is still loading, in focused-item \
+       \mode too -- and still loads nothing extra for the surface"
+      $ runsOk $ lns
+      [ harness
+      , "local pm = bootPreview({ mode = 'item', entry = {"
+      , "    label = 'skill/climbing.png',"
+      , "    path = 'assets/textures/icons/skill/climbing.png' } },"
+      , "    { category = 'icons', item = 'skill/climbing.png' })"
+      , "assert(pm.dump().state == 'loading', 'precondition: still loading')"
+      , "local d = pm.dump()"
+      , "assert(d.zoom.surface, 'the capturing surface exists during the load')"
+      , "assert(#d.loadedPaths == 1,"
+      , "    'and priming it loaded nothing extra, got '"
+      , "    .. tostring(#d.loadedPaths))"
+      , "assert(elements[d.zoom.surface].tex == LAST_HANDLE,"
+      , "    'it borrowed the in-flight request own handle')"
+      , "pm.onUIScroll(d.zoom.surface, 0, 2)"
+      , "assert(pm.dump().zoom.multiplier < pz.MAX,"
+      , "    'a wheel during the load must zoom in item mode too')"
+      ]
+
+    -- The borrowed handle can be exactly the one that dies. The surface
+    -- must outlive it: deleting the element would take wheel capture
+    -- down with it, and #1690 makes "empty" terminal, so zoom would be
+    -- unrecoverable for the rest of the session.
+    it "keeps zooming when the very request the surface borrowed fails, \
+       \and re-points the surface at the next live handle" $ runsOk $ lns
+      [ harness
+      , "local browse = { mode = 'list', entries = {"
+      , "    { label = 'a.png', path = 'assets/textures/icons/a.png' },"
+      , "    { label = 'b.png', path = 'assets/textures/icons/b.png' } } }"
+      , "local pm = bootPreview(browse, { category = 'icons' })"
+      , "local surface = pm.dump().zoom.surface"
+      , "local dead = LAST_HANDLE"
+      , "assert(elements[surface].tex == dead, 'the surface borrowed it')"
+      , "pm.onAssetFailed('texture', dead,"
+      , "    'assets/textures/icons/a.png', 'no bindless slot')"
+      , "assert(elements[surface] ~= nil,"
+      , "    'the surface element survives the failure')"
+      , "pm.onUIScroll(surface, 0, 2)"
+      , "assert(pm.dump().zoom.multiplier < pz.MAX,"
+      , "    'and the wheel still zooms after it')"
+      , "-- The next selection re-points the SAME surface at a live"
+      , "-- handle rather than leaving a dead one bound."
+      , "assetBrowserStub.selectEntry(1, 'assets/textures/icons/b.png')"
+      , "resolveTexture(pm)"
+      , "assert(pm.dump().zoom.surface == surface,"
+      , "    'still the same surface element')"
+      , "assert(elements[surface].tex ~= dead,"
+      , "    'and it no longer holds the dead handle')"
+      ]
+
     it "loads no texture of its own for the surface -- focused-item mode \
        \has no chrome allowance, so the surface reuses a handle the \
        \session already asked for" $ runsOk $ lns

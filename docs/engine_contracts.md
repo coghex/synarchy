@@ -774,7 +774,17 @@ drift onto different math.
   The surface reuses a texture handle the session has ALREADY requested
   (at alpha 0), never a fresh load — focused-item mode allows no chrome
   at all (`tools/preview_probe.py`'s `allow_chrome=False`), so
-  `list.getChromeTexture()` there would break trimmed loading.
+  `list.getChromeTexture()` there would break trimmed loading. It is
+  borrowed from the REQUEST, and the surface is installed as each mode's
+  UI is built, NOT when the upload completes: an upload is asynchronous,
+  so waiting for it would leave list and focused-item mode with no
+  capturing surface for the whole load — a window in which a wheel over
+  the pane never reaches `onUIScroll` and leaks to the gameplay/z-slice
+  broadcasts. A zoom performed during that load is applied to the
+  texture when it finally arrives. If the borrowed request then FAILS
+  (#1690), only the handle is released — the element is left alone and
+  re-pointed at the next live handle, because deleting it would take
+  wheel capture down with it and `"empty"` is terminal by design.
 - **Wheel response.** `dy < 0` ENLARGES toward `1` and `dy > 0` SHRINKS
   toward `1/8` — the gameplay convention (`Engine.Loop.Camera`: `dy > 0`
   zooms out, `dy < 0` zooms in, `camZoom` being the viewport

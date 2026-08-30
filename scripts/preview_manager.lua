@@ -136,6 +136,12 @@ local zoomSurfaceKey = nil   -- guards redundant geometry writes
 -- ITEM mode, where the probe allows no chrome at all because that mode
 -- never calls assetBrowser.init(), so list.getChromeTexture() would be
 -- a NEW load there.
+--
+-- Taken from the REQUEST, not from the completion: an upload is
+-- asynchronous, and waiting for it would leave list and focused-item
+-- mode with no capturing surface for the whole load — a window in which
+-- a wheel over the preview pane never reaches onUIScroll at all and
+-- leaks to the gameplay/z-slice broadcasts instead of zooming.
 local zoomSurfaceTexture = nil
 -- engine.getPreviewTarget(), read once. false means "asked, and there
 -- is none" so a nil answer is not re-asked every frame.
@@ -143,6 +149,19 @@ local previewTargetCache = nil
 -- The handle the list/item panel sprite is currently showing, so a zoom
 -- change can re-fit it without waiting for another load.
 local currentHandle = nil
+
+-- Adopt 'handle' as the invisible surface's texture, re-pointing a
+-- surface that already exists. The surface is alpha 0, so WHICH texture
+-- it holds is immaterial; what matters is that it holds one this
+-- session already asked for (never a fresh load, which would break
+-- trimmed loading) and never one that has since died. Re-pointing
+-- rather than recreating is what keeps the surface — and therefore
+-- zoom — continuously live across a failed request.
+local function adoptZoomSurfaceTexture(handle)
+    if not handle or zoomSurfaceTexture then return end
+    zoomSurfaceTexture = handle
+    if zoomSurfaceId then UI.setSpriteTexture(zoomSurfaceId, handle) end
+end
 
 -- path -> texture handle, for entries already uploaded; never evicted
 -- (see the module comment above).
@@ -182,7 +201,7 @@ local function acquireTexture(path)
     local handle = engine.loadTexture(path)
     textureCache[path] = handle
     table.insert(loadedPaths, path)
-    zoomSurfaceTexture = zoomSurfaceTexture or handle
+    adoptZoomSurfaceTexture(handle)
     return handle
 end
 
@@ -215,6 +234,11 @@ local function requestTexture(path)
     pendingPath = path
     pendingHandle = engine.loadTexture(path)
     table.insert(loadedPaths, path)
+    -- Immediately, not on completion: see zoomSurfaceTexture's comment.
+    -- A wheel that arrives while this upload is still in flight must
+    -- still zoom, and the multiplier it sets is applied to the texture
+    -- when applyTexture finally fits it.
+    adoptZoomSurfaceTexture(pendingHandle)
 end
 
 -----------------------------------------------------------
@@ -362,9 +386,7 @@ function previewManager.applyTexture(handle, path)
     -- in-flight request from being able to settle this view.
     viewHandles = { [handle] = true }
     currentHandle = handle
-    -- A handle that actually RESOLVED, so the invisible zoom surface is
-    -- never built on a request that later fails.
-    zoomSurfaceTexture = zoomSurfaceTexture or handle
+    adoptZoomSurfaceTexture(handle)
     if not panelBounds then return end
     layoutPanelSprite()
     syncZoomSurface()
@@ -440,6 +462,10 @@ local function buildListUI(browseEntries, fbW, fbH, restoreSelectedPath, restore
     if restoreScroll and restoreScroll > 0 then
         assetBrowser.setScrollOffset(browserId, restoreScroll)
     end
+    -- #1907: install the wheel-capturing surface as soon as the UI
+    -- exists, not a tick later — the selection above has already
+    -- REQUESTED its texture, which is all the surface needs.
+    syncZoomSurface()
 end
 
 -- Recompute the focused-item panel geometry and, if the texture already
@@ -466,6 +492,9 @@ local function buildFocusedUI(entry, fbW, fbH)
     focusedEntry = entry
     refitFocusedPanel(fbW, fbH)
     requestTexture(entry.path)
+    -- After the request, not before it: requestTexture is what primes
+    -- the handle the surface borrows (#1907).
+    syncZoomSurface()
 end
 
 -----------------------------------------------------------
@@ -576,6 +605,7 @@ local function buildUnitUI(unit, fbW, fbH, restoreAnim, restoreScroll, restoreDi
     if restoreScroll and restoreScroll > 0 then
         assetBrowser.setScrollOffset(browserId, restoreScroll)
     end
+    syncZoomSurface()
 end
 
 -----------------------------------------------------------
@@ -670,6 +700,7 @@ local function buildBuildingUI(building, fbW, fbH, restoreEntry, restoreScroll)
     if restoreScroll and restoreScroll > 0 then
         assetBrowser.setScrollOffset(browserId, restoreScroll)
     end
+    syncZoomSurface()
 end
 
 function previewManager.init(scriptId)
@@ -772,6 +803,12 @@ function previewManager.onAssetFailed(assetType, handle, path, reason, reported)
     -- wheel input would keep asking the engine to size a texture that
     -- will never resolve.
     if currentHandle == handle then currentHandle = nil end
+    -- The zoom surface borrows a handle purely to exist; a dead one is
+    -- invisible either way, but release it so the next request re-points
+    -- the surface at a live texture. The ELEMENT is deliberately left
+    -- alone — deleting it would take the wheel-capturing surface down
+    -- with it, and zoom must survive a failed load.
+    if zoomSurfaceTexture == handle then zoomSurfaceTexture = nil end
 
     -- ...but only a CURRENT waiter settles the view.
     if isPending or isInView then
