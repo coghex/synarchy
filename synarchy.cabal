@@ -1242,6 +1242,7 @@ test-suite synarchy-test-headless
                    Test.Headless.UI.InputOwnership
                    Test.Headless.UI.ZoomBandInputGate
                    Test.Headless.UI.HudHoverGate
+                   Test.Headless.UI.UnitInfoRowSelection
                    Test.Headless.UI.ElementInputPolicy
                    Test.Headless.UI.ControlActivation
                    Test.Headless.UI.HierarchyOwnership
@@ -1259,6 +1260,7 @@ test-suite synarchy-test-headless
                    Test.Headless.UI.TutorialHud
                    Test.Headless.UI.UnicodeTextEditing
                    Test.Headless.UI.Slider
+                   Test.Headless.UI.BarFillColor
                    Test.Headless.UI.ClickCorrelation
                    Test.Headless.UI.TransferContextMenu
                    Test.Headless.UI.ItemList
