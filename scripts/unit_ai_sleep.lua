@@ -16,10 +16,16 @@
 -- drives its stand<->crouch<->crawl descent/ascent.
 --
 -- Wake conditions (v1, per design): sleep_pressure back near full, OR
--- the first dawn crossing since falling asleep — whichever comes
--- first. Interruption by anything else (sound, an attack, another
--- acolyte) is explicitly deferred; the only additional hook is the
--- public wake API below, so other systems can force a wake.
+-- the first crossing of the unit's OWN time-of-day wake boundary since
+-- falling asleep — whichever comes first. That boundary is derived
+-- per species from the same circadian phase the sleep urge uses (#1945:
+-- half a day past scripts/circadian.lua's circadian_center, so a
+-- dusk-centered sleeper still wakes at dawn while the dawn-centered
+-- bear wakes at dusk instead of on its own urge peak) — it is NOT the
+-- universal dawn this module originally hard-coded. Interruption by
+-- anything else (sound, an attack, another acolyte) is explicitly
+-- deferred; the only additional hook is the public wake API below, so
+-- other systems can force a wake.
 
 local core       = require("scripts.unit_ai_core")
 local mv         = require("scripts.movement_speed")
@@ -37,20 +43,54 @@ local STRIDE_WAKE     = 2
 -- chasing the last 2% while regen asymptotically approaches maxVal.
 local WAKE_PRESSURE_FRAC = 0.98
 
-local DAWN_ANGLE = 0.25
+-- Half a day past the sleeper's own circadian peak — the antipode of
+-- its sleep-urge curve on world.getSunAngleAt's circular 0..1 domain
+-- (0 = midnight, 0.25 = dawn, 0.5 = noon, 0.75 = dusk). This module used
+-- to hard-code 0.25 for EVERY species; the dawn-centered bear_brown
+-- (#613) therefore had its wake boundary sitting exactly on its own
+-- sleep-urge peak, so it was driven to bed in the very window it was
+-- woken in (#1945). Deriving the boundary from the phase keeps the
+-- dusk-centered default at 0.25 exactly (0.75 + 0.5 = 1.25 -> 0.25) and
+-- moves the bear's to 0.75.
+--
+-- Half a day is the derivation rather than the urge window's trailing
+-- edge (center + circadian_width) because that edge would put the
+-- acolyte's boundary at 0.875, changing shipped behavior, and rather
+-- than a new per-def wake-angle field because every def would then have
+-- to restate what its phase already says.
+local WAKE_PHASE_OFFSET = 0.5
 
--- True on the AI tick that sees sunAngle cross DAWN_ANGLE from below,
--- since the unit started sleeping (s.sleepLastSunAngle is reset when
--- sleep begins). A unit that falls asleep already past dawn (forced by
--- exhaustion at noon) only wakes at the NEXT crossing, not immediately.
-local function dawnHasArrived(uid, s)
+-- The unit's own time-of-day wake boundary. The center comes from
+-- scripts/circadian.lua's shapeFor — the single source of truth for
+-- per-def phase, including its DEFAULT_CENTER = 0.75 fallback for a def
+-- that configures none — so this module deliberately keeps no default
+-- of its own and an unconfigured def keeps the historical 0.25.
+local function wakeAngleFor(defName)
+    local center = circadian.shapeFor(defName)
+    return (center + WAKE_PHASE_OFFSET) % 1.0
+end
+
+-- True on the AI tick that sees the sun sweep across this unit's own
+-- wake boundary, since it started sleeping (s.sleepLastSunAngle is reset
+-- when sleep begins). Written as containment in the half-open forward
+-- arc (prev, angle] rather than `prev < B and angle >= B`, so it stays
+-- correct on the circular domain: a boundary of 0.0, or any crossing
+-- that spans the 1.0 -> 0.0 midnight wrap, is invisible to a bare
+-- comparison. A unit that falls asleep already past its boundary
+-- (forced by exhaustion at noon) has no earlier sample to cross from
+-- and so only wakes at the NEXT crossing, not immediately.
+local function wakeBoundaryCrossed(uid, s)
     local info = unit.getInfo(uid)
     if not info then return false end
     local angle = world.getSunAngleAt(math.floor(info.gridX), math.floor(info.gridY))
     if not angle then return false end
     local prev = s.sleepLastSunAngle
     s.sleepLastSunAngle = angle
-    return prev ~= nil and prev < DAWN_ANGLE and angle >= DAWN_ANGLE
+    if prev == nil then return false end
+    local boundary   = wakeAngleFor(info.defName)
+    local travelled  = (angle - prev) % 1.0
+    local toBoundary = (boundary - prev) % 1.0
+    return toBoundary > 0 and toBoundary <= travelled
 end
 
 -- 8 compass directions, matching unit_ai_water.lua's SEARCH_DIRECTIONS
@@ -117,7 +157,7 @@ local function shouldWake(uid, s)
     if sp and maxSp and maxSp > 0 and sp / maxSp >= WAKE_PRESSURE_FRAC then
         return true
     end
-    return dawnHasArrived(uid, s)
+    return wakeBoundaryCrossed(uid, s)
 end
 
 -----------------------------------------------------------
@@ -163,7 +203,7 @@ local function sleepExecute(uid, s, params)
         elseif pose == "crawling"  then unit.transitionTo(uid, "sleeping", STRIDE_LIE_DOWN)
         elseif pose == "sleeping"  then
             s.sleepPhase         = "sleeping"
-            s.sleepLastSunAngle  = nil   -- baseline for dawn-crossing detection
+            s.sleepLastSunAngle  = nil   -- baseline for wake-boundary crossing
         end
         return
     end
@@ -220,6 +260,10 @@ end
 
 M.sleepUtility = sleepUtility
 M.sleepExecute = sleepExecute
+-- Exposed for tools/circadian_species_probe.py, which asserts the
+-- per-species boundary (and the unconfigured-def default) through the
+-- same lookup the sleeping unit itself uses.
+M.wakeAngleFor = wakeAngleFor
 
 -- Public wake API (#612 v1 priority): force-wakes a sleeping unit on
 -- its next AI tick. No-op if the unit isn't tracked or isn't actually
