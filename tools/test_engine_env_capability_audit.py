@@ -2285,6 +2285,33 @@ unboxed ∷ EngineEnv → IO ()
 unboxed env = writeIORef (# fieldOne env #) 1
 """
 
+# `OverloadedRecordDot` field access. The scan cannot read it as an
+# accessor application, and taking `env` as the argument head would
+# quietly make this a non-write -- so it is unclassifiable, and
+# requirement 6 reports it. Spaced composition is ordinary code and
+# must NOT be swept up with it.
+_RECORD_DOT = """\
+module RecordDot.Mod where
+
+import Data.IORef
+
+import Engine.Core.State (EngineEnv, fieldOne)
+
+viaDot ∷ EngineEnv → IO ()
+viaDot env = modifyIORef' (env.fieldOne) id
+"""
+
+_COMPOSED_ARGUMENT = """\
+module Composed.Mod where
+
+import Data.IORef
+
+import Engine.Core.State (EngineEnv, fieldOne)
+
+viaComposition ∷ EngineEnv → IO ()
+viaComposition env = modifyIORef' (chooseRef . pick $ env) id
+"""
+
 _PRIMITIVE_AS_VALUE = """\
 module AsValue.Mod where
 
@@ -2563,6 +2590,8 @@ def _writer_sources(**modules: str) -> dict[str, str]:
         "allPrims": "src/AllPrims/Mod.hs",
         "bareImport": "src/BareImport/Mod.hs",
         "unreadable": "src/Unreadable/Mod.hs",
+        "recordDot": "src/RecordDot/Mod.hs",
+        "composed": "src/Composed/Mod.hs",
         "asValue": "src/AsValue/Mod.hs",
         "localPrim": "src/LocalPrim/Mod.hs",
         "alpha": "src/Engine/Core/Capability/Alpha.hs",
@@ -3177,6 +3206,32 @@ def test_an_unreadable_mutation_site_blocks():
            f"and that must be a blocking violation, got: {violations}")
 
 
+def test_record_dot_access_is_unclassifiable():
+    """`modifyIORef' (env.fieldOne) id` is a direct mutation the scan
+    cannot read. Taking `env` as the argument head would make it a
+    silent non-write, which is exactly what requirement 6 exists to
+    prevent, so the site blocks instead.
+
+    Spaced composition tokenizes identically and is ordinary code —
+    only the ABSENCE of a gap distinguishes them — so it must not be
+    swept up with it."""
+    scan = _full_scan(_writer_sources(recordDot=_RECORD_DOT))
+    kinds = [site.kind for site in scan.sites
+             if site.module == "RecordDot.Mod"]
+    expect(kinds == ["unclassifiable"],
+           f"record-dot access must block, got: {kinds}")
+    expect(len(audit_mutation_sites(scan.sites)) == 1,
+           "and be reported")
+
+    scan = _full_scan(_writer_sources(composed=_COMPOSED_ARGUMENT))
+    kinds = [site.kind for site in scan.sites
+             if site.module == "Composed.Mod"]
+    expect(kinds == ["other"],
+           f"spaced composition is ordinary code, got: {kinds}")
+    expect(audit_mutation_sites(scan.sites) == [],
+           "and blocks nothing")
+
+
 def test_a_primitive_used_as_a_value_is_not_unreadable():
     """The other side of requirement 6: a primitive that is not applied
     to anything HERE is being handed onward, which is an ordinary
@@ -3631,6 +3686,7 @@ def main() -> int:
         test_every_recognized_primitive_is_read,
         test_a_bare_import_brings_the_accessor_into_scope,
         test_an_unreadable_mutation_site_blocks,
+        test_record_dot_access_is_unclassifiable,
         test_a_primitive_used_as_a_value_is_not_unreadable,
         test_a_comment_marker_inside_a_string_is_text,
         test_token_lines_survive_a_string_gap,

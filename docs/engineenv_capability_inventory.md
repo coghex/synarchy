@@ -1312,8 +1312,9 @@ applied, in-scope, non-exempt accessor (attributed); a nameable head
 that is not this boundary's business — a local `IORef`, an unapplied
 accessor, one the module cannot reach, or the primitive used as a value
 rather than applied; or a site where an argument is plainly being
-formed and the scan cannot name its head, which **fails the audit**
-naming file and line. There are no sites of the third kind today. A
+formed and the scan cannot read it, which **fails the audit** naming
+file and line — `OverloadedRecordDot` access (`env.fieldOne`) is one
+such shape, rejected rather than misread as an application of `env`. There are no sites of the third kind today. A
 spelling outside the list therefore stops the gate instead of silently
 dropping a write — and the fix is to extend the scan and this list
 together, never to leave the site unread.

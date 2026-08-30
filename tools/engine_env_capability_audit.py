@@ -2324,11 +2324,10 @@ _IMPORT_DECL_RE = re.compile(
 class Token(NamedTuple):
     """One identifier or single-character punctuation token.
 
-    `offset` is what makes shadowing precise: a binding's scope starts
-    where the binding is WRITTEN, which is a position and not a line --
-    `writeIORef (fieldOne env) 1 >> (let fieldOne _ = ref in ...)` is
-    one line carrying a real write and, after it, a binding that does
-    not reach back over it."""
+    `offset` is the character position, which is what lets ADJACENCY be
+    tested: `env.fieldOne` and `env . fieldOne` tokenize identically and
+    mean entirely different things, and only the gap between them says
+    which."""
     kind: str   # "id" | "punc"
     text: str
     line: int   # 1-based
@@ -2794,6 +2793,33 @@ def _operand_head(tokens: list[Token], last: int) -> int | None:
     return inner if inner < len(tokens) else None
 
 
+def _opens_record_dot(tokens: list[Token], index: int) -> bool:
+    """True if `tokens[index]` is an identifier IMMEDIATELY followed by
+    `.` and another identifier.
+
+    Only a lowercase head can reach this: `tokenize_haskell` already
+    merges `Mod.name` into one qualified token, so an uppercase head is
+    never left with a separate `.` beside it.
+
+    Written without spaces that is `OverloadedRecordDot` field access
+    (`env.fieldOne`); written with them it is composition. The scan can
+    read neither as an accessor application, so rather than take the
+    left operand as the argument head -- which quietly makes
+    `modifyIORef' (env.fieldOne) id` a non-write -- the site is left
+    unclassifiable and requirement 6 reports it. No such site exists in
+    this tree: the extension is not enabled anywhere in it."""
+    if tokens[index].kind != "id":
+        return False
+    dot, name = index + 1, index + 2
+    if name >= len(tokens):
+        return False
+    return (tokens[dot].kind == "punc" and tokens[dot].text == "."
+            and tokens[name].kind == "id"
+            and tokens[dot].offset == tokens[index].offset
+            + len(tokens[index].text)
+            and tokens[name].offset == tokens[dot].offset + 1)
+
+
 def first_argument_token(tokens: list[Token], index: int
                          ) -> tuple[int | None, bool]:
     """`(index of the first argument's head identifier, was a grouping
@@ -2829,6 +2855,8 @@ def first_argument_token(tokens: list[Token], index: int
             continue
         break
     if j < len(tokens) and tokens[j].kind == "id":
+        if _opens_record_dot(tokens, j):
+            return None, True
         return j, grouped
     return None, grouped
 
