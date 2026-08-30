@@ -2677,6 +2677,40 @@ _HASKELL_KEYWORDS = frozenset({
 })
 
 
+def after_operator_section(tokens: list[Token], index: int) -> bool:
+    """True if `tokens[index]` is directly preceded by an OPERATOR
+    SECTION -- a parenthesized group holding nothing but punctuation,
+    as in `($) writeIORef (fieldOne env) value` or `(.) f g`.
+
+    Applying an operator prefix that way is ordinary Haskell, and what
+    the section does with its arguments is exactly what a textual scan
+    cannot know: `($)` applies them, `(.)` composes them, and the two
+    have opposite consequences for whether a write happens here. So the
+    site is neither attributed nor waved through -- it is
+    unclassifiable, and requirement 6 reports it. Recognizing each
+    operator individually is the open-ended path this arc rejects."""
+    if index == 0:
+        return False
+    closing = tokens[index - 1]
+    if closing.kind != "punc" or closing.text != ")":
+        return False
+    depth, j = 0, index - 1
+    while j >= 0:
+        token = tokens[j]
+        if token.kind == "punc" and token.text == ")":
+            depth += 1
+        elif token.kind == "punc" and token.text == "(":
+            depth -= 1
+            if depth == 0:
+                break
+        j -= 1
+    if j < 0:
+        return False
+    # An empty group vacuously qualifies, which is harmless: `()` can
+    # never be applying a primitive in code that compiles.
+    return all(tokens[k].kind == "punc" for k in range(j + 1, index - 1))
+
+
 def line_indents(code: str) -> list[int | None]:
     """Indent column per 1-BASED line (index 0 unused), `None` for a
     blank line. `in_head_position` reads it to tell a continuation from
@@ -3095,10 +3129,15 @@ def scan_capability_writes(
                 continue
             if not in_head_position(tokens, index, indents):
                 # Being passed on, not applied: no inline use to record,
-                # and the accessor beside it stays residue.
+                # and the accessor beside it stays residue. Unless what
+                # precedes it is an operator SECTION, which may well be
+                # applying it -- unreadable either way, so it blocks.
                 if primitive in IOREF_WRITE_PRIMITIVES:
                     sites.append(MutationSite(
-                        relpath, token.line, module, "other", None))
+                        relpath, token.line, module,
+                        "unclassifiable"
+                        if after_operator_section(tokens, index) else "other",
+                        None))
                 continue
             head = _first_argument_head(tokens, index)
             if head is None:

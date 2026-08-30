@@ -2374,6 +2374,34 @@ run env = do
     writeIORef (fieldThree env) 1
 """
 
+# An operator SECTION applied prefix. `($)` applies its arguments and
+# `(.)` composes them -- opposite consequences for whether a write
+# happens here, and a textual scan cannot tell which. Unreadable, so
+# it blocks rather than passing silently.
+_OPERATOR_SECTION = """\
+module Section.Mod where
+
+import Data.IORef
+
+import Engine.Core.State (EngineEnv, fieldOne)
+
+applied ∷ EngineEnv → IO ()
+applied env = ($) writeIORef (fieldOne env) 1
+"""
+
+# A parenthesized group holding a real expression is not a section, and
+# is the ordinary passed-on case.
+_PARENTHESIZED_CALLEE = """\
+module Callee.Mod where
+
+import Data.IORef
+
+import Engine.Core.State (EngineEnv, fieldTwo)
+
+handedOn ∷ EngineEnv → IO ()
+handedOn env = (chooseLogger env) writeIORef (fieldTwo env) 2
+"""
+
 _AFTER_KEYWORD = """\
 module AfterKeyword.Mod where
 
@@ -2667,6 +2695,8 @@ def _writer_sources(**modules: str) -> dict[str, str]:
         "bareImport": "src/BareImport/Mod.hs",
         "unreadable": "src/Unreadable/Mod.hs",
         "passedOn": "src/PassedOn/Mod.hs",
+        "section": "src/Section/Mod.hs",
+        "callee": "src/Callee/Mod.hs",
         "multiPassed": "src/MultiPassed/Mod.hs",
         "siblings": "src/Siblings/Mod.hs",
         "afterKeyword": "src/AfterKeyword/Mod.hs",
@@ -3336,6 +3366,31 @@ def test_a_primitive_must_be_in_head_position():
            f"got: {sorted(writes['fieldThree'])}")
 
 
+def test_an_operator_section_applying_a_primitive_blocks():
+    """`($) writeIORef (fieldOne env) 1` is a direct write and
+    `(.) writeIORef f` is not, and nothing textual separates them. The
+    site is therefore unreadable rather than silently `other` --
+    recognizing each operator individually is the open-ended path this
+    arc rejects.
+
+    A parenthesized group holding a real expression is not a section,
+    and stays the ordinary passed-on case."""
+    scan = _full_scan(_writer_sources(section=_OPERATOR_SECTION))
+    expect([site.kind for site in scan.sites
+            if site.module == "Section.Mod"] == ["unclassifiable"],
+           f"an applied operator section must block, got: "
+           f"{[s.kind for s in scan.sites if s.module == 'Section.Mod']}")
+    expect(len(audit_mutation_sites(scan.sites)) == 1, "and be reported")
+
+    scan = _full_scan(_writer_sources(callee=_PARENTHESIZED_CALLEE))
+    expect([site.kind for site in scan.sites
+            if site.module == "Callee.Mod"] == ["other"],
+           "a parenthesized expression callee is not a section")
+    expect(scan.writes["fieldTwo"] == set()
+           and audit_mutation_sites(scan.sites) == [],
+           "so it is an ordinary hand-off: no write, and no block")
+
+
 def test_record_dot_access_is_unclassifiable():
     """`modifyIORef' (env.fieldOne) id` is a direct mutation the scan
     cannot read. Taking `env` as the argument head would make it a
@@ -3817,6 +3872,7 @@ def main() -> int:
         test_a_bare_import_brings_the_accessor_into_scope,
         test_an_unreadable_mutation_site_blocks,
         test_a_primitive_must_be_in_head_position,
+        test_an_operator_section_applying_a_primitive_blocks,
         test_record_dot_access_is_unclassifiable,
         test_a_primitive_used_as_a_value_is_not_unreadable,
         test_a_comment_marker_inside_a_string_is_text,

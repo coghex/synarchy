@@ -1285,7 +1285,11 @@ identifier or a closing bracket, but a newline ends no application and
 layout ends a statement with no token at all, so three things decide
 it: a keyword applies to nothing; on the same line an identifier or
 bracket is applying; across lines, a continuation is indented past the
-line that opened the expression while a sibling statement is not.
+line that opened the expression while a sibling statement is not. An
+operator SECTION applied prefix (`($) writeIORef …`) is a fourth case
+and an unreadable one — `($)` applies its arguments and `(.)` composes
+them, with opposite consequences — so it joins the blocking bucket
+rather than being modelled operator by operator.
 
 The primitive is held to the same scope test as the accessor: a name is only
 `Data.IORef`'s `writeIORef` if that one reaches the module under the
