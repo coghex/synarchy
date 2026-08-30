@@ -1258,6 +1258,7 @@ test-suite synarchy-test-headless
                    Test.Headless.UI.TutorialHud
                    Test.Headless.UI.UnicodeTextEditing
                    Test.Headless.UI.Slider
+                   Test.Headless.UI.BarFillColor
                    Test.Headless.UI.ClickCorrelation
                    Test.Headless.UI.TransferContextMenu
                    Test.Headless.UI.ItemList
