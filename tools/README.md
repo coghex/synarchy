@@ -922,6 +922,61 @@ alongside `test_probe_root_cleanup.py`.
 python3 tools/test_flora_growth_probe.py
 ```
 
+### `test_location_content_probe.py` — the location-content probe's artifact ownership (#1884)
+
+The same split, one probe over. `location_content_probe.py` already owned
+an isolated resource root and removed it on every exit path (#1620) — but
+again only its SAVE slots had moved there. Its five fixture YAMLs and its
+engine log stayed at the fixed, process-global names
+`/tmp/loc_content_probe_bogus.yaml`, `…_bogus_loot.yaml`, `…_quinoa.yaml`,
+`…_quinoa_loot.yaml`, `…_dense.yaml` and
+`/tmp/location_content_engine.log`, each written with a truncating
+`open(..., "w")`, none carrying any invocation identity, and none removed
+by anything. Two concurrent runs collided on all six. The log collision is
+the sharp one here: this probe ASSERTS against that log twice — the
+integrity diagnostic after phase 2's load, and phase 3's two
+unknown-content warnings — so a foreign truncation could turn a passing
+phase into a failure or a failure into a pass, not merely muddle a
+post-mortem. All six now live inside the directory the invocation already
+owned.
+
+`python3 tools/test_location_content_probe.py` drives the probe's REAL
+`main()` with `run` substituted, so the guard's own paths are exercised
+without an engine: two invocations share no fixture, log or root path;
+all five fixture paths are absolute (the engine is chdir'd into the
+isolated root, so a relative one would resolve elsewhere) and inside the
+run's own tree; no `/tmp` literal is left in the module at all, and a
+real run leaves each of the six legacy paths exactly as it found it —
+absent if absent, byte-identical if a developer has one; the tree is
+released after a pass, a failure, an early return, an exception, a
+`_PhaseAborted`, a `probelib.boot` abort and a handled Ctrl-C; an engine
+the run merely LAUNCHED is killed BEFORE the tree it is writing into is
+removed, and killed directly rather than sent an `engine.quit()` that
+might reach somebody else's instance; `--keep-artifacts` is opt-in, keeps
+whatever result the run's own checks produced, names the retained
+directory, and reports only what that run ACTUALLY produced (a directory
+that was never created says so rather than being called empty); a default
+failing run says its log went with the tree and points at the flag; and a
+cleanup that cannot finish makes an otherwise passing run non-zero,
+through #1620's own `remove_isolated_root` reporting. It also pins what
+the probe still proves after the move: all seven boots go through the one
+funnel that hands each this invocation's log and registers its process as
+it is launched; both log-reading ASSERTIONS read that same log; the five
+fixture bodies are pinned by `sha256`; their registration order and
+loaders are unchanged (placement and loot draws are order- and
+content-sensitive); `load_fixture_yaml` still guards every one of them
+(#1342); and `make_isolated_root`, `remove_isolated_root` and
+`save_and_wait` are still the shapes `portal_ghost_probe.py` imports.
+
+The probe is manual-only and boots seven engines across several generated
+worlds, so without this companion the contract is only ever observed by a
+run nothing in CI can make. Engine-free, GPU-free, network-free, about a
+second; blocking CI step alongside `test_flora_growth_probe.py`.
+
+```bash
+python3 tools/test_location_content_probe.py
+```
+
 ### `test_location_probe_config_isolation.py` — the location probes' private `config/` (#1729)
 
 `location_content_probe.py`, `location_overlay_probe.py` and
