@@ -2206,6 +2206,12 @@ _IMPORT_WILDCARD_RE = re.compile(r"\(\s*\.\.\s*\)")
 # nothing at all.
 _BINDING_LHS_RE = re.compile(
     r"[ \t]*([a-z_][A-Za-z0-9_']*)((?:[ \t]+[^={\n]*?)?)=(?!=)")
+# A `let` ANYWHERE on a line, not only at its start: `f env ref = let
+# fieldOne _ = ref in writeIORef (fieldOne env) 1` binds just as much as
+# the same `let` written on its own line. The tail is split on `;` so a
+# one-line multi-binding group (`let a = p; b = q in ...`) binds both.
+_INLINE_LET_RE = re.compile(r"(?<![A-Za-z0-9_'])let(?![A-Za-z0-9_'])")
+_LET_BINDING_RE = re.compile(r"[ \t]*([^={\n]*?)=(?!=)")
 _LAMBDA_BINDER_RE = re.compile(r"\\\s*([^\n{}=]*?)(?:->|→)")
 _MONADIC_BINDER_RE = re.compile(r"[ \t]*\(?([^(){}=\n]*?)\)?[ \t]*(?:<-|←)")
 _CASE_ALT_RE = re.compile(
@@ -2535,25 +2541,31 @@ def local_binding_regions(code: str) -> dict[str, set[int]]:
         declaration = min(declaration_end[i], ceiling)
 
         equation = _BINDING_LHS_RE.match(line)
-        if equation:
+        if equation and equation.group(1) != "let":
             head, parameters = equation.group(1), equation.group(2)
-            names = _HS_IDENT_RE.findall(parameters)
-            if head == "let":
-                # `let` is a keyword, not the bound name. A pattern
-                # binding (`let (a, b) = ...`) binds every name in it;
-                # a function binding (`let f x = ...`) binds `f` over
-                # the block and `x` over this equation alone.
-                if parameters.strip()[:1] in ("(", "["):
+            bind(head, i, block)
+            for name in _HS_IDENT_RE.findall(parameters):
+                bind(name, i, declaration)
+
+        opening = _INLINE_LET_RE.search(line)
+        if opening:
+            for segment in line[opening.end():].split(";"):
+                binding = _LET_BINDING_RE.match(segment)
+                if not binding:
+                    continue
+                # A pattern binding (`let (a, b) = ...`) binds every
+                # name in it; a function binding (`let f x = ...`) binds
+                # `f` over the block and its parameters over this
+                # equation alone.
+                text = binding.group(1)
+                names = _HS_IDENT_RE.findall(text)
+                if text.strip()[:1] in ("(", "["):
                     for name in names:
                         bind(name, i, block)
                 elif names:
                     bind(names[0], i, block)
                     for name in names[1:]:
                         bind(name, i, declaration)
-            else:
-                bind(head, i, block)
-                for name in names:
-                    bind(name, i, declaration)
 
         for parameters in _LAMBDA_BINDER_RE.findall(line):
             for name in _HS_IDENT_RE.findall(parameters):
@@ -2621,6 +2633,30 @@ def _extend_where_declarations(lines: list[str], indents: list[int | None],
                 bind(declaration.group(1), owner, end)
 
 
+def _skip_type_atom(tokens: list[Token], index: int) -> int:
+    """Index just past the type atom at `index` -- one identifier, or
+    one balanced `(`/`[` group. Anything else is left where it is, so a
+    shape this does not understand stops the walk instead of consuming
+    the value argument."""
+    if index >= len(tokens):
+        return index
+    token = tokens[index]
+    if token.kind == "id":
+        return index + 1
+    if token.kind == "punc" and token.text in ("(", "["):
+        depth = 0
+        while index < len(tokens):
+            current = tokens[index]
+            if current.kind == "punc" and current.text in ("(", "["):
+                depth += 1
+            elif current.kind == "punc" and current.text in (")", "]"):
+                depth -= 1
+                if depth == 0:
+                    return index + 1
+            index += 1
+    return index
+
+
 def _first_argument_head(tokens: list[Token], index: int) -> int | None:
     """Token index of the head identifier of `tokens[index]`'s first
     argument, when that argument is an APPLICATION -- `prim (accessor
@@ -2647,10 +2683,22 @@ def _first_argument_head(tokens: list[Token], index: int) -> int | None:
     like every other use the scan cannot attribute (D-5)."""
     j = index + 1
     grouped = False
-    while (j < len(tokens) and tokens[j].kind == "punc"
-           and tokens[j].text in ("$", "(")):
-        grouped = True
-        j += 1
+    while j < len(tokens):
+        token = tokens[j]
+        if token.kind != "punc":
+            break
+        if token.text == "@":
+            # A visible type application (`writeIORef @Int (ref) v`,
+            # legal under GHC2024's default `TypeApplications`) is not
+            # the value argument. Skip its type atom -- an identifier,
+            # or one balanced group -- and keep looking.
+            j = _skip_type_atom(tokens, j + 1)
+            continue
+        if token.text in ("$", "("):
+            grouped = True
+            j += 1
+            continue
+        break
     if not grouped or j >= len(tokens) or tokens[j].kind != "id":
         return None
     following = tokens[j + 1] if j + 1 < len(tokens) else None

@@ -1264,8 +1264,10 @@ purpose — none is asked to be complete by itself:
    write to the local binding. Each binding is given its own **lexical
    region** rather than its whole enclosing declaration, because the
    permissive direction of that mistake *suppresses a real write
-   silently*: a `let` shadows the statements below it and nothing
-   above; an equation's parameters reach that equation only; and a
+   silently*: a `let` — wherever on its line it is written, including
+   nested after an equation's own `=` — shadows the statements below it
+   and nothing above; an equation's parameters reach that equation
+   only; and a
    `where` block's own declarations are the single form that reaches
    backwards, over the enclosing declaration — their parameters and
    nested `let`s do not come with them. Every region is clamped to its
@@ -1275,7 +1277,9 @@ purpose — none is asked to be complete by itself:
    loud violation naming module and field, never a silent miss.
 3. **Applied position.** The accessor must head the first argument of a
    mutation primitive *and* that argument must be an application —
-   `prim (accessor handle) …`. This is a type argument, not a
+   `prim (accessor handle) …`, with any visible type application
+   (`prim @Int (accessor handle) …`, legal under GHC2024's default
+   `TypeApplications`) stepped over first. This is a type argument, not a
    heuristic: every accessor projects out of a handle
    (`EngineEnv -> IORef a`), so it can never itself be the `IORef` the
    primitive takes, and a *bare* identifier there always denotes some

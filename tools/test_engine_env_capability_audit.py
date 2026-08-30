@@ -2074,6 +2074,23 @@ inlineLet ∷ EngineEnv → IORef Int → IO ()
 inlineLet env ref =
     let fieldOne _ = ref in writeIORef (fieldOne env) 1
 
+-- The same `let`, NESTED mid-line after the equation's own `=`, where
+-- the line does not begin with it.
+nestedLet ∷ EngineEnv → IORef Int → IO ()
+nestedLet env ref = let fieldOne _ = ref in writeIORef (fieldOne env) 2
+
+-- A one-line multi-binding group: the second binding shadows too.
+groupedLet ∷ EngineEnv → IORef Int → IO ()
+groupedLet env ref =
+    let other = ref; fieldOne _ = other in writeIORef (fieldOne env) 3
+
+-- A `let` PATTERN binds every name in it over the block, not just the
+-- leading one.
+patternLet ∷ EngineEnv → (Int, EngineEnv → IORef Int) → IO ()
+patternLet env pair = do
+    let (_, fieldOne) = pair
+    writeIORef (fieldOne env) 4
+
 -- A `do`-block `let` shadows the statements BELOW it -- across the
 -- blank line, which closes no layout block (and is what a stripped
 -- comment leaves behind).
@@ -2121,6 +2138,21 @@ siblings env = viaParameter (fieldThree env) >> direct
   where
     viaParameter fieldThree = writeIORef (fieldThree env) 9
     direct = writeIORef (fieldThree env) 10
+"""
+
+# A visible type application is not the value argument. Legal under
+# GHC2024's default `TypeApplications`, and invisible to a scan that
+# expects the accessor immediately after the primitive.
+_TYPE_APPLICATION = """\
+module TypeApp.Mod where
+
+import Engine.Core.State (EngineEnv, fieldOne, fieldTwo)
+
+simple ∷ EngineEnv → IO ()
+simple env = writeIORef @Int (fieldOne env) 1
+
+grouped ∷ EngineEnv → IO ()
+grouped env = writeIORef @(IORef Text) (fieldTwo env) 2
 """
 
 # A mutation primitive is itself under a qualifier too. Missing this
@@ -2225,6 +2257,7 @@ def _writer_sources(**modules: str) -> dict[str, str]:
         "qualPrim": "src/QualPrim/Mod.hs",
         "qualOnly": "src/QualOnly/Mod.hs",
         "shadow": "src/Shadow/Mod.hs",
+        "typeApp": "src/TypeApp/Mod.hs",
         "explicit": "src/Explicit/Mod.hs",
         "multiline": "src/Multi/Mod.hs",
     }
@@ -2438,6 +2471,19 @@ def test_locally_shadowed_accessors_are_not_writes():
            f"got: {sorted(writes['fieldThree'])}")
 
 
+def test_visible_type_applications_are_skipped():
+    """`writeIORef @Int (fieldOne env) 1` is a direct write. A scan that
+    expects the accessor immediately after the primitive stops at the
+    `@` and lets an undeclared writer through in silence."""
+    writes, _ = _scan(_writer_sources(typeApp=_TYPE_APPLICATION))
+    expect(writes["fieldOne"] == {"TypeApp.Mod"},
+           f"a type application by name must be stepped over, got: "
+           f"{sorted(writes['fieldOne'])}")
+    expect(writes["fieldTwo"] == {"TypeApp.Mod"},
+           f"a parenthesized type application must be stepped over "
+           f"whole, got: {sorted(writes['fieldTwo'])}")
+
+
 def test_binding_regions_are_lexical():
     """`local_binding_regions` directly, on the two extents Haskell's
     layout rule distinguishes: a `do`-block `let` reaches the statements
@@ -2451,6 +2497,9 @@ def test_binding_regions_are_lexical():
             "second ref env = pure ref\n"            # 5
             "third env = writeIORef (ref env) 3\n")  # 6
     regions = local_binding_regions(code)
+    expect("let" not in regions,
+           f"`let` is a keyword, never a bound name, got: "
+           f"{sorted(regions.get('let', ()))}")
     expect(regions.get("ref") == {3, 4, 5},
            f"the `let` must cover its own line and the statement below "
            f"it, the parameter its own equation, and neither the write "
@@ -2487,6 +2536,12 @@ def test_a_first_argument_must_be_applied():
            "application")
     expect(head_of("writeIORef fieldOne 1") is None,
            "a bare first argument is never an accessor application")
+    expect(head_of("writeIORef @Int (fieldOne env) 1") == 4,
+           "a visible type application is stepped over, not treated as "
+           "the value argument")
+    expect(head_of("writeIORef @Int fieldOne 1") is None,
+           "stepping over a type application must not turn a bare "
+           "argument into an application")
 
 
 def test_a_later_binder_cannot_hide_an_earlier_write():
@@ -2838,6 +2893,7 @@ def main() -> int:
         test_out_of_scope_names_are_not_writes,
         test_comments_and_bare_arguments_are_not_writes,
         test_locally_shadowed_accessors_are_not_writes,
+        test_visible_type_applications_are_skipped,
         test_binding_regions_are_lexical,
         test_a_first_argument_must_be_applied,
         test_a_later_binder_cannot_hide_an_earlier_write,
