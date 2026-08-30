@@ -2420,6 +2420,34 @@ bump ∷ EngineEnv → IO ()
 bump env = writeIORef (A.sharedRef (A.toAlphaCapability env)) 1
 """
 
+# `T(..)` grants `T`'s selectors and nobody else's, so a wildcard on
+# some OTHER type in the same module puts no `EngineEnv` field in scope.
+_FOREIGN_WILDCARD = """\
+module ForeignWildcard.Mod where
+
+import Data.IORef
+
+import Engine.Core.State (EngineEnv, WindowState(..))
+
+fieldOne ∷ EngineEnv → IORef Int
+fieldOne _ = error "this module's own helper, not the accessor"
+
+use ∷ EngineEnv → IO ()
+use env = writeIORef (fieldOne env) 1
+"""
+
+# The control: the wildcard that DOES own the field.
+_OWNING_WILDCARD = """\
+module OwningWildcard.Mod where
+
+import Data.IORef
+
+import Engine.Core.State (EngineEnv(..))
+
+use ∷ EngineEnv → IO ()
+use env = writeIORef (fieldTwo env) 2
+"""
+
 _BETA_CONSUMER = """\
 module CollideB.Mod where
 
@@ -2462,6 +2490,8 @@ def _writer_sources(**modules: str) -> dict[str, str]:
         "localPrim": "src/LocalPrim/Mod.hs",
         "alpha": "src/Engine/Core/Capability/Alpha.hs",
         "beta": "src/Engine/Core/Capability/Beta.hs",
+        "foreignWildcard": "src/ForeignWildcard/Mod.hs",
+        "owningWildcard": "src/OwningWildcard/Mod.hs",
         "collideA": "src/CollideA/Mod.hs",
         "collideB": "src/CollideB/Mod.hs",
         "qualHomonym": "src/QualHomonym/Mod.hs",
@@ -2494,10 +2524,12 @@ def test_writer_map_canonicalizes_both_consumer_shapes():
     accessors = capability_accessor_map(
         _writer_sources(), _WRITER_FIELDS)
     expect(accessors == {
-        "fkFieldOne": (("fieldOne", "Engine.Core.Capability.Fake"),),
-        "fkFieldTwo": (("fieldTwo", "Engine.Core.Capability.Fake"),),
-    }, f"capability_accessor_map must derive each accessor's field and "
-       f"owner from the LIVE projection, got: {accessors}")
+        "fkFieldOne": (("fieldOne", "Engine.Core.Capability.Fake",
+                        "FakeCapability"),),
+        "fkFieldTwo": (("fieldTwo", "Engine.Core.Capability.Fake",
+                        "FakeCapability"),),
+    }, f"capability_accessor_map must derive each accessor's field, owner "
+       f"and record type from the LIVE projection, got: {accessors}")
 
     writes, _ = _scan(_writer_sources(declared=_DECLARED_WRITER))
     expect(writes["fieldOne"] == {"Consumer.Mod"},
@@ -2921,17 +2953,18 @@ def test_import_declarations_record_qualification_and_alias():
         "import Engine.Core.Capability.Fake (FakeCapability(..))\n"
         "import Engine.Core.Defaults\n")
     shape = [(d.module, d.qualified, d.qualifier,
-              None if d.names is None else sorted(d.names))
+              None if d.names is None else sorted(d.names),
+              sorted(d.wildcards))
              for d in declarations]
     expect(shape == [
         ("Engine.Core.State", False, "Engine.Core.State",
-         ["EngineEnv", "fieldOne"]),
-        ("Engine.Core.State", True, "State", None),
-        ("Data.IORef", True, "Ref", None),
-        ("Data.Map", False, "Data.Map", None),
+         ["EngineEnv", "fieldOne"], []),
+        ("Engine.Core.State", True, "State", None, []),
+        ("Data.IORef", True, "Ref", None, []),
+        ("Data.Map", False, "Data.Map", None, []),
         ("Engine.Core.Capability.Fake", False,
-         "Engine.Core.Capability.Fake", None),
-        ("Engine.Core.Defaults", False, "Engine.Core.Defaults", None),
+         "Engine.Core.Capability.Fake", [], ["FakeCapability"]),
+        ("Engine.Core.Defaults", False, "Engine.Core.Defaults", None, []),
     ], f"all six import shapes -- explicit list, qualified-with-alias, "
        f"`ImportQualifiedPost`, `hiding`, a `(..)` wildcard and a bare "
        f"import -- must each be recorded with its own qualification, "
@@ -3078,6 +3111,33 @@ def test_a_primitive_used_as_a_value_is_not_unreadable():
            "and blocks nothing")
 
 
+def test_a_wildcard_grants_only_its_own_type_s_selectors():
+    """`import Engine.Core.State (WindowState(..))` brings in
+    `WindowState`'s selectors, not `EngineEnv`'s -- so a module-local
+    `fieldOne` used beside it is not the accessor. Treating every
+    `(..)` as unrestricted access would make that a false writer, and
+    then an undeclared-writer failure over code that touches no field."""
+    writes, _ = _scan(_writer_sources(foreignWildcard=_FOREIGN_WILDCARD))
+    expect(writes["fieldOne"] == set(),
+           f"another type's wildcard puts no `EngineEnv` field in scope, "
+           f"got: {sorted(writes['fieldOne'])}")
+
+    writes, _ = _scan(_writer_sources(owningWildcard=_OWNING_WILDCARD))
+    expect(writes["fieldTwo"] == {"OwningWildcard.Mod"},
+           f"but the owning type's wildcard does, got: "
+           f"{sorted(writes['fieldTwo'])}")
+
+    declarations = parse_imports(
+        "import Engine.Core.State (EngineEnv, WindowState(..))\n")
+    expect(not imports_name(declarations, "Engine.Core.State", "fieldOne",
+                            "", "EngineEnv"),
+           "a foreign wildcard grants nothing here")
+    expect(imports_name(parse_imports(
+        "import Engine.Core.State (EngineEnv(..))\n"),
+        "Engine.Core.State", "fieldOne", "", "EngineEnv"),
+           "and the owning one grants everything it declares")
+
+
 def test_one_selector_may_belong_to_two_capabilities():
     """A selector name is only unique within its own record. Two
     capability modules may both export `sharedRef`, and the consumer's
@@ -3090,8 +3150,8 @@ def test_one_selector_may_belong_to_two_capabilities():
                               collideB=_BETA_CONSUMER)
     accessors = capability_accessor_map(sources, _WRITER_FIELDS)
     expect(accessors["sharedRef"] == (
-        ("fieldOne", "Engine.Core.Capability.Alpha"),
-        ("fieldTwo", "Engine.Core.Capability.Beta"),
+        ("fieldOne", "Engine.Core.Capability.Alpha", "AlphaCapability"),
+        ("fieldTwo", "Engine.Core.Capability.Beta", "BetaCapability"),
     ), f"both owners must survive, sorted, got: "
        f"{accessors.get('sharedRef')}")
 
@@ -3394,6 +3454,7 @@ def main() -> int:
         test_a_bare_import_brings_the_accessor_into_scope,
         test_an_unreadable_mutation_site_blocks,
         test_a_primitive_used_as_a_value_is_not_unreadable,
+        test_a_wildcard_grants_only_its_own_type_s_selectors,
         test_one_selector_may_belong_to_two_capabilities,
         test_a_primitive_must_be_the_one_from_data_ioref,
         test_a_shadow_exemption_suppresses_only_its_own_pair,

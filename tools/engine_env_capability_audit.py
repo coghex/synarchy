@@ -1098,6 +1098,10 @@ TEMPORARY_CEILING: dict[str, frozenset[str]] = {
 
 PRODUCTION_DIRS = ("src", "app")
 STATE_MODULE = "Engine.Core.State"
+# The record whose selectors `EngineEnv(..)` brings into scope --
+# `WindowState(..)` in the same import list brings its own, and not
+# these.
+ENGINE_ENV_TYPE = "EngineEnv"
 
 _IMPORT_LINE_RE = re.compile(r"^import\b")
 _IMPORT_HEAD_RE = re.compile(r"^import\s+(?:qualified\s+)?([A-Za-z][A-Za-z0-9_.']*)")
@@ -2219,7 +2223,8 @@ CAPABILITY_WRITER_MODULES: dict[str, frozenset[str]] = {
 
 _HS_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_']*")
 _CHAR_LITERAL_RE = re.compile(r"'(?:\\.|[^\\'])'")
-_IMPORT_WILDCARD_RE = re.compile(r"\(\s*\.\.\s*\)")
+_IMPORT_WILDCARD_RE = re.compile(
+    r"([A-Z][A-Za-z0-9_']*)\s*\(\s*\.\.\s*\)")
 # An equation left-hand side (top-level, `where` or `let` alike),
 # anchored at the start of its line and forbidding `{` in the parameter
 # text, so a record construction or update -- `env { fooRef = r }`, or a
@@ -2266,16 +2271,19 @@ class ImportDecl(NamedTuple):
     `qualified` says whether the UNQUALIFIED spelling is in scope at
     all: `import qualified M as N` puts only `N.f` in scope, never `f`,
     which is why the two flags cannot be collapsed into one map.
-    `names` is `None` for an import whose list does not enumerate what
-    it brings in (bare, `(..)`-carrying, or `hiding`), and `hidden`
-    carries a `hiding` clause's own names -- an import that brings in
-    everything EXCEPT those, which is how a module legally defines its
-    own `fieldOne` while still importing the rest."""
+    `names` is `None` only for an import that enumerates nothing at all
+    -- a bare import, or one carrying a `hiding` clause, whose excluded
+    names are in `hidden`. Otherwise `names` holds the plainly listed
+    symbols and `wildcards` the TYPES imported as `T(..)`: that form
+    brings in `T`'s own selectors and nobody else's, so
+    `Engine.Core.State (WindowState(..))` does not put an `EngineEnv`
+    field in scope."""
     module: str
     qualified: bool
     qualifier: str
     names: frozenset[str] | None
     hidden: frozenset[str]
+    wildcards: frozenset[str]
 
 
 class Occurrence(NamedTuple):
@@ -2401,6 +2409,8 @@ def parse_imports(source_text: str) -> list[ImportDecl]:
         body = chunk[head.end():]
         hiding = _IMPORT_HIDING_RE.search(body)
         hidden: frozenset[str] = frozenset()
+        wildcards = frozenset(match.group(1)
+                              for match in _IMPORT_WILDCARD_RE.finditer(body))
         if hiding is not None:
             # Everything EXCEPT the listed names. A `hiding (T(..))`
             # names the type, not its fields, so a field hidden that way
@@ -2408,22 +2418,31 @@ def parse_imports(source_text: str) -> list[ImportDecl]:
             # (a loud violation), never hide one.
             hidden = frozenset(_HS_IDENT_RE.findall(body[hiding.end():]))
             names: frozenset[str] | None = None
-        elif "(" not in body or _IMPORT_WILDCARD_RE.search(body):
+        elif "(" not in body:
             names = None
         else:
-            names = frozenset(_HS_IDENT_RE.findall(body))
-        declarations.append(
-            ImportDecl(module, qualified, alias or module, names, hidden))
+            # A `T(..)` group is recorded as a wildcard on `T`, never as
+            # a plain name, so it can only grant `T`'s own selectors.
+            names = frozenset(_HS_IDENT_RE.findall(
+                _IMPORT_WILDCARD_RE.sub(" ", body)))
+        declarations.append(ImportDecl(module, qualified, alias or module,
+                                       names, hidden, wildcards))
     return declarations
 
 
 def imports_name(declarations: list[ImportDecl], module: str, name: str,
-                 qualifier: str) -> bool:
+                 qualifier: str, owner_type: str | None = None) -> bool:
     """True iff `declarations` put `module`'s `name` in scope under the
     spelling used -- `qualifier` empty for a bare use, otherwise the
     prefix that was written. A qualified use must match a declaration's
     own qualifier; an unqualified one must find a declaration that is
-    not `qualified` at all."""
+    not `qualified` at all.
+
+    `owner_type` is the record `name` is a selector of. A `T(..)` group
+    grants only `T`'s selectors, so an import list carrying some OTHER
+    type's wildcard does not put this one in scope. `None` means the
+    owner is unknown, in which case any wildcard is accepted -- the
+    direction that keeps a write visible."""
     for declaration in declarations:
         if declaration.module != module:
             continue
@@ -2436,12 +2455,15 @@ def imports_name(declarations: list[ImportDecl], module: str, name: str,
             continue
         if declaration.names is None or name in declaration.names:
             return True
+        if declaration.wildcards and (owner_type is None
+                                      or owner_type in declaration.wildcards):
+            return True
     return False
 
 
 def capability_accessor_map(sources: dict[str, str], live_fields: list[str]
-                            ) -> dict[str, tuple[tuple[str, str], ...]]:
-    """`{capability accessor: ((EngineEnv field, defining module), ...)}`
+                            ) -> dict[str, tuple[tuple[str, str, str], ...]]:
+    """`{capability accessor: ((field, defining module, record type), ...)}`
     for every `Engine.Core.Capability.*` record, derived from the LIVE
     projections (`parse_projection_bindings`) rather than a second
     checked-in list, so this canonicalization cannot drift from the
@@ -2461,20 +2483,23 @@ def capability_accessor_map(sources: dict[str, str], live_fields: list[str]
     rather than invented -- `audit_save_load_projection` and the
     boundary checks are where a mis-bound projection is caught."""
     fields = set(live_fields)
-    candidates: dict[str, set[tuple[str, str]]] = {}
+    candidates: dict[str, set[tuple[str, str, str]]] = {}
     for relpath, text in sorted(sources.items()):
         module = module_identifier(relpath)
         if not module.startswith(CAPABILITY_MODULE_PREFIX):
             continue
-        match = re.search(r"^(to[A-Za-z0-9_']*)\s*(?:∷|::)", text, re.MULTILINE)
+        match = re.search(
+            r"^(to[A-Za-z0-9_']*)\s*(?:∷|::)\s*EngineEnv\s*(?:→|->)\s*"
+            r"([A-Z][A-Za-z0-9_']*)", text, re.MULTILINE)
         if not match:
             continue
+        record = match.group(2)
         for capability_field, accessor in parse_projection_bindings(
                 text, match.group(1)).items():
             if accessor in fields:
                 candidates.setdefault(capability_field, set()).add(
-                    (accessor, module))
-    return {name: tuple(sorted(owners, key=lambda pair: pair[1]))
+                    (accessor, module, record))
+    return {name: tuple(sorted(owners, key=lambda entry: entry[1]))
             for name, owners in candidates.items()}
 
 
@@ -2854,7 +2879,8 @@ def scan_capability_writes(
             `hiding` it."""
             qualifier, _, base = name.rpartition(".")
             if base in raw_fields:
-                owners: tuple[tuple[str, str], ...] = ((base, STATE_MODULE),)
+                owners: tuple[tuple[str, str, str], ...] = (
+                    (base, STATE_MODULE, ENGINE_ENV_TYPE),)
             else:
                 owners = accessors.get(base, ())
                 if not owners:
@@ -2863,10 +2889,10 @@ def scan_capability_writes(
             # records; the module's own imports say which one it means,
             # so every candidate is offered the scope test rather than
             # the first arbitrarily winning.
-            for field, owner in owners:
+            for field, owner, record in owners:
                 if not qualifier and module == owner:
                     return field, owner, base
-                if imports_name(declarations, owner, base, qualifier):
+                if imports_name(declarations, owner, base, qualifier, record):
                     return field, owner, base
             return None
 

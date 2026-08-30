@@ -1251,9 +1251,10 @@ binding forms:
    module-local homonym, or an unrelated module's qualified one, is a
    different function whose argument mutates no `IORef`. For the
    accessor the same rule applies: it must
-   actually reach that module — imported by name,
-   through a `(..)` wildcard or a bare import, or defined by the module
-   itself. Each `import` declaration is kept separate rather than
+   actually reach that module — imported by name, through a bare
+   import, through the wildcard of the record it belongs to
+   (`EngineEnv(..)`, and not some other type's `(..)` in the same
+   list), or defined by the module itself. Each `import` declaration is kept separate rather than
    merged into one answer per module, because the things that decide
    this are per-declaration language rules — `qualified` removes the
    *unqualified* spelling from scope entirely, an `as` alias
