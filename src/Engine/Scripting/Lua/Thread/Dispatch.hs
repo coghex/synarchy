@@ -14,6 +14,8 @@ import Engine.Scripting.Lua.Util (isValidRef, broadcastToModules
 import Engine.Core.Log (logWarn, logDebug, LogCategory(..))
 import Engine.Core.Thread
 import Engine.Core.State (EngineEnv(..))
+import Structure.ArtCatalog
+    (ArtFailureReport(..), artAssetFailureMessage, failPackArtPath)
 import World.State.Types (requestSelectionChange)
 import Engine.Input.Types (keyToText, clickRouteText)
 import UI.Types (ElementHandle(..))
@@ -234,14 +236,39 @@ processLuaMsg env ls stateRef msg = case msg of
     -- #1690: the terminal counterpart of onAssetLoaded, on its own
     -- callback so no waiter can mistake one for the other.
     logger ← readIORef (loggerRef env)
-    logWarn logger CatAsset $
-        "Asset load failed (" <> assetType <> ", handle " <> tshow handle
-          <> "): " <> path <> " -- " <> reason
+    -- #1842: a texture the unplaced-piece art catalogue registered is
+    -- reported by the CATALOGUE instead, which can name the pack, the
+    -- kind and the asset role the generic line cannot — and the pack
+    -- stops resolving anything, because its art is only meaningful as a
+    -- complete set. Exactly ONE warning either way: the contextual line
+    -- REPLACES the generic one rather than joining it, and a repeat for
+    -- an asset already recorded is silent (the catalogue deduplicates
+    -- per pack per path), which is what keeps a re-requested texture
+    -- from warning once per attempt.
+    report ← if assetType ≢ "texture"
+        then pure (ArtFailureReport False Nothing)
+        else atomicModifyIORef' (structureArtCatalogRef env)
+                                (failPackArtPath path reason)
+    if afrTracked report
+        then forM_ (afrFailure report) $
+                 logWarn logger CatAsset ∘ artAssetFailureMessage
+        else logWarn logger CatAsset $
+                "Asset load failed (" <> assetType <> ", handle " <> tshow handle
+                  <> "): " <> path <> " -- " <> reason
+    -- The fifth argument says the diagnostic is ALREADY REPORTED. Every
+    -- Lua handler still runs — a failure has to settle whatever
+    -- readiness gate is waiting on it, or boot stalls — but the ones
+    -- that log a line of their own skip it, so a tracked structure-art
+    -- failure stays at exactly one observable warning however many
+    -- modules are listening. `afrTracked`, not `afrFailure`: a repeat
+    -- for an asset already recorded emits nothing here either, and Lua
+    -- re-announcing it would be the duplicate by another route.
     broadcastToModules ls "onAssetFailed"
       [ ScriptString assetType
       , ScriptNumber (fromIntegral handle)
       , ScriptString path
       , ScriptString reason
+      , ScriptBool (afrTracked report)
       ]
   LuaCharInput fid c →
     broadcastToModules ls "onCharInput"

@@ -20,6 +20,7 @@ import Engine.PlayerEvent (PlayerEvent, EventStore, NotificationCfg)
 import qualified Combat.Types
 import Engine.ActionOutcome (ActionOutcome)
 import Engine.Scripting.Lua.Types
+import Engine.Graphics.Solar (SolarBase(..))
 import Engine.Graphics.Types
 import Engine.Graphics.Config
 import Engine.Graphics.Vulkan.Base
@@ -48,6 +49,7 @@ import Building.Types (BuildingManager, BuildingGhost)
 import Building.Command.Types (BuildingCommand)
 import Structure.Palette (TexPalette)
 import Structure.WallCatalog (StructureWallCatalog)
+import Structure.ArtCatalog (StructureArtCatalog)
 import Item.Types (ItemManager)
 import Equipment.Types (EquipmentClassManager)
 import Substance.Types (SubstanceManager)
@@ -189,7 +191,12 @@ data EngineEnv = EngineEnv
   --   'worldPreviewRef' already use for the render thread.
   , pendingLoadRef      ∷ IORef (Maybe (Int, StagedSession))
   , worldQueue          ∷ Q.Queue WorldCommand
-  , sunAngleRef         ∷ IORef Float
+  , sunAngleRef         ∷ IORef SolarBase
+    -- ^ The process-global base sun angle plus whether
+    --   @world.setSunAngle@ is currently overriding it (#1869). Per-page
+    --   attribution rides with the published quads
+    --   ('Engine.Scene.Types.Batch.lqSolar'); this is what page-LESS
+    --   geometry and the Lua climate queries read.
   , worldPreviewRef     ∷ IORef (Maybe (Int, Int, BS.ByteString, Word64))
     -- ^ Pending world-preview pixel data for GPU upload, tagged with the
     --   generation it was enqueued under (issue #763;
@@ -284,6 +291,20 @@ data EngineEnv = EngineEnv
     --   a wall with the sprite its edge occupies once the camera rotates.
     --   NOT persisted and never cleared — a load replaces the palette (and so
     --   can reassign ids), which is exactly why this is keyed by path.
+  , structureArtCatalogRef ∷ IORef StructureArtCatalog
+    -- ^ Per-kind art for every UNPLACED structure piece (#1842), keyed by
+    --   PACK NAME: the texture/facemap pair the build AI would place for
+    --   each kind a pack offers (floor, ceiling, post, the four wall
+    --   edges' sixteen cap facemaps, the wire pack's sixteen connection
+    --   variants), with the runtime handle Lua already loaded for each,
+    --   plus which kinds carry complete `build:` metadata. Registered
+    --   from `scripts/structures.lua` / `scripts/wire.lua` out of the
+    --   pack YAML they read (`structure.registerPackArt`); read by the
+    --   construction render pass, which cannot call into Lua, to answer
+    --   what an unplaced designation would be built with. All or nothing
+    --   per pack. NOT persisted and never cleared — like
+    --   `structureWallCatalogRef` it is keyed by pack name and holds
+    --   paths, neither of which a load's palette replacement invalidates.
   , buildingQueue       ∷ Q.Queue BuildingCommand
   , combatQueue         ∷ Q.Queue Combat.Types.CombatCommand
     -- ^ Lua / AI → combat thread. Issued via `combat.attack` (and

@@ -28,6 +28,7 @@ import Engine.Core.Capability.RenderView
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import Engine.Core.Log (logInfo, logDebug, logWarn, LogCategory(..), LoggerState)
+import Engine.Graphics.Solar (maxSolarPages)
 import Engine.Graphics.Camera (Camera2D(..))
 import Engine.Scripting.Lua.Types (LuaMsg(..))
 import World.Types
@@ -39,7 +40,8 @@ import World.Geology (buildTimeline)
 import World.Geology.Log (formatPlatesSummary)
 import World.Plate (generatePlates, elevationAtGlobal)
 import Language.Generated.Types (generatorErrorText)
-import Language.Semantic.Catalogue (conceptCataloguePath, loadCatalogue)
+import Language.Semantic.Catalogue ( conceptCataloguePath
+                                   , conceptOrdinalPath, loadCatalogue )
 import Language.Semantic.Types (catalogueErrorText)
 import Location.Types (allLocations)
 import Location.Instance
@@ -425,7 +427,7 @@ resolvePageNamer
 resolvePageNamer logger identity = case wiLanguage =≪ identity of
     Nothing   → pure Nothing
     Just prov → do
-        eCat ← loadCatalogue conceptCataloguePath
+        eCat ← loadCatalogue conceptCataloguePath conceptOrdinalPath
         case eCat of
             Left cErr → do
                 logWarn logger CatWorld $
@@ -517,15 +519,26 @@ handleWorldInitArenaDoneCommand env logger pageId = do
     logInfo logger CatWorld $ "Arena textures ready, showing: " <> unWorldPageId pageId
     
     -- Now safe to make visible — all texture commands have been processed
-    atomicModifyIORef' (wsWorldManagerRef (toWorldSimCapability env)) $ \mgr' →
+    atLimit ← atomicModifyIORef' (wsWorldManagerRef (toWorldSimCapability env)) $ \mgr' →
       -- #1602: the request is discharged either way — it tracks
       -- requests, not effects — while the GENERATION moves only when the
       -- visible list actually changes, exactly as in
       -- handleWorldShowCommand.
       let mgr = completeSelectionChange mgr' in
         if pageId `elem` wmVisible mgr
-        then (mgr, ())
-        else (bumpSelectionGen (mgr { wmVisible = pageId : wmVisible mgr }), ())
+        then (mgr, False)
+        -- The same visible-page limit handleWorldShowCommand enforces,
+        -- for the same reason (#1869): one frame can light exactly
+        -- 'maxSolarPages' pages by their own clocks, and a page past
+        -- that would be drawn with another page's sun.
+        else if length (wmVisible mgr) ≥ maxSolarPages
+        then (mgr, True)
+        else (bumpSelectionGen (mgr { wmVisible = pageId : wmVisible mgr }), False)
+
+    when atLimit $ logWarn logger CatWorld $
+        "Arena " <> unWorldPageId pageId <> " stays hidden: already "
+        <> tshow maxSolarPages
+        <> " visible worlds, the most one frame can light individually"
     
     -- Broadcast to Lua that the arena is ready to display
     let lteq = ivLuaQueue (toInputViewCapability env)

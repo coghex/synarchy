@@ -49,7 +49,8 @@ import Engine.Core.Capability.RenderView
     (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..), defaultCamera)
-import Engine.Scene.Types (SortableQuad(..))
+import Engine.Scene.Types (SortableQuad(..), setQuadSolarPage)
+import Engine.Graphics.Solar (solarPageNone)
 import Structure.Types (emptyChunkStructures)
 import World.Chunk.Types
     (ChunkCoord(..), ColumnTiles(..), LoadedChunk(..), chunkSize)
@@ -208,8 +209,16 @@ buildWith env ws live snap = do
 
 -- | A total, exact fingerprint of a quad run: 'SortableQuad' has no
 --   'Eq', and every field that renders is inside its 'Show'.
+--
+--   The per-page solar slot (#1869) is normalised away first. It is
+--   stamped by 'updateWorldTiles' once the owning page is known, so a
+--   run taken from a page's cache carries it and one built straight
+--   from 'renderWorldQuads' does not — a difference about page
+--   ATTRIBUTION, which is a different gate
+--   ("Test.Headless.World.Render.SolarAttribution") and would otherwise
+--   make every comparison here fail for the wrong reason.
 quadPrints ∷ V.Vector SortableQuad → [Text]
-quadPrints = map tshow . V.toList
+quadPrints = map (tshow . setQuadSolarPage solarPageNone) . V.toList
 
 -- * Spec
 

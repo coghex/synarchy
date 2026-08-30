@@ -95,7 +95,8 @@ import Language.Etymology.Source (EtymologySource(..))
 import Language.Etymology
     (EtymologyResult(..), Etymology(..), decomposeName, etyTokenText)
 import Language.Semantic.Types (Catalogue, ConceptId(..), NameExpr(..))
-import Language.Semantic.Catalogue (conceptCataloguePath, loadCatalogue)
+import Language.Semantic.Catalogue ( conceptCataloguePath
+                                   , conceptOrdinalPath, loadCatalogue )
 import World.Render.Zoom.Types (ZoomMapMode(..))
 import Language.Generated.Types
     (LanguageProvenance(..), LangSeed(..), GeneratorVersion(..))
@@ -1859,7 +1860,7 @@ currentPageCore = PageCoreDTO
 --   nothing about the file the engine actually ships.
 loadRealCatalogue ∷ IO Catalogue
 loadRealCatalogue = do
-    eCat ← loadCatalogue conceptCataloguePath
+    eCat ← loadCatalogue conceptCataloguePath conceptOrdinalPath
     case eCat of
         Right cat → pure cat
         Left err  → error ("test setup: catalogue: " <> show err)

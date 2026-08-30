@@ -3,6 +3,7 @@ module Engine.Graphics.Vulkan.Types.Vertex where
 import UPrelude
 import Control.DeepSeq (NFData(..), rwhnf)
 import qualified Foreign.Storable as Storable
+import Engine.Graphics.Solar (solarPageNone)
 
 -- Constants for vertex layout
 vertexPositionOffset ∷ Int
@@ -33,8 +34,24 @@ vertexRenderFlagsOffset = 40
 vertexWorldUVOffset ∷ Int
 vertexWorldUVOffset = 44
 
+-- | Which world page's clock and circumference light this vertex
+--   (#1869): @0@ ('Engine.Graphics.Solar.solarPageNone') means none —
+--   the vertex takes the UBO's global @sunAngle@ \/
+--   @worldCircumferenceTiles@, which is what UI and generic scene
+--   sprites have always done — and @n > 0@ selects
+--   @ubo.solarPages[n - 1]@.
+--
+--   Ignored by pipelines that don't declare the matching vertex input,
+--   exactly like 'vertexRenderFlagsOffset' and 'vertexWorldUVOffset'.
+--
+--   Kept out of 'renderFlags' deliberately: that word is a FLAG bitset
+--   whose bits are allocated one at a time, and a page index sharing it
+--   would be corrupted the day someone allocates a bit above it.
+vertexSolarPageOffset ∷ Int
+vertexSolarPageOffset = 48
+
 vertexTotalSize ∷ Int
-vertexTotalSize = 48
+vertexTotalSize = 52
 
 -- | The ONE value a quad's 'faceMapId' \/ 'qpFaceMap' carries when its
 -- producer has NO directional face map of its own (#1696).
@@ -89,7 +106,7 @@ packWorldUV gx gy = packUV (gx - gy) (gx + gy)
 -- units) or 'mkVertexWorld' when you need real world coordinates (e.g.
 -- tile/flora/structure quads, #483).
 mkVertex ∷ Vec2 → Vec2 → Vec4 → Float → Float → Vertex
-mkVertex p t c a f = Vertex p t c a f 0 0
+mkVertex p t c a f = Vertex p t c a f 0 0 solarPageNone
 
 -- | Like 'mkVertex', but stamps the tile's packed world coordinates
 -- (pass the result of 'packWorldUV') instead of defaulting worldUV to
@@ -97,7 +114,7 @@ mkVertex p t c a f = Vertex p t c a f 0 0
 -- needs both a non-zero worldUV AND flags, build its four corners with
 -- 'quadVertices' rather than restating the 'Vertex' constructor.
 mkVertexWorld ∷ Word32 → Vec2 → Vec2 → Vec4 → Float → Float → Vertex
-mkVertexWorld wuv p t c a f = Vertex p t c a f 0 wuv
+mkVertexWorld wuv p t c a f = Vertex p t c a f 0 wuv solarPageNone
 
 -- | The four corner POSITIONS of a sprite quad, in the order
 -- 'Engine.Scene.Types.Batch.SortableQuad' documents for
@@ -192,7 +209,7 @@ quadVertices corners uv payload =
   where
     corner p u v = Vertex p (Vec2 u v) (qpTint payload)
                           (qpAtlasSlot payload) (qpFaceMap payload)
-                          (qpFlags payload) (qpWorldUV payload)
+                          (qpFlags payload) (qpWorldUV payload) solarPageNone
 
 -- | 2D vector for positions and texture coordinates
 data Vec2 = Vec2
@@ -254,6 +271,7 @@ data Vertex = Vertex
     , faceMapId   ∷ !Float  -- ^ Face map texture slot (layout = 4)
     , renderFlags ∷ !Word32 -- ^ Render-flag bitset, see renderFlag* (layout = 5)
     , worldUV     ∷ !Word32 -- ^ Packed world (u,v), see packWorldUV (layout = 6)
+    , solarPage   ∷ !Word32 -- ^ Solar page slot, see vertexSolarPageOffset (layout = 7)
     } deriving (Show, Eq)
 
 instance NFData Vertex where
@@ -270,8 +288,9 @@ instance Storable Vertex where
         f ← Storable.peekElemOff (castPtr (ptr `plusPtr` vertexFaceMapIdOffset) ∷ Ptr Float) 0
         rf ← Storable.peekElemOff (castPtr (ptr `plusPtr` vertexRenderFlagsOffset) ∷ Ptr Word32) 0
         wuv ← Storable.peekElemOff (castPtr (ptr `plusPtr` vertexWorldUVOffset) ∷ Ptr Word32) 0
-        return $! Vertex p t c a f rf wuv
-    poke ptr (Vertex p t c a f rf wuv) = do
+        sp ← Storable.peekElemOff (castPtr (ptr `plusPtr` vertexSolarPageOffset) ∷ Ptr Word32) 0
+        return $! Vertex p t c a f rf wuv sp
+    poke ptr (Vertex p t c a f rf wuv sp) = do
         poke (ptr `plusPtr` vertexPositionOffset) p
         poke (ptr `plusPtr` vertexTexCoordOffset) t
         poke (ptr `plusPtr` vertexColorOffset) c
@@ -279,3 +298,4 @@ instance Storable Vertex where
         Storable.pokeElemOff (castPtr (ptr `plusPtr` vertexFaceMapIdOffset) ∷ Ptr Float) 0 f
         Storable.pokeElemOff (castPtr (ptr `plusPtr` vertexRenderFlagsOffset) ∷ Ptr Word32) 0 rf
         Storable.pokeElemOff (castPtr (ptr `plusPtr` vertexWorldUVOffset) ∷ Ptr Word32) 0 wuv
+        Storable.pokeElemOff (castPtr (ptr `plusPtr` vertexSolarPageOffset) ∷ Ptr Word32) 0 sp

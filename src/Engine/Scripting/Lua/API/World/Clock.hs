@@ -21,6 +21,7 @@ import qualified Engine.Core.Queue as Q
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), withPlayerIntent)
 import Engine.Core.State (activeWorldStateFrom)
+import Engine.Graphics.Solar (overriddenSolar)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scripting.Lua.Material (parseTextureType)
 import World.Types
@@ -59,15 +60,33 @@ worldSetCameraFn wsc = do
 
     return 0
 
--- | world.setSunAngle(angle)
--- Direct override of sun angle (0..1), bypasses time system
+-- | @world.setSunAngle(angle)@ — a direct override of the sun angle
+--   (0..1) that bypasses the time system.
+--
+--   It takes no page argument, and deliberately still does not (#1869).
+--   Its meaning under per-page solar attribution is the one it has
+--   always had, stated:
+--
+--     * It is a PROCESS-GLOBAL render\/query override. While it is in
+--       force, EVERY rendered page takes @angle@ as its base sun angle
+--       — each still dividing by its OWN circumference, so the
+--       longitude spread across a page is unchanged — and page-less
+--       geometry and @world.getLocalSunAngle@ read it too.
+--     * It mutates no page's @wsTimeRef@. No clock moves; nothing about
+--       it is persisted.
+--     * It lasts until the next visible-page clock publication
+--       overwrites it, i.e. until the next world tick that has a
+--       visible page ('World.Thread.Time'). That is precisely how long
+--       it lasted before #1869, when it wrote the same single scalar
+--       the tick republished.
 worldSetSunAngleFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
 worldSetSunAngleFn wsc = do
     angleArg ← Lua.tonumber 1
 
     case angleArg of
         Just (Lua.Number angle) → Lua.liftIO $ do
-            atomicModifyIORef' (wsSunAngleRef wsc) $ \_ → (realToFrac angle, ())
+            atomicModifyIORef' (wsSunAngleRef wsc) $ \_ →
+                (overriddenSolar (realToFrac angle), ())
         _ → pure ()
 
     return 0

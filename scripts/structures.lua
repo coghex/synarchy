@@ -124,6 +124,62 @@ function registerWallFamily(h, key)
     end
 end
 
+-- The non-wall kinds the build picker offers, in the pack YAML's own
+-- `pieces:`/`build:` vocabulary.
+local PIECE_KINDS = { "floor", "ceiling", "post" }
+
+-- Does this kind carry COMPLETE build metadata? Both halves are needed:
+-- the AI costs a job from `materials` and paces it from `build_work`, so
+-- a block missing either is not a buildable kind. Deliberately separate
+-- from whether the kind's ART resolves (#1842) — a pack may ship art for
+-- a kind it never offers as a job.
+local function buildableKind(pack, kind)
+    local b = pack.build and pack.build[kind]
+    return (b ~= nil) and (b.build_work ~= nil) and (b.materials ~= nil)
+end
+
+-- Declare this pack's per-kind art for UNPLACED pieces (#1842), so the
+-- construction render pass — which cannot call into Lua — can resolve
+-- what a designation would be BUILT with. DEFAULT art only: a structure
+-- designation carries no variant (scripts/unit_ai_construct.lua builds
+-- one from pack/kind/edge alone), and `damaged` is direct stamping by
+-- scripts/locations.lua, never a build job. Variant art stays exclusively
+-- the placed-wall rotation catalogue's business (#1712, above).
+--
+-- One call per session, registered all-or-nothing engine-side. An entry
+-- whose art the pack never declared is OMITTED rather than sent with a
+-- nil path, so the engine's own refusal names the missing SLOT (pack,
+-- kind, role) instead of rejecting the payload as unreadable. It reports
+-- the failure itself, naming exactly that — so nothing warns here.
+local registeredArt = false
+local function registerPackArtCatalog(h)
+    if registeredArt or not structure.registerPackArt then return end
+    local pack = packDef()
+    if not pack then return end
+    registeredArt = true
+    local kinds, art = {}, {}
+    for _, k in ipairs(PIECE_KINDS) do
+        kinds[#kinds + 1] = { kind = k, buildable = buildableKind(pack, k) }
+        local p = h[k]
+        if p and p.texPath and p.facePath then
+            art[#art + 1] = { kind = k, texture = p.texPath, texHandle = p.tex,
+                              facemap = p.facePath, faceHandle = p.face }
+        end
+    end
+    kinds[#kinds + 1] = { kind = "wall", buildable = buildableKind(pack, "wall") }
+    for _, e in ipairs(WALL_DIRS) do
+        local w = h.walls[e]
+        for _, c in ipairs(WALL_CAPS) do
+            if w and w.texPath and w.facePath[c] then
+                art[#art + 1] = { kind = "wall", edge = e, caps = c,
+                                  texture = w.texPath, texHandle = w.tex,
+                                  facemap = w.facePath[c], faceHandle = w.face[c] }
+            end
+        end
+    end
+    structure.registerPackArt{ pack = M.pack, kinds = kinds, art = art }
+end
+
 -- Register every variant's wall art up front. A wall replayed from a save
 -- is never re-placed, so waiting for a placement to warm `handles()` would
 -- leave a loaded room unrotatable; and `damaged` art is stamped by
@@ -135,10 +191,11 @@ function M.registerPackArt()
     local pack = packDef()
     if not pack then return end
     registeredPack = true
-    handles(nil)
+    local defaults = handles(nil)
     for name, _ in pairs(pack.variants or {}) do
         handles(name)
     end
+    registerPackArtCatalog(defaults)
 end
 
 -- Map a fractional in-tile hover position to the nearest diamond edge
