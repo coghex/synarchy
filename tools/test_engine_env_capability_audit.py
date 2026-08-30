@@ -2369,6 +2369,70 @@ bump env =
 """
 
 
+# Two capability records exporting the SAME selector, projecting
+# different fields. A consumer imports one of them qualified, so its
+# imports are what say which `sharedRef` it means.
+_ALPHA_CAPABILITY = """\
+module Engine.Core.Capability.Alpha
+  ( AlphaCapability(..)
+  , toAlphaCapability
+  ) where
+
+import Engine.Core.State (EngineEnv, fieldOne)
+
+data AlphaCapability = AlphaCapability
+  { sharedRef ∷ IORef Int
+  }
+
+toAlphaCapability ∷ EngineEnv → AlphaCapability
+toAlphaCapability env = AlphaCapability
+  { sharedRef = fieldOne env
+  }
+"""
+
+_BETA_CAPABILITY = """\
+module Engine.Core.Capability.Beta
+  ( BetaCapability(..)
+  , toBetaCapability
+  ) where
+
+import Engine.Core.State (EngineEnv, fieldTwo)
+
+data BetaCapability = BetaCapability
+  { sharedRef ∷ IORef Text
+  }
+
+toBetaCapability ∷ EngineEnv → BetaCapability
+toBetaCapability env = BetaCapability
+  { sharedRef = fieldTwo env
+  }
+"""
+
+_ALPHA_CONSUMER = """\
+module CollideA.Mod where
+
+import Data.IORef
+
+import Engine.Core.State (EngineEnv)
+import qualified Engine.Core.Capability.Alpha as A
+
+bump ∷ EngineEnv → IO ()
+bump env = writeIORef (A.sharedRef (A.toAlphaCapability env)) 1
+"""
+
+_BETA_CONSUMER = """\
+module CollideB.Mod where
+
+import Data.IORef
+
+import Engine.Core.State (EngineEnv)
+import qualified Engine.Core.Capability.Beta as B
+
+bump ∷ EngineEnv → IO ()
+bump env = writeIORef (B.sharedRef (B.toBetaCapability env)) 2
+"""
+
+
 def _writer_sources(**modules: str) -> dict[str, str]:
     """Synthetic production tree: the fake capability record plus
     whichever consumer fixtures a case asks for, keyed by the relative
@@ -2396,6 +2460,10 @@ def _writer_sources(**modules: str) -> dict[str, str]:
         "unreadable": "src/Unreadable/Mod.hs",
         "asValue": "src/AsValue/Mod.hs",
         "localPrim": "src/LocalPrim/Mod.hs",
+        "alpha": "src/Engine/Core/Capability/Alpha.hs",
+        "beta": "src/Engine/Core/Capability/Beta.hs",
+        "collideA": "src/CollideA/Mod.hs",
+        "collideB": "src/CollideB/Mod.hs",
         "qualHomonym": "src/QualHomonym/Mod.hs",
         "parens": "src/Parens/Mod.hs",
         "parenAccessor": "src/ParenAccessor/Mod.hs",
@@ -2425,12 +2493,11 @@ def test_writer_map_canonicalizes_both_consumer_shapes():
     consumer shapes."""
     accessors = capability_accessor_map(
         _writer_sources(), _WRITER_FIELDS)
-    expect(accessors == {"fkFieldOne": ("fieldOne",
-                                        "Engine.Core.Capability.Fake"),
-                         "fkFieldTwo": ("fieldTwo",
-                                        "Engine.Core.Capability.Fake")},
-           f"capability_accessor_map must derive each accessor's field and "
-           f"owner from the LIVE projection, got: {accessors}")
+    expect(accessors == {
+        "fkFieldOne": (("fieldOne", "Engine.Core.Capability.Fake"),),
+        "fkFieldTwo": (("fieldTwo", "Engine.Core.Capability.Fake"),),
+    }, f"capability_accessor_map must derive each accessor's field and "
+       f"owner from the LIVE projection, got: {accessors}")
 
     writes, _ = _scan(_writer_sources(declared=_DECLARED_WRITER))
     expect(writes["fieldOne"] == {"Consumer.Mod"},
@@ -3011,6 +3078,35 @@ def test_a_primitive_used_as_a_value_is_not_unreadable():
            "and blocks nothing")
 
 
+def test_one_selector_may_belong_to_two_capabilities():
+    """A selector name is only unique within its own record. Two
+    capability modules may both export `sharedRef`, and the consumer's
+    own imports say which one it means -- so every candidate owner is
+    offered the scope test rather than one arbitrarily winning and the
+    write being dropped as somebody else's."""
+    sources = _writer_sources(alpha=_ALPHA_CAPABILITY,
+                              beta=_BETA_CAPABILITY,
+                              collideA=_ALPHA_CONSUMER,
+                              collideB=_BETA_CONSUMER)
+    accessors = capability_accessor_map(sources, _WRITER_FIELDS)
+    expect(accessors["sharedRef"] == (
+        ("fieldOne", "Engine.Core.Capability.Alpha"),
+        ("fieldTwo", "Engine.Core.Capability.Beta"),
+    ), f"both owners must survive, sorted, got: "
+       f"{accessors.get('sharedRef')}")
+
+    # One consumer per record, so neither candidate order can be right
+    # by luck: each write must land on the field of the capability that
+    # consumer actually imported.
+    writes, _ = _scan(sources)
+    expect(writes["fieldOne"] == {"CollideA.Mod"},
+           f"the `Alpha` consumer writes `Alpha`'s field, got: "
+           f"{sorted(writes['fieldOne'])}")
+    expect(writes["fieldTwo"] == {"CollideB.Mod"},
+           f"and the `Beta` consumer writes `Beta`'s, got: "
+           f"{sorted(writes['fieldTwo'])}")
+
+
 def test_a_primitive_must_be_the_one_from_data_ioref():
     """The primitive is held to the same scope rule as the accessor. A
     module-local `writeIORef`, or an unrelated module's qualified
@@ -3298,6 +3394,7 @@ def main() -> int:
         test_a_bare_import_brings_the_accessor_into_scope,
         test_an_unreadable_mutation_site_blocks,
         test_a_primitive_used_as_a_value_is_not_unreadable,
+        test_one_selector_may_belong_to_two_capabilities,
         test_a_primitive_must_be_the_one_from_data_ioref,
         test_a_shadow_exemption_suppresses_only_its_own_pair,
         test_shadow_exemptions_are_validated,

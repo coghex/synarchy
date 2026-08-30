@@ -2440,12 +2440,19 @@ def imports_name(declarations: list[ImportDecl], module: str, name: str,
 
 
 def capability_accessor_map(sources: dict[str, str], live_fields: list[str]
-                            ) -> dict[str, tuple[str, str]]:
-    """`{capability accessor: (EngineEnv field, defining module)}` for
-    every `Engine.Core.Capability.*` record, derived from the LIVE
+                            ) -> dict[str, tuple[tuple[str, str], ...]]:
+    """`{capability accessor: ((EngineEnv field, defining module), ...)}`
+    for every `Engine.Core.Capability.*` record, derived from the LIVE
     projections (`parse_projection_bindings`) rather than a second
     checked-in list, so this canonicalization cannot drift from the
     records it describes.
+
+    Each accessor maps to a TUPLE of candidates, not one, because a
+    selector name is only unique within its own module: two capability
+    records may both export `sharedRef`, and a consumer that imports one
+    of them qualified is writing THAT one's field. Collapsing them would
+    let the wrong owner win the scope test and drop a real write. The
+    candidates are sorted by owner, so resolution is deterministic.
 
     Duplicate full/view accessors resolve independently: `Render`'s
     `rcVideoConfigRef` and `RenderView`'s `rvVideoConfigRef` are separate
@@ -2454,7 +2461,7 @@ def capability_accessor_map(sources: dict[str, str], live_fields: list[str]
     rather than invented -- `audit_save_load_projection` and the
     boundary checks are where a mis-bound projection is caught."""
     fields = set(live_fields)
-    accessors: dict[str, tuple[str, str]] = {}
+    candidates: dict[str, set[tuple[str, str]]] = {}
     for relpath, text in sorted(sources.items()):
         module = module_identifier(relpath)
         if not module.startswith(CAPABILITY_MODULE_PREFIX):
@@ -2465,8 +2472,10 @@ def capability_accessor_map(sources: dict[str, str], live_fields: list[str]
         for capability_field, accessor in parse_projection_bindings(
                 text, match.group(1)).items():
             if accessor in fields:
-                accessors[capability_field] = (accessor, module)
-    return accessors
+                candidates.setdefault(capability_field, set()).add(
+                    (accessor, module))
+    return {name: tuple(sorted(owners, key=lambda pair: pair[1]))
+            for name, owners in candidates.items()}
 
 
 def resolve_primitive(declarations: list[ImportDecl], name: str) -> str | None:
@@ -2845,17 +2854,21 @@ def scan_capability_writes(
             `hiding` it."""
             qualifier, _, base = name.rpartition(".")
             if base in raw_fields:
-                field, owner = base, STATE_MODULE
+                owners: tuple[tuple[str, str], ...] = ((base, STATE_MODULE),)
             else:
-                entry = accessors.get(base)
-                if entry is None:
+                owners = accessors.get(base, ())
+                if not owners:
                     return None
-                field, owner = entry
-            if not qualifier and module == owner:
-                return field, owner, base
-            if not imports_name(declarations, owner, base, qualifier):
-                return None
-            return field, owner, base
+            # One selector name can belong to several capability
+            # records; the module's own imports say which one it means,
+            # so every candidate is offered the scope test rather than
+            # the first arbitrarily winning.
+            for field, owner in owners:
+                if not qualifier and module == owner:
+                    return field, owner, base
+                if imports_name(declarations, owner, base, qualifier):
+                    return field, owner, base
+            return None
 
         inline_heads: set[int] = set()
         for index, token in enumerate(tokens):
