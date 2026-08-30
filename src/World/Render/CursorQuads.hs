@@ -30,7 +30,8 @@ import World.Plant.Types (PlantDesignation(..))
 import World.Render.ViewBounds (computeViewBounds)
 import World.Render.ChunkCulling (isChunkVisibleWrapped)
 import World.Render.HitTest (pickWorldTile)
-import World.Render.TileQuads (worldCursorToQuad, worldCursorBgToQuad)
+import World.Render.TileQuads
+    (worldCursorToQuad, worldFlatCursorToQuad, worldCursorBgToQuad)
 
 -- * World Cursor Quads (generated every frame, not cached)
 
@@ -171,7 +172,7 @@ renderWorldCursorQuads env worldState tileAlpha = do
             Just tex
                 | HM.null tillDesigns → V.empty
                 | otherwise → V.fromList
-                    [ worldCursorToQuad lookupSlot lookupFmSlot textures
+                    [ worldFlatCursorToQuad lookupSlot lookupFmSlot textures
                           facing dgx dgy (tlZ td) zSlice effectiveDepth
                           tileAlpha wrapOff tex
                     | ((dgx, dgy), td) ← HM.toList tillDesigns
@@ -418,7 +419,7 @@ renderWorldCursorQuads env worldState tileAlpha = do
     -- Till tool: anchor→hover rectangle preview. Per-z-level like mine/
     -- construct — a farmed field is flat ground, unlike chop's
     -- slope-spanning forest sweep.
-    let tillPreviewQuads = case (tillAnchor cs', hoverResult, worldCursorTexture cs') of
+    let tillPreviewQuads = case (tillAnchor cs', hoverResult, tillDesignTexture cs') of
             (Just (ax, ay), Just (hxRaw, hyRaw, _, _, _), Just tex)
                 | Just anchorZ ← surfaceZAt ax ay →
                 let (hx, hy) = localizeHover ax ay hxRaw hyRaw
@@ -429,7 +430,7 @@ renderWorldCursorQuads env worldState tileAlpha = do
                     yLo = min ay hy'
                     yHi = max ay hy'
                 in V.fromList
-                    [ worldCursorToQuad lookupSlot lookupFmSlot textures
+                    [ worldFlatCursorToQuad lookupSlot lookupFmSlot textures
                           facing gx gy z zSlice effectiveDepth
                           tileAlpha wrapOff tex
                     | gx ← [xLo .. xHi]

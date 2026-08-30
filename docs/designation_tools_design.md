@@ -78,12 +78,12 @@ concrete precondition
 
 ## Current state and evidence
 
-- `World.Render.CursorQuads` renders Mine, Chop, Till, Plant, and both
-  construction categories through `worldCursorToQuad`. That helper always
-  supplies `wtIsoFaceMap`, whose red/green/blue channels represent the right,
-  top, and left faces. All six standing marker families therefore enter the
-  same three-face lighting and alpha-mask path even when their source PNG masks
-  differ.
+- `worldCursorToQuad` is the explicit three-face cursor path: it supplies
+  `wtIsoFaceMap`, whose red/green/blue channels represent the right, top, and
+  left faces. Mine, Chop, Plant, construction, and generic cursor art retain
+  that behavior. Till's committed markers and rectangle preview instead use
+  the reusable `worldFlatCursorToQuad`, which emits `noFaceMapVertexId`; the
+  approved Till texture's own alpha is therefore its complete silhouette.
 - Mine already follows the desired three-dimensional model. Its 96×64 marker
   covers the full tile silhouette, and the shared isometric facemap preserves
   distinct top and side faces. The arc should preserve this behavior rather
@@ -109,9 +109,12 @@ concrete precondition
   co-tenant's rendered state. D-27 keeps the per-instance data model the owner
   expected while adding the identity and persistence layer needed to make a
   mutable Boolean survive eviction and save/load.
-- Till is also a two-click rectangle. Its handler keeps only tillable tiles at
-  the anchor's surface z: no fluid, no flora, and not already tilled. Its
-  committed marker nevertheless uses the three-face isometric cursor helper.
+- Till is also a two-click rectangle. Its handler keeps only level tiles
+  (surface slope ID exactly zero) at the anchor's surface z, with no fluid,
+  flora, or already-tilled soil. Its approved marker is a flat translucent
+  orange top-surface diamond. The completed tilled-soil source preserves its
+  existing RGB art but carries the same intrinsic flat-diamond alpha, so a
+  facemap fault cannot reveal its otherwise unused canvas.
 - Plant is a single-tile tool reached through the crop-selection panel. Both
   Lua and the world command require tilled soil before a designation is
   accepted; the command additionally excludes existing flora and crop plots.
@@ -387,12 +390,14 @@ The field may not be a transient-only flag which silently resets on eviction.
 Selection, marker rendering, claims, exact harvest, regrowth and invalidation
 all carry the same id instead of falling back to tile identity.
 
-Till retains its existing eligibility and same-z rectangle semantics unless the
-user expands this design. The repository's current Plant tool is specifically a
-single-tile crop workflow: it opens a crop-selection panel on tilled soil and
-accepts only `row_crop` or `groundcover_crop` species. It cannot plant a tree.
-DTV-3 changes that existing crop designation's committed visual meaning and
-invalidation lifecycle, not its target-selection flow or supported species.
+Till retains its same-z rectangle semantics and cumulative fluid, flora, and
+already-tilled filters. The owner expanded its admission rule during DTV-2:
+farming is possible only on level ground, so a nonzero surface slope is also
+ineligible. The repository's current Plant tool is specifically a single-tile
+crop workflow: it opens a crop-selection panel on tilled soil and accepts only
+`row_crop` or `groundcover_crop` species. It cannot plant a tree. DTV-3 changes
+that existing crop designation's committed visual meaning and invalidation
+lifecycle, not its target-selection flow or supported species.
 
 ### Lifecycle
 
@@ -484,7 +489,9 @@ flat green overlay. D-12 settles its ground-contact-relative anchor.
 
 Till represents work on a two-dimensional ground surface. Its committed marker
 must show only the settled top-surface shape and must not imply that either
-vertical tile side is designated.
+vertical tile side is designated. Farming is admitted only when the stored
+surface slope ID is exactly zero; an absent or out-of-range slope entry is not
+silently treated as level.
 
 ### D-5. The crop Plant marker is a light-green flat surface
 
@@ -493,12 +500,13 @@ Till surface language but remains distinguishable with a light-green category
 colour. It is shown only under the settled tilled-soil rule. This does not
 specify future tree planting.
 
-### D-6. Final marker textures are authored by the user during delivery
+### D-6. Final marker textures are owner-directed and signed off during delivery
 
-The user, not an image generator or an autonomous implementation guess, will
-author the final alpha-bearing textures while solving their corresponding
-delivery slice. Every final texture still requires gameplay-scale validation
-and explicit signoff before merge.
+The owner directs each final alpha-bearing texture while solving its delivery
+slice, and every final texture requires gameplay-scale validation and explicit
+signoff before merge. For DTV-2 the approved Till marker is a 96×64 flat
+top-surface diamond whose sole visible colour is RGBA `(232, 126, 38, 88)`;
+the owner approved a live contiguous 5×5 arena field on 2026-08-30.
 
 ### D-7. The earlier exact-mask, hue-only construction proposal is superseded
 
@@ -540,7 +548,9 @@ texture therefore owns the complete visible shape through its alpha channel.
 This is safe because the shader multiplies final alpha by both the texture alpha
 and the facemap alpha; the default map's alpha is fully opaque, so transparent
 texture pixels remain transparent and no extra facemap silhouette is imposed.
-The `vegface.png` clipping mask is not used for these markers.
+The `vegface.png` clipping mask is not used at runtime for these markers; it may
+serve as the level-top validation envelope. DTV-2 also bakes that exact support
+into the actual tilled-soil source while preserving its RGB plane byte-for-byte.
 
 ### D-11. Planned construction shows the target's own rendered art
 
@@ -1512,18 +1522,22 @@ or generate missing frames.
 
 > Filed 2026-08-28 as #1857.
 
-- **Outcome:** Committed Till work reads as a two-dimensional ground treatment
-  with no lit or visible vertical tile sides.
-- **Scope:** Explicit surface render path, settled mask/facemap pairing, final
-  user-authored Till marker, and focused render/asset verification.
+- **Outcome:** Till preview and committed work read as a two-dimensional ground
+  treatment with no lit or visible vertical tile sides, and farming admission
+  agrees by accepting only level ground.
+- **Scope:** Explicit reusable surface render path, approved authored-alpha Till
+  marker, flat-only Till admission, intrinsic tilled-soil alpha with unchanged
+  RGB art, and focused render, asset, and behavior verification.
 - **Phase:** 1 — surface render foundation
 - **Depends on:** `none`
 - **Ordering:** `critical path` for DTV-3
 - **Relevant decisions:** D-4, D-6, D-10
-- **Acceptance signals:** A designated tillable tile shows only the settled
+- **Acceptance signals:** Preview and committed Till tiles show only the settled
   top-surface region at gameplay zoom across camera facings; Mine still shows
-  all three faces.
-- **Out of scope:** Till eligibility, AI execution, and #1692 toolbar art.
+  all three faces; sloped candidates are refused; the actual soil and marker
+  sources cannot reveal pixels outside the level-top diamond.
+- **Out of scope:** Continuous slope revalidation after admission, AI execution,
+  Plant eligibility, the wider vegetation-alpha corpus, and #1692 toolbar art.
 - **Open questions:** `None`
 
 ### DTV-3. Render the existing crop Plant job as a light-green tilled surface
@@ -1584,6 +1598,11 @@ or generate missing frames.
   eligible tree sprite and drags include rendered tree anchors inside the box.
 - The user approved the 1×1 default/noface map for Till and Plant; each authored
   designation texture's alpha channel will cut out its own flat surface shape.
+- During DTV-2 on 2026-08-30 the user restored the intended rule that farming is
+  possible only on level ground, and required source alpha to remain correct
+  even when runtime masking would otherwise hide an error.
+- The user approved the final Till marker in a live contiguous 5×5 arena field:
+  one flat, slightly orange translucent layer with no texture detail.
 - The user clarified that planned structures and buildings should ghost their
   own target textures with forced alpha. The category-marker solution proposed
   by #1780 is intentionally abandoned, and stale documentation may redirect to
