@@ -2092,6 +2092,12 @@ patternLet env pair = do
     let (_, fieldOne) = pair
     writeIORef (fieldOne env) 4
 
+-- A line may carry TWO `let`s; the second one binds too.
+secondLet ∷ EngineEnv → IORef Int → IO ()
+secondLet env ref =
+    (let unrelated = 1 in pure unrelated)
+        >> (let fieldOne _ = ref in writeIORef (fieldOne env) 7)
+
 -- A binding written AFTER a use on the same line does not reach back
 -- over it, so this write is real.
 sameLine ∷ EngineEnv → IORef Text → IO ()
@@ -2286,6 +2292,36 @@ grouped env ref =
     let { other = ref; fieldTwo _ = other } in writeIORef (fieldTwo env) 2
 """
 
+# TWO `let`s on one line, the second opening a LAYOUT group whose
+# bindings sit below it. Only scanning the first keyword misses it.
+_TWO_LET_GROUPS = """\
+module TwoGroups.Mod where
+
+import Engine.Core.State (EngineEnv, fieldOne)
+
+run ∷ EngineEnv → IORef Int → IO ()
+run env ref = (let x = 1 in pure x) >> (let
+    fieldOne _ = ref
+  in writeIORef (fieldOne env) 1)
+"""
+
+# A `let` group opened on a COLUMN-0 line has no layout block to its
+# left, so without the top-level clamp its bindings would run to the end
+# of the file and swallow the next declaration's write.
+_LET_CLAMP = """\
+module LetClamp.Mod where
+
+import Engine.Core.State (EngineEnv, fieldTwo)
+
+opener ∷ EngineEnv → IORef Text → IO ()
+opener env ref = let
+    fieldTwo _ = ref
+  in pure ()
+
+after ∷ EngineEnv → IO ()
+after env = writeIORef (fieldTwo env) 1
+"""
+
 # A binding nested DEEPER than a `let` group's own column belongs to
 # that inner binding, not to the group, so it must not be widened to the
 # `let`'s block.
@@ -2337,6 +2373,20 @@ grouped env = writeIORef @(IORef Text) (fieldTwo env) 2
 -- The type application sits INSIDE parentheses around the primitive.
 insideParentheses ∷ EngineEnv → IO ()
 insideParentheses env = (writeIORef @Int) (fieldThree env) 3
+"""
+
+# `$!` is the strict sibling of `$` and groups its argument the same
+# way; the tokenizer splits it into two punctuation tokens.
+_STRICT_APPLICATION = """\
+module Strict.Mod where
+
+import Engine.Core.State (EngineEnv, fieldOne, fieldTwo)
+
+strict ∷ EngineEnv → IO ()
+strict env = (writeIORef $! fieldOne env) 1
+
+lazyControl ∷ EngineEnv → IO ()
+lazyControl env = (writeIORef $ fieldTwo env) 2
 """
 
 # A mutation primitive is itself under a qualifier too. Missing this
@@ -2442,6 +2492,7 @@ def _writer_sources(**modules: str) -> dict[str, str]:
         "qualOnly": "src/QualOnly/Mod.hs",
         "shadow": "src/Shadow/Mod.hs",
         "typeApp": "src/TypeApp/Mod.hs",
+        "strict": "src/Strict/Mod.hs",
         "lambdaEscape": "src/LambdaEscape/Mod.hs",
         "infix": "src/Infix/Mod.hs",
         "hiding": "src/Hiding/Mod.hs",
@@ -2450,6 +2501,8 @@ def _writer_sources(**modules: str) -> dict[str, str]:
         "parenAccessor": "src/ParenAccessor/Mod.hs",
         "bracedLet": "src/BracedLet/Mod.hs",
         "nestedLet": "src/NestedLet/Mod.hs",
+        "twoGroups": "src/TwoGroups/Mod.hs",
+        "letClamp": "src/LetClamp/Mod.hs",
         "casePattern": "src/CasePattern/Mod.hs",
         "explicit": "src/Explicit/Mod.hs",
         "multiline": "src/Multi/Mod.hs",
@@ -2766,6 +2819,22 @@ def test_a_braced_let_group_shadows():
            f"fieldTwo={sorted(writes['fieldTwo'])}")
 
 
+def test_every_let_on_a_line_opens_its_own_group():
+    """A line may carry two `let`s, and the second may open a LAYOUT
+    group whose bindings sit below it. Scanning only the first keyword
+    leaves that group binding nothing."""
+    writes, _ = _scan(_writer_sources(twoGroups=_TWO_LET_GROUPS))
+    expect(writes["fieldOne"] == set(),
+           f"the second `let`'s layout group must shadow the write in "
+           f"its own `in` expression, got: {sorted(writes['fieldOne'])}")
+
+    clamped, _ = _scan(_writer_sources(letClamp=_LET_CLAMP))
+    expect(clamped["fieldTwo"] == {"LetClamp.Mod"},
+           f"and a group opened on a column-0 line must stop at that "
+           f"declaration rather than swallow the next one's write, got: "
+           f"{sorted(clamped['fieldTwo'])}")
+
+
 def test_a_deeper_binding_is_not_part_of_the_let_group():
     """Only the declarations at a `let` group's own column reach the
     `let`'s block. A `where` nested inside one of them binds for that
@@ -2791,6 +2860,19 @@ def test_visible_type_applications_are_skipped():
            f"a type application INSIDE parentheses around the primitive "
            f"must be stepped over before the closer, got: "
            f"{sorted(writes['fieldThree'])}")
+
+
+def test_strict_application_groups_like_lazy():
+    """`$!` is `$` with a `seq`, and groups its argument identically. The
+    tokenizer splits it into two punctuation tokens, so its `!` has to
+    be stepped over or the write disappears."""
+    writes, _ = _scan(_writer_sources(strict=_STRICT_APPLICATION))
+    expect(writes["fieldOne"] == {"Strict.Mod"},
+           f"`writeIORef $! fieldOne env` is a write, got: "
+           f"{sorted(writes['fieldOne'])}")
+    expect(writes["fieldTwo"] == {"Strict.Mod"},
+           f"and so is the lazy control, got: "
+           f"{sorted(writes['fieldTwo'])}")
 
 
 def test_binding_regions_are_lexical():
@@ -2845,6 +2927,14 @@ def test_binding_regions_are_lexical():
     expect(shadowed(regions, "fieldOne", sameLine.index("let fieldOne") + 4),
            "but it does shadow from where it is written")
 
+    # Two `let`s on one line: the second binds from its own keyword.
+    twoLets = ("run env ref = (let x = 1 in pure x) "
+               ">> (let fieldOne _ = ref in writeIORef (fieldOne env) 1)\n")
+    regions = local_binding_regions(twoLets)
+    expect(shadowed(regions, "fieldOne",
+                    twoLets.index("(fieldOne env)") + 1),
+           "a line's SECOND `let` binds too")
+
     # A type signature's own arrow must not bind its subject, nor a
     # lowercase type variable that happens to share an accessor's name.
     annotated = local_binding_regions(
@@ -2871,6 +2961,8 @@ def test_a_first_argument_must_be_applied():
            "an applied accessor inside parens is the first-argument head")
     expect(head_of("writeIORef $ fieldOne env") == 2,
            "`$` groups the first argument just as parentheses do")
+    expect(head_of("writeIORef $! fieldOne env") == 3,
+           "and `$!` groups it identically")
     expect(head_of("writeIORef (fieldOne) 1") is None,
            "a parenthesized but unapplied name is not an accessor "
            "application")
@@ -3323,8 +3415,10 @@ def main() -> int:
         test_redundant_parentheses_change_nothing,
         test_parentheses_around_the_accessor_change_nothing,
         test_a_braced_let_group_shadows,
+        test_every_let_on_a_line_opens_its_own_group,
         test_a_deeper_binding_is_not_part_of_the_let_group,
         test_visible_type_applications_are_skipped,
+        test_strict_application_groups_like_lazy,
         test_binding_regions_are_lexical,
         test_a_first_argument_must_be_applied,
         test_let_group_segments_handle_explicit_braces,

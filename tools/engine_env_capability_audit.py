@@ -2586,8 +2586,10 @@ def local_binding_regions(code: str) -> dict[str, list[tuple[int, int]]]:
             for name in _HS_IDENT_RE.findall(parameters):
                 bind(name, starts[i], declaration)
 
-        opening = _INLINE_LET_RE.search(line)
-        if opening:
+        # EVERY `let` on the line, not just the first: two of them can
+        # share one line (`(let a = p in q) >> (let b = r in s)`), and
+        # each binds from its own keyword onward.
+        for opening in _INLINE_LET_RE.finditer(line):
             keyword = starts[i] + opening.start()
             for segment in _let_group_segments(line[opening.end():]):
                 binding = _LET_BINDING_RE.match(segment)
@@ -2620,14 +2622,15 @@ def local_binding_regions(code: str) -> dict[str, list[tuple[int, int]]]:
                     bind(name, starts[i], declaration)
 
     _bind_lambda_parameters(code, lines, declaration_end, top_level_end, bind)
-    _bind_let_block_declarations(lines, indents, starts, block_end, bind)
+    _bind_let_block_declarations(lines, indents, starts, block_end,
+                                 top_level_end, bind)
     _extend_where_declarations(lines, indents, starts, declaration_end, bind)
     return regions
 
 
 def _bind_let_block_declarations(lines: list[str], indents: list[int | None],
                                  starts: list[int], block_end: list[int],
-                                 bind) -> None:
+                                 top_level_end: list[int], bind) -> None:
     """Widen a `let` block's declarations to the `let`'s own layout
     block.
 
@@ -2646,38 +2649,49 @@ def _bind_let_block_declarations(lines: list[str], indents: list[int | None],
         column = indents[i]
         if column is None:
             continue
-        opening = _INLINE_LET_RE.search(line)
-        if opening is None:
-            continue
-        keyword = starts[i] + opening.start()
-        tail = line[opening.end():]
-        if tail.lstrip().startswith("{"):
-            tail = tail[:len(tail) - len(tail.lstrip())] + tail.lstrip()[1:]
-        if tail.strip():
-            group_column = opening.end() + len(tail) - len(tail.lstrip())
-        else:
-            group_column = None
-            for j in range(i + 1, len(lines)):
-                indent = indents[j]
-                if indent is None:
-                    continue
-                if indent > column:
-                    group_column = indent
-                break
-            if group_column is None:
-                continue
+        for opening in _INLINE_LET_RE.finditer(line):
+            _widen_one_let_group(lines, indents, starts, block_end,
+                                 top_level_end, bind, i, column, opening)
+
+
+def _widen_one_let_group(lines: list[str], indents: list[int | None],
+                         starts: list[int], block_end: list[int],
+                         top_level_end: list[int], bind,
+                         i: int, column: int, opening) -> None:
+    """One `let` keyword's share of `_bind_let_block_declarations`.
+
+    A line may carry several `let`s, each opening its own group, so this
+    is written per keyword rather than per line."""
+    keyword = starts[i] + opening.start()
+    tail = lines[i][opening.end():]
+    if tail.lstrip().startswith("{"):
+        tail = tail[:len(tail) - len(tail.lstrip())] + tail.lstrip()[1:]
+    if tail.strip():
+        group_column = opening.end() + len(tail) - len(tail.lstrip())
+    else:
+        group_column = None
         for j in range(i + 1, len(lines)):
             indent = indents[j]
             if indent is None:
                 continue
-            if indent < group_column:
-                break
-            if indent != group_column:
-                continue
-            declaration = _BINDING_LHS_RE.match(lines[j])
-            if declaration is None or declaration.group(1) == "let":
-                continue
-            bind(declaration.group(1), keyword, block_end[i])
+            if indent > column:
+                group_column = indent
+            break
+        if group_column is None:
+            return
+    for j in range(i + 1, len(lines)):
+        indent = indents[j]
+        if indent is None:
+            continue
+        if indent < group_column:
+            break
+        if indent != group_column:
+            continue
+        declaration = _BINDING_LHS_RE.match(lines[j])
+        if declaration is None or declaration.group(1) == "let":
+            continue
+        bind(declaration.group(1), keyword,
+             min(block_end[i], top_level_end[i]))
 
 
 def _bind_lambda_parameters(code: str, lines: list[str],
@@ -3030,6 +3044,11 @@ def _first_argument_head(tokens: list[Token], index: int) -> int | None:
         if token.text in ("$", "("):
             grouped = True
             j += 1
+            # `$!` is the strict sibling of `$` and groups identically;
+            # the tokenizer splits it, so its `!` is stepped over here.
+            if (token.text == "$" and j < len(tokens)
+                    and tokens[j].kind == "punc" and tokens[j].text == "!"):
+                j += 1
             continue
         break
     if not grouped or j >= len(tokens) or tokens[j].kind != "id":

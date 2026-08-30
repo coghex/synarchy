@@ -1268,7 +1268,8 @@ purpose — none is asked to be complete by itself:
    silently*. Regions are measured in characters, not lines, so a
    binding written midway through a line does not reach back over the
    write before it, and a binding group written with explicit braces
-   and semicolons binds the same as the layout spelling: a `let` — wherever on its line it is written, including
+   and semicolons binds the same as the layout spelling, as does the
+   second of two `let`s sharing one line: a `let` — wherever on its line it is written, including
    nested after an equation's own `=` — shadows the statements below it
    and nothing above, its group's later bindings included; a lambda's
    parameters reach the bracket that closes its body — or, unbracketed,
@@ -1283,7 +1284,9 @@ purpose — none is asked to be complete by itself:
    loud violation naming module and field, never a silent miss.
 3. **Applied position.** The accessor must head an argument of a
    mutation primitive *and* that argument must be an application —
-   `prim (accessor handle) …`, with any visible type application
+   `prim (accessor handle) …` — with `$` and its strict sibling `$!`
+   grouping the argument exactly as parentheses do — and with any
+   visible type application
    (`prim @Int (accessor handle) …`, legal under GHC2024's default
    `TypeApplications`) stepped over first. Haskell lets any
    two-argument function be written infix, so the backticked form
