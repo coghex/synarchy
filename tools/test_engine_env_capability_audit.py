@@ -38,8 +38,9 @@ from engine_env_capability_audit import (  # type: ignore
     CAPABILITY_WRITER_MODULES, capability_accessor_map,
     scan_capability_writes, audit_writer_modules, format_residue,
     tokenize_haskell, parse_imports, imports_name,
-    local_binding_regions, _first_argument_head,
-    _infix_left_operand_head, _applied_head, _let_group_segments,
+    _first_argument_head, _infix_left_operand_head, _applied_head,
+    classify_mutation_site, audit_mutation_sites, audit_shadow_exemptions,
+    SHADOW_EXEMPTIONS,
 )
 from persistence_inventory_audit import extract_record_fields  # type: ignore
 
@@ -2007,27 +2008,6 @@ tick ∷ EngineEnv → IO ()
 tick env = writeIORef (fieldOne env) 5
 """
 
-# The regression for a binder introduced AFTER the write it would have
-# masked. A block-scoped binder heuristic drops `bump`'s real write
-# because `helper`'s `let fieldOne` is collected for the whole
-# declaration; requiring an APPLIED first argument cannot, because it
-# consults no binder at all.
-_LATE_BINDER = """\
-module LateBinder.Mod where
-
-import Engine.Core.State (EngineEnv, fieldOne)
-
-bump ∷ EngineEnv → IO ()
-bump env = do
-    writeIORef (fieldOne env) 1
-    helper
-  where
-    helper = inner
-      where
-        fieldOne _ = pure ()
-        inner = fieldOne ()
-"""
-
 # Qualified spellings, through the module's own name and through an
 # `as` alias. Both name the field exactly as the bare spelling does.
 _QUALIFIED_WRITER = """\
@@ -2060,154 +2040,50 @@ replacedName ∷ State.EngineEnv → IO ()
 replacedName env = writeIORef (Engine.Core.State.fieldTwo env) 7
 """
 
-# Every binding form that legally shadows an imported accessor, each
-# paired in the same module with a real write the binding must NOT
-# reach. One fixture, because the whole point is that the two are
-# distinguished by scope rather than by shape.
-_SHADOWING = """\
-module Shadow.Mod where
-
-import Engine.Core.State (EngineEnv, fieldOne, fieldTwo, fieldThree)
-
--- A `let ... in`, all on one line: the write is inside the binding's
--- own scope.
-inlineLet ∷ EngineEnv → IORef Int → IO ()
-inlineLet env ref =
-    let fieldOne _ = ref in writeIORef (fieldOne env) 1
-
--- The same `let`, NESTED mid-line after the equation's own `=`, where
--- the line does not begin with it.
-nestedLet ∷ EngineEnv → IORef Int → IO ()
-nestedLet env ref = let fieldOne _ = ref in writeIORef (fieldOne env) 2
-
--- A one-line multi-binding group: the second binding shadows too.
-groupedLet ∷ EngineEnv → IORef Int → IO ()
-groupedLet env ref =
-    let other = ref; fieldOne _ = other in writeIORef (fieldOne env) 3
-
--- A `let` PATTERN binds every name in it over the block, not just the
--- leading one.
-patternLet ∷ EngineEnv → (Int, EngineEnv → IORef Int) → IO ()
-patternLet env pair = do
-    let (_, fieldOne) = pair
-    writeIORef (fieldOne env) 4
-
--- A line may carry TWO `let`s; the second one binds too.
-secondLet ∷ EngineEnv → IORef Int → IO ()
-secondLet env ref =
-    (let unrelated = 1 in pure unrelated)
-        >> (let fieldOne _ = ref in writeIORef (fieldOne env) 7)
-
--- A binding written AFTER a use on the same line does not reach back
--- over it, so this write is real.
-sameLine ∷ EngineEnv → IORef Text → IO ()
-sameLine env ref =
-    writeIORef (fieldTwo env) 9 >> (let fieldTwo _ = ref in pure ())
-
--- A LAYOUT `let`, whose bindings begin on the following line.
-layoutLet ∷ EngineEnv → IORef Int → IO ()
-layoutLet env ref = do
-    let
-      fieldOne _ = ref
-    writeIORef (fieldOne env) 5
-
--- A binding CONTINUING under the first one binds over the same block.
-continuedLet ∷ EngineEnv → IORef Int → IO ()
-continuedLet env ref = do
-    let other = ref
-        fieldOne _ = other
-    writeIORef (fieldOne env) 6
-
--- A `do`-block `let` shadows the statements BELOW it -- across the
--- blank line, which closes no layout block (and is what a stripped
--- comment leaves behind).
-blockLet ∷ EngineEnv → IORef Int → IO ()
-blockLet env ref = do
-    let fieldOne _ = ref
-
-    writeIORef (fieldOne env) 2
-
--- A `where` declaration reaches BACKWARDS over its whole equation.
-whereHelper ∷ EngineEnv → IO ()
-whereHelper env = writeIORef (fieldOne env) 3
-  where
-    fieldOne _ = error "the equation's own helper"
-
--- A lambda binder shadows its own body.
-viaLambda ∷ EngineEnv → IO ()
-viaLambda env = withRef (\\fieldOne → writeIORef (fieldOne env) 4)
-
--- A `<-` bind shadows the statements below it.
-viaBind ∷ EngineEnv → IO ()
-viaBind env = do
-    fieldOne ← pure (const undefined)
-    writeIORef (fieldOne env) 5
-
--- A `case` alternative binds only its own alternative.
-viaAlternative ∷ EngineEnv → Maybe Int → IO ()
-viaAlternative env slot = case slot of
-    Just fieldOne → writeIORef (fieldOne env) 6
-    Nothing → pure ()
-
--- The control: an equation PARAMETER shadows its own equation only, so
--- this sibling's write is the real thing.
-shadowedParameter ∷ (EngineEnv → IORef Text) → EngineEnv → IO ()
-shadowedParameter fieldTwo env = writeIORef (fieldTwo env) 7
-
-realWrite ∷ EngineEnv → IO ()
-realWrite env = writeIORef (fieldTwo env) 8
-
--- Sibling `where` declarations: one takes a shadowing parameter, the
--- other performs the real write. The parameter reaches its own
--- equation and must not reach the sibling below it.
-siblings ∷ EngineEnv → IO ()
-siblings env = viaParameter (fieldThree env) >> direct
-  where
-    viaParameter fieldThree = writeIORef (fieldThree env) 9
-    direct = writeIORef (fieldThree env) 10
-"""
-
-# A lambda binder must not outlive the bracket that closes its body,
-# and a backslash inside a STRING is not a lambda at all. Both would
-# silently swallow the write below.
-_LAMBDA_ESCAPE = """\
-module LambdaEscape.Mod where
-
-import Engine.Core.State (EngineEnv, fieldOne, fieldTwo, fieldThree)
-
-afterLambda ∷ EngineEnv → IO ()
-afterLambda env = do
-    withRef (\\fieldOne → pure (fieldOne env))
-    writeIORef (fieldOne env) 1
-
-afterStringLiteral ∷ EngineEnv → IO ()
-afterStringLiteral env = do
-    putStrLn "\\\\fieldTwo -> not a lambda"
-    writeIORef (fieldTwo env) 2
-
--- An UNBRACKETED lambda ends at its own statement: the sibling below
--- it in the same `do` block is outside its body.
-afterUnbracketedLambda ∷ EngineEnv → [Int] → IO ()
-afterUnbracketedLambda env xs = do
-    forM_ xs $ \\fieldThree → pure (fieldThree env)
-    writeIORef (fieldThree env) 3
-"""
-
-# Any two-argument function may be written infix, so a backticked
-# primitive is the same direct write with its arguments swapped --
-# qualified spelling included.
-_INFIX_WRITER = """\
-module Infix.Mod where
+# A mutation primitive is itself under a qualifier too. Missing this
+# spelling would let an undeclared writer through in silence.
+_QUALIFIED_PRIMITIVE = """\
+module QualPrim.Mod where
 
 import qualified Data.IORef as Ref
 import Engine.Core.State (EngineEnv, fieldOne)
-import Engine.Core.Capability.Fake (FakeCapability(..), toFakeCapability)
 
-raw ∷ EngineEnv → IO ()
-raw env = (fieldOne env) `writeIORef` 1
+bump ∷ EngineEnv → IO ()
+bump env = Ref.writeIORef (fieldOne env) 1
+"""
 
-viaCapability ∷ EngineEnv → IO ()
-viaCapability env = (fkFieldTwo (toFakeCapability env)) `Ref.writeIORef` 2
+# `qualified` removes the UNQUALIFIED spelling from scope, so this
+# module's own `fieldOne` helper is not the field even though the owner
+# is imported -- while `State.fieldTwo` in the same module is.
+_QUALIFIED_ONLY = """\
+module QualOnly.Mod where
+
+import qualified Engine.Core.State as State
+
+fieldOne ∷ State.EngineEnv → IORef Int
+fieldOne _ = error "this module's own helper, not the accessor"
+
+viaHomonym ∷ State.EngineEnv → IO ()
+viaHomonym env = writeIORef (fieldOne env) 2
+
+viaQualifier ∷ State.EngineEnv → IO ()
+viaQualifier env = writeIORef (State.fieldTwo env) 3
+"""
+
+# A bare first argument: never the accessor (it projects out of a
+# handle, so it cannot BE the `IORef`), and for a capability accessor
+# it surfaces in the residue rather than being silently dropped.
+_BARE_ARGUMENT = """\
+module Bare.Mod where
+
+import Engine.Core.State (EngineEnv, fieldTwo)
+import Engine.Core.Capability.Fake (FakeCapability(..))
+
+viaWildcard ∷ FakeCapability → Int → IO ()
+viaWildcard FakeCapability{..} newValue = writeIORef fkFieldOne newValue
+
+viaParenthesizedLocal ∷ IORef Text → IO ()
+viaParenthesizedLocal fieldTwo = writeIORef (fieldTwo) 9
 """
 
 # `hiding` brings in everything EXCEPT the listed names, which is how a
@@ -2225,6 +2101,23 @@ shadowed env = writeIORef (fieldOne env) 1
 
 visible ∷ EngineEnv → IO ()
 visible env = writeIORef (fieldTwo env) 2
+"""
+
+# Any two-argument function may be written infix, so a backticked
+# primitive is the same direct write with its arguments swapped --
+# qualified spelling included.
+_INFIX_WRITER = """\
+module Infix.Mod where
+
+import qualified Data.IORef as Ref
+import Engine.Core.State (EngineEnv, fieldOne)
+import Engine.Core.Capability.Fake (FakeCapability(..), toFakeCapability)
+
+raw ∷ EngineEnv → IO ()
+raw env = (fieldOne env) `writeIORef` 1
+
+viaCapability ∷ EngineEnv → IO ()
+viaCapability env = (fkFieldTwo (toFakeCapability env)) `Ref.writeIORef` 2
 """
 
 # A backtick operator binds looser than application, so an infix
@@ -2278,84 +2171,6 @@ unapplied ∷ IORef Int → IO ()
 unapplied _ = writeIORef (fieldThree) 3
 """
 
-# An EXPLICIT-brace binding group is the same `let`.
-_BRACED_LET = """\
-module BracedLet.Mod where
-
-import Engine.Core.State (EngineEnv, fieldOne, fieldTwo)
-
-shadowed ∷ EngineEnv → IORef Int → IO ()
-shadowed env ref = let { fieldOne _ = ref } in writeIORef (fieldOne env) 1
-
-grouped ∷ EngineEnv → IORef Text → IO ()
-grouped env ref =
-    let { other = ref; fieldTwo _ = other } in writeIORef (fieldTwo env) 2
-"""
-
-# TWO `let`s on one line, the second opening a LAYOUT group whose
-# bindings sit below it. Only scanning the first keyword misses it.
-_TWO_LET_GROUPS = """\
-module TwoGroups.Mod where
-
-import Engine.Core.State (EngineEnv, fieldOne)
-
-run ∷ EngineEnv → IORef Int → IO ()
-run env ref = (let x = 1 in pure x) >> (let
-    fieldOne _ = ref
-  in writeIORef (fieldOne env) 1)
-"""
-
-# A `let` group opened on a COLUMN-0 line has no layout block to its
-# left, so without the top-level clamp its bindings would run to the end
-# of the file and swallow the next declaration's write.
-_LET_CLAMP = """\
-module LetClamp.Mod where
-
-import Engine.Core.State (EngineEnv, fieldTwo)
-
-opener ∷ EngineEnv → IORef Text → IO ()
-opener env ref = let
-    fieldTwo _ = ref
-  in pure ()
-
-after ∷ EngineEnv → IO ()
-after env = writeIORef (fieldTwo env) 1
-"""
-
-# A binding nested DEEPER than a `let` group's own column belongs to
-# that inner binding, not to the group, so it must not be widened to the
-# `let`'s block.
-_NESTED_LET = """\
-module NestedLet.Mod where
-
-import Engine.Core.State (EngineEnv, fieldOne)
-
-run ∷ EngineEnv → IO ()
-run env = do
-    let helper = inner
-          where
-            fieldOne _ = undefined
-            inner = fieldOne ()
-    writeIORef (fieldOne env) 1
-"""
-
-# Variable and as-pattern `case` alternatives bind just as much as a
-# constructor application does.
-_CASE_PATTERNS = """\
-module CasePattern.Mod where
-
-import Engine.Core.State (EngineEnv, fieldOne, fieldTwo)
-
-bareVariable ∷ EngineEnv → (EngineEnv → IORef Int) → IO ()
-bareVariable env source = case source of
-    fieldOne → writeIORef (fieldOne env) 1
-
-asPattern ∷ EngineEnv → [EngineEnv → IORef Text] → IO ()
-asPattern env sources = case sources of
-    whole@(fieldTwo : _) → writeIORef (fieldTwo env) 2 >> use whole
-    [] → pure ()
-"""
-
 # A visible type application is not the value argument. Legal under
 # GHC2024's default `TypeApplications`, and invisible to a scan that
 # expects the accessor immediately after the primitive.
@@ -2389,50 +2204,52 @@ lazyControl ∷ EngineEnv → IO ()
 lazyControl env = (writeIORef $ fieldTwo env) 2
 """
 
-# A mutation primitive is itself under a qualifier too. Missing this
-# spelling would let an undeclared writer through in silence.
-_QUALIFIED_PRIMITIVE = """\
-module QualPrim.Mod where
+# All six recognized mutation primitives, so no spelling can leave the
+# closed set unnoticed.
+_ALL_PRIMITIVES = """\
+module AllPrims.Mod where
 
-import qualified Data.IORef as Ref
 import Engine.Core.State (EngineEnv, fieldOne)
 
+a, b, c, d, e, f ∷ EngineEnv → IO ()
+a env = writeIORef (fieldOne env) 1
+b env = atomicWriteIORef (fieldOne env) 2
+c env = modifyIORef (fieldOne env) (+ 1)
+d env = modifyIORef' (fieldOne env) (+ 1)
+e env = atomicModifyIORef (fieldOne env) (\\n → (n, ()))
+f env = atomicModifyIORef' (fieldOne env) (\\n → (n, ()))
+"""
+
+# A BARE import grants everything the module exports; the remaining
+# import shape the scan must honour at scan level.
+_BARE_IMPORTER = """\
+module BareImport.Mod where
+
+import Engine.Core.State
+
 bump ∷ EngineEnv → IO ()
-bump env = Ref.writeIORef (fieldOne env) 1
+bump env = writeIORef (fieldOne env) 1
 """
 
-# `qualified` removes the UNQUALIFIED spelling from scope, so this
-# module's own `fieldOne` helper is not the field even though the owner
-# is imported -- while `State.fieldTwo` in the same module is.
-_QUALIFIED_ONLY = """\
-module QualOnly.Mod where
+# An argument is plainly being formed and its head is not an
+# identifier: requirement 6's blocking case. Beside it, two shapes that
+# form NO argument here and are therefore ordinary non-writes.
+_UNREADABLE = """\
+module Unreadable.Mod where
 
-import qualified Engine.Core.State as State
+import Engine.Core.State (EngineEnv, fieldOne)
 
-fieldOne ∷ State.EngineEnv → IORef Int
-fieldOne _ = error "this module's own helper, not the accessor"
-
-viaHomonym ∷ State.EngineEnv → IO ()
-viaHomonym env = writeIORef (fieldOne env) 2
-
-viaQualifier ∷ State.EngineEnv → IO ()
-viaQualifier env = writeIORef (State.fieldTwo env) 3
+unboxed ∷ EngineEnv → IO ()
+unboxed env = writeIORef (# fieldOne env #) 1
 """
 
-# A bare first argument: never the accessor (it projects out of a
-# handle, so it cannot BE the `IORef`), and for a capability accessor
-# it surfaces in the residue rather than being silently dropped.
-_BARE_ARGUMENT = """\
-module Bare.Mod where
+_PRIMITIVE_AS_VALUE = """\
+module AsValue.Mod where
 
-import Engine.Core.State (EngineEnv, fieldTwo)
-import Engine.Core.Capability.Fake (FakeCapability(..))
+import Engine.Core.State (EngineEnv, fieldOne)
 
-viaWildcard ∷ FakeCapability → Int → IO ()
-viaWildcard FakeCapability{..} newValue = writeIORef fkFieldOne newValue
-
-viaParenthesizedLocal ∷ IORef Text → IO ()
-viaParenthesizedLocal fieldTwo = writeIORef (fieldTwo) 9
+handedOn ∷ [IORef Int] → IO ()
+handedOn refs = mapM_ (writeIORef) refs
 """
 
 # The same two writes, but importing the accessors BY NAME rather than
@@ -2484,26 +2301,22 @@ def _writer_sources(**modules: str) -> dict[str, str]:
         "trap": "src/Trap/Mod.hs",
         "narrow": "src/Narrow/Mod.hs",
         "homonym": "src/Homonym/Mod.hs",
-        "lateBinder": "src/LateBinder/Mod.hs",
         "qualified": "src/Qualified/Mod.hs",
         "misqualified": "src/Misqualified/Mod.hs",
         "bare": "src/Bare/Mod.hs",
         "qualPrim": "src/QualPrim/Mod.hs",
         "qualOnly": "src/QualOnly/Mod.hs",
-        "shadow": "src/Shadow/Mod.hs",
         "typeApp": "src/TypeApp/Mod.hs",
         "strict": "src/Strict/Mod.hs",
-        "lambdaEscape": "src/LambdaEscape/Mod.hs",
         "infix": "src/Infix/Mod.hs",
         "hiding": "src/Hiding/Mod.hs",
         "bareOperand": "src/BareOperand/Mod.hs",
+        "allPrims": "src/AllPrims/Mod.hs",
+        "bareImport": "src/BareImport/Mod.hs",
+        "unreadable": "src/Unreadable/Mod.hs",
+        "asValue": "src/AsValue/Mod.hs",
         "parens": "src/Parens/Mod.hs",
         "parenAccessor": "src/ParenAccessor/Mod.hs",
-        "bracedLet": "src/BracedLet/Mod.hs",
-        "nestedLet": "src/NestedLet/Mod.hs",
-        "twoGroups": "src/TwoGroups/Mod.hs",
-        "letClamp": "src/LetClamp/Mod.hs",
-        "casePattern": "src/CasePattern/Mod.hs",
         "explicit": "src/Explicit/Mod.hs",
         "multiline": "src/Multi/Mod.hs",
     }
@@ -2512,10 +2325,16 @@ def _writer_sources(**modules: str) -> dict[str, str]:
     return sources
 
 
-def _scan(sources: dict[str, str]):
+def _full_scan(sources: dict[str, str], exemptions=None):
     return scan_capability_writes(
-        sources, _WRITER_FIELDS,
-        permanent=_WRITER_PERMANENT, definer="Engine.Core.State")
+        sources, _WRITER_FIELDS, permanent=_WRITER_PERMANENT,
+        definer="Engine.Core.State", exemptions=exemptions or {})
+
+
+def _scan(sources: dict[str, str]):
+    """`(writes, residue)` -- the two halves most cases assert on."""
+    scan = _full_scan(sources)
+    return scan.writes, scan.residue
 
 
 def test_writer_map_canonicalizes_both_consumer_shapes():
@@ -2692,50 +2511,6 @@ def test_comments_and_bare_arguments_are_not_writes():
            f"no residue, got: {residue}")
 
 
-def test_locally_shadowed_accessors_are_not_writes():
-    """Every binding form that legally shadows an imported accessor --
-    an inline `let ... in`, a `do`-block `let`, a `where` declaration
-    reaching backwards over its own equation, a lambda binder, a `<-`
-    bind, a `case` alternative and an equation parameter -- makes the
-    write a write to the LOCAL binding, not to the field.
-
-    The last equation is the control: a parameter reaches its own
-    equation and no further, so its sibling's write is real. Both
-    halves are asserted together because a model that suppressed
-    everything would pass the first half alone."""
-    writes, _ = _scan(_writer_sources(shadow=_SHADOWING))
-    expect(writes["fieldOne"] == set(),
-           f"no shadowed binding may be attributed to `fieldOne`, got: "
-           f"{sorted(writes['fieldOne'])}")
-    expect(writes["fieldTwo"] == {"Shadow.Mod"},
-           f"the sibling equation's unshadowed write must survive -- an "
-           f"equation parameter reaches its own equation only, got: "
-           f"{sorted(writes['fieldTwo'])}")
-    expect(writes["fieldThree"] == {"Shadow.Mod"},
-           f"the same holds one level down: a `where` declaration's "
-           f"parameter must not reach its sibling declaration's write, "
-           f"got: {sorted(writes['fieldThree'])}")
-
-
-def test_a_lambda_binder_stops_at_its_own_body():
-    """A lambda's parameters scope over the lambda, not over the rest of
-    the layout block: after `withRef (\\fieldOne -> ...)` the next
-    statement's `fieldOne` is the accessor again. And a backslash inside
-    a STRING opens no lambda at all. Either mistake swallows a real
-    write in silence."""
-    writes, _ = _scan(_writer_sources(lambdaEscape=_LAMBDA_ESCAPE))
-    expect(writes["fieldOne"] == {"LambdaEscape.Mod"},
-           f"the write after the lambda's closing bracket is real, got: "
-           f"{sorted(writes['fieldOne'])}")
-    expect(writes["fieldTwo"] == {"LambdaEscape.Mod"},
-           f"a backslash inside a string literal is not a lambda, got: "
-           f"{sorted(writes['fieldTwo'])}")
-    expect(writes["fieldThree"] == {"LambdaEscape.Mod"},
-           f"an unbracketed lambda ends at its own statement, so the "
-           f"sibling below it is a real write, got: "
-           f"{sorted(writes['fieldThree'])}")
-
-
 def test_backticked_infix_mutations_are_writes():
     """Any two-argument function may be written infix, so
     ``(fieldOne env) `writeIORef` 1`` is the same direct write with its
@@ -2759,18 +2534,6 @@ def test_backticked_infix_mutations_are_writes():
            f"under a qualified primitive, got: "
            f"{sorted(bare['fieldOne'])}")
 
-
-
-def test_case_patterns_bind_variables_and_as_patterns():
-    """A `case` alternative binds through a bare variable pattern and
-    through an as-pattern, not only through a constructor application.
-    Missing either turns a legal local binding into a spurious
-    violation."""
-    writes, _ = _scan(_writer_sources(casePattern=_CASE_PATTERNS))
-    expect(writes["fieldOne"] == set() and writes["fieldTwo"] == set(),
-           f"neither a bare-variable nor an as-pattern alternative may "
-           f"be attributed, got: fieldOne={sorted(writes['fieldOne'])}, "
-           f"fieldTwo={sorted(writes['fieldTwo'])}")
 
 
 def test_redundant_parentheses_change_nothing():
@@ -2807,44 +2570,6 @@ def test_parentheses_around_the_accessor_change_nothing():
            f"{sorted(writes['fieldThree'])}")
 
 
-def test_a_braced_let_group_shadows():
-    """A binding group written with explicit braces and semicolons is
-    the same `let`: the braces are punctuation around the same
-    bindings, and every one of them shadows."""
-    writes, _ = _scan(_writer_sources(bracedLet=_BRACED_LET))
-    expect(writes["fieldOne"] == set() and writes["fieldTwo"] == set(),
-           f"neither a single braced binding nor a later one in the same "
-           f"group may be attributed, got: "
-           f"fieldOne={sorted(writes['fieldOne'])}, "
-           f"fieldTwo={sorted(writes['fieldTwo'])}")
-
-
-def test_every_let_on_a_line_opens_its_own_group():
-    """A line may carry two `let`s, and the second may open a LAYOUT
-    group whose bindings sit below it. Scanning only the first keyword
-    leaves that group binding nothing."""
-    writes, _ = _scan(_writer_sources(twoGroups=_TWO_LET_GROUPS))
-    expect(writes["fieldOne"] == set(),
-           f"the second `let`'s layout group must shadow the write in "
-           f"its own `in` expression, got: {sorted(writes['fieldOne'])}")
-
-    clamped, _ = _scan(_writer_sources(letClamp=_LET_CLAMP))
-    expect(clamped["fieldTwo"] == {"LetClamp.Mod"},
-           f"and a group opened on a column-0 line must stop at that "
-           f"declaration rather than swallow the next one's write, got: "
-           f"{sorted(clamped['fieldTwo'])}")
-
-
-def test_a_deeper_binding_is_not_part_of_the_let_group():
-    """Only the declarations at a `let` group's own column reach the
-    `let`'s block. A `where` nested inside one of them binds for that
-    helper alone, so the write below the `let` is real."""
-    writes, _ = _scan(_writer_sources(nestedLet=_NESTED_LET))
-    expect(writes["fieldOne"] == {"NestedLet.Mod"},
-           f"a binding nested deeper than the `let` group must not mask "
-           f"the write below it, got: {sorted(writes['fieldOne'])}")
-
-
 def test_visible_type_applications_are_skipped():
     """`writeIORef @Int (fieldOne env) 1` is a direct write. A scan that
     expects the accessor immediately after the primitive stops at the
@@ -2873,78 +2598,6 @@ def test_strict_application_groups_like_lazy():
     expect(writes["fieldTwo"] == {"Strict.Mod"},
            f"and so is the lazy control, got: "
            f"{sorted(writes['fieldTwo'])}")
-
-
-def test_binding_regions_are_lexical():
-    """`local_binding_regions` directly, on the extents Haskell's layout
-    rule distinguishes and on the POSITION a binding starts at: a
-    `do`-block `let` reaches the statements BELOW it and nothing above,
-    an equation parameter reaches its own equation and no further, and a
-    binding written midway through a line does not reach back over what
-    precedes it there."""
-    def shadowed(regions, name, offset):
-        return any(start <= offset < end
-                   for start, end in regions.get(name, ()))
-
-    code = ("first env = do\n"                       # 1
-            "    writeIORef (ref env) 1\n"           # 2
-            "    let ref _ = undefined\n"            # 3
-            "    writeIORef (ref env) 2\n"           # 4
-            "second ref env = pure ref\n"            # 5
-            "third env = writeIORef (ref env) 3\n")  # 6
-    regions = local_binding_regions(code)
-    expect("let" not in regions,
-           f"`let` is a keyword, never a bound name, got: "
-           f"{regions.get('let')}")
-    expect(not shadowed(regions, "ref", code.index("(ref env) 1") + 1),
-           "the write ABOVE the `let` is not shadowed by it")
-    expect(shadowed(regions, "ref", code.index("(ref env) 2") + 1),
-           "the statement below the `let` is inside its block")
-    expect(shadowed(regions, "ref", code.index("pure ref") + 5),
-           "an equation's parameter shadows within that equation")
-    expect(not shadowed(regions, "ref", code.index("(ref env) 3") + 1),
-           "and reaches no further than it")
-
-    # A binder written on a COLUMN-0 line has no layout block to the
-    # left of it, so without the top-level clamp its region would run to
-    # the end of the file and silently swallow every later write.
-    clamped = ("one env = withRef (\\ref → writeIORef (ref env) 1)\n"
-               "two env = writeIORef (ref env) 2\n")
-    regions = local_binding_regions(clamped)
-    expect(shadowed(regions, "ref", clamped.index("(ref env) 1") + 1),
-           "the lambda shadows its own body")
-    expect(not shadowed(regions, "ref", clamped.index("(ref env) 2") + 1),
-           "a column-0 lambda binder must stop at its own declaration")
-
-    # A binding written AFTER a use on the same line does not reach back
-    # over it.
-    sameLine = "bump env ref = writeIORef (fieldOne env) 1 " \
-               ">> (let fieldOne _ = ref in pure ())\n"
-    regions = local_binding_regions(sameLine)
-    expect(not shadowed(regions, "fieldOne",
-                        sameLine.index("(fieldOne env) 1") + 1),
-           "a later same-line `let` does not shadow the write before it")
-    expect(shadowed(regions, "fieldOne", sameLine.index("let fieldOne") + 4),
-           "but it does shadow from where it is written")
-
-    # Two `let`s on one line: the second binds from its own keyword.
-    twoLets = ("run env ref = (let x = 1 in pure x) "
-               ">> (let fieldOne _ = ref in writeIORef (fieldOne env) 1)\n")
-    regions = local_binding_regions(twoLets)
-    expect(shadowed(regions, "fieldOne",
-                    twoLets.index("(fieldOne env)") + 1),
-           "a line's SECOND `let` binds too")
-
-    # A type signature's own arrow must not bind its subject, nor a
-    # lowercase type variable that happens to share an accessor's name.
-    annotated = local_binding_regions(
-        "run env = convert\n"
-        "  where\n"
-        "    convert :: ref -> Int\n"
-        "    convert = undefined\n")
-    expect("ref" not in annotated,
-           f"a `::` annotation is not a `case` alternative, got: "
-           f"{annotated.get('ref')}")
 
 
 def test_a_first_argument_must_be_applied():
@@ -3021,32 +2674,6 @@ def test_a_first_argument_must_be_applied():
     expect(_applied_head(trailing, head) is None,
            "one opener balances one closer, and the next token is "
            "another closer, not an argument")
-
-
-def test_let_group_segments_handle_explicit_braces():
-    """A `let`'s binding group may be written with explicit braces and
-    semicolons. The opening brace is punctuation to drop, each `;`
-    starts another binding, and the closing brace ends the group so the
-    `in` expression after it contributes none."""
-    expect(_let_group_segments(" { a = p; b = q } in rest")
-           == [" a = p", " b = q "],
-           f"a braced group splits into its own bindings, got: "
-           f"{_let_group_segments(' { a = p; b = q } in rest')}")
-    expect(_let_group_segments(" a = p in rest") == [" a = p in rest"],
-           f"a layout group is unchanged, got: "
-           f"{_let_group_segments(' a = p in rest')}")
-
-
-def test_a_later_binder_cannot_hide_an_earlier_write():
-    """A binder introduced AFTER the write it would have masked must not
-    suppress it. This is the failure mode of any block-scoped binder
-    heuristic -- `bump` writes `(fieldOne env)`, and its own `where`
-    clause later binds a local `fieldOne` -- and the applied-argument
-    rule cannot have it, because it consults no binder at all."""
-    writes, _ = _scan(_writer_sources(lateBinder=_LATE_BINDER))
-    expect(writes["fieldOne"] == {"LateBinder.Mod"},
-           f"the applied write must survive a same-block local binder "
-           f"declared below it, got: {sorted(writes['fieldOne'])}")
 
 
 def test_qualified_accessors_are_resolved():
@@ -3141,7 +2768,9 @@ def test_import_declarations_record_qualification_and_alias():
         "import Engine.Core.State (EngineEnv, fieldOne)\n"
         "import qualified Engine.Core.State as State\n"
         "import Data.IORef qualified as Ref\n"
-        "import Data.Map hiding (lookup)\n")
+        "import Data.Map hiding (lookup)\n"
+        "import Engine.Core.Capability.Fake (FakeCapability(..))\n"
+        "import Engine.Core.Defaults\n")
     shape = [(d.module, d.qualified, d.qualifier,
               None if d.names is None else sorted(d.names))
              for d in declarations]
@@ -3151,9 +2780,13 @@ def test_import_declarations_record_qualification_and_alias():
         ("Engine.Core.State", True, "State", None),
         ("Data.IORef", True, "Ref", None),
         ("Data.Map", False, "Data.Map", None),
-    ], f"each import's qualification, qualifier and name list must be "
-       f"recorded separately (`ImportQualifiedPost` included), got: "
-       f"{shape}")
+        ("Engine.Core.Capability.Fake", False,
+         "Engine.Core.Capability.Fake", None),
+        ("Engine.Core.Defaults", False, "Engine.Core.Defaults", None),
+    ], f"all six import shapes -- explicit list, qualified-with-alias, "
+       f"`ImportQualifiedPost`, `hiding`, a `(..)` wildcard and a bare "
+       f"import -- must each be recorded with its own qualification, "
+       f"qualifier and name list, got: {shape}")
 
     expect(imports_name(declarations, "Engine.Core.State", "fieldOne", ""),
            "the unqualified declaration puts the bare name in scope")
@@ -3242,6 +2875,114 @@ def test_tokenizer_skips_literals_and_keeps_line_numbers():
            f"`modifyIORef'` sits on line 3, got: {line}")
 
 
+def test_every_recognized_primitive_is_read():
+    """All six mutation primitives in the closed set, each on the same
+    field, so a spelling that stopped being recognized shows up as a
+    missing write SITE rather than a silently smaller map."""
+    scan = _full_scan(_writer_sources(allPrims=_ALL_PRIMITIVES))
+    expect(scan.writes["fieldOne"] == {"AllPrims.Mod"},
+           f"every primitive must attribute to the field, got: "
+           f"{sorted(scan.writes['fieldOne'])}")
+    attributed = [site for site in scan.sites
+                  if site.module == "AllPrims.Mod" and site.kind == "write"]
+    expect(len(attributed) == 6,
+           f"all six spellings must be read as writes, got "
+           f"{len(attributed)}")
+
+
+def test_a_bare_import_brings_the_accessor_into_scope():
+    """The last import shape: a bare import grants everything the target
+    exports, so the accessor is in scope without being named."""
+    writes, _ = _scan(_writer_sources(bareImport=_BARE_IMPORTER))
+    expect(writes["fieldOne"] == {"BareImport.Mod"},
+           f"a bare import puts the accessor in scope, got: "
+           f"{sorted(writes['fieldOne'])}")
+
+
+def test_an_unreadable_mutation_site_blocks():
+    """Requirement 6. An argument is plainly being formed and its head
+    is not an identifier, so the scan says so and the audit fails --
+    which is how a spelling outside the recognized set stops the gate
+    instead of silently dropping a write."""
+    scan = _full_scan(_writer_sources(unreadable=_UNREADABLE))
+    kinds = [site.kind for site in scan.sites
+             if site.module == "Unreadable.Mod"]
+    expect(kinds == ["unclassifiable"],
+           f"the site must be recorded as unclassifiable, got: {kinds}")
+    violations = audit_mutation_sites(scan.sites)
+    expect(len(violations) == 1 and "Unreadable" in violations[0],
+           f"and that must be a blocking violation, got: {violations}")
+
+
+def test_a_primitive_used_as_a_value_is_not_unreadable():
+    """The other side of requirement 6: a primitive that is not applied
+    to anything HERE is being handed onward, which is an ordinary
+    non-write, not an unreadable site. Confusing the two would make the
+    guard fire on correct code."""
+    scan = _full_scan(_writer_sources(asValue=_PRIMITIVE_AS_VALUE))
+    kinds = [site.kind for site in scan.sites
+             if site.module == "AsValue.Mod"]
+    expect(kinds == ["other"],
+           f"a primitive passed as a value classifies as `other`, got: "
+           f"{kinds}")
+    expect(audit_mutation_sites(scan.sites) == [],
+           "and blocks nothing")
+
+
+def test_a_shadow_exemption_suppresses_only_its_own_pair():
+    """Requirement 7's mechanism. An exemption suppresses exactly the
+    module/field pair it names -- the same module's other writes are
+    untouched -- and is itself checked, so it cannot quietly outlive
+    what it was suppressing."""
+    sources = _writer_sources(declared=_DECLARED_WRITER)
+    admitted = {("Consumer.Mod", "fieldOne"):
+                "`fieldOne` here is the equation's own parameter"}
+    scan = _full_scan(sources, exemptions=admitted)
+    expect(scan.writes["fieldOne"] == set(),
+           f"the exempted pair must not be attributed, got: "
+           f"{sorted(scan.writes['fieldOne'])}")
+    expect(scan.writes["fieldTwo"] == {"Consumer.Mod"},
+           f"but the same module's OTHER write must survive, got: "
+           f"{sorted(scan.writes['fieldTwo'])}")
+    expect(scan.suppressed == frozenset({("Consumer.Mod", "fieldOne")}),
+           f"and the suppression must be recorded, got: {scan.suppressed}")
+    expect(audit_shadow_exemptions(scan.suppressed, _WRITER_FIELDS,
+                                   exemptions=admitted) == [],
+           "a live, reasoned exemption is valid")
+
+
+def test_shadow_exemptions_are_validated():
+    """Its three failure modes: a field that is not live, a reason that
+    says nothing, and an entry that no longer suppresses anything."""
+    sources = _writer_sources(declared=_DECLARED_WRITER)
+    suppressed = _full_scan(sources).suppressed
+
+    unknown = {("Consumer.Mod", "fieldGone"): "a real reason"}
+    violations = audit_shadow_exemptions(
+        _full_scan(sources, exemptions=unknown).suppressed,
+        _WRITER_FIELDS, exemptions=unknown)
+    expect(len(violations) == 1 and "fieldGone" in violations[0]
+           and "not a live `EngineEnv` field" in violations[0],
+           f"an exemption naming a dead field must fail as such, not "
+           f"merely as a stale one, got: {violations}")
+
+    for reason in ("", "   ", "TBD"):
+        blank = {("Consumer.Mod", "fieldOne"): reason}
+        violations = audit_shadow_exemptions(
+            _full_scan(sources, exemptions=blank).suppressed,
+            _WRITER_FIELDS, exemptions=blank)
+        expect(len(violations) == 1 and "no real reason" in violations[0],
+               f"reason {reason!r} must fail, got: {violations}")
+
+    stale = {("Nobody.Mod", "fieldOne"): "a real reason"}
+    violations = audit_shadow_exemptions(
+        suppressed, _WRITER_FIELDS, exemptions=stale)
+    expect(len(violations) == 1 and "no such write is detected"
+           in violations[0],
+           f"an exemption that suppresses nothing must fail, got: "
+           f"{violations}")
+
+
 def test_writer_map_against_the_real_repo():
     """The live gate, asserted against the REAL tree and the REAL
     checked-in map: every field is mapped, no undeclared write, no
@@ -3252,7 +2993,8 @@ def test_writer_map_against_the_real_repo():
     live_fields = extract_record_fields(engine_env_source,
                                         ENGINE_ENV_PATTERN)
     sources = scan_production_sources(REPO_ROOT)
-    writes, residue = scan_capability_writes(sources, live_fields)
+    scan = scan_capability_writes(sources, live_fields)
+    writes, residue = scan.writes, scan.residue
 
     expect(set(CAPABILITY_WRITER_MODULES) == set(live_fields),
            f"CAPABILITY_WRITER_MODULES' keys must equal the live EngineEnv "
@@ -3279,9 +3021,24 @@ def test_writer_map_against_the_real_repo():
     expect(all(item.field in set(live_fields) for item in residue),
            "every residue entry must canonicalize to a live EngineEnv field")
 
-    again, _ = scan_capability_writes(sources, live_fields)
-    expect(again == writes,
+    expect(scan_capability_writes(sources, live_fields).writes == writes,
            "the scan must be deterministic across runs")
+
+    unclassified = audit_mutation_sites(scan.sites)
+    expect(unclassified == [],
+           f"every mutation-primitive occurrence in the real tree must "
+           f"classify -- requirement 6's whole point is that an "
+           f"unreadable site fails instead of vanishing; got: "
+           f"{unclassified[:3]}")
+    expect(all(site.kind in ("write", "other") for site in scan.sites)
+           and len(scan.sites) > len(
+               [s for s in scan.sites if s.kind == "write"]),
+           "the site census covers both attributed and ignored sites")
+    expect(SHADOW_EXEMPTIONS == {},
+           f"SHADOW_EXEMPTIONS is empty in this tree -- the two shape "
+           f"rules separate every real case; got: {SHADOW_EXEMPTIONS}")
+    expect(audit_shadow_exemptions(scan.suppressed, live_fields) == [],
+           "and an empty exemption list has nothing to be stale about")
 
 
 def main() -> int:
@@ -3408,21 +3165,12 @@ def main() -> int:
         test_passed_on_handle_is_residue_not_a_write,
         test_out_of_scope_names_are_not_writes,
         test_comments_and_bare_arguments_are_not_writes,
-        test_locally_shadowed_accessors_are_not_writes,
-        test_a_lambda_binder_stops_at_its_own_body,
         test_backticked_infix_mutations_are_writes,
-        test_case_patterns_bind_variables_and_as_patterns,
         test_redundant_parentheses_change_nothing,
         test_parentheses_around_the_accessor_change_nothing,
-        test_a_braced_let_group_shadows,
-        test_every_let_on_a_line_opens_its_own_group,
-        test_a_deeper_binding_is_not_part_of_the_let_group,
         test_visible_type_applications_are_skipped,
         test_strict_application_groups_like_lazy,
-        test_binding_regions_are_lexical,
         test_a_first_argument_must_be_applied,
-        test_let_group_segments_handle_explicit_braces,
-        test_a_later_binder_cannot_hide_an_earlier_write,
         test_qualified_accessors_are_resolved,
         test_a_qualifier_must_name_the_owning_module,
         test_qualified_mutation_primitives_are_recognized,
@@ -3433,6 +3181,12 @@ def main() -> int:
         test_import_declarations_are_not_uses,
         test_multiline_expressions_are_scanned,
         test_tokenizer_skips_literals_and_keeps_line_numbers,
+        test_every_recognized_primitive_is_read,
+        test_a_bare_import_brings_the_accessor_into_scope,
+        test_an_unreadable_mutation_site_blocks,
+        test_a_primitive_used_as_a_value_is_not_unreadable,
+        test_a_shadow_exemption_suppresses_only_its_own_pair,
+        test_shadow_exemptions_are_validated,
         test_writer_map_against_the_real_repo,
     ]
 

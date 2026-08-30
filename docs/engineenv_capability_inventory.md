@@ -1242,8 +1242,8 @@ evidence CMA-2's pilot and CMA-3's verdict turn on: a small residue
 means a textual gate is nearly sufficient, a large one argues for a
 mechanism that travels with the handle.
 
-**Three gates keep a textual match honest**, and they are independent on
-purpose — none is asked to be complete by itself:
+**Two rules keep a textual match honest**, and neither models Haskell's
+binding forms:
 
 1. **Import scope, under the exact spelling used.** The identifier must
    actually reach the accessor in that module: imported by name,
@@ -1254,50 +1254,10 @@ purpose — none is asked to be complete by itself:
    *unqualified* spelling from scope entirely, an `as` alias
    *replaces* the module name as the qualifier rather than joining it,
    a `hiding` clause takes its own names back out, and one module is
-   legitimately imported twice on different terms. So under `import qualified Engine.Core.State as
-   State` only `State.fieldOne` is the field and a bare `fieldOne` is
-   something the module defined itself, while
-   `src/Unit/Thread/Movement.hs` writes a local `utsRef` parameter
-   under an import that names the `EngineEnv` *type* alone.
-2. **Not locally shadowed.** A `let`, a `where` declaration, a lambda,
-   a `<-` bind, a `case` alternative or an equation parameter legally
-   shadows an import of the same name, so a write through one is a
-   write to the local binding. Each binding is given its own **lexical
-   region** rather than its whole enclosing declaration, because the
-   permissive direction of that mistake *suppresses a real write
-   silently*. Regions are measured in characters, not lines, so a
-   binding written midway through a line does not reach back over the
-   write before it, and a binding group written with explicit braces
-   and semicolons binds the same as the layout spelling, as does the
-   second of two `let`s sharing one line: a `let` — wherever on its line it is written, including
-   nested after an equation's own `=` — shadows the statements below it
-   and nothing above, its group's later bindings included; a lambda's
-   parameters reach the bracket that closes its body — or, unbracketed,
-   its own statement — and no further; an equation's parameters reach
-   that equation only; and a
-   `where` block's own declarations are the single form that reaches
-   backwards, over the enclosing declaration — their parameters and
-   nested `let`s do not come with them. Every region is clamped to its
-   top-level declaration, so a binder written on a column-0 line cannot
-   claim the rest of the file. The model errs toward shadowing *less*:
-   an unrecognized binding form leaves a write attributed, which is a
-   loud violation naming module and field, never a silent miss.
-3. **Applied position.** The accessor must head an argument of a
+   legitimately imported twice on different terms.
+2. **Applied position.** The accessor must head an argument of a
    mutation primitive *and* that argument must be an application —
-   `prim (accessor handle) …` — with `$` and its strict sibling `$!`
-   grouping the argument exactly as parentheses do — and with any
-   visible type application
-   (`prim @Int (accessor handle) …`, legal under GHC2024's default
-   `TypeApplications`) stepped over first. Haskell lets any
-   two-argument function be written infix, so the backticked form
-   ``accessor handle `prim` value`` is the same write with its
-   arguments swapped and is read from the left operand — parenthesized
-   or not, since a backtick binds looser than application. Redundant
-   parentheses — around the primitive in head position, around the
-   operand, or around the accessor itself — change nothing and are
-   normalized away; one that something
-   else is *applying* to is a primitive being passed onward, which the
-   residue reports rather than attributes. This is a type argument, not a
+   `prim (accessor handle) …`. This is a type argument, not a
    heuristic: every accessor projects out of a handle
    (`EngineEnv -> IORef a`), so it can never itself be the `IORef` the
    primitive takes, and a *bare* identifier there always denotes some
@@ -1305,14 +1265,38 @@ purpose — none is asked to be complete by itself:
    Haddock, or in an import list is not using it either — commentary
    and import declarations are stripped before the scan.
 
-The rule's one blind spot is a record wildcard or field pun over a
-capability record (`RenderCapability{..}`), which puts a genuine
-`IORef` under a bare accessor name; nothing in the tree does that, and
-such a use is not dropped silently — with no application to consume it
-inline, it appears in the residue like every other unattributable use.
+**Deliberately no lexical scope analysis, and a closed form list
+instead.** Those two rules separate every case in this tree; the one
+near-miss, `src/Unit/Thread/Movement.hs`'s `utsRef` parameter, is
+excluded because that module imports `Engine.Core.State` for the
+`EngineEnv` *type* alone. The residue of the rules — a module that
+locally binds a name matching an accessor **and applies it to a
+handle** — goes on `SHADOW_EXEMPTIONS`, a checked-in
+`{(module, field): reason}` list that is **empty**. Each entry
+suppresses exactly its own pair, must name a live field, must carry a
+real reason, and fails once it stops suppressing anything.
 
-**Maintaining it.** Adding an entry is a deliberate act, not a
-maintenance edit: it declares that a capability-narrowed module now
+The alternative was modelling `let`/`where`/lambda/`<-`/`case` scopes.
+Measured against this tree that analysis changed the answer at **none**
+of the mutation sites, while its incompleteness was findable
+indefinitely — the forms are many, and such an analysis is only ever as
+complete as the last one someone thought of.
+
+**Every mutation site must classify, or the gate stops.** That is what
+makes the form list above CLOSED rather than aspirational. Each
+occurrence of a mutation primitive lands in exactly one bucket: an
+applied, in-scope, non-exempt accessor (attributed); a nameable head
+that is not this boundary's business — a local `IORef`, an unapplied
+accessor, one the module cannot reach, or the primitive used as a value
+rather than applied; or a site where an argument is plainly being
+formed and the scan cannot name its head, which **fails the audit**
+naming file and line. There are no sites of the third kind today. A
+spelling outside the list therefore stops the gate instead of silently
+dropping a write — and the fix is to extend the scan and this list
+together, never to leave the site unread.
+
+**Maintaining it.** Adding a writing-module entry is a deliberate act,
+not a maintenance edit: it declares that a capability-narrowed module now
 holds write authority over that field. Removing one is what a narrowing
 migration owes the gate. Either direction, the audit names the exact
 module and field, so the edit is mechanical once the decision is made —

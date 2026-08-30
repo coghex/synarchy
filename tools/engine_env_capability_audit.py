@@ -119,7 +119,6 @@ the SS6 ratchet holds, 1 = one or more violations found.
 """
 from __future__ import annotations
 
-import bisect
 import re
 import sys
 from pathlib import Path
@@ -1906,11 +1905,13 @@ def audit_ratchet(unrestricted: set[str], doc_temporary: dict[str, set[str]],
 # DIRECTLY to a known accessor application -- `writeIORef (accessor
 # handle) ...`, bare or qualified (`State.fieldOne`, under the module's
 # own name or an `as` alias; see `parse_imports`), prefix or
-# backticked-infix. Three gates keep a textual match honest -- import
-# scope under the exact spelling used, lexical shadowing by a local
-# binding (`local_binding_regions`), and an APPLIED argument
-# (`_first_argument_head` / `_infix_left_operand_head`). Mutation
-# through a queue, a `TVar`, an `MVar`, an opaque
+# backticked-infix. Two rules keep a textual match honest, and neither
+# models Haskell's binding forms: import scope under the exact spelling
+# used, and an APPLIED argument (`_first_argument_head` /
+# `_infix_left_operand_head`). `SHADOW_EXEMPTIONS` covers their
+# residue, and `audit_mutation_sites` makes the recognized-form list
+# CLOSED by failing on a site whose argument the scan cannot read.
+# Mutation through a queue, a `TVar`, an `MVar`, an opaque
 # internally-synchronized handle (`SaveBarrier`, `LoadStatusRef`), or a
 # helper that took the `IORef` as an argument is NOT a write this scan
 # can see, and is deliberately out of this slice: full interprocedural
@@ -1967,6 +1968,27 @@ CAPABILITY_MODULE_PREFIX = "Engine.Core.Capability."
 # gate. Either way the audit names the exact module and field, so the
 # edit is mechanical once the decision is made -- see
 # docs/engineenv_capability_inventory.md SS6.4.
+# docs/engineenv_capability_inventory.md SS6.5's shadow exemptions
+# (issue #1892 requirement 7): `{(module, EngineEnv field): reason}` for
+# the one case the two shape rules cannot separate -- a module that
+# locally binds a name matching an accessor AND applies it to a handle.
+#
+# __Empty, and expected to stay that way.__ The alternative was a
+# lexical scope analysis of Haskell's binding forms; measured against
+# the live tree it changed the answer at NONE of the mutation sites,
+# while costing eight review rounds of findings, because the forms are
+# many and the analysis is only ever as complete as the last one
+# someone thought of. The one near-miss in the tree,
+# `src/Unit/Thread/Movement.hs`'s `utsRef` parameter, needs no entry:
+# that module imports `Engine.Core.State` for the `EngineEnv` TYPE
+# alone, so the name is not in scope as an accessor there.
+#
+# An entry suppresses exactly its own module/field pair and nothing
+# else, must name a live field, must carry a real reason, and fails
+# once it stops suppressing anything -- `audit_shadow_exemptions`
+# checks all four.
+SHADOW_EXEMPTIONS: dict[tuple[str, str], str] = {}
+
 CAPABILITY_WRITER_MODULES: dict[str, frozenset[str]] = {
     "engineConfig": frozenset(),
     "engineStateRef": frozenset(),
@@ -2206,28 +2228,6 @@ _IMPORT_WILDCARD_RE = re.compile(r"\(\s*\.\.\s*\)")
 # construction or update (`env { fooRef = r }`) is never read as an
 # equation; a continuation line opening with `,` or `{` matches
 # nothing at all.
-_BINDING_LHS_RE = re.compile(
-    r"[ \t]*([a-z_][A-Za-z0-9_']*)((?:[ \t]+[^={\n]*?)?)=(?!=)")
-# A `let` ANYWHERE on a line, not only at its start: `f env ref = let
-# fieldOne _ = ref in writeIORef (fieldOne env) 1` binds just as much as
-# the same `let` written on its own line. The tail is split on `;` so a
-# one-line multi-binding group (`let a = p; b = q in ...`) binds both.
-_INLINE_LET_RE = re.compile(r"(?<![A-Za-z0-9_'])let(?![A-Za-z0-9_'])")
-_LET_BINDING_RE = re.compile(r"[ \t]*([^={\n]*?)=(?!=)")
-_LAMBDA_BINDER_RE = re.compile(r"\\\s*([^\n{}=]*?)(?:->|→)")
-_MONADIC_BINDER_RE = re.compile(r"[ \t]*\(?([^(){}=\n]*?)\)?[ \t]*(?:<-|←)")
-# A `case`/`\case` alternative's pattern: everything left of the arrow.
-# Deliberately broad -- a bare variable (`fieldOne → ...`), a
-# constructor application, an as-pattern (`whole@(x:xs) → ...`) and a
-# tuple or list pattern all bind. The character class excludes `=` and
-# `\`, so an equation and a lambda cannot be read as an alternative,
-# and a segment carrying a `::`/`∷` is rejected outright so a type
-# signature's own arrow never binds its subject.
-_CASE_ALT_RE = re.compile(
-    r"[ \t]*([A-Za-z_][A-Za-z0-9_'@().,:\[\]| \t]*?)[ \t]*(?:->|→)")
-_TYPE_ANNOTATION_RE = re.compile(r"::|∷")
-_WHERE_RE = re.compile(r"(?<![A-Za-z0-9_'])where(?![A-Za-z0-9_'])")
-
 _IMPORT_HIDING_RE = re.compile(r"(?<![A-Za-z0-9_'])hiding(?![A-Za-z0-9_'])")
 _IMPORT_DECL_RE = re.compile(
     r"^import\s+(?P<pre>qualified\s+)?(?P<module>[A-Z][A-Za-z0-9_.']*)"
@@ -2460,357 +2460,6 @@ def capability_accessor_map(sources: dict[str, str], live_fields: list[str]
     return accessors
 
 
-def _line_indents(lines: list[str]) -> list[int | None]:
-    """Each line's indent column, `None` for a blank line (a blank line
-    closes no layout block, so it must not be treated as column 0)."""
-    return [None if not line.strip() else len(line) - len(line.lstrip())
-            for line in lines]
-
-
-def _layout_ends(indents: list[int | None]
-                 ) -> tuple[list[int], list[int]]:
-    """`(block_end, declaration_end)` per line, as EXCLUSIVE bounds.
-
-    Haskell's layout rule gives a binding two different extents and the
-    distinction is load-bearing here:
-
-    * `block_end[i]` -- the first later line indented strictly LEFT of
-      line `i`. That closes the layout BLOCK line `i` sits in, which is
-      how far a `let`-bound name or a `<-` bind reaches: to the end of
-      its `do` block, over the sibling statements below it.
-    * `declaration_end[i]` -- the first later line indented at or left
-      of line `i`. That closes line `i`'s own DECLARATION, which is how
-      far its PARAMETERS reach: over this equation's body, and no
-      further.
-
-    Both are computed with one monotonic stack each, so a long module
-    stays linear rather than quadratic."""
-    total = len(indents)
-    block_end = [total] * total
-    declaration_end = [total] * total
-    occupied = [i for i in range(total) if indents[i] is not None]
-
-    stack: list[int] = []
-    for i in reversed(occupied):
-        while stack and indents[stack[-1]] > indents[i]:  # type: ignore[operator]
-            stack.pop()
-        declaration_end[i] = stack[-1] if stack else total
-        stack.append(i)
-
-    stack = []
-    for i in reversed(occupied):
-        while stack and indents[stack[-1]] >= indents[i]:  # type: ignore[operator]
-            stack.pop()
-        block_end[i] = stack[-1] if stack else total
-        stack.append(i)
-    return block_end, declaration_end
-
-
-def _top_level_ends(indents: list[int | None]) -> list[int]:
-    """Per line, the EXCLUSIVE index of the next column-0 line -- the
-    end of the top-level declaration that line sits in.
-
-    Every local binding is clamped to this. Without it a binder written
-    on a column-0 line (a lambda in a one-line equation, say) would take
-    "the enclosing layout block" to mean the module top level and shadow
-    the accessor for the whole rest of the file, which is exactly the
-    silent-write-dropping this model exists to avoid."""
-    total = len(indents)
-    ends = [total] * total
-    following = total
-    for i in range(total - 1, -1, -1):
-        ends[i] = following
-        if indents[i] == 0:
-            following = i
-    return ends
-
-
-def local_binding_regions(code: str) -> dict[str, list[tuple[int, int]]]:
-    """`{locally bound name: the half-open character ranges it shadows}`.
-
-    A name bound by a `let`, a `where`, a lambda, a `<-` bind, a `case`
-    alternative or an equation's parameter list legally SHADOWS an
-    import of the same name, so a write through it is not a write to
-    the field -- issue #1892's "locally shadowing identifiers must not
-    count". What makes that safe to act on is that each binding is
-    given its OWN lexical region rather than its whole enclosing
-    declaration:
-
-    * a `let`-bound name, a `<-` bind and a lambda binder reach the end
-      of their layout block, so they shadow the statements BELOW them
-      and nothing above;
-    * an equation's parameters reach the end of that equation only;
-    * a `where` block's own declarations are the one binding that
-      reaches BACKWARDS, over the whole enclosing declaration, which is
-      exactly Haskell's rule and the reason they are handled separately
-      below -- note their own parameters and nested `let`s do NOT come
-      with them.
-
-    That last distinction is the difference between a correct model and
-    a binder heuristic that silently drops a real write: a `let` inside
-    a `where` helper must not mask a write in the parent body ABOVE it.
-
-    Ranges are measured in CHARACTERS rather than lines, because a
-    binding written midway through a line does not reach back over what
-    precedes it there.
-
-    The model is approximate in the direction of shadowing LESS -- an
-    unrecognized binding form leaves a write attributed, which surfaces
-    as a loud violation naming module and field, never as a silent
-    miss."""
-    lines = code.split("\n")
-    indents = _line_indents(lines)
-    block_end, declaration_end = _layout_ends(indents)
-    top_level_end = _top_level_ends(indents)
-    starts = _line_start_offsets(lines)
-    regions: dict[str, list[tuple[int, int]]] = {}
-
-    def bind(name: str, start_offset: int, end_line: int) -> None:
-        """Shadow `name` from `start_offset` to the start of `end_line`
-        (a line index, exclusive)."""
-        end = starts[end_line] if end_line < len(starts) else len(code)
-        if end > start_offset:
-            regions.setdefault(name, []).append((start_offset, end))
-
-    for i, line in enumerate(lines):
-        if indents[i] is None:
-            continue
-        ceiling = top_level_end[i]
-        block = min(block_end[i], ceiling)
-        declaration = min(declaration_end[i], ceiling)
-
-        equation = _BINDING_LHS_RE.match(line)
-        if equation and equation.group(1) != "let":
-            head, parameters = equation.group(1), equation.group(2)
-            bind(head, starts[i], block)
-            for name in _HS_IDENT_RE.findall(parameters):
-                bind(name, starts[i], declaration)
-
-        # EVERY `let` on the line, not just the first: two of them can
-        # share one line (`(let a = p in q) >> (let b = r in s)`), and
-        # each binds from its own keyword onward.
-        for opening in _INLINE_LET_RE.finditer(line):
-            keyword = starts[i] + opening.start()
-            for segment in _let_group_segments(line[opening.end():]):
-                binding = _LET_BINDING_RE.match(segment)
-                if not binding:
-                    continue
-                # A pattern binding (`let (a, b) = ...`) binds every
-                # name in it; a function binding (`let f x = ...`) binds
-                # `f` over the block and its parameters over this
-                # equation alone.
-                text = binding.group(1)
-                names = _HS_IDENT_RE.findall(text)
-                if text.strip()[:1] in ("(", "["):
-                    for name in names:
-                        bind(name, keyword, block)
-                elif names:
-                    bind(names[0], keyword, block)
-                    for name in names[1:]:
-                        bind(name, keyword, declaration)
-
-        monadic = _MONADIC_BINDER_RE.match(line)
-        if monadic:
-            for name in _HS_IDENT_RE.findall(monadic.group(1)):
-                bind(name, starts[i], block)
-
-        alternative = _CASE_ALT_RE.match(line)
-        if alternative and not _TYPE_ANNOTATION_RE.search(
-                alternative.group(1)):
-            for name in _HS_IDENT_RE.findall(alternative.group(1)):
-                if name[:1].islower() or name[:1] == "_":
-                    bind(name, starts[i], declaration)
-
-    _bind_lambda_parameters(code, lines, declaration_end, top_level_end, bind)
-    _bind_let_block_declarations(lines, indents, starts, block_end,
-                                 top_level_end, bind)
-    _extend_where_declarations(lines, indents, starts, declaration_end, bind)
-    return regions
-
-
-def _bind_let_block_declarations(lines: list[str], indents: list[int | None],
-                                 starts: list[int], block_end: list[int],
-                                 top_level_end: list[int], bind) -> None:
-    """Widen a `let` block's declarations to the `let`'s own layout
-    block.
-
-    A `let` opens a binding group whose declarations may sit on
-    FOLLOWING lines -- `let` alone on its line with the bindings
-    indented below it, or a second binding continuing under the first.
-    Each of those lines is an equation in its own right, so the per-line
-    scan already gave it a region, but that region is the deeper block
-    it is written in; what it actually scopes over is the `let`'s block,
-    which is where the statements that use it live.
-
-    Only the lines at the group's own column are widened, for the same
-    reason `_extend_where_declarations` restricts itself: anything
-    nested deeper belongs to that inner binding, not to this group."""
-    for i, line in enumerate(lines):
-        column = indents[i]
-        if column is None:
-            continue
-        for opening in _INLINE_LET_RE.finditer(line):
-            _widen_one_let_group(lines, indents, starts, block_end,
-                                 top_level_end, bind, i, column, opening)
-
-
-def _widen_one_let_group(lines: list[str], indents: list[int | None],
-                         starts: list[int], block_end: list[int],
-                         top_level_end: list[int], bind,
-                         i: int, column: int, opening) -> None:
-    """One `let` keyword's share of `_bind_let_block_declarations`.
-
-    A line may carry several `let`s, each opening its own group, so this
-    is written per keyword rather than per line."""
-    keyword = starts[i] + opening.start()
-    tail = lines[i][opening.end():]
-    if tail.lstrip().startswith("{"):
-        tail = tail[:len(tail) - len(tail.lstrip())] + tail.lstrip()[1:]
-    if tail.strip():
-        group_column = opening.end() + len(tail) - len(tail.lstrip())
-    else:
-        group_column = None
-        for j in range(i + 1, len(lines)):
-            indent = indents[j]
-            if indent is None:
-                continue
-            if indent > column:
-                group_column = indent
-            break
-        if group_column is None:
-            return
-    for j in range(i + 1, len(lines)):
-        indent = indents[j]
-        if indent is None:
-            continue
-        if indent < group_column:
-            break
-        if indent != group_column:
-            continue
-        declaration = _BINDING_LHS_RE.match(lines[j])
-        if declaration is None or declaration.group(1) == "let":
-            continue
-        bind(declaration.group(1), keyword,
-             min(block_end[i], top_level_end[i]))
-
-
-def _bind_lambda_parameters(code: str, lines: list[str],
-                            declaration_end: list[int],
-                            top_level_end: list[int], bind) -> None:
-    """Bind each lambda's parameters over its own BODY.
-
-    A lambda body ends where the bracket enclosing it closes, not where
-    its layout block does: after `withRef (\\fieldOne -> pure fieldOne)`
-    the next statement's `fieldOne` is the accessor again. So the
-    enclosing bracket is tracked as the source is walked -- the innermost
-    one open at the backslash -- and the region ends on the line its
-    partner closes.
-
-    A lambda with no enclosing bracket (`forM_ xs $ \\item -> do ...`)
-    ends at its own STATEMENT instead: the next sibling in the same
-    `do` block is outside it, so the fallback is the declaration extent
-    (the first line indented at or left of the lambda's), never the
-    block extent, which would run past every sibling below.
-
-    String and character literals are stepped over, so a `\\` inside one
-    is not a lambda and a bracket inside one does not unbalance the
-    walk."""
-    starts = _line_start_offsets(lines)
-    stack: list[int] = []
-    partners: dict[int, int] = {}
-    lambdas: list[tuple[int, int | None]] = []
-    i, n = 0, len(code)
-    while i < n:
-        ch = code[i]
-        if ch == '"':
-            i += 1
-            while i < n and code[i] != '"':
-                i += 2 if code[i] == "\\" else 1
-            i += 1
-            continue
-        if ch == "'":
-            literal = _CHAR_LITERAL_RE.match(code, i)
-            if literal:
-                i = literal.end()
-                continue
-        elif ch in "([":
-            stack.append(i)
-        elif ch in ")]":
-            if stack:
-                partners[stack.pop()] = i
-        elif ch == "\\":
-            lambdas.append((i, stack[-1] if stack else None))
-        i += 1
-
-    for offset, opener in lambdas:
-        binder = _LAMBDA_BINDER_RE.match(code, offset)
-        if binder is None:
-            continue
-        line = bisect.bisect_right(starts, offset) - 1
-        closer = partners.get(opener) if opener is not None else None
-        if closer is None:
-            end = declaration_end[line]
-        else:
-            end = bisect.bisect_right(starts, closer)
-        for name in _HS_IDENT_RE.findall(binder.group(1)):
-            bind(name, offset, min(end, top_level_end[line]))
-
-
-def _line_start_offsets(lines: list[str]) -> list[int]:
-    """Each line's absolute character offset in the joined source."""
-    offsets = [0]
-    for line in lines[:-1]:
-        offsets.append(offsets[-1] + len(line) + 1)
-    return offsets
-
-
-def _extend_where_declarations(lines: list[str], indents: list[int | None],
-                               starts: list[int], declaration_end: list[int],
-                               bind) -> None:
-    """Widen each `where` block's own declaration names to the whole
-    enclosing declaration -- the one binding form that reaches lines
-    ABOVE where it is written.
-
-    Only the declarations sitting at the block's own column are widened.
-    Their parameters, and anything nested deeper (a `let` inside a
-    `where` helper), keep the narrow regions `local_binding_regions`
-    already gave them, because those genuinely do not reach the parent
-    body."""
-    for w, line in enumerate(lines):
-        if indents[w] is None or not _WHERE_RE.search(line):
-            continue
-        column = indents[w]
-        owner = w
-        for j in range(w - 1, -1, -1):
-            if indents[j] is not None and indents[j] < column:
-                owner = j
-                break
-        end = declaration_end[owner]
-
-        # An inline `f x = e where g = h` declares in the tail of this
-        # very line; an own-line `where` declares in the lines below it,
-        # at the first deeper column it establishes.
-        tail = line[_WHERE_RE.search(line).end():]
-        inline = _BINDING_LHS_RE.match(tail)
-        if inline:
-            bind(inline.group(1), starts[owner], end)
-
-        block_column: int | None = None
-        for j in range(w + 1, len(lines)):
-            indent = indents[j]
-            if indent is None:
-                continue
-            if indent <= column:
-                break
-            if block_column is None:
-                block_column = indent
-            if indent != block_column:
-                continue
-            declaration = _BINDING_LHS_RE.match(lines[j])
-            if declaration:
-                bind(declaration.group(1), starts[owner], end)
-
-
 def _applied_head(tokens: list[Token], head: int) -> int | None:
     """`head` if the accessor at that index is APPLIED to something,
     else `None`.
@@ -2989,57 +2638,29 @@ def _operand_head(tokens: list[Token], last: int) -> int | None:
     return inner if inner < len(tokens) else None
 
 
-def _let_group_segments(tail: str) -> list[str]:
-    """A `let`'s binding group, split into one segment per binding.
+def first_argument_token(tokens: list[Token], index: int
+                         ) -> tuple[int | None, bool]:
+    """`(index of the first argument's head identifier, was a grouping
+    token consumed)` for the mutation primitive at `tokens[index]`.
 
-    Layout is the usual spelling, but the group may also be written with
-    EXPLICIT braces and semicolons -- `let { a = p; b = q } in ...` --
-    in which case the braces are punctuation around the same bindings
-    and would otherwise make every one of them unparseable. The opening
-    brace is dropped and each segment ends at a closing one, so the `in`
-    expression after the group contributes no binding."""
-    stripped = tail.lstrip()
-    if stripped.startswith("{"):
-        tail = stripped[1:]
-    return [segment.split("}")[0] for segment in tail.split(";")]
-
-
-def _first_argument_head(tokens: list[Token], index: int) -> int | None:
-    """Token index of the head identifier of `tokens[index]`'s first
-    argument, when that argument is an APPLICATION -- `prim (accessor
-    handle) ...` or `prim $ accessor handle`, with leading `(`s peeled
-    so `prim ((accessor handle)) ...` resolves the same. Otherwise
-    `None`.
-
-    __Requiring the application is a type argument, not a heuristic.__
-    Every accessor here projects out of a handle -- `EngineEnv -> IORef
-    a`, or `XCapability -> IORef a` -- so it cannot itself BE the
-    `IORef` a mutation primitive takes. A BARE identifier in that
-    position therefore never denotes the accessor; it denotes some
-    local binding that happens to share its name, exactly like
-    `src/Unit/Thread/Movement.hs`'s `utsRef` parameter. That is decided
-    here, by shape, without consulting a binding at all --
-    `local_binding_regions` is what handles a shadow that IS applied,
-    and it decides that per line rather than per block.
-
-    The one construct that could put a genuine `IORef` under an
-    accessor's bare name is a record wildcard or field pun over a
-    capability record (`RenderCapability{..}`). Nothing in the tree does
-    that today, and such a use is not silently dropped: with no
-    application to consume it inline it surfaces in the pass-on residue,
-    like every other use the scan cannot attribute (D-5)."""
+    The head is returned whether or not it is APPLIED, because naming it
+    is what `classify_mutation_site` needs and being applied is what
+    `_first_argument_head` needs. `grouped` says whether anything that
+    OPENS an argument -- a `(`, a `$`, a `$!`, a visible type
+    application -- was stepped over on the way, which is what separates
+    "an argument is being formed here and I cannot read it" from "this
+    primitive is not applied to anything here"."""
     j = _past_primitive_parentheses(tokens, index)
-    grouped = False
-    while j < len(tokens):
+    grouped = j != index + 1
+    while j < len(tokens) and tokens[j].kind == "punc":
         token = tokens[j]
-        if token.kind != "punc":
-            break
         if token.text == "@":
             # A visible type application (`writeIORef @Int (ref) v`,
             # legal under GHC2024's default `TypeApplications`) is not
             # the value argument. Skip its type atom -- an identifier,
             # or one balanced group -- and keep looking.
             j = _skip_type_atom(tokens, j + 1)
+            grouped = True
             continue
         if token.text in ("$", "("):
             grouped = True
@@ -3051,66 +2672,151 @@ def _first_argument_head(tokens: list[Token], index: int) -> int | None:
                 j += 1
             continue
         break
-    if not grouped or j >= len(tokens) or tokens[j].kind != "id":
+    if j < len(tokens) and tokens[j].kind == "id":
+        return j, grouped
+    return None, grouped
+
+
+def _first_argument_head(tokens: list[Token], index: int) -> int | None:
+    """Token index of the head identifier of `tokens[index]`'s first
+    argument, when that argument is an APPLICATION -- `prim (accessor
+    handle) ...` or `prim $ accessor handle`. Otherwise `None`.
+
+    __Requiring the application is a type argument, not a heuristic.__
+    Every accessor here projects out of a handle -- `EngineEnv -> IORef
+    a`, or `XCapability -> IORef a` -- so it cannot itself BE the
+    `IORef` a mutation primitive takes. A BARE identifier in that
+    position therefore never denotes the accessor; it denotes some
+    local binding that happens to share its name, exactly like
+    `src/Unit/Thread/Movement.hs`'s `utsRef` parameter. That is decided
+    by SHAPE, without modelling Haskell's binding forms at all -- see
+    `SHADOW_EXEMPTIONS` for the one residual case and why it is a
+    checked-in list rather than a scope analysis."""
+    head, grouped = first_argument_token(tokens, index)
+    if head is None or not grouped:
         return None
-    return _applied_head(tokens, j)
+    return _applied_head(tokens, head)
+
+
+class MutationSite(NamedTuple):
+    """One mutation-primitive occurrence and what the scan made of it.
+
+    `kind` is exactly one of:
+
+    * `"write"` -- an APPLIED, in-scope, non-exempt accessor: attributed
+      to `field`.
+    * `"other"` -- a nameable head that is not this boundary's business:
+      a local `IORef`, an unapplied accessor, an accessor the module
+      cannot reach, an exempted shadow, or the primitive used as a
+      VALUE rather than applied to anything here.
+    * `"unclassifiable"` -- an argument is plainly being formed and the
+      scan cannot name its head. This BLOCKS (requirement 6): it is how
+      a spelling outside the recognized set fails loudly instead of
+      silently dropping a write.
+    """
+    relpath: str
+    line: int
+    module: str
+    kind: str
+    field: str | None
+
+
+def classify_mutation_site(tokens: list[Token], index: int
+                           ) -> tuple[str, int | None]:
+    """`(kind, head token index)` for the mutation primitive at
+    `tokens[index]`, before scope is consulted -- `"applied"`,
+    `"bare"`, `"value"` or `"unclassifiable"`.
+
+    Every occurrence lands in exactly one of the four, which is what
+    makes the recognized-form list a closed set rather than an
+    aspiration."""
+    head, grouped = first_argument_token(tokens, index)
+    if head is not None:
+        applied = grouped and _applied_head(tokens, head) is not None
+        return ("applied" if applied else "bare"), head
+    if (index > 0 and tokens[index - 1].kind == "punc"
+            and tokens[index - 1].text == "`"):
+        operand = _operand_head(tokens, index - 2)
+        if operand is None:
+            return "unclassifiable", None
+        applied = _infix_left_operand_head(tokens, index) is not None
+        return ("applied" if applied else "bare"), operand
+    return ("unclassifiable" if grouped else "value"), None
+
+
+class WriteScan(NamedTuple):
+    """Everything one pass over the production tree establishes."""
+    writes: dict[str, set[str]]
+    residue: list[Occurrence]
+    sites: list[MutationSite]
+    suppressed: frozenset[tuple[str, str]]
 
 
 def scan_capability_writes(
     sources: dict[str, str], live_fields: list[str], *,
     permanent: frozenset[str] = PERMANENT_IMPORTERS,
     definer: str = PERMANENT_DEFINER,
-) -> tuple[dict[str, set[str]], list[Occurrence]]:
-    """Pure core of the CMA-1 scan: `({EngineEnv field: writing
-    modules}, residue)`.
+    exemptions: dict[tuple[str, str], str] | None = None,
+) -> WriteScan:
+    """Pure core of the CMA-1 scan.
 
     Both a RAW `EngineEnv` accessor (a narrow-import consumer) and a
     CAPABILITY-record accessor canonicalize onto the same `EngineEnv`
     field, so the two consumer shapes are one boundary. Accessor AND
     mutation primitive are each recognized qualified (`State.fieldOne`,
-    `Ref.writeIORef`) as readily as bare. Two gates keep a textual match
-    honest: the identifier must be in scope in that module under the
-    exact spelling used (`parse_imports`/`imports_name`) and not
-    shadowed at that line by a local binding
-    (`local_binding_regions`), and it must head an APPLIED argument of
-    an `IORef` mutation primitive -- the first argument of a prefix
-    application (`_first_argument_head`), or the left operand of a
-    backticked infix one (`_infix_left_operand_head`).
+    `Ref.writeIORef`) as readily as bare.
+
+    Two rules decide an attribution, and neither models Haskell's
+    binding forms: the identifier must be in scope in that module under
+    the exact spelling used (`parse_imports`/`imports_name`), and it
+    must head an APPLIED argument of the primitive -- the first argument
+    of a prefix application (`_first_argument_head`), or the left
+    operand of a backticked infix one (`_infix_left_operand_head`).
+    `SHADOW_EXEMPTIONS` covers the residue of that: a module that binds
+    a name matching an accessor AND applies it to a handle.
+
+    EVERY mutation-primitive occurrence is classified exactly once
+    (`classify_mutation_site`), and a site whose argument the scan
+    cannot read is recorded as `unclassifiable` for `main` to fail on --
+    requirement 6, and what keeps the recognized-form list closed.
 
     `permanent`/`definer` are SS6.1's cohort (D-4), excluded from the
     write map -- their authority is not what this boundary constrains.
-    They are parameters so the self-test can drive small synthetic
-    fixtures instead of the real ~200-module tree.
+    They are parameters, like `exemptions`, so the self-test can drive
+    small synthetic fixtures instead of the real ~200-module tree.
 
     The residue is every remaining CAPABILITY-accessor use -- a helper
     argument, a context-record field, a queue/`TVar`/`MVar` handle, a
     point-free composition -- i.e. exactly what the write scan cannot
-    attribute (D-5). Occurrences are counted individually, never
-    deduplicated to field/module pairs. An accessor's own defining
-    capability module is excluded, because its record declaration,
-    export list and projection are declarations rather than uses."""
+    attribute (D-5). A direct `readIORef` application to a known
+    accessor is an inline READ, not a pass-on. Occurrences are counted
+    individually, never deduplicated to field/module pairs. An
+    accessor's own defining capability module is excluded, because its
+    record declaration, export list and projection are declarations
+    rather than uses."""
     exempt = set(permanent) | {definer}
+    shadows = SHADOW_EXEMPTIONS if exemptions is None else exemptions
     accessors = capability_accessor_map(sources, live_fields)
     raw_fields = set(live_fields)
 
     writes: dict[str, set[str]] = {field: set() for field in live_fields}
     residue: list[Occurrence] = []
+    sites: list[MutationSite] = []
+    suppressed: set[tuple[str, str]] = set()
 
     for relpath, text in sorted(sources.items()):
         module = module_identifier(relpath)
         declarations = parse_imports(text)
         code = prepared_source(text)
         tokens = tokenize_haskell(code)
-        shadows = local_binding_regions(code)
 
-        def resolve(name: str, offset: int) -> tuple[str, str, str] | None:
+        def resolve(name: str) -> tuple[str, str, str] | None:
             """`(EngineEnv field, owning module, base accessor name)` for
-            an occurrence spelled `name` at character `offset`, or
-            `None` when it names no accessor this module can reach
-            there -- `Other.fieldOne` is not this field, a bare
-            `fieldOne` is not it in a module that imports the owner
-            `qualified`, and neither is one a local binding shadows at
-            that position."""
+            an occurrence spelled `name` here, or `None` when it names no
+            accessor this module can reach under that exact spelling --
+            `Other.fieldOne` is not this field, and neither is a bare
+            `fieldOne` in a module that imports the owner `qualified` or
+            `hiding` it."""
             qualifier, _, base = name.rpartition(".")
             if base in raw_fields:
                 field, owner = base, STATE_MODULE
@@ -3119,10 +2825,6 @@ def scan_capability_writes(
                 if entry is None:
                     return None
                 field, owner = entry
-            if not qualifier and any(
-                    start <= offset < end
-                    for start, end in shadows.get(base, ())):
-                return None
             if not qualifier and module == owner:
                 return field, owner, base
             if not imports_name(declarations, owner, base, qualifier):
@@ -3146,19 +2848,38 @@ def scan_capability_writes(
             head = _first_argument_head(tokens, index)
             if head is None:
                 head = _infix_left_operand_head(tokens, index)
-            if head is None:
+            if head is not None:
+                inline_heads.add(head)
+            if primitive not in IOREF_WRITE_PRIMITIVES:
                 continue
-            inline_heads.add(head)
-            if primitive not in IOREF_WRITE_PRIMITIVES or module in exempt:
+
+            kind, candidate = classify_mutation_site(tokens, index)
+            if kind == "unclassifiable":
+                sites.append(MutationSite(
+                    relpath, token.line, module, "unclassifiable", None))
                 continue
-            resolved = resolve(tokens[head].text, tokens[head].offset)
-            if resolved is not None:
-                writes[resolved[0]].add(module)
+            field = None
+            if kind == "applied" and candidate is not None:
+                resolved = resolve(tokens[candidate].text)
+                if resolved is not None:
+                    field = resolved[0]
+            if field is None or module in exempt:
+                sites.append(
+                    MutationSite(relpath, token.line, module, "other", field))
+                continue
+            if (module, field) in shadows:
+                suppressed.add((module, field))
+                sites.append(
+                    MutationSite(relpath, token.line, module, "other", field))
+                continue
+            writes[field].add(module)
+            sites.append(
+                MutationSite(relpath, token.line, module, "write", field))
 
         for index, token in enumerate(tokens):
             if token.kind != "id":
                 continue
-            resolved = resolve(token.text, token.offset)
+            resolved = resolve(token.text)
             if resolved is None:
                 continue
             field, owner, base = resolved
@@ -3169,7 +2890,64 @@ def scan_capability_writes(
                 Occurrence(relpath, token.line, base, field, module))
 
     residue.sort()
-    return writes, residue
+    sites.sort()
+    return WriteScan(writes, residue, sites, frozenset(suppressed))
+
+
+def audit_mutation_sites(sites: list[MutationSite]) -> list[str]:
+    """Requirement 6: no mutation-primitive occurrence may go
+    unclassified.
+
+    This is what makes the recognized-form list in
+    docs/engineenv_capability_inventory.md SS6.5 a CLOSED set. Without
+    it, a spelling the scan does not model -- a new operator, an
+    unfamiliar grouping -- silently drops the write and the map keeps
+    claiming a guarantee it no longer provides. With it, the gate stops
+    and names the site instead."""
+    return [
+        f"{site.relpath}:{site.line} mutates an `IORef` through an "
+        f"expression this audit cannot read -- every mutation site must "
+        f"classify (docs/{INVENTORY_PATH.name} SS6.5's recognized write "
+        f"forms). Extend the scan and that list together, or restate the "
+        f"site in a recognized form; do NOT leave it unread, because an "
+        f"unread site is an unenforced field"
+        for site in sites if site.kind == "unclassifiable"]
+
+
+def audit_shadow_exemptions(
+    suppressed: frozenset[tuple[str, str]], live_fields: list[str], *,
+    exemptions: dict[tuple[str, str], str] | None = None,
+) -> list[str]:
+    """Requirement 7's other half: each exemption must name a live
+    field, carry a real reason, and still be doing something.
+
+    Checked in both directions like every other list in this file -- a
+    stale exemption is a suppression nobody is watching any more, which
+    is exactly the silent hole the map exists to close."""
+    shadows = SHADOW_EXEMPTIONS if exemptions is None else exemptions
+    fields = set(live_fields)
+    violations: list[str] = []
+    for (module, field), reason in sorted(shadows.items()):
+        if field not in fields:
+            violations.append(
+                f"SHADOW_EXEMPTIONS names `{field}` for `{module}`, which "
+                f"is not a live `EngineEnv` field -- remove the stale "
+                f"entry")
+            continue
+        if not reason or not reason.strip() or _is_placeholder(reason):
+            violations.append(
+                f"the SHADOW_EXEMPTIONS entry for `{module}`/`{field}` "
+                f"carries no real reason -- an exemption suppresses a "
+                f"detected write, so it states why that write is a local "
+                f"binding rather than the field")
+            continue
+        if (module, field) not in suppressed:
+            violations.append(
+                f"`{module}` is exempted from writing `{field}` but no "
+                f"such write is detected any more -- remove the stale "
+                f"entry, the same way the writing-module map is checked "
+                f"in both directions")
+    return violations
 
 
 def audit_writer_modules(
@@ -3242,8 +3020,8 @@ def main() -> int:
     # The pass-on residue is non-blocking evidence (D-5), so it is
     # printed FIRST -- before any check that can `return 1` -- and the
     # measurement survives a failure anywhere below it.
-    field_writes, residue = scan_capability_writes(
-        production_sources, live_fields)
+    scan = scan_capability_writes(production_sources, live_fields)
+    field_writes, residue = scan.writes, scan.residue
     for line in format_residue(residue):
         print(line)
     print()
@@ -3308,6 +3086,21 @@ def main() -> int:
             print(f"  - {v}")
         return 1
 
+    site_violations = audit_mutation_sites(scan.sites)
+    if site_violations:
+        print(f"{len(site_violations)} unclassifiable mutation site(s):")
+        for v in site_violations:
+            print(f"  - {v}")
+        return 1
+
+    exemption_violations = audit_shadow_exemptions(
+        scan.suppressed, live_fields)
+    if exemption_violations:
+        print(f"{len(exemption_violations)} SHADOW_EXEMPTIONS violation(s):")
+        for v in exemption_violations:
+            print(f"  - {v}")
+        return 1
+
     writer_violations = audit_writer_modules(field_writes, live_fields)
     if writer_violations:
         print(f"{len(writer_violations)} SS5 writing-module map "
@@ -3333,8 +3126,10 @@ def main() -> int:
           f"naming `inputBarrierNextRef`/`currentKeyDownRef` (SS7.3), "
           f"{mapped_fields}/{total_fields} field(s) carrying a non-empty "
           f"writing-module map covering {mapped_pairs} field-module pair(s) "
-          f"with no undeclared or stale entry (SS5), and {len(residue)} "
-          f"reported pass-on residue use(s)")
+          f"with no undeclared or stale entry (SS5) over "
+          f"{len(scan.sites)} classified mutation site(s) and "
+          f"{len(SHADOW_EXEMPTIONS)} shadow exemption(s), and "
+          f"{len(residue)} reported pass-on residue use(s)")
     return 0
 
 
