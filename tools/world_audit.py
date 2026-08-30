@@ -238,18 +238,32 @@ def check_lava_rim_containment(grid: dict[tuple[int, int], dict[str, Any]],
                                issues: list[Issue]) -> None:
     """Lava tiles whose rim cannot hold the pool at its own surface (#1876).
 
-    `src/World/Magma/Pool.hs` grows a pool from a breach cluster's lowest
-    opening and floods "the connected region of terrain at or below that
-    level", with `floodPool`'s `grow` clamping the level below the basin's
-    spill saddle so the pool "can never sheet downhill out of the
-    depression". A correctly grown pool therefore has EVERY dry rim tile at
-    or above its surface, and this check tests exactly that invariant.
+    A pool is supposed to be CONTAINED: every dry tile bordering it sits at
+    or above its surface, so nothing is perched or spilling. This checks
+    exactly that, on the tiles `--dump` actually emits.
 
-    It is not vacuously true: `grow` also stops at the area cap
-    (`n >= poolArea`) and at the jittered radius bound (`withinRim`, whose
-    own comment describes growth as "radius-limited"), and either early-out
-    can leave a truncated pool with a lower dry rim tile beside it. Those
-    truncation artifacts are what this category counts.
+    **What that does and does not observe.** Containment is established
+    twice over, and only the SECOND is visible here. `World.Magma.Pool`'s
+    `floodPool.grow` clamps a pool below its basin's spill saddle — but it
+    also stops at the area cap (`n >= poolArea`) and the jittered radius
+    bound (`withinRim`), either of which can end growth beside a lower dry
+    tile. That raw rim never reaches a dump: `World.Generate.Chunk` raises
+    every OUTERMOST pool tile to the pool surface as a basalt cap
+    (`poolRimCaps` → `applyBasaltCaps`) and `applyLavaShell` strips the
+    zero-depth lava film off it, leaving a basalt wall FLUSH with the lava.
+    So a `grow` truncation is repaired before the audit can see it, and
+    post-cap data cannot show whether one happened.
+
+    What this check therefore guards is that SEALING pipeline: a regression
+    in the rim caps, the terrain patch or the shell would leave a real rim
+    tile below the surface and fail here. The zero it measures across the
+    baselines is evidence the seal holds, not evidence `grow` never
+    truncates. `tools/test_audit.py`'s
+    `test_lava_rim_on_real_generated_output` pins that reading — it drives a
+    real seed-12321 dump, asserts the rim is present and flush, and then
+    lowers one real rim tile to prove the predicate is a live guard rather
+    than dead code. Auditing the PRE-cap rim would need the dump to expose
+    it, which is engine-side work #1876 puts out of scope.
 
     Containment is a per-tile rim property, so no pool-connectivity pass is
     needed. One offending lava tile emits AT MOST one occurrence however
@@ -1160,18 +1174,20 @@ QUALITY_THRESHOLDS = {
                                   # FLOATING_LAKE. 1.5× obs-max is 16.5,
                                   # rounded up per the policy above.
     "LAVA_RIM_BREACH":        0,  # observed max 0 — NO baseline seed
-                                  # produces one, which is the
-                                  # World.Magma.Pool invariant holding:
-                                  # every grown pool's dry rim sits at or
-                                  # above its surface. 1.5× obs-max is 0,
-                                  # so the cap is 0 and any breach fails.
-                                  # It stays QUALITY rather than BUG
-                                  # because `grow`'s area/radius
-                                  # early-outs make a breach a generation
-                                  # TUNING artifact, not corruption —
-                                  # raising this is the evidence-backed
-                                  # response to a deliberate generator
-                                  # change, which BUG would forbid.
+                                  # produces one, because Chunk.hs's rim
+                                  # caps + lava shell seal every pool's
+                                  # rim flush with its surface before the
+                                  # dump exists (see the check). The zero
+                                  # therefore measures that SEALING pass,
+                                  # not World.Magma.Pool.grow's own
+                                  # clamp. 1.5× obs-max is 0, so the cap
+                                  # is 0 and any breach fails. It stays
+                                  # QUALITY rather than BUG because the
+                                  # seal is a generation TUNING pass, not
+                                  # corruption — raising this is the
+                                  # evidence-backed response to a
+                                  # deliberate generator change, which
+                                  # BUG would forbid.
     "LAVA_RIM_INCOMPLETE":   20,  # observed max 13 (seed 5050); 1.5× is
                                   # 19.5, rounded up. Counts lava tiles
                                   # whose containment could not be judged
