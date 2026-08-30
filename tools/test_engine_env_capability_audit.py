@@ -37,7 +37,7 @@ from engine_env_capability_audit import (  # type: ignore
     _import_chunks, _strip_haskell_comments,
     CAPABILITY_WRITER_MODULES, capability_accessor_map,
     scan_capability_writes, audit_writer_modules, format_residue,
-    tokenize_haskell,
+    tokenize_haskell, parse_imports, imports_name,
 )
 from persistence_inventory_audit import extract_record_fields  # type: ignore
 
@@ -2057,6 +2057,36 @@ replacedName ∷ State.EngineEnv → IO ()
 replacedName env = writeIORef (Engine.Core.State.fieldTwo env) 7
 """
 
+# A mutation primitive is itself under a qualifier too. Missing this
+# spelling would let an undeclared writer through in silence.
+_QUALIFIED_PRIMITIVE = """\
+module QualPrim.Mod where
+
+import qualified Data.IORef as Ref
+import Engine.Core.State (EngineEnv, fieldOne)
+
+bump ∷ EngineEnv → IO ()
+bump env = Ref.writeIORef (fieldOne env) 1
+"""
+
+# `qualified` removes the UNQUALIFIED spelling from scope, so this
+# module's own `fieldOne` helper is not the field even though the owner
+# is imported -- while `State.fieldTwo` in the same module is.
+_QUALIFIED_ONLY = """\
+module QualOnly.Mod where
+
+import qualified Engine.Core.State as State
+
+fieldOne ∷ State.EngineEnv → IORef Int
+fieldOne _ = error "this module's own helper, not the accessor"
+
+viaHomonym ∷ State.EngineEnv → IO ()
+viaHomonym env = writeIORef (fieldOne env) 2
+
+viaQualifier ∷ State.EngineEnv → IO ()
+viaQualifier env = writeIORef (State.fieldTwo env) 3
+"""
+
 # A bare first argument: never the accessor (it projects out of a
 # handle, so it cannot BE the `IORef`), and for a capability accessor
 # it surfaces in the residue rather than being silently dropped.
@@ -2126,6 +2156,8 @@ def _writer_sources(**modules: str) -> dict[str, str]:
         "qualified": "src/Qualified/Mod.hs",
         "misqualified": "src/Misqualified/Mod.hs",
         "bare": "src/Bare/Mod.hs",
+        "qualPrim": "src/QualPrim/Mod.hs",
+        "qualOnly": "src/QualOnly/Mod.hs",
         "explicit": "src/Explicit/Mod.hs",
         "multiline": "src/Multi/Mod.hs",
     }
@@ -2361,6 +2393,67 @@ def test_a_qualifier_must_name_the_owning_module():
            f"{sorted(writes['fieldTwo'])}")
 
 
+def test_qualified_mutation_primitives_are_recognized():
+    """A mutation primitive under a qualifier -- `Ref.writeIORef`, from
+    `import qualified Data.IORef as Ref` -- is the same write, and
+    missing it would be a silent hole rather than a conservative
+    miss."""
+    writes, _ = _scan(_writer_sources(qualPrim=_QUALIFIED_PRIMITIVE))
+    expect(writes["fieldOne"] == {"QualPrim.Mod"},
+           f"`Ref.writeIORef` must be recognized as a mutation "
+           f"primitive, got: {sorted(writes['fieldOne'])}")
+
+
+def test_a_qualified_only_import_excludes_the_bare_spelling():
+    """`qualified` removes the UNQUALIFIED spelling from scope entirely,
+    so a module-local homonym is not the field even though the owner is
+    imported -- while the qualified spelling in the same module still
+    is. Merging every import of a module into one scope answer loses
+    exactly this distinction."""
+    writes, _ = _scan(_writer_sources(qualOnly=_QUALIFIED_ONLY))
+    expect(writes["fieldOne"] == set(),
+           f"a bare `fieldOne` is out of scope under a qualified-only "
+           f"import, got: {sorted(writes['fieldOne'])}")
+    expect(writes["fieldTwo"] == {"QualOnly.Mod"},
+           f"`State.fieldTwo` in the same module must still be "
+           f"attributed, got: {sorted(writes['fieldTwo'])}")
+
+
+def test_import_declarations_record_qualification_and_alias():
+    """`parse_imports` keeps each declaration separate, because one
+    module is legitimately imported twice on different terms and each
+    declaration carries its own answer."""
+    declarations = parse_imports(
+        "import Engine.Core.State (EngineEnv, fieldOne)\n"
+        "import qualified Engine.Core.State as State\n"
+        "import Data.IORef qualified as Ref\n"
+        "import Data.Map hiding (lookup)\n")
+    shape = [(d.module, d.qualified, d.qualifier,
+              None if d.names is None else sorted(d.names))
+             for d in declarations]
+    expect(shape == [
+        ("Engine.Core.State", False, "Engine.Core.State",
+         ["EngineEnv", "fieldOne"]),
+        ("Engine.Core.State", True, "State", None),
+        ("Data.IORef", True, "Ref", None),
+        ("Data.Map", False, "Data.Map", None),
+    ], f"each import's qualification, qualifier and name list must be "
+       f"recorded separately (`ImportQualifiedPost` included), got: "
+       f"{shape}")
+
+    expect(imports_name(declarations, "Engine.Core.State", "fieldOne", ""),
+           "the unqualified declaration puts the bare name in scope")
+    expect(imports_name(declarations, "Engine.Core.State", "fieldOne",
+                        "State"),
+           "the qualified declaration puts `State.fieldOne` in scope")
+    expect(not imports_name(declarations[1:], "Engine.Core.State",
+                            "fieldOne", ""),
+           "a qualified-only import puts NO bare spelling in scope")
+    expect(not imports_name(declarations, "Engine.Core.State", "fieldOne",
+                            "Ref"),
+           "a qualifier bound to another module resolves nothing here")
+
+
 def test_a_bare_argument_surfaces_as_residue():
     """A bare accessor name in a mutation primitive's first argument is
     never attributed -- and when it is a CAPABILITY accessor (the record
@@ -2388,7 +2481,7 @@ def test_import_declarations_are_not_uses():
     four lines and writes only the first, so the import declaration --
     the one place both tokens appear together -- must register as
     neither a write nor a residue use. It also drives
-    `imported_symbols`' explicit-name path, which `FakeCapability(..)`
+    `parse_imports`' explicit-name path, which `FakeCapability(..)`
     never reaches."""
     writes, residue = _scan(_writer_sources(explicit=_EXPLICIT_IMPORTER))
     expect(writes["fieldOne"] == {"Explicit.Mod"},
@@ -2600,6 +2693,9 @@ def main() -> int:
         test_a_later_binder_cannot_hide_an_earlier_write,
         test_qualified_accessors_are_resolved,
         test_a_qualifier_must_name_the_owning_module,
+        test_qualified_mutation_primitives_are_recognized,
+        test_a_qualified_only_import_excludes_the_bare_spelling,
+        test_import_declarations_record_qualification_and_alias,
         test_a_bare_argument_surfaces_as_residue,
         test_import_declarations_are_not_uses,
         test_multiline_expressions_are_scanned,

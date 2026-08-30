@@ -1213,9 +1213,9 @@ already-wrong role cell stays wrong until someone reads it (D-2a).
 an `IORef` mutation primitive is applied directly to a known accessor
 application — `writeIORef (accessor handle) …`, whether through the
 field's own `EngineEnv` accessor or through any capability-record
-accessor projecting it, bare or qualified (`State.fieldOne`, under the
-module's own name or an `as` alias), and whether or not the expression
-spans several lines. Mutation through a queue, a `TVar`, an `MVar`, an
+accessor projecting it, and whether or not the expression spans
+several lines. Accessor *and* primitive are each recognized qualified
+(`State.fieldOne`, `Ref.writeIORef`) as readily as bare. Mutation through a queue, a `TVar`, an `MVar`, an
 opaque internally-synchronized handle (`SaveBarrier`, `LoadStatusRef`),
 or a helper that was *given* the `IORef` is invisible to a textual scan
 and is deliberately out of scope: resolving it means interprocedural
@@ -1244,15 +1244,20 @@ mechanism that travels with the handle.
 **Two gates keep a textual match honest**, and they are independent on
 purpose — neither is asked to be complete by itself:
 
-1. **Import scope.** The identifier must actually reach the accessor in
-   that module: imported by name, through a `(..)` wildcard or a bare
-   import, or defined by the module itself. A qualified spelling must
-   additionally resolve through a prefix that module's own imports
-   establish *for the owning module* — an alias replaces the module
-   name rather than joining it. `src/Unit/Thread/Movement.hs` writes a
-   local `utsRef` parameter while importing `Engine.Core.State` for the
-   `EngineEnv` *type* alone, so the identical name there is not the
-   field.
+1. **Import scope, under the exact spelling used.** The identifier must
+   actually reach the accessor in that module: imported by name,
+   through a `(..)` wildcard or a bare import, or defined by the module
+   itself. Each `import` declaration is kept separate rather than
+   merged into one answer per module, because the three things that
+   decide this are per-declaration language rules — `qualified`
+   removes the *unqualified* spelling from scope entirely, an `as`
+   alias *replaces* the module name as the qualifier rather than
+   joining it, and one module is legitimately imported twice on
+   different terms. So under `import qualified Engine.Core.State as
+   State` only `State.fieldOne` is the field and a bare `fieldOne` is
+   something the module defined itself, while
+   `src/Unit/Thread/Movement.hs` writes a local `utsRef` parameter
+   under an import that names the `EngineEnv` *type* alone.
 2. **Applied position.** The accessor must head the first argument of a
    mutation primitive *and* that argument must be an application —
    `prim (accessor handle) …`. This is a type argument, not a

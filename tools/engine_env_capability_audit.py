@@ -2191,12 +2191,16 @@ _IMPORT_WILDCARD_RE = re.compile(r"\(\s*\.\.\s*\)")
 # text, so a record construction or update -- `env { fooRef = r }`, or a
 # continuation line starting with `,` or `{` -- is never mistaken for
 # one. Group 1 is the bound name, group 2 its parameter text.
-# An import's module name and its optional `as` alias. Which of the two
-# may prefix a qualified use is a language rule, not a preference: an
-# aliased import REPLACES the module name as the qualifier.
-_IMPORT_ALIAS_RE = re.compile(
-    r"^import\s+(?:qualified\s+)?([A-Z][A-Za-z0-9_.']*)"
-    r"(?:\s+as\s+([A-Z][A-Za-z0-9_.']*))?")
+# An import's `qualified` keyword, module name, and optional `as`
+# alias, in either the classic or the `ImportQualifiedPost` order. All
+# three matter, and each is a language rule rather than a preference:
+# `qualified` removes the UNQUALIFIED spelling from scope entirely, and
+# an `as` alias REPLACES the module name as the qualifier instead of
+# joining it.
+_IMPORT_DECL_RE = re.compile(
+    r"^import\s+(?P<pre>qualified\s+)?(?P<module>[A-Z][A-Za-z0-9_.']*)"
+    r"(?P<post>\s+qualified\b)?"
+    r"(?:\s+as\s+(?P<alias>[A-Z][A-Za-z0-9_.']*))?")
 
 
 class Token(NamedTuple):
@@ -2204,6 +2208,22 @@ class Token(NamedTuple):
     kind: str   # "id" | "punc"
     text: str
     line: int   # 1-based
+
+
+class ImportDecl(NamedTuple):
+    """One `import` declaration, reduced to what name resolution needs.
+
+    `qualifier` is the prefix a QUALIFIED use must carry -- the `as`
+    alias when there is one, otherwise the module's own name.
+    `qualified` says whether the UNQUALIFIED spelling is in scope at
+    all: `import qualified M as N` puts only `N.f` in scope, never `f`,
+    which is why the two flags cannot be collapsed into one map.
+    `names` is `None` for an import whose list does not enumerate what
+    it brings in (bare, `(..)`-carrying, or `hiding`)."""
+    module: str
+    qualified: bool
+    qualifier: str
+    names: frozenset[str] | None
 
 
 class Occurrence(NamedTuple):
@@ -2300,46 +2320,59 @@ def prepared_source(text: str) -> str:
     return strip_import_declarations(_strip_haskell_comments(text))
 
 
-def imported_symbols(source_text: str
-                     ) -> tuple[dict[str, set[str] | None], dict[str, str]]:
-    """`({module: set of explicitly imported names}, {qualifier: module})`.
+def parse_imports(source_text: str) -> list[ImportDecl]:
+    """Every `import` declaration in `source_text`, as `ImportDecl`s.
 
-    In the first map, `None` means unrestricted -- a bare import, or one
-    whose list carries a `(..)` wildcard or a `hiding` clause, none of
-    which enumerates what it brings into scope. A module ABSENT from it
-    is not imported at all, which is a third answer and not the same as
-    `None`.
+    A LIST, not a map keyed by module: one module is legitimately
+    imported twice with different terms (`import Data.Map (Map)` beside
+    `import qualified Data.Map as M`), and each declaration carries its
+    own answer about which spellings it admits.
 
-    The second map is what makes a QUALIFIED use resolvable:
-    `writeIORef (State.fieldOne env) ...` names the field just as much
-    as the unqualified spelling does, and dropping it would be a silent
-    hole in the gate rather than a conservative miss. Which prefix is
-    legal is a language rule -- `import qualified M as N` makes `N` the
-    only qualifier, an unaliased import makes `M` itself one -- so the
-    alias replaces the module name rather than joining it.
-
-    Together these decide whether an identifier at a write site can even
-    BE the accessor: `src/Unit/Thread/Movement.hs` writes a local
-    `utsRef` parameter while importing `Engine.Core.State` for the
-    `EngineEnv` TYPE alone, so the identical name there is not the
-    field."""
-    scopes: dict[str, set[str] | None] = {}
-    qualifiers: dict[str, str] = {}
+    This is what decides whether an identifier at a write site can even
+    BE the accessor -- in both directions. `src/Unit/Thread/Movement.hs`
+    writes a local `utsRef` parameter while importing
+    `Engine.Core.State` for the `EngineEnv` TYPE alone, so the identical
+    name there is not the field; and under
+    `import qualified Engine.Core.State as State` only `State.fieldOne`
+    is the field, while a bare `fieldOne` is necessarily something the
+    module defined itself."""
+    declarations: list[ImportDecl] = []
     for chunk in _import_chunks(_strip_haskell_comments(source_text)):
-        head = _IMPORT_ALIAS_RE.match(chunk)
+        head = _IMPORT_DECL_RE.match(chunk)
         if not head:
             continue
-        module, alias = head.group(1), head.group(2)
-        qualifiers[alias or module] = module
+        module = head.group("module")
+        alias = head.group("alias")
+        qualified = bool(head.group("pre") or head.group("post"))
         body = chunk[head.end():]
         if ("(" not in body or "hiding" in body
                 or _IMPORT_WILDCARD_RE.search(body)):
-            scopes[module] = None
+            names: frozenset[str] | None = None
+        else:
+            names = frozenset(_HS_IDENT_RE.findall(body))
+        declarations.append(
+            ImportDecl(module, qualified, alias or module, names))
+    return declarations
+
+
+def imports_name(declarations: list[ImportDecl], module: str, name: str,
+                 qualifier: str) -> bool:
+    """True iff `declarations` put `module`'s `name` in scope under the
+    spelling used -- `qualifier` empty for a bare use, otherwise the
+    prefix that was written. A qualified use must match a declaration's
+    own qualifier; an unqualified one must find a declaration that is
+    not `qualified` at all."""
+    for declaration in declarations:
+        if declaration.module != module:
             continue
-        names = set(_HS_IDENT_RE.findall(body))
-        existing = scopes.get(module, set())
-        scopes[module] = None if existing is None else (existing | names)
-    return scopes, qualifiers
+        if qualifier:
+            if declaration.qualifier != qualifier:
+                continue
+        elif declaration.qualified:
+            continue
+        if declaration.names is None or name in declaration.names:
+            return True
+    return False
 
 
 def capability_accessor_map(sources: dict[str, str], live_fields: list[str]
@@ -2425,14 +2458,15 @@ def scan_capability_writes(
 
     Both a RAW `EngineEnv` accessor (a narrow-import consumer) and a
     CAPABILITY-record accessor canonicalize onto the same `EngineEnv`
-    field, so the two consumer shapes are one boundary, and each is
-    recognized qualified (`State.fieldOne`, under the module's own name
-    or an `as` alias) as readily as bare. Two gates keep a textual match
+    field, so the two consumer shapes are one boundary. Accessor AND
+    mutation primitive are each recognized qualified (`State.fieldOne`,
+    `Ref.writeIORef`) as readily as bare. Two gates keep a textual match
     honest: the identifier must be in scope in that module under the
-    spelling used, and it must head an APPLIED first argument of an
-    `IORef` mutation primitive -- see `_first_argument_head` for why the
-    application is a type argument rather than a heuristic, and why no
-    local-binder scan is needed or wanted.
+    exact spelling used (`parse_imports`/`imports_name`), and it must
+    head an APPLIED first argument of an `IORef` mutation primitive --
+    see `_first_argument_head` for why the application is a type
+    argument rather than a heuristic, and why no local-binder scan is
+    needed or wanted.
 
     `permanent`/`definer` are SS6.1's cohort (D-4), excluded from the
     write map -- their authority is not what this boundary constrains.
@@ -2455,17 +2489,16 @@ def scan_capability_writes(
 
     for relpath, text in sorted(sources.items()):
         module = module_identifier(relpath)
-        scopes, qualifiers = imported_symbols(text)
+        declarations = parse_imports(text)
         code = prepared_source(text)
         tokens = tokenize_haskell(code)
 
         def resolve(name: str) -> tuple[str, str, str] | None:
             """`(EngineEnv field, owning module, base accessor name)` for
             an occurrence spelled `name` here, or `None` when it names no
-            accessor this module can reach. A qualified spelling must
-            resolve through a qualifier the module's own imports
-            establish, and must name the module that actually exports
-            the accessor -- `Other.fieldOne` is not this field."""
+            accessor this module can reach under that exact spelling --
+            `Other.fieldOne` is not this field, and neither is a bare
+            `fieldOne` in a module that imports the owner `qualified`."""
             qualifier, _, base = name.rpartition(".")
             if base in raw_fields:
                 field, owner = base, STATE_MODULE
@@ -2474,27 +2507,31 @@ def scan_capability_writes(
                 if entry is None:
                     return None
                 field, owner = entry
-            if qualifier:
-                if qualifiers.get(qualifier) != owner:
-                    return None
-            elif module == owner:
+            if not qualifier and module == owner:
                 return field, owner, base
-            if owner not in scopes:
-                return None
-            symbols = scopes[owner]
-            if symbols is not None and base not in symbols:
+            if not imports_name(declarations, owner, base, qualifier):
                 return None
             return field, owner, base
 
         inline_heads: set[int] = set()
         for index, token in enumerate(tokens):
-            if token.kind != "id" or token.text not in IOREF_ACCESS_PRIMITIVES:
+            if token.kind != "id":
+                continue
+            # A mutation primitive is just as much itself under a
+            # qualifier (`Ref.writeIORef`, from
+            # `import qualified Data.IORef as Ref`), and missing one
+            # would be a SILENT hole in the gate. The prefix is not
+            # checked against `Data.IORef`: a false match here only
+            # means the first argument is examined, and that argument
+            # must still resolve to an in-scope accessor.
+            primitive = token.text.rpartition(".")[2]
+            if primitive not in IOREF_ACCESS_PRIMITIVES:
                 continue
             head = _first_argument_head(tokens, index)
             if head is None:
                 continue
             inline_heads.add(head)
-            if token.text not in IOREF_WRITE_PRIMITIVES or module in exempt:
+            if primitive not in IOREF_WRITE_PRIMITIVES or module in exempt:
                 continue
             resolved = resolve(tokens[head].text)
             if resolved is not None:
