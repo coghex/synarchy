@@ -1154,6 +1154,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Preview.Discovery
                    Test.Headless.Preview.UnitAnimation
                    Test.Headless.Preview.Building
+                   Test.Headless.Preview.Zoom
                    Test.Headless.World.Save.Sanitize
                    Test.Headless.World.Save.Serialize
                    Test.Headless.World.Save.Envelope
