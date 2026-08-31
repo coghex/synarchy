@@ -1,8 +1,9 @@
 -- Transient unit-AI coordination registries (#1329).
 --
--- Seven module-local tables decide which acolyte is working what: the
+-- Eleven module-local tables coordinate unit AI transiently: the
 -- five coordinate claim registries (dig, chop, construct, till, plant),
--- plus repairClaims and repairPriority. None of them is persisted, and
+-- repairClaims and repairPriority, plus #916's four same-tick encounter
+-- episode overlays. None of them is persisted, and
 -- until #1329 nothing cleared them when a load replaced the session.
 -- Both id allocators REWIND across a load -- World/Load/Publish.hs
 -- assigns nextItemInstanceIdRef straight from the save, and

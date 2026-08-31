@@ -21,77 +21,10 @@ local ensureState         = core.ensureState
 
 local mv = require("scripts.movement_speed")
 local pace = require("scripts.unit_ai_pace")
--- #1769: the order stall accounting, so followCommandExecute below can
--- record which task the engine is actually walking. A leaf module (no
--- requires at all), so this is not a cycle.
-local stall = require("scripts.unit_ai_stall")
+local combatMove = require("scripts.unit_ai_combat_move")
 local staminaPct = pace.staminaPct
 
 local M = {}
-
------------------------------------------------------------
--- Action: follow_command
------------------------------------------------------------
--- An explicit player move order outranks routine autonomous behaviour:
--- above ambient wander, routine work (build/deliver/store/dig ≤6.0), and
--- the situational goals (find_water/notify) — so a right-click reliably
--- redirects a unit that is merely wandering, working, or scouting.
---
--- It is OUTRANKED by (the #306 ladder, re-derived against this 7.0
--- baseline — NOT the historical 1.0):
---   * dire SELF survival — drink (thirst·15, crosses 7.0 at thirst≈0.47)
---     and eat (≥7.5 whenever it fires), and a dry-canteen refill (peaks
---     7.5 near-empty): a unit tends to its own body first, then resumes;
---   * combat — engage/retreat (8.0+): a unit defends itself or flees a
---     hopeless fight rather than walking to a commanded tile;
---   * treatment — treat_ally (8.0): a medic finishes saving a life.
--- Peer to it: an explicit ground-item pickup (7.5) — also a player order,
--- nudged just above so it wins the move-vs-pickup tie.
--- commandedTask persists until maintainTask clears it on arrival/timeout,
--- so the unit resumes the move once the higher-priority action finishes.
--- Clearing it on ARRIVAL is not the end of the order's effect: a PLAYER
--- move leaves the unit holding the tile it named (#1216,
--- scripts/unit_ai_hold.lua), at this same utility, so what could
--- interrupt the walk can still interrupt the standing.
--- Exported (see the bottom of this file) so scripts/unit_ai_hold.lua's
--- own constant can be pinned equal to it by
--- Test.Headless.Lua.UnitAiHold rather than agreeing by coincidence:
--- a position hold (#1216) is the standing remainder of the order that
--- created it, and two numbers would be two ladders free to drift.
-local FOLLOW_COMMAND_UTILITY = 7.0
-
-local function followCommandUtility(uid, s, params)
-    if not s.commandedTask then return -math.huge end
-    return FOLLOW_COMMAND_UTILITY
-end
-
--- Adaptive pacing (#999): a sustained follow_command move downshifts to
--- a below-comfort recovery pace once stamina runs low, instead of
--- holding `ordered`'s small deficit until collapse. Mechanics
--- (hysteresis thresholds, grade-aware recovery, the per-tick
--- feedback loop) live in unit_ai_pace.lua; this action just picks the
--- initial pace on command start and delegates the continuous feedback.
-local function followCommandExecute(uid, s, params)
-    local task = s.commandedTask
-    if not task then return end
-    -- This is the one place a commanded task reaches unit.moveTo, so it
-    -- is where the stuck-walk watchdog's report attribution is bound
-    -- (#1769). unit_ai_core's commandMove replaces `s.commandedTask`
-    -- alone and unit_ai.lua does not re-run an already-running action,
-    -- so a replacement can be current for many ticks while the engine
-    -- is still walking its predecessor's destination -- and a watchdog
-    -- report in that window belongs to the predecessor, not to it.
-    stall.noteWalk(uid, task)
-    if task.speed then
-        -- Explicit-speed command: respect it as-is, no adaptive pacing.
-        task.paceMode = nil
-        unit.moveTo(uid, task.x, task.y, task.speed)
-        return
-    end
-    task.paceMode = pace.initialPaceMode(uid)
-    unit.moveTo(uid, task.x, task.y, pace.paceSpeed(uid, task.paceMode))
-end
-
 
 -----------------------------------------------------------
 -- Action: retreat
@@ -279,6 +212,11 @@ local THREAT_SOURCES = {
         score = function(uid, s, params)
             local att = unit.getLastAttacker(uid)
             if not att then return nil end
+            local hold = s.holdAnchor
+            if hold and hold.combatWithdrawalCompletedAt
+               and (att.at or 0) <= hold.combatWithdrawalCompletedAt then
+                return nil
+            end
             if engine.gameTime() - (att.at or 0)
                > ENGAGE_WINDOW_SEC then return nil end
             if not unit.exists(att.uid) then return nil end
@@ -425,9 +363,10 @@ local function computeAttackCooldown(uid, mode)
 end
 
 
-M.FOLLOW_COMMAND_UTILITY = FOLLOW_COMMAND_UTILITY
-M.followCommandUtility   = followCommandUtility
-M.followCommandExecute   = followCommandExecute
+M.FOLLOW_COMMAND_UTILITY = combatMove.FOLLOW_COMMAND_UTILITY
+M.followCommandUtility   = combatMove.followCommandUtility
+M.followCommandExecute   = combatMove.followCommandExecute
+M.completeCommandedTask  = combatMove.completeCommandedTask
 M.followCommandPaceTick  = pace.followCommandPaceTick
 M.retreatUtility         = retreatUtility
 M.retreatExecute         = retreatExecute

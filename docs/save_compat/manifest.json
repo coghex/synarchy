@@ -1696,6 +1696,93 @@
           "expectedCanonicalSummary": "test-headless/data/save-compat/q1-repair-ground-target.expected.json"
         }
       ]
+    },
+    {
+      "id": "r1-ruin-nomad-encounter",
+      "description": "Persistent hostile nomad encounters at ruin_small (issue #916): world-pages became v8 because each generated ruin now stores its one-time uniform 0-3 occupant roll, exact same-page UnitId roster, occupant home tiles, guard episode flags, and death-only clearance state. This fixture is written by the live v8 codec after a real occupied ruin registers its complete roster, so the new shape is exercised with populated encounter data. The pre-#916 v7 shape remains tracked by n1/o1/p1/q1 and migrates with the encounter absent rather than rerolling current content into an already-materialized world.",
+      "declaredAt": "2026-08-29",
+      "declaredByIssue": 916,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "World.Save.Component.Page.migrateWorldPagesV7 (v7 -> v8 preserves every stored location field and adds no encounter); the fixture itself is the identity path for current v8 with a populated encounter",
+      "components": [
+        {
+          "id": "metadata",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "core-session",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "texture-palette",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-pages",
+          "version": 8,
+          "required": true
+        },
+        {
+          "id": "world-edits",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-activity",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "buildings",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "units",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "unit-sim",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "craft-bills",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "power-nodes",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "lua.unit_ai",
+          "version": 7,
+          "required": true
+        },
+        {
+          "id": "lua.building_spawn",
+          "version": 3,
+          "required": true
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "r1-ruin-nomad-encounter-session",
+          "path": "test-headless/data/save-compat/r1-ruin-nomad-encounter.bin",
+          "kind": "complete-session",
+          "sha256": "901a8643e902624cda0361f22d0146dc13316f1cad7bf39521ec86382b38f3da",
+          "sizeBytes": 5049608,
+          "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 64, 3), unit.spawn('acolyte', 0,0, 0, 'player'), settled 30.0s and held until `(function() local found=false; for _,l in ipairs(world.listPlacedLocations() or {}) do if l.id == 'ruin_small' then world.loadChunksInRegion(l.cx,l.cy,l.cx,l.cy); local e=l.encounter; if e and e.rolled_count > 0 and e.roster_complete and #e.occupants == e.rolled_count then found=true end end end; return found end)()`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/r1-ruin-nomad-encounter.expected.json"
+        }
+      ]
     }
   ],
   "retiredBaselinesComment": "Empty for now (round-7 review): the #760-only split-Haskell-plus-opaque-lua-state shape previously listed here as 'never declared, no removal needed' is now a REAL declared baseline (b2-split-haskell-lua-state, above) -- issue #766 requirement 3 explicitly requires supporting it, regardless of whether a manifest existed to declare it at the time. Nothing this manifest has ever declared has since been retired.",

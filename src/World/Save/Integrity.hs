@@ -88,7 +88,7 @@ import World.Save.Envelope.Types (ComponentId(..))
 import World.Save.Component.Types
     ( craftBillsComponentId, powerNodesComponentId
     , buildingsComponentId, unitsComponentId
-    , transferOrdersComponentId )
+    , transferOrdersComponentId, worldPagesComponentId )
 import World.Save.Payload
     (LuaRefEdge(..), LoadReconcileContext(..))
 import World.Save.Reference (RefKind(..), RefScope(..), refKindText)
@@ -100,7 +100,8 @@ import World.Save.Types
 import Item.Types (ItemInstance(..))
 import Item.Ground (GroundItems(..))
 import Location.Instance
-    (LocationInstance(..), LocationInstanceId(..), instancesToList)
+    ( LocationEncounter(..), LocationEncounterOccupant(..)
+    , LocationInstance(..), LocationInstanceId(..), instancesToList )
 import World.Generate.Types (WorldGenParams(..))
 
 -- | One structured integrity finding (requirement 10): which component
@@ -228,6 +229,7 @@ sessionIntegrityErrors ∷ SessionSnapshot → [IntegrityError]
 sessionIntegrityErrors snap = concat
     [ duplicateGlobalIdErrors snap
     , billStationErrors, billClaimantErrors, nodeBuildingErrors
+    , locationOccupantErrors
     , orderRefErrors snap
     ]
   where
@@ -280,6 +282,22 @@ sessionIntegrityErrors snap = concat
         , Just err ← [ refEdgeError powerNodesComponentId 2 path RefBuilding
                          ScopeSamePage pid (buildingPages (pnBuilding node))
                          (tshow (unBuildingId (pnBuilding node))) ]
+        ]
+
+    locationOccupantErrors =
+        [ err
+        | (pid, page) ← HM.toList pages
+        , inst ← instancesToList
+            (wgpLocationInstances (pgsGenParams page))
+        , encounter ← maybeToList (liEncounter inst)
+        , (index, occupant) ← zip [(0 ∷ Int) ..] (leOccupants encounter)
+        , let uid = leoUnitId occupant
+              path = "world-pages[page=" <> unWorldPageId pid
+                  <> "].locations[" <> tshow (unLocationInstanceId (liId inst))
+                  <> "].encounter.occupants[" <> tshow index <> "].unit"
+        , Just err ← [ refEdgeError worldPagesComponentId 8 path RefUnit
+                         ScopeSamePage pid (unitPages uid)
+                         (tshow (unUnitId uid)) ]
         ]
 
 -- Transfer orders (#1246) -------------------------------------------
@@ -464,13 +482,40 @@ danglingOrderRefErrors pid entities orders =
 --   silently tolerated today (issues #758/#763) and reporting them here
 --   would change what an existing, unrelated save logs.
 sessionIntegrityWarnings ∷ SessionSnapshot → [IntegrityError]
-sessionIntegrityWarnings snap =
-    [ e
-    | (pid, page) ← HM.toList (snapPages snap)
-    , Just pe ← [HM.lookup pid entitiesByPage]
-    , e ← danglingOrderRefErrors pid pe (pgsTransferOrders page)
-    ]
+sessionIntegrityWarnings snap = orderWarnings ⧺ locationWarnings
   where entitiesByPage = snapshotPageEntities snap
+        orderWarnings =
+            [ e
+            | (pid, page) ← HM.toList (snapPages snap)
+            , Just pe ← [HM.lookup pid entitiesByPage]
+            , e ← danglingOrderRefErrors pid pe (pgsTransferOrders page)
+            ]
+        locationWarnings =
+            [ IntegrityError
+                { ieComponent = worldPagesComponentId
+                , ieVersion = 8
+                , iePath = path
+                , ieRefKind = RefUnit
+                , ieRefValue = tshow (unUnitId uid)
+                , ieExpectedScope = "same page ('" <> unWorldPageId pid <> "')"
+                , ieActual = "absent from the session"
+                , ieCode = "dangling-reference"
+                , ieMessage = "encounter occupant unit '"
+                    <> tshow (unUnitId uid)
+                    <> "' does not resolve (tolerated: roster membership is retained)"
+                }
+            | (pid, page) ← HM.toList (snapPages snap)
+            , inst ← instancesToList
+                (wgpLocationInstances (pgsGenParams page))
+            , encounter ← maybeToList (liEncounter inst)
+            , (index, occupant) ← zip [(0 ∷ Int) ..] (leOccupants encounter)
+            , let uid = leoUnitId occupant
+                  path = "world-pages[page=" <> unWorldPageId pid
+                      <> "].locations["
+                      <> tshow (unLocationInstanceId (liId inst))
+                      <> "].encounter.occupants[" <> tshow index <> "].unit"
+            , null (sessionPagesOf entitiesByPage (OrderRefUnit uid))
+            ]
 
 -- | A 'UnitId'/'BuildingId' is a GLOBAL allocator (one counter for the
 --   whole session, see "World.Save.Snapshot"'s 'SessionGlobals'

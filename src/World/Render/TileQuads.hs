@@ -7,6 +7,7 @@ module World.Render.TileQuads
     , lavaTileToQuad
     , freshwaterTileToQuad
     , worldCursorToQuad
+    , worldFlatCursorToQuad
     , worldCursorBgToQuad
     , vegToQuad
     , vegQuadWithTexture
@@ -17,8 +18,8 @@ import qualified Data.HashMap.Strict as HM
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (CameraFacing(..))
-import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..), mkVertexWorld
-                                           , packWorldUV)
+import Engine.Graphics.Vulkan.Types.Vertex
+    ( Vec2(..), Vec4(..), mkVertexWorld, noFaceMapVertexId, packWorldUV )
 import World.Material (matOcean, matLava, matIce, unMaterialId)
 import World.Vegetation (getVegTexture)
 import World.Grid (gridToScreen, tileWidth, tileHeight, tileSideHeight, worldLayer, applyFacing)
@@ -336,7 +337,9 @@ freshwaterTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY
         , sqLayer    = worldLayer
         }
 
--- | Generate a cursor quad that participates in isometric sort order.
+-- | Generate a three-face cursor quad that participates in isometric sort
+-- order. Mine and other volumetric/generic cursor art keeps the isometric
+-- face map; flat authored-alpha annotations use 'worldFlatCursorToQuad'.
 -- The cursor sits at the surface elevation of the target tile,
 -- with a tiny sort-key nudge (+0.0004) so it draws just above
 -- the surface tile but below tiles that are in front.
@@ -350,6 +353,33 @@ worldCursorToQuad ∷ (TextureHandle → Int) → (TextureHandle → Float)
                   → SortableQuad
 worldCursorToQuad lookupSlot lookupFmSlot textures facing
                   gx gy surfZ zSlice _effDepth tileAlpha wrapOff cursorTex =
+    worldCursorToQuadWithFaceMap lookupSlot
+        (lookupFmSlot (wtIsoFaceMap textures)) facing
+        gx gy surfZ zSlice tileAlpha wrapOff cursorTex
+
+-- | Generate a flat top-surface cursor quad whose authored texture alpha
+-- owns the complete shape. The neutral face-map sentinel deliberately avoids
+-- applying the terrain three-face mask: designation art can therefore be an
+-- intrinsically correct diamond and cannot expose side faces if a mask asset
+-- or registration changes.
+worldFlatCursorToQuad ∷ (TextureHandle → Int) → (TextureHandle → Float)
+                      → WorldTextures → CameraFacing
+                      → Int → Int → Int
+                      → Int → Int
+                      → Float
+                      → (Float, Float)
+                      → TextureHandle
+                      → SortableQuad
+worldFlatCursorToQuad lookupSlot _lookupFmSlot _textures facing
+                      gx gy surfZ zSlice _effDepth tileAlpha wrapOff cursorTex =
+    worldCursorToQuadWithFaceMap lookupSlot noFaceMapVertexId facing
+        gx gy surfZ zSlice tileAlpha wrapOff cursorTex
+
+worldCursorToQuadWithFaceMap ∷ (TextureHandle → Int) → Float → CameraFacing
+                             → Int → Int → Int → Int → Float → (Float, Float)
+                             → TextureHandle → SortableQuad
+worldCursorToQuadWithFaceMap lookupSlot fmSlot facing
+                             gx gy surfZ zSlice tileAlpha wrapOff cursorTex =
     let (rawX, rawY) = gridToScreen facing gx gy
         (fa, fb) = applyFacing facing gx gy
         relativeZ = surfZ - zSlice
@@ -365,7 +395,6 @@ worldCursorToQuad lookupSlot lookupFmSlot textures facing
                 + 0.0004  -- after terrain (0.0), before fluid (0.0005)
 
         actualSlot = lookupSlot cursorTex
-        fmSlot = lookupFmSlot (wtIsoFaceMap textures)
 
         tint = Vec4 1.0 1.0 1.0 (tileAlpha * 0.7)
         wuv = packWorldUV gx gy
