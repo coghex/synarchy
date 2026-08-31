@@ -8,7 +8,10 @@
 --   suppression, and the notification-overrides
 --   materialize-if-absent + round-trip contract in
 --   'Engine.Asset.YamlNotifications' (config/notifications.local.yaml
---   has no separate default file — it self-materializes from the registry).
+--   has no separate default file — it self-materializes from the registry),
+--   plus #1938's per-FIELD override resolution: a checkbox the overrides
+--   file omits inherits its category's registry default instead of
+--   reading as an explicit @false@.
 module Test.Headless.Core.ConfigState (spec) where
 
 import UPrelude
@@ -30,7 +33,8 @@ import Engine.Core.Init
 import Engine.Core.Log
   ( initLogger, defaultLogConfig, LogConfig(..), LogBackend(..)
   , LoggerState, LogEntry(..) )
-import Engine.Asset.YamlNotifications (loadNotificationCfg, writeNotificationOverrides)
+import Engine.Asset.YamlNotifications
+  ( loadNotificationCfg, writeNotificationOverrides, OverridesFile )
 import Engine.PlayerEvent (CategoryCfg(..))
 
 -- | A minimal FromJSON type with one REQUIRED field, standing in for a
@@ -97,6 +101,57 @@ registryYaml = unlines
     , "    display_name: Debug"
     , "    default_settings: {log: false, popup: false, pause: false}"
     ]
+
+-- | A registry whose defaults are NOT uniformly false, which is what
+--   makes inheritance distinguishable from the pre-#1938 false-filling:
+--
+--     * @survival_critical@ mirrors the shipped entry — all three
+--       checkboxes default TRUE, so an omitted override field that
+--       resolved to 'False' would be visible.
+--     * @building@ mirrors a mixed shipped entry.
+--     * @sparse_defaults@ has no counterpart in
+--       @data/notification_categories.yaml@ (every shipped entry states
+--       all three), and exists solely to pin requirement 4: the REGISTRY
+--       is the bottom layer, so a field IT omits has nothing to inherit
+--       and stays false.
+mixedRegistryYaml ∷ String
+mixedRegistryYaml = unlines
+    [ "categories:"
+    , "  - id: survival_critical"
+    , "    display_name: Survival (Critical)"
+    , "    default_settings: {log: true, popup: true, pause: true}"
+    , "  - id: building"
+    , "    display_name: Building"
+    , "    default_settings: {log: true, popup: false, pause: false}"
+    , "  - id: sparse_defaults"
+    , "    display_name: Sparse Defaults"
+    , "    default_settings: {log: true}"
+    ]
+
+-- | Resolve one category out of a loaded config, failing the example
+--   with a useful message rather than pattern-matching on 'Nothing'.
+categoryOf ∷ HM.HashMap Text CategoryCfg → Text → IO CategoryCfg
+categoryOf cfg catId = case HM.lookup catId cfg of
+    Just c  → return c
+    Nothing → do
+        expectationFailure $
+            "category " <> T.unpack catId <> " missing from resolved config"
+        fail "unreachable"
+
+-- | The resolved checkbox triple, the shape every #1938 example asserts on.
+triple ∷ CategoryCfg → (Bool, Bool, Bool)
+triple c = (ccLog c, ccPopup c, ccPause c)
+
+-- | Load a registry + a hand-written overrides file from a scratch dir.
+loadWithOverrides ∷ FilePath → String → String
+                  → IO (HM.HashMap Text CategoryCfg)
+loadWithOverrides dir registry overrides = do
+    logger ← initLogger defaultLogConfig { lcBackend = LogToHandle stderr }
+    let registryPath  = dir </> "registry.yaml"
+        overridesPath = dir </> "notifications.local.yaml"
+    writeFile registryPath registry
+    writeFile overridesPath overrides
+    fst ⊚ loadNotificationCfg logger registryPath overridesPath
 
 spec ∷ Spec
 spec = do
@@ -379,3 +434,118 @@ spec = do
                 case HM.lookup "debug" cfg1 of
                     Nothing → expectationFailure "debug category missing from resolved config"
                     Just c  → ccLog c `shouldBe` True
+
+    describe "Engine.Asset.YamlNotifications sparse config overrides \
+             \inherit registry defaults (#1938)" $ do
+        it "resolves a checkbox the overrides file omits to that \
+           \category's own registry default, not to false" $
+            withTempDir $ \dir → do
+                cfg ← loadWithOverrides dir mixedRegistryYaml $ unlines
+                    [ "categories:"
+                    , "  survival_critical:"
+                    , "    log: true"
+                    ]
+                c ← categoryOf cfg "survival_critical"
+                triple c `shouldBe` (True, True, True)
+
+        it "reads the authored field even when it is the only one \
+           \present, without disturbing the inherited two" $
+            withTempDir $ \dir → do
+                cfg ← loadWithOverrides dir mixedRegistryYaml $ unlines
+                    [ "categories:"
+                    , "  survival_critical:"
+                    , "    popup: false"
+                    ]
+                c ← categoryOf cfg "survival_critical"
+                triple c `shouldBe` (True, False, True)
+
+        it "lets an explicit false defeat a true registry default" $
+            withTempDir $ \dir → do
+                cfg ← loadWithOverrides dir mixedRegistryYaml $ unlines
+                    [ "categories:"
+                    , "  survival_critical: {log: false, popup: false, \
+                      \pause: false}"
+                    ]
+                c ← categoryOf cfg "survival_critical"
+                triple c `shouldBe` (False, False, False)
+
+        it "treats an explicit YAML null the same as an omitted field" $
+            withTempDir $ \dir → do
+                cfg ← loadWithOverrides dir mixedRegistryYaml $ unlines
+                    [ "categories:"
+                    , "  survival_critical:"
+                    , "    log: false"
+                    , "    popup: null"
+                    , "    pause: ~"
+                    ]
+                c ← categoryOf cfg "survival_critical"
+                triple c `shouldBe` (False, True, True)
+
+        it "leaves a category absent from the overrides file resolving \
+           \entirely from the registry" $
+            withTempDir $ \dir → do
+                cfg ← loadWithOverrides dir mixedRegistryYaml $ unlines
+                    [ "categories:"
+                    , "  survival_critical: {pause: false}"
+                    ]
+                b ← categoryOf cfg "building"
+                triple b `shouldBe` (True, False, False)
+
+        it "keeps false as the registry's own base for a default_settings \
+           \field the registry omits (nothing beneath it to inherit)" $
+            withTempDir $ \dir → do
+                cfg ← loadWithOverrides dir mixedRegistryYaml $ unlines
+                    [ "categories:"
+                    , "  survival_critical: {log: true}"
+                    ]
+                c ← categoryOf cfg "sparse_defaults"
+                triple c `shouldBe` (True, False, False)
+
+        it "falls back to the registry defaults when an overrides file \
+           \states a non-boolean value, exactly as a malformed file does" $
+            withTempDir $ \dir → do
+                cfg ← loadWithOverrides dir mixedRegistryYaml $ unlines
+                    [ "categories:"
+                    , "  survival_critical: {log: \"yes\"}"
+                    ]
+                c ← categoryOf cfg "survival_critical"
+                triple c `shouldBe` (True, True, True)
+
+        it "round-trips the settings tab's write through load unchanged, \
+           \explicit falses included" $
+            withTempDir $ \dir → do
+                logger ← initLogger defaultLogConfig
+                    { lcBackend = LogToHandle stderr }
+                let registryPath  = dir </> "registry.yaml"
+                    overridesPath = dir </> "notifications.local.yaml"
+                writeFile registryPath mixedRegistryYaml
+                (cfg0, _) ← loadNotificationCfg logger registryPath overridesPath
+                let updated = HM.adjust
+                        (\c → c { ccPause = False }) "survival_critical" cfg0
+                writeNotificationOverrides overridesPath updated
+                (cfg1, _) ← loadNotificationCfg logger registryPath overridesPath
+                c ← categoryOf cfg1 "survival_critical"
+                triple c `shouldBe` (True, True, False)
+
+        it "migrates a PARTIAL legacy notifications.yaml and resolves its \
+           \omitted fields from the registry (#786's partial legacy \
+           \state, resolved by overlay semantics)" $
+            withTempDir $ \dir → do
+                (logger, dumpLog) ← capturingLogger
+                let legacy        = dir </> "notifications.yaml"
+                    overridesPath = dir </> "notifications.local.yaml"
+                    registryPath  = dir </> "registry.yaml"
+                writeFile registryPath mixedRegistryYaml
+                writeFile legacy $ unlines
+                    [ "categories:"
+                    , "  survival_critical:"
+                    , "    log: false"
+                    ]
+                migrateLegacyConfig (Proxy ∷ Proxy OverridesFile) logger
+                    Nothing legacy overridesPath
+                msgs ← dumpLog
+                logged msgs (migratedLine legacy overridesPath)
+                    `shouldBe` True
+                (cfg, _) ← loadNotificationCfg logger registryPath overridesPath
+                c ← categoryOf cfg "survival_critical"
+                triple c `shouldBe` (False, True, True)
