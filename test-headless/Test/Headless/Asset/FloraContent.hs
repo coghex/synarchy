@@ -10,12 +10,14 @@ import Data.List (nub, sort)
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
-import System.Directory (doesFileExist)
+import System.Directory (doesFileExist, listDirectory)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Asset.YamlFlora
+import Engine.Asset.YamlItems
+    ( ItemYamlDef(..), ItemYamlFood(..), ItemYamlWeight(..), loadItemYaml )
 import Engine.Asset.YamlMaterials (loadPopulatedMaterialRegistry)
 import Engine.Core.Log
-    (LogBackend(..), LogConfig(..), defaultLogConfig, initLogger)
+    (LoggerState, LogBackend(..), LogConfig(..), defaultLogConfig, initLogger)
 import World.Chunk.Types (ChunkCoord(..), chunkSize)
 import World.Flora.Growth (instanceLifespan)
 import World.Flora.Placement (computeChunkFlora, speciesFitnessDetail)
@@ -37,15 +39,29 @@ spec ∷ Spec
 spec = do
     describe "saguaro flora content" $ do
         it "registers the approved texture family as decorative desert flora" $ do
-            logger ← initLogger defaultLogConfig
-                { lcBackend = LogToCallback (\_ → pure ()) }
+            logger ← silentLogger
             defs ← loadFloraYaml logger "data/flora/saguaro.yaml"
             registry ← loadPopulatedMaterialRegistry logger "data/materials"
             case defs of
                 [def] → assertSaguaro registry def
                 _ → expectationFailure $
                     "expected exactly one saguaro definition, got "
-                    ⧺ show (length defs)
+                        ⧺ show (length defs)
+
+    describe "tomato crop content" $ do
+        it "ships dedicated art without changing the crop or item contract" $ do
+            logger ← silentLogger
+            floraDefs ← loadFloraYaml logger "data/flora/crops.yaml"
+            itemDefs ← loadItemYaml logger "data/items/tomato.yaml"
+            case ( filter ((≡ "tomato_plant") ∘ fydName) floraDefs
+                 , filter ((≡ "tomato") ∘ iydName) itemDefs ) of
+                ([floraDef], [itemDef]) → do
+                    assertTomatoFlora floraDef
+                    assertTomatoItem itemDef
+                    assertTomatoTextures floraDef
+                (floraMatches, itemMatches) → expectationFailure $
+                    "expected one tomato crop and item definition, got "
+                        ⧺ show (length floraMatches, length itemMatches)
 
     describe "cattail flora content" $ do
         it "loads the exact decorative wetland contract and all textures" $
@@ -61,8 +77,7 @@ withCattail
     ∷ (MaterialRegistry → FloraYamlDef → Expectation)
     → Expectation
 withCattail action = do
-    logger ← initLogger defaultLogConfig
-        { lcBackend = LogToCallback (\_ → pure ()) }
+    logger ← silentLogger
     defs ← loadFloraYaml logger "data/flora/wetlands.yaml"
     registry ← loadPopulatedMaterialRegistry logger "data/materials"
     case defs of
@@ -70,6 +85,10 @@ withCattail action = do
         _ → expectationFailure $
             "expected exactly one common cattail definition, got "
             ⧺ show (length defs)
+
+silentLogger ∷ IO LoggerState
+silentLogger = initLogger defaultLogConfig
+    { lcBackend = LogToCallback (\_ → pure ()) }
 
 assertSaguaro ∷ MaterialRegistry → FloraYamlDef → Expectation
 assertSaguaro registry def = do
@@ -167,6 +186,108 @@ toRuntimeWorldGen wg soilIds =
         , fwSoils = soilIds
         , fwFootprint = fromMaybe 0 (fywFootprint wg)
         }
+
+assertTomatoFlora ∷ FloraYamlDef → Expectation
+assertTomatoFlora def = do
+    fydName def `shouldBe` "tomato_plant"
+    fydType def `shouldBe` "row_crop"
+    fydTexDir def `shouldBe` "assets/textures/flora/tomato_plant"
+    fydLifecycle def `shouldBe` "annual"
+    (fydMinLife def, fydMaxLife def, fydDeathChance def)
+        `shouldBe` (Nothing, Nothing, Nothing)
+
+    map (\p → (fypTag p, fypTexture p, fypAge p)) (fydPhases def)
+        `shouldBe`
+            [ ("sprout", "sprout.png", 0)
+            , ("matured", "matured.png", 60)
+            , ("dead", "dead.png", 360)
+            ]
+    map (\c → (fycsTag c, fycsStartDay c, fycsTexture c))
+            (fydAnnualCycle def)
+        `shouldBe`
+            [ ("dormant", 0, "matured_dormant.png")
+            , ("budding", 30, "matured_budding.png")
+            , ("flowering", 60, "matured_flowering.png")
+            , ("fruiting", 90, "matured_fruiting.png")
+            , ("senescing", 240, "matured_senescing.png")
+            ]
+    map (\o → (fycoPhase o, fycoCycle o, fycoTexture o))
+            (fydCycleOverrides def)
+        `shouldBe`
+            [ ("sprout", "dormant", "sprout_dormant.png")
+            , ("sprout", "budding", "sprout_budding.png")
+            , ("sprout", "senescing", "sprout_senescing.png")
+            , ("dead", "dormant", "dead.png")
+            , ("dead", "budding", "dead.png")
+            , ("dead", "flowering", "dead.png")
+            , ("dead", "fruiting", "dead.png")
+            , ("dead", "senescing", "dead.png")
+            ]
+
+    case fydHarvest def of
+        Just harvest → do
+            fyhTags harvest `shouldBe` ["fruit"]
+            map (\y → (fyyId y, fyyMin y, fyyMax y)) (fyhYield harvest)
+                `shouldBe` [("tomato", 2, 4)]
+            fyhRegrowthTime harvest `shouldBe` 43200
+            fyhHarvestedTexture harvest `shouldBe` Just "matured_senescing.png"
+        Nothing → expectationFailure "tomato_plant lost its harvest contract"
+
+    let wg = fydWorldGen def
+    fywCategory wg `shouldBe` "row_crop"
+    (fywMinTemp wg, fywIdealTemp wg, fywMaxTemp wg)
+        `shouldBe` (10, 22, 32)
+    (fywMinPrecip wg, fywIdealPrecip wg, fywMaxPrecip wg)
+        `shouldBe` (0.3, 0.6, 0.9)
+    (fywMinAlt wg, fywIdealAlt wg, fywMaxAlt wg)
+        `shouldBe` (Just (-50), Just 100, Just 400)
+    (fywMinHumidity wg, fywIdealHumidity wg, fywMaxHumidity wg)
+        `shouldBe` (Just 0.3, Just 0.6, Just 0.9)
+    fywMaxSlope wg `shouldBe` Just 2
+    fywDensity wg `shouldBe` Just 0
+    fywFootprint wg `shouldBe` Just 6
+    fywSoils wg `shouldBe` ["loam", "sandy_loam", "silt_loam", "clay_loam"]
+
+assertTomatoItem ∷ ItemYamlDef → Expectation
+assertTomatoItem def = do
+    iydName def `shouldBe` "tomato"
+    iydDisplayName def `shouldBe` "Tomato"
+    iydSprite def `shouldBe` "assets/textures/items/supply/tomato.png"
+    iydWeight def `shouldBe` WeightFixed 0.12
+    iydBulk def `shouldBe` 0.2
+    iydKind def `shouldBe` "misc"
+    iydCategory def `shouldBe` "Supplies"
+    iydFood def `shouldBe` Just (ItemYamlFood 35 0)
+
+assertTomatoTextures ∷ FloraYamlDef → Expectation
+assertTomatoTextures def = do
+    let root = T.unpack (fydTexDir def)
+        expected = sort
+            [ "dead.png"
+            , "matured.png"
+            , "matured_budding.png"
+            , "matured_dormant.png"
+            , "matured_flowering.png"
+            , "matured_fruiting.png"
+            , "matured_senescing.png"
+            , "sprout.png"
+            , "sprout_budding.png"
+            , "sprout_dormant.png"
+            , "sprout_senescing.png"
+            ]
+        declared = sort ∘ nub $
+            map (T.unpack ∘ fypTexture) (fydPhases def)
+            ⧺ map (T.unpack ∘ fycsTexture) (fydAnnualCycle def)
+            ⧺ map (T.unpack ∘ fycoTexture) (fydCycleOverrides def)
+            ⧺ maybe [] (maybe [] (pure ∘ T.unpack) ∘ fyhHarvestedTexture)
+                (fydHarvest def)
+    actual ← sort ⊚ listDirectory root
+    actual `shouldBe` expected
+    declared `shouldBe` expected
+    mapM (doesFileExist ∘ (root ⊘)) declared
+        `shouldReturn` replicate (length declared) True
+    doesFileExist "assets/textures/items/supply/tomato.png"
+        `shouldReturn` True
 
 assertCattail ∷ MaterialRegistry → FloraYamlDef → Expectation
 assertCattail registry def = do
