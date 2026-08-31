@@ -25,8 +25,8 @@ import Data.IORef (readIORef)
 import Building.Thread.Command (applyBuildingSpawn)
 import Building.Types (BuildingId(..))
 import Engine.Core.Capability.Building (toBuildingCapability)
-import Engine.Core.Capability.ContentRegistries
-    (toContentRegistriesCapability)
+import Engine.Core.Capability.ContentRegistriesView
+    (toContentRegistriesViewCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import Engine.Core.Log (logDebug, LogCategory(..), LoggerState)
@@ -66,6 +66,6 @@ handleWorldSpawnBoundBuildingCommand env logger bid defName gx gy gz
         <> "click (" <> defName <> " on " <> unWorldPageId pageId <> ")"
     else applyBuildingSpawn logger
             (toWorldSimCapability env)
-            (toContentRegistriesCapability env)
+            (toContentRegistriesViewCapability env)
             (toBuildingCapability env)
             bid defName gx gy gz pageId

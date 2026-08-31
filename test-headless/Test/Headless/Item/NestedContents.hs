@@ -26,6 +26,7 @@ import qualified Data.Text as T
 import Data.IORef (newIORef, readIORef, writeIORef, modifyIORef')
 import Building.Knowledge (ContainerKnowledge, ckRecords, crRevealedAt)
 import Building.Knowledge.Live (ContainerObserver(..), revealContainer)
+import Engine.Core.ReadOnlyRef (toReadOnlyRef)
 import Building.Types
     ( BuildingDef(..), BuildingId(..), BuildingInstance(..)
     , BuildingManager(..), emptyBuildingManager )
@@ -218,7 +219,7 @@ observerFor ∷ EngineEnv → ContainerObserver
 observerFor env = ContainerObserver
     { coBuildings = buildingManagerRef env
     , coWorlds    = worldManagerRef env
-    , coItems     = itemManagerRef env
+    , coItems     = toReadOnlyRef (itemManagerRef env)
     , coGameTime  = gameTimeRef env
     }
 

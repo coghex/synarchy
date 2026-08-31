@@ -14,8 +14,8 @@ module Engine.Scripting.Lua.API.Craft.Execute
 import UPrelude
 import Engine.Core.Capability.Building
     (BuildingCapability(..), toBuildingCapability)
-import Engine.Core.Capability.ContentRegistries
-    (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Engine.Core.Capability.ContentRegistriesView
+    (ContentRegistriesViewCapability(..), toContentRegistriesViewCapability)
 import Engine.Core.Capability.Core
     (CoreCapability(..), toCoreCapability)
 import Engine.Core.Capability.UnitCombat
@@ -26,6 +26,7 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
+import Engine.Core.ReadOnlyRef (readReadOnlyRef)
 import Engine.Core.State (EngineEnv, freshItemInstanceId)
 import Craft.Bills (BillId(..))
 import Craft.Types
@@ -107,7 +108,7 @@ craftExecuteAtFn env = do
 validateStation ∷ EngineEnv → Maybe BillId → UnitId → Text → BuildingId
                 → IO (Either Text ())
 validateStation env mBillId uid rid bid = do
-    rm      ← readIORef (crRecipeManagerRef (toContentRegistriesCapability env))
+    rm      ← readReadOnlyRef (crvRecipeManagerRef (toContentRegistriesViewCapability env))
     bm      ← readIORef (bcBuildingManagerRef (toBuildingCapability env))
     um      ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
     now     ← readIORef (wsGameTimeRef (toWorldSimCapability env))
@@ -174,13 +175,14 @@ pushCraftResult (Left err) = do
 --   Success carries the created outputs' instance ids.
 executeCraft ∷ EngineEnv → UnitId → Text → IO (Either Text [Word64])
 executeCraft env uid rid = do
-    rm ← readIORef (crRecipeManagerRef (toContentRegistriesCapability env))
+    rm ← readReadOnlyRef (crvRecipeManagerRef (toContentRegistriesViewCapability env))
     case lookupRecipe rid rm of
         Nothing → return (Left ("unknown recipe " <> rid))
         Just recipe | rdRepairAxis recipe ≢ Nothing →
             return (Left (rid <> " is a repair recipe: use repair.repairAt"))
         Just recipe → do
-            im ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
+            im ← readReadOnlyRef
+                (crvItemManagerRef (toContentRegistriesViewCapability env))
             case mapM (resolve im) (rdOutputs recipe) of
                 Left err → return (Left err)
                 Right outs → do

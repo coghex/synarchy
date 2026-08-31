@@ -236,6 +236,7 @@ import qualified Test.Headless.App.ChunkRegion as AppChunkRegion
 import qualified Test.Headless.App.PreviewConfig as PreviewConfig
 import qualified Test.Headless.App.ResourceRoot as AppResourceRoot
 import qualified Test.Headless.Camera.GotoClamp as GotoClamp
+import qualified Test.Headless.Camera.GotoLoad as GotoLoad
 import qualified Test.Headless.Camera.ZoomScroll as ZoomScroll
 import qualified Test.Headless.Scene.BatchMerge as BatchMerge
 import qualified Test.Headless.Render.PanMargin as PanMargin
@@ -284,6 +285,7 @@ import qualified Test.Headless.Lua.WorkClaimCapacity as LuaWorkClaimCapacity
 import qualified Test.Headless.Lua.Faction as LuaFaction
 import qualified Test.Headless.Unit.Faction as UnitFaction
 import qualified Test.Headless.Capability.Building as CapabilityBuilding
+import qualified Test.Headless.Capability.ContentRegistriesView as CapabilityContentRegistriesView
 import qualified Test.Headless.Capability.Events as CapabilityEvents
 import qualified Test.Headless.Capability.Input as CapabilityInput
 import qualified Test.Headless.Capability.Render as CapabilityRender
@@ -363,6 +365,12 @@ main = hspec $ do
         -- checks against the already-booted env — no worldgen, no
         -- mutation, so it rides the shared engine above.
         describe "Capability.Building projections" CapabilityBuilding.spec
+        -- #1896 adds the one property a plain projection test cannot
+        -- carry: the `ReadOnlyRef` wrapper ALIASES its handle rather
+        -- than snapshotting it, so a write through the raw writer
+        -- record is observed through the read-only view.
+        describe "ReadOnlyRef and Capability.ContentRegistriesView projections"
+                 CapabilityContentRegistriesView.spec
         describe "Capability.Events projections" CapabilityEvents.spec
         describe "Capability.Input projections" CapabilityInput.spec
         describe "Capability.Render projections" CapabilityRender.spec
@@ -516,6 +524,11 @@ main = hspec $ do
     -- so it generates its own cheap private w8 page rather than sharing
     -- or disturbing the worldgen specs' engine/camera state.
     aroundAll withHeadlessEngine SelectChunk.sharedSpec
+    -- Own engine for the same reason: it shows a private w8 page and
+    -- teleports the camera, so the world worker generates against THAT
+    -- page's window. Sharing the worldgen engine would hand every other
+    -- spec a different active world and a moved camera.
+    aroundAll withHeadlessEngine GotoLoad.spec
     HarnessWorkerHealth.spec
     describe "Wrap Seam" WrapSeam.spec
     describe "Arena base seeding (#1718)" ArenaSeed.pureSpec
