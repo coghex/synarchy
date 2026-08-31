@@ -233,6 +233,7 @@ import qualified Test.Headless.App.ChunkRegion as AppChunkRegion
 import qualified Test.Headless.App.PreviewConfig as PreviewConfig
 import qualified Test.Headless.App.ResourceRoot as AppResourceRoot
 import qualified Test.Headless.Camera.GotoClamp as GotoClamp
+import qualified Test.Headless.Camera.GotoLoad as GotoLoad
 import qualified Test.Headless.Camera.ZoomScroll as ZoomScroll
 import qualified Test.Headless.Scene.BatchMerge as BatchMerge
 import qualified Test.Headless.Render.PanMargin as PanMargin
@@ -506,6 +507,11 @@ main = hspec $ do
     -- so it generates its own cheap private w8 page rather than sharing
     -- or disturbing the worldgen specs' engine/camera state.
     aroundAll withHeadlessEngine SelectChunk.sharedSpec
+    -- Own engine for the same reason: it shows a private w8 page and
+    -- teleports the camera, so the world worker generates against THAT
+    -- page's window. Sharing the worldgen engine would hand every other
+    -- spec a different active world and a moved camera.
+    aroundAll withHeadlessEngine GotoLoad.spec
     HarnessWorkerHealth.spec
     describe "Wrap Seam" WrapSeam.spec
     describe "Arena base seeding (#1718)" ArenaSeed.pureSpec
