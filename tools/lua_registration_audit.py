@@ -624,6 +624,8 @@ BOUNDARY_KEYWORDS = frozenset({
 
 BLOCK_CLOSED_BY_END = frozenset({"function", "do", "while", "for", "if"})
 
+BRACKET_PAIRS = {"(": ")", "[": "]", "{": "}"}
+
 
 @dataclass
 class Block:
@@ -640,6 +642,14 @@ class PendingLocal:
     the outer `blood` on the right of the `=` and the new local
     everywhere after it. Binding them at the keyword instead would put a
     shadow over the very expression that reads through it.
+
+    These NEST: an expression list can contain a function body or a table
+    constructor holding `local` statements of its own, as in
+    `local engine = { f = function() local seen = true; return seen end }`.
+    They are therefore held on a stack, innermost first. A single slot
+    would let the inner declaration displace the outer one, which would
+    then never bind at all -- and every later reference through that name
+    would be resolved against the global it was shadowing.
     """
 
     names: list[str]
@@ -701,8 +711,8 @@ class LuaScopeReader:
         self.tokens = tokens
         self.namespaces = namespaces
         self.blocks: list[Block] = [Block("chunk")]
-        self.bracket = 0
-        self.pending: PendingLocal | None = None
+        self.brackets: list[Token] = []
+        self.pending: list[PendingLocal] = []
         self.pending_for: list[str] | None = None
         self.pending_params: list[str] | None = None
         self.awaiting_do: str | None = None
@@ -719,6 +729,10 @@ class LuaScopeReader:
     def peek(self, offset: int = 0) -> Token | None:
         index = self.i + offset
         return self.tokens[index] if 0 <= index < len(self.tokens) else None
+
+    @property
+    def bracket(self) -> int:
+        return len(self.brackets)
 
     def bound(self, name: str) -> bool:
         return any(name in block.names for block in self.blocks)
@@ -743,12 +757,36 @@ class LuaScopeReader:
 
     # -- statement boundaries -------------------------------------------
 
-    def commit_pending(self) -> None:
-        if self.pending is None:
-            return
-        if self.pending.block in self.blocks:
-            self.pending.block.names.update(self.pending.names)
-        self.pending = None
+    def commit_top_pending(self) -> None:
+        """Bind the innermost deferred `local` into the frame that owns it.
+
+        The membership test is defensive rather than load-bearing: every
+        construct that pops a frame (`end`, `until`) is also a boundary
+        keyword, so the drain below always reaches a pending declaration
+        before its own frame can be popped out from under it. It is kept
+        so that adding a block closer that is NOT a boundary keyword
+        degrades to a dropped binding rather than a write into a
+        detached frame.
+        """
+        pending = self.pending.pop()
+        if pending.block in self.blocks:
+            pending.block.names.update(pending.names)
+
+    def commit_ready_pending(self, token: Token, previous: Token | None) -> None:
+        """Bind every deferred `local` whose expression list has ended.
+
+        Innermost first, and more than one can become ready at the same
+        token, so this drains rather than committing a single entry.
+        """
+        while (self.pending
+               and len(self.blocks) == self.pending[-1].block_depth
+               and self.bracket == self.pending[-1].bracket
+               and self.at_boundary(token, previous)):
+            self.commit_top_pending()
+
+    def commit_all_pending(self) -> None:
+        while self.pending:
+            self.commit_top_pending()
 
     def at_boundary(self, token: Token, previous: Token | None) -> bool:
         return _starts_statement(token, previous)
@@ -776,12 +814,7 @@ class LuaScopeReader:
         while self.i < len(self.tokens):
             token = self.tokens[self.i]
 
-            if self.pending is not None and (
-                    len(self.blocks) < self.pending.block_depth
-                    or (len(self.blocks) == self.pending.block_depth
-                        and self.bracket == self.pending.bracket
-                        and self.at_boundary(token, previous))):
-                self.commit_pending()
+            self.commit_ready_pending(token, previous)
 
             if self.repeat_closing is not None and self.at_boundary(token, previous):
                 self.maybe_close_repeat()
@@ -792,8 +825,14 @@ class LuaScopeReader:
                 raise AssertionError(f"{self.path}:{token.line}: scope reader stalled")
             previous = token
 
-        self.commit_pending()
+        self.commit_all_pending()
         self.maybe_close_repeat(at_end=True)
+        if self.brackets:
+            opener = self.brackets[0]
+            raise CertificationError(
+                self.path, opener.line,
+                f"file ends with unclosed {opener.text!r}: the expression it opens "
+                "was never classified")
         if len(self.blocks) != 1:
             open_kinds = ", ".join(block.kind for block in self.blocks[1:])
             raise CertificationError(
@@ -813,11 +852,14 @@ class LuaScopeReader:
 
     def step_op(self, token: Token) -> None:
         if token.text in "([{":
-            self.bracket += 1
+            self.brackets.append(token)
         elif token.text in ")]}":
-            self.bracket -= 1
-            if self.bracket < 0:
-                self.fail(token, f"unbalanced {token.text!r}")
+            if not self.brackets:
+                self.fail(token, f"unbalanced {token.text!r}: it closes nothing")
+            opener = self.brackets.pop()
+            if BRACKET_PAIRS[opener.text] != token.text:
+                self.fail(token, f"{token.text!r} closes a {opener.text!r} opened on "
+                                 f"line {opener.line}")
         self.i += 1
 
     def step_keyword(self, token: Token) -> None:
@@ -903,7 +945,8 @@ class LuaScopeReader:
 
         assign = self.peek()
         if assign is not None and assign.kind == "op" and assign.text == "=":
-            self.pending = PendingLocal(names, self.blocks[-1], len(self.blocks), self.bracket)
+            self.pending.append(
+                PendingLocal(names, self.blocks[-1], len(self.blocks), self.bracket))
             self.i += 1
         else:
             self.blocks[-1].names.update(names)

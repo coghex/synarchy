@@ -398,6 +398,57 @@ def test_a_local_declaration_does_not_shadow_its_own_right_hand_side() -> None:
            f"the name must be shadowed AFTER the statement, got: {output!r}")
 
 
+def test_a_local_nested_in_an_outer_locals_rhs_does_not_displace_it() -> None:
+    """Deferred `local` bindings NEST. An expression list can hold a
+    function body or a table constructor with `local` statements of its
+    own; if the inner one displaced the outer, the outer would never bind
+    and every later reference through that name would resolve to the
+    global it was shadowing."""
+    root = build(
+        {"engine": ["quit"]},
+        {"scripts/a.lua":
+            "local engine = { localFunction = function()\n"
+            "    local sentinel = true\n"
+            "    return sentinel\n"
+            "end }\n"
+            "engine.localFunction()\n"})
+    expect_clean(root, "a local declared inside an outer local's right-hand side")
+
+
+def test_nested_pending_locals_survive_several_levels() -> None:
+    root = build(
+        {"engine": ["quit"], "unit": ["getInfo"]},
+        {"scripts/a.lua":
+            "local engine = { a = function()\n"
+            "    local unit = { c = function() local d = 1; return d end }\n"
+            "    return unit.c\n"
+            "end }\n"
+            "engine.a()\n"
+            "unit.getInfo(1)\n"})
+    expect_clean(root, "three levels of nested deferred locals")
+
+
+def test_an_inner_nested_local_still_binds() -> None:
+    """The other direction: the inner declaration must not be lost either."""
+    root = build(
+        {"unit": ["getInfo"]},
+        {"scripts/a.lua":
+            "local t = { f = function()\n"
+            "    local unit = 1\n"
+            "    return unit.notAVerb\n"
+            "end }\n"})
+    expect_clean(root, "the inner declaration of a nested pair")
+
+
+def test_an_unshadowed_reference_beside_a_nested_local_is_still_a_finding() -> None:
+    root = build(
+        {"engine": ["quit"]},
+        {"scripts/a.lua":
+            "local t = { f = function() local sentinel = 1; return sentinel end }\n"
+            "engine.vanished()\n"})
+    expect_finding(root, "engine.vanished", "a real defect beside a nested local")
+
+
 def test_multiple_local_names_all_shadow() -> None:
     root = build(
         {"item": ["getInfo"], "loot": ["roll"]},
@@ -525,6 +576,31 @@ def test_an_end_closing_the_wrong_block_is_a_certification_failure() -> None:
                  {"scripts/a.lua": "repeat\n    engine.quit()\nend\n"})
     expect_certification_failure(root, "closes a `repeat` block",
                                  "an `end` closing a `repeat`")
+
+
+def test_an_unclosed_bracket_is_a_certification_failure() -> None:
+    """An unterminated expression leaves a Lua construct unclassified.
+    Rejecting only SURPLUS closers would certify `engine.quit(` clean."""
+    root = build({"engine": ["quit"]}, {"scripts/a.lua": "engine.quit(\n"})
+    output = expect_certification_failure(root, "unclosed '('",
+                                          "a file ending inside an open call")
+    expect_attributed(output, "scripts/a.lua", 1, "the unclosed bracket")
+
+
+def test_an_unclosed_table_constructor_is_a_certification_failure() -> None:
+    root = build({"engine": ["quit"]}, {"scripts/a.lua": "local t = {\n    a = 1\n"})
+    expect_certification_failure(root, "unclosed '{'", "a file ending inside a table")
+
+
+def test_a_mismatched_bracket_pair_is_a_certification_failure() -> None:
+    root = build({"engine": ["quit"]}, {"scripts/a.lua": "engine.quit(1]\n"})
+    expect_certification_failure(root, "closes a '('", "a bracket closed by the wrong kind")
+
+
+def test_balanced_brackets_of_every_kind_are_clean() -> None:
+    root = build({"engine": ["quit"]},
+                 {"scripts/a.lua": "engine.quit({ a = 1 }, (2), t[3])\n"})
+    expect_clean(root, "balanced brackets of every kind")
 
 
 def test_an_unterminated_string_is_a_certification_failure() -> None:
@@ -872,6 +948,10 @@ TESTS = [
     test_shadow_is_restored_after_a_function_body,
     test_a_local_declaration_does_not_shadow_its_own_right_hand_side,
     test_multiple_local_names_all_shadow,
+    test_a_local_nested_in_an_outer_locals_rhs_does_not_displace_it,
+    test_nested_pending_locals_survive_several_levels,
+    test_an_inner_nested_local_still_binds,
+    test_an_unshadowed_reference_beside_a_nested_local_is_still_a_finding,
     test_a_bare_local_declaration_shadows,
     test_local_function_is_visible_inside_its_own_body,
     test_an_anonymous_function_local_is_not_visible_inside_its_own_body,
@@ -885,6 +965,10 @@ TESTS = [
     test_a_stray_end_is_a_certification_failure,
     test_an_end_closing_the_wrong_block_is_a_certification_failure,
     test_an_unterminated_string_is_a_certification_failure,
+    test_an_unclosed_bracket_is_a_certification_failure,
+    test_an_unclosed_table_constructor_is_a_certification_failure,
+    test_a_mismatched_bracket_pair_is_a_certification_failure,
+    test_balanced_brackets_of_every_kind_are_clean,
     test_an_unterminated_long_comment_is_a_certification_failure,
     test_an_unreadable_function_header_is_a_certification_failure,
     test_an_unreadable_for_header_is_a_certification_failure,
