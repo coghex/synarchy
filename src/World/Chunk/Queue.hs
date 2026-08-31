@@ -54,7 +54,7 @@ import World.Chunk.Types (ChunkCoord(..))
 import World.Generate.Constants (chunkLoadRadius)
 import World.Generate.Types (WorldGenParams(..))
 import World.Page.Types (WorldPageId(..))
-import World.State.Types (WorldState(..))
+import World.State.Types (WorldState(..), LoadPhase(..))
 
 -- | Keep one entry per PHYSICAL chunk, preserving the FIRST occurrence
 --   and the input order.
@@ -152,8 +152,28 @@ enqueueChunkRequest pid ws coords = do
         Nothing → pure 0
         Just params → do
             needed ← registerChunkDemand ws pid params coords
-            atomicModifyIORef' (wsInitQueueRef ws) $ \q →
+            count ← atomicModifyIORef' (wsInitQueueRef ws) $ \q →
                 (q ⧺ needed, length needed)
+            -- Appending work does not complete any, so a request made
+            -- while the page is still in 'LoadPhase2' raises the TOTAL by
+            -- the same amount it raises the remaining count. Without
+            -- that, a large enough region outruns the total the initial
+            -- box recorded — 'drainInitQueues' carries that total
+            -- forward — and @world.getInitProgress@ reports
+            -- @total - remaining@ completed, so the pair surfaces as
+            -- NEGATIVE progress through the public API.
+            --
+            -- Only the remaining count is authoritative from the queue;
+            -- the world thread recomputes it every tick. The total is
+            -- what has to survive, which is why it is bumped here rather
+            -- than left for the drain to reconcile. Outside 'LoadPhase2'
+            -- there is no total to keep and the phase is untouched.
+            when (count > 0) $
+                atomicModifyIORef' (wsLoadPhaseRef ws) $ \ph → case ph of
+                    LoadPhase2 remaining total →
+                        (LoadPhase2 (remaining + count) (total + count), ())
+                    other → (other, ())
+            pure count
 
 -- | Seed a page's init queue with its initial box and report the
 --   @('LoadPhase2' remaining, total)@ pair that describes it.

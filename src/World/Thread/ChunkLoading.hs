@@ -532,10 +532,24 @@ drainInitQueues env logger = do
                                 LoadPhase2 _ recorded → recorded
                                 _ → (2 * chunkLoadRadius + 1)
                                       * (2 * chunkLoadRadius + 1)
+                        -- The total can never sit below the remaining
+                        -- count: @world.getInitProgress@ reports
+                        -- @total - remaining@ completed, so that pair
+                        -- would surface as negative progress. A request
+                        -- made DURING LoadPhase2 raises the recorded
+                        -- total with it ('enqueueChunkRequest'), but one
+                        -- made after LoadDone re-enters this phase with
+                        -- no recorded total at all, and the box-shaped
+                        -- fallback above can be smaller than what was
+                        -- just queued. Flooring it there reports zero
+                        -- completed rather than a negative count, and
+                        -- changes nothing in the ordinary case.
+                        let remaining = length rest
                         writeIORef (wsLoadPhaseRef worldState)
                             (if null rest
                              then LoadDone
-                             else LoadPhase2 (length rest) totalChunks)
+                             else LoadPhase2 remaining
+                                      (max totalChunks remaining))
 computeSideDecos ∷ Word64 → [ChunkCoord] → WorldTileData → WorldTileData
 computeSideDecos seed newCoords wtd =
     let chunks = wtdChunks wtd

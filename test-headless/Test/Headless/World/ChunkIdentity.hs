@@ -47,7 +47,7 @@ import World.Command.Types (WorldCommand(..))
 import World.Generate.Types
     (WorldGenParams(..), defaultWorldGenParams, isArenaParams)
 import World.Page.Types (WorldPageId(..))
-import World.State.Types (WorldState(..), emptyWorldState)
+import World.State.Types (WorldState(..), LoadPhase(..), emptyWorldState)
 import World.Tile.Types (WorldTileData(..), emptyWorldTileData, lookupChunk)
 import World.Generate.Arena (generateFlatChunk)
 import Test.Headless.Harness
@@ -574,3 +574,38 @@ spec = describe "canonical chunk identity" $ do
         stateOf params pageA aliasCoord settled `shouldBe` ChunkResident
         chunkOwnerSize settled `shouldBe` 1
         enqueueChunkRequest pageA ws [aliasCoord] `shouldReturn` 0
+
+    it "never lets init progress run negative when a region is appended" $ \_ → do
+        -- world.getInitProgress reports (total - remaining) completed, so
+        -- a phase whose remaining outruns its total surfaces as NEGATIVE
+        -- progress through the public API. Appending work completes none
+        -- of it, so a request made during LoadPhase2 raises the total by
+        -- exactly what it raises the remaining count by.
+        let params = sizedParams wideWorldSize
+            region = [ ChunkCoord cx 40 | cx ← [0 .. 11] ]
+        ws ← detachedPage params
+        writeIORef (wsLoadPhaseRef ws) (LoadPhase2 24 25)
+
+        queued ← enqueueChunkRequest pageA ws region
+        queued `shouldBe` length region
+        phase ← readIORef (wsLoadPhaseRef ws)
+        phase `shouldBe` LoadPhase2 (24 + length region) (25 + length region)
+        -- Non-vacuity: leaving the total alone really would go negative.
+        length region `shouldSatisfy` (> 25 - 24)
+        case phase of
+            LoadPhase2 remaining total → do
+                total - remaining `shouldBe` 1
+                total `shouldSatisfy` (≥ remaining)
+            other → expectationFailure ("expected LoadPhase2, got " ⧺ show other)
+
+        -- A request that adds no NEW physical chunk moves neither.
+        again ← enqueueChunkRequest pageA ws region
+        again `shouldBe` 0
+        readIORef (wsLoadPhaseRef ws) `shouldReturn` phase
+
+        -- Outside LoadPhase2 there is no total to keep, so the phase is
+        -- untouched — the drain floors it when it re-enters the phase.
+        wsDone ← detachedPage params
+        writeIORef (wsLoadPhaseRef wsDone) LoadDone
+        _ ← enqueueChunkRequest pageA wsDone region
+        readIORef (wsLoadPhaseRef wsDone) `shouldReturn` LoadDone
