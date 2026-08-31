@@ -123,6 +123,7 @@ import qualified Test.Headless.Graphics.InstancePlan as GraphicsInstancePlan
 import qualified Test.Headless.Graphics.WindowMode as GraphicsWindowMode
 import qualified Test.Headless.Graphics.AmbientLight as AmbientLight
 import qualified Test.Headless.Graphics.Screenshot as GraphicsScreenshot
+import qualified Test.Headless.Graphics.SwapchainSelection as GraphicsSwapchainSelection
 import qualified Test.Headless.Graphics.UniformLayout as GraphicsUniformLayout
 import qualified Test.Headless.Graphics.VertexLayout as GraphicsVertexLayout
 import qualified Test.Headless.Graphics.FontFallback as GraphicsFontFallback
@@ -181,6 +182,7 @@ import qualified Test.Headless.Lua.WidthTruncation as LuaWidthTruncation
 import qualified Test.Headless.Lua.ShellInput as LuaShellInput
 import qualified Test.Headless.Lua.RandomStream as LuaRandomStream
 import qualified Test.Headless.Lua.ConsoleTableKeys as LuaConsoleTableKeys
+import qualified Test.Headless.Lua.LogSource as LuaLogSource
 import qualified Test.Headless.Lua.InjuryNarration as LuaInjuryNarration
 import qualified Test.Headless.UI.Slider as UISlider
 import qualified Test.Headless.UI.BarFillColor as UIBarFillColor
@@ -233,6 +235,7 @@ import qualified Test.Headless.App.ChunkRegion as AppChunkRegion
 import qualified Test.Headless.App.PreviewConfig as PreviewConfig
 import qualified Test.Headless.App.ResourceRoot as AppResourceRoot
 import qualified Test.Headless.Camera.GotoClamp as GotoClamp
+import qualified Test.Headless.Camera.GotoLoad as GotoLoad
 import qualified Test.Headless.Camera.ZoomScroll as ZoomScroll
 import qualified Test.Headless.Scene.BatchMerge as BatchMerge
 import qualified Test.Headless.Render.PanMargin as PanMargin
@@ -506,6 +509,11 @@ main = hspec $ do
     -- so it generates its own cheap private w8 page rather than sharing
     -- or disturbing the worldgen specs' engine/camera state.
     aroundAll withHeadlessEngine SelectChunk.sharedSpec
+    -- Own engine for the same reason: it shows a private w8 page and
+    -- teleports the camera, so the world worker generates against THAT
+    -- page's window. Sharing the worldgen engine would hand every other
+    -- spec a different active world and a moved camera.
+    aroundAll withHeadlessEngine GotoLoad.spec
     HarnessWorkerHealth.spec
     describe "Wrap Seam" WrapSeam.spec
     describe "Arena base seeding (#1718)" ArenaSeed.pureSpec
@@ -637,6 +645,7 @@ main = hspec $ do
     describe "Graphics.WindowMode" GraphicsWindowMode.spec
     describe "Graphics.computeAmbientLight" AmbientLight.spec
     describe "Graphics.Screenshot" GraphicsScreenshot.spec
+    GraphicsSwapchainSelection.spec
     describe "Graphics.UniformLayout" GraphicsUniformLayout.spec
     describe "Graphics.VertexLayout" GraphicsVertexLayout.spec
     describe "Graphics.FontFallback" GraphicsFontFallback.spec
@@ -699,6 +708,7 @@ main = hspec $ do
     describe "Lua.TextTruncation" LuaTextTruncation.spec
     describe "Lua.WidthTruncation" LuaWidthTruncation.spec
     describe "Lua.ShellInput" LuaShellInput.spec
+    describe "Lua log source" LuaLogSource.spec
     describe "Lua random stream ownership" LuaRandomStream.spec
     describe "Lua injury narration" LuaInjuryNarration.spec
     UISlider.spec
