@@ -163,6 +163,15 @@ data EngineEnv = EngineEnv
   --   physical key (which side of a merged modifier) without racing the
   --   input thread's shared state. 'Nothing' outside a key-down dispatch.
   , currentKeyDownRef   ∷ IORef (Maybe GLFW.Key)
+  -- | The SCENE-OBJECT text cache @engine.getText@ answers from, keyed
+  --   by the scene node's own 'ObjectId'. NOT editable-widget text — that
+  --   is @UI.TextBuffer@ inside 'uiManagerRef', a different mechanism
+  --   with its own code-point coordinate contract. @boot-process@, and
+  --   deliberately not reset by
+  --   @World.Load.Publish.resetTransientState@: entries are created and
+  --   removed with the scene nodes they describe by
+  --   "Engine.Scripting.Lua.Message.Scene", its only writer (#1961), so
+  --   a session boundary has nothing left to clear.
   , textBuffersRef      ∷ IORef (Map.Map ObjectId Text)
   , cameraRef           ∷ IORef Camera2D
   , uiCameraRef         ∷ IORef UICamera
