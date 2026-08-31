@@ -1703,6 +1703,28 @@ spec = around withMenusEngine $ do
             sspCursorX after `shouldSatisfy` (> sspBufferX after)
             sspCursorX after `shouldSatisfy` (≤ sspBoxRight after)
 
+        it "keeps the prompt, input, cursor and ghost inside the fitted center at every band's maximum scale" $ \env → do
+            ls ← newBareLuaBackend env
+            -- The nine box sprites fitting is not the whole of requirement
+            -- 2: the input ROW has to live inside them too. Charge 64px per
+            -- byte, so the two-glyph prompt measures 128px whatever the
+            -- scaled font size is — which is what the narrowest supported
+            -- combination (MIN_WIDTH at the top band's 4x, a 128px fitted
+            -- center) really does to shell.ttf, and what a flat inset from
+            -- the center could not survive.
+            _ ← evalOk ls (fixedCharMetrics promptPx <> " return true")
+            envelope ← decodeProbe "envelope" =≪ evalJSON ls envelopeExpr
+            let combos = [ (epMinWidth envelope, brMinH b, brMaxScale b)
+                         | b ← epBands envelope ]
+            length combos `shouldSatisfy` (≥ 4)
+            _ ← evalOk ls shellBootExpr
+            rows ← mapM (inputRowAt env ls) combos
+            concatMap fst rows `shouldBe` []
+            -- Both ends of the degradation ladder actually run: the widest
+            -- band keeps its prompt, the narrowest has to drop it.
+            map snd rows `shouldSatisfy` or
+            map snd rows `shouldSatisfy` (not ∘ and)
+
         it "redraws the completion ghost a width rebuild destroyed" $ \env → do
             ls ← newBareLuaBackend env
             _ ← evalOk ls (fixedCharMetrics contentPx <> " return true")
@@ -3055,6 +3077,115 @@ shellSeedExpr px = luaLines
     , "shell.addHistory(string.rep('c', 600), string.rep('r', 600), false);"
     , "for _ = 1, 300 do shell.onCharInput(fid, 'i') end;"
     , "return " <> shellStateProbe px
+    ]
+
+-- | Per-byte width for the input-row case. Large enough that the prompt
+--   alone is as wide as the narrowest supported band's fitted center,
+--   which is the combination that exposed a budget measured from the
+--   center rather than from where the input actually starts.
+promptPx ∷ Int
+promptPx = 64
+
+-- | Where the prompt, input line, cursor and completion ghost landed
+--   relative to the fitted center's own interior — the two edge tiles'
+--   inner faces, read off @shell_nw@ and @shell_ne@ rather than
+--   recomputed.
+data InputRowProbe = InputRowProbe
+    { irpSupported ∷ Bool
+    , irpInteriorLeft ∷ Double, irpInteriorRight ∷ Double
+    , irpInputWidth ∷ Double
+    , irpPromptVisible ∷ Bool, irpPromptX ∷ Double, irpPromptWidth ∷ Double
+    , irpBufferX ∷ Double, irpBufferWidth ∷ Double
+    , irpCursorCenter ∷ Double
+    , irpGhostVisible ∷ Bool, irpGhostX ∷ Double, irpGhostRight ∷ Double
+    } deriving Show
+instance FromJSON InputRowProbe where
+    parseJSON = withObject "InputRowProbe" $ \o → InputRowProbe
+        <$> o .: "supported"
+        <*> o .: "interiorLeft" <*> o .: "interiorRight"
+        <*> o .: "inputWidth"
+        <*> o .: "promptVisible" <*> o .: "promptX" <*> o .: "promptWidth"
+        <*> o .: "bufferX" <*> o .: "bufferWidth"
+        <*> o .: "cursorCenter"
+        <*> o .: "ghostVisible" <*> o .: "ghostX" <*> o .: "ghostRight"
+
+-- | Rebuild at one supported combination with a short completable input,
+--   then report every violated in-bounds fact for the input row, plus
+--   whether the prompt survived at that width.
+inputRowAt ∷ EngineEnv → LuaBackendState → (Int, Int, Double) → IO ([String], Bool)
+inputRowAt env ls (w, h, sc) = do
+    setFramebuffer env (w, h)
+    p ← decodeProbe "input row" =≪ evalJSON ls (shellInputRowExpr promptPx w h sc)
+    let at = show w ⧺ "x" ⧺ show h ⧺ " @" ⧺ show sc ⧺ "x"
+        left = irpInteriorLeft p
+        right = irpInteriorRight p
+        inside what x wide =
+            [ at ⧺ ": " ⧺ what ⧺ " spans " ⧺ show x ⧺ ".." ⧺ show (x + wide)
+                ⧺ ", outside the fitted center " ⧺ show left ⧺ ".." ⧺ show right
+            | x < left ∨ (x + wide) > right ]
+    pure ( concat
+             [ [ at ⧺ ": the envelope does not classify this as supported"
+               | not (irpSupported p) ]
+             , [ at ⧺ ": non-positive input budget " ⧺ show (irpInputWidth p)
+               | irpInputWidth p ≤ 0 ]
+             , [ at ⧺ ": nothing rendered on the input line"
+               | irpBufferWidth p ≤ 0 ]
+             , if irpPromptVisible p
+                 then inside "the prompt" (irpPromptX p) (irpPromptWidth p)
+                 else []
+             , inside "the input line" (irpBufferX p) (irpBufferWidth p)
+             -- The caret glyph is drawn CENTRED on the insertion point, so
+             -- half of it legitimately overhangs at either end of the
+             -- field; the point itself is what must stay in the center.
+             , inside "the cursor" (irpCursorCenter p) 0
+             , if irpGhostVisible p
+                 then inside "the completion ghost" (irpGhostX p)
+                          (irpGhostRight p - irpGhostX p)
+                 else []
+             ]
+         , irpPromptVisible p )
+
+-- | Rebuild at (w, h, scale), type a two-character prefix exactly one
+--   global answers, and report the input row's geometry.
+shellInputRowExpr ∷ Int → Int → Int → Double → Text
+shellInputRowExpr px w h sc = luaLines
+    [ "engine.setUIScale(" <> tshow sc <> ");"
+    , "local shell = require('scripts.shell');"
+    , "shell.onFramebufferResize(" <> tshow w <> ", " <> tshow h <> ");"
+    , "local fid = shell.getFocusId();"
+    , "shell.onInterrupt(fid);"
+    , "_G.zzq = 1;"
+    , "shell.onCharInput(fid, 'z'); shell.onCharInput(fid, 'z');"
+    , "local left, right = -1, -1;"
+    , "local promptVisible, promptX, promptText = false, -1, '';"
+    , "local bufferX, bufferText = -1, '';"
+    , "local cursorX, cursorText = -1, '';"
+    , "local ghostVisible, ghostX, ghostText = false, -1, '';"
+    , "for _, e in ipairs(UI.getVisibleElements()) do"
+    , "  if e.page == 'shell' then"
+    , "    if e.name == 'shell_nw' then left = e.x + e.width;"
+    , "    elseif e.name == 'shell_ne' then right = e.x;"
+    , "    elseif e.name == 'shell_prompt' then"
+    , "      promptVisible = e.visible; promptX = e.x; promptText = e.text or '';"
+    , "    elseif e.name == 'shell_buffer' then"
+    , "      bufferX = e.x; bufferText = e.text or '';"
+    , "    elseif e.name == 'shell_cursor' then"
+    , "      cursorX = e.x; cursorText = e.text or '';"
+    , "    elseif e.name == 'shell_ghost' then"
+    , "      ghostVisible = e.visible; ghostX = e.x; ghostText = e.text or '';"
+    , "    end;"
+    , "  end;"
+    , "end;"
+    , "return {supported=require('scripts.ui.responsive').classify("
+        <> tshow w <> ", " <> tshow h <> ", " <> tshow sc <> ").supported,"
+    , "        interiorLeft=left, interiorRight=right,"
+    , "        inputWidth=shell.getMaxInputWidth(),"
+    , "        promptVisible=promptVisible, promptX=promptX,"
+    , "        promptWidth=#promptText * " <> tshow px <> ","
+    , "        bufferX=bufferX, bufferWidth=#bufferText * " <> tshow px <> ","
+    , "        cursorCenter=cursorX + (#cursorText * " <> tshow px <> ") / 2,"
+    , "        ghostVisible=ghostVisible, ghostX=ghostX,"
+    , "        ghostRight=ghostX + #ghostText * " <> tshow px <> "}"
     ]
 
 -- | Type a short prefix exactly one global answers, so the completion

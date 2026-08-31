@@ -140,11 +140,15 @@ local uiscale = 1.0
 -- non-positive text budget, so every fitted width clamps here.
 local minCenterWidth = 1
 
--- The input line's own inset inside the center, and the extra inset a
--- history RESULT line carries over a command line. Both predate #1959;
--- they are named rather than inline because the fitted widths clamp
--- against them.
-local inputPadding = 100
+-- The glyphs the input row is laid out around, and the gap left of the
+-- prompt and between prompt and input line. Naming the label keeps the
+-- element and the width it is measured against from drifting apart.
+local promptLabel = "$>"
+local inputGap = 10
+
+-- The extra inset a history RESULT line carries over the command line
+-- above it. Predates #1959; named because the fitted width clamps against
+-- it.
 local resultIndent = 20
 
 -- completion state
@@ -568,10 +572,8 @@ function shell.rebuildBox()
     local row0Y = baseY + tileSize / 2
     local middleY = baseY + tileSize + middleHeight / 2
     local row2Y = baseY + tileSize + middleHeight + tileSize / 2
-    local promptX = baseX + tileSize + 10
     local promptY = row2Y - fontSize
-    local promptWidth = engine.getTextWidth(shellFont, "$>", fontSize)
-    local bufferX = promptX + promptWidth + 10
+    local promptX, bufferX, _, promptVisible = shell.getInputLayout()
     
     if not boxSpawned then
         -- First time: create all UI elements
@@ -601,8 +603,9 @@ function shell.rebuildBox()
         UI.addToPage(shellPage, objBoxS,  baseX + tileSize, row0Y + tileSize / 2 + middleHeight)
         UI.addToPage(shellPage, objBoxSE, baseX + tileSize + centerWidth, row0Y + tileSize / 2 + middleHeight)
         
-        objPrompt = UI.newText("shell_prompt", "$>", shellFont, fontSize, 1.0, 1.0, 1.0, 1.0, shellPage)
+        objPrompt = UI.newText("shell_prompt", promptLabel, shellFont, fontSize, 1.0, 1.0, 1.0, 1.0, shellPage)
         UI.addToPage(shellPage, objPrompt, promptX, promptY)
+        UI.setVisible(objPrompt, promptVisible)
         
         objBufferText = UI.newText("shell_buffer", inputBuffer, shellFont, fontSize, 1.0, 1.0, 1.0, 1.0, shellPage)
         UI.addToPage(shellPage, objBufferText, bufferX, promptY)
@@ -636,6 +639,7 @@ function shell.rebuildBox()
         
         -- Prompt
         UI.setPosition(objPrompt, promptX, promptY)
+        UI.setVisible(objPrompt, promptVisible)
         UI.setPosition(objBufferText, bufferX, promptY)
         UI.setVisible(objCursor, cursorVisible)
         shell.updateCursorPos()
@@ -648,14 +652,11 @@ function shell.updateCursorPos()
     
     local _, fbHeight = engine.getFramebufferSize()
     local boxHeight = shell.calculateBoxHeight()
-    local baseX = marginLeft
     local baseY = fbHeight - marginBottom - boxHeight
     local middleHeight = boxHeight - tileSize * 2
     local row2Y = baseY + tileSize + middleHeight + tileSize / 2
-    local promptX = baseX + tileSize + 10
     local promptY = row2Y - fontSize
-    local promptWidth = engine.getTextWidth(shellFont, "$>", fontSize)
-    local bufferX = promptX + promptWidth + 10
+    local _, bufferX = shell.getInputLayout()
     
     -- Only measure text up to cursor position, as whole code points --
     -- a byte slice here would hand engine.getTextWidth half a character.
@@ -721,10 +722,46 @@ function shell.getResultTextWidth()
                     shell.getHistoryTextWidth() - resultIndent)
 end
 
+-- Where the prompt and the input line sit inside the fitted center, and
+-- how much horizontal budget the input line has there. ONE derivation,
+-- shared by shell.rebuildBox (which PLACES prompt, input and cursor),
+-- shell.updateCursorPos, shell.updateGhostText and shell.getMaxInputWidth
+-- (which MEASURE against them). Three of those recomputed this arithmetic
+-- privately before #1959, and the budget was a flat 100px inset with no
+-- relation to where the input actually starts -- so at a narrow fitted
+-- center the reported budget described a row the box was not drawing.
+--
+-- Returns promptX, bufferX, the input's width budget, and whether the
+-- prompt fits at all. The ladder degrades rather than overrunning the
+-- right edge tile: full spacing, then no spacing, then -- when the prompt
+-- alone is as wide as the whole fitted center, which 800x1601 at 4x really
+-- is -- no prompt at all, and the input takes the entire interior.
+function shell.getInputLayout()
+    local left = marginLeft + tileSize
+    local right = left + shell.getContentWidth()
+    local promptWidth =
+        engine.getTextWidth(shellFont, promptLabel, fontSize) or 0
+
+    local promptX = left + inputGap
+    local bufferX = promptX + promptWidth + inputGap
+    if bufferX + minCenterWidth <= right then
+        return promptX, bufferX, math.max(minCenterWidth, right - bufferX), true
+    end
+
+    promptX = left
+    bufferX = left + promptWidth
+    if bufferX + minCenterWidth <= right then
+        return promptX, bufferX, math.max(minCenterWidth, right - bufferX), true
+    end
+
+    return left, left, math.max(minCenterWidth, right - left), false
+end
+
 -- Horizontal budget for the input line -- and, through
 -- shell.updateGhostText, for the completion hint that trails it.
 function shell.getMaxInputWidth()
-    return math.max(minCenterWidth, shell.getContentWidth() - inputPadding)
+    local _, _, width = shell.getInputLayout()
+    return width
 end
 
 -- Update scroll position based on cursor
@@ -988,14 +1025,11 @@ function shell.updateGhostText()
             -- Position after cursor
             local _, fbHeight = engine.getFramebufferSize()
             local boxHeight = shell.calculateBoxHeight()
-            local baseX = marginLeft
             local baseY = fbHeight - marginBottom - boxHeight
             local middleHeight = boxHeight - tileSize * 2
             local row2Y = baseY + tileSize + middleHeight + tileSize / 2
-            local promptX = baseX + tileSize + 10
             local promptY = row2Y - fontSize
-            local promptWidth = engine.getTextWidth(shellFont, "$>", fontSize)
-            local bufferX = promptX + promptWidth + 10
+            local _, bufferX = shell.getInputLayout()
             local textWidth = engine.getTextWidth(shellFont,
                 utf8Safe.suffix(inputBuffer, inputScrollOffset), fontSize)
             local cursorWidth = engine.getTextWidth(shellFont, "|", fontSize)
