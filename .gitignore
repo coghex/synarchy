@@ -17,9 +17,22 @@ config/shell_history.txt
 # an update, so their real values survive on disk (now off this list's
 # purpose, since the tree no longer needs to protect them) until
 # migrateLegacyConfig picks them up. Nothing writes to them any more.
+#
+# Since #1937 a neutral stand-in is NOT seeded into a local file: only a
+# legacy file saying something the versioned default does not becomes
+# local state, so revising a tracked default still reaches a player who
+# never saved. The *.legacy-neutral.local.yaml files below are how that
+# judgement survives such a revision — each is a verbatim copy of the
+# legacy file at the boot that judged it neutral, written by
+# migrateLegacyConfig and read by nothing else. They are named
+# *.local.yaml on purpose: per-machine runtime state that can decide
+# what a boot resolves, so every fixture already hiding the developer's
+# config/*.local.yaml from an isolated run covers them unwidened.
 config/video.local.yaml
 config/keybinds.local.yaml
 config/notifications.local.yaml
+config/video.legacy-neutral.local.yaml
+config/keybinds.legacy-neutral.local.yaml
 # Autosave settings (#913). New in the #786 layout, so it has no
 # pre-#786 tracked path and is deliberately absent from
 # migrateLegacyConfig — there is no legacy source to migrate from.

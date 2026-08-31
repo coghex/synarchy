@@ -168,10 +168,12 @@ normalizeUIScale env =
 --
 --   The wrapper ALSO establishes #1357's filesystem boundary, and does
 --   so OUTSIDE 'withHeadlessEngine': engine initialization is itself a
---   config writer — 'Engine.Core.Init.migrateLegacyConfig' can
---   materialize an absent @config/video.local.yaml@ or
---   @config/keybinds.local.yaml@, and notification overrides
---   self-materialize — so isolating only after the engine came up would
+--   config writer — 'Engine.Core.Init.migrateLegacyConfig' writes a
+--   @*.legacy-neutral.local.yaml@ record for the tracked placeholders (and
+--   would materialize @config/video.local.yaml@ or
+--   @config/keybinds.local.yaml@ from a legacy file with real values),
+--   and notification overrides self-materialize — so isolating only
+--   after the engine came up would
 --   already be too late (see 'Test.Headless.Harness.Isolation').
 withClippingEngine ∷ (EngineEnv → IO α) → IO α
 withClippingEngine action = withIsolatedResourceRoot $
