@@ -143,6 +143,121 @@ spec = describe "unit location knowledge" $ do
                 , "assert(L.nearestKnownLocation(s, 'none', 0, 0) == nil)"
                 ]
 
+    -- #1944: the memory list is acquired seam-aware (Location.Discovery's
+    -- containment enumeration) but was ranked with raw Euclidean deltas,
+    -- so an anchor directly across the U seam scored a world-width away.
+    --
+    -- The canonical fixture: world size 8 chunks, so the full u-wrap
+    -- period is 128 tiles and the alias step is 64 (the same half-period
+    -- Location.Bounds.seamAliases and World.Generate.Coordinates.
+    -- tileAliasStep derive). Under alias k = -1 the anchor (70, 6) maps
+    -- to (6, 70) -- the unit's OWN tile, physical distance 0 -- while
+    -- (10, 70) is a genuine 4 tiles away. Raw deltas invert that: (70, 6)
+    -- scores about 90.5 and loses.
+    describe "seam-aware ranking on the page's cylinder" $ do
+        let seamMemories = lns
+                [ prelude
+                , "L.addKnownLocation(s, 'main', 1, 70, 6)"
+                , "L.addKnownLocation(s, 'main', 2, 10, 70)"
+                ]
+
+        it "prefers the anchor that is physically nearest across the U \
+           \seam over the one that is nearest in raw coordinates" $
+            runsOk $ lns
+                [ seamMemories
+                , "local n = L.nearestKnownLocation(s, 'main', 6, 70, 128)"
+                , "assert(n ~= nil and n.id == 1)"
+                ]
+
+        it "is the plain Euclidean ranking on a non-wrapping page, and \
+           \when no period is supplied at all" $
+            runsOk $ lns
+                [ seamMemories
+                -- An arena / zero-size page reports period 0, which is
+                -- the identity: the raw winner (10, 70) is returned.
+                , "assert(L.nearestKnownLocation(s, 'main', 6, 70, 0).id == 2)"
+                , "assert(L.nearestKnownLocation(s, 'main', 6, 70).id == 2)"
+                , "assert(L.nearestKnownLocation(s, 'main', 6, 70, nil).id"
+                , "       == 2)"
+                ]
+
+        it "is unchanged away from the seam even on a wrapping page" $
+            runsOk $ lns
+                [ prelude
+                , "L.addKnownLocation(s, 'main', 1, 100, 0)"
+                , "L.addKnownLocation(s, 'main', 2, 10, 0)"
+                , "L.addKnownLocation(s, 'main', 3, 50, 0)"
+                -- The same answer this suite already pins for the
+                -- period-free call, now with a live 128-tile period.
+                , "assert(L.nearestKnownLocation(s, 'main', 0, 0).id == 2)"
+                , "assert(L.nearestKnownLocation(s, 'main', 0, 0, 128).id"
+                , "       == 2)"
+                ]
+
+    -- The registered uid-keyed wrapper is what obtains the period, so
+    -- requirement 6 (measure against the page ASKED ABOUT, never the
+    -- active or visible one) and the graceful-degradation contract are
+    -- only observable through it. `register` is pure, so these stage it
+    -- against a bare table with no engine behind them.
+    describe "the registered unitAi.nearestKnownLocation wrapper" $ do
+        let registeredWrapper = lns
+                [ "local L = require('scripts.unit_ai_locations')"
+                , "local unitAi, aiState = {}, { [7] = {} }"
+                , "L.register(unitAi, aiState)"
+                , "local s = aiState[7]"
+                -- The same seam fixture, remembered on BOTH pages.
+                , "for _, p in ipairs({ 'alpha', 'beta' }) do"
+                , "  L.addKnownLocation(s, p, 1, 70, 6)"
+                , "  L.addKnownLocation(s, p, 2, 10, 70) end"
+                ]
+
+        it "reads the wrap period of the page it was ASKED about, not \
+           \the active one, so a non-visible loaded page is measured \
+           \against its own world size" $
+            runsOk $ lns
+                [ registeredWrapper
+                -- Only 'alpha' wraps. Which page is ACTIVE flips between
+                -- the two queries, and neither answer may follow it.
+                , "local asked = {}"
+                , "local activeId = 'beta'"
+                , "world = {"
+                , "  getActiveWorldId = function() return activeId end,"
+                , "  getWrapWidth = function(page)"
+                , "    asked[#asked + 1] = tostring(page)"
+                , "    if page == 'alpha' then return 128 end"
+                , "    return 0 end }"
+                -- Asked about the WRAPPING page while a non-wrapping one
+                -- is active: the seam alias wins.
+                , "assert(unitAi.nearestKnownLocation(7, 'alpha', 6, 70).id"
+                , "       == 1)"
+                -- Asked about the NON-wrapping page while the wrapping
+                -- one is active: the raw winner, uncontaminated.
+                , "activeId = 'alpha'"
+                , "assert(unitAi.nearestKnownLocation(7, 'beta', 6, 70).id"
+                , "       == 2)"
+                , "assert(#asked == 2)"
+                , "assert(asked[1] == 'alpha' and asked[2] == 'beta')"
+                ]
+
+        it "falls back to today's raw-Euclidean ranking when the period \
+           \cannot be obtained -- verb absent, or the page refused" $
+            runsOk $ lns
+                [ registeredWrapper
+                -- An engine too old to answer, or a bare Lua backend.
+                , "world = { getActiveWorldId = function() return 'alpha' end }"
+                , "assert(unitAi.nearestKnownLocation(7, 'alpha', 6, 70).id"
+                , "       == 2)"
+                -- A verb that raises rather than answering must not
+                -- propagate out of a memory lookup.
+                , "world.getWrapWidth = function() error('no such page') end"
+                , "assert(unitAi.nearestKnownLocation(7, 'alpha', 6, 70).id"
+                , "       == 2)"
+                -- A non-numeric answer is treated the same way.
+                , "world.getWrapWidth = function() return nil end"
+                , "assert(unitAi.nearestKnownLocation(7, 'alpha', 6, 70).id"
+                , "       == 2)"
+                ]
+
     describe "forget" $ do
         it "removes exactly the named memory and leaves its siblings" $
             runsOk $ lns
