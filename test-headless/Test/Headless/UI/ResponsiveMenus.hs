@@ -32,6 +32,7 @@ import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Thread (ThreadControl(..))
 import Engine.Graphics.Config (VideoConfig(..))
 import Engine.Scripting.Lua.API (registerLuaAPI)
+import Engine.Scripting.Lua.API.Shell (setupShellSandbox)
 import Engine.Scripting.Lua.Thread (createLuaBackendState)
 import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
 import Engine.Scripting.Lua.Types (LuaBackendState(..), ScriptValue(..))
@@ -2993,9 +2994,11 @@ shellContentExpr px w h sc = luaLines
     , "end;"
     , "local visibleWidth = #shell.getVisibleInput() * " <> tshow px <> ";"
     -- The ghost hint rides the same fitted budget: clear the line, type a
-    -- prefix exactly one global answers, and see where the hint lands.
+    -- prefix exactly one SANDBOX name answers, and see where the hint lands.
+    -- shellSandbox, not _G: that is the environment the console completes
+    -- from and executes in (#1958).
     , "shell.onInterrupt(fid);"
-    , "_G.zzShellFitCompletionTarget = 1;"
+    , "shellSandbox.zzShellFitCompletionTarget = 1;"
     , "for _, c in ipairs({'z','z','S','h','e','l','l'}) do"
     , "  shell.onCharInput(fid, c);"
     , "end;"
@@ -3230,15 +3233,17 @@ shellInputRowExpr px w h sc = luaLines
     , "        ghostRight=ghostX + #ghostText * " <> tshow px <> "}"
     ]
 
--- | Type a short prefix exactly one global answers, so the completion
---   ghost is live before a resize. Deliberately SHORT: a scrolled input
+-- | Type a short prefix exactly one SANDBOX name answers, so the completion
+--   ghost is live before a resize. The name goes in @shellSandbox@ and not
+--   @_G@ because that is the environment the console both completes from and
+--   executes in (#1958). Deliberately SHORT: a scrolled input
 --   already fills the whole field, so no ghost can fit beside it, which is
 --   why the ghost case cannot share the preservation case's seed.
 shellGhostSeedExpr ∷ Int → Text
 shellGhostSeedExpr px = luaLines
     [ "local shell = require('scripts.shell');"
     , "local fid = shell.getFocusId();"
-    , "_G.zzShellGhostCompletionTarget = 1;"
+    , "shellSandbox.zzShellGhostCompletionTarget = 1;"
     , "for _, c in ipairs({'z','z','S','h','e','l','l'}) do"
     , "  shell.onCharInput(fid, c);"
     , "end;"
@@ -3263,6 +3268,12 @@ newBareLuaBackend env = do
                                 (inputStateRef env) (loggerRef env)
     stateRef ← newIORef ThreadRunning
     registerLuaAPI (lbsLuaState ls) env ls stateRef
+    -- Production order (Engine.Scripting.Lua.Thread.luaStartup): register
+    -- the API, then build the console sandbox. Since #1958 that sandbox is
+    -- also where scripts/shell.lua looks for completion candidates, so the
+    -- two shell cases below that need a live ghost have nothing to complete
+    -- against without it.
+    setupShellSandbox (lbsLuaState ls)
     pure ls
 
 eval ∷ LuaBackendState → Text → IO Text

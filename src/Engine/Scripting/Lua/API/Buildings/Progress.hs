@@ -12,7 +12,7 @@ module Engine.Scripting.Lua.API.Buildings.Progress
 import UPrelude
 import Engine.Core.Capability.Building
     (BuildingCapability(..), toBuildingCapability)
-import Engine.Core.Capability.ContentRegistries (toContentRegistriesCapability)
+import Engine.Core.Capability.ContentRegistriesView (toContentRegistriesViewCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import Building.Knowledge (SeedTrigger(..), seedTriggerFor)
@@ -199,7 +199,7 @@ buildingAddBuildProgressFn env = do
                 seedBuiltContainer
                     (containerObserver (toBuildingCapability env)
                                        (toWorldSimCapability env)
-                                       (toContentRegistriesCapability env))
+                                       (toContentRegistriesViewCapability env))
                     bid
             case mNew of
                 Just p → do

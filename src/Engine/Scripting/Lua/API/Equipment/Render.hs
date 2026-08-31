@@ -12,14 +12,15 @@ module Engine.Scripting.Lua.API.Equipment.Render
     ) where
 
 import UPrelude
-import Engine.Core.Capability.ContentRegistries
-    (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Engine.Core.Capability.ContentRegistriesView
+    (ContentRegistriesViewCapability(..), toContentRegistriesViewCapability)
 import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef)
+import Engine.Core.ReadOnlyRef (readReadOnlyRef)
 import Engine.Core.State (EngineEnv)
 import Engine.Asset.Handle (TextureHandle(..))
 import Item.Types (ItemInstance(..), ItemDef(..), ItemWeapon(..),
@@ -47,7 +48,8 @@ equipmentGetLoadoutFn env = do
             let uid = UnitId (fromIntegral n)
             mPair ← Lua.liftIO $ do
                 um      ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
-                itemMgr ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
+                itemMgr ← readReadOnlyRef
+                    (crvItemManagerRef (toContentRegistriesViewCapability env))
                 pure $ do
                     inst ← HM.lookup uid (umInstances um)
                     pure (uiEquipment inst, itemMgr)
@@ -310,7 +312,8 @@ equipmentGetAccessoriesFn env = do
             let uid = UnitId (fromIntegral n)
             mPair ← Lua.liftIO $ do
                 um      ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
-                itemMgr ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
+                itemMgr ← readReadOnlyRef
+                    (crvItemManagerRef (toContentRegistriesViewCapability env))
                 pure $ do
                     inst ← HM.lookup uid (umInstances um)
                     pure (uiAccessories inst, itemMgr)

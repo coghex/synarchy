@@ -11,12 +11,13 @@ module Engine.Scripting.Lua.API.Buildings.Materials
 import UPrelude
 import Engine.Core.Capability.Building
     (BuildingCapability(..), toBuildingCapability)
-import Engine.Core.Capability.ContentRegistries
-    (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Engine.Core.Capability.ContentRegistriesView
+    (ContentRegistriesViewCapability(..), toContentRegistriesViewCapability)
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef)
+import Engine.Core.ReadOnlyRef (readReadOnlyRef)
 import Engine.Core.State (EngineEnv)
 import Building.Types
 import Item.Types (itemTotalWeight)
@@ -130,7 +131,8 @@ buildingGetStorageFn env = do
                     Lua.pushnil
                     return 1
                 Just inst → do
-                    itemMgr ← Lua.liftIO $ readIORef (crItemManagerRef (toContentRegistriesCapability env))
+                    itemMgr ← Lua.liftIO $ readReadOnlyRef
+                        (crvItemManagerRef (toContentRegistriesViewCapability env))
                     Lua.newtable
                     forM_ (zip [1 ∷ Int ..] (biStorage inst)) $ \(i, item) → do
                         Lua.newtable
@@ -181,7 +183,8 @@ buildingGetStorageWeightFn env = do
             let bid = BuildingId (fromIntegral n)
             mW ← Lua.liftIO $ do
                 bm      ← readIORef (bcBuildingManagerRef (toBuildingCapability env))
-                itemMgr ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
+                itemMgr ← readReadOnlyRef
+                    (crvItemManagerRef (toContentRegistriesViewCapability env))
                 pure $ do
                     inst ← HM.lookup bid (bmInstances bm)
                     pure $ sum (map (itemTotalWeight itemMgr) (biStorage inst))

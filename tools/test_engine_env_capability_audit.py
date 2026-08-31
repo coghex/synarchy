@@ -2561,6 +2561,74 @@ toGammaCapability env = GammaCapability
   }
 """
 
+# SS2.1's abstract-wrapper extension (issue #1896): a view field is
+# `field = toReadOnlyRef (accessor env)`. It aliases the very same live
+# handle, so it must canonicalize exactly as the bare form does.
+_WRAPPED_PROJECTION = """\
+module Engine.Core.Capability.DeltaView
+  ( DeltaViewCapability(..)
+  , toDeltaViewCapability
+  ) where
+
+import Engine.Core.ReadOnlyRef (ReadOnlyRef, toReadOnlyRef)
+import Engine.Core.State (EngineEnv, fieldOne, fieldTwo)
+
+data DeltaViewCapability = DeltaViewCapability
+  { dvFieldOne ∷ ReadOnlyRef Int
+  , dvFieldTwo ∷ ReadOnlyRef Text
+  }
+
+toDeltaViewCapability ∷ EngineEnv → DeltaViewCapability
+toDeltaViewCapability env = DeltaViewCapability
+  { dvFieldOne = toReadOnlyRef (fieldOne env)
+  , dvFieldTwo = snapshotOf (fieldTwo env)
+  }
+"""
+
+# The migrated reader: it CONSUMES the wrapped handle inline, exactly as
+# a `readIORef` consumer does, so it must not be counted as a pass-on.
+_WRAPPED_READER = """\
+module WrappedReader.Mod where
+
+import Engine.Core.ReadOnlyRef (readReadOnlyRef)
+
+import Engine.Core.State (EngineEnv)
+import Engine.Core.Capability.DeltaView
+  (DeltaViewCapability(..), toDeltaViewCapability)
+
+peek ∷ EngineEnv → IO Int
+peek env = readReadOnlyRef (dvFieldOne (toDeltaViewCapability env))
+"""
+
+# The pass-on this whole arc exists to catch: the wrapped handle is
+# stored in a context record instead of being read here.
+_WRAPPED_PASS_ON = """\
+module WrappedPassOn.Mod where
+
+import Engine.Core.State (EngineEnv)
+import Engine.Core.Capability.DeltaView
+  (DeltaViewCapability(..), toDeltaViewCapability)
+
+observer ∷ EngineEnv → Observer
+observer env = Observer { obField = dvFieldOne (toDeltaViewCapability env) }
+"""
+
+# `readReadOnlyRef` is held to the same scope rule every primitive is:
+# a module-local one of that name is a different function.
+_LOCAL_READONLY_PRIMITIVE = """\
+module LocalReadOnly.Mod where
+
+import Engine.Core.State (EngineEnv)
+import Engine.Core.Capability.DeltaView
+  (DeltaViewCapability(..), toDeltaViewCapability)
+
+readReadOnlyRef ∷ α → IO Int
+readReadOnlyRef _ = pure 0
+
+peek ∷ EngineEnv → IO Int
+peek env = readReadOnlyRef (dvFieldOne (toDeltaViewCapability env))
+"""
+
 _GAMMA_CONSUMER = """\
 module Gamma.Mod where
 
@@ -2719,6 +2787,10 @@ def _writer_sources(**modules: str) -> dict[str, str]:
         "parenAccessor": "src/ParenAccessor/Mod.hs",
         "explicit": "src/Explicit/Mod.hs",
         "multiline": "src/Multi/Mod.hs",
+        "deltaView": "src/Engine/Core/Capability/DeltaView.hs",
+        "wrappedReader": "src/WrappedReader/Mod.hs",
+        "wrappedPassOn": "src/WrappedPassOn/Mod.hs",
+        "localReadOnly": "src/LocalReadOnly/Mod.hs",
     }
     for key, body in modules.items():
         sources[paths[key]] = body
@@ -3540,6 +3612,74 @@ def test_a_projection_may_name_its_accessor_qualified():
            f"{sorted(writes['fieldThree'])}")
 
 
+def test_a_view_field_wrapped_by_a_named_alias_wrapper_canonicalizes():
+    """SS2.1's abstract-wrapper extension (issue #1896). A reader-facing
+    view projects `dvFieldOne = toReadOnlyRef (fieldOne env)` -- the same
+    live handle, denied a write by its type. If that spelling is not
+    parsed, the accessor never enters the map, and then EVERY use of it
+    is invisible: the write scan cannot attribute one, and the pass-on
+    residue CMA-3 weighs silently loses the context-record sites the
+    wrapper was introduced to protect.
+
+    The wrapper set is CLOSED, so an unrecognized function around the
+    accessor does not canonicalize -- `snapshotOf` might copy, and
+    inventing an alias for it would claim a guarantee nothing gives."""
+    sources = _writer_sources(deltaView=_WRAPPED_PROJECTION)
+    accessors = capability_accessor_map(sources, _WRITER_FIELDS)
+    expect(accessors.get("dvFieldOne") == (
+        ("fieldOne", "Engine.Core.Capability.DeltaView",
+         "DeltaViewCapability"),),
+           f"the wrapped projection must canonicalize to the bare field, "
+           f"got: {accessors.get('dvFieldOne')}")
+    expect("dvFieldTwo" not in accessors,
+           f"but an unrecognized wrapper must NOT be treated as an alias, "
+           f"got: {accessors.get('dvFieldTwo')}")
+
+
+def test_a_read_only_ref_read_is_an_inline_use_not_a_pass_on():
+    """`readReadOnlyRef` consumes the handle exactly as `readIORef`
+    does, so a migrated reader is an inline use. Without that, every
+    reader moved onto a wrapped view would be recounted as a pass-on and
+    the residue would inflate by the size of the migration -- reporting
+    the OPPOSITE of what the migration did."""
+    sources = _writer_sources(deltaView=_WRAPPED_PROJECTION,
+                              wrappedReader=_WRAPPED_READER)
+    _, residue = _scan(sources)
+    expect([r for r in residue if r.module == "WrappedReader.Mod"] == [],
+           f"an inline read of a wrapped field is not residue, got: "
+           f"{[r for r in residue if r.module == 'WrappedReader.Mod']}")
+
+    # ...and the pass-on it is contrasted with still IS residue, or the
+    # rule above would have been achieved by simply going blind.
+    sources = _writer_sources(deltaView=_WRAPPED_PROJECTION,
+                              wrappedPassOn=_WRAPPED_PASS_ON)
+    _, residue = _scan(sources)
+    passed = [(r.accessor, r.field) for r in residue
+              if r.module == "WrappedPassOn.Mod"]
+    expect(passed == [("dvFieldOne", "fieldOne")],
+           f"storing a wrapped handle in a context record must stay "
+           f"residue, got: {passed}")
+
+    # The primitive is held to the scope rule too: a module-local
+    # `readReadOnlyRef` is a different function, so the accessor beside
+    # it was not consumed here and stays residue.
+    sources = _writer_sources(deltaView=_WRAPPED_PROJECTION,
+                              localReadOnly=_LOCAL_READONLY_PRIMITIVE)
+    _, residue = _scan(sources)
+    expect([r.accessor for r in residue if r.module == "LocalReadOnly.Mod"]
+           == ["dvFieldOne"],
+           f"a module-local `readReadOnlyRef` is not the primitive, got: "
+           f"{[r.accessor for r in residue if r.module == 'LocalReadOnly.Mod']}")
+
+    expect(resolve_primitive(
+        parse_imports("import Engine.Core.ReadOnlyRef (readReadOnlyRef)\n"),
+        "readReadOnlyRef") == "readReadOnlyRef",
+           "the read-only read resolves through its own defining module")
+    expect(resolve_primitive(parse_imports("import Data.IORef\n"),
+                             "readReadOnlyRef") is None,
+           "and `Data.IORef` does not put it in scope")
+
+
 def test_one_selector_may_belong_to_two_capabilities():
     """A selector name is only unique within its own record. Two
     capability modules may both export `sharedRef`, and the consumer's
@@ -3879,6 +4019,8 @@ def main() -> int:
         test_token_lines_survive_a_string_gap,
         test_a_wildcard_grants_only_its_own_type_s_selectors,
         test_a_projection_may_name_its_accessor_qualified,
+        test_a_view_field_wrapped_by_a_named_alias_wrapper_canonicalizes,
+        test_a_read_only_ref_read_is_an_inline_use_not_a_pass_on,
         test_one_selector_may_belong_to_two_capabilities,
         test_a_primitive_must_be_the_one_from_data_ioref,
         test_a_shadow_exemption_suppresses_only_its_own_pair,

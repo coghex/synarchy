@@ -17,13 +17,14 @@ module Engine.Scripting.Lua.API.Buildings.Knowledge
 import UPrelude
 import Engine.Core.Capability.Building
     (BuildingCapability(..), toBuildingCapability)
-import Engine.Core.Capability.ContentRegistries
-    (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Engine.Core.Capability.ContentRegistriesView
+    (ContentRegistriesViewCapability(..), toContentRegistriesViewCapability)
 import Engine.Core.Capability.WorldSim (toWorldSimCapability)
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef)
+import Engine.Core.ReadOnlyRef (readReadOnlyRef)
 import Engine.Core.State (EngineEnv)
 import Building.Knowledge
 import Building.Knowledge.Live
@@ -84,8 +85,8 @@ buildingGetContainerKnowledgeFn env = do
                     (cap, itemMgr) ← Lua.liftIO $ do
                         bm ← readIORef
                             (bcBuildingManagerRef (toBuildingCapability env))
-                        im ← readIORef (crItemManagerRef
-                                            (toContentRegistriesCapability env))
+                        im ← readReadOnlyRef (crvItemManagerRef
+                                            (toContentRegistriesViewCapability env))
                         let c = fromMaybe 0 $ do
                                 inst ← HM.lookup bid (bmInstances bm)
                                 def  ← HM.lookup (biDefName inst) (bmDefs bm)
@@ -156,8 +157,8 @@ buildingGetRememberedItemContentsFn env = do
             case mKnown of
                 Just (Just record)
                   | Just held ← resolveContainedItem path (crItems record) → do
-                    itemMgr ← Lua.liftIO $ readIORef
-                        (crItemManagerRef (toContentRegistriesCapability env))
+                    itemMgr ← Lua.liftIO $ readReadOnlyRef
+                        (crvItemManagerRef (toContentRegistriesViewCapability env))
                     Lua.newtable
                     pushGroupedContents itemMgr (iiContents held)
                     Lua.setfield (-2) "items"
@@ -200,7 +201,7 @@ buildingRefreshContainerKnowledgeFn env = do
 observerFor ∷ EngineEnv → ContainerObserver
 observerFor env = containerObserver
     (toBuildingCapability env) (toWorldSimCapability env)
-    (toContentRegistriesCapability env)
+    (toContentRegistriesViewCapability env)
 
 pushTextField ∷ Lua.Name → Text → Lua.LuaE Lua.Exception ()
 pushTextField key val = do

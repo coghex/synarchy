@@ -16,14 +16,15 @@ module Engine.Scripting.Lua.API.Units.Query
     where
 
 import UPrelude
-import Engine.Core.Capability.ContentRegistries
-    (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Engine.Core.Capability.ContentRegistriesView
+    (ContentRegistriesViewCapability(..), toContentRegistriesViewCapability)
 import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef)
+import Engine.Core.ReadOnlyRef (readReadOnlyRef)
 import Engine.Core.State (EngineEnv)
 import Unit.Types
 import Unit.Thread.Movement (jumpMaxTiles, maxJumpHeight, lungeImpactSpeed)
@@ -52,7 +53,8 @@ unitGetAttackRangeFn env = do
             let uid = UnitId (fromIntegral n)
             mRange ← Lua.liftIO $ do
                 um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
-                im ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
+                im ← readReadOnlyRef
+                    (crvItemManagerRef (toContentRegistriesViewCapability env))
                 case HM.lookup uid (umInstances um) of
                     Nothing → return Nothing
                     Just inst → case HM.lookup "height" (uiStats inst) of
@@ -79,7 +81,8 @@ unitGetAttackCooldownFn env = do
             let uid = UnitId (fromIntegral n)
             mCD ← Lua.liftIO $ do
                 um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
-                im ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
+                im ← readReadOnlyRef
+                    (crvItemManagerRef (toContentRegistriesViewCapability env))
                 case HM.lookup uid (umInstances um) of
                     Nothing → return Nothing
                     Just inst → return $ Just (resolveCooldown im um inst)
@@ -167,7 +170,8 @@ unitGetEquippedWeaponWeightFn env = do
             let uid = UnitId (fromIntegral n)
             mW ← Lua.liftIO $ do
                 um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
-                im ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
+                im ← readReadOnlyRef
+                    (crvItemManagerRef (toContentRegistriesViewCapability env))
                 case HM.lookup uid (umInstances um) of
                     Nothing → return Nothing
                     Just inst → return $ Just
@@ -301,7 +305,8 @@ unitGetWeaponClassFn env = do
             let uid = UnitId (fromIntegral n)
             mClass ← Lua.liftIO $ do
                 um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
-                im ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
+                im ← readReadOnlyRef
+                    (crvItemManagerRef (toContentRegistriesViewCapability env))
                 case HM.lookup uid (umInstances um) of
                     Nothing → return Nothing
                     Just inst → case firstEquippedWeapon im

@@ -17,10 +17,11 @@ import qualified HsLua as Lua
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text.Encoding as TE
 import Data.IORef (readIORef)
+import Engine.Core.ReadOnlyRef (readReadOnlyRef)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
-import Engine.Core.Capability.ContentRegistries
-    (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Engine.Core.Capability.ContentRegistriesView
+    (ContentRegistriesViewCapability(..), toContentRegistriesViewCapability)
 import Engine.Core.State (EngineEnv, activeWorldStateFrom)
 import World.Types
 import World.Flora.Growth (FloraGrowth(..), floraGrowth, harvestOpen,
@@ -243,7 +244,8 @@ worldFindHarvestableFloraFn env = do
                         harvests ← readIORef (wsFloraHarvestsRef ws)
                         cropPlots ← readIORef (wsCropPlotsRef ws)
                         (doy, absDay) ← growthClock ws
-                        itemMgr ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
+                        itemMgr ← readReadOnlyRef
+                            (crvItemManagerRef (toContentRegistriesViewCapability env))
                         worldSize ← pageWrapWorldSize ws
                         -- Resolve the ORIGIN into the stored frame before
                         -- stepping the box outward from it: a caller may
@@ -382,7 +384,8 @@ itemGetFoodFn env = do
         Just nameBS → do
             let name = TE.decodeUtf8Lenient nameBS
             mFood ← Lua.liftIO $ do
-                itemMgr ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
+                itemMgr ← readReadOnlyRef
+                    (crvItemManagerRef (toContentRegistriesViewCapability env))
                 pure (lookupItemDef name itemMgr ⌦ idFood)
             case mFood of
                 Nothing → Lua.pushnil

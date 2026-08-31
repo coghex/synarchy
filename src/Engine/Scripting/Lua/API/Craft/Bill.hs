@@ -24,8 +24,8 @@ module Engine.Scripting.Lua.API.Craft.Bill
 import UPrelude
 import Engine.Core.Capability.Building
     (BuildingCapability(..), toBuildingCapability)
-import Engine.Core.Capability.ContentRegistries
-    (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Engine.Core.Capability.ContentRegistriesView
+    (ContentRegistriesViewCapability(..), toContentRegistriesViewCapability)
 import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
@@ -34,6 +34,7 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
+import Engine.Core.ReadOnlyRef (readReadOnlyRef)
 import Data.List (sortOn)
 import Engine.Core.State (EngineEnv, activeWorldPageFrom)
 import Craft.Types
@@ -74,7 +75,8 @@ craftAddBillFn env = do
                     if t > 0 then Just (fromIntegral t ∷ Int) else Nothing
             result ← Lua.liftIO $ do
                 mPage ← activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
-                rm    ← readIORef (crRecipeManagerRef (toContentRegistriesCapability env))
+                rm    ← readReadOnlyRef
+                    (crvRecipeManagerRef (toContentRegistriesViewCapability env))
                 bm    ← readIORef (bcBuildingManagerRef (toBuildingCapability env))
                 let gate = do
                         (pageId, ws) ← note "no active world" mPage

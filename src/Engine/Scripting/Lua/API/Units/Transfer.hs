@@ -83,8 +83,8 @@ module Engine.Scripting.Lua.API.Units.Transfer
 import UPrelude
 import Engine.Core.Capability.Building
     (BuildingCapability(..), toBuildingCapability)
-import Engine.Core.Capability.ContentRegistries
-    (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Engine.Core.Capability.ContentRegistriesView
+    (ContentRegistriesViewCapability(..), toContentRegistriesViewCapability)
 import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
@@ -93,6 +93,7 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
+import Engine.Core.ReadOnlyRef (readReadOnlyRef)
 import Engine.Core.State (EngineEnv)
 import Unit.Types
 import Unit.Faction (isPlayerCommandable)
@@ -124,7 +125,7 @@ readLiveState ∷ EngineEnv → IO LiveState
 readLiveState env = LiveState
     ⊚ readIORef (ucUnitManagerRef (toUnitCombatCapability env))
     ⊛ readIORef (bcBuildingManagerRef (toBuildingCapability env))
-    ⊛ readIORef (crItemManagerRef (toContentRegistriesCapability env))
+    ⊛ readReadOnlyRef (crvItemManagerRef (toContentRegistriesViewCapability env))
     ⊛ readIORef (wsGameTimeRef (toWorldSimCapability env))
 
 -- | Where an endpoint physically is, re-read INSIDE a commit
@@ -466,7 +467,7 @@ revealAfter env uid bid outcome = do
         Right _ → void $ revealContainerForUnit
             (containerObserver (toBuildingCapability env)
                                (toWorldSimCapability env)
-                               (toContentRegistriesCapability env))
+                               (toContentRegistriesViewCapability env))
             (ucUnitManagerRef (toUnitCombatCapability env)) uid bid
         Left _  → pure ()
     pure outcome
@@ -479,7 +480,7 @@ revealAfter env uid bid outcome = do
 commitUnitToUnit ∷ EngineEnv → UnitId → UnitId → TransferItemRef
                  → IO (Either TransferFailure ItemInstance)
 commitUnitToUnit env fromUid toUid ref = do
-    itemMgr ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
+    itemMgr ← readReadOnlyRef (crvItemManagerRef (toContentRegistriesViewCapability env))
     now     ← readIORef (wsGameTimeRef (toWorldSimCapability env))
     bm      ← readIORef (bcBuildingManagerRef (toBuildingCapability env))
     atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
@@ -511,7 +512,7 @@ commitBuildingToBuilding ∷ EngineEnv → BuildingId → BuildingId
                          → TransferItemRef
                          → IO (Either TransferFailure ItemInstance)
 commitBuildingToBuilding env fromBid toBid ref = do
-    itemMgr ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
+    itemMgr ← readReadOnlyRef (crvItemManagerRef (toContentRegistriesViewCapability env))
     now     ← readIORef (wsGameTimeRef (toWorldSimCapability env))
     um      ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
     atomicModifyIORef' (bcBuildingManagerRef (toBuildingCapability env)) $ \bm →
@@ -698,7 +699,7 @@ popBuilding bid = (pop, restore)
 --   still fits.
 pushBuilding ∷ BuildingId → PushStep
 pushBuilding bid env item srcPlace = do
-    itemMgr ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
+    itemMgr ← readReadOnlyRef (crvItemManagerRef (toContentRegistriesViewCapability env))
     now     ← readIORef (wsGameTimeRef (toWorldSimCapability env))
     atomicModifyIORef' (bcBuildingManagerRef (toBuildingCapability env)) $ \bm →
         case resolveBuilding bm bid of
@@ -724,7 +725,7 @@ pushBuilding bid env item srcPlace = do
 --   player-commandable, still in reach, still has capacity.
 pushUnit ∷ UnitId → PushStep
 pushUnit uid env item srcPlace = do
-    itemMgr ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
+    itemMgr ← readReadOnlyRef (crvItemManagerRef (toContentRegistriesViewCapability env))
     now     ← readIORef (wsGameTimeRef (toWorldSimCapability env))
     atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
         case HM.lookup uid (umInstances um) of

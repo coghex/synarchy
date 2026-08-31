@@ -11,14 +11,15 @@ module Engine.Scripting.Lua.API.Equipment.Accessory
     ) where
 
 import UPrelude
-import Engine.Core.Capability.ContentRegistries
-    (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Engine.Core.Capability.ContentRegistriesView
+    (ContentRegistriesViewCapability(..), toContentRegistriesViewCapability)
 import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
-import Data.IORef (readIORef, atomicModifyIORef')
+import Data.IORef (atomicModifyIORef')
+import Engine.Core.ReadOnlyRef (readReadOnlyRef)
 import Engine.Core.State (EngineEnv)
 import Engine.Scripting.Lua.API.Equipment.Slot (removeFirstFromInventoryWhere)
 import Item.Types (ItemInstance(..), ItemManager, lookupItemDef, itemMatches,
@@ -56,7 +57,8 @@ equipmentEquipAccessoryFn env = do
                 defName = TE.decodeUtf8Lenient nameBS
                 wantId  = maybe 0 fromIntegral instArg
             ok ← Lua.liftIO $ do
-                itemMgr ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
+                itemMgr ← readReadOnlyRef
+                    (crvItemManagerRef (toContentRegistriesViewCapability env))
                 atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                     case HM.lookup uid (umInstances um) of
                         Nothing → (um, False)
@@ -181,7 +183,8 @@ equipmentUnequipAccessoryFn env = do
             let uid    = UnitId (fromIntegral n)
                 idx0   = fromIntegral i - 1
             ok ← Lua.liftIO $ do
-                itemMgr ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
+                itemMgr ← readReadOnlyRef
+                    (crvItemManagerRef (toContentRegistriesViewCapability env))
                 atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env))
                     (unequipAccessoryFromUnit itemMgr uid idx0)
             Lua.pushboolean ok
