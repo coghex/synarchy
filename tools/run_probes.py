@@ -472,9 +472,11 @@ PROBES = [
 # overlap each other, and neither overlaps a probe reading the binary they
 # may be relinking. They are deliberately RETAINED rather than converted —
 # a GHCi consumer is not an engine boot and has no prebuilt equivalent.
-#: The shared Cabal build state, named once so the preflight below and
-#: the two declaration tables cannot drift apart.
-BUILD_RESOURCE = "cabal-build"
+#: The shared Cabal build state, named once so the preflight below, the
+#: two declaration tables, and the direct path's own preparation (#1913)
+#: cannot drift apart. The name is `probe_engine`'s, because that module
+#: owns every Cabal contact a probe makes.
+BUILD_RESOURCE = probe_engine.BUILD_RESOURCE
 
 IMPLICIT_SHARED_RESOURCES: tuple[str, ...] = ("repo-config", BUILD_RESOURCE)
 
@@ -1416,10 +1418,12 @@ def run_one(script: str, port: int | None, timeout: float,
     # preflight. Stripped-then-set for the same reason the protocol
     # variables are: an operator's stale export must not decide which
     # binary a sweep runs. A caller that resolved nothing leaves the child
-    # on the `cabal run` fallback it has always used — which is
-    # `tools/probe_flake.py`'s path, deliberately unchanged here: it runs
-    # ONE probe at a time, so it starts no concurrent Cabal of its own,
-    # and the de-flake lab's own inheritance of this race is #1426.
+    # to prepare its own executable (#1913) — still one probe at a time
+    # and still no concurrent Cabal, because that preparation takes
+    # `cabal-build` exclusively before it builds. `tools/deflake.py`
+    # fills this in for the de-flake lab's own runs, ahead of the hold
+    # its measurement takes, so no child of a measurement prepares
+    # anything.
     if ENGINE_EXECUTABLE is not None:
         child_env[probe_engine.ENV_ENGINE_EXE] = ENGINE_EXECUTABLE
     if hold_env:
