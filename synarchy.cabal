@@ -301,6 +301,7 @@ library
                      Engine.Scripting.Lua.API.ActionOutcome
                      Engine.Scripting.Lua.API.InputInject
                      Engine.Scripting.Lua.API.LoadGate
+                     Engine.Scripting.Lua.API.QueueStats
                      Engine.Scripting.Lua.API.Screenshot
                      Engine.Scripting.Lua.API.Log
                      Engine.Scripting.Lua.API.Config
@@ -1285,6 +1286,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Render.PickSeam
                    Test.Headless.World.Render.QuadSnapshot
                    Test.Headless.World.Render.SolarAttribution
+                   Test.Headless.World.Render.DesignationFaceMap
                    Test.Headless.World.Render.SideFace
                    Test.Headless.World.Render.ZTrackSeam
                    Test.Headless.World.Render.SlopeBit
@@ -1387,6 +1389,7 @@ test-suite synarchy-test-headless
                 , hslua
                 , hspec
                 , JuicyPixels
+                , cryptohash-sha256
                 , synarchy
                 , text
                 , stm

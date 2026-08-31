@@ -990,7 +990,9 @@ offscreen reader. All four used to SYMLINK `config/` in beside `scripts`,
 writer: `Engine.Asset.YamlNotifications` materializes
 `config/notifications.local.yaml` from registry defaults whenever that file
 is absent, and `Engine.Core.Init.migrateLegacyConfig` copies a tracked
-legacy file over an absent local one. Through the alias those writes landed
+legacy file over an absent local one — or, when that legacy file is a
+neutral placeholder (#1937), writes a `config/*.legacy-neutral.local.yaml`
+record instead. Through the alias those writes landed
 in the developer's own checkout, and teardown — which unlinks a symlink
 rather than descending it — then left them there. A personal `*.local.yaml`
 was visible to the run in the same breath, so a local override could decide
@@ -1078,8 +1080,8 @@ Only probes that implement the shared `probe-result/v1` protocol
 is rejected BY NAME before execution, without running the probe at all —
 heuristically parsing free-form stdout is the guesswork a reliability harness
 must not do, and invoking a legacy probe to find out would boot a real engine.
-`position_hold`, `role` and `thermo_altitude` are the migrated probes today;
-later issues migrate one at a time.
+`position_hold`, `role`, `text_encoding` and `thermo_altitude` are the migrated
+probes today; later changes migrate one at a time.
 
 A migrated probe prints its ordered, stable check declaration with
 `--describe` (no engine) and, when the harness supplies an event path, writes

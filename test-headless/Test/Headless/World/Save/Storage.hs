@@ -35,13 +35,20 @@ import System.IO (stderr)
 import Engine.Core.Log
     (initLogger, defaultLogConfig, LogConfig(..), LogBackend(..), LoggerState)
 import World.Save.Serialize
-    (listSaves, loadWorld, savesDirectory, SaveListing(..))
+    (listSaves, loadWorld, savesDirectory, SaveListing(..), loadPhaseFor)
 import World.Save.Storage
 import World.Save.Envelope
     ( encodeSessionSnapshot, metadataComponentId, metadataComponentVersion
-    , currentEnvelopeVersion )
-import World.Save.Envelope.Codec (encodeEnvelope)
-import World.Save.Envelope.Types (defaultEnvelopeLimits, ComponentId(..))
+    , currentEnvelopeVersion, LoadProgress(..) )
+import World.Save.Envelope.Codec
+    (encodeEnvelope, decodeEnvelope, DecodedEnvelope(..))
+import World.Save.Envelope.Types
+    ( defaultEnvelopeLimits, ComponentId(..), EnvelopeManifest(..)
+    , ComponentDescriptor(..) )
+import World.Save.Component (componentKnownIds, componentRequiredIds)
+import World.Save.Component.Types
+    (ComponentPhase(..), coreSessionComponentId)
+import Engine.Load.Status (LoadPhase(..))
 import World.Save.Snapshot
 import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotSaveMetadata)
 import World.Save.Types
@@ -161,6 +168,21 @@ emptyPagesBytes =
         meta = snapshotSaveMetadata (SaveRequestMeta "slot" "t-empty" False) snap
     in encodeSessionSnapshot meta snap []
 
+-- | A STRUCTURALLY VALID, fully checksummed envelope whose snapshot
+--   names an ACTIVE PAGE that its own page set does not contain — every
+--   component decodes and self-validates cleanly, and only
+--   'assembleSnapshot''s cross-component 'validateSessionSnapshot' pass
+--   rejects it. That makes it the one fixture here that reaches a real
+--   'AssemblePhase' failure through the production load path, as opposed
+--   to 'emptyPagesBytes', which a component's OWN validator catches
+--   first. Built by direct record update for the same reason
+--   'emptyPagesBytes' is: 'captureSessionSnapshot' refuses to produce it.
+activePageMissingBytes ∷ BS.ByteString
+activePageMissingBytes =
+    let snap = (snapshotWithSeed 1) { snapActivePage = WorldPageId "ghost" }
+        meta = snapshotSaveMetadata (SaveRequestMeta "slot" "t-ghost" False) snap
+    in encodeSessionSnapshot meta snap []
+
 -- | A STRUCTURALLY VALID envelope carrying a genuinely unrecognized
 --   OPTIONAL component (round-4 review) -- exactly what a corrupted-
 --   authoritative-with-a-valid-.prev recovery scenario would leave
@@ -271,6 +293,33 @@ corruptEnvelopeVersion bytes =
         bumped = BS.map (`xor` 0xFF) versionBytes
     in BS.take 4 bytes <> bumped <> BS.drop 8 bytes
 
+-- | Re-encode a structurally valid envelope with ONE component's
+--   declared schema version changed, leaving every payload byte alone.
+--   Checksums are recomputed by 'encodeEnvelope', so the result is a
+--   COHERENT envelope (nothing a storage-corruption check can see) that
+--   nonetheless carries a component version this reader has no decoder
+--   for — the one way to reach a per-component 'DecodePhase' failure
+--   through the real load path, since the envelope codec itself never
+--   inspects component versions.
+reversionComponent ∷ ComponentId → Word32 → BS.ByteString → BS.ByteString
+reversionComponent target newVer bytes =
+    case decodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion
+             known required bytes of
+        Left err → error ("reversionComponent: decode: " <> show err)
+        Right de →
+            let specs = [ ( cdId d
+                          , if cdId d ≡ target then newVer else cdVersion d
+                          , cdRequired d
+                          , HM.lookupDefault BS.empty (cdId d) (dePayloads de) )
+                        | d ← emComponents (deManifest de) ]
+            in case encodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion
+                        specs of
+                Left err → error ("reversionComponent: encode: " <> show err)
+                Right b  → b
+  where
+    known    = HS.insert metadataComponentId componentKnownIds
+    required = HS.insert metadataComponentId componentRequiredIds
+
 -- | Put a slot into the exact recovery topology issue #1203 is about: a
 --   STORAGE-corrupt authoritative generation (one flipped checksum byte —
 --   the same corruption the 'selectLoadGeneration' fallback tests below
@@ -301,7 +350,7 @@ shouldSelect dir source seed = do
         Right s → do
             lsSource s `shouldBe` source
             smSeed (sdMetadata (lsSaveData s)) `shouldBe` seed
-        Left err → expectationFailure (T.unpack err)
+        Left err → expectationFailure (T.unpack (lfMessage err))
 
 -- | A throwaway logger for the 'listSaves' tests below (they only need
 --   somewhere for its 'logWarn' calls to go).
@@ -713,7 +762,7 @@ spec = do
                 -- Precondition: this really is the no-fallback case.
                 sel0 ← selectLoadGeneration HS.empty HS.empty dir "slot"
                 case sel0 of
-                    Left err → T.unpack err `shouldContain` "incompatible"
+                    Left err → T.unpack (lfMessage err) `shouldContain` "incompatible"
                     Right s  → expectationFailure
                         ("expected no fallback, got " <> show (lsSource s))
                 let (metaC, bytesC) = buildEncoded 3 "slot" "t3"
@@ -739,7 +788,7 @@ spec = do
                     Right s → do
                         lsSource s `shouldBe` FromAuthoritative
                         smSeed (sdMetadata (lsSaveData s)) `shouldBe` 2
-                    Left err → expectationFailure (T.unpack err)
+                    Left err → expectationFailure (T.unpack (lfMessage err))
 
         it "falls back to the previous generation when the \
            \authoritative file is missing" $
@@ -752,7 +801,7 @@ spec = do
                     Right s → do
                         lsSource s `shouldBe` FromPrevious
                         smSeed (sdMetadata (lsSaveData s)) `shouldBe` 1
-                    Left err → expectationFailure (T.unpack err)
+                    Left err → expectationFailure (T.unpack (lfMessage err))
 
         it "falls back to the previous generation when the \
            \authoritative file is truncated" $
@@ -766,7 +815,7 @@ spec = do
                     Right s → do
                         lsSource s `shouldBe` FromPrevious
                         smSeed (sdMetadata (lsSaveData s)) `shouldBe` 1
-                    Left err → expectationFailure (T.unpack err)
+                    Left err → expectationFailure (T.unpack (lfMessage err))
 
         it "falls back to the previous generation when the \
            \authoritative file has bad framing (magic)" $
@@ -778,7 +827,7 @@ spec = do
                 sel ← selectLoadGeneration HS.empty HS.empty dir "slot"
                 case sel of
                     Right s  → lsSource s `shouldBe` FromPrevious
-                    Left err → expectationFailure (T.unpack err)
+                    Left err → expectationFailure (T.unpack (lfMessage err))
 
         it "falls back to the previous generation when the \
            \authoritative file fails checksum validation" $
@@ -790,7 +839,7 @@ spec = do
                 sel ← selectLoadGeneration HS.empty HS.empty dir "slot"
                 case sel of
                     Right s  → lsSource s `shouldBe` FromPrevious
-                    Left err → expectationFailure (T.unpack err)
+                    Left err → expectationFailure (T.unpack (lfMessage err))
 
         it "does NOT fall back when the authoritative generation is \
            \present but semantically incompatible with this build, \
@@ -804,7 +853,7 @@ spec = do
                 case sel of
                     Right s  → expectationFailure
                         ("expected no fallback, got " <> show (lsSource s))
-                    Left err → T.unpack err `shouldContain` "incompatible"
+                    Left err → T.unpack (lfMessage err) `shouldContain` "incompatible"
 
         it "does NOT fall back when the authoritative generation is \
            \structurally valid (every checksum agrees) but has no world \
@@ -819,7 +868,7 @@ spec = do
                 case sel of
                     Right s  → expectationFailure
                         ("expected no fallback, got " <> show (lsSource s))
-                    Left err → T.unpack err `shouldContain` "incompatible"
+                    Left err → T.unpack (lfMessage err) `shouldContain` "incompatible"
 
         it "reports an unsafe-path failure and never reads through a \
            \slot directory that is itself a symlink" $
@@ -831,7 +880,7 @@ spec = do
                     `finally` (removeFile dir
                                 >> removeDirectoryRecursive target)
                 case sel of
-                    Left err → T.unpack err `shouldContain` "symlink"
+                    Left err → T.unpack (lfMessage err) `shouldContain` "symlink"
                     Right s  → expectationFailure
                         ("expected an unsafe-path failure, got " <> show s)
 
@@ -853,7 +902,7 @@ spec = do
                     Right s → do
                         lsSource s `shouldBe` FromPrevious
                         smSeed (sdMetadata (lsSaveData s)) `shouldBe` 1
-                    Left err → expectationFailure (T.unpack err)
+                    Left err → expectationFailure (T.unpack (lfMessage err))
 
         it "reports a failure (not a hybrid) when BOTH the authoritative \
            \and previous generation files are themselves symlinks" $
@@ -891,7 +940,7 @@ spec = do
                     Right s → do
                         lsSource s `shouldBe` FromAuthoritative
                         smSeed (sdMetadata (lsSaveData s)) `shouldBe` 2
-                    Left err → expectationFailure (T.unpack err)
+                    Left err → expectationFailure (T.unpack (lfMessage err))
                 -- A subsequent successful publish must sweep the
                 -- leftover staged file like any other owned artifact.
                 _ ← publishOK dir "slot" 3 "slot" "t3"
@@ -932,7 +981,7 @@ spec = do
                 sel ← selectLoadGeneration HS.empty HS.empty dir "slot"
                 case sel of
                     Right s  → lsSource s `shouldBe` FromAuthoritative
-                    Left err → expectationFailure (T.unpack err)
+                    Left err → expectationFailure (T.unpack (lfMessage err))
 
         it "never selects a partial candidate: a stray leftover \
            \temporary file alongside a previous-only recovery is \
@@ -948,7 +997,7 @@ spec = do
                     Right s → do
                         lsSource s `shouldBe` FromPrevious
                         smSeed (sdMetadata (lsSaveData s)) `shouldBe` 1
-                    Left err → expectationFailure (T.unpack err)
+                    Left err → expectationFailure (T.unpack (lfMessage err))
 
     describe "World.Save.Serialize.listSaves symlink containment \
              \(issue #762 round 4 — the same containment check applies \
@@ -1032,3 +1081,208 @@ spec = do
                 createFileLink decoy (prevPath slot)
                 saves ← listSaves logger HS.empty `finally` removeFile decoy
                 map slName saves `shouldNotContain` ["leaked"]
+
+    -- Issue #1919: 'failedAtPhase' used to be recovered by
+    -- substring-matching the rendered failure text. It is now derived
+    -- from the structured 'LoadProgress' every failing decode carries, so
+    -- these two blocks pin BOTH halves: the mapping itself, exhaustively
+    -- and purely, and the transport, through the real selection path.
+    describe "load-phase derivation (issue #1919)" $ do
+        it "maps every ComponentPhase to the checkpoint the substring \
+           \parser reported for it" $
+            [ (ph, loadPhaseFor (ReachedComponents [ph]))
+            | ph ← [DecodePhase, MigratePhase, ValidatePhase, AssemblePhase] ]
+                `shouldBe`
+            [ (DecodePhase,   LoadEnvelopeValidated)
+            , (MigratePhase,  LoadComponentsDecoded)
+              -- No LoadPhase constructor sits between "every component
+              -- migrated" and "the whole session assembled", so a
+              -- per-component validate failure and a cross-component
+              -- assemble failure both bottom out here.
+            , (ValidatePhase, LoadComponentsMigrated)
+            , (AssemblePhase, LoadComponentsMigrated)
+            ]
+
+        it "maps the two non-component progresses to their own \
+           \checkpoints" $ do
+            loadPhaseFor ReachedNothing  `shouldBe` LoadPaused
+            loadPhaseFor ReachedEnvelope `shouldBe` LoadEnvelopeValidated
+
+        it "resolves a MIXED-phase failure list to the FURTHEST point \
+           \every component reached, in the parser's own precedence -- \
+           \order within the list never matters" $ do
+            loadPhaseFor (ReachedComponents [DecodePhase, AssemblePhase])
+                `shouldBe` LoadComponentsMigrated
+            loadPhaseFor (ReachedComponents [AssemblePhase, DecodePhase])
+                `shouldBe` LoadComponentsMigrated
+            loadPhaseFor (ReachedComponents [DecodePhase, MigratePhase])
+                `shouldBe` LoadComponentsDecoded
+            loadPhaseFor (ReachedComponents [MigratePhase, ValidatePhase])
+                `shouldBe` LoadComponentsMigrated
+            loadPhaseFor (ReachedComponents [DecodePhase, DecodePhase])
+                `shouldBe` LoadEnvelopeValidated
+
+        it "treats a component failure list with no phases at all as \
+           \'the envelope was coherent' -- structurally unreachable, but \
+           \it must not silently regress to LoadPaused" $
+            loadPhaseFor (ReachedComponents []) `shouldBe` LoadEnvelopeValidated
+
+        it "cannot be influenced by the failure MESSAGE: a diagnostic \
+           \stuffed with every phase word AND the old \
+           \'incompatible with this build' marker still reports the \
+           \progress its structure actually carries" $ do
+            let misleading = LoadFailure ReachedNothing
+                    "save 'x' is incompatible with this build: \
+                    \[core-session v3 AssemblePhase] ... \
+                    \[units v1 MigratePhase] ... [world-pages v2 DecodePhase]"
+            loadPhaseFor (lfProgress misleading) `shouldBe` LoadPaused
+            -- And the converse: real component progress reports its own
+            -- phase even when the message mentions nothing at all.
+            loadPhaseFor (lfProgress
+                (LoadFailure (ReachedComponents [MigratePhase]) "something broke"))
+                `shouldBe` LoadComponentsDecoded
+
+    describe "load-phase transport through selectLoadGeneration (#1919)" $ do
+        it "a coherent but envelope-INCOMPATIBLE authoritative generation \
+           \reports ReachedEnvelope -- no component was ever reached" $
+            withTempSlotDir $ \dir → do
+                _ ← publishOK dir "slot" 1 "slot" "t1"
+                whole ← BS.readFile (authPath dir)
+                BS.writeFile (authPath dir) (corruptEnvelopeVersion whole)
+                sel ← selectLoadGeneration HS.empty HS.empty dir "slot"
+                case sel of
+                    Right s → expectationFailure
+                        ("expected a failure, got " <> show (lsSource s))
+                    Left f  → do
+                        lfProgress f `shouldBe` ReachedEnvelope
+                        loadPhaseFor (lfProgress f)
+                            `shouldBe` LoadEnvelopeValidated
+
+        it "a component declared at an unsupported schema version reports \
+           \ReachedComponents [DecodePhase]" $
+            withTempSlotDir $ \dir → do
+                _ ← publishOK dir "slot" 1 "slot" "t1"
+                whole ← BS.readFile (authPath dir)
+                BS.writeFile (authPath dir)
+                    (reversionComponent coreSessionComponentId 999 whole)
+                sel ← selectLoadGeneration HS.empty HS.empty dir "slot"
+                case sel of
+                    Right s → expectationFailure
+                        ("expected a failure, got " <> show (lsSource s))
+                    Left f  → do
+                        lfProgress f `shouldBe` ReachedComponents [DecodePhase]
+                        loadPhaseFor (lfProgress f)
+                            `shouldBe` LoadEnvelopeValidated
+
+        it "a per-component VALIDATE failure reports \
+           \ReachedComponents [ValidatePhase]" $
+            withTempSlotDir $ \dir → do
+                _ ← publishOK dir "slot" 1 "slot" "t1"
+                BS.writeFile (authPath dir) emptyPagesBytes
+                sel ← selectLoadGeneration HS.empty HS.empty dir "slot"
+                case sel of
+                    Right s → expectationFailure
+                        ("expected a failure, got " <> show (lsSource s))
+                    Left f  → do
+                        lfProgress f `shouldBe` ReachedComponents [ValidatePhase]
+                        loadPhaseFor (lfProgress f)
+                            `shouldBe` LoadComponentsMigrated
+
+        it "a CROSS-COMPONENT assembly failure -- every component decoded \
+           \and self-validated, only the whole-session invariants \
+           \rejected it -- reports ReachedComponents [AssemblePhase]" $
+            withTempSlotDir $ \dir → do
+                _ ← publishOK dir "slot" 1 "slot" "t1"
+                BS.writeFile (authPath dir) activePageMissingBytes
+                sel ← selectLoadGeneration HS.empty HS.empty dir "slot"
+                case sel of
+                    Right s → expectationFailure
+                        ("expected a failure, got " <> show (lsSource s))
+                    Left f  → do
+                        lfProgress f `shouldBe` ReachedComponents [AssemblePhase]
+                        loadPhaseFor (lfProgress f)
+                            `shouldBe` LoadComponentsMigrated
+
+        it "a storage-corrupt authoritative generation with NO previous \
+           \generation reports ReachedNothing" $
+            withTempSlotDir $ \dir → do
+                _ ← publishOK dir "slot" 1 "slot" "t1"
+                whole ← BS.readFile (authPath dir)
+                BS.writeFile (authPath dir)
+                    (flipByteAt (BS.length whole - 1) whole)
+                sel ← selectLoadGeneration HS.empty HS.empty dir "slot"
+                case sel of
+                    Right s → expectationFailure
+                        ("expected a failure, got " <> show (lsSource s))
+                    Left f  → do
+                        lfProgress f `shouldBe` ReachedNothing
+                        loadPhaseFor (lfProgress f) `shouldBe` LoadPaused
+
+        it "a symlinked slot directory reports ReachedNothing -- nothing \
+           \was ever read" $
+            withTempSlotDir $ \dir → do
+                let target = dir <> "-target"
+                _ ← publishOK target "slot" 1 "slot" "t1"
+                createFileLink target dir
+                sel ← selectLoadGeneration HS.empty HS.empty dir "slot"
+                case sel of
+                    Right s → expectationFailure
+                        ("expected a failure, got " <> show (lsSource s))
+                    Left f  → lfProgress f `shouldBe` ReachedNothing
+
+        it "a CORRUPT authoritative over an INCOMPATIBLE previous keeps \
+           \the PREVIOUS candidate's structured progress -- the composite \
+           \message names both, but the progress reported is the one the \
+           \selection actually got furthest with" $
+            withTempSlotDir $ \dir → do
+                _ ← publishOK dir "slot" 1 "slot" "t1"
+                _ ← publishOK dir "slot" 2 "slot" "t2"
+                whole ← BS.readFile (authPath dir)
+                BS.writeFile (authPath dir)
+                    (flipByteAt (BS.length whole - 1) whole)
+                prev ← BS.readFile (prevPath dir)
+                BS.writeFile (prevPath dir) (corruptEnvelopeVersion prev)
+                sel ← selectLoadGeneration HS.empty HS.empty dir "slot"
+                case sel of
+                    Right s → expectationFailure
+                        ("expected a failure, got " <> show (lsSource s))
+                    Left f  → do
+                        -- The message lacks the authoritative
+                        -- compatibility phrase the old parser keyed on,
+                        -- which is exactly why it used to fall through to
+                        -- LoadPaused.
+                        T.unpack (lfMessage f) `shouldContain`
+                            "previous generation is also unusable"
+                        lfProgress f `shouldBe` ReachedEnvelope
+                        loadPhaseFor (lfProgress f)
+                            `shouldBe` LoadEnvelopeValidated
+
+        it "a CORRUPT authoritative over a COMPONENT-incompatible previous \
+           \keeps that previous candidate's component phases" $
+            withTempSlotDir $ \dir → do
+                _ ← publishOK dir "slot" 1 "slot" "t1"
+                _ ← publishOK dir "slot" 2 "slot" "t2"
+                whole ← BS.readFile (authPath dir)
+                BS.writeFile (authPath dir)
+                    (flipByteAt (BS.length whole - 1) whole)
+                prev ← BS.readFile (prevPath dir)
+                BS.writeFile (prevPath dir)
+                    (reversionComponent coreSessionComponentId 999 prev)
+                sel ← selectLoadGeneration HS.empty HS.empty dir "slot"
+                case sel of
+                    Right s → expectationFailure
+                        ("expected a failure, got " <> show (lsSource s))
+                    Left f  → lfProgress f
+                        `shouldBe` ReachedComponents [DecodePhase]
+
+        it "loadWorld propagates the derived phase all the way to its \
+           \caller, so engine.getLoadStatus().failedAtPhase reports it" $
+            withSavesRoot $ do
+                logger ← testLogger
+                let slot = savesDirectory </> "phased"
+                _ ← publishOK slot "phased" 1 "phased" "t1"
+                BS.writeFile (authPath slot) emptyPagesBytes
+                result ← loadWorld logger "phased" HS.empty HS.empty
+                case result of
+                    Right _ → expectationFailure "expected a load failure"
+                    Left (phase, _) → phase `shouldBe` LoadComponentsMigrated

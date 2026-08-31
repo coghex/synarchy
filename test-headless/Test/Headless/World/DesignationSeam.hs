@@ -39,6 +39,8 @@ import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Thread (ThreadControl(..))
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..), defaultCamera)
+import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), noFaceMapVertexId)
+import Engine.Scene.Types (SortableQuad(..))
 import Engine.Scripting.Lua.API (registerLuaAPI)
 import Engine.Scripting.Lua.Thread (createLuaBackendState)
 import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
@@ -47,7 +49,7 @@ import Structure.Types
     (StructurePieceData(..), StructureSlot(..), emptyChunkStructures)
 import World.Chop.Types (newChopDesignation)
 import World.Chunk.Types
-    (ChunkCoord(..), ColumnTiles(..), LoadedChunk(..), chunkSize)
+    (ChunkCoord(..), ColumnTiles(..), LoadedChunk(..), chunkSize, columnIndex)
 import World.Construct.Types
     ( ConstructDesignation(..), ConstructStatus(..), ConstructTarget(..)
     , StructurePiece(..) )
@@ -61,8 +63,8 @@ import World.Cursor.Types (CursorState(..), emptyCursorState)
 import World.Fluid.Types (emptyIceMap)
 import World.Grid (gridToWorld, tileHeight)
 import World.Generate.Coordinates
-    ( canonicalTile, chunkInSeamRegion, globalToChunk, localizeTileToAnchor
-    , seamTileDist2, tileAliasStep )
+    ( canonicalTile, canonicalTileFrame, chunkInSeamRegion, globalToChunk
+    , localizeTileToAnchor, seamTileDist2, tileAliasStep )
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import World.Page.Types (WorldPageId(..))
 import World.Save.Component.Page
@@ -70,6 +72,8 @@ import World.Save.Component.Page
     , TillDesignationDTO(..), WorldActivityDTO(..), applyWorldActivity
     , blankPageSnapshot )
 import World.Render.CursorQuads (renderWorldCursorQuads)
+import World.Render.Textures.Types
+    (WorldTextures(..), defaultWorldTextures)
 import World.Save.Snapshot (PageSnapshot(..))
 import World.State.Types
     (WorldManager(..), WorldState(..), emptyWorldState, emptyWorldManager)
@@ -83,6 +87,7 @@ import World.Thread.Command.Cursor
 import World.Thread.Command.Cursor.Common (designateRect, maxDesignateSide)
 import World.Tile.Types (WorldTileData(..))
 import World.Tool.Types (ToolMode(..))
+import World.Till.Types (newTillDesignation)
 import World.Vegetation (vegTilledSoil)
 
 -- * Geometry
@@ -475,6 +480,33 @@ engineSpec = beforeAll setup $ do
           (fst farTilePicked) (snd farTilePicked) "wood"
       keysOf (wsChopDesignationsRef ws) `shouldReturn` drawnKeys
 
+  describe "Till is restricted to level ground" $ do
+
+    it "refuses a sloped anchor" $ \(env, _) → do
+      ws ← resetPageWithSlopes env [anchorTile]
+      logger ← readIORef (loggerRef env)
+      handleWorldDesignateTillCommand env logger fixturePage
+          (fst anchorTile) (snd anchorTile)
+          (fst anchorTile) (snd anchorTile)
+      keysOf (wsTillDesignationsRef ws) `shouldReturn` []
+
+    it "filters a sloped tile out of an otherwise level drag" $ \(env, _) → do
+      ws ← resetPageWithSlopes env [farTilePicked]
+      logger ← readIORef (loggerRef env)
+      handleWorldDesignateTillCommand env logger fixturePage
+          (fst anchorTile) (snd anchorTile)
+          (fst farTilePicked) (snd farTilePicked)
+      keysOf (wsTillDesignationsRef ws)
+          `shouldReturn` filter (≢ farTilePicked) drawnKeys
+
+    it "refuses a tile whose surface slope entry is missing" $ \(env, _) → do
+      ws ← resetPageWithoutSurfaceSlope env anchorTile
+      logger ← readIORef (loggerRef env)
+      handleWorldDesignateTillCommand env logger fixturePage
+          (fst anchorTile) (snd anchorTile)
+          (fst anchorTile) (snd anchorTile)
+      keysOf (wsTillDesignationsRef ws) `shouldReturn` []
+
   describe "the preview draws exactly what the commit designates" $ do
 
     it "mine" $ \(env, _) → do
@@ -509,8 +541,42 @@ engineSpec = beforeAll setup $ do
     it "till" $ \(env, _) → do
       ws ← resetPage env 0 noFlora
       n ← previewQuadCount env ws TillTool
-              (\cs → cs { tillAnchor = Just anchorTile })
+              (\cs → cs { tillAnchor = Just anchorTile
+                        , tillDesignTexture = Just tillMarkerTexture })
       n `shouldBe` length drawnKeys
+
+  describe "Till production facemap routing" $ do
+
+    it "uses the neutral map and approved texture for committed markers" $
+        \(env, _) → do
+      ws ← resetPage env 0 noFlora
+      writeIORef (wsTexturesRef ws) defaultWorldTextures
+          { wtIsoFaceMap = isoFaceMapTexture }
+      writeIORef (wsTillDesignationsRef ws) $ HM.singleton anchorTile
+          (newTillDesignation zSlice)
+      quads ← markerQuads env ws emptyCursorState
+          { tillDesignTexture = Just tillMarkerTexture }
+      case V.toList quads of
+        [quad] → do
+          sqTexture quad `shouldBe` tillMarkerTexture
+          quadFaceMaps quad `shouldBe` replicate 4 noFaceMapVertexId
+        _ → expectationFailure
+            ("expected one committed Till marker, got " ⧺ show (V.length quads))
+
+    it "uses the neutral map and approved texture for the rectangle preview" $
+        \(env, _) → do
+      ws ← resetPage env 0 noFlora
+      writeIORef (wsTexturesRef ws) defaultWorldTextures
+          { wtIsoFaceMap = isoFaceMapTexture }
+      quads ← previewQuads env ws TillTool
+          (\cs → cs { tillAnchor = Just anchorTile
+                    , tillDesignTexture = Just tillMarkerTexture })
+      V.length quads `shouldBe` length drawnKeys
+      map sqTexture (V.toList quads)
+          `shouldBe` replicate (length drawnKeys) tillMarkerTexture
+      map quadFaceMaps (V.toList quads)
+          `shouldBe` replicate (length drawnKeys)
+              (replicate 4 noFaceMapVertexId)
 
   describe "one physical tile is one stored key" $
     it "re-designating through the other alias does not add an entry" $
@@ -881,6 +947,43 @@ resetPageSized env size veg flora = do
         { wmWorlds = [(fixturePage, ws)], wmVisible = [fixturePage] }
     pure ws
 
+-- | The standard flat fixture with selected surface tiles made non-level.
+-- Till must reject these even though every other eligibility input remains
+-- valid, pinning the farming-domain rule independently of generated terrain.
+resetPageWithSlopes ∷ EngineEnv → [(Int, Int)] → IO WorldState
+resetPageWithSlopes env slopedTiles = do
+    ws ← resetPage env 0 noFlora
+    writeIORef (wsTilesRef ws) (foldl' slopeTile (seamTiles 0 noFlora) slopedTiles)
+    pure ws
+  where
+    slopeTile tileData (gx, gy) =
+        let (coord, (lx, ly), _) = canonicalTileFrame worldSize gx gy
+            idx = columnIndex lx ly
+            setSlope lc =
+                let col = lcTiles lc V.! idx
+                    i = (lcSurfaceMap lc VU.! idx) - ctStartZ col
+                    col' = col { ctSlopes = ctSlopes col VU.// [(i, 1)] }
+                in lc { lcTiles = lcTiles lc V.// [(idx, col')] }
+        in tileData
+            { wtdChunks = HM.adjust setSlope coord (wtdChunks tileData) }
+
+-- | Remove the selected surface's slope slot. A malformed column must be
+-- rejected, never inferred to be level merely because no nonzero slope exists.
+resetPageWithoutSurfaceSlope ∷ EngineEnv → (Int, Int) → IO WorldState
+resetPageWithoutSurfaceSlope env (gx, gy) = do
+    ws ← resetPage env 0 noFlora
+    let tiles = seamTiles 0 noFlora
+        (coord, (lx, ly), _) = canonicalTileFrame worldSize gx gy
+        idx = columnIndex lx ly
+        removeSlope lc =
+            let col = lcTiles lc V.! idx
+                i = (lcSurfaceMap lc VU.! idx) - ctStartZ col
+                col' = col { ctSlopes = VU.take i (ctSlopes col) }
+            in lc { lcTiles = lcTiles lc V.// [(idx, col')] }
+    writeIORef (wsTilesRef ws) tiles
+        { wtdChunks = HM.adjust removeSlope coord (wtdChunks tiles) }
+    pure ws
+
 -- | The seam page with a floor piece already placed on 'anchorTile',
 --   stored under its CANONICAL key inside the chunk that holds it —
 --   exactly how the structure overlay records a real placement.
@@ -917,7 +1020,30 @@ keysOf ref = sort . HM.keys <$> readIORef ref
 --   anchor, which is the whole point.
 previewQuadCount ∷ EngineEnv → WorldState → ToolMode
                  → (CursorState → CursorState) → IO Int
-previewQuadCount env ws tool arm = do
+previewQuadCount env ws tool arm =
+    V.length <$> previewQuads env ws tool arm
+
+previewQuads ∷ EngineEnv → WorldState → ToolMode
+             → (CursorState → CursorState) → IO (V.Vector SortableQuad)
+previewQuads env ws tool arm = do
+    (pixX, pixY) ← configureSeamView env
+    writeIORef (wsToolModeRef ws) tool
+    writeIORef (wsCursorRef ws) $ arm emptyCursorState
+        { worldCursorPos = Just (pixX, pixY)
+        , worldCursorTexture = Just (TextureHandle 1)
+        }
+    renderWorldCursorQuads env ws 1.0
+
+markerQuads ∷ EngineEnv → WorldState → CursorState
+            → IO (V.Vector SortableQuad)
+markerQuads env ws cursorState = do
+    _ ← configureSeamView env
+    writeIORef (wsToolModeRef ws) TillTool
+    writeIORef (wsCursorRef ws) cursorState
+    renderWorldCursorQuads env ws 1.0
+
+configureSeamView ∷ EngineEnv → IO (Int, Int)
+configureSeamView env = do
     let farAlias = aliasOf farTilePicked
         (camX, camY) = gridToWorld FaceSouth (fst farAlias) (snd farAlias)
         (wx, wy0) = gridToWorld FaceSouth (fst farAlias) (snd farAlias)
@@ -932,12 +1058,14 @@ previewQuadCount env ws tool arm = do
         , camFacing = FaceSouth, camZSlice = zSlice }
     writeIORef (windowSizeRef env) (previewWinW, previewWinH)
     writeIORef (framebufferSizeRef env) (previewFbW, previewFbH)
-    writeIORef (wsToolModeRef ws) tool
-    writeIORef (wsCursorRef ws) $ arm emptyCursorState
-        { worldCursorPos = Just (pixX, pixY)
-        , worldCursorTexture = Just (TextureHandle 1)
-        }
-    V.length <$> renderWorldCursorQuads env ws 1.0
+    pure (pixX, pixY)
+
+tillMarkerTexture, isoFaceMapTexture ∷ TextureHandle
+tillMarkerTexture = TextureHandle 41
+isoFaceMapTexture = TextureHandle 29
+
+quadFaceMaps ∷ SortableQuad → [Float]
+quadFaceMaps quad = map faceMapId [sqV0 quad, sqV1 quad, sqV2 quad, sqV3 quad]
 
 -- | Same generous viewport 'Test.Headless.World.Render.PickSeam' uses,
 --   and for the same reason: the pick must resolve rather than be culled.

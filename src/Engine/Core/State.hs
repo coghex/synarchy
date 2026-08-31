@@ -855,3 +855,47 @@ activeWorldState env = activeWorldStateFrom (worldManagerRef env)
 freshItemInstanceId ∷ EngineEnv → IO Word64
 freshItemInstanceId env =
     atomicModifyIORef' (nextItemInstanceIdRef env) (\n → (n + 1, n))
+
+-- | #1910: the ten long-lived inter-thread queues this record owns,
+--   each under a stable, low-cardinality name for
+--   @debug.getQueueStats()@ to report.
+--
+--   A name is the field's own module-qualified spelling, which is what
+--   keeps it stable and unambiguous: the identifier a reader would grep
+--   for is literally the name they see. Nothing that passed THROUGH a
+--   queue — an element, an argument, an entity id — ever appears in
+--   one, so the label set is fixed at ten and cannot grow with traffic.
+--
+--   The inventory is assembled here, beside the declarations it names,
+--   rather than at a consumer: this module is the capability inventory's
+--   permanent definer, so no reader of the telemetry needs unrestricted
+--   'EngineEnv' access to obtain it, and a queue field cannot be added,
+--   renamed or removed without the list that names it being right here.
+--
+--   Ephemeral per-call queues — @Engine.Scripting.Lua.API.Screenshot@'s
+--   reply queue, and the queues tests build directly — are deliberately
+--   absent: they are created and discarded within one operation, so a
+--   name for them would identify nothing durable.
+engineQueueInventory ∷ EngineEnv → [Q.NamedQueue]
+engineQueueInventory env =
+  [ Q.namedQueue "Engine.Core.State.inputQueue"
+                 (inputQueue env)
+  , Q.namedQueue "Engine.Core.State.luaToEngineQueue"
+                 (luaToEngineQueue env)
+  , Q.namedQueue "Engine.Core.State.luaQueue"
+                 (luaQueue env)
+  , Q.namedQueue "Engine.Core.State.worldQueue"
+                 (worldQueue env)
+  , Q.namedQueue "Engine.Core.State.screenshotRequestQueue"
+                 (screenshotRequestQueue env)
+  , Q.namedQueue "Engine.Core.State.bloodDisposeQueue"
+                 (bloodDisposeQueue env)
+  , Q.namedQueue "Engine.Core.State.unitQueue"
+                 (unitQueue env)
+  , Q.namedQueue "Engine.Core.State.buildingQueue"
+                 (buildingQueue env)
+  , Q.namedQueue "Engine.Core.State.combatQueue"
+                 (combatQueue env)
+  , Q.namedQueue "Engine.Core.State.simQueue"
+                 (simQueue env)
+  ]
