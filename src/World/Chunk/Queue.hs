@@ -41,6 +41,7 @@ module World.Chunk.Queue
     , dedupChunkQueue
     , newChunkQueueEntries
     , initialChunkQueue
+    , seedInitialQueue
     , enqueueChunkRequest
     ) where
 
@@ -51,6 +52,7 @@ import World.Chunk.Admit (registerChunkDemand)
 import World.Chunk.Residency (canonicalChunkCoord)
 import World.Chunk.Types (ChunkCoord(..))
 import World.Generate.Constants (chunkLoadRadius)
+import World.Generate.Types (WorldGenParams(..))
 import World.Page.Types (WorldPageId(..))
 import World.State.Types (WorldState(..))
 
@@ -152,3 +154,31 @@ enqueueChunkRequest pid ws coords = do
             needed ← registerChunkDemand ws pid params coords
             atomicModifyIORef' (wsInitQueueRef ws) $ \q →
                 (q ⧺ needed, length needed)
+
+-- | Seed a page's init queue with its initial box and report the
+--   @('LoadPhase2' remaining, total)@ pair that describes it.
+--
+--   Shared by fresh world init and saved-page restore so the two cannot
+--   drift, and it is a REGISTER-then-APPEND, never a write. A page is
+--   registered in @wmWorlds@ — and given its generation params — before
+--   its box is queued, so a @world.loadChunksInRegion@ accepted in that
+--   window has already been counted and registered on the owner;
+--   replacing the queue would drop its coords while leaving them
+--   requested, deduplicating every later request for them.
+--
+--   The total is @remaining + 1@: the queue as it now stands, plus the
+--   synchronously generated centre, which is the one chunk already
+--   resident at this point. With no concurrent request that is exactly
+--   the box's own physical total ('initialChunkQueue'\'s second
+--   component), which is what 'LoadPhase2' has always progressed
+--   towards. Deriving it from the queue rather than from the box is what
+--   keeps a retained request from making @remaining@ exceed @total@ —
+--   @world.getInitProgress@ reports @total - remaining@ completed, so
+--   that would surface as NEGATIVE progress through the public API.
+seedInitialQueue ∷ WorldPageId → WorldState → WorldGenParams
+                 → [ChunkCoord] → IO (Int, Int)
+seedInitialQueue pid ws params boxCoords = do
+    needed ← registerChunkDemand ws pid params boxCoords
+    remaining ← atomicModifyIORef' (wsInitQueueRef ws) $ \q →
+        let q' = q ⧺ needed in (q', length q')
+    pure (remaining, remaining + 1)

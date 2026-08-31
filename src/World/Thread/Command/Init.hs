@@ -35,10 +35,9 @@ import World.Types
 import Structure.Types (emptyChunkStructures)
 import World.Generate (generateChunk)
 import World.Generate.Arena (generateArenaChunks, arenaGenForSeed)
-import World.Chunk.Queue (initialChunkQueue)
+import World.Chunk.Queue (initialChunkQueue, seedInitialQueue)
 import World.Chunk.Residency (canonicalChunkCoord)
-import World.Chunk.Admit
-    (claimChunkGeneration, publishSeedChunks, registerChunkDemand)
+import World.Chunk.Admit (claimChunkGeneration, publishSeedChunks)
 import World.Geology (buildTimeline)
 import World.Geology.Log (formatPlatesSummary)
 import World.Plate (generatePlates, elevationAtGlobal)
@@ -403,27 +402,26 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
 
     -- Step 7: Queue remaining chunks
     writeIORef phaseRef (LoadPhase1 7 totalSteps)
-    -- Register the initial box as durable demand, then APPEND exactly
-    -- what that call says still needs scheduling (#2001).
+    -- Register the initial box as durable demand and APPEND exactly what
+    -- still needs scheduling (#2001) — never a wholesale write, because
+    -- this page was registered in wmWorlds near the top of this function
+    -- so Lua could watch the loading phase, and its generation params
+    -- went in before the expensive cache/preview work above. A
+    -- world.loadChunksInRegion accepted in that window has already been
+    -- counted and registered on the owner; overwriting the queue would
+    -- drop its coords while leaving them requested, deduplicating every
+    -- later request for them.
     --
-    -- Appending rather than replacing is load-bearing. This page was
-    -- registered in wmWorlds near the top of this function so Lua could
-    -- watch the loading phase, and its generation params went in before
-    -- the expensive cache/preview work above — so a world.loadChunksInRegion
-    -- can be accepted, counted and registered on the owner during that
-    -- window. A wholesale write would drop its coords from the queue
-    -- while leaving them requested on the owner, which deduplicates
-    -- every later request for them: the region would be reported as
-    -- queued and then never load, unrepairably.
-    needed ← registerChunkDemand worldState pageId params remainingCoords
-    queuedNow ← atomicModifyIORef' (wsInitQueueRef worldState) $ \q →
-        let q' = q ⧺ needed in (q', length q')
+    -- The phase total comes back from the same call, derived from the
+    -- queue rather than from this page's own box, so a retained request
+    -- cannot make remaining exceed total.
+    (queuedNow, phaseTotal) ←
+        seedInitialQueue pageId worldState params remainingCoords
     
-    -- Now switch to Phase 2 tracking. The remaining count is the queue's
-    -- real length, which an accepted concurrent request makes larger than
-    -- this page's own box; drainInitQueues recomputes it every tick from
-    -- the same source, so the two never disagree.
-    writeIORef phaseRef (LoadPhase2 queuedNow totalInitialChunks)
+    -- Now switch to Phase 2 tracking. drainInitQueues recomputes the
+    -- remaining count every tick from the same queue, so the two never
+    -- disagree.
+    writeIORef phaseRef (LoadPhase2 queuedNow phaseTotal)
     
     sendGenLog env "Calculating surface elevation..."
     let (surfaceElev, _mat) = elevationAtGlobal seed (wgpPlates params)

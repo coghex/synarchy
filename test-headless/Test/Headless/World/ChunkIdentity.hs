@@ -22,7 +22,7 @@ module Test.Headless.World.ChunkIdentity (spec) where
 import UPrelude
 import Test.Hspec
 import Control.Concurrent (threadDelay)
-import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
+import Data.IORef (readIORef, writeIORef)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import Engine.Core.State (EngineEnv)
@@ -31,6 +31,7 @@ import World.Chunk.Admit
     , pageChunkKey, publishSeedChunks, readChunkOwner
     , reconcileResidentChunks, registerChunkDemand, releaseEvictedChunks
     , withTransientChunkClaim )
+import World.Generate.Constants (chunkLoadRadius)
 import World.Chunk.Residency
     ( AdmitOutcome(..), ChunkGeneration, ChunkOwner, ChunkState(..)
     , ClaimKind(..), ClaimOutcome(..)
@@ -39,7 +40,8 @@ import World.Chunk.Residency
     , claimChunk, crGeneration, crKey, emptyChunkOwner, evictChunk
     , isCurrentGeneration, mintChunkRequest, newChunkGeneration
     , releaseChunk, requestChunk )
-import World.Chunk.Queue (enqueueChunkRequest)
+import World.Chunk.Queue
+    (enqueueChunkRequest, initialChunkQueue, seedInitialQueue)
 import World.Chunk.Types (ChunkCoord(..), LoadedChunk(..), wrapChunkCoordU)
 import World.Command.Types (WorldCommand(..))
 import World.Generate.Types
@@ -470,26 +472,51 @@ spec = describe "canonical chunk identity" $ do
         -- loadChunksInRegion accepted in that window was registered on
         -- the owner and then had its queue entries thrown away — leaving
         -- coords requested for ever and every later request for them
-        -- deduplicated away. The producers append now, so the two sets
+        -- deduplicated away. 'seedInitialQueue' appends, so the two sets
         -- coexist.
-        let params = sizedParams seamWorldSize
-            outside = [ChunkCoord 7 7, ChunkCoord 8 8]
+        --
+        -- The PAGE here is a bare wide world, so its box does not alias
+        -- against itself and the arithmetic below is the plain one.
+        let params = sizedParams wideWorldSize
+            centre  = ChunkCoord 0 0
+            (box, boxTotal) = initialChunkQueue
+                                  (canonicalChunkCoord params) centre
+            outside = [ ChunkCoord (2 * chunkLoadRadius + 4) 0
+                      , ChunkCoord (2 * chunkLoadRadius + 5) 0 ]
+
+        -- With nothing outstanding, the phase pair is exactly the box's
+        -- own: every chunk but the synchronously loaded centre remains,
+        -- and the total is the box's physical total.
+        wsPlain ← detachedPage params
+        seedInitialQueue pageA wsPlain params box
+            `shouldReturn` (length box, boxTotal)
+
+        -- Now the racing case: two off-box requests accepted before the
+        -- box is queued.
         ws ← detachedPage params
         enqueueChunkRequest pageA ws outside `shouldReturn` 2
+        (remaining, total) ← seedInitialQueue pageA ws params box
 
-        boxNeeded ← registerChunkDemand ws pageA params
-                        [ChunkCoord 1 1, ChunkCoord 7 7]
-        -- The already-requested coord is recognised, the new one is not.
-        boxNeeded `shouldBe` [ChunkCoord 1 1]
-        -- ...and the outstanding one is still requested, so it is still
-        -- owed a chunk. A wholesale write of boxNeeded would have left
-        -- it requested with nothing queued — the unrepairable state,
-        -- because every later request for it now deduplicates.
-        owner0 ← readChunkOwner ws
-        stateOf params pageA (ChunkCoord 8 8) owner0 `shouldBe` ChunkRequested
-        atomicModifyIORef' (wsInitQueueRef ws) $ \q → (q ⧺ boxNeeded, ())
-        readIORef (wsInitQueueRef ws)
-            `shouldReturn` (outside ⧺ [ChunkCoord 1 1])
+        -- Both sets are on the queue, the outstanding ones first.
+        readIORef (wsInitQueueRef ws) `shouldReturn` (outside ⧺ box)
+        remaining `shouldBe` length box + 2
+
+        -- ...and the total ACCOUNTS for them. world.getInitProgress
+        -- reports (total - remaining) completed, so a total left at the
+        -- box's own 'boxTotal' would surface as NEGATIVE progress
+        -- through the public API.
+        total `shouldSatisfy` (> boxTotal)
+        total - remaining `shouldBe` 1
+        total `shouldSatisfy` (≥ remaining)
+
+        -- A prior request INSIDE the box is not counted twice.
+        wsOverlap ← detachedPage params
+        case filter (≢ centre) box of
+            [] → expectationFailure "fixture box holds only its centre"
+            (inBox : _) → do
+                enqueueChunkRequest pageA wsOverlap [inBox] `shouldReturn` 1
+                seedInitialQueue pageA wsOverlap params box
+                    `shouldReturn` (length box, boxTotal)
 
     it "never leaves a requested key off the page's work list" $ \_ → do
         -- The invariant all three losses violated, stated directly:

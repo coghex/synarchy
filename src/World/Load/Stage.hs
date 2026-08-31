@@ -31,7 +31,7 @@ import qualified Data.List as L
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Text as T
-import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
+import Data.IORef (readIORef, writeIORef)
 import Control.DeepSeq (force)
 import Control.Exception (evaluate)
 import Engine.Core.State (EngineEnv(..))
@@ -44,10 +44,9 @@ import World.Generate (generateChunk, cameraChunkCoord)
 import World.Generate.Arena (generateArenaChunks, arenaGenForSeed)
 import World.Plant.Validate (revalidatePlantDesignations)
 import World.Grid (worldToGrid)
-import World.Chunk.Queue (initialChunkQueue)
+import World.Chunk.Queue (initialChunkQueue, seedInitialQueue)
 import World.Chunk.Residency (canonicalChunkCoord)
-import World.Chunk.Admit
-    (claimChunkGeneration, publishSeedChunks, registerChunkDemand)
+import World.Chunk.Admit (claimChunkGeneration, publishSeedChunks)
 import World.Plate (elevationAtGlobal)
 import World.Preview (buildPreviewFromPixels, PreviewImage(..))
 import World.Render (surfaceHeadroom)
@@ -452,16 +451,15 @@ stagePage logger registry palette catalog buildingDefs unitDefs
           let (remainingCoords, totalInitialChunks) =
                   initialChunkQueue (canonicalChunkCoord params) centerCoord
           when isActive $ writeIORef phaseRef (LoadPhase1 4 totalSteps)
-          -- Register the restored box as durable demand, then append
-          -- exactly what still needs scheduling (#2001), exactly as
-          -- fresh world init does. This staged page is not published
-          -- until World.Load.Publish, so nothing can race the queue
-          -- here — the append is the same shape as init's so the two
-          -- cannot drift, not a defence this path needs.
-          needed ← registerChunkDemand worldState pid params remainingCoords
-          queuedNow ← atomicModifyIORef' (wsInitQueueRef worldState) $ \q →
-              let q' = q ⧺ needed in (q', length q')
-          writeIORef phaseRef (LoadPhase2 queuedNow totalInitialChunks)
+          -- Register the restored box and append what still needs
+          -- scheduling (#2001), through the same call fresh world init
+          -- uses. This staged page is not published until
+          -- World.Load.Publish, so nothing can race the queue here —
+          -- sharing the one helper is what keeps the two seed paths from
+          -- drifting, not a defence this path needs.
+          (queuedNow, phaseTotal) ←
+              seedInitialQueue pid worldState params remainingCoords
+          writeIORef phaseRef (LoadPhase2 queuedNow phaseTotal)
 
           mCam ← if isActive
             then do
