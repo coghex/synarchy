@@ -54,7 +54,8 @@ import Building.Command.Types (BuildingCommand(..))
 import Building.Thread.Command (processAllBuildingCommands)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Core.Capability.Building (toBuildingCapability)
-import Engine.Core.Capability.ContentRegistries (toContentRegistriesCapability)
+import Engine.Core.Capability.ContentRegistriesView
+    (toContentRegistriesViewCapability)
 import Engine.Core.Capability.WorldSim (toWorldSimCapability)
 import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
 import Engine.Core.State (EngineEnv(..))
@@ -1091,7 +1092,7 @@ applyQueuedBuildings ∷ EngineEnv → IO ()
 applyQueuedBuildings env =
     processAllBuildingCommands (loggerRef env)
         (toWorldSimCapability env)
-        (toContentRegistriesCapability env)
+        (toContentRegistriesViewCapability env)
         (toBuildingCapability env)
 
 -- | The window round 3 named: a selection change ENQUEUED before the

@@ -53,7 +53,19 @@
 --   resynced from @wmVisible@). 'uicTextBuffersRef' is
 --   @boot-process@: the scene-object text map is NOT touched by
 --   @resetTransientState@, and its entries follow their scene objects'
---   own lifetimes instead.
+--   own lifetimes instead. That coupling is enforced in
+--   "Engine.Scripting.Lua.Message.Scene" and nowhere else, which states
+--   the invariant in full and routes all four transitions through one
+--   pair of helpers: an entry exists exactly when the scene graph holds
+--   a node at that id whose @nodeText@ is set, and equals it (#1961).
+--   The condition is a node BEARING TEXT, not a @TextObject@ —
+--   @engine.setText@ against a sprite's id sets that sprite's text and
+--   caches it, which is preserved behaviour. And note the transition
+--   that is easy to miss: 'Engine.Scene.Graph.addNode' is a
+--   @Map.insert@, so spawning a SPRITE over a node that bore text
+--   replaces it and retires its entry too. Those are the map's only
+--   writers and only removers, so a session boundary has nothing left
+--   to reset.
 --
 --   Like the other capability modules, this one imports only the
 --   narrow slice of @Engine.Core.State@ it needs (the bare 'EngineEnv'
@@ -78,10 +90,14 @@ import Engine.Core.State
   )
 
 -- | The UI\/focus\/HUD slice of @ui-hud-events@: the whole UI page
---   tree (pages, elements, text\/control focus, tooltip state), the
+--   tree (pages, elements, text\/control focus, tooltip state — the
+--   editable-widget @UI.TextBuffer@s among them, carried on each
+--   element as @ueTextBuffer@ inside 'uicUiManagerRef' and reached by
+--   @ElementHandle@, never by 'ObjectId'), the
 --   Lua-facing focus-target registry, the page id the global HUD info
---   panel currently reflects, and the editable-widget text buffers
---   keyed by scene 'ObjectId'. See
+--   panel currently reflects, and — a separate mechanism entirely —
+--   the SCENE-OBJECT text cache keyed by scene 'ObjectId' that
+--   @engine.getText@ answers from. See
 --   'docs/engineenv_capability_inventory.md' SS5 @ui-hud-events@ and
 --   SS7.7.
 data UiCapability = UiCapability
@@ -106,7 +122,9 @@ data UiCapability = UiCapability
     --   (@Engine.Scripting.Lua.Message.Scene@, dispatched by
     --   @processLuaMessages@ — never the Lua thread itself);
     --   @boot-process@, and deliberately NOT reset by
-    --   @World.Load.Publish.resetTransientState@.
+    --   @World.Load.Publish.resetTransientState@ because entries are
+    --   created and removed with their scene nodes instead (#1961).
+    --   The scene-OBJECT text cache, not editable-widget text.
   , uicTextBuffersRef    ∷ IORef (Map.Map ObjectId Text)
   }
 

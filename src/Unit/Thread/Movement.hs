@@ -42,9 +42,10 @@ import qualified Data.HashSet as HS
 import qualified Data.Text as T
 import Combat.Types (pushInjuryEvent)
 import Data.IORef (IORef, readIORef, writeIORef, atomicModifyIORef')
+import Engine.Core.ReadOnlyRef (readReadOnlyRef)
 import Engine.Core.State (EngineEnv)
-import Engine.Core.Capability.ContentRegistries
-    (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Engine.Core.Capability.ContentRegistriesView
+    (ContentRegistriesViewCapability(..), toContentRegistriesViewCapability)
 import Unit.Sim.Types
 import Unit.Types (UnitInstance(..), UnitManager(..), UnitId(..), UnitDef(..)
                   , Wound(..), TrailState(..))
@@ -166,8 +167,8 @@ tickAllMovement dt env utsRef = do
     -- the knockdown stun from the worst injury. The combat wound tick then
     -- heals/bleeds them; the Lua injury tick reads them for impairment +
     -- death. Mirrors the climb-XP drain above.
-    sm ← readIORef
-        (crSubstanceManagerRef (toContentRegistriesCapability env))
+    sm ← readReadOnlyRef
+        (crvSubstanceManagerRef (toContentRegistriesViewCapability env))
     let fallResults =
             [ (uid, injs, foldr (max . fiSeverity) 0 injs, usRealX ss, usRealY ss, usGridZ ss)
             | (uid, ss) ← HM.toList simStates'''

@@ -47,7 +47,15 @@ Ownership, in order, and what each step may not do
    runs. A measurement nobody can attribute to an acquisition is worse
    than one that did not happen, so a failure here releases the claim
    and refuses to run.
-4. RESOURCES. The probe's declared shared and exclusive interests, taken
+4. PREPARE. The engine executable the runs will launch, built and
+   located HERE — before the resource hold below, and outside every
+   probe process. A probe that was handed no executable prepares its
+   own (#1913), which takes `cabal-build` exclusively; doing that
+   underneath this measurement's own hold of the same resource is an
+   upgrade that can only deadlock, so the ordering is the fix. It also
+   means one build serves all ten runs and no child makes a Cabal
+   contact at all. A failure releases the claim and refuses to run.
+5. RESOURCES. The probe's declared shared and exclusive interests, taken
    across processes. `run_probes.ResourceLedger` coordinates only the
    probes inside one runner process, so without this a `/deflake`
    measurement and a `tools/run_probes.py` sweep would happily boot two
@@ -62,13 +70,13 @@ Ownership, in order, and what each step may not do
    retained ownership becomes the result rather than a footnote on it,
    and the outcome is the nonzero `managed-error`. `_no_work` is the one
    funnel every such exit goes through, so that holds by construction.
-5. MEASURE. Held resources and a renewed claim throughout, released only
+6. MEASURE. Held resources and a renewed claim throughout, released only
    once the harness has stopped and reaped its process groups.
-6. RECORD. The measurement is retained on disk FIRST — it is the
+7. RECORD. The measurement is retained on disk FIRST — it is the
    expensive thing, and everything after it is cheap — then ingested
    under one hold of the claim's sidecar lock.
-7. RELEASE. Only what this invocation acquired, and never a successor's.
-8. HAND OFF. LAST, and only on the exact `recorded` outcome (#1659).
+8. RELEASE. Only what this invocation acquired, and never a successor's.
+9. HAND OFF. LAST, and only on the exact `recorded` outcome (#1659).
 
 The handoff
 -----------
@@ -178,6 +186,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import probe_census  # noqa: E402
 import probe_claim  # noqa: E402
+import probe_engine  # noqa: E402
 import probe_flake  # noqa: E402
 import probe_protocol  # noqa: E402
 import probe_resource_lock  # noqa: E402
@@ -545,6 +554,7 @@ def measure_next_probe(*, repo_root=None, census_path=None, claim_root=None,
                        stale_after_seconds=probe_census.DEFAULT_STALE_AFTER_SECONDS,
                        inputs=None, load_census=None, claimed=None,
                        acquire_claim=None, acquire_resources=None,
+                       prepare_engine=None,
                        measure=None, record_claim=None, record_result=None,
                        head_commit=None, announce=None, argv=None, cwd=None,
                        read_configuration=None, save_handoff=None) -> Result:
@@ -562,6 +572,8 @@ def measure_next_probe(*, repo_root=None, census_path=None, claim_root=None,
     take_claim = acquire_claim if acquire_claim is not None else probe_claim.acquire
     take_resources = (acquire_resources if acquire_resources is not None
                       else _acquire_probe_resources)
+    prepare = (prepare_engine if prepare_engine is not None
+               else _prepare_probe_engine)
     run_measure = measure if measure is not None else probe_flake.measure
     log_claim = record_claim if record_claim is not None else probe_census.record_claim
     # The INSTALLED candidate, not just the probe key: #1659's handoff
@@ -653,7 +665,7 @@ def measure_next_probe(*, repo_root=None, census_path=None, claim_root=None,
             repo_root=repo_root, namespace=namespace,
             artifact_root=artifact_root, result_path=result_path, runs=runs,
             rts_caps=rts_caps, take_resources=take_resources,
-            run_measure=run_measure, log_claim=log_claim,
+            prepare=prepare, run_measure=run_measure, log_claim=log_claim,
             log_result=log_result, read_head=read_head, say=say,
             argv=observed_argv, cwd=observed_cwd,
             read_configuration=read_config, save_handoff=store_handoff)
@@ -720,6 +732,46 @@ def _no_work(outcome: str, claim, *, detail: str, **fields) -> Result:
         ownership=OWNERSHIP_CLAIM_HELD, **fields)
 
 
+def _probe_resource_namespace(*, namespace, repo_root=None) -> str:
+    """The one namespace both the hold and the preparation resolve in.
+
+    Split out of `_acquire_probe_resources` rather than duplicated:
+    `probe_engine.prepare_executable` takes `cabal-build` in the SAME
+    namespace this measurement's hold takes it in, and two independent
+    resolutions that agreed today would be two places for a future edit
+    to make them disagree.
+    """
+    if namespace is not None:
+        return namespace
+    if repo_root is None:
+        return run_probes.resource_namespace()
+    return probe_resource_lock.repository_namespace(repo_root)
+
+
+def _prepare_probe_engine(*, namespace, repo_root=None, announce=None) -> str:
+    """Build and locate the engine BEFORE the measurement takes its hold.
+
+    A measurement runs the probe as a child process, and a child that
+    was handed no executable prepares its own (#1913) — which takes
+    `cabal-build` EXCLUSIVELY. This process is by then holding that same
+    resource, SHARED for an ordinary probe and exclusive for the three
+    that drive Cabal themselves, and `run_probes.run_one` strips the
+    inherited runner variables on the way down, so the child could
+    neither see the ancestor's hold nor upgrade past it: it would wait
+    out its whole allowance for a holder that is itself blocked waiting
+    for the child.
+
+    Preparing HERE removes that by ordering rather than by exception.
+    The exclusive hold is taken and released before this measurement's
+    own hold is acquired, so nothing is ever upgraded; the resolved path
+    is then installed as the runner's executable, which puts every run
+    of the measurement on the prebuilt path and leaves it making no
+    Cabal contact at all.
+    """
+    return probe_engine.prepare_executable(
+        repo_root, namespace=namespace, announce=announce)
+
+
 def _acquire_probe_resources(probe: str, *, namespace, repo_root=None):
     """The probe's declared interests, taken across processes.
 
@@ -732,12 +784,7 @@ def _acquire_probe_resources(probe: str, *, namespace, repo_root=None):
     silent: both processes would take a lock and neither would see the
     other.
     """
-    if namespace is not None:
-        token = namespace
-    elif repo_root is None:
-        token = run_probes.resource_namespace()
-    else:
-        token = probe_resource_lock.repository_namespace(repo_root)
+    token = _probe_resource_namespace(namespace=namespace, repo_root=repo_root)
     return probe_resource_lock.acquire(
         exclusive=run_probes.exclusive_resources(probe),
         shared=run_probes.shared_resources(probe),
@@ -789,7 +836,7 @@ def _build_recorded_handoff(*, measurement, retained, recorded_row, probe,
 
 def _measure_claimed(*, probe, claim, selection, target, repo_root, namespace,
                      artifact_root, result_path, runs, rts_caps,
-                     take_resources, run_measure, log_claim, log_result,
+                     take_resources, prepare, run_measure, log_claim, log_result,
                      read_head, say, argv, cwd, read_configuration,
                      save_handoff) -> Result:
     """Everything that happens while this invocation owns `probe`."""
@@ -837,7 +884,36 @@ def _measure_claimed(*, probe, claim, selection, target, repo_root, namespace,
             ownership=OWNERSHIP_CLAIM_HELD if problem else OWNERSHIP_NONE,
             commit=captured, **common)
 
-    # ---- 5. Resources ---------------------------------------------------
+    # ---- 5. The engine the runs will launch (#1913) ----------------------
+    # BEFORE the hold below, never inside it. Preparation is a Cabal
+    # writer and takes `cabal-build` exclusively; this measurement is
+    # about to hold that same resource, so preparing under it would be
+    # an upgrade that can only deadlock. Resolved once here, the path
+    # goes to every run of the measurement through the runner's own
+    # executable handoff, so no child performs a Cabal contact of its
+    # own — which is also what stops each of N runs rebuilding.
+    try:
+        engine_exe = prepare(namespace=_probe_resource_namespace(
+            namespace=namespace, repo_root=repo_root),
+            repo_root=repo_root, announce=say)
+    except (probe_engine.EngineExecutableError,
+            probe_resource_lock.ResourceLockError) as error:
+        problem = _release(claim)
+        return Result(OUTCOME_MANAGED_ERROR, detail=(
+            f"the engine the runs would launch could not be prepared "
+            f"({error}); the probe was not run"),
+            ownership=(OWNERSHIP_CLAIM_HELD if problem else OWNERSHIP_NONE),
+            commit=captured, **common)
+    # `run_probes.run_one` reads this module global for the executable it
+    # hands each child through `$SYNARCHY_PROBE_ENGINE_EXE`, and it is
+    # the same fill-in `run_probes.main` performs after ITS preflight —
+    # `probe_flake` sits between us and `run_one` and forwards nothing of
+    # its own, so this is where a de-flake measurement declares which
+    # binary its runs are measuring.
+    run_probes.ENGINE_EXECUTABLE = engine_exe
+    say(f"engine: {engine_exe}")
+
+    # ---- 6. Resources ---------------------------------------------------
     try:
         hold = take_resources(probe, namespace=namespace, repo_root=repo_root)
     except probe_resource_lock.ResourceBusy as busy:
@@ -859,7 +935,7 @@ def _measure_claimed(*, probe, claim, selection, target, repo_root, namespace,
     measurement = None
     try:
         with hold:
-            # ---- 6. Measure ---------------------------------------------
+            # ---- 7. Measure ---------------------------------------------
             # The last check before an hour of engine time: still ours,
             # still live, lease refreshed. Starting a measurement this
             # run no longer owns is precisely the duplicated work the
@@ -919,7 +995,7 @@ def _measure_claimed(*, probe, claim, selection, target, repo_root, namespace,
     # only once the harness has returned — and it returns only after
     # `run_one` has reaped each run's whole process group.
 
-    # ---- 7. Retain, before anything that can fail -----------------------
+    # ---- 8. Retain, before anything that can fail -----------------------
     retained, retain_problem = probe_claim.retain_measurement(
         measurement, result_path)
     artifacts = measurement.retained_artifacts()
@@ -931,7 +1007,7 @@ def _measure_claimed(*, probe, claim, selection, target, repo_root, namespace,
             f"once the cause is fixed" if retained is not None else
             f"the completed measurement could NOT be retained ({retain_problem})")
 
-    # ---- 8. The cohort must still be the one that was measured ----------
+    # ---- 9. The cohort must still be the one that was measured ----------
     reported = measurement.to_document().get("commit_sha")
     # Read ONCE. A second `read_head()` inside the diagnostic below could
     # answer differently again and report a third commit that no step
@@ -949,7 +1025,7 @@ def _measure_claimed(*, probe, claim, selection, target, repo_root, namespace,
             ownership=OWNERSHIP_CLAIM_HELD if problem else OWNERSHIP_NONE,
             commit=captured, **common)
 
-    # ---- 9. Record ------------------------------------------------------
+    # ---- 10. Record -----------------------------------------------------
     # A harness error is recorded too: #1428 appends the non-accepted
     # attempt unconditionally while leaving `current`, `history`, samples
     # and aggregates untouched, so the attempt log stays a complete
@@ -1003,7 +1079,7 @@ def _measure_claimed(*, probe, claim, selection, target, repo_root, namespace,
             ownership=OWNERSHIP_CLAIM_HELD if problem else OWNERSHIP_NONE,
             commit=captured, **common)
 
-    # ---- 10. Release ----------------------------------------------------
+    # ---- 11. Release ---------------------------------------------------
     problem = _release(claim)
     if problem is not None:
         # Committed, then could not let go. Both facts are reported; the
@@ -1022,7 +1098,7 @@ def _measure_claimed(*, probe, claim, selection, target, repo_root, namespace,
             f"and no cohort, sample or aggregate changed — {kept}"),
             commit=captured, **common)
 
-    # ---- 11. Hand off ---------------------------------------------------
+    # ---- 12. Hand off --------------------------------------------------
     # LAST, and only on the exact `recorded` outcome. Every step above
     # that returns early — `commit-changed`, `record-failed`,
     # `record-indeterminate`, `recorded-release-failed`, `harness-error`

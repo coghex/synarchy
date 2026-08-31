@@ -5,6 +5,7 @@ module Engine.Scripting.Lua.API.Shell
   ) where
 
 import UPrelude
+import Engine.Scripting.Lua.API.Namespaces (consoleExposedNamespaces)
 import qualified HsLua as Lua
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
@@ -77,8 +78,14 @@ shellTryLoadAndRun src = do
             Lua.pop 1
             return $ Left $ maybe "Parse error" TE.decodeUtf8Lenient err
 
--- | Create a sandboxed environment for shell execution
--- This creates a global 'shellSandbox' table with only safe functions
+-- | Create a sandboxed environment for shell execution.
+-- This creates a global 'shellSandbox' table with only safe functions:
+-- a copied subset of the Lua stdlib, plus every engine API namespace
+-- 'consoleExposedNamespaces' declares. It is both the console's
+-- execution environment ('shellTryLoadAndRun' installs it as the loaded
+-- chunk's @_ENV@) and, since #1958, the only environment
+-- @scripts/shell.lua@ draws completion candidates from -- so a
+-- namespace withheld here is neither executable nor suggested.
 setupShellSandbox ∷ Lua.State → IO ()
 setupShellSandbox lst = Lua.runWith lst $ do
     Lua.newtable
@@ -103,21 +110,17 @@ setupShellSandbox lst = Lua.runWith lst $ do
     copyGlobalTable "string"
     copyGlobalTable "table"
     
-    -- Engine API tables. Keep in sync with the setglobal list in
-    -- Engine.Scripting.Lua.API — a table missing here is invisible
-    -- from the in-game shell ("attempt to index a nil value") even
-    -- though scripts and the TCP debug console (no sandbox) see it.
-    copyGlobalTable "engine"
-    copyGlobalTable "UI"
-    copyGlobalTable "camera"
-    copyGlobalTable "world"
-    copyGlobalTable "unit"
-    copyGlobalTable "building"
-    copyGlobalTable "equipment"
-    copyGlobalTable "substance"
-    copyGlobalTable "item"
-    copyGlobalTable "flora"
-    copyGlobalTable "combat"
+    -- Engine API tables (#1958). Driven by the one production
+    -- declaration in Engine.Scripting.Lua.API.Namespaces rather than a
+    -- second hand-maintained list: this used to be eleven literal names
+    -- beside a comment asking the next author to keep them in sync with
+    -- the setglobal calls, and they had drifted by sixteen namespaces.
+    -- A table missing here is invisible from the in-game shell
+    -- ("attempt to index a nil value") even though scripts and the TCP
+    -- debug console (no sandbox) see it -- and, since scripts/shell.lua
+    -- now completes from this table alone, a missing table is also a
+    -- name the console will no longer suggest.
+    mapM_ copyGlobalTable consoleExposedNamespaces
     
     -- Safe subset of os
     Lua.newtable
@@ -137,6 +140,12 @@ setupShellSandbox lst = Lua.runWith lst $ do
     -- Shallow-copy the table so shell assignments (string.format = nil)
     -- can't mutate the real global and break every loaded script. The
     -- values (functions) are still shared; only the table is fresh.
+    --
+    -- The copy is taken before scripts/init.lua runs, so _G.engine and
+    -- shellSandbox.engine are distinct tables that can go on to differ
+    -- in CONTENT, not just presence. That is why shell.getTableCompletions
+    -- resolves `foo.` against this copy rather than _G.foo (#1958): the
+    -- member set it offers has to be the one the console will index.
     copyGlobalTable ∷ BS.ByteString → Lua.LuaE Lua.Exception ()
     copyGlobalTable name = do
         _ ← Lua.getglobal (Lua.Name name)        -- sandbox src

@@ -14,10 +14,11 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Data.IORef (IORef, readIORef, writeIORef, atomicModifyIORef')
+import Engine.Core.ReadOnlyRef (readReadOnlyRef)
 import qualified Engine.Core.Queue as Q
 import Engine.Core.State (EngineEnv, freshItemInstanceId)
-import Engine.Core.Capability.ContentRegistries
-    (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Engine.Core.Capability.ContentRegistriesView
+    (ContentRegistriesViewCapability(..), toContentRegistriesViewCapability)
 import Unit.Command.Types (UnitCommand(..))
 import Engine.Core.Log (logDebug, logWarn, LogCategory(..), LoggerState)
 import World.Types
@@ -237,9 +238,9 @@ spawnYieldItems ∷ EngineEnv → IORef StdGen → LoggerState → WorldState �
                 → (Int, Int) → Int → IO ()
 spawnYieldItems env rngRef logger ws defName (gx, gy) n = do
     -- Dig-yield item defs come through the `content-registries`
-    -- capability (#890).
-    itemMgr ← readIORef
-        (crItemManagerRef (toContentRegistriesCapability env))
+    -- READER view (#890, narrowed to read-only handles by #1896).
+    itemMgr ← readReadOnlyRef
+        (crvItemManagerRef (toContentRegistriesViewCapability env))
     case lookupItemDef defName itemMgr of
         Nothing →
             logWarn logger CatWorld $

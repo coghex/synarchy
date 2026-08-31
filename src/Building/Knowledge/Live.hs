@@ -12,10 +12,22 @@
 --   no consumer of this module gains unrestricted
 --   'Engine.Core.State.EngineEnv' access
 --   (@tools/engine_env_capability_audit.py@), and every trigger below is
---   exercisable from hspec against four freshly-made 'IORef's with no
+--   exercisable from hspec against four freshly-made handles with no
 --   engine boot at all. The unit-gated reveal takes the unit roster as
 --   its own argument, and the two DEMOLITION helpers take the
 --   world-manager ref alone — each asking for exactly what it touches.
+--
+--   __This record is the mutation-authority arc's production pass-on__
+--   (#1896, CMA-2 of epic #1890). 'coItems' is an
+--   'Engine.Core.ReadOnlyRef.ReadOnlyRef', because this module is one
+--   of the item registry's 26 read-only consumers and must not be
+--   handed a writable handle merely so it can weigh an observation.
+--   That is why 'containerObserver' takes the reader-facing
+--   'Engine.Core.Capability.ContentRegistriesView.ContentRegistriesViewCapability'
+--   rather than the raw writer record and wrapping here itself — the
+--   boundary has to travel INTO this record, which is exactly the case
+--   a record-level boundary misses. The other three fields are outside
+--   that pilot and stay raw 'IORef's.
 --
 --   __What reveals contents__ (epic decision 2: an INTERACTION, never
 --   proximity). Every one of them lands here:
@@ -69,8 +81,9 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import Data.IORef (IORef, readIORef, atomicModifyIORef')
 import Engine.Core.Capability.Building (BuildingCapability(..))
-import Engine.Core.Capability.ContentRegistries (ContentRegistriesCapability(..))
+import Engine.Core.Capability.ContentRegistriesView (ContentRegistriesViewCapability(..))
 import Engine.Core.Capability.WorldSim (WorldSimCapability(..))
+import Engine.Core.ReadOnlyRef (ReadOnlyRef, readReadOnlyRef)
 import Building.Knowledge
 import Building.Types
     ( BuildingActivity(..), BuildingId(..)
@@ -88,20 +101,26 @@ data ContainerObserver = ContainerObserver
     , coWorlds    ∷ !(IORef WorldManager)
       -- ^ How a container's own page is resolved to the 'WorldState'
       --   that owns its knowledge record.
-    , coItems     ∷ !(IORef ItemManager)
+    , coItems     ∷ !(ReadOnlyRef ItemManager)
       -- ^ Only for weighing an observation ('itemTotalWeight' needs the
-      --   def's per-unit fill weight).
+      --   def's per-unit fill weight) — so it arrives WRAPPED (#1896).
+      --   This is the arc's production pass-on: the read-only boundary
+      --   travels with the handle into this record, where a
+      --   record-level one would have ended the moment
+      --   'Engine.Core.Capability.ContentRegistriesView' was unpacked.
+      --   An attempted write here does not typecheck; see
+      --   @tools\/test_read_only_ref_compile.py@.
     , coGameTime  ∷ !(IORef Double)
       -- ^ The clock a reveal is stamped with — game time, not calendar.
     }
 
 containerObserver
-    ∷ BuildingCapability → WorldSimCapability → ContentRegistriesCapability
+    ∷ BuildingCapability → WorldSimCapability → ContentRegistriesViewCapability
     → ContainerObserver
 containerObserver bld sim reg = ContainerObserver
     { coBuildings = bcBuildingManagerRef bld
     , coWorlds    = wsWorldManagerRef sim
-    , coItems     = crItemManagerRef reg
+    , coItems     = crvItemManagerRef reg
     , coGameTime  = wsGameTimeRef sim
     }
 
@@ -135,7 +154,7 @@ revealContainer co bid = do
     case mPage of
         Nothing → pure False
         Just (ws, storage) → do
-            itemMgr ← readIORef (coItems co)
+            itemMgr ← readReadOnlyRef (coItems co)
             now     ← readIORef (coGameTime co)
             atomicModifyIORef' (wsContainerKnowledgeRef ws) $ \k →
                 (recordObservation itemMgr now bid storage k, ())
@@ -178,7 +197,7 @@ seedBuiltContainer co bid = do
     case mPage of
         Nothing → pure False
         Just (ws, storage) → do
-            itemMgr ← readIORef (coItems co)
+            itemMgr ← readReadOnlyRef (coItems co)
             now     ← readIORef (coGameTime co)
             atomicModifyIORef' (wsContainerKnowledgeRef ws) $ \k →
                 case lookupContainer bid k of
