@@ -341,7 +341,9 @@ function createWorldMenu.init(panelTex, btnTex, font, width, height)
         fillCenter  = engine.loadTexture("assets/textures/ui/bar/bar_fill_center.png"),
     }
 
-    createWorldMenu.createUI()
+    -- #1978: init is the first construction, so there is no prior player
+    -- state to preserve over the controls' generated initial values.
+    createWorldMenu.createUI({ preserveState = false })
 end
 
 -----------------------------------------------------------
