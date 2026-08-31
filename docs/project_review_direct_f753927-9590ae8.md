@@ -34,14 +34,14 @@ The next direct commit to review is
 
 ## Status
 
-- [ ] PRR-10. Debug console retains and remeasures unbounded scrollback
-- [ ] PRR-11. Console autocomplete suggests globals excluded from its execution sandbox
-- [ ] PRR-12. Debug console remains wider than supported framebuffers
-- [ ] PRR-13. Scene-text cache records nonexistent objects and survives object destruction
+- [x] PRR-10. Debug console retains and remeasures unbounded scrollback — [#1956]
+- [x] PRR-11. Console autocomplete suggests globals excluded from its execution sandbox — [#1958]
+- [x] PRR-12. Debug console remains wider than supported framebuffers — [#1959]
+- [x] PRR-13. Scene-text cache records nonexistent objects and survives object destruction — [#1961]
 
 ## Findings
 
-### PRR-10. Debug console retains and remeasures unbounded scrollback
+### [#1956] PRR-10. Debug console retains and remeasures unbounded scrollback
 
 > **Captured note:** Console output is retained without a limit even though the
 > UI exposes only the newest viewportful of entries. Layout work still walks
@@ -84,7 +84,7 @@ interactive session develops a noticeable delay was not measured.
 - **Deduplication:** No matching open issue or existing findings-report entry
   was found.
 
-### PRR-11. Console autocomplete suggests globals excluded from its execution sandbox
+### [#1958] PRR-11. Console autocomplete suggests globals excluded from its execution sandbox
 
 > **Captured note:** Completion is generated from the host Lua global table,
 > but console expressions execute inside a deliberately restricted sandbox.
@@ -119,7 +119,7 @@ interactive session develops a noticeable delay was not measured.
   Unicode completion fixes.
 - **Deduplication:** No matching issue or findings-report entry was found.
 
-### PRR-12. Debug console remains wider than supported framebuffers
+### [#1959] PRR-12. Debug console remains wider than supported framebuffers
 
 > **Captured note:** The console width is derived from a fixed 1,200-pixel
 > center section and UI scale, without fitting the result to the framebuffer.
@@ -159,7 +159,7 @@ inspection. A graphical screenshot was not taken.
 - **Deduplication:** Closed issue #750 intended to cover this surface, but the
   current width defect persists and has no open tracker owner.
 
-### PRR-13. Scene-text cache records nonexistent objects and survives object destruction
+### [#1961] PRR-13. Scene-text cache records nonexistent objects and survives object destruction
 
 > **Captured note:** `engine.setText` updates the scene-text cache before
 > determining whether the addressed scene node exists, while destruction never
