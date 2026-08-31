@@ -10,44 +10,25 @@ The design deliberately does not treat the in-memory cache as save data. A save
 restores the same world and the same gameplay consequences, but it may choose a
 different useful set of resident chunks after loading.
 
-Design state: `deferred — blocked on the world-map level-of-detail design`
+Design state: `exploring`
 
-**Deferred 2026-08-31.** Issue processing must not resume on this document
-until the world-map level-of-detail arc is designed and its representation
-decided. `/process-design-doc` will refuse this document while the state line
-above reads anything other than `ready for issue processing`, which is
-intentional.
+**Rebased 2026-08-31.** `docs/world_map_level_of_detail_design.md` has selected
+the world-map representation and persistence boundary, so the former global
+design blocker is cleared. The two arcs now meet through explicit capabilities:
 
-The reason is that the zoom map, not the detailed chunk cache, is the binding
-constraint on world size — and it is a dependency of this document rather than
-a later slice of it:
-
-- The zoom atlas stores a fixed 32x32 pixels per chunk
-  (`World.ZoomMap.Types.zoomTileSize`), and `buildZoomCache` enumerates
-  `worldSize` squared chunks, so the atlas side is `worldSize * 32` in one
-  contiguous RGBA8 buffer. That is 1024 MiB at worldSize 512 — exactly at the
-  common 16384-pixel GPU dimension limit — and 4096 MiB at worldSize 1024,
-  which exceeds it outright.
-- Nothing queries Vulkan's `maxImageDimension2D` and nothing validates
-  `zadWidth`/`zadHeight` before upload, so the failure mode above the limit is a
-  driver error during image creation, not a degraded map.
-- By contrast, 289 resident detailed chunks did not move a 184 MiB peak set by
-  world generation itself (see §Measurements). The cache this document is about
-  is an order of magnitude cheaper than the map.
-- Arc B specified that the generated-world foundation stores the zoom output.
-  Freezing that bundle format before the map's representation is decided would
-  freeze it around a representation that is about to be replaced.
-
-Revision 2's content below is retained as drafted. Two known defects were
-identified after it was written and are deliberately **not** repaired here,
-because the deferral makes them moot until the arc is rescoped: the Arc B gate
-is circular (it checks a measurement against a ceiling chosen after that
-measurement is read), and CRS-14 is gated on a memory threshold when its real
-trigger is a texture-dimension limit that is already reachable.
-
-Linked tracker items stay open. #2001 (CRS-1, canonical chunk identity) is
-unaffected by any of this: one physical chunk equalling one key holds under
-every candidate map and storage design.
+- WML owns the complete map, its spatial-pyramid artifact format, its GPU page
+  pool, and its texture-dimension and runtime-residency gates. This document no
+  longer carries a duplicate zoom-map delivery slice.
+- WML-3/WML-4 establish generated-world identity and the shared library
+  lifecycle. Arc B extends that library with base-chunk artifacts only after
+  those capabilities land; a processed WML ledger entry is not a substitute for
+  the implementation.
+- #2001 (CRS-1, canonical chunk identity) remains the prerequisite for Arc A's
+  accounting, reservation, and eviction work. One physical chunk equalling one
+  key holds under every selected map and storage representation.
+- Arc B remains measurement-gated, but the gate now compares projected detailed
+  residency against a predeclared platform memory envelope rather than a ceiling
+  chosen from the same measurement.
 
 Status legend: `[ ]` unprocessed · `[#N]` linked to issue N · `[no-issue]`
 reviewed and deliberately not tracked separately · `[deferred]` blocked on a
@@ -64,18 +45,47 @@ concrete precondition
 - [ ] CRS-6. Reserve chunks used by unit work and authoritative world edits
 - [ ] CRS-7. Make location stamping transactional across its footprint
 - [ ] CRS-8. Add residency diagnostics and the long-travel plateau gate
-- [ ] CRS-9. Define the versioned generated-world bundle and base-chunk record
-- [ ] CRS-10. Write base chunks and the reusable zoom artifact during world generation
-- [ ] CRS-11. Materialize resident chunks from the bundle plus durable deltas
-- [ ] CRS-12. Replace resident-chunk fluid snapshots with sparse durable fluid state
-- [ ] CRS-13. Move chunk reads and fallback generation off the world thread
-- [ ] CRS-14. Keep the complete zoom map available at large world sizes
-- [ ] CRS-15. Add bundle corruption, latency, and pressure gates
+- [ ] CRS-9. Define the versioned generated-world bundle and base-chunk record — [deferred]: Arc B memory gate and WML library capabilities
+- [ ] CRS-10. Write base-chunk artifacts during world generation — [deferred]: Arc B memory gate
+- [ ] CRS-11. Materialize resident chunks from the bundle plus durable deltas — [deferred]: Arc B memory gate
+- [ ] CRS-12. Replace resident-chunk fluid snapshots with sparse durable fluid state — [deferred]: Arc B memory gate
+- [ ] CRS-13. Move chunk reads and fallback generation off the world thread — [deferred]: Arc B memory gate
+- [x] CRS-14. Keep the complete zoom map available at large world sizes — [no-issue]
+- [ ] CRS-15. Add bundle corruption, latency, and pressure gates — [deferred]: Arc B memory gate
 
-CRS-1 through CRS-8 are **Arc A**; CRS-9 through CRS-15 are **Arc B**, which
-does not begin until CRS-2's measurement opens its gate. See §Two arcs.
+CRS-1 through CRS-8 are **Arc A**; CRS-9 through CRS-13 and CRS-15 are **Arc
+B**. Arc B does not begin until CRS-2's measurement opens its independent
+memory-envelope gate and the WML shared-library capabilities it consumes have
+landed. CRS-14 is retained only as the durable record of its transfer to WML.
+
+## Epic contract
+
+- **Goal:** Keep detailed chunks within explicit runtime bounds without making
+  residency world truth or losing durable gameplay consequences.
+- **Done when:** every chunk demand uses one canonical identity and owner;
+  admitted operations hold explicit reservations; eviction can remove only
+  unreserved reconstructions; fluid, edits, units, and location stamping remain
+  correct across eviction and save/load; diagnostics prove a bounded plateau;
+  and, only if the approved memory envelope requires it, detailed chunks can be
+  materialized asynchronously from versioned base artifacts plus durable
+  deltas. The complete world map remains independently available through WML.
+- **Users and operators:** players traversing and loading large finite worlds;
+  maintainers of world generation, simulation, persistence, and diagnostics;
+  and tooling that requests explicit chunk regions.
+- **Tracker relationship:** #1997 owns detailed residency and streaming; #2001
+  is its canonical-key prerequisite. #2017 and
+  `docs/world_map_level_of_detail_design.md` supersede this arc's former map
+  representation, map persistence, and large-world map slice while supplying
+  the shared generated-world identity and library boundary Arc B extends.
+- **Arc label:** None proposed.
 
 ## Revision history
+
+**Revision 3 (2026-08-31)** rebased the design after the WML representation was
+selected. It removes the obsolete document-wide deferral, transfers CRS-14 to
+WML, narrows CRS-9/CRS-10 to base-chunk artifacts in the shared generated-world
+library, and makes Arc B's memory gate independent of the threshold CRS-2 will
+help tune. The state returns to `exploring` pending fresh readiness signoff.
 
 **Revision 2 (2026-08-31)** restructured the delivery plan after processing
 stalled on the original CRS-2. Four changes, each signed off:
@@ -108,11 +118,11 @@ defects at today's world sizes**, and two of them have already shipped as bugs
 (#1674, #1719). Arc A needs no new storage format, no bundle, and no
 asynchronous loading.
 
-**Arc B — capacity and streaming.** An immutable generated-world bundle, base
-chunk records, materialization from bundle plus deltas, asynchronous reads, and
-a zoom map that survives large worlds. This is the larger body of work and it
-rests on one premise: that resident detailed chunks are the memory problem.
-**That premise is not yet measured.** See §Measurements.
+**Arc B — capacity and streaming.** An immutable base-chunk artifact in WML's
+shared generated-world library, materialization from base plus deltas, and
+asynchronous reads. This is the larger body of work and it rests on one premise:
+that resident detailed chunks are the memory problem. **That premise is not yet
+measured.** See §Measurements.
 
 Arc A's invariant is the one worth stating on its own, because every slice in it
 is an instance of it:
@@ -260,9 +270,10 @@ finishes, it publishes one complete generated-world foundation atomically. A
 crash or cancellation before completion leaves no bundle that can be mistaken
 for a usable world. *(Arc B.)*
 
-The expensive result is reusable. Starting a game, loading a save, opening the
-zoom map, or revisiting a distant region should not repeat work that was already
-finished during world generation. *(Arc B.)*
+The expensive detailed foundation is reusable. Starting a game, loading a save,
+or revisiting a distant region should not repeat detailed generation work that
+was already finished during world generation. WML separately owns reuse of the
+complete map artifact. *(Arc B.)*
 
 ### Travelling during play
 
@@ -312,12 +323,12 @@ by its accepted cell state plus enough activity metadata to resume settling.
 The exact post-load cache contents are allowed to differ from the pre-save
 contents; the gameplay answers are not.
 
-### Zoom map
+### World-map boundary
 
-The zoom map is always available as a complete view of the finite world and is
-unrelated to detailed chunk residency. Opening it never requests, reserves, or
-waits for gameplay chunks. *(Arc B makes its storage independent; the behavioural
-rule holds from Arc A onward.)*
+WML keeps the complete finite-world map available independently of detailed
+chunk residency. This arc preserves the integration invariant that opening the
+map never requests, reserves, or waits for gameplay chunks, but does not own the
+map representation, artifact, caches, or rendering.
 
 ## Scope
 
@@ -335,14 +346,13 @@ rule holds from Arc A onward.)*
 - Coordinated fluid activation, final writeback, save/load restoration, and
   reservation release.
 - Metrics, diagnostics, and a deterministic long-travel plateau gate.
-- *(Arc B)* An immutable generated-world bundle with a manifest, version and
-  generator identity, chunk index, checksums, atomic publication, and reusable
-  zoom data; a shared world-library bundle referenced by every descendant save;
-  composition of base data, sparse deltas, and time-derived state; a sparse
-  per-chunk fluid representation independent of residency; asynchronous
-  read/decompress/fallback-generation workers with world-thread publication;
-  immediate entry into the game scene with progressive chunk pop-in; an
-  always-renderable zoom map.
+- *(Arc B)* A versioned base-chunk artifact extending WML's shared
+  generated-world library, with a chunk index, checksums, atomic publication,
+  and references from descendant saves; composition of base data, sparse
+  deltas, and time-derived state; a sparse per-chunk fluid representation
+  independent of residency; asynchronous read/decompress/fallback-generation
+  workers with world-thread publication; and immediate entry into the game
+  scene with progressive chunk pop-in.
 
 ### Out of scope
 
@@ -351,6 +361,8 @@ rule holds from Arc A onward.)*
 - Saving and restoring the exact RAM cache, its recency order, or pending
   background work.
 - Making every cosmetic or deterministic derived value into persistent save data.
+- Redesigning, storing, loading, caching, rendering, or gating the complete
+  world map; `docs/world_map_level_of_detail_design.md` owns those outcomes.
 - A general rewrite of unit, building, item, or power persistence. This arc
   changes only their dependency on chunk residency where required.
 - Cloud storage, cross-device bundle transfer, multiplayer synchronization, or a
@@ -372,7 +384,7 @@ gameplay deletion.
 
 | Layer | Meaning | Lifetime | Examples |
 |---|---|---|---|
-| Generated-world foundation | Immutable result of expensive finite-world generation | From successful world creation until the last referencing save/world is deleted | Base chunk records, generation identity, location overlay, complete zoom artifact |
+| Generated-world foundation | Immutable result of expensive finite-world generation | From successful world creation until the last referencing save/world is deleted | Shared generated-world identity/library, WML-owned map artifacts, and Arc B base-chunk records |
 | Durable gameplay state | Authoritative differences and clocks | Save/session lifetime, independent of chunk residency | Terrain/structure edits, sparse fluid state, flora harvests, stamped locations, units and buildings |
 | Resident detail cache | Materialized chunks ready for immediate queries/render/simulation | Bounded runtime working set | Base chunk + current deltas + derived seams/decoration |
 
@@ -543,14 +555,16 @@ acceptance cases must remain green.
 
 ### Generated-world bundle *(Arc B)*
 
-An immutable, checksummed, versioned bundle stores the expensive base data and
-the zoom-map output, published atomically so a crash leaves nothing mistakable
-for a usable world. Saves descended from one generated world share it by
-identity, with reference-aware cleanup. Missing or incompatible base data has a
-defined, compatibility-checked regeneration path.
+An immutable, checksummed, versioned base-chunk artifact stores the expensive
+detailed foundation inside the shared generated-world library established by
+WML. It is a sibling of WML-owned map artifacts, not their container or format
+authority. Saves descended from one generated world share the library identity
+and reference-aware cleanup. Missing or incompatible base data has a defined,
+compatibility-checked regeneration path.
 
-Its manifest, index, checksum, `BaseChunkV1` and zoom-page DTO contracts freeze
-in CRS-9, and the two open questions gating that freeze are Q-1 and Q-2 below.
+Its manifest extension, index, checksum, and `BaseChunkV1` contracts freeze in
+CRS-9. WML owns map-page DTOs and map-artifact publication. The two open
+questions gating the base-chunk freeze are Q-1 and Q-2 below.
 
 ### Asynchronous reads and presentation *(Arc B)*
 
@@ -561,12 +575,12 @@ notification stay on the world thread under a per-tick drain budget. Save
 loading enters the game scene after index validation, renders missing detail as
 black, and publishes only fully composed chunks, centre and visible first.
 
-### Always-available zoom map *(Arc B)*
+### World-map handoff
 
-The zoom map loads a complete, separately generated artifact and never enters
-the detailed residency manager. Where one texture is unsafe, its internal
-storage becomes tiles or multiple resolutions; absent fine detail falls back to
-the complete base layer rather than a hole.
+The WML arc owns the always-available complete map and guarantees that opening
+it never enters the detailed residency manager. Arc B may share generated-world
+identity, library lifetime, and publication infrastructure with WML, but it does
+not define, write, load, cache, or gate map pages.
 
 ### Metrics and observability
 
@@ -733,11 +747,11 @@ targeted world sizes exceeding an acceptable ceiling.
 If they do not, Arc A still stands on its own: it fixes observed correctness
 defects that have nothing to do with how much memory a chunk costs.
 
-### D-18. Zoom output is a generated artifact independent of detailed residency
+### D-18. World-map artifacts remain independent of detailed residency
 
-The zoom map is already derived from `WorldGenParams` rather than from resident
-chunks. Arc B makes that explicit in storage; the behavioural rule that opening
-the map never requests gameplay chunks holds throughout.
+WML owns the generated map artifact and its storage representation. This arc
+retains only the cross-arc invariant that opening the map never requests or
+reserves detailed gameplay chunks.
 
 ### D-19. Regeneration is a compatibility-checked fallback
 
@@ -780,10 +794,11 @@ Manual and autosave state is durable; progress after the last completed save may
 be lost in a crash. Automatic crash recovery is separate complexity outside this
 arc.
 
-### D-24. The zoom map always renders and never depends on detailed chunks
+### D-24. WML owns complete-map availability
 
-Its internal large-world representation may be tiled or multi-resolution; a
-complete global layer is always available and never shows cache holes.
+The complete global map, fallback behavior, and absence of map cache holes are
+WML contracts. This arc neither duplicates those outcomes nor makes them depend
+on detailed chunks.
 
 ## Open questions
 
@@ -811,15 +826,21 @@ stop-and-ask rule as Q-1.
 
 ### Q-3. What are the streaming target and the hard residency ceiling, numerically?
 
-Status: open, and answered by CRS-2 rather than by this document.
+Status: open. The platform memory envelope must be owner-approved before CRS-2
+can close Arc B's gate; CRS-2 then supplies the measurements used to tune the
+two runtime numbers inside that envelope.
 
 D-11 fixes the shape — two numbers, different jobs — but not their values. The
 streaming target is today's 200 and may stay there; it is a locality choice, and
 CRS-2 should confirm it is not accidentally the wrong order of magnitude. The
-hard residency ceiling is the one that matters: it must be large enough that a
-legitimate `--dump` region and every gameplay reservation fit comfortably, and
-small enough to prevent process death. CRS-2 reports the measured per-chunk cost
-and proposes both; the maintainer sets them.
+hard residency ceiling must be large enough that a legitimate `--dump` region
+and every gameplay reservation fit comfortably, and small enough to prevent
+process death. Before measuring, the maintainer approves a platform memory
+envelope and the supported WML world-size range. CRS-2 measures per-chunk cost,
+projects the detailed working set against that independent envelope, and
+proposes the target and ceiling. Arc B opens only if the supported working set
+cannot remain within the approved envelope; the measurement does not choose its
+own pass threshold.
 
 ### Q-4. Should a refused reservation block or fail? *(Gates CRS-4)*
 
@@ -892,7 +913,7 @@ Each slice is intended to fit one pull request. Issue processing may split a
 slice if repository evidence proves it cannot be reviewed safely as one PR, but
 must preserve the dependency order and update both this plan and the ledger.
 
-## Arc A — residency correctness
+**Arc A — residency correctness**
 
 ### CRS-1. Centralize chunk demand and canonical chunk identity
 
@@ -922,7 +943,9 @@ must preserve the dependency order and update both this plan and the ledger.
 - **Propose both of D-11's numbers** — the streaming trim target and the hard
   residency ceiling — with the measured evidence for each, for the maintainer to
   set under Q-3. CRS-4 cannot be implemented until they exist.
-- Write the results into this document, and record whether Arc B's gate opens.
+- Project detailed residency at the supported WML world-size range against
+  Q-3's independently approved platform memory envelope. Write the results into
+  this document and record whether Arc B's gate opens.
 - **Depends on:** CRS-1. **Independent** of every other Arc A slice and **can
   land first** among them.
 
@@ -1005,29 +1028,36 @@ must preserve the dependency order and update both this plan and the ledger.
 - Record whether D-20's hibernation revival condition is met.
 - **Depends on:** CRS-4, CRS-5, CRS-6, CRS-7.
 
-## Arc B — capacity and streaming *(gated)*
+**Arc B — capacity and streaming *(gated)***
 
-**Gate:** CRS-2's measurement shows resident bytes at the targeted world sizes
-exceeding the ceiling set for Q-3. Until that is recorded in §Measurements, every
-slice below is correctly dispositioned `[deferred]` on this precondition.
+**Gate:** CRS-2's measurement shows that the detailed working set required at
+the supported WML world sizes cannot remain within Q-3's independently approved
+platform memory envelope. WML-3/WML-4's generated-world identity and shared
+library capabilities must also have landed before CRS-9. Until the measurement
+is recorded in §Measurements, every Arc B slice is correctly dispositioned
+`[deferred]` on the memory-envelope precondition.
 
 ### CRS-9. Define the versioned generated-world bundle and base-chunk record
 
 - Resolve Q-1 and Q-2 with focused size, cold-read and generation-cost
   prototypes; stop for a maintainer decision before freezing either format if
   the documented measurement rules do not yield a clear choice.
-- Freeze manifest, index, checksum, `BaseChunkV1` and zoom-page DTO contracts.
-- Define world, generator and content identity and compatibility rules.
+- Extend the WML shared-library manifest with an indexed, checksummed,
+  versioned `BaseChunkV1` artifact; do not redefine the map-page DTO or map
+  artifact format.
+- Consume WML's generated-world identity and library lifecycle while defining
+  base-chunk generator/content compatibility rules.
 - Implement atomic incomplete/complete publication and corruption detection in
   isolation from runtime loading.
-- **Depends on:** the Arc B gate. Logically independent of Arc A.
+- **Depends on:** the Arc B gate and the landed WML-3/WML-4 capabilities.
+  Logically independent of Arc A.
 
-### CRS-10. Write base chunks and the reusable zoom artifact during world generation
+### CRS-10. Write base-chunk artifacts during world generation
 
 - Stream every physical canonical base chunk into indexed bundle shards during
   finite-world creation without retaining all detailed chunks at once.
-- Store the complete reusable zoom base plus any internal fine-detail data.
-- Verify the complete inventory and atomically publish the manifest.
+- Verify the complete base-chunk inventory and atomically publish its manifest
+  extension without republishing or embedding WML map artifacts.
 - Measure generation time, peak memory, bundle size and compression.
 - Register the published bundle in the shared world library under D-21's identity.
 - **Depends on:** CRS-9.
@@ -1071,26 +1101,21 @@ slice below is correctly dispositioned `[deferred]` on this precondition.
 
 ### CRS-14. Keep the complete zoom map available at large world sizes
 
-- Load a complete separately generated zoom artifact from the bundle; opening it
-  never enters the detailed residency manager.
-- Preserve an always-available complete base representation, including when no
-  detailed chunks are resident.
-- Replace one unsafe whole-world atlas with internal texture-dimension-safe tiles
-  or multiple resolutions; absent fine detail falls back to the complete base.
-- Retain live icon and discovery overlays and preserve current pixels and
-  interaction coordinates at existing sizes.
-- **Depends on:** CRS-10. **Independent** of CRS-11 through CRS-13 and **not on
-  the critical path**.
+> **Disposition:** No separate issue — WML-5 through WML-15 own deterministic
+> map pages, codecs, the map-artifact format, publication, recovery, bounded CPU
+> and GPU caches, rendering, analytical modes, runtime tuning, and legacy-atlas
+> retirement. WML-16 owns the final reconciliation with this streaming arc.
 
 ### CRS-15. Add bundle corruption, latency, and pressure gates
 
 - Add bundle corruption and partial-publication recovery probes.
-- Add the performance probe recording bundle size, worldgen write overhead, cold
-  and warm chunk latency, save-load time, zoom-page upload time and resident high
+- Add the performance probe recording base-chunk artifact size, worldgen write
+  overhead, cold and warm chunk latency, save-load time, and resident high
   water.
-- Establish documented latency and high-water baselines from measurements, then
-  gate regressions at stable thresholds.
-- **Depends on:** CRS-9, CRS-10, CRS-11, CRS-12, CRS-13, CRS-14, and CRS-8.
+- Establish documented base-chunk latency and high-water baselines from
+  measurements, then gate regressions at stable thresholds.
+- **Depends on:** CRS-9, CRS-10, CRS-11, CRS-12, CRS-13, and CRS-8. WML owns its
+  own map corruption, upload, latency, and pressure gates.
 
 ## Source notes
 
@@ -1111,3 +1136,5 @@ slice below is correctly dispositioned `[deferred]` on this precondition.
   `src/World/Flora/Harvest.hs`.
 - Location materialization: `scripts/location_stamper.lua`,
   `scripts/locations.lua`, and `src/World/Thread/ChunkLoading.hs`.
+- Complete-map representation and shared generated-world library authority:
+  `docs/world_map_level_of_detail_design.md`.

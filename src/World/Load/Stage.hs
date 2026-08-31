@@ -42,6 +42,7 @@ import World.Load.Types (StagedPage(..), StagedSession(..))
 import Structure.Types (emptyChunkStructures)
 import World.Generate (generateChunk, cameraChunkCoord)
 import World.Generate.Arena (generateArenaChunks, arenaGenForSeed)
+import World.Plant.Validate (revalidatePlantDesignations)
 import World.Grid (worldToGrid)
 import World.Chunk.Queue (chunkQueueCanon, initialChunkQueue)
 import World.Plate (elevationAtGlobal)
@@ -451,6 +452,17 @@ stagePage logger registry palette catalog buildingDefs unitDefs
                   }
             else pure Nothing
           pure (seeds, stamps, mCam, mZoomAtlasVal, mPreviewVal)
+
+    -- #1858: the third publication boundary, and the one a save has to
+    -- pass through. Designations restore VERBATIM above — the record
+    -- keeps its serialized shape and its "Persist exactly"
+    -- classification — and are reconciled HERE against the terrain this
+    -- page just reconstructed, so a save whose ground is no longer
+    -- tilled cannot restore a stranded designation. The arena branch
+    -- rebuilt every chunk and the ordinary branch has only its centre,
+    -- so most records are still UNKNOWN at this point and are retained
+    -- for 'World.Thread.ChunkLoading' to resolve as the queue drains.
+    _ ← revalidatePlantDesignations logger worldState
 
     let (restoredBm, bOrphans) = fromBuildingSnapshot pid buildingDefs (wpsBuildings wps)
         (restoredUm, uOrphans, uUnknownFactions) =

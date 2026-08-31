@@ -9,6 +9,16 @@
 --   designation. The farm AI (scripts/unit_ai.lua, #336) is the
 --   eventual consumer. Split out of "World.Thread.Command.Cursor"
 --   (issue #564).
+--
+--   #1858: the soil half of that commit is no longer the last word on
+--   it. Tilled soil is a CONTINUOUS requirement — "World.Plant.Validate"
+--   re-resolves it after every write that can move a designated tile's
+--   resolved surface and whenever terrain becomes resident, and REMOVES
+--   a record whose soil is resident and lost. Both sides share the one
+--   'isTilledSoil' predicate deliberately, so admission and
+--   invalidation cannot drift; the CROP half stays admission-only, as
+--   growing the catalogue must not retroactively cancel a player's
+--   designation.
 module World.Thread.Command.Cursor.Plant
     ( handleWorldDesignatePlantCommand
     , handleWorldCancelPlantCommand
@@ -43,6 +53,12 @@ import World.Thread.Command.Cursor.Common (recordMissingWorldOutcome)
 --   AI from spending a full walk-and-work cycle on a designation that
 --   was always going to fail), or cropName doesn't name a registered
 --   plantable-crop species.
+--
+--   The tilled-soil read below is the ADMISSION half of #1858's
+--   continuous check; 'World.Plant.Validate.plantSoilState' is the
+--   other half and resolves the tile through the same steps — the same
+--   canonical frame, the same 'lcSurfaceMap', the same bounded 'ctVeg'
+--   read and the same 'isTilledSoil'. Change one and change the other.
 handleWorldDesignatePlantCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → Text → IO ()
 handleWorldDesignatePlantCommand env logger pageId gx gy cropName = do

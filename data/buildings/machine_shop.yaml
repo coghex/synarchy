@@ -33,3 +33,20 @@ buildings:
     # recipes carry a recipe-level power_draw (#590).
     operations:
       - machine
+
+    # Construction progress is driven by build_work, so it freezes when
+    # workers stop. With no "built" animation the final frame pins as the
+    # completed sprite, matching default.png exactly with no visual snap.
+    state_animations:
+      appearing: machine-shop-construct
+
+    animations:
+      machine-shop-construct:
+        fps: 4
+        loop: false
+        frames:
+          default:
+            - "assets/textures/buildings/machine_shop/construct/frame_001.png"
+            - "assets/textures/buildings/machine_shop/construct/frame_002.png"
+            - "assets/textures/buildings/machine_shop/construct/frame_003.png"
+            - "assets/textures/buildings/machine_shop/construct/frame_004.png"

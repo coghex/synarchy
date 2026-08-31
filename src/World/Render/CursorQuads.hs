@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict #-}
 module World.Render.CursorQuads
     ( renderWorldCursorQuads
+    , renderWorldCursorQuadsScanned
     ) where
 
 import UPrelude
@@ -23,7 +24,8 @@ import World.Generate.Coordinates
     (globalToChunk, canonicalTileFrame, localizeTileToAnchor)
 import World.Mine.Types (MineDesignation(..))
 import World.Construct.Types (ConstructDesignation(..), ConstructTarget(..)
-                            , constructDesignationFootprint)
+                            , constructDesignationFootprint
+                            , constructDesignationFootprintSize)
 import World.Chop.Types (ChopDesignation(..))
 import World.Till.Types (TillDesignation(..))
 import World.Plant.Types (PlantDesignation(..))
@@ -42,7 +44,30 @@ maxMinePreviewSide ∷ Int
 maxMinePreviewSide = 64
 
 renderWorldCursorQuads ∷ EngineEnv → WorldState → Float → IO (V.Vector SortableQuad)
-renderWorldCursorQuads env worldState tileAlpha = do
+renderWorldCursorQuads env worldState tileAlpha =
+    snd ⊚ renderWorldCursorQuadsScanned env worldState tileAlpha
+
+-- | 'renderWorldCursorQuads' with the scene-assembly telemetry (#1921)
+--   this pass contributes: the marker-tile CANDIDATES it evaluated,
+--   paired with the quads it produced.
+--
+--   \"Candidates\" is the set the ACTIVE tool mode's returned vector is
+--   built from, and nothing else: the always-on marker builders (mine,
+--   chop, till, plant, and construction designations expanded to their
+--   full footprints) plus that mode's own hover, selection and preview
+--   builders. This module is @Strict@, so every builder's bindings are
+--   forced whichever mode is active — but a builder whose quads the
+--   mode does not return contributed no candidate to the answer, and
+--   counting it would pair a scanned total with an unrelated emitted
+--   one. Pinning the count to the returned set also keeps it correct if
+--   the unused builders ever become lazy.
+--
+--   A candidate is counted BEFORE per-chunk visibility culling, and one
+--   candidate may still emit two quads (a background and a foreground),
+--   so no @emitted <= scanned@ relation holds here.
+renderWorldCursorQuadsScanned
+    ∷ EngineEnv → WorldState → Float → IO (Int, V.Vector SortableQuad)
+renderWorldCursorQuadsScanned env worldState tileAlpha = do
     let rv = toRenderViewCapability env
     camera   ← readIORef (rvCameraRef rv)
     tileData ← readIORef (wsTilesRef worldState)
@@ -183,18 +208,32 @@ renderWorldCursorQuads env worldState tileAlpha = do
 
     -- Plant-designation markers (#335): world annotations like the
     -- till markers, visible in every tool mode. Rendered from the
-    -- surface z stored at designation time.
+    -- surface z stored at designation time, through #1857's FLAT
+    -- top-surface helper — crop planting is work on level ground, so
+    -- the authored alpha owns the whole shape and no three-face mask
+    -- applies (#1858 requirement 1; the same one call Till makes, not
+    -- a copy of it).
+    --
+    -- The residency guard is a DRAWING suppression, never a validity
+    -- filter: a designation whose chunk is not resident is UNKNOWN, so
+    -- it is kept and simply not drawn until 'World.Plant.Validate' can
+    -- resolve it (requirement 6). Validity itself is world-owned and
+    -- lives entirely in that module — a resident record reaching here
+    -- is drawn, never re-judged. #1175: the storing chunk comes from
+    -- the canonical frame, so a legacy u-alias key resolves too.
     plantDesigns ← readIORef (wsPlantDesignationsRef worldState)
     let plantDesignQuads = case plantDesignTexture cs' of
             Nothing → V.empty
             Just tex
                 | HM.null plantDesigns → V.empty
                 | otherwise → V.fromList
-                    [ worldCursorToQuad lookupSlot lookupFmSlot textures
+                    [ worldFlatCursorToQuad lookupSlot lookupFmSlot textures
                           facing dgx dgy (ptZ pd) zSlice effectiveDepth
                           tileAlpha wrapOff tex
                     | ((dgx, dgy), pd) ← HM.toList plantDesigns
-                    , let (chunkCoord, _) = globalToChunk dgx dgy
+                    , let (chunkCoord, _, _) =
+                              canonicalTileFrame worldSize dgx dgy
+                    , Just _ ← [lookupChunk chunkCoord tileData]
                     , Just wrapOff ← [isChunkVisibleWrapped facing worldSize
                                           vb camX camY chunkCoord]
                     ]
@@ -326,7 +365,11 @@ renderWorldCursorQuads env worldState tileAlpha = do
         -- would otherwise span the whole world here exactly as it would
         -- at commit. Re-express it against the anchor first.
         localizeHover ax ay hx hy = localizeTileToAnchor worldSize (ax, ay) (hx, hy)
-        minePreviewQuads = case (mineAnchor cs', hoverResult, worldCursorTexture cs') of
+        -- (#1921) The candidate count is the previewed RECTANGLE's
+        -- area, derived arithmetically rather than by re-walking it:
+        -- every tile in the rectangle is a candidate the comprehension
+        -- below evaluates, before the per-tile z and visibility filters.
+        minePreview = case (mineAnchor cs', hoverResult, worldCursorTexture cs') of
             (Just (ax, ay), Just (hxRaw, hyRaw, _, _, _), Just tex)
                 | Just anchorZ ← surfaceZAt ax ay →
                 let (hx, hy) = localizeHover ax ay hxRaw hyRaw
@@ -336,7 +379,8 @@ renderWorldCursorQuads env worldState tileAlpha = do
                     xHi = max ax hx'
                     yLo = min ay hy'
                     yHi = max ay hy'
-                in V.fromList
+                in ( (xHi - xLo + 1) * (yHi - yLo + 1)
+                   , V.fromList
                     [ worldCursorToQuad lookupSlot lookupFmSlot textures
                           facing gx gy z zSlice effectiveDepth
                           tileAlpha wrapOff tex
@@ -347,8 +391,9 @@ renderWorldCursorQuads env worldState tileAlpha = do
                     , let (chunkCoord, _) = globalToChunk gx gy
                     , Just wrapOff ← [isChunkVisibleWrapped facing worldSize
                                           vb camX camY chunkCoord]
-                    ]
-            _ → V.empty
+                    ] )
+            _ → (0, V.empty)
+        minePreviewQuads = snd minePreview
 
     -- Structure-piece designation preview (#403 — folded into the build
     -- tool): anchor→hover rectangle, mirroring the mine preview
@@ -360,7 +405,7 @@ renderWorldCursorQuads env worldState tileAlpha = do
     -- from the anchor, instead of the filled rectangle — the build
     -- tool's commit (scripts/build_tool.lua) snaps the SAME way before
     -- calling construction.designate, so what previews is what commits.
-    let constructPreviewQuads = case (constructAnchor cs', hoverResult, worldCursorTexture cs') of
+    let constructPreview = case (constructAnchor cs', hoverResult, worldCursorTexture cs') of
             (Just (ax, ay), Just (hxRaw, hyRaw, _, _, _), Just tex)
                 | Just anchorZ ← surfaceZAt ax ay →
                 let (hx, hy) = localizeHover ax ay hxRaw hyRaw
@@ -377,7 +422,12 @@ renderWorldCursorQuads env worldState tileAlpha = do
                             [ (gx, gy)
                             | gx ← [min ax hx' .. max ax hx']
                             , gy ← [min ay hy' .. max ay hy'] ]
-                in V.fromList
+                -- (#1921) 'tiles' IS the candidate set here — line mode
+                -- and rectangle mode enumerate different shapes — so
+                -- the count comes from the very list the quads are
+                -- built from.
+                in ( length tiles
+                   , V.fromList
                     [ worldCursorToQuad lookupSlot lookupFmSlot textures
                           facing gx gy z zSlice effectiveDepth
                           tileAlpha wrapOff tex
@@ -387,14 +437,15 @@ renderWorldCursorQuads env worldState tileAlpha = do
                     , let (chunkCoord, _) = globalToChunk gx gy
                     , Just wrapOff ← [isChunkVisibleWrapped facing worldSize
                                           vb camX camY chunkCoord]
-                    ]
-            _ → V.empty
+                    ] )
+            _ → (0, V.empty)
+        constructPreviewQuads = snd constructPreview
 
     -- Chop tool: anchor→hover rectangle preview. Unlike the mine /
     -- construct previews there is NO per-z-level filter — the commit
     -- takes wood-tagged flora at any surface z (forests span slopes) —
     -- so every loaded tile in the rectangle previews at its own z.
-    let chopPreviewQuads = case (chopAnchor cs', hoverResult, worldCursorTexture cs') of
+    let chopPreview = case (chopAnchor cs', hoverResult, worldCursorTexture cs') of
             (Just (ax, ay), Just (hxRaw, hyRaw, _, _, _), Just tex) →
                 let (hx, hy) = localizeHover ax ay hxRaw hyRaw
                     hx' = clampSide ax hx
@@ -403,7 +454,8 @@ renderWorldCursorQuads env worldState tileAlpha = do
                     xHi = max ax hx'
                     yLo = min ay hy'
                     yHi = max ay hy'
-                in V.fromList
+                in ( (xHi - xLo + 1) * (yHi - yLo + 1)
+                   , V.fromList
                     [ worldCursorToQuad lookupSlot lookupFmSlot textures
                           facing gx gy z zSlice effectiveDepth
                           tileAlpha wrapOff tex
@@ -413,13 +465,14 @@ renderWorldCursorQuads env worldState tileAlpha = do
                     , let (chunkCoord, _) = globalToChunk gx gy
                     , Just wrapOff ← [isChunkVisibleWrapped facing worldSize
                                           vb camX camY chunkCoord]
-                    ]
-            _ → V.empty
+                    ] )
+            _ → (0, V.empty)
+        chopPreviewQuads = snd chopPreview
 
     -- Till tool: anchor→hover rectangle preview. Per-z-level like mine/
     -- construct — a farmed field is flat ground, unlike chop's
     -- slope-spanning forest sweep.
-    let tillPreviewQuads = case (tillAnchor cs', hoverResult, tillDesignTexture cs') of
+    let tillPreview = case (tillAnchor cs', hoverResult, tillDesignTexture cs') of
             (Just (ax, ay), Just (hxRaw, hyRaw, _, _, _), Just tex)
                 | Just anchorZ ← surfaceZAt ax ay →
                 let (hx, hy) = localizeHover ax ay hxRaw hyRaw
@@ -429,7 +482,8 @@ renderWorldCursorQuads env worldState tileAlpha = do
                     xHi = max ax hx'
                     yLo = min ay hy'
                     yHi = max ay hy'
-                in V.fromList
+                in ( (xHi - xLo + 1) * (yHi - yLo + 1)
+                   , V.fromList
                     [ worldFlatCursorToQuad lookupSlot lookupFmSlot textures
                           facing gx gy z zSlice effectiveDepth
                           tileAlpha wrapOff tex
@@ -440,22 +494,60 @@ renderWorldCursorQuads env worldState tileAlpha = do
                     , let (chunkCoord, _) = globalToChunk gx gy
                     , Just wrapOff ← [isChunkVisibleWrapped facing worldSize
                                           vb camX camY chunkCoord]
-                    ]
-            _ → V.empty
+                    ] )
+            _ → (0, V.empty)
+        tillPreviewQuads = snd tillPreview
 
     -- Mine + construction + chop + till markers are world annotations:
     -- shown in every tool mode. The mode only adds its own hover/preview
     -- on top.
     let markerQuads = designQuads <> constructDesignQuads <> chopDesignQuads
                     <> tillDesignQuads <> plantDesignQuads
+
+    -- Scene-assembly telemetry (#1921). Each count is the number of
+    -- marker-tile CANDIDATES the matching builder enumerated, taken
+    -- before that builder's own per-chunk visibility cull — a builder
+    -- short-circuited by a missing texture or an empty designation map
+    -- enumerated nothing and contributes zero. 'markerScanned' is
+    -- always in the answer because the marker builders are; the rest
+    -- join it only in the modes whose quads they are part of, so the
+    -- reported scanned total always pairs with the returned vector.
+    let designationScanned tex m
+            | isNothing tex   = 0
+            | HM.null m       = 0
+            | otherwise       = HM.size m
+        markerScanned =
+            designationScanned (mineDesignTexture cs') designations
+          + designationScanned (chopDesignTexture cs') chopDesigns
+          + designationScanned (tillDesignTexture cs') tillDesigns
+          + designationScanned (plantDesignTexture cs') plantDesigns
+          -- A construction designation is stored anchor-only and
+          -- expands to the def's whole footprint (#807), so its
+          -- candidates are the FOOTPRINT tiles, not the map entries.
+          -- Folded strictly over the map itself rather than over a
+          -- second 'HM.toList': requirement 9 forbids the counter
+          -- allocating in proportion to the candidates it counts, and
+          -- an empty map folds to 0 without a guard.
+          + HM.foldl' (\acc cd →
+                if isJust (constructTexFor cd)
+                then acc + constructDesignationFootprintSize (bmDefs bm) cd
+                else acc) 0 constructDesigns
+        hoverScanned  = if isJust hoverResult then 1 else 0
+        selectScanned = if isJust (worldSelectedTile cs') then 1 else 0
     return $ case toolMode of
-        InfoTool  → markerQuads <> hoverQuads <> selectQuads
-        MineTool  → markerQuads <> hoverQuads <> minePreviewQuads
+        InfoTool  → ( markerScanned + hoverScanned + selectScanned
+                    , markerQuads <> hoverQuads <> selectQuads )
+        MineTool  → ( markerScanned + hoverScanned + fst minePreview
+                    , markerQuads <> hoverQuads <> minePreviewQuads )
         -- #403: the build tool now drives construction designation too
         -- (structure-piece rectangles), so it gets the same preview the
         -- standalone construct tool used to.
-        BuildTool → markerQuads <> hoverQuads <> constructPreviewQuads
-        ChopTool  → markerQuads <> hoverQuads <> chopPreviewQuads
-        TillTool  → markerQuads <> hoverQuads <> tillPreviewQuads
-        PlantTool → markerQuads <> hoverQuads
-        _         → markerQuads
+        BuildTool → ( markerScanned + hoverScanned + fst constructPreview
+                    , markerQuads <> hoverQuads <> constructPreviewQuads )
+        ChopTool  → ( markerScanned + hoverScanned + fst chopPreview
+                    , markerQuads <> hoverQuads <> chopPreviewQuads )
+        TillTool  → ( markerScanned + hoverScanned + fst tillPreview
+                    , markerQuads <> hoverQuads <> tillPreviewQuads )
+        PlantTool → ( markerScanned + hoverScanned
+                    , markerQuads <> hoverQuads )
+        _         → (markerScanned, markerQuads)

@@ -91,7 +91,6 @@ import shutil
 import socket
 import stat
 import subprocess
-import sys
 import tempfile
 import time
 from collections import Counter
@@ -99,8 +98,16 @@ from pathlib import Path
 from probelib import (FixtureNotRegistered, capture_request_id, quit_engine,
                       boot, load_fixture_yaml, send, wait_load_published,
                       wait_save_complete)
+from run_probes import FailureEmitter   # durable failure records (#1982)
 
 LOG = "/tmp/location_stamp_idempotent_engine.log"
+#: The engine log the phase now running writes to. `report` reads a
+#: bounded tail of it, which is what tells a fixture failure apart from
+#: a product failure without rerunning the probe (#1982).
+_current_log: list[str] = [LOG]
+#: #1982 — this run's durable failure records, built at import so the
+#: offset each carries is measured from the probe's own start.
+FAILURE = FailureEmitter("location_stamp_idempotent_probe")
 LOCATION_YAML = "/tmp/location_stamp_idempotent_probe_loc.yaml"
 LOCATION_ID = "stamp_probe_room"
 REPO = Path(__file__).resolve().parent.parent
@@ -242,7 +249,11 @@ def boot_isolated(port: int, root: str, log: str = LOG):
     path leave only the LAST one's output on disk. This probe now judges
     each boot on its own stamping diagnostics, which makes a per-boot
     path load-bearing rather than cosmetic.
+
+    The path is also recorded as the CURRENT log, so `report` can retain
+    a bounded excerpt of whichever phase's engine was last live (#1982).
     """
+    _current_log[0] = log
     return boot(port, log=log, args=["--resource-root", root])
 
 
@@ -799,7 +810,7 @@ def main() -> int:
         # requirement 6 forbids.
         leftover = remove_isolated_root(base)
         if leftover:
-            print(f"FAIL: {leftover}", file=sys.stderr)
+            FAILURE.check(leftover)
     return 1 if leftover else rc
 
 
@@ -813,11 +824,15 @@ def report(failures: list[str], setup_failures: list[str]) -> int:
     the label separates "try another seed" from "there is a bug".
     """
     print("-" * 56)
-    for f in setup_failures:
-        print(f"SETUP FAILURE: {f}", file=sys.stderr)
-    for f in failures:
-        print(f"FAIL: {f}", file=sys.stderr)
     if setup_failures or failures:
+        # Durable records rather than the unflushed stderr prints these
+        # were (#1982). `run_probes.py` merges this probe's stderr into a
+        # block-buffered stdout pipe and prints only its last 25 lines, so
+        # a printed `FAIL:` overtook the buffered checks and landed above
+        # the retained tail. These are read back from the COMPLETE
+        # capture, and the two vocabularies survive as distinct kinds.
+        FAILURE.report(failures, setup_failures)
+        FAILURE.context_log(_current_log[0])
         return 1
     print("ALL CHECKS PASSED")
     return 0
