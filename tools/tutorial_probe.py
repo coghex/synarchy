@@ -59,9 +59,22 @@ What it proves (issue #922 requirements 2 and 3):
      conditions established rather than hoped for -- see
      `phase_pre_latched_reveal`), the already-latched branch must become
      observable in the checklist rather than latching and hiding in the
-     same instant -- and removing the supplies afterwards must still
-     uncheck the live subobjectives, keep the branch observable, and
-     never touch the durable completion.
+     same instant.
+  9. (#1941, the same boot) That suppression is a LOAN, not a second
+     hide rule. The gameplay HUD is booted for real and the checklist
+     opened for real: a visible HUD over a COLLAPSED panel still
+     presents nothing, opening it renders the whole branch, and the
+     update tick that reports the presentation retires it -- after
+     which the ordinary #958 hide rule empties the checklist while the
+     supplies are still carried and every latch is intact. Removing the
+     supplies then brings the RETIRED branch back (requirement 3, now
+     under the ordinary rule rather than a suppression).
+ 10. (#1941, a FOURTH boot) A save taken with that branch finished and
+     retired reloads in a fresh process without returning any
+     already-retired ancestor to the active checklist -- across the
+     evaluation tick that re-checks both subobjectives against the same
+     loaded world, which is the exact tick that used to resurrect all
+     five rows.
 
 Two deliberate departures from "just play the game", both forced by the
 shipped content and both documented rather than worked around:
@@ -112,9 +125,13 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG_A = "/tmp/tutorial_probe_engine_a.log"
 LOG_B = "/tmp/tutorial_probe_engine_b.log"
 LOG_C = "/tmp/tutorial_probe_engine_c.log"
+LOG_D = "/tmp/tutorial_probe_engine_d.log"
 
 PAGE = "tutorial"
 SLOT = "tutorial_probe_slot"
+#: The pre-latched leg's own save slot, kept apart from SLOT so the two
+#: round trips can never observe each other's generation.
+STICKY_SLOT = "tutorial_probe_sticky_slot"
 
 PORTAL_DEF = "acolyte_portal"
 CANTEEN_DEF = "canteen_steel_2l"
@@ -845,6 +862,69 @@ def hud_open(port: int) -> str:
                 "return tostring(h.dump().open)", timeout=15.0)
 
 
+def show_gameplay_hud(port: int) -> None:
+    """Boot the REAL scripts/hud.lua and show it, so the checklist has a
+    visible page to be presented on.
+
+    #1941's acknowledgement is gated on `hud.visible` -- the flag
+    scripts/hud.lua's own show() sets, and the one
+    scripts/tutorial_hud.lua mirrors into the page visibility it paints
+    by -- so a run that never boots the gameplay HUD can never present
+    anything, which is exactly why every leg above this one leaves the
+    branch sticky. Nothing here is stubbed: the module, its UI build and
+    its show path are the shipped ones, reached the same way ui_manager
+    reaches them. Its font and box textures are nil headless (there is
+    no GPU font atlas), which leaves the rows unlabelled -- the viewport
+    hit boxes that presentation is actually measured by are laid out
+    either way.
+    """
+    got = send(port,
+               "local hud = require('scripts.hud'); "
+               "hud.init(nil, nil, 1280, 720); hud.createUI(); hud.show(); "
+               "local th = package.loaded['scripts.tutorial_hud']; "
+               "if th then th.reflow(1280, 720) end; "
+               "return tostring(hud.visible)", timeout=60.0)
+    if got != "true":
+        raise ProbeError(f"scripts/hud.lua would not come up visible: {got!r}")
+
+
+def open_checklist(port: int) -> list[str]:
+    """Open the panel and report the rows THAT BUILD laid out, in ONE
+    console chunk.
+
+    The two halves cannot be separate commands: the retirement they
+    exist to observe takes exactly one update tick, so a second
+    round-trip to read the rows would usually arrive after the panel had
+    already been rebuilt empty and would report a race, not a defect.
+    One chunk runs to completion on the Lua thread, so this is the build
+    itself talking.
+    """
+    raw = send(port,
+               "local th = package.loaded['scripts.tutorial_hud']; "
+               "if not th then return '' end; "
+               "th.setOpen(true); "
+               "return table.concat(th.dump().rowIds, ',')", timeout=15.0)
+    return [r for r in raw.split(",") if r]
+
+
+def checklist_rows(port: int) -> list[str]:
+    """The ids the tutorial panel has actually LAID OUT -- what the
+    player is looking at, as opposed to what the model reports active.
+    Empty while the panel is collapsed, by construction."""
+    raw = send(port,
+               "local th = package.loaded['scripts.tutorial_hud']; "
+               "if not th then return '' end; "
+               "return table.concat(th.dump().rowIds, ',')", timeout=15.0)
+    return [r for r in raw.split(",") if r]
+
+
+def hud_visible(port: int) -> str:
+    return send(port,
+                "local th = package.loaded['scripts.tutorial_hud']; "
+                "if not th then return 'absent' end; "
+                "return tostring(th.dump().hudVisible)", timeout=15.0)
+
+
 # --------------------------------------------------------------------------
 # Phases
 # --------------------------------------------------------------------------
@@ -1091,7 +1171,8 @@ def phase_reload(port: int, expected: list[str]) -> None:
 
 
 # --------------------------------------------------------------------------
-# #996: a branch that latches BEFORE it is ever revealed
+# #996 / #1941: a branch that latches BEFORE it is ever revealed, is
+# shown once, and then retires
 #
 # A separate boot and a separate acolyte on purpose: by the time the main
 # flow above reaches "Prepare an expedition", "Secure water source" has
@@ -1214,7 +1295,8 @@ def phase_pre_latched_reveal(port: int, uid: int, sx: int, sy: int,
     # place_portal/secure_water still leave the default checklist view
     # (they were revealed while still incomplete, so the ordinary
     # hide-on-completion rule applies to them unchanged); only the
-    # already-latched prepare branch is the new, sticky exception.
+    # already-latched prepare branch carries the #996 suppression -- and
+    # only until it has been presented, which the next phase does.
     check("the already-latched prepare branch is observable in authored "
           "preorder, not an empty checklist (#996)",
           p.active_row_ids == [OBJ_EXPEDITION, SUB_WATER, SUB_FOOD],
@@ -1233,37 +1315,193 @@ def phase_pre_latched_reveal(port: int, uid: int, sx: int, sy: int,
           and (p.row(SUB_FOOD) or {}).get("active") is True, str(p))
 
 
+def phase_pre_latched_presentation(port: int, uid: int) -> None:
+    """#1941: the #996 suppression is a LOAN, and this is where it is
+    repaid.
+
+    Nothing before this point in the leg can present anything -- the
+    gameplay HUD has never been shown, so the checklist page is not
+    painted. Booting the REAL hud and opening the REAL panel is what
+    puts the pre-latched branch in front of the player; the update tick
+    that follows reports it presented, the suppression retires, and the
+    ordinary #958 hide rule empties the checklist -- with the supplies
+    still carried and every durable latch untouched.
+    """
+    show_gameplay_hud(port)
+    visible = hud_visible(port)
+    check("the tutorial checklist page is painted once the gameplay HUD "
+          "is showing", visible == "true", visible)
+
+    # A visible HUD is not enough on its own: a COLLAPSED panel lays out
+    # no rows, so ticking against it presents nothing. Give the update
+    # tick a real window to get this wrong in.
+    time.sleep(2.0)
+    p = progress(port)
+    check("a collapsed panel presents nothing, however long the HUD is "
+          "visible -- the branch is still waiting",
+          OBJ_EXPEDITION in p.active_row_ids, str(p.active_row_ids))
+    check("and it really is collapsed", checklist_rows(port) == [],
+          str(checklist_rows(port)))
+
+    shown = open_checklist(port)
+    check("opening the panel renders the whole already-latched branch "
+          "(the #996 guarantee, unchanged)",
+          OBJ_EXPEDITION in shown and SUB_WATER in shown and SUB_FOOD in shown,
+          str(shown))
+
+    p = settle(port, lambda s: OBJ_EXPEDITION not in s.active_row_ids,
+               seconds=20.0)
+    check("having been presented, the branch retires from the active "
+          "checklist", OBJ_EXPEDITION not in p.active_row_ids,
+          str(p.active_row_ids))
+    check("its subobjective rows retire with it",
+          SUB_WATER not in p.active_row_ids
+          and SUB_FOOD not in p.active_row_ids, str(p.active_row_ids))
+    check("the checklist reaches its EMPTY completed state -- the "
+          "shipped session's terminal branch no longer pins it open",
+          p.active_row_ids == [], str(p.active_row_ids))
+    check("the durable completions are untouched by the retirement",
+          p.is_completed(OBJ_EXPEDITION) and p.is_completed(OBJ_PORTAL)
+          and p.is_completed(OBJ_WATER), str(p))
+    check("retirement is a display transition, not a supply change -- "
+          "the acolyte is still provisioned",
+          p.is_checked(SUB_WATER) and p.is_checked(SUB_FOOD), str(p))
+
+    # poll_until answers on TRUTHINESS, and "empty" is the state being
+    # waited for, so the sentinel is a marker rather than the list.
+    settled = poll_until(10.0,
+                         lambda: "empty" if checklist_rows(port) == [] else None)
+    check("the open panel itself ends up empty, not merely the model",
+          settled == "empty", str(checklist_rows(port)))
+
+
 def phase_pre_latched_reversal(port: int, uid: int) -> None:
     """Removing the supplies afterwards must still uncheck the live
-    subobjectives, keep the branch observable, and never touch the
-    durable completion (the same reversal contract check 6 already
-    covers, now proven for a branch that started out sticky)."""
+    subobjectives, bring the branch back, and never touch the durable
+    completion.
+
+    Since #1941 this is the ORDINARY rule doing the work, not a
+    suppression: the composite retired above, and it returns for exactly
+    the reason any completed composite returns -- a live subobjective
+    came back off. That is requirement 3, proven on the branch that
+    started out sticky.
+    """
     strip_supplies(port, uid)
     p = settle(port, lambda s: not s.is_checked(SUB_WATER))
     check("removing the water unchecks the live water subobjective",
           p.is_checked(SUB_WATER) is False, str(p))
     check("removing the ration unchecks the live food subobjective",
           p.is_checked(SUB_FOOD) is False, str(p))
-    check("the prepare branch stays in the ACTIVE checklist rather than "
-          "vanishing (it never hides once already-latched-sticky)",
+    check("the RETIRED branch returns to the active checklist under the "
+          "ordinary hide rule, showing the unchecked rows",
           OBJ_EXPEDITION in p.active_row_ids and SUB_WATER in p.active_row_ids
           and SUB_FOOD in p.active_row_ids, str(p.active_row_ids))
     check("the composite's durable completion is untouched",
           p.is_completed(OBJ_EXPEDITION), str(p))
 
 
+def phase_pre_latched_resupply(port: int, uid: int) -> list[str]:
+    """Put the supplies back so the branch is FINISHED again, then save.
+
+    The state that goes to disk matters: a save taken with the
+    subobjectives unchecked would come back with the composite
+    legitimately active under the ordinary rule, and could not tell
+    #1941's load reconstruction from #996's old permanent one. Saving a
+    finished, retired branch is what makes the reload leg conclusive.
+    """
+    send(port, f"return unit.modifyItemFill({uid}, '{CANTEEN_DEF}', "
+               f"{EXPEDITION_WATER_L})", timeout=15.0)
+    send(port, f"return tostring(unit.addItem({uid}, '{RATIONS_DEF}', 0))",
+         timeout=15.0)
+    got = poll_until(20.0, lambda: carried(port, uid)[1] > 0)
+    if got is None:
+        raise ProbeError(f"acolyte {uid} never got its ration back")
+
+    p = settle(port, lambda s: s.active_row_ids == [], seconds=20.0)
+    check("re-satisfying the retired branch empties the checklist again, "
+          "with no second presentation needed",
+          p.active_row_ids == [], str(p.active_row_ids))
+
+    before = p.completed
+    accepted = send(port, f"return engine.saveWorld('{PAGE}', '{STICKY_SLOT}')",
+                    timeout=30.0)
+    if accepted != "true":
+        raise ProbeError(f"engine.saveWorld was not accepted: {accepted!r}")
+    req = capture_request_id(port, "return engine.getSaveStatus()")
+    ok, status = wait_save_complete(port, req) if req is not None else (False, None)
+    check("the retired-branch session saves through the real save barrier",
+          ok, str(status))
+    return before
+
+
+def phase_pre_latched_reload(port: int, expected: list[str]) -> None:
+    """#1941 requirement 4, in a FRESH PROCESS: a save whose tutorial was
+    already finished must not put the ancestors the player watched
+    retire back on the checklist.
+
+    Presentation is deliberately never persisted, so the load has no
+    history to restore -- it RECONSTRUCTS one, treating every id the
+    restored durable set already makes structurally reveal-eligible as
+    previously presented. The evaluator then re-checks both
+    subobjectives against the same loaded world the save was taken from,
+    which is precisely the tick that used to resurrect all five rows.
+    """
+    accepted = send(port, f"return engine.loadSave('{STICKY_SLOT}')", timeout=30.0)
+    if accepted != "true":
+        raise ProbeError(f"engine.loadSave was not accepted: {accepted!r}")
+    req = capture_request_id(port, "return engine.getLoadStatus()")
+    published, status = wait_load_published(port, request_id=req)
+    if not check("the retired-branch save loads and publishes in a fresh "
+                 "process", published, str(status)):
+        return
+
+    p = settle(port, lambda s: s.is_checked(SUB_WATER) and s.is_checked(SUB_FOOD),
+               seconds=45.0)
+    check("every completed full objective survives the round trip",
+          sorted(p.completed) == sorted(expected),
+          f"{sorted(p.completed)} != {sorted(expected)}")
+    check("the acolyte's supplies came back, so the evaluator re-checks "
+          "both subobjectives",
+          p.is_checked(SUB_WATER) and p.is_checked(SUB_FOOD), str(p))
+    open_state = hud_open(port)
+    check("the HUD comes back collapsed after a load", open_state == "false",
+          open_state)
+    check("the checklist stays EMPTY -- no already-retired ancestor is "
+          "returned to the active view (#1941)",
+          p.active_row_ids == [], str(p.active_row_ids))
+
+    # Not a single-frame answer: hold it across further evaluation ticks,
+    # since the defect this replaces was a tick recomputing the rows back.
+    time.sleep(2.0)
+    p = progress(port)
+    check("and it stays empty across further evaluation ticks",
+          p.active_row_ids == [], str(p.active_row_ids))
+    check("with every durable latch still intact underneath",
+          sorted(p.completed) == sorted(expected),
+          f"{sorted(p.completed)} != {sorted(expected)}")
+
+
 # --------------------------------------------------------------------------
 # Save-slot hygiene
 # --------------------------------------------------------------------------
-def remove_probe_slot() -> None:
-    """Delete only this probe's own save slot, under the repo's saves/."""
+def remove_probe_slot(slot: str = SLOT) -> None:
+    """Delete only one of this probe's own save slots, under the repo's
+    saves/. The name is checked against the probe's own two rather than
+    interpolated blind, so this can never reach a player slot."""
+    if slot not in (SLOT, STICKY_SLOT):
+        raise ProbeError(f"refusing to remove a slot this probe does not own: {slot!r}")
     saves = os.path.join(REPO_ROOT, "saves")
-    target = os.path.join(saves, SLOT)
-    if (os.path.basename(target) == SLOT
+    target = os.path.join(saves, slot)
+    if (os.path.basename(target) == slot
             and os.path.dirname(target) == saves
             and os.path.isdir(target)
             and not os.path.islink(target)):
         shutil.rmtree(target)
+
+
+def remove_probe_slots() -> None:
+    remove_probe_slot(SLOT)
+    remove_probe_slot(STICKY_SLOT)
 
 
 def main() -> int:
@@ -1273,7 +1511,7 @@ def main() -> int:
     ap.add_argument("--port", type=int, default=9424)
     args = ap.parse_args()
 
-    remove_probe_slot()
+    remove_probe_slots()
     started = time.time()
 
     print(f"== boot 1: build the session (port {args.port}) ==")
@@ -1335,6 +1573,7 @@ def main() -> int:
     print(f"== boot 3: a branch that latches before it is ever revealed "
           f"(#996, port {args.port}) ==")
     proc = boot(args.port, log=LOG_C, label="tutorial pre-latch engine")
+    sticky_completed: list[str] = []
     try:
         load_content(args.port)
         generate_world(args.port, args.seed, args.size)
@@ -1366,14 +1605,40 @@ def main() -> int:
               "complete ==")
         phase_pre_latched_reveal(args.port, uid, sx, sy, wx, wy)
 
-        print("== 12. removing supplies unchecks live subobjectives, "
-              "keeps the branch observable ==")
+        print("== 12. presenting the branch on the real HUD retires it "
+              "(#1941) ==")
+        phase_pre_latched_presentation(args.port, uid)
+
+        print("== 13. removing supplies brings the RETIRED branch back "
+              "under the ordinary hide rule ==")
         phase_pre_latched_reversal(args.port, uid)
+
+        print("== 14. re-supply, then save the finished, retired session ==")
+        sticky_completed = phase_pre_latched_resupply(args.port, uid)
     except ProbeError as e:
         print(f"\nPRE-LATCHED-BRANCH LEG FAILED: {e}")
         failures.append(f"pre-latched branch: {e}")
     finally:
         quit_engine(args.port, proc)
+
+    if sticky_completed:
+        print(f"== boot 4: reload the retired branch in a FRESH process "
+              f"(#1941, port {args.port}) ==")
+        proc = boot(args.port, log=LOG_D, label="tutorial retire reload engine")
+        try:
+            load_content(args.port)
+            load_scripts(args.port)
+            print("== 15. an already-retired branch does not come back ==")
+            phase_pre_latched_reload(args.port, sticky_completed)
+        except ProbeError as e:
+            print(f"\nRETIRED-BRANCH RELOAD FAILED: {e}")
+            failures.append(f"retired-branch reload: {e}")
+        finally:
+            quit_engine(args.port, proc)
+            remove_probe_slot(STICKY_SLOT)
+    else:
+        failures.append("retired-branch reload: the pre-latched leg never "
+                        "produced a save to reload")
 
     print(f"\n({time.time() - started:.0f}s)")
     if failures:

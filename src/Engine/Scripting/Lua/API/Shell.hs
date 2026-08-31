@@ -10,7 +10,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text.Read as T
 import qualified Data.ByteString.Char8 as BS
-import Data.List (sortBy, sort)
+import Data.List (sortBy, sort, group)
 import Numeric (showHex)
 
 shellExecuteFn ∷ Lua.LuaE Lua.Exception Lua.NumResults
@@ -168,6 +168,19 @@ setupShellSandbox lst = Lua.runWith lst $ do
 -- | Convert a Lua value at the given stack index to a Text representation.
 --   Tables are recursively serialized to JSON format.
 --   Depth limit prevents infinite recursion on circular references.
+--
+--   __Table-key contract (#1955).__ Lua keys are not JSON member names,
+--   and the conversion between them is not injective: numeric @1@ and
+--   string @\"1\"@ both name @1@, two byte strings that are not valid
+--   UTF-8 can both decode to the same replacement character, and a
+--   boolean or reference key has no textual name at all. So this
+--   serializer never emits a JSON object with a repeated member name: a
+--   table whose keys collide after conversion renders as the single
+--   JSON /string/ @\"\<duplicate key ...\>\"@ instead of an object, so
+--   a @json.loads@ consumer gets an obviously wrong value rather than a
+--   dictionary quietly missing entries. Tables whose converted keys stay
+--   distinct are unaffected — that includes every all-string-keyed table
+--   and every consecutive @1..n@ array, whose bytes are unchanged.
 luaValueToText ∷ Int → Lua.StackIndex → Lua.LuaE Lua.Exception Text
 luaValueToText depth idx
     | depth > 8 = return "\"<max depth>\""
@@ -212,6 +225,12 @@ luaValueToText depth idx
 -- | Serialize a Lua table to JSON. Detects arrays vs objects:
 --   if all keys are consecutive integers starting at 1, emit [...],
 --   otherwise emit {...}.
+--
+--   The object form is emitted only when every member name is distinct
+--   (#1955); see 'luaValueToText' for why that is not automatic and what
+--   a colliding table renders as instead. The array form cannot collide:
+--   it is reached only when the converted key names are exactly the
+--   consecutive run @1..n@, and that multiset has no repeats.
 luaTableToJson ∷ Int → Lua.StackIndex → Lua.LuaE Lua.Exception Text
 luaTableToJson depth idx = do
     -- First pass: check if it's an array (keys are EXACTLY the
@@ -236,10 +255,44 @@ luaTableToJson depth idx = do
                 sorted = sortBy (\(a,_) (b,_) → compare (readInt a) (readInt b)) pairs
             return $ "[" <> T.intercalate "," (map snd sorted) <> "]"
         else do
-            let entries = map (\(k, v) → "\"" <> escapeJsonText k <> "\":" <> v) pairs
-            return $ "{" <> T.intercalate "," entries <> "}"
+            -- Uniqueness is decided on the ESCAPED name — the exact text
+            -- that reaches the consumer — so nothing here rests on
+            -- 'escapeJsonText' happening to be injective.
+            let names = map (escapeJsonText . fst) pairs
+            case duplicateMemberName names of
+                -- Refuse the object outright. Emitting both members is
+                -- valid JSON that 'json.loads' silently reduces, which is
+                -- the wrong-but-parseable answer this guard exists to
+                -- prevent; 'dup' is already escaped, so the surrounding
+                -- literal is the only thing needing quotes of its own.
+                Just dup → return $
+                    "\"<duplicate key \\\"" <> dup <> "\\\">\""
+                Nothing  → do
+                    let entries = map (\(k, v) →
+                            "\"" <> escapeJsonText k <> "\":" <> v) pairs
+                    return $ "{" <> T.intercalate "," entries <> "}"
+
+-- | The lexicographically smallest member name appearing more than once
+--   in a table's converted keys, if any.
+--
+--   Smallest rather than first because Lua's traversal order is not a
+--   durable contract: the reported name has to be a property of the key
+--   SET, or the same table would name different keys on different runs.
+duplicateMemberName ∷ [Text] → Maybe Text
+duplicateMemberName names = case [ n | (n:_:_) ← group (sort names) ] of
+    (dup:_) → Just dup
+    []      → Nothing
 
 -- | Collect all key-value pairs from a table. Leaves stack clean.
+--
+--   Every key type gets a name of its own (#1955): booleans, tables,
+--   functions, userdata and threads used to share one literal
+--   @\<key\>@, so any two of them collapsed into a single member. Names
+--   produced here are still not guaranteed distinct from each other —
+--   nothing stops a string key spelling one of them, and lenient UTF-8
+--   decoding maps distinct byte strings onto one name — which is why
+--   'luaTableToJson' checks the collected names rather than trusting
+--   them.
 collectTablePairs ∷ Int → Lua.StackIndex → [(Text, Text)]
                   → Lua.LuaE Lua.Exception [(Text, Text)]
 collectTablePairs depth tableIdx acc = do
@@ -261,9 +314,36 @@ collectTablePairs depth tableIdx acc = do
                     Lua.TypeString → do
                         mStr ← Lua.tostring (-2)
                         return $ maybe "" TE.decodeUtf8Lenient mStr
-                    _ → return "<key>"
+                    Lua.TypeBoolean → do
+                        b ← Lua.toboolean (-2)
+                        return $ if b then "<boolean: true>"
+                                      else "<boolean: false>"
+                    -- Reference types: name them by identity, so two
+                    -- distinct tables (or functions, …) do not become
+                    -- one member. 'topointer' neither converts the value
+                    -- in place nor runs a __tostring metamethod, both of
+                    -- which would disturb the 'next' walk.
+                    _ → do
+                        ptr ← Lua.topointer (-2)
+                        return $ "<" <> luaTypeName keyTy <> ": "
+                                     <> tshow ptr <> ">"
             Lua.pop 1  -- pop value, keep key for next iteration
             collectTablePairs depth tableIdx ((keyText, valText) : acc)
+
+-- | Lua's own spelling of a value type, for the synthetic member names
+--   'collectTablePairs' gives keys that have no textual name.
+luaTypeName ∷ Lua.Type → Text
+luaTypeName ty = case ty of
+    Lua.TypeNone          → "none"
+    Lua.TypeNil           → "nil"
+    Lua.TypeBoolean       → "boolean"
+    Lua.TypeLightUserdata → "lightuserdata"
+    Lua.TypeNumber        → "number"
+    Lua.TypeString        → "string"
+    Lua.TypeTable         → "table"
+    Lua.TypeFunction      → "function"
+    Lua.TypeUserdata      → "userdata"
+    Lua.TypeThread        → "thread"
 
 -- | Escape special characters for JSON string values.
 --   All C0 control chars (U+0000–U+001F) must be escaped per the JSON spec;

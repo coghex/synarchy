@@ -421,13 +421,113 @@ spec = describe "Tutorial progress" $ do
             , "assert(rowById(m, 'prepare_food').checked == true)"
               -- Regression step 4: removing the supplies afterwards
               -- still unchecks the live subobjectives and never touches
-              -- the durable completion -- and, unlike the ordinary case,
-              -- the composite was never hidden to begin with.
+              -- the durable completion -- and, until the branch has
+              -- been presented, the composite was never hidden at all.
             , "TP.setSubobjectiveChecked('prepare_water', false)"
             , "m = TP.getViewModel()"
             , "assert(rowById(m, 'prepare_water').checked == false)"
             , "assert(rowById(m, 'prepare_expedition').active == true)"
             , "assert(rowById(m, 'prepare_expedition').completed == true)"
+              -- Regression step 5 (#1941): the suppression is a LOAN.
+              -- Re-satisfy the check and acknowledge the presentation --
+              -- the branch retires and the ordinary hide rule takes over.
+              -- One rule from here on, not two.
+            , "TP.setSubobjectiveChecked('prepare_water', true)"
+            , "assert(ids(TP.acknowledgePresented("
+              <> "{ 'prepare_expedition' })) == 'prepare_expedition')"
+            , "m = TP.getViewModel()"
+            , "assert(activeIds(m) == '', activeIds(m))"
+            ]
+
+    -- #1941: #996's hide suppression is EXCEPTIONAL, not a second hide
+    -- rule. It buys an already-latched branch the presentation it would
+    -- otherwise never get, and retires the moment the consumer that
+    -- rendered the row says so -- after which the node behaves exactly
+    -- like one that was never sticky.
+    describe "presentation retirement (#1941)" $ do
+
+        -- The pre-latched setup every case below shares: the composite
+        -- latches with both subobjectives checked BEFORE its ancestors
+        -- complete, then the chain completes and reveals it sticky.
+        let preLatched =
+                [ "TP.setSubobjectiveChecked('prepare_water', true)"
+                , "TP.setSubobjectiveChecked('prepare_food', true)"
+                , "TP.completeObjective('prepare_expedition')"
+                , "TP.completeObjective('place_portal')"
+                , "TP.completeObjective('secure_water')"
+                ]
+
+        it "retires a pre-latched branch once it has been presented, \
+           \after which the ordinary hide rule applies unchanged" $
+            runsOk $ withTP prelude $ preLatched ⧺
+            [ "assert(activeIds(TP.getViewModel()) == 'prepare_expedition,"
+              <> "prepare_water,prepare_food',"
+            , "       activeIds(TP.getViewModel()))"
+              -- The acknowledgement names only the composite: its
+              -- subobjectives are gated on it staying un-hidden, so
+              -- retiring it is what takes the whole branch with it.
+            , "assert(ids(TP.acknowledgePresented('prepare_expedition'))"
+            , "       == 'prepare_expedition')"
+            , "local m = TP.getViewModel()"
+            , "assert(activeIds(m) == '', activeIds(m))"
+              -- The ORDINARY rule, not a deletion: the composite is
+              -- still reported as retained history, still latched.
+            , "assert(rowById(m, 'prepare_expedition').active == false)"
+            , "assert(rowById(m, 'prepare_expedition').completed == true)"
+            , "assert(TP.isCompleted('prepare_expedition'))"
+            ]
+
+        it "keeps getViewModel a pure read — repeated calls never \
+           \present anything" $ runsOk $ withTP prelude $ preLatched ⧺
+            [ "local want = 'prepare_expedition,prepare_water,prepare_food'"
+            , "for _ = 1, 5 do"
+            , "    assert(activeIds(TP.getViewModel()) == want,"
+            , "           activeIds(TP.getViewModel()))"
+            , "end"
+              -- Only the explicit acknowledgement moves it.
+            , "TP.acknowledgePresented('prepare_expedition')"
+            , "assert(activeIds(TP.getViewModel()) == '')"
+            ]
+
+        it "is state-preserving for a repeat, a non-sticky id, a \
+           \subobjective and an unknown id" $
+            runsOk $ withTP prelude $ preLatched ⧺
+            [ "assert(#TP.acknowledgePresented('prepare_expedition') == 1)"
+              -- A second acknowledgement of the same id retires nothing
+              -- more and cannot re-hide anything on its own.
+            , "assert(#TP.acknowledgePresented('prepare_expedition') == 0)"
+              -- place_portal/secure_water were revealed while still
+              -- incomplete, so they were never sticky: acknowledging
+              -- them is a no-op that must not bypass the ordinary hide
+              -- rule they are already subject to.
+            , "assert(#TP.acknowledgePresented("
+              <> "{ 'place_portal', 'secure_water' }) == 0)"
+            , "assert(#TP.acknowledgePresented("
+              <> "{ 'prepare_water', 'no_such_objective' }) == 0)"
+            , "assert(#TP.acknowledgePresented(nil) == 0)"
+            , "assert(#TP.acknowledgePresented(42) == 0)"
+              -- Nothing durable moved, and the view is exactly what one
+              -- retirement leaves.
+            , "assert(ids(TP.completedIds()) == 'place_portal,"
+              <> "prepare_expedition,secure_water', ids(TP.completedIds()))"
+            , "assert(activeIds(TP.getViewModel()) == '')"
+            ]
+
+        it "returns a retired composite to the active view when a live \
+           \subobjective unchecks, with its latch untouched" $
+            runsOk $ withTP prelude $ preLatched ⧺
+            [ "TP.acknowledgePresented('prepare_expedition')"
+            , "assert(activeIds(TP.getViewModel()) == '')"
+            , "TP.setSubobjectiveChecked('prepare_food', false)"
+            , "local m = TP.getViewModel()"
+            , "assert(activeIds(m) == 'prepare_expedition,prepare_water,"
+              <> "prepare_food', activeIds(m))"
+            , "assert(rowById(m, 'prepare_expedition').completed == true)"
+            , "assert(rowById(m, 'prepare_food').checked == false)"
+              -- ...and re-checking hides it again, with no second
+              -- acknowledgement needed. One rule.
+            , "TP.setSubobjectiveChecked('prepare_food', true)"
+            , "assert(activeIds(TP.getViewModel()) == '')"
             ]
 
     -- Round-2 review (PR #962): tutorial progress lives on a Lua
@@ -653,32 +753,40 @@ spec = describe "Tutorial progress" $ do
             , "saveModules.applyAll()"
             , "assert(ids(TP.completedIds()) =="
             , "       'place_portal,prepare_expedition,secure_water')"
-            -- Everything completed, nothing checked yet: with no
-            -- incremental history to replay, #996's reveal-history
-            -- rebuild judges every already-completed id sticky at once
-            -- (requirement 6 asks only for deterministic and non-empty,
-            -- not a replay of a pre-save order nothing kept), so the
-            -- WHOLE chain stays in the active view rather than only the
-            -- composite branch.
+            -- #1941 requirement 4: the reveal history is RECONSTRUCTED,
+            -- and every id the restored set already makes structurally
+            -- reveal-eligible is rebuilt as already presented -- so no
+            -- ancestor the player watched retire comes back. What IS
+            -- active is what the ORDINARY hide rule leaves active: a
+            -- load never restores live checks, so the composite's
+            -- subobjectives read unchecked and the composite is not yet
+            -- hideable.
             , "local m = TP.getViewModel()"
-            , "assert(activeIds(m) == 'place_portal,secure_water,"
-              <> "prepare_expedition,prepare_water,prepare_food', activeIds(m))"
+            , "assert(activeIds(m) == 'prepare_expedition,prepare_water,"
+              <> "prepare_food', activeIds(m))"
+            , "assert(rowById(m, 'place_portal').active == false)"
+            , "assert(rowById(m, 'secure_water').active == false)"
             ]
 
-        -- #996 requirement 6: the reveal history above must survive the
-        -- NEXT evaluation tick too. tutorial_eval.lua's update always
-        -- re-checks live subobjectives against the current world; if the
-        -- acolyte is still provisioned, that re-check would (without the
-        -- fix) recompute the ordinary hide condition and silently hide
-        -- the chain again, reproducing the exact bug across a load.
-        it "stays observable across a load even once the live \
-           \subobjectives are re-checked true again (#996)" $
+        -- #1941 requirement 4: a tutorial that was already FINISHED
+        -- when it was saved comes back finished. Every id here was
+        -- revealed and hidden in the pre-save session -- reveal order
+        -- ran forward through the whole chain, so nothing was ever
+        -- sticky -- and the reconstruction rule reproduces that without
+        -- persisting a byte of presentation state. The next evaluation
+        -- tick re-checking the same live world it was saved from leaves
+        -- the checklist empty, rather than resurrecting five rows the
+        -- player already watched retire.
+        it "does not return already-retired ancestors to the checklist \
+           \after loading a completed tutorial (#1941)" $
             runsOk $ withTP savePrelude
             [ "TP.completeObjective('place_portal')"
             , "TP.completeObjective('secure_water')"
             , "TP.setSubobjectiveChecked('prepare_water', true)"
             , "TP.setSubobjectiveChecked('prepare_food', true)"
             , "TP.completeObjective('prepare_expedition')"
+            , "assert(activeIds(TP.getViewModel()) == '',"
+            , "       'precondition: the pre-save checklist is finished')"
             , "local snap = saveModules.snapshotAll()"
             , "assert(snap.ok, snap.error)"
             , "local prep = saveModules.prepareLoad(snap.components)"
@@ -689,6 +797,47 @@ spec = describe "Tutorial progress" $ do
             , "TP.setSubobjectiveChecked('prepare_water', true)"
             , "TP.setSubobjectiveChecked('prepare_food', true)"
             , "local m = TP.getViewModel()"
-            , "assert(activeIds(m) == 'place_portal,secure_water,"
-              <> "prepare_expedition,prepare_water,prepare_food', activeIds(m))"
+            , "assert(activeIds(m) == '', activeIds(m))"
+            , "assert(rowById(m, 'prepare_expedition').completed == true)"
+            , "assert(ids(TP.completedIds()) == 'place_portal,"
+              <> "prepare_expedition,secure_water', ids(TP.completedIds()))"
+            ]
+
+        -- The other half of that rule, and the one that keeps #996's
+        -- original defect fixed ACROSS a save: a branch that had
+        -- completed but was still gated behind an incomplete ancestor
+        -- when the save was taken was never revealed, so the
+        -- reconstruction must leave it unjudged rather than assuming it
+        -- was presented. Its real first reveal is still ahead, and it
+        -- must collect the suppression there.
+        it "keeps a completed-but-unrevealed branch protected at its \
+           \first reveal after a load (#1941)" $
+            runsOk $ withTP savePrelude
+            -- Pre-latched and saved with BOTH ancestors incomplete.
+            [ "TP.setSubobjectiveChecked('prepare_water', true)"
+            , "TP.setSubobjectiveChecked('prepare_food', true)"
+            , "TP.completeObjective('prepare_expedition')"
+            , "assert(rowById(TP.getViewModel(), 'prepare_expedition') == nil,"
+            , "       'precondition: the branch is not revealed yet')"
+            , "local snap = saveModules.snapshotAll()"
+            , "assert(snap.ok, snap.error)"
+            , "local prep = saveModules.prepareLoad(snap.components)"
+            , "assert(prep.ok, prep.errors and table.concat(prep.errors, '; '))"
+            , "saveModules.applyAll()"
+            , "assert(TP.isCompleted('prepare_expedition'))"
+            , "assert(rowById(TP.getViewModel(), 'prepare_expedition') == nil,"
+            , "       'still gated behind its incomplete ancestors')"
+            -- The evaluation tick re-checks the live world, then the
+            -- chain completes for the first time in THIS session.
+            , "TP.setSubobjectiveChecked('prepare_water', true)"
+            , "TP.setSubobjectiveChecked('prepare_food', true)"
+            , "TP.completeObjective('place_portal')"
+            , "TP.completeObjective('secure_water')"
+            , "local m = TP.getViewModel()"
+            , "assert(activeIds(m) == 'prepare_expedition,prepare_water,"
+              <> "prepare_food', activeIds(m))"
+            -- ...and it is a real suppression, retired by presenting it.
+            , "assert(ids(TP.acknowledgePresented('prepare_expedition'))"
+            , "       == 'prepare_expedition')"
+            , "assert(activeIds(TP.getViewModel()) == '')"
             ]
