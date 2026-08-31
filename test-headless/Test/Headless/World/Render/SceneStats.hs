@@ -92,6 +92,7 @@ import World.Mine.Types (MineDesignation(..))
 import World.Page.Types (WorldPageId(..))
 import World.Render (updateWorldTiles)
 import World.Render.ViewBounds (ViewBounds, computeViewBounds)
+import World.Render.Zoom.Cursor (pixelToChunkOrigin)
 import World.Render.Zoom.Types (BakedZoomEntry(..))
 import World.Tool.Types (ToolMode(..))
 import World.Material.Id (MaterialId(..))
@@ -1003,6 +1004,52 @@ zoomScanSpec = describe "the zoom map's candidate sources" $ do
         -- would reject it — this page has no zoom cursor texture, so
         -- the candidate emits nothing.
         scannedOf ScZoomMap stats `shouldBe` 5 + 3 + 1
+
+    it "adds a resolvable zoom-cursor HOVER candidate" $ \env → do
+        ws ← resetScene env zoomedOutCamera
+        seedBakedZoom ws 5
+        writeIORef (wsGenParamsRef ws) $ Just genParams
+            { wgpLocationInstances = locationInstances 3 }
+        cs ← readIORef (wsCursorRef ws)
+        writeIORef (wsCursorRef ws)
+            cs { zoomCursorPos = Just zoomHoverPixel }
+        stats ← runPass env
+        -- Hover and selection reach the count through INDEPENDENT
+        -- paths, so the selection example above proves nothing about
+        -- this one.
+        scannedOf ScZoomMap stats `shouldBe` 5 + 3 + 1
+
+    it "adds both cursor candidates when hover and selection coexist" $
+        \env → do
+            ws ← resetScene env zoomedOutCamera
+            seedBakedZoom ws 5
+            writeIORef (wsGenParamsRef ws) $ Just genParams
+                { wgpLocationInstances = locationInstances 3 }
+            cs ← readIORef (wsCursorRef ws)
+            writeIORef (wsCursorRef ws)
+                cs { zoomCursorPos   = Just zoomHoverPixel
+                   , zoomSelectedPos = Just (0, 0) }
+            stats ← runPass env
+            scannedOf ScZoomMap stats `shouldBe` 5 + 3 + 2
+
+-- | A screen pixel the zoom map's own unprojection resolves to a chunk.
+--
+--   Located through 'pixelToChunkOrigin' — the very function
+--   'makeCursorQuadScanned' asks — rather than guessed, because which
+--   pixels land on the map is a property of the projection and the
+--   camera, not something an example should hard-code. Using the
+--   engine's own oracle to choose an INPUT is not circular: what the
+--   examples assert is the counter's output.
+zoomHoverPixel ∷ (Int, Int)
+zoomHoverPixel =
+    case [ p
+         | p@(x, y) ← [ (x, y) | y ← [0, 16 .. snd testFb - 1]
+                               , x ← [0, 16 .. fst testFb - 1] ]
+         , isJust (pixelToChunkOrigin (camFacing zoomedOutCamera)
+                       zoomedOutCamera (fst testFb) (snd testFb)
+                       (fst testFb) (snd testFb) worldSizeChunks x y) ] of
+        (p : _) → p
+        []      → error "no screen pixel resolves to a zoom-map chunk"
 
 -- | @n@ location instances on the page, allocated through the real
 --   allocator so their stored geometry is what placement would produce.
