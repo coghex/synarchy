@@ -22,14 +22,27 @@
 --
 --   For FOUR of the eight registries — items, equipment classes,
 --   substances and recipes — that write authority is now narrowed to
---   the module that legitimately holds it, and every other consumer
---   takes "Engine.Core.Capability.ContentRegistriesView" instead, where
---   those four arrive as 'Engine.Core.ReadOnlyRef.ReadOnlyRef's (issue
---   #1896, CMA-2 of epic #1890). So the earlier blanket claim that
---   every reader AND writer in this group reaches these fields through
---   THIS record no longer holds: it is true of the other four
---   registries (infection, locations, loot tables, tutorials — outside
---   the pilot), and of the four selected registries' writers alone.
+--   the module that legitimately holds it, and every other
+--   capability-narrowed consumer takes
+--   "Engine.Core.Capability.ContentRegistriesView" instead, where those
+--   four arrive as 'Engine.Core.ReadOnlyRef.ReadOnlyRef's (issue #1896,
+--   CMA-2 of epic #1890). So the earlier blanket claim that every
+--   reader AND writer in this group reaches these fields through THIS
+--   record no longer holds: it is true of the other four registries
+--   (infection, locations, loot tables, tutorials — outside the pilot),
+--   and of the four selected registries' writers alone.
+--
+--   __The SS6.1 permanent cohort is outside this boundary (D-4), and
+--   still reaches the raw handles directly.__ 'Engine.Core.Init'
+--   allocates them, and 'Engine.Scripting.Lua.API.Save' reads the item
+--   and recipe registries straight off 'EngineEnv'. Neither is a
+--   counterexample to the sentence above: they hold whole-session
+--   orchestration authority by job description, and this arc does not
+--   constrain them. Every NON-permanent reader does take the view —
+--   including 'World.Render.GroundItemQuads', which reached
+--   'itemManagerRef' through the raw accessor rather than a capability
+--   record and so fell outside #1896's accessor census while being
+--   exactly the kind of consumer it governs.
 --
 --   The modules that keep this record for a SELECTED field are exactly
 --   its four raw writers: 'Engine.Scripting.Lua.API.Items.Defs'

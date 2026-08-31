@@ -634,9 +634,12 @@ longer all reach them through the *same record* (§7.6). For
 For `itemManagerRef`, `equipmentClassManagerRef`, `substanceManagerRef`
 and `recipeManagerRef`, that record is now the raw WRITER interface
 — held by the one `X.loadYaml` module that legitimately writes each —
-while all 26 read-only consumer modules take
+while every other non-§6.1 reader takes
 `Engine.Core.Capability.ContentRegistriesView.ContentRegistriesViewCapability`,
 which presents those four as `Engine.Core.ReadOnlyRef.ReadOnlyRef`s.
+§6.1's permanent cohort is outside that boundary by D-4 and still reads
+the raw handles (`Engine.Core.Init` allocates them;
+`Engine.Scripting.Lua.API.Save` reads the item and recipe registries).
 Both records alias the same live containers, so the Readers/Writers
 cells below are unchanged: this split narrowed authority, not state.
 
@@ -2054,13 +2057,21 @@ including that section's abstract-wrapper extension.
   their `Engine.Scripting.Lua.API.Register.*` call sites, never
   through a fresh raw `EngineEnv` accessor import.
 - **Who moved:** all 31 read-only module-field pairs, across 26
-  modules — the complete measured surface, in one change. Three
-  further modules move with them without naming a selected accessor
-  themselves (`Building.Thread.Command`, `Unit.Thread`,
+  modules — the complete measured accessor surface, in one change.
+  Three further modules move with them without naming a selected
+  accessor themselves (`Building.Thread.Command`, `Unit.Thread`,
   `Engine.Scripting.Lua.API.Buildings.Progress`), plus
   `World.Thread.Command.BoundSpawn`, because they carry or forward the
   record into `Building.Knowledge.Live.containerObserver`, whose third
   parameter is now the view.
+- **And one module the accessor census could not see.**
+  `World.Render.GroundItemQuads` read `itemManagerRef` through the raw
+  `Engine.Core.State` accessor rather than a capability record, so it
+  appears in none of the counts above — while being exactly the kind of
+  non-writing consumer this boundary governs. It takes the view too. The
+  census measures the capability-accessor surface; the RULE is "every
+  non-§6.1 reader of a selected registry", and where the two differ the
+  rule wins.
 - **The production pass-on** is
   `Building.Knowledge.Live.ContainerObserver.coItems ∷ ReadOnlyRef
   ItemManager` — the arc's load-bearing demonstration, since a
