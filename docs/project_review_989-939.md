@@ -8,13 +8,13 @@ PR #988's clipped tutorial-toggle caption is already PRR-4 in `docs/project_revi
 
 ## Status
 
-- [ ] PRR-1. Already-latched tutorial branches never retire from the active checklist
-- [ ] PRR-2. Nearest known-location lookup ignores cylindrical seam aliases
-- [ ] PRR-3. Loot-table weights are registered without semantic validation
+- [x] PRR-1. Already-latched tutorial branches never retire from the active checklist — [#1941]
+- [x] PRR-2. Nearest known-location lookup ignores cylindrical seam aliases — [#1944]
+- [x] PRR-3. Loot-table weights are registered without semantic validation — [#1946]
 
 ## 1. Tutorial active-history lifecycle
 
-### PRR-1. Already-latched tutorial branches never retire from the active checklist
+### [#1941] PRR-1. Already-latched tutorial branches never retire from the active checklist
 
 > **Captured note:** Give an already-latched tutorial branch a way to retire after it has actually been made observable. The current `stickyActive` repair suppresses the normal hide rule forever, and reconstructing it after a load makes every completed objective in the chain active again.
 
@@ -41,7 +41,7 @@ PR #988's clipped tutorial-toggle caption is already PRR-4 in `docs/project_revi
 
 ## 2. Experiential location distance
 
-### PRR-2. Nearest known-location lookup ignores cylindrical seam aliases
+### [#1944] PRR-2. Nearest known-location lookup ignores cylindrical seam aliases
 
 > **Captured note:** Make `nearestKnownLocation` compare anchors in the page's cylindrical coordinate space. PR #954 correctly made acquisition containment seam-aware, but its nearest-memory helper uses raw Euclidean `(x,y)` deltas and can prefer a physically farther ruin over one directly across the U seam.
 
@@ -67,7 +67,7 @@ PR #988's clipped tutorial-toggle caption is already PRR-4 in `docs/project_revi
 
 ## 3. Loot-table authoring validation
 
-### PRR-3. Loot-table weights are registered without semantic validation
+### [#1946] PRR-3. Loot-table weights are registered without semantic validation
 
 > **Captured note:** Reject or explicitly define non-positive and non-finite loot weights before registration. The YAML loader accepts any `Float`, and #953's shared weighted walk assumes a meaningful positive total; zero-weight entries can be selected and all-zero/NaN tables degenerate into arbitrary first/last-entry results.
 

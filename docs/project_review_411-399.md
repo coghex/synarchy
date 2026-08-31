@@ -8,16 +8,16 @@ The contextual-error additions, removed worldgen/channel-mask/Lua/UI/engine/fall
 
 ## Status
 
-- [ ] PRR-1. Unit hit-testing does not follow rendered climb and animation geometry
-- [ ] PRR-2. Directoryless Lua chunks lose their log source label
-- [ ] PRR-3. The wound tick still reimplements the shared effective-severity formula
-- [ ] PRR-4. Removing `Engine.Event` left an orphan exported `AssetEvent`
-- [ ] PRR-5. Unit activity and pose label comments have drifted from their sources
-- [ ] PRR-6. `unit.getWounds` advertises only a fraction of its returned schema
+- [x] PRR-1. Unit hit-testing does not follow rendered climb and animation geometry — [#1957]
+- [x] PRR-2. Directoryless Lua chunks lose their log source label — [#1960]
+- [x] PRR-3. The wound tick still reimplements the shared effective-severity formula — [#1963]
+- [x] PRR-4. Removing `Engine.Event` left an orphan exported `AssetEvent` — [#1966]
+- [x] PRR-5. Unit activity and pose label comments have drifted from their sources — [#1967]
+- [x] PRR-6. `unit.getWounds` advertises only a fraction of its returned schema — [#1969]
 
 ## 1. Unit render and interaction geometry
 
-### PRR-1. Unit hit-testing does not follow rendered climb and animation geometry
+### [#1957] PRR-1. Unit hit-testing does not follow rendered climb and animation geometry
 
 > **Captured note:** Make click and box selection derive their sprite quad from the same immutable render inputs as `Unit.Render.unitToQuad`. The renderer positions a climbing unit at continuous `uiRealZ` and sizes it from the active animation frame, while both hit-test paths use integer `uiGridZ` and the directional T-pose texture, so the selectable region can lag behind the sprite that is actually on screen.
 
@@ -43,7 +43,7 @@ The contextual-error additions, removed worldgen/channel-mask/Lua/UI/engine/fall
 
 ## 2. Lua diagnostic source labels
 
-### PRR-2. Directoryless Lua chunks lose their log source label
+### [#1960] PRR-2. Directoryless Lua chunks lose their log source label
 
 > **Captured note:** Preserve a Lua debug source when it has no slash. The shared `dropDir` helper correctly removes the leading directory from file-backed chunks, but its recursive fallback consumes a slashless name to the empty string; console and sandbox chunks can therefore emit `[:line]` instead of an identifying source in all four Lua log functions.
 
@@ -68,7 +68,7 @@ The contextual-error additions, removed worldgen/channel-mask/Lua/UI/engine/fall
 
 ## 3. Wound effective-severity ownership
 
-### PRR-3. The wound tick still reimplements the shared effective-severity formula
+### [#1963] PRR-3. The wound tick still reimplements the shared effective-severity formula
 
 > **Captured note:** Make the wound tick consume the same authoritative effective-severity operation as every downstream caller, using a wound value updated with the tick's fresh heal and necrosis fields. PR #401 removed three weaker copies, but the tick still spells out `max (severity * (1 - heal)) necrosis` separately, leaving the claimed single-source contract and its comments vulnerable to another split.
 
@@ -92,7 +92,7 @@ The contextual-error additions, removed worldgen/channel-mask/Lua/UI/engine/fall
 
 ## 4. Residual asset event surface
 
-### PRR-4. Removing `Engine.Event` left an orphan exported `AssetEvent`
+### [#1966] PRR-4. Removing `Engine.Event` left an orphan exported `AssetEvent`
 
 > **Captured note:** Remove the residual `AssetEvent` type or give it an explicit live owner. PR #402 deleted the only event constructor that consumed it and knowingly left the unrelated export behind, so the exposed asset base module still advertises an event concept with no producer, queue, handler, or consumer.
 
@@ -116,7 +116,7 @@ The contextual-error additions, removed worldgen/channel-mask/Lua/UI/engine/fall
 
 ## 5. Mirrored unit-state documentation
 
-### PRR-5. Unit activity and pose label comments have drifted from their sources
+### [#1967] PRR-5. Unit activity and pose label comments have drifted from their sources
 
 > **Captured note:** Stop hand-maintaining partial activity and pose enumerations on the render-mirror fields. The authoritative label functions and Lua API Haddocks are current, but `UnitInstance` still documents smaller historical sets, so a maintainer inspecting the data boundary is told that valid `running`, `eating`, `dead`, `climbing`, `falling`, and `sleeping` values cannot occur.
 
@@ -141,7 +141,7 @@ The contextual-error additions, removed worldgen/channel-mask/Lua/UI/engine/fall
 
 ## 6. Lua wound-result schema
 
-### PRR-6. `unit.getWounds` advertises only a fraction of its returned schema
+### [#1969] PRR-6. `unit.getWounds` advertises only a fraction of its returned schema
 
 > **Captured note:** Document the complete stable return shape of `unit.getWounds`, especially the distinction among acute `severity`, full `severityEffective`, original `severityInflicted`, and healing/necrosis fields. The function's top-level Lua API Haddock still advertises only four fields, even though callers receive a much richer medical record whose severity choice changes gameplay semantics.
 

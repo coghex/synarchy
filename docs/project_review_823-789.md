@@ -10,8 +10,8 @@ PR #821's input-thread split, #820's ordered immutable CI-image publication, #81
 
 - [x] PRR-1. Direct tile selection leaves both deferred cursor-selection arms live — [#1702]
 - [x] PRR-2. Nested structure content can stamp beyond a location's authoritative bounds — [#1708]
-- [ ] PRR-3. Neutral legacy placeholders become permanent local settings on every first boot
-- [ ] PRR-4. Partial notification overrides migrate successfully by turning omitted fields off
+- [x] PRR-3. Neutral legacy placeholders become permanent local settings on every first boot — [#1937]
+- [x] PRR-4. Partial notification overrides migrate successfully by turning omitted fields off — [#1938]
 
 ## 1. Direct tile selection versus deferred cursor arms
 
@@ -68,7 +68,7 @@ PR #821's input-thread split, #820's ordered immutable CI-image publication, #81
 
 ## 3. Neutral migration and future defaults
 
-### PRR-3. Neutral legacy placeholders become permanent local settings on every first boot
+### [#1937] PRR-3. Neutral legacy placeholders become permanent local settings on every first boot
 
 > **Captured note:** Do not promote a byte-for-byte neutral legacy placeholder into durable player state. A player who never saved settings should continue inheriting later tracked video/keybinding defaults instead of being pinned forever to the defaults from their first post-migration boot.
 
@@ -94,7 +94,7 @@ PR #821's input-thread split, #820's ordered immutable CI-image publication, #81
 
 ## 4. Partial notification migration
 
-### PRR-4. Partial notification overrides migrate successfully by turning omitted fields off
+### [#1938] PRR-4. Partial notification overrides migrate successfully by turning omitted fields off
 
 > **Captured note:** Treat field-sparse legacy notification entries as incomplete migration input, or overlay their missing fields onto the registry defaults. A present category with one authored checkbox currently receives `false` for the other two before the migration validator ever sees it.
 

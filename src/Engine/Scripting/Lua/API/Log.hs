@@ -1,8 +1,14 @@
+-- | The four @engine.log*@ Lua functions and the source field of the
+--   @[source:line]@ prefix they share.
 module Engine.Scripting.Lua.API.Log
   ( logInfoFn
   , logWarnFn
   , logErrorFn
   , logDebugFn
+    -- * The prefix's source field
+    -- $sourcefield
+  , logSourceField
+  , shortenChunkPath
   ) where
 
 import UPrelude
@@ -13,26 +19,65 @@ import Engine.Core.Capability.Core (CoreCapability(..))
 import Engine.Core.Log
 import Data.IORef (readIORef)
 
-import Engine.Scripting.Lua.Debug (getSourceInfo, SourceInfo(..))
+import Engine.Scripting.Lua.Debug
+    (getChunkSourceInfo, ChunkSourceInfo(..), ChunkKind(..))
 
--- | Strip the leading directory (and any "./" prefix) from a Lua chunk
---   source path so the log prefix shows just the script segment, not the
---   full on-disk path. Shared by all four log fns (info/warn/error/debug).
-dropDir ∷ String → String
-dropDir ('.':'/':ss) = dropDir ss
-dropDir ('/':ss)     = ss
-dropDir (_:ss)       = dropDir ss
-dropDir _            = ""
+-- $sourcefield
+--
+-- Exported for the @\"Lua log source\"@ headless group, which pins the
+-- transformation directly rather than through a log line.
+
+-- | Render the source field of a Lua log line's @[source:line]@ prefix
+--   from the chunk metadata 'getChunkSourceInfo' reports. Shared by all
+--   four log fns (info\/warn\/error\/debug), which is what keeps their
+--   prefixes identical.
+--
+--   Only a FILE-backed chunk names a path, and only that case is
+--   shortened by 'shortenChunkPath'. Every other kind is a LABEL:
+--   the debug console's verbatim entered code (Lua's @=@ convention,
+--   'Engine.Scripting.Lua.Thread.Console.executeDebugLua'), the
+--   @[string \"...\"]@ rendering 'HsLua.Core.loadstring' gives the in-game
+--   shell, or anything else Lua invents. A label reaches the log line
+--   unchanged, and a frame Lua reports nothing for is @\<unknown\>@.
+--
+--   Before #1960 every source went through the path shortener, which
+--   erased a slashless label to @\"\"@ (so a console command logged
+--   @[:1]@) and replaced a label containing a @\/@ with whatever
+--   followed it (so @local a=8\/2; engine.logInfo(..)@ logged the tail of
+--   the operator's own command as the source). The decision no longer
+--   turns on whether a @\/@ happens to occur in the text.
+logSourceField ∷ Maybe ChunkSourceInfo → String
+logSourceField Nothing    = "<unknown>"
+logSourceField (Just csi) = case csiKind csi of
+    ChunkFile → shortenChunkPath (csiSource csi)
+    _         → csiSource csi
+
+-- | Shorten a file-backed chunk's path for display: drop any leading
+--   @\".\/\"@, then drop everything up to and including the FIRST
+--   remaining @\/@.
+--
+--   The nested segment is retained, because it is the useful part:
+--   @\".\/scripts\/unit_ai.lua\"@ becomes @\"unit_ai.lua\"@ while
+--   @\".\/scripts\/ui\/panel.lua\"@ becomes @\"ui\/panel.lua\"@. A path with
+--   no directory to drop is returned unchanged (@\"foo.lua\"@), and an
+--   absolute path loses only its root (@\"\/abs\/foo.lua\"@ becomes
+--   @\"abs\/foo.lua\"@). Never applied to a chunk that is not a file:
+--   see 'logSourceField'.
+shortenChunkPath ∷ String → String
+shortenChunkPath src = case break (≡ '/') (dropCurDir src) of
+    (_, _:rest) → rest
+    (whole, _)  → whole
+  where
+    dropCurDir ('.':'/':ss) = dropCurDir ss
+    dropCurDir ss           = ss
 
 logInfoFn ∷ CoreCapability → Lua.LuaE Lua.Exception Lua.NumResults
 logInfoFn core = do
     msg ← Lua.tostring 1
     -- Level 2: 0=C function, 1=logInfoFn wrapper, 2=Lua caller
-    mInfo ← getSourceInfo 2
-    let (srcFile, srcLine) = case mInfo of
-            Just info → (siSource info, siCurrentLine info)
-            Nothing   → ("<unknown>", 0)
-        srcFileStripped = dropDir srcFile
+    mInfo ← getChunkSourceInfo 2
+    let srcFileStripped = logSourceField mInfo
+        srcLine = maybe 0 csiCurrentLine mInfo
     case msg of
         Just msgBS → Lua.liftIO $ do
             logger ← readIORef (ccLoggerRef core)
@@ -47,11 +92,9 @@ logWarnFn ∷ CoreCapability → Lua.LuaE Lua.Exception Lua.NumResults
 logWarnFn core = do
     msg ← Lua.tostring 1
     -- Level 2: 0=C function, 1=logWarnFn wrapper, 2=Lua caller
-    mInfo ← getSourceInfo 2
-    let (srcFile, srcLine) = case mInfo of
-            Just info → (siSource info, siCurrentLine info)
-            Nothing   → ("<unknown>", 0)
-        srcFileStripped = dropDir srcFile
+    mInfo ← getChunkSourceInfo 2
+    let srcFileStripped = logSourceField mInfo
+        srcLine = maybe 0 csiCurrentLine mInfo
     case msg of
         Just msgBS → Lua.liftIO $ do
             logger ← readIORef (ccLoggerRef core)
@@ -66,11 +109,9 @@ logErrorFn ∷ CoreCapability → Lua.LuaE Lua.Exception Lua.NumResults
 logErrorFn core = do
     msg ← Lua.tostring 1
     -- Level 2: 0=C function, 1=logErrorFn wrapper, 2=Lua caller
-    mInfo ← getSourceInfo 2
-    let (srcFile, srcLine) = case mInfo of
-            Just info → (siSource info, siCurrentLine info)
-            Nothing   → ("<unknown>", 0)
-        srcFileStripped = dropDir srcFile
+    mInfo ← getChunkSourceInfo 2
+    let srcFileStripped = logSourceField mInfo
+        srcLine = maybe 0 csiCurrentLine mInfo
     case msg of
         Just msgBS → Lua.liftIO $ do
             logger ← readIORef (ccLoggerRef core)
@@ -86,12 +127,10 @@ logDebugFn core = do
     msg ← Lua.tostring 1
     
     -- Level 2: 0=C function, 1=logInfoFn wrapper, 2=Lua caller
-    mInfo ← getSourceInfo 2
+    mInfo ← getChunkSourceInfo 2
     
-    let (srcFile, srcLine) = case mInfo of
-            Just info → (siSource info, siCurrentLine info)
-            Nothing   → ("<unknown>", 0)
-        srcFileStripped = dropDir srcFile
+    let srcFileStripped = logSourceField mInfo
+        srcLine = maybe 0 csiCurrentLine mInfo
 
     case msg of
         Just msgBS → Lua.liftIO $ do

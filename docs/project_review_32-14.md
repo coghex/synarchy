@@ -29,12 +29,12 @@ was run. Two non-duplicate concerns remain.
 
 ## Status
 
-- [ ] PRR-1. The coastal-parallel threshold counts violating components instead of limiting run length
-- [ ] PRR-2. Swapchain fallbacks remain below the warning level required by PR #14
+- [x] PRR-1. The coastal-parallel threshold counts violating components instead of limiting run length — [#1952]
+- [x] PRR-2. Swapchain fallbacks remain below the warning level required by PR #14 — [#1954]
 
 ## 1. River regression-tool threshold semantics
 
-### PRR-1. The coastal-parallel threshold counts violating components instead of limiting run length
+### [#1952] PRR-1. The coastal-parallel threshold counts violating components instead of limiting run length
 
 > **Captured note:** PR #32 made `MAX_COASTAL_PARALLEL = 5` part of the shared
 > river-tool threshold contract, but the single-seed checker hard-codes five as
@@ -93,7 +93,7 @@ gate this metric at all.
 
 ## 2. Swapchain fallback observability
 
-### PRR-2. Swapchain fallbacks remain below the warning level required by PR #14
+### [#1954] PRR-2. Swapchain fallbacks remain below the warning level required by PR #14
 
 > **Captured note:** PR #14's explicit swapchain contract required warnings
 > when the preferred surface format or present mode was unavailable. The PR

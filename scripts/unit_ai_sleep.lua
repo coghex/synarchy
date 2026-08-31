@@ -70,19 +70,35 @@ local function wakeAngleFor(defName)
     return (center + WAKE_PHASE_OFFSET) % 1.0
 end
 
--- True on the AI tick that sees the sun sweep across this unit's own
--- wake boundary, since it started sleeping (s.sleepLastSunAngle is reset
--- when sleep begins). Written as containment in the half-open forward
--- arc (prev, angle] rather than `prev < B and angle >= B`, so it stays
--- correct on the circular domain: a boundary of 0.0, or any crossing
--- that spans the 1.0 -> 0.0 midnight wrap, is invisible to a bare
--- comparison. A unit that falls asleep already past its boundary
--- (forced by exhaustion at noon) has no earlier sample to cross from
--- and so only wakes at the NEXT crossing, not immediately.
-local function wakeBoundaryCrossed(uid, s)
+-- The unit's OWN longitude-local sun angle right now, with the info
+-- record it came from (callers that need defName would otherwise fetch
+-- it twice). The single reader of the sun in this module: the baseline
+-- seeded when sleep begins and every later crossing sample are then the
+-- same measurement of the same quantity by construction, taken at the
+-- unit's own position through the same longitude-aware call. nil when
+-- the unit has gone away or its column has no climate sample yet.
+local function localSunAngleFor(uid)
     local info = unit.getInfo(uid)
-    if not info then return false end
+    if not info then return nil, nil end
     local angle = world.getSunAngleAt(math.floor(info.gridX), math.floor(info.gridY))
+    if not angle then return nil, nil end
+    return angle, info
+end
+
+-- True on the AI tick that sees the sun sweep across this unit's own
+-- wake boundary, since it started sleeping (s.sleepLastSunAngle is
+-- seeded with the angle AT the moment the sleeping phase begins, so the
+-- very first sleeping-phase check already has an earlier sample to
+-- cross from — see sleepExecute). Written as containment in the
+-- half-open forward arc (prev, angle] rather than `prev < B and angle >=
+-- B`, so it stays correct on the circular domain: a boundary of 0.0, or
+-- any crossing that spans the 1.0 -> 0.0 midnight wrap, is invisible to
+-- a bare comparison. A unit that falls asleep already past its boundary
+-- (forced by exhaustion at noon) starts from a baseline just PAST it, so
+-- the forward arc back round to the boundary is nearly a whole day: it
+-- only wakes at the NEXT crossing, not immediately.
+local function wakeBoundaryCrossed(uid, s)
+    local angle, info = localSunAngleFor(uid)
     if not angle then return false end
     local prev = s.sleepLastSunAngle
     s.sleepLastSunAngle = angle
@@ -202,8 +218,20 @@ local function sleepExecute(uid, s, params)
         elseif pose == "crouching" then unit.transitionTo(uid, "crawling", STRIDE_LIE_DOWN)
         elseif pose == "crawling"  then unit.transitionTo(uid, "sleeping", STRIDE_LIE_DOWN)
         elseif pose == "sleeping"  then
-            s.sleepPhase         = "sleeping"
-            s.sleepLastSunAngle  = nil   -- baseline for wake-boundary crossing
+            s.sleepPhase = "sleeping"
+            -- Seed the wake-boundary baseline with the angle at the
+            -- moment sleep actually begins (#1939). This used to store
+            -- nil, which is the ABSENCE of a baseline rather than one:
+            -- wakeBoundaryCrossed needs an earlier sample, so the first
+            -- sleeping-phase check only recorded one and any boundary
+            -- swept in the gap since this transition was lost — and
+            -- unrecoverably, because every later sample that day then
+            -- sits past the boundary. That gap is a real 0.5-1.5 s
+            -- (thought_interval + thought_jitter, scheduled after the
+            -- action runs), not two checks within one tick. nil survives
+            -- only as the genuinely-unreadable case, which keeps the old
+            -- wait-one-more-tick behaviour.
+            s.sleepLastSunAngle = (localSunAngleFor(uid))
         end
         return
     end
