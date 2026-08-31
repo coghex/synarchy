@@ -17,16 +17,16 @@ concrete precondition
 ## Processing status
 
 - [ ] EPIC. Make the texture asset pool safe to grow beyond the current corpus
-- [ ] APS-1. Make bindless slot-registration failure a truthful terminal outcome
-- [ ] APS-2. Refuse stable texture handles the shader cannot represent
-- [ ] APS-3. Make accepted-device descriptor capacity match the shader contract
-- [ ] APS-4. Drain ordinary texture resources during orderly shutdown
-- [ ] APS-5. Add descriptor, handle, residency, alias, and memory observability
+- [x] APS-1. Make bindless slot-registration failure a truthful terminal outcome — [#1690]
+- [x] APS-2. Refuse stable texture handles the shader cannot represent — [#1699]
+- [x] APS-3. Make accepted-device descriptor capacity match the shader contract — [#1689]
+- [x] APS-4. Drain ordinary texture resources during orderly shutdown — [#1691]
+- [x] APS-5. Add descriptor, handle, residency, alias, and memory observability — [no-issue]
 - [ ] APS-6. Replace path-only texture identity with a policy-aware asset key
 - [ ] APS-7. Separate canonical texture identity from asynchronous load requests
 - [ ] APS-8. Add explicit lifetime classes and owner-scoped release
-- [ ] APS-9. Remove preview's abandoned-request handle growth
-- [ ] APS-10. Make all direct texture references a blocking validated inventory
+- [x] APS-9. Remove preview's abandoned-request handle growth — [no-issue]
+- [x] APS-10. Make all direct texture references a blocking validated inventory — [#1705]
 - [ ] APS-11. Generate a capacity-aware asset catalog and budget report
 - [ ] APS-12. Pilot another atlas family only if measurements justify it
 - [ ] APS-13. Add bounded lazy residency or eviction only if measured pressure remains
@@ -45,10 +45,11 @@ concrete precondition
   atlasing or residency policy is selected from measured pressure rather than
   file count alone.
 - **Primary concern:** descriptor headroom before a large asset expansion.
-- **Tracker overlap:** open #1689, #1690, #1691, #1699, and #1705 already own
-  several foundation slices. No matching umbrella epic was found in the fresh
-  tracker search on 2026-08-26. Later issue processing must reuse or link these
-  issues rather than duplicate them.
+- **Tracker overlap:** closed #1689, #1690, #1691, #1699, and #1705 delivered
+  five foundation slices and are linked in the processing ledger. No matching
+  umbrella epic was found in the fresh tracker search on 2026-08-26. The
+  focused telemetry work is owned by `docs/asset_telemetry_design.md`; later
+  issue processing must not duplicate either that arc or the closed issues.
 - **Arc label:** None proposed.
 
 ## The short version
@@ -188,21 +189,22 @@ only residency telemetry can show how many are simultaneously consuming slots.
 The underlying correctness defects are recorded with full evidence in
 `docs/asset_system_findings.md`. The scaling-relevant set is:
 
-- Slot exhaustion can still publish `AssetReady`, cache the path, and send
-  `LuaAssetLoaded`, even though the handle has no descriptor mapping. Open
-  #1690 owns this false-success transition.
-- A monotonically allocated handle beyond the shader's 65,536-entry table is
-  not representable, yet current allocation can continue. Open #1699 owns the
-  refusal boundary and is explicitly sequenced after #1690's failure model.
-- An accepted device can currently receive fewer descriptors than the fixed
-  shader array declares. Open #1689 owns the device capability/layout
+- Slot exhaustion previously could publish `AssetReady`, cache the path, and
+  send `LuaAssetLoaded` even though the handle had no descriptor mapping.
+  Closed #1690 delivered the truthful failure transition.
+- A monotonically allocated handle beyond the shader's 65,536-entry table was
+  not representable while allocation could continue. Closed #1699 delivered
+  the refusal boundary on top of #1690's failure model.
+- An accepted device could receive fewer descriptors than the fixed shader
+  array declared. Closed #1689 delivered the device capability/layout
   contract.
-- Ordinary texture cleanup closures exist, but the orderly shutdown path does
-  not call their alias-safe pool drain. Open #1691 owns that wiring.
+- Ordinary texture cleanup closures existed without an orderly-shutdown pool
+  drain. Closed #1691 delivered that wiring.
 - Repeated preview races reuse the image and slot but leak handle aliases and
-  refcounts. This is ASSET-3 and has no dedicated open issue yet.
-- The all-reference texture checker is red on comment prose and absent from CI.
-  Open #1705 owns repairing and wiring it.
+  refcounts. ASSET-3 deliberately has no dedicated issue; its regression case
+  belongs in APS-7/APS-8 rather than a tactical preview issue.
+- The all-reference texture checker was red on comment prose and absent from
+  CI. Closed #1705 repaired and wired it as a blocking gate.
 
 These are reasons to harden capacity behavior before adding thousands of new
 assets. They are not reasons to abandon bindless rendering.
@@ -465,11 +467,11 @@ world/session ownership. UI-screen-level ownership may be useful later but can
 create churn and complexity without saving meaningful residency. The first
 implementation should name only lifecycle boundaries with real teardown events.
 
-## Dependency-ordered delivery
+## Delivery plan
 
 ### APS-1. Make bindless slot-registration failure a truthful terminal outcome
 
-- Reuse open #1690.
+- Delivered by closed #1690.
 - Gate every ready/cache/size/callback publication on successful registration.
 - Publish the chosen terminal failure to all waiters and release prepared GPU
   objects; preserve the previous transient generation.
@@ -478,7 +480,7 @@ implementation should name only lifecycle boundaries with real teardown events.
 
 ### APS-2. Refuse stable texture handles the shader cannot represent
 
-- Reuse open #1699.
+- Delivered by closed #1699.
 - Refuse the first id outside `handleSlotTableSize` at one allocation or
   registration boundary and reuse APS-1's failure representation.
 - Preserve the last representable id and all below-cap behavior.
@@ -486,7 +488,7 @@ implementation should name only lifecycle boundaries with real teardown events.
 
 ### APS-3. Make accepted-device descriptor capacity match the shader contract
 
-- Reuse open #1689.
+- Delivered by closed #1689.
 - Choose and implement one valid fixed-array or runtime-array contract without
   `VARIABLE_DESCRIPTOR_COUNT`, preserving the MoltenVK constraint.
 - Make physical-device selection and texture-system construction agree.
@@ -495,7 +497,7 @@ implementation should name only lifecycle boundaries with real teardown events.
 
 ### APS-4. Drain ordinary texture resources during orderly shutdown
 
-- Reuse open #1691.
+- Delivered by closed #1691.
 - Invoke the existing alias-safe drain while the device, descriptor set, and
   queues are alive; keep no-device boot modes unchanged.
 - Do not add a public mid-session unload verb in this slice.
@@ -503,12 +505,10 @@ implementation should name only lifecycle boundaries with real teardown events.
 
 ### APS-5. Add descriptor, handle, residency, alias, and memory observability
 
-- Add a pure snapshot seam and focused headless counter-transition coverage.
-- Expose a bounded debug query and boot/shutdown high-water summary.
-- Capture representative startup, gameplay, unit-heavy, world-map, preview,
-  resize, save-load, and long-navigation baselines on a graphical device.
-- Resolve Q-1 and Q-2 from actual supported-device and runtime evidence.
-- **Depends on:** APS-1, APS-2, and APS-3 for truthful capacity semantics.
+> **Disposition:** No separate issue — `docs/asset_telemetry_design.md` owns
+> the typed snapshot, Lua query, bounded detail, real-GPU probe, representative
+> baselines, and pressure warnings. APS-6, APS-11, APS-12, and APS-13 consume
+> that evidence without duplicating the telemetry arc.
 
 ### APS-6. Replace path-only texture identity with a policy-aware asset key
 
@@ -517,7 +517,8 @@ implementation should name only lifecycle boundaries with real teardown events.
 - Keep generated unit atlases pinned-nearest and ordinary textures global.
 - Add cross-policy same-path coverage so neither request inherits the wrong
   sampler.
-- **Depends on:** APS-5 so the migration's resource/alias effect is measurable.
+- **Depends on:** ATEL-5's measured baseline so the migration's resource/alias
+  effect is measurable.
 
 ### APS-7. Separate canonical texture identity from asynchronous load requests
 
@@ -539,18 +540,15 @@ implementation should name only lifecycle boundaries with real teardown events.
 
 ### APS-9. Remove preview's abandoned-request handle growth
 
-- Process ASSET-3 without duplicating an existing tracker item.
-- Cache successful completion by `AssetKey` even when it is no longer the
-  current selection; only the current selection may change the displayed
-  sprite.
-- Prove rapid A -> B -> A selection does not grow handles, slots, or ownership
-  after the canonical load settles.
-- **Depends on:** APS-7 and APS-8. A small tactical repair may land earlier if
-  it does not create an API that the canonical identity work must remove.
+> **Disposition:** No separate issue — ASSET-3 already established that the
+> developer-only preview race is too small for a tactical tracker item. Fold
+> its rapid A -> B -> A acceptance case into APS-7/APS-8: every successful
+> completion becomes reusable by `AssetKey`, only the current selection changes
+> the sprite, and the settled sequence does not grow handles, slots, or owners.
 
 ### APS-10. Make all direct texture references a blocking validated inventory
 
-- Reuse open #1705.
+- Delivered by closed #1705.
 - Make the checker comment/string aware, self-tested, fail-loud, green on the
   repository, and present in both CI and `make ci` with parity intact.
 - Do not turn it into an orphan-asset or atlas compiler in this slice.
@@ -561,10 +559,10 @@ implementation should name only lifecycle boundaries with real teardown events.
 - Inventory authored sources separately from generated atlas artifacts.
 - Record image dimensions, decoded byte estimates, intended sampler/lifetime,
   and expected eager/conditional/transient residency by family.
-- Compare the static estimate with APS-5 runtime high-water captures.
+- Compare the static estimate with ATEL-5 runtime high-water captures.
 - Fail on missing/stale ownership metadata, not on intentionally identical
   pixel content.
-- **Depends on:** APS-5 and APS-10.
+- **Depends on:** ATEL-5 and APS-10.
 
 ### APS-12. Pilot another atlas family only if measurements justify it
 
@@ -607,4 +605,3 @@ implementation should name only lifecycle boundaries with real teardown events.
 - Verified audit findings: `docs/asset_system_findings.md`.
 - Related zoom scaling design:
   `docs/chunk_residency_streaming_design.md`.
-
