@@ -23,12 +23,13 @@ import UPrelude
 import Test.Hspec
 import Control.Concurrent (threadDelay)
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
+import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import Engine.Core.State (EngineEnv)
 import World.Chunk.Admit
     ( admitResidentChunks, claimChunkGeneration, claimedChunkCoord
-    , pageChunkKey, readChunkOwner, reconcileResidentChunks
-    , registerChunkDemand, releaseEvictedChunks, seedResidentChunks
+    , pageChunkKey, publishSeedChunks, readChunkOwner
+    , reconcileResidentChunks, registerChunkDemand, releaseEvictedChunks
     , withTransientChunkClaim )
 import World.Chunk.Residency
     ( AdmitOutcome(..), ChunkGeneration, ChunkOwner, ChunkState(..)
@@ -39,12 +40,14 @@ import World.Chunk.Residency
     , isCurrentGeneration, mintChunkRequest, newChunkGeneration
     , releaseChunk, requestChunk )
 import World.Chunk.Queue (enqueueChunkRequest)
-import World.Chunk.Types (ChunkCoord(..), wrapChunkCoordU)
+import World.Chunk.Types (ChunkCoord(..), LoadedChunk(..), wrapChunkCoordU)
 import World.Command.Types (WorldCommand(..))
 import World.Generate.Types
     (WorldGenParams(..), defaultWorldGenParams, isArenaParams)
 import World.Page.Types (WorldPageId(..))
 import World.State.Types (WorldState(..), emptyWorldState)
+import World.Tile.Types (WorldTileData(..), emptyWorldTileData, lookupChunk)
+import World.Generate.Arena (generateFlatChunk)
 import Test.Headless.Harness
     (getWorldState, sendWorldCommand, waitForWorldInit)
 
@@ -108,6 +111,14 @@ waitForNewGeneration env pid old timeoutSecs = go (timeoutSecs * 10)
           case mGen of
               Just gen | gen ≢ old → pure gen
               _ → threadDelay 100000 ⌦ \_ → go (n - 1)
+
+-- | A seed page's tile map: one chunk under its CANONICAL key, the
+--   shape every seed site writes. Only the KEY matters to these
+--   examples, so the payload is the cheapest real chunk available.
+seedTileData ∷ ChunkCoord → WorldTileData
+seedTileData coord = emptyWorldTileData
+    { wtdChunks = HM.singleton canonical (generateFlatChunk canonical) }
+  where canonical = canonicalChunkCoord (sizedParams seamWorldSize) coord
 
 -- | The four-valued residency of a coord on a page.
 stateOf ∷ WorldGenParams → WorldPageId → ChunkCoord → ChunkOwner → ChunkState
@@ -358,18 +369,42 @@ spec = describe "canonical chunk identity" $ do
         ws2 ← waitForWorldInit env pid 300
         (chunkOwnerGeneration ⊚ readChunkOwner ws2) `shouldReturn` gen2
 
-    it "admits a seeded page's chunks under their canonical keys" $ \_ → do
+    it "admits a seeded page's chunks before it publishes their payloads" $ \_ → do
         -- The seed paths (a fresh world's centre, a restored centre, an
         -- arena's whole chunk set) build their payloads before the page
         -- can take a request, and still reach the resident set through
-        -- the same admission boundary.
+        -- the same admission boundary — owner first, payloads second.
+        --
+        -- The order is what matters. A fresh world's page is registered
+        -- and given its generation params BEFORE its centre is built, so
+        -- the Lua thread can call world.loadChunksInRegion mid-seed. The
+        -- example below reconstructs both interleavings deterministically
+        -- rather than racing them.
         let params = sizedParams seamWorldSize
         ws ← detachedPage params
-        seedResidentChunks ws pageA params [aliasCoord]
+        publishSeedChunks ws pageA params [aliasCoord] (seedTileData aliasCoord)
         owner ← readChunkOwner ws
         chunkOwnerSize owner `shouldBe` 1
         stateOf params pageA canonCoord owner `shouldBe` ChunkResident
         registerChunkDemand ws pageA params [canonCoord] `shouldReturn` []
+        -- The payload landed under the canonical key, not the alias the
+        -- caller named.
+        td ← readIORef (wsTilesRef ws)
+        (lcCoord ⊚ lookupChunk canonCoord td) `shouldBe` Just canonCoord
+
+        -- The window the ordering closes, made deterministic: with the
+        -- payload published FIRST, a request arriving before the owner is
+        -- settled queues and COUNTS a chunk the page already holds.
+        wsBad ← detachedPage params
+        writeIORef (wsTilesRef wsBad) (seedTileData aliasCoord)
+        enqueueChunkRequest pageA wsBad [canonCoord] `shouldReturn` 1
+
+        -- Owner first, the same request is satisfied work.
+        wsGood ← detachedPage params
+        publishSeedChunks wsGood pageA params [aliasCoord]
+                          (seedTileData aliasCoord)
+        enqueueChunkRequest pageA wsGood [canonCoord] `shouldReturn` 0
+        readIORef (wsInitQueueRef wsGood) `shouldReturn` []
 
     it "schedules a request that lands behind a transient claim" $ \_ → do
         -- The loss this closes: the cursor's ore survey holds a

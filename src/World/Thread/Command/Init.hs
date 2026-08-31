@@ -37,7 +37,7 @@ import World.Generate (generateChunk)
 import World.Generate.Arena (generateArenaChunks, arenaGenForSeed)
 import World.Chunk.Queue (initialChunkQueue)
 import World.Chunk.Residency (canonicalChunkCoord)
-import World.Chunk.Admit (registerChunkDemand, seedResidentChunks)
+import World.Chunk.Admit (publishSeedChunks, registerChunkDemand)
 import World.Geology (buildTimeline)
 import World.Geology.Log (formatPlatesSummary)
 import World.Plate (generatePlates, elevationAtGlobal)
@@ -380,14 +380,16 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
             , lcStructures = emptyChunkStructures
             }
 
-    atomicModifyIORef' (wsTilesRef worldState) $ \_ →
-        (WorldTileData { wtdChunks = HM.singleton centerCoord centerChunk
-                       , wtdMaxChunks = 200 }, ())
     -- The centre is new residency like any other chunk (#2001), so it
     -- reaches the owner through the SAME admission boundary the camera
-    -- and init-queue batches use — on a brand-new page whose owner is
-    -- empty, hence the claim-then-admit seed form.
-    seedResidentChunks worldState pageId params [centerCoord]
+    -- and init-queue batches use. This page is already registered and
+    -- already has its generation params, so a world.loadChunksInRegion
+    -- can arrive mid-seed: publishSeedChunks settles the owner before it
+    -- writes the tile map, so such a call can never queue and count the
+    -- centre the page is in the middle of acquiring.
+    publishSeedChunks worldState pageId params [centerCoord]
+        WorldTileData { wtdChunks = HM.singleton centerCoord centerChunk
+                      , wtdMaxChunks = 200 }
 
     -- Stamp any placed location on the synchronously-generated centre
     -- chunk (#89). It is written straight to wsTilesRef and excluded from
@@ -512,13 +514,12 @@ handleWorldInitArenaCommand env logger pageId = do
         allChunks = generateArenaChunks (arenaGenForSeed (wgpSeed arenaParams))
         chunkMap  = HM.fromList [ (lcCoord c, c) | c ← allChunks ]
 
-    -- Write tile data
-    atomicModifyIORef' (wsTilesRef worldState) $ \_ →
-        (WorldTileData { wtdChunks = chunkMap, wtdMaxChunks = 100 }, ())
-    -- Arena chunks are residency too (#2001): same admission boundary,
-    -- and 'canonicalChunkCoord' is the identity on an arena page, so the
+    -- Write tile data. Arena chunks are residency too (#2001): same
+    -- admission boundary, same owner-before-payloads order, and
+    -- 'canonicalChunkCoord' is the identity on an arena page, so the
     -- sentinel wgpWorldSize never reaches 'wrapChunkCoordU'.
-    seedResidentChunks worldState pageId arenaParams (map lcCoord allChunks)
+    publishSeedChunks worldState pageId arenaParams (map lcCoord allChunks)
+        WorldTileData { wtdChunks = chunkMap, wtdMaxChunks = 100 }
 
     -- Force the arena chunks to NF so the LoadDone below is honest (same
     -- contract as the progressive loader). Tiny 5×5 arena, negligible cost.

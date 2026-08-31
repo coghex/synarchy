@@ -46,7 +46,7 @@ import World.Plant.Validate (revalidatePlantDesignations)
 import World.Grid (worldToGrid)
 import World.Chunk.Queue (initialChunkQueue)
 import World.Chunk.Residency (canonicalChunkCoord)
-import World.Chunk.Admit (registerChunkDemand, seedResidentChunks)
+import World.Chunk.Admit (publishSeedChunks, registerChunkDemand)
 import World.Plate (elevationAtGlobal)
 import World.Preview (buildPreviewFromPixels, PreviewImage(..))
 import World.Render (surfaceHeadroom)
@@ -336,11 +336,13 @@ stagePage logger registry palette catalog buildingDefs unitDefs
                                 (generateArenaChunks (arenaGenForSeed seed))
               chunkMap = HM.fromList [ (lcCoord c, c) | c ← arenaChunks ]
           _ ← evaluate (force arenaChunks)
-          atomicModifyIORef' (wsTilesRef worldState) $ \_ →
-              (WorldTileData { wtdChunks = chunkMap, wtdMaxChunks = 100 }, ())
-          -- Same admission boundary a fresh arena uses (#2001); this
-          -- staged WorldState is brand new, so its owner starts empty.
-          seedResidentChunks worldState pid params (map lcCoord arenaChunks)
+          -- Same admission boundary and same owner-before-payloads order
+          -- a fresh arena uses (#2001). This staged WorldState is not
+          -- published until World.Load.Publish, so nothing can observe
+          -- the handoff here — sharing the one helper is what keeps the
+          -- two seed paths from drifting, not a defence this one needs.
+          publishSeedChunks worldState pid params (map lcCoord arenaChunks)
+              WorldTileData { wtdChunks = chunkMap, wtdMaxChunks = 100 }
           let seeds = [ (lcCoord c, lcFluidMap c, lcTerrainSurfaceMap c)
                       | c ← arenaChunks ]
           writeIORef (wsInitQueueRef worldState) []
@@ -421,12 +423,11 @@ stagePage logger registry palette catalog buildingDefs unitDefs
           cdesigs ← readIORef (wsConstructDesignationsRef worldState)
           let centerChunk = applyConstructSlopes cdesigs
                   (applyDigSlopes desigs (replayEdits edits centerChunkRaw))
-          atomicModifyIORef' (wsTilesRef worldState) $ \_ →
-              (WorldTileData { wtdChunks    = HM.singleton centerCoord centerChunk
-                             , wtdMaxChunks = 200 }, ())
           -- The restored centre is new residency (#2001), admitted the
-          -- same way a fresh world's centre is.
-          seedResidentChunks worldState pid params [centerCoord]
+          -- same way — and in the same order — as a fresh world's centre.
+          publishSeedChunks worldState pid params [centerCoord]
+              WorldTileData { wtdChunks    = HM.singleton centerCoord centerChunk
+                            , wtdMaxChunks = 200 }
           let seeds = [ (centerCoord, lcFluidMap centerChunk
                         , lcTerrainSurfaceMap centerChunk) ]
               stamps = locationStampsFor params [centerChunk]
