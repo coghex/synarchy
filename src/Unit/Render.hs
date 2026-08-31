@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict #-}
 module Unit.Render
     ( renderUnitQuads
+    , renderUnitQuadsScanned
     , unitToQuad
     , pickFrame
     , screenDirOf
@@ -139,7 +140,23 @@ pickFrame now cam inst def
 --   resolved per instance here rather than stamped over the result.
 renderUnitQuads ∷ EngineEnv → (WorldPageId → Word32) → CameraFacing → Int → Int
                 → Float → IO (V.Vector SortableQuad)
-renderUnitQuads env solarSlotOf facing zSlice effDepth tileAlpha = do
+renderUnitQuads env solarSlotOf facing zSlice effDepth tileAlpha =
+    snd ⊚ renderUnitQuadsScanned env solarSlotOf facing zSlice effDepth tileAlpha
+
+-- | 'renderUnitQuads' with the scene-assembly telemetry (#1921) this
+--   pass contributes: the entries examined in the GLOBAL unit-manager
+--   map, paired with the quads it produced.
+--
+--   The count is taken before ANY filtering — 'unitsOnPages' narrows to
+--   the visible pages, the texture-system check below rejects the whole
+--   pass without one, and 'unitToQuad' applies the Z band — because the
+--   global map is what this pass actually walks, and that is the cost
+--   the measurement exists to expose. It therefore stays non-zero under
+--   GPU-free headless execution, where emitted is legitimately zero.
+renderUnitQuadsScanned
+    ∷ EngineEnv → (WorldPageId → Word32) → CameraFacing → Int → Int
+    → Float → IO (Int, V.Vector SortableQuad)
+renderUnitQuadsScanned env solarSlotOf facing zSlice effDepth tileAlpha = do
     um ← readIORef (unitManagerRef env)
     -- Render only units of the VISIBLE worlds — units are world-scoped, so
     -- a hidden world's units must not draw over the active one (#78).
@@ -148,8 +165,9 @@ renderUnitQuads env solarSlotOf facing zSlice effDepth tileAlpha = do
         instances = unitsOnPages visiblePages (umInstances um)
         defs      = umDefs um
         selected  = umSelected um
+        scanned   = HM.size (umInstances um)
     if HM.null instances
-        then return V.empty
+        then return (scanned, V.empty)
         else do
             -- Read the game-clock (advances only when not paused) so
             -- the rendered frame index matches the uiAnimStart values
@@ -158,7 +176,7 @@ renderUnitQuads env solarSlotOf facing zSlice effDepth tileAlpha = do
             texSizes ← readIORef (rvTextureSizeRef (toRenderViewCapability env))
             mBts ← readIORef (rvTextureSystemRef (toRenderViewCapability env))
             case mBts of
-                Nothing → return V.empty
+                Nothing → return (scanned, V.empty)
                 Just _bts → do
                     -- Bake a STABLE texture-handle id; the bindless shader
                     -- resolves it to a live slot at draw time (#286).
@@ -178,7 +196,7 @@ renderUnitQuads env solarSlotOf facing zSlice effDepth tileAlpha = do
                                             (solarSlotOf (uiPage inst)) sq : acc
                                     Nothing → acc
                               ) [] instances
-                    return quads
+                    return (scanned, quads)
 
 -- | The pure per-unit quad the renderer emits — exported so a test can
 --   gate the ACTUAL consumer geometry (vertex positions and UVs)

@@ -38,7 +38,9 @@
 --   facing's own depth axis instead, so the gap is the same at all four.
 module Structure.Render
     ( renderStructureQuads
+    , renderStructureQuadsScanned
     , structureChunkQuads
+    , structureChunkQuadsScanned
     , structurePieceQuads
     , isScreenFrontWall
     , wallTieBreak
@@ -106,7 +108,23 @@ import Structure.WallCatalog (StructureWallCatalog, rotatedWallArt)
 --   'wsGenParamsRef' so two visible pages can never borrow each other's.
 renderStructureQuads ∷ EngineEnv → WorldState → CameraFacing → Int → Int → Float
                      → IO (V.Vector SortableQuad)
-renderStructureQuads env ws facing zSlice effDepth tileAlpha = do
+renderStructureQuads env ws facing zSlice effDepth tileAlpha =
+    snd ⊚ renderStructureQuadsScanned env ws facing zSlice effDepth tileAlpha
+
+-- | 'renderStructureQuads' with the scene-assembly telemetry (#1921)
+--   this pass contributes: the structure-PIECE records examined after
+--   their loaded chunk passed chunk-visibility culling, paired with the
+--   quads it produced.
+--
+--   Unlike units and buildings, the texture-system check here sits
+--   BEFORE any piece is enumerated, so a GPU-free headless run
+--   legitimately reports zero scanned as well as zero emitted. One
+--   piece can expand into several wall strips, so emitted is not
+--   bounded by scanned.
+renderStructureQuadsScanned
+    ∷ EngineEnv → WorldState → CameraFacing → Int → Int → Float
+    → IO (Int, V.Vector SortableQuad)
+renderStructureQuadsScanned env ws facing zSlice effDepth tileAlpha = do
             td      ← readIORef (wsTilesRef ws)
             let handoff = toRenderHandoffCapability env
             handles ← readIORef (rhTexPaletteHandlesRef handoff)
@@ -117,7 +135,7 @@ renderStructureQuads env ws facing zSlice effDepth tileAlpha = do
             -- camera / view-bounds reads entirely, as before.
             let chunks = [ lc | lc ← HM.elems (wtdChunks td)
                              , not (HM.null (lcStructures lc)) ]
-            if null chunks then return V.empty else do
+            if null chunks then return (0, V.empty) else do
                 let rv = toRenderViewCapability env
                 texSizes ← readIORef (rvTextureSizeRef rv)
                 camera   ← readIORef (rvCameraRef rv)
@@ -125,7 +143,7 @@ renderStructureQuads env ws facing zSlice effDepth tileAlpha = do
                 paramsM  ← readIORef (wsGenParamsRef ws)
                 mBts ← readIORef (rvTextureSystemRef rv)
                 case mBts of
-                    Nothing → return V.empty
+                    Nothing → return (0, V.empty)
                     Just _bts →
                         -- Bake stable handle ids (tile + its own face map);
                         -- resolved to live slots in the shader (#286).
@@ -133,10 +151,12 @@ renderStructureQuads env ws facing zSlice effDepth tileAlpha = do
                             worldSize = maybe 128 wgpWorldSize paramsM
                             vb = computeViewBounds camera fbW fbH effDepth
                             (camX, camY) = camPosition camera
-                        in return $ V.fromList $
-                            structureChunkQuads catalog palette handles
-                                lookupSlot texSizes facing zSlice effDepth
-                                tileAlpha worldSize vb camX camY chunks
+                            (scanned, quads) =
+                                structureChunkQuadsScanned catalog palette
+                                    handles lookupSlot texSizes facing zSlice
+                                    effDepth tileAlpha worldSize vb camX camY
+                                    chunks
+                        in return (scanned, V.fromList quads)
 
 -- | The seam-aware per-chunk half of the pass, pure so a headless spec can
 --   drive the real geometry (the IO pass above deliberately emits nothing
@@ -172,16 +192,48 @@ structureChunkQuads
 structureChunkQuads catalog palette handles lookupSlot texSizes
                     facing zSlice effDepth tileAlpha worldSize vb
                     camX camY chunks =
-    [ shifted
-    | lc ← chunks
-    , Just off ← [isChunkVisibleWrapped facing worldSize vb camX camY
-                                        (lcCoord lc)]
-    , ((gx, gy, slotTag), spd) ← HM.toList (lcStructures lc)
-    , sq ← structurePieceQuads catalog palette handles lookupSlot texSizes
-               facing zSlice effDepth tileAlpha gx gy
-               (toEnum (fromIntegral slotTag) ∷ StructureSlot) spd
-    , let shifted = translateQuad off sq
-    ]
+    snd (structureChunkQuadsScanned catalog palette handles lookupSlot texSizes
+             facing zSlice effDepth tileAlpha worldSize vb camX camY chunks)
+
+-- | 'structureChunkQuads' paired with the scene-assembly telemetry
+--   (#1921) it contributes: the structure-PIECE records examined once
+--   their chunk has passed the visibility test.
+--
+--   The visible chunks are shared between the two halves, so the
+--   'isChunkVisibleWrapped' decision is taken exactly once per chunk
+--   here as it was before — the extra list is proportional to VISIBLE
+--   CHUNKS, never to the pieces the count is over.
+structureChunkQuadsScanned
+    ∷ StructureWallCatalog
+    → TexPalette
+    → HM.HashMap Int TextureHandle             -- ^ palette id → runtime handle
+    → (TextureHandle → Word32)                 -- ^ handle → bindless slot id
+    → HM.HashMap TextureHandle (Int, Int)      -- ^ texture pixel sizes
+    → CameraFacing → Int → Int → Float
+    → Int                                      -- ^ world size in chunks
+    → ViewBounds
+    → Float → Float                            -- ^ camera screen position
+    → [LoadedChunk]
+    → (Int, [SortableQuad])
+structureChunkQuadsScanned catalog palette handles lookupSlot texSizes
+                           facing zSlice effDepth tileAlpha worldSize vb
+                           camX camY chunks =
+    ( sum [ HM.size (lcStructures lc) | (lc, _) ← visible ]
+    , [ shifted
+      | (lc, off) ← visible
+      , ((gx, gy, slotTag), spd) ← HM.toList (lcStructures lc)
+      , sq ← structurePieceQuads catalog palette handles lookupSlot texSizes
+                 facing zSlice effDepth tileAlpha gx gy
+                 (toEnum (fromIntegral slotTag) ∷ StructureSlot) spd
+      , let shifted = translateQuad off sq
+      ] )
+  where
+    visible =
+        [ (lc, off)
+        | lc ← chunks
+        , Just off ← [isChunkVisibleWrapped facing worldSize vb camX camY
+                                            (lcCoord lc)]
+        ]
 
 -- | Move a quad's four vertex POSITIONS by a screen-space offset, leaving
 --   every other field — UVs, tint, atlas/facemap slots, flags, packed
