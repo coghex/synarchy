@@ -59,26 +59,41 @@ function M.encumbranceMultiplier(uid)
     return clamp(1.0 - penalty / endur, ENC_FLOOR, 1.0)
 end
 
--- Top (sprint) speed: max_speed × agility. Agility 1.0 → max_speed,
--- 2.0 → double (a 20 km/h human, an exceptional 40 km/h one). Agility is
--- clamped defensively so absurd stat data can't produce absurd speeds.
--- A leg/foot fracture multiplies the whole speed band down (a limp) via
--- injuries.speedMultiplier, so comfort/ordered/meander — all derived
--- from sprint — slow together. A fully disabling break keeps the unit
--- collapsed entirely (unit_resources), so this only ever limps a unit
--- that's still on its feet. Carried load slows the band the same way via
--- encumbranceMultiplier — heavier = slower, eased by endurance.
-function M.sprint(uid)
-    local maxsp = unit.getMaxSpeed(uid) or 0
-    local agi   = unit.getStat(uid, "agility") or 1.0
-    -- Salt cramps (hyponatremia), low exhaustion (circadian epic #479 /
-    -- #610), and a low calorie-store fraction (the hungry band, #806)
-    -- all slow the whole speed band too, like a limp.
-    return maxsp * clamp(agi, 0.3, 3.0)
-         * injuries.speedMultiplier(uid) * salts.speedMultiplier(uid)
+-- Every WHOLE-BAND modifier, as one product (#1948). These are the
+-- physiological / load conditions that slow a unit no matter which gait
+-- it is using, so they belong to the band itself rather than to any one
+-- speed:
+--   * a limp from a leg/foot fracture (injuries.speedMultiplier). A
+--     fully disabling break keeps the unit collapsed entirely
+--     (unit_resources), so this only ever limps a unit still on its feet.
+--   * salt cramps / hyponatremia (salts.speedMultiplier).
+--   * near-empty exhaustion (circadian epic #479 / #610).
+--   * a low calorie-store fraction — the hungry band (#806).
+--   * carried load, eased by endurance (M.encumbranceMultiplier).
+-- Every one of them returns a neutral 1.0 when the unit has no such
+-- state (no wound, no live salt/exhaustion/calorie pool, no carry stat),
+-- so a def without those resources gets exactly its unmodified band.
+--
+-- Kept as ONE named function so every gait multiplies by the SAME set:
+-- sprint, and the derived comfort / ordered, take it through M.sprint,
+-- and meander's raw max_speed branch takes it directly. That is what
+-- makes it impossible for a modifier to reach some gaits and not others.
+function M.bandMultiplier(uid)
+    return injuries.speedMultiplier(uid) * salts.speedMultiplier(uid)
          * exhaustion.speedMultiplier(uid)
          * starvation.speedMultiplier(uid)
          * M.encumbranceMultiplier(uid)
+end
+
+-- Top (sprint) speed: max_speed × agility. Agility 1.0 → max_speed,
+-- 2.0 → double (a 20 km/h human, an exceptional 40 km/h one). Agility is
+-- clamped defensively so absurd stat data can't produce absurd speeds.
+-- The whole-band modifiers above scale it down, so comfort/ordered —
+-- both derived from sprint — slow together with it.
+function M.sprint(uid)
+    local maxsp = unit.getMaxSpeed(uid) or 0
+    local agi   = unit.getStat(uid, "agility") or 1.0
+    return maxsp * clamp(agi, 0.3, 3.0) * M.bandMultiplier(uid)
 end
 
 -- Comfort (stamina-neutral cruise): a fraction of sprint set by endurance,
@@ -124,19 +139,29 @@ end
 -- Meander: the slow amble of a unit with NO goal (ambient wander). Well
 -- below comfort, so the unit also recovers stamina while drifting. A low
 -- fraction of max_speed — NOT agility-scaled, because ambling is leisurely
--- regardless of how fast the unit *could* run — and capped under half
--- comfort so even a low-comfort unit still meanders slower than it cruises.
+-- regardless of how fast the unit *could* run — and capped at half
+-- comfort so even a low-comfort unit never meanders faster than half
+-- its cruise.
 -- This is what keeps animals from sprinting around with no purpose.
 --
--- Encumbrance DOES slow the amble (a loaded unit physically plods), so it
--- multiplies the raw max_speed cap too. The comfort term already carries
--- encumbrance via sprint, but on an agile unit the max_speed cap binds and
--- would otherwise hide load from wander until it grew heavy — so apply the
--- multiplier to both terms and the amble always responds to load.
+-- The whole-band modifiers DO slow the amble (a limping, cramping,
+-- exhausted, hungry or loaded unit physically plods), so they multiply
+-- the raw max_speed term too — not just the comfort term, which already
+-- carries them via sprint. Applying them to only one branch hides them
+-- behind whichever branch of the `min` wins: on an agile unit the raw
+-- cap binds, so a modifier confined to the comfort term never reaches
+-- the amble at all (#1948 — the bug #305 had already fixed for
+-- encumbrance alone). Scaling BOTH terms by the same M.bandMultiplier
+-- makes the choice of branch irrelevant: the amble always responds.
+--
+-- Note this cannot make a wandering unit burn stamina. The drain tick
+-- reads speed/comfort, and that ratio is now INVARIANT under the band
+-- modifiers (both terms carry the same factor, so it cancels) instead
+-- of creeping up as the band shrank.
 local MEANDER_FRAC = 0.25
 function M.meander(uid)
     local maxsp = unit.getMaxSpeed(uid) or 0
-    return math.min(maxsp * MEANDER_FRAC * M.encumbranceMultiplier(uid),
+    return math.min(maxsp * MEANDER_FRAC * M.bandMultiplier(uid),
                     M.comfort(uid) * 0.5)
 end
 
