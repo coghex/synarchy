@@ -15,6 +15,10 @@ executable works from a working directory OUTSIDE the repo:
   3. --resource-root pointing at a nonexistent directory -> same, and
      a bare --resource-root with no path errors instead of silently
      falling back to the cwd;
+  3c. an explicitly EMPTY --resource-root operand -> exit 1 naming the
+     flag and calling the operand empty, with nothing on stdout, run
+     from the REPO and again with SYNARCHY_ROOT naming the repo, so
+     neither the cwd nor the environment can answer it (#1949);
   4. a small --dump run with --resource-root pointing at the repo ->
      stdout is a nonempty JSON tile array (flag mechanism);
   5. a --headless boot with SYNARCHY_ROOT pointing at the repo ->
@@ -138,6 +142,44 @@ def main() -> int:
           and "--resource-root requires a path" in r.stderr)
     failures += not check("bare --resource-root -> exit 1, no cwd fallback",
                           ok, f"rc={r.returncode}")
+
+    # --- 3c. empty --resource-root operand: error, not cwd/env fallback ---
+    # Deliberately run from REPO, not the temp dir. The pre-#1949 code
+    # resolved "" to the cwd, so from an unsuitable temp directory the
+    # bug ALSO exited 1 (as an invalid-root complaint about that temp
+    # directory) and a bare exit-code assertion would pass over it.
+    # From the repo the cwd is a valid root, which is exactly where the
+    # bug booted successfully; so the checks pin the specific rejection:
+    # stderr names the flag and calls the operand empty, and nothing
+    # reaches stdout.
+    empty_dump = ["--dump", "--seed", "7", "--worldSize", "32",
+                  "--region", "0,0,0,0", "--resource-root", ""]
+    r = subprocess.run([binary] + empty_dump,
+                       cwd=str(REPO), env=base_env(),
+                       capture_output=True, text=True, timeout=60)
+    ok = (r.returncode == 1
+          and "--resource-root" in r.stderr
+          and "empty" in r.stderr
+          and r.stdout == "")
+    failures += not check("empty --resource-root from the repo -> exit 1 naming "
+                          "the flag and the empty operand, no stdout",
+                          ok, f"rc={r.returncode}, stdout={len(r.stdout)}B")
+
+    # Same operand with a VALID SYNARCHY_ROOT: the empty flag value must
+    # not defer to the environment root either. Both roots on offer here
+    # are usable, so booting at all is the regression.
+    env = base_env()
+    env["SYNARCHY_ROOT"] = str(REPO)
+    r = subprocess.run([binary] + empty_dump,
+                       cwd=str(REPO), env=env,
+                       capture_output=True, text=True, timeout=60)
+    ok = (r.returncode == 1
+          and "--resource-root" in r.stderr
+          and "empty" in r.stderr
+          and r.stdout == "")
+    failures += not check("empty --resource-root with a valid SYNARCHY_ROOT -> "
+                          "exit 1, boots from neither root",
+                          ok, f"rc={r.returncode}, stdout={len(r.stdout)}B")
 
     # --- 4. --dump from the temp dir with --resource-root <repo> ----------
     r = subprocess.run([binary, "--dump", "--seed", "42",
