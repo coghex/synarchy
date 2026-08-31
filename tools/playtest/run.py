@@ -1634,6 +1634,23 @@ def selftest() -> int:
                 typed = str(e)
             check(f"a non-numeric dy ({bogus!r}) is rejected, not coerced",
                   typed is not None and "rejected" in typed, str(typed))
+        # A float just outside a bound must be recorded as the value it
+        # actually was. A fixed significant-figure format collapses it
+        # onto the bound, producing a note that reads "dy 10 ... clamped
+        # to 10" and loses what caused the clamp.
+        for near in (10.0000001, -10.0000001,
+                     math.nextafter(engine_mod.SCROLL_DY_MAX, math.inf),
+                     math.nextafter(engine_mod.SCROLL_DY_MIN, -math.inf)):
+            ncalls, _, nnotes = scroll_calls({"do": "scroll", "dy": near})
+            bound = (engine_mod.SCROLL_DY_MAX if near > 0
+                     else engine_mod.SCROLL_DY_MIN)
+            check(f"a float just outside the bound ({near!r}) clamps and "
+                  "records the value that caused it",
+                  scroll_dy_of(ncalls) == [bound] and len(nnotes) == 1
+                  and repr(near) in nnotes[0]
+                  and float(re.search(r"scroll dy (\S+) is outside",
+                                      nnotes[0]).group(1)) == near,
+                  str(ncalls) + str(nnotes))
         # A schema-valid integer can be arbitrary precision and sit
         # entirely outside float range. It is still FINITE, so the
         # contract clamps it; converting first would raise OverflowError

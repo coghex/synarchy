@@ -288,16 +288,21 @@ def _lua_number(value: float) -> str:
 def _requested_repr(value) -> str:
     """The delta the player asked for, as text for its own turn note.
 
+    A float is rendered round-trippably, the same way the Lua call is: a
+    fixed significant-figure format collapses a near-bound request onto
+    the bound itself, so `10.0000001` would be recorded as "dy 10 ...
+    clamped to 10" — a note that both contradicts itself and loses the
+    value that actually caused the clamp.
+
     Ints are arbitrary precision, so a schema-valid integer can carry
-    hundreds of digits and cannot be formatted through a float
-    presentation at all. The note is read back as the player's own
-    memory, so an outsized one says how big the number was instead of
-    spelling it out.
+    hundreds of digits and cannot be put through a float presentation at
+    all. The note is read back as the player's own memory, so an outsized
+    one says how big the number was instead of spelling it out.
     """
     if isinstance(value, int):
         text = str(value)
         return text if len(text) <= 24 else f"{text[:12]}...({len(text)} digits)"
-    return f"{value:g}"
+    return _lua_number(value)
 
 
 def _clamped_dy_note(requested, effective: float) -> str:
