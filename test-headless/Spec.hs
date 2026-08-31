@@ -207,6 +207,7 @@ import qualified Test.Headless.World.Render.QuadSnapshot as QuadSnapshot
 import qualified Test.Headless.World.Render.SolarAttribution as SolarAttribution
 import qualified Test.Headless.World.Render.DesignationFaceMap as DesignationFaceMap
 import qualified Test.Headless.World.DesignationSeam as DesignationSeam
+import qualified Test.Headless.World.CropPlant as CropPlant
 import qualified Test.Headless.World.StructureStage as StructureStage
 import qualified Test.Headless.World.StructurePaletteResidue as StructurePaletteResidue
 import qualified Test.Headless.Structure.ArtCatalog as StructureArtCatalog
@@ -418,6 +419,11 @@ main = hspec $ do
     aroundAll withHeadlessEngine $ do
         FluidWritebackStaleness.spec
         describe "persistence contract" FluidWritebackStaleness.saveSpec
+    -- Own engine (#1858): the only example in the suite that PUBLISHES
+    -- a loaded session, which replaces every live page -- so it must
+    -- never run inside the shared-worlds engine, and nothing may be
+    -- registered after it in this block.
+    aroundAll withHeadlessEngine CropPlant.saveSpec
     -- Own engine: #913's failure-report cases queue a WorldSave for a
     -- page that does not exist, and assert on the shared event log --
     -- both of which would be noise (and, for the log, a source of
@@ -751,6 +757,8 @@ main = hspec $ do
     describe "World.Render.DesignationFaceMap" DesignationFaceMap.spec
     describe "World.DesignationSeam" DesignationSeam.spec
     describe "World.DesignationSeam (engine)" DesignationSeam.engineSpec
+    describe "World.CropPlant" CropPlant.spec
+    describe "World.CropPlant (engine)" CropPlant.engineSpec
 
     -- #1674: its own headless engine (no worker threads), so the
     -- WorldSetStructure structure.place emits waits to be dequeued and

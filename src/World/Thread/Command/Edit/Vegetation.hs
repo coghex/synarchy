@@ -21,6 +21,7 @@ import World.Generate.Coordinates (canonicalTileFrame)
 import World.Edit.Types (WorldEdit(..), appendEdit)
 import World.Edit.Apply (applyEdit)
 import World.Vegetation (isTilledSoil)
+import World.Plant.Validate (revalidatePlantDesignations)
 
 -- | Set the vegetation id of an existing tile at (gx,gy,z) via the
 --   WeSetVeg edit path. Mirrors handleWorldSetSlopeCommand exactly —
@@ -70,6 +71,11 @@ handleWorldSetVegCommand wsc logger pageId rawGX rawGY z vegId = do
                         bumpQuadCacheGen ws
                         writeIORef (wsZoomQuadCacheRef ws) Nothing
                         writeIORef (wsBgQuadCacheRef ws)   Nothing
+                        -- #1858: the direct vegetation trigger. Tilling
+                        -- writes tilled soil through here, and anything
+                        -- writing a different cover over a designated
+                        -- tile is exactly the case D-14 makes continuous.
+                        _ ← revalidatePlantDesignations logger ws
                         logDebug logger CatWorld $
                             "Set veg at " <> tshow gx <> ","
                               <> tshow gy <> " z=" <> tshow z
