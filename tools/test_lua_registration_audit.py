@@ -649,6 +649,62 @@ def test_a_repeat_until_block_is_analyzed() -> None:
            f"the until expression must still see the body local, got: {output!r}")
 
 
+def test_a_do_inside_a_loop_header_does_not_open_the_loop_body() -> None:
+    """Loop headers NEST. A `do` opened deeper than the header -- inside
+    a function or a parenthesised expression in the header itself -- is
+    an ordinary block, and consuming the header there would scan the
+    real loop body with its control variable unbound."""
+    root = build(
+        {"item": ["getInfo"]},
+        {"scripts/a.lua":
+            "for item in (function()\n"
+            "    do local x = 1 end\n"
+            "    return function() return nil end\n"
+            "end)() do\n"
+            "    item.notRegistered()\n"
+            "end\n"})
+    expect_clean(root, "a `do` block nested inside a loop header")
+
+
+def test_nested_loop_headers_each_bind_their_own_control_variable() -> None:
+    root = build(
+        {"item": ["getInfo"], "unit": ["getInfo"]},
+        {"scripts/a.lua":
+            "for item in outer(function()\n"
+            "    for unit in inner() do print(unit.notAVerb) end\n"
+            "end) do\n"
+            "    print(item.alsoNotAVerb)\n"
+            "end\n"})
+    expect_clean(root, "two nested loop headers")
+
+
+def test_a_loop_header_with_no_do_is_a_certification_failure() -> None:
+    root = build({"item": ["getInfo"]},
+                 {"scripts/a.lua": "for item in pairs(t)\n    print(item)\n"})
+    expect_certification_failure(root, "opens its body",
+                                 "a loop header that never reaches its `do`")
+
+
+def test_a_repeat_nested_in_an_until_condition_is_analyzed() -> None:
+    """Pending `repeat` closures nest as well: an inner loop must not
+    displace the outer one, which would then never be retired and would
+    surface at end of file as a spurious unclosed block."""
+    root = build(
+        {"item": ["getInfo"]},
+        {"scripts/a.lua":
+            "repeat\n"
+            "    local item = 1\n"
+            "until (function()\n"
+            "    repeat local x = 1 until x > 0\n"
+            "    return item == 1\n"
+            "end)()\n"
+            "item.afterBothLoops()\n"})
+    output = expect_finding(root, "item.afterBothLoops",
+                            "a repeat nested inside an until condition")
+    expect("item ==" not in output and "unclosed" not in output,
+           f"the outer repeat must retire cleanly, got: {output!r}")
+
+
 def test_an_end_inside_an_until_expression_does_not_close_the_repeat() -> None:
     """`end` is a boundary keyword, so an anonymous function inside the
     `until` expression must not retire the loop's frame early."""
@@ -910,14 +966,27 @@ def test_goto_and_labels_are_analyzed() -> None:
     expect_finding(root, "engine.vanished", "a chunk using goto and a label")
 
 
-def test_computed_indexing_is_outside_the_grammar() -> None:
-    """`engine[k]` names no member statically, so it is not a candidate
-    -- and the direct references around it must still be checked."""
+def test_computed_indexing_on_a_namespace_is_a_certification_failure() -> None:
+    """`engine[k]` names a verb this analyzer cannot see. It begins as a
+    direct, unshadowed known-namespace reference and then leaves the
+    grammar, so it is an attributed failure -- certifying it clean would
+    leave a dynamic hole at the very boundary this gate exists to check."""
     root = build({"engine": ["quit"]},
+                 {"scripts/a.lua": "local k = 'quit'\nengine[k]()\nengine.quit()\n"})
+    output = expect_certification_failure(
+        root, "computed key", "a computed index on an engine namespace")
+    expect_attributed(output, "scripts/a.lua", 2, "the computed index")
+
+
+def test_computed_indexing_on_a_shadowed_name_is_clean() -> None:
+    """The other direction, and the shape the shipped tree really has:
+    scripts/ui/list.lua indexes an `item` that is a function parameter."""
+    root = build({"item": ["getInfo"]},
                  {"scripts/a.lua":
-                     "local k = 'quit'\nengine[k]()\nengine.quit()\nengine.vanished()\n"})
-    output = expect_finding(root, "engine.vanished", "a file mixing computed and direct access")
-    expect_attributed(output, "scripts/a.lua", 4, "the direct reference beside a computed one")
+                     "local function columnText(ls, item, i)\n"
+                     "    return item[ls.columns[i].key]\n"
+                     "end\n"})
+    expect_clean(root, "a computed index on a shadowed name")
 
 
 def test_escaped_quotes_do_not_end_a_string() -> None:
@@ -974,11 +1043,16 @@ TESTS = [
     test_an_unreadable_for_header_is_a_certification_failure,
     test_an_unreadable_local_is_a_certification_failure,
     test_a_repeat_until_block_is_analyzed,
+    test_a_do_inside_a_loop_header_does_not_open_the_loop_body,
+    test_nested_loop_headers_each_bind_their_own_control_variable,
+    test_a_loop_header_with_no_do_is_a_certification_failure,
+    test_a_repeat_nested_in_an_until_condition_is_analyzed,
     test_an_end_inside_an_until_expression_does_not_close_the_repeat,
     test_lua_54_local_attributes_are_read,
     test_if_elseif_else_branches_scope_independently,
     test_goto_and_labels_are_analyzed,
-    test_computed_indexing_is_outside_the_grammar,
+    test_computed_indexing_on_a_namespace_is_a_certification_failure,
+    test_computed_indexing_on_a_shadowed_name_is_clean,
     test_escaped_quotes_do_not_end_a_string,
     test_the_import_list_is_not_a_registration,
     test_haskell_comments_and_literals_are_not_registrations,

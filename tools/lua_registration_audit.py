@@ -59,10 +59,12 @@ registrar installs, and the `till.execute` tail is never a candidate
 because its `till` is preceded by `.`.
 
 Outside the grammar entirely, and therefore silently uninteresting:
-longer paths rooted at unrelated Lua modules, computed indexing, and
+longer paths and computed indexing rooted at unrelated Lua modules, and
 calls through aliases. But a construct that *begins* as a direct,
 unshadowed known-namespace reference and then leaves the grammar --
 `engine:method`, `engine[expr]` -- is an attributed failure, not a skip.
+A dynamic access at the engine boundary names a verb this analyzer
+cannot see, which is exactly the thing it must not certify.
 
 WHY IT IS A LEXER AND NOT A REGEX
 ---------------------------------
@@ -659,6 +661,23 @@ class PendingLocal:
 
 
 @dataclass
+class LoopHeader:
+    """A `for`/`while` header waiting for the `do` that opens its body.
+
+    These NEST, and the `do` that belongs to one is the one at the SAME
+    block and bracket depth the header started at. A `do` opened deeper
+    -- inside a function or a parenthesised expression in the header
+    itself -- is an ordinary block, and consuming the header there would
+    scan the real loop body with its control variables unbound.
+    """
+
+    kind: str
+    names: list[str]
+    block_depth: int
+    bracket: int
+
+
+@dataclass
 class Candidate:
     namespace: str
     member: str
@@ -713,11 +732,8 @@ class LuaScopeReader:
         self.blocks: list[Block] = [Block("chunk")]
         self.brackets: list[Token] = []
         self.pending: list[PendingLocal] = []
-        self.pending_for: list[str] | None = None
-        self.pending_params: list[str] | None = None
-        self.awaiting_do: str | None = None
-        self.repeat_closing: Block | None = None
-        self.repeat_closing_depth = 0
+        self.loop_headers: list[LoopHeader] = []
+        self.repeat_closing: list[tuple[Block, int]] = []
         self.candidates: list[Candidate] = []
         self.i = 0
 
@@ -791,21 +807,29 @@ class LuaScopeReader:
     def at_boundary(self, token: Token, previous: Token | None) -> bool:
         return _starts_statement(token, previous)
 
-    def maybe_close_repeat(self, *, at_end: bool = False) -> None:
-        """Retire a `repeat` frame once its `until` expression is over.
+    def close_ready_repeats(self, token: Token, previous: Token | None) -> None:
+        """Retire every `repeat` frame whose `until` expression is over.
 
         Gated on block depth: an anonymous function inside the `until`
         expression closes with an `end`, which is a boundary keyword, and
         acting on that one would drop the loop's own locals while the
         expression that reads them is still being scanned.
+
+        These NEST too -- an `until` expression may contain a whole
+        `repeat` loop of its own -- so pending closures are a stack,
+        innermost first. A single slot let an inner loop displace the
+        outer one, which was then never retired at all and surfaced at
+        end of file as a spurious unclosed block.
         """
-        if self.repeat_closing is None:
-            return
-        if not at_end and len(self.blocks) != self.repeat_closing_depth:
-            return
-        if self.repeat_closing in self.blocks:
-            self.blocks.remove(self.repeat_closing)
-        self.repeat_closing = None
+        while (self.repeat_closing
+               and len(self.blocks) == self.repeat_closing[-1][1]
+               and self.at_boundary(token, previous)):
+            self.close_top_repeat()
+
+    def close_top_repeat(self) -> None:
+        block, _ = self.repeat_closing.pop()
+        if block in self.blocks:
+            self.blocks.remove(block)
 
     # -- the walk --------------------------------------------------------
 
@@ -815,9 +839,7 @@ class LuaScopeReader:
             token = self.tokens[self.i]
 
             self.commit_ready_pending(token, previous)
-
-            if self.repeat_closing is not None and self.at_boundary(token, previous):
-                self.maybe_close_repeat()
+            self.close_ready_repeats(token, previous)
 
             start = self.i
             self.step(token, previous)
@@ -826,7 +848,14 @@ class LuaScopeReader:
             previous = token
 
         self.commit_all_pending()
-        self.maybe_close_repeat(at_end=True)
+        while self.repeat_closing:
+            self.close_top_repeat()
+        if self.loop_headers:
+            header = self.loop_headers[-1]
+            raise CertificationError(
+                self.path, self.tokens[-1].line if self.tokens else 0,
+                f"a `{header.kind}` header is never followed by the `do` that "
+                "opens its body")
         if self.brackets:
             opener = self.brackets[0]
             raise CertificationError(
@@ -874,13 +903,17 @@ class LuaScopeReader:
             self.i += 1
             self.step_for(token)
         elif word == "while":
-            self.awaiting_do = "while"
+            self.loop_headers.append(
+                LoopHeader("while", [], len(self.blocks), self.bracket))
             self.i += 1
         elif word == "do":
-            kind = self.awaiting_do or "do"
-            names = set(self.pending_for or ())
-            self.blocks.append(Block(kind, names))
-            self.awaiting_do, self.pending_for = None, None
+            header = self.loop_headers[-1] if self.loop_headers else None
+            if (header is not None and header.block_depth == len(self.blocks)
+                    and header.bracket == self.bracket):
+                self.loop_headers.pop()
+                self.blocks.append(Block(header.kind, set(header.names)))
+            else:
+                self.blocks.append(Block("do"))
             self.i += 1
         elif word == "then":
             self.blocks.append(Block("if"))
@@ -898,8 +931,7 @@ class LuaScopeReader:
                 self.fail(token, "`until` does not close a `repeat` block")
             # The `until` expression can still read the body's locals, so
             # the frame stays live until the statement after it.
-            self.repeat_closing = self.blocks[-1]
-            self.repeat_closing_depth = len(self.blocks)
+            self.repeat_closing.append((self.blocks[-1], len(self.blocks)))
             self.i += 1
         elif word == "end":
             self.pop_block(token, expected=BLOCK_CLOSED_BY_END, closer="end")
@@ -1004,8 +1036,8 @@ class LuaScopeReader:
         if not (numeric or generic):
             self.fail(token, "`for` header is neither numeric (`=`) nor generic (`in`)")
         self.i += 1
-        self.pending_for = names
-        self.awaiting_do = "for"
+        self.loop_headers.append(
+            LoopHeader("for", names, len(self.blocks), self.bracket))
 
     def step_name(self, token: Token, previous: Token | None) -> None:
         if (token.text not in self.namespaces
@@ -1029,6 +1061,9 @@ class LuaScopeReader:
         if following.text == ":":
             self.fail(token, f"`{token.text}:` is a method call on an engine namespace, "
                              "which this analyzer does not model")
+        if following.text == "[":
+            self.fail(token, f"`{token.text}[` indexes an engine namespace with a "
+                             "computed key, so the verb it names cannot be checked")
         self.i += 1
 
 
