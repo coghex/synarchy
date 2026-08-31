@@ -29,11 +29,11 @@ generating it.
 
 - [x] CIT-1. Test-only PRs unnecessarily run the entire behavior-probe smoke bundle — [#1359]
 - [x] CIT-2. Save-compatibility’s one GHCi self-test runs on every PR — [#1360]
-- [x] CIT-3. CI does not directly detect a current worldgen determinism regression — [#1361]
-- [x] CIT-4. A passing page-scope test leaves its world thread crashed — [#1362]
 - [x] CIT-5. Per-example headless-engine fixtures add substantial suite overhead — [#1363]
-- [x] CIT-6. CI skips the known w128 volcano exposure regression — [#1364]
 - [x] CIT-7. UI-script changes run an unrelated full behavior-probe bundle — [#1365]
+- [x] CIT-3. CI does not directly detect a current worldgen determinism regression — [#1361]
+- [x] CIT-6. CI skips the known w128 volcano exposure regression — [#1364]
+- [x] CIT-4. A passing page-scope test leaves its world thread crashed — [#1362]
 - [x] CIT-8. UI fixtures flood passing CI output with missing-world warnings — [#1366]
 - [x] CIT-9. Pure same-input comparisons do not test language-generation determinism — [#1367]
 - [x] CIT-10. Language suggestion and semantic tests use tautological determinism assertions — [#1368]
@@ -41,23 +41,23 @@ generating it.
 - [x] CIT-12. Visual/layout helper tests use tautological determinism assertions — [#1370]
 - [x] CIT-13. Autosave race test does not force the competing restore to reach the lock boundary — [#1372]
 - [x] CIT-14. Headless harness lets worker crashes pass as successful examples — [#1388]
-- [ ] CIT-15. Responsive-menu UI tests restart the engine for every example — [deferred]: re-measure after #1363
+- [x] CIT-15. Responsive-menu UI tests restart the engine for every example — [no-issue]
+- [x] CIT-21. Settings scale-change fan-out coverage omits Save and tolerates duplicate shell rebuilds — [#2027]
+- [x] CIT-22. World-audit self-test compares identical pure calls — [#1380]
+- [x] CIT-23. Building spawn/preview agreement test compares the same helper to itself — [#1381]
 - [x] CIT-16. Location-overlay wiring test has a tautological assertion — [#1375]
 - [x] CIT-17. Location-loot suite contains two false-green assertions — [#1376]
 - [x] CIT-18. Blood texture and pool-placement determinism tests compare identical calls — [#1377]
 - [x] CIT-19. Flora-lifespan determinism test only checks a pure call against itself — [#1378]
 - [x] CIT-20. Final-climate determinism test has no independent expected result — [#1379]
-- [ ] CIT-21. Settings scale-change fan-out coverage omits Save and tolerates duplicate shell rebuilds
-- [x] CIT-22. World-audit self-test compares identical pure calls — [#1380]
-- [x] CIT-23. Building spawn/preview agreement test compares the same helper to itself — [#1381]
 - [x] CIT-24. Location-placement determinism test only compares pure same-input calls — [#1382]
 - [x] CIT-25. Location-name determinism test compares the same pure construction twice — [#1383]
 - [x] CIT-26. Location-instance mapping test derives both sides from the same construction — [#1384]
 - [x] CIT-27. River-name determinism test compares the same pure construction twice — [#1385]
 - [x] CIT-29. River-ID stability assertion repeats the same pure timeline query — [#1386]
-- [ ] CIT-30. Focus-navigation integration tests restart the engine for nearly every example
-- [ ] CIT-31. Control-activation integration tests restart the engine for nearly every example
-- [ ] CIT-32. Lua text-contract tests boot a full engine for each Lua assertion
+- [x] CIT-30. Focus-navigation integration tests restart the engine for nearly every example — [no-issue]
+- [x] CIT-31. Control-activation integration tests restart the engine for nearly every example — [no-issue]
+- [x] CIT-32. Lua text-contract tests boot a full engine for each Lua assertion — [no-issue]
 
 ---
 
@@ -471,14 +471,13 @@ future engine-backed test.
 
 ---
 
-### [deferred] CIT-15. Responsive-menu UI tests restart the engine for every example
+### [no-issue] CIT-15. Responsive-menu UI tests restart the engine for every example
 
-> **Deferred:** 77% of this suite's runtime is the harness sleep #1363 deletes
-> (9.3 s of a measured 12.07 s, across 93 engine starts), so the consolidation's
-> remaining value is unmeasured — re-measure
-> `cabal test synarchy-test-headless --test-options='--match "UI.ResponsiveMenus"'`
-> once #1363 has merged, and file only if the residual justifies resetting UI,
-> Lua and scale state across 93 examples.
+> **Disposition:** No issue — #1363 removed the fixed teardown delay that
+> supplied 77% of the original cost. A fresh focused run on 2026-08-31 completed
+> 110 examples in 3.8085 seconds with zero failures. Saving part of that residual
+> does not justify sharing and resetting menu, Lua, filesystem, and scale state;
+> revisit only if future profiling identifies this suite as a material blocker.
 
 The responsive-menu suite has 93 examples, all wrapped with Hspec's `around`
 and `withMenusEngine`. Each example therefore creates a fresh headless engine
@@ -528,7 +527,7 @@ start of every case.
 
 ---
 
-### CIT-21. Settings scale-change fan-out coverage omits Save and tolerates duplicate shell rebuilds
+### [#2027] CIT-21. Settings scale-change fan-out coverage omits Save and tolerates duplicate shell rebuilds
 
 The Settings menu exposes four scale-changing paths: Apply, Save, Defaults,
 and Back. Each is supposed to notify registered menus, the live shell, and
@@ -1131,7 +1130,9 @@ rivers on actual worldgen output.
 
 ---
 
-### CIT-30. Focus-navigation integration tests restart the engine for nearly every example
+### [no-issue] CIT-30. Focus-navigation integration tests restart the engine for nearly every example
+
+> **Disposition:** No issue — #1363 removed the 100 ms teardown delay that made these 36 engine boots costly; the current 50-example suite completes in 0.6955 seconds, so shared-fixture consolidation is not justified by present measurements.
 
 The UI focus-navigation suite has 50 examples and applies
 `around withHeadlessEngine` to each of its six integration describes. Every
@@ -1182,7 +1183,9 @@ example.
 
 ---
 
-### CIT-31. Control-activation integration tests restart the engine for nearly every example
+### [no-issue] CIT-31. Control-activation integration tests restart the engine for nearly every example
+
+> **Disposition:** No issue — #1363 removed the 100 ms teardown delay that made these 19 engine boots costly; the current 33-example suite completes in 0.3615 seconds, so shared-fixture consolidation is not justified by present measurements.
 
 The UI control-activation suite applies `around withHeadlessEngine` to its
 integration blocks, restarting an engine/world thread for each contained
@@ -1231,7 +1234,9 @@ example.
 
 ---
 
-### CIT-32. Lua text-contract tests boot a full engine for each Lua assertion
+### [no-issue] CIT-32. Lua text-contract tests boot a full engine for each Lua assertion
+
+> **Disposition:** No issue — #1363 removed the 100 ms teardown delay that made these 41 engine boots costly; the three current text-focused runs total 47 examples and 0.8197 seconds of Hspec time, so shared-engine refactoring is not justified by present measurements.
 
 The CI text/Unicode Lua suites use `around withHeadlessEngine` per example
 while creating a fresh Lua backend and deterministic resource/measurement
