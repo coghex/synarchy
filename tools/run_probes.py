@@ -331,6 +331,11 @@ PROBES = [
      "refusal, ordered rotation, and depth-reduction/disable retention"),
     ("save_pause", "save_pause_probe.py",
      "save/load pause-semantics regression (#42)"),
+    ("scene_stats", "scene_stats_probe.py",
+     "World.Render scene-assembly telemetry: debug.getSceneStats()'s ten-row "
+     "shape and sequence, per-category scanned counts moving by exactly the "
+     "population created, and the non-zero unit/ground-item/building emitted "
+     "counts only a live offscreen texture system can produce (#1921)"),
     ("pause_speed", "pause_speed_probe.py",
      "the player's chosen world speed survives a pause imposed by a "
      "pause: true notification, a whole manual engine.saveWorld driven to a "

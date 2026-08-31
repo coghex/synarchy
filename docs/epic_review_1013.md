@@ -17,12 +17,12 @@ concrete precondition
 
 ## Status
 
-- [ ] ER-1. Mode B can queue an order for a carrier whose species cannot execute it
-- [ ] ER-2. Current transfer steering docs still describe the pre-delivery arc
+- [x] ER-1. Mode B can queue an order for a carrier whose species cannot execute it — [#2030]
+- [x] ER-2. Current transfer steering docs still describe the pre-delivery arc — [#2033]
 
 ## 1. Transfer composition
 
-### ER-1. Mode B can queue an order for a carrier whose species cannot execute it
+### [#2030] ER-1. Mode B can queue an order for a carrier whose species cannot execute it
 
 > **Captured note:** Epic #1013's Mode B gesture (#1249) and executor (#1247)
 > disagree about which player-commandable units can carry a durable transfer
@@ -99,7 +99,7 @@ does not exercise this composition boundary.
 
 ## 2. Steering-document accuracy
 
-### ER-2. Current transfer steering docs still describe the pre-delivery arc
+### [#2033] ER-2. Current transfer steering docs still describe the pre-delivery arc
 
 > **Captured note:** Epic #1013's durable design authority contradicts both
 > its own completed processing checklist and the current repository, while the

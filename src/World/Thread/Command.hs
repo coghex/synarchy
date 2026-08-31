@@ -81,6 +81,7 @@ import World.Thread.Command.Edit (handleWorldDeleteTileCommand
                                  , handleWorldDigTileCommand
                                  , handleWorldAddTileCommand
                                  , handleWorldPlantRowCropAtCommand)
+import World.Plant.Validate (revalidatePlantDesignations)
 import World.Thread.Command.Location
     (handleWorldMarkLocationContentsSpawnedCommand
     ,handleWorldRegisterLocationEncounterOccupantsCommand
@@ -235,8 +236,8 @@ handleWorldCommand env logger (WorldDestroy pageId)
   = handleWorldDestroyCommand env logger pageId
 handleWorldCommand env logger WorldDestroyAll
   = handleWorldDestroyAllCommand env logger
-handleWorldCommand env _ (WorldApplyFluids batch)
-  = handleApplyFluidsCommand env batch
+handleWorldCommand env logger (WorldApplyFluids batch)
+  = handleApplyFluidsCommand env logger batch
 handleWorldCommand env _ (WorldMarkLocationContentsSpawned pageId iid)
   = handleWorldMarkLocationContentsSpawnedCommand (toWorldSimCapability env) pageId iid
 handleWorldCommand env _ (WorldRegisterLocationEncounterOccupants pageId iid occupants)
@@ -275,8 +276,9 @@ handleWorldCommand env _ (WorldMarkLocationStamped pageId gx gy)
 --   The ack fires whatever the outcome — batch empty, page gone, or
 --   every writeback dropped — or 'SimFastSettleAll' and the @--dump@
 --   fast-settle path would block forever waiting on it.
-handleApplyFluidsCommand ∷ EngineEnv → FluidWritebackBatch → IO ()
-handleApplyFluidsCommand env (FluidWritebackBatch pageId writebacks mAck) = do
+handleApplyFluidsCommand ∷ EngineEnv → LoggerState → FluidWritebackBatch
+                         → IO ()
+handleApplyFluidsCommand env logger (FluidWritebackBatch pageId writebacks mAck) = do
     when (not (null writebacks)) $ do
         mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
         case lookup pageId (wmWorlds mgr) of
@@ -290,6 +292,13 @@ handleApplyFluidsCommand env (FluidWritebackBatch pageId writebacks mAck) = do
                     bumpQuadCacheGen ws
                     writeIORef (wsZoomQuadCacheRef ws) Nothing
                     writeIORef (wsBgQuadCacheRef ws)   Nothing
+                    -- #1858: an accepted writeback replaces lcSurfaceMap
+                    -- without touching ctVeg, so it can move a designated
+                    -- tile's resolved surface off its tilled cell with no
+                    -- vegetation edit anywhere. Omitting this path would
+                    -- let admission and continuous validation disagree.
+                    _ ← revalidatePlantDesignations logger ws
+                    pure ()
     forM_ mAck (`putMVar` ())
 
 -- | Is this writeback derived from the chunk state the page currently

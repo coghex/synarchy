@@ -73,9 +73,14 @@ RESULT_SCHEMA = "probe-flake-result/v1"
 # harness works on a checkout with no docs worktree. Later migration
 # issues add one key each.
 PROTOCOL_PROBES: dict[str, str] = {
+    "circadian": probe_protocol.PROTOCOL_VERSION,
+    "concussion_revive": probe_protocol.PROTOCOL_VERSION,
+    "disarm": probe_protocol.PROTOCOL_VERSION,
     "lua_strict_msg": probe_protocol.PROTOCOL_VERSION,
     "position_hold": probe_protocol.PROTOCOL_VERSION,
+    "remote_warning_page_guard": probe_protocol.PROTOCOL_VERSION,
     "role": probe_protocol.PROTOCOL_VERSION,
+    "state_of_mind": probe_protocol.PROTOCOL_VERSION,
     "text_encoding": probe_protocol.PROTOCOL_VERSION,
     "thermo_altitude": probe_protocol.PROTOCOL_VERSION,
 }
