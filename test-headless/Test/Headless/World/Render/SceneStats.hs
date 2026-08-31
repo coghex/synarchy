@@ -30,7 +30,7 @@ module Test.Headless.World.Render.SceneStats (spec) where
 import UPrelude
 import Test.Hspec
 import Test.Headless.Harness.Isolation (withIsolatedResourceRoot)
-import Data.IORef (IORef, readIORef, writeIORef)
+import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Map as Map
 import qualified Data.Vector as V
@@ -43,6 +43,12 @@ import Engine.Core.Capability.RenderHandoff
 import Engine.Core.Capability.RenderView
     (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Core.State (EngineEnv(..))
+import Engine.Scripting.Lua.API (registerLuaAPI)
+import Engine.Scripting.Lua.Thread (createLuaBackendState)
+import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
+import Engine.Scripting.Lua.Types (LuaBackendState(..))
+import Engine.Core.Thread (ThreadControl(..))
+import qualified Data.Text as T
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..), defaultCamera)
 import Engine.Graphics.Vulkan.Types.Vertex
     (Vec2(..), Vec4(..), mkVertexWorld, packWorldUV)
@@ -397,6 +403,7 @@ spec = describe "scene assembly telemetry (#1921)" $ aroundAll setup $ do
     scannedMeaningSpec
     guardSpec
     teardownSpec
+    luaQuerySpec
   where
     -- Isolation wraps the boot (#1357): engine init is itself a config
     -- writer.
@@ -694,3 +701,100 @@ teardownSpec = describe "world teardown" $ do
 -- | 'shouldSatisfy' over an action's result.
 shouldSatisfy' ∷ (HasCallStack, Show α) ⇒ IO α → (α → Bool) → Expectation
 shouldSatisfy' act p = act ⌦ \a → a `shouldSatisfy` p
+
+
+-- * The public Lua query
+
+-- | Requirement 2 and requirement 3, through the verb a player-facing
+--   caller actually has.
+--
+--   Everything above reads the published 'IORef' directly, which proves
+--   what the world thread stores but not what @debug.getSceneStats()@
+--   answers — and the unavailable state is a SYNTHESISED shape (ten
+--   zero rows, not an absent table), so the query is the only place it
+--   exists at all. This drives the real registration on a bare Lua
+--   backend, no GPU and no Lua thread.
+luaQuerySpec ∷ SpecWith EngineEnv
+luaQuerySpec = describe "debug.getSceneStats()" $ do
+
+    it "answers the complete zero-valued shape before the first pass" $
+        \env → do
+            _ ← resetScene env gameplayCamera
+            ls ← bareLuaBackend env
+            querySummary ls `shouldReturn` quoted unavailableSummary
+
+    it "answers available, with the fixed order, after a pass" $ \env → do
+        _ ← resetScene env gameplayCamera
+        ls ← bareLuaBackend env
+        _ ← runPass env
+        queryShape ls `shouldReturn` quoted ("true|1|" <> idList)
+
+    it "returns to the zero-valued shape after one page is destroyed" $
+        \env → do
+            _ ← resetScene env gameplayCamera
+            ls ← bareLuaBackend env
+            _ ← runPass env
+            logger ← readIORef (loggerRef env)
+            handleWorldDestroyCommand env logger fixturePage
+            querySummary ls `shouldReturn` quoted unavailableSummary
+
+    it "returns to the zero-valued shape after every world is destroyed" $
+        \env → do
+            _ ← resetScene env gameplayCamera
+            ls ← bareLuaBackend env
+            _ ← runPass env
+            logger ← readIORef (loggerRef env)
+            handleWorldDestroyAllCommand env logger
+            querySummary ls `shouldReturn` quoted unavailableSummary
+
+-- | The registered production Lua API on a bare backend: no GPU, no Lua
+--   thread, and no scripts loaded — @registerDebugAPI@ is reached from
+--   the single unconditional 'registerLuaAPI' path, so the verb is
+--   present exactly as it is in a real boot.
+bareLuaBackend ∷ EngineEnv → IO LuaBackendState
+bareLuaBackend env = do
+    ls ← createLuaBackendState (luaToEngineQueue env) (luaQueue env)
+                               (assetPoolRef env) (nextObjectIdRef env)
+                               (inputStateRef env) (loggerRef env)
+    stateRef ← newIORef ThreadRunning
+    registerLuaAPI (lbsLuaState ls) env ls stateRef
+    pure ls
+
+-- | @available|sequence|id:scanned:emitted:durationNs,...@ — every field
+--   of every row, flattened, so one comparison pins availability, the
+--   sequence, the row order, the identifiers AND the zero values.
+querySummary ∷ LuaBackendState → IO Text
+querySummary ls = executeDebugLua (lbsLuaState ls) $ T.concat
+    [ "local s = debug.getSceneStats(); local r = {}; "
+    , "for i, c in ipairs(s.categories) do "
+    , "  r[i] = c.id .. ':' .. c.scanned .. ':' .. c.emitted"
+    , "         .. ':' .. c.durationNs end; "
+    , "return tostring(s.available) .. '|' .. tostring(s.sequence)"
+    , "       .. '|' .. table.concat(r, ',')" ]
+
+-- | @available|sequence|id,...@ — the same, minus the per-row values,
+--   for the available case where scanned/emitted/duration are the
+--   subject of the examples above rather than of this one.
+queryShape ∷ LuaBackendState → IO Text
+queryShape ls = executeDebugLua (lbsLuaState ls) $ T.concat
+    [ "local s = debug.getSceneStats(); local r = {}; "
+    , "for i, c in ipairs(s.categories) do r[i] = c.id end; "
+    , "return tostring(s.available) .. '|' .. tostring(s.sequence)"
+    , "       .. '|' .. table.concat(r, ',')" ]
+
+-- | The ten identifiers, in the published order.
+idList ∷ Text
+idList = T.intercalate "," (map sceneCategoryId sceneCategoryOrder)
+
+-- | Requirement 3's exact answer: not available, sequence 0, and ten
+--   complete zero-valued rows — never an empty or absent table.
+unavailableSummary ∷ Text
+unavailableSummary =
+    "false|0|"
+      <> T.intercalate ","
+             [ sceneCategoryId cat <> ":0:0:0" | cat ← sceneCategoryOrder ]
+
+-- | The debug console JSON-encodes its result, so a Lua string comes
+--   back quoted.
+quoted ∷ Text → Text
+quoted t = "\"" <> t <> "\""

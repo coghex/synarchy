@@ -17,7 +17,8 @@ import Engine.Core.Capability.RenderView
 import Engine.Scene.Types (LayeredQuads(..), SortableQuad, mergeSortedQuads
                           , sortQuadsByLayer, stampSolarPage)
 import Engine.Scene.Stats
-    (SceneCategory(..), measureCategory, publishSceneStats)
+    ( SceneCategory(..), forcedLayeredQuadCount, forcedQuadCount
+    , measureCategory, publishSceneStats )
 import Engine.Core.Capability.RenderHandoff
     (RenderHandoffCapability(..), toRenderHandoffCapability)
 import Engine.Graphics.Solar (SolarBase(..), SolarPageTable, solarPageNone)
@@ -79,7 +80,7 @@ updateWorldTiles env = do
     -- charged to a later one. The measurement adds no per-object work
     -- and no allocation proportional to the sources counted; only the
     -- fixed-size snapshot published at the end of the pass.
-    (tilesStat, tileQuads) ← measureCategory ScTiles layeredQuadCount $
+    (tilesStat, tileQuads) ← measureCategory ScTiles forcedLayeredQuadCount $
       if tileAlpha ≤ 0.001
         then return (0, Map.empty)
         else do
@@ -135,7 +136,7 @@ updateWorldTiles env = do
 
     -- Cursor quads are generated every frame (cheap: just 1-2 quads)
     -- so they respond instantly to mouse movement
-    (cursorStat, worldCursorQuads) ← measureCategory ScCursor V.length $
+    (cursorStat, worldCursorQuads) ← measureCategory ScCursor forcedQuadCount $
       if tileAlpha ≤ 0.001
         then return (0, V.empty)
         else perVisiblePage worldManager $ \pageId worldState →
@@ -146,7 +147,7 @@ updateWorldTiles env = do
     -- the CURRENT terrain each frame, so items drop with dug tiles
     -- and sit on slopes without any re-grounding machinery.
     (groundItemStat, groundItemQuads) ←
-      measureCategory ScGroundItems V.length $
+      measureCategory ScGroundItems forcedQuadCount $
         if tileAlpha ≤ 0.001
           then return (0, V.empty)
           else perVisiblePage worldManager $ \pageId worldState →
@@ -157,7 +158,7 @@ updateWorldTiles env = do
     -- reason — piles change every dig tick, and the partial fringe
     -- is small (full cells promote to real terrain and render
     -- through the cached tile pass).
-    (spoilStat, spoilQuads) ← measureCategory ScSpoil V.length $
+    (spoilStat, spoilQuads) ← measureCategory ScSpoil forcedQuadCount $
       if tileAlpha ≤ 0.001
         then return (0, V.empty)
         else perVisiblePage worldManager $ \pageId worldState →
@@ -169,7 +170,7 @@ updateWorldTiles env = do
     -- only has GPU-resident data once 'uploadBloodTextures' catches up
     -- (Engine.Scripting.Lua.Message), so a decal simply doesn't
     -- contribute a quad until then.
-    (bloodStat, bloodQuads) ← measureCategory ScBlood V.length $
+    (bloodStat, bloodQuads) ← measureCategory ScBlood forcedQuadCount $
       if tileAlpha ≤ 0.001
         then return (0, V.empty)
         else perVisiblePage worldManager $ \pageId worldState →
@@ -178,7 +179,7 @@ updateWorldTiles env = do
 
     -- Unit quads are generated every frame (cheap: handful of sprites)
     -- so they respond instantly to movement
-    (unitStat, unitQuads) ← measureCategory ScUnits V.length $
+    (unitStat, unitQuads) ← measureCategory ScUnits forcedQuadCount $
       if tileAlpha ≤ 0.001
         then return (0, V.empty)
         else do
@@ -188,7 +189,7 @@ updateWorldTiles env = do
 
     -- Buildings: same shape as units, simpler internals. Plus the
     -- optional ghost preview while in placement mode.
-    (buildingStat, buildingQuads) ← measureCategory ScBuildings V.length $
+    (buildingStat, buildingQuads) ← measureCategory ScBuildings forcedQuadCount $
       if tileAlpha ≤ 0.001
         then return (0, V.empty)
         else do
@@ -198,7 +199,7 @@ updateWorldTiles env = do
 
     -- Structures (walls / floors / ceilings) — same iso-sorted quad path
     -- as buildings, with each piece's own facemap slot.
-    (structureStat, structureQuads) ← measureCategory ScStructures V.length $
+    (structureStat, structureQuads) ← measureCategory ScStructures forcedQuadCount $
       if tileAlpha ≤ 0.001
         then return (0, V.empty)
         else do
@@ -209,7 +210,7 @@ updateWorldTiles env = do
                     renderStructureQuadsScanned env worldState facing zSlice
                                                 effDepth tileAlpha
 
-    (ghostStat, ghostQuads) ← measureCategory ScGhost V.length $
+    (ghostStat, ghostQuads) ← measureCategory ScGhost forcedQuadCount $
       if tileAlpha ≤ 0.001
         then return (0, V.empty)
         else do
@@ -221,7 +222,7 @@ updateWorldTiles env = do
                                         (resolveActiveWorld worldManager)
             renderGhostQuadScanned env activeSolarSlot facing zSlice
 
-    (zoomStat, zoomQuads) ← measureCategory ScZoomMap V.length $
+    (zoomStat, zoomQuads) ← measureCategory ScZoomMap forcedQuadCount $
         generateZoomMapQuadsScanned env solarSlotOf camera fbW fbH
 
     let shouldTrack = camZTracking camera
@@ -301,16 +302,6 @@ stampPageQuads ∷ Word32 → (Int, V.Vector SortableQuad)
                → (Int, V.Vector SortableQuad)
 stampPageQuads slot (scanned, quads) = (scanned, stampSolarPage slot quads)
 
--- | Emitted-quad count of a whole per-layer static run.
---
---   Forcing this is what makes the tiles category's timing honest, and
---   it has one consequence worth naming: the per-layer vectors
---   'Map.unionsWith mergeSortedQuads' produces are value thunks until
---   something demands them, so the merge now happens here on the world
---   thread instead of at first read in the frame loop. It changes no
---   quad, no ordering and no output — only when the same work runs.
-layeredQuadCount ∷ Map.Map α (V.Vector β) → Int
-layeredQuadCount = sum . map V.length . Map.elems
 
 -- | This frame's page→slot lookup and the table those slots index.
 --

@@ -38,11 +38,16 @@ module Engine.Scene.Stats
   , publishSceneStats
   , clearSceneStats
   , measureCategory
+  , forcedQuadCount
+  , forcedLayeredQuadCount
   ) where
 
 import UPrelude
+import Control.DeepSeq (NFData, rnf)
 import Control.Exception (evaluate)
 import Data.IORef (IORef, atomicModifyIORef', writeIORef)
+import qualified Data.Map as Map
+import qualified Data.Vector as V
 import GHC.Clock (getMonotonicTimeNSec)
 
 -- | The ten scene-assembly categories, in the fixed order every
@@ -181,9 +186,17 @@ clearSceneStats ref = writeIORef ref Nothing
 --   scanned count and the caller's emitted count are forced with
 --   'evaluate' BEFORE the end timestamp, so lazily deferred assembly
 --   work can never be charged to a later category.
+--
+--   @emittedOf@ therefore has to FORCE the payload as it counts, not
+--   merely measure it. A vector's 'V.length' is @O(1)@ and forces no
+--   element at all, so counting alone would leave the quads themselves
+--   as thunks for the frame loop — or the NEXT category — to pay for,
+--   which is precisely the misattribution this measurement exists to
+--   avoid. 'forcedQuadCount' and 'forcedLayeredQuadCount' below are the
+--   two counters that do it; do not substitute a bare length.
 measureCategory
     ∷ SceneCategory
-    → (α → Int)          -- ^ emitted quads in the produced payload
+    → (α → Int)          -- ^ emitted quads, FORCING the payload as it counts
     → IO (Int, α)        -- ^ scanned sources, and the payload
     → IO (SceneCategoryStat, α)
 measureCategory cat emittedOf act = do
@@ -200,3 +213,25 @@ measureCategory cat emittedOf act = do
             , scsDurationNs = end - start
             }
         , payload )
+
+-- | Emitted count of one per-tick dynamic run, forcing every quad as it
+--   counts.
+--
+--   Forcing a 'Engine.Scene.Types.SortableQuad' to WHNF forces it
+--   completely — every field of it and of its four vertices is strict,
+--   which is why its own 'NFData' instance is @rwhnf@ — so this is a
+--   cheap element walk rather than a deep traversal, and it is exactly
+--   what makes the category's own assembly work land inside the
+--   category's own timing interval.
+forcedQuadCount ∷ NFData α ⇒ V.Vector α → Int
+forcedQuadCount = V.foldl' (\n q → rnf q `seq` (n + 1)) 0
+
+-- | 'forcedQuadCount' over a whole per-layer static run.
+--
+--   This is what forces the per-layer vectors that
+--   @Map.unionsWith mergeSortedQuads@ leaves as value thunks (Data.Map
+--   is spine-strict, not value-strict), so the merge is charged to the
+--   terrain category that caused it instead of to the frame loop's
+--   first read.
+forcedLayeredQuadCount ∷ NFData α ⇒ Map.Map κ (V.Vector α) → Int
+forcedLayeredQuadCount = Map.foldl' (\n v → n + forcedQuadCount v) 0
