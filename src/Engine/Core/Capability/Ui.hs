@@ -53,7 +53,13 @@
 --   resynced from @wmVisible@). 'uicTextBuffersRef' is
 --   @boot-process@: the scene-object text map is NOT touched by
 --   @resetTransientState@, and its entries follow their scene objects'
---   own lifetimes instead.
+--   own lifetimes instead. That coupling is enforced in
+--   "Engine.Scripting.Lua.Message.Scene" and nowhere else — a spawn
+--   writes an entry only when the node is added, a @setText@ writes one
+--   only when 'Engine.Scene.Graph.modifySceneNode' reports it updated a
+--   live node, and @handleDestroy@ removes it (#1961). Those are the
+--   map's only writers and its only remover, so a session boundary has
+--   nothing left to reset.
 --
 --   Like the other capability modules, this one imports only the
 --   narrow slice of @Engine.Core.State@ it needs (the bare 'EngineEnv'
@@ -106,7 +112,9 @@ data UiCapability = UiCapability
     --   (@Engine.Scripting.Lua.Message.Scene@, dispatched by
     --   @processLuaMessages@ — never the Lua thread itself);
     --   @boot-process@, and deliberately NOT reset by
-    --   @World.Load.Publish.resetTransientState@.
+    --   @World.Load.Publish.resetTransientState@ because entries are
+    --   created and removed with their scene nodes instead (#1961).
+    --   The scene-OBJECT text cache, not editable-widget text.
   , uicTextBuffersRef    ∷ IORef (Map.Map ObjectId Text)
   }
 

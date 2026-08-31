@@ -55,14 +55,22 @@ handleSpawnText oid x y fontHandle text color layer size = do
           Nothing → logDebugM CatLua $ "Failed to add text object " <> tshow oid
       Nothing → logDebugM CatLua "Cannot spawn text: no active scene"
 
+-- | Update a live text node's string, and the scene-text cache with it.
+--
+--   The node write comes FIRST and its 'Bool' decides the cache write
+--   (#1961): 'uicTextBuffersRef' entries follow their scene nodes' own
+--   lifetimes, so a @setText@ naming an id with no node must change
+--   nothing at all — not the scene graph, and not the cache that
+--   @engine.getText@ answers from. Writing the cache unconditionally
+--   (as this did) left @engine.getText@ reporting text for objects that
+--   never existed, in a map with no other way to shrink.
 handleSetText ∷ ObjectId → Text → EngineM σ ()
 handleSetText objId text = do
-    env ← ask
-    liftIO $ atomicModifyIORef' (uicTextBuffersRef (toUiCapability env)) $ \m →
-      (Map.insert objId text m, ())
-    -- Bool result ignored: setText on a missing node is a no-op by design.
-    _ ← modifySceneNode objId $ \node → node { nodeText = Just text }
-    return ()
+    nodeUpdated ← modifySceneNode objId $ \node → node { nodeText = Just text }
+    when nodeUpdated $ do
+      env ← ask
+      liftIO $ atomicModifyIORef' (uicTextBuffersRef (toUiCapability env)) $ \m →
+        (Map.insert objId text m, ())
 
 handleSpawnSprite ∷ ObjectId → Float → Float → Float → Float
                   → TextureHandle → LayerId → EngineM σ ()
@@ -102,5 +110,19 @@ handleSetVisible ∷ ObjectId → Bool → EngineM σ ()
 handleSetVisible objId visible =
     void $ modifySceneNode objId $ \node → node { nodeVisible = visible }
 
+-- | Destroy a scene object, retiring its scene-text cache entry with it.
+--
+--   The cache delete is the other half of #1961's lifetime coupling and
+--   is deliberately UNCONDITIONAL: @Map.delete@ on an absent key is a
+--   no-op, so a sprite (or an already-destroyed id) costs nothing,
+--   while every destroyed text object is guaranteed to stop answering
+--   through @engine.getText@ even if the node itself had already left
+--   the active graph. This is the only removal path the map has, which
+--   is what keeps its @boot-process@ classification honest — see
+--   "Engine.Core.Capability.Ui".
 handleDestroy ∷ ObjectId → EngineM σ ()
-handleDestroy objId = void $ deleteSceneNode objId
+handleDestroy objId = do
+    _ ← deleteSceneNode objId
+    env ← ask
+    liftIO $ atomicModifyIORef' (uicTextBuffersRef (toUiCapability env)) $ \m →
+      (Map.delete objId m, ())

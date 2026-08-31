@@ -2122,12 +2122,14 @@ def _drive_text_encoding(rep, *, malformed_call_result="no_error",
         launches["commands"].append(lua)
         if "engine.setText(1" in lua:
             return "no_error"
+        # Neither id names a scene node, so post-#1961 the handler
+        # caches nothing and getText answers the console's nil rendering.
         if "engine.getText(1)" in lua:
-            return "hello"
+            return "null"
         if "engine.setText(2" in lua:
             return malformed_call_result
         if "engine.getText(2)" in lua:
-            return "caf\ufffd"
+            return "null"
         if 'world.show("no_such_page")' in lua:
             return "no_error"
         if 'world.show("caf' in lua and "no_such_page" not in lua:
