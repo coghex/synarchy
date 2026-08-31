@@ -139,32 +139,34 @@ reconcileResidentChunks ws pid params coords =
                  owner0 coords
         , () )
 
--- | Publish a page's SEED chunk set: the synchronously generated centre
---   chunk of a fresh or restored world, and an arena's whole chunk set.
+-- | Publish a page's SEED chunk set — the synchronously generated centre
+--   chunk of a fresh or restored world, or an arena's whole chunk
+--   set — from the claims taken before it was generated.
 --
---   Owner FIRST, payloads second, and the two are welded together here
---   precisely so no seed site can get that order wrong. A page is
---   registered in @wmWorlds@ — and given its generation params — before
+--   A seed runs the SAME lifecycle every other path runs: claim with
+--   'claimChunkGeneration', generate, then admit and publish here. It is
+--   split in two rather than done in one call because the generation
+--   sits between the halves, and that is the whole point — a page is
+--   registered in @wmWorlds@, and given its generation params, before
 --   its seed is built ('World.Thread.Command.Init' does it early so Lua
 --   can watch the loading phase), so the Lua thread can call
---   @world.loadChunksInRegion@ while this runs. Writing the tile map
---   first would leave a window in which the centre chunk is resident but
---   the owner still says absent: that request would queue and COUNT a
---   chunk the page already holds, which is exactly the dedup contract
---   the owner exists to keep. Leading with the owner reports it as
---   satisfied instead, which is true a moment later and never wrong.
+--   @world.loadChunksInRegion@ for the very chunk being generated.
+--   Holding the claim across that window reports it as pending, which is
+--   what it is; leaving the key absent would have that call queue and
+--   COUNT a chunk the page is already producing.
 --
---   Seed payloads are built before the page can take a request, so there
---   is never prior demand to claim — but they are new residency all the
---   same, and they reach the resident set through the same
---   'admitResidentChunks' every other path uses.
+--   Then owner before payloads, welded together here so no seed site can
+--   get that order wrong either. Writing the tile map first would leave
+--   a window in which the chunk is resident but the owner still says
+--   absent, and a request landing there would queue and count a chunk
+--   the page already holds. Admitting first reports it as satisfied,
+--   which is true a moment later and never wrong.
 --
 --   The tile write REPLACES the page's whole map, as every seed site
 --   does: a seed is the first thing a page holds.
-publishSeedChunks ∷ WorldState → WorldPageId → WorldGenParams
-                  → [ChunkCoord] → WorldTileData → IO ()
-publishSeedChunks ws pid params coords td = do
-    admitResidentChunks ws =≪ claimChunkGeneration ws pid params coords
+publishSeedChunks ∷ WorldState → [ChunkRequest] → WorldTileData → IO ()
+publishSeedChunks ws claims td = do
+    admitResidentChunks ws claims
     atomicModifyIORef' (wsTilesRef ws) $ \_ → (td, ())
 
 -- | These coords left the tile map: their keys are requestable again.

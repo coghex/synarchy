@@ -37,7 +37,8 @@ import World.Generate (generateChunk)
 import World.Generate.Arena (generateArenaChunks, arenaGenForSeed)
 import World.Chunk.Queue (initialChunkQueue)
 import World.Chunk.Residency (canonicalChunkCoord)
-import World.Chunk.Admit (publishSeedChunks, registerChunkDemand)
+import World.Chunk.Admit
+    (claimChunkGeneration, publishSeedChunks, registerChunkDemand)
 import World.Geology (buildTimeline)
 import World.Geology.Log (formatPlatesSummary)
 import World.Plate (generatePlates, elevationAtGlobal)
@@ -359,6 +360,14 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
         <> tshow totalInitialChunks <> ")..."
     
     catalog ← readIORef (wsFloraCatalogRef worldSim)
+    -- Claim the centre BEFORE generating it (#2001). This page is
+    -- already registered and already carries its generation params, so a
+    -- world.loadChunksInRegion naming the centre can arrive during the
+    -- generateChunk below; the claim makes the owner report it as
+    -- pending for the whole of that window instead of absent, so such a
+    -- call neither queues nor counts a chunk this page is already
+    -- producing. The claim is carried to admission by publishSeedChunks.
+    centreClaims ← claimChunkGeneration worldState pageId params [centerCoord]
     let (ct, cs, cterrain, cf, cice, cflora, cwt, cmagma) =
             generateChunk registry catalog params centerCoord
         seededSurf = VU.imap (\idx surfZ →
@@ -382,12 +391,8 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
 
     -- The centre is new residency like any other chunk (#2001), so it
     -- reaches the owner through the SAME admission boundary the camera
-    -- and init-queue batches use. This page is already registered and
-    -- already has its generation params, so a world.loadChunksInRegion
-    -- can arrive mid-seed: publishSeedChunks settles the owner before it
-    -- writes the tile map, so such a call can never queue and count the
-    -- centre the page is in the middle of acquiring.
-    publishSeedChunks worldState pageId params [centerCoord]
+    -- and init-queue batches use, carrying the claim taken above.
+    publishSeedChunks worldState centreClaims
         WorldTileData { wtdChunks = HM.singleton centerCoord centerChunk
                       , wtdMaxChunks = 200 }
 
@@ -515,10 +520,14 @@ handleWorldInitArenaCommand env logger pageId = do
         chunkMap  = HM.fromList [ (lcCoord c, c) | c ← allChunks ]
 
     -- Write tile data. Arena chunks are residency too (#2001): same
-    -- admission boundary, same owner-before-payloads order, and
+    -- lifecycle, same owner-before-payloads order, and
     -- 'canonicalChunkCoord' is the identity on an arena page, so the
-    -- sentinel wgpWorldSize never reaches 'wrapChunkCoordU'.
-    publishSeedChunks worldState pageId arenaParams (map lcCoord allChunks)
+    -- sentinel wgpWorldSize never reaches 'wrapChunkCoordU'. Claiming
+    -- before the 'evaluate (force allChunks)' below covers this page's
+    -- own generation window; reading lcCoord forces only the list spine.
+    arenaClaims ← claimChunkGeneration worldState pageId arenaParams
+                                       (map lcCoord allChunks)
+    publishSeedChunks worldState arenaClaims
         WorldTileData { wtdChunks = chunkMap, wtdMaxChunks = 100 }
 
     -- Force the arena chunks to NF so the LoadDone below is honest (same

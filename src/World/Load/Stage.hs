@@ -46,7 +46,8 @@ import World.Plant.Validate (revalidatePlantDesignations)
 import World.Grid (worldToGrid)
 import World.Chunk.Queue (initialChunkQueue)
 import World.Chunk.Residency (canonicalChunkCoord)
-import World.Chunk.Admit (publishSeedChunks, registerChunkDemand)
+import World.Chunk.Admit
+    (claimChunkGeneration, publishSeedChunks, registerChunkDemand)
 import World.Plate (elevationAtGlobal)
 import World.Preview (buildPreviewFromPixels, PreviewImage(..))
 import World.Render (surfaceHeadroom)
@@ -335,13 +336,17 @@ stagePage logger registry palette catalog buildingDefs unitDefs
                                 . applyDigSlopes desigs . replayEdits edits)
                                 (generateArenaChunks (arenaGenForSeed seed))
               chunkMap = HM.fromList [ (lcCoord c, c) | c ← arenaChunks ]
+          -- Claimed before the generation is forced, then admitted with
+          -- that same claim — the lifecycle and the owner-before-payloads
+          -- order a fresh arena uses (#2001). This staged WorldState is
+          -- not published until World.Load.Publish, so nothing can
+          -- observe either window here; sharing the one shape is what
+          -- keeps the two seed paths from drifting, not a defence this
+          -- one needs.
+          arenaClaims ← claimChunkGeneration worldState pid params
+                                             (map lcCoord arenaChunks)
           _ ← evaluate (force arenaChunks)
-          -- Same admission boundary and same owner-before-payloads order
-          -- a fresh arena uses (#2001). This staged WorldState is not
-          -- published until World.Load.Publish, so nothing can observe
-          -- the handoff here — sharing the one helper is what keeps the
-          -- two seed paths from drifting, not a defence this one needs.
-          publishSeedChunks worldState pid params (map lcCoord arenaChunks)
+          publishSeedChunks worldState arenaClaims
               WorldTileData { wtdChunks = chunkMap, wtdMaxChunks = 100 }
           let seeds = [ (lcCoord c, lcFluidMap c, lcTerrainSurfaceMap c)
                       | c ← arenaChunks ]
@@ -394,11 +399,16 @@ stagePage logger registry palette catalog buildingDefs unitDefs
           -- same physical chunk under the canonical key. Identity for
           -- every restore that is not near the seam, and for arena and
           -- zero-size pages.
+          -- Claimed before generation, exactly as fresh world init does:
+          -- a staged page cannot be reached by a request, but the two
+          -- seed paths run the same lifecycle so neither can drift.
           let centerCoord = canonicalChunkCoord params $
                   cameraChunkCoord (wpsCameraFacing wps)
                                    (wpsCameraX wps)
                                    (wpsCameraY wps)
-              (ct, cs, cterrain, cf, cice, cflora, cwt, cmagma) =
+          centreClaims ← claimChunkGeneration worldState pid params
+                                              [centerCoord]
+          let (ct, cs, cterrain, cf, cice, cflora, cwt, cmagma) =
                   generateChunk registry catalog params centerCoord
               seededSurf = VU.imap (\idx surfZ →
                   case cf V.! idx of
@@ -423,9 +433,9 @@ stagePage logger registry palette catalog buildingDefs unitDefs
           cdesigs ← readIORef (wsConstructDesignationsRef worldState)
           let centerChunk = applyConstructSlopes cdesigs
                   (applyDigSlopes desigs (replayEdits edits centerChunkRaw))
-          -- The restored centre is new residency (#2001), admitted the
-          -- same way — and in the same order — as a fresh world's centre.
-          publishSeedChunks worldState pid params [centerCoord]
+          -- The restored centre is new residency (#2001), claimed and
+          -- admitted exactly as a fresh world's centre is.
+          publishSeedChunks worldState centreClaims
               WorldTileData { wtdChunks    = HM.singleton centerCoord centerChunk
                             , wtdMaxChunks = 200 }
           let seeds = [ (centerCoord, lcFluidMap centerChunk

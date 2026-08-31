@@ -369,7 +369,7 @@ spec = describe "canonical chunk identity" $ do
         ws2 ← waitForWorldInit env pid 300
         (chunkOwnerGeneration ⊚ readChunkOwner ws2) `shouldReturn` gen2
 
-    it "admits a seeded page's chunks before it publishes their payloads" $ \_ → do
+    it "holds a seed claim across generation, then admits before publishing" $ \_ → do
         -- The seed paths (a fresh world's centre, a restored centre, an
         -- arena's whole chunk set) build their payloads before the page
         -- can take a request, and still reach the resident set through
@@ -382,7 +382,20 @@ spec = describe "canonical chunk identity" $ do
         -- rather than racing them.
         let params = sizedParams seamWorldSize
         ws ← detachedPage params
-        publishSeedChunks ws pageA params [aliasCoord] (seedTileData aliasCoord)
+        claims ← claimChunkGeneration ws pageA params [aliasCoord]
+
+        -- MID-GENERATION. A fresh page is registered and carries its
+        -- generation params before its centre exists, so a
+        -- world.loadChunksInRegion naming that centre can land here,
+        -- while generateChunk is still running. The claim reports it as
+        -- pending — which it is — so the call neither queues nor counts a
+        -- chunk this page is already producing.
+        enqueueChunkRequest pageA ws [canonCoord] `shouldReturn` 0
+        readIORef (wsInitQueueRef ws) `shouldReturn` []
+        midOwner ← readChunkOwner ws
+        stateOf params pageA canonCoord midOwner `shouldBe` ChunkInFlight
+
+        publishSeedChunks ws claims (seedTileData aliasCoord)
         owner ← readChunkOwner ws
         chunkOwnerSize owner `shouldBe` 1
         stateOf params pageA canonCoord owner `shouldBe` ChunkResident
@@ -392,17 +405,23 @@ spec = describe "canonical chunk identity" $ do
         td ← readIORef (wsTilesRef ws)
         (lcCoord ⊚ lookupChunk canonCoord td) `shouldBe` Just canonCoord
 
-        -- The window the ordering closes, made deterministic: with the
-        -- payload published FIRST, a request arriving before the owner is
-        -- settled queues and COUNTS a chunk the page already holds.
+        -- Both windows the lifecycle closes, reconstructed rather than
+        -- raced. UNCLAIMED during generation: the owner says absent, so
+        -- the same request queues and COUNTS work already under way.
+        wsUnclaimed ← detachedPage params
+        enqueueChunkRequest pageA wsUnclaimed [canonCoord] `shouldReturn` 1
+
+        -- PAYLOAD BEFORE OWNER: the chunk is resident and the owner still
+        -- says absent, so the request queues and counts a chunk the page
+        -- already holds.
         wsBad ← detachedPage params
         writeIORef (wsTilesRef wsBad) (seedTileData aliasCoord)
         enqueueChunkRequest pageA wsBad [canonCoord] `shouldReturn` 1
 
-        -- Owner first, the same request is satisfied work.
+        -- Claim, then publish owner-first: satisfied work, nothing queued.
         wsGood ← detachedPage params
-        publishSeedChunks wsGood pageA params [aliasCoord]
-                          (seedTileData aliasCoord)
+        goodClaims ← claimChunkGeneration wsGood pageA params [aliasCoord]
+        publishSeedChunks wsGood goodClaims (seedTileData aliasCoord)
         enqueueChunkRequest pageA wsGood [canonCoord] `shouldReturn` 0
         readIORef (wsInitQueueRef wsGood) `shouldReturn` []
 
