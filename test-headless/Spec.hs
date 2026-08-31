@@ -26,6 +26,7 @@ import qualified Test.Headless.Unit.SimPageOwnership as SimPageOwnership
 import qualified Test.Headless.Unit.Pathing.AStar as PathingAStar
 import qualified Test.Headless.Unit.Pathing.Config as PathingConfig
 import qualified Test.Headless.Unit.Render.PickFrame as PickFrame
+import qualified Test.Headless.Unit.HitTest as UnitHitTest
 import qualified Test.Headless.Unit.Anim as AnimTest
 import qualified Test.Headless.Unit.Injury as InjuryTest
 import qualified Test.Headless.Unit.InjurySpeed as InjurySpeedTest
@@ -179,6 +180,7 @@ import qualified Test.Headless.Lua.TextTruncation as LuaTextTruncation
 import qualified Test.Headless.Lua.WidthTruncation as LuaWidthTruncation
 import qualified Test.Headless.Lua.ShellInput as LuaShellInput
 import qualified Test.Headless.Lua.RandomStream as LuaRandomStream
+import qualified Test.Headless.Lua.ConsoleTableKeys as LuaConsoleTableKeys
 import qualified Test.Headless.Lua.InjuryNarration as LuaInjuryNarration
 import qualified Test.Headless.UI.Slider as UISlider
 import qualified Test.Headless.UI.BarFillColor as UIBarFillColor
@@ -325,6 +327,10 @@ main = hspec $ do
         -- at all, just the live EngineEnv's queues/refs to construct a
         -- real Lua backend and drive processLuaMsg directly.
         describe "Lua.DebugQueue" LuaDebugQueue.spec
+        -- Same technique as Lua.DebugQueue above: the live EngineEnv's
+        -- queues/refs are only there to build a real Lua backend, whose
+        -- console boundary is what #1955's key contract lives on.
+        describe "debug console table keys" LuaConsoleTableKeys.spec
         LuaUnitAiReconcile.envSpec
         describe "Lua.RenderQueue" LuaRenderQueue.spec
         describe "Lua.PreviewGeneration" LuaPreviewGeneration.spec
@@ -521,6 +527,7 @@ main = hspec $ do
     describe "Unit.Pathing.AStar" PathingAStar.spec
     describe "Unit.Pathing.Config" PathingConfig.spec
     describe "Unit.Render.pickFrame" PickFrame.spec
+    UnitHitTest.spec
     UnitAtlas.spec
     aroundAll withHeadlessEngine UnitAtlasLoader.spec
 
