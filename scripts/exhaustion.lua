@@ -8,7 +8,9 @@
 -- there). This module holds the one passive near-empty effect this issue
 -- adds: a movement-speed penalty, mirroring injuries.speedMultiplier /
 -- salts.speedMultiplier exactly (composed into movement_speed.lua's
--- M.sprint alongside them).
+-- M.bandMultiplier alongside them, so it reaches EVERY gait — sprint,
+-- the derived comfort/ordered, and the ambient meander — rather than
+-- only the ones that happen to derive from sprint, #1948).
 --
 -- No AI-goal wiring here — a fatigued unit slows down but doesn't collapse
 -- or seek rest on its own. Feeding exhaustion into a "go to sleep" utility

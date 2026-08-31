@@ -185,6 +185,16 @@ def _sprint_speed(port, uid):
         return None
 
 
+def _meander_speed(port, uid):
+    """The ambient-wander gait (#1948). Read alongside sprint so the
+    exhaustion section can prove the whole-band penalty reaches BOTH."""
+    r = send(port, f"return require('scripts.movement_speed').meander({uid}) or -1")
+    try:
+        return float(r)
+    except ValueError:
+        return None
+
+
 def exhaustion_section(port, seconds):
     """Exhaustion meter regression coverage (circadian epic #479 / #610):
       * Drains faster under sustained exertion (combat) than at idle.
@@ -192,6 +202,9 @@ def exhaustion_section(port, seconds):
       * A fatigued unit's sprint speed is measurably lower than a fully
         rested unit's (the movement-speed penalty, exhaustion.lua).
       * Wildlife (bear_brown) carries the same exhaustion resource.
+      * (#1948) The penalty reaches the ambient AMBLE too, not just sprint:
+        one red_squirrel measured at full and at zero exhaustion slows in
+        BOTH gaits by the same factor.
     All on the flat temperate arena, AI wander already neutralised."""
     passed = True
     win = min(seconds, 20.0)
@@ -271,7 +284,57 @@ def exhaustion_section(port, seconds):
         bear = []
     passed &= ok4
 
-    for u in idle + actv + [rest, rested, fatigued] + bear:
+    # --- 5. The penalty reaches the ambient AMBLE, not just sprint (#1948) ---
+    # ONE unit measured twice, so its rolled agility/endurance cancel out of
+    # the ratio (the two independently rolled acolytes in check 3 could not
+    # support a ratio assertion). red_squirrel is the shipped case that
+    # exposed the bug: it owns the full exhaustion resource AND routes its
+    # aimless wander through movement_speed.meander, and its high agility is
+    # what makes the raw max_speed branch — not half-comfort — bind the
+    # amble. Before #1948 the whole-band modifiers reached only the
+    # half-comfort branch, so this same measurement moved meander by 0-5.5%
+    # while sprint fell 45%; the threshold below rejects that bypass without
+    # pinning the exact floor constant.
+    squirrel = spawn_batch(port, 1, "red_squirrel", x0=26)
+    ok5 = False
+    if squirrel:
+        sq = squirrel[0]
+        smx = send(port, f"return require('scripts.unit_stats')"
+                         f".get({sq},'max_exhaustion') or -1").strip()
+        try:
+            smx_f = float(smx)
+        except ValueError:
+            smx_f = -1.0
+        if smx_f > 0:
+            send(port, f"unit.setStat({sq},'exhaustion',{smx_f}); return 'ok'")
+            sq_sp_rested = _sprint_speed(port, sq)
+            sq_mn_rested = _meander_speed(port, sq)
+            send(port, f"unit.setStat({sq},'exhaustion',0); return 'ok'")
+            sq_sp_spent = _sprint_speed(port, sq)
+            sq_mn_spent = _meander_speed(port, sq)
+            if (None not in (sq_sp_rested, sq_mn_rested, sq_sp_spent, sq_mn_spent)
+                    and sq_sp_rested > 0 and sq_mn_rested > 0):
+                mn_ratio = sq_mn_spent / sq_mn_rested
+                sp_ratio = sq_sp_spent / sq_sp_rested
+                # Sprint must still slow (the #610 penalty is intact), the
+                # amble must slow far past the old 4-5.5% bypass, and both
+                # must slow by the SAME whole-band factor.
+                ok5 = (sp_ratio < 0.90 and mn_ratio < 0.75
+                       and abs(mn_ratio - sp_ratio) < 0.05)
+                print(f"  [{'PASS' if ok5 else 'FAIL'}] fatigue reaches the amble: "
+                      f"sprint {sq_sp_rested:.3f}->{sq_sp_spent:.3f} "
+                      f"(x{sp_ratio:.3f}), meander "
+                      f"{sq_mn_rested:.3f}->{sq_mn_spent:.3f} (x{mn_ratio:.3f})")
+            else:
+                print("  [FAIL] exhaustion amble check: could not read squirrel speeds")
+        else:
+            print(f"  [FAIL] exhaustion amble check: red_squirrel max_exhaustion={smx}")
+    else:
+        print("  [WARN] exhaustion amble check: could not spawn red_squirrel")
+        squirrel = []
+    passed &= ok5
+
+    for u in idle + actv + [rest, rested, fatigued] + bear + squirrel:
         send(port, f"unit.destroy({u}); return 'ok'")
     return passed
 
