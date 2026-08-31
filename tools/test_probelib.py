@@ -838,6 +838,54 @@ sys.exit(3)
 """
 
 
+def proc_stat_state(raw: str) -> str | None:
+    """The state letter in a Linux `/proc/<pid>/stat` line.
+
+    Split out and pinned by a case below because macOS never reaches it:
+    the `/proc` branch is the one CI actually runs, so a parsing mistake
+    there would be invisible to every local run. The command field is
+    parenthesised and may itself contain spaces AND parentheses, so the
+    state is the first token after the LAST `)` rather than the third
+    whitespace field.
+    """
+    fields = raw.rpartition(")")[2].split()
+    return fields[0] if fields else None
+
+
+def process_state(pid: int) -> str | None:
+    """`pid`'s state letter, or None when there is no such entry.
+
+    Read rather than probed. The descendant these cases watch is killed
+    while it is an ORPHAN — its `cabal` parent is already dead and
+    reaped — so it is reparented to whatever init the host provides, and
+    it stays in the process table as a zombie until that init reaps it.
+    macOS's launchd does so at once; a CI container's PID 1 need not,
+    and on this repository's Linux image it does not.
+    """
+    stat_path = Path(f"/proc/{pid}/stat")
+    if stat_path.exists():
+        try:
+            return proc_stat_state(stat_path.read_text())
+        except OSError:
+            return None
+    done = subprocess.run(["ps", "-o", "state=", "-p", str(pid)],
+                          capture_output=True, text=True)
+    state = (done.stdout or "").strip()
+    return state[:1] if state else None
+
+
+def process_running(pid: int) -> bool:
+    """True while `pid` is a live process rather than a corpse.
+
+    `os.kill(pid, 0)` cannot answer this: it succeeds against a zombie,
+    because the entry survives until somebody reaps it. A killed
+    descendant awaiting its reaper is GONE for these cases — it holds
+    nothing and compiles nothing — so the state decides, not the signal.
+    """
+    state = process_state(pid)
+    return state is not None and state not in ("Z", "X", "x")
+
+
 class PreparedScratch:
     """A stand-in `cabal` on PATH, a stand-in engine, an isolated lock root.
 
@@ -880,6 +928,19 @@ class PreparedScratch:
             return []
         return [line for line in self.calls.read_text().splitlines() if line]
 
+    def describe_descendant(self) -> str:
+        """The descendant's pid and observed state, for a failure message.
+
+        A survivor in `S` was never signalled — a real disposal defect —
+        while a `Z` would mean this check had regressed to reading a
+        corpse as a live process. Naming the state is what tells those
+        two apart from the log alone.
+        """
+        pid = self.descendant()
+        if pid is None:
+            return "no descendant was recorded"
+        return f"pid {pid}, state {process_state(pid)!r}"
+
     def descendant(self) -> int | None:
         if not self.descendant_pid.exists():
             return None
@@ -895,9 +956,7 @@ class PreparedScratch:
             return False
         deadline = time.time() + seconds
         while time.time() < deadline:
-            try:
-                os.kill(pid, 0)
-            except (ProcessLookupError, PermissionError):
+            if not process_running(pid):
                 return True
             time.sleep(0.1)
         return False
@@ -920,6 +979,47 @@ def prepare(scratch: PreparedScratch, **kwargs):
     return probe_engine.prepare_executable(
         str(scratch.dir), namespace=scratch.namespace,
         lock_root=scratch.lock_root, **kwargs)
+
+
+def test_a_killed_descendant_reads_as_gone_before_it_is_reaped() -> None:
+    print("\n-- the disposal check reads process STATE, not a bare signal")
+    # An orphan killed by a group signal stays in the process table
+    # until its init reaps it; macOS does so at once, a CI container's
+    # PID 1 need not. `os.kill(pid, 0)` succeeds against that corpse, so
+    # a check built on it would call a killed descendant "still
+    # compiling" on exactly the platform CI runs.
+    child = subprocess.Popen([sys.executable, "-c", "import time\n"
+                                                    "time.sleep(600)\n"])
+    try:
+        expect(process_running(child.pid),
+               "a live process reads as running, so this is not vacuous")
+        child.kill()
+        deadline = time.time() + 10
+        while process_running(child.pid) and time.time() < deadline:
+            time.sleep(0.05)
+        expect(not process_running(child.pid),
+               "and a killed one reads as gone while still unreaped")
+        signal_says_alive = True
+        try:
+            os.kill(child.pid, 0)
+        except (ProcessLookupError, PermissionError):
+            signal_says_alive = False
+        expect(signal_says_alive or sys.platform == "darwin",
+               "which is the whole point: the bare signal would still "
+               "report it alive here")
+    finally:
+        child.wait(timeout=10)
+    # The Linux branch, against the real file format. macOS takes the
+    # `ps` branch, so nothing else here would catch a mistake in it.
+    for raw, expected, why in (
+            ("42 (cabal) Z 1 42 0 0 -1 4194560 0", "Z", "an ordinary name"),
+            ("42 (ghc (stage 2)) S 1 42", "S",
+             "a name containing spaces AND parentheses"),
+            ("42 (x) R 1", "R", "a running process"),
+            ("", None, "an empty read")):
+        expect(proc_stat_state(raw) == expected,
+               f"/proc stat parsing handles {why} "
+               f"(got {proc_stat_state(raw)!r}, wanted {expected!r})")
 
 
 def test_preparation_precedes_the_engine_launch() -> None:
@@ -1022,7 +1122,7 @@ def test_a_failed_preparation_disposes_of_its_whole_process_tree() -> None:
             expect(scratch.descendant_gone(),
                    f"[{label}] and the marked descendant is gone, not left "
                    f"compiling into the build directory "
-                   f"(pid {scratch.descendant()})")
+                   f"({scratch.describe_descendant()})")
         finally:
             scratch.cleanup()
 
@@ -1160,7 +1260,7 @@ def test_an_interrupt_during_preparation_leaves_no_build_behind() -> None:
                "not vacuous")
         expect(scratch.descendant_gone(),
                f"and it is gone, not left compiling after the probe was "
-               f"interrupted (pid {scratch.descendant()})")
+               f"interrupted ({scratch.describe_descendant()})")
     finally:
         timer.cancel()
         scratch.cleanup()
@@ -1295,6 +1395,7 @@ def main() -> int:
     test_an_interrupt_during_the_hand_off_kills_the_child()
     test_boot_without_a_callback_is_unchanged()
     test_resolve_executable_builds_then_locates()
+    test_a_killed_descendant_reads_as_gone_before_it_is_reaped()
     test_preparation_precedes_the_engine_launch()
     test_a_failed_preparation_is_not_reported_as_readiness()
     test_a_failed_preparation_disposes_of_its_whole_process_tree()
