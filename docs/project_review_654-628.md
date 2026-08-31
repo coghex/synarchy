@@ -8,11 +8,11 @@ The `World.Generate.Config`, `UI.Tooltip`, `unit_info_v2`, `World.Geology.Coasta
 
 ## Status
 
-- [ ] PRR-1. A unit can miss dawn between entering Sleeping and its first wake check
+- [x] PRR-1. A unit can miss dawn between entering Sleeping and its first wake check — [#1939]
 
 ## 1. Dawn-crossing initialization
 
-### PRR-1. A unit can miss dawn between entering Sleeping and its first wake check
+### [#1939] PRR-1. A unit can miss dawn between entering Sleeping and its first wake check
 
 > **Captured note:** Seed the dawn-crossing baseline at the moment the unit enters the real `Sleeping` phase. A unit that finishes lying down just before dawn should not sleep through that dawn merely because its next utility-AI thought occurs just after the boundary.
 

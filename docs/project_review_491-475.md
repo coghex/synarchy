@@ -8,12 +8,12 @@ The current strict-TVar updates, probe runner, `unsafePerformIO` replacements, C
 
 ## Status
 
-- [ ] PRR-1. Repair recipes publish work values that repair never consumes
-- [ ] PRR-2. The texture audit treats generic assets as per-subset unknowns
+- [x] PRR-1. Repair recipes publish work values that repair never consumes — [#1965]
+- [x] PRR-2. The texture audit treats generic assets as per-subset unknowns — [no-issue]
 
 ## 1. Repair effort semantics
 
-### PRR-1. Repair recipes publish work values that repair never consumes
+### [#1965] PRR-1. Repair recipes publish work values that repair never consumes
 
 > **Captured note:** Give repair recipe `work` one coherent meaning. The two shipped repairs author different effort values and expose them through `repair.get`, but autonomous repair ignores the field and calls `repair.repairAt` on the first tick after reaching the station. Reforging with `work: 15` and honing with `work: 10` therefore have the same one-call completion behavior.
 
@@ -39,7 +39,20 @@ The current strict-TVar updates, probe runner, `unsafePerformIO` replacements, C
 
 ## 2. Texture fallback contract
 
-### PRR-2. The texture audit treats generic assets as per-subset unknowns
+### [no-issue] PRR-2. The texture audit treats generic assets as per-subset unknowns
+
+> **Disposition:** No issue — the audit already distinguishes shared fallbacks
+> from per-subset assets via a `shared_fallback` reason printed on all four
+> affected rows, and `utility/blanktexture.png` is not a substitute for
+> vegetation's unknown asset but the engine's own unmapped-vegetation-id
+> texture (`World/Vegetation.hs:128`, `World/Render/TileQuads.hs:128`), so the
+> load-failure path and the unmapped-id path agree by design. It is also a
+> single flat colour (1 distinct colour, luminance stdev 0.00) on the same
+> 96x64 3936-pixel diamond mask as all 77 shipped vegetation textures, each of
+> which carries 5-6 colours — so a missing path reads as an obvious void, not
+> as ordinary terrain. #478's acceptance ("zero yaml entities silently relying
+> on a generic fallback") holds: the audit reports zero unresolved declared
+> paths across all 13 subsets.
 
 > **Captured note:** Reconcile #478's per-subset unknown-texture contract with the implementation that closed it. Vegetation still substitutes the generic gray `utility/blanktexture.png`, and the audit labels that shared asset as vegetation's canonical unknown, even though the issue explicitly required `unknown_<subset>.png` assets and zero entities silently relying on generic fallbacks.
 

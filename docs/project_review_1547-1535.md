@@ -6,11 +6,11 @@ Status legend: `[ ]` unprocessed · `[#N]` filed as issue N · `[no-issue]` revi
 
 ## Status
 
-- [ ] PRR-1. Probe concurrency report claims rate invariance its sample cannot establish
+- [x] PRR-1. Probe concurrency report claims rate invariance its sample cannot establish — [#1994]
 
 ## 1. Probe-concurrency inference
 
-### PRR-1. Probe concurrency report claims rate invariance its sample cannot establish
+### [#1994] PRR-1. Probe concurrency report claims rate invariance its sample cannot establish
 
 > **Captured note:** Correct PR #1545's concurrency report so it distinguishes the observed absence of monotonic failure-rate degradation from proof that failure rates do not move. Eight attempts per cell and one repeated cell cannot establish rate invariance or a causal separation between probe flakiness and concurrency.
 
