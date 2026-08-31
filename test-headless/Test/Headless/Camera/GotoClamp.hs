@@ -1,108 +1,133 @@
 {-# LANGUAGE Strict #-}
--- | Pure tests for the camera.gotoTile glacier clamp (issue #297).
+-- | Pure tests for the world bounds @camera.goToTile@ retains (#1953).
 --
---   The bug: @camera.gotoTile@ teleported the camera by writing camPosition
---   directly with no world-bounds clamp, so a target near the world's
---   diagonal corner parked the camera at the v-edge rim. gotoTile forces a
---   zoomed-in level that DOES load chunks (unlike panning over the rim at
---   world-map zoom), and generating a rim chunk heap-overflowed the world
---   thread permanently.
+--   History. Issue #297 gave the teleport its own, larger glacier fence
+--   because generating a chunk on the glacier rim killed the world
+--   thread, and it deferred the mechanism to #298. The defect turned out
+--   to live in the SHARED chunk generator — a beyond-glacier neighbour's
+--   @minBound@ sentinel sizing a ~2^63-tall strata column — and was
+--   repaired there by PR #363, which covers the init-queue loader and
+--   the camera-visible loader alike. The teleport-only fence outlived
+--   its cause: it clamped four chunks further in than ordinary panning,
+--   and on the 8-chunk minimum world it exceeded the half-size, pinning
+--   EVERY teleport to the centre in map view with z-tracking off.
 --
---   The fix fences the teleport target through 'applyGotoLimits', whose
---   buffer ('cameraGotoBufferChunks') keeps not just the camera but the
---   region the loader pulls in around it ('chunkLoadRadius' past the camera)
---   strictly inside the rim. These assertions pin that the fence is more
---   conservative than the pan path's and that the outermost loaded chunk
---   stays interior. The clamp is pure — no engine needed.
+--   #1953 retired it. @camera.goToTile@ is now fenced by the same
+--   'cameraGlacierBufferChunks' boundary the pan and drag paths use,
+--   which is a framing rule (the outermost rim band would fill half the
+--   screen with the void past the world edge) and not a safety one.
+--
+--   These examples pin the RETAINED behaviour: the fence is still the
+--   pan/drag path's, a rim-ward target lands on it for both glacier
+--   directions and all four facings, the cylindrical u-axis is never
+--   clamped, and an interior target is the identity — on every supported
+--   world size, the 8-chunk minimum included. The clamp is pure, so no
+--   engine is needed here; "Test.Headless.Camera.GotoLoad" drives the
+--   repaired loader end to end through the real registered API.
 module Test.Headless.Camera.GotoClamp (spec) where
 
 import UPrelude
 import Test.Hspec
 import Engine.Graphics.Camera (CameraFacing(..))
-import Engine.Loop.Camera (applyGotoLimits, cameraYLimitChunks
-                          , cameraGotoBufferChunks, gotoTileZoomSafe)
+import Engine.Loop.Camera (applyLimits, cameraYLimitChunks
+                          , cameraGlacierBufferChunks)
 import World.Chunk.Types (chunkSize)
-import World.Generate.Constants (chunkLoadRadius)
 import World.Grid (tileHalfDiamondHeight)
 
 -- World sizes (in chunks) to exercise. 8 is the smallest supported world
--- (World.Generate.Config.minimumWorldSize) — the case where an unbounded goto
--- buffer would drive the limit negative and invert the clamp.
+-- (World.Generate.Config.minimumWorldSize) — the case the retired
+-- teleport buffer collapsed to a centre pin.
 worldSizes ∷ [Int]
 worldSizes = [8, 16, 64, 128, 256]
 
 facings ∷ [CameraFacing]
 facings = [FaceSouth, FaceNorth, FaceWest, FaceEast]
 
--- The v-axis component (the one the rim clamp acts on) for a given facing.
+-- | The retained bound for a world size: the pan/drag path's own.
+limitFor ∷ Int → Float
+limitFor = cameraYLimitChunks cameraGlacierBufferChunks
+
+-- | Screen coordinates carrying a given (u, v) pair, where v is the
+--   glacier-bounded axis for this facing and u the cylindrical one that
+--   wraps. Mirrors 'Engine.Loop.Camera.applyLimits'' own facing split.
+axesToScreen ∷ CameraFacing → Float → Float → (Float, Float)
+axesToScreen FaceSouth u v = (u, v)
+axesToScreen FaceNorth u v = (u, v)
+axesToScreen FaceWest  u v = (v, u)
+axesToScreen FaceEast  u v = (v, u)
+
+-- The v-axis component (the one the rim clamp acts on) for a facing.
 clampedV ∷ CameraFacing → (Float, Float) → Float
 clampedV FaceSouth (_, y) = y
 clampedV FaceNorth (_, y) = y
 clampedV FaceWest  (x, _) = x
 clampedV FaceEast  (x, _) = x
 
--- The camera v-chunk a rim-ward teleport actually lands on for a given world
--- size, derived from the clamp output (so it reflects the effective, possibly
--- small-world-capped, buffer rather than the raw constant).
-clampedCamVChunk ∷ Int → Int
-clampedCamVChunk ws =
-    let (_, y) = applyGotoLimits ws FaceSouth 1.0e6 1.0e6
-    in round (y / tileHalfDiamondHeight / fromIntegral chunkSize)
+-- The u-axis component (the cylinder seam), which must come back
+-- untouched however far out of range it is.
+wrappingU ∷ CameraFacing → (Float, Float) → Float
+wrappingU FaceSouth (x, _) = x
+wrappingU FaceNorth (x, _) = x
+wrappingU FaceWest  (_, y) = y
+wrappingU FaceEast  (_, y) = y
+
+-- | A distinctive u offset, far enough out that a clamp acting on the
+--   wrong axis could not return it unchanged.
+farU ∷ Float
+farU = 987654.0
+
+nearly ∷ Float → Float → Bool
+nearly want got = abs (got - want) ≤ 1.0e-3
 
 spec ∷ Spec
 spec = do
-    describe "camera.gotoTile glacier clamp (#297)" $ do
+    describe "camera.gotoTile world bounds (#1953)" $ do
 
-        it "fences teleports at least as hard as the pan/drag path" $
-            -- The pan path uses a 2-chunk buffer; gotoTile uses more (it forces
-            -- a zoomed-in level that actually loads chunks), so its limit is
-            -- never looser than the pan limit on any supported world size.
-            forM_ worldSizes $ \ws →
-                cameraYLimitChunks cameraGotoBufferChunks ws
-                    `shouldSatisfy` (≤ cameraYLimitChunks 2 ws)
+        it "fences teleports on the pan/drag path's own two-chunk buffer" $
+            -- #1953 retired the teleport's separate buffer by adopting
+            -- this one AS-IS; re-examining the pan/drag boundary itself
+            -- is separate work. Changing this value now moves every
+            -- camera path at once, which is the point of pinning it.
+            cameraGlacierBufferChunks `shouldBe` 2
 
         it "never inverts the clamp — limit stays non-negative on every world" $
-            -- On the 8-chunk minimum the raw buffer would push the limit
-            -- negative (maxRow < 0), inverting the clampF range. The half-size
-            -- cap keeps it ≥ 0 (and exactly 0 there — a centre pin).
+            -- The half-size cap keeps 'cameraYLimitChunks' ≥ 0 for a
+            -- buffer wider than the world could hold.
             forM_ worldSizes $ \ws →
-                cameraYLimitChunks cameraGotoBufferChunks ws
-                    `shouldSatisfy` (≥ 0)
+                limitFor ws `shouldSatisfy` (≥ 0)
 
-        it "keeps the outermost loaded chunk strictly inside the v-edge rim" $
-            -- The loader pulls chunkLoadRadius past the (clamped) camera; that
-            -- outermost loaded chunk must stay strictly interior. Holds even on
-            -- the 8-chunk world, where the camera pins to centre and only loads
-            -- the same set the initial (centre) view already loaded safely.
-            forM_ worldSizes $ \ws → do
-                let halfSize = ws `div` 2
-                (clampedCamVChunk ws + chunkLoadRadius) `shouldSatisfy` (< halfSize)
+        it "leaves the 8-chunk minimum a real interior to teleport into" $
+            -- The retired buffer (chunkLoadRadius + 4 = 6) exceeded this
+            -- world's half-size of 4, collapsing the limit to 0 so every
+            -- target landed at the centre. Two chunks fit with room to
+            -- spare: 4 half-chunks − 2 = 2 chunks = 32 tiles of reach.
+            limitFor 8 `shouldBe`
+                fromIntegral (2 * chunkSize) * tileHalfDiamondHeight
 
-        it "clamps an out-of-bounds rim target onto the fence" $
+        it "clamps an out-of-bounds rim target onto the retained bound" $
+            -- Both glacier directions, all four facings.
+            forM_ worldSizes $ \ws → forM_ facings $ \f →
+                forM_ [1.0, -1.0 ∷ Float] $ \sign → do
+                    let (x, y) = axesToScreen f farU (sign * 1.0e6)
+                        out    = applyLimits ws f x y
+                    clampedV f out `shouldSatisfy` nearly (sign * limitFor ws)
+
+        it "never clamps the cylindrical u-axis" $
+            -- u wraps rather than ending, so the clamp must not touch it
+            -- even when the v-axis is being pulled all the way back.
             forM_ worldSizes $ \ws → forM_ facings $ \f → do
-                let lim = cameraYLimitChunks cameraGotoBufferChunks ws
-                    out = applyGotoLimits ws f 1.0e6 1.0e6
-                abs (clampedV f out) `shouldSatisfy`
-                    (\v → v ≤ lim + 1.0e-3 ∧ v ≥ lim - 1.0e-3)
+                let (x, y) = axesToScreen f farU 1.0e6
+                    out    = applyLimits ws f x y
+                wrappingU f out `shouldBe` farU
 
-        it "leaves a deep-interior target unchanged (identity)" $
-            -- 0.3 screen units sits inside the fence for every world big enough
-            -- to have a non-zero fence (the 8-chunk world pins to centre, so
-            -- nothing but the origin is interior there).
-            forM_ (filter (\ws → ws ≥ 16) worldSizes) $ \ws → forM_ facings $ \f →
-                applyGotoLimits ws f 0.3 0.3 `shouldBe` (0.3, 0.3)
-
-        it "only allows tile-level zoom where the loader stays clear of the rim" $ do
-            -- The 8-chunk minimum has no safe zoomed-in region (a centred load
-            -- still pulls a rim corner chunk), so gotoTile must stay zoomed out
-            -- there; every larger supported world is safe.
-            gotoTileZoomSafe 8  `shouldBe` False
-            forM_ [16, 64, 128, 256] $ \ws →
-                gotoTileZoomSafe ws `shouldBe` True
+        it "leaves an interior target unchanged (identity)" $
+            -- 0.3 screen units sits inside the fence on every supported
+            -- world size now that the 8-chunk minimum has an interior.
+            forM_ worldSizes $ \ws → forM_ facings $ \f →
+                applyLimits ws f 0.3 0.3 `shouldBe` (0.3, 0.3)
 
         it "the fence sits inside the true rim" $
             forM_ worldSizes $ \ws → do
                 let halfTiles = fromIntegral ((ws * chunkSize) `div` 2)
                                   * tileHalfDiamondHeight
-                    lim = cameraYLimitChunks cameraGotoBufferChunks ws
-                (lim < halfTiles) `shouldBe` True
+                (limitFor ws < halfTiles) `shouldBe` True

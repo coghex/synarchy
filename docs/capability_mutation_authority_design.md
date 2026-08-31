@@ -115,7 +115,7 @@ accessors: of **321** accessor uses, **208** read or write inline and **113
 records that mix several capabilities:
 
 ```haskell
--- src/Building/Knowledge/Live.hs:102-105
+-- src/Building/Knowledge/Live.hs:102-105, as measured
 { coBuildings = bcBuildingManagerRef bld
 , coWorlds    = wsWorldManagerRef sim
 , coItems     = crItemManagerRef reg
@@ -128,6 +128,14 @@ forgetContainerEverywhere (wsWorldManagerRef sim) bid
 This is the measurement D-7 turns on: any boundary drawn at the *record* is
 gone the moment the `IORef` is extracted, and a third of all uses do exactly
 that.
+
+CMA-2 (#1896) has since landed, and `coItems` is the field it wrapped:
+it now reads `coItems = crvItemManagerRef reg` with type
+`ReadOnlyRef ItemManager`, so that one site is a pass-on the boundary
+now survives rather than one it leaks through. The count above is the
+`master@19af28ea` measurement and is left as measured; `coGameTime`
+beside it is a `world-sim-render-handoff` field and stays a raw
+`IORef`.
 
 ### `RenderHandoff`'s read-only surface is three relationships, not eight
 
@@ -222,6 +230,10 @@ express "several owners" without collapsing to "everyone."
 
 No `newtype ReadOnly`/`RO`/`Readable`/`WriteOnly` exists anywhere under `src/`.
 Any reference-wrapping mechanism is a new abstraction, not an extension of one.
+
+*(As measured. CMA-2 (#1896) is what created one —
+`Engine.Core.ReadOnlyRef.ReadOnlyRef` — so a later slice extends that
+rather than inventing a second.)*
 
 ### The permanent full-access cohort sits outside any capability mechanism
 
@@ -474,23 +486,46 @@ CMA-3's verdict must say so explicitly rather than generalising
 Approved 2026-08-29, superseding D-6 after measurement showed `RenderHandoff`'s
 in-scope surface is 3 module-field pairs in a single module (`Structure.Render`).
 
-`ContentRegistries` has 7 in-scope module-field pairs across 4 fields and ~5
-consumer modules: `crItemManagerRef` (read by `Combat.Resolution`,
-`API.Items.Defs`, `API.Repair`, `Unit.Thread.Command.Spawn`),
-`crEquipmentClassManagerRef`, `crRecipeManagerRef` and `crSubstanceManagerRef`.
+`ContentRegistries`' in-scope surface is the four registries
+`crItemManagerRef`, `crEquipmentClassManagerRef`, `crRecipeManagerRef` and
+`crSubstanceManagerRef`.
+
+**Corrected by #1896's issue review, and the correction is large.** The
+figure this decision was approved on — "7 in-scope module-field pairs across 4
+fields and ~5 consumer modules" — undercounted by a factor of five. Measured at
+`master@1845ac2910ed` and re-measured unchanged when CMA-2 was implemented, the
+four accessors occur in **35 production module-field pairs across 30 modules**
+(23 / 3 / 6 / 3 respectively, excluding the capability module itself).
+Subtracting the four single-field writer modules leaves **31 read-only pairs
+across 26 modules**, and CMA-2 migrated all of them in one change.
+
+`Engine.Scripting.Lua.API.Items.Defs` was also miscounted here as a *reader* of
+`crItemManagerRef`: `loadItemYamlFn` hands the handle to `registerItemDefs`,
+which mutates it with `atomicModifyIORef'`. It is one of the four raw writers,
+not one of the readers.
 
 **Rationale:**
 
 - Registries are content catalogues — loaded once at boot, read everywhere — so
   read-only is the semantically obvious case rather than an imposed one.
 - It **exercises the pass-on pattern the newtype was chosen for** (D-7), which
-  `RenderHandoff` never would: `Unit/Thread/Movement.hs:170` and
-  `Combat/Wounds/Tick.hs:82` hand the accessor straight into a helper call, and
-  `Building/Knowledge/Live.hs:104` packs `crItemManagerRef reg` into a
-  multi-capability context record. A pilot that never crosses a module boundary
-  would not test the property D-7 exists to buy.
-- It stays comfortably within one PR, unlike `RenderView` (31 pairs) or
-  `WorldSim` (36 pairs, 24 modules on one field).
+  `RenderHandoff` never would: `Building/Knowledge/Live.hs:104` packs
+  `crItemManagerRef reg` into a multi-capability context record. A pilot that
+  never crosses a module boundary would not test the property D-7 exists to
+  buy. *(Corrected: the two further sites this bullet originally cited are
+  not pass-ons. `Unit/Thread/Movement.hs:170` and `Combat/Wounds/Tick.hs:82`
+  both apply `readIORef` immediately — they are inline reads. And
+  `crInfectionManagerRef`, the second of those, is not one of the four
+  selected fields at all. So the pass-on rationale rests on ONE selected-field
+  context pass-on, which #1896 duly delivered as
+  `ContainerObserver.coItems ∷ ReadOnlyRef ItemManager`.)*
+- It stays within one PR — but not "comfortably", and not for the reason
+  originally given. *(Corrected: this bullet claimed the pilot was small
+  "unlike `RenderView` (31 pairs) or `WorldSim` (36 pairs, 24 modules on one
+  field)". The corrected measurement makes `ContentRegistries`' own read-only
+  surface 31 pairs across 26 modules — the same scale as the alternative it
+  rejects on size. `WorldSim` remains materially larger. CMA-3 must weigh the
+  rollout question against the corrected number, not this comparison.)*
 
 **Consequences:**
 
@@ -501,32 +536,56 @@ consumer modules: `crItemManagerRef` (read by `Combat.Resolution`,
 ### D-7. The pilot's mechanism is a read-only reference newtype
 
 Approved 2026-08-29, resolving Q-4. CMA-2 introduces a `ReadOnlyRef a` wrapping
-an `IORef a` and exporting only a read primitive — no write primitive at all —
-and `RenderHandoff` hands non-writer roles the wrapped form.
+an `IORef a` and exporting only the type name, a construction function and a
+read — no constructor, no unwrap, no write primitive at all — and the pilot
+capability hands non-writer consumers the wrapped form. *(Corrected: this
+sentence named `RenderHandoff`, which D-6a had already superseded as the pilot
+and which this arc does not touch at all.)*
+
+**As landed (#1896).** `Engine.Core.ReadOnlyRef` exports
+`ReadOnlyRef`, `toReadOnlyRef :: IORef a -> ReadOnlyRef a` and
+`readReadOnlyRef :: ReadOnlyRef a -> IO a`, and nothing else. Construction is
+deliberately PUBLIC: the guarantee bought is "a module handed only the wrapped
+form cannot write", not unforgeability — the raw handle is what confers
+authority, and a private constructor would only have blocked the view
+projection and the test fixtures that build a context record by hand.
+`ContentRegistries` keeps the raw writer record; the new
+`Engine.Core.Capability.ContentRegistriesView` is what readers take.
 
 **Rationale — the pass-on measurement decides it.** 113 of 321 capability-accessor
 uses (35%) pass the raw handle onward, into helper parameters and into context
 records that mix several capabilities. Per-role views and accessor-only modules
 both draw their boundary at the *record*, and that boundary ends the moment the
 `IORef` is extracted — so a third of all uses would walk straight through it,
-and `Building.Knowledge.Live`'s four-capability context record defeats them
-outright. A newtype travels with the handle, so `coGameTime :: ReadOnlyRef
-Double` stays read-only wherever it is passed.
+and `Building.Knowledge.Live`'s multi-capability context record defeats them
+outright. A newtype travels with the handle, so `coItems :: ReadOnlyRef
+ItemManager` stays read-only wherever it is passed. *(Corrected: the worked
+example here was `coGameTime :: ReadOnlyRef Double`. `coGameTime` is
+`wsGameTimeRef sim`, a `world-sim-render-handoff` field outside this arc's
+scope, and it stays a raw `IORef`. `coItems` is the one `ContainerObserver`
+field #1896 wrapped, and the arc's only selected-field pass-on.)*
 
 **Consequences:**
 
 - A new abstraction with no precedent in the tree (no `ReadOnly`/`RO`/`Readable`
   newtype exists under `src/`). CMA-2 establishes both the type and the
-  convention for using it.
+  convention for using it — the latter as §2.1's abstract-wrapper extension in
+  `docs/engineenv_capability_inventory.md`, which is where a later slice reads
+  the rules from.
 - Full rollout would propagate the wrapper into helper signatures and shared
   context records. That cost is real and lands on the **rollout arc**, not this
   epic — it is precisely what CMA-3's verdict weighs.
-- The pilot demonstrates 7 module-field pairs across `ContentRegistries`' 4
-  fields (D-6a). Proving the mechanism works is not the same as proving it is
-  worth rolling out, and CMA-3 must not read a successful pilot as a mandate.
-- The load-bearing demonstrations are the pass-on sites — `Unit/Thread/Movement.hs:170`,
-  `Combat/Wounds/Tick.hs:82`, and `Building/Knowledge/Live.hs:104`'s context
-  record — exactly the cases a record-level boundary misses and this one catches.
+- The pilot demonstrates 31 read-only module-field pairs across
+  `ContentRegistries`' 4 fields, in 26 modules (D-6a, as corrected — the
+  original "7 pairs across ~5 modules" was wrong). Proving the mechanism works
+  is not the same as proving it is worth rolling out, and CMA-3 must not read a
+  successful pilot as a mandate.
+- The load-bearing demonstration is the ONE pass-on site —
+  `Building/Knowledge/Live.hs:104`'s context record — exactly the case a
+  record-level boundary misses and this one catches. *(Corrected: the two
+  other sites this bullet cited are inline `readIORef` calls, and one of them
+  names an out-of-scope registry. CMA-3 should weigh a single demonstrated
+  pass-on, not three.)*
 
 **Rejected alternatives:** per-role capability views and accessor-only modules,
 both for the record-level escape above. Accessor-only modules additionally carry
@@ -637,19 +696,36 @@ additionally gated on a signoff checkpoint (Q-4).
 - **Outcome:** a module that only reads a `ContentRegistries` field cannot
   mutate it — a compile error, not a review catch — and the guarantee survives
   the handle being passed into a helper or packed into a context record.
-- **Scope:** introduce `ReadOnlyRef` (D-7); hand the wrapped form to the 7
+- **Scope:** introduce `ReadOnlyRef` (D-7); hand the wrapped form to the 31
   in-scope read-only module-field pairs across `ContentRegistries`' 4 fields
   (`crItemManagerRef`, `crEquipmentClassManagerRef`, `crRecipeManagerRef`,
-  `crSubstanceManagerRef`); migrate the ~5 consumer modules, including the three
-  pass-on sites; amend §2.1's canonical capability-record convention to cover the
-  wrapped form (§6.4's approval procedure applies); and update CMA-1's
-  writing-module map if any accessor is renamed.
+  `crSubstanceManagerRef`); migrate all 26 consumer modules, including the one
+  selected-field pass-on site; amend §2.1's canonical capability-record
+  convention to cover the wrapped form (§6.4's approval procedure applies); and
+  update CMA-1's writing-module map if any accessor is renamed. *(The original
+  "7 pairs / ~5 modules / three pass-on sites" figures were corrected by
+  #1896's issue review — see D-6a.)*
+
+  **As delivered,** the four field types could not simply change: one record
+  cannot vary its field types per consumer, so `ContentRegistriesCapability`
+  stayed the raw WRITER interface for its four legitimate `X.loadYaml` writers
+  and a separate `ContentRegistriesViewCapability` carries the wrapped form for
+  every reader. `crvInfectionManagerRef` rides on that view as a raw `IORef` so
+  `API.Units.Combat`, the one module mixing a selected registry with an
+  out-of-scope one, needs no raw record. The writing-module map needed no edit:
+  no accessor was renamed on the writers' side, and a `ReadOnlyRef` field has no
+  write to declare.
 - **Phase:** 2
 - **Depends on:** `CMA-1`
 - **Ordering:** `critical path`
 - **Relevant decisions:** D-2, D-6a, D-7
 - **Acceptance signals:**
   - A rejected mutation is demonstrated as a compile failure in the PR.
+    *(Delivered mechanically rather than as prose:
+    `tools/test_read_only_ref_compile.py` compiles five fixtures against the
+    real built library and prints each command and complete diagnostic — two
+    positive controls that must compile, so a broken environment cannot make
+    the rejections look like the boundary.)*
   - The guarantee is shown to survive a pass-on: a read-only handle given to a
     helper or stored in a context record still cannot be written.
   - No behavior change: the headless hspec suite and the worldgen baselines are

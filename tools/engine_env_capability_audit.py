@@ -1764,6 +1764,34 @@ _PROJECTION_BINDING_RE = re.compile(
     r"((?:[A-Z][A-Za-z0-9_']*\.)*[A-Za-z][A-Za-z0-9_']*)"
     r"\s+env(?![A-Za-z0-9_'])")
 
+# docs/engineenv_capability_inventory.md SS2.1's abstract-wrapper
+# extension (issue #1896): a view field may be
+# `field = wrapper (accessor env)` instead of `field = accessor env`.
+# The wrapper set is a CLOSED, named list, not "any function", because
+# what earns the alias treatment is the guarantee the wrapper carries:
+# `Engine.Core.ReadOnlyRef.toReadOnlyRef` is documented to wrap the
+# caller's live handle and never to copy it, so the projected field is
+# the same container the accessor named. A projection that applied any
+# other function would be transforming the state, and inventing an
+# alias for it is exactly what this regex must not do -- so an
+# unrecognized wrapper is skipped, and the field simply does not
+# canonicalize.
+#
+# Missing this shape is not cosmetic. `capability_accessor_map` is what
+# turns a record selector into an `EngineEnv` field for BOTH the write
+# scan and the pass-on residue, so a dropped view accessor would make
+# every use of it invisible -- including the context-record pass-on in
+# `Building.Knowledge.Live` that D-7 exists to demonstrate, which would
+# have silently left the residue CMA-3 weighs.
+ALIAS_PRESERVING_WRAPPERS = frozenset({"toReadOnlyRef"})
+
+_WRAPPED_PROJECTION_BINDING_RE = re.compile(
+    r"(?<![A-Za-z0-9_'])([A-Za-z][A-Za-z0-9_']*)\s*=\s*"
+    r"((?:[A-Z][A-Za-z0-9_']*\.)*[A-Za-z][A-Za-z0-9_']*)"
+    r"\s*\(\s*"
+    r"((?:[A-Z][A-Za-z0-9_']*\.)*[A-Za-z][A-Za-z0-9_']*)"
+    r"\s+env\s*\)")
+
 
 def parse_projection_bindings(source_text: str, projection: str
                               ) -> dict[str, str]:
@@ -1772,7 +1800,14 @@ def parse_projection_bindings(source_text: str, projection: str
     construction, the accessor reported BARE whether it was written
     qualified or not. Comments are stripped first, so a Haddock example
     never counts as a binding. Returns `{}` if the projection is not
-    defined in `source_text` at all."""
+    defined in `source_text` at all.
+
+    A view field wrapped by a named alias-preserving wrapper --
+    `field = toReadOnlyRef (accessor env)`, SS2.1's abstract-wrapper
+    extension -- reports the same accessor as the bare form, because it
+    names the same live container (`ALIAS_PRESERVING_WRAPPERS` says
+    which wrappers make that promise). Any other function around the
+    accessor is not recognized, and the field does not canonicalize."""
     code = _strip_haskell_comments(source_text)
     lines = code.split("\n")
     start = None
@@ -1797,9 +1832,15 @@ def parse_projection_bindings(source_text: str, projection: str
     # The qualifier says which module the accessor came from, which is
     # already settled by the time we get here; the FIELD name is what
     # every consumer wants, so it is returned bare.
-    return {field: accessor.rpartition(".")[2]
-            for field, accessor
-            in _PROJECTION_BINDING_RE.findall("\n".join(body))}
+    text = "\n".join(body)
+    bindings = {field: accessor.rpartition(".")[2]
+                for field, accessor
+                in _PROJECTION_BINDING_RE.findall(text)}
+    for field, wrapper, accessor in (
+            _WRAPPED_PROJECTION_BINDING_RE.findall(text)):
+        if wrapper.rpartition(".")[2] in ALIAS_PRESERVING_WRAPPERS:
+            bindings[field] = accessor.rpartition(".")[2]
+    return bindings
 
 
 def audit_save_load_projection(
@@ -2021,16 +2062,36 @@ IOREF_WRITE_PRIMITIVES = frozenset({
 IOREF_READ_PRIMITIVES = frozenset({"readIORef"})
 IOREF_ACCESS_PRIMITIVES = IOREF_WRITE_PRIMITIVES | IOREF_READ_PRIMITIVES
 
+# Issue #1896 (CMA-2) gave `content-registries` a reader-facing view
+# whose selected fields are `Engine.Core.ReadOnlyRef.ReadOnlyRef`s.
+# Such a field has NO write primitive by construction -- that is the
+# whole point of the type -- so nothing joins IOREF_WRITE_PRIMITIVES
+# here. What it does have is a read, and the read matters for exactly
+# the reason `readIORef` does: it CONSUMES the handle inline, so
+# without it every migrated reader's ordinary read would be counted as
+# a pass-on and the residue measurement CMA-3 weighs would inflate by
+# the size of the migration.
+READ_ONLY_REF_MODULE = "Engine.Core.ReadOnlyRef"
+READ_ONLY_REF_READ_PRIMITIVES = frozenset({"readReadOnlyRef"})
+
 CAPABILITY_MODULE_PREFIX = "Engine.Core.Capability."
 
-# Where the primitives come from. A name is only the `Data.IORef`
-# primitive if the module actually has THAT one in scope under the
-# spelling used -- the same rule the accessors are held to, and for the
-# same reason: a module may define its own `writeIORef`, or qualify an
-# unrelated module's homonym, and calling it is not an `IORef`
-# mutation. Every module in this tree that mutates one imports
-# `Data.IORef` bare.
+# Where the primitives come from. A name is only the primitive if the
+# module actually has THAT one in scope under the spelling used -- the
+# same rule the accessors are held to, and for the same reason: a
+# module may define its own `writeIORef`, or qualify an unrelated
+# module's homonym, and calling it is not an `IORef` mutation. Every
+# module in this tree that mutates one imports `Data.IORef` bare.
 IOREF_MODULE = "Data.IORef"
+
+# `{primitive: the module it must come from}`. The scan resolves a
+# primitive through this table, so a handle-consuming operation defined
+# somewhere other than `Data.IORef` is recognized under the identical
+# in-scope rule rather than by a second, looser path.
+ACCESS_PRIMITIVE_MODULES: dict[str, str] = dict(
+    [(name, IOREF_MODULE) for name in sorted(IOREF_ACCESS_PRIMITIVES)]
+    + [(name, READ_ONLY_REF_MODULE)
+       for name in sorted(READ_ONLY_REF_READ_PRIMITIVES)])
 
 # docs/engineenv_capability_inventory.md SS5's writing-module map: for
 # every live `EngineEnv` field, the production modules that DIRECTLY
@@ -2584,14 +2645,16 @@ def capability_accessor_map(sources: dict[str, str], live_fields: list[str]
 
 
 def resolve_primitive(declarations: list[ImportDecl], name: str) -> str | None:
-    """The `Data.IORef` primitive `name` denotes here, or `None`.
+    """The handle-consuming primitive `name` denotes here, or `None`.
 
     Bare or qualified, the base name must be one of the recognized
-    primitives AND must reach this module from `Data.IORef` under that
-    exact spelling. A module-local `writeIORef`, or `Other.writeIORef`
-    from an unrelated module, is a different function; attributing its
+    primitives AND must reach this module from that primitive's OWN
+    defining module (`ACCESS_PRIMITIVE_MODULES`) under that exact
+    spelling. A module-local `writeIORef`, or `Other.writeIORef` from
+    an unrelated module, is a different function; attributing its
     argument would invent a write out of code that mutates no `IORef`
-    at all.
+    at all. `Engine.Core.ReadOnlyRef`'s read goes through the identical
+    rule, not a looser second path.
 
     __A TOP-LEVEL homonym is covered by the same rule, because Haskell
     makes it so.__ Defining `writeIORef` beside an unqualified
@@ -2608,9 +2671,10 @@ def resolve_primitive(declarations: list[ImportDecl], name: str) -> str | None:
     suppresses the module/field pair whatever name was shadowed to
     produce it, and no scope analysis is performed for either."""
     qualifier, _, base = name.rpartition(".")
-    if base not in IOREF_ACCESS_PRIMITIVES:
+    owner = ACCESS_PRIMITIVE_MODULES.get(base)
+    if owner is None:
         return None
-    if not imports_name(declarations, IOREF_MODULE, base, qualifier):
+    if not imports_name(declarations, owner, base, qualifier):
         return None
     return base
 

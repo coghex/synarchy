@@ -9,8 +9,8 @@ module Engine.Scripting.Lua.API.Forage.Harvest
     ) where
 
 import UPrelude
-import Engine.Core.Capability.ContentRegistries
-    (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Engine.Core.Capability.ContentRegistriesView
+    (ContentRegistriesViewCapability(..), toContentRegistriesViewCapability)
 import Engine.Core.Capability.Core
     (CoreCapability(..), toCoreCapability)
 import Engine.Core.Capability.UnitCombat
@@ -21,6 +21,7 @@ import qualified HsLua as Lua
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text.Encoding as TE
 import Data.IORef (readIORef, atomicModifyIORef')
+import Engine.Core.ReadOnlyRef (readReadOnlyRef)
 import System.Random (randomR)
 import Engine.Core.State (EngineEnv, activeWorldStateFrom, freshItemInstanceId)
 import World.Types
@@ -159,7 +160,7 @@ worldHarvestFloraFn env = do
 spawnYields ∷ EngineEnv → WorldState → Int → Int → [(Text, Int, Int)]
             → IO [(Text, Int)]
 spawnYields env ws gx gy yields = do
-    itemMgr ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
+    itemMgr ← readReadOnlyRef (crvItemManagerRef (toContentRegistriesViewCapability env))
     logger ← readIORef (ccLoggerRef (toCoreCapability env))
     fmap concat $ forM yields $ \(name, lo, hi) →
         case lookupItemDef name itemMgr of

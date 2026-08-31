@@ -281,6 +281,7 @@ library
                      Engine.Scripting.Lua.Util
                      Engine.Scripting.Lua.API
                      Engine.Scripting.Lua.API.Internal
+                     Engine.Scripting.Lua.API.Namespaces
                      Engine.Scripting.Lua.API.PageBinding
                      Engine.Scripting.Lua.API.Register.Debug
                      Engine.Scripting.Lua.API.Register.Engine
@@ -371,10 +372,12 @@ library
                      Engine.Core.Defaults
                      Engine.Core.Init
                      Engine.Core.Monad
+                     Engine.Core.ReadOnlyRef
                      Engine.Core.State
                      Engine.Core.Capability.Building
                      Engine.Core.Capability.Core
                      Engine.Core.Capability.ContentRegistries
+                     Engine.Core.Capability.ContentRegistriesView
                      Engine.Core.Capability.Events
                      Engine.Core.Capability.Input
                      Engine.Core.Capability.InputView
@@ -1313,6 +1316,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Core.ShutdownAtlasRelease
                    Test.Headless.Core.WorkerLifecycle
                    Test.Headless.Camera.GotoClamp
+                   Test.Headless.Camera.GotoLoad
                    Test.Headless.Camera.ZoomScroll
                    Test.Headless.Scene.BatchMerge
                    Test.Headless.Render.PanMargin
@@ -1356,6 +1360,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.BuildingSpawnSentinel
                    Test.Headless.Lua.WorkClaimCapacity
                    Test.Headless.Capability.Building
+                   Test.Headless.Capability.ContentRegistriesView
                    Test.Headless.Capability.Events
                    Test.Headless.Capability.Input
                    Test.Headless.Capability.Render
@@ -1365,6 +1370,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Capability.UnitCombat
                    Test.Headless.Capability.WorldSim
                    Test.Headless.Lua.DebugQueue
+                   Test.Headless.Lua.SceneText
                    Test.Headless.Lua.RenderQueue
                    Test.Headless.Lua.PreviewGeneration
                    Test.Headless.Lua.PauseGate

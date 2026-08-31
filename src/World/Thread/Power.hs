@@ -27,9 +27,10 @@ import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (readIORef, atomicModifyIORef')
+import Engine.Core.ReadOnlyRef (readReadOnlyRef)
 import Engine.Core.State (EngineEnv)
-import Engine.Core.Capability.ContentRegistries
-    (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Engine.Core.Capability.ContentRegistriesView
+    (ContentRegistriesViewCapability(..), toContentRegistriesViewCapability)
 import Power.Types (PowerNodes(..))
 import Power.Network (tickPowerNodes, pageWireTiles, positionsOf, consumersOn,
                       activeCraftConsumersOn, combineConsumers)
@@ -58,9 +59,10 @@ tickPowerNetworks env pageId ws dtGame = do
         bm      ← readIORef (bcBuildingManagerRef (toBuildingCapability env))
         now     ← readIORef (wsGameTimeRef (toWorldSimCapability env))
         -- Per-bill electrical load lives on the recipe, read through
-        -- the `content-registries` capability (#890).
-        rm      ← readIORef
-            (crRecipeManagerRef (toContentRegistriesCapability env))
+        -- the `content-registries` READER view (#890, narrowed to
+        -- read-only handles by #1896).
+        rm      ← readReadOnlyRef
+            (crvRecipeManagerRef (toContentRegistriesViewCapability env))
         bills   ← readIORef (wsCraftBillsRef ws)
         mParams ← readIORef (wsGenParamsRef ws)
         let sunAngle    = worldTimeToSunAngle (wt ∷ WorldTime)

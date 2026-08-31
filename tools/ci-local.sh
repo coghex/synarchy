@@ -347,8 +347,10 @@ python3 tools/world_check.py --quick
 # test_probelib pins probelib.send_json's result contract against a real
 # socket and fails if a probe grows a private JSON console wrapper again
 # (#1160), and owns probe_engine.py's launcher contract -- runner mode
-# execs the resolved binary, direct mode keeps the `cabal run` fallback
-# (#1570); test_probe_flake mutation-covers probe_protocol.py,
+# execs the resolved binary (#1570), while direct mode BUILDS one before
+# the READY deadline starts, holding cabal-build exclusively, owning its
+# build's process group, and reporting a preparation failure as one
+# (#1913); test_probe_flake mutation-covers probe_protocol.py,
 # probe_flake.py and probe_census.py's parsers, and every #1426 protocol
 # migration extends it (#1475); test_probe_census is the census's own
 # self-test -- the record, its atomic writer, the declared schema, and

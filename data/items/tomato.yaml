@@ -3,7 +3,7 @@ items:
   # DISCRETE food, same shape as the #94 foraged yields (foraged_food.yaml).
   - name: "tomato"
     display_name: "Tomato"
-    sprite: "assets/textures/items/supply/wild_berries.png"  # placeholder — reused, no dedicated art yet
+    sprite: "assets/textures/items/supply/tomato.png"
     weight: 0.12
     bulk: 0.2        # litres of external bulk
     category: Supplies

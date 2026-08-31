@@ -875,7 +875,11 @@ jobs:
       # removed. It also owns probe_engine.py's launcher contract
       # (#1570): under the aggregate runner a probe execs the one
       # already-resolved binary with no Cabal in its argv, while a probe
-      # run by hand keeps the historical `cabal run` fallback.
+      # run by hand BUILDS one first (#1913) — inside an exclusive
+      # cabal-build hold, owning that build's process group, on its own
+      # 1800 s allowance — so the READY deadline that follows measures
+      # engine startup and a build that fails is reported as a
+      # preparation failure carrying its own output.
       # test_probe_flake mutation-covers probe_protocol.py,
       # probe_flake.py and probe_census.py's parsers from both sides,
       # engine-free and GPU-free, and every #1426 protocol migration

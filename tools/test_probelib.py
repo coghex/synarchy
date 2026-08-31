@@ -36,21 +36,29 @@ Exit codes: 0 = all tests passed, 1 = one or more failed.
 """
 from __future__ import annotations
 
+import _thread
 import ast
+import contextlib
 import inspect
+import json
 import os
+import shutil
+import signal
 import socket
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+import uuid
 from pathlib import Path
 
 TOOLS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TOOLS))
 import probe_engine  # type: ignore  # noqa: E402
+import probe_resource_lock  # type: ignore  # noqa: E402
 import probelib  # type: ignore  # noqa: E402
+import run_probes  # type: ignore  # noqa: E402
 from probelib import send, send_json  # type: ignore  # noqa: E402
 
 FAILURES: list[str] = []
@@ -739,6 +747,631 @@ def test_resolve_executable_builds_then_locates() -> None:
             expect(False, "a failed build did not raise")
 
 
+# ---------------------------------------------------------------------
+# Preparing the engine BEFORE the READY deadline (#1913)
+#
+# The direct path's `cabal run` fallback is a BUILD wearing an engine's
+# argv, and `boot` used to start the READY clock the moment that child
+# existed: a cold compile expired at 180 s reported as "engine never
+# printed READY", against a `-v0` log with nothing in it, having killed
+# only the `cabal` process and left its GHC descendants compiling.
+#
+# Everything below drives REAL processes — a stand-in `cabal` on PATH, a
+# stand-in engine, real flocks in an isolated sticky scratch root — so
+# process-group disposal is observed rather than asserted about a mock.
+# ---------------------------------------------------------------------
+#: A separate process that takes a `cabal-build` interest and holds it
+#: until told to let go. Run as `python3 -c`, so it shares nothing with
+#: this process but the module it imports — which is the point: a hold
+#: taken in-process would be the same open file description and the
+#: kernel would grant it to us again.
+HOLDER_SRC = """\
+import json, sys, time
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import probe_resource_lock as lock
+root, namespace, ready, release = sys.argv[2:6]
+plan = json.loads(sys.argv[6])
+hold = lock.acquire(exclusive=plan.get("exclusive", []),
+                    shared=plan.get("shared", []),
+                    namespace=namespace, root=Path(root),
+                    purpose="test_probelib holder")
+Path(ready).write_text("held")
+deadline = time.time() + 120
+while not Path(release).exists() and time.time() < deadline:
+    time.sleep(0.02)
+hold.release()
+"""
+
+
+FAKE_CABAL = r"""#!/usr/bin/env python3
+# Stands in for `cabal`. Its whole behaviour is the JSON beside it, so a
+# case picks a build that succeeds, fails, hangs, or leaves a descendant
+# of its own behind, without a second copy of this script.
+import json, os, subprocess, sys, time
+from pathlib import Path
+
+config = json.loads(Path(__file__).with_name("cabal.json").read_text())
+with open(config["calls"], "a") as fh:
+    fh.write(" ".join(sys.argv[1:]) + "\n")
+step = sys.argv[1] if len(sys.argv) > 1 else ""
+if step == "build":
+    print(config.get("build_output", "compiling"), flush=True)
+    if config.get("descendant"):
+        # A GHC stand-in: a child of this process, in this process
+        # group, that outlives it. Nothing but a group kill removes it.
+        subprocess.Popen([
+            sys.executable, "-c",
+            "import os,sys,time\n"
+            "open(sys.argv[1],'w').write(str(os.getpid()))\n"
+            "time.sleep(600)\n",
+            config["descendant"]])
+        while not os.path.exists(config["descendant"]):
+            time.sleep(0.02)
+    if config.get("build_hangs"):
+        time.sleep(600)
+    sys.exit(config.get("build_status", 0))
+if step == "list-bin":
+    if config.get("locate_noise"):
+        print(config["locate_noise"])
+    print(config["engine"])
+    sys.exit(0)
+sys.exit(9)
+"""
+
+SILENT_ENGINE = """\
+#!/usr/bin/env python3
+# An engine that starts and stays up but never becomes READY: the other
+# genuine boot failure, and the one an explicit `ready_timeout` bounds.
+import time
+time.sleep(600)
+"""
+
+DYING_ENGINE = """\
+#!/usr/bin/env python3
+# An engine that really starts and then fails: READY never arrives, but
+# preparation had already succeeded, so this must NOT be diagnosed as a
+# preparation problem.
+import sys
+print("boot failed: no Vulkan device", flush=True)
+sys.exit(3)
+"""
+
+
+def proc_stat_state(raw: str) -> str | None:
+    """The state letter in a Linux `/proc/<pid>/stat` line.
+
+    Split out and pinned by a case below because macOS never reaches it:
+    the `/proc` branch is the one CI actually runs, so a parsing mistake
+    there would be invisible to every local run. The command field is
+    parenthesised and may itself contain spaces AND parentheses, so the
+    state is the first token after the LAST `)` rather than the third
+    whitespace field.
+    """
+    fields = raw.rpartition(")")[2].split()
+    return fields[0] if fields else None
+
+
+def process_state(pid: int) -> str | None:
+    """`pid`'s state letter, or None when there is no such entry.
+
+    Read rather than probed. The descendant these cases watch is killed
+    while it is an ORPHAN — its `cabal` parent is already dead and
+    reaped — so it is reparented to whatever init the host provides, and
+    it stays in the process table as a zombie until that init reaps it.
+    macOS's launchd does so at once; a CI container's PID 1 need not,
+    and on this repository's Linux image it does not.
+    """
+    stat_path = Path(f"/proc/{pid}/stat")
+    if stat_path.exists():
+        try:
+            return proc_stat_state(stat_path.read_text())
+        except OSError:
+            return None
+    done = subprocess.run(["ps", "-o", "state=", "-p", str(pid)],
+                          capture_output=True, text=True)
+    state = (done.stdout or "").strip()
+    return state[:1] if state else None
+
+
+def process_running(pid: int) -> bool:
+    """True while `pid` is a live process rather than a corpse.
+
+    `os.kill(pid, 0)` cannot answer this: it succeeds against a zombie,
+    because the entry survives until somebody reaps it. A killed
+    descendant awaiting its reaper is GONE for these cases — it holds
+    nothing and compiles nothing — so the state decides, not the signal.
+    """
+    state = process_state(pid)
+    return state is not None and state not in ("Z", "X", "x")
+
+
+class PreparedScratch:
+    """A stand-in `cabal` on PATH, a stand-in engine, an isolated lock root.
+
+    The lock root is a throwaway directory with `/tmp`'s own mode --
+    sticky and owned by us, which is what `probe_resource_lock`'s safety
+    check insists on. Redirecting it is what keeps these cases away from
+    the repository's live `cabal-build` lock: a case here must neither
+    wait on a real sweep nor block one.
+    """
+
+    def __init__(self, *, engine: str = FAKE_ENGINE, **config) -> None:
+        self.dir = Path(tempfile.mkdtemp(prefix="test_probelib_prepare_"))
+        self.lock_root = Path(tempfile.mkdtemp(prefix="test_probelib_locks_"))
+        os.chmod(self.lock_root, probe_resource_lock.SHARED_DIR_MODE)
+        self.namespace = f"selftest{uuid.uuid4().hex[:12]}"
+        self.engine = self.dir / "fake-synarchy"
+        self.engine.write_text(engine)
+        self.engine.chmod(0o755)
+        self.calls = self.dir / "cabal-calls.txt"
+        self.descendant_pid = self.dir / "descendant.pid"
+        self.prepare_log = self.dir / "prepare.log"
+        self.engine_log = self.dir / "engine.log"
+        # Where `boot` puts preparation output: named after the engine
+        # log it was given, so the operator finds the two together.
+        self.boot_prepare_log = Path(f"{self.engine_log}.prepare")
+        self.argv_log = self.dir / "argv.txt"
+        document = {"calls": str(self.calls), "engine": str(self.engine)}
+        document.update(config)
+        (self.dir / "cabal.json").write_text(json.dumps(document))
+        cabal = self.dir / "cabal"
+        cabal.write_text(FAKE_CABAL)
+        cabal.chmod(0o755)
+        self._saved_path = os.environ.get("PATH", "")
+        self._saved_root = probe_engine.PREPARE_LOCK_ROOT
+        os.environ["PATH"] = f"{self.dir}{os.pathsep}{self._saved_path}"
+        probe_engine.PREPARE_LOCK_ROOT = self.lock_root
+
+    def cabal_calls(self) -> list[str]:
+        if not self.calls.exists():
+            return []
+        return [line for line in self.calls.read_text().splitlines() if line]
+
+    def describe_descendant(self) -> str:
+        """The descendant's pid and observed state, for a failure message.
+
+        A survivor in `S` was never signalled — a real disposal defect —
+        while a `Z` would mean this check had regressed to reading a
+        corpse as a live process. Naming the state is what tells those
+        two apart from the log alone.
+        """
+        pid = self.descendant()
+        if pid is None:
+            return "no descendant was recorded"
+        return f"pid {pid}, state {process_state(pid)!r}"
+
+    def descendant(self) -> int | None:
+        if not self.descendant_pid.exists():
+            return None
+        try:
+            return int(self.descendant_pid.read_text().strip())
+        except ValueError:
+            return None
+
+    def descendant_gone(self, seconds: float = 10.0) -> bool:
+        """True once the marked descendant is no longer running."""
+        pid = self.descendant()
+        if pid is None:
+            return False
+        deadline = time.time() + seconds
+        while time.time() < deadline:
+            if not process_running(pid):
+                return True
+            time.sleep(0.1)
+        return False
+
+    def cleanup(self) -> None:
+        os.environ["PATH"] = self._saved_path
+        probe_engine.PREPARE_LOCK_ROOT = self._saved_root
+        pid = self.descendant()
+        if pid is not None:
+            with contextlib.suppress(OSError):
+                os.kill(pid, signal.SIGKILL)
+        shutil.rmtree(self.dir, ignore_errors=True)
+        shutil.rmtree(self.lock_root, ignore_errors=True)
+
+
+def prepare(scratch: PreparedScratch, **kwargs):
+    """`prepare_executable` against the scratch, with its own namespace."""
+    kwargs.setdefault("timeout", 60.0)
+    kwargs.setdefault("log_path", str(scratch.prepare_log))
+    return probe_engine.prepare_executable(
+        str(scratch.dir), namespace=scratch.namespace,
+        lock_root=scratch.lock_root, **kwargs)
+
+
+def test_a_killed_descendant_reads_as_gone_before_it_is_reaped() -> None:
+    print("\n-- the disposal check reads process STATE, not a bare signal")
+    # An orphan killed by a group signal stays in the process table
+    # until its init reaps it; macOS does so at once, a CI container's
+    # PID 1 need not. `os.kill(pid, 0)` succeeds against that corpse, so
+    # a check built on it would call a killed descendant "still
+    # compiling" on exactly the platform CI runs.
+    child = subprocess.Popen([sys.executable, "-c", "import time\n"
+                                                    "time.sleep(600)\n"])
+    try:
+        expect(process_running(child.pid),
+               "a live process reads as running, so this is not vacuous")
+        child.kill()
+        deadline = time.time() + 10
+        while process_running(child.pid) and time.time() < deadline:
+            time.sleep(0.05)
+        expect(not process_running(child.pid),
+               "and a killed one reads as gone while still unreaped")
+        signal_says_alive = True
+        try:
+            os.kill(child.pid, 0)
+        except (ProcessLookupError, PermissionError):
+            signal_says_alive = False
+        expect(signal_says_alive or sys.platform == "darwin",
+               "which is the whole point: the bare signal would still "
+               "report it alive here")
+    finally:
+        child.wait(timeout=10)
+    # The Linux branch, against the real file format. macOS takes the
+    # `ps` branch, so nothing else here would catch a mistake in it.
+    for raw, expected, why in (
+            ("42 (cabal) Z 1 42 0 0 -1 4194560 0", "Z", "an ordinary name"),
+            ("42 (ghc (stage 2)) S 1 42", "S",
+             "a name containing spaces AND parentheses"),
+            ("42 (x) R 1", "R", "a running process"),
+            ("", None, "an empty read")):
+        expect(proc_stat_state(raw) == expected,
+               f"/proc stat parsing handles {why} "
+               f"(got {proc_stat_state(raw)!r}, wanted {expected!r})")
+
+
+def test_preparation_precedes_the_engine_launch() -> None:
+    print("\n-- the executable is BUILT before the READY deadline exists")
+    scratch = PreparedScratch(locate_noise="Warning: resolving dependencies")
+    try:
+        proc = None
+        with engine_env(None):
+            try:
+                proc = probelib.boot(9461, log=str(scratch.engine_log),
+                                     args=["--argv-log", str(scratch.argv_log)],
+                                     ready_timeout=30.0)
+            except SystemExit as leaving:
+                expect(False, f"boot did not reach READY: {leaving}")
+        try:
+            expect(scratch.cabal_calls() == ["build exe:synarchy",
+                                             "list-bin exe:synarchy"],
+                   f"one freshness build then one read-only query, before "
+                   f"any engine (got {scratch.cabal_calls()})")
+            argv = (scratch.argv_log.read_text().splitlines()
+                    if scratch.argv_log.exists() else [])
+            expect(argv[:1] == [str(scratch.engine)],
+                   f"and what boot LAUNCHED is the built binary, not "
+                   f"`cabal run` (got {argv[:1]})")
+            expect("cabal" not in argv,
+                   f"so no Cabal process is inside the READY window at all "
+                   f"(got {argv})")
+            expect(scratch.boot_prepare_log.exists()
+                   and "compiling" in scratch.boot_prepare_log.read_text(),
+                   f"the build output reached a preparation log beside the "
+                   f"engine log ({scratch.boot_prepare_log})")
+            engine_log = scratch.engine_log.read_text()
+            expect("READY" in engine_log and "compiling" not in engine_log,
+                   f"while the engine log holds the ENGINE's output alone "
+                   f"(got {engine_log!r})")
+        finally:
+            if proc is not None:
+                proc.kill()
+                proc.wait(timeout=10)
+    finally:
+        scratch.cleanup()
+
+
+def test_a_failed_preparation_is_not_reported_as_readiness() -> None:
+    print("\n-- a failed build is reported as PREPARATION, with its output")
+    scratch = PreparedScratch(build_status=1,
+                              build_output="Missing dependency: vulkan-1.2")
+    try:
+        with engine_env(None):
+            try:
+                probelib.boot(9462, log=str(scratch.engine_log),
+                              ready_timeout=30.0, prepare_timeout=60.0)
+            except SystemExit as leaving:
+                message = str(leaving)
+            else:
+                message = ""
+                expect(False, "a failed preparation did not end the probe")
+        expect("could not be prepared" in message,
+               f"the diagnostic names preparation (got {message!r})")
+        expect("never printed READY" not in message
+               and "exited before READY" not in message,
+               f"and never blames engine readiness for a build that never "
+               f"produced an engine (got {message!r})")
+        expect(str(scratch.boot_prepare_log) in message,
+               f"it names the log the build output really went to "
+               f"(got {message!r})")
+        expect("Missing dependency: vulkan-1.2" in message,
+               f"and carries that output, rather than pointing at an empty "
+               f"file (got {message!r})")
+        expect(not scratch.engine_log.exists(),
+               "no empty engine log is left behind to be misread as a boot "
+               "that was attempted")
+    finally:
+        scratch.cleanup()
+
+
+def test_a_failed_preparation_disposes_of_its_whole_process_tree() -> None:
+    print("\n-- and takes its `setup`/GHC descendants with it")
+    for label, config in (
+            ("a nonzero build", {"build_status": 1}),
+            ("a build that overruns", {"build_hangs": True})):
+        scratch = PreparedScratch(descendant=None, **config)
+        # The descendant path is written by the scratch itself, so the
+        # stand-in knows where to record the pid it leaves behind.
+        document = json.loads((scratch.dir / "cabal.json").read_text())
+        document["descendant"] = str(scratch.descendant_pid)
+        (scratch.dir / "cabal.json").write_text(json.dumps(document))
+        try:
+            try:
+                prepare(scratch, timeout=(60.0 if "build_status" in config
+                                          else 3.0))
+            except probe_engine.EnginePreparationError as error:
+                expect("could not be prepared" in str(error),
+                       f"[{label}] preparation refuses (got {error})")
+            else:
+                expect(False, f"[{label}] preparation did not fail")
+            expect(scratch.descendant() is not None,
+                   f"[{label}] the stand-in really did leave a descendant, "
+                   f"so this case is not vacuous")
+            expect(scratch.descendant_gone(),
+                   f"[{label}] and the marked descendant is gone, not left "
+                   f"compiling into the build directory "
+                   f"({scratch.describe_descendant()})")
+        finally:
+            scratch.cleanup()
+
+
+def test_the_preparation_allowance_is_its_own() -> None:
+    print("\n-- preparation has a finite allowance unrelated to readiness")
+    expect(probe_engine.DEFAULT_PREPARE_TIMEOUT == 1800.0,
+           f"the default matches the repository's full-cold-build watchdog "
+           f"(got {probe_engine.DEFAULT_PREPARE_TIMEOUT})")
+    expect(probe_engine.DEFAULT_PREPARE_TIMEOUT
+           != probelib.DEFAULT_READY_TIMEOUT,
+           "and is not the readiness allowance wearing another name")
+    signature = inspect.signature(probelib.boot)
+    parameter = signature.parameters.get("prepare_timeout")
+    expect(parameter is not None
+           and parameter.default == probe_engine.DEFAULT_PREPARE_TIMEOUT,
+           f"boot takes it separately from ready_timeout (got {parameter})")
+    expect(list(signature.parameters)[:7]
+           == ["port", "log", "args", "ready_timeout", "label", "mode",
+               "on_launch"],
+           f"and it was APPENDED, so no positional caller shifted "
+           f"(got {list(signature.parameters)})")
+    scratch = PreparedScratch(build_hangs=True)
+    try:
+        started = time.monotonic()
+        try:
+            # A readiness allowance an order of magnitude larger: if the
+            # build were being timed by it, this would not return here.
+            with engine_env(None):
+                probelib.boot(9463, log=str(scratch.engine_log),
+                              ready_timeout=600.0, prepare_timeout=3.0)
+        except SystemExit as leaving:
+            message = str(leaving)
+        else:
+            message = ""
+            expect(False, "an overrunning build did not end the probe")
+        elapsed = time.monotonic() - started
+        expect(elapsed < 60.0,
+               f"the build is bounded by ITS allowance, not readiness "
+               f"(took {elapsed:.1f} s)")
+        expect("could not be prepared" in message and "3 s" in message,
+               f"and the diagnostic names the preparation allowance "
+               f"(got {message!r})")
+    finally:
+        scratch.cleanup()
+
+
+def test_preparation_will_not_build_beside_another_writer() -> None:
+    print("\n-- preparation takes `cabal-build` exclusively, or builds nothing")
+    scratch = PreparedScratch()
+    holder = None
+    try:
+        # An ordinary SHARED interest, which is what every probe and
+        # every `/deflake` measurement holds while a run is in flight.
+        holder = subprocess.Popen(
+            [sys.executable, "-c", HOLDER_SRC, str(TOOLS),
+             str(scratch.lock_root), scratch.namespace,
+             str(scratch.dir / "held.json"), str(scratch.dir / "release"),
+             json.dumps({"shared": [probe_engine.BUILD_RESOURCE]})])
+        deadline = time.time() + 20
+        while not (scratch.dir / "held.json").exists() and time.time() < deadline:
+            time.sleep(0.05)
+        expect((scratch.dir / "held.json").exists(),
+               "the foreign holder really took the resource")
+        try:
+            prepare(scratch, timeout=3.0)
+        except probe_engine.EnginePreparationError as error:
+            expect(probe_engine.BUILD_RESOURCE in str(error),
+                   f"preparation refuses, naming the resource (got {error})")
+        else:
+            expect(False, "preparation built beside a live holder")
+        expect(scratch.cabal_calls() == [],
+               f"and NOTHING was built: waiting was not degraded into an "
+               f"unlocked build (got {scratch.cabal_calls()})")
+        (scratch.dir / "release").write_text("go")
+        holder.wait(timeout=20)
+        holder = None
+        expect(prepare(scratch, timeout=60.0) == str(scratch.engine),
+               "and once the resource is free the same call prepares")
+        expect(scratch.cabal_calls() == ["build exe:synarchy",
+                                         "list-bin exe:synarchy"],
+               f"building exactly then (got {scratch.cabal_calls()})")
+    finally:
+        if holder is not None:
+            holder.kill()
+            holder.wait(timeout=10)
+        scratch.cleanup()
+
+
+def test_an_engine_that_fails_after_preparation_is_still_a_boot_failure() -> None:
+    print("\n-- an engine that dies after its executable exists is diagnosed "
+          "as one")
+    scratch = PreparedScratch(engine=DYING_ENGINE)
+    try:
+        with engine_env(None):
+            try:
+                probelib.boot(9464, log=str(scratch.engine_log),
+                              ready_timeout=30.0)
+            except SystemExit as leaving:
+                message = str(leaving)
+            else:
+                message = ""
+                expect(False, "a dying engine did not end the probe")
+        expect("exited before READY" in message,
+               f"the engine's own failure keeps its own diagnostic "
+               f"(got {message!r})")
+        expect("could not be prepared" not in message,
+               f"and is not relabelled as a preparation problem "
+               f"(got {message!r})")
+        expect("no Vulkan device" in scratch.engine_log.read_text(),
+               "with the engine log holding what the engine actually said")
+    finally:
+        scratch.cleanup()
+
+
+def test_an_interrupt_during_preparation_leaves_no_build_behind() -> None:
+    print("\n-- a Ctrl-C during the build takes the whole build tree with it")
+    scratch = PreparedScratch(build_hangs=True)
+    document = json.loads((scratch.dir / "cabal.json").read_text())
+    document["descendant"] = str(scratch.descendant_pid)
+    (scratch.dir / "cabal.json").write_text(json.dumps(document))
+    timer = threading.Timer(2.0, _thread.interrupt_main)
+    try:
+        timer.start()
+        raised: BaseException | None = None
+        try:
+            prepare(scratch, timeout=120.0)
+        except BaseException as exc:  # noqa: BLE001 - the point
+            raised = exc
+        expect(isinstance(raised, KeyboardInterrupt),
+               f"the interrupt still ends the run rather than being "
+               f"swallowed (got {raised!r})")
+        expect(scratch.descendant() is not None,
+               "the stand-in really did leave a descendant, so this case is "
+               "not vacuous")
+        expect(scratch.descendant_gone(),
+               f"and it is gone, not left compiling after the probe was "
+               f"interrupted ({scratch.describe_descendant()})")
+    finally:
+        timer.cancel()
+        scratch.cleanup()
+
+
+def test_an_unlaunchable_cabal_is_a_preparation_failure() -> None:
+    print("\n-- and a `cabal` that cannot be launched at all is reported "
+          "as one")
+    scratch = PreparedScratch()
+    try:
+        # The stand-in goes, and so does every other directory on PATH:
+        # leaving the REAL `cabal` reachable would test what it says
+        # about a temporary directory, not what preparation says about a
+        # `cabal` it cannot launch at all.
+        (scratch.dir / "cabal").unlink()
+        os.environ["PATH"] = str(scratch.dir)
+        try:
+            prepare(scratch, timeout=30.0)
+        except probe_engine.EnginePreparationError as error:
+            expect("not found on PATH" in str(error),
+                   f"the diagnostic names the missing tool (got {error})")
+        else:
+            expect(False, "a missing `cabal` was not reported")
+        expect(not scratch.prepare_log.exists()
+               or scratch.prepare_log.read_text() == "",
+               "and nothing was built")
+    finally:
+        scratch.cleanup()
+
+
+def test_an_explicit_ready_timeout_still_bounds_readiness_alone() -> None:
+    print("\n-- an explicit ready_timeout keeps meaning engine readiness")
+    scratch = PreparedScratch(engine=SILENT_ENGINE)
+    try:
+        started = time.monotonic()
+        with engine_env(None):
+            try:
+                probelib.boot(9465, log=str(scratch.engine_log),
+                              ready_timeout=4.0)
+            except SystemExit as leaving:
+                message = str(leaving)
+            else:
+                message = ""
+                expect(False, "a silent engine did not end the probe")
+        elapsed = time.monotonic() - started
+        expect("never printed READY" in message,
+               f"the allowance the caller asked for still governs READY "
+               f"(got {message!r})")
+        expect("could not be prepared" not in message,
+               f"and is not spent on, or blamed on, preparation "
+               f"(got {message!r})")
+        expect(4.0 <= elapsed < 60.0,
+               f"it really waited its own 4 s and no longer "
+               f"(took {elapsed:.1f} s)")
+        expect(scratch.cabal_calls() == ["build exe:synarchy",
+                                         "list-bin exe:synarchy"],
+               f"with the build already finished before that wait began "
+               f"(got {scratch.cabal_calls()})")
+    finally:
+        scratch.cleanup()
+
+
+def test_the_runner_path_prepares_nothing() -> None:
+    print("\n-- under the runner there is no build, no lock and no log")
+    scratch = PreparedScratch()
+    try:
+        with engine_env(str(scratch.engine)):
+            resolved = probe_engine.prepare_executable(
+                str(scratch.dir), log_path=str(scratch.prepare_log),
+                namespace=scratch.namespace, lock_root=scratch.lock_root)
+            expect(resolved == str(scratch.engine),
+                   f"the runner's executable is returned as-is "
+                   f"(got {resolved})")
+            expect(scratch.cabal_calls() == [],
+                   f"with no Cabal contact of its own "
+                   f"(got {scratch.cabal_calls()})")
+            expect(not scratch.prepare_log.exists(),
+                   "and no preparation log, because nothing was prepared")
+            expect(probe_engine.prepare_command(["--headless", "--port", "9008"],
+                                                repo_root=str(scratch.dir))
+                   == probe_engine.engine_command(["--headless", "--port",
+                                                   "9008"]),
+                   "so the argv is exactly what engine_command already "
+                   "produced")
+        with engine_env(str(scratch.dir / "never-built")):
+            try:
+                prepare(scratch)
+            except probe_engine.EngineExecutableError as error:
+                expect("never-built" in str(error),
+                       f"an unusable supplied path is still refused rather "
+                       f"than quietly rebuilt (got {error})")
+            else:
+                expect(False, "an unusable supplied path was accepted")
+            expect(scratch.cabal_calls() == [],
+                   f"and no build was started to paper over it "
+                   f"(got {scratch.cabal_calls()})")
+    finally:
+        scratch.cleanup()
+
+
+def test_the_build_resource_is_named_once() -> None:
+    print("\n-- the direct path and the runner name the same resource")
+    expect(run_probes.BUILD_RESOURCE is probe_engine.BUILD_RESOURCE,
+           f"run_probes reads the name from probe_engine, so the two "
+           f"cannot drift (got {run_probes.BUILD_RESOURCE!r} / "
+           f"{probe_engine.BUILD_RESOURCE!r})")
+    expect(probe_engine.BUILD_RESOURCE
+           in run_probes.IMPLICIT_SHARED_RESOURCES,
+           "and it is the same resource every probe already declares")
+
+
 def main() -> int:
     test_valid_json_decodes()
     test_lua_nil_is_none()
@@ -762,6 +1395,18 @@ def main() -> int:
     test_an_interrupt_during_the_hand_off_kills_the_child()
     test_boot_without_a_callback_is_unchanged()
     test_resolve_executable_builds_then_locates()
+    test_a_killed_descendant_reads_as_gone_before_it_is_reaped()
+    test_preparation_precedes_the_engine_launch()
+    test_a_failed_preparation_is_not_reported_as_readiness()
+    test_a_failed_preparation_disposes_of_its_whole_process_tree()
+    test_the_preparation_allowance_is_its_own()
+    test_preparation_will_not_build_beside_another_writer()
+    test_an_interrupt_during_preparation_leaves_no_build_behind()
+    test_an_unlaunchable_cabal_is_a_preparation_failure()
+    test_an_explicit_ready_timeout_still_bounds_readiness_alone()
+    test_an_engine_that_fails_after_preparation_is_still_a_boot_failure()
+    test_the_runner_path_prepares_nothing()
+    test_the_build_resource_is_named_once()
     if FAILURES:
         print(f"\n{len(FAILURES)} test(s) failed:")
         for failure in FAILURES:
