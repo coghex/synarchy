@@ -180,6 +180,7 @@ import qualified Test.Headless.Lua.TextTruncation as LuaTextTruncation
 import qualified Test.Headless.Lua.WidthTruncation as LuaWidthTruncation
 import qualified Test.Headless.Lua.ShellInput as LuaShellInput
 import qualified Test.Headless.Lua.RandomStream as LuaRandomStream
+import qualified Test.Headless.Lua.ConsoleTableKeys as LuaConsoleTableKeys
 import qualified Test.Headless.Lua.InjuryNarration as LuaInjuryNarration
 import qualified Test.Headless.UI.Slider as UISlider
 import qualified Test.Headless.UI.BarFillColor as UIBarFillColor
@@ -327,6 +328,10 @@ main = hspec $ do
         -- at all, just the live EngineEnv's queues/refs to construct a
         -- real Lua backend and drive processLuaMsg directly.
         describe "Lua.DebugQueue" LuaDebugQueue.spec
+        -- Same technique as Lua.DebugQueue above: the live EngineEnv's
+        -- queues/refs are only there to build a real Lua backend, whose
+        -- console boundary is what #1955's key contract lives on.
+        describe "debug console table keys" LuaConsoleTableKeys.spec
         LuaUnitAiReconcile.envSpec
         describe "Lua.RenderQueue" LuaRenderQueue.spec
         describe "Lua.PreviewGeneration" LuaPreviewGeneration.spec

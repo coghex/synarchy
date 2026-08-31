@@ -23,6 +23,27 @@
 -- starts hidden on a new session and, since nothing about it is stored,
 -- comes up hidden after a load too, with no reset step to forget.
 --
+-- A third, smaller lifetime sits between those two, and it is also
+-- never persisted: whether a full/composite id's #996 hide suppression
+-- is still owed it. It is granted at a first reveal that finds the id
+-- already latched, retired by acknowledgePresented once a consumer has
+-- actually shown the row, and RECONSTRUCTED -- never restored -- at
+-- every setTree/reset/load, under one rule (#1941 requirement 4):
+--
+--   an id the durable `completed` set already makes structurally
+--   reveal-eligible through its ancestor CHAIN is rebuilt as
+--   ALREADY PRESENTED, and an id still gated behind an incomplete
+--   ancestor is left unjudged so its real first reveal, later, can
+--   still collect #996's protection.
+--
+-- That is what keeps a load of a finished tutorial from returning
+-- ancestors the player already watched retire to the active checklist,
+-- while a branch that was completed but never revealed before the save
+-- is still protected when it finally appears. Because presentation is
+-- deliberately not saved, a save taken after an id's structural reveal
+-- but before the HUD acknowledged it is indistinguishable from an
+-- acknowledged one, and follows the same deterministic rule.
+--
 -- Singleton via package.loaded, like scripts/pause.lua: the
 -- engine.loadScript tick, the save registry's snapshot/apply callbacks,
 -- and any HUD consumer must all see ONE progress state. Nothing is
@@ -41,8 +62,10 @@ tutorialProgress.completed = tutorialProgress.completed or {}
 tutorialProgress.checked   = tutorialProgress.checked   or {}
 -- PRESENTATION-ONLY, never persisted (#996 requirement 6): whether a
 -- full/composite id's reveal-eligibility has already been judged once
--- (historySeen), and the answer (stickyActive) -- see recomputeHistory
--- below for what "judged" means.
+-- (historySeen), and whether that judgement is still SUPPRESSING the
+-- hide rule for it (stickyActive) -- see recomputeHistory below for
+-- what "judged" means, and acknowledgePresented for what retires a
+-- suppression once the id has actually been shown (#1941).
 tutorialProgress.historySeen  = tutorialProgress.historySeen  or {}
 tutorialProgress.stickyActive = tutorialProgress.stickyActive or {}
 -- The active tree and its derived index, or nil until one is available.
@@ -124,9 +147,15 @@ end
 -- reveal-eligibility (its ancestor CHAIN's durable completion -- never
 -- its own hidden/checked state) goes true, was `completed[id]` ALREADY
 -- true? If so the id is stickyActive: computeState's hidden rule below
--- is overridden to false for it FOREVER, which is what lets it (and, for
--- a composite, the subobjectives its active state reveals) actually be
--- seen at least once instead of latching and hiding in the same instant.
+-- is overridden to false for it, which is what lets it (and, for a
+-- composite, the subobjectives its active state reveals) actually be
+-- seen instead of latching and hiding in the same instant.
+--
+-- That suppression is EXCEPTIONAL, not permanent (#1941): it exists
+-- only to buy the id a presentation it would otherwise never get, and
+-- acknowledgePresented below retires it the moment a consumer reports
+-- having actually shown the row, after which the ordinary hide rule
+-- applies to that id unchanged.
 --
 -- This has to be judged at the exact moment identified above, not
 -- whenever a reader happens to call getViewModel: completeObjective is
@@ -140,14 +169,26 @@ end
 -- the node may go on to complete later.
 --
 -- The one case with no incremental order to replay is a fresh
--- setTree()/reset()/load: both tables are presentation state and are
--- never persisted (requirement 6), so they are rebuilt from scratch
--- against whatever the durable `completed` set holds at that moment.
--- A restored session may therefore judge every already-completed id
--- sticky at once rather than reproducing the exact pre-save sequence --
--- deterministic and non-empty is what requirement 6 asks for, not a
--- replay of history nobody kept.
-local function recomputeHistory()
+-- setTree()/reset()/load, and it passes `reconstructing` here. Both
+-- tables are presentation state and are never persisted (requirement
+-- 6), so they are rebuilt from scratch against whatever the durable
+-- `completed` set holds at that moment, under ONE deterministic rule
+-- (#1941 requirement 4):
+--
+--   * an id that is ALREADY structurally reveal-eligible through its
+--     durable ancestor chain is judged AS IF PRESENTED -- historySeen,
+--     never sticky. The pre-save session could only have reached that
+--     structural state by revealing the id, so restoring it to the
+--     active checklist would resurrect ancestors the player already
+--     watched retire. Presentation deliberately is not persisted, so a
+--     save taken after an id's structural reveal but BEFORE the HUD
+--     acknowledged it is indistinguishable from an acknowledged one and
+--     follows this same rule;
+--   * an id still gated behind an INCOMPLETE ancestor is not judged at
+--     all here, exactly as in a live session. Its real first reveal is
+--     still ahead of it, and it collects #996's protection then --
+--     which is what keeps the original defect fixed across a save.
+local function recomputeHistory(reconstructing)
     local index = tutorialProgress.index
     if index == nil then return end
     local structRevealed = {}
@@ -167,10 +208,51 @@ local function recomputeHistory()
         if isFullKind(entry.node.kind) and structRevealed[id]
                 and not tutorialProgress.historySeen[id] then
             tutorialProgress.historySeen[id] = true
-            tutorialProgress.stickyActive[id] =
-                tutorialProgress.completed[id] == true
+            if reconstructing then
+                tutorialProgress.stickyActive[id] = false
+            else
+                tutorialProgress.stickyActive[id] =
+                    tutorialProgress.completed[id] == true
+            end
         end
     end
+end
+
+-- Retire the #996 hide suppression for ids a consumer has actually put
+-- in front of the player (#1941 requirements 1/2).
+--
+-- `ids` is one id string or an array of them, and the caller is the
+-- surface that RENDERED those rows, asserting that they were exposed on
+-- a visible, open page. BUILDING a view model is not presentation --
+-- which is exactly why getViewModel stays a pure read a console or a
+-- test may call repeatedly, and why this is a separate explicit call
+-- rather than a side effect of reading.
+--
+-- Retirement removes ONLY the exceptional suppression. The ordinary
+-- #958 hide rule is never bypassed (a retired composite whose
+-- subobjective later unchecks returns to the active view like any
+-- other), the durable `completed` set is never touched, and
+-- `historySeen` stays set so the id is never re-judged.
+--
+-- Everything else is state-preserving, by construction rather than by
+-- special-casing: only an id currently marked sticky is ever written,
+-- so an unknown id, a subobjective id, a full objective that was never
+-- sticky, and a repeat of an id already retired all change nothing.
+--
+-- Returns the sorted ids this call actually retired.
+function tutorialProgress.acknowledgePresented(ids)
+    local list = ids
+    if type(list) == "string" then list = { list } end
+    if type(list) ~= "table" then return {} end
+    local retired = {}
+    for _, id in ipairs(list) do
+        if tutorialProgress.stickyActive[id] == true then
+            tutorialProgress.stickyActive[id] = false
+            retired[#retired + 1] = id
+        end
+    end
+    table.sort(retired)
+    return retired
 end
 
 -- Adopt `tree` (nil clears), rebuild the index, and reconcile the
@@ -184,11 +266,12 @@ function tutorialProgress.setTree(tree)
     -- `completed` holds right now (empty for a brand-new session; a
     -- load's already-restored set when the tree resolves lazily during
     -- one, since ensureTree() runs before apply()'s own explicit
-    -- rebuild below).
+    -- rebuild below). A rebuild has no incremental order to replay, so
+    -- it takes recomputeHistory's RECONSTRUCTION rule (#1941).
     tutorialProgress.historySeen  = {}
     tutorialProgress.stickyActive = {}
     tutorialProgress.reconcile()
-    recomputeHistory()
+    recomputeHistory(true)
     return tutorialProgress.tree
 end
 
@@ -243,8 +326,9 @@ function tutorialProgress.completeObjective(id)
     -- This completion may be exactly what makes a DIFFERENT id (a
     -- child this one gates) newly reveal-eligible for the first time --
     -- see recomputeHistory's header for why the judgement has to happen
-    -- here, not lazily whenever a view is next read.
-    recomputeHistory()
+    -- here, not lazily whenever a view is next read. INCREMENTAL: this
+    -- is a live reveal with a real order, not a reconstruction.
+    recomputeHistory(false)
     return true
 end
 
@@ -298,7 +382,7 @@ function tutorialProgress.reset()
     tutorialProgress.checked   = {}
     tutorialProgress.historySeen  = {}
     tutorialProgress.stickyActive = {}
-    recomputeHistory()
+    recomputeHistory(true)
 end
 
 -- Drop every completion whose id is not a full objective in the tree
@@ -375,9 +459,17 @@ end
 -- chance to be seen "in progress" at all, so hiding it on the same tick
 -- it first appears would mean the player never sees it. stickyActive
 -- (recomputeHistory, above) marks exactly those ids, and the hide rule
--- below is suppressed for them permanently -- which, for a composite,
--- is also what lets its subobjectives (gated on the composite staying
--- un-hidden) become observable at all.
+-- below is suppressed for them -- which, for a composite, is also what
+-- lets its subobjectives (gated on the composite staying un-hidden)
+-- become observable at all.
+--
+-- The override is a LOAN, not a second hide rule (#1941): it lasts
+-- until the id has actually been presented, which the surface that
+-- rendered it reports through acknowledgePresented. Once retired, the
+-- id falls back onto the rule above with nothing carried over -- so it
+-- hides while its relevant set is done, and returns to the active view
+-- the moment a live subobjective unchecks, exactly like a node that was
+-- never sticky at all.
 
 local function allCompleted(ids)
     for _, id in ipairs(ids) do
@@ -620,9 +712,16 @@ function tutorialProgress.register()
             -- set) or found it already cached from an earlier session
             -- in the same process (which would otherwise leave stale
             -- history behind).
+            --
+            -- RECONSTRUCTION (#1941 requirement 4): an id the restored
+            -- set already makes structurally reveal-eligible is treated
+            -- as previously presented, so a load never returns an
+            -- ancestor the player watched retire to the checklist,
+            -- while a completed id still gated behind an incomplete one
+            -- keeps #996's protection for its real first reveal.
             tutorialProgress.historySeen  = {}
             tutorialProgress.stickyActive = {}
-            recomputeHistory()
+            recomputeHistory(true)
         end,
     })
     tutorialProgress._registered = true

@@ -140,7 +140,18 @@ fmtInitProgress env = do
 -- | Execute a Lua string and return the result as text.
 --   Uses loadstring to compile, then pcall to run safely.
 --   Captures return values and any errors.
---   Tables are automatically serialized to JSON format.
+--   Tables are serialized to JSON format by 'luaValueToText'.
+--
+--   __That serialization is not key-preserving (#1955).__ Distinct Lua
+--   keys can convert to one JSON member name — numeric @1@ and string
+--   @\"1\"@ are the standard case — so a table is emitted as a JSON
+--   object only when its member names come out distinct. One that does
+--   not comes back as the JSON /string/ @\"\<duplicate key ...\>\"@
+--   rather than as an object silently missing entries, which is what a
+--   'json.loads' consumer such as @tools\/probelib.py@'s @send_json@
+--   would otherwise be handed. All-string-keyed tables and consecutive
+--   @1..n@ arrays — every shape the probes actually consume — are
+--   unaffected. 'luaValueToText' states the full contract.
 executeDebugLua ∷ Lua.State → Text → IO Text
 executeDebugLua lst cmdText = Lua.runWith lst $ do
     let code = TE.encodeUtf8 cmdText
