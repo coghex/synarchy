@@ -28,7 +28,7 @@ import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.Capability.Core (CoreCapability)
 import Engine.Core.Capability.ContentRegistries
     (ContentRegistriesCapability(..))
-import Engine.Core.Log (LogCategory(..), logInfo)
+import Engine.Core.Log (LogCategory(..), logDebug)
 import Engine.Core.Log.Monad (getLoggerFor)
 import Engine.Asset.YamlRecipes
 import Craft.Types
@@ -68,7 +68,7 @@ loadRecipeYamlFn core regs = do
                                                  (rmDefs m) }, ())
                     return (acc + 1)
                     ) (0 ∷ Int) defs
-                logInfo logger CatAsset $
+                logDebug logger CatAsset $
                     "loadRecipeYaml: loaded " <> tshow total
                     <> " recipes from " <> T.pack filePath
                 return total

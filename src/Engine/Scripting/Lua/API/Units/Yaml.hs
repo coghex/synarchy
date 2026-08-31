@@ -20,7 +20,7 @@ import qualified HsLua as Lua
 import Control.Monad (foldM)
 import Data.IORef (IORef, readIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv, loggerRef)
-import Engine.Core.Log (LogCategory(..), logInfo, logDebug, logWarn, logError)
+import Engine.Core.Log (LogCategory(..), logDebug, logWarn, logError)
 import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaToEngineMsg)
 import Engine.Asset.Types (AssetPool)
 import qualified Engine.Core.Queue as Q
@@ -57,7 +57,7 @@ loadUnitYamlFn env backendState = do
                 defs ← loadUnitYaml logger filePath
                 total ← registerUnitDefs env (lbsAssetPool backendState) lteq
                             resolveUnitAtlases filePath defs
-                logInfo logger CatAsset $
+                logDebug logger CatAsset $
                     "loadUnitYaml: loaded " <> tshow total
                     <> " unit definitions from " <> T.pack filePath
                 return total
