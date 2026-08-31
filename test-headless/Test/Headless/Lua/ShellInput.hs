@@ -302,6 +302,123 @@ spec = do
                     \return t1..'|'..c1..'|'..t2..'|'..c2..'|'..t3..'|'..c3"
                     `shouldReturn` "東京|2|ok|2|ok|2"
 
+        -- #1956: the console retained every line it had ever printed and
+        -- remeasured all of it on every keystroke. Two independent bounds
+        -- fix that -- a cap on what is RETAINED, and an early stop on what
+        -- is MEASURED -- and each is asserted here as a count that stops
+        -- growing rather than as a timing.
+        --
+        -- The stub framebuffer is 1280x720 and each code point costs the
+        -- default 10px, so: baseHeight = 2*64 + 40 - 20 = 148, one line per
+        -- one-line entry at 40px, and maxHeight = 720 - 40 - 40 = 640. The
+        -- box therefore fills on the 13th measured entry (148 + 13*40 =
+        -- 668 >= 640), whatever the retained total is.
+        describe "scrollback bounds" $ do
+            it "retains a bounded scrollback, dropping oldest and keeping \
+               \newest" $ \env → do
+                ls ← shellBackend env
+                -- getCompletions is the read side: it sources past commands
+                -- from the displayed scrollback, so the retained set is
+                -- observable through a production path, and an evicted entry
+                -- ceasing to be a completion candidate is the one
+                -- completion change this bound is allowed to cause.
+                eval ls
+                    "__boot(); \
+                    \for i=1,1200 do \
+                    \__shell.addHistory(string.format('zc%04d',i),'',false) end; \
+                    \local c=__shell.getCompletions('zc'); \
+                    \return #c..'|'..c[1]..'|'..c[#c]"
+                    `shouldReturn` "1000|zc0201|zc1200"
+
+            it "measures newest-first and stops once the box is full" $ \env → do
+                ls ← shellBackend env
+                -- countLinesForEntry is reached through the module table, so
+                -- a recording proxy sees exactly which entries
+                -- calculateBoxHeight measured and in what order. `seen` is
+                -- reset immediately before each measurement because
+                -- addHistory itself remeasures on the way in.
+                eval ls
+                    "__boot(); \
+                    \local real=__shell.countLinesForEntry; local seen={}; \
+                    \__shell.countLinesForEntry=function(e,w,f) \
+                    \seen[#seen+1]=e.command; return real(e,w,f) end; \
+                    \local h0=__shell.calculateBoxHeight(); \
+                    \__shell.addHistory('za','',false); \
+                    \local h1=__shell.calculateBoxHeight(); \
+                    \__shell.addHistory('zb','',false); \
+                    \seen={}; local h2=__shell.calculateBoxHeight(); \
+                    \local n2=#seen; local o2=table.concat(seen,','); \
+                    \for i=1,60 do \
+                    \__shell.addHistory(string.format('zc%04d',i),'',false) end; \
+                    \seen={}; local h3=__shell.calculateBoxHeight(); \
+                    \local n3=#seen; local f3=seen[1]; \
+                    \for i=61,600 do \
+                    \__shell.addHistory(string.format('zc%04d',i),'',false) end; \
+                    \seen={}; local h4=__shell.calculateBoxHeight(); \
+                    \local n4=#seen; local f4=seen[1]; \
+                    \return h0..'|'..h1..'|'..h2..'|'..n2..'|'..o2 \
+                    \..'|'..h3..'|'..n3..'|'..f3 \
+                    \..'|'..h4..'|'..n4..'|'..f4"
+                    -- Underfull: every retained entry is still measured and
+                    -- the height is the unchanged baseHeight + lines*40.
+                    -- Overflowing: the same clamped 640 from a measured
+                    -- count that does not move as the history grows tenfold,
+                    -- starting at the newest entry both times.
+                    `shouldReturn`
+                        "148|188|228|2|zb,za|640|13|zc0060|640|13|zc0600"
+
+            it "keeps clear and clear-history acting on different lists" $ \env → do
+                ls ← shellBackend env
+                eval ls
+                    "__boot({'zs1','zs2'}); local f=__fid; \
+                    \__shell.addHistory('zkeepa','',false); \
+                    \__shell.cmdClear(); \
+                    \local a1=#__shell.getCompletions('zkeepa'); \
+                    \__shell.onCursorUp(f); local t1=__shell.getInputState(); \
+                    \local w1=#__historyWrites; local r1=#__historyRemoves; \
+                    \__shell.onInterrupt(f); \
+                    \__shell.addHistory('zkeepb','',false); \
+                    \__shell.cmdClearHistory(); \
+                    \local a2=#__shell.getCompletions('zkeepb'); \
+                    \__shell.onCursorUp(f); local t2=__shell.getInputState(); \
+                    \return a1..'|'..t1..'|'..w1..'|'..r1 \
+                    \..'|'..a2..'|['..t2..']|'..#__historyRemoves"
+                    -- clear empties the scrollback and touches neither the
+                    -- navigation list nor its file; clear-history wipes the
+                    -- list and removes the file and leaves the scrollback.
+                    `shouldReturn` "0|zs2|0|0|1|[]|1"
+
+            it "leaves the navigation history's cap and dedup untouched" $ \env → do
+                ls ← shellBackend env
+                -- pushArrowHistory rewrites the whole file per submit, two
+                -- writes per entry, so the recorded writes count the list.
+                eval ls
+                    "local seed={}; \
+                    \for i=1,1000 do seed[i]=string.format('zh%04d',i) end; \
+                    \__boot(seed); local f=__fid; \
+                    \local function submit(s) \
+                    \for c in s:gmatch('.') do __shell.onCharInput(f,c) end; \
+                    \__shell.onTextSubmit(f) end; \
+                    \_G.__historyWrites={}; submit('znew'); \
+                    \local n=math.floor(#__historyWrites/2); \
+                    \return n..'|'..__historyWrites[1]..'|'..__historyWrites[#__historyWrites-1]"
+                    `shouldReturn` "1000|zh0002|znew"
+
+            it "still dedups a repeated command on push" $ \env → do
+                ls ← shellBackend env
+                eval ls
+                    "__boot(); local f=__fid; \
+                    \local function submit(s) \
+                    \for c in s:gmatch('.') do __shell.onCharInput(f,c) end; \
+                    \__shell.onTextSubmit(f) end; \
+                    \submit('zaa'); submit('zbb'); \
+                    \_G.__historyWrites={}; submit('zaa'); \
+                    \__shell.onCursorUp(f); local u1=__shell.getInputState(); \
+                    \__shell.onCursorUp(f); local u2=__shell.getInputState(); \
+                    \__shell.onCursorUp(f); local u3=__shell.getInputState(); \
+                    \return math.floor(#__historyWrites/2)..'|'..u1..'|'..u2..'|'..u3"
+                    `shouldReturn` "2|zaa|zbb|zbb"
+
         -- "Unchanged" is #1187's contract: ASCII must behave exactly as it
         -- did before the byte -> code-point rewrite. The trailing scroll
         -- offset and visible slice moved with #1959's fitted input width
@@ -388,6 +505,15 @@ shellBackend env = do
         , "      return __historySeed[i] end end, close=function() end}"
         , "  end;"
         , "  return realOpen(path,mode) end;"
+        -- clear-history DELETES that same user-owned file, so the removal
+        -- boundary is stubbed too — recorded rather than performed, which
+        -- is what lets a case assert the deletion without any case being
+        -- able to perform one.
+        , "_G.__historyRemoves={}; local realRemove=os.remove;"
+        , "os.remove=function(path)"
+        , "  if path=='config/shell_history.txt' then"
+        , "    __historyRemoves[#__historyRemoves+1]=path; return true end;"
+        , "  return realRemove(path) end;"
         , "_G.__shell=require('scripts.shell');"
         , "_G.__boot=function(seed) _G.__historySeed=seed or {};"
         , "  __shell.init(1); __shell.show(); _G.__fid=__shell.getFocusId() end;"
