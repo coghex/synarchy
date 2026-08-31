@@ -181,6 +181,7 @@ import qualified Test.Headless.Lua.WidthTruncation as LuaWidthTruncation
 import qualified Test.Headless.Lua.ShellInput as LuaShellInput
 import qualified Test.Headless.Lua.RandomStream as LuaRandomStream
 import qualified Test.Headless.Lua.ConsoleTableKeys as LuaConsoleTableKeys
+import qualified Test.Headless.Lua.LogSource as LuaLogSource
 import qualified Test.Headless.Lua.InjuryNarration as LuaInjuryNarration
 import qualified Test.Headless.UI.Slider as UISlider
 import qualified Test.Headless.UI.BarFillColor as UIBarFillColor
@@ -699,6 +700,7 @@ main = hspec $ do
     describe "Lua.TextTruncation" LuaTextTruncation.spec
     describe "Lua.WidthTruncation" LuaWidthTruncation.spec
     describe "Lua.ShellInput" LuaShellInput.spec
+    describe "Lua log source" LuaLogSource.spec
     describe "Lua random stream ownership" LuaRandomStream.spec
     describe "Lua injury narration" LuaInjuryNarration.spec
     UISlider.spec
