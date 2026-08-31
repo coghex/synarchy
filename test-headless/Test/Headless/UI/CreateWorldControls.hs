@@ -16,13 +16,22 @@ module Test.Headless.UI.CreateWorldControls (spec) where
 
 import UPrelude
 import Test.Hspec
+import Data.IORef (newIORef)
 import Data.Maybe (mapMaybe)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import qualified Data.Text.Encoding as TE
 import qualified HsLua as Lua
 import System.Directory (doesFileExist)
+import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Thread (ThreadControl(..))
 import Engine.Graphics.Font.Repertoire (generatedNameFonts)
+import Engine.Scripting.Lua.API (registerLuaAPI)
+import Engine.Scripting.Lua.Thread (createLuaBackendState)
+import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
+import Engine.Scripting.Lua.Types (LuaBackendState(..))
+import Test.Headless.Harness (withHeadlessEngine)
+import Test.Headless.Harness.Isolation (withIsolatedResourceRoot)
 
 menuPath, settingsPath, generalPath, generationPath, climatePath ∷ FilePath
 menuPath       = "scripts/create_world_menu.lua"
@@ -127,6 +136,28 @@ runsWith prelude chunkText = do
     luaError = do
         err ← Lua.tostring (-1)
         return (maybe "<no message>" TE.decodeUtf8Lenient err)
+
+-- | Run a Create World lifecycle against the real headless UI API. This
+--   deliberately uses the same bare-backend shape as ResponsiveMenus, but
+--   keeps the fixture here because the regression belongs to this screen's
+--   player-facing identity contract rather than to responsive geometry.
+--
+--   The isolated resource root wraps engine creation because production
+--   startup may materialize local config overlays; no focused UI test may
+--   write into the checkout's real @config/@ directory (#1357).
+runsCreateWorldLifecycle ∷ Text → Expectation
+runsCreateWorldLifecycle chunkText =
+    withIsolatedResourceRoot $ withHeadlessEngine $ \env → do
+        ls ← createLuaBackendState (luaToEngineQueue env) (luaQueue env)
+                                   (assetPoolRef env) (nextObjectIdRef env)
+                                   (inputStateRef env) (loggerRef env)
+        stateRef ← newIORef ThreadRunning
+        registerLuaAPI (lbsLuaState ls) env ls stateRef
+        result ← executeDebugLua (lbsLuaState ls) chunkText
+        when ("error:" `T.isPrefixOf` result
+              ∨ "syntax error:" `T.isPrefixOf` result) $
+            expectationFailure ("Lua error: " ⧺ T.unpack result)
+        result `shouldBe` "true"
 
 -- | Stubs for every global the two real modules reach outside an engine
 --   boot, plus a recorder capturing @world.init@'s COMPLETE argument
@@ -311,6 +342,71 @@ spec = do
     it "exposes exactly the five active General controls" $
         settingsLabels settingsSource ++ generalLabels generalSource
             `shouldBe` ["Name", "Seed", "Size", "Days / Month", "Months / Year"]
+
+    -- #1978: production first enters this screen by ensuring it (init),
+    -- then immediately showing it (a second createUI). The two controls
+    -- could display the generated identity while the persistent pending
+    -- table had already been restored to its pre-construction blanks, so
+    -- untouched Generate silently created an unnamed seed-0 world.
+    it "keeps the first-entry visible name, seed, and suggestion identity through untouched Generate" $
+        runsCreateWorldLifecycle $ lns
+            [ "require('scripts.ui.randbox').init()"
+            , "require('scripts.ui.textbox').init()"
+            , "require('scripts.ui.dropdown').init()"
+            , "local randbox = require('scripts.ui.randbox')"
+            -- Make the screen's fresh identity deterministic while
+            -- retaining the real settings/menu/generation modules.
+            , "randbox.newHexSeed = function() return 'B' end"
+            , "world.suggestName = function(seed, ordinal)"
+            , "  return { name = 'N' .. tostring(seed) .. '_' .. tostring(ordinal),"
+            , "    gloss = 'G' .. tostring(seed) .. '_' .. tostring(ordinal),"
+            , "    expr = 'Modifier:M' .. tostring(seed) .. ':H' .. tostring(ordinal),"
+            , "    language = { seed = tostring(seed) .. '000', version = 5 } }"
+            , "end"
+            , "world.generatedNameCharacters = function() return 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-' end"
+            , "world.setGenConfig = function() end"
+            , "debug.recordOutcome = function() end"
+            , "local worldView = { startGeneration = function() end }"
+            , "package.loaded['scripts.world_view'] = worldView"
+            , "package.loaded['scripts.world_manager'] = {"
+            , "  isActive = function() return false end,"
+            , "  destroyWorld = function() end,"
+            , "}"
+            , "local menu = require('scripts.create_world_menu')"
+            -- Mirrors ui_manager_menu's ensureCreateWorldMenu()+show().
+            , "menu.init(1, 2, 3, 1280, 720)"
+            , "menu.show()"
+            , "local settings = require('scripts.create_world.settings_tab')"
+            , "local shownName = randbox.getValue(settings.nameRandBoxId)"
+            , "local shownSeed = randbox.getValue(settings.seedRandBoxId)"
+            , "assert(shownName == 'N11_0', 'visible name: ' .. tostring(shownName))"
+            , "assert(shownSeed == 'B', 'visible seed: ' .. tostring(shownSeed))"
+            , "assert(menu.pending.worldName == shownName,"
+            , "  'pending name: ' .. tostring(menu.pending.worldName))"
+            , "assert(menu.pending.seed == shownSeed,"
+            , "  'pending seed: ' .. tostring(menu.pending.seed))"
+            , "local identity = {"
+            , "  gloss = menu.pending.nameGloss, expr = menu.pending.nameExpr,"
+            , "  languageSeed = menu.pending.nameLanguageSeed,"
+            , "  languageVersion = menu.pending.nameLanguageVersion,"
+            , "  ordinal = menu.pending.nameOrdinal,"
+            , "}"
+            , "assert(identity.gloss == 'G11_0', tostring(identity.gloss))"
+            , "assert(identity.expr == 'Modifier:M11:H0', tostring(identity.expr))"
+            , "assert(identity.languageSeed == '11000', tostring(identity.languageSeed))"
+            , "assert(identity.languageVersion == 5, tostring(identity.languageVersion))"
+            , "assert(identity.ordinal == 1, tostring(identity.ordinal))"
+            , "menu.onGenerateWorld()"
+            , "local generated = worldView.worldParams"
+            , "assert(generated.seed == tonumber(shownSeed, 16), tostring(generated.seed))"
+            , "assert(generated.worldName == shownName, tostring(generated.worldName))"
+            , "assert(generated.worldGloss == identity.gloss, tostring(generated.worldGloss))"
+            , "assert(generated.nameExpr == identity.expr, tostring(generated.nameExpr))"
+            , "assert(generated.languageSeed == identity.languageSeed, tostring(generated.languageSeed))"
+            , "assert(generated.languageVersion == identity.languageVersion, tostring(generated.languageVersion))"
+            , "assert(menu.pending.nameOrdinal == identity.ordinal, tostring(menu.pending.nameOrdinal))"
+            , "return true"
+            ]
 
     -- #1106 requirement 9: the dummy generator is gone, not merely
     -- bypassed. Its word lists had no language, no meaning, and no
