@@ -280,6 +280,11 @@ def _clamp(v, lo, hi) -> float:
     return max(lo, min(hi, float(v)))
 
 
+def _lua_number(value: float) -> str:
+    """A finite float as a Lua numeral that round-trips exactly."""
+    return repr(float(value))
+
+
 def bound_scroll_dy(dy):
     """Apply the published wheel contract to one requested vertical delta.
 
@@ -302,12 +307,18 @@ def bound_scroll_dy(dy):
     fallback both reach `translate_action` without any schema having
     validated them.
     """
-    try:
-        value = float(dy)
-    except (TypeError, ValueError):
+    # A JSON number and nothing else. `float()` alone would accept the
+    # very inputs this boundary exists to catch — a numeric string "5"
+    # from a lenient provider fallback, or a bool from a scripted agent
+    # (bool is an int subclass, so it must be excluded FIRST) — and each
+    # would enter the engine as a delta the published contract never
+    # described.
+    if isinstance(dy, bool) or not isinstance(dy, (int, float)):
         raise ActionError(
             f"action 'scroll' rejected: dy must be a number in "
-            f"[{SCROLL_DY_MIN}, {SCROLL_DY_MAX}], got {dy!r}") from None
+            f"[{SCROLL_DY_MIN:g}, {SCROLL_DY_MAX:g}], got {dy!r}; "
+            f"no scroll was sent")
+    value = float(dy)
     if not math.isfinite(value):
         raise ActionError(
             f"action 'scroll' rejected: dy must be a finite number in "
@@ -385,7 +396,11 @@ def translate_action(action: dict, fb_size: tuple[int, int], notes=None):
         # injected call rather than moving the pointer and then refusing.
         # dx keeps its historical verbatim forwarding: the camera premise
         # and the player-facing notch vocabulary are about dy alone.
-        dy, dy_note = bound_scroll_dy(action.get("dy") or 0)
+        # NOT `action.get("dy") or 0`: that turns a `false` into 0 and so
+        # coerces a contract violation into a silently valid gesture
+        # before it can be rejected. Only an absent dy defaults.
+        raw_dy = action.get("dy")
+        dy, dy_note = bound_scroll_dy(0 if raw_dy is None else raw_dy)
         if dy_note:
             add_note(dy_note)
         calls = []
@@ -393,12 +408,16 @@ def translate_action(action: dict, fb_size: tuple[int, int], notes=None):
             x, y = xy()
             calls.append(f"return input.moveMouse({x:.1f}, {y:.1f})")
         dx = float(action.get("dx") or 0)
-        # dy carries more precision than dx because the contract now
-        # advertises fractional notches for trackpad-style input, and at
-        # one decimal a small real gesture rounds to a literal 0.0 — the
-        # accepted no-op this contract exists to stop. dx keeps its
-        # historical formatting along with its historical forwarding.
-        calls.append(f"return input.scroll({dx:.1f}, {dy:.4f})")
+        # dy is serialized losslessly rather than at a fixed number of
+        # decimals, because the contract advertises fractional notches: at
+        # ANY fixed width a small in-range gesture rounds to a literal 0.0
+        # — the accepted no-op this contract exists to stop — and a value
+        # just inside a bound rounds onto it without being recorded as
+        # clamped. `repr` of a finite float round-trips and its widest
+        # form (`1e-05`) is an ordinary Lua numeral. dx keeps its
+        # historical formatting along with its historical forwarding; the
+        # notch vocabulary and the bound are about dy alone.
+        calls.append(f"return input.scroll({dx:.1f}, {_lua_number(dy)})")
         return calls, []
     if kind == "key":
         name = action.get("name")

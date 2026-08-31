@@ -252,8 +252,14 @@ schema having validated them:
   the turn keeps the action the player requested, its note records the
   requested and effective values, and only the bounded call reaches
   `injected`/`replay.jsonl`;
-- a non-finite `dy` is **rejected** — there is no nearest bound to clamp
-  it to, so the turn injects no scroll call and its note says so.
+- a non-finite `dy`, and anything that is not a JSON number at all (a
+  numeric string, a bool), is **rejected** — there is no nearest bound to
+  clamp such a value to, so the turn injects no scroll call and its note
+  says so.
+
+In-range values are serialized losslessly rather than at a fixed decimal
+width, so a small fraction cannot become a literal `0.0` and a value just
+inside a bound cannot round onto it unrecorded.
 
 Either way the turn still crosses exactly one observable action boundary.
 `dx` keeps its historical verbatim forwarding: the camera premise and the

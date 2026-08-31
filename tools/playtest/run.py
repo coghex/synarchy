@@ -1563,8 +1563,10 @@ def selftest() -> int:
 
         def scroll_dy_of(calls):
             vals = [float(m.group(1)) for m in
-                    (re.search(r"input\.scroll\([^,]+,\s*(-?[\d.eE+]+)\)",
-                               c) for c in calls) if m]
+                    (re.search(
+                        r"input\.scroll\([^,]+,\s*"
+                        r"(-?[\d.]+(?:[eE][-+]?\d+)?)\)", c)
+                     for c in calls) if m]
             return vals
 
         notch, _, notch_notes = scroll_calls(
@@ -1609,6 +1611,33 @@ def selftest() -> int:
             check(f"a non-finite dy ({bad}) is rejected, not forwarded",
                   rejected is not None and "rejected" in rejected,
                   str(rejected))
+        # An in-range fraction must survive serialization: at any fixed
+        # decimal width a small real gesture becomes a literal 0.0, and a
+        # value just inside a bound rounds onto it while the turn records
+        # no clamp — both of them the accepted no-op this contract exists
+        # to stop.
+        for fraction in (0.00001, -0.00001, 9.99999, -9.99999, 0.25):
+            fcalls, _, fnotes = scroll_calls({"do": "scroll", "dy": fraction})
+            check(f"an in-range fraction {fraction!r} is serialized "
+                  "losslessly and unremarked",
+                  scroll_dy_of(fcalls) == [fraction] and fnotes == [],
+                  str(fcalls) + str(fnotes))
+        # The translation boundary is the one that has to hold, so it
+        # types dy itself instead of trusting the schema: a numeric string
+        # and a bool are exactly what a lenient provider fallback and a
+        # scripted agent produce, and float() would have accepted both.
+        for bogus in ("5", "-1", True, False, [], {}, complex(1, 0)):
+            typed = None
+            try:
+                scroll_calls({"do": "scroll", "dy": bogus})
+            except ActionError as e:
+                typed = str(e)
+            check(f"a non-numeric dy ({bogus!r}) is rejected, not coerced",
+                  typed is not None and "rejected" in typed, str(typed))
+        absent, _, absent_notes = scroll_calls({"do": "scroll", "dx": 2})
+        check("an absent dy still defaults to a zero vertical delta",
+              scroll_dy_of(absent) == [0.0] and absent_notes == [],
+              str(absent))
         aimed, _, _ = scroll_calls(
             {"do": "scroll", "dy": -2, "x": 640, "y": 360})
         check("cursor-aimed scrolling still pre-moves, then scrolls once",
@@ -1648,7 +1677,8 @@ def selftest() -> int:
         check("only the bounded call lands in injected and replay data",
               cturn["injected"] == creplay["pre"]
               and len(cturn["injected"]) == 1
-              and f"{engine_mod.SCROLL_DY_MAX:.4f}" in cturn["injected"][0]
+              and scroll_dy_of(cturn["injected"]) == [
+                  engine_mod.SCROLL_DY_MAX]
               and "600" not in cturn["injected"][0],
               str(cturn["injected"]))
         usage = agent_mod._parse_codex_usage(
