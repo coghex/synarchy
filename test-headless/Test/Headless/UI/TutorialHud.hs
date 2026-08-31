@@ -109,6 +109,25 @@ treeHelpers = luaLines
     , "        subs[i] = node(string.format('sub_%03d', i), 'subobjective', i) end;"
     , "    return { id = 'first_session',"
     , "             root = node('root', 'composite', 1, {}, subs) } end;"
+    -- #1941: the shipped SHAPE, widened. A composite that can latch
+    -- before its ancestor reveals it (so it can go sticky, which
+    -- `wideTree`'s root never can — a root is reveal-eligible from the
+    -- start) carrying enough subobjectives to overflow a viewport, so
+    -- the sticky row itself can be scrolled out of range.
+    , "local function stickyTree(n)"
+    , "    local subs = {};"
+    , "    for i = 1, n do"
+    , "        subs[i] = node(string.format('sub_%03d', i), 'subobjective', i) end;"
+    , "    local branch = node('branch', 'composite', 1, {}, subs);"
+    , "    return { id = 'first_session',"
+    , "             root = node('gate', 'full', 1, {branch}) } end;"
+    -- Latch `branch` and every subobjective BEFORE `gate` completes, so
+    -- `branch`'s first reveal finds it already complete (#996's case).
+    , "local function preLatch(tp, n)"
+    , "    for i = 1, n do"
+    , "        tp.setSubobjectiveChecked(string.format('sub_%03d', i), true) end;"
+    , "    tp.completeObjective('branch');"
+    , "    tp.completeObjective('gate') end;"
     ]
 
 -- | Boot hud + the tutorial HUD at a given framebuffer size, with a
@@ -545,6 +564,139 @@ spec = aroundAll withSharedFixture $ do
                     [ "prepare_expedition", "prepare_water", "prepare_food" ]
             arpRowIds probe `shouldBe` want
             arpActiveIds probe `shouldBe` want
+
+        -- #1941: and then it RETIRES. This surface is the only thing
+        -- that can testify a row was actually put in front of the
+        -- player, so #958 hands it that job: the update tick reports the
+        -- viewport that has been on screen since the last one, the
+        -- sticky suppression is spent, and the ordinary hide rule takes
+        -- the branch off the list in that same tick's rebuild. The
+        -- acknowledgement runs BEFORE that rebuild, so what it reports
+        -- is a viewport the player really saw — never one this tick
+        -- built and unbuilt.
+        it "retires the presented branch on the update tick that reports \
+           \it, leaving the checklist empty (#1941)" $ \(env, ls) → do
+            resetFixture env ls
+            r ← evalOk ls $ luaLines
+                [ bootAt 1280 720 "shippedShape()"
+                , "tp.setSubobjectiveChecked('prepare_water', true);"
+                , "tp.setSubobjectiveChecked('prepare_food', true);"
+                , "tp.completeObjective('prepare_expedition');"
+                , "tp.completeObjective('place_portal');"
+                , "tp.completeObjective('secure_water');"
+                -- Opening builds the branch and nothing else: no tick
+                -- has run, so nothing has been reported yet.
+                , "th.setOpen(true);"
+                , "local shown = th.dump();"
+                -- The tick that reports it, and rebuilds without it.
+                , "th.update(0);"
+                , "local after = th.dump();"
+                , "return { shownIds = table.concat(shown.rowIds, ','),"
+                , "         shownActive = table.concat(shown.activeIds, ','),"
+                , "         afterIds = table.concat(after.rowIds, ','),"
+                , "         afterActive = table.concat(after.activeIds, ','),"
+                , "         afterRebuilds = after.rebuildCount"
+                , "                         - shown.rebuildCount }"
+                ]
+            probe ← decodeOr r ∷ IO PresentProbe
+            let want = T.intercalate ","
+                    [ "prepare_expedition", "prepare_water", "prepare_food" ]
+            -- Opening the panel renders the whole branch, exactly as
+            -- #996 requires — and a build alone reports nothing, so the
+            -- model still has it.
+            ppShownIds probe `shouldBe` want
+            ppShownActive probe `shouldBe` want
+            -- The reporting tick spends the suppression and rebuilds
+            -- once: the ordinary completed-history view, an empty
+            -- checklist.
+            ppAfterActive probe `shouldBe` ""
+            ppAfterIds probe `shouldBe` ""
+            ppAfterRebuilds probe `shouldBe` 1
+
+        it "never acknowledges from a COLLAPSED panel — the branch is \
+           \still waiting when it is finally opened (#1941)" $ \(env, ls) → do
+            resetFixture env ls
+            r ← evalOk ls $ luaLines
+                [ bootAt 1280 720 "shippedShape()"
+                , "tp.setSubobjectiveChecked('prepare_water', true);"
+                , "tp.setSubobjectiveChecked('prepare_food', true);"
+                , "tp.completeObjective('prepare_expedition');"
+                , "tp.completeObjective('place_portal');"
+                , "tp.completeObjective('secure_water');"
+                -- Ticks with the panel closed: the HUD is visible and
+                -- the branch is active in the model, but the checklist
+                -- lays out no rows at all, so nothing is presented.
+                , "for _ = 1, 5 do th.update(0) end;"
+                , "local suppressed = table.concat(th.dump().activeIds, ',');"
+                , "th.setOpen(true);"
+                , "local exposed = table.concat(th.dump().rowIds, ',');"
+                , "return { suppressed = suppressed, exposed = exposed }"
+                ]
+            probe ← decodeOr r ∷ IO NoAckProbe
+            let want = T.intercalate ","
+                    [ "prepare_expedition", "prepare_water", "prepare_food" ]
+            napWhileSuppressed probe `shouldBe` want
+            napAfterExposed probe `shouldBe` want
+
+        it "never acknowledges while the gameplay HUD is HIDDEN, and \
+           \does once it comes back (#1941)" $ \(env, ls) → do
+            resetFixture env ls
+            r ← evalOk ls $ luaLines
+                [ bootAt 1280 720 "shippedShape()"
+                , "tp.setSubobjectiveChecked('prepare_water', true);"
+                , "tp.setSubobjectiveChecked('prepare_food', true);"
+                , "tp.completeObjective('prepare_expedition');"
+                , "tp.completeObjective('place_portal');"
+                , "tp.completeObjective('secure_water');"
+                -- Open, but with the whole HUD hidden: the page is not
+                -- painted, so a build behind it presents nothing.
+                , "th.setOpen(true);"
+                , "hud.visible = false;"
+                , "for _ = 1, 5 do th.update(0) end;"
+                , "local suppressed = table.concat(th.dump().activeIds, ',');"
+                -- The HUD comes back with no content change of any
+                -- kind: the transition alone is the presentation.
+                , "hud.visible = true;"
+                , "th.update(0); th.update(0);"
+                , "local exposed = table.concat(th.dump().rowIds, ',');"
+                , "return { suppressed = suppressed, exposed = exposed }"
+                ]
+            probe ← decodeOr r ∷ IO NoAckProbe
+            napWhileSuppressed probe `shouldBe` T.intercalate ","
+                [ "prepare_expedition", "prepare_water", "prepare_food" ]
+            napAfterExposed probe `shouldBe` ""
+
+        it "never acknowledges a sticky row scrolled OUT of the \
+           \viewport, and does once it is scrolled back (#1941)" $ \(env, ls) → do
+            resetFixture env ls
+            r ← evalOk ls $ luaLines
+                [ bootAt 1024 768 "stickyTree(60)"
+                , "preLatch(tp, 60);"
+                , "th.setOpen(true);"
+                -- Scroll the composite itself off the top. Its
+                -- subobjectives stay on screen, so the panel is busy —
+                -- but the only STICKY id is no longer laid out.
+                , "th.setScrollOffset(1);"
+                , "for _ = 1, 5 do th.update(0) end;"
+                , "local d = th.dump();"
+                , "local suppressed = tostring(d.rows[1] ~= nil"
+                , "    and d.rows[1].id or 'none') .. '/'"
+                , "    .. tostring(d.activeIds[1] or 'none');"
+                -- Back to the top: now the sticky row IS in the
+                -- viewport, and the next tick spends the suppression.
+                , "th.setScrollOffset(0);"
+                , "th.update(0); th.update(0);"
+                , "local exposed = table.concat(th.dump().rowIds, ',');"
+                , "return { suppressed = suppressed, exposed = exposed }"
+                ]
+            probe ← decodeOr r ∷ IO NoAckProbe
+            -- The viewport starts at the first subobjective while the
+            -- model still reports the sticky composite as active: the
+            -- row was never rendered, so it was never presented.
+            napWhileSuppressed probe `shouldBe` (subId 1 <> "/branch")
+            -- Retired: the whole branch leaves the active view, so the
+            -- rebuilt viewport is empty.
+            napAfterExposed probe `shouldBe` ""
 
     describe "scoped wheel capture and scrolling (requirements 4/7)" $ do
         it "captures the wheel only over the visible list — never on the toggle, never off it" $ \(env, ls) → do
@@ -1063,6 +1215,29 @@ data ReverseProbe = ReverseProbe { rvDoneIds ∷ Text, rvReopenedIds ∷ Text }
 instance FromJSON ReverseProbe where
     parseJSON = withObject "ReverseProbe" $ \o →
         ReverseProbe <$> o .: "doneIds" <*> o .: "reopenedIds"
+
+-- | #1941: the two views a retirement passes through — the build that
+--   rendered the sticky rows, and the tick that reported them presented
+--   and rebuilt without them.
+data PresentProbe = PresentProbe
+    { ppShownIds ∷ Text, ppShownActive ∷ Text
+    , ppAfterIds ∷ Text, ppAfterActive ∷ Text
+    , ppAfterRebuilds ∷ Int } deriving (Show, Eq)
+instance FromJSON PresentProbe where
+    parseJSON = withObject "PresentProbe" $ \o →
+        PresentProbe <$> o .: "shownIds" <*> o .: "shownActive"
+                      <*> o .: "afterIds" <*> o .: "afterActive"
+                      <*> o .: "afterRebuilds"
+
+-- | #1941: a checklist observed while the panel was closed, or the HUD
+--   hidden, or the sticky row scrolled out of the viewport — and then
+--   again once that condition is lifted.
+data NoAckProbe = NoAckProbe
+    { napWhileSuppressed ∷ Text, napAfterExposed ∷ Text }
+    deriving (Show, Eq)
+instance FromJSON NoAckProbe where
+    parseJSON = withObject "NoAckProbe" $ \o →
+        NoAckProbe <$> o .: "suppressed" <*> o .: "exposed"
 
 data WheelProbe = WheelProbe
     { wpToggleCaptures ∷ Bool, wpRowCaptures ∷ Bool

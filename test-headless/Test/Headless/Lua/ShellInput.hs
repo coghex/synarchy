@@ -133,9 +133,19 @@ spec = do
         describe "scrolling" $ do
             it "scrolls by code points and shows whole characters" $ \env → do
                 ls ← shellBackend env
-                -- 100px per code point against the shell's 1100px input field:
-                -- exactly eleven characters fit, so a fifteen-character line
-                -- must scroll four of them away.
+                -- 100px per code point against the shell's 892px input
+                -- field: exactly eight characters fit, so a fifteen-character
+                -- line must scroll seven of them away.
+                --
+                -- #1959 is why that field is 892px and not the 1100px this
+                -- case measured against before, and the stub framebuffer
+                -- below is unchanged — the width it implies is what moved.
+                -- The console now fits its box to the framebuffer, and
+                -- 1280px cannot hold the preferred 1368px-wide box, so the
+                -- center narrows to 1112 (interior 104..1216); and the input
+                -- budget is now the room actually left after the prompt
+                -- rather than a flat 100px inset, so the 200px this stub
+                -- charges for "$>" is what the field gives up.
                 eval ls
                     "__boot(); local f=__fid; _G.__px=100; \
                     \for i=1,5 do for _,c in ipairs({'é','界','🙂'}) do \
@@ -148,7 +158,7 @@ spec = do
                     \return utf8.len(t)..'|'..c..'|'..s..'|'..utf8.len(vis)..'|'..vis \
                     \..'|'..c2..'|'..s2..'|'..utf8.len(vis2)..'|'..vis2"
                     `shouldReturn`
-                        "15|15|4|11|界🙂é界🙂é界🙂é界🙂|3|3|11|é界🙂é界🙂é界🙂é界"
+                        "15|15|7|8|界🙂é界🙂é界🙂|3|3|8|é界🙂é界🙂é界"
 
         describe "history and interrupt" $ do
             it "restores stored Unicode commands with a code-point cursor" $ \env → do
@@ -180,6 +190,11 @@ spec = do
                     \return t1..'|'..c1..'|'..t2..'|'..c2..'|'..t3..'|'..c3"
                     `shouldReturn` "東京|2|ok|2|ok|2"
 
+        -- "Unchanged" is #1187's contract: ASCII must behave exactly as it
+        -- did before the byte -> code-point rewrite. The trailing scroll
+        -- offset and visible slice moved with #1959's fitted input width
+        -- (see the scrolling case above); every editing, navigation and
+        -- completion expectation in the line is untouched.
         describe "ASCII behaviour is unchanged" $ do
             it "edits, navigates, completes, and scrolls exactly as before" $ \env → do
                 ls ← shellBackend env
@@ -201,7 +216,7 @@ spec = do
                     \local _,c6,s6=__shell.getInputState(); \
                     \return t1..'|'..c1..'|'..t2..'|'..c2..'|'..c3..'|'..c4 \
                     \..'|'..t5..'|'..c5..'|'..c6..'|'..s6..'|'..__shell.getVisibleInput()"
-                    `shouldReturn` "abXc|3|ab|2|0|2|qqr|3|15|4|aaaaaaaaaaa"
+                    `shouldReturn` "abXc|3|ab|2|0|2|qqr|3|15|7|aaaaaaaa"
 
     -- The byte-offset assumption was spread across every editing, navigation
     -- and measuring path in the file, so pin its absence rather than only its
