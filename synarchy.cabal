@@ -1371,6 +1371,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.WidthTruncation
                    Test.Headless.Lua.ShellInput
                    Test.Headless.Lua.RandomStream
+                   Test.Headless.Lua.ConsoleTableKeys
                    Test.Headless.Lua.InjuryNarration
                    Test.Headless.Graphics.BindlessRebind
                    Test.Headless.Graphics.BindlessRelease
