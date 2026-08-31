@@ -42,7 +42,7 @@ import World.Chunk.Residency
     , releaseChunk, requestChunk )
 import World.Chunk.Queue
     ( drainedLoadPhase, enqueueChunkRequest, initialChunkQueue
-    , seedInitialQueue )
+    , seedInitialQueue, settleDrainedPhase )
 import World.Chunk.Types (ChunkCoord(..), LoadedChunk(..), wrapChunkCoordU)
 import World.Command.Types (WorldCommand(..))
 import World.Generate.Types
@@ -665,3 +665,67 @@ spec = describe "canonical chunk identity" $ do
                     , ph ← [ LoadIdle, LoadDone, LoadPhase2 24 boxTotal
                            , LoadPhase2 34 35, LoadPhase2 0 0 ] ]
         filter (< 0) (mapMaybe completed pairs) `shouldBe` []
+
+    it "keeps an early centre request out of the initial queue" $ \_ → do
+        -- A fresh page's generation params are published in step 3 but
+        -- its centre is not generated until step 6, and publishing the
+        -- params is what makes world.loadChunksInRegion able to act on
+        -- the page at all. Init claims the centre BEFORE that write, so
+        -- any request able to see the page already sees the centre in
+        -- flight.
+        let params = sizedParams wideWorldSize
+            centre = ChunkCoord 0 0
+            (box, boxTotal) = initialChunkQueue
+                                  (canonicalChunkCoord params) centre
+
+        wsClaimed ← detachedPage params
+        _ ← claimChunkGeneration wsClaimed pageA params [centre]
+        -- Neither queued nor counted: this page is already producing it.
+        enqueueChunkRequest pageA wsClaimed [centre] `shouldReturn` 0
+        seedInitialQueue pageA wsClaimed params box
+            `shouldReturn` (length box, boxTotal)
+        readIORef (wsInitQueueRef wsClaimed) `shouldReturn` box
+
+        -- Unclaimed, the same request queues the centre and the initial
+        -- phase then overstates the work by exactly that entry — for a
+        -- chunk the seed is about to make resident, so the queue would
+        -- carry an entry no generation will ever satisfy.
+        wsUnclaimed ← detachedPage params
+        enqueueChunkRequest pageA wsUnclaimed [centre] `shouldReturn` 1
+        (badRemaining, badTotal) ←
+            seedInitialQueue pageA wsUnclaimed params box
+        badRemaining `shouldBe` length box + 1
+        badTotal `shouldSatisfy` (> boxTotal)
+        readIORef (wsInitQueueRef wsUnclaimed) `shouldReturn` (centre : box)
+
+    it "never leaves LoadDone standing over a non-empty queue" $ \_ → do
+        -- The phase WRITE is atomic, but the queue length it is computed
+        -- from is a separate read. On the final batch a snapshot of an
+        -- empty queue becomes LoadDone, and a region appended in that
+        -- window would leave world.getInitProgress — and every waiter
+        -- polling for the terminal phase — reporting a load that has not
+        -- happened. settleDrainedPhase rechecks that conclusion.
+        let params = sizedParams wideWorldSize
+            fallback = 25
+            pending = [ChunkCoord 3 3, ChunkCoord 4 4]
+
+        wsBusy ← detachedPage params
+        writeIORef (wsInitQueueRef wsBusy) pending
+        writeIORef (wsLoadPhaseRef wsBusy) (LoadPhase2 10 fallback)
+        settleDrainedPhase wsBusy fallback
+        readIORef (wsLoadPhaseRef wsBusy)
+            `shouldReturn` LoadPhase2 (length pending) fallback
+
+        wsDone ← detachedPage params
+        writeIORef (wsInitQueueRef wsDone) []
+        writeIORef (wsLoadPhaseRef wsDone) (LoadPhase2 1 fallback)
+        settleDrainedPhase wsDone fallback
+        readIORef (wsLoadPhaseRef wsDone) `shouldReturn` LoadDone
+
+        -- The invariant, checked against the queue rather than assumed:
+        -- a settled page reports done only when there is nothing left.
+        forM_ [wsBusy, wsDone] $ \ws → do
+            settleDrainedPhase ws fallback
+            phase ← readIORef (wsLoadPhaseRef ws)
+            queue ← readIORef (wsInitQueueRef ws)
+            when (phase ≡ LoadDone) $ queue `shouldBe` []

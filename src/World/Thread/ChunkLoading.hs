@@ -29,7 +29,7 @@ import World.Generate.Constants (chunkLoadRadius)
 import World.Chunk.Admit
     ( admitResidentChunks, claimChunkGeneration, claimedChunkCoord
     , reconcileResidentChunks, releaseEvictedChunks )
-import World.Chunk.Queue (drainedLoadPhase)
+import World.Chunk.Queue (settleDrainedPhase)
 import World.Chunk.Residency (canonicalChunkCoord)
 import World.Grid (zoomFadeEnd)
 import World.Slope (recomputeNeighborSlopes
@@ -528,20 +528,20 @@ drainInitQueues env logger = do
                         -- initial load (a later loadChunksInRegion, so
                         -- the phase is no longer LoadPhase2) has no
                         -- recorded total to keep.
-                        -- ONE atomic read-modify-write, because the Lua
+                        -- One atomic read-modify-write, because the Lua
                         -- thread also writes this ref: it raises the
                         -- total whenever it appends during LoadPhase2
                         -- (World.Chunk.Queue.enqueueChunkRequest). The
                         -- old read-compute-write dropped any increment
                         -- that landed in between — permanently, since
                         -- the total is the value later ticks carry
-                        -- forward. 'drainedLoadPhase' merges instead:
-                        -- the remaining count is this drain's own, the
-                        -- total comes from the value being replaced.
-                        let fallbackTotal = (2 * chunkLoadRadius + 1)
-                                              * (2 * chunkLoadRadius + 1)
-                        atomicModifyIORef' (wsLoadPhaseRef worldState) $ \ph →
-                            (drainedLoadPhase fallbackTotal (length rest) ph, ())
+                        -- forward. 'drainedLoadPhase' merges instead,
+                        -- and 'settleDrainedPhase' will not leave a
+                        -- LoadDone standing over a queue an append
+                        -- refilled after the count was taken.
+                        settleDrainedPhase worldState
+                            ((2 * chunkLoadRadius + 1)
+                                * (2 * chunkLoadRadius + 1))
 computeSideDecos ∷ Word64 → [ChunkCoord] → WorldTileData → WorldTileData
 computeSideDecos seed newCoords wtd =
     let chunks = wtdChunks wtd

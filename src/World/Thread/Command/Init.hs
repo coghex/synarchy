@@ -300,6 +300,21 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
             sendGenLog env msg
         _ → pure ()
 
+    -- Claim the centre BEFORE the params become observable (#2001).
+    -- Publishing them is what makes world.loadChunksInRegion able to act
+    -- on this page at all, and the centre is not generated until step 6;
+    -- a request naming it in that span would otherwise register demand,
+    -- queue it, and count it for a chunk this page is committed to
+    -- producing itself — leaving an entry for an already resident chunk
+    -- on the queue and the phase pair overstating the work.
+    --
+    -- The claim needs the params VALUE, not the ref, so it can precede
+    -- the write; any request able to see this page therefore already
+    -- sees the centre in flight. It is carried to admission by
+    -- publishSeedChunks in step 6.
+    let centerCoord = ChunkCoord 0 0
+    centreClaims ← claimChunkGeneration worldState pageId params [centerCoord]
+
     writeIORef (wsGenParamsRef worldState) (Just params)
     
     -- Step 4: Zoom cache + texture atlas
@@ -352,21 +367,15 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     -- the seam, and this total is what LoadPhase2 progresses towards
     -- (#1723). The centre is generated synchronously just below and so
     -- is excluded from the queue but counted in the total.
-    let centerCoord = ChunkCoord 0 0
-        (remainingCoords, totalInitialChunks) =
+    let (remainingCoords, totalInitialChunks) =
             initialChunkQueue (canonicalChunkCoord params) centerCoord
     sendGenLog env $ "Generating initial chunks ("
         <> tshow totalInitialChunks <> ")..."
     
     catalog ← readIORef (wsFloraCatalogRef worldSim)
-    -- Claim the centre BEFORE generating it (#2001). This page is
-    -- already registered and already carries its generation params, so a
-    -- world.loadChunksInRegion naming the centre can arrive during the
-    -- generateChunk below; the claim makes the owner report it as
-    -- pending for the whole of that window instead of absent, so such a
-    -- call neither queues nor counts a chunk this page is already
-    -- producing. The claim is carried to admission by publishSeedChunks.
-    centreClaims ← claimChunkGeneration worldState pageId params [centerCoord]
+    -- The centre has been claimed since before the params were published,
+    -- so the owner has reported it in flight for this whole
+    -- initialization — including the generateChunk below.
     let (ct, cs, cterrain, cf, cice, cflora, cwt, cmagma) =
             generateChunk registry catalog params centerCoord
         seededSurf = VU.imap (\idx surfZ →

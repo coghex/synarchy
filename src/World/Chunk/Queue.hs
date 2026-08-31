@@ -43,6 +43,7 @@ module World.Chunk.Queue
     , initialChunkQueue
     , seedInitialQueue
     , drainedLoadPhase
+    , settleDrainedPhase
     , enqueueChunkRequest
     ) where
 
@@ -253,3 +254,33 @@ drainedLoadPhase fallbackTotal remaining recorded
     observedTotal = case recorded of
         LoadPhase2 _ total → total
         _                  → fallbackTotal
+
+-- | Install the phase a drain tick has produced, and do not leave a
+--   'LoadDone' standing over a queue that is no longer empty.
+--
+--   The phase write itself is atomic ('drainedLoadPhase'), but the
+--   QUEUE LENGTH it is computed from is a separate read, and the Lua
+--   thread appends between the two. That does not matter while work
+--   remains — the next tick recomputes the count — but it matters for
+--   the FINAL batch: a snapshot of an empty queue becomes 'LoadDone',
+--   and a region appended in that window leaves @world.getInitProgress@
+--   and every waiter that polls for the terminal phase reporting a load
+--   that has not happened.
+--
+--   So a settle that concluded \"done\" re-reads the queue and, if
+--   something arrived, settles again. The retry terminates on that
+--   second pass by construction: it sees the non-empty queue and writes
+--   'LoadPhase2', which is not a conclusion that needs rechecking. Only
+--   an appender producing work faster than one read could spin it, and
+--   the Lua thread appending to this queue is the thread that would then
+--   be blocked on nothing else.
+settleDrainedPhase ∷ WorldState → Int → IO ()
+settleDrainedPhase ws fallbackTotal = go
+  where
+    go = do
+        rest ← readIORef (wsInitQueueRef ws)
+        atomicModifyIORef' (wsLoadPhaseRef ws) $ \ph →
+            (drainedLoadPhase fallbackTotal (length rest) ph, ())
+        when (null rest) $ do
+            arrived ← readIORef (wsInitQueueRef ws)
+            unless (null arrived) go
