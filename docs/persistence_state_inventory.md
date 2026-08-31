@@ -64,7 +64,7 @@ the affected fields as unclassified.
 | `inputStateRef` | global | Exclude | — | live device state (keys/buttons down) | none yet |
 | `keyBindingsRef` | global | Exclude | — | local runtime config (`config/keybinds.local.yaml`, #638/#786) | `tools/config_state_probe.py` |
 | `currentKeyDownRef` | global | Exclude | — | transient dispatch flag, `Nothing` outside a key-down broadcast | none yet |
-| `textBuffersRef` | global | Exclude | — | transient UI text-input buffers | none yet |
+| `textBuffersRef` | global | Exclude | — | transient scene-object text cache (`engine.spawnText`/`setText`/`getText`), NOT a UI text-input buffer; entries are created and removed with their scene nodes (#1961) and the scene graph is itself session-only | `Test.Headless.Lua.SceneText` |
 | `cameraRef` | global | Exclude | active page's `WorldCamera` + `wpsCameraZoom`/`wpsCameraFacing` | session-only render camera; see §8 for the per-page source of truth | none yet |
 | `uiCameraRef` | global | Exclude | window size | derived from window size at boot | none yet |
 | `uiManagerRef` | global | Exclude | — | entire UI tree rebuilt by Lua on load | none yet |

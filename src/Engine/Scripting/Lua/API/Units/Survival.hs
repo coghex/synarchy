@@ -9,14 +9,15 @@ module Engine.Scripting.Lua.API.Units.Survival
     where
 
 import UPrelude
-import Engine.Core.Capability.ContentRegistries
-    (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Engine.Core.Capability.ContentRegistriesView
+    (ContentRegistriesViewCapability(..), toContentRegistriesViewCapability)
 import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
-import Data.IORef (readIORef, atomicModifyIORef')
+import Data.IORef (atomicModifyIORef')
+import Engine.Core.ReadOnlyRef (readReadOnlyRef)
 import Engine.Core.State (EngineEnv)
 import qualified Engine.Core.Queue as Q
 import Unit.Types
@@ -87,7 +88,8 @@ unitFeedFn env = do
             let uid     = UnitId (fromIntegral n)
                 defName = TE.decodeUtf8Lenient nameBS
             mCredited ← Lua.liftIO $ do
-                itemMgr ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
+                itemMgr ← readReadOnlyRef
+                    (crvItemManagerRef (toContentRegistriesViewCapability env))
                 case lookupItemDef defName itemMgr ⌦ idFood of
                     Nothing   → pure Nothing   -- no food data → can't feed
                     Just food → atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →

@@ -17,8 +17,8 @@ module Engine.Scripting.Lua.API.Items.Ground
     ) where
 
 import UPrelude
-import Engine.Core.Capability.ContentRegistries
-    (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Engine.Core.Capability.ContentRegistriesView
+    (ContentRegistriesViewCapability(..), toContentRegistriesViewCapability)
 import Engine.Core.Capability.Core
     (CoreCapability(..), toCoreCapability)
 import Engine.Core.Capability.UnitCombat
@@ -29,6 +29,7 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
+import Engine.Core.ReadOnlyRef (readReadOnlyRef)
 import Engine.Core.State (EngineEnv, activeWorldStateFrom, freshItemInstanceId)
 import Engine.Scripting.Lua.API.Units.Page (unitOwningWorldState)
 import Item.Ground (GroundItem(..), GroundItems(..), spawnGroundItem
@@ -130,7 +131,8 @@ itemSpawnGroundFn env = do
     case (nameArg, xArg, yArg, mBase) of
         (Just nameBS, Just x, Just y, Just base) → do
             let name = TE.decodeUtf8Lenient nameBS
-            im ← Lua.liftIO $ readIORef (crItemManagerRef (toContentRegistriesCapability env))
+            im ← Lua.liftIO $ readReadOnlyRef
+                (crvItemManagerRef (toContentRegistriesViewCapability env))
             mWs ← Lua.liftIO $ resolveItemPage env (TE.decodeUtf8Lenient <$> pageArg)
             case (HM.lookup name (imDefs im), mWs) of
                 (Just iDef, Just ws) → do
@@ -259,7 +261,8 @@ pushGroundRow im gid gi = do
 itemListGroundFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 itemListGroundFn env = do
     mWs ← Lua.liftIO $ activeWorldStateFrom (wsWorldManagerRef (toWorldSimCapability env))
-    im  ← Lua.liftIO $ readIORef (crItemManagerRef (toContentRegistriesCapability env))
+    im  ← Lua.liftIO $ readReadOnlyRef
+        (crvItemManagerRef (toContentRegistriesViewCapability env))
     case mWs of
         Nothing → Lua.pushnil >> return 1
         Just ws → do
@@ -316,8 +319,8 @@ itemGetGroundForUnitFn env = do
                 Nothing → unresolved
                 Just ws → do
                     gis ← Lua.liftIO $ readIORef (wsGroundItemsRef ws)
-                    im  ← Lua.liftIO $ readIORef
-                        (crItemManagerRef (toContentRegistriesCapability env))
+                    im  ← Lua.liftIO $ readReadOnlyRef
+                        (crvItemManagerRef (toContentRegistriesViewCapability env))
                     case HM.lookup (fromIntegral g) (gisItems gis) of
                         Nothing → Lua.pushnil
                         Just gi → pushGroundRow im (fromIntegral g) gi

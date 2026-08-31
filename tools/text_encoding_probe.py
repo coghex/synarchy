@@ -21,9 +21,22 @@ StrictData on `LuaToEngineMsg` forces the field inside
 call — which is what #618's fix (switch to `TE.decodeUtf8Lenient`, the
 codebase's established convention per #437/PR #492) actually eliminates.
 The Text-API case below asserts the stronger, issue-#618-specific
-property: no error at all, and the malformed text is actually stored
-(round-trips through `engine.getText`) rather than silently dropped when
-the call errors out before `Q.writeQueue` runs.
+property: no error at all, from `setTextFn`'s own `TE.decodeUtf8Lenient`
+at the Lua argument boundary, which runs before `Q.writeQueue` and is
+where the pre-fix throw happened.
+
+That decode is ALL this probe can observe of the Text API's `setText`,
+because #1961 made a `setText` naming an id with no scene node a genuine
+no-op: it writes no scene-text cache entry, so `engine.getText` answers
+nil for it. This probe deliberately does not spawn a text node -- it
+cannot, since a headless engine has no active scene ("Cannot spawn text:
+no active scene"; the default scene is created by
+`Engine.Graphics.Vulkan.Init`) -- so ids 1 and 2 below name nothing, and
+the checks assert exactly that NOTHING was cached rather than the
+round-trip they used to require. Requiring a round-trip here would be
+asserting the lifetime defect #1961 fixed. The engine-side coupling
+between a cache entry and its scene node is covered by the headless
+`Test.Headless.Lua.SceneText` spec, which can install a real scene.
 
 #665 completed the same sweep across every remaining strict
 `TE.decodeUtf8` call site under `src/Engine/Scripting/Lua/`, covering both
@@ -59,11 +72,11 @@ PROBE_KEY = "text_encoding"
 
 CHECKS = [
     ("well_formed_text_call", "well-formed engine.setText raises no error"),
-    ("well_formed_text_roundtrip",
-     "well-formed text round-trips through engine.getText"),
+    ("well_formed_text_uncached",
+     "well-formed engine.setText on an id with no scene node caches nothing"),
     ("malformed_text_call", "malformed UTF-8 engine.setText raises no error"),
-    ("malformed_text_roundtrip",
-     "malformed text is stored with its well-formed prefix intact"),
+    ("malformed_text_uncached",
+     "malformed engine.setText on an id with no scene node caches nothing"),
     ("well_formed_world_show", "well-formed world.show raises no error"),
     ("malformed_world_show", "malformed UTF-8 world.show raises no error"),
     ("engine_alive", "the engine remains alive after malformed UTF-8"),
@@ -108,12 +121,18 @@ def _run(args, port, rep) -> int:
             ("well-formed setText raised no error" if call_ok else
              f"well-formed setText returned {result!r}"),
             {"result": result})
+        # Id 1 names no scene node here, so post-#1961 the handler is a
+        # genuine no-op and getText must answer nil (the console renders
+        # that as the JSON literal `null`). This is the lifetime
+        # contract, asserted on the same control case: the call is
+        # accepted at the Lua boundary and changes nothing downstream.
         got = send(port, "return engine.getText(1)")
-        roundtrip_ok = got == "hello"
+        uncached_ok = got == "null"
         ok &= rep.check(
-            "well_formed_text_roundtrip", roundtrip_ok,
-            ("well-formed text round-tripped" if roundtrip_ok else
-             f"well-formed text read back as {got!r}"),
+            "well_formed_text_uncached", uncached_ok,
+            ("no cache entry was created for an id with no scene node"
+             if uncached_ok else
+             f"unspawned id 1 read back as {got!r}, expected 'null'"),
             {"observed": got})
 
         # The malformed repro: a truncated multi-byte UTF-8 lead byte.
@@ -129,17 +148,18 @@ def _run(args, port, rep) -> int:
             {"result": result})
 
         got = send(port, "return engine.getText(2)")
-        # decodeUtf8Lenient replaces the invalid byte with U+FFFD; the
-        # exact replacement text isn't the contract, but it must have been
-        # stored at all (proves the message wasn't dropped by a caught
-        # exception aborting setTextFn before Q.writeQueue ran).
-        malformed_roundtrip_ok = bool(
-            got and got not in ("null", "") and got.startswith("caf"))
+        # Id 2 names no scene node either, so the same #1961 no-op
+        # applies and nothing may be cached. The malformed input's
+        # survival past `setTextFn`'s decode is what the check above
+        # measures -- a strict `TE.decodeUtf8` there would have returned
+        # a caught Lua error instead of "no_error", regardless of what
+        # the handler downstream then decided to store.
+        malformed_uncached_ok = got == "null"
         ok &= rep.check(
-            "malformed_text_roundtrip", malformed_roundtrip_ok,
-            ("malformed text was stored with its well-formed prefix intact"
-             if malformed_roundtrip_ok else
-             f"malformed text read back as {got!r}"),
+            "malformed_text_uncached", malformed_uncached_ok,
+            ("no cache entry was created for the malformed call's "
+             "unspawned id" if malformed_uncached_ok else
+             f"unspawned id 2 read back as {got!r}, expected 'null'"),
             {"observed": got})
 
         # world.show is the representative non-Text-API boundary (#665):

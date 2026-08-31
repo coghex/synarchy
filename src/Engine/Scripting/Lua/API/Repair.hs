@@ -19,9 +19,12 @@
 --   before any cost is consumed, so an AI (#302) can't waste a
 --   whetstone honing an already-keen edge.
 --
---   Narrowed to the @content-registries@ capability (#890, epic #537):
---   the recipe + item catalogues are reached only through
---   'ContentRegistriesCapability', and the one @units-buildings-combat@
+--   Narrowed to the @content-registries@ capability (#890, epic #537),
+--   and since #1896 to its READ-ONLY view: the recipe + item catalogues
+--   are reached only through 'ContentRegistriesViewCapability', whose
+--   handles this module cannot write even in principle. It is a pure
+--   reader of both — @repair.repairAt@ mutates the unit manager, never
+--   a registry. The one @units-buildings-combat@
 --   field this module writes (the unit manager) is passed in as the bare
 --   'IORef' it is. 'repairAtFn' still takes an 'EngineEnv', but purely
 --   as the opaque token the station gate ('validateStation') demands —
@@ -31,7 +34,7 @@
 --   migrated (#895\/#896, SS7.5), as an earlier version of this comment
 --   predicted it would. The gate is not a single-capability consumer:
 --   it composes FOUR already-landed records
---   ('ContentRegistriesCapability' for the recipe, 'BuildingCapability'
+--   ('ContentRegistriesViewCapability' for the recipe, 'BuildingCapability'
 --   for the station, 'UnitCombatCapability' for the crafter,
 --   'WorldSimCapability' for the game clock) and then calls
 --   @Engine.Scripting.Lua.API.Power.isRecipePoweredAt@, which composes
@@ -50,10 +53,11 @@ import UPrelude
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
-import Data.IORef (IORef, readIORef, atomicModifyIORef')
+import Data.IORef (IORef, atomicModifyIORef')
+import Engine.Core.ReadOnlyRef (readReadOnlyRef)
 import Engine.Core.State (EngineEnv)
-import Engine.Core.Capability.ContentRegistries
-    (ContentRegistriesCapability(..))
+import Engine.Core.Capability.ContentRegistriesView
+    (ContentRegistriesViewCapability(..))
 import Craft.Types (RecipeManager(..), RecipeDef(..), lookupRecipe,
                     RepairAxis(..), repairAxisName)
 import Craft.Execute (consumeIngredients)
@@ -66,7 +70,7 @@ import Engine.Scripting.Lua.API.Units
 
 -- | repair.get(id) → table | nil. Same shape as craft.get, restricted
 --   to recipes tagged with a repair axis.
-repairGetFn ∷ ContentRegistriesCapability
+repairGetFn ∷ ContentRegistriesViewCapability
             → Lua.LuaE Lua.Exception Lua.NumResults
 repairGetFn regs = do
     idArg ← Lua.tostring 1
@@ -75,17 +79,17 @@ repairGetFn regs = do
         Just idBS → do
             let key = TE.decodeUtf8Lenient idBS
             mDef ← Lua.liftIO $ do
-                m ← readIORef (crRecipeManagerRef regs)
+                m ← readReadOnlyRef (crvRecipeManagerRef regs)
                 pure (lookupRecipe key m)
             case mDef of
                 Just d | rdRepairAxis d ≢ Nothing → pushRecipe d >> return 1
                 _ → Lua.pushnil >> return 1
 
 -- | repair.getNames() → array of repair-tagged recipe ids only.
-repairGetNamesFn ∷ ContentRegistriesCapability
+repairGetNamesFn ∷ ContentRegistriesViewCapability
                  → Lua.LuaE Lua.Exception Lua.NumResults
 repairGetNamesFn regs = do
-    m ← Lua.liftIO $ readIORef (crRecipeManagerRef regs)
+    m ← Lua.liftIO $ readReadOnlyRef (crvRecipeManagerRef regs)
     let names = [ rdId d | d ← HM.elems (rmDefs m), rdRepairAxis d ≢ Nothing ]
     Lua.newtable
     forM_ (zip [1..] names) $ \(i, n) → do
@@ -106,7 +110,7 @@ repairGetNamesFn regs = do
 --   sharpnessApplied } shape as unit.repairItem. On refusal, returns
 --   nil plus a reason and touches nothing — including the #1732 case
 --   where the axis restoration this verb DERIVES is not finite.
-repairAtFn ∷ ContentRegistriesCapability → IORef UnitManager → EngineEnv
+repairAtFn ∷ ContentRegistriesViewCapability → IORef UnitManager → EngineEnv
            → Lua.LuaE Lua.Exception Lua.NumResults
 repairAtFn regs umRef env = do
     idArg    ← Lua.tointeger 1
@@ -145,11 +149,11 @@ repairAtFn regs umRef env = do
                 ("repair.repairAt: expected (uid, recipeId, instanceId, buildingId)" ∷ Text))
             return 2
 
-runRepairAt ∷ ContentRegistriesCapability → IORef UnitManager → EngineEnv
+runRepairAt ∷ ContentRegistriesViewCapability → IORef UnitManager → EngineEnv
             → UnitId → Text → Word64 → BuildingId
             → IO (Either Text (Text, Float, Float, Float, Float))
 runRepairAt regs umRef env uid rid iid bid = do
-    rm ← readIORef (crRecipeManagerRef regs)
+    rm ← readReadOnlyRef (crvRecipeManagerRef regs)
     case lookupRecipe rid rm of
         Nothing → return (Left ("unknown recipe " <> rid))
         Just recipe → case rdRepairAxis recipe of
@@ -163,7 +167,7 @@ runRepairAt regs umRef env uid rid iid bid = do
                 case gate of
                     Left err → return (Left err)
                     Right () → do
-                        itemMgr ← readIORef (crItemManagerRef regs)
+                        itemMgr ← readReadOnlyRef (crvItemManagerRef regs)
                         atomicModifyIORef' umRef $ \um →
                             applyRepairAt axis recipe iid itemMgr uid um
 

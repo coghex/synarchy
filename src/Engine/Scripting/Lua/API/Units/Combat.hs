@@ -14,8 +14,8 @@ module Engine.Scripting.Lua.API.Units.Combat
     where
 
 import UPrelude
-import Engine.Core.Capability.ContentRegistries
-    (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Engine.Core.Capability.ContentRegistriesView
+    (ContentRegistriesViewCapability(..), toContentRegistriesViewCapability)
 import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
@@ -24,6 +24,7 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
+import Engine.Core.ReadOnlyRef (readReadOnlyRef)
 import qualified Data.List as L
 import Engine.Core.State (EngineEnv)
 import Infection.Types (InfectionDef(..), lookupInfection)
@@ -79,7 +80,8 @@ unitGetWoundsFn env = do
         Nothing → Lua.pushnil >> return 1
         Just n → do
             let uid = UnitId (fromIntegral n)
-            infMgr ← Lua.liftIO $ readIORef (crInfectionManagerRef (toContentRegistriesCapability env))
+            infMgr ← Lua.liftIO $ readIORef
+                (crvInfectionManagerRef (toContentRegistriesViewCapability env))
             mWounds ← Lua.liftIO $ do
                 um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
                 pure $ do
@@ -240,7 +242,8 @@ unitGetImmunitiesFn env = do
         Nothing → Lua.pushnil >> return 1
         Just n → do
             let uid = UnitId (fromIntegral n)
-            infMgr ← Lua.liftIO $ readIORef (crInfectionManagerRef (toContentRegistriesCapability env))
+            infMgr ← Lua.liftIO $ readIORef
+                (crvInfectionManagerRef (toContentRegistriesViewCapability env))
             mImm ← Lua.liftIO $ do
                 um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
                 pure (uiImmunities <$> HM.lookup uid (umInstances um))
@@ -277,7 +280,8 @@ unitGetInsulationFn env = do
             let uid = UnitId (fromIntegral n)
             total ← Lua.liftIO $ do
                 um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
-                im ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
+                im ← readReadOnlyRef
+                    (crvItemManagerRef (toContentRegistriesViewCapability env))
                 pure $ case HM.lookup uid (umInstances um) of
                     Nothing → 0
                     Just inst →

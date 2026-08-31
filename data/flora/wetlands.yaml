@@ -1,0 +1,85 @@
+flora:
+  - name: common_cattail
+    type: perennial_wetland_herb
+    texDir: "assets/textures/flora/common_cattail"
+    lifecycle: perennial
+    minLife: 1800
+    maxLife: 7200
+    deathChance: 0.05
+    phases:
+      - tag: sprout
+        texture: "sprout.png"
+        age: 0
+      - tag: matured
+        texture: "matured.png"
+        age: 180
+      - tag: dead
+        texture: "dead.png"
+        age: 7200
+    annualCycle:
+      - tag: dormant
+        startDay: 0
+        texture: "matured_dormant.png"
+      - tag: budding
+        startDay: 60
+        texture: "matured.png"
+      - tag: flowering
+        startDay: 120
+        texture: "matured_flowering.png"
+      - tag: fruiting
+        startDay: 180
+        texture: "matured_fruiting.png"
+      - tag: senescing
+        startDay: 260
+        texture: "matured_senescing.png"
+    cycleOverrides:
+      - phase: sprout
+        cycle: dormant
+        texture: "sprout_dormant.png"
+      - phase: sprout
+        cycle: budding
+        texture: "sprout_budding.png"
+      - phase: sprout
+        cycle: flowering
+        texture: "sprout_budding.png"
+      - phase: sprout
+        cycle: fruiting
+        texture: "sprout_budding.png"
+      - phase: sprout
+        cycle: senescing
+        texture: "sprout_senescing.png"
+      - phase: dead
+        cycle: dormant
+        texture: "dead.png"
+      - phase: dead
+        cycle: budding
+        texture: "dead.png"
+      - phase: dead
+        cycle: flowering
+        texture: "dead.png"
+      - phase: dead
+        cycle: fruiting
+        texture: "dead.png"
+      - phase: dead
+        cycle: senescing
+        texture: "dead.png"
+    # Decorative exposed-marsh flora. The placement pipeline rejects
+    # standing-fluid tiles before habitat fitness is evaluated.
+    worldGen:
+      category: wildflower
+      minTemp: -5
+      maxTemp: 30
+      idealTemp: 14
+      minPrecip: 0.5
+      maxPrecip: 1.0
+      idealPrecip: 0.8
+      minAlt: -30
+      maxAlt: 350
+      idealAlt: 30
+      minHumidity: 0.7
+      maxHumidity: 1.0
+      idealHumidity: 0.9
+      maxSlope: 1
+      density: 0.18
+      footprint: 6
+      soils: [peat, mucky_peat, muck, silt, silty_clay, silty_clay_loam]
