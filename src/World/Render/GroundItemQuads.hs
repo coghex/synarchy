@@ -14,6 +14,7 @@
 --   with 'renderFlagSelected' — the same shader outline units use.
 module World.Render.GroundItemQuads
     ( renderGroundItemQuads
+    , renderGroundItemQuadsScanned
     , hitTestGroundItemAt
     , itemGeometry
     ) where
@@ -164,10 +165,24 @@ itemGeometry tileData im texSizes facing zSlice worldSize gi = do
 
 renderGroundItemQuads ∷ EngineEnv → WorldState → Float
                       → IO (V.Vector SortableQuad)
-renderGroundItemQuads env worldState tileAlpha = do
+renderGroundItemQuads env worldState tileAlpha =
+    snd ⊚ renderGroundItemQuadsScanned env worldState tileAlpha
+
+-- | 'renderGroundItemQuads' with the scene-assembly telemetry (#1921)
+--   this pass contributes: the ground-item RECORDS it evaluated on this
+--   page, paired with the quads it produced.
+--
+--   Every record in the page's map is evaluated — the geometry check
+--   that rejects one is inside 'quadFor' — so the count is the map's
+--   size, and zero when the early return above fires. There is no
+--   @emitted <= scanned@ relation: a broken item emits its sprite plus
+--   the broken-equipment overlay.
+renderGroundItemQuadsScanned ∷ EngineEnv → WorldState → Float
+                             → IO (Int, V.Vector SortableQuad)
+renderGroundItemQuadsScanned env worldState tileAlpha = do
     gis ← readIORef (wsGroundItemsRef worldState)
     if HM.null (gisItems gis)
-      then return V.empty
+      then return (0, V.empty)
       else do
         let rv = toRenderViewCapability env
         camera   ← readIORef (rvCameraRef rv)
@@ -292,8 +307,8 @@ renderGroundItemQuads env worldState tileAlpha = do
                         , sqLayer = worldLayer
                         }
 
-        return $ V.fromList
-            (concatMap quadFor (HM.toList (gisItems gis)))
+        return ( HM.size (gisItems gis)
+               , V.fromList (concatMap quadFor (HM.toList (gisItems gis))) )
 
 -- | Hit test at window-pixel coordinates (the input layer's mouse
 --   coords). Returns the topmost ground item whose sprite quad

@@ -368,6 +368,13 @@ MANUAL_ONLY_REASONS: dict[str, tuple[Reason, ...]] = {
                                   "exhaustively by the pure hspec groups "
                                   "World.Render.StructureRotation and "
                                   "World.Render.FrontWallLift, which DO gate on CI"),),
+    "scene_stats": (Reason(NEEDS_GPU, "offscreen boot: the #1921 telemetry's "
+                           "non-zero unit/ground-item/building EMITTED counts "
+                           "exist only with a live texture system, which the "
+                           "GPU-free headless path never has -- no GPU on the "
+                           "CI runner. Publication, ordering, sequence and "
+                           "every scanned meaning ARE gated on CI, by the pure "
+                           "hspec group \"scene assembly telemetry\""),),
     "tutorial_hud": (Reason(NEEDS_GPU, "offscreen boot: verifies the tutorial checklist "
                                        "HUD's rendered overlay, real toggle clicks, wheel "
                                        "scrolling and click-through via screenshots — no "
