@@ -485,6 +485,7 @@ instance, defaulting to its own historical fixed port when unset (#723).
 | `save_compat_migration_probe.py` | #766, #1485 | none (a tracked fixture is placed directly on disk, isolated resource root) | Fresh-process save-compatibility migration, for EVERY `complete-session` fixture `docs/save_compat/manifest.json` declares (the pre-#760 B1 envelope through every later baseline's own session): each loads and publishes through the normal whole-session transaction, the migrated session begins paused and a dwell advances no gameplay date, re-saving under a new slot produces a genuine current-format re-encode (not a copy of the input bytes), and a FRESH engine process loads that re-saved file and reaches the same active page — proving the migration survives a real restart, not merely an in-memory decode. Each engine is provisioned with the SAME registry families (and order) `scripts/startup_loader.lua`'s `queueNormalProfile` loads, which a headless boot never runs (#1485); `--self-test` verifies that plan and its startup-loader parser with no engine at all. A fixture whose load is not accepted, or does not publish, stops there (#1486): that failure is the last check reported for it, the stages it made unreachable are listed as `[SKIP]` diagnostics (never a pass, never a failure), its cleanup and the rest of the sweep are unaffected, and `--self-test` drives both prerequisite branches through injected doubles. |
 | `autosave_probe.py` | #913 | worldgen (size 32, isolated resource root with a COPIED `config/`) | Interval autosave end to end in one boot: the shipped default-off config produces neither a request nor a slot across a dwell longer than one configured interval; enabled, a REAL one-minute interval fires and hands an unpaused world back at its exact prior fast-forward time scale, while one that began paused stays paused and zero-scaled; a player pause/resume during the request window suppresses restoration even though the final pause boolean is unchanged (the time scale is the discriminator); an accepted autosave whose storage write fails stays paused and zero-scaled with `engine.getSaveStatus()` carrying the rendered `StoragePhase`; a deadline outside `uiManager.isGameplayView()` skips silently (no request, no failure event, cadence uninterrupted); a `save_load` category configured to pause wins over the restoration; a pre-existing MANUAL save on an `autosave-<n>` name — as a slot directory OR a pre-#762 legacy flat file a published directory would shadow — fails the attempt through `save_load` with nothing overwritten or partially rotated; rotation keeps `autosave-1` newest across generations that all stay classified autosave, a failed write against a FULL family discards and renumbers nothing (publish-then-rotate), a rotation that fails part-way leaves every generation on disk and retries cleanly (retire-by-rename, delete last), and one interrupted AFTER a partial shift resumes without ageing out a second generation; and reducing `rotation_depth` or disabling autosave retains every excess generation untouched. |
 | `save_pause_probe.py` | #42 | worldgen | Save/load pause-semantics regression. |
+| `scene_stats_probe.py` | #1921 | offscreen worldgen (size 64, needs a GPU) | **World.Render scene-assembly telemetry.** Builds a deliberate population — units, ground items and buildings, all on tiles at the camera's own pinned z-slice so a seed's relief cannot decide what is culled — and reads `debug.getSceneStats()` back: the complete ten-row shape in the contract's order and identifiers, an advancing sequence whose later snapshot is a whole replacement, per-category `scanned` counts moving by EXACTLY the population created (measured as a delta against a pre-spawn baseline, so nothing assumes an empty world), present non-negative `durationNs` on every row with no threshold asserted, and a Lua caller's mutation of the returned table leaving the engine's own snapshot untouched. Offscreen rather than headless for one reason: `Unit.Render`/`Building.Render` emit nothing without a live texture system, so the non-zero EMITTED counts are the half only a GPU run can prove. Publication, ordering, sequence and every scanned meaning are gated on CI by the pure hspec group `scene assembly telemetry`. |
 | `pause_speed_probe.py` | #1599 | worldgen | The chosen world speed survives every pause source: a `pause: true` notification, a whole manual `engine.saveWorld` driven to its terminal outcome, and a save taken from an already-paused session; load still resumes at the default speed. The hspec suite cannot drive `engine.saveWorld` (its barrier waits on owner threads the headless harness never starts), so the whole-verb proof lives here. |
 | `save_barrier_probe.py` | #757 | worldgen (isolated resource root) | Coordinated save-owner acknowledgement and paused reload smoke test. |
 | `save_storage_probe.py` | #762 | worldgen (size 64, isolated resource root) | Atomic save-storage transaction: a first save publishes with no previous generation, a second save to the same slot retains the first as the previous generation; restart-and-select across constructed on-disk states (missing/truncated/bad-framing/checksum-corrupt authoritative, a stray leftover temp file) always recovers the correct complete generation via the live camera position, never a hybrid; neither generation valid rejects the load outright; `engine.listSaves()` reports a recovered slot's machine-readable status; a real disk-level write failure (directory path pre-occupied) names its storage phase via `engine.getSaveStatus()` and the barrier recovers for a follow-up save. |
@@ -610,6 +611,58 @@ latest phase the child entered, and every attempt still in flight:
 The complete capture is never dumped, and a probe emitting no progress
 records has exactly the failure presentation it always had.
 
+**Failure records and the retained failed check (#1982).** The record above
+solves the TIMEOUT half of that loss; a probe that FINISHES and fails loses
+something else. Its per-check verdicts go to a block-buffered stdout while its
+terminal `FAIL:` summary goes to an unbuffered stderr the runner merges into
+that same pipe (`stderr=subprocess.STDOUT`) — so the `FAIL:` lines overtake the
+buffered output and land near the TOP of the merged capture, above whatever
+`--tail 25` prints. A 279.5-second run reported "1 check(s) FAILED" and named
+the check nowhere. Flushing alone would not fix it: with more failed checks
+than `--tail` lines the tail truncates them again.
+
+So a failed check is recorded the way a phase is — one flushed line in a
+sibling convention (`FAILURE_MARKER`, `FailureEmitter`, `parse_failure`), read
+back from the COMPLETE capture:
+
+```
+#probe-failure# 19:29:11 +279.4s | check   | location_embark_probe | the discovered icon never appeared at (12,7)
+#probe-failure# 19:29:11 +279.4s | setup   | location_embark_probe | no conforming [flat] site in 6 seeds
+#probe-failure# 19:29:11 +279.4s | context | engine log            | /tmp/loc_embark_x9/logs/engine.log
+```
+
+The kinds are three, not one. `check` and `setup` are the two vocabularies the
+probes already print — "there is a bug" against "try another seed" — and
+`context` carries the bounded invocation evidence beside them: the engine log
+this run owned, a short tail of it, and what became of the artifact tree.
+Keeping them apart is what lets an operator tell a product failure from a
+fixture or infrastructure one without rerunning the probe. Emitting one is
+never a substitute for CLEANUP: the excerpt is read while the tree still
+exists, and a passing or failing run removes its own artifacts exactly as
+before.
+
+Both default failure presentations — sequential and `--jobs` — print this block
+above the phase attribution and the ordinary tail, and withhold the raw records
+from that tail, so every recorded failure appears exactly once:
+
+```
+[1/1] location_embark_probe.py ... [timeout 900s] FAIL (279.5s)
+    failure: 2 recorded failure(s) from location_embark_probe:
+        [19:29:11 +279.4s] FAIL: the discovered icon never appeared at (12,7)
+        [19:29:11 +279.4s] FAIL: the map icon was the unknown bitmap after discovery
+    failure: retained context:
+        engine log: /tmp/loc_embark_x9/logs/engine.log
+        engine log tail: vulkan: swapchain out of date
+    ... the ordinary last-25 lines follow, unchanged ...
+```
+
+The six producers today are `location_embark_probe.py`,
+`location_stamp_idempotent_probe.py`, `location_content_probe.py`,
+`location_overlay_probe.py`, `portal_location_probe.py` and
+`portal_ghost_probe.py`. As with progress records, the complete capture is
+never dumped, and a probe emitting no failure records has exactly the failure
+presentation it always had.
+
 **Timeouts are per probe.** Most registered probes use the ordinary 900-second
 default. A scenario whose complete expected workload structurally exceeds that
 class declares a validated key-specific default in
@@ -651,13 +704,53 @@ building again).
 `probelib.boot` and the four probes with their own private launchers
 (`debug_console_boot`, `preview_cli`, `resource_root`, `thermo_altitude`)
 alike. Handed an executable it execs that absolute path; handed none it
-falls back to the historical `cabal run` invocation, with the engine's own
-arguments in the same order either way. **That fallback is why running a
-probe by hand still needs no prior build step**: `python3
-tools/chop_probe.py` from the repository root behaves exactly as it always
-has. A supplied path that is relative, missing or not executable is a
-refusal rather than a quiet fallback — falling back would put a `cabal
-run` straight back inside a parallel sweep.
+reaches Cabal itself, with the engine's own arguments in the same order
+either way. **That is why running a probe by hand still needs no prior
+build step**: `python3 tools/chop_probe.py` from the repository root
+behaves exactly as it always has. A supplied path that is relative,
+missing or not executable is a refusal rather than a quiet fallback —
+falling back would put a Cabal process straight back inside a parallel
+sweep.
+
+**Preparation, not readiness (#1913).** In direct invocation that Cabal
+contact is a BUILD, and `probelib.boot` used to start its 180-second
+READY deadline the instant the child existed — so a cold compile was
+timed as though an engine were already starting. Two coordinated runs
+expired that way, both reported as `engine never printed READY` against
+an empty `-v0` log, one of them with the finished 179 MB executable
+timestamped 25 seconds AFTER the recorded timeout. `boot` now calls
+`probe_engine.prepare_executable` FIRST: one freshness `cabal build`
+plus one `cabal list-bin`, inside an **exclusive `cabal-build` hold**
+(the direct path's answer to the same race the preflight solves for a
+sweep), and what it launches afterwards is the resolved absolute binary.
+So `ready_timeout` measures engine startup and nothing else, and a probe
+that passes its own keeps exactly the readiness allowance it asked for.
+
+Preparation has its OWN finite allowance, `prepare_timeout`, defaulting
+to 1800 s — the repository's established full-cold-build watchdog — and
+covering lock acquisition, the build and the query together. It is not a
+second readiness budget and enlarging one does not enlarge the other.
+Every preparation failure names PREPARATION rather than readiness, and
+carries the build output: it goes to a `<engine log>.prepare` file whose
+path and tail appear in the diagnostic, so an operator never again reads
+"engine never printed READY" pointing at a log the engine never reached.
+The engine log itself is not even opened until preparation has
+succeeded. Each preparation subprocess owns its process group and the
+whole group is reaped on a nonzero exit, an overrun or an interrupt, so
+a `cabal` that fails cannot leave `setup`/GHC descendants compiling
+behind it. An engine that dies or hangs AFTER its executable exists is
+still diagnosed as the boot failure it is.
+
+`tools/deflake.py` prepares the same way but a step earlier: **before**
+the measurement takes its resource hold, never inside it. A measurement
+holds `cabal-build` (shared for an ordinary probe, exclusive for the
+three that drive Cabal themselves) across all ten runs, and
+`run_probes.run_one` strips the inherited runner variables on the way
+down — so a child left to prepare its own executable would take an
+exclusive interest underneath its own ancestor's hold and wait out its
+whole allowance for a holder blocked on it. Preparing first removes that
+by ordering, and the resolved path is installed as the runner's
+executable, which is also what stops each of the ten runs rebuilding.
 
 Three registered probes legitimately still drive Cabal themselves, and
 they are not engine boots: `persistence_contract`,
@@ -1080,8 +1173,9 @@ Only probes that implement the shared `probe-result/v1` protocol
 is rejected BY NAME before execution, without running the probe at all —
 heuristically parsing free-form stdout is the guesswork a reliability harness
 must not do, and invoking a legacy probe to find out would boot a real engine.
-`position_hold`, `role`, `text_encoding` and `thermo_altitude` are the migrated
-probes today; later changes migrate one at a time.
+`lua_strict_msg`, `position_hold`, `role`, `text_encoding` and
+`thermo_altitude` are the migrated probes today; later changes migrate one at
+a time.
 
 A migrated probe prints its ordered, stable check declaration with
 `--describe` (no engine) and, when the harness supplies an event path, writes

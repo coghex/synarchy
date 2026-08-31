@@ -220,6 +220,7 @@ def boot(port: int, log: str | None = None, args: list[str] | None = None,
          label: str = "engine",
          mode: tuple[str, ...] = ("--headless",),
          on_launch: Callable[[subprocess.Popen], None] | None = None,
+         prepare_timeout: float = probe_engine.DEFAULT_PREPARE_TIMEOUT,
          ) -> subprocess.Popen:
     """Launch an engine on ``port`` and block until it prints READY.
 
@@ -243,6 +244,18 @@ def boot(port: int, log: str | None = None, args: list[str] | None = None,
     failure paths mean the port may belong to somebody else's instance,
     which is precisely why the boot failed.
 
+    ``prepare_timeout`` is a SEPARATE allowance covering the direct
+    path's build (#1913), and it is not a second readiness budget: run
+    by hand with nobody having supplied an executable, this function
+    builds ``exe:synarchy`` and resolves its absolute path BEFORE it
+    launches anything, so ``ready_timeout`` below measures an engine
+    starting rather than a compiler running. Under the aggregate runner
+    there is nothing to prepare and the step is a validated read of the
+    path the runner already resolved. A preparation that fails, or
+    overruns its own allowance, exits naming PREPARATION and the log the
+    build output went to — never "never printed READY" against a log the
+    engine never reached.
+
     Handing ownership over is itself guarded: anything raised between
     the child existing and that hand-off completing — a ``Ctrl-C``
     delivered in the middle of it, or a callback that itself fails —
@@ -255,12 +268,26 @@ def boot(port: int, log: str | None = None, args: list[str] | None = None,
     if port == GUI_PORT:
         sys.exit(f"refusing to boot on port {GUI_PORT} (the GUI port); pass a 9xxx port")
     logpath = _log_path(port, log)
-    logf = open(logpath, "w")
     # The runner resolves ONE executable before any probe starts and
-    # hands it over through the environment (#1570); with none supplied
-    # this is the historical `cabal run` invocation, so a probe run by
-    # hand still needs no prior build step.
-    cmd = probe_engine.engine_command([*mode, "--port", str(port), *(args or [])])
+    # hands it over through the environment (#1570). With none supplied
+    # this BUILDS one — still no prior build step for a probe run by
+    # hand, but the build happens here, outside the READY deadline
+    # established below, holding `cabal-build` exclusively and owning
+    # its own process group (#1913). Nothing about it is charged to the
+    # engine: the failure it raises names preparation, and the engine
+    # log is not even opened until it has succeeded, so an empty one
+    # can no longer be the only artifact of a build that overran.
+    try:
+        cmd = probe_engine.prepare_command(
+            [*mode, "--port", str(port), *(args or [])],
+            log_path=f"{logpath}.prepare", timeout=prepare_timeout,
+            announce=lambda note: print(f"[{label}] {note}",
+                                        file=sys.stderr, flush=True))
+    except probe_engine.EngineExecutableError as error:
+        # The error already names preparation; the label says which
+        # engine's preparation it was.
+        sys.exit(f"{label}: {error}")
+    logf = open(logpath, "w")
     proc = None
     try:
         proc = subprocess.Popen(cmd, stdout=logf, stderr=subprocess.STDOUT)

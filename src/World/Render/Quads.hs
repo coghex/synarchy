@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict #-}
 module World.Render.Quads
     ( renderWorldQuads
+    , renderWorldQuadsScanned
     , structureFrontWallClear
     ) where
 
@@ -63,7 +64,25 @@ import World.Render.TileQuads
 --   rebuilt every frame, so responding to input immediately is the point.
 renderWorldQuads ∷ EngineEnv → WorldState → Float → WorldCameraSnapshot
   → IO (V.Vector SortableQuad)
-renderWorldQuads env worldState zoomAlpha snap = do
+renderWorldQuads env worldState zoomAlpha snap =
+    snd ⊚ renderWorldQuadsScanned env worldState zoomAlpha snap
+
+-- | 'renderWorldQuads' with the scene-assembly telemetry (#1921) this
+--   pass contributes: the number of terrain CELLS the rebuild visits,
+--   paired with the quads it produced.
+--
+--   That count is the whole reason this variant exists — every visible
+--   chunk's column grid is walked in full by the two loops below
+--   ('realQuads' folds the chunk's tile map, and the blank-tile fill
+--   enumerates the same @chunkSize × chunkSize@ grid), so the cell
+--   count is exactly the visible-chunk count times a chunk's area and
+--   costs nothing to derive. It is a REBUILD count by construction:
+--   'World.Render.updateWorldTiles' only reaches this function when the
+--   page's quad cache missed, and a cache HIT reports zero scanned
+--   cells while still reporting its reused quads as emitted.
+renderWorldQuadsScanned ∷ EngineEnv → WorldState → Float → WorldCameraSnapshot
+  → IO (Int, V.Vector SortableQuad)
+renderWorldQuadsScanned env worldState zoomAlpha snap = do
     tileData ← readIORef (wsTilesRef worldState)
     textures ← readIORef (wsTexturesRef worldState)
     paramsM ← readIORef (wsGenParamsRef worldState)
@@ -412,7 +431,11 @@ renderWorldQuads env worldState zoomAlpha snap = do
             -- ZoomMap.Cache (#447). Chunk-of-4 keeps spark overhead
             -- low at typical visible-chunk counts (~20–100).
             `using` parListChunk 4 rdeepseq
-    return $! V.concat chunkVectors
+        -- One cell per column of every chunk this rebuild walked
+        -- (#1921). Both per-chunk loops cover the whole grid, so this
+        -- is the exact visited-cell count and not an estimate.
+        scannedCells = length visibleChunksWithOffset * chunkSize * chunkSize
+    return $! (scannedCells, V.concat chunkVectors)
 
 -- | #418: a flora/veg billboard sitting in front of a structure's FRONT
 --   wall must draw over the WHOLE wall, not slice through the wall's
