@@ -31,8 +31,8 @@ module Engine.Scripting.Lua.API.Power
 import UPrelude
 import Engine.Core.Capability.Building
     (BuildingCapability(..), toBuildingCapability)
-import Engine.Core.Capability.ContentRegistries
-    (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Engine.Core.Capability.ContentRegistriesView
+    (ContentRegistriesViewCapability(..), toContentRegistriesViewCapability)
 import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
@@ -42,6 +42,7 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
+import Engine.Core.ReadOnlyRef (readReadOnlyRef)
 import Engine.Core.State (EngineEnv, activeWorldPageFrom)
 import World.Page.Types (WorldPageId(..))
 import World.Time.Types (worldTimeToSunAngle)
@@ -339,7 +340,7 @@ liveConsumersOn ∷ EngineEnv → Maybe BillId → WorldPageId → Double
                → BuildingManager → WorldState
                → IO (HM.HashMap BuildingId ((Int, Int), Float))
 liveConsumersOn env exclude pageId now bm ws = do
-    rm    ← readIORef (crRecipeManagerRef (toContentRegistriesCapability env))
+    rm    ← readReadOnlyRef (crvRecipeManagerRef (toContentRegistriesViewCapability env))
     bills ← readIORef (wsCraftBillsRef ws)
     pure $ combineConsumers (consumersOn pageId now bm)
                 (activeCraftConsumersOn exclude pageId now bm rm bills)
@@ -512,7 +513,7 @@ powerIsStationPoweredForRecipeFn env = do
     billArg ← Lua.tointeger 3
     ok ← case (bidArg, ridArg) of
         (Just b, Just ridBS) → Lua.liftIO $ do
-            rm ← readIORef (crRecipeManagerRef (toContentRegistriesCapability env))
+            rm ← readReadOnlyRef (crvRecipeManagerRef (toContentRegistriesViewCapability env))
             let rid     = TE.decodeUtf8Lenient ridBS
                 drawW   = maybe 0 rdPowerDraw (lookupRecipe rid rm)
                 mBillId = BillId . fromIntegral ⊚ billArg

@@ -18,8 +18,8 @@ module Engine.Scripting.Lua.API.Units.Inventory
     where
 
 import UPrelude
-import Engine.Core.Capability.ContentRegistries
-    (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Engine.Core.Capability.ContentRegistriesView
+    (ContentRegistriesViewCapability(..), toContentRegistriesViewCapability)
 import Engine.Core.Capability.Core
     (CoreCapability(..), toCoreCapability)
 import Engine.Core.Capability.UnitCombat
@@ -30,6 +30,7 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
+import Engine.Core.ReadOnlyRef (readReadOnlyRef)
 import Data.List (sortOn)
 import Engine.Core.State (EngineEnv, freshItemInstanceId)
 import Engine.Scripting.Lua.API.Items.Contents
@@ -64,7 +65,8 @@ unitAddItemFn env = do
                     Just (Lua.Number d) → Just (realToFrac d ∷ Float)
                     _ → Nothing
             ok ← Lua.liftIO $ do
-                itemMgr ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
+                itemMgr ← readReadOnlyRef
+                    (crvItemManagerRef (toContentRegistriesViewCapability env))
                 case lookupItemDef defName itemMgr of
                     Nothing → return False
                     Just _ → do
@@ -504,7 +506,8 @@ unitGetItemContentsFn env = do
                 wantId = maybe 0 fromIntegral instArg
             mRes ← Lua.liftIO $ do
                 um      ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
-                itemMgr ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
+                itemMgr ← readReadOnlyRef
+                    (crvItemManagerRef (toContentRegistriesViewCapability env))
                 pure $ do
                     inst ← HM.lookup uid (umInstances um)
                     kit  ← case [ i | i ← unitHeldItems inst
@@ -545,7 +548,8 @@ unitGetInventoryFn env = do
             let uid = UnitId (fromIntegral n)
             mInv ← Lua.liftIO $ do
                 um      ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
-                itemMgr ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
+                itemMgr ← readReadOnlyRef
+                    (crvItemManagerRef (toContentRegistriesViewCapability env))
                 pure $ case HM.lookup uid (umInstances um) of
                     Nothing   → Nothing
                     Just inst → Just (uiInventory inst, itemMgr)

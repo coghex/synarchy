@@ -281,6 +281,7 @@ import qualified Test.Headless.Lua.WorkClaimCapacity as LuaWorkClaimCapacity
 import qualified Test.Headless.Lua.Faction as LuaFaction
 import qualified Test.Headless.Unit.Faction as UnitFaction
 import qualified Test.Headless.Capability.Building as CapabilityBuilding
+import qualified Test.Headless.Capability.ContentRegistriesView as CapabilityContentRegistriesView
 import qualified Test.Headless.Capability.Events as CapabilityEvents
 import qualified Test.Headless.Capability.Input as CapabilityInput
 import qualified Test.Headless.Capability.Render as CapabilityRender
@@ -353,6 +354,12 @@ main = hspec $ do
         -- checks against the already-booted env — no worldgen, no
         -- mutation, so it rides the shared engine above.
         describe "Capability.Building projections" CapabilityBuilding.spec
+        -- #1896 adds the one property a plain projection test cannot
+        -- carry: the `ReadOnlyRef` wrapper ALIASES its handle rather
+        -- than snapshotting it, so a write through the raw writer
+        -- record is observed through the read-only view.
+        describe "ReadOnlyRef and Capability.ContentRegistriesView projections"
+                 CapabilityContentRegistriesView.spec
         describe "Capability.Events projections" CapabilityEvents.spec
         describe "Capability.Input projections" CapabilityInput.spec
         describe "Capability.Render projections" CapabilityRender.spec

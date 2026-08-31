@@ -11,8 +11,8 @@ module Engine.Scripting.Lua.API.Units.Cargo
 import UPrelude
 import Engine.Core.Capability.Building
     (BuildingCapability(..), toBuildingCapability)
-import Engine.Core.Capability.ContentRegistries
-    (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Engine.Core.Capability.ContentRegistriesView
+    (ContentRegistriesViewCapability(..), toContentRegistriesViewCapability)
 import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim (toWorldSimCapability)
@@ -22,6 +22,7 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
+import Engine.Core.ReadOnlyRef (readReadOnlyRef)
 import Engine.Core.State (EngineEnv, loggerRef)
 import Engine.Core.Log (LogCategory(..), logWarn)
 import Unit.Types
@@ -35,7 +36,7 @@ import World.Page.Types (WorldPageId)
 observerFor ∷ EngineEnv → ContainerObserver
 observerFor env = containerObserver
     (toBuildingCapability env) (toWorldSimCapability env)
-    (toContentRegistriesCapability env)
+    (toContentRegistriesViewCapability env)
 
 -- | #1673: the page floor these four verbs enforce. Laxity here has
 --   always meant "no adjacency check, no receiver-eligibility check" —
@@ -257,7 +258,8 @@ unitDepositToCargoFn env = do
             -- so checking idWeight here would let it overfill the cargo.
             okFits ← Lua.liftIO $ do
                 bm      ← readIORef (bcBuildingManagerRef (toBuildingCapability env))
-                itemMgr ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
+                itemMgr ← readReadOnlyRef
+                    (crvItemManagerRef (toContentRegistriesViewCapability env))
                 um      ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
                 pure $ fromMaybe False $ do
                     inst         ← HM.lookup bid (bmInstances bm)
@@ -457,7 +459,8 @@ unitGetCarryingWeightFn env = do
             let uid = UnitId (fromIntegral n)
             mW ← Lua.liftIO $ do
                 um      ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
-                itemMgr ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
+                itemMgr ← readReadOnlyRef
+                    (crvItemManagerRef (toContentRegistriesViewCapability env))
                 let weightOf = itemTotalWeight itemMgr
                 pure $ do
                     u ← HM.lookup uid (umInstances um)
