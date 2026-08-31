@@ -510,10 +510,14 @@ renderWorldCursorQuadsScanned env worldState tileAlpha = do
           -- A construction designation is stored anchor-only and
           -- expands to the def's whole footprint (#807), so its
           -- candidates are the FOOTPRINT tiles, not the map entries.
-          + (if HM.null constructDesigns then 0 else sum
-                [ constructDesignationFootprintSize (bmDefs bm) cd
-                | (_, cd) ← HM.toList constructDesigns
-                , isJust (constructTexFor cd) ])
+          -- Folded strictly over the map itself rather than over a
+          -- second 'HM.toList': requirement 9 forbids the counter
+          -- allocating in proportion to the candidates it counts, and
+          -- an empty map folds to 0 without a guard.
+          + HM.foldl' (\acc cd →
+                if isJust (constructTexFor cd)
+                then acc + constructDesignationFootprintSize (bmDefs bm) cd
+                else acc) 0 constructDesigns
         hoverScanned  = if isJust hoverResult then 1 else 0
         selectScanned = if isJust (worldSelectedTile cs') then 1 else 0
     return $ case toolMode of

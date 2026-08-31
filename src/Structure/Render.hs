@@ -199,10 +199,13 @@ structureChunkQuads catalog palette handles lookupSlot texSizes
 --   (#1921) it contributes: the structure-PIECE records examined once
 --   their chunk has passed the visibility test.
 --
---   The visible chunks are shared between the two halves, so the
---   'isChunkVisibleWrapped' decision is taken exactly once per chunk
---   here as it was before — the extra list is proportional to VISIBLE
---   CHUNKS, never to the pieces the count is over.
+--   The quad half below is the ORIGINAL comprehension, unchanged and
+--   unshared, and the count is a strict fold that materialises nothing:
+--   requirement 9 forbids instrumentation allocating in proportion to
+--   the sources it counts, and a shared list of visible chunks is
+--   exactly that in a world holding one piece per chunk. The fold pays
+--   one extra 'isChunkVisibleWrapped' per structure-bearing chunk —
+--   pure, allocation-free, and O(chunks) rather than O(pieces).
 structureChunkQuadsScanned
     ∷ StructureWallCatalog
     → TexPalette
@@ -218,9 +221,11 @@ structureChunkQuadsScanned
 structureChunkQuadsScanned catalog palette handles lookupSlot texSizes
                            facing zSlice effDepth tileAlpha worldSize vb
                            camX camY chunks =
-    ( sum [ HM.size (lcStructures lc) | (lc, _) ← visible ]
+    ( foldl' countVisible 0 chunks
     , [ shifted
-      | (lc, off) ← visible
+      | lc ← chunks
+      , Just off ← [isChunkVisibleWrapped facing worldSize vb camX camY
+                                          (lcCoord lc)]
       , ((gx, gy, slotTag), spd) ← HM.toList (lcStructures lc)
       , sq ← structurePieceQuads catalog palette handles lookupSlot texSizes
                  facing zSlice effDepth tileAlpha gx gy
@@ -228,12 +233,10 @@ structureChunkQuadsScanned catalog palette handles lookupSlot texSizes
       , let shifted = translateQuad off sq
       ] )
   where
-    visible =
-        [ (lc, off)
-        | lc ← chunks
-        , Just off ← [isChunkVisibleWrapped facing worldSize vb camX camY
-                                            (lcCoord lc)]
-        ]
+    countVisible acc lc =
+        case isChunkVisibleWrapped facing worldSize vb camX camY (lcCoord lc) of
+            Just _  → acc + HM.size (lcStructures lc)
+            Nothing → acc
 
 -- | Move a quad's four vertex POSITIONS by a screen-space offset, leaving
 --   every other field — UVs, tint, atlas/facemap slots, flags, packed
