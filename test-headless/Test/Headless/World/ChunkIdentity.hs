@@ -42,7 +42,7 @@ import World.Chunk.Residency
     , releaseChunk, requestChunk )
 import World.Chunk.Queue
     ( drainedLoadPhase, enqueueChunkRequest, initialChunkQueue
-    , seedInitialQueue, settleDrainedPhase )
+    , reconcileQueuedPhase, seedInitialQueue, settleDrainedPhase )
 import World.Chunk.Types (ChunkCoord(..), LoadedChunk(..), wrapChunkCoordU)
 import World.Command.Types (WorldCommand(..))
 import World.Generate.Types
@@ -802,3 +802,53 @@ spec = describe "canonical chunk identity" $ do
             `shouldReturn` LoadPhase2 (remaining + added) (total + added)
         (length ⊚ readIORef (wsInitQueueRef ws))
             `shouldReturn` (remaining + added)
+
+    it "does not reopen a load the world thread already finished" $ \_ → do
+        -- The append and the phase update that accounts for it are two
+        -- steps, and the world thread can drain the appended work to
+        -- completion in between — so the update would reopen LoadPhase2
+        -- over an empty queue. drainInitQueues returns immediately for an
+        -- empty queue, so nothing would ever settle it back:
+        -- world.waitForInit would block for ever while
+        -- world.waitForChunks reported nothing remaining.
+        let params = sizedParams wideWorldSize
+
+        -- The preempted state, constructed directly: the phase was
+        -- reopened for six chunks the drain has already finished.
+        wsDrained ← detachedPage params
+        writeIORef (wsInitQueueRef wsDrained) []
+        writeIORef (wsLoadPhaseRef wsDrained) (LoadPhase2 6 6)
+        reconcileQueuedPhase wsDrained
+        readIORef (wsLoadPhaseRef wsDrained) `shouldReturn` LoadDone
+
+        -- Work genuinely outstanding is left alone.
+        wsBusy ← detachedPage params
+        writeIORef (wsInitQueueRef wsBusy) [ChunkCoord 5 5]
+        writeIORef (wsLoadPhaseRef wsBusy) (LoadPhase2 6 6)
+        reconcileQueuedPhase wsBusy
+        readIORef (wsLoadPhaseRef wsBusy) `shouldReturn` LoadPhase2 6 6
+
+        -- A page still in SETUP is never forced done, however empty its
+        -- queue is: seedInitialQueue has not put its box on yet, so an
+        -- empty queue there is not a finished load, and retiring it
+        -- would report a world ready before it has any chunks at all.
+        wsSetup ← detachedPage params
+        writeIORef (wsInitQueueRef wsSetup) []
+        writeIORef (wsLoadPhaseRef wsSetup) (LoadPhase1 3 8)
+        reconcileQueuedPhase wsSetup
+        readIORef (wsLoadPhaseRef wsSetup) `shouldReturn` LoadPhase1 3 8
+
+        -- And the invariant the appender now maintains end to end: after
+        -- a request, the phase reports a load in progress only when the
+        -- queue actually holds work.
+        wsLive ← detachedPage params
+        writeIORef (wsLoadPhaseRef wsLive) LoadDone
+        _ ← enqueueChunkRequest pageA wsLive [ChunkCoord 7 7]
+        livePhase ← readIORef (wsLoadPhaseRef wsLive)
+        liveQueue ← readIORef (wsInitQueueRef wsLive)
+        livePhase `shouldBe` LoadPhase2 1 1
+        liveQueue `shouldBe` [ChunkCoord 7 7]
+        -- Draining it by hand and reconciling retires the phase again.
+        writeIORef (wsInitQueueRef wsLive) []
+        reconcileQueuedPhase wsLive
+        readIORef (wsLoadPhaseRef wsLive) `shouldReturn` LoadDone

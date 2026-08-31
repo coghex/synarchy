@@ -44,6 +44,7 @@ module World.Chunk.Queue
     , seedInitialQueue
     , drainedLoadPhase
     , settleDrainedPhase
+    , reconcileQueuedPhase
     , enqueueChunkRequest
     ) where
 
@@ -191,6 +192,15 @@ enqueueChunkRequest pid ws coords = do
                     -- load and none of it is done yet.
                     LoadDone → (LoadPhase2 count count, ())
                     other → (other, ())
+            -- ...and then VALIDATE that against the queue. The append
+            -- above and the update just now are two steps, and the world
+            -- thread can drain the appended work to completion between
+            -- them — leaving this reopening a phase over an empty queue.
+            -- 'drainInitQueues' returns immediately for an empty queue,
+            -- so nothing would ever settle it back: @world.waitForInit@
+            -- would block for ever while @world.waitForChunks@ reported
+            -- nothing remaining.
+            reconcileQueuedPhase ws
             pure count
 
 -- | Seed a page's init queue with its initial box and report the
@@ -305,3 +315,27 @@ settleDrainedPhase ws fallbackTotal = go
         when (null rest) $ do
             arrived ← readIORef (wsInitQueueRef ws)
             unless (null arrived) go
+
+-- | Settle a page's phase back to 'LoadDone' when its queue has emptied
+--   under it.
+--
+--   The repair half of 'enqueueChunkRequest''s phase update: an append
+--   and the phase update that accounts for it are two steps, and the
+--   world thread can drain the appended work in between, so the update
+--   can reopen a load that has already finished. An empty queue means no
+--   pending work — the drain keeps a chunk enqueued for the whole of its
+--   generation and removes it only after inserting — so the phase is
+--   settled from the queue rather than from what the appender expected.
+--
+--   Deliberately NARROW. It only ever retires a 'LoadPhase2', never
+--   'LoadPhase1': a page still in setup has not queued its box yet
+--   ('seedInitialQueue' does that at the end), so its empty queue is not
+--   a finished load and forcing one would report a world ready before it
+--   has any chunks at all.
+reconcileQueuedPhase ∷ WorldState → IO ()
+reconcileQueuedPhase ws = do
+    pending ← readIORef (wsInitQueueRef ws)
+    when (null pending) $
+        atomicModifyIORef' (wsLoadPhaseRef ws) $ \ph → case ph of
+            LoadPhase2 _ _ → (LoadDone, ())
+            other          → (other, ())
