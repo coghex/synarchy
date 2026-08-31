@@ -20,15 +20,32 @@
 --   this mapping are the whole of what a ruin is worth.
 module Test.Headless.Location.LootDeterminism
     ( spec
+    , luaSpec
     ) where
 
 import UPrelude
 import Test.Hspec
+import Control.Exception (finally)
+import Data.IORef (IORef, newIORef, readIORef, writeIORef, modifyIORef')
+import qualified Data.Text as T
 import qualified Data.Yaml as Yaml
+import qualified HsLua as Lua
+import qualified Data.Text.Encoding as TE
+import System.Directory
+    (getTemporaryDirectory, createDirectoryIfMissing, removeDirectoryRecursive)
+import System.FilePath ((</>))
 import Engine.Asset.YamlLootTables
-    ( LootTableYamlDef(..), LootTableYamlEntry(..) )
+    ( LootTableYamlDef(..), LootTableYamlEntry(..), loadLootTableYaml )
+import Engine.Core.Log
+    ( initLogger, defaultLogConfig, LogConfig(..), LogBackend(..)
+    , LogCategory(..), LogLevel(..), LogEntry(..), LoggerState )
+import Engine.Core.State (EngineEnv)
+import Engine.Core.Capability.Core (CoreCapability, toCoreCapability)
+import Engine.Core.Capability.ContentRegistries
+    (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Engine.Scripting.Lua.API.LootTables (loadLootTableYamlFn)
 import LootTable.Types
-    ( LootTableDef(..), LootTableEntry(..)
+    ( LootTableDef(..), LootTableEntry(..), LootTableRegistry
     , emptyLootTableRegistry, registerLootTable, lookupLootTable )
 import LootTable.Roll
     ( LootRollContext(..), lootRollUnit, pickByWeight, rollLootTableFor )
@@ -250,3 +267,254 @@ spec = describe "Location loot determinism" $ do
             (lookupLootTable "ruin_common" reg
                 >>= \d → rollLootTableFor d (ctxAt 42 1 3 1))
                 `shouldBe` Just "rations"
+
+    -- #1946: the authoring boundary for `weight` itself. Every case
+    -- below goes through the REAL 'loadLootTableYaml' on a real file,
+    -- because two halves of what is under test are facts about the
+    -- source text: `.nan`/`.inf` resolving to STRINGS rather than
+    -- numbers, and an ordinary Scientific literal narrowing to
+    -- Infinity or to 0.0 in the engine's stored 32-bit Float. A
+    -- fixture built from Haskell values could express neither.
+    describe "weight domain (#1946)" $ do
+        describe "rejected weights" $ do
+            it "rejects zero, which pickByWeight would still SELECT at \
+               \draw 0 — the one outcome `weight: 0` means to rule out" $
+                rejectsNaming ["positive", "0.0"] (probeTable "0")
+
+            it "rejects an explicitly floating zero the same way" $
+                rejectsNaming ["positive", "0.0"] (probeTable "0.0")
+
+            it "rejects a negative weight, which shrinks the total and \
+               \makes later entries unreachable" $
+                rejectsNaming ["positive", "-1.0"] (probeTable "-1")
+
+            it "rejects a finite YAML literal that OVERFLOWS the \
+               \engine's 32-bit Float to infinity — an infinite weight \
+               \poisons the sum and hands every draw to the last entry" $
+                rejectsNaming ["finite"] (probeTable "1.0e+100")
+
+            it "rejects a positive weight that UNDERFLOWS to zero in \
+               \that same Float, reporting the effective 0.0 rather \
+               \than the authored literal" $
+                -- The mirror image of the overflow above: positivity is
+                -- evaluated AFTER narrowing, so a Scientific the YAML
+                -- parser is perfectly happy with cannot author a weight
+                -- the runtime would only ever sum as zero.
+                rejectsNaming ["positive", "0.0"] (probeTable "1.0e-60")
+
+            it "rejects .nan, which YAML's scalar resolver hands over \
+               \as a STRING rather than a number" $
+                rejectsNaming ["number", ".nan"] (probeTable ".nan")
+
+            it "rejects .inf the same way" $
+                rejectsNaming ["number", ".inf"] (probeTable ".inf")
+
+            it "rejects an absent weight — it is required and has no \
+               \default, exactly as before" $
+                rejectsNaming ["required"]
+                    (tableSource "probe_ruins"
+                        ["  - id: rations", "  - id: quinoa_sack\n    weight: 1"])
+
+            it "rejects an authored null, which aeson reads as absent" $
+                rejectsNaming ["required"] (probeTable "null")
+
+            it "rejects a non-numeric weight by entry rather than by \
+               \list index" $
+                rejectsNaming ["number", "often"] (probeTable "\"often\"")
+
+        it "names the TABLE and the offending ENTRY, not a bare JSON \
+           \path — an index nobody can map back without counting" $
+            -- The rejected entry is the SECOND one, so an assertion
+            -- naming the first would pass by accident.
+            rejectsNaming ["probe_ruins", "2", "quinoa_sack", "weight"]
+                (probeTable "0")
+
+        it "fails the WHOLE document, so the valid sibling entry is \
+           \not salvaged either" $
+            withTempLootYaml (probeTable "0") $ \path → do
+                (logger, _) ← callbackLogger
+                loadLootTableYaml logger path `shouldReturn` Nothing
+
+        describe "accepted weights" $ do
+            it "accepts ordinary positive weights" $
+                acceptsAs ("probe_ruins", [("rations", 3), ("quinoa_sack", 1)])
+                    (probeTable "1")
+
+            it "accepts an arbitrarily small positive weight — the \
+               \boundary is zero, and it is exclusive" $
+                acceptsAs
+                    ("probe_ruins", [("rations", 3), ("quinoa_sack", 1.0e-3)])
+                    (probeTable "0.001")
+
+            -- Requirement 5, gated at the YAML boundary rather than
+            -- only over a directly constructed def: an empty table is a
+            -- defined outcome, so the decoder must not reject it while
+            -- closing the weight domain.
+            it "accepts entries: [] and still rolls Nothing" $
+                withTempLootYaml (tableSource "probe_empty" []) $ \path → do
+                    (logger, _) ← callbackLogger
+                    mDef ← loadLootTableYaml logger path
+                    fmap ltydEntries mDef `shouldBe` Just []
+                    fmap (\d → rollLootTableFor (toLootTableDef d) (ctxAt 42 1 1 1))
+                        mDef `shouldBe` Just Nothing
+
+            it "still accepts the shipped data/loot_tables/ruin_common.yaml \
+               \through the real loader" $ do
+                (logger, _) ← callbackLogger
+                mDef ← loadLootTableYaml logger
+                    "data/loot_tables/ruin_common.yaml"
+                fmap toLootTableDef mDef `shouldBe` Just pinnedRuinCommon
+
+-- * #1946 fixtures and assertions
+
+-- | A loot table document named @tid@ whose @entries:@ list is
+--   @entryLines@ verbatim (empty for @entries: []@).
+tableSource ∷ Text → [Text] → Text
+tableSource tid entryLines
+    | null entryLines = T.unlines ["id: " <> tid, "entries: []"]
+    | otherwise       = T.unlines (["id: " <> tid, "entries:"] ⧺ entryLines)
+
+-- | Two entries under the name every rejection assertion looks for.
+--   The first is always valid; the SECOND carries @w@ authored exactly
+--   as a content author writes it — including the spellings (@null@, a
+--   quoted string, @.nan@) that are not numbers at all.
+probeTable ∷ Text → Text
+probeTable w = tableSource "probe_ruins"
+    [ "  - id: rations\n    weight: 3"
+    , "  - id: quinoa_sack\n    weight: " <> w
+    ]
+
+-- | Load @src@ through the REAL loader and require whole-document
+--   rejection: 'Nothing' plus exactly one 'CatAsset' 'LevelWarn' whose
+--   message names the file and every token in @tokens@.
+--
+--   Tokens are matched as whole WORDS of a punctuation-scrubbed
+--   message, not substrings, so @finite@ cannot be satisfied by a
+--   message that only ever says @infinite@. The scrub deliberately
+--   leaves @.@ and @-@ alone: they are inside the values (@-1.0@,
+--   @.nan@) the tokens have to match.
+rejectsNaming ∷ [String] → Text → Expectation
+rejectsNaming tokens src =
+    withTempLootYaml src $ \path → do
+        (logger, entriesRef) ← callbackLogger
+        mDef ← loadLootTableYaml logger path
+        mDef `shouldBe` Nothing
+        entries ← readIORef entriesRef
+        case entries of
+            [entry] → do
+                leLevel entry `shouldBe` LevelWarn
+                leCategory entry `shouldBe` CatAsset
+                let msg     = T.unpack (leMessage entry)
+                    ws      = words (map scrub msg)
+                    wanted  = path : tokens
+                    missing = [t | t ← wanted, t `notElem` ws]
+                if null missing
+                  then pure ()
+                  else expectationFailure $
+                      "rejected, but the warning does not name "
+                      ⧺ show missing ⧺ ": " ⧺ msg
+            other → expectationFailure $
+                "expected exactly one captured log entry, got "
+                ⧺ show (length other)
+  where
+    scrub c = if c `elem` ("'\"(),:;=\\\8212" ∷ String) then ' ' else c
+
+-- | Load @src@ and require exactly that table id and those entries.
+acceptsAs ∷ (Text, [(Text, Float)]) → Text → Expectation
+acceptsAs expected src =
+    withTempLootYaml src $ \path → do
+        (logger, _) ← callbackLogger
+        mDef ← loadLootTableYaml logger path
+        fmap (\d → (ltydId d, [ (ltyeId e, ltyeWeight e)
+                              | e ← ltydEntries d ])) mDef
+            `shouldBe` Just expected
+
+-- | A logger whose backend appends every emitted 'LogEntry' to an
+--   'IORef'. 'CatAsset' debug logging stays OFF (the default) so a
+--   rejection's warning is the only entry captured, which is what lets
+--   'rejectsNaming' require exactly one.
+callbackLogger ∷ IO (LoggerState, IORef [LogEntry])
+callbackLogger = do
+    entriesRef ← newIORef []
+    logger ← initLogger defaultLogConfig
+        { lcBackend = LogToCallback (\e → modifyIORef' entriesRef (e :)) }
+    pure (logger, entriesRef)
+
+withTempLootYaml ∷ Text → (FilePath → IO a) → IO a
+withTempLootYaml contents action = do
+    tmp ← getTemporaryDirectory
+    let dir  = tmp </> "synarchy-loot-weight-spec"
+        path = dir </> "probe_loot_table.yaml"
+    createDirectoryIfMissing True dir
+    writeFile path (T.unpack contents)
+    action path `finally` removeDirectoryRecursive dir
+
+-- | The load-and-register boundary itself (#1946), driven through the
+--   real @engine.loadLootTableYaml@ verb and the live engine's own
+--   @content-registries@ projection.
+--
+--   The decoder cases above prove the FILE is rejected; this proves
+--   what that rejection means for the registry, which is a separate
+--   contract: 'Engine.Scripting.Lua.API.LootTables.loadLootTableYamlFn'
+--   mutates 'crLootTableRegistryRef' only once 'loadLootTableYaml' has
+--   answered 'Just', and 'registerLootTable' inserts BY TABLE ID — so
+--   without the decoder guard a semantically invalid file would silently
+--   replace a good table of the same id.
+--
+--   Run just this gate: @cabal test synarchy-test-headless
+--   --test-options='--match "Location loot determinism"'@.
+luaSpec ∷ SpecWith EngineEnv
+luaSpec = describe "Location loot determinism (load and register)" $ do
+    it "leaves an already-registered table of the same id EXACTLY as it \
+       \was when the replacement file is rejected" $ \env →
+        withPrepopulatedRegistry env $ \core regs → do
+            loadVia core regs (probeTable "0") `shouldReturn` Just 0
+            reg ← readIORef (crLootTableRegistryRef regs)
+            lookupLootTable "probe_ruins" reg `shouldBe` Just priorProbeTable
+
+    -- The control that keeps the assertion above honest: the same
+    -- boundary DOES replace the table when the file is valid, so the
+    -- untouched registry is the rejection's doing and not a wiring
+    -- failure that never registers anything.
+    it "still replaces that table when the file is valid" $ \env →
+        withPrepopulatedRegistry env $ \core regs → do
+            loadVia core regs (probeTable "1") `shouldReturn` Just 1
+            reg ← readIORef (crLootTableRegistryRef regs)
+            lookupLootTable "probe_ruins" reg `shouldBe` Just LootTableDef
+                { ltdId      = "probe_ruins"
+                , ltdEntries = [ LootTableEntry "rations"     3
+                               , LootTableEntry "quinoa_sack" 1 ]
+                }
+
+-- | The table already in the registry when a replacement file arrives.
+priorProbeTable ∷ LootTableDef
+priorProbeTable = LootTableDef
+    { ltdId      = "probe_ruins"
+    , ltdEntries = [LootTableEntry "steel_dagger" 7]
+    }
+
+-- | Run @action@ with the live engine's loot-table registry holding
+--   'priorProbeTable' alone, restoring whatever it held before. The ref
+--   is shared with every other spec riding this engine, so it is
+--   borrowed rather than reassigned.
+withPrepopulatedRegistry
+    ∷ EngineEnv
+    → (CoreCapability → ContentRegistriesCapability → IO a)
+    → IO a
+withPrepopulatedRegistry env action = do
+    let core = toCoreCapability env
+        regs = toContentRegistriesCapability env
+        ref  = crLootTableRegistryRef regs ∷ IORef LootTableRegistry
+    before ← readIORef ref
+    writeIORef ref (registerLootTable priorProbeTable emptyLootTableRegistry)
+    action core regs `finally` writeIORef ref before
+
+-- | One @engine.loadLootTableYaml(path)@ call over a temporary file
+--   holding @src@, returning the verb's own 1/0 result.
+loadVia ∷ CoreCapability → ContentRegistriesCapability → Text
+        → IO (Maybe Lua.Integer)
+loadVia core regs src = withTempLootYaml src $ \path → Lua.run $ do
+    Lua.openlibs
+    Lua.pushstring (TE.encodeUtf8 (T.pack path))
+    _ ← loadLootTableYamlFn core regs
+    Lua.tointeger (-1)
