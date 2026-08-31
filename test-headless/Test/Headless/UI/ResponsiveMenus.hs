@@ -1725,6 +1725,35 @@ spec = around withMenusEngine $ do
             map snd rows `shouldSatisfy` or
             map snd rows `shouldSatisfy` (not ∘ and)
 
+        it "rebuilds at the new scale when the scale changed while the console was hidden" $ \env → do
+            ls ← newBareLuaBackend env
+            setFramebuffer env (800, 1601)
+            _ ← evalOk ls shellBootExpr
+            big ← decodeProbe "at 4x" =≪ evalJSON ls (shellFitExpr 800 1601 4.0)
+            sbpCornerWidth big `shouldBe` 256      -- floor(64 * 4)
+            -- Close the console, then apply a Settings scale change: the
+            -- engine still delivers the resize, and shell.rescale() still
+            -- runs, but there is no open box to rebuild behind it. The
+            -- retained elements are the ones the next open would reuse.
+            _ ← evalOk ls "require('scripts.shell').hide(); return true"
+            setFramebuffer env (1280, 720)
+            _ ← evalOk ls $ luaLines
+                [ "engine.setUIScale(1.0);"
+                , "require('scripts.shell').onFramebufferResize(1280, 720);"
+                , "return true"
+                ]
+            after ← decodeProbe "after reopen" =≪ evalJSON ls (shellReopenExpr 1280 720)
+            sbpSupported after `shouldBe` True
+            sbpCount after `shouldBe` 9
+            -- The corner sprites are the tell: rebuildBox's existing-element
+            -- branch repositions from the new tileSize but never resizes
+            -- them, so a reused 4x corner leaves the box hanging past the
+            -- framebuffer at 1x.
+            sbpCornerWidth after `shouldBe` 64
+            sbpMinX after `shouldSatisfy` (≥ 0)
+            sbpMaxX after `shouldSatisfy` (≤ 1280)
+            sbpMinWidth after `shouldSatisfy` (> 0)
+
         it "redraws the completion ghost a width rebuild destroyed" $ \env → do
             ls ← newBareLuaBackend env
             _ ← evalOk ls (fixedCharMetrics contentPx <> " return true")
@@ -2730,7 +2759,7 @@ data ShellBoxProbe = ShellBoxProbe
     { sbpSupported ∷ Bool
     , sbpCount ∷ Int
     , sbpMinX ∷ Double, sbpMaxX ∷ Double
-    , sbpMinWidth ∷ Double, sbpCenterWidth ∷ Double
+    , sbpMinWidth ∷ Double, sbpCenterWidth ∷ Double, sbpCornerWidth ∷ Double
     , sbpReportedWidth ∷ Double, sbpInputWidth ∷ Double
     , sbpHistoryWidth ∷ Double, sbpResultWidth ∷ Double
     , sbpMinPaintKey ∷ Int, sbpAllInScope ∷ Bool, sbpInputBlocked ∷ Bool
@@ -2739,7 +2768,7 @@ instance FromJSON ShellBoxProbe where
     parseJSON = withObject "ShellBoxProbe" $ \o → ShellBoxProbe
         <$> o .: "supported" <*> o .: "count"
         <*> o .: "minX" <*> o .: "maxX"
-        <*> o .: "minWidth" <*> o .: "centerWidth"
+        <*> o .: "minWidth" <*> o .: "centerWidth" <*> o .: "cornerWidth"
         <*> o .: "reportedWidth" <*> o .: "inputWidth"
         <*> o .: "historyWidth" <*> o .: "resultWidth"
         <*> o .: "minPaintKey" <*> o .: "allInScope" <*> o .: "inputBlocked"
@@ -2854,7 +2883,7 @@ shellBoxProbe = luaLines
     , "             shell_w=true,  shell_c=true, shell_e=true,"
     , "             shell_sw=true, shell_s=true, shell_se=true};"
     , "local count, minX, maxX, minW, minKey = 0, nil, nil, nil, nil;"
-    , "local centerW, inScope = nil, true;"
+    , "local centerW, cornerW, inScope = nil, nil, true;"
     , "for _, e in ipairs(UI.getVisibleElements()) do"
     , "  if e.page == 'shell' and box[e.name] then"
     , "    count = count + 1;"
@@ -2864,10 +2893,12 @@ shellBoxProbe = luaLines
     , "    if minKey == nil or e.paintKey < minKey then minKey = e.paintKey end;"
     , "    if not e.inScope then inScope = false end;"
     , "    if e.name == 'shell_c' then centerW = e.width end;"
+    , "    if e.name == 'shell_nw' then cornerW = e.width end;"
     , "  end;"
     , "end;"
     , "return {count=count, minX=minX or -1, maxX=maxX or -1,"
     , "        minWidth=minW or -1, centerWidth=centerW or -1,"
+    , "        cornerWidth=cornerW or -1,"
     , "        minPaintKey=minKey or -1, allInScope=inScope,"
     , "        reportedWidth=shell.getContentWidth(),"
     , "        inputWidth=shell.getMaxInputWidth(),"
@@ -3077,6 +3108,17 @@ shellSeedExpr px = luaLines
     , "shell.addHistory(string.rep('c', 600), string.rep('r', 600), false);"
     , "for _ = 1, 300 do shell.onCharInput(fid, 'i') end;"
     , "return " <> shellStateProbe px
+    ]
+
+-- | Reopen the console and report the box it rebuilt, classified at
+--   whatever UI scale is now live.
+shellReopenExpr ∷ Int → Int → Text
+shellReopenExpr w h = luaLines
+    [ "require('scripts.shell').show();"
+    , "local p = " <> shellBoxProbe <> ";"
+    , "p.supported = require('scripts.ui.responsive').classify("
+        <> tshow w <> ", " <> tshow h <> ", engine.getUIScale()).supported;"
+    , "return p"
     ]
 
 -- | Per-byte width for the input-row case. Large enough that the prompt

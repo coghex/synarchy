@@ -615,7 +615,14 @@ function shell.rebuildBox()
         
         boxSpawned = true
     else
-        -- Reposition and resize existing elements
+        -- Reposition and resize existing elements.
+        --
+        -- The four CORNER sprites and every text element are created at the
+        -- then-current tileSize/fontSize and never resized here, which is
+        -- sound only because neither can have changed since: every
+        -- shell.rescale() that moves them is followed by a
+        -- destroyAllElements() -- in shell.show() when the scale changed,
+        -- and in shell.onFramebufferResize() on both its branches (#1959).
         
         -- Top row
         UI.setPosition(objBoxNW, baseX, row0Y - tileSize / 2)
@@ -1207,7 +1214,7 @@ function shell.onFramebufferResize(width, height)
     -- ever rescaled lazily the next time shell.show() ran rescale()
     -- itself. Call rescale() here too so an already-visible shell
     -- picks up a live scale change immediately, not just on next open.
-    shell.rescale()
+    local scaleChanged = shell.rescale()
 
     -- If visible, rebuild everything with new dimensions
     if shellvisible then
@@ -1225,6 +1232,23 @@ function shell.onFramebufferResize(width, height)
         -- from the new width -- including re-scrolling the window, which
         -- is what keeps the cursor inside a field that just got narrower.
         shell.updateDisplay()
+    elseif scaleChanged then
+        -- #1959: rescale() above runs whether or not the console is open,
+        -- but a HIDDEN one has no rebuild to follow it -- shell.hide keeps
+        -- every element and leaves boxSpawned true. The next show() then
+        -- finds nothing left to rescale and takes rebuildBox's
+        -- existing-element branch, which repositions from the new tileSize
+        -- while the corner sprites keep the old one (and every text element
+        -- keeps the old font size): apply 1x after opening at 4x and
+        -- shell_ne is still 256px wide, hanging 192px past a 1280px
+        -- framebuffer. Drop the stale elements so the next show() builds
+        -- them at the scale that is now current.
+        --
+        -- A framebuffer-size change with no scale change needs nothing
+        -- here: tileSize and fontSize are unchanged, and rebuildBox's
+        -- existing-element branch already resizes and repositions
+        -- everything the fitted center governs.
+        shell.destroyAllElements()
     end
 end
 
