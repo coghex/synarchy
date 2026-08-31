@@ -52,6 +52,7 @@ import qualified Data.Text as T
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..), defaultCamera)
 import Engine.Graphics.Vulkan.Types.Vertex
     (Vec2(..), Vec4(..), mkVertexWorld, packWorldUV)
+import Engine.Scene.Types (SortableQuad)
 import Engine.Scene.Stats
     ( SceneCategory(..), SceneCategoryStat(..), SceneStats(..)
     , sceneCategoryId, sceneCategoryOrder )
@@ -64,7 +65,17 @@ import Building.Types
     , BuildingManager(..), emptyBuildingManager )
 import Item.Ground (GroundItem(..), GroundItems(..), emptyGroundItems)
 import Item.Types (ItemInstance(..))
-import Structure.Types (emptyChunkStructures)
+import Location.Instance
+    (LocationInstances, allocateLocationInstance, emptyLocationInstances)
+import Location.Bounds (RelBounds(..))
+import Location.Types (LocationDef(..), LocationNaming(..))
+import Language.Semantic.Types (ConceptId(..))
+import Structure.Palette (TexPalette, emptyTexPalette, internPath)
+import Structure.Types
+    ( ChunkStructures, StructurePieceData(..), StructureSlot(..)
+    , emptyChunkStructures )
+import Structure.Render (structureChunkQuads, structureChunkQuadsScanned)
+import Structure.WallCatalog (emptyStructureWallCatalog)
 import Unit.Types
     ( UnitId(..), UnitInstance(..), UnitManager(..), emptyUnitManager )
 import Unit.Faction (Faction(..))
@@ -80,7 +91,9 @@ import World.Construct.Types
 import World.Mine.Types (MineDesignation(..))
 import World.Page.Types (WorldPageId(..))
 import World.Render (updateWorldTiles)
+import World.Render.ViewBounds (ViewBounds, computeViewBounds)
 import World.Render.Zoom.Types (BakedZoomEntry(..))
+import World.Tool.Types (ToolMode(..))
 import World.Material.Id (MaterialId(..))
 import World.Spoil.Types (SpoilPile(..))
 import World.State.Types
@@ -401,7 +414,10 @@ spec = describe "scene assembly telemetry (#1921)" $ aroundAll setup $ do
     sequenceSpec
     terrainCacheSpec
     scannedMeaningSpec
+    cursorModeSpec
+    structureScanSpec
     guardSpec
+    zoomScanSpec
     teardownSpec
     luaQuerySpec
   where
@@ -798,3 +814,218 @@ unavailableSummary =
 --   back quoted.
 quoted ∷ Text → Text
 quoted t = "\"" <> t <> "\""
+
+
+-- * The cursor category's mode discipline
+
+-- | Requirement 5's @cursor@ row: the candidates counted are the ones
+--   the ACTIVE tool mode's returned vector is built from — not every
+--   candidate this @Strict@ module forces on the way there. Each
+--   example pins the mode, the designation maps and the hover /
+--   selection state rather than asserting an incidental total.
+cursorModeSpec ∷ SpecWith EngineEnv
+cursorModeSpec = describe "the cursor category's active tool mode" $ do
+
+    it "counts the selection candidate in the mode that returns it" $
+        \env → do
+            ws ← resetScene env gameplayCamera
+            writeIORef (wsToolModeRef ws) InfoTool
+            cs ← readIORef (wsCursorRef ws)
+            writeIORef (wsCursorRef ws)
+                cs { worldSelectedTile = Just (0, 0, 0) }
+            stats ← runPass env
+            scannedOf ScCursor stats `shouldBe` 1
+
+    it "does NOT count it in a mode whose returned vector omits it" $
+        \env → do
+            ws ← resetScene env gameplayCamera
+            -- Identical state, different mode. 'MineTool' returns
+            -- markers, hover and its own preview — never the selection
+            -- quads — and this module is @Strict@, so the selection
+            -- binding is forced regardless. Counting the forced set
+            -- instead of the returned one would report 1 here.
+            writeIORef (wsToolModeRef ws) MineTool
+            cs ← readIORef (wsCursorRef ws)
+            writeIORef (wsCursorRef ws)
+                cs { worldSelectedTile = Just (0, 0, 0) }
+            stats ← runPass env
+            scannedOf ScCursor stats `shouldBe` 0
+
+    it "counts the hover candidate the mode returns" $ \env → do
+        ws ← resetScene env gameplayCamera
+        writeIORef (wsToolModeRef ws) InfoTool
+        _ ← hoverSomewhere env ws
+        stats ← runPass env
+        scannedOf ScCursor stats `shouldBe` 1
+
+    it "counts the mine preview's whole anchored rectangle" $ \env → do
+        ws ← resetScene env gameplayCamera
+        writeIORef (wsToolModeRef ws) MineTool
+        (hx, hy) ← hoverSomewhere env ws
+        cs ← readIORef (wsCursorRef ws)
+        -- A 3x3 rectangle: the anchor two tiles from the hover on both
+        -- axes, stepped INWARD so both corners stay inside the one
+        -- loaded chunk (the anchor's own surface z has to be readable
+        -- for the builder to run at all). Every tile in it is a
+        -- candidate the builder enumerates, before the per-tile
+        -- surface-z and visibility filters — so the count is the AREA,
+        -- not what survives them.
+        let inward v = if v ≥ 2 then v - 2 else v + 2
+        writeIORef (wsCursorRef ws)
+            cs { mineAnchor         = Just (inward hx, inward hy)
+               , worldCursorTexture = Just (TextureHandle 3) }
+        stats ← runPass env
+        -- One hover candidate plus the 3x3 preview.
+        scannedOf ScCursor stats `shouldBe` 1 + 9
+
+-- | Find a screen pixel this fixture's hit test actually resolves, park
+--   the world cursor on it, and answer with the tile it picked.
+--
+--   The pixel is SEARCHED rather than assumed, because where three
+--   solid tiles land on screen is a property of the projection, not
+--   something an example should hard-code — and an example that
+--   silently failed to pick would go on to compare zero against zero.
+--   'fail' rather than a zero fallback is the point: no hover means the
+--   fixture, not the counter, is broken.
+hoverSomewhere ∷ EngineEnv → WorldState → IO (Int, Int)
+hoverSomewhere env ws = go candidatePixels
+  where
+    go [] = fail "no screen pixel resolved a hover tile on this fixture"
+    go (p : rest) = do
+        cs ← readIORef (wsCursorRef ws)
+        writeIORef (wsCursorRef ws) cs { worldCursorPos = Just p }
+        _ ← updateWorldTiles env
+        cs' ← readIORef (wsCursorRef ws)
+        case worldHoverTile cs' of
+            Just tile → pure tile
+            Nothing   → go rest
+    candidatePixels =
+        [ (x, y)
+        | y ← [0, 16 .. snd testFb - 1]
+        , x ← [0, 16 .. fst testFb - 1] ]
+
+-- * The structure category's own pure pass
+
+-- | Requirement 5's @structures@ row, with pieces actually present.
+--
+--   A GPU-free 'updateWorldTiles' can never reach this: 'Structure.Render'
+--   returns before enumerating anything without a texture system, which
+--   is why the headless example above asserts zero on both counts. The
+--   pure pass underneath it has no such gate, so this is where a piece
+--   count with real pieces is provable at all.
+structureScanSpec ∷ SpecWith EngineEnv
+structureScanSpec = describe "the structure category's pure pass" $ do
+
+    it "counts every piece of a chunk the visibility test admits" $ \_ → do
+        let (scanned, quads) = structureScan inViewCamera
+        scanned `shouldBe` length structureSlots
+        quads `shouldSatisfy` (not . null)
+
+    it "emits exactly what the untouched structureChunkQuads emits" $ \_ →
+        map tshow (snd (structureScan inViewCamera))
+            `shouldBe` map tshow (structureQuadsOnly inViewCamera)
+
+    it "counts nothing for a chunk the visibility test culls" $ \_ → do
+        let (scanned, quads) = structureScan outOfViewCamera
+        scanned `shouldBe` 0
+        quads `shouldSatisfy` null
+
+-- | Four wall slots on one tile, so the piece count is a number no
+--   other quantity in this fixture could be mistaken for.
+structureSlots ∷ [StructureSlot]
+structureSlots = [SWallNW, SWallNE, SWallSE, SWallSW]
+
+structurePieces ∷ ChunkStructures
+structurePieces = HM.fromList
+    [ ((0, 0, fromIntegral (fromEnum slot)), StructurePieceData 0 0 0)
+    | slot ← structureSlots ]
+
+structureChunk ∷ LoadedChunk
+structureChunk = fixtureChunk { lcStructures = structurePieces }
+
+structurePalette ∷ TexPalette
+structurePalette = snd (internPath "scene_stats/placeholder.png" emptyTexPalette)
+
+-- | The camera the fixture chunk is in view of, and one far enough away
+--   on the non-wrapping axis that no u-wrap alias brings it back.
+inViewCamera, outOfViewCamera ∷ Camera2D
+inViewCamera    = gameplayCamera { camZSlice = 0 }
+outOfViewCamera = inViewCamera { camPosition = (0, 100000) }
+
+structureScan ∷ Camera2D → (Int, [SortableQuad])
+structureScan cam =
+    structureChunkQuadsScanned emptyStructureWallCatalog structurePalette
+        (HM.singleton 0 (TextureHandle 1)) (const 1) HM.empty
+        (camFacing cam) (camZSlice cam) structureDepth 1.0 worldSizeChunks
+        (boundsFor cam) (fst (camPosition cam)) (snd (camPosition cam))
+        [structureChunk]
+
+structureQuadsOnly ∷ Camera2D → [SortableQuad]
+structureQuadsOnly cam =
+    structureChunkQuads emptyStructureWallCatalog structurePalette
+        (HM.singleton 0 (TextureHandle 1)) (const 1) HM.empty
+        (camFacing cam) (camZSlice cam) structureDepth 1.0 worldSizeChunks
+        (boundsFor cam) (fst (camPosition cam)) (snd (camPosition cam))
+        [structureChunk]
+
+structureDepth ∷ Int
+structureDepth = 48
+
+boundsFor ∷ Camera2D → ViewBounds
+boundsFor cam = computeViewBounds cam (fst testFb) (snd testFb) structureDepth
+
+-- * The zoom map's other two candidate sources
+
+-- | Requirement 5's @zoom_map@ row names three sources, and the guard
+--   example above exercises only the baked entries. This adds the other
+--   two, each seeded to a distinct count so no two can be confused.
+zoomScanSpec ∷ SpecWith EngineEnv
+zoomScanSpec = describe "the zoom map's candidate sources" $ do
+
+    it "adds the page's location instances to its baked entries" $
+        \env → do
+            ws ← resetScene env zoomedOutCamera
+            seedBakedZoom ws 5
+            writeIORef (wsGenParamsRef ws) $ Just genParams
+                { wgpLocationInstances = locationInstances 3 }
+            stats ← runPass env
+            scannedOf ScZoomMap stats `shouldBe` 5 + 3
+
+    it "adds a present zoom-cursor selection candidate" $ \env → do
+        ws ← resetScene env zoomedOutCamera
+        seedBakedZoom ws 5
+        writeIORef (wsGenParamsRef ws) $ Just genParams
+            { wgpLocationInstances = locationInstances 3 }
+        cs ← readIORef (wsCursorRef ws)
+        writeIORef (wsCursorRef ws) cs { zoomSelectedPos = Just (0, 0) }
+        stats ← runPass env
+        -- Counted from the cursor state, BEFORE the texture lookup that
+        -- would reject it — this page has no zoom cursor texture, so
+        -- the candidate emits nothing.
+        scannedOf ScZoomMap stats `shouldBe` 5 + 3 + 1
+
+-- | @n@ location instances on the page, allocated through the real
+--   allocator so their stored geometry is what placement would produce.
+locationInstances ∷ Int → LocationInstances
+locationInstances n = foldl' step emptyLocationInstances [1 .. n]
+  where
+    step lis i =
+        case allocateLocationInstance Nothing (ChunkCoord i 0) locationDef lis of
+            Right (_, lis') → lis'
+            Left err        → error ("location fixture: " <> show err)
+
+locationDef ∷ LocationDef
+locationDef = LocationDef
+    { ldId         = "scene_stats_ruin"
+    , ldLabel      = "Scene Stats Ruin"
+    , ldType       = "ruin"
+    , ldBuilder    = "room_small"
+    , ldAnchor     = []
+    , ldMaxCount   = 0
+    , ldMinSpacing = 0
+    , ldContents   = []
+    , ldBounds     = RelBounds (-1) (-1) 1 1
+    , ldMapIcon    = Nothing
+    , ldNaming     = LocationNaming
+        { lnHeads = [ConceptId "KEEP"], lnModifiers = [ConceptId "ASH"] }
+    }
