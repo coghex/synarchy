@@ -28,6 +28,7 @@ here — only clamping to the frame.
 """
 from __future__ import annotations
 
+import math
 import os
 import sys
 
@@ -46,6 +47,25 @@ class ActionError(ValueError):
 # The action vocabulary the harness accepts from agents. Mirrors F2's
 # verbs; documented for the player in the agent prompt and in README.md.
 ACTION_KINDS = ("click", "drag", "scroll", "key", "hold", "type", "wait", "done")
+
+# The wheel contract for the `scroll` action (#1980). `dy` is measured in
+# WHEEL NOTCHES, not pixels, and its sign is the CAMERA's rather than the
+# gesture's: Engine.Loop.Camera's `scrollZoomImpulse zoom dy =
+# zoomScrollScale * zoom * dy` has a positive scale and camZoom is the
+# viewport half-height, so a NEGATIVE dy shrinks the half-height and moves
+# the camera toward the ground. The player prompt states that in those
+# terms, and run.py --selftest re-derives it from the checked-in Haskell so
+# the two cannot drift.
+#
+# The bound exists because the impulse multiplies by the CURRENT zoom, so
+# one delta is far more violent from the whole-world view than from near
+# the ground and no single magnitude is universally sensible. Ten notches
+# is one short multi-notch correction — enough to cross the calibrated
+# range in a turn without the unbounded gestures (dy=600) that reached the
+# engine as accepted no-ops before this contract existed.
+SCROLL_DY_NOTCH = 1.0
+SCROLL_DY_MIN = -10.0
+SCROLL_DY_MAX = 10.0
 
 # Default per-call console budgets. Named so the setup launcher can
 # shrink them to whatever is left of its own deadline (#1539) instead of
@@ -260,7 +280,50 @@ def _clamp(v, lo, hi) -> float:
     return max(lo, min(hi, float(v)))
 
 
-def translate_action(action: dict, fb_size: tuple[int, int]):
+def bound_scroll_dy(dy):
+    """Apply the published wheel contract to one requested vertical delta.
+
+    Returns ``(effective_dy, note)``: `note` is None when the request was
+    already inside the contract, and otherwise says which of the two
+    outcomes happened, in the words the turn record keeps (#1980 req 4).
+
+    The two outcomes are deliberately different, because the inputs are:
+
+    * A finite delta outside the range is a real gesture asking for too
+      much, so it is CLAMPED to the nearest bound. The turn still spends
+      its one action on a wheel movement the camera actually performs,
+      and the note carries both the requested and the effective value.
+    * A non-finite delta (NaN, +/-inf) is not a magnitude at all — there
+      is no nearest bound to clamp it to — so it is REJECTED and no
+      scroll call is generated for the turn.
+
+    This is enforced here, at the translation boundary, rather than in the
+    structured schema alone: a scripted agent and a lenient provider
+    fallback both reach `translate_action` without any schema having
+    validated them.
+    """
+    try:
+        value = float(dy)
+    except (TypeError, ValueError):
+        raise ActionError(
+            f"action 'scroll' rejected: dy must be a number in "
+            f"[{SCROLL_DY_MIN}, {SCROLL_DY_MAX}], got {dy!r}") from None
+    if not math.isfinite(value):
+        raise ActionError(
+            f"action 'scroll' rejected: dy must be a finite number in "
+            f"[{SCROLL_DY_MIN}, {SCROLL_DY_MAX}], got {value!r}; "
+            f"no scroll was sent")
+    if SCROLL_DY_MIN <= value <= SCROLL_DY_MAX:
+        return value, None
+    effective = _clamp(value, SCROLL_DY_MIN, SCROLL_DY_MAX)
+    return effective, (
+        f"scroll dy {value:g} is outside the contract range "
+        f"[{SCROLL_DY_MIN:g}, {SCROLL_DY_MAX:g}] and was clamped to "
+        f"{effective:g}; one wheel notch is {SCROLL_DY_NOTCH:g} and "
+        f"negative dy zooms in toward the ground")
+
+
+def translate_action(action: dict, fb_size: tuple[int, int], notes=None):
     """Agent action -> (main_calls, post_calls) of input.* Lua lines.
 
     main_calls are injected before the sim step; post_calls after it
@@ -269,8 +332,21 @@ def translate_action(action: dict, fb_size: tuple[int, int]):
     clamped into the framebuffer so a wild guess still lands on-screen
     (a misclick is wanted signal; an out-of-range coordinate is not an
     interesting one).
+
+    `notes` is an optional list the caller passes to collect the harness's
+    own remarks about what it did with a request it could not honour
+    verbatim — today only the clamped-wheel-delta note (#1980). The
+    requested action itself is never rewritten: the trace keeps what the
+    player asked for, and the note says what was actually injected. An
+    outright refusal still raises `ActionError`, which the runner already
+    records the same way while injecting nothing.
     """
     w, h = fb_size
+
+    def add_note(text):
+        if notes is not None:
+            notes.append(text)
+
     kind = action.get("do")
     if kind not in ACTION_KINDS:
         raise ActionError(f"unknown action {kind!r} (expected one of {ACTION_KINDS})")
@@ -304,13 +380,25 @@ def translate_action(action: dict, fb_size: tuple[int, int]):
             f"return input.mouseUp({x2:.1f}, {y2:.1f}, {button})",
         ], []
     if kind == "scroll":
+        # The bound is checked BEFORE the optional cursor pre-move is
+        # generated, so a rejected delta leaves the whole turn without any
+        # injected call rather than moving the pointer and then refusing.
+        # dx keeps its historical verbatim forwarding: the camera premise
+        # and the player-facing notch vocabulary are about dy alone.
+        dy, dy_note = bound_scroll_dy(action.get("dy") or 0)
+        if dy_note:
+            add_note(dy_note)
         calls = []
         if action.get("x") is not None and action.get("y") is not None:
             x, y = xy()
             calls.append(f"return input.moveMouse({x:.1f}, {y:.1f})")
         dx = float(action.get("dx") or 0)
-        dy = float(action.get("dy") or 0)
-        calls.append(f"return input.scroll({dx:.1f}, {dy:.1f})")
+        # dy carries more precision than dx because the contract now
+        # advertises fractional notches for trackpad-style input, and at
+        # one decimal a small real gesture rounds to a literal 0.0 — the
+        # accepted no-op this contract exists to stop. dx keeps its
+        # historical formatting along with its historical forwarding.
+        calls.append(f"return input.scroll({dx:.1f}, {dy:.4f})")
         return calls, []
     if kind == "key":
         name = action.get("name")

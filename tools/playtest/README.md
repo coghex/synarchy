@@ -223,12 +223,41 @@ coordinates into the frame.
 |---|---|
 | `{"do":"click","x","y"[,"button","mods"]}` | `input.click` |
 | `{"do":"drag","x1","y1","x2","y2"[,"button"]}` | `input.mouseDown` → `moveMouse` (midpoint, end) → `input.mouseUp` |
-| `{"do":"scroll","dy"[,"dx","x","y"]}` | optional `input.moveMouse` + `input.scroll` |
+| `{"do":"scroll","dy"[,"dx","x","y"]}` | optional `input.moveMouse` + one `input.scroll` |
 | `{"do":"key","name"[,"mods"]}` | `input.key` |
 | `{"do":"hold","name"}` | `input.keyDown` before the step, `input.keyUp` after it (camera pan rides the unpaused `dt`) |
 | `{"do":"type","text"}` | `input.type` |
 | `{"do":"wait"}` | nothing — watch time pass |
 | `{"do":"done","reason"}` | nothing — player claims the goal; session ends |
+
+`dy` is the one action parameter with a published range, because it is
+the one whose sign the player cannot infer from the gesture (#1980). It
+is measured in **wheel notches** — one notch is `1` — and its polarity is
+the *camera's*: **negative `dy` zooms in, toward the ground**, positive
+zooms out. That is `Engine.Loop.Camera`'s own convention
+(`scrollZoomImpulse zoom dy = zoomScrollScale * zoom * dy` over a
+half-height `camZoom` whose `zoomMin` is the closest zoom), and
+`--selftest` re-derives it from that checked-in source and compares it
+with the rendered player prompt, so the two cannot drift.
+
+The range is `[-10, 10]` inclusive, fractions included. Because the
+impulse multiplies by the *current* zoom, one delta is far more violent
+from the whole-world view than from near the ground, so the bound is what
+keeps a single turn to a short multi-notch correction. It is enforced in
+`translate_action`, not in the structured schema alone, since a scripted
+agent and a lenient provider fallback both reach that boundary without a
+schema having validated them:
+
+- a finite `dy` outside the range is **clamped** to the nearest bound —
+  the turn keeps the action the player requested, its note records the
+  requested and effective values, and only the bounded call reaches
+  `injected`/`replay.jsonl`;
+- a non-finite `dy` is **rejected** — there is no nearest bound to clamp
+  it to, so the turn injects no scroll call and its note says so.
+
+Either way the turn still crosses exactly one observable action boundary.
+`dx` keeps its historical verbatim forwarding: the camera premise and the
+notch vocabulary are about `dy` alone.
 
 ## Personas
 
