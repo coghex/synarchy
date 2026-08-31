@@ -727,6 +727,62 @@ def test_lua_54_local_attributes_are_read() -> None:
     expect_clean(root, "a Lua 5.4 <const> local attribute")
 
 
+def test_lua_54_attributes_bind_per_name_in_a_multi_name_local() -> None:
+    """The grammar is `Name attrib {',' Name attrib}`, so an attribute
+    binds to the name before it and the list continues past it. Reading
+    the whole list first and then draining attributes stops at the first
+    `<` and loses every name after it -- and a lost name is a lost
+    shadow, which surfaces as a false finding on an ordinary local."""
+    root = build(
+        {"engine": ["quit"]},
+        {"scripts/a.lua":
+            "local stable <const>, engine <close> = 1, acquire()\n"
+            "engine.notRegistered()\n"})
+    expect_clean(root, "a multi-name local with per-name attributes")
+
+
+def test_attributes_on_every_name_of_a_longer_local_are_read() -> None:
+    root = build(
+        {"engine": ["quit"], "item": ["getInfo"], "unit": ["getInfo"]},
+        {"scripts/a.lua":
+            "local engine <const>, item <const>, unit = 1, 2, 3\n"
+            "print(engine.a, item.b, unit.c)\n"})
+    expect_clean(root, "attributes spread across a three-name local")
+
+
+def test_a_name_after_an_attribute_is_still_bound_not_merely_skipped() -> None:
+    """The other direction: the trailing names must really bind, rather
+    than the whole statement being swallowed."""
+    root = build(
+        {"engine": ["quit"]},
+        {"scripts/a.lua":
+            "do\n"
+            "    local stable <const>, engine <close> = 1, acquire()\n"
+            "    engine.insideTheBlock()\n"
+            "end\n"
+            "engine.outsideTheBlock()\n"})
+    output = expect_finding(root, "engine.outsideTheBlock",
+                            "a reference after an attributed local's block closes")
+    expect("insideTheBlock" not in output,
+           f"the attributed name must shadow inside its block, got: {output!r}")
+
+
+def test_an_unreadable_local_attribute_is_a_certification_failure() -> None:
+    root = build({"engine": ["quit"]},
+                 {"scripts/a.lua": "local engine <const = 1\nengine.quit()\n"})
+    expect_certification_failure(root, "unreadable attribute",
+                                 "a malformed local attribute")
+
+
+def test_a_for_variable_may_not_carry_an_attribute() -> None:
+    """Attributes are a `local` construct only; a `<` in a `for` header
+    is a comparison, so the header must fail rather than absorb it."""
+    root = build({"item": ["getInfo"]},
+                 {"scripts/a.lua": "for item <const> in pairs(t) do end\n"})
+    expect_certification_failure(root, "`for` header",
+                                 "an attribute in a `for` header")
+
+
 # ===========================================================================
 # The registrar side: every module and every construct must be certified
 # ===========================================================================
@@ -1049,6 +1105,11 @@ TESTS = [
     test_a_repeat_nested_in_an_until_condition_is_analyzed,
     test_an_end_inside_an_until_expression_does_not_close_the_repeat,
     test_lua_54_local_attributes_are_read,
+    test_lua_54_attributes_bind_per_name_in_a_multi_name_local,
+    test_attributes_on_every_name_of_a_longer_local_are_read,
+    test_a_name_after_an_attribute_is_still_bound_not_merely_skipped,
+    test_an_unreadable_local_attribute_is_a_certification_failure,
+    test_a_for_variable_may_not_carry_an_attribute,
     test_if_elseif_else_branches_scope_independently,
     test_goto_and_labels_are_analyzed,
     test_computed_indexing_on_a_namespace_is_a_certification_failure,

@@ -753,8 +753,18 @@ class LuaScopeReader:
     def bound(self, name: str) -> bool:
         return any(name in block.names for block in self.blocks)
 
-    def read_name_list(self, token: Token, what: str) -> list[str]:
-        """Read `a, b, c` at the cursor, leaving it on the following token."""
+    def read_name_list(self, token: Token, what: str,
+                       *, attributes: bool = False) -> list[str]:
+        """Read `a, b, c` at the cursor, leaving it on the following token.
+
+        With `attributes`, each name may carry its own Lua 5.4 attribute:
+        the grammar is `Name attrib {',' Name attrib}`, so an attribute
+        binds to the name BEFORE it and the list continues past it.
+        Reading the whole list first and then draining attributes stops
+        at the first `<` and loses every name after it -- and a lost name
+        is a lost shadow, which surfaces as a false missing-verb finding
+        on a perfectly ordinary local.
+        """
         names: list[str] = []
         while True:
             current = self.peek()
@@ -765,6 +775,13 @@ class LuaScopeReader:
                                  f"found {current.text!r}")
             names.append(current.text)
             self.i += 1
+            marker = self.peek()
+            if attributes and marker is not None and marker.kind == "op" and marker.text == "<":
+                attribute, closer = self.peek(1), self.peek(2)
+                if (attribute is None or attribute.kind != "name"
+                        or closer is None or closer.kind != "op" or closer.text != ">"):
+                    self.fail(token, f"{what} carries an unreadable attribute")
+                self.i += 3
             following = self.peek()
             if following is not None and following.kind == "op" and following.text == ",":
                 self.i += 1
@@ -961,20 +978,8 @@ class LuaScopeReader:
             self.step_function_header(token, named=False)
             return
 
-        names = self.read_name_list(token, "`local`")
-        # Lua 5.4 attributes: `local x <close> = ...`, `local n <const> = ...`.
-        while True:
-            marker = self.peek()
-            if marker is not None and marker.kind == "op" and marker.text == "<":
-                attribute = self.peek(1)
-                closer = self.peek(2)
-                if (attribute is None or attribute.kind != "name"
-                        or closer is None or closer.kind != "op" or closer.text != ">"):
-                    self.fail(token, "`local` carries an unreadable attribute")
-                self.i += 3
-                continue
-            break
-
+        # Lua 5.4 attributes are per-name: `local n <const>, h <close> = ...`.
+        names = self.read_name_list(token, "`local`", attributes=True)
         assign = self.peek()
         if assign is not None and assign.kind == "op" and assign.text == "=":
             self.pending.append(
