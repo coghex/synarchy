@@ -1925,10 +1925,11 @@ def test_manifest_real_registry() -> None:
            f"{ci} entries are CI-eligible, matching tools/ci_probes.py")
     migrated = [e["key"] for e in manifest["probes"]
                 if e["protocol"] != "legacy"]
-    expect(migrated == ["lua_strict_msg", "position_hold", "role",
-                        "text_encoding", "thermo_altitude"],
-           f"lua_strict_msg, position_hold, role, text_encoding and "
-           f"thermo_altitude are the probe-result/v1 probes, in "
+    expect(migrated == ["circadian", "concussion_revive", "disarm",
+                        "lua_strict_msg", "position_hold",
+                        "remote_warning_page_guard", "role",
+                        "state_of_mind", "text_encoding", "thermo_altitude"],
+           f"the ten migrated probes are probe-result/v1 probes in "
            f"run_probes.PROBES order (got {migrated})")
 
     # The REAL docs-wip manifest, only when one is resolvable.
@@ -1944,6 +1945,516 @@ def test_manifest_real_registry() -> None:
     problems = probe_census.validate_manifest(probe_census.load(path))
     expect(problems == [], f"the seeded {path} agrees with the live registry "
                            f"({problems[:3]})")
+
+
+# ==========================================================================
+# Five-probe replenishment batch
+# ==========================================================================
+def _migration_descriptor(script: str, probe: str, expected_ids: tuple[str, ...]):
+    repo_root = Path(__file__).resolve().parent.parent
+    done = subprocess.run(
+        [sys.executable, f"tools/{script}", "--describe"],
+        cwd=repo_root, text=True, capture_output=True, timeout=60)
+    expect(done.returncode == 0,
+           f"{probe} --describe exits 0 without booting anything")
+    try:
+        descriptor = probe_protocol.parse_descriptor(
+            done.stdout, expected_probe=probe)
+    except probe_protocol.ProtocolError as error:
+        expect(False, f"{probe}'s descriptor is valid probe-result/v1 ({error})")
+        return None
+    expect(descriptor.ids == expected_ids,
+           f"{probe} declares its stable checks in execution order "
+           f"(got {descriptor.ids})")
+    return descriptor
+
+
+def _drive_concussion_revive(rep, *, second_pass=True):
+    import concussion_revive_probe as concussion  # type: ignore
+
+    launches = {}
+
+    class FakeProc:
+        pass
+
+    def fake_boot(port, log=None, args=None, **_kw):
+        launches["engine"] = {"port": port, "log": log,
+                              "args": list(args or [])}
+        return FakeProc()
+
+    def fake_case(_port, _idx, _concussion, _expect, check_id, reporter):
+        passed = second_pass or check_id == "in_band_stays_collapsed"
+        return reporter.check(check_id, passed,
+                              f"synthetic {check_id} {'passed' if passed else 'failed'}",
+                              {"synthetic": True})
+
+    saved = (concussion.boot, concussion.quit_engine, concussion.bootstrap,
+             concussion.run_case)
+    concussion.boot = fake_boot
+    concussion.quit_engine = lambda *a, **k: None
+    concussion.bootstrap = lambda _port: None
+    concussion.run_case = fake_case
+    try:
+        rc = concussion._run(9304, rep)
+    finally:
+        (concussion.boot, concussion.quit_engine, concussion.bootstrap,
+         concussion.run_case) = saved
+    return rc, launches
+
+
+def test_concussion_revive_standalone() -> None:
+    ids = ("in_band_stays_collapsed", "below_band_rises")
+    if _migration_descriptor("concussion_revive_probe.py",
+                             "concussion_revive", ids) is None:
+        return
+
+    import io
+    import concussion_revive_probe as concussion  # type: ignore
+
+    standalone = io.StringIO()
+    rc, launches = _drive_concussion_revive(
+        probe_protocol.Reporter(concussion.DESCRIPTOR, stream=standalone))
+    expect(rc == 0, f"concussion_revive standalone exits 0 (got {rc})")
+    expect(standalone.getvalue().count("[PASS]") == 2,
+           "concussion_revive standalone prints two human PASS lines")
+    expect(launches["engine"]["args"] == [],
+           "concussion_revive standalone passes no RTS override")
+    expect(launches["engine"]["log"] == "/tmp/synarchy_probe_9304.log",
+           "concussion_revive preserves its historical per-port log fallback")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        events = Path(tmp) / "events.jsonl"
+        stream = io.StringIO()
+        rep = probe_protocol.Reporter(
+            concussion.DESCRIPTOR, events_path=str(events),
+            engine_log_dir=tmp, rts_caps=4, stream=stream)
+        rc, launches = _drive_concussion_revive(rep, second_pass=False)
+        rep.close()
+        _seen, outcomes = probe_protocol.parse_event_stream(
+            events.read_text(encoding="utf-8"), concussion.DESCRIPTOR)
+        expect(rc == 1 and outcomes == {
+                   "in_band_stays_collapsed": "PASS",
+                   "below_band_rises": "FAIL"},
+               f"concussion_revive attributes one failed case and exits 1 "
+               f"(got rc={rc}, {outcomes})")
+        expect(stream.getvalue() == "",
+               "concussion_revive protocol mode prints nothing to stdout")
+        expect(launches["engine"]["args"] == ["+RTS", "-N4", "-RTS"]
+               and launches["engine"]["log"]
+               == os.path.join(tmp, concussion.LOG_NAME),
+               "concussion_revive uses harness RTS and isolated engine log")
+
+
+def _drive_disarm(rep, *, second_equip="true"):
+    import disarm_probe as disarm  # type: ignore
+
+    launches = {}
+    ground = iter((0, 1, 2))
+    held = iter(("steel_dagger", "EMPTY", "EMPTY"))
+    equip_calls = 0
+
+    class FakeProc:
+        pass
+
+    def fake_boot(port, log=None, args=None, **_kw):
+        launches["engine"] = {"port": port, "log": log,
+                              "args": list(args or [])}
+        return FakeProc()
+
+    def fake_send(_port, lua, **_kw):
+        nonlocal equip_calls
+        if "unit.spawn" in lua:
+            return "1"
+        if "equipment.equip" in lua:
+            equip_calls += 1
+            return "true" if equip_calls == 1 else second_equip
+        if "item.listGround" in lua:
+            return str(next(ground))
+        return "ok"
+
+    saved = (disarm.boot, disarm.quit_engine, disarm.bootstrap,
+             disarm.send, disarm.held_right, disarm.time.sleep)
+    disarm.boot = fake_boot
+    disarm.quit_engine = lambda *a, **k: None
+    disarm.bootstrap = lambda _port: None
+    disarm.send = fake_send
+    disarm.held_right = lambda _port, _uid: next(held)
+    disarm.time.sleep = lambda _seconds: None
+    try:
+        rc = disarm._run(9193, rep)
+    finally:
+        (disarm.boot, disarm.quit_engine, disarm.bootstrap,
+         disarm.send, disarm.held_right, disarm.time.sleep) = saved
+    return rc, launches
+
+
+def test_disarm_standalone() -> None:
+    ids = ("initial_drop", "repeat_drop")
+    if _migration_descriptor("disarm_probe.py", "disarm", ids) is None:
+        return
+
+    import io
+    import disarm_probe as disarm  # type: ignore
+
+    standalone = io.StringIO()
+    rc, launches = _drive_disarm(
+        probe_protocol.Reporter(disarm.DESCRIPTOR, stream=standalone))
+    expect(rc == 0, f"disarm standalone exits 0 (got {rc})")
+    expect(standalone.getvalue().count("[PASS]") == 2,
+           "disarm standalone prints two human PASS lines")
+    expect(launches["engine"] == {"port": 9193, "log": disarm.LOG, "args": []},
+           "disarm standalone preserves its port and engine-log behavior")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        events = Path(tmp) / "events.jsonl"
+        stream = io.StringIO()
+        rep = probe_protocol.Reporter(
+            disarm.DESCRIPTOR, events_path=str(events),
+            engine_log_dir=tmp, rts_caps=4, stream=stream)
+        rc, launches = _drive_disarm(rep, second_equip="false")
+        rep.close()
+        event_text = events.read_text(encoding="utf-8")
+        _seen, outcomes = probe_protocol.parse_event_stream(
+            event_text, disarm.DESCRIPTOR)
+        expect(rc == 3, f"disarm preserves inconclusive exit 3 (got {rc})")
+        expect(outcomes == {"initial_drop": "PASS", "repeat_drop": "MISSING"},
+               f"disarm retains the first result and leaves the rejected "
+               f"re-equip path MISSING (got {outcomes})")
+        expect('"level": "SKIP"' in event_text,
+               "disarm diagnoses its unexercised repeat drop as SKIP")
+        expect(stream.getvalue() == "",
+               "disarm protocol mode prints nothing to stdout")
+        expect(launches["engine"]["args"] == ["+RTS", "-N4", "-RTS"]
+               and launches["engine"]["log"]
+               == os.path.join(tmp, disarm.LOG_NAME),
+               "disarm uses harness RTS and isolated engine log")
+
+
+def _drive_remote_warning(rep, *, remote_ok=True):
+    import remote_warning_page_guard_probe as remote  # type: ignore
+
+    launches = {}
+    drains = iter((
+        [],
+        [{"outcome": "presented"}],
+        [{"outcome": "confirmed"},
+         {"outcome": "revalidationRejected",
+          "reason": "active world changed"}],
+        [],
+        [{"kind": "buildTool.commitPlacement", "outcome": "accepted"}],
+        [],
+        [{"outcome": "canceled"}],
+    ))
+
+    class FakeProc:
+        pass
+
+    def fake_boot(port, log=None, args=None, **_kw):
+        launches["engine"] = {"port": port, "log": log,
+                              "args": list(args or [])}
+        return FakeProc()
+
+    def fake_send(_port, lua, **_kw):
+        if "building.list" in lua:
+            count = launches.setdefault("list_calls", 0)
+            launches["list_calls"] = count + 1
+            return "" if count == 0 else remote.PORTAL
+        return "ok"
+
+    def fake_send_json(_port, lua, **_kw):
+        if "building.canPlaceAt" in lua:
+            return True
+        if "building.remoteCheck" in lua:
+            return remote_ok
+        if "rw.isOpen" in lua:
+            return "rw.open" in lua
+        raise AssertionError(f"unexpected send_json command: {lua!r}")
+
+    saved = (remote.boot, remote.quit_engine, remote.load_defs,
+             remote.init_arena, remote.show_and_wait, remote.drain,
+             remote.send, remote.send_json)
+    remote.boot = fake_boot
+    remote.quit_engine = lambda *a, **k: None
+    remote.load_defs = lambda _port: None
+    remote.init_arena = lambda _port, _name: None
+    remote.show_and_wait = lambda _port, _name: True
+    remote.drain = lambda _port: next(drains)
+    remote.send = fake_send
+    remote.send_json = fake_send_json
+    try:
+        rc = remote._run(9421, rep)
+    finally:
+        (remote.boot, remote.quit_engine, remote.load_defs,
+         remote.init_arena, remote.show_and_wait, remote.drain,
+         remote.send, remote.send_json) = saved
+    return rc, launches
+
+
+def test_remote_warning_page_guard_standalone() -> None:
+    import io
+    import remote_warning_page_guard_probe as remote  # type: ignore
+
+    ids = tuple(check_id for check_id, _label in remote.CHECKS)
+    if _migration_descriptor("remote_warning_page_guard_probe.py",
+                             "remote_warning_page_guard", ids) is None:
+        return
+    expect(len(ids) == 18 and len(set(ids)) == 18,
+           "remote_warning_page_guard declares all 18 unique checks")
+
+    standalone = io.StringIO()
+    rc, launches = _drive_remote_warning(
+        probe_protocol.Reporter(remote.DESCRIPTOR, stream=standalone))
+    expect(rc == 0, f"remote_warning_page_guard standalone exits 0 (got {rc})")
+    expect(standalone.getvalue().count("[PASS]") == 18,
+           "remote_warning_page_guard standalone prints 18 human PASS lines")
+    expect(launches["engine"] == {"port": 9421, "log": remote.LOG, "args": []},
+           "remote_warning_page_guard preserves standalone launch behavior")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        events = Path(tmp) / "events.jsonl"
+        stream = io.StringIO()
+        rep = probe_protocol.Reporter(
+            remote.DESCRIPTOR, events_path=str(events),
+            engine_log_dir=tmp, rts_caps=4, stream=stream)
+        rc, launches = _drive_remote_warning(rep, remote_ok=False)
+        rep.close()
+        _seen, outcomes = probe_protocol.parse_event_stream(
+            events.read_text(encoding="utf-8"), remote.DESCRIPTOR)
+        expect(rc == 1 and outcomes["remote_position_valid"] == "FAIL",
+               "remote_warning_page_guard attributes an invalid remote fixture")
+        expect(all(value == "PASS" for key, value in outcomes.items()
+                   if key != "remote_position_valid"),
+               "remote_warning_page_guard continues reporting after one failure")
+        expect(stream.getvalue() == "",
+               "remote_warning_page_guard protocol mode prints nothing to stdout")
+        expect(launches["engine"]["args"] == ["+RTS", "-N4", "-RTS"]
+               and launches["engine"]["log"]
+               == os.path.join(tmp, remote.LOG_NAME),
+               "remote_warning_page_guard uses harness RTS and isolated log")
+
+
+def _drive_circadian(rep, *, midnight=0.0):
+    import circadian_probe as circadian  # type: ignore
+
+    launches = {}
+    urges = iter((midnight, 0.0, 1.0, 0.5))
+    pressure = iter((100.0, 99.98, 99.96, 99.94, 99.92))
+
+    class FakeProc:
+        pass
+
+    def fake_boot(port, log=None, args=None, **_kw):
+        launches["engine"] = {"port": port, "log": log,
+                              "args": list(args or [])}
+        return FakeProc()
+
+    def fake_send(_port, lua, **_kw):
+        if "max_sleep_pressure" in lua:
+            return "100"
+        if "sleep_pressure" in lua:
+            return str(next(pressure))
+        return "ok"
+
+    saved = (circadian.boot, circadian.quit_engine,
+             circadian.bootstrap_defs, circadian.init_arena,
+             circadian.spawn_acolyte, circadian.urge_at,
+             circadian.send, circadian.poll_until,
+             circadian.time.sleep, circadian.PORT)
+    circadian.boot = fake_boot
+    circadian.quit_engine = lambda *a, **k: None
+    circadian.bootstrap_defs = lambda _port: None
+    circadian.init_arena = lambda _port, name=None: None
+    circadian.spawn_acolyte = lambda *a, **k: 1
+    circadian.urge_at = lambda *a, **k: next(urges)
+    circadian.send = fake_send
+    circadian.poll_until = lambda _timeout, fn: fn()
+    circadian.time.sleep = lambda _seconds: None
+    try:
+        rc = circadian._run(9013, rep)
+    finally:
+        (circadian.boot, circadian.quit_engine,
+         circadian.bootstrap_defs, circadian.init_arena,
+         circadian.spawn_acolyte, circadian.urge_at,
+         circadian.send, circadian.poll_until,
+         circadian.time.sleep, circadian.PORT) = saved
+    return rc, launches
+
+
+def test_circadian_standalone() -> None:
+    import io
+    import circadian_probe as circadian  # type: ignore
+
+    ids = ("urge_midnight_flat", "urge_noon_flat", "urge_dusk_peak",
+           "urge_evening_rising", "sleep_pressure_seeded",
+           "sleep_pressure_monotonic", "sleep_pressure_drain_rate")
+    if _migration_descriptor("circadian_probe.py", "circadian", ids) is None:
+        return
+
+    standalone = io.StringIO()
+    rc, launches = _drive_circadian(
+        probe_protocol.Reporter(circadian.DESCRIPTOR, stream=standalone))
+    expect(rc == 0, f"circadian standalone exits 0 (got {rc})")
+    expect(standalone.getvalue().count("[PASS]") == 7,
+           "circadian standalone prints seven human PASS lines")
+    expect(launches["engine"] == {"port": 9013, "log": circadian.LOG,
+                                  "args": []},
+           "circadian preserves standalone launch behavior")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        events = Path(tmp) / "events.jsonl"
+        stream = io.StringIO()
+        rep = probe_protocol.Reporter(
+            circadian.DESCRIPTOR, events_path=str(events),
+            engine_log_dir=tmp, rts_caps=4, stream=stream)
+        rc, launches = _drive_circadian(rep, midnight=0.5)
+        rep.close()
+        _seen, outcomes = probe_protocol.parse_event_stream(
+            events.read_text(encoding="utf-8"), circadian.DESCRIPTOR)
+        expect(rc == 1 and outcomes["urge_midnight_flat"] == "FAIL",
+               "circadian attributes its first failed urge check and exits 1")
+        expect(all(outcomes[key] == "MISSING" for key in ids[1:]),
+               "circadian preserves first-failure early stop as trailing MISSING")
+        expect(stream.getvalue() == "",
+               "circadian protocol mode prints nothing to stdout")
+        expect(launches["engine"]["args"] == ["+RTS", "-N4", "-RTS"]
+               and launches["engine"]["log"]
+               == os.path.join(tmp, circadian.LOG_NAME),
+               "circadian uses harness RTS and isolated engine log")
+
+
+def _drive_state_of_mind(rep, *, fail_delirious=False):
+    import state_of_mind_probe as state  # type: ignore
+
+    launches = {}
+    summary_calls = 0
+
+    class FakeProc:
+        pass
+
+    def fake_boot(port, log=None, args=None, **_kw):
+        launches["engine"] = {"port": port, "log": log,
+                              "args": list(args or [])}
+        return FakeProc()
+
+    baseline = {"state": "alert", "consciousness": 1.0, "mood": 1.0,
+                "emotionalPain": 0.0, "concentration": 1.0,
+                "stateOfMind": 1.0}
+
+    def fake_summary(_port, _uid):
+        nonlocal summary_calls
+        summary_calls += 1
+        if summary_calls <= 2:
+            return dict(baseline)
+        if summary_calls == 3:
+            value = dict(baseline)
+            value.update({"concentration": 0.88, "mood": 0.99,
+                          "emotionalPain": 0.10, "stateOfMind": 0.94})
+            return value
+        if summary_calls <= 11:
+            step = summary_calls - 4
+            value = dict(baseline)
+            value.update({"mood": 0.99 - step * 0.002,
+                          "emotionalPain": 0.10 + step * 0.01,
+                          "stateOfMind": 0.90})
+            return value
+        step = summary_calls - 12
+        value = dict(baseline)
+        value.update({"mood": 1.0 - step * 0.004})
+        return value
+
+    def fake_send(_port, lua, **_kw):
+        if "unit.getPain" in lua:
+            return "1.0"
+        if "brain').awareness" in lua:
+            return "0.2"
+        if "unit.spawn" in lua:
+            if "bear_brown',5" in lua:
+                return "2"
+            if "acolyte',13" in lua:
+                return "3"
+            if "bear_brown',9" in lua:
+                return "4"
+            return "1"
+        return "ok"
+
+    def alert_gate(som=0.9):
+        return {"c": 1.0, "som": som, "mood": 0.8, "ep": 0.2,
+                "pose": "standing", "uncon": False, "delir": False,
+                "conf": False, "state": "alert"}
+
+    def fake_band(_port, _uid, mood, emotional_pain, timeout=8.0):
+        if mood == 0.75:
+            return alert_gate(0.55), None
+        if mood == 0.57:
+            gate = alert_gate(0.27)
+            if fail_delirious:
+                gate.update({"delir": True, "state": "delirious"})
+            return gate, None
+        return alert_gate(0.06), None
+
+    saved = (state.boot, state.quit_engine, state.bootstrap, state.send,
+             state.summary, state.gate_observation, state.band_fixture,
+             state.time.sleep)
+    state.boot = fake_boot
+    state.quit_engine = lambda *a, **k: None
+    state.bootstrap = lambda _port: None
+    state.send = fake_send
+    state.summary = fake_summary
+    state.gate_observation = lambda _port, _uid: alert_gate(0.9)
+    state.band_fixture = fake_band
+    state.time.sleep = lambda _seconds: None
+    try:
+        rc = state._run(9350, rep)
+    finally:
+        (state.boot, state.quit_engine, state.bootstrap, state.send,
+         state.summary, state.gate_observation, state.band_fixture,
+         state.time.sleep) = saved
+    return rc, launches
+
+
+def test_state_of_mind_standalone() -> None:
+    import io
+    import state_of_mind_probe as state  # type: ignore
+
+    ids = tuple(check_id for check_id, _label in state.CHECKS)
+    if _migration_descriptor("state_of_mind_probe.py", "state_of_mind",
+                             ids) is None:
+        return
+    expect(len(ids) == 11 and len(set(ids)) == 11,
+           "state_of_mind declares all 11 unique checks")
+
+    standalone = io.StringIO()
+    rc, launches = _drive_state_of_mind(
+        probe_protocol.Reporter(state.DESCRIPTOR, stream=standalone))
+    expect(rc == 0, f"state_of_mind standalone exits 0 (got {rc})")
+    expect(standalone.getvalue().count("[PASS]") == 11,
+           "state_of_mind standalone prints 11 human PASS lines")
+    expect(launches["engine"] == {"port": 9350, "log": state.LOG,
+                                  "args": []},
+           "state_of_mind preserves standalone launch behavior")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        events = Path(tmp) / "events.jsonl"
+        stream = io.StringIO()
+        rep = probe_protocol.Reporter(
+            state.DESCRIPTOR, events_path=str(events),
+            engine_log_dir=tmp, rts_caps=4, stream=stream)
+        rc, launches = _drive_state_of_mind(rep, fail_delirious=True)
+        rep.close()
+        _seen, outcomes = probe_protocol.parse_event_stream(
+            events.read_text(encoding="utf-8"), state.DESCRIPTOR)
+        expect(rc == 1
+               and outcomes["delirious_band_gate_isolation"] == "FAIL",
+               "state_of_mind attributes the failed delirious-band guard")
+        expect(all(value == "PASS" for key, value in outcomes.items()
+                   if key != "delirious_band_gate_isolation"),
+               "state_of_mind preserves its accumulate-all behavior")
+        expect(stream.getvalue() == "",
+               "state_of_mind protocol mode prints nothing to stdout")
+        expect(launches["engine"]["args"] == ["+RTS", "-N4", "-RTS"]
+               and launches["engine"]["log"]
+               == os.path.join(tmp, state.LOG_NAME),
+               "state_of_mind uses harness RTS and isolated engine log")
 
 
 # ==========================================================================
@@ -2885,6 +3396,11 @@ def main() -> int:
                  test_no_tmpdir_default, test_result_document,
                  test_exit_codes, test_render, test_manifest_fixture,
                  test_manifest_real_registry, test_role_standalone,
+                 test_circadian_standalone,
+                 test_concussion_revive_standalone,
+                 test_disarm_standalone,
+                 test_remote_warning_page_guard_standalone,
+                 test_state_of_mind_standalone,
                  test_position_hold_standalone,
                  test_lua_strict_msg_standalone,
                  test_text_encoding_standalone,
