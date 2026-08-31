@@ -199,13 +199,19 @@ structureChunkQuads catalog palette handles lookupSlot texSizes
 --   (#1921) it contributes: the structure-PIECE records examined once
 --   their chunk has passed the visibility test.
 --
---   The quad half below is the ORIGINAL comprehension, unchanged and
---   unshared, and the count is a strict fold that materialises nothing:
---   requirement 9 forbids instrumentation allocating in proportion to
---   the sources it counts, and a shared list of visible chunks is
---   exactly that in a world holding one piece per chunk. The fold pays
---   one extra 'isChunkVisibleWrapped' per structure-bearing chunk —
---   pure, allocation-free, and O(chunks) rather than O(pieces).
+--   ONE traversal answers both halves, because requirement 9 forbids
+--   instrumentation that allocates in proportion to the sources it
+--   counts and a world can legitimately hold one piece per chunk. So
+--   there is no shared list of visible chunks to sum over, and no
+--   second 'isChunkVisibleWrapped' either: that helper builds corner
+--   and candidate lists of its own, so calling it twice per chunk is
+--   itself the forbidden allocation. Each chunk's visibility is decided
+--   exactly once and its result feeds the count and the quads together.
+--
+--   The quads stay bit-identical: same chunk order, same
+--   'HM.toList' piece order within a chunk, same
+--   'structurePieceQuads' order within a piece, built by the same
+--   right-nested concatenation a comprehension would produce.
 structureChunkQuadsScanned
     ∷ StructureWallCatalog
     → TexPalette
@@ -221,22 +227,27 @@ structureChunkQuadsScanned
 structureChunkQuadsScanned catalog palette handles lookupSlot texSizes
                            facing zSlice effDepth tileAlpha worldSize vb
                            camX camY chunks =
-    ( foldl' countVisible 0 chunks
-    , [ shifted
-      | lc ← chunks
-      , Just off ← [isChunkVisibleWrapped facing worldSize vb camX camY
-                                          (lcCoord lc)]
-      , ((gx, gy, slotTag), spd) ← HM.toList (lcStructures lc)
-      , sq ← structurePieceQuads catalog palette handles lookupSlot texSizes
-                 facing zSlice effDepth tileAlpha gx gy
-                 (toEnum (fromIntegral slotTag) ∷ StructureSlot) spd
-      , let shifted = translateQuad off sq
-      ] )
+    go 0 chunks
   where
-    countVisible acc lc =
+    -- The count is a strict argument, so it never builds a thunk chain,
+    -- and 'HM.size' is a traversal with no allocation of its own.
+    go ∷ Int → [LoadedChunk] → (Int, [SortableQuad])
+    go !scanned [] = (scanned, [])
+    go !scanned (lc : rest) =
         case isChunkVisibleWrapped facing worldSize vb camX camY (lcCoord lc) of
-            Just _  → acc + HM.size (lcStructures lc)
-            Nothing → acc
+            Nothing  → go scanned rest
+            Just off →
+                let (scanned', quads) =
+                        go (scanned + HM.size (lcStructures lc)) rest
+                in (scanned', chunkQuads off lc ++ quads)
+
+    chunkQuads off lc =
+        [ translateQuad off sq
+        | ((gx, gy, slotTag), spd) ← HM.toList (lcStructures lc)
+        , sq ← structurePieceQuads catalog palette handles lookupSlot texSizes
+                   facing zSlice effDepth tileAlpha gx gy
+                   (toEnum (fromIntegral slotTag) ∷ StructureSlot) spd
+        ]
 
 -- | Move a quad's four vertex POSITIONS by a screen-space offset, leaving
 --   every other field — UVs, tint, atlas/facemap slots, flags, packed
