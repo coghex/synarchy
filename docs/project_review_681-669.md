@@ -8,11 +8,11 @@ The river-identification, world-render, Lua world/world-query/equipment/units, g
 
 ## Status
 
-- [ ] PRR-1. An empty explicit resource root silently selects the current directory
+- [x] PRR-1. An empty explicit resource root silently selects the current directory — [#1949]
 
 ## 1. Resource-root argument validation
 
-### PRR-1. An empty explicit resource root silently selects the current directory
+### [#1949] PRR-1. An empty explicit resource root silently selects the current directory
 
 > **Captured note:** Reject an explicitly empty `--resource-root` value instead of interpreting it as the current directory. An unset shell variable must not override `SYNARCHY_ROOT` and silently select whichever checkout happens to be the caller's cwd.
 

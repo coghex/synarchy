@@ -8,12 +8,12 @@ The UI-manager, Buildings API, top-level Lua router, Lua API registration, UI Ma
 
 ## Status
 
-- [ ] PRR-1. The nocturnal bear can wake at the same dawn that makes it seek sleep
-- [ ] PRR-2. The Cabal package has regressed to a failing `cabal check`
+- [x] PRR-1. The nocturnal bear can wake at the same dawn that makes it seek sleep — [#1945]
+- [x] PRR-2. The Cabal package has regressed to a failing `cabal check` — [no-issue]
 
 ## 1. Species-specific sleep phase and wake phase
 
-### PRR-1. The nocturnal bear can wake at the same dawn that makes it seek sleep
+### [#1945] PRR-1. The nocturnal bear can wake at the same dawn that makes it seek sleep
 
 > **Captured note:** Make automatic circadian wake timing compatible with the per-species sleep phase. A dawn-centered nocturnal species must not be driven to bed by dawn and then immediately woken by the same dawn crossing.
 
@@ -40,7 +40,9 @@ The UI-manager, Buildings API, top-level Lua router, Lua API registration, UI Ma
 
 ## 2. Cabal metadata validation
 
-### PRR-2. The Cabal package has regressed to a failing `cabal check`
+### [no-issue] PRR-2. The Cabal package has regressed to a failing `cabal check`
+
+> **Disposition:** No issue — the exit-1 is a signed-off consequence of #1057's checked-in `-Werror`, documented at `synarchy.cabal:99-104` as "accepted deliberately, not an oversight", alongside the same treatment for the `-O2` (`:145`) and upper-bounds (`:160-164`) warnings. No live gate runs `cabal check`: it is absent from `ci.yml`, `tools/ci-local.sh`, the Makefile, and every tracked doc, so nothing in the repository implies the checker passes. #635's clean-check acceptance is a closed issue's record of its merge state, not a standing contract, and the two available repairs would either stop ordinary local builds being warning-fatal — the gap #1057 closed — or relocate `-Werror` to `cabal.project` purely so a command no gate runs returns 0.
 
 > **Captured note:** Reconcile the checked-in fatal-warning policy with the clean-package contract established by #635. Either restore a zero-exit `cabal check` while keeping ordinary builds warning-fatal, or explicitly supersede the old acceptance contract so the repository does not continue to imply that the Cabal checker passes.
 

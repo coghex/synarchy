@@ -133,12 +133,14 @@ are the same list, and a field that fits none of them cannot be
 classified at all. Adding a ninth is possible but deliberately hard —
 see §6.4(c).
 
-**Eight identifiers, thirteen record/view types.** The record set is
-finer-grained than the identifier set, because five capabilities are
-deliberately split — four of them by §3.1's pointer-record visibility
-rule (a thread-private field forces a strictly narrower worker-safe
-view, never a documented restriction on a wider record), one by
-consumer coupling:
+**Eight identifiers, fourteen record/view types.** The record set is
+finer-grained than the identifier set, because six capabilities are
+deliberately split, for three distinct reasons — four of them by
+§3.1's pointer-record visibility rule (a thread-private field forces a
+strictly narrower worker-safe view, never a documented restriction on a
+wider record), one by consumer coupling, and one by **mutation
+authority** (a field's legitimate writer and its many readers need
+different *field types*, not different field *sets*):
 
 | Identifier | Record / view type(s) | Landed by |
 |---|---|---|
@@ -147,7 +149,7 @@ consumer coupling:
 | `input-lua-transport` | `Engine.Core.Capability.Input` — `InputCapability` (8, `LuaThread`-only); `Engine.Core.Capability.InputView` — `InputViewCapability` (worker-safe, carries neither `inputBarrierNextRef` nor `currentKeyDownRef`) | #892 (E4) |
 | `world-sim-render-handoff` | `Engine.Core.Capability.WorldSim` — `WorldSimCapability` (9 world/sim fields); `Engine.Core.Capability.RenderHandoff` — `RenderHandoffCapability` (7 coupled handoff fields) | #893 (E5a) / #894 (E5b) |
 | `units-buildings-combat` | `Engine.Core.Capability.UnitCombat` — `UnitCombatCapability` (10); `Engine.Core.Capability.Building` — `BuildingCapability` (3) | #895 (E6a) / #896 (E6b) |
-| `content-registries` | `Engine.Core.Capability.ContentRegistries` — `ContentRegistriesCapability` (8 registries) | #890 (E2) |
+| `content-registries` | `Engine.Core.Capability.ContentRegistries` — `ContentRegistriesCapability` (8 registries, the raw WRITER interface); `Engine.Core.Capability.ContentRegistriesView` — `ContentRegistriesViewCapability` (the reader-facing view: 4 registries as `ReadOnlyRef`s + `crvInfectionManagerRef` raw) | #890 (E2) / #1896 (CMA-2) |
 | `ui-hud-events` | `Engine.Core.Capability.Ui` — `UiCapability` (4 UI/focus/HUD fields); `Engine.Core.Capability.Events` — `EventsCapability` (4 event/notification/popup fields) | #897 (E7a) / #898 (E7b) |
 | `save-load-coordination` | `Engine.Core.Capability.SaveLoad` — `SaveLoadCapability` (5 coordination handles) | #899 (E8) |
 
@@ -155,6 +157,21 @@ The `world-sim-render-handoff` split is the one that is not a §3.1
 thread-privacy split: neither half carries a thread-private field, and
 it exists because the render-handoff fields' consumers straddle
 this group and `render-gpu-asset` (§7.4).
+
+The `content-registries` split is the third kind, and the only one so
+far (#1896, CMA-2 of the mutation-authority epic #1890). Both records
+carry the same live handles; what differs is what a holder may DO with
+four of them. `ContentRegistriesCapability` stays the raw writer
+interface — the four `X.loadYaml` populators keep it — while every
+other production consumer of those four registries takes
+`ContentRegistriesViewCapability`, where they arrive as
+`Engine.Core.ReadOnlyRef.ReadOnlyRef`s and a mutation is a compile
+error. `crvInfectionManagerRef` rides on the view as the ordinary
+`IORef` it is, because `Engine.Scripting.Lua.API.Units.Combat` is the
+one module mixing a selected registry with an out-of-scope one and must
+not keep the raw record merely to reach infection. Infection, locations,
+loot tables and tutorials are deliberately OUTSIDE the pilot's
+structural boundary; whether it is worth extending is CMA-3's call.
 
 **The capability-record convention (canonical statement).** Every
 record/view in the table above — and any future one — follows exactly
@@ -176,6 +193,28 @@ here:
   exact same `IORef`/`TVar`/`Queue` handle (or immutable value)
   `EngineEnv` already carries — the projection aliases live state, it
   does not snapshot or duplicate it.
+* **An abstract wrapper narrows AUTHORITY, and must still alias**
+  (#1896). A view may present a field through an abstract wrapper
+  around the *same live handle* — today exactly one exists,
+  `Engine.Core.ReadOnlyRef.ReadOnlyRef`, which denies writes by
+  exporting no constructor, no unwrap and no write. Four rules make
+  that an extension of the rule above rather than an exception to it:
+  the wrapper **aliases**, never copies, so a write through the
+  legitimate raw handle is observed through it immediately (the rule
+  above, unchanged, and it is what the projection-aliasing hspec
+  module must prove for a wrapped field); its **construction is
+  public**, because the guarantee is "a module handed only the wrapped
+  form cannot write", not unforgeability — the raw handle is what
+  confers authority, and a private constructor would merely block the
+  view projection and test fixtures; there is **no `.Internal`
+  companion**, no unwrap, and no second route back to the handle; and
+  the wrapper's own module lives OUTSIDE `Engine.Core.Capability.*`,
+  since it is a reference discipline rather than a capability record.
+  A consumer narrowed to the wrapped form must not retain another route
+  to the raw handle, or the boundary is decorative —
+  `tools/engine_env_capability_audit.py` knows the wrapper by name
+  (`ALIAS_PRESERVING_WRAPPERS`) so a wrapped field still canonicalizes
+  onto its `EngineEnv` field for the §5 write map and the §6.5 residue.
 * **No capability module imports its own consumers.** A capability
   module may be imported freely by the modules it narrows access for,
   but must never import back into them.
@@ -586,10 +625,23 @@ startup shape, **not** an enforced invariant: the `engine.load*Yaml` /
 `item.loadYaml` / `equipment.loadYaml` verbs stay publicly callable at
 any time (`Engine.Scripting.Lua.API.Register.Engine`) and keep their
 insert/replace-by-id behaviour, so nothing here may assume a one-shot
-or frozen registry. Since #890 every reader AND writer in this group
-reaches these fields through
-`Engine.Core.Capability.ContentRegistries.ContentRegistriesCapability`
-rather than an `EngineEnv` field (§7.6).
+or frozen registry. Since #890 no consumer in this group reaches these
+fields through an `EngineEnv` field at all — but since #1896 they no
+longer all reach them through the *same record* (§7.6). For
+`infectionManagerRef`, `locationDefsRef`, `lootTableRegistryRef` and
+`tutorialRegistryRef`, reader and writer alike still take
+`Engine.Core.Capability.ContentRegistries.ContentRegistriesCapability`.
+For `itemManagerRef`, `equipmentClassManagerRef`, `substanceManagerRef`
+and `recipeManagerRef`, that record is now the raw WRITER interface
+— held by the one `X.loadYaml` module that legitimately writes each —
+while every other non-§6.1 reader takes
+`Engine.Core.Capability.ContentRegistriesView.ContentRegistriesViewCapability`,
+which presents those four as `Engine.Core.ReadOnlyRef.ReadOnlyRef`s.
+§6.1's permanent cohort is outside that boundary by D-4 and still reads
+the raw handles (`Engine.Core.Init` allocates them;
+`Engine.Scripting.Lua.API.Save` reads the item and recipe registries).
+Both records alias the same live containers, so the Readers/Writers
+cells below are unchanged: this split narrowed authority, not state.
 
 | Field | Lifecycle | Readers | Writers | Sync | Init | Shutdown | Notes |
 |---|---|---|---|---|---|---|---|
@@ -1148,7 +1200,7 @@ An approved ninth capability requires these changes **in lockstep**:
 
 And it must have a **real narrowed consumer** in the same change. No
 unused record is permitted — that rule is what has kept every one of
-the thirteen existing record/view types earning its place.
+the fourteen existing record/view types earning its place.
 
 #### (d) Adding a new module to §6.1
 
@@ -1230,9 +1282,9 @@ violations nor admitted into the map. The cohort this map governs is
 the capability-narrowed consumers.
 
 **The pass-on residue.** What the scan cannot attribute, it reports.
-Every capability-accessor use that is *not* a direct inline `IORef`
-read or write — a handle given to a helper, stored into a context
-record that mixes several capabilities, handed to a queue/`TVar`/`MVar`
+Every capability-accessor use that is *not* a direct inline handle read
+or write — a handle given to a helper, stored into a context record
+that mixes several capabilities, handed to a queue/`TVar`/`MVar`
 primitive, or composed point-free — is listed on every run as one line
 per source occurrence, with its path, line, accessor and canonical
 field. It is **non-blocking, counted but never resolved to an
@@ -1249,7 +1301,16 @@ binding forms:
    *and* for the primitive. A name is only `Data.IORef`'s `writeIORef`
    if that one reaches the module under the spelling written; a
    module-local homonym, or an unrelated module's qualified one, is a
-   different function whose argument mutates no `IORef`. For the
+   different function whose argument mutates no `IORef`. Each primitive
+   is resolved against **its own** defining module
+   (`ACCESS_PRIMITIVE_MODULES`), so `Engine.Core.ReadOnlyRef`'s
+   `readReadOnlyRef` (#1896) goes through the identical rule rather than
+   a looser second path. It is a READ, and only a read: a
+   `ReadOnlyRef` field has no write primitive to recognize, which is the
+   whole point of the type. Recognizing it matters for the residue, not
+   the map — without it every consumer migrated onto a wrapped view
+   would be recounted as a pass-on, and the measurement would report
+   the opposite of what the migration did. For the
    accessor the same rule applies: it must
    actually reach that module — imported by name, through a bare
    import, through the wildcard of the record it belongs to
@@ -1265,9 +1326,13 @@ binding forms:
    mutation primitive *and* that argument must be an application —
    `prim (accessor handle) …`. This is a type argument, not a
    heuristic: every accessor projects out of a handle
-   (`EngineEnv -> IORef a`), so it can never itself be the `IORef` the
-   primitive takes, and a *bare* identifier there always denotes some
-   local binding sharing its name. Naming an accessor in a comment, in
+   (`EngineEnv -> IORef a`, or `EngineEnv -> ReadOnlyRef a` for a
+   wrapped view field — §2.1's abstract-wrapper extension, which
+   `ALIAS_PRESERVING_WRAPPERS` lets the scan see through so a wrapped
+   field still canonicalizes onto its `EngineEnv` field), so it can
+   never itself be the handle the primitive takes, and a *bare*
+   identifier there always denotes some local binding sharing its
+   name. Naming an accessor in a comment, in
    Haddock, or in an import list is not using it either — commentary
    and import declarations are stripped before the scan, and that
    stripping is literal-aware: a `--` inside a string is text, block
@@ -1963,7 +2028,69 @@ same containers.
   are the ones handed to a §6.1 permanent orchestration boundary or to
   a helper that composes several capability records, which is the
   intended end state, not a remaining migration. Nothing further is
-  owed to `content-registries` itself.
+  owed to `content-registries` itself. *(That closure is about the
+  #537 VISIBILITY split, and it still holds. The mutation-authority
+  arc below is a separate epic (#1890) reaching into the same group,
+  not a reopening of this row.)*
+
+**What #1896 added (CMA-2, epic #1890 — mutation authority, not
+visibility).** The 8-field record above stayed exactly as it is and
+kept every consumer of the four registries outside the pilot. Beside
+it now sits `Engine.Core.Capability.ContentRegistriesView`, exporting
+`ContentRegistriesViewCapability` plus the total one-way projection
+`toContentRegistriesViewCapability`, following the same §2.1
+convention (same live handles, never a copy; no import of a consumer)
+including that section's abstract-wrapper extension.
+
+- **What differs is the field TYPE, not the field set.**
+  `crvItemManagerRef`, `crvEquipmentClassManagerRef`,
+  `crvSubstanceManagerRef` and `crvRecipeManagerRef` are
+  `Engine.Core.ReadOnlyRef.ReadOnlyRef`s over the very handles
+  `ContentRegistriesCapability` exposes raw, so a non-writer's
+  mutation is a compile error and the restriction survives the handle
+  being passed into a helper or packed into a context record.
+- **Who keeps the raw record for a selected field:** its four
+  legitimate writers, and nobody else —
+  `Engine.Scripting.Lua.API.Items.Defs` (indirectly, through
+  `registerItemDefs`), `.Equipment.Class`, `.Craft.Recipe` and
+  `.Substance`. They obtain it through the existing projection at
+  their `Engine.Scripting.Lua.API.Register.*` call sites, never
+  through a fresh raw `EngineEnv` accessor import.
+- **Who moved:** all 31 read-only module-field pairs, across 26
+  modules — the complete measured accessor surface, in one change.
+  Three further modules move with them without naming a selected
+  accessor themselves (`Building.Thread.Command`, `Unit.Thread`,
+  `Engine.Scripting.Lua.API.Buildings.Progress`), plus
+  `World.Thread.Command.BoundSpawn`, because they carry or forward the
+  record into `Building.Knowledge.Live.containerObserver`, whose third
+  parameter is now the view.
+- **And one module the accessor census could not see.**
+  `World.Render.GroundItemQuads` read `itemManagerRef` through the raw
+  `Engine.Core.State` accessor rather than a capability record, so it
+  appears in none of the counts above — while being exactly the kind of
+  non-writing consumer this boundary governs. It takes the view too. The
+  census measures the capability-accessor surface; the RULE is "every
+  non-§6.1 reader of a selected registry", and where the two differ the
+  rule wins.
+- **The production pass-on** is
+  `Building.Knowledge.Live.ContainerObserver.coItems ∷ ReadOnlyRef
+  ItemManager` — the arc's load-bearing demonstration, since a
+  record-level boundary would have ended the moment the record was
+  unpacked. `coGameTime` beside it stays a raw `IORef`: it is a
+  `world-sim-render-handoff` field, outside this pilot.
+- **`crvInfectionManagerRef` is the one deliberately UNWRAPPED field.**
+  `Engine.Scripting.Lua.API.Units.Combat` is the only module in the
+  tree mixing a selected registry with an out-of-scope one; keeping
+  the raw record merely to reach infection would have handed the raw
+  item handle straight back, so infection is supplied on the view as
+  the ordinary `IORef` it remains. It is not inside the structural
+  boundary, and neither are locations, loot tables or tutorials.
+- **Gates:** hspec `--match "ReadOnlyRef"` (the wrapper aliases rather
+  than snapshots, both records share one container),
+  `tools/test_read_only_ref_compile.py` (manual — real compilations,
+  with positive controls, proving the rejections are the boundary and
+  not a broken environment), plus this file's own audit, which knows
+  the wrapper by name.
 
 ### 7.7 `ui-hud-events` — **FULLY LANDED (E7a #897; E7b #898)**
 

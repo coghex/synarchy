@@ -22,11 +22,16 @@ module Test.Headless.Lua.ShellInput (spec) where
 import UPrelude
 import Test.Hspec
 import Data.IORef (newIORef, writeIORef)
+import Data.List (sort)
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
 import qualified Data.Text.IO as TIO
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Thread (ThreadControl(..))
 import Engine.Scripting.Lua.API (registerLuaAPI)
+import Engine.Scripting.Lua.API.Namespaces
+    (engineApiNamespaces, consoleExposedNamespaces, consoleWithheldNamespaces)
+import Engine.Scripting.Lua.API.Shell (setupShellSandbox)
 import Engine.Scripting.Lua.Thread (createLuaBackendState)
 import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
@@ -92,7 +97,7 @@ spec = do
             it "inserts a multibyte completion by code points" $ \env → do
                 ls ← shellBackend env
                 eval ls
-                    "__boot(); local f=__fid; _G['ww🙂ab']=1; _G['ww🙂cd']=1; \
+                    "__boot(); local f=__fid; shellSandbox['ww🙂ab']=1; shellSandbox['ww🙂cd']=1; \
                     \__shell.onCharInput(f,'w'); __shell.onCharInput(f,'w'); \
                     \__shell.onTabPressed(f); \
                     \local t,c=__shell.getInputState(); \
@@ -106,7 +111,7 @@ spec = do
                 -- invalid UTF-8 — and it used to become ghost text and a Tab
                 -- insertion.
                 eval ls
-                    "__boot(); local f=__fid; _G['zz🙂x']=1; _G['zz🙃y']=1; \
+                    "__boot(); local f=__fid; shellSandbox['zz🙂x']=1; shellSandbox['zz🙃y']=1; \
                     \local lcp=__shell.longestCommonPrefix(__shell.getCompletions('zz')); \
                     \__shell.onCharInput(f,'z'); __shell.onCharInput(f,'z'); \
                     \__shell.onTabPressed(f); \
@@ -121,7 +126,7 @@ spec = do
                 -- leading 'é' the byte-counting cursor sat one short of
                 -- #inputBuffer and the hint silently never appeared.
                 eval ls
-                    "__boot(); local f=__fid; _G['gg界xy']=1; _G['gg界zw']=1; \
+                    "__boot(); local f=__fid; shellSandbox['gg界xy']=1; shellSandbox['gg界zw']=1; \
                     \__shell.onCharInput(f,'é'); __shell.onCharInput(f,'g'); \
                     \_G.__measured={}; __shell.onCharInput(f,'g'); \
                     \local ghost,buffer=false,false; \
@@ -130,12 +135,129 @@ spec = do
                     \return tostring(ghost)..'|'..tostring(buffer)"
                     `shouldReturn` "true|true"
 
+            it "offers only names the console's own environment can resolve" $ \env → do
+                ls ← shellBackend env
+                -- _G and shellSandbox are DISTINCT objects at both levels:
+                -- a top-level name, and a member of an engine API table the
+                -- sandbox shallow-copied before scripts loaded. Only the
+                -- sandbox side may be suggested, and what is suggested must
+                -- resolve where engine.shellExecute actually runs it.
+                eval ls
+                    "__boot(); \
+                    \_G['zqGlobalOnly']=1; shellSandbox['zqSandboxOnly']=1; \
+                    \engine.zqGlobalMember=1; shellSandbox.engine.zqSandboxMember=1; \
+                    \local top=table.concat(__shell.getCompletions('zq'),','); \
+                    \local mem=table.concat(__shell.getCompletions('engine.zq'),','); \
+                    \local r1=engine.shellExecute('return zqSandboxOnly ~= nil'); \
+                    \local r2=engine.shellExecute('return engine.zqSandboxMember ~= nil'); \
+                    \return top..'|'..mem..'|'..r1..'|'..r2"
+                    `shouldReturn`
+                        "zqSandboxOnly|engine.zqSandboxMember|true|true"
+
+            it "resolves every candidate it offers in the execution environment" $ \env → do
+                ls ← shellBackend env
+                -- 'c' matches no Lua keyword and no copied stdlib name, and
+                -- the visible history is empty, so every candidate for it
+                -- comes from the environment source requirement 2 governs --
+                -- and all five are engine API tables the sandbox used to
+                -- omit. 'world.get' is the member half of the same check.
+                eval ls
+                    "__boot(); local bad,n={},0; \
+                    \local function check(p) \
+                    \  for _,c in ipairs(__shell.getCompletions(p)) do n=n+1; \
+                    \    local r,e=engine.shellExecute('return ('..c..') ~= nil'); \
+                    \    if e or r~='true' then bad[#bad+1]=c end end end; \
+                    \check('c'); check('world.get'); \
+                    \return table.concat(__shell.getCompletions('c'),',') \
+                    \..'|'..table.concat(bad,',')..'|'..tostring(n>=10)"
+                    `shouldReturn`
+                        "camera,chop,combat,construction,craft||true"
+
+            it "keeps keyword and visible-history candidates beside the \
+               \environment source" $ \env → do
+                ls ← shellBackend env
+                -- Requirement 6: keywords and past commands are separate
+                -- sources and are NOT required to resolve as sandbox keys.
+                -- 'wh' reaches only the keyword; 'zzc' only the history.
+                eval ls
+                    "__boot(); \
+                    \__shell.addHistory('zzcOne','OK',false); \
+                    \__shell.addHistory('zzcTwo','OK',false); \
+                    \return table.concat(__shell.getCompletions('wh'),',') \
+                    \..'|'..table.concat(__shell.getCompletions('zzc'),',') \
+                    \..'|'..table.concat(__shell.getCompletions('pr'),',')"
+                    `shouldReturn` "while|zzcOne,zzcTwo|print"
+
+        -- #1958: the console offered completions it could not execute. The
+        -- sandbox's engine API list had drifted sixteen namespaces behind
+        -- the setglobal calls it was asked to mirror by comment, and
+        -- getCompletions enumerated _G on top of that. Both sides here are
+        -- derived live -- the registered set by diffing _G across a real
+        -- registerLuaAPI, the reachable set from the real shellSandbox --
+        -- so neither this group nor production restates the other's list.
+        describe "engine API namespace synchronisation" $ do
+            it "exposes every registered engine API namespace to the console \
+               \except the declared withheld ones" $ \env → do
+                (ls, registered) ← apiRegistrationBackend env
+                sandboxTables ← splitNames ⊚ eval ls
+                    "local n={}; for k,v in pairs(shellSandbox) do \
+                    \if type(k)=='string' and type(v)=='table' then n[#n+1]=k end \
+                    \end; table.sort(n); return table.concat(n,',')"
+                let declared  = sort (map TE.decodeUtf8 engineApiNamespaces)
+                    exposed   = sort (map TE.decodeUtf8 consoleExposedNamespaces)
+                    withheld  = sort (map (TE.decodeUtf8 . fst)
+                                          consoleWithheldNamespaces)
+                    -- Not every sandbox table is an API namespace: math,
+                    -- string, table and os are deliberately there too.
+                    projection = filter (`elem` registered) sandboxTables
+                -- Both directions: a namespace registered but undeclared,
+                -- and a declared name no longer registered, each fail here.
+                registered `shouldBe` declared
+                filter (`notElem` registered) withheld `shouldBe` []
+                -- The contract itself: registered minus withheld, reachable.
+                projection `shouldBe` filter (`notElem` withheld) registered
+                projection `shouldBe` exposed
+
+            it "withholds debug and keeps its escape primitives out of the \
+               \console" $ \env → do
+                (ls, registered) ← apiRegistrationBackend env
+                -- debug is the augmented case: openlibs created the stdlib
+                -- table and registerDebugAPI added engine verbs to it, so
+                -- it never appears as a NEW global. The live derivation has
+                -- to recognise it anyway, or the one withheld namespace
+                -- would silently drop out of the comparison above.
+                ("debug" `elem` registered) `shouldBe` True
+                eval ls "return tostring(shellSandbox.debug)"
+                    `shouldReturn` "nil"
+                -- The reason it is withheld, checked rather than asserted in
+                -- prose: the console cannot reach the upvalue primitive that
+                -- would rewrite its own _ENV.
+                eval ls "local r=engine.shellExecute('return debug'); return r"
+                    `shouldReturn` "nil"
+                eval ls "local _,e=engine.shellExecute('return debug.setupvalue'); \
+                        \return tostring(e)"
+                    `shouldReturn` "true"
+                -- Withholding is a deliberate decision, so widening the set
+                -- is meant to cost an edit here as well as in production.
+                map (TE.decodeUtf8 . fst) consoleWithheldNamespaces
+                    `shouldBe` ["debug"]
+
         describe "scrolling" $ do
             it "scrolls by code points and shows whole characters" $ \env → do
                 ls ← shellBackend env
-                -- 100px per code point against the shell's 1100px input field:
-                -- exactly eleven characters fit, so a fifteen-character line
-                -- must scroll four of them away.
+                -- 100px per code point against the shell's 892px input
+                -- field: exactly eight characters fit, so a fifteen-character
+                -- line must scroll seven of them away.
+                --
+                -- #1959 is why that field is 892px and not the 1100px this
+                -- case measured against before, and the stub framebuffer
+                -- below is unchanged — the width it implies is what moved.
+                -- The console now fits its box to the framebuffer, and
+                -- 1280px cannot hold the preferred 1368px-wide box, so the
+                -- center narrows to 1112 (interior 104..1216); and the input
+                -- budget is now the room actually left after the prompt
+                -- rather than a flat 100px inset, so the 200px this stub
+                -- charges for "$>" is what the field gives up.
                 eval ls
                     "__boot(); local f=__fid; _G.__px=100; \
                     \for i=1,5 do for _,c in ipairs({'é','界','🙂'}) do \
@@ -148,7 +270,7 @@ spec = do
                     \return utf8.len(t)..'|'..c..'|'..s..'|'..utf8.len(vis)..'|'..vis \
                     \..'|'..c2..'|'..s2..'|'..utf8.len(vis2)..'|'..vis2"
                     `shouldReturn`
-                        "15|15|4|11|界🙂é界🙂é界🙂é界🙂|3|3|11|é界🙂é界🙂é界🙂é界"
+                        "15|15|7|8|界🙂é界🙂é界🙂|3|3|8|é界🙂é界🙂é界"
 
         describe "history and interrupt" $ do
             it "restores stored Unicode commands with a code-point cursor" $ \env → do
@@ -180,11 +302,16 @@ spec = do
                     \return t1..'|'..c1..'|'..t2..'|'..c2..'|'..t3..'|'..c3"
                     `shouldReturn` "東京|2|ok|2|ok|2"
 
+        -- "Unchanged" is #1187's contract: ASCII must behave exactly as it
+        -- did before the byte -> code-point rewrite. The trailing scroll
+        -- offset and visible slice moved with #1959's fitted input width
+        -- (see the scrolling case above); every editing, navigation and
+        -- completion expectation in the line is untouched.
         describe "ASCII behaviour is unchanged" $ do
             it "edits, navigates, completes, and scrolls exactly as before" $ \env → do
                 ls ← shellBackend env
                 eval ls
-                    "__boot(); local f=__fid; _G['qqrs']=1; _G['qqrt']=1; \
+                    "__boot(); local f=__fid; shellSandbox['qqrs']=1; shellSandbox['qqrt']=1; \
                     \for _,c in ipairs({'a','b','c'}) do __shell.onCharInput(f,c) end; \
                     \__shell.onCursorLeft(f); __shell.onCharInput(f,'X'); \
                     \local t1,c1=__shell.getInputState(); \
@@ -201,7 +328,7 @@ spec = do
                     \local _,c6,s6=__shell.getInputState(); \
                     \return t1..'|'..c1..'|'..t2..'|'..c2..'|'..c3..'|'..c4 \
                     \..'|'..t5..'|'..c5..'|'..c6..'|'..s6..'|'..__shell.getVisibleInput()"
-                    `shouldReturn` "abXc|3|ab|2|0|2|qqr|3|15|4|aaaaaaaaaaa"
+                    `shouldReturn` "abXc|3|ab|2|0|2|qqr|3|15|7|aaaaaaaa"
 
     -- The byte-offset assumption was spread across every editing, navigation
     -- and measuring path in the file, so pin its absence rather than only its
@@ -219,6 +346,11 @@ spec = do
 -- | A headless Lua backend with the real shell module loaded and the stubs it
 -- needs to run without a GPU, a window, or the user's history file. Booting is
 -- left to @__boot@ so each case can seed its own arrow-key history first.
+--
+-- The @engine.getTextWidth@ stub lands on @_G.engine@, which is a different
+-- table from the @shellSandbox.engine@ the sandbox copied — that is exactly
+-- the divergence #1958 is about. It is the right side to stub: @shell.lua@
+-- itself runs unsandboxed and calls the @_G@ copy.
 shellBackend ∷ EngineEnv → IO LuaBackendState
 shellBackend env = do
     writeIORef (uiManagerRef env) emptyUIPageManager
@@ -228,6 +360,11 @@ shellBackend env = do
                                (inputStateRef env) (loggerRef env)
     stateRef ← newIORef ThreadRunning
     registerLuaAPI (lbsLuaState ls) env ls stateRef
+    -- Production order (Engine.Scripting.Lua.Thread.luaStartup): register
+    -- the API, build the sandbox, and only then load scripts. Since #1958
+    -- the sandbox is also the console's completion source, so a fixture
+    -- that skipped this step would test a console with no names at all.
+    setupShellSandbox (lbsLuaState ls)
     setup ← eval ls $ T.unwords
         [ "_G.__measured={}; _G.__px=10;"
         , "engine.getTextWidth=function(_,t,_) local n,b=utf8.len(t);"
@@ -258,6 +395,61 @@ shellBackend env = do
         ]
     setup `shouldBe` "ready"
     pure ls
+
+-- | A backend that answers "which globals did 'registerLuaAPI' actually
+-- install?" from the live Lua state rather than from a list, then builds the
+-- real console sandbox on top. The registered set is the difference @_G@ took
+-- across the call: a name that appeared, a name whose value was replaced, or
+-- — the @debug@ case — a table @Lua.openlibs@ had already created that gained
+-- members. @__apiSnap@ is this fixture's only addition to @_G@ and both
+-- passes skip it by name; it is scaffolding, not a namespace.
+--
+-- No shell module here: this pair of cases is about registration and sandbox
+-- construction, which happen before any script loads.
+apiRegistrationBackend ∷ EngineEnv → IO (LuaBackendState, [T.Text])
+apiRegistrationBackend env = do
+    ls ← createLuaBackendState (luaToEngineQueue env) (luaQueue env)
+                               (assetPoolRef env) (nextObjectIdRef env)
+                               (inputStateRef env) (loggerRef env)
+    snapped ← eval ls $ T.unwords
+        [ "_G.__apiSnap={values={},keys={}};"
+        , "for k,v in pairs(_G) do"
+        , "  if type(k)=='string' and k~='__apiSnap' then"
+        , "    __apiSnap.values[k]=v;"
+        , "    if type(v)=='table' then local ks={};"
+        , "      for mk in pairs(v) do ks[mk]=true end;"
+        , "      __apiSnap.keys[k]=ks end"
+        , "  end end;"
+        , "return 'snapped'"
+        ]
+    snapped `shouldBe` "snapped"
+    stateRef ← newIORef ThreadRunning
+    registerLuaAPI (lbsLuaState ls) env ls stateRef
+    registered ← splitNames ⊚ eval ls (T.unwords
+        [ "local n={};"
+        , "for k,v in pairs(_G) do"
+        , "  if type(k)=='string' and k~='__apiSnap' then"
+        , "    local pv=__apiSnap.values[k];"
+        , "    local isNew=(pv==nil) or (pv~=v);"
+        -- v~=_G skips the _G._G self-alias: the table being diffed
+        -- gained all 26 new globals as members, so it would otherwise
+        -- report itself as an augmented namespace.
+        , "    if not isNew and type(v)=='table' and v~=_G then"
+        , "      local pk=__apiSnap.keys[k] or {};"
+        , "      for mk in pairs(v) do"
+        , "        if pk[mk]==nil then isNew=true; break end end"
+        , "    end;"
+        , "    if isNew then n[#n+1]=k end"
+        , "  end end;"
+        , "table.sort(n); return table.concat(n,',')"
+        ])
+    setupShellSandbox (lbsLuaState ls)
+    pure (ls, registered)
+
+-- | The comma-joined name lists the Lua fixtures above return. An empty
+-- answer is an empty list, not a one-element list holding "".
+splitNames ∷ T.Text → [T.Text]
+splitNames = filter (not ∘ T.null) ∘ T.splitOn ","
 
 eval ∷ LuaBackendState → T.Text → IO T.Text
 eval ls code = do

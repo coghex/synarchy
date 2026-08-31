@@ -41,10 +41,10 @@ drafting this report.
 ## Status
 
 - [x] CTA-1. Create World restores blank pending values over visible suggestions — [#1978]
-- [ ] CTA-2. Playtest wheel actions omit usable camera-zoom semantics
-- [ ] CTA-3. Location-embark failures can discard the failed assertion
-- [ ] CTA-4. Power-workshop grades a variable AI walk against a fixed deadline
-- [ ] CTA-5. Etymology probe rebuilds the HUD with incorrect resource handles
+- [x] CTA-2. Playtest wheel actions omit usable camera-zoom semantics — [#1980]
+- [x] CTA-3. Location-embark failures can discard the failed assertion — [#1982]
+- [x] CTA-4. Power-workshop grades a variable AI walk against a fixed deadline — [#1426]
+- [x] CTA-5. Etymology probe rebuilds the HUD with incorrect resource handles — [#1983]
 
 ---
 
@@ -100,7 +100,7 @@ the visible controls.
 
 ## Playtest action semantics
 
-### CTA-2. Playtest wheel actions omit usable camera-zoom semantics
+### [#1980] CTA-2. Playtest wheel actions omit usable camera-zoom semantics
 
 The screenshot-driven playtest action contract exposes scrolling as an
 unbounded numeric `dy` and describes one sign only as “away/up.” It does not
@@ -150,7 +150,7 @@ actual gameplay goals.
 
 ## Probe evidence and timing
 
-### CTA-3. Location-embark failures can discard the failed assertion
+### [#1982] CTA-3. Location-embark failures can discard the failed assertion
 
 A coordinated location-embark run completed late save/reload and icon-state
 coverage, exited nonzero, and reported one failed check, but its retained
@@ -200,7 +200,7 @@ the caller opted into retention before knowing it would fail.
 - **Remaining uncertainty:** The missing assertion and its underlying product
   or harness interpretation cannot be recovered from this run.
 
-### CTA-4. Power-workshop grades a variable AI walk against a fixed deadline
+### [#1426] CTA-4. Power-workshop grades a variable AI walk against a fixed deadline
 
 The power-workshop probe requires a real `craft_job` worker to claim a bill,
 fetch material, walk to the station, and enter `working` within two fixed
@@ -246,7 +246,7 @@ and power checks.
   the bounded deadline, and it does not explain every source of run-to-run
   path duration.
 
-### CTA-5. Etymology probe rebuilds the HUD with incorrect resource handles
+### [#1983] CTA-5. Etymology probe rebuilds the HUD with incorrect resource handles
 
 Both manual HUD rebuilds in the etymology probe pass the world-selection texture
 as the box texture set and the existing box texture set as the menu font. The

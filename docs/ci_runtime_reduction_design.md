@@ -7,7 +7,7 @@ successful runs normally completed the same step in about four minutes. A hang
 is something to restart, reproduce, and measure—not justification for adding a
 timer to the test suite.
 
-Design state: `ready for issue processing`
+Design state: `exploring`
 
 Status legend: `[ ]` unprocessed · `[#N]` linked to issue N · `[no-issue]`
 reviewed and deliberately not tracked separately · `[deferred]` blocked on a
@@ -24,6 +24,11 @@ concrete precondition
 - [ ] CIR-8. Prove and adopt only safe Hspec parallel regions
 - [ ] CIR-5. Run post-build gate families on independent critical paths
 - [ ] CIR-6. Reassess full-suite and behavior-probe selection from measured coverage
+- [ ] CIR-9. Make required CI checks merge-group aware
+- [ ] CIR-10. Make repository identity transfer-ready
+- [ ] CIR-11. Transfer the repository and rebind existing automation
+- [ ] CIR-12. Pilot the native merge queue manually
+- [ ] CIR-13. Convert the drainer into a queue-admission controller
 
 ## Epic contract
 
@@ -36,7 +41,9 @@ concrete precondition
   parallel probes never mutate one shared Cabal build tree; independent gate
   families no longer serialize behind one another unnecessarily after the
   build; and safe Hspec regions use available concurrency without corrupting
-  shared fixtures. Any reduction in which tests run on a PR is
+  shared fixtures; and several approved PRs can advance through hosted merge
+  groups without serial contributor-managed branch updates. Any reduction in
+  which tests run on a PR is
   backed by an explicit path-to-coverage contract and retains a full post-merge
   backstop.
 - **Users and operators:** Contributors waiting for PR checks, reviewers deciding
@@ -47,10 +54,96 @@ concrete precondition
 
 ### Verified current state
 
-- `.github/workflows/ci.yml` has one `build-test` job after the image resolver.
-  Compilation, the complete headless Hspec suite, every static audit, optional
-  unit-asset/worldgen gates, and path-selected behavior probes execute serially
-  in that one job. Its job timeout is 90 minutes.
+- `.github/workflows/ci.yml` now runs `test-and-audits` and the PR-only
+  `behavior-probes` worker in parallel after image resolution, then reports one
+  stable `build-test` aggregate. Compilation, the complete headless Hspec suite,
+  every static audit, and selected unit-asset/worldgen work remain serial inside
+  `test-and-audits`; the existing fan-out therefore removes probe serialization
+  without removing the main worker's critical path.
+- `master` protection is strict: the required `build-test`, `review-approved`,
+  and `behavior-probes` checks must pass on a head that is up to date with its
+  base. The current drainer has one active lane, so a branch update, pending
+  check, or rerun for the candidate holding that lane prevents every later
+  candidate from advancing. The latest forty merged PRs include hours with
+  four merges, making repeated twenty-minute revalidation a throughput limit
+  rather than an occasional inconvenience.
+- The drainer is deliberately default-branch-only. It refuses to start from a
+  checkout not on the repository default branch, refuses a PR whose
+  `baseRefName` is not that branch, and holds one repository-wide run lock for
+  its lifetime. Running one independent drainer per lieutenant branch is
+  therefore not supported by configuration; it would require a multi-base lane
+  design in Kanban or a different integration controller.
+- CI's push trigger names only `master`, and the project cache is written only
+  by a successful `refs/heads/master` push. PR workflows already accept any
+  base branch, but an integration branch would not receive its own full
+  post-merge run or seed branch-scoped project caches until both policies were
+  generalized. GitHub's [cache access
+  rules](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching#restrictions-for-accessing-a-cache)
+  permit a PR workflow to restore caches from its base branch and the default
+  branch, so a trusted integration-branch push can be a useful cache writer
+  without sharing sibling-branch products.
+- GitHub's native merge queue is the closest built-in match for this problem:
+  it creates temporary merge groups against the current base and can run
+  several group builds concurrently without requiring every PR author to
+  update their branch. It requires the workflow to handle `merge_group`.
+  However, GitHub's [merge-queue availability and workflow
+  contract](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/configuring-pull-request-merges/managing-a-merge-queue)
+  currently offers the feature for organization-owned public repositories (and
+  qualifying organization-owned private repositories), while
+  `coghex/synarchy` is public and user-owned. Using it therefore first requires
+  transferring the repository to an organization.
+- GitHub's [repository transfer
+  contract](https://docs.github.com/en/repositories/creating-and-managing-repositories/transferring-a-repository)
+  carries issues, pull requests, releases, settings, webhooks, secrets, deploy
+  keys, Git history, and fork relationships. Old Web and Git URLs redirect, but
+  creating a new repository or fork at the retired `coghex/synarchy` location
+  would permanently delete that redirect. The
+  current repository has one Actions secret (`NTFY_URL`), one environment
+  (`copilot`), no repository variables, no webhooks, no deploy keys, and no
+  Pages site. Its only collaborator and the only observed issue assignee are
+  `coghex`, so making `coghex` an owner/member of the target organization before
+  transfer preserves the relevant access and assignments.
+- GHCR is the material transfer exception. GitHub's [package-transfer
+  contract](https://docs.github.com/en/packages/learn-github-packages/about-permissions-for-github-packages#about-repository-transfers)
+  says the container registry uses user/organization-scoped granular
+  permissions, so
+  `ghcr.io/coghex/synarchy-ci` remains owned by the personal account, loses its
+  repository link, and no longer grants the transferred repository's Actions
+  workflow access. The active CI-image references are hard-coded in
+  `.github/workflows/ci-image.yml`; two compatibility checks in `ci.yml` and
+  `tools/ci_cache_report.py` intentionally name one historical image and must
+  not be mechanically rewritten. The safe destination is a new
+  `ghcr.io/synarchy-game/synarchy-ci` package written by the transferred
+  repository's `GITHUB_TOKEN`, while the old public package remains
+  temporarily available as rollback evidence.
+- Seven tracked implementation/configuration files contain live or tested
+  `coghex/synarchy` identity assumptions: the two CI workflows,
+  `synarchy.cabal`, the probe-census schema ID, the cache reporter's historical
+  image constant, and two Python self-tests. Historical measurement/report
+  links can keep the old slug because the redirect preserves their target;
+  canonical package metadata, generated links, tests, and active image
+  publication must use the new identity.
+- The installed PR drainer is keyed by canonical repository identity in both
+  its discovery record and launchd label:
+  `coghex/synarchy` / `com.coghex.drain-prs.coghex.synarchy`. Its controller
+  resolves identity from `origin`, so updating the remote before uninstalling
+  the old entry would make that entry undiscoverable through normal control.
+  It must be stopped and uninstalled while the old remote is still canonical,
+  then installed under the new identity after transfer. The shared issue-review
+  backend is not repository-keyed, and no Synarchy issue-approval background
+  service is installed.
+- Every current local worktree shares the primary checkout's `.git/config`, so
+  one `origin` update changes remote resolution for all of them. Existing
+  directory names under `worktrees/coghex/synarchy/` are local labels and do not
+  need a disruptive move. Open pull requests currently use same-repository
+  heads and transfer with the repository; no contributor branch recreation is
+  required.
+- The user selected a new dedicated organization rather than either existing
+  organization membership and approved `synarchy-game` as its slug. A
+  2026-08-30 namespace check found no public account at that name. A missing
+  public account is not a reservation guarantee; availability must be rechecked
+  during organization creation, and an unavailable name stops for a new user
+  decision rather than silently selecting a substitute.
 - The full headless suite is deliberately blocking on every pull request. The
   graphical test build, unit-asset gate, world check, and behavior probes are
   already path-selective on pull requests; master runs the complete post-merge
@@ -163,6 +256,10 @@ concrete precondition
 7. Project-cache freshness should be automatic and observable without spending
    Actions minutes on a scheduled warmer. Cache deletion remains a deliberate,
    dry-run-first maintainer action after the replacement is proven usable.
+8. Several approved PRs may enter one hosted merge train without rewriting
+   their source branches after every preceding merge. GitHub tests each exact
+   cumulative candidate, ejects a failing change, and advances `master` without
+   making contributors operate intermediate integration branches.
 
 ## Scope
 
@@ -178,6 +275,8 @@ concrete precondition
 - Existing path selectors for expensive gates and behavior probes.
 - Measurement of PR wall-clock latency, runner minutes, cache age/hit state,
   selected gates, and retry frequency.
+- Native merge-queue admission, merge-group CI/cache behavior, repository
+  transfer prerequisites, failure recovery, and the current drainer's role.
 
 ### Out of scope
 
@@ -364,6 +463,168 @@ path-selected integration groups, and the full suite on master, but it is not
 adopted by this design yet. Any selector must be fail-closed, self-tested, and
 map tests to source/config/data ownership without relying on test filename alone.
 
+### Native merge queue (proposal, not yet adopted)
+
+The queue keeps one contributor-facing destination: `master`. A pull request
+still receives its ordinary review and PR CI. Once its approval label and
+initial required checks are satisfied, the drainer or a maintainer adds it to
+the queue instead of updating its source branch and merging it immediately.
+GitHub then owns the changing-base problem.
+
+Suppose PR A and PR B are both ready while `master` is at M. GitHub creates one
+temporary merge group for `M + A`, and a later cumulative group for `M + A +
+B`. With build concurrency of at least two, both exact candidate trees can be
+checked concurrently. If both pass, A and B can advance through the queue
+without B's source branch being rewritten after A lands. If A's group fails,
+A is removed; GitHub regenerates B's candidate as `M + B` and checks that new
+tree before allowing B to merge. This preserves combined-tree coverage while
+moving invalidation and recovery out of the contributor workflow.
+
+This improves **merge throughput**, not the duration of one CI execution. With
+the current strict branch and single-lane drainer, two already-green PRs can
+pay roughly one additional twenty-minute update-and-revalidate turn each in
+series. A queue with two concurrent group builds can validate the two
+cumulative candidates during one approximately twenty-minute wave, subject to
+runner availability. Each PR still normally pays its original PR CI and a
+merge-group CI, so queue adoption increases runner work unless later evidence
+justifies safely avoiding duplication.
+
+Synarchy must make these changes before enabling the queue:
+
+1. Add the `merge_group`/`checks_requested` event to the main workflow and run
+   every queue-required executable check on the merge-group SHA. The current
+   PR-only behavior-probe condition would otherwise omit a required check.
+2. Resolve the `review-approved` contract. That required workflow currently
+   handles only `pull_request`; a merge group will not receive the check unless
+   the workflow gains a safe group-aware form or the label check becomes an
+   admission condition while a different executable aggregate protects groups.
+3. Treat merge groups as cache consumers, not writers. They can restore a
+   compatible default-branch cache; successful `master` pushes remain the
+   writer and retain the complete post-merge backstop from D-2.
+4. Change the drainer from a one-at-a-time update-and-merge controller into an
+   admission controller: verify freshness of approval and ordinary PR checks,
+   enqueue the PR, then release its lane while GitHub constructs and validates
+   the group. Queue incidents and ejections still need visible ownership.
+5. Transfer the public user-owned repository to a GitHub organization, because
+   native merge queues are not available to this repository's current owner
+   shape. Repoint and verify the repository-scoped drainer, local remotes,
+   Actions permissions, and the GHCR CI-image/package relationship before the
+   new identity becomes the production path.
+
+Initial activation should be deliberately small: build concurrency two, a
+small merge limit, only non-failing pull requests allowed to merge, and the
+existing complete `master` run retained. Measure approved-to-merge time, group
+rebuild count, ejections, queue occupancy, runner minutes, cache outcomes, and
+post-merge failures before widening it. Exact configuration values remain a
+maintainer choice at activation time.
+
+### Repository transfer migration (proposal)
+
+The transfer and the merge-queue activation are separate changes. The
+repository should first operate normally under its organization identity with
+the existing merge policy. Only after that state passes CI and automation
+verification should the queue be required for `master`.
+
+#### 1. Create and prepare the dedicated organization
+
+- Recheck and create the dedicated GitHub Free organization `synarchy-game`,
+  producing the canonical repository URL
+  `github.com/synarchy-game/synarchy` and active image namespace
+  `ghcr.io/synarchy-game/synarchy-ci`. Existing organizations are not
+  candidates. GitHub exposes merge queues for any organization-owned public
+  repository, so no paid plan is required for this public repository. If the
+  slug cannot be created, stop for a replacement decision.
+- Make `coghex` an organization owner before transfer. Confirm the organization
+  permits repository creation/transfer, GitHub-hosted Actions, the pinned
+  `actions/*` and `docker/*` actions used here, and organization package
+  publication. The destination must not already contain `synarchy` or a fork in
+  the same network.
+- Keep the repository name `synarchy` during transfer. Renaming at the same time
+  adds no queue benefit and expands every identity migration and redirect.
+
+#### 2. Land transfer-readiness before changing ownership
+
+- Make the active CI-image namespace owner-derived rather than hard-coded to
+  `coghex`, with a normalized lowercase registry owner. Keep the explicitly
+  documented old `LEGACY_IMAGE_REF` unchanged: it describes which historical
+  v2 cache objects are compatible, not where new images are published.
+- Update canonical Cabal homepage/source/bug URLs, the probe-census schema ID,
+  and self-test fixtures that assert the live repository identity. Historical
+  run and issue citations may keep the redirected old URL.
+- Add a deliberate post-transfer CI entry point, such as `workflow_dispatch`,
+  so the organization image and cache can be seeded without inventing an empty
+  commit. Prove before transfer that the owner-derived path still resolves and
+  publishes correctly as `coghex`.
+- Complete CIR-9's merge-group event work, but do not require the queue yet.
+  This lets the transferred repository prove ordinary PR/push CI before the
+  branch-protection behavior changes.
+
+#### 3. Freeze integration and transfer
+
+- Pick a short maintenance window, stop admitting merges, and wait for active
+  Actions runs to finish. Snapshot repository identity, required checks,
+  rulesets/branch protection, Actions permissions, secret and environment
+  names, open PRs, and the current master SHA for post-transfer comparison.
+- Confirm the drainer is idle and has no unresolved obligation. Stop and
+  uninstall its `coghex/synarchy` service while `origin` still resolves that
+  identity. Its historical runtime records remain on disk by design.
+- Transfer the repository from its Settings/Danger Zone without renaming it.
+  Do not create a replacement `coghex/synarchy`; preserving the old-location
+  redirect is part of compatibility.
+
+#### 4. Rebind and verify before enabling the queue
+
+- Change the shared `origin` URL to
+  `git@github.com:synarchy-game/synarchy.git` and verify fetch and push using
+  that canonical URL. Existing worktree paths remain in place.
+- Compare the transferred repository with the snapshot: owner and visibility,
+  master SHA, open PRs/issues/releases, collaborator role, ruleset and strict
+  required checks, Actions policy/default token permissions, `NTFY_URL`, the
+  `copilot` environment, and workflow history/access. Reauthorize any OAuth or
+  connector whose organization policy requires approval.
+- Trigger the explicit CI entry point. The new organization image namespace is
+  initially empty, so the resolver must build, validate, and publish the first
+  `ghcr.io/synarchy-game/synarchy-ci:<content-tag>` image, then consume it in
+  both heavy workers. Verify the new package is linked to the transferred
+  repository and grants its Actions workflows read/write access. Treat project
+  cache reuse as untrusted until observed; the namespace change deliberately
+  prevents the old image-specific project objects from being mistaken for new
+  ones.
+- Reinstall and start the drainer against the new `origin`; its discovery key,
+  reported repository, launchd label, and runtime namespace must respectively
+  resolve as `synarchy-game/synarchy`, `synarchy-game/synarchy`,
+  `com.coghex.drain-prs.synarchy-game.synarchy`, and
+  `synarchy-game.synarchy`. The old personal GHCR package and old drainer
+  runtime records remain untouched until the new path has operated
+  successfully.
+- Run one ordinary disposable PR through the unchanged merge policy. Only then
+  begin CIR-12's manual queue pilot; CIR-13 automates admission after the hosted
+  queue behavior is proven.
+
+The expected disruption is a temporary merge freeze and one cold organization
+image publication, not loss of issue/PR history or a need to recreate branches.
+Normal old Git URLs redirect during the migration, but automation stays paused
+until it has been verified against the new canonical identity.
+
+### Lieutenant integration branches (rejected alternative)
+
+The Linux-kernel-style alternative would route ordinary pull requests to
+long-lived subsystem branches, then gate separate promotions from those
+branches into `master`. Ephemeral batch branches are a lighter variant, but
+they have the same semantic question: is the contribution complete at the
+intermediate merge or only after final promotion?
+
+The user rejected this direction for the present use case. If only `master`
+counts as complete, lieutenant branches add routing, ownership, promotion CI,
+branch drift, and failed-convergence recovery while moving rather than removing
+the final wall. If an intermediate branch counts as complete, they materially
+change the project's completion and release model. A production version would
+also require multi-base Kanban lanes, generalized branch protection and cache
+writing, and exact combined-commit gates. The native queue retains the desired
+single-`master` model and delegates those transient integration branches to
+GitHub, so permanent or manually operated lieutenant branches will not be
+piloted unless this decision is explicitly revisited.
+
 ## Decisions
 
 ### D-1. Preserve coverage while removing repeated work and serialization
@@ -424,6 +685,39 @@ Use Hspec's `parallel`/`--jobs` only on audited groups. The shared-world block
 and any group with unisolated mutable engine, filesystem, environment, or
 process state remain sequential. `parallel` is never applied to the whole
 suite merely because the framework supports it.
+
+### D-9. Keep one integration branch and pursue hosted merge groups
+
+Do not introduce permanent lieutenant branches or a manual ephemeral-branch
+pilot for this use case. Continue designing around one protected `master` and
+GitHub's native merge queue, subject to an explicitly approved organization
+transfer and a safe merge-group approval contract. This targets the actual
+single-lane throughput wall without redefining an intermediate branch as
+contributor completion.
+
+### D-10. Accept an organization transfer in principle
+
+The repository may move from the personal `coghex` account to an organization
+to unlock GitHub's native merge queue. This approves continued design and
+preparatory work, not an immediate transfer: the transfer-readiness change,
+merge-group approval contract, and explicit maintenance-window approval remain
+gates before ownership changes.
+
+### D-11. Create a dedicated organization for Synarchy
+
+Do not place Synarchy in either existing organization membership. Create a new
+GitHub Free organization dedicated to the project, with `coghex` as owner. This
+keeps repository, Actions, package, and membership policy under project control
+and prevents unrelated organization governance from becoming a CI dependency.
+The organization identity is fixed by D-12.
+
+### D-12. Use `synarchy-game` as the organization slug
+
+Create the dedicated organization as `synarchy-game`. After transfer, the
+canonical repository is `github.com/synarchy-game/synarchy` and the active CI
+package is `ghcr.io/synarchy-game/synarchy-ci`. If GitHub refuses the slug when
+creation is attempted, stop and ask for a replacement rather than modifying or
+suffixing it without approval.
 
 ## Open questions
 
@@ -487,6 +781,36 @@ direct Hspec runner's runtime environment have not yet been exercised as a
 downloaded artifact. CIR-5 stops after the spike and reports the blocker if the
 minimal binary bundle cannot run without copying Cabal's build database.
 
+### Q-8. What event counts as a completed contribution under a lieutenant model?
+
+Resolved by D-9: completion remains integration into `master`.
+
+### Q-9. How should lieutenant branches converge and be trusted?
+
+Resolved by D-9: hosted merge groups replace project-operated convergence
+branches, and GitHub gates the exact cumulative candidate before `master`.
+
+### Q-10. Is transferring the repository to an organization acceptable?
+
+Resolved by D-10. The user accepts the transfer in principle; CIR-11 retains an
+explicit stop before the actual ownership change.
+
+### Q-11. How should approval apply to a merge group?
+
+The current `review-approved` required check proves a label on one pull-request
+event, while a `merge_group` event represents a cumulative temporary ref. The
+design must either re-verify that every included PR still carries fresh
+approval, or make approval a strictly enforced queue-admission condition and
+require a merge-group-specific executable aggregate. CIR-9 must establish from
+the event/API data that the chosen contract fails closed before changing branch
+protection.
+
+### Q-12. Which organization should own Synarchy?
+
+Resolved by D-11 and D-12: ownership will be the new dedicated GitHub Free
+organization `synarchy-game`. Availability is rechecked at creation; refusal
+stops for a new decision.
+
 ## Verification strategy
 
 - Capture baseline and post-change timings from both PR and master workflows,
@@ -517,6 +841,10 @@ minimal binary bundle cannot run without copying Cabal's build database.
 - Compare wall-clock critical path and total runner minutes before and after
   each slice. A wall-time improvement that causes unbounded cost or materially
   higher flake/retry rates does not pass.
+- Before queue activation, use disposable PRs to prove that two cumulative
+  merge groups run concurrently, a failing first change is ejected, the second
+  group's replacement is revalidated, every required check reports on the
+  group SHA, and the complete post-merge `master` backstop still runs.
 - Keep workflow YAML, local `make ci` coverage, and repository testing docs in
   sync. The local gate need not reproduce cloud parallel scheduling.
 
@@ -668,3 +996,112 @@ minimal binary bundle cannot run without copying Cabal's build database.
   to run the complete suite.
 - **Out of scope:** Demoting tests based only on their current duration.
 - **Open questions:** Q-2
+
+### CIR-9. Make required CI checks merge-group aware
+
+- **Outcome:** A temporary merge-group ref receives a complete, fail-closed set
+  of required checks against its own SHA without writing project caches or
+  weakening the existing PR approval requirement.
+- **Scope:** `merge_group` workflow triggers, explicit event classification,
+  behavior-probe and aggregate-check semantics, approval admission/revalidation,
+  cache restore-only behavior, queue diagnostics, and focused event-fixture
+  tests. Include a dry-run design for changing the drainer from merge execution
+  to queue admission.
+- **Phase:** 3 — prepare hosted integration
+- **Depends on:** `CIR-1`
+- **Ordering:** `must land before queue activation; can proceed before transfer`
+- **Relevant decisions:** D-1, D-2, D-7, D-9
+- **Acceptance signals:** Synthetic pull-request, push, and merge-group payloads
+  select the intended gates; every branch-protection check reports on the group
+  SHA; approval fails closed; merge groups cannot save caches; ordinary PR and
+  complete `master` behavior remain unchanged.
+- **Out of scope:** Enabling the queue, transferring the repository, reducing
+  coverage, or assuming that enqueue success means the group will merge.
+- **Open questions:** Q-11
+
+### CIR-10. Make repository identity transfer-ready
+
+- **Outcome:** The current personal-account repository continues to pass CI
+  while every live publication and canonical-metadata path is ready to resolve
+  through `synarchy-game` after transfer.
+- **Scope:** Owner-derived lowercase GHCR namespace, explicit post-transfer CI
+  dispatch, canonical Cabal/schema URLs, identity-sensitive self-test fixtures,
+  and transfer preflight/snapshot documentation. Preserve historical URLs and
+  the old compatibility image constant deliberately.
+- **Phase:** 3 — prepare ownership migration
+- **Depends on:** `none`
+- **Ordering:** `can land before CIR-9; must land before CIR-11`
+- **Relevant decisions:** D-1, D-2, D-9, D-10, D-11, D-12
+- **Acceptance signals:** CI still publishes and consumes the current personal
+  package through the owner-derived path; tests exercise an owner change; the
+  manual dispatch runs the ordinary complete gate; an audit distinguishes live
+  identity references from historical redirected evidence.
+- **Out of scope:** Transferring the repository, rewriting historical links,
+  deleting the personal GHCR package, or enabling the merge queue.
+- **Open questions:** `None`
+
+### CIR-11. Transfer the repository and rebind existing automation
+
+- **Outcome:** Synarchy operates normally at `synarchy-game/synarchy` with its
+  repository history and protections intact, a newly owned CI package seeded,
+  and the existing drainer installed under the new canonical identity.
+- **Scope:** Explicit maintenance approval; merge freeze and state snapshot;
+  old drainer stop/uninstall; repository transfer without rename; shared remote
+  update; repository/Actions/secret/environment/protection comparison; first
+  organization image publication; connector authorization; new drainer
+  install/start; and one ordinary-merge smoke PR.
+- **Phase:** 4 — migrate ownership
+- **Depends on:** `CIR-9`, `CIR-10`
+- **Ordering:** `blocked on Q-11; stop again immediately before transfer`
+- **Relevant decisions:** D-1, D-2, D-9, D-10, D-11, D-12
+- **Acceptance signals:** Master SHA and open tracker/PR state are preserved;
+  old URLs redirect; fetch/push uses the new remote; required checks and secrets
+  match the snapshot; CI publishes and consumes the organization package; the
+  new identity-keyed drainer reports healthy; an ordinary PR merges under the
+  pre-queue policy.
+- **Out of scope:** Recreating `coghex/synarchy`, deleting old package/runtime
+  evidence, enabling the queue during the transfer, or renaming the project.
+- **Open questions:** Q-11
+
+### CIR-12. Pilot the native merge queue manually
+
+- **Outcome:** Two or more approved PRs are validated as cumulative merge
+  groups concurrently and reach one protected `master` without contributor
+  branch rewrites after each preceding merge.
+- **Scope:** Temporary manual admission with the drainer stopped, branch queue
+  settings, build concurrency two, a small merge limit, disposable green and
+  controlled-failure PRs, metrics, incident ownership, and rollback to the
+  verified pre-queue branch protection.
+- **Phase:** 4 — prove hosted integration
+- **Depends on:** `CIR-1`, `CIR-9`, `CIR-11`
+- **Ordering:** `begin only after the transferred ordinary-merge smoke test`
+- **Relevant decisions:** D-1, D-2, D-7, D-9, D-10, D-11, D-12
+- **Acceptance signals:** Two cumulative group builds run concurrently; a red
+  leading PR is ejected and a trailing candidate is regenerated and rechecked;
+  green groups merge in queue order; `master` runs the complete backstop and
+  remains the only project-cache writer; disabling the queue restores the
+  snapshotted policy.
+- **Out of scope:** Unattended drainer admission, removing initial PR CI,
+  increasing concurrency beyond the pilot, or changing coverage policy.
+- **Open questions:** Q-11
+
+### CIR-13. Convert the drainer into a queue-admission controller
+
+- **Outcome:** Approved PRs enter the proven GitHub queue without one
+  repository-wide controller lane remaining occupied through merge-group CI.
+- **Scope:** A Kanban-side repository-agnostic enqueue operation, fresh approval
+  and initial-check validation, prompt lane release after admission, queue
+  status/ejection incidents, safe restart/reconciliation, and retirement of
+  direct update-and-merge behavior when the base requires a queue.
+- **Phase:** 5 — automate queue operation
+- **Depends on:** `CIR-12`
+- **Ordering:** `cross-repository follow-up after the manual pilot`
+- **Relevant decisions:** D-1, D-7, D-9, D-10, D-11, D-12
+- **Acceptance signals:** Several ready PRs can be admitted without waiting for
+  an earlier group's verdict; restart does not double-admit or lose ownership;
+  ejection is visible and recoverable; non-queue repositories retain their
+  existing behavior; Synarchy's primary checkout still satisfies its clean-tree
+  and post-merge obligations.
+- **Out of scope:** Reimplementing GitHub's group construction, operating
+  lieutenant branches, or increasing queue concurrency automatically.
+- **Open questions:** `None`

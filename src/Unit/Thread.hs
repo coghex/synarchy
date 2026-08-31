@@ -5,7 +5,7 @@ module Unit.Thread
 
 import UPrelude
 import Engine.Core.Capability.Building (toBuildingCapability)
-import Engine.Core.Capability.ContentRegistries (toContentRegistriesCapability)
+import Engine.Core.Capability.ContentRegistriesView (toContentRegistriesViewCapability)
 import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
@@ -98,7 +98,7 @@ unitTick env lastTimeRef utsRef = do
     unless locked $ processAllBuildingCommands
         (loggerRef env)
         (toWorldSimCapability env)
-        (toContentRegistriesCapability env)
+        (toContentRegistriesViewCapability env)
         (toBuildingCapability env)
     acknowledgeCurrent (saveBarrierRef env) SaveUnit
     acknowledgeCurrent (saveBarrierRef env) SaveBuilding

@@ -9,7 +9,8 @@
 -- couplings already key on, and recover the instant the store refills.
 --
 -- This is the one place the two fraction thresholds + both multipliers
--- live, so movement_speed.lua (sprint), the per-tick strength refresh
+-- live, so movement_speed.lua (M.bandMultiplier, which every gait
+-- multiplies by), the per-tick strength refresh
 -- (scripts/unit_resources.lua), unit_info_v2_status.lua's Hungry/
 -- Starving condition rows, and tools/physiology_probe.py all read
 -- through here and can't drift onto different numbers — mirrors

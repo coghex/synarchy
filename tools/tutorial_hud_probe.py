@@ -52,7 +52,14 @@ in-game HUD, then:
      scripts/tutorial_hud.lua now fits a row's string to the budget its
      indent leaves; the assertions stay because that fit is the ONLY
      thing bounding a row (rows are still never clipped by the renderer,
-     and `fitToggle` covers the caption alone).
+     and `fitToggle` covers the caption alone). Since #1941 the five
+     rows are reached in TWO stable captures rather than one transient
+     sticky one — see `restore_shipped_tree`.
+  9. (#1941) A finished checklist stays finished across a REAL save and
+     load in this same GPU session: the emptied panel comes back
+     collapsed, and reopening it does not repopulate with the ancestors
+     the player already watched retire, across the evaluation tick that
+     re-checks both subobjectives against the loaded world.
 
 Needs a GPU (Vulkan device) — manual-only, never CI-gated, same as
 tools/offscreen_probe.py.
@@ -72,15 +79,20 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import sys
 import tempfile
 import time
 
-from probelib import boot, poll_until, quit_engine, send, send_json
+from probelib import (boot, capture_request_id, poll_until, quit_engine,
+                      send, send_json, wait_load_published,
+                      wait_save_complete)
 from offscreen_probe import (screenshot, png_stats, png_differs,
                              find_widget, click_widget, center_on)
 
 LOG = "/tmp/tutorial_hud_engine.log"
+#: This probe's own save slot, for the #1941 reload check.
+SLOT = "tutorial_hud_probe_slot"
 TOGGLE_CALLBACK = "onTutorialHudToggle"
 # A tree big enough to overflow the viewport at any supported size.
 PROBE_ROWS = 40
@@ -99,6 +111,18 @@ SHIPPED_ROWS = [
 ]
 
 failures: list[str] = []
+
+
+def remove_probe_slot() -> None:
+    """Delete only this probe's own save slot, under the repo's saves/."""
+    saves = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "saves")
+    target = os.path.join(saves, SLOT)
+    if (os.path.basename(target) == SLOT
+            and os.path.dirname(target) == saves
+            and os.path.isdir(target)
+            and not os.path.islink(target)):
+        shutil.rmtree(target)
 
 
 def check(name: str, ok: bool, detail: str = "") -> bool:
@@ -614,42 +638,95 @@ def inject_shipped_shape(port: int) -> None:
          "return 'ok'", timeout=15.0)
 
 
+def open_and_read_build(port: int) -> list[dict]:
+    """Open the panel and report the rows THAT BUILD laid out, in ONE
+    console chunk.
+
+    The two halves cannot be separate commands since #1941: the
+    retirement they exist to observe takes exactly one update tick, so a
+    second round-trip would usually arrive after the panel had been
+    rebuilt empty and would report a race rather than a defect. One
+    chunk runs to completion on the Lua thread, so this is the build
+    itself talking. Only the fields this phase asserts on are carried
+    out, because the whole dump is not JSON-safe to rebuild by hand."""
+    got = send_json(port,
+                    "local th = require('scripts.tutorial_hud'); "
+                    "th.setOpen(true); "
+                    "local out = {}; "
+                    "for i, r in ipairs(th.dump().rows) do "
+                    "out[i] = { id = r.id, marker = r.marker, "
+                    "depth = r.depth } end; "
+                    "return out", timeout=15.0)
+    return got if isinstance(got, list) else []
+
+
 def already_latched_phase(port: int, shots: str) -> None:
-    """#996: latch the composite and check both of its subobjectives
-    BEFORE that branch is ever revealed (the shipped acolyte spawn kit
-    does exactly this before secure_water_source ever completes), then
-    reveal it by completing its ancestors. The real, GPU-rendered
-    checklist must show the branch -- not an empty panel."""
+    """#996 then #1941, in the order a player meets them.
+
+    #996: latch the composite and check both of its subobjectives BEFORE
+    that branch is ever revealed (the shipped acolyte spawn kit does
+    exactly this before secure_water_source ever completes), then reveal
+    it by completing its ancestors. The real, GPU-rendered checklist
+    must show the branch -- not an empty panel.
+
+    #1941: that suppression is a LOAN. This surface, on a visible page
+    with the panel open, is what reports the presentation; the update
+    tick that follows spends the suppression, and the ordinary #958 hide
+    rule then empties the checklist. The reveal happens with the panel
+    CLOSED on purpose -- a collapsed panel lays out no rows, so nothing
+    can be presented before the open below.
+    """
     inject_shipped_shape(port)
     send(port,
          "local tp = require('scripts.tutorial_progress'); "
+         "require('scripts.tutorial_hud').setOpen(false); "
          "tp.setSubobjectiveChecked('prepare_water', true); "
          "tp.setSubobjectiveChecked('prepare_food', true); "
          "tp.completeObjective('prepare_expedition'); "
          "tp.completeObjective('place_portal'); "
          "tp.completeObjective('secure_water'); "
          "return 'ok'", timeout=15.0)
-    send(port, "require('scripts.tutorial_hud').setOpen(true); return 'ok'",
-         timeout=10.0)
-    d = poll_dump(port, lambda x: len(x.get("rows") or []) > 0) or dump(port)
+    branch = ["prepare_expedition", "prepare_water", "prepare_food"]
+    d = poll_dump(port, lambda x: x.get("activeIds") == branch) or dump(port)
+    check("the model holds the already-latched branch active while the "
+          "panel is still collapsed", d.get("activeIds") == branch,
+          str(d.get("activeIds")))
+    check("and a collapsed panel has presented nothing",
+          (d.get("rows") or []) == [], str(d.get("rowIds")))
+
+    built = open_and_read_build(port)
     check("the already-latched prepare branch renders in authored order, "
           "instead of an empty checklist (#996)",
-          d.get("rowIds") == ["prepare_expedition", "prepare_water", "prepare_food"],
-          str(d.get("rowIds")))
-    rows = d.get("rows") or []
+          [r.get("id") for r in built] == branch,
+          str([r.get("id") for r in built]))
     check("the composite renders its normal completed marker, and both "
           "subobjectives render checked",
-          len(rows) == 3 and rows[0].get("marker") == "[x]"
-          and rows[1].get("marker") == "(x)" and rows[2].get("marker") == "(x)",
-          str(rows))
+          [r.get("marker") for r in built] == ["[x]", "(x)", "(x)"],
+          str(built))
     shot = os.path.join(shots, "already_latched.png")
     check("the already-latched checklist screenshot answers",
           screenshot(port, shot))
 
+    # #1941: having been shown, it retires -- and because this is the
+    # shipped session's TERMINAL branch, the checklist reaches the empty
+    # completed state it could never reach while the suppression was
+    # permanent. The panel stays OPEN throughout: this is an emptied
+    # list, not a closed one.
+    retired = poll_dump(port,
+                        lambda x: x.get("open") is True
+                        and (x.get("rows") or []) == []
+                        and (x.get("activeIds") or []) == [])
+    check("having been presented, the branch retires and the still-OPEN "
+          "checklist reaches its empty completed state (#1941)",
+          bool(retired), str(dump(port)))
+    shot = os.path.join(shots, "retired_empty.png")
+    check("the retired, empty checklist screenshot answers",
+          screenshot(port, shot))
 
-def restore_shipped_tree(port: int) -> str:
-    """Put the LIVE ENGINE REGISTRY tree back in front of the HUD and
-    reveal all five of its rows at once.
+
+def restore_shipped_tree(port: int, completed: list[str]) -> str:
+    """Put the LIVE ENGINE REGISTRY tree back in front of the HUD with
+    exactly `completed` latched, and open the panel.
 
     The labels measured have to be the authored ones, so the tree comes
     from `engine.getTutorialTree()` -- #957 writes that registry once at
@@ -658,64 +735,177 @@ def restore_shipped_tree(port: int) -> str:
     Copying the strings into Python or Lua would measure this file's
     idea of the labels instead of the shipped file's.
 
-    Revealing all five at once is #996's own mechanism, not a new one:
-    `setTree` rebuilds the reveal history from the durable completed set
-    AS IT STANDS, so completing the three full/composite objectives
-    FIRST and re-adopting the same registry tree afterwards latches each
-    of them sticky-active. Without that second adoption a completed
-    parent hides the moment its child is revealed and only the deepest
-    branch would be on screen."""
+    The durable set is what selects which rows are on screen, and every
+    state used below is STABLE under the ordinary #958 rule -- no
+    subobjective is ever checked here, so a composite whose reveal is
+    reached is never hideable and never leaves mid-measurement. That
+    matters since #1941: the old fixture re-adopted the tree to latch
+    all five rows sticky at once, and a suppression is now spent by the
+    very act of showing it, so a measurement lasting several seconds and
+    several screenshots can no longer be built on one. Two stable
+    captures replace one transient one; between them they still measure
+    every shipped row at every authored depth."""
+    ids = ", ".join(f"'{cid}'" for cid in completed)
     got = send(port,
                "local tp = require('scripts.tutorial_progress'); "
                "local hud = require('scripts.tutorial_hud'); "
                "local tree = engine.getTutorialTree(); "
                "if tree == nil then return 'no-tree' end; "
                "tp.reset(); tp.setTree(tree); "
-               "tp.completeObjective('first_session_place_portal'); "
-               "tp.completeObjective('first_session_secure_water'); "
-               "tp.completeObjective('first_session_prepare_expedition'); "
-               "tp.setSubobjectiveChecked('first_session_prepare_water', true); "
-               "tp.setSubobjectiveChecked('first_session_prepare_food', true); "
-               "tp.setTree(engine.getTutorialTree()); "
+               f"for _, id in ipairs({{{ids}}}) do tp.completeObjective(id) end; "
                "hud.setOpen(true); hud.rebuild(); "
                "return tree.id or 'unnamed'",
                timeout=15.0).strip()
     return got
 
 
-def shipped_rows_phase(port: int, w: int, h: int, shots: str) -> None:
-    """#1581: bound the RENDERED GLYPHS of the shipped tree's rows."""
-    tree_id = restore_shipped_tree(port)
-    if not check("the live engine registry still holds the shipped "
+def measure_shipped_stage(port: int, w: int, h: int, shots: str, tag: str,
+                          completed: list[str], want: list[int]) -> list[int]:
+    """One stable capture of the shipped tree: latch `completed`, then
+    bound the glyphs of the rows at SHIPPED_ROWS indices `want`."""
+    tree_id = restore_shipped_tree(port, completed)
+    if not check(f"[{tag}] the live engine registry still holds the shipped "
                  "first_session tree", tree_id == "first_session", tree_id):
-        return
-    d = poll_dump(port, lambda x: len(x.get("rows") or []) == len(SHIPPED_ROWS)) \
-        or dump(port)
-    check("the whole shipped tree renders at once, in authored order",
-          d.get("rowIds") == [rid for rid, _ in SHIPPED_ROWS],
-          str(d.get("rowIds")))
+        return []
+    expected_ids = [SHIPPED_ROWS[i][0] for i in want]
+    d = poll_dump(port, lambda x: x.get("rowIds") == expected_ids) or dump(port)
+    if not check(f"[{tag}] exactly the expected shipped rows render, in "
+                 "authored order", d.get("rowIds") == expected_ids,
+                 f"{d.get('rowIds')} != {expected_ids} "
+                 f"(capacity {d.get('capacity')}, "
+                 f"scrollOffset {d.get('scrollOffset')})"):
+        return []
     rows = d.get("rows") or []
-    if len(rows) != len(SHIPPED_ROWS):
-        check("every shipped row is on screen to be measured", False,
-              f"{len(rows)} row(s) rendered, capacity {d.get('capacity')}, "
-              f"scrollOffset {d.get('scrollOffset')}")
-        return
     # The labels are the AUTHORED strings, not this file's copy of them:
     # they arrived through the registry, and the expectation is what is
     # checked against them. Depth is asserted too because indent eats
     # the row's horizontal budget, so a wrong depth would measure a
     # different layout than the shipped one.
     rendered = [(r.get("id"), r.get("label"), r.get("depth")) for r in rows]
-    expected = [(rid, label, depth) for rid, (label, depth) in SHIPPED_ROWS]
-    check("the rendered rows carry the authored labels and depths",
+    expected = [(SHIPPED_ROWS[i][0], SHIPPED_ROWS[i][1][0], SHIPPED_ROWS[i][1][1])
+                for i in want]
+    check(f"[{tag}] the rendered rows carry the authored labels and depths",
           rendered == expected, f"{rendered} != {expected}")
-    check("the shipped tree exercises every depth it authors",
-          sorted({r.get("depth") for r in rows}) == [0, 1, 2, 3],
-          str(sorted({r.get("depth") for r in rows})))
     for i in range(len(rows)):
-        measure_row_bounds(port, w, h, shots, "shipped", i)
-    shot = os.path.join(shots, "shipped_rows.png")
-    check("the shipped-row screenshot answers", screenshot(port, shot))
+        measure_row_bounds(port, w, h, shots, tag, i)
+    shot = os.path.join(shots, f"shipped_rows_{tag}.png")
+    check(f"[{tag}] the shipped-row screenshot answers",
+          screenshot(port, shot))
+    # The depths ACTUALLY rendered and measured, not the ones this file
+    # expected: the coverage claim below has to be evidence.
+    return [r.get("depth") for r in rows]
+
+
+def shipped_rows_phase(port: int, w: int, h: int, shots: str) -> None:
+    """#1581: bound the RENDERED GLYPHS of the shipped tree's rows.
+
+    Every shipped row and every authored depth is still measured; they
+    are reached in two stable stages rather than one (see
+    restore_shipped_tree). Stage `ancestors` latches only the root, so
+    the root stays active (its child is not complete) beside the child
+    it reveals; stage `branch` latches the whole chain with no
+    subobjective checked, so the terminal composite is not hideable and
+    displays both of its subobjectives.
+    """
+    covered = measure_shipped_stage(port, w, h, shots, "ancestors",
+                                    [SHIPPED_ROWS[0][0]], [0, 1])
+    covered += measure_shipped_stage(port, w, h, shots, "branch",
+                                     [SHIPPED_ROWS[0][0], SHIPPED_ROWS[1][0],
+                                      SHIPPED_ROWS[2][0]], [2, 3, 4])
+    check("the two stages between them measure every depth the shipped "
+          "tree authors", sorted(set(covered)) == [0, 1, 2, 3],
+          str(sorted(set(covered))))
+
+
+def spawn_provisioned_acolyte(port: int) -> int:
+    """Spawn one PLAYER-faction acolyte at the camera, with its shipped
+    spawn kit.
+
+    scripts/tutorial_eval.lua only counts `player` acolytes, and the kit
+    (a full canteen and two rations, data/units/acolyte.yaml) is exactly
+    what checks both prepare subobjectives -- which is what lets the
+    reload check below observe an EMPTY checklist rather than a
+    composite that is legitimately active because its live checks are
+    off."""
+    raw = send(port,
+               "local gx, gy = camera.getPosition(); "
+               "return tostring(unit.spawn('acolyte', math.floor(gx), "
+               "math.floor(gy), nil, 'player'))", timeout=30.0).strip()
+    try:
+        return int(float(raw))
+    except (ValueError, TypeError):
+        return -1
+
+
+def retired_reload_phase(port: int, shots: str) -> None:
+    """#1941 requirement 4, through a REAL save and load in this GPU
+    session: a checklist the player finished stays finished.
+
+    Presentation is deliberately never persisted, so the load has no
+    history to restore -- it RECONSTRUCTS one, treating every id the
+    restored durable set already makes structurally reveal-eligible as
+    previously presented. Without that rule this is exactly where the
+    five rows came back: the load rebuilt the history against a fully
+    completed set and judged every id sticky at once.
+    """
+    uid = spawn_provisioned_acolyte(port)
+    if not check("a provisioned player acolyte spawns to satisfy the "
+                 "prepare subobjectives", uid > 0, str(uid)):
+        return
+    # The shipped tree, fully latched, with the evaluator free to check
+    # both subobjectives off the acolyte's own kit.
+    tree_id = restore_shipped_tree(port, [rid for rid, _ in SHIPPED_ROWS[:3]])
+    if not check("the shipped tree is back in front of the HUD for the "
+                 "round trip", tree_id == "first_session", tree_id):
+        return
+    empty = poll_dump(port,
+                      lambda x: (x.get("activeIds") or []) == [], seconds=30.0)
+    if not check("with the acolyte provisioned, the checklist reaches its "
+                 "EMPTY completed state before the save",
+                 bool(empty), str(dump(port))):
+        return
+
+    page = send(port, "return tostring(world.getActiveWorldId())",
+                timeout=15.0).strip().strip('"')
+    accepted = send(port, f"return engine.saveWorld('{page}', '{SLOT}')",
+                    timeout=60.0).strip()
+    if not check("the finished session saves through the real save barrier",
+                 accepted == "true", accepted):
+        return
+    req = capture_request_id(port, "return engine.getSaveStatus()")
+    ok, status = wait_save_complete(port, req) if req is not None else (False, None)
+    if not check("the save completes", ok, str(status)):
+        return
+
+    accepted = send(port, f"return engine.loadSave('{SLOT}')", timeout=60.0).strip()
+    if not check("the save is accepted for loading", accepted == "true", accepted):
+        return
+    req = capture_request_id(port, "return engine.getLoadStatus()")
+    published, status = wait_load_published(port, request_id=req)
+    if not check("the save loads and publishes", published, str(status)):
+        return
+
+    d = poll_dump(port, lambda x: x.get("open") is False, seconds=30.0) or dump(port)
+    check("the panel comes back COLLAPSED after a load (presentation state "
+          "is never persisted)", d.get("open") is False, str(d.get("open")))
+    # Open it and watch: the evaluation tick re-checks both subobjectives
+    # against the same loaded world the save was taken from, which is the
+    # exact tick that used to recompute five rows back onto the list.
+    send(port, "require('scripts.tutorial_hud').setOpen(true); return 'ok'",
+         timeout=15.0)
+    still_empty = poll_dump(port,
+                            lambda x: (x.get("activeIds") or []) == []
+                            and (x.get("rows") or []) == [], seconds=30.0)
+    check("the reopened checklist does NOT repopulate -- no already-retired "
+          "ancestor returns to the active view (#1941)",
+          bool(still_empty), str(dump(port)))
+    time.sleep(2.0)
+    after = dump(port)
+    check("and it stays empty across further evaluation ticks",
+          (after.get("activeIds") or []) == [], str(after.get("activeIds")))
+    shot = os.path.join(shots, "reloaded_empty.png")
+    check("the reloaded, empty checklist screenshot answers",
+          screenshot(port, shot))
 
 
 def reclose_phase(port: int, closed_shot: str, shots: str) -> None:
@@ -791,8 +981,13 @@ def main() -> int:
 
         print("== 8. the SHIPPED rows' rendered glyph bounds (#1581) ==")
         shipped_rows_phase(args.port, w, h, shots)
+
+        print("== 9. a finished checklist stays finished across a real "
+              "save/load (#1941) ==")
+        retired_reload_phase(args.port, shots)
     finally:
         quit_engine(args.port, proc)
+        remove_probe_slot()
 
     print()
     if failures:
