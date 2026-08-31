@@ -388,25 +388,48 @@ stagePage logger registry palette catalog buildingDefs unitDefs
             else pure (Nothing, Nothing)
 
           when isActive $ writeIORef phaseRef (LoadPhase1 3 totalSteps)
-          -- The SAVED camera chunk, canonicalised (#2001).
+          -- The SAVED camera chunk, in whatever frame it was saved in.
           -- 'cameraChunkCoord' does no wrapping, so a session saved past
-          -- the seam names an ALIAS — and this centre is generated and
-          -- inserted straight into wsTilesRef under whatever coord it is
-          -- given. Storing it raw would put the page's one synchronously
-          -- loaded chunk somewhere every canonicalising reader misses,
-          -- and leave the camera loader generating a SECOND copy of the
-          -- same physical chunk under the canonical key. Identity for
-          -- every restore that is not near the seam, and for arena and
-          -- zero-size pages.
-          -- Claimed before generation, exactly as fresh world init does:
-          -- a staged page cannot be reached by a request, but the two
-          -- seed paths run the same lifecycle so neither can drift.
-          let centerCoord = canonicalChunkCoord params $
-                  cameraChunkCoord (wpsCameraFacing wps)
-                                   (wpsCameraX wps)
-                                   (wpsCameraY wps)
-          centreClaims ← claimChunkGeneration worldState pid params
-                                              [centerCoord]
+          -- the seam names a non-canonical ALIAS, and this centre is
+          -- generated and inserted under exactly that coord.
+          --
+          -- #2001 canonicalised it and that had to be REVERTED: an
+          -- existing save's replay log is keyed by the coord its chunks
+          -- carried when the entries were written, and
+          -- 'World.Thread.Command.Save.WriteWorld.appendFluidSnapshot'
+          -- keys every settled-fluid snapshot by the chunk's own
+          -- 'lcCoord'. A save written on this path therefore holds
+          -- alias-keyed entries, and 'World.Edit.Apply.replayEdits' is a
+          -- direct lookup by 'lcCoord' — so restoring the centre
+          -- canonically silently skipped them. Rekeying them is not a
+          -- relabel either: a 'World.Edit.Types.WorldEdit' carries GLOBAL
+          -- tile coordinates, which a seam move would have to shift too,
+          -- across an append-only serialized enum. That migration is its
+          -- own piece of work; storing the centre where the save's own
+          -- data already points is what keeps existing saves loading.
+          let centerCoord = cameraChunkCoord (wpsCameraFacing wps)
+                                             (wpsCameraX wps)
+                                             (wpsCameraY wps)
+          -- Claimed before generation, exactly as fresh world init does —
+          -- but ONLY when the saved coord is the canonical one. The
+          -- residency owner is keyed canonically by construction
+          -- ('World.Chunk.Residency.chunkKeyFor') and so cannot name a
+          -- chunk stored under an alias: claiming the canonical key for
+          -- it would mark resident a key whose payload is not in the tile
+          -- map, and the camera loader's own claim for that key would
+          -- then be refused for ever, leaving the physical chunk
+          -- unreachable to every canonicalising reader.
+          --
+          -- Leaving it unclaimed restores the pre-#2001 behaviour
+          -- exactly: the camera loader generates the canonical twin, as
+          -- it always did. That is one physical place held under two
+          -- keys — a real defect, but a PRE-EXISTING one, and out of
+          -- scope here (this slice may not regress a reader's current
+          -- behaviour). The alias-stored chunk is simply outside the
+          -- owner's vocabulary, which is honest rather than papered over.
+          centreClaims ← if canonicalChunkCoord params centerCoord ≡ centerCoord
+              then claimChunkGeneration worldState pid params [centerCoord]
+              else pure []
           let (ct, cs, cterrain, cf, cice, cflora, cwt, cmagma) =
                   generateChunk registry catalog params centerCoord
               seededSurf = VU.imap (\idx surfZ →

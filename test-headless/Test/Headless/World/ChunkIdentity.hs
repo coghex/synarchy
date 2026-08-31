@@ -52,8 +52,6 @@ import Data.Maybe (mapMaybe)
 import World.State.Types (WorldState(..), LoadPhase(..), emptyWorldState)
 import World.Tile.Types (WorldTileData(..), emptyWorldTileData, lookupChunk)
 import World.Generate.Arena (generateFlatChunk)
-import World.Edit.Apply (replayEdits)
-import World.Edit.Types (WorldEdit(..), appendEdit, emptyWorldEdits)
 import Test.Headless.Harness
     (getWorldState, sendWorldCommand, waitForWorldInit)
 
@@ -855,32 +853,6 @@ spec = describe "canonical chunk identity" $ do
         reconcileQueuedPhase wsLive
         readIORef (wsLoadPhaseRef wsLive) `shouldReturn` LoadDone
 
-    it "replays a seam save's edits onto the canonicalised centre" $ \_ → do
-        -- Canonicalising the restored centre is a save-compat FIX, not a
-        -- break. Edit keys come from 'globalToChunk' applied to the
-        -- coords the pick head produced, and 'World.Render.HitTest' is
-        -- the head of the designation coordinate contract: it reports in
-        -- the CANONICAL frame (#1175). So a seam page's edits are keyed
-        -- canonically, and it was the RAW-keyed restored centre that
-        -- could not see them.
-        let params = sizedParams seamWorldSize
-            -- (3, 67) sits in chunk (0, 4) — the canonical spelling of
-            -- the alias (4, 0) a seam restore used to store the centre
-            -- under.
-            edited = WeDeleteTile 3 67
-            saved = appendEdit canonCoord edited emptyWorldEdits
-        canonicalChunkCoord params aliasCoord `shouldBe` canonCoord
-
-        -- The centre this branch restores replays them.
-        let onCanonical = replayEdits saved (generateFlatChunk canonCoord)
-        lcTiles onCanonical `shouldNotBe` lcTiles (generateFlatChunk canonCoord)
-
-        -- The centre it USED to restore could not: replayEdits looks its
-        -- chunk up by lcCoord exactly, and the alias is not a key in a
-        -- log the pick head wrote.
-        let onAlias = replayEdits saved (generateFlatChunk aliasCoord)
-        lcTiles onAlias `shouldBe` lcTiles (generateFlatChunk aliasCoord)
-
     it "carries a concurrent total across the settle's own retry" $ \_ → do
         -- The settle concludes "done" from a queue it read empty, and
         -- that write ERASES the recorded total. If an append landed in
@@ -907,3 +879,43 @@ spec = describe "canonical chunk identity" $ do
         -- one is recorded.
         drainedLoadPhase boxFallback 1 (LoadPhase2 2 26)
             `shouldBe` LoadPhase2 1 26
+
+    it "leaves an alias-stored seed chunk outside the owner" $ \_ → do
+        -- A saved session past the seam restores its centre under the
+        -- coord it was SAVED with, not the canonical one: an existing
+        -- save's replay log — including every settled-fluid snapshot
+        -- appendFluidSnapshot keyed by the chunk's own lcCoord — points
+        -- at that alias, and replayEdits is a direct lookup by lcCoord.
+        --
+        -- The owner is keyed canonically by construction, so it cannot
+        -- name such a chunk. Claiming the canonical key for it would mark
+        -- resident a key whose payload is not in the tile map, and the
+        -- camera loader's own claim for that key would then be refused
+        -- for ever — leaving the physical chunk unreachable to every
+        -- canonicalising reader. It is left unclaimed instead.
+        let params = sizedParams seamWorldSize
+            canonicalSeed c = canonicalChunkCoord params c ≡ c
+
+        -- The seam case: the saved centre is an alias, so no claim.
+        canonicalSeed aliasCoord `shouldBe` False
+        wsSeam ← detachedPage params
+        writeIORef (wsTilesRef wsSeam) (seedTileData aliasCoord)
+        seamOwner ← readChunkOwner wsSeam
+        chunkOwnerSize seamOwner `shouldBe` 0
+        -- ...so the canonical key stays claimable, which is what lets the
+        -- camera loader produce it exactly as it did before #2001.
+        claims ← claimChunkGeneration wsSeam pageA params [canonCoord]
+        map claimedChunkCoord claims `shouldBe` [canonCoord]
+
+        -- Every other restore is unaffected: away from the seam the
+        -- saved coord IS canonical, so the seed claims and admits as
+        -- usual.
+        canonicalSeed (ChunkCoord 1 1) `shouldBe` True
+        wsPlain ← detachedPage params
+        plainClaims ← claimChunkGeneration wsPlain pageA params [ChunkCoord 1 1]
+        publishSeedChunks wsPlain plainClaims (seedTileData (ChunkCoord 1 1))
+        plainOwner ← readChunkOwner wsPlain
+        stateOf params pageA (ChunkCoord 1 1) plainOwner `shouldBe` ChunkResident
+        -- ...and a fresh world's centre is canonical on every world size,
+        -- so fresh init always claims.
+        canonicalSeed (ChunkCoord 0 0) `shouldBe` True
