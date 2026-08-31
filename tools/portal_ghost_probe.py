@@ -54,9 +54,13 @@ from location_content_probe import (load_defs, gen_world, placed_ready,
                                     wait_floor, make_isolated_root,
                                     remove_isolated_root, save_and_wait)
 from offscreen_probe import screenshot, png_stats, png_differs
+from run_probes import FailureEmitter   # durable failure records (#1982)
 
 LOG_PREP = "/tmp/portal_ghost_prep_engine.log"
 LOG_GPU = "/tmp/portal_ghost_gpu_engine.log"
+#: #1982 — this run's durable failure records, built at import so the
+#: offset each carries is measured from the probe's own start.
+FAILURE = FailureEmitter("portal_ghost_probe")
 #: Base of the per-invocation save slot. The run's own random token is
 #: appended so two runs cannot collide and no slot a normal `cabal run`
 #: could reach is ever created (#1620 requirement 5).
@@ -225,7 +229,7 @@ def main() -> int:
         # requirement 6 forbids.
         leftover = remove_isolated_root(base)
         if leftover:
-            print(f"FAIL: {leftover}", file=sys.stderr)
+            FAILURE.check(leftover)
     return 1 if leftover else rc
 
 
@@ -399,8 +403,19 @@ def report(shots: str) -> int:
     print(f"\nscreenshots kept in {shots}")
     print("-" * 56)
     if failures:
-        for f in failures:
-            print(f"FAIL: {f}", file=sys.stderr)
+        # Durable records rather than the unflushed stderr print this was
+        # (#1982): `run_probes.py` merges this probe's stderr into a
+        # block-buffered stdout pipe and prints only its last 25 lines, so
+        # a printed `FAIL:` overtook the buffered checks and landed above
+        # the retained tail. These are read back from the COMPLETE
+        # capture. Both engines of this invocation are named: a ghost that
+        # never rendered and one that rendered wrongly are the same check
+        # and different logs. The screenshots this probe deliberately
+        # KEEPS are named here too — its artifact policy is unchanged.
+        FAILURE.report(failures)
+        FAILURE.context_log(LOG_PREP, label="prep engine log")
+        FAILURE.context_log(LOG_GPU, label="offscreen engine log")
+        FAILURE.context("screenshots", shots)
         return 1
     print("ALL CHECKS PASSED")
     return 0

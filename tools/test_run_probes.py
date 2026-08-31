@@ -606,7 +606,9 @@ def probe_src(root: Path, name: str, *, exit_code: int = 0,
               dwell: float = 0.0,
               handshake_delay: float = 0.0,
               bind_span: int = 0, bind_delay: float = 0.0,
-              progress: "tuple[tuple[str, str, str], ...]" = ()) -> str:
+              progress: "tuple[tuple[str, str, str], ...]" = (),
+              failures: "tuple[tuple[str, str, str], ...]" = (),
+              sentinel: str = "") -> str:
     """A synthetic probe that boots a synthetic 'engine' the way probelib does.
 
     ``ignore_term`` and ``engine_ignores_term`` are independent on purpose:
@@ -640,6 +642,19 @@ def probe_src(root: Path, name: str, *, exit_code: int = 0,
     them first is what lets a case bury them under more than ``--tail``
     ordinary lines and still require the failure presentation to surface
     them.
+
+    ``failures`` is the same for #1982's durable failure records --
+    ``(kind, identity, detail)`` triples emitted through the real
+    ``run_probes.FailureEmitter``. They are emitted FLUSHED, before the
+    block-buffered ``tail_lines``, which is exactly the displacement the
+    real probes suffer: their ``FAIL:`` lines go to an unbuffered stderr
+    the runner merges into a piped, block-buffered stdout, so they
+    overtake the buffered check output and land at the TOP of the merged
+    capture, above whatever the ``--tail`` retains.
+
+    ``sentinel`` is one ordinary line printed FIRST -- a non-diagnostic
+    marker a case can require to stay OMITTED, which is what proves the
+    failure presentation did not simply dump the complete capture.
     """
     pidfile = root / f"{name}.enginepid"
     startedfile = root / f"{name}.started"
@@ -682,6 +697,8 @@ def probe_src(root: Path, name: str, *, exit_code: int = 0,
         "    os.fsync(_iv.fileno())",
         "_stamp('start')",
     ]
+    if sentinel:
+        lines.append(f"print({sentinel!r})")
     if ignore_term:
         lines.append("signal.signal(signal.SIGTERM, signal.SIG_IGN)")
     if descendant:
@@ -747,6 +764,18 @@ def probe_src(root: Path, name: str, *, exit_code: int = 0,
         for kind, identity, detail in progress:
             lines.append(
                 f"_progress.emit({kind!r}, {identity!r}, {detail!r})")
+    if failures:
+        # The real module again, for the same reason: a synthetic copy of
+        # the record format would let producer and consumer drift apart
+        # without a test noticing (#1982).
+        lines += [
+            f"sys.path.insert(0, {str(Path(__file__).resolve().parent)!r})",
+            "import run_probes as _run_probes",
+            "_failure = _run_probes.FailureEmitter('synthetic')",
+        ]
+        for kind, identity, detail in failures:
+            lines.append(
+                f"_failure.emit({kind!r}, {identity!r}, {detail!r})")
     for i in range(tail_lines):
         lines.append(f"print('diagnostic line {i}')")
     lines.append("sys.stdout.flush()")
@@ -3583,6 +3612,268 @@ def test_parallel_dispatch_and_retry_records_name_every_attempt() -> None:
         tree.cleanup()
 
 
+# --------------------------------------------------------------------------
+# Durable failure records and the retained failed check (#1982)
+#
+# #1768's cases above are about a probe that never finished. These are
+# about one that finished and FAILED: it printed its per-check verdicts
+# to a block-buffered stdout pipe and its terminal `FAIL:` summary to an
+# unbuffered stderr the runner merges into that same pipe, so the
+# `FAIL:` lines OVERTOOK the buffered output and landed at the top of the
+# capture while `--tail 25` printed only the bottom. A real coordinated
+# run spent 279.5 s to report "1 check(s) FAILED" and name the check
+# nowhere.
+#
+# The synthetic probes below reproduce that displacement exactly -- real
+# `FailureEmitter` records flushed ahead of more than `--tail` buffered
+# lines -- and require the DEFAULT presentation, on both of its paths, to
+# surface every one of them without dumping the capture.
+# --------------------------------------------------------------------------
+def failure_records(out: str) -> list[run_probes.FailureRecord]:
+    """Every failure record in some output, in order."""
+    return [record for record in
+            (run_probes.parse_failure(line) for line in out.splitlines())
+            if record is not None]
+
+
+def test_failure_records_round_trip_and_stay_off_the_progress_channel() -> None:
+    print("\n-- a failure record round-trips, and is not a progress record")
+    now = time.time()
+    line = run_probes.format_failure(
+        "check", "location_embark_probe",
+        "the discovered icon never appeared at (12,7)",
+        elapsed=279.4, now=now)
+    record = run_probes.parse_failure(line)
+    expect(record is not None, f"the rendered record parses back ({line!r})")
+    expect(record.kind == "check"
+           and record.identity == "location_embark_probe",
+           f"with its kind and identity intact (got {record!r})")
+    expect(record.detail == "the discovered icon never appeared at (12,7)",
+           f"and its detail intact (got {record.detail!r})")
+    expect("+279.4s" in record.stamp,
+           f"the stamp carries the elapsed offset, so 'at the very end of "
+           f"a 279.5 s run' is readable (got {record.stamp!r})")
+
+    awkward = run_probes.format_failure(
+        "setup", "probe", "no [flat] site | tried 6 seeds",
+        elapsed=1.0, now=now)
+    expect(run_probes.parse_failure(awkward).detail
+           == "no [flat] site | tried 6 seeds",
+           "a detail containing the separator survives the round trip")
+
+    # A detail spanning lines would split into a marked line and an
+    # unmarked orphan the parser could only drop; one record is one line.
+    multi = run_probes.format_failure(
+        "check", "probe", "first\nsecond\n   third", elapsed=1.0, now=now)
+    expect("\n" not in multi,
+           f"a multi-line detail is collapsed to one line ({multi!r})")
+    expect(run_probes.parse_failure(multi).detail == "first second third",
+           f"keeping every word (got {run_probes.parse_failure(multi)!r})")
+
+    # The two conventions must not read each other's records: #1768's
+    # promise is that a capture with no PROGRESS records yields no
+    # progress attribution at all, and a failing probe emitting only
+    # failure records must not break it.
+    expect(run_probes.parse_progress(line) is None,
+           "a failure record is not a progress record")
+    expect(run_probes.progress_attribution(line + "\n") == [],
+           "and yields no progress attribution")
+    progress = run_probes.format_progress("phase", "engine A", "build",
+                                          elapsed=1.0, now=now)
+    expect(run_probes.parse_failure(progress) is None,
+           "and a progress record is not a failure record")
+    expect(run_probes.failure_attribution(progress + "\n") == [],
+           "nor does it yield failure attribution")
+
+    expect(run_probes.parse_failure("FAIL: something broke") is None,
+           "an ordinary printed FAIL line is not a record")
+    expect(progress_lines(line, "location_embark_probe.py") == 0,
+           f"and a record naming a probe is not counted as its verdict "
+           f"({line!r})")
+
+    try:
+        run_probes.format_failure("nonsense", "x", "y", elapsed=0.0, now=now)
+    except ValueError:
+        expect(True, "an unknown record kind is refused at the source")
+    else:
+        expect(False, "an unknown record kind should be refused at the source")
+
+
+def test_failure_attribution_names_every_recorded_failure_once() -> None:
+    print("\n-- attribution names every recorded failure exactly once, "
+          "keeps the two vocabularies apart, and carries the context")
+    now = time.time()
+
+    def line(kind, identity, detail, elapsed):
+        return run_probes.format_failure(kind, identity, detail,
+                                         elapsed=elapsed, now=now)
+
+    expect(run_probes.failure_attribution("") == [],
+           "a capture with no failure records yields no attribution at all")
+    expect(run_probes.failure_attribution("just some probe output\n") == [],
+           "and neither does ordinary probe output")
+
+    capture = "\n".join([
+        line("setup", "stamp_probe", "no conforming [flat] site", 4.0),
+        "some ordinary output",
+        line("check", "stamp_probe", "room at (12,7) never stamped", 9.0),
+        line("check", "stamp_probe", "structure.clear left the floor", 11.0),
+        line("context", "engine log", "/tmp/x/engine.log", 12.0),
+        line("context", "engine log tail", "vulkan: device lost", 12.0),
+    ]) + "\n"
+    got = run_probes.failure_attribution(capture)
+    text = "\n".join(got)
+    expect("3 recorded failure(s)" in text,
+           f"the count covers both vocabularies (got {got!r})")
+    for detail in ("no conforming [flat] site",
+                   "room at (12,7) never stamped",
+                   "structure.clear left the floor"):
+        expect(text.count(detail) == 1,
+               f"{detail!r} is named exactly once (got {got!r})")
+    expect("SETUP FAILURE: no conforming [flat] site" in text,
+           f"a setup failure keeps its own vocabulary (got {got!r})")
+    expect("FAIL: room at (12,7) never stamped" in text,
+           f"and an ordinary failure keeps its own (got {got!r})")
+    expect(text.index("room at (12,7)") < text.index("structure.clear"),
+           "recorded failures are listed in the order they happened")
+    expect("engine log: /tmp/x/engine.log" in text
+           and "vulkan: device lost" in text,
+           f"and the bounded context is carried beside them (got {got!r})")
+    expect(text.index("structure.clear") < text.index("/tmp/x/engine.log"),
+           "with the failures first and the context after them")
+
+    # The tail is printed BESIDE the attribution, so the records
+    # themselves must be withheld from it or every failure appears twice.
+    stripped = run_probes.without_failure_records(capture)
+    expect(run_probes.FAILURE_MARKER not in stripped,
+           f"the records are withheld from the ordinary tail ({stripped!r})")
+    expect("some ordinary output" in stripped,
+           "while everything else survives it")
+
+
+def test_failed_checks_survive_outside_the_ordinary_tail() -> None:
+    print("\n-- a completed failing probe's failed checks reach the default "
+          "report, though its records sit above the 25-line tail")
+    tree = Tree()
+    try:
+        # The observed shape: several failure records flushed into the
+        # merged pipe, then 40 block-buffered ordinary lines against the
+        # default `--tail 25`. Every record is provably outside the tail,
+        # so only the attribution can surface it. A phase record rides
+        # along, because #1982 requirement 4 wants the failure CLASS and
+        # the phase both readable without rerunning the probe.
+        tree.add("stamp", exit_code=1, tail_lines=40,
+                 sentinel="sentinel: the very first line of this run",
+                 progress=(("phase", "engine C", "fresh process, load 'gen2'"),),
+                 failures=(("setup", "stamp_probe",
+                            "no conforming [flat] site in 6 seeds"),
+                           ("check", "stamp_probe",
+                            "room at (12,7) never stamped on first load"),
+                           ("check", "stamp_probe",
+                            "structure.clear did not remove the anchor floor"),
+                           ("context", "engine log", "/tmp/stamp/engine.log"),
+                           ("context", "engine log tail",
+                            "vulkan: swapchain out of date")))
+        rc, out = _main_with(tree, [])
+        expect(rc == 1, f"the failing run still fails (exit {rc})")
+        expect("FAIL" in out, "and is reported as a FAIL")
+
+        # Requirement 1 and 2: every failed check and its detail, named.
+        expect("3 recorded failure(s)" in out,
+               f"the recorded count is reported:\n{out}")
+        for detail in ("no conforming [flat] site in 6 seeds",
+                       "room at (12,7) never stamped on first load",
+                       "structure.clear did not remove the anchor floor"):
+            expect(out.count(detail) == 1,
+                   f"{detail!r} is named exactly once:\n{out}")
+        expect("SETUP FAILURE: no conforming [flat] site" in out,
+               f"the setup vocabulary survives distinctly:\n{out}")
+
+        # Requirement 4: the phase and the invocation context.
+        expect("progress: latest phase entered at" in out and "engine C" in out,
+               f"the phase the run was in is named too:\n{out}")
+        expect("engine log: /tmp/stamp/engine.log" in out
+               and "vulkan: swapchain out of date" in out,
+               f"and the bounded engine-log context:\n{out}")
+
+        # Requirement 6: bounded, not a dump. The sentinel is the very
+        # first line of the run and stays omitted; the tail is the last
+        # 25 ordinary lines and nothing more.
+        expect("sentinel: the very first line" not in out,
+               f"an early non-diagnostic line stays omitted:\n{out}")
+        expect("diagnostic line 0" not in out,
+               f"and the complete capture is NOT dumped:\n{out}")
+        expect("diagnostic line 39" in out and "diagnostic line 15" in out,
+               f"while the ordinary tail is preserved as context:\n{out}")
+        expect("diagnostic line 14" not in out,
+               f"bounded at exactly --tail lines:\n{out}")
+        expect(run_probes.FAILURE_MARKER not in out,
+               f"and the raw records are not reprinted beside the "
+               f"attribution that already carries them:\n{out}")
+    finally:
+        tree.cleanup()
+
+
+def test_failed_checks_survive_the_parallel_presentation() -> None:
+    print("\n-- the same guarantee holds in the --jobs failure block, and "
+          "only the FINAL attempt's capture is the one it is read from")
+    tree = Tree()
+    try:
+        tree.add("alpha", dwell=0.3, descendant=False)
+        tree.add("beta", exit_code=1, tail_lines=40, descendant=False,
+                 sentinel="sentinel: the very first line of this run",
+                 progress=(("phase", "engine A", "build the scenario"),),
+                 failures=(("check", "beta_probe",
+                            "the overlay lost a ruin across save-load"),
+                           ("check", "beta_probe",
+                            "only 2/5 ruin(s) materialized after load"),
+                           ("context", "engine log", "/tmp/beta/engine.log")))
+        # `--retries 1` makes this the reviewer's case: `run_with_retry`
+        # keeps only the FINAL attempt's capture, and the guarantee is
+        # about the completed nonzero attempt that decided the verdict.
+        rc, out = _main_with(tree, ["--jobs", "2", "--retries", "1"])
+        expect(rc == 1, f"the failing probe still fails the run (exit {rc})")
+
+        block = out.split("--- beta_probe.py (FAIL) ---")[-1]
+        expect("2 recorded failure(s)" in block,
+               f"the parallel failure block carries the attribution:\n{out}")
+        for detail in ("the overlay lost a ruin across save-load",
+                       "only 2/5 ruin(s) materialized after load"):
+            expect(block.count(detail) == 1,
+                   f"{detail!r} is named exactly once in the block:\n{out}")
+        expect("engine log: /tmp/beta/engine.log" in block,
+               f"with its context:\n{out}")
+        expect("progress: latest phase entered at" in block
+               and "engine A" in block,
+               f"and the phase attribution beside it:\n{out}")
+        expect("sentinel: the very first line" not in block,
+               f"the early non-diagnostic line stays omitted:\n{out}")
+        expect("diagnostic line 0" not in block,
+               f"and the complete capture is NOT dumped:\n{out}")
+        expect("diagnostic line 39" in block,
+               f"while the ordinary tail is preserved:\n{out}")
+        expect(run_probes.FAILURE_MARKER not in out,
+               f"and no raw record is reprinted:\n{out}")
+
+        # A passing probe's block does not exist at all, so nothing of
+        # the mechanism reaches a green run.
+        expect("alpha_probe.py (FAIL)" not in out,
+               f"the passing probe gets no failure block:\n{out}")
+
+        # The retention guarantee is about the FINAL completed nonzero
+        # attempt -- the one that decided the verdict. `run_with_retry`
+        # keeps only that attempt's capture, so proving the retry really
+        # happened is what makes the assertions above about the second
+        # attempt rather than a single-run coincidence.
+        expect(len(tree.intervals("beta")) == 2,
+               f"the failing probe really was retried "
+               f"({tree.intervals('beta')!r})")
+        expect(failure_records(block) == [],
+               f"and no raw record reaches the block that already renders "
+               f"them (got {failure_records(block)!r})")
+    finally:
+        tree.cleanup()
+
 def test_the_readme_states_no_registry_total() -> None:
     print("\n-- tools/README.md's run_probes section states no registry total")
 
@@ -4219,6 +4510,10 @@ def main() -> int:
     test_progress_survives_a_forced_timeout_outside_the_ordinary_tail()
     test_in_flight_attempts_are_derivable_from_the_default_report()
     test_parallel_dispatch_and_retry_records_name_every_attempt()
+    test_failure_records_round_trip_and_stay_off_the_progress_channel()
+    test_failure_attribution_names_every_recorded_failure_once()
+    test_failed_checks_survive_outside_the_ordinary_tail()
+    test_failed_checks_survive_the_parallel_presentation()
     if FAILURES:
         print(f"\n{len(FAILURES)} test(s) failed:")
         for failure in FAILURES:
