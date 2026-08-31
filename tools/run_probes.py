@@ -1021,6 +1021,225 @@ def progress_attribution(out: str) -> list[str]:
     return lines
 
 
+# ── Durable failure records (#1982) ───────────────────────────────────
+#
+# #1768 above solves the TIMEOUT half of the same loss. This solves the
+# COMPLETED-failure half, and it is a different mechanism because the
+# thing lost is different.
+#
+# A probe writes its per-check verdicts to stdout and its terminal
+# `FAIL:` summary to stderr. `run_one` merges the two with
+# `stderr=subprocess.STDOUT`, and Python block-buffers a piped stdout
+# while leaving stderr unbuffered — so the `FAIL:` lines OVERTAKE the
+# stdout still sitting in the child's buffer and land near the TOP of
+# the merged capture, while the default `--tail 25` prints only its
+# bottom. A run that failed one check therefore reported "1 check(s)
+# FAILED" and named the check nowhere. Flushing alone would fix the
+# ordering but not the guarantee: with more failed checks than `--tail`
+# lines, or a probe that keeps printing afterwards, the tail truncates
+# them again.
+#
+# So a failed check is recorded the way a phase is: ONE flushed line in
+# a marked convention, read back by the failure presentation from the
+# COMPLETE capture. Position in the stream then stops mattering.
+#
+#   #probe-failure# HH:MM:SS +12.3s | check   | location_embark_probe | ...
+#   #probe-failure# HH:MM:SS +12.3s | setup   | location_stamp_...    | ...
+#   #probe-failure# HH:MM:SS +12.3s | context | engine log            | /tmp/...
+#
+# The kinds are deliberately three, not one. `check` and `setup` are the
+# two vocabularies the probes already print (#1575 requirement 4: "try
+# another seed" versus "there is a bug"), and losing that distinction in
+# the retained output would leave an operator unable to tell a fixture
+# failure from a product failure — which is the whole of #1982's
+# requirement 4. `context` carries the bounded invocation evidence
+# beside them: the engine log this run owned, a short tail of it, and
+# what became of the artifact tree.
+#
+# The marker is its own, not `#probe-progress#`'s: `progress_attribution`
+# reports the latest phase and the in-flight attempt set, which is a
+# different question from "what failed", and its documented promise that
+# a capture with no progress records yields no attribution at all stays
+# exactly true.
+FAILURE_MARKER = "#probe-failure#"
+FAILURE_SEP = " | "
+FAILURE_KINDS = ("check", "setup", "context")
+# The two REPORTED kinds and the vocabulary each is printed back as. A
+# kind outside this mapping is context, never a failed check.
+FAILURE_LABELS = {"check": "FAIL", "setup": "SETUP FAILURE"}
+# Requirement 6: a failure block stays concise. The engine-log excerpt is
+# bounded here rather than at each call site, so no probe can widen it
+# into a whole-capture dump by passing a large number.
+FAILURE_LOG_TAIL_LINES = 10
+
+
+class FailureRecord(NamedTuple):
+    """One parsed failure record: `stamp` is `HH:MM:SS +<elapsed>s`."""
+    stamp: str
+    kind: str
+    identity: str
+    detail: str
+
+
+def _one_line(text: object) -> str:
+    """Collapse anything to a single line, so one record is one line.
+
+    A record survives by being ONE flushed write; a detail carrying an
+    embedded newline would split into a marked line and an unmarked
+    orphan the parser could only drop.
+    """
+    return " ".join(str(text).split())
+
+
+def format_failure(kind: str, identity: str, detail: str, *,
+                   elapsed: float, now: float) -> str:
+    """Render one failure record in the shared convention."""
+    if kind not in FAILURE_KINDS:
+        raise ValueError(f"unknown failure kind {kind!r}; "
+                         f"expected one of {FAILURE_KINDS}")
+    stamp = f"{time.strftime('%H:%M:%S', time.localtime(now))} +{elapsed:.1f}s"
+    # Only the first three fields are structural, so the separator is
+    # removed from the identity (field 3) and left alone in the detail.
+    label = _one_line(identity).replace("|", "/") or "(unnamed)"
+    return FAILURE_SEP.join(
+        [f"{FAILURE_MARKER} {stamp}", kind, label, _one_line(detail)])
+
+
+def parse_failure(line: str) -> FailureRecord | None:
+    """One failure record, or None for any other line of child output."""
+    text = line.strip()
+    if not text.startswith(FAILURE_MARKER + " "):
+        return None
+    fields = text.split(FAILURE_SEP)
+    if len(fields) < 4:
+        return None
+    stamp = fields[0][len(FAILURE_MARKER):].strip()
+    kind = fields[1].strip()
+    if kind not in FAILURE_KINDS:
+        return None
+    return FailureRecord(stamp, kind, fields[2].strip(),
+                         FAILURE_SEP.join(fields[3:]).strip())
+
+
+def failure_records(out: str) -> list[FailureRecord]:
+    """Every failure record in a capture, in emission order."""
+    return [record for record in
+            (parse_failure(line) for line in out.splitlines())
+            if record is not None]
+
+
+def failure_attribution(out: str) -> list[str]:
+    """The failed-check block of a failing probe's DEFAULT presentation.
+
+    Read from the COMPLETE capture `run_one` holds, so a record that more
+    than `--tail` lines followed is still named, and every recorded
+    failure is named exactly once — the records themselves are removed
+    from the tail printed beside this block (`without_failure_records`),
+    so nothing here is repeated there.
+
+    A capture holding no failure records yields nothing at all, so a
+    probe that emits none has exactly the presentation it always had.
+    """
+    records = failure_records(out)
+    if not records:
+        return []
+    lines: list[str] = []
+    reported = [record for record in records if record.kind in FAILURE_LABELS]
+    if reported:
+        producers: list[str] = []
+        for record in reported:
+            if record.identity not in producers:
+                producers.append(record.identity)
+        lines.append(f"failure: {len(reported)} recorded failure(s) from "
+                     f"{', '.join(producers)}:")
+        for record in reported:
+            lines.append(f"    [{record.stamp}] "
+                         f"{FAILURE_LABELS[record.kind]}: {record.detail}")
+    context = [record for record in records if record.kind == "context"]
+    if context:
+        lines.append("failure: retained context:")
+        for record in context:
+            lines.append(f"    {record.identity}: {record.detail}")
+    return lines
+
+
+def without_failure_records(out: str) -> str:
+    """A capture with its failure records removed, for the ordinary tail.
+
+    They are presented by `failure_attribution` above, in full; leaving
+    them in the tail as well would print the same failed check twice and
+    spend the tail's bounded budget on lines already shown.
+    """
+    return "\n".join(line for line in out.splitlines()
+                     if parse_failure(line) is None)
+
+
+class FailureEmitter:
+    """A probe's own producer of durable failure records.
+
+    Construct it at module scope, not inside `report()`: the elapsed
+    offset each record carries is measured from this object's birth, and
+    a probe's own start is what makes "+279.4s" mean "at the very end of
+    a 279.5 s run".
+
+    Every record is flushed as it is written, for the same reason
+    `ProgressEmitter` flushes: this process's stdout is a pipe the runner
+    drains only at exit.
+    """
+
+    def __init__(self, probe: str, *, start: float | None = None) -> None:
+        self.probe = probe
+        self.start = time.time() if start is None else start
+
+    def emit(self, kind: str, identity: str, detail: str) -> str:
+        now = time.time()
+        line = format_failure(kind, identity, detail,
+                              elapsed=now - self.start, now=now)
+        # `file` is left at its default so a caller redirecting
+        # `sys.stdout` still captures it.
+        print(line, flush=True)
+        return line
+
+    def check(self, detail: str) -> str:
+        return self.emit("check", self.probe, detail)
+
+    def setup(self, detail: str) -> str:
+        return self.emit("setup", self.probe, detail)
+
+    def context(self, label: str, detail: str) -> str:
+        return self.emit("context", label, detail)
+
+    def report(self, failures, setup_failures=()) -> None:
+        """One record per recorded failure, setup vocabulary first."""
+        for failure in setup_failures:
+            self.setup(failure)
+        for failure in failures:
+            self.check(failure)
+
+    def context_log(self, path, *, label: str = "engine log",
+                    lines: int = FAILURE_LOG_TAIL_LINES) -> None:
+        """Name this run's engine log and retain a bounded tail of it.
+
+        This is requirement 4's evidence: a fixture or infrastructure
+        failure and a product failure look identical in a check name and
+        different in the last few lines the engine wrote.
+        """
+        if not path:
+            return
+        self.context(label, str(path))
+        try:
+            with open(path, errors="replace") as handle:
+                tail = handle.readlines()[-max(0, lines):]
+        except OSError as error:
+            self.context(f"{label} tail", f"(unreadable: {error})")
+            return
+        if not tail:
+            self.context(f"{label} tail", "(empty)")
+            return
+        for line in tail:
+            if line.strip():
+                self.context(f"{label} tail", line.rstrip("\n"))
+
 # farm_ai_probe.py's O(n^2) TCP tile scan over natural terrain (#336) is the
 # slowest probe in the ordinary runtime class at ~11.5 min solo on a warm dev
 # machine (#721), so the shared default needs real margin above that. A probe
@@ -1706,14 +1925,19 @@ def main() -> int:
                 note = f"  [passed on retry {attempts}]" if status == "PASS" and attempts > 1 else ""
                 print(f"{status} ({elapsed:.1f}s){note}")
                 if status != "PASS" and args.tail > 0:
-                    # #1768: the attribution first, then the ordinary tail
-                    # as context. The attribution is drawn from the
-                    # COMPLETE capture, so a phase record that more than
-                    # `--tail` lines followed is still named; nothing else
-                    # of the capture is printed.
+                    # #1768 and #1982: the two attributions first, then the
+                    # ordinary tail as context. Both are drawn from the
+                    # COMPLETE capture, so a phase record or a failed check
+                    # that more than `--tail` lines followed is still named;
+                    # nothing else of the capture is printed. The failure
+                    # records are then withheld from the tail, so every
+                    # recorded failure appears exactly once.
+                    for ln in failure_attribution(out):
+                        print(f"    {ln}")
                     for ln in progress_attribution(out):
                         print(f"    {ln}")
-                    for ln in out.splitlines()[-args.tail:]:
+                    for ln in without_failure_records(
+                            out).splitlines()[-args.tail:]:
                         print(f"    {ln}")
                 results[key] = (script, status, elapsed, out)
         else:
@@ -1924,14 +2148,17 @@ def main() -> int:
                     r = results[key]
                     if r[1] != "PASS":
                         print(f"\n--- {r[0]} ({r[1]}) ---")
-                        # The same #1768 attribution the sequential path
-                        # prints: `--jobs` is the OTHER default failure
-                        # presentation, and the guarantee has to hold on
-                        # both or it silently lapses whenever a probe is
-                        # selected inside a parallel run.
+                        # The same #1768 and #1982 attributions the
+                        # sequential path prints: `--jobs` is the OTHER
+                        # default failure presentation, and both guarantees
+                        # have to hold on it too or they silently lapse
+                        # whenever a probe is selected inside a parallel run.
+                        for ln in failure_attribution(r[3]):
+                            print(f"    {ln}")
                         for ln in progress_attribution(r[3]):
                             print(f"    {ln}")
-                        for ln in r[3].splitlines()[-args.tail:]:
+                        for ln in without_failure_records(
+                                r[3]).splitlines()[-args.tail:]:
                             print(f"    {ln}")
     except KeyboardInterrupt:
         # Each run_one already reaped its own group on the way out; this is

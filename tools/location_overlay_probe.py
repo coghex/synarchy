@@ -57,15 +57,18 @@ import shutil
 import socket
 import stat
 import subprocess
-import sys
 import tempfile
 import time
 from pathlib import Path
 from probelib import (FixtureNotRegistered, capture_request_id, quit_engine,
                       boot, load_fixture_yaml, send, wait_load_published,
                       wait_save_complete)
+from run_probes import FailureEmitter   # durable failure records (#1982)
 
 LOG = "/tmp/location_overlay_engine.log"
+#: #1982 — this run's durable failure records, built at import so the
+#: offset each carries is measured from the probe's own start.
+FAILURE = FailureEmitter("location_overlay_probe")
 REPO = Path(__file__).resolve().parent.parent
 #: Prefix of this invocation's throwaway resource root. The random
 #: suffix mkdtemp appends to it is also the per-invocation save-slot
@@ -479,7 +482,7 @@ def main() -> int:
         # requirement 6 forbids.
         leftover = remove_isolated_root(base)
         if leftover:
-            print(f"FAIL: {leftover}", file=sys.stderr)
+            FAILURE.check(leftover)
     return 1 if leftover else rc
 
 
@@ -793,8 +796,13 @@ def run(args, root: str, token: str) -> int:
 
     print("-" * 56)
     if failures:
-        for f in failures:
-            print(f"FAIL: {f}", file=sys.stderr)
+        # Durable records rather than the unflushed stderr print this was
+        # (#1982): `run_probes.py` merges this probe's stderr into a
+        # block-buffered stdout pipe and prints only its last 25 lines, so
+        # a printed `FAIL:` overtook the buffered checks and landed above
+        # the retained tail. These are read back from the COMPLETE capture.
+        FAILURE.report(failures)
+        FAILURE.context_log(LOG)
         return 1
     print("ALL CHECKS PASSED")
     return 0

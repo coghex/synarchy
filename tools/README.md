@@ -610,6 +610,58 @@ latest phase the child entered, and every attempt still in flight:
 The complete capture is never dumped, and a probe emitting no progress
 records has exactly the failure presentation it always had.
 
+**Failure records and the retained failed check (#1982).** The record above
+solves the TIMEOUT half of that loss; a probe that FINISHES and fails loses
+something else. Its per-check verdicts go to a block-buffered stdout while its
+terminal `FAIL:` summary goes to an unbuffered stderr the runner merges into
+that same pipe (`stderr=subprocess.STDOUT`) — so the `FAIL:` lines overtake the
+buffered output and land near the TOP of the merged capture, above whatever
+`--tail 25` prints. A 279.5-second run reported "1 check(s) FAILED" and named
+the check nowhere. Flushing alone would not fix it: with more failed checks
+than `--tail` lines the tail truncates them again.
+
+So a failed check is recorded the way a phase is — one flushed line in a
+sibling convention (`FAILURE_MARKER`, `FailureEmitter`, `parse_failure`), read
+back from the COMPLETE capture:
+
+```
+#probe-failure# 19:29:11 +279.4s | check   | location_embark_probe | the discovered icon never appeared at (12,7)
+#probe-failure# 19:29:11 +279.4s | setup   | location_embark_probe | no conforming [flat] site in 6 seeds
+#probe-failure# 19:29:11 +279.4s | context | engine log            | /tmp/loc_embark_x9/logs/engine.log
+```
+
+The kinds are three, not one. `check` and `setup` are the two vocabularies the
+probes already print — "there is a bug" against "try another seed" — and
+`context` carries the bounded invocation evidence beside them: the engine log
+this run owned, a short tail of it, and what became of the artifact tree.
+Keeping them apart is what lets an operator tell a product failure from a
+fixture or infrastructure one without rerunning the probe. Emitting one is
+never a substitute for CLEANUP: the excerpt is read while the tree still
+exists, and a passing or failing run removes its own artifacts exactly as
+before.
+
+Both default failure presentations — sequential and `--jobs` — print this block
+above the phase attribution and the ordinary tail, and withhold the raw records
+from that tail, so every recorded failure appears exactly once:
+
+```
+[1/1] location_embark_probe.py ... [timeout 900s] FAIL (279.5s)
+    failure: 2 recorded failure(s) from location_embark_probe:
+        [19:29:11 +279.4s] FAIL: the discovered icon never appeared at (12,7)
+        [19:29:11 +279.4s] FAIL: the map icon was the unknown bitmap after discovery
+    failure: retained context:
+        engine log: /tmp/loc_embark_x9/logs/engine.log
+        engine log tail: vulkan: swapchain out of date
+    ... the ordinary last-25 lines follow, unchanged ...
+```
+
+The six producers today are `location_embark_probe.py`,
+`location_stamp_idempotent_probe.py`, `location_content_probe.py`,
+`location_overlay_probe.py`, `portal_location_probe.py` and
+`portal_ghost_probe.py`. As with progress records, the complete capture is
+never dumped, and a probe emitting no failure records has exactly the failure
+presentation it always had.
+
 **Timeouts are per probe.** Most registered probes use the ordinary 900-second
 default. A scenario whose complete expected workload structurally exceeds that
 class declares a validated key-specific default in
