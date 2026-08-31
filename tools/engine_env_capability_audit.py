@@ -2245,6 +2245,14 @@ CAPABILITY_WRITER_MODULES: dict[str, frozenset[str]] = {
         "World.Thread",
         "World.Thread.Command.Basic",
     }),
+    # #1921. Written only by the world thread, and only through
+    # `Engine.Scene.Stats`'s `publishSceneStats`/`clearSceneStats`, which
+    # take the ref as a parameter -- so no module writes it DIRECTLY and
+    # the empty set is what this direct-write scan can honestly assert.
+    # The callers are `World.Render.updateWorldTiles` (one publication
+    # per completed pass) and `World.Thread.Command.Basic`'s two
+    # teardown handlers (clear), both named in the SS5 row.
+    "sceneStatsRef": frozenset(),
     "textureSystemRef": frozenset({
         "Engine.Asset.Manager",
         "Engine.Graphics.Vulkan.Init",

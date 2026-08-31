@@ -102,6 +102,7 @@ from offscreen_probe import (
     click_at_seed, zoom_fade_end, set_zoom, center_on,
 )
 from portal_ghost_probe import center_on_tile, in_world_view
+from run_probes import FailureEmitter   # noqa: E402 - durable failure records (#1982)
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -124,6 +125,13 @@ SAVE_LOCAL = "location_embark_local"   # (b)'s own save, reloaded by (c)
 
 failures: list[str] = []
 _current_log: list[str | None] = [None]
+
+#: #1982 — this run's durable failure records. Built at import, so the
+#: offset every record carries is measured from the probe's own start;
+#: emitted by `report` below instead of the unflushed `FAIL:` print that
+#: the runner's block-buffered pipe used to strand above its 25-line
+#: tail.
+FAILURE = FailureEmitter("location_embark_probe")
 
 
 def set_log(path: str | None) -> None:
@@ -1462,11 +1470,23 @@ def main() -> int:
 
 
 def report(art: RunArtifacts, keep: bool) -> int:
+    if failures:
+        # BEFORE release_artifacts below, which removes the tree the
+        # engine log lives inside. Requirement 4 is met by retaining a
+        # BOUNDED excerpt of that log in the capture, never by keeping the
+        # tree, so requirement 5's unconditional cleanup is untouched.
+        FAILURE.context_log(_current_log[0])
     release_artifacts(art, keep)
     print("-" * 56)
     if failures:
-        for f in failures:
-            print(f"FAIL: {f}", file=sys.stderr)
+        # Durable records rather than an unflushed stderr print (#1982):
+        # the runner reads these back from the COMPLETE capture, so a
+        # failed check survives however much output followed it. Emitted
+        # after release_artifacts because that call can record a leftover
+        # of its own, which belongs in the same block.
+        FAILURE.report(failures)
+        FAILURE.context("artifact root",
+                        f"{art.base} ({'retained' if keep else 'removed'})")
         print(f"location_embark_probe: {len(failures)} check(s) FAILED")
         if not keep:
             print("  (re-run with --keep-artifacts to retain this run's "

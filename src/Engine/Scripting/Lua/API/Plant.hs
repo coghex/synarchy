@@ -62,6 +62,12 @@ plantDesignateFn wsc = do
 -- | plant.cancelDesignation(gx, gy) — remove the designation at a tile
 --   on the active world. Both the player-cancel path and the farm AI's
 --   completion call this (best-effort, returns nothing).
+--
+--   Not the only way a designation disappears: since #1858 the world
+--   removes one whose tile's soil is resident and no longer tilled
+--   ("World.Plant.Validate"). The AI's existing "the designation is
+--   gone" release path handles both identically, which is why that
+--   removal needed no new protocol.
 plantCancelDesignationFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
 plantCancelDesignationFn wsc = do
     gxArg ← Lua.tonumber 1

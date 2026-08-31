@@ -16,6 +16,7 @@
 --   invalidation story simple.
 module World.Render.SpoilQuads
     ( renderSpoilQuads
+    , renderSpoilQuadsScanned
     ) where
 
 import UPrelude
@@ -64,10 +65,25 @@ loweredMask (rNW, rNE, rSE, rSW) =
 
 renderSpoilQuads ∷ EngineEnv → WorldState → Float
                  → IO (V.Vector SortableQuad)
-renderSpoilQuads env worldState tileAlpha = do
+renderSpoilQuads env worldState tileAlpha =
+    snd ⊚ renderSpoilQuadsScanned env worldState tileAlpha
+
+-- | 'renderSpoilQuads' with the scene-assembly telemetry (#1921) this
+--   pass contributes: the pile-level EVALUATIONS it performed, paired
+--   with the quads it produced.
+--
+--   'tilesAtLevel' folds over the whole pile map once per level, and
+--   both levels always run, so the count is exactly twice the pile
+--   count — irrespective of camera, z-band or visibility — and zero
+--   when the empty-map early return above fires. Piles expand into
+--   tile-level quads, so emitted is unrelated to scanned in either
+--   direction.
+renderSpoilQuadsScanned ∷ EngineEnv → WorldState → Float
+                        → IO (Int, V.Vector SortableQuad)
+renderSpoilQuadsScanned env worldState tileAlpha = do
     piles ← readIORef (wsSpoilRef worldState)
     if HM.null piles
-      then return V.empty
+      then return (0, V.empty)
       else do
         camera   ← readIORef (rvCameraRef (toRenderViewCapability env))
         tileData ← readIORef (wsTilesRef worldState)
@@ -179,6 +195,8 @@ renderSpoilQuads env worldState tileAlpha = do
                         , sqLayer = worldLayer
                         }
 
-        return $ V.fromList $ concat
-            [ mapMaybe (quadFor lvl) (HM.toList (tilesAtLevel lvl))
-            | lvl ← [1, 2] ]
+        let levels = [1, 2] ∷ [Int]
+        return ( length levels * HM.size piles
+               , V.fromList $ concat
+                    [ mapMaybe (quadFor lvl) (HM.toList (tilesAtLevel lvl))
+                    | lvl ← levels ] )

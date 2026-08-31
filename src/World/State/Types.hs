@@ -287,9 +287,14 @@ data WorldState = WorldState
     , wsPlantDesignationsRef ∷ IORef PlantDesignations
       -- ^ Plant-designation set (#335): tile (gx, gy) → designation
       --   (surface z + chosen crop; see World.Plant.Types). Written by
-      --   the world thread (WorldDesignatePlant / cancel commands),
-      --   read by the render pass (marker) and the farm AI (#336).
-      --   Persisted in saves (wpsPlantDesignations).
+      --   the world thread — the WorldDesignatePlant / cancel commands
+      --   AND, since #1858, 'World.Plant.Validate''s invalidation sweep,
+      --   which is a third writer and removes any record whose tile is
+      --   resident and no longer tilled soil. Read by the render pass
+      --   (marker, which draws only records whose chunk is resident) and
+      --   the farm AI (#336, which releases its claim and job the tick a
+      --   record disappears). Persisted in saves (wpsPlantDesignations),
+      --   and reconciled against the terrain each load publishes.
     , wsBloodStoreRef ∷ IORef BloodStore
       -- ^ Blood decal model (#604): generated-texture FIFO pool +
       --   world decal placements (see Blood.Types). Like
