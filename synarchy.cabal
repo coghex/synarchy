@@ -1371,6 +1371,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Capability.UnitCombat
                    Test.Headless.Capability.WorldSim
                    Test.Headless.Lua.DebugQueue
+                   Test.Headless.Lua.SceneText
                    Test.Headless.Lua.RenderQueue
                    Test.Headless.Lua.PreviewGeneration
                    Test.Headless.Lua.PauseGate

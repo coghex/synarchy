@@ -107,6 +107,7 @@ import qualified Test.Headless.Input.Inject as InputInject
 import qualified Test.Headless.Input.Followup as InputFollowup
 import qualified Test.Headless.Input.InjectOwnership as InputInjectOwnership
 import qualified Test.Headless.Lua.DebugQueue as LuaDebugQueue
+import qualified Test.Headless.Lua.SceneText as LuaSceneText
 import qualified Test.Headless.Lua.RenderQueue as LuaRenderQueue
 import qualified Test.Headless.Lua.PreviewGeneration as LuaPreviewGeneration
 import qualified Test.Headless.Lua.PauseGate as LuaPauseGate
@@ -334,6 +335,13 @@ main = hspec $ do
         -- at all, just the live EngineEnv's queues/refs to construct a
         -- real Lua backend and drive processLuaMsg directly.
         describe "Lua.DebugQueue" LuaDebugQueue.spec
+        -- Same technique as Lua.DebugQueue above (#1961): the scene
+        -- handlers are GPU-free, so the real luaToEngineQueue →
+        -- processLuaMessages → Message.Scene route runs headless
+        -- against the live env. The spec installs and restores its
+        -- own active scene rather than leaking one into this shared
+        -- environment.
+        describe "Lua.SceneText" LuaSceneText.spec
         -- Same technique as Lua.DebugQueue above: the live EngineEnv's
         -- queues/refs are only there to build a real Lua backend, whose
         -- console boundary is what #1955's key contract lives on.
