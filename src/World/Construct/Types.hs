@@ -25,6 +25,7 @@ module World.Construct.Types
     , textToConstructStatus
     , constructTargetCategory
     , constructDesignationFootprint
+    , constructDesignationFootprintSize
     ) where
 
 import UPrelude
@@ -144,3 +145,27 @@ constructDesignationFootprint defs (ax, ay) cd = case cdTarget cd of
     CtBuilding defName → case HM.lookup defName defs of
         Just def → footprintTiles ax ay (bdTileW def) (bdTileH def)
         Nothing  → [(ax, ay)]
+
+-- | How many tiles 'constructDesignationFootprint' would enumerate,
+--   without enumerating them.
+--
+--   Written for the scene-assembly telemetry (#1921), whose counters may
+--   not allocate in proportion to the sources they count: the cursor
+--   pass has to report how many footprint candidates it evaluated, and
+--   rebuilding each rectangle just to take its 'length' would allocate
+--   exactly what the requirement forbids. Deliberately mirrors the
+--   function above case for case — including the missing-def fallback
+--   to the anchor tile alone — so the two cannot disagree about what a
+--   designation covers.
+constructDesignationFootprintSize
+    ∷ HM.HashMap Text BuildingDef → ConstructDesignation → Int
+constructDesignationFootprintSize defs cd = case cdTarget cd of
+    CtStructure _      → 1
+    CtBuilding defName → case HM.lookup defName defs of
+        -- 'Building.Types.footprintTiles' is the product of two
+        -- ranges, @[ax .. ax + w - 1]@ by @[ay .. ay + h - 1]@, so its
+        -- length is exactly this — including the degenerate
+        -- non-positive dimensions, where both the range and this
+        -- product are empty.
+        Just def → max 0 (bdTileW def) * max 0 (bdTileH def)
+        Nothing  → 1

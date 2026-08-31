@@ -72,6 +72,7 @@ import Data.IORef (IORef)
 import Engine.Core.Queue as Q
 import Engine.Asset.Handle (TextureHandle)
 import Engine.Scene.Types (LayeredQuads)
+import Engine.Scene.Stats (SceneStats)
 import Structure.Palette (TexPalette)
 import Structure.WallCatalog (StructureWallCatalog)
 import Structure.ArtCatalog (StructureArtCatalog)
@@ -79,13 +80,15 @@ import World.Types (WorldState, BloodTextureHandles)
 import Engine.Core.State
   ( EngineEnv
   , worldPreviewRef, worldPreviewGenerationRef, zoomAtlasDataRef
-  , worldQuadsRef, bloodDisposeQueue, texPaletteRef, texPaletteHandlesRef
+  , worldQuadsRef, sceneStatsRef, bloodDisposeQueue, texPaletteRef
+  , texPaletteHandlesRef
   , structureWallCatalogRef, structureArtCatalogRef
   )
 
 -- | The coupled render-handoff slice of @world-sim-render-handoff@: the
 --   pending world-preview and zoom-atlas upload slots with the preview's
---   generation counter, the published world quads, the blood-texture
+--   generation counter, the published world quads and the
+--   scene-assembly telemetry measured while building them, the blood-texture
 --   GPU-disposal transport, and the save-level texture palette with its
 --   runtime handle translation table. See
 --   'docs/engineenv_capability_inventory.md' §5
@@ -118,6 +121,19 @@ data RenderHandoffCapability = RenderHandoffCapability
     --   world-thread publish replaces it, or a world teardown
     --   explicitly clears it to @emptyLayeredQuads@ so the renderer
     --   stops drawing a destroyed world.
+  , rhSceneStatsRef             ∷ IORef (Maybe SceneStats)
+    -- ^ Boot-process. Scene-assembly telemetry (#1921) for the pass that
+    --   produced 'rhWorldQuadsRef''s current value: one immutable
+    --   snapshot per completed @updateWorldTiles@ pass, written by
+    --   @WorldThread@ and read by @LuaThread@ through
+    --   @debug.getSceneStats()@. PUBLISHED on exactly the same terms as
+    --   'rhWorldQuadsRef' — it stays readable until the next
+    --   world-thread publish replaces it, or a world teardown clears it
+    --   back to 'Nothing' at the same two sites that clear the quads,
+    --   which is what keeps the two from disagreeing about whether a
+    --   world lifecycle ended. 'Nothing' is the query's
+    --   @available = false@ state; the next completed pass republishes
+    --   at sequence 1.
   , rhBloodDisposeQueue         ∷ Q.Queue (IORef BloodTextureHandles)
     -- ^ Transient-handoff. Cross-thread GPU-dispose transport for #606
     --   blood textures owned by a page the world thread is removing or
@@ -176,6 +192,7 @@ toRenderHandoffCapability env = RenderHandoffCapability
   , rhWorldPreviewGenerationRef = worldPreviewGenerationRef env
   , rhZoomAtlasDataRef          = zoomAtlasDataRef env
   , rhWorldQuadsRef             = worldQuadsRef env
+  , rhSceneStatsRef             = sceneStatsRef env
   , rhBloodDisposeQueue         = bloodDisposeQueue env
   , rhTexPaletteRef             = texPaletteRef env
   , rhTexPaletteHandlesRef      = texPaletteHandlesRef env

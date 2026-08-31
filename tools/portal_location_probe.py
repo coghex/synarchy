@@ -35,15 +35,18 @@ Exit code 0 = all checks passed.
 from __future__ import annotations
 
 import argparse
-import sys
 
 from probelib import quit_engine, boot, send
 from location_content_probe import (
     load_defs, gen_world, placed_ready, wait_floor, ruin_geometry,
     spawn_counts,
 )
+from run_probes import FailureEmitter   # durable failure records (#1982)
 
 LOG = "/tmp/portal_location_engine.log"
+#: #1982 — this run's durable failure records, built at import so the
+#: offset each carries is measured from the probe's own start.
+FAILURE = FailureEmitter("portal_location_probe")
 
 PORTAL = "acolyte_portal"
 ORDINARY = "cargo_hold_S"
@@ -181,8 +184,13 @@ def main() -> int:
 
     print("-" * 56)
     if failures:
-        for f in failures:
-            print(f"FAIL: {f}", file=sys.stderr)
+        # Durable records rather than the unflushed stderr print this was
+        # (#1982): `run_probes.py` merges this probe's stderr into a
+        # block-buffered stdout pipe and prints only its last 25 lines, so
+        # a printed `FAIL:` overtook the buffered checks and landed above
+        # the retained tail. These are read back from the COMPLETE capture.
+        FAILURE.report(failures)
+        FAILURE.context_log(LOG)
         return 1
     print("ALL CHECKS PASSED")
     return 0

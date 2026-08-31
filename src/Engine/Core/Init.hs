@@ -350,6 +350,9 @@ initializeEngineWith logBackend = do
   worldPreviewGenerationRef ← newIORef 0
   zoomAtlasDataRef ← newIORef Nothing
   worldQuadsRef ← newIORef emptyLayeredQuads
+  -- Scene-assembly telemetry (#1921): unavailable until the first
+  -- completed 'updateWorldTiles' pass publishes into it.
+  sceneStatsRef ← newIORef Nothing
   textureSystemRef ← newIORef Nothing
   samplerCacheRef ← newIORef emptySamplerCache
   texSizeRef ← newIORef HM.empty
@@ -463,6 +466,7 @@ initializeEngineWith logBackend = do
         , zoomAtlasDataRef   = zoomAtlasDataRef
         , screenshotRequestQueue = screenshotRequestQueue
         , worldQuadsRef      = worldQuadsRef
+        , sceneStatsRef      = sceneStatsRef
         , textureSystemRef   = textureSystemRef
         , samplerCacheRef    = samplerCacheRef
         , textureSizeRef     = texSizeRef

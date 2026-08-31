@@ -32,6 +32,7 @@ import World.Construct.Types ( ConstructTarget(..), ConstructStatus(..)
                              , StructurePiece(..)
                              , newConstructDesignation
                              , constructTargetCategory )
+import World.Plant.Validate (revalidatePlantDesignations)
 import World.Construct.Apply ( applyConstructSlopeToChunk
                              , clearConstructSlope )
 import World.Thread.Command.Cursor.Common
@@ -270,7 +271,7 @@ handleWorldSetConstructStatusCommand env _logger pageId gx gy st = do
 --   so the site visibly works corner-by-corner.
 handleWorldAddConstructProgressCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → Float → IO ()
-handleWorldAddConstructProgressCommand env _logger pageId gx gy delta = do
+handleWorldAddConstructProgressCommand env logger pageId gx gy delta = do
     mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
         Just worldState → do
@@ -288,6 +289,14 @@ handleWorldAddConstructProgressCommand env _logger pageId gx gy delta = do
             forM_ mUpd $ \(prevProgress, cd') →
                 withConstructChunk worldState key $
                     applyConstructSlopeToChunk key prevProgress cd'
+            -- #1858: 'applyCornerSlopeToChunk' sheds the tile's surface
+            -- vegetation the moment any corner has progressed, so a
+            -- build site's own progress write is a way a tile stops
+            -- being tilled soil with no vegetation or terrain EDIT
+            -- anywhere. ('resetConstructSlope' passes full corners and
+            -- therefore never touches ctVeg — see there.)
+            _ ← revalidatePlantDesignations logger worldState
+            pure ()
         Nothing → pure ()
 
 -- | Run a chunk transform for the designation tile's loaded chunk and
@@ -317,6 +326,10 @@ withConstructChunk worldState (gx, gy) f = do
 -- | Reset a removed designation's corner-progress display to flat
 --   (guarded inside 'clearConstructSlope' to the designation's own
 --   mask, so natural/authored slopes are untouched).
+-- Deliberately NOT a #1858 revalidation point: this passes FULL
+-- corners, so 'applyCornerSlopeToChunk' leaves 'ctVeg' alone — the
+-- vegetation a site shed during prep stays shed, and nothing here can
+-- change a tile's tilled-soil answer in either direction.
 resetConstructSlope ∷ WorldState → (Int, Int) → ConstructDesignation → IO ()
 resetConstructSlope worldState (gx, gy) cd =
     withConstructChunk worldState (gx, gy) $ clearConstructSlope (gx, gy) cd

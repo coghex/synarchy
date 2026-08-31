@@ -41,7 +41,7 @@ needed.
 <!-- engineenv-field-total -->
 
 `src/Engine/Core/State.hs` declares `data EngineEnv = EngineEnv { ... }`
-with exactly **88** fields, `engineConfig` through `popupQueueRef`, and
+with exactly **89** fields, `engineConfig` through `popupQueueRef`, and
 every one of them has exactly one row in §5 below.
 
 <!-- /engineenv-field-total -->
@@ -548,11 +548,13 @@ reached through
 `EngineEnv` field; since #894 (E5b) the rest —
 `worldPreviewRef`, `worldPreviewGenerationRef`, `zoomAtlasDataRef`,
 `worldQuadsRef`, `bloodDisposeQueue`, `texPaletteRef`,
-`texPaletteHandlesRef` and, since #1712, `structureWallCatalogRef`, the
+`texPaletteHandlesRef`, since #1712 `structureWallCatalogRef`, and since
+#1921 `sceneStatsRef`, the
 **coupled render-handoff** half (the world
 thread's staging surface for `MainRender` GPU uploads plus the
-structure-palette translation table and the packs' directional wall
-art) — are reached through
+structure-palette translation table, the packs' directional wall art
+and the scene-assembly telemetry measured while building the published
+quads) — are reached through
 `Engine.Core.Capability.RenderHandoff.RenderHandoffCapability`. Both
 hold for every reader and writer below EXCEPT the §6.1 permanent
 orchestration modules, which keep whole-environment access by job
@@ -569,8 +571,8 @@ rule: `worldPreviewRef`/`zoomAtlasDataRef` are single slots consumed to
 `Nothing` by their `MainRender` upload handler and `bloodDisposeQueue`
 is drained by its `MainRender` consumer (`transient-handoff`);
 `worldPreviewGenerationRef` is monotonic and never cleared while
-`worldQuadsRef` stays published until replaced or explicitly cleared by
-a world teardown (`boot-process`); `texPaletteRef`/
+`worldQuadsRef` and `sceneStatsRef` stay published until replaced or
+explicitly cleared by a world teardown (`boot-process`); `texPaletteRef`/
 `texPaletteHandlesRef` follow session replacement (`session-replaced`).
 
 | Field | Lifecycle | Readers | Writers | Sync | Init | Shutdown | Notes |
@@ -582,6 +584,7 @@ a world teardown (`boot-process`); `texPaletteRef`/
 | `worldPreviewGenerationRef` | boot-process | `LuaThread` (`Thread.Dispatch:319`'s `LuaWorldPreviewReady` handler — the generation comparison deliberately happens HERE, at delivery time, not in `Message.WorldTexture.handleWorldPreview`'s upload-completion code, which stopped reading this ref after round 11's review; see that module's own comment explaining why) | `WorldThread` (enqueue bumps it, and load publish `World.Load.Publish:149`) | `IORef Word64`, monotonic, never decreases | `0` (`src/Engine/Core/Init.hs:206`) | None | — |
 | `zoomAtlasDataRef` | transient-handoff | `MainRender` (consumes for GPU upload) | `WorldThread` (enqueues, and load publish `World.Load.Publish:137`), `MainRender` (`Message.WorldTexture:186`'s `handleZoomAtlasUpload`, `atomicModifyIORef'` clearing the slot once dequeued) | `IORef (Maybe (Int,Int,ByteString,[WorldState]))`, single-slot | `Nothing` (`src/Engine/Core/Init.hs:207`) | None | Captures the exact `WorldState`s it belongs to at enqueue time (round 9 review, #763). |
 | `worldQuadsRef` | boot-process | `MainRender` (frame loop merges + draws) | `WorldThread` (per-tick static/dynamic quad split, #446) | `IORef LayeredQuads` | `emptyLayeredQuads` (`src/Engine/Core/Init.hs:208`) | None | — |
+| `sceneStatsRef` | boot-process | `LuaThread` (`Engine.Scripting.Lua.API.SceneStats`'s `getSceneStatsFn` — `debug.getSceneStats()`, one direct synchronous read of the whole immutable snapshot) | `WorldThread` (`World.Render.updateWorldTiles` publishes once per completed pass; `World.Thread.Command.Basic`'s `handleWorldDestroyCommand`/`handleWorldDestroyAllCommand` clear it back to `Nothing` beside the `worldQuadsRef` clear) | `IORef (Maybe SceneStats)`, single-writer thread, whole-value replacement | `Nothing` (`src/Engine/Core/Init.hs`) | None | #1921. Scene-assembly telemetry for the pass that produced `worldQuadsRef`'s current value, and PUBLISHED on exactly the same terms — which is why it is cleared at the same two teardown sites: the two describe one world lifecycle, so they must not disagree about whether it ended. `Nothing` is the query's `available = false` state and the next completed pass republishes at sequence 1. Transient session telemetry, never serialized (see `docs/persistence_state_inventory.md`). |
 | `bloodDisposeQueue` | transient-handoff | `MainRender` (drains; `World.Render.BloodQuads.disposeQueuedBloodTextures`) | `WorldThread` (page-removal teardown, `World.Blood.Teardown`, `World.Thread.Command.Basic/Init`) | `Q.Queue (IORef BloodTextureHandles)` | `Q.newQueue` (`src/Engine/Core/Init.hs:152`) | None — empty/inert under headless | — |
 | `floraCatalogRef` | boot-process | `WorldThread` (`Thread.ChunkLoading`, `Thread.Cursor`, `Thread.Command.Init`, `Command.Cursor.Plant/Chop`, `Command.Edit.Vegetation`, `World.Load.Stage` during staging, and `World.Render.Quads`'s `renderWorldQuads`, reached via `updateWorldTiles`), `LuaThread` (`API.Plant:100`, direct crop/species lookup) | `LuaThread` (content load) | `IORef FloraCatalog` | `emptyFloraCatalog` seed, populated from `data/*.yaml` via Lua content load (`src/Engine/Core/Init.hs:213`) | None | — |
 | `materialRegistryRef` | session-replaced | `UnitThread` (`Unit.Thread.Movement`), `WorldThread`, `LuaThread` (`Engine.Scripting.Lua.API.World.Edit:86,211`, `Engine.Scripting.Lua.API.YamlTextures:350`), `MainRender` (`app/App/Dump.hs:152`, direct read while building the dump JSON) | `WorldThread` (populated per-world-init from `data/materials/*.yaml`, `src/World/Thread/Command/Init.hs:111-113`; also load publish, `src/World/Load/Publish.hs:117`), `LuaThread` (`Engine.Scripting.Lua.API.YamlTextures:99` registers each material's physical properties from the same loaded YAML content) | `IORef MaterialRegistry`, multi-writer | `emptyMaterialRegistry` at engine boot (`src/Engine/Core/Init.hs:214`); populated per-world-init from `data/materials/*.yaml` (`src/World/Thread/Command/Init.hs:100-113`) | None | YAML-driven after all (corrected from an earlier draft of this row, per review) — populated once per world init/load, not built into the binary. |
@@ -1738,8 +1741,9 @@ change, no behaviour change.
 over exactly the seven coupled render-handoff fields E5b found
 (`worldPreviewRef`, `worldPreviewGenerationRef`, `zoomAtlasDataRef`,
 `worldQuadsRef`, `bloodDisposeQueue`, `texPaletteRef`,
-`texPaletteHandlesRef`; #1712 later added an eighth,
-`structureWallCatalogRef`) plus the total one-way projection
+`texPaletteHandlesRef`; later additions: `structureWallCatalogRef`
+(#1712), `structureArtCatalogRef` (#1842) and `sceneStatsRef` (#1921))
+plus the total one-way projection
 `toRenderHandoffCapability`, following the same §7.1/#889 convention
 E5a did (same live `IORef`s/`Queue`, never a copy; no import of a
 consumer). It is a pure refactor — no `EngineEnv` field-set change, no

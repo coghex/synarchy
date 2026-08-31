@@ -1,7 +1,9 @@
 {-# LANGUAGE Strict #-}
 module Building.Render
     ( renderBuildingQuads
+    , renderBuildingQuadsScanned
     , renderGhostQuad
+    , renderGhostQuadScanned
     , ghostTint
     ) where
 
@@ -95,7 +97,22 @@ pickBuildingFrame now inst def =
 --   solar slot (#1869).
 renderBuildingQuads ∷ EngineEnv → (WorldPageId → Word32) → CameraFacing → Int
                     → Int → Float → IO (V.Vector SortableQuad)
-renderBuildingQuads env solarSlotOf facing zSlice effDepth tileAlpha = do
+renderBuildingQuads env solarSlotOf facing zSlice effDepth tileAlpha =
+    snd ⊚ renderBuildingQuadsScanned env solarSlotOf facing zSlice
+                                     effDepth tileAlpha
+
+-- | 'renderBuildingQuads' with the scene-assembly telemetry (#1921)
+--   this pass contributes: the entries examined in the GLOBAL
+--   building-manager map, paired with the quads it produced.
+--
+--   Counted before visible-page, texture-system and Z filtering, for
+--   the same reason as 'Unit.Render.renderUnitQuadsScanned': the global
+--   map is what the pass walks. It stays non-zero under GPU-free
+--   headless execution, where emitted is legitimately zero.
+renderBuildingQuadsScanned
+    ∷ EngineEnv → (WorldPageId → Word32) → CameraFacing → Int
+    → Int → Float → IO (Int, V.Vector SortableQuad)
+renderBuildingQuadsScanned env solarSlotOf facing zSlice effDepth tileAlpha = do
     bm ← readIORef (buildingManagerRef env)
     -- Render only the visible worlds' buildings — buildings are
     -- world-scoped so a hidden world's must not draw here (#76).
@@ -104,8 +121,9 @@ renderBuildingQuads env solarSlotOf facing zSlice effDepth tileAlpha = do
         instances = buildingsOnPages visiblePages (bmInstances bm)
         defs      = bmDefs bm
         selected  = bmSelected bm
+        scanned   = HM.size (bmInstances bm)
     if HM.null instances
-        then return V.empty
+        then return (scanned, V.empty)
         else do
             -- Game-clock matches biSpawnedAt's clock, so the
             -- Appearing→Built transition derived from elapsed time
@@ -114,7 +132,7 @@ renderBuildingQuads env solarSlotOf facing zSlice effDepth tileAlpha = do
             texSizes ← readIORef (rvTextureSizeRef (toRenderViewCapability env))
             mBts ← readIORef (rvTextureSystemRef (toRenderViewCapability env))
             case mBts of
-                Nothing → return V.empty
+                Nothing → return (scanned, V.empty)
                 Just _bts → do
                     -- Stable handle id resolved in the shader (#286);
                     -- buildings carry no directional face map (#1696).
@@ -132,7 +150,7 @@ renderBuildingQuads env solarSlotOf facing zSlice effDepth tileAlpha = do
                                             (solarSlotOf (biPage inst)) sq : acc
                                     Nothing → acc
                               ) [] instances
-                    return quads
+                    return (scanned, quads)
 
 buildingToQuad
     ∷ (TextureHandle → Word32)
@@ -265,19 +283,32 @@ ghostTint valid
 --   (#1869), which is the page the placement will land on.
 renderGhostQuad ∷ EngineEnv → Word32 → CameraFacing → Int
                 → IO (V.Vector SortableQuad)
-renderGhostQuad env solarSlot facing zSlice = do
+renderGhostQuad env solarSlot facing zSlice =
+    snd ⊚ renderGhostQuadScanned env solarSlot facing zSlice
+
+-- | 'renderGhostQuad' with the scene-assembly telemetry (#1921) this
+--   pass contributes: the optional ghost CANDIDATE — zero or one —
+--   paired with the quad it produced.
+--
+--   Counted from the presence of the ghost alone, before the
+--   definition lookup and the texture-system check reject it, since
+--   those rejections are exactly what an emitted count of zero beside
+--   a scanned count of one records.
+renderGhostQuadScanned ∷ EngineEnv → Word32 → CameraFacing → Int
+                       → IO (Int, V.Vector SortableQuad)
+renderGhostQuadScanned env solarSlot facing zSlice = do
     mGhost ← readIORef (buildingGhostRef env)
     case mGhost of
-        Nothing → return V.empty
+        Nothing → return (0, V.empty)
         Just ghost → do
             bm ← readIORef (buildingManagerRef env)
             case HM.lookup (bgDefName ghost) (bmDefs bm) of
-                Nothing → return V.empty
+                Nothing → return (1, V.empty)
                 Just def → do
                     texSizes ← readIORef (rvTextureSizeRef (toRenderViewCapability env))
                     mBts ← readIORef (rvTextureSystemRef (toRenderViewCapability env))
                     case mBts of
-                        Nothing → return V.empty
+                        Nothing → return (1, V.empty)
                         Just _bts →
                             -- Stable handle id resolved in the shader (#286);
                             -- buildings carry no directional face map (#1696).
@@ -334,7 +365,7 @@ renderGhostQuad env solarSlot facing zSlice = do
                                             , qpFlags     = 0
                                             , qpWorldUV   = wuv
                                             }
-                            in return $ V.singleton
+                            in return $ (,) 1 $ V.singleton
                                 $ setQuadSolarPage solarSlot SortableQuad
                                 { sqSortKey = sortKey
                                 , sqV0      = v0

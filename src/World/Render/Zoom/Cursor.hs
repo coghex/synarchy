@@ -3,6 +3,7 @@
 --   and pixel-to-chunk-origin conversion.
 module World.Render.Zoom.Cursor
     ( makeCursorQuad
+    , makeCursorQuadScanned
     , pixelToChunkOrigin
     ) where
 
@@ -52,7 +53,24 @@ makeCursorQuad ∷ CameraFacing → Camera2D → Int → Int → Int → Int →
               → IORef CursorState
               → (TextureHandle → Int) → Float
               → IO (V.Vector SortableQuad)
-makeCursorQuad facing camera winW winH fbW fbH worldSize csRef lookupSlot defFmSlot = do
+makeCursorQuad facing camera winW winH fbW fbH worldSize csRef lookupSlot defFmSlot =
+    snd ⊚ makeCursorQuadScanned facing camera winW winH fbW fbH worldSize
+                                csRef lookupSlot defFmSlot
+
+-- | 'makeCursorQuad' with the scene-assembly telemetry (#1921) it
+--   contributes: the PRESENT hover and selection candidates — zero, one
+--   or two — paired with the quads it produced.
+--
+--   A candidate is counted from the cursor state that this pass's own
+--   (possibly committing) read resolved, and before the texture lookup
+--   that can still reject it, so an absent zoom-cursor texture shows as
+--   a scanned candidate emitting nothing.
+makeCursorQuadScanned
+              ∷ CameraFacing → Camera2D → Int → Int → Int → Int → Int
+              → IORef CursorState
+              → (TextureHandle → Int) → Float
+              → IO (Int, V.Vector SortableQuad)
+makeCursorQuadScanned facing camera winW winH fbW fbH worldSize csRef lookupSlot defFmSlot = do
     cs ← readIORef csRef
 
     let hoverChunk = case zoomCursorPos cs of
@@ -113,7 +131,9 @@ makeCursorQuad facing camera winW winH fbW fbH worldSize csRef lookupSlot defFmS
                 emitCursorQuad facing baseGX baseGY hoverTexture lookupSlot defFmSlot 0.6 100
             _ → V.empty
 
-    return $ selectQuad <> hoverQuad
+        scanned = (if isJust hoverChunk then 1 else 0)
+                + (if isJust (zoomSelectedPos cs') then 1 else 0)
+    return (scanned, selectQuad <> hoverQuad)
 
 makeSelectQuad ∷ CameraFacing → Int → CursorState
                → (TextureHandle → Int) → Float → V.Vector SortableQuad

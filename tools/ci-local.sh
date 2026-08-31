@@ -157,6 +157,10 @@ step "lua duplicate function audit"
 python3 tools/test_lua_duplicate_function_audit.py
 python3 tools/lua_duplicate_function_audit.py
 
+step "lua registration audit"
+python3 tools/test_lua_registration_audit.py
+python3 tools/lua_registration_audit.py
+
 step "haskell module line budget"
 python3 tools/test_haskell_module_budget.py
 python3 tools/haskell_module_budget.py
