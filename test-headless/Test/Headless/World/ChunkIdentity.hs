@@ -52,6 +52,8 @@ import Data.Maybe (mapMaybe)
 import World.State.Types (WorldState(..), LoadPhase(..), emptyWorldState)
 import World.Tile.Types (WorldTileData(..), emptyWorldTileData, lookupChunk)
 import World.Generate.Arena (generateFlatChunk)
+import World.Edit.Apply (replayEdits)
+import World.Edit.Types (WorldEdit(..), appendEdit, emptyWorldEdits)
 import Test.Headless.Harness
     (getWorldState, sendWorldCommand, waitForWorldInit)
 
@@ -852,3 +854,29 @@ spec = describe "canonical chunk identity" $ do
         writeIORef (wsInitQueueRef wsLive) []
         reconcileQueuedPhase wsLive
         readIORef (wsLoadPhaseRef wsLive) `shouldReturn` LoadDone
+
+    it "replays a seam save's edits onto the canonicalised centre" $ \_ → do
+        -- Canonicalising the restored centre is a save-compat FIX, not a
+        -- break. Edit keys come from 'globalToChunk' applied to the
+        -- coords the pick head produced, and 'World.Render.HitTest' is
+        -- the head of the designation coordinate contract: it reports in
+        -- the CANONICAL frame (#1175). So a seam page's edits are keyed
+        -- canonically, and it was the RAW-keyed restored centre that
+        -- could not see them.
+        let params = sizedParams seamWorldSize
+            -- (3, 67) sits in chunk (0, 4) — the canonical spelling of
+            -- the alias (4, 0) a seam restore used to store the centre
+            -- under.
+            edited = WeDeleteTile 3 67
+            saved = appendEdit canonCoord edited emptyWorldEdits
+        canonicalChunkCoord params aliasCoord `shouldBe` canonCoord
+
+        -- The centre this branch restores replays them.
+        let onCanonical = replayEdits saved (generateFlatChunk canonCoord)
+        lcTiles onCanonical `shouldNotBe` lcTiles (generateFlatChunk canonCoord)
+
+        -- The centre it USED to restore could not: replayEdits looks its
+        -- chunk up by lcCoord exactly, and the alias is not a key in a
+        -- log the pick head wrote.
+        let onAlias = replayEdits saved (generateFlatChunk aliasCoord)
+        lcTiles onAlias `shouldBe` lcTiles (generateFlatChunk aliasCoord)
