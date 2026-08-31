@@ -30,6 +30,46 @@ import Engine.Scene.Graph (modifySceneNode, deleteSceneNode)
 import Engine.Scene.Manager (addObjectToScene)
 import Engine.Scene.Types
 
+-- The scene-text cache invariant
+--
+--   The invariant every handler below maintains (#1961):
+--   'uicTextBuffersRef' holds an entry for an 'ObjectId' EXACTLY when
+--   the active scene graph holds a TEXT node at that id, and the entry
+--   is that node's text. That is what makes the field's
+--   @boot-process@\/reset-@None@ classification honest — entries are
+--   retired with their nodes, so a session boundary has nothing to
+--   clear (see "Engine.Core.Capability.Ui").
+--
+--   Every write goes through 'cacheSceneText' or 'forgetSceneText', so
+--   the invariant is maintained in one place rather than at four call
+--   sites. There are exactly four transitions that can break it, and
+--   each is handled: a text node is added ('handleSpawnText'), a live
+--   text node's string changes ('handleSetText'), a node is destroyed
+--   ('handleDestroy'), and — the one that is easy to miss — a node is
+--   REPLACED, because 'Engine.Scene.Graph.addNode' is a @Map.insert@:
+--   spawning a sprite over an id that already names a text node
+--   ('handleSpawnSprite') leaves an object with no text, so its entry
+--   must go too.
+
+-- | Record @text@ as the scene-text for @oid@, whose text node the
+--   caller has just confirmed exists.
+cacheSceneText ∷ ObjectId → Text → EngineM σ ()
+cacheSceneText oid text = do
+    env ← ask
+    liftIO $ atomicModifyIORef' (uicTextBuffersRef (toUiCapability env)) $ \m →
+      (Map.insert oid text m, ())
+
+-- | Retire @oid@'s scene-text entry, because it no longer names a text
+--   node. Deliberately unconditional: @Map.delete@ on an absent key is
+--   a no-op, so an id that never had text costs nothing, and no id can
+--   be left answering through @engine.getText@ for an object that is
+--   gone or is no longer text.
+forgetSceneText ∷ ObjectId → EngineM σ ()
+forgetSceneText oid = do
+    env ← ask
+    liftIO $ atomicModifyIORef' (uicTextBuffersRef (toUiCapability env)) $ \m →
+      (Map.delete oid m, ())
+
 handleSpawnText ∷ ObjectId → Float → Float → FontHandle → Text
                 → Vec4 → LayerId → Float → EngineM σ ()
 handleSpawnText oid x y fontHandle text color layer size = do
@@ -49,9 +89,7 @@ handleSpawnText oid x y fontHandle text color layer size = do
         case addObjectToScene sceneId node sceneMgr of
           Just (_addedObjId, newSceneMgr) → do
             modify $ \s → s { sceneManager = newSceneMgr }
-            env ← ask
-            liftIO $ atomicModifyIORef' (uicTextBuffersRef (toUiCapability env)) $ \m →
-              (Map.insert oid text m, ())
+            cacheSceneText oid text
           Nothing → logDebugM CatLua $ "Failed to add text object " <> tshow oid
       Nothing → logDebugM CatLua "Cannot spawn text: no active scene"
 
@@ -63,14 +101,11 @@ handleSpawnText oid x y fontHandle text color layer size = do
 --   nothing at all — not the scene graph, and not the cache that
 --   @engine.getText@ answers from. Writing the cache unconditionally
 --   (as this did) left @engine.getText@ reporting text for objects that
---   never existed, in a map with no other way to shrink.
+--   never existed, in a map with no removal path at all.
 handleSetText ∷ ObjectId → Text → EngineM σ ()
 handleSetText objId text = do
     nodeUpdated ← modifySceneNode objId $ \node → node { nodeText = Just text }
-    when nodeUpdated $ do
-      env ← ask
-      liftIO $ atomicModifyIORef' (uicTextBuffersRef (toUiCapability env)) $ \m →
-        (Map.insert objId text m, ())
+    when nodeUpdated $ cacheSceneText objId text
 
 handleSpawnSprite ∷ ObjectId → Float → Float → Float → Float
                   → TextureHandle → LayerId → EngineM σ ()
@@ -90,6 +125,14 @@ handleSpawnSprite objId x y width height texHandle layer = do
         case addObjectToScene sceneId node sceneMgr of
           Just (_addedObjId, newSceneMgr) → do
             modify $ \s → s { sceneManager = newSceneMgr }
+            -- 'addNode' is a @Map.insert@, so this REPLACES whatever
+            -- node held @objId@ — possibly a live text node, once
+            -- 'nextObjectIdRef''s 'Word32' wraps or an id is otherwise
+            -- reused. A sprite has no text, so the replaced node's
+            -- cache entry must go with it or 'engine.getText' would
+            -- keep answering for an object whose @nodeText@ is now
+            -- 'Nothing' (#1961).
+            forgetSceneText objId
           Nothing → logDebugM CatLua $ "Failed to add sprite " <> tshow objId
       Nothing → logDebugM CatLua "Cannot spawn sprite: no active scene"
 
@@ -110,19 +153,9 @@ handleSetVisible ∷ ObjectId → Bool → EngineM σ ()
 handleSetVisible objId visible =
     void $ modifySceneNode objId $ \node → node { nodeVisible = visible }
 
--- | Destroy a scene object, retiring its scene-text cache entry with it.
---
---   The cache delete is the other half of #1961's lifetime coupling and
---   is deliberately UNCONDITIONAL: @Map.delete@ on an absent key is a
---   no-op, so a sprite (or an already-destroyed id) costs nothing,
---   while every destroyed text object is guaranteed to stop answering
---   through @engine.getText@ even if the node itself had already left
---   the active graph. This is the only removal path the map has, which
---   is what keeps its @boot-process@ classification honest — see
---   "Engine.Core.Capability.Ui".
+-- | Destroy a scene object, retiring its scene-text cache entry with it
+--   (#1961) — the destruction half of the invariant described above.
 handleDestroy ∷ ObjectId → EngineM σ ()
 handleDestroy objId = do
     _ ← deleteSceneNode objId
-    env ← ask
-    liftIO $ atomicModifyIORef' (uicTextBuffersRef (toUiCapability env)) $ \m →
-      (Map.delete objId m, ())
+    forgetSceneText objId

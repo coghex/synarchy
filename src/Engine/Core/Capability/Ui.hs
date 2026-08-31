@@ -54,12 +54,14 @@
 --   @boot-process@: the scene-object text map is NOT touched by
 --   @resetTransientState@, and its entries follow their scene objects'
 --   own lifetimes instead. That coupling is enforced in
---   "Engine.Scripting.Lua.Message.Scene" and nowhere else — a spawn
---   writes an entry only when the node is added, a @setText@ writes one
---   only when 'Engine.Scene.Graph.modifySceneNode' reports it updated a
---   live node, and @handleDestroy@ removes it (#1961). Those are the
---   map's only writers and its only remover, so a session boundary has
---   nothing left to reset.
+--   "Engine.Scripting.Lua.Message.Scene" and nowhere else, which states
+--   the invariant in full and routes all four transitions through one
+--   pair of helpers: an entry exists exactly when the active scene
+--   graph holds a TEXT node at that id (#1961). Note the transition
+--   that is easy to miss — 'Engine.Scene.Graph.addNode' is a
+--   @Map.insert@, so spawning a SPRITE over a live text node replaces
+--   it and retires its entry too. Those are the map's only writers and
+--   only removers, so a session boundary has nothing left to reset.
 --
 --   Like the other capability modules, this one imports only the
 --   narrow slice of @Engine.Core.State@ it needs (the bare 'EngineEnv'

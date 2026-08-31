@@ -18,6 +18,12 @@
 --   GPU calls, and every GPU step in 'processLuaMessages' sits behind
 --   @whenGraphical@, so the whole path runs headless.
 --
+--   The one transition worth naming here is REPLACEMENT:
+--   'Engine.Scene.Graph.addNode' is a @Map.insert@, so a spawn at an id
+--   that already names a node overwrites it rather than failing, and a
+--   sprite spawned over a text node leaves an object with no text. Two
+--   cases below cover that in both directions.
+--
 --   The one thing headless does NOT give us is an active scene:
 --   'initializeEngineHeadless' inherits @defaultEngineState@'s empty
 --   'sceneManager', and the default scene is created by
@@ -32,14 +38,14 @@ import Test.Hspec
 import Control.Exception (bracket)
 import qualified Data.Map.Strict as Map
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
-import Engine.Asset.Handle (FontHandle(..))
+import Engine.Asset.Handle (FontHandle(..), TextureHandle(..))
 import Engine.Core.Capability.Ui (UiCapability(..), toUiCapability)
 import Engine.Core.Monad (EngineM', runEngineM)
 import qualified Engine.Core.Queue as Q
 import Engine.Core.State (EngineEnv(..), EngineState(..))
 import Engine.Graphics.Camera (defaultCamera)
 import Engine.Graphics.Vulkan.Types.Vertex (Vec4(..))
-import Engine.Scene.Base (LayerId(..), ObjectId(..))
+import Engine.Scene.Base (LayerId(..), NodeType(..), ObjectId(..))
 import Engine.Scene.Manager (createScene, setActiveScene)
 import Engine.Scene.Types
     (SceneGraph(..), SceneManager(..), SceneNode(..))
@@ -70,6 +76,25 @@ spawnLive ∷ Text → LuaToEngineMsg
 spawnLive text =
     LuaSpawnTextRequest liveId 0 0 (FontHandle 0) text
                         (Vec4 1 1 1 1) (LayerId 0) 12
+
+-- | Spawn a SPRITE at @liveId@ — the same id 'spawnLive' uses, which
+--   is the point: 'Engine.Scene.Graph.addNode' is a @Map.insert@, so
+--   this REPLACES whatever node holds that id.
+spawnSpriteOverLive ∷ LuaToEngineMsg
+spawnSpriteOverLive =
+    LuaSpawnSpriteRequest liveId 0 0 8 8 (TextureHandle 0) (LayerId 0)
+
+-- | The active scene graph's node type at @oid@, so a replacement can
+--   be shown to have actually happened rather than merely assumed.
+nodeTypeOf ∷ EngineEnv → ObjectId → IO (Maybe NodeType)
+nodeTypeOf env oid = do
+    st ← readIORef (engineStateRef env)
+    let mgr = sceneManager st
+    pure $ do
+        sid   ← smActiveScene mgr
+        graph ← Map.lookup sid (smSceneGraphs mgr)
+        node  ← Map.lookup oid (sgNodes graph)
+        pure (nodeType node)
 
 -- | The scene-text cache's current entry for @oid@, which is exactly
 --   what @engine.getText@ reads ("Engine.Scripting.Lua.API.Text").
@@ -150,6 +175,37 @@ spec = describe "scene-text cache lifetime (issue #1961)" $ do
 
             cachedText env liveId `shouldReturn` Nothing
 
+    -- Node REPLACEMENT is the transition that is easy to miss: addNode
+    -- is a Map.insert, so a spawn at a live id overwrites the node
+    -- rather than failing. Reachable through nextObjectIdRef's Word32
+    -- wrap, and the reason nothing here may rest on ids being unique
+    -- forever.
+    it "drops the cache entry when a sprite replaces a live text node \
+       \at the same id, so engine.getText stops answering for an \
+       \object that now has no text" $ \env →
+        withActiveScene env $ do
+            pump env [spawnLive "was text"]
+            cachedText env liveId `shouldReturn` Just "was text"
+
+            pump env [spawnSpriteOverLive]
+
+            -- The replacement really happened...
+            nodeTypeOf env liveId `shouldReturn` Just SpriteObject
+            nodeTextOf env liveId `shouldReturn` Nothing
+            -- ...and the cache followed the node it described.
+            cachedText env liveId `shouldReturn` Nothing
+
+    it "caches the new text when a text node replaces a sprite at the \
+       \same id" $ \env →
+        withActiveScene env $ do
+            pump env [spawnSpriteOverLive]
+            cachedText env liveId `shouldReturn` Nothing
+
+            pump env [spawnLive "now text"]
+
+            nodeTypeOf env liveId `shouldReturn` Just TextObject
+            cachedText env liveId `shouldReturn` Just "now text"
+
     it "leaves the map empty across a spawn/set/destroy round trip, \
        \which is what makes its boot-process reset None honest" $ \env →
         withActiveScene env $ do
@@ -157,6 +213,7 @@ spec = describe "scene-text cache lifetime (issue #1961)" $ do
             pump env [ spawnLive "one"
                      , LuaSetTextRequest liveId "two"
                      , LuaSetTextRequest orphanId "never"
+                     , spawnSpriteOverLive
                      , LuaDestroyRequest liveId ]
 
             after ← readIORef (uicTextBuffersRef (toUiCapability env))
