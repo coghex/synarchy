@@ -8,12 +8,12 @@ PR #341's executable Lua serializer has since been replaced by the finite, data-
 
 ## Status
 
-- [ ] PRR-1. The glacier-rim camera workaround outlived the loader bug it fenced
-- [ ] PRR-2. Debug-console JSON silently collapses distinct Lua table keys
+- [x] PRR-1. The glacier-rim camera workaround outlived the loader bug it fenced — [#1953]
+- [x] PRR-2. Debug-console JSON silently collapses distinct Lua table keys — [#1955]
 
 ## 1. Camera teleport after the rim-loader repair
 
-### PRR-1. The glacier-rim camera workaround outlived the loader bug it fenced
+### [#1953] PRR-1. The glacier-rim camera workaround outlived the loader bug it fenced
 
 > **Captured note:** Retire `camera.goToTile`'s hazard-specific six-chunk fence and width-8 zoom ban now that PR #363 fixed the shared glacier-rim loader. Keep only the camera/world bounds that are still product policy, and prove safety by loading the repaired rim rather than by preventing the teleport from reaching it.
 
@@ -40,7 +40,7 @@ PR #341's executable Lua serializer has since been replaced by the finite, data-
 
 ## 2. Debug-console table-key identity
 
-### PRR-2. Debug-console JSON silently collapses distinct Lua table keys
+### [#1955] PRR-2. Debug-console JSON silently collapses distinct Lua table keys
 
 > **Captured note:** Give non-array Lua tables an explicit key contract at the debug-console JSON boundary. Distinct Lua keys must not be emitted as duplicate JSON member names that ordinary consumers silently overwrite; either encode their types, reject unsupported/colliding keys with a clear diagnostic, or define another lossless representation.
 

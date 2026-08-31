@@ -1219,6 +1219,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Graphics.WindowMode
                    Test.Headless.Graphics.AmbientLight
                    Test.Headless.Graphics.Screenshot
+                   Test.Headless.Graphics.SwapchainSelection
                    Test.Headless.Graphics.UniformLayout
                    Test.Headless.Graphics.VertexLayout
                    Test.Headless.Graphics.FontFallback
@@ -1376,6 +1377,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.ShellInput
                    Test.Headless.Lua.RandomStream
                    Test.Headless.Lua.ConsoleTableKeys
+                   Test.Headless.Lua.LogSource
                    Test.Headless.Lua.InjuryNarration
                    Test.Headless.Graphics.BindlessRebind
                    Test.Headless.Graphics.BindlessRelease
