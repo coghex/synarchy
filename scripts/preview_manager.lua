@@ -858,24 +858,27 @@ function previewManager.onAssetFailed(assetType, handle, path, reason, reported)
     end
 end
 
--- Playback is driven off a WALL clock (engine.realTime), not an
--- accumulated dt: the tick rate only controls smoothness, never which
--- frame is correct, so a slow or bursty tick can't desynchronize the
--- direction row from the enlarged sprite.
+-- Playback and held-key repeat are driven off a WALL clock
+-- (engine.realTime), not an accumulated dt: the tick rate only controls
+-- smoothness, never which frame is correct. Read that clock lazily so an
+-- idle list/item update keeps its existing engine-state-free contract.
 function previewManager.update(dt)
-    local now = engine.realTime()
+    local now = nil
 
     -- One repeat at most per rendered update. Resetting from `now` avoids a
     -- burst of catch-up selections after a debugger pause or slow texture
     -- upload while keeping the live cadence fast at ordinary frame rates.
-    if repeatKey and repeatNextAt and now >= repeatNextAt then
-        if navigateKey(repeatKey) then
-            repeatNextAt = now + REPEAT_INTERVAL
-        else
-            -- A list boundary is terminal for this hold. Directions wrap,
-            -- so their repeat continues until the matching key-up.
-            repeatKey = nil
-            repeatNextAt = nil
+    if repeatKey and repeatNextAt then
+        now = engine.realTime()
+        if now >= repeatNextAt then
+            if navigateKey(repeatKey) then
+                repeatNextAt = now + REPEAT_INTERVAL
+            else
+                -- A list boundary is terminal for this hold. Directions wrap,
+                -- so their repeat continues until the matching key-up.
+                repeatKey = nil
+                repeatNextAt = nil
+            end
         end
     end
 
@@ -893,9 +896,11 @@ function previewManager.update(dt)
     -- every mode.
     local view = nil
     if animViewId then
+        now = now or engine.realTime()
         unitAnimationView.update(animViewId, now)
         view = unitAnimationView.dump(animViewId)
     elseif buildingViewId then
+        now = now or engine.realTime()
         buildingAssetView.update(buildingViewId, now)
         view = buildingAssetView.dump(buildingViewId)
     else
