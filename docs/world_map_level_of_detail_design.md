@@ -15,10 +15,10 @@ concrete precondition
 ## Processing status
 
 - [x] EPIC. Make the complete world map scale safely to the supported world size — [#2017]
-- [ ] WML-1. Carry signed 32-bit cylinder coordinates in world vertices
-- [ ] WML-2. Reject unsafe map image plans before allocation or upload
-- [ ] WML-3. Persist an opaque generated-world identity with save migration
-- [ ] WML-4. Establish the shared generated-world library lifecycle
+- [x] WML-1. Carry signed 32-bit cylinder coordinates in world vertices — [#2019]
+- [x] WML-2. Reject unsafe map image plans before allocation or upload — [#2020]
+- [x] WML-3. Persist an opaque generated-world identity with save migration — [#2021]
+- [x] WML-4. Establish the shared generated-world library lifecycle — [#2024]
 - [ ] WML-5. Generate deterministic spatial pyramid pages
 - [ ] WML-6. Measure map-page codecs and disk-cache budgets
 - [ ] WML-7. Define the versioned map-artifact format

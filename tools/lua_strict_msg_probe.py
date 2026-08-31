@@ -25,26 +25,58 @@ the engine stays alive to answer a follow-up command.
 No world/AI stack is needed — `engine.setText` is registered at Lua-API
 boot time, before any script loads.
 
+This probe implements the shared `probe-result/v1` contract: `--describe`
+prints its ordered stable checks without booting an engine, and a harnessed
+run writes structured events while a standalone run keeps human-readable
+per-check output.
+
 Usage: python3 tools/lua_strict_msg_probe.py [--port 9622]
+       python3 tools/lua_strict_msg_probe.py --describe
 Exit 0 = pass (engine survived + kept responding).
 """
 from __future__ import annotations
 import argparse
 import sys
 import time
+
+import probe_protocol
 from probelib import boot, quit_engine, send
 
 LOG = "/tmp/lua_strict_msg_probe_engine.log"
+LOG_NAME = "lua_strict_msg_probe_engine.log"
+PROBE_KEY = "lua_strict_msg"
+
+CHECKS = [
+    ("engine_alive", "the engine remains alive after the malformed message"),
+    ("console_responsive",
+     "the debug console remains responsive after the malformed message"),
+]
+
+DESCRIPTOR = probe_protocol.build_descriptor(PROBE_KEY, CHECKS)
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                   formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", type=int, default=9622)
+    ap.add_argument("--describe", action="store_true",
+                    help="print the probe-result/v1 check declaration and "
+                         "exit without booting an engine")
     args = ap.parse_args()
-    port = args.port
+    if args.describe:
+        print(DESCRIPTOR.to_json())
+        return 0
+    rep = probe_protocol.reporter_from_env(DESCRIPTOR)
+    try:
+        return _run(args.port, rep)
+    finally:
+        rep.close()
 
-    proc = boot(port, log=LOG)
+
+def _run(port, rep) -> int:
+    engine_log = rep.engine_log_path(LOG_NAME, LOG)
+
+    proc = boot(port, log=engine_log, args=rep.engine_args())
     try:
         # Malformed-UTF-8 payload: Lua's \195 decimal escape is the raw
         # byte 0xC3, an invalid/truncated UTF-8 lead byte on its own.
@@ -56,9 +88,15 @@ def main() -> int:
         # give it a moment to land before checking the process is still up.
         time.sleep(1.0)
         alive = proc.poll() is None
-        print(f"engine process alive after setText: {alive}")
+        ok = rep.check(
+            "engine_alive", alive,
+            ("engine process remained alive" if alive else
+             f"engine process exited; see {engine_log}"),
+            {"alive": alive})
         if not alive:
-            print("FAIL: engine process exited (see", LOG, ")")
+            rep.skip("debug-console responsiveness could not be checked because "
+                     "the engine exited")
+            rep.note("FAIL")
             return 1
 
         # Confirm the debug console (and thus the engine loop) is still
@@ -68,13 +106,18 @@ def main() -> int:
         try:
             echo = send(port, "return 1+1").strip()
         except OSError as e:
-            print(f"FAIL: debug console unreachable after setText ({e})")
-            return 1
-        responsive = echo == "2"
-        print(f"follow-up debug-console echo: {echo!r} (responsive={responsive})")
+            responsive = False
+            detail = {"error": str(e)}
+        else:
+            responsive = echo == "2"
+            detail = {"echo": echo}
+        ok &= rep.check(
+            "console_responsive", responsive,
+            ("follow-up debug-console echo returned 2" if responsive else
+             f"follow-up debug-console echo failed: {detail}"),
+            detail)
 
-        ok = alive and responsive
-        print("PASS" if ok else "FAIL")
+        rep.note("PASS" if ok else "FAIL")
         return 0 if ok else 1
     finally:
         quit_engine(port, proc)
