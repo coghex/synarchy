@@ -1675,10 +1675,16 @@ spec = around withMenusEngine $ do
             -- Requirement 6: nothing the rebuild does not own may move.
             sspInput after `shouldBe` sspInput before
             sspCursor after `shouldBe` sspCursor before
-            sspScroll after `shouldBe` sspScroll before
             sspFocus after `shouldBe` sspFocus before
             sspFocus after `shouldBe` Just (sspShellFocusId after)
             sspHistoryJoined after `shouldBe` sspHistoryJoined before
+            -- The scroll offset is the one retained value that legitimately
+            -- MOVES here, and only forward: it is the window onto the
+            -- buffer, and a field that just got narrower cannot keep the
+            -- cursor on screen without advancing it. It stays a valid
+            -- window (never past the cursor) and never rewinds.
+            sspScroll after `shouldSatisfy` (≥ sspScroll before)
+            sspScroll after `shouldSatisfy` (≤ sspCursor after)
             -- ...while both displays reflow to the narrower fitted width.
             sspContentWidth after `shouldSatisfy` (< sspContentWidth before)
             sspLineCount after `shouldSatisfy` (> sspLineCount before)
@@ -1686,6 +1692,34 @@ spec = around withMenusEngine $ do
             sspVisibleChars after `shouldSatisfy` (< sspVisibleChars before)
             sspVisibleWidth after `shouldSatisfy` (≤ sspInputWidth after)
             sspBoxRight after `shouldSatisfy` (≤ 1024)
+            -- The RENDERED input line, not just the value it should show:
+            -- rebuildBox recreates shell_buffer from the raw buffer and
+            -- parks shell_cursor at the line's start, so a resize that
+            -- stops there draws the whole unscrolled input past the fitted
+            -- width with the cursor in the wrong place.
+            sspBufferText after `shouldBe` sspVisibleText after
+            sspBufferWidth after `shouldSatisfy` (≤ sspInputWidth after)
+            (sspBufferX after + sspBufferWidth after) `shouldSatisfy` (≤ sspBoxRight after)
+            sspCursorX after `shouldSatisfy` (> sspBufferX after)
+            sspCursorX after `shouldSatisfy` (≤ sspBoxRight after)
+
+        it "redraws the completion ghost a width rebuild destroyed" $ \env → do
+            ls ← newBareLuaBackend env
+            _ ← evalOk ls (fixedCharMetrics contentPx <> " return true")
+            setFramebuffer env (1920, 1080)
+            _ ← evalOk ls shellBootExpr
+            -- destroyAllElements deletes shell_ghost and clears the handle,
+            -- and nothing in the box/history rebuild puts it back -- so a
+            -- resize used to drop a live completion hint until the next
+            -- keystroke happened to recompute it.
+            before ← decodeProbe "ghost before" =≪ evalJSON ls (shellGhostSeedExpr contentPx)
+            sspGhostSeen before `shouldBe` True
+            sspGhostText before `shouldSatisfy` (not ∘ T.null)
+            setFramebuffer env (1024, 768)
+            after ← decodeProbe "ghost after" =≪ evalJSON ls (shellResizeExpr contentPx 1024 768)
+            sspGhostSeen after `shouldBe` True
+            sspGhostText after `shouldBe` sspGhostText before
+            sspGhostRight after `shouldSatisfy` (≤ sspBoxRight after)
 
         it "leaves the rebuilt console on the pass-through debug layer" $ \env → do
             ls ← newBareLuaBackend env
@@ -2711,7 +2745,11 @@ data ShellStateProbe = ShellStateProbe
     , sspFocus ∷ Maybe Int, sspShellFocusId ∷ Int
     , sspHistoryJoined ∷ Text, sspLineCount ∷ Int, sspAllFit ∷ Bool
     , sspContentWidth ∷ Double, sspInputWidth ∷ Double
-    , sspVisibleChars ∷ Int, sspVisibleWidth ∷ Double, sspBoxRight ∷ Double
+    , sspVisibleChars ∷ Int, sspVisibleText ∷ Text
+    , sspVisibleWidth ∷ Double, sspBoxRight ∷ Double
+    , sspBufferText ∷ Text, sspBufferX ∷ Double, sspBufferWidth ∷ Double
+    , sspCursorX ∷ Double
+    , sspGhostSeen ∷ Bool, sspGhostText ∷ Text, sspGhostRight ∷ Double
     } deriving Show
 instance FromJSON ShellStateProbe where
     parseJSON = withObject "ShellStateProbe" $ \o → ShellStateProbe
@@ -2719,7 +2757,11 @@ instance FromJSON ShellStateProbe where
         <*> o .:? "focus" <*> o .: "shellFocusId"
         <*> o .: "historyJoined" <*> o .: "lineCount" <*> o .: "allFit"
         <*> o .: "contentWidth" <*> o .: "inputWidth"
-        <*> o .: "visibleChars" <*> o .: "visibleWidth" <*> o .: "boxRight"
+        <*> o .: "visibleChars" <*> o .: "visibleText"
+        <*> o .: "visibleWidth" <*> o .: "boxRight"
+        <*> o .: "bufferText" <*> o .: "bufferX" <*> o .: "bufferWidth"
+        <*> o .: "cursorX"
+        <*> o .: "ghostSeen" <*> o .: "ghostText" <*> o .: "ghostRight"
 
 -- | Decode one JSON probe result, failing the example with the raw text
 --   when it does not parse.
@@ -2964,13 +3006,36 @@ shellStateProbe px = luaLines
     , "local joined = '';"
     , "for _, q in ipairs(parts) do joined = joined .. q.t end;"
     , "local visible = shell.getVisibleInput();"
+    -- The three elements the resize path recreates from scratch: what the
+    -- console actually DRAWS for the input line, its cursor and its
+    -- completion hint. Reading getVisibleInput() alone would report the
+    -- value the display is supposed to show rather than the one it does.
+    , "local bufferText, bufferX = nil, -1;"
+    , "local cursorX, ghostText, ghostX = -1, nil, -1;"
+    , "for _, e in ipairs(UI.getVisibleElements()) do"
+    , "  if e.page == 'shell' then"
+    , "    if e.name == 'shell_buffer' then"
+    , "      bufferText = e.text or ''; bufferX = e.x;"
+    , "    elseif e.name == 'shell_cursor' then"
+    , "      cursorX = e.x;"
+    , "    elseif e.name == 'shell_ghost' and e.visible then"
+    , "      ghostText = e.text or ''; ghostX = e.x;"
+    , "    end;"
+    , "  end;"
+    , "end;"
     , "return {input=text, cursor=cursor, scroll=scroll,"
     , "        focus=engine.getFocusId(), shellFocusId=shell.getFocusId(),"
     , "        historyJoined=joined, lineCount=#parts, allFit=allFit,"
     , "        contentWidth=shell.getContentWidth(),"
     , "        inputWidth=shell.getMaxInputWidth(),"
-    , "        visibleChars=utf8.len(visible),"
-    , "        visibleWidth=#visible * " <> tshow px <> ", boxRight=right}"
+    , "        visibleChars=utf8.len(visible), visibleText=visible,"
+    , "        visibleWidth=#visible * " <> tshow px <> ", boxRight=right,"
+    , "        bufferText=bufferText or '', bufferX=bufferX,"
+    , "        bufferWidth=#(bufferText or '') * " <> tshow px <> ","
+    , "        cursorX=cursorX, ghostSeen=(ghostText ~= nil),"
+    , "        ghostText=ghostText or '',"
+    , "        ghostRight=(ghostText and (ghostX + #ghostText * "
+        <> tshow px <> ") or -1)}"
     , "end)()"
     ]
 
@@ -2989,6 +3054,21 @@ shellSeedExpr px = luaLines
     , "local fid = shell.getFocusId();"
     , "shell.addHistory(string.rep('c', 600), string.rep('r', 600), false);"
     , "for _ = 1, 300 do shell.onCharInput(fid, 'i') end;"
+    , "return " <> shellStateProbe px
+    ]
+
+-- | Type a short prefix exactly one global answers, so the completion
+--   ghost is live before a resize. Deliberately SHORT: a scrolled input
+--   already fills the whole field, so no ghost can fit beside it, which is
+--   why the ghost case cannot share the preservation case's seed.
+shellGhostSeedExpr ∷ Int → Text
+shellGhostSeedExpr px = luaLines
+    [ "local shell = require('scripts.shell');"
+    , "local fid = shell.getFocusId();"
+    , "_G.zzShellGhostCompletionTarget = 1;"
+    , "for _, c in ipairs({'z','z','S','h','e','l','l'}) do"
+    , "  shell.onCharInput(fid, c);"
+    , "end;"
     , "return " <> shellStateProbe px
     ]
 

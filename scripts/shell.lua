@@ -339,6 +339,12 @@ function shell.show()
     
     shell.rebuildBox()
     shell.rebuildHistoryDisplay()
+    -- Same reason as shell.onFramebufferResize (#1959): opening after a
+    -- resize taken while the console was hidden -- or after a scale change,
+    -- which destroys the elements above -- reaches the same rebuild with a
+    -- retained input buffer, so the input line, cursor and ghost have to be
+    -- re-derived from the width the box was just drawn at.
+    shell.updateDisplay()
     UI.showPage(shellPage)
 end
 
@@ -1175,6 +1181,16 @@ function shell.onFramebufferResize(width, height)
         boxSpawned = false
         shell.rebuildBox()
         shell.rebuildHistoryDisplay()
+        -- #1959: rebuildBox's CREATE branch spawns shell_buffer from the
+        -- RAW inputBuffer and parks the cursor at bufferX, because it has
+        -- no idea what the scroll window is. Without this the resize path
+        -- left a long input drawn unscrolled past the newly fitted width,
+        -- the cursor at the start of the line, and no ghost at all (it was
+        -- just destroyed) until the next keystroke happened to redraw
+        -- them. updateDisplay is the one path that re-derives all three
+        -- from the new width -- including re-scrolling the window, which
+        -- is what keeps the cursor inside a field that just got narrower.
+        shell.updateDisplay()
     end
 end
 
