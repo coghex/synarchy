@@ -17,9 +17,12 @@ import System.FilePath (takeDirectory)
 import Engine.Core.Log (LoggerState, logInfo, logWarn, LogCategory(..))
 import Engine.PlayerEvent (NotificationCfg, CategoryCfg(..))
 
--- | Per-category checkbox triple. Used both for registry defaults
---   (under "default_settings") and for the player's overrides file
---   (one entry per category id at top level).
+-- | Per-category checkbox triple as the REGISTRY states it (under
+--   "default_settings"): three concrete booleans. This is the BOTTOM
+--   layer of the resolution, so a field the registry itself omits has
+--   nothing beneath it to inherit and stays 'False' (#1938 requirement
+--   4). The player's overrides file is a DIFFERENT shape — see
+--   'CategoryOverride'.
 data CategorySettings = CategorySettings
     { csLog   ∷ !Bool
     , csPopup ∷ !Bool
@@ -32,12 +35,62 @@ instance FromJSON CategorySettings where
         ⊛ v .:? "popup" .!= False
         ⊛ v .:? "pause" .!= False
 
-instance ToJSON CategorySettings where
-    toJSON cs = object
-        [ "log"   .= csLog cs
-        , "popup" .= csPopup cs
-        , "pause" .= csPause cs
+-- | One entry of the player's overrides file: an OPTIONAL value per
+--   checkbox, layered ON TOP of that category's registry defaults
+--   (#1938). 'Nothing' — the field omitted, or written as an explicit
+--   YAML @null@, which aeson's '.:?' reads the same way — contributes
+--   NO value and leaves the registry default standing; a present
+--   boolean wins, @false@ included. A present but non-boolean value is
+--   still a parse failure, so the fallback to the registry that
+--   'loadOverrides' already performs is unchanged.
+--
+--   Splitting this from 'CategorySettings' is the whole fix: the two
+--   types were one, so an omitted override field decoded as an explicit
+--   @false@ and 'mkCategoryCfg' replaced the registry triple wholesale.
+--   A file carrying only @{log: true}@ for a category defaulting to
+--   @{log: true, popup: true, pause: true}@ therefore silently disabled
+--   its popup and its automatic pause. This mirrors 'Engine.Save.Config'
+--   (#913), which already resolves the @save@ family as a key-level
+--   overlay for exactly this reason.
+data CategoryOverride = CategoryOverride
+    { coLog   ∷ !(Maybe Bool)
+    , coPopup ∷ !(Maybe Bool)
+    , coPause ∷ !(Maybe Bool)
+    } deriving (Show, Eq, Generic)
+
+instance FromJSON CategoryOverride where
+    parseJSON = withObject "CategoryOverride" $ \v → CategoryOverride
+        ⊚ v .:? "log"
+        ⊛ v .:? "popup"
+        ⊛ v .:? "pause"
+
+-- | Emits only the fields the entry actually carries, so a sparse
+--   override survives a read/write round trip as sparse rather than
+--   being silently completed with the values it inherited. Every writer
+--   in this module ('writeNotificationOverrides' and the absent-file
+--   materialization) builds complete triples via 'fullOverride', so the
+--   bytes they produce are unchanged.
+instance ToJSON CategoryOverride where
+    toJSON co = object $ catMaybes
+        [ ("log"   .=) ⊚ coLog   co
+        , ("popup" .=) ⊚ coPopup co
+        , ("pause" .=) ⊚ coPause co
         ]
+
+-- | The empty override: every field inherited. What a category ABSENT
+--   from the overrides file resolves through.
+noOverride ∷ CategoryOverride
+noOverride = CategoryOverride Nothing Nothing Nothing
+
+-- | A fully-authored override stating all three values explicitly —
+--   what both writers here emit, so what they put on disk keeps
+--   meaning exactly what it meant before #1938.
+fullOverride ∷ CategorySettings → CategoryOverride
+fullOverride cs = CategoryOverride
+    { coLog   = Just (csLog   cs)
+    , coPopup = Just (csPopup cs)
+    , coPause = Just (csPause cs)
+    }
 
 -- | One row of the YAML registry — what's shipped with the game.
 data RegistryEntry = RegistryEntry
@@ -73,9 +126,10 @@ instance FromJSON RegistryFile where
     parseJSON = withObject "RegistryFile" $ \v → RegistryFile
         ⊚ v .: "categories"
 
--- | The overrides file's shape: @categories: { id: { log, popup, pause }, … }@.
+-- | The overrides file's shape: @categories: { id: { log, popup, pause }, … }@,
+--   where each of the three checkboxes is OPTIONAL (#1938).
 newtype OverridesFile
-    = OverridesFile { ofCategories ∷ HM.HashMap Text CategorySettings }
+    = OverridesFile { ofCategories ∷ HM.HashMap Text CategoryOverride }
     deriving (Show, Eq, Generic)
 
 instance FromJSON OverridesFile where
@@ -85,8 +139,10 @@ instance FromJSON OverridesFile where
 instance ToJSON OverridesFile where
     toJSON (OverridesFile cats) = object [ "categories" .= cats ]
 
--- | Load the YAML registry, merge the player's overrides on top, and
---   return a resolved 'NotificationCfg'. If the overrides file doesn't
+-- | Load the YAML registry, merge the player's overrides on top
+--   PER FIELD (#1938 — an override entry that omits a checkbox leaves
+--   that checkbox at its registry default), and return a resolved
+--   'NotificationCfg'. If the overrides file doesn't
 --   exist, write it out using the registry defaults so the player has
 --   a file to edit. If the registry itself is missing or unparseable,
 --   log a warning and return an empty map — every 'emitEvent' will
@@ -134,41 +190,48 @@ writeNotificationOverrides path cfg = do
             , csPopup = ccPopup c
             , csPause = ccPause c
             }
-        overrides = HM.map toSettings cfg
+        overrides = HM.map (fullOverride . toSettings) cfg
     Yaml.encodeFile path (OverridesFile overrides)
 
--- | Resolve one registry row against the player overrides. Missing
---   override entry → use registry defaults.
+-- | Resolve one registry row against the player overrides, FIELD BY
+--   FIELD (#1938). The registry row is the base; each checkbox the
+--   override entry actually states replaces its base value, and each one
+--   it omits keeps it. A category with no override entry at all
+--   therefore resolves entirely from the registry, exactly as before.
 mkCategoryCfg ∷ RegistryEntry
-              → HM.HashMap Text CategorySettings
+              → HM.HashMap Text CategoryOverride
               → CategoryCfg
 mkCategoryCfg e overrides =
-    let cs = HM.lookupDefault (reDefaults e) (reId e) overrides
+    let base = reDefaults e
+        co   = HM.lookupDefault noOverride (reId e) overrides
     in CategoryCfg
         { ccId          = reId e
         , ccDisplayName = reDisplayName e
         , ccDescription = reDescription e
         , ccTextColor   = reTextColor e
-        , ccLog         = csLog   cs
-        , ccPopup       = csPopup cs
-        , ccPause       = csPause cs
+        , ccLog         = fromMaybe (csLog   base) (coLog   co)
+        , ccPopup       = fromMaybe (csPopup base) (coPopup co)
+        , ccPause       = fromMaybe (csPause base) (coPause co)
         , ccPopupCoalesceWindow = rePopupCoalesceWindow e
         , ccLogCoalesceWindow   = reLogCoalesceWindow e
         }
 
 -- | Load 'config/notifications.local.yaml' (#786) if present, else
 --   materialize it from the registry defaults so the player has a file
---   to edit.
+--   to edit. Hand-editing that file is an intended workflow, which is
+--   why deleting a line from it must not change behaviour: the returned
+--   map is the OVERRIDE layer, and a checkbox it does not mention is
+--   left to 'mkCategoryCfg' to inherit (#1938).
 loadOverrides ∷ LoggerState
               → FilePath
               → [RegistryEntry]
-              → IO (HM.HashMap Text CategorySettings)
+              → IO (HM.HashMap Text CategoryOverride)
 loadOverrides logger path entries = do
     exists ← doesFileExist path
     if not exists
         then do
             let defaults = HM.fromList
-                    [ (reId e, reDefaults e) | e ← entries ]
+                    [ (reId e, fullOverride (reDefaults e)) | e ← entries ]
             createDirectoryIfMissing True (takeDirectory path)
             Yaml.encodeFile path (OverridesFile defaults)
             logInfo logger CatEvent $

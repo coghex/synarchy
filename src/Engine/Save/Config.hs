@@ -2,10 +2,15 @@
 
 -- | The @save@ config family (#913): the autosave scheduler's tunables.
 --
---   Unlike the video\/keybind\/notification families, this one resolves
---   its effective values as an explicit KEY-LEVEL OVERLAY rather than
---   by "whole local file wins" ('Engine.Core.Init.resolveConfigPath')
---   plus hard-coded parser fallbacks. A sparse
+--   Unlike the video\/keybind families, this one resolves its effective
+--   values as an explicit KEY-LEVEL OVERLAY rather than by "whole local
+--   file wins" ('Engine.Core.Init.resolveConfigPath') plus hard-coded
+--   parser fallbacks. (Notifications joined the overlay side in #1938:
+--   an overrides entry that omits a checkbox leaves that checkbox at its
+--   registry default instead of replacing the whole triple. Their base
+--   layer is @data\/notification_categories.yaml@ rather than a tracked
+--   @_default.yaml@, and their writer still emits complete triples.) A
+--   sparse
 --   @config\/save.local.yaml@ carrying only the one key the player
 --   actually changed must keep every OTHER value the tracked
 --   @config\/save_default.yaml@ ships — not fall back to a constant

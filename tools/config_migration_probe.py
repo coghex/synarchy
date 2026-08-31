@@ -41,7 +41,13 @@ This probe asserts the engine-side upgrade contract end to end:
   1. A legacy file with distinct non-default values, present with no
      local file yet, gets migrated on boot: the resolved config reflects
      the legacy values, the matching `*.local.yaml` is written, and the
-     `Migrated legacy config <legacy> -> <local>` line is unchanged.
+     `Migrated legacy config <legacy> -> <local>` line is unchanged. The
+     notification fixture is deliberately PARTIAL (#1938): it states one
+     checkbox of a category whose other two default TRUE, so the boot
+     must show the authored value AND both inherited ones. That is
+     #786's "partial legacy state" requirement resolved — under
+     key-level overlay semantics a sparse overrides document is valid
+     input, not incomplete input.
   2. A second boot is idempotent: editing the legacy file afterward has
      no further effect — the already-migrated local file keeps winning.
   3. When both a legacy file and a genuine local file exist from the
@@ -133,11 +139,17 @@ LEGACY_KEYBINDS = """keybinds:
   toggleEventLog: [L]
 """
 
+# Deliberately PARTIAL (#1938): `survival_critical` ships
+# `{log: true, popup: true, pause: true}`, and this states only `log`,
+# with the value inverted so the override layer is provably read at all.
+# The two omitted checkboxes must come back as the registry's own TRUE
+# defaults. Before #1938 they decoded as an explicit `false` and replaced
+# the registry triple wholesale, silently disabling that category's popup
+# AND its automatic pause. A complete, all-false-default fixture (the old
+# `debug` triple) could not tell the two behaviours apart.
 LEGACY_NOTIFICATIONS = """categories:
-  debug:
-    log: true
-    popup: false
-    pause: false
+  survival_critical:
+    log: false
 """
 
 MALFORMED_YAML = "video: [this, is: not, valid: {yaml"
@@ -237,6 +249,18 @@ def load_yaml(path: str):
         return yaml.safe_load(f)
 
 
+def notification_triple(port: int, cat: str) -> str:
+    """The resolved `log|popup|pause` triple for one category, as the
+    engine actually routes it. Reading all three is what makes #1938's
+    inheritance observable — the pre-fix behaviour differs only in the
+    checkboxes the overrides file never mentioned."""
+    return send(port,
+                 "local cfg = engine.getNotificationCfg(); "
+                 f"for _,c in ipairs(cfg) do if c.id == '{cat}' then "
+                 "return tostring(c.log)..'|'..tostring(c.popup)"
+                 "..'|'..tostring(c.pause) end end; return 'NOTFOUND'")
+
+
 def get_video_ui_scale(port: int) -> float:
     r = send(port,
               "local w,h,wm,uis,vs = engine.getVideoConfig(); "
@@ -286,12 +310,13 @@ def main() -> int:
         passed &= check("real legacy keybinds.yaml resolves to the versioned default moveUp",
                          r == ",".join(want_kb["moveUp"]), r)
 
-        r = send(args.port,
-                  "local cfg = engine.getNotificationCfg(); "
-                  "for _,c in ipairs(cfg) do if c.id == 'debug' then "
-                  "return tostring(c.log) end end; return 'NOTFOUND'")
+        r = notification_triple(args.port, "survival_critical")
+        want_cat = next(c for c in load_yaml("data/notification_categories.yaml")
+                         ["categories"] if c["id"] == "survival_critical")
+        want_triple = "|".join(str(bool(want_cat["default_settings"][k])).lower()
+                                for k in ("log", "popup", "pause"))
         passed &= check("real legacy notifications.yaml resolves to the registry default",
-                         r == "false", r)
+                         r == want_triple, f"{r} want {want_triple}")
 
         quit_engine(args.port, proc)
         proc = None
@@ -429,11 +454,13 @@ def main() -> int:
         r = send(args.port, "local b = engine.getKeybinds(); return table.concat(b.moveUp, ',')")
         passed &= check("keybinds: legacy moveUp=[I,K] is effective", r == "I,K", r)
 
-        r = send(args.port,
-                  "local cfg = engine.getNotificationCfg(); "
-                  "for _,c in ipairs(cfg) do if c.id == 'debug' then "
-                  "return tostring(c.log) end end; return 'NOTFOUND'")
-        passed &= check("notifications: legacy debug.log=true is effective", r == "true", r)
+        r = notification_triple(args.port, "survival_critical")
+        passed &= check("notifications: the partial legacy file's explicit "
+                         "log=false is effective", r.split("|")[0] == "false", r)
+        passed &= check("notifications: the omitted popup/pause inherit the "
+                         "registry's true defaults rather than reading as false "
+                         "(#1938)",
+                         r == "false|true|true", r)
 
         for p in LOCAL_FILES:
             passed &= check(f"{p} created by migration", os.path.exists(p))
