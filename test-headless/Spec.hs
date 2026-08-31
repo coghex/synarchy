@@ -247,6 +247,8 @@ import qualified Test.Headless.Building.PageBinding as BuildingPageBinding
 import qualified Test.Headless.Building.PortalSpawnBinding as BuildingPortalSpawnBinding
 import qualified Test.Headless.Building.Placement as BuildingPlacement
 import qualified Test.Headless.Building.RemoteWarning as BuildingRemoteWarning
+import qualified Test.Headless.Building.MachineShopConstruction
+    as MachineShopConstruction
 import qualified Test.Headless.Building.WorkbenchConstruction
     as WorkbenchConstruction
 import qualified Test.Headless.Save.AutosaveGuards as AutosaveGuards
@@ -552,6 +554,7 @@ main = hspec $ do
     describe "Preview.UnitAnimation" PreviewUnitAnimation.spec
     describe "Preview.Building" PreviewBuilding.spec
     describe "Preview.Zoom" PreviewZoom.spec
+    describe "Machine Shop construction animation" MachineShopConstruction.spec
     describe "Workbench construction animation" WorkbenchConstruction.spec
     describe "Bindless texture filter rebinding" BindlessRebind.spec
     describe "Bindless texture release" BindlessRelease.spec
