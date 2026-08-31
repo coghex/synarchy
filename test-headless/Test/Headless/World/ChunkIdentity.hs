@@ -43,7 +43,9 @@ import World.Chunk.Residency
 import World.Chunk.Queue
     ( drainedLoadPhase, enqueueChunkRequest, initialChunkQueue
     , reconcileQueuedPhase, seedInitialQueue, settleDrainedPhase )
-import World.Chunk.Types (ChunkCoord(..), LoadedChunk(..), wrapChunkCoordU)
+import World.Chunk.Types
+    (ChunkCoord(..), LoadedChunk(..), chunkSize, wrapChunkCoordU)
+import World.Generate.Coordinates (globalToChunk)
 import World.Command.Types (WorldCommand(..))
 import World.Generate.Types
     (WorldGenParams(..), defaultWorldGenParams, isArenaParams)
@@ -880,42 +882,55 @@ spec = describe "canonical chunk identity" $ do
         drainedLoadPhase boxFallback 1 (LoadPhase2 2 26)
             `shouldBe` LoadPhase2 1 26
 
-    it "leaves an alias-stored seed chunk outside the owner" $ \_ → do
-        -- A saved session past the seam restores its centre under the
-        -- coord it was SAVED with, not the canonical one: an existing
-        -- save's replay log — including every settled-fluid snapshot
-        -- appendFluidSnapshot keyed by the chunk's own lcCoord — points
-        -- at that alias, and replayEdits is a direct lookup by lcCoord.
+    it "replays a seam save's own frame, then labels the chunk canonically" $ \_ → do
+        -- A session saved past the seam wrote its centre under a
+        -- non-canonical ALIAS, and everything in its replay log is keyed
+        -- to that alias — appendFluidSnapshot keys every settled-fluid
+        -- snapshot by the chunk's own lcCoord, and applyEdit refuses an
+        -- edit whose coords do not belong to the chunk it is handed. So
+        -- the restore replays in the SAVED frame and relabels afterwards.
         --
-        -- The owner is keyed canonically by construction, so it cannot
-        -- name such a chunk. Claiming the canonical key for it would mark
-        -- resident a key whose payload is not in the tile map, and the
-        -- camera loader's own claim for that key would then be refused
-        -- for ever — leaving the physical chunk unreachable to every
-        -- canonicalising reader. It is left unclaimed instead.
+        -- The relabel is sound because the u-wrap moves WHOLE chunks: the
+        -- shift is a multiple of chunkSize, so a column's local index is
+        -- identical on both sides and only the label changes.
         let params = sizedParams seamWorldSize
-            canonicalSeed c = canonicalChunkCoord params c ≡ c
+            ChunkCoord ax ay = aliasCoord
+            ChunkCoord kx ky = canonCoord
+        canonicalChunkCoord params aliasCoord `shouldBe` canonCoord
+        ((kx - ax) * chunkSize) `mod` chunkSize `shouldBe` 0
+        ((ky - ay) * chunkSize) `mod` chunkSize `shouldBe` 0
 
-        -- The seam case: the saved centre is an alias, so no claim.
-        canonicalSeed aliasCoord `shouldBe` False
-        wsSeam ← detachedPage params
-        writeIORef (wsTilesRef wsSeam) (seedTileData aliasCoord)
-        seamOwner ← readChunkOwner wsSeam
-        chunkOwnerSize seamOwner `shouldBe` 0
-        -- ...so the canonical key stays claimable, which is what lets the
-        -- camera loader produce it exactly as it did before #2001.
-        claims ← claimChunkGeneration wsSeam pageA params [canonCoord]
+        -- An edit written in the SAVED frame belongs to the alias chunk
+        -- and not to its canonical twin, which is exactly why replay has
+        -- to happen before the relabel.
+        let aliasGX = ax * chunkSize + 6
+            aliasGY = ay * chunkSize + 2
+            canonGX = kx * chunkSize + 6
+            canonGY = ky * chunkSize + 2
+        fst (globalToChunk aliasGX aliasGY) `shouldBe` aliasCoord
+        fst (globalToChunk canonGX canonGY) `shouldBe` canonCoord
+        -- ...and both name the same column of their own chunk, which is
+        -- what makes relabelling a payload-preserving operation.
+        snd (globalToChunk aliasGX aliasGY)
+            `shouldBe` snd (globalToChunk canonGX canonGY)
+
+    it "publishes a relabelled seed under the canonical key" $ \_ → do
+        -- Whatever frame it was generated in, the chunk reaches the owner
+        -- and the tile map under ONE key, so a later request for either
+        -- spelling is satisfied rather than generating a second payload
+        -- for the same physical place.
+        let params = sizedParams seamWorldSize
+        ws ← detachedPage params
+        claims ← claimChunkGeneration ws pageA params [aliasCoord]
         map claimedChunkCoord claims `shouldBe` [canonCoord]
+        publishSeedChunks ws claims (seedTileData aliasCoord)
 
-        -- Every other restore is unaffected: away from the seam the
-        -- saved coord IS canonical, so the seed claims and admits as
-        -- usual.
-        canonicalSeed (ChunkCoord 1 1) `shouldBe` True
-        wsPlain ← detachedPage params
-        plainClaims ← claimChunkGeneration wsPlain pageA params [ChunkCoord 1 1]
-        publishSeedChunks wsPlain plainClaims (seedTileData (ChunkCoord 1 1))
-        plainOwner ← readChunkOwner wsPlain
-        stateOf params pageA (ChunkCoord 1 1) plainOwner `shouldBe` ChunkResident
-        -- ...and a fresh world's centre is canonical on every world size,
-        -- so fresh init always claims.
-        canonicalSeed (ChunkCoord 0 0) `shouldBe` True
+        owner ← readChunkOwner ws
+        chunkOwnerSize owner `shouldBe` 1
+        stateOf params pageA aliasCoord owner `shouldBe` ChunkResident
+        td ← readIORef (wsTilesRef ws)
+        (lcCoord ⊚ lookupChunk canonCoord td) `shouldBe` Just canonCoord
+        lookupChunk aliasCoord td `shouldBe` Nothing
+        -- Neither spelling is work any more.
+        enqueueChunkRequest pageA ws [aliasCoord] `shouldReturn` 0
+        enqueueChunkRequest pageA ws [canonCoord] `shouldReturn` 0
