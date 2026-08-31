@@ -3874,6 +3874,84 @@ def test_failed_checks_survive_the_parallel_presentation() -> None:
     finally:
         tree.cleanup()
 
+#: The six probes #1982 repaired. Every terminal failure any of them
+#: reports must reach the runner as a durable record, so the structural
+#: guard below can name them as one set.
+REPAIRED_PROBES = (
+    "location_embark_probe.py",
+    "location_stamp_idempotent_probe.py",
+    "location_content_probe.py",
+    "location_overlay_probe.py",
+    "portal_location_probe.py",
+    "portal_ghost_probe.py",
+)
+
+
+def test_no_repaired_probe_still_reports_a_failure_to_stderr() -> None:
+    print("\n-- no repaired probe reports a terminal failure on the "
+          "unbuffered stderr the runner's tail cannot retain")
+
+    # This is the mechanism of the whole bug, stated as a guard: the
+    # runner launches each probe with `stderr=subprocess.STDOUT`, and
+    # Python leaves stderr unbuffered while block-buffering the piped
+    # stdout. ANY failure written to stderr therefore overtakes the
+    # buffered output and lands above the retained `--tail`, whatever
+    # else the probe does correctly. One such path survived the first
+    # pass of this repair -- portal_ghost's phase-1 setup exit, which
+    # returned without reaching `report` at all -- so the guard is over
+    # the whole set rather than the paths that were noticed.
+    tools = Path(__file__).resolve().parent
+    for script in REPAIRED_PROBES:
+        source = (tools / script).read_text(encoding="utf-8")
+        expect("file=sys.stderr" not in source,
+               f"{script} writes nothing to stderr; a failure there is "
+               f"exactly what the runner's tail cannot keep")
+        expect("FailureEmitter" in source,
+               f"{script} produces durable failure records instead")
+
+
+def test_a_probes_setup_exit_is_recorded_and_recoverable() -> None:
+    print("\n-- portal_ghost's phase-1 setup exit records a durable setup "
+          "failure the runner can recover from the complete capture")
+
+    # The engine-free half of a needs-GPU probe: this exit is reached
+    # when the fixture never materialised, BEFORE any GPU work, and it is
+    # the one terminal exit that does not go through `report`. Driving it
+    # directly is what proves it emits at all -- the review that found it
+    # found it by reading, and nothing failed.
+    import io
+    import contextlib
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import portal_ghost_probe
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = portal_ghost_probe.report_prep_setup_failure()
+    out = buf.getvalue()
+    expect(rc == 1, f"the setup exit still fails the probe (got {rc})")
+
+    records = failure_records(out)
+    kinds = [record.kind for record in records]
+    expect("setup" in kinds,
+           f"it records a SETUP failure, not an ordinary one (got {kinds!r})")
+    setup = [record for record in records if record.kind == "setup"]
+    expect(len(setup) == 1,
+           f"exactly one, so the runner names it once (got {setup!r})")
+    expect("no ruin_small with resolvable bounds" in setup[0].detail,
+           f"carrying the diagnosis (got {setup[0].detail!r})")
+    expect(setup[0].identity == "portal_ghost_probe",
+           f"and naming its producer (got {setup[0].identity!r})")
+    expect(any(record.kind == "context" for record in records),
+           f"with the prep engine log as context (got {records!r})")
+
+    # Nothing reaches stderr on this path any more, and the runner's own
+    # consumer recovers the whole thing from the capture.
+    derived = "\n".join(run_probes.failure_attribution(out))
+    expect("SETUP FAILURE: phase 1 (headless prep)" in derived,
+           f"the runner's presentation recovers it (got {derived!r})")
+    expect("no ruin_small with resolvable bounds" in derived,
+           f"with its detail (got {derived!r})")
+
 def test_the_readme_states_no_registry_total() -> None:
     print("\n-- tools/README.md's run_probes section states no registry total")
 
@@ -4514,6 +4592,8 @@ def main() -> int:
     test_failure_attribution_names_every_recorded_failure_once()
     test_failed_checks_survive_outside_the_ordinary_tail()
     test_failed_checks_survive_the_parallel_presentation()
+    test_no_repaired_probe_still_reports_a_failure_to_stderr()
+    test_a_probes_setup_exit_is_recorded_and_recoverable()
     if FAILURES:
         print(f"\n{len(FAILURES)} test(s) failed:")
         for failure in FAILURES:

@@ -44,7 +44,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import sys
 import tempfile
 import time
 
@@ -244,9 +243,7 @@ def run(args, root: str, slot: str, shots: str) -> int:
             # The save was refused or never completed; prepare_save already
             # recorded it, and the GPU reader deliberately never boots.
             return report(shots)
-        print("FAIL (setup): no ruin_small with resolvable bounds placed",
-              file=sys.stderr)
-        return 1
+        return report_prep_setup_failure()
     gx, gy = ruin["gx"], ruin["gy"]
     bounds = ruin["bounds"]
     print(f"  ruin at ({gx},{gy}), bounds {bounds}, saved as '{slot}'")
@@ -397,6 +394,27 @@ def run(args, root: str, slot: str, shots: str) -> int:
         quit_engine(args.port, proc)
 
     return report(shots)
+
+
+def report_prep_setup_failure() -> int:
+    """The one terminal exit that does NOT go through `report` below.
+
+    `prepare_save` returning no ruin without having recorded a failure of
+    its own means the fixture never materialised — a SETUP failure in
+    #1575's vocabulary ("try another seed"), not a product one. It used to
+    print straight to stderr and return, which is precisely the #1982 loss
+    the rest of this probe was repaired for: the runner merges stderr into
+    a block-buffered stdout pipe, so this line overtook the buffered prep
+    output and landed above the retained `--tail`, and `report` -- the only
+    thing emitting durable records -- was never reached.
+
+    Only the prep log is named: phase 2 has not booted, so `LOG_GPU` names
+    either nothing or a previous run's file.
+    """
+    FAILURE.setup("phase 1 (headless prep): no ruin_small with resolvable "
+                  "bounds placed")
+    FAILURE.context_log(LOG_PREP, label="prep engine log")
+    return 1
 
 
 def report(shots: str) -> int:
