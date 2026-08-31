@@ -12,6 +12,14 @@
 --     once, and duplicating it here is exactly the drift that split the
 --     two slices apart. It also means the hspec gate can drive real
 --     rendering by injecting a tree through `tutorialProgress.setTree`.
+--   * This surface is also #958's PRESENTATION witness (#1941). It is
+--     the only thing that can say a row was actually put in front of
+--     the player, so it reports exactly the rows it laid out on a
+--     visible, open page back through
+--     `tutorialProgress.acknowledgePresented`, which retires the #996
+--     hide suppression that kept an already-latched branch on screen.
+--     Reading the view model is not presentation and never acknowledges
+--     anything.
 --   * Rows are DISPLAY-ONLY. They carry a tooltip and capture the
 --     wheel, and that is all: no click callback and no pointer
 --     blocking, so a click over the checklist reaches the terrain
@@ -375,17 +383,26 @@ end
 -- Model
 -----------------------------------------------------------
 
+-- #958's progress singleton, or nil when it is not reachable at all.
+-- package.loaded first (the module registers itself there), require()
+-- only as a fallback, so this never forces a load order. Shared by the
+-- two things that talk to #958 from here: the read below and the
+-- presentation acknowledgement further down.
+local function progressModule()
+    local progress = package.loaded["scripts.tutorial_progress"]
+    if progress ~= nil then return progress end
+    local ok, mod = pcall(require, "scripts.tutorial_progress")
+    if not ok then return nil end
+    return mod
+end
+
 -- Exactly the rows the model reports as active, in the model's own
 -- order. `active == false` rows are retained completed history and are
 -- out of scope for this view; the order is #958's pre-order display
 -- walk, already sorted by the loader, so it is never re-sorted here.
 local function activeRows()
-    local progress = package.loaded["scripts.tutorial_progress"]
-    if progress == nil then
-        local ok, mod = pcall(require, "scripts.tutorial_progress")
-        if not ok then return {} end
-        progress = mod
-    end
+    local progress = progressModule()
+    if progress == nil then return {} end
     if type(progress.getViewModel) ~= "function" then return {} end
     local ok, model = pcall(progress.getViewModel)
     if not ok or type(model) ~= "table" or type(model.rows) ~= "table" then
@@ -425,6 +442,48 @@ local function contentSignature(rows)
         parts[#parts + 1] = tostring(row.id) .. markerFor(row)
     end
     return table.concat(parts, "|")
+end
+
+-- #1941: report the rows this surface has actually PUT IN FRONT OF THE
+-- PLAYER, so #958 can retire the #996 hide suppression that kept an
+-- already-latched branch on screen and let the ordinary hide rule
+-- resume.
+--
+-- The one GATE is `_hudVisible`: applyPageVisibility paints this page
+-- by it, so a build that happened behind a hidden gameplay HUD has put
+-- nothing in front of anyone, however complete the model was.
+--
+-- Everything else the rule needs is already true of `_rows`, which is
+-- why nothing else is re-checked here. It holds precisely the slice the
+-- viewport laid out -- emptied by destroyElements and repopulated only
+-- by the OPEN build path, and then only for
+-- `scrollOffset .. +visibleRows`. So a collapsed panel and a row
+-- scrolled out of range are both excluded by construction rather than
+-- by a second condition that could drift from the build.
+--
+-- Fetching the model (activeRows) never reaches here, which is what
+-- keeps getViewModel a pure read.
+--
+-- Driven from the UPDATE TICK, never from rebuild() itself, and BEFORE
+-- this tick's own rebuild: what it reports is the viewport that was on
+-- screen for the frame just past, so a build is never unmade by the
+-- same tick that created it, and rebuild() stays a pure build with no
+-- cross-module side effect.
+--
+-- Idempotent and cheap: acknowledgePresented only writes ids that are
+-- still sticky, so every call after the first is a no-op.
+local function acknowledgePresentedRows()
+    if not tutorialHud._hudVisible then return end
+    -- Early-out only: an empty list acknowledges nothing either way.
+    if #tutorialHud._rows == 0 then return end
+    local progress = progressModule()
+    if progress == nil
+            or type(progress.acknowledgePresented) ~= "function" then
+        return
+    end
+    local ids = {}
+    for _, row in ipairs(tutorialHud._rows) do ids[#ids + 1] = row.id end
+    pcall(progress.acknowledgePresented, ids)
 end
 
 -----------------------------------------------------------
@@ -739,10 +798,18 @@ function tutorialHud.update(_dt)
         tutorialHud._hudVisible = hudVisible
         applyPageVisibility()
     end
+    -- #1941: report what this surface has been showing since the last
+    -- tick, BEFORE any rebuild below can replace it. Every tick, not
+    -- only after a rebuild -- a row can reach the screen with no
+    -- content change at all, because hud.show() flips `_hudVisible`
+    -- just above and paints a page that was built while hidden.
+    acknowledgePresentedRows()
     if not hudVisible then return end
     -- Content churn only: opening, scrolling and resizing rebuild
     -- directly. Objectives complete and subobjectives check/uncheck
     -- from #959's evaluation tick, which this module never drives.
+    -- Retiring a sticky row above is itself such a change, so the
+    -- rebuild that takes it off the list happens here.
     if contentSignature(activeRows()) ~= tutorialHud._sig then
         tutorialHud.rebuild()
     end
