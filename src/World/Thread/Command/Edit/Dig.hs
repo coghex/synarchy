@@ -222,6 +222,17 @@ handleWorldDigTileCommand env rngRef unitQ logger pageId rawGX rawGY rawUX rawUY
                                     bumpQuadCacheGen ws
                                     writeIORef (wsZoomQuadCacheRef ws) Nothing
                                     writeIORef (wsBgQuadCacheRef ws)   Nothing
+                                    -- #1858: a PARTIAL dig sheds the
+                                    -- tile's surface vegetation as soon
+                                    -- as one corner drops
+                                    -- ('applyDigSlopeToChunk'), and mine
+                                    -- admission does not exclude a tile
+                                    -- carrying a plant designation — so
+                                    -- this write, not the eventual tile
+                                    -- deletion, is where such a tile
+                                    -- stops being tilled soil.
+                                    _ ← revalidatePlantDesignations logger ws
+                                    pure ()
 
 -- | Spawn @n@ yield items (chunks, gems) as ground items scattered
 --   on the dig tile. Each gets a random sub-tile position, retried a

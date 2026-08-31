@@ -53,6 +53,7 @@ import Engine.Asset.Handle (TextureHandle(..), toInt)
 import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
 import Engine.Core.Capability.WorldSim (toWorldSimCapability)
 import Engine.Core.State (EngineEnv(..))
+import World.Construct.Types (ConstructTarget(..), StructurePiece(..))
 import Engine.Graphics.Camera
     (Camera2D(..), CameraFacing(..), defaultCamera)
 import Engine.Graphics.Vulkan.Types.Vertex
@@ -74,7 +75,10 @@ import World.Plant.Validate
 import World.Render.CursorQuads (renderWorldCursorQuads)
 import World.Save.Serialize (loadWorld)
 import World.Thread.Command.Cursor
-    (handleWorldDesignatePlantCommand)
+    ( handleWorldAddConstructProgressCommand
+    , handleWorldDesignateConstructCommand, handleWorldDesignateMineCommand
+    , handleWorldDesignatePlantCommand )
+import World.Thread.Command.Edit.Dig (handleWorldDigTileCommand)
 import World.Thread.Command.Edit (handleWorldSetVegCommand)
 import World.Types
 import World.Vegetation (vegMediumGrass, vegTilledSoil)
@@ -358,6 +362,11 @@ spec = do
             , "assert(next(unitAi.plant.claims), 'and keeps the claim')"
             ]
 
+-- | A structure piece, so 'applyConstructSlopeToChunk''s @isStructure@
+--   guard passes and the progress write really reaches the tile.
+wirePiece ∷ ConstructTarget
+wirePiece = CtStructure (StructurePiece "wire" "wire" Nothing)
+
 plantMarkerPath ∷ FilePath
 plantMarkerPath = "assets/textures/ui/hud/utility/plant_designate.png"
 
@@ -595,6 +604,50 @@ engineSpec = beforeAll setup $ do
           (fst plantTile) (snd plantTile) zSlice vegMediumGrass
       sort . HM.keys <$> readIORef (wsPlantDesignationsRef ws)
           `shouldReturn` [otherTile]
+
+    it "removes it when a PARTIAL dig sheds the tile's vegetation" $
+        \env → do
+      -- Round 1 review: 'applyDigSlopeToChunk' clears the surface
+      -- ctVeg the moment one corner drops, and mine admission does not
+      -- exclude a tile carrying a plant designation — so the tile stops
+      -- being tilled soil here, at a write that is neither a vegetation
+      -- edit nor the eventual tile deletion.
+      ws ← resetPage env vegTilledSoil
+      logger ← readIORef (loggerRef env)
+      writeIORef (floraCatalogRef env) cropCatalog
+      handleWorldDesignatePlantCommand env logger fixturePage
+          (fst plantTile) (snd plantTile) "probe_crop"
+      handleWorldDesignateMineCommand env logger fixturePage
+          (fst plantTile) (snd plantTile) (fst plantTile) (snd plantTile)
+      handleWorldDigTileCommand env (statRNGRef env) (unitQueue env) logger
+          fixturePage (fst plantTile) (snd plantTile)
+          (fromIntegral (fst plantTile)) (fromIntegral (snd plantTile) - 1)
+          0.25 1.0 1.0
+      -- Really a PARTIAL dig: the mine designation is still there, so
+      -- this is not the already-covered delete-tile path in disguise.
+      HM.keys <$> readIORef (wsMineDesignationsRef ws)
+          `shouldReturn` [plantTile]
+      HM.keys <$> readIORef (wsPlantDesignationsRef ws) `shouldReturn` []
+
+    it "removes it when construction progress sheds the tile's \
+       \vegetation" $ \env → do
+      -- Round 1 review, the same shedding through the other consumer of
+      -- 'applyCornerSlopeToChunk'. ('resetConstructSlope' passes full
+      -- corners and never touches ctVeg, so it is deliberately not a
+      -- revalidation point.)
+      ws ← resetPage env vegTilledSoil
+      logger ← readIORef (loggerRef env)
+      writeIORef (floraCatalogRef env) cropCatalog
+      handleWorldDesignatePlantCommand env logger fixturePage
+          (fst plantTile) (snd plantTile) "probe_crop"
+      handleWorldDesignateConstructCommand env logger fixturePage
+          (fst plantTile) (snd plantTile) (fst plantTile) (snd plantTile)
+          wirePiece Nothing
+      HM.keys <$> readIORef (wsConstructDesignationsRef ws)
+          `shouldReturn` [plantTile]
+      handleWorldAddConstructProgressCommand env logger fixturePage
+          (fst plantTile) (snd plantTile) 0.5
+      HM.keys <$> readIORef (wsPlantDesignationsRef ws) `shouldReturn` []
 
     it "keeps — and does not draw — a designation whose chunk is gone" $
         \env → do
