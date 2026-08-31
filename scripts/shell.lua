@@ -41,6 +41,16 @@ local inputBuffer = ""
 -- rebuildHistoryDisplay. Cleared by the `clear` command. NOT
 -- persisted — fresh on each session.
 local history = {}
+-- #1956: cap on the RETAINED scrollback. rebuildHistoryDisplay renders
+-- newest-first and stops at the viewport, and no control exposes anything
+-- older, so entries past the cap are unreachable memory that every
+-- measurement and completion scan still walks. 1000 mirrors the
+-- historyMaxLines bound the navigation history already carries -- but
+-- deliberately as a SEPARATE constant, because the two lists are bounded
+-- for different reasons and either may move without the other. One consequence
+-- is intended: shell.getCompletions sources past commands from this list,
+-- so an evicted entry also stops being a completion candidate.
+local scrollbackMaxEntries = 1000
 local historyTextObjects = {}
 local lineHeight = 40
 local historyPadding = 10
@@ -681,6 +691,11 @@ function shell.addHistory(command, result, isError)
         result = result,
         isError = isError
     })
+    -- #1956: drop from the OLD end, so the entry just appended -- the one
+    -- the user is about to read -- is always the one that survives.
+    while #history > scrollbackMaxEntries do
+        table.remove(history, 1)
+    end
     if shellvisible then
         shell.rebuildBox()
         shell.rebuildHistoryDisplay()
@@ -827,19 +842,28 @@ function shell.calculateBoxHeight()
         return baseHeight
     end
     
-    local maxTextWidth = shell.getHistoryTextWidth()
-    local historyLines = 0
-    for _, entry in ipairs(history) do
-        historyLines = historyLines + shell.countLinesForEntry(entry, maxTextWidth, shellFont)
-    end
-    
-    local historyHeight = historyLines * lineHeight
-    local neededHeight = baseHeight + historyHeight
-    
     local _, fbHeight = engine.getFramebufferSize()
     local maxHeight = fbHeight - marginTop - marginBottom
-    
-    return math.min(neededHeight, maxHeight)
+
+    -- #1956: walk NEWEST-first -- the order rebuildHistoryDisplay renders
+    -- in -- and stop the moment the running total has reached the height
+    -- this is clamped to anyway. Measuring one entry costs one
+    -- engine.getTextWidth call per code point, so summing the whole
+    -- retained history put every keystroke's cost in proportion to the
+    -- session's total output. The answer is unchanged either way: a
+    -- history that fits is still summed in full, and one that overflows
+    -- still returns maxHeight, whichever entries carried it there.
+    local maxTextWidth = shell.getHistoryTextWidth()
+    local historyLines = 0
+    for i = #history, 1, -1 do
+        historyLines = historyLines
+            + shell.countLinesForEntry(history[i], maxTextWidth, shellFont)
+        if baseHeight + historyLines * lineHeight >= maxHeight then
+            return maxHeight
+        end
+    end
+
+    return baseHeight + historyLines * lineHeight
 end
 
 -- Longest common prefix of the completion candidates, cut at a code-point
