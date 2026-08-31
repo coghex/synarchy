@@ -341,6 +341,16 @@ data WorldPageSave = WorldPageSave
         --   Like the other designation layers, restored straight into
         --   wsPlantDesignationsRef; markers re-render from the stored
         --   z. Appended for save v78.
+        --
+        --   #1858 adds the one qualification: the restore is still
+        --   verbatim, but tilled soil is a CONTINUOUS requirement, so a
+        --   restored record is RECONCILED against the terrain this load
+        --   reconstructs ('World.Plant.Validate', called from
+        --   "World.Load.Stage" and again as each chunk publishes). One
+        --   whose ground came back untilled is removed rather than
+        --   re-rendered over soil it can no longer be planted in; one
+        --   whose chunk is not resident yet is UNKNOWN, and is retained
+        --   until it can be resolved.
     , wpsContainerKnowledge ∷ !ContainerKnowledge
         -- ^ The player's remembered view of each container's contents
         --   on this page (#1087, epic #1013): last-known items + their

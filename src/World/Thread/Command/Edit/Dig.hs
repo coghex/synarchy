@@ -40,6 +40,7 @@ import World.Spoil.Types (SpoilPile(..), spoilCapacity, depositSpoil
                          , debitPromotedTile, tileCornerVertices)
 import World.Thread.Command.Edit.Terrain (handleWorldDeleteTileCommand)
 import World.Thread.Command.Edit.Sync (syncEditToSim)
+import World.Plant.Validate (revalidatePlantDesignations)
 
 -- | Apply dig progress to the designated tile at (gx, gy).
 --
@@ -327,6 +328,9 @@ promoteFullSpoilTiles env unitQ logger pageId ws startV = do
                         bumpQuadCacheGen ws
                         writeIORef (wsZoomQuadCacheRef ws) Nothing
                         writeIORef (wsBgQuadCacheRef ws)   Nothing
+                        -- #1858: the promotion raises the surface, so
+                        -- re-run the tilled-soil check.
+                        _ ← revalidatePlantDesignations logger ws
                         -- Anything standing on the tile rides up.
                         Q.writeQueue unitQ (UnitReGround pageId tx ty)
                         logDebug logger CatWorld $

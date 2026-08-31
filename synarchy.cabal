@@ -735,6 +735,7 @@ library
                      World.Chop.Types
                      World.Till.Types
                      World.Plant.Types
+                     World.Plant.Validate
                      World.Render.SpoilQuads
                      World.Render.BloodQuads
                      World.Blood.Teardown
@@ -1187,6 +1188,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.ActionOutcome
                    Test.Headless.World.ChunkQueueFrame
                    Test.Headless.World.DesignationSeam
+                   Test.Headless.World.CropPlant
                    Test.Headless.World.StructureStage
                    Test.Headless.World.StructurePaletteResidue
                    Test.Headless.Structure.ArtCatalog
