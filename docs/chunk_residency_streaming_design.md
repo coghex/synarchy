@@ -18,8 +18,8 @@ concrete precondition
 
 ## Processing status
 
-- [ ] EPIC. Bound detailed-world memory while preserving durable gameplay state
-- [ ] CRS-1. Centralize chunk demand and canonical chunk identity
+- [x] EPIC. Bound detailed-world memory while preserving durable gameplay state — [#1997]
+- [x] CRS-1. Centralize chunk demand and canonical chunk identity — [#2001]
 - [ ] CRS-2. Enforce bounded residency across every chunk-loading path
 - [ ] CRS-3. Add scoped chunk leases and an explicit pressure policy
 - [ ] CRS-4. Make active fluid simulation eviction- and save-safe

@@ -238,10 +238,10 @@ def site_cause(anchor_1x1, anchor_2x3, seed_hex: str,
 def basis_cause(origin, unit_x, unit_y) -> str | None:
     """Whether goToTile still spans two independent tile axes.
 
-    The glacier fence (Engine.Loop.Camera.applyGotoLimits) clamps ONE
-    screen axis, and on a world too small to hold the teleport buffer it
-    pins that axis to the centre for every target — which would collapse
-    this basis and make the landing check below pass vacuously.
+    The glacier fence (Engine.Loop.Camera.applyLimits) clamps ONE screen
+    axis, so a fixture world whose interior is too small for the two
+    candidate offsets would collapse this basis and make the landing
+    check below pass vacuously.
     """
     cross = ((unit_x[0] - origin[0]) * (unit_y[1] - origin[1])
              - (unit_x[1] - origin[1]) * (unit_y[0] - origin[0]))
@@ -249,8 +249,8 @@ def basis_cause(origin, unit_x, unit_y) -> str | None:
         return None
     return (f"camera.goToTile does not span two independent tile axes on this "
             f"world (origin={origin}, +1 gx={unit_x}, +1 gy={unit_y}): the "
-            f"glacier fence (#297/#298) is clamping every teleport, so no "
-            f"anchor can be framed at the tile it was designated on.")
+            f"glacier fence is clamping every teleport, so no anchor can be "
+            f"framed at the tile it was designated on.")
 
 
 def unclamped_landing_cause(label: str, ax: int, ay: int,
@@ -260,9 +260,9 @@ def unclamped_landing_cause(label: str, ax: int, ay: int,
     gridToWorld is affine in (gx, gy), so three measured teleports —
     (0,0), (1,0), (0,1) — reconstruct where an UNCLAMPED teleport to any
     tile would land, without this probe restating the engine's own tile
-    metrics. A landing that differs is the #297/#298 glacier clamp
-    pulling the camera somewhere else, which would frame the wrong spot
-    (#1587 requirement 3).
+    metrics. A landing that differs is the glacier clamp pulling the
+    camera somewhere else, which would frame the wrong spot (#1587
+    requirement 3).
     """
     if landed is None:
         return (f"camera.getPosition() did not report where the {label} anchor "

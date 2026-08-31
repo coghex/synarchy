@@ -281,6 +281,7 @@ library
                      Engine.Scripting.Lua.Util
                      Engine.Scripting.Lua.API
                      Engine.Scripting.Lua.API.Internal
+                     Engine.Scripting.Lua.API.Namespaces
                      Engine.Scripting.Lua.API.PageBinding
                      Engine.Scripting.Lua.API.Register.Debug
                      Engine.Scripting.Lua.API.Register.Engine
@@ -1221,6 +1222,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Graphics.WindowMode
                    Test.Headless.Graphics.AmbientLight
                    Test.Headless.Graphics.Screenshot
+                   Test.Headless.Graphics.SwapchainSelection
                    Test.Headless.Graphics.UniformLayout
                    Test.Headless.Graphics.VertexLayout
                    Test.Headless.Graphics.FontFallback
@@ -1314,6 +1316,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Core.ShutdownAtlasRelease
                    Test.Headless.Core.WorkerLifecycle
                    Test.Headless.Camera.GotoClamp
+                   Test.Headless.Camera.GotoLoad
                    Test.Headless.Camera.ZoomScroll
                    Test.Headless.Scene.BatchMerge
                    Test.Headless.Render.PanMargin
@@ -1379,6 +1382,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.ShellInput
                    Test.Headless.Lua.RandomStream
                    Test.Headless.Lua.ConsoleTableKeys
+                   Test.Headless.Lua.LogSource
                    Test.Headless.Lua.InjuryNarration
                    Test.Headless.Graphics.BindlessRebind
                    Test.Headless.Graphics.BindlessRelease

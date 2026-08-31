@@ -847,7 +847,7 @@ end
 -- `a🙂x` and `a🙃y` share three of the emoji's four bytes -- so the raw
 -- byte-wise agreement point is snapped back to the last whole character
 -- before it becomes ghost text, a Tab insertion, or a measured string.
--- The candidates come from _G/sandbox key names and past commands, so
+-- The candidates come from sandbox key names and past commands, so
 -- snapping (which never raises) is used rather than utf8_safe's asserting
 -- code-point walk.
 function shell.longestCommonPrefix(strings)
@@ -908,10 +908,18 @@ function shell.countLinesForEntry(entry, maxWidth, font)
     return lines
 end
 
--- More general table member completion
+-- Member completion for a `table.` prefix.
+--
+-- #1958: the member set comes from shellSandbox's own copy of the table
+-- and from nowhere else. setupShellSandbox shallow-copies each engine API
+-- table before scripts/init.lua runs, so _G.engine and
+-- shellSandbox.engine are DISTINCT tables whose contents can diverge --
+-- resolving _G first (as this did) could offer a member the console's
+-- `_ENV` does not have. shellSandbox is also what the console assigns
+-- into, so a member added from the console completes here too.
 function shell.getTableCompletions(tableName, memberPrefix)
     local results = {}
-    local tbl = _G[tableName] or (shellSandbox and shellSandbox[tableName])
+    local tbl = shellSandbox and shellSandbox[tableName]
     if type(tbl) == "table" then
         for name, _ in pairs(tbl) do
             if type(name) == "string" and name:sub(1, #memberPrefix) == memberPrefix then
@@ -952,17 +960,13 @@ function shell.getCompletions(prefix)
             end
         end
         
-        -- Globals
-        for name, _ in pairs(_G) do
-            if type(name) == "string" and name:sub(1, #prefix) == prefix then
-                if not shell._completionSeen[name] then
-                    shell._completionSeen[name] = true
-                    table.insert(shell._completionResults, name)
-                end
-            end
-        end
-        
-        -- Sandbox globals
+        -- Names visible to the console at execution time. This is
+        -- shellSandbox and NOT _G (#1958): engine.shellExecute installs
+        -- shellSandbox as the chunk's `_ENV`, so a _G-only name -- `io`,
+        -- `require`, or any of the sixteen engine API tables the sandbox
+        -- used to omit -- is a suggestion that cannot run. It is also the
+        -- table console assignments land in, so a name defined from the
+        -- console is completable even though _G never sees it.
         if shellSandbox then
             for name, _ in pairs(shellSandbox) do
                 if type(name) == "string" and name:sub(1, #prefix) == prefix then

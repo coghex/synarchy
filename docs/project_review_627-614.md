@@ -8,12 +8,12 @@ The `World.Slope`, `Unit.Thread.Movement`, `unit_ai`, `Unit.Thread.Command`, `En
 
 ## Status
 
-- [ ] PRR-1. High-agility wildlife mostly bypasses the exhaustion slowdown while meandering
-- [ ] PRR-2. The profiling recipe still points at pre-split `Main.hs` locations
+- [x] PRR-1. High-agility wildlife mostly bypasses the exhaustion slowdown while meandering — [#1948]
+- [x] PRR-2. The profiling recipe still points at pre-split `Main.hs` locations — [#1950]
 
 ## 1. Exhaustion and the ambient meander gait
 
-### PRR-1. High-agility wildlife mostly bypasses the exhaustion slowdown while meandering
+### [#1948] PRR-1. High-agility wildlife mostly bypasses the exhaustion slowdown while meandering
 
 > **Captured note:** Make the near-empty exhaustion penalty observably affect ambient wildlife movement as well as sprint and goal-directed gaits. A red squirrel that has accumulated physical fatigue should not continue its ordinary aimless movement at almost its fully rested speed merely because `meander`'s raw `max_speed` cap wins.
 
@@ -39,7 +39,7 @@ The `World.Slope`, `Unit.Thread.Movement`, `unit_ai`, `Unit.Thread.Command`, `En
 
 ## 2. Profiling-recipe ownership references
 
-### PRR-2. The profiling recipe still points at pre-split `Main.hs` locations
+### [#1950] PRR-2. The profiling recipe still points at pre-split `Main.hs` locations
 
 > **Captured note:** Update the worldgen profiling recipe's dump-watchdog references after the application boot split. Readers following the current profiling instructions should land on the actual `runDump` and `waitForInit` implementation rather than obsolete `Main.hs` line numbers.
 
