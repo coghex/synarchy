@@ -3,18 +3,17 @@ flora:
   # (#331) calls for, both riding the #332 growth runtime like wild
   # flora. density: 0.0 on BOTH species: farmed crops shouldn't sprout
   # in the wild before farming's planting flow (#335/#336) exists to
-  # put them there deliberately. Placeholder art — both reuse an
-  # existing wild-species texture set pending dedicated crop art (same
-  # convention as tools/flora_growth_probe.py's probe_berry fixture).
+  # put them there deliberately. Tomato owns dedicated crop art;
+  # wheat still reuses white clover pending its separate art and
+  # wild-versus-cultivated presentation work.
 
   # Row crop: a discrete FloraInstance laid at intervals within the
   # tile (World.Flora.Placement's "row_crop" category — see
   # rowOffset), same placement/growth/render pipeline as any wild
-  # flora. Fruiting-gated harvest window (like red_raspberry, whose
-  # texture set this reuses).
+  # flora. Fruiting-gated harvest window, like red_raspberry.
   - name: tomato_plant
     type: row_crop
-    texDir: "assets/textures/flora/red_raspberry"
+    texDir: "assets/textures/flora/tomato_plant"
     lifecycle: annual
     phases:
       - tag: sprout

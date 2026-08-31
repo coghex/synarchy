@@ -22,9 +22,10 @@ import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (IORef, readIORef, atomicModifyIORef')
+import Engine.Core.ReadOnlyRef (readReadOnlyRef)
 import Engine.Core.State (EngineEnv, freshItemInstanceId, loggerRef)
-import Engine.Core.Capability.ContentRegistries
-    (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Engine.Core.Capability.ContentRegistriesView
+    (ContentRegistriesViewCapability(..), toContentRegistriesViewCapability)
 import Engine.Core.Log (logDebug, logInfo, logWarn, LogCategory(..), LoggerState)
 import Unit.Types
 import Unit.Faction (Faction(..))
@@ -114,17 +115,18 @@ handleUnitSpawnCommand env utsRef uid defName gx gy gz faction pageId = do
             -- and build an ItemInstance. Unknown names are dropped
             -- with a warning (load-order issue: items loaded after
             -- units that reference them). Both catalogues are reached
-            -- through the `content-registries` capability (#890); the
-            -- unit state they materialize into is still broad EngineEnv.
-            let regs = toContentRegistriesCapability env
-            itemMgr ← readIORef (crItemManagerRef regs)
+            -- through the `content-registries` READER view (#890,
+            -- narrowed to read-only handles by #1896); the unit state
+            -- they materialize into is still broad EngineEnv.
+            let regs = toContentRegistriesViewCapability env
+            itemMgr ← readReadOnlyRef (crvItemManagerRef regs)
             logger  ← readIORef (loggerRef env)
             taggedInventory ← buildStartingInventory env logger itemMgr
                                   (udStartingInventory def)
             -- Pre-equipped items declared by the unit def's
             -- starting_equipment. Resolved against the EquipmentClass
             -- so each item's kind can be validated against the slot.
-            ecMgr ← readIORef (crEquipmentClassManagerRef regs)
+            ecMgr ← readReadOnlyRef (crvEquipmentClassManagerRef regs)
             let mClass = udEquipmentClass def ⌦ (`lookupEquipmentClass` ecMgr)
             initialEquipment ← buildStartingEquipment env logger itemMgr mClass
                                   (udStartingEquipment def)

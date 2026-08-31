@@ -24,9 +24,12 @@ import qualified Data.List as L
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Data.IORef (readIORef)
-import Engine.Core.State (EngineEnv, itemManagerRef)
+import Engine.Core.State (EngineEnv)
+import Engine.Core.Capability.ContentRegistriesView
+  (ContentRegistriesViewCapability(..), toContentRegistriesViewCapability)
 import Engine.Core.Capability.RenderView
   (RenderViewCapability(..), toRenderViewCapability)
+import Engine.Core.ReadOnlyRef (readReadOnlyRef)
 import Engine.Asset.TextureNameRegistry (lookupTextureName)
 import Engine.Asset.Handle (TextureHandle(..), toInt)
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing)
@@ -169,7 +172,8 @@ renderGroundItemQuads env worldState tileAlpha = do
         let rv = toRenderViewCapability env
         camera   ← readIORef (rvCameraRef rv)
         tileData ← readIORef (wsTilesRef worldState)
-        im       ← readIORef (itemManagerRef env)
+        im       ← readReadOnlyRef
+            (crvItemManagerRef (toContentRegistriesViewCapability env))
         texSizes ← readIORef (rvTextureSizeRef rv)
         paramsM  ← readIORef (wsGenParamsRef worldState)
         cs       ← readIORef (wsCursorRef worldState)
@@ -307,7 +311,8 @@ hitTestGroundItemAt env worldState pixX pixY = do
       else do
         camera   ← readIORef (rvCameraRef (toRenderViewCapability env))
         tileData ← readIORef (wsTilesRef worldState)
-        im       ← readIORef (itemManagerRef env)
+        im       ← readReadOnlyRef
+            (crvItemManagerRef (toContentRegistriesViewCapability env))
         texSizes ← readIORef (rvTextureSizeRef (toRenderViewCapability env))
         paramsM  ← readIORef (wsGenParamsRef worldState)
         (fbW, fbH) ← readIORef (rvFramebufferSizeRef (toRenderViewCapability env))

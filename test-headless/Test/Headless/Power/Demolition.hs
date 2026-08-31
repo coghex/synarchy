@@ -43,7 +43,8 @@ import Building.Types
     , emptyBuildingManager )
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Core.Capability.Building (toBuildingCapability)
-import Engine.Core.Capability.ContentRegistries (toContentRegistriesCapability)
+import Engine.Core.Capability.ContentRegistriesView
+    (toContentRegistriesViewCapability)
 import Engine.Core.Capability.WorldSim (toWorldSimCapability)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Thread (ThreadControl(..))
@@ -261,7 +262,7 @@ drainBuildings ∷ EngineEnv → IO ()
 drainBuildings env = processAllBuildingCommands
     (loggerRef env)
     (toWorldSimCapability env)
-    (toContentRegistriesCapability env)
+    (toContentRegistriesViewCapability env)
     (toBuildingCapability env)
 
 -- * Live-state readers

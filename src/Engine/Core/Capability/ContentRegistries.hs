@@ -10,14 +10,54 @@
 --   authoritative statement, not restated here); this record's own
 --   field prefix is @cr@.
 --
---   Unlike a read-only view, this record carries the registries'
---   __write__ path too: the @engine.load*Yaml@ \/ @item.loadYaml@ \/
---   @equipment.loadYaml@ populators go through the same handles the
---   readers do. Those verbs stay publicly callable at any time and keep
---   their existing insert\/replace semantics (see
---   "Engine.Scripting.Lua.API.Register.Engine") — SS5's
---   "populated once at boot" is the normal startup pattern, not an
---   enforced one-shot invariant, so nothing here freezes a registry.
+--   __This is the raw WRITER interface, and since #1896 it is no longer
+--   the only one.__ This record carries the registries' __write__ path:
+--   the @engine.load*Yaml@ \/ @item.loadYaml@ \/ @equipment.loadYaml@
+--   populators mutate through the same handles they read. Those verbs
+--   stay publicly callable at any time and keep their existing
+--   insert\/replace semantics (see
+--   "Engine.Scripting.Lua.API.Register.Engine") — SS5's "populated once
+--   at boot" is the normal startup pattern, not an enforced one-shot
+--   invariant, so nothing here freezes a registry.
+--
+--   For FOUR of the eight registries — items, equipment classes,
+--   substances and recipes — that write authority is now narrowed to
+--   the module that legitimately holds it, and every other
+--   capability-narrowed consumer takes
+--   "Engine.Core.Capability.ContentRegistriesView" instead, where those
+--   four arrive as 'Engine.Core.ReadOnlyRef.ReadOnlyRef's (issue #1896,
+--   CMA-2 of epic #1890). So the earlier blanket claim that every
+--   reader AND writer in this group reaches these fields through THIS
+--   record no longer holds: it is true of the other four registries
+--   (infection, locations, loot tables, tutorials — outside the pilot),
+--   and of the four selected registries' writers alone.
+--
+--   __The SS6.1 permanent cohort is outside this boundary (D-4), and
+--   still reaches the raw handles directly.__ 'Engine.Core.Init'
+--   allocates them, and 'Engine.Scripting.Lua.API.Save' reads the item
+--   and recipe registries straight off 'EngineEnv'. Neither is a
+--   counterexample to the sentence above: they hold whole-session
+--   orchestration authority by job description, and this arc does not
+--   constrain them. Every NON-permanent reader does take the view —
+--   including 'World.Render.GroundItemQuads', which reached
+--   'itemManagerRef' through the raw accessor rather than a capability
+--   record and so fell outside #1896's accessor census while being
+--   exactly the kind of consumer it governs.
+--
+--   The modules that keep this record for a SELECTED field are exactly
+--   its four raw writers: 'Engine.Scripting.Lua.API.Items.Defs'
+--   (@item.loadYaml@, writing through its @registerItemDefs@ helper),
+--   'Engine.Scripting.Lua.API.Equipment.Class'
+--   (@equipment.loadYaml@), 'Engine.Scripting.Lua.API.Craft.Recipe'
+--   (@engine.loadRecipeYaml@) and
+--   'Engine.Scripting.Lua.API.Substance' (@substance.loadYaml@). They
+--   obtain it the way they always have — through this projection, wired
+--   at their @Engine.Scripting.Lua.API.Register.*@ call sites — never
+--   through a fresh raw 'EngineEnv' accessor import.
+--
+--   Both records project independently and totally from 'EngineEnv' and
+--   alias the SAME live containers, so a populator's write is visible
+--   through every reader's wrapped handle the instant it lands.
 --
 --   Like "Engine.Core.Capability.Core", this module imports only the
 --   narrow slice of @Engine.Core.State@ it needs (the bare 'EngineEnv'

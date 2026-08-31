@@ -23,6 +23,7 @@ import qualified Data.Serialize as S
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import Data.IORef (IORef, newIORef, readIORef, writeIORef, modifyIORef')
+import Engine.Core.ReadOnlyRef (toReadOnlyRef)
 import Building.Knowledge
 import Building.Knowledge.Live
 import Building.Types
@@ -242,7 +243,7 @@ newScene = do
     pure Scene
         { scObserver = ContainerObserver
             { coBuildings = buildingsRef, coWorlds = worldsRef
-            , coItems = itemsRef, coGameTime = timeRef }
+            , coItems = toReadOnlyRef itemsRef, coGameTime = timeRef }
         , scUnits = unitsRef
         , scBuildings = buildingsRef
         , scPageA = wsA, scPageB = wsB, scTime = timeRef

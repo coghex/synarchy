@@ -82,12 +82,13 @@ import Engine.Core.Capability.WorldSim
 import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (readIORef, atomicModifyIORef')
+import Engine.Core.ReadOnlyRef (readReadOnlyRef)
 import Data.List (maximumBy)
 import qualified System.Random as Random
 import Combat.Types (AttackMode(..), attackModeText)
 import Engine.Core.State (EngineEnv, loggerRef)
-import Engine.Core.Capability.ContentRegistries
-    (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Engine.Core.Capability.ContentRegistriesView
+    (ContentRegistriesViewCapability(..), toContentRegistriesViewCapability)
 import Engine.Core.Log (logDebug, LogCategory(..), LoggerState)
 import Item.Types (ItemDef(..), ItemWeapon(..), ItemInstance(..)
                   , ItemManager(..), lookupItemDef)
@@ -122,12 +123,13 @@ resolveAttack env atkRaw tgtRaw mode reachBonus lungeSpeed = do
     logger ← readIORef (loggerRef env)
     um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
     -- Weapon/armor item defs + their worked-material properties are
-    -- reached through the `content-registries` capability (#890), not
-    -- the broader EngineEnv this module still carries for unit/combat
-    -- state (SS7.5 narrows the rest).
-    let regs = toContentRegistriesCapability env
-    im ← readIORef (crItemManagerRef regs)
-    sm ← readIORef (crSubstanceManagerRef regs)
+    -- reached through the `content-registries` READER view (#890,
+    -- narrowed to read-only handles by #1896), not the broader
+    -- EngineEnv this module still carries for unit/combat state (SS7.5
+    -- narrows the rest).
+    let regs = toContentRegistriesViewCapability env
+    im ← readReadOnlyRef (crvItemManagerRef regs)
+    sm ← readReadOnlyRef (crvSubstanceManagerRef regs)
     gt ← readIORef (wsGameTimeRef (toWorldSimCapability env))
     let atkId = UnitId atkRaw
         tgtId = UnitId tgtRaw

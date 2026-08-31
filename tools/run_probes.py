@@ -350,7 +350,7 @@ PROBES = [
      "GPU offscreen visual check: one stamped room captured at all four "
      "camera facings — rotated wall art, terrain interleave, billboard lift (#1712)"),
     ("text_encoding", "text_encoding_probe.py",
-     "TE.decodeUtf8Lenient sweep across Engine.Scripting.Lua: malformed UTF-8 through engine.setText (#618) and the representative non-Text-API world.show boundary (#665) no longer errors, and the Text-API case round-trips through engine.getText"),
+     "TE.decodeUtf8Lenient sweep across Engine.Scripting.Lua: malformed UTF-8 through engine.setText (#618) and the representative non-Text-API world.show boundary (#665) no longer errors, and a setText naming no scene node caches nothing for engine.getText to read back (#1961)"),
     ("thermo_altitude", "thermo_altitude_probe.py",
      "altitude-lapse thermal effect (#308)"),
     ("thought", "thought_probe.py",

@@ -107,6 +107,7 @@ import qualified Test.Headless.Input.Inject as InputInject
 import qualified Test.Headless.Input.Followup as InputFollowup
 import qualified Test.Headless.Input.InjectOwnership as InputInjectOwnership
 import qualified Test.Headless.Lua.DebugQueue as LuaDebugQueue
+import qualified Test.Headless.Lua.SceneText as LuaSceneText
 import qualified Test.Headless.Lua.RenderQueue as LuaRenderQueue
 import qualified Test.Headless.Lua.PreviewGeneration as LuaPreviewGeneration
 import qualified Test.Headless.Lua.PauseGate as LuaPauseGate
@@ -182,6 +183,7 @@ import qualified Test.Headless.Lua.WidthTruncation as LuaWidthTruncation
 import qualified Test.Headless.Lua.ShellInput as LuaShellInput
 import qualified Test.Headless.Lua.RandomStream as LuaRandomStream
 import qualified Test.Headless.Lua.ConsoleTableKeys as LuaConsoleTableKeys
+import qualified Test.Headless.Lua.LogSource as LuaLogSource
 import qualified Test.Headless.Lua.InjuryNarration as LuaInjuryNarration
 import qualified Test.Headless.UI.Slider as UISlider
 import qualified Test.Headless.UI.BarFillColor as UIBarFillColor
@@ -234,6 +236,7 @@ import qualified Test.Headless.App.ChunkRegion as AppChunkRegion
 import qualified Test.Headless.App.PreviewConfig as PreviewConfig
 import qualified Test.Headless.App.ResourceRoot as AppResourceRoot
 import qualified Test.Headless.Camera.GotoClamp as GotoClamp
+import qualified Test.Headless.Camera.GotoLoad as GotoLoad
 import qualified Test.Headless.Camera.ZoomScroll as ZoomScroll
 import qualified Test.Headless.Scene.BatchMerge as BatchMerge
 import qualified Test.Headless.Render.PanMargin as PanMargin
@@ -282,6 +285,7 @@ import qualified Test.Headless.Lua.WorkClaimCapacity as LuaWorkClaimCapacity
 import qualified Test.Headless.Lua.Faction as LuaFaction
 import qualified Test.Headless.Unit.Faction as UnitFaction
 import qualified Test.Headless.Capability.Building as CapabilityBuilding
+import qualified Test.Headless.Capability.ContentRegistriesView as CapabilityContentRegistriesView
 import qualified Test.Headless.Capability.Events as CapabilityEvents
 import qualified Test.Headless.Capability.Input as CapabilityInput
 import qualified Test.Headless.Capability.Render as CapabilityRender
@@ -329,6 +333,13 @@ main = hspec $ do
         -- at all, just the live EngineEnv's queues/refs to construct a
         -- real Lua backend and drive processLuaMsg directly.
         describe "Lua.DebugQueue" LuaDebugQueue.spec
+        -- Same technique as Lua.DebugQueue above (#1961): the scene
+        -- handlers are GPU-free, so the real luaToEngineQueue →
+        -- processLuaMessages → Message.Scene route runs headless
+        -- against the live env. The spec installs and restores its
+        -- own active scene rather than leaking one into this shared
+        -- environment.
+        describe "Lua.SceneText" LuaSceneText.spec
         -- Same technique as Lua.DebugQueue above: the live EngineEnv's
         -- queues/refs are only there to build a real Lua backend, whose
         -- console boundary is what #1955's key contract lives on.
@@ -354,6 +365,12 @@ main = hspec $ do
         -- checks against the already-booted env — no worldgen, no
         -- mutation, so it rides the shared engine above.
         describe "Capability.Building projections" CapabilityBuilding.spec
+        -- #1896 adds the one property a plain projection test cannot
+        -- carry: the `ReadOnlyRef` wrapper ALIASES its handle rather
+        -- than snapshotting it, so a write through the raw writer
+        -- record is observed through the read-only view.
+        describe "ReadOnlyRef and Capability.ContentRegistriesView projections"
+                 CapabilityContentRegistriesView.spec
         describe "Capability.Events projections" CapabilityEvents.spec
         describe "Capability.Input projections" CapabilityInput.spec
         describe "Capability.Render projections" CapabilityRender.spec
@@ -507,6 +524,11 @@ main = hspec $ do
     -- so it generates its own cheap private w8 page rather than sharing
     -- or disturbing the worldgen specs' engine/camera state.
     aroundAll withHeadlessEngine SelectChunk.sharedSpec
+    -- Own engine for the same reason: it shows a private w8 page and
+    -- teleports the camera, so the world worker generates against THAT
+    -- page's window. Sharing the worldgen engine would hand every other
+    -- spec a different active world and a moved camera.
+    aroundAll withHeadlessEngine GotoLoad.spec
     HarnessWorkerHealth.spec
     describe "Wrap Seam" WrapSeam.spec
     describe "Arena base seeding (#1718)" ArenaSeed.pureSpec
@@ -701,6 +723,7 @@ main = hspec $ do
     describe "Lua.TextTruncation" LuaTextTruncation.spec
     describe "Lua.WidthTruncation" LuaWidthTruncation.spec
     describe "Lua.ShellInput" LuaShellInput.spec
+    describe "Lua log source" LuaLogSource.spec
     describe "Lua random stream ownership" LuaRandomStream.spec
     describe "Lua injury narration" LuaInjuryNarration.spec
     UISlider.spec

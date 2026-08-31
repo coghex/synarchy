@@ -24,12 +24,13 @@ module World.Thread.ItemTemp
 import UPrelude
 import Engine.Core.Capability.Building
     (BuildingCapability(..), toBuildingCapability)
-import Engine.Core.Capability.ContentRegistries
-    (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Engine.Core.Capability.ContentRegistriesView
+    (ContentRegistriesViewCapability(..), toContentRegistriesViewCapability)
 import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (readIORef, atomicModifyIORef')
+import Engine.Core.ReadOnlyRef (readReadOnlyRef)
 import Engine.Core.State (EngineEnv)
 import Building.Types (BuildingInstance(..), BuildingManager(..))
 import Item.Ground (GroundItem(..), GroundItems(..))
@@ -48,7 +49,8 @@ tickItemTemperatures env pageId ws dtGame = do
     case mParams of
         Nothing → pure ()
         Just p → do
-            im ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
+            im ← readReadOnlyRef
+                (crvItemManagerRef (toContentRegistriesViewCapability env))
             let ambientAt ∷ Int → Int → Float
                 ambientAt = ambientTempAt (wgpSeed p) (wgpPlates p)
                                 (wgpClimateState p) (wgpWorldSize p)
