@@ -23,6 +23,7 @@ module World.Chunk.Admit
     , registerChunkDemand
     , claimChunkGeneration
     , admitResidentChunks
+    , reconcileResidentChunks
     , seedResidentChunks
     , releaseEvictedChunks
     , withTransientChunkClaim
@@ -33,9 +34,9 @@ import UPrelude
 import Control.Exception (finally)
 import Data.IORef (readIORef, atomicModifyIORef')
 import World.Chunk.Residency
-    ( ChunkKey, ChunkOwner, ChunkRequest, ClaimOutcome(..), RequestOutcome(..)
-    , admitChunk, chunkKeyFor, claimChunk, crKey, ckCoord, evictChunk
-    , mintChunkRequest, releaseChunk, requestChunk )
+    ( ChunkKey, ChunkOwner, ChunkRequest, ClaimKind(..), ClaimOutcome(..)
+    , RequestOutcome(..), admitChunk, chunkKeyFor, claimChunk, crKey, ckCoord
+    , evictChunk, mintChunkRequest, releaseChunk, requestChunk )
 import World.Chunk.Types (ChunkCoord(..))
 import World.Generate.Types (WorldGenParams(..))
 import World.Page.Types (WorldPageId(..))
@@ -55,13 +56,20 @@ claimedChunkCoord = ckCoord . crKey
 readChunkOwner ∷ WorldState → IO ChunkOwner
 readChunkOwner ws = readIORef (wsChunkResidencyRef ws)
 
--- | Register DURABLE demand for these coords, returning the ones whose
---   demand is NEW — in input order, one entry per physical chunk.
+-- | Register DURABLE demand for these coords, returning the ones the
+--   caller must SCHEDULE — in input order, one entry per physical chunk.
 --
 --   That return is what @world.loadChunksInRegion@ and the dump path's
---   @--region@ fill report and then append to the init queue: a coord
---   naming another spelling of a resident, requested or in-flight chunk
---   is already-known work, so it is neither counted nor queued.
+--   @--region@ fill report and then append to the init queue, and it is
+--   the caller's half of the owner's invariant: a key the owner holds as
+--   'World.Chunk.Residency.ChunkRequested' is on the init queue, because
+--   nothing scans the owner looking for unscheduled demand. So the
+--   append must follow this call with no other queue write in between,
+--   and must APPEND rather than replace.
+--
+--   A coord naming another spelling of a resident chunk, of an
+--   already-scheduled request, or of a generation that is going to admit
+--   its result is already-known work: neither counted nor queued.
 registerChunkDemand ∷ WorldState → WorldPageId → WorldGenParams
                     → [ChunkCoord] → IO [ChunkCoord]
 registerChunkDemand ws pid params coords =
@@ -75,18 +83,20 @@ registerChunkDemand ws pid params coords =
             (owner1, revNew) = foldl' step (owner0, []) coords
         in (owner1, reverse revNew)
 
--- | Claim the right to GENERATE these coords, returning one tagged
---   request per coord actually granted, in input order.
+-- | Claim the right to GENERATE these coords for KEEPS, returning one
+--   tagged request per coord actually granted, in input order.
 --
 --   A coord already in flight or already resident is refused and simply
---   absent from the result, so a caller generates exactly what it owns.
+--   absent from the result, so a caller generates exactly what it owns —
+--   and, because a refusal leaves the demand untouched, a caller that
+--   pulled the coord off a work list has to leave it there.
 claimChunkGeneration ∷ WorldState → WorldPageId → WorldGenParams
                      → [ChunkCoord] → IO [ChunkRequest]
 claimChunkGeneration ws pid params coords =
     atomicModifyIORef' (wsChunkResidencyRef ws) $ \owner0 →
         let step (owner, acc) coord =
                 let req = mintChunkRequest owner (pageChunkKey pid params coord)
-                    (owner', outcome) = claimChunk req owner
+                    (owner', outcome) = claimChunk DurableClaim req owner
                 in case outcome of
                     ClaimGranted → (owner', req : acc)
                     ClaimRefused → (owner', acc)
@@ -105,6 +115,28 @@ admitResidentChunks _  []   = pure ()
 admitResidentChunks ws reqs =
     atomicModifyIORef' (wsChunkResidencyRef ws) $ \owner0 →
         ( foldl' (\owner req → fst (admitChunk req owner)) owner0 reqs, () )
+
+-- | Record coords the page ALREADY holds as resident.
+--
+--   Not a new admission — the payloads are in
+--   'World.State.Types.wsTilesRef' already — but the reconciliation that
+--   keeps the owner from carrying a stale 'ChunkRequested' for a chunk
+--   that is in fact loaded. 'World.Thread.ChunkLoading.drainInitQueues'
+--   calls it for the half of its batch it finds already resident, which
+--   is what makes the owner self-healing: a request that raced an
+--   eviction (registered against the owner while the tile map still had
+--   the payload) is settled here rather than sitting requested for ever
+--   after its queue entry is dropped.
+reconcileResidentChunks ∷ WorldState → WorldPageId → WorldGenParams
+                        → [ChunkCoord] → IO ()
+reconcileResidentChunks _  _   _      []     = pure ()
+reconcileResidentChunks ws pid params coords =
+    atomicModifyIORef' (wsChunkResidencyRef ws) $ \owner0 →
+        ( foldl' (\owner c →
+              fst (admitChunk (mintChunkRequest owner (pageChunkKey pid params c))
+                              owner))
+                 owner0 coords
+        , () )
 
 -- | Claim and admit in one step, for a page SEED: the synchronously
 --   generated centre chunk of a fresh or restored world, and an arena's
@@ -148,14 +180,20 @@ releaseEvictedChunks ws pid params coords =
 --   Durable demand survives the round trip: a key nothing else wanted
 --   returns to absent, a key the init queue had already requested
 --   returns to requested, and a request that arrives WHILE the survey is
---   generating is retained rather than dropped. The body runs either
---   way — a refused claim (the chunk is resident, or the world thread is
---   already generating it) changes nothing about what the survey is
---   allowed to count.
+--   generating is retained rather than dropped — AND scheduled by the
+--   requester, because this claim is going to throw its chunk away
+--   rather than admit it. That is what the 'TransientClaim' below tells
+--   'World.Chunk.Residency.requestChunk'. The body runs either way — a
+--   refused claim (the chunk is resident, or the world thread is already
+--   generating it) changes nothing about what the survey is allowed to
+--   count.
 withTransientChunkClaim ∷ WorldState → WorldPageId → WorldGenParams
                         → ChunkCoord → IO α → IO α
 withTransientChunkClaim ws pid params coord body = do
-    granted ← claimChunkGeneration ws pid params [coord]
+    granted ← atomicModifyIORef' (wsChunkResidencyRef ws) $ \owner0 →
+        let req = mintChunkRequest owner0 (pageChunkKey pid params coord)
+            (owner1, outcome) = claimChunk TransientClaim req owner0
+        in (owner1, [req | outcome ≡ ClaimGranted])
     body `finally` release granted
   where
     release reqs = atomicModifyIORef' (wsChunkResidencyRef ws) $ \owner0 →

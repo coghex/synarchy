@@ -22,20 +22,23 @@ module Test.Headless.World.ChunkIdentity (spec) where
 import UPrelude
 import Test.Hspec
 import Control.Concurrent (threadDelay)
-import Data.IORef (readIORef, writeIORef)
+import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
+import qualified Data.HashSet as HS
 import Engine.Core.State (EngineEnv)
 import World.Chunk.Admit
     ( admitResidentChunks, claimChunkGeneration, claimedChunkCoord
-    , pageChunkKey, readChunkOwner, registerChunkDemand
-    , releaseEvictedChunks, seedResidentChunks, withTransientChunkClaim )
+    , pageChunkKey, readChunkOwner, reconcileResidentChunks
+    , registerChunkDemand, releaseEvictedChunks, seedResidentChunks
+    , withTransientChunkClaim )
 import World.Chunk.Residency
     ( AdmitOutcome(..), ChunkGeneration, ChunkOwner, ChunkState(..)
-    , ClaimOutcome(..)
+    , ClaimKind(..), ClaimOutcome(..)
     , RequestOutcome(..), admitChunk, canonicalChunkCoord, chunkKeyFor
     , chunkOwnerGeneration, chunkOwnerSize, chunkStateOf, ckCoord, ckPage
     , claimChunk, crGeneration, crKey, emptyChunkOwner, evictChunk
     , isCurrentGeneration, mintChunkRequest, newChunkGeneration
     , releaseChunk, requestChunk )
+import World.Chunk.Queue (enqueueChunkRequest)
 import World.Chunk.Types (ChunkCoord(..), wrapChunkCoordU)
 import World.Command.Types (WorldCommand(..))
 import World.Generate.Types
@@ -165,12 +168,12 @@ spec = describe "canonical chunk identity" $ do
         o1 `shouldBe` RequestRegistered
         chunkStateOf key owner1 `shouldBe` ChunkRequested
 
-        let (owner2, c1) = claimChunk req owner1
+        let (owner2, c1) = claimChunk DurableClaim req owner1
         c1 `shouldBe` ClaimGranted
         chunkStateOf key owner2 `shouldBe` ChunkInFlight
 
         -- Nobody generates a chunk twice.
-        snd (claimChunk req owner2) `shouldBe` ClaimRefused
+        snd (claimChunk DurableClaim req owner2) `shouldBe` ClaimRefused
 
         let (owner3, a1) = admitChunk req owner2
         a1 `shouldBe` AdmittedCurrent
@@ -367,3 +370,126 @@ spec = describe "canonical chunk identity" $ do
         chunkOwnerSize owner `shouldBe` 1
         stateOf params pageA canonCoord owner `shouldBe` ChunkResident
         registerChunkDemand ws pageA params [canonCoord] `shouldReturn` []
+
+    it "schedules a request that lands behind a transient claim" $ \_ → do
+        -- The loss this closes: the cursor's ore survey holds a
+        -- TRANSIENT claim, a world.loadChunksInRegion for the same chunk
+        -- arrives, and the owner absorbs it as "already pending". The
+        -- survey then throws its chunk away and releases the key to
+        -- requested — with nothing queued to generate it. Nothing scans
+        -- the owner for unscheduled demand, so the call reported 0,
+        -- world.waitForChunks reported completion, and the chunk never
+        -- became resident.
+        let params = sizedParams seamWorldSize
+        ws ← detachedPage params
+
+        queued ← withTransientChunkClaim ws pageA params aliasCoord $
+            enqueueChunkRequest pageA ws [canonCoord]
+        -- Counted as real work, and actually on the queue.
+        queued `shouldBe` 1
+        readIORef (wsInitQueueRef ws) `shouldReturn` [canonCoord]
+
+        -- A SECOND request during the same claim is genuinely pending:
+        -- the first one already scheduled it.
+        secondDuring ← withTransientChunkClaim ws pageA params aliasCoord $
+            enqueueChunkRequest pageA ws [aliasCoord]
+        secondDuring `shouldBe` 0
+
+        -- Released to requested, still queued exactly once — which is
+        -- the owner's invariant: a requested key is on the init queue.
+        owner ← readChunkOwner ws
+        stateOf params pageA aliasCoord owner `shouldBe` ChunkRequested
+        readIORef (wsInitQueueRef ws) `shouldReturn` [canonCoord]
+
+        -- A DURABLE claim absorbs a request instead, because it is going
+        -- to admit its result: queueing behind it would be duplicate
+        -- work, not lost work.
+        ws2 ← detachedPage params
+        _ ← claimChunkGeneration ws2 pageA params [aliasCoord]
+        enqueueChunkRequest pageA ws2 [canonCoord] `shouldReturn` 0
+        readIORef (wsInitQueueRef ws2) `shouldReturn` []
+
+    it "keeps a request that arrives against an already-queued page" $ \_ → do
+        -- The loss this closes: world init and saved-page restore used
+        -- to WRITE their initial box over the queue. A page is
+        -- registered before its initial box is queued, so a
+        -- loadChunksInRegion accepted in that window was registered on
+        -- the owner and then had its queue entries thrown away — leaving
+        -- coords requested for ever and every later request for them
+        -- deduplicated away. The producers append now, so the two sets
+        -- coexist.
+        let params = sizedParams seamWorldSize
+            outside = [ChunkCoord 7 7, ChunkCoord 8 8]
+        ws ← detachedPage params
+        enqueueChunkRequest pageA ws outside `shouldReturn` 2
+
+        boxNeeded ← registerChunkDemand ws pageA params
+                        [ChunkCoord 1 1, ChunkCoord 7 7]
+        -- The already-requested coord is recognised, the new one is not.
+        boxNeeded `shouldBe` [ChunkCoord 1 1]
+        -- ...and the outstanding one is still requested, so it is still
+        -- owed a chunk. A wholesale write of boxNeeded would have left
+        -- it requested with nothing queued — the unrepairable state,
+        -- because every later request for it now deduplicates.
+        owner0 ← readChunkOwner ws
+        stateOf params pageA (ChunkCoord 8 8) owner0 `shouldBe` ChunkRequested
+        atomicModifyIORef' (wsInitQueueRef ws) $ \q → (q ⧺ boxNeeded, ())
+        readIORef (wsInitQueueRef ws)
+            `shouldReturn` (outside ⧺ [ChunkCoord 1 1])
+
+    it "never leaves a requested key off the page's work list" $ \_ → do
+        -- The invariant all three losses violated, stated directly:
+        -- every key the owner holds as requested is on the init queue.
+        let params = sizedParams seamWorldSize
+        ws ← detachedPage params
+        _ ← enqueueChunkRequest pageA ws [ChunkCoord 1 1, aliasCoord]
+        _ ← withTransientChunkClaim ws pageA params (ChunkCoord 2 2) $
+                enqueueChunkRequest pageA ws [ChunkCoord 2 2]
+        _ ← enqueueChunkRequest pageA ws [ChunkCoord 3 3, canonCoord]
+        owner ← readChunkOwner ws
+        queue ← readIORef (wsInitQueueRef ws)
+        let queuedKeys = HS.fromList (map (pageChunkKey pageA params) queue)
+            requested = [ k | k ← map (pageChunkKey pageA params) allTouched
+                            , chunkStateOf k owner ≡ ChunkRequested ]
+            allTouched = [ ChunkCoord 1 1, aliasCoord, canonCoord
+                         , ChunkCoord 2 2, ChunkCoord 3 3 ]
+        -- Non-vacuity: there really are requested keys to check.
+        requested `shouldNotBe` []
+        [ k | k ← requested, not (HS.member k queuedKeys) ] `shouldBe` []
+
+    it "leaves demand alone when a claim is refused" $ \_ → do
+        -- The init-queue drain pulls a batch off the queue and claims
+        -- it. A refusal means somebody else is generating that chunk, so
+        -- the demand is untouched — and the drain has to put the coord
+        -- back rather than drop it, or the owner keeps a request nothing
+        -- is scheduled to meet.
+        let params = sizedParams seamWorldSize
+        ws ← detachedPage params
+        _ ← enqueueChunkRequest pageA ws [aliasCoord]
+        first ← claimChunkGeneration ws pageA params [aliasCoord]
+        length first `shouldBe` 1
+
+        before ← readChunkOwner ws
+        claimChunkGeneration ws pageA params [canonCoord] `shouldReturn` []
+        after ← readChunkOwner ws
+        after `shouldBe` before
+        stateOf params pageA aliasCoord after `shouldBe` ChunkInFlight
+        readIORef (wsInitQueueRef ws) `shouldReturn` [aliasCoord]
+
+    it "settles a request the page turns out to already hold" $ \_ → do
+        -- The drain's reconciliation, and the reason the owner is
+        -- self-healing: a request registered against a key the page in
+        -- fact holds (it raced an eviction that then did not happen, or
+        -- landed while the tile map still had the payload) would sit
+        -- requested for ever once its queue entry is dropped.
+        let params = sizedParams seamWorldSize
+        ws ← detachedPage params
+        _ ← enqueueChunkRequest pageA ws [aliasCoord]
+        stale ← readChunkOwner ws
+        stateOf params pageA aliasCoord stale `shouldBe` ChunkRequested
+
+        reconcileResidentChunks ws pageA params [canonCoord]
+        settled ← readChunkOwner ws
+        stateOf params pageA aliasCoord settled `shouldBe` ChunkResident
+        chunkOwnerSize settled `shouldBe` 1
+        enqueueChunkRequest pageA ws [aliasCoord] `shouldReturn` 0

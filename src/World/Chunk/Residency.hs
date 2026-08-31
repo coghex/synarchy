@@ -56,6 +56,7 @@ module World.Chunk.Residency
       -- * Transitions
     , RequestOutcome(..)
     , requestChunk
+    , ClaimKind(..)
     , ClaimOutcome(..)
     , claimChunk
     , AdmitOutcome(..)
@@ -187,11 +188,23 @@ data ChunkState
 data DurableDemand = NoDurableDemand | HasDurableDemand
     deriving (Show, Eq)
 
+-- | Whether an in-flight claim is going to ADMIT its result.
+--
+--   The distinction decides what a request meeting that claim has to do.
+--   A 'DurableClaim' — the camera loader, the init-queue drain — ends in
+--   'admitChunk', so demand behind it is already going to be met and the
+--   caller has nothing to schedule. A 'TransientClaim' — the cursor's
+--   ore survey — ends in 'releaseChunk' and THROWS ITS CHUNK AWAY, so
+--   demand behind it still has to be scheduled or it would sit
+--   'ChunkRequested' for ever with nothing generating it.
+data ClaimKind = DurableClaim | TransientClaim
+    deriving (Show, Eq)
+
 -- | The owner's internal per-key entry. Absent is the absence of an
 --   entry, so an idle page's owner is genuinely empty.
 data ChunkEntry
     = EntryRequested
-    | EntryInFlight !DurableDemand
+    | EntryInFlight !ClaimKind !DurableDemand
     | EntryResident
     deriving (Show, Eq)
 
@@ -219,10 +232,10 @@ chunkOwnerSize = HM.size . coEntries
 -- | The four-valued residency of one key.
 chunkStateOf ∷ ChunkKey → ChunkOwner → ChunkState
 chunkStateOf key owner = case HM.lookup key (coEntries owner) of
-    Nothing                → ChunkAbsent
-    Just EntryRequested    → ChunkRequested
-    Just (EntryInFlight _) → ChunkInFlight
-    Just EntryResident     → ChunkResident
+    Nothing                  → ChunkAbsent
+    Just EntryRequested      → ChunkRequested
+    Just (EntryInFlight _ _) → ChunkInFlight
+    Just EntryResident       → ChunkResident
 
 -- | Tag a key with this owner's generation.
 mintChunkRequest ∷ ChunkOwner → ChunkKey → ChunkRequest
@@ -240,9 +253,20 @@ isCurrentGeneration ∷ ChunkRequest → ChunkOwner → Bool
 isCurrentGeneration req owner = crGeneration req ≡ coGeneration owner
 
 -- | What a 'requestChunk' found.
+--
+--   The distinction is a SCHEDULING one, not a bookkeeping one:
+--   'RequestRegistered' means the caller must now put this key on the
+--   page's work list, and the other two mean it must not. That is the
+--   owner's central invariant —
+--
+--     a key the owner holds as 'ChunkRequested' is on
+--     'World.State.Types.wsInitQueueRef'
+--
+--   — and every producer depends on it, because nothing scans the owner
+--   looking for unscheduled demand.
 data RequestOutcome
-    = RequestRegistered       -- ^ new demand; this key was absent
-    | RequestAlreadyPending   -- ^ already requested, or already in flight
+    = RequestRegistered       -- ^ new demand the caller must schedule
+    | RequestAlreadyPending   -- ^ demand already scheduled, or already being generated for keeps
     | RequestAlreadySatisfied -- ^ already resident
     deriving (Show, Eq)
 
@@ -254,16 +278,26 @@ data RequestOutcome
 --   work as already satisfied or already pending — whether the two
 --   requests came from the camera path, the init queue, or one of each.
 --
---   A request arriving while a TRANSIENT generation holds the key
---   upgrades that claim's demand instead of being dropped, so releasing
---   the transient claim leaves the durable request standing.
+--   The one case that is NOT simply \"already pending\" is a request
+--   meeting a 'TransientClaim'. That generation is thrown away
+--   ('releaseChunk'), so nothing is going to admit this chunk: the
+--   demand is recorded on the claim AND reported as
+--   'RequestRegistered', so the caller schedules it. Without that, the
+--   release would leave the key 'ChunkRequested' with nothing queued to
+--   generate it — @world.loadChunksInRegion@ reporting no work and
+--   @world.waitForChunks@ reporting completion for a chunk that never
+--   becomes resident. A SECOND request during the same transient claim
+--   is genuinely already pending, because the first one scheduled it.
 requestChunk ∷ ChunkKey → ChunkOwner → (ChunkOwner, RequestOutcome)
 requestChunk key owner = case HM.lookup key (coEntries owner) of
     Nothing → ( insertEntry key EntryRequested owner, RequestRegistered )
     Just EntryRequested → ( owner, RequestAlreadyPending )
-    Just (EntryInFlight _) →
-        ( insertEntry key (EntryInFlight HasDurableDemand) owner
-        , RequestAlreadyPending )
+    Just (EntryInFlight DurableClaim _) → ( owner, RequestAlreadyPending )
+    Just (EntryInFlight TransientClaim HasDurableDemand) →
+        ( owner, RequestAlreadyPending )
+    Just (EntryInFlight TransientClaim NoDurableDemand) →
+        ( insertEntry key (EntryInFlight TransientClaim HasDurableDemand) owner
+        , RequestRegistered )
     Just EntryResident → ( owner, RequestAlreadySatisfied )
 
 -- | What a 'claimChunk' found.
@@ -282,15 +316,24 @@ data ClaimOutcome
 --   'World.Thread.worldTick' runs today, which requirement 8 forbids.
 --
 --   Refused for a key already in flight (nobody generates a chunk twice)
---   and for a resident one (nothing to generate).
-claimChunk ∷ ChunkRequest → ChunkOwner → (ChunkOwner, ClaimOutcome)
-claimChunk req owner = case HM.lookup key (coEntries owner) of
+--   and for a resident one (nothing to generate). A REFUSED claim leaves
+--   the demand exactly as it was, so a caller that took the key off a
+--   work list on the strength of a claim must put it back — see
+--   'World.Thread.ChunkLoading.drainInitQueues'.
+--
+--   The 'ClaimKind' records whether this claim is going to admit its
+--   result, which is what a later 'requestChunk' meeting it needs to
+--   know.
+claimChunk ∷ ClaimKind → ChunkRequest → ChunkOwner → (ChunkOwner, ClaimOutcome)
+claimChunk kind req owner = case HM.lookup key (coEntries owner) of
     Nothing →
-        ( insertEntry key (EntryInFlight NoDurableDemand) owner, ClaimGranted )
+        ( insertEntry key (EntryInFlight kind NoDurableDemand) owner
+        , ClaimGranted )
     Just EntryRequested →
-        ( insertEntry key (EntryInFlight HasDurableDemand) owner, ClaimGranted )
-    Just (EntryInFlight _) → ( owner, ClaimRefused )
-    Just EntryResident     → ( owner, ClaimRefused )
+        ( insertEntry key (EntryInFlight kind HasDurableDemand) owner
+        , ClaimGranted )
+    Just (EntryInFlight _ _) → ( owner, ClaimRefused )
+    Just EntryResident       → ( owner, ClaimRefused )
   where key = crKey req
 
 -- | Whether an admission belonged to the page generation that is still
@@ -341,8 +384,8 @@ evictChunk key owner = case HM.lookup key (coEntries owner) of
 --   wanted returns the key to absent.
 releaseChunk ∷ ChunkRequest → ChunkOwner → ChunkOwner
 releaseChunk req owner = case HM.lookup key (coEntries owner) of
-    Just (EntryInFlight HasDurableDemand) → insertEntry key EntryRequested owner
-    Just (EntryInFlight NoDurableDemand)  →
+    Just (EntryInFlight _ HasDurableDemand) → insertEntry key EntryRequested owner
+    Just (EntryInFlight _ NoDurableDemand)  →
         owner { coEntries = HM.delete key (coEntries owner) }
     _ → owner
   where key = crKey req

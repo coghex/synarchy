@@ -440,11 +440,16 @@ stagePage logger registry palette catalog buildingDefs unitDefs
           let (remainingCoords, totalInitialChunks) =
                   initialChunkQueue (canonicalChunkCoord params) centerCoord
           when isActive $ writeIORef phaseRef (LoadPhase1 4 totalSteps)
-          -- Register the restored box as durable demand before queueing
-          -- it (#2001), exactly as fresh world init does.
-          _ ← registerChunkDemand worldState pid params remainingCoords
-          writeIORef (wsInitQueueRef worldState) remainingCoords
-          writeIORef phaseRef (LoadPhase2 (length remainingCoords) totalInitialChunks)
+          -- Register the restored box as durable demand, then append
+          -- exactly what still needs scheduling (#2001), exactly as
+          -- fresh world init does. This staged page is not published
+          -- until World.Load.Publish, so nothing can race the queue
+          -- here — the append is the same shape as init's so the two
+          -- cannot drift, not a defence this path needs.
+          needed ← registerChunkDemand worldState pid params remainingCoords
+          queuedNow ← atomicModifyIORef' (wsInitQueueRef worldState) $ \q →
+              let q' = q ⧺ needed in (q', length q')
+          writeIORef phaseRef (LoadPhase2 queuedNow totalInitialChunks)
 
           mCam ← if isActive
             then do

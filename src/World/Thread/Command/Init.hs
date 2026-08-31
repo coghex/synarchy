@@ -396,15 +396,27 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
 
     -- Step 7: Queue remaining chunks
     writeIORef phaseRef (LoadPhase1 7 totalSteps)
-    -- Register the initial box as durable demand before it is queued
-    -- (#2001), so a world.loadChunksInRegion naming any of those chunks
-    -- — or the other seam spelling of one — is recognised as work
-    -- already pending instead of queueing a second copy.
-    _ ← registerChunkDemand worldState pageId params remainingCoords
-    writeIORef (wsInitQueueRef worldState) remainingCoords
+    -- Register the initial box as durable demand, then APPEND exactly
+    -- what that call says still needs scheduling (#2001).
+    --
+    -- Appending rather than replacing is load-bearing. This page was
+    -- registered in wmWorlds near the top of this function so Lua could
+    -- watch the loading phase, and its generation params went in before
+    -- the expensive cache/preview work above — so a world.loadChunksInRegion
+    -- can be accepted, counted and registered on the owner during that
+    -- window. A wholesale write would drop its coords from the queue
+    -- while leaving them requested on the owner, which deduplicates
+    -- every later request for them: the region would be reported as
+    -- queued and then never load, unrepairably.
+    needed ← registerChunkDemand worldState pageId params remainingCoords
+    queuedNow ← atomicModifyIORef' (wsInitQueueRef worldState) $ \q →
+        let q' = q ⧺ needed in (q', length q')
     
-    -- Now switch to Phase 2 tracking
-    writeIORef phaseRef (LoadPhase2 (length remainingCoords) totalInitialChunks)
+    -- Now switch to Phase 2 tracking. The remaining count is the queue's
+    -- real length, which an accepted concurrent request makes larger than
+    -- this page's own box; drainInitQueues recomputes it every tick from
+    -- the same source, so the two never disagree.
+    writeIORef phaseRef (LoadPhase2 queuedNow totalInitialChunks)
     
     sendGenLog env "Calculating surface elevation..."
     let (surfaceElev, _mat) = elevationAtGlobal seed (wgpPlates params)
