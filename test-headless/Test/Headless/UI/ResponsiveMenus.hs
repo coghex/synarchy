@@ -1545,6 +1545,162 @@ spec = around withMenusEngine $ do
                     rcpAfterMinimize p `shouldBe` 0
                     rcpAfterRestore p `shouldSatisfy` (> 0)
 
+    -- #1959: the console sized itself from its scaled `middleWidth`
+    -- constant and never consulted the framebuffer width, so at 1x its
+    -- right edge landed at 40 + 64 + 1200 + 64 = 1368px and every band's
+    -- maximum scale multiplied that -- the box ran off the side of every
+    -- display the envelope above declares supported. The shell queried
+    -- engine.getFramebufferSize() in five places and used only fbHeight.
+    --
+    -- Everything here is a HORIZONTAL contract. Vertical fit stays out of
+    -- scope: calculateBoxHeight returns before its fbHeight clamp when the
+    -- history is empty, so an out-of-envelope combination can still place
+    -- the box off the top -- no case below asserts a y bound.
+    describe "the debug console fits the framebuffer width (#1959)" $ do
+        it "keeps the whole box in frame at every supported (width, height, scale) the envelope declares" $ \env → do
+            ls ← newBareLuaBackend env
+            -- Requirement 5: the combinations come FROM
+            -- scripts/ui/responsive.lua (its MIN_WIDTH and its band
+            -- table), never restated as literals here, so widening a band
+            -- or raising a maximum scale widens this gate with it.
+            envelope ← decodeProbe "envelope" =≪ evalJSON ls envelopeExpr
+            let widths = [epMinWidth envelope, 1366, 1920, 3840]
+                combos = [ (w, h, sc)
+                         | b  ← epBands envelope
+                         , w  ← widths
+                         , h  ← [brMinH b, brMaxH b]
+                         , sc ← [brMinScale b, brMaxScale b]
+                         ]
+            -- Non-vacuity: a band table that failed to decode into rows
+            -- would otherwise pass this example by asserting nothing.
+            length combos `shouldSatisfy` (≥ 16)
+            _ ← evalOk ls shellBootExpr
+            failures ← fmap concat $ mapM (checkFit env ls) combos
+            failures `shouldBe` []
+
+        it "keeps the preferred floor(1200 * scale) center wherever the box fits, and narrows only below that boundary" $ \env → do
+            ls ← newBareLuaBackend env
+            _ ← evalOk ls shellBootExpr
+            -- Requirement 4, as the issue review corrected it: the
+            -- preferred center is floor(1200 * uiscale), not a literal
+            -- 1200 device pixels. Two scales, so a fit rule that happened
+            -- to hold at 1x alone cannot pass.
+            forM_ [(720 ∷ Int, 1.0 ∷ Double), (1080, 2.0)] $ \(h, sc) → do
+                -- Far wider than any preferred center: nothing narrows.
+                setFramebuffer env (4096, h)
+                wide ← decodeProbe "wide" =≪ evalJSON ls (shellFitExpr 4096 h sc)
+                sbpReportedWidth wide `shouldBe` preferredCenter sc
+                sbpCenterWidth wide `shouldBe` preferredCenter sc
+                -- The rendered box's own right edge at that width IS the
+                -- boundary framebuffer width (marginLeft + 2 * tileSize +
+                -- preferredCenter) -- read off the sprites rather than
+                -- restated from the shell's private constants.
+                let boundary = round (sbpMaxX wide) ∷ Int
+                setFramebuffer env (boundary, h)
+                atFit ← decodeProbe "boundary" =≪ evalJSON ls (shellFitExpr boundary h sc)
+                sbpReportedWidth atFit `shouldBe` preferredCenter sc
+                sbpMaxX atFit `shouldBe` fromIntegral boundary
+                -- One pixel narrower, and the center gives up exactly one
+                -- pixel -- it never collapses to some other fallback.
+                setFramebuffer env (boundary - 1, h)
+                below ← decodeProbe "below boundary" =≪ evalJSON ls (shellFitExpr (boundary - 1) h sc)
+                sbpReportedWidth below `shouldBe` preferredCenter sc - 1
+                sbpCenterWidth below `shouldBe` preferredCenter sc - 1
+                sbpMaxX below `shouldBe` fromIntegral (boundary - 1)
+
+        it "degrades safely below the formal minimum: no crash, no non-positive sprite width or text budget" $ \env → do
+            ls ← newBareLuaBackend env
+            _ ← evalOk ls shellBootExpr
+            -- Requirement 3. evalJSON fails the example on any Lua error,
+            -- so reaching an assertion at all is the no-crash half.
+            --
+            -- (a) Below MIN_WIDTH, but still wide enough for the whole box.
+            setFramebuffer env (320, 600)
+            narrow ← decodeProbe "narrow" =≪ evalJSON ls (shellFitExpr 320 600 1.0)
+            sbpSupported narrow `shouldBe` False
+            sbpCount narrow `shouldBe` 9
+            forM_ (positiveWidths narrow) (`shouldSatisfy` (> 0))
+            -- (b) Degenerate: at 4x the two edge tiles alone are 512px, so
+            -- NO center width brings a 100px framebuffer's box in frame.
+            -- Best-effort here means positive geometry, not containment,
+            -- which is why this case asserts sizes and budgets only.
+            setFramebuffer env (100, 600)
+            tiny ← decodeProbe "tiny" =≪ evalJSON ls (shellFitExpr 100 600 4.0)
+            sbpSupported tiny `shouldBe` False
+            sbpCount tiny `shouldBe` 9
+            forM_ (positiveWidths tiny) (`shouldSatisfy` (> 0))
+
+        it "measures the input line, the ghost hint and history wrapping against the fitted width" $ \env → do
+            ls ← newBareLuaBackend env
+            -- Requirement 2. The bare backend's real engine.getTextWidth
+            -- measures 0 headless, so every width-driven rule would fire
+            -- vacuously; charge a fixed width per byte instead, which also
+            -- makes a rendered line's own length its width.
+            _ ← evalOk ls (fixedCharMetrics contentPx <> " return true")
+            setFramebuffer env (1024, 768)
+            _ ← evalOk ls shellBootExpr
+            p ← decodeProbe "content" =≪ evalJSON ls (shellContentExpr contentPx 1024 768 1.0)
+            -- The case is only meaningful where the preferred width does
+            -- NOT fit, so pin that first.
+            scpCenter p `shouldSatisfy` (< preferredCenter 1.0)
+            scpBoxRight p `shouldSatisfy` (≤ 1024)
+            -- Every budget lives inside the center the box was drawn at.
+            scpInputWidth p `shouldSatisfy` (≤ scpCenter p)
+            scpHistoryWidth p `shouldSatisfy` (≤ scpCenter p)
+            scpResultWidth p `shouldSatisfy` (≤ scpHistoryWidth p)
+            -- ...and the text really wrapped against them rather than
+            -- overrunning: multiple lines, none wider than its own budget
+            -- and none reaching past the box's right edge.
+            scpCmdLines p `shouldSatisfy` (> 1)
+            scpResLines p `shouldSatisfy` (> 1)
+            scpAllFit p `shouldBe` True
+            scpVisibleWidth p `shouldSatisfy` (≤ scpInputWidth p)
+            -- The completion hint trails the input inside the same box.
+            scpGhostSeen p `shouldBe` True
+            scpGhostFits p `shouldBe` True
+
+        it "preserves input, cursor, scroll, focus and history across a width rebuild while reflowing both" $ \env → do
+            ls ← newBareLuaBackend env
+            _ ← evalOk ls (fixedCharMetrics contentPx <> " return true")
+            setFramebuffer env (1920, 1080)
+            _ ← evalOk ls shellBootExpr
+            before ← decodeProbe "before" =≪ evalJSON ls (shellSeedExpr contentPx)
+            -- Non-vacuity: the seed really did scroll the input line and
+            -- render wrapped history at the wide size.
+            sspScroll before `shouldSatisfy` (> 0)
+            sspLineCount before `shouldSatisfy` (> 1)
+            sspHistoryJoined before `shouldSatisfy` (not ∘ T.null)
+            setFramebuffer env (1024, 768)
+            after ← decodeProbe "after" =≪ evalJSON ls (shellResizeExpr contentPx 1024 768)
+            -- Requirement 6: nothing the rebuild does not own may move.
+            sspInput after `shouldBe` sspInput before
+            sspCursor after `shouldBe` sspCursor before
+            sspScroll after `shouldBe` sspScroll before
+            sspFocus after `shouldBe` sspFocus before
+            sspFocus after `shouldBe` Just (sspShellFocusId after)
+            sspHistoryJoined after `shouldBe` sspHistoryJoined before
+            -- ...while both displays reflow to the narrower fitted width.
+            sspContentWidth after `shouldSatisfy` (< sspContentWidth before)
+            sspLineCount after `shouldSatisfy` (> sspLineCount before)
+            sspAllFit after `shouldBe` True
+            sspVisibleChars after `shouldSatisfy` (< sspVisibleChars before)
+            sspVisibleWidth after `shouldSatisfy` (≤ sspInputWidth after)
+            sspBoxRight after `shouldSatisfy` (≤ 1024)
+
+        it "leaves the rebuilt console on the pass-through debug layer" $ \env → do
+            ls ← newBareLuaBackend env
+            _ ← evalOk ls shellBootExpr
+            setFramebuffer env (1024, 768)
+            p ← decodeProbe "layer" =≪ evalJSON ls (shellFitExpr 1024 768 1.0)
+            -- Requirement 6's pass-through half, against the engine's own
+            -- paint key rather than the page name: LayerDebug's band is
+            -- 200000 (UI.Types.uiLayerBand), and a LayerDebug page defaults
+            -- non-exclusive, so a width rebuild must leave no modal
+            -- boundary behind (#742).
+            sbpMinPaintKey p `shouldSatisfy` (≥ 200000)
+            sbpInputBlocked p `shouldBe` False
+            sbpAllInScope p `shouldBe` True
+
     -- #1325: every case in the block ABOVE requires scripts.shell
     -- before booting settings, which populates package.loaded first and
     -- makes both sides share one instance — the REVERSE of production,
@@ -2490,6 +2646,360 @@ instance FromJSON LoadingAbsentProbe where
     parseJSON = withObject "LoadingAbsentProbe" $ \o → LoadingAbsentProbe
         <$> o .: "hasName" <*> o .: "hasGloss" <*> o .: "anyElement"
         <*> o .:? "status"
+
+-- * #1959: debug-console horizontal fit
+
+-- | scripts/ui/responsive.lua's own band table, read out of the module
+--   instead of restated here — requirement 5's "derive the combinations
+--   from responsive.bands" is what keeps this gate in step with the
+--   envelope it is testing.
+data BandRow = BandRow
+    { brMinH ∷ Int, brMaxH ∷ Int, brMinScale ∷ Double, brMaxScale ∷ Double }
+    deriving Show
+instance FromJSON BandRow where
+    parseJSON = withObject "BandRow" $ \o → BandRow
+        <$> o .: "minH" <*> o .: "maxH" <*> o .: "minScale" <*> o .: "maxScale"
+
+data EnvelopeProbe = EnvelopeProbe { epMinWidth ∷ Int, epBands ∷ [BandRow] }
+    deriving Show
+instance FromJSON EnvelopeProbe where
+    parseJSON = withObject "EnvelopeProbe" $ \o →
+        EnvelopeProbe <$> o .: "minWidth" <*> o .: "bands"
+
+-- | One observation of the RENDERED console: the nine @shell_*@ box
+--   sprites as the engine's own element tree reports them, beside the
+--   four widths the shell derives from the same framebuffer. Keeping both
+--   in one probe is what lets a case assert they agree.
+data ShellBoxProbe = ShellBoxProbe
+    { sbpSupported ∷ Bool
+    , sbpCount ∷ Int
+    , sbpMinX ∷ Double, sbpMaxX ∷ Double
+    , sbpMinWidth ∷ Double, sbpCenterWidth ∷ Double
+    , sbpReportedWidth ∷ Double, sbpInputWidth ∷ Double
+    , sbpHistoryWidth ∷ Double, sbpResultWidth ∷ Double
+    , sbpMinPaintKey ∷ Int, sbpAllInScope ∷ Bool, sbpInputBlocked ∷ Bool
+    } deriving Show
+instance FromJSON ShellBoxProbe where
+    parseJSON = withObject "ShellBoxProbe" $ \o → ShellBoxProbe
+        <$> o .: "supported" <*> o .: "count"
+        <*> o .: "minX" <*> o .: "maxX"
+        <*> o .: "minWidth" <*> o .: "centerWidth"
+        <*> o .: "reportedWidth" <*> o .: "inputWidth"
+        <*> o .: "historyWidth" <*> o .: "resultWidth"
+        <*> o .: "minPaintKey" <*> o .: "allInScope" <*> o .: "inputBlocked"
+
+-- | What the console actually DREW into its fitted center, measured with
+--   'fixedCharMetrics' so a line's own byte length is its width.
+data ShellContentProbe = ShellContentProbe
+    { scpCenter ∷ Double, scpHistoryWidth ∷ Double, scpResultWidth ∷ Double
+    , scpInputWidth ∷ Double, scpCmdLines ∷ Int, scpResLines ∷ Int
+    , scpAllFit ∷ Bool, scpVisibleWidth ∷ Double, scpBoxRight ∷ Double
+    , scpGhostSeen ∷ Bool, scpGhostFits ∷ Bool
+    } deriving Show
+instance FromJSON ShellContentProbe where
+    parseJSON = withObject "ShellContentProbe" $ \o → ShellContentProbe
+        <$> o .: "center" <*> o .: "historyWidth" <*> o .: "resultWidth"
+        <*> o .: "inputWidth" <*> o .: "cmdLines" <*> o .: "resLines"
+        <*> o .: "allFit" <*> o .: "visibleWidth" <*> o .: "boxRight"
+        <*> o .: "ghostSeen" <*> o .: "ghostFits"
+
+-- | The state a width rebuild must carry across (raw buffer, cursor,
+--   scroll, focus, rendered history) beside the display facts that must
+--   reflow to the new width.
+data ShellStateProbe = ShellStateProbe
+    { sspInput ∷ Text, sspCursor ∷ Int, sspScroll ∷ Int
+    , sspFocus ∷ Maybe Int, sspShellFocusId ∷ Int
+    , sspHistoryJoined ∷ Text, sspLineCount ∷ Int, sspAllFit ∷ Bool
+    , sspContentWidth ∷ Double, sspInputWidth ∷ Double
+    , sspVisibleChars ∷ Int, sspVisibleWidth ∷ Double, sspBoxRight ∷ Double
+    } deriving Show
+instance FromJSON ShellStateProbe where
+    parseJSON = withObject "ShellStateProbe" $ \o → ShellStateProbe
+        <$> o .: "input" <*> o .: "cursor" <*> o .: "scroll"
+        <*> o .:? "focus" <*> o .: "shellFocusId"
+        <*> o .: "historyJoined" <*> o .: "lineCount" <*> o .: "allFit"
+        <*> o .: "contentWidth" <*> o .: "inputWidth"
+        <*> o .: "visibleChars" <*> o .: "visibleWidth" <*> o .: "boxRight"
+
+-- | Decode one JSON probe result, failing the example with the raw text
+--   when it does not parse.
+decodeProbe ∷ FromJSON α ⇒ String → Text → IO α
+decodeProbe what r =
+    maybe (fail ("failed to decode " ⧺ what ⧺ ": " ⧺ T.unpack r)) pure
+          (decode (BL.fromStrict (TE.encodeUtf8 r)))
+
+-- | The framebuffer size @engine.getFramebufferSize@ reports, which is
+--   what the shell's geometry reads. Written on the engine's own IORef
+--   rather than stubbed in Lua, so these cases exercise the production
+--   query rather than a fixture standing in for it.
+setFramebuffer ∷ EngineEnv → (Int, Int) → IO ()
+setFramebuffer env = writeIORef (framebufferSizeRef env)
+
+-- | Requirement 4's preferred center width, as the issue review corrected
+--   it: @floor(1200 * uiscale)@ — the base constant scaled, never a
+--   literal 1200 device pixels.
+preferredCenter ∷ Double → Double
+preferredCenter sc = fromIntegral (floor (1200 * sc) ∷ Int)
+
+-- | Fixed pixels per BYTE, independent of the font size the shell scaled
+--   to — so a case can compare a rendered line against its budget from
+--   the line's own length. The bare backend's real @engine.getTextWidth@
+--   measures 0 headless (no font atlas without a GPU), which would make
+--   every width-driven rule pass vacuously.
+fixedCharMetrics ∷ Int → Text
+fixedCharMetrics px =
+    "engine.getTextWidth = function(_, text, _) return #text * "
+        <> tshow px <> " end;"
+
+-- | The per-byte width 'fixedCharMetrics' charges in the two content
+--   cases. Small enough that a few hundred characters overflow every
+--   fitted center they are measured against.
+contentPx ∷ Int
+contentPx = 8
+
+-- | Read the supported envelope out of scripts/ui/responsive.lua.
+envelopeExpr ∷ Text
+envelopeExpr = luaLines
+    [ "local r = require('scripts.ui.responsive');"
+    , "local bands = {};"
+    , "for _, b in ipairs(r.bands) do"
+    , "  bands[#bands+1] = {minH=b.minH, maxH=b.maxH,"
+    , "                     minScale=b.minScale, maxScale=b.maxScale};"
+    , "end;"
+    , "return {minWidth=r.MIN_WIDTH, bands=bands}"
+    ]
+
+-- | Bring the real shell up, visible, on a bare backend.
+shellBootExpr ∷ Text
+shellBootExpr = luaLines
+    [ "local shell = require('scripts.shell');"
+    , "shell.init(0);"
+    , "shell.show();"
+    , "return true"
+    ]
+
+-- | The nine box sprites plus the shell's own reported widths, as one
+--   table. An empty scan reports -1 rather than nil, so a filter that
+--   silently matched nothing fails the bounds checks instead of the
+--   decode.
+shellBoxProbe ∷ Text
+shellBoxProbe = luaLines
+    [ "(function()"
+    , "local shell = require('scripts.shell');"
+    , "local box = {shell_nw=true, shell_n=true, shell_ne=true,"
+    , "             shell_w=true,  shell_c=true, shell_e=true,"
+    , "             shell_sw=true, shell_s=true, shell_se=true};"
+    , "local count, minX, maxX, minW, minKey = 0, nil, nil, nil, nil;"
+    , "local centerW, inScope = nil, true;"
+    , "for _, e in ipairs(UI.getVisibleElements()) do"
+    , "  if e.page == 'shell' and box[e.name] then"
+    , "    count = count + 1;"
+    , "    if minX == nil or e.x < minX then minX = e.x end;"
+    , "    if maxX == nil or (e.x + e.width) > maxX then maxX = e.x + e.width end;"
+    , "    if minW == nil or e.width < minW then minW = e.width end;"
+    , "    if minKey == nil or e.paintKey < minKey then minKey = e.paintKey end;"
+    , "    if not e.inScope then inScope = false end;"
+    , "    if e.name == 'shell_c' then centerW = e.width end;"
+    , "  end;"
+    , "end;"
+    , "return {count=count, minX=minX or -1, maxX=maxX or -1,"
+    , "        minWidth=minW or -1, centerWidth=centerW or -1,"
+    , "        minPaintKey=minKey or -1, allInScope=inScope,"
+    , "        reportedWidth=shell.getContentWidth(),"
+    , "        inputWidth=shell.getMaxInputWidth(),"
+    , "        historyWidth=shell.getHistoryTextWidth(),"
+    , "        resultWidth=shell.getResultTextWidth(),"
+    , "        inputBlocked=UI.isInputBlocked()}"
+    , "end)()"
+    ]
+
+-- | Apply one (width, height, scale) through the SAME entry point the
+--   engine uses — @shell.onFramebufferResize@, after the framebuffer ref
+--   has been written — then report the rendered box and how the envelope
+--   classifies the combination.
+shellFitExpr ∷ Int → Int → Double → Text
+shellFitExpr w h sc = luaLines
+    [ "engine.setUIScale(" <> tshow sc <> ");"
+    , "require('scripts.shell').onFramebufferResize("
+        <> tshow w <> ", " <> tshow h <> ");"
+    , "local p = " <> shellBoxProbe <> ";"
+    , "p.supported = require('scripts.ui.responsive').classify("
+        <> tshow w <> ", " <> tshow h <> ", " <> tshow sc <> ").supported;"
+    , "return p"
+    ]
+
+-- | One supported combination: rebuild against that framebuffer, then
+--   report one message per violated requirement-1 fact (none when the box
+--   fits).
+checkFit ∷ EngineEnv → LuaBackendState → (Int, Int, Double) → IO [String]
+checkFit env ls (w, h, sc) = do
+    setFramebuffer env (w, h)
+    p ← decodeProbe "shell box" =≪ evalJSON ls (shellFitExpr w h sc)
+    let at = show w ⧺ "x" ⧺ show h ⧺ " @" ⧺ show sc ⧺ "x"
+    pure $ concat
+        [ [ at ⧺ ": the envelope does not classify this as supported"
+          | not (sbpSupported p) ]
+        , [ at ⧺ ": expected 9 box sprites, found " ⧺ show (sbpCount p)
+          | sbpCount p ≢ 9 ]
+        , [ at ⧺ ": left edge " ⧺ show (sbpMinX p) ⧺ " is before 0"
+          | sbpMinX p < 0 ]
+        , [ at ⧺ ": right edge " ⧺ show (sbpMaxX p) ⧺ " is past " ⧺ show w
+          | sbpMaxX p > fromIntegral w ]
+        , [ at ⧺ ": non-positive sprite width " ⧺ show (sbpMinWidth p)
+          | sbpMinWidth p ≤ 0 ]
+        , [ at ⧺ ": center " ⧺ show (sbpCenterWidth p)
+              ⧺ " is neither the preferred " ⧺ show (preferredCenter sc)
+              ⧺ " nor the full fitted width"
+          | sbpCenterWidth p ≢ preferredCenter sc
+            ∧ sbpMaxX p ≢ fromIntegral w ]
+        , [ at ⧺ ": the shell reports a " ⧺ show (sbpReportedWidth p)
+              ⧺ " center but drew a " ⧺ show (sbpCenterWidth p) ⧺ " one"
+          | sbpReportedWidth p ≢ sbpCenterWidth p ]
+        ]
+
+-- | The horizontal quantities requirement 3 forbids from ever going
+--   non-positive, however far out of envelope the framebuffer is.
+positiveWidths ∷ ShellBoxProbe → [Double]
+positiveWidths p =
+    [ sbpMinWidth p, sbpCenterWidth p, sbpInputWidth p
+    , sbpHistoryWidth p, sbpResultWidth p ]
+
+-- | Fill the console with history that must wrap and an input line that
+--   must scroll, then report whether anything it renders overruns the
+--   fitted center — history lines, the visible input, and the completion
+--   ghost that trails it.
+shellContentExpr ∷ Int → Int → Int → Double → Text
+shellContentExpr px w h sc = luaLines
+    [ "engine.setUIScale(" <> tshow sc <> ");"
+    , "local shell = require('scripts.shell');"
+    , "shell.onFramebufferResize(" <> tshow w <> ", " <> tshow h <> ");"
+    , "local fid = shell.getFocusId();"
+    , "shell.addHistory(string.rep('c', 300), string.rep('r', 300), false);"
+    , "for _ = 1, 200 do shell.onCharInput(fid, 'i') end;"
+    , "local hw, rw = shell.getHistoryTextWidth(), shell.getResultTextWidth();"
+    , "local right = 0;"
+    , "for _, e in ipairs(UI.getVisibleElements()) do"
+    , "  if e.page == 'shell' and e.name == 'shell_se' then"
+    , "    right = e.x + e.width;"
+    , "  end;"
+    , "end;"
+    , "local cmdLines, resLines, allFit = 0, 0, true;"
+    , "for _, e in ipairs(UI.getVisibleElements()) do"
+    , "  if e.page == 'shell' and e.text then"
+    , "    local width = #e.text * " <> tshow px <> ";"
+    , "    if e.name:match('^shell_cmd_%d+_%d+$') then"
+    , "      cmdLines = cmdLines + 1;"
+    , "      if width > hw or (e.x + width) > right then allFit = false end;"
+    , "    elseif e.name:match('^shell_result_%d+_%d+$') then"
+    , "      resLines = resLines + 1;"
+    , "      if width > rw or (e.x + width) > right then allFit = false end;"
+    , "    end;"
+    , "  end;"
+    , "end;"
+    , "local visibleWidth = #shell.getVisibleInput() * " <> tshow px <> ";"
+    -- The ghost hint rides the same fitted budget: clear the line, type a
+    -- prefix exactly one global answers, and see where the hint lands.
+    , "shell.onInterrupt(fid);"
+    , "_G.zzShellFitCompletionTarget = 1;"
+    , "for _, c in ipairs({'z','z','S','h','e','l','l'}) do"
+    , "  shell.onCharInput(fid, c);"
+    , "end;"
+    , "local ghostSeen, ghostFits = false, true;"
+    , "for _, e in ipairs(UI.getVisibleElements()) do"
+    , "  if e.page == 'shell' and e.name == 'shell_ghost'"
+    , "     and e.visible and e.text then"
+    , "    ghostSeen = true;"
+    , "    if (e.x + #e.text * " <> tshow px <> ") > right then"
+    , "      ghostFits = false;"
+    , "    end;"
+    , "  end;"
+    , "end;"
+    , "return {center=shell.getContentWidth(), historyWidth=hw,"
+    , "        resultWidth=rw, inputWidth=shell.getMaxInputWidth(),"
+    , "        cmdLines=cmdLines, resLines=resLines, allFit=allFit,"
+    , "        visibleWidth=visibleWidth, boxRight=right,"
+    , "        ghostSeen=ghostSeen, ghostFits=ghostFits}"
+    ]
+
+-- | The raw editing state, the focus, and the rendered history joined
+--   back into one string. @textWrap.byCharacter@'s lines always
+--   concatenate back to their input, so this join is invariant across a
+--   rewrap — which is exactly what makes it a preservation assertion
+--   rather than a restatement of the current wrapping.
+shellStateProbe ∷ Int → Text
+shellStateProbe px = luaLines
+    [ "(function()"
+    , "local shell = require('scripts.shell');"
+    , "local text, cursor, scroll = shell.getInputState();"
+    , "local hw, rw = shell.getHistoryTextWidth(), shell.getResultTextWidth();"
+    , "local right = 0;"
+    , "for _, e in ipairs(UI.getVisibleElements()) do"
+    , "  if e.page == 'shell' and e.name == 'shell_se' then"
+    , "    right = e.x + e.width;"
+    , "  end;"
+    , "end;"
+    , "local parts, allFit = {}, true;"
+    , "for _, e in ipairs(UI.getVisibleElements()) do"
+    , "  if e.page == 'shell' and e.text then"
+    , "    local isCmd = true;"
+    , "    local i, j = e.name:match('^shell_cmd_(%d+)_(%d+)$');"
+    , "    if not i then"
+    , "      isCmd = false;"
+    , "      i, j = e.name:match('^shell_result_(%d+)_(%d+)$');"
+    , "    end;"
+    , "    if i then"
+    , "      local width = #e.text * " <> tshow px <> ";"
+    , "      local budget = isCmd and hw or rw;"
+    , "      if width > budget or (e.x + width) > right then allFit = false end;"
+    , "      parts[#parts+1] = {i=tonumber(i), j=tonumber(j),"
+    , "                         cmd=isCmd, t=e.text};"
+    , "    end;"
+    , "  end;"
+    , "end;"
+    , "table.sort(parts, function(a, b)"
+    , "  if a.cmd ~= b.cmd then return a.cmd end;"
+    , "  if a.i ~= b.i then return a.i < b.i end;"
+    , "  return a.j < b.j;"
+    , "end);"
+    , "local joined = '';"
+    , "for _, q in ipairs(parts) do joined = joined .. q.t end;"
+    , "local visible = shell.getVisibleInput();"
+    , "return {input=text, cursor=cursor, scroll=scroll,"
+    , "        focus=engine.getFocusId(), shellFocusId=shell.getFocusId(),"
+    , "        historyJoined=joined, lineCount=#parts, allFit=allFit,"
+    , "        contentWidth=shell.getContentWidth(),"
+    , "        inputWidth=shell.getMaxInputWidth(),"
+    , "        visibleChars=utf8.len(visible),"
+    , "        visibleWidth=#visible * " <> tshow px <> ", boxRight=right}"
+    , "end)()"
+    ]
+
+-- | Seed the console with wrapping history and a scrolled input line at
+--   whatever framebuffer is current, then report its state.
+--
+--   The 600-character entry is sized against BOTH framebuffers the
+--   preservation case uses: it wraps to five lines each at the preferred
+--   1200px center and six at the fitted 856px one (so the reflow is
+--   visible in the line count), and twelve lines still clear the shorter
+--   framebuffer's own height budget, so no line is dropped on either side
+--   and the joined history stays comparable.
+shellSeedExpr ∷ Int → Text
+shellSeedExpr px = luaLines
+    [ "local shell = require('scripts.shell');"
+    , "local fid = shell.getFocusId();"
+    , "shell.addHistory(string.rep('c', 600), string.rep('r', 600), false);"
+    , "for _ = 1, 300 do shell.onCharInput(fid, 'i') end;"
+    , "return " <> shellStateProbe px
+    ]
+
+-- | Deliver a framebuffer resize the way the engine does, then report the
+--   same state again.
+shellResizeExpr ∷ Int → Int → Int → Text
+shellResizeExpr px w h = luaLines
+    [ "require('scripts.shell').onFramebufferResize("
+        <> tshow w <> ", " <> tshow h <> ");"
+    , "return " <> shellStateProbe px
+    ]
 
 -- * Lua backend + eval helpers (mirrors Test.Headless.UI.InputOwnership)
 

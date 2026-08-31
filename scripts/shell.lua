@@ -112,12 +112,40 @@ end
 
 -- Configuration
 local tileSize = 64
+-- The PREFERRED center-section width. #1959: this is what the console is
+-- drawn at wherever the framebuffer can hold the whole nine-box; where it
+-- cannot, shell.getContentWidth() below fits the box instead. Both are the
+-- base constant scaled by UI scale (shell.init / shell.rescale).
 local middleWidth = 1200
 local fontSize = 32
-local maxInputWidth = 0
 
 -- System configuration
 local uiscale = 1.0
+
+-----------------------------------------------------------
+-- Horizontal fit (#1959)
+-----------------------------------------------------------
+
+-- The box is laid out as marginLeft + tileSize + center + tileSize, so the
+-- widest one that fits a framebuffer of fbWidth has a center of
+-- fbWidth - marginLeft - 2 * tileSize. Nothing consulted fbWidth before
+-- #1959: at 1x the right edge landed at 40 + 64 + 1200 + 64 = 1368px, and
+-- every responsive band's maximum scale multiplies that (up to 5472px at
+-- 4x), so the console ran off the side of every display its own envelope
+-- declares supported.
+--
+-- A framebuffer below responsive.MIN_WIDTH (or a scale far past its band)
+-- can drive that subtraction negative. Out-of-envelope sizes degrade
+-- best-effort, which means a tiny box -- never a negative sprite size or a
+-- non-positive text budget, so every fitted width clamps here.
+local minCenterWidth = 1
+
+-- The input line's own inset inside the center, and the extra inset a
+-- history RESULT line carries over a command line. Both predate #1959;
+-- they are named rather than inline because the fitted widths clamp
+-- against them.
+local inputPadding = 100
+local resultIndent = 20
 
 -- completion state
 local currentCompletions = {}
@@ -454,10 +482,12 @@ function shell.rebuildHistoryDisplay()
     if not shellvisible then return end
     if #history == 0 then return end
     
-    local fbWidth, fbHeight = engine.getFramebufferSize()
     local baseX = marginLeft
     local textX = baseX + tileSize + historyPadding
-    local maxTextWidth = middleWidth - historyPadding * 2
+    -- #1959: resolve the fitted budgets ONCE, before any wrap below, so the
+    -- rendered history measures against the center the box is drawn at.
+    local maxTextWidth = shell.getHistoryTextWidth()
+    local maxResultWidth = shell.getResultTextWidth()
     
     local promptY = shell.getPromptY()
     local y = promptY - lineHeight
@@ -476,7 +506,7 @@ function shell.rebuildHistoryDisplay()
                 resultColor = {1.0, 0.0, 0.0, 1.0}
             end
             
-            local resultLines = shell.wrapText(entry.result, maxTextWidth - 20, shellFont)
+            local resultLines = shell.wrapText(entry.result, maxResultWidth, shellFont)
             for j = #resultLines, 1, -1 do
                 if y < marginTop + tileSize then break end
                 local resultObj = UI.newText(
@@ -518,8 +548,12 @@ function shell.rebuildHistoryDisplay()
 end
 
 function shell.rebuildBox()
-    local fbWidth, fbHeight = engine.getFramebufferSize()
+    local _, fbHeight = engine.getFramebufferSize()
     local boxHeight = shell.calculateBoxHeight()
+    -- #1959: one fitted center width for the whole rebuild -- every sprite
+    -- size and every edge position below reads this, never the preferred
+    -- (unfitted) width the base constant scales to.
+    local centerWidth = shell.getContentWidth()
     local middleHeight = boxHeight - tileSize * 2
     local baseX = marginLeft
     local baseY = fbHeight - marginBottom - boxHeight
@@ -536,30 +570,30 @@ function shell.rebuildBox()
     if not boxSpawned then
         -- First time: create all UI elements
         objBoxNW = UI.newSprite("shell_nw", tileSize, tileSize, texBoxNW, 1.0, 1.0, 1.0, 1.0, shellPage)
-        objBoxN  = UI.newSprite("shell_n", middleWidth, tileSize, texBoxN, 1.0, 1.0, 1.0, 1.0, shellPage)
+        objBoxN  = UI.newSprite("shell_n", centerWidth, tileSize, texBoxN, 1.0, 1.0, 1.0, 1.0, shellPage)
         objBoxNE = UI.newSprite("shell_ne", tileSize, tileSize, texBoxNE, 1.0, 1.0, 1.0, 1.0, shellPage)
         
         objBoxW  = UI.newSprite("shell_w", tileSize, middleHeight, texBoxW, 1.0, 1.0, 1.0, 1.0, shellPage)
-        objBox   = UI.newSprite("shell_c", middleWidth, middleHeight, texBox, 1.0, 1.0, 1.0, 1.0, shellPage)
+        objBox   = UI.newSprite("shell_c", centerWidth, middleHeight, texBox, 1.0, 1.0, 1.0, 1.0, shellPage)
         objBoxE  = UI.newSprite("shell_e", tileSize, middleHeight, texBoxE, 1.0, 1.0, 1.0, 1.0, shellPage)
         
         objBoxSW = UI.newSprite("shell_sw", tileSize, tileSize, texBoxSW, 1.0, 1.0, 1.0, 1.0, shellPage)
-        objBoxS  = UI.newSprite("shell_s", middleWidth, tileSize, texBoxS, 1.0, 1.0, 1.0, 1.0, shellPage)
+        objBoxS  = UI.newSprite("shell_s", centerWidth, tileSize, texBoxS, 1.0, 1.0, 1.0, 1.0, shellPage)
         objBoxSE = UI.newSprite("shell_se", tileSize, tileSize, texBoxSE, 1.0, 1.0, 1.0, 1.0, shellPage)
         
         -- ... rest of addToPage calls unchanged ...
         
         UI.addToPage(shellPage, objBoxNW, baseX, row0Y - tileSize / 2)
         UI.addToPage(shellPage, objBoxN,  baseX + tileSize, row0Y - tileSize / 2)
-        UI.addToPage(shellPage, objBoxNE, baseX + tileSize + middleWidth, row0Y - tileSize / 2)
+        UI.addToPage(shellPage, objBoxNE, baseX + tileSize + centerWidth, row0Y - tileSize / 2)
         
         UI.addToPage(shellPage, objBoxW,  baseX, row0Y + tileSize / 2)
         UI.addToPage(shellPage, objBox,   baseX + tileSize, row0Y + tileSize / 2)
-        UI.addToPage(shellPage, objBoxE,  baseX + tileSize + middleWidth, row0Y + tileSize / 2)
+        UI.addToPage(shellPage, objBoxE,  baseX + tileSize + centerWidth, row0Y + tileSize / 2)
         
         UI.addToPage(shellPage, objBoxSW, baseX, row0Y + tileSize / 2 + middleHeight)
         UI.addToPage(shellPage, objBoxS,  baseX + tileSize, row0Y + tileSize / 2 + middleHeight)
-        UI.addToPage(shellPage, objBoxSE, baseX + tileSize + middleWidth, row0Y + tileSize / 2 + middleHeight)
+        UI.addToPage(shellPage, objBoxSE, baseX + tileSize + centerWidth, row0Y + tileSize / 2 + middleHeight)
         
         objPrompt = UI.newText("shell_prompt", "$>", shellFont, fontSize, 1.0, 1.0, 1.0, 1.0, shellPage)
         UI.addToPage(shellPage, objPrompt, promptX, promptY)
@@ -577,22 +611,22 @@ function shell.rebuildBox()
         -- Top row
         UI.setPosition(objBoxNW, baseX, row0Y - tileSize / 2)
         UI.setPosition(objBoxN,  baseX + tileSize, row0Y - tileSize / 2)
-        UI.setSize(objBoxN, middleWidth, tileSize)
-        UI.setPosition(objBoxNE, baseX + tileSize + middleWidth, row0Y - tileSize / 2)
+        UI.setSize(objBoxN, centerWidth, tileSize)
+        UI.setPosition(objBoxNE, baseX + tileSize + centerWidth, row0Y - tileSize / 2)
         
         -- Middle row - reposition and resize
         UI.setPosition(objBoxW,  baseX, row0Y + tileSize / 2)
         UI.setSize(objBoxW, tileSize, middleHeight)
         UI.setPosition(objBox,   baseX + tileSize, row0Y + tileSize / 2)
-        UI.setSize(objBox, middleWidth, middleHeight)
-        UI.setPosition(objBoxE,  baseX + tileSize + middleWidth, row0Y + tileSize / 2)
+        UI.setSize(objBox, centerWidth, middleHeight)
+        UI.setPosition(objBoxE,  baseX + tileSize + centerWidth, row0Y + tileSize / 2)
         UI.setSize(objBoxE, tileSize, middleHeight)
         
         -- Bottom row
         UI.setPosition(objBoxSW, baseX, row0Y + tileSize / 2 + middleHeight)
         UI.setPosition(objBoxS,  baseX + tileSize, row0Y + tileSize / 2 + middleHeight)
-        UI.setSize(objBoxS, middleWidth, tileSize)
-        UI.setPosition(objBoxSE, baseX + tileSize + middleWidth, row0Y + tileSize / 2 + middleHeight)
+        UI.setSize(objBoxS, centerWidth, tileSize)
+        UI.setPosition(objBoxSE, baseX + tileSize + centerWidth, row0Y + tileSize / 2 + middleHeight)
         
         -- Prompt
         UI.setPosition(objPrompt, promptX, promptY)
@@ -606,7 +640,7 @@ function shell.updateCursorPos()
     if not objCursor then return end
     if not shellvisible then return end
     
-    local fbWidth, fbHeight = engine.getFramebufferSize()
+    local _, fbHeight = engine.getFramebufferSize()
     local boxHeight = shell.calculateBoxHeight()
     local baseX = marginLeft
     local baseY = fbHeight - marginBottom - boxHeight
@@ -640,7 +674,7 @@ function shell.addHistory(command, result, isError)
 end
 
 function shell.getPromptY()
-    local fbWidth, fbHeight = engine.getFramebufferSize()
+    local _, fbHeight = engine.getFramebufferSize()
     local boxHeight = shell.calculateBoxHeight()
     local baseY = fbHeight - marginBottom - boxHeight
     local middleHeight = boxHeight - tileSize * 2
@@ -648,10 +682,43 @@ function shell.getPromptY()
     return row2Y - fontSize
 end
 
+-- The center-section width the console is actually DRAWN at: the preferred
+-- `middleWidth` wherever marginLeft + 2 * tileSize + middleWidth fits the
+-- framebuffer, and the widest fitting center otherwise (#1959 requirement
+-- 4 -- nothing narrows on a display that fits the preferred width today).
+--
+-- Resolved from the LIVE framebuffer on every call rather than memoized:
+-- with no retained width there is nothing for a framebuffer-width change
+-- to leave stale, which is what the old `maxInputWidth` memo got wrong --
+-- it was reset only from shell.rescale and shell.onFramebufferResize, so a
+-- width change observed through any other path still measured against the
+-- previous framebuffer.
+function shell.getContentWidth()
+    local fbWidth = engine.getFramebufferSize()
+    local fitted = (fbWidth or 0) - marginLeft - tileSize * 2
+    if fitted > middleWidth then fitted = middleWidth end
+    if fitted < minCenterWidth then fitted = minCenterWidth end
+    return math.floor(fitted)
+end
+
+-- Horizontal budget for one wrapped history COMMAND line: the fitted
+-- center less its padding on both sides.
+function shell.getHistoryTextWidth()
+    return math.max(minCenterWidth,
+                    shell.getContentWidth() - historyPadding * 2)
+end
+
+-- Same, for a history RESULT line, which is indented one `resultIndent`
+-- further than the command above it.
+function shell.getResultTextWidth()
+    return math.max(minCenterWidth,
+                    shell.getHistoryTextWidth() - resultIndent)
+end
+
+-- Horizontal budget for the input line -- and, through
+-- shell.updateGhostText, for the completion hint that trails it.
 function shell.getMaxInputWidth()
-    if maxInputWidth > 0 then return maxInputWidth end
-    maxInputWidth = middleWidth - 100
-    return maxInputWidth
+    return math.max(minCenterWidth, shell.getContentWidth() - inputPadding)
 end
 
 -- Update scroll position based on cursor
@@ -710,7 +777,7 @@ function shell.calculateBoxHeight()
         return baseHeight
     end
     
-    local maxTextWidth = middleWidth - historyPadding * 2
+    local maxTextWidth = shell.getHistoryTextWidth()
     local historyLines = 0
     for _, entry in ipairs(history) do
         historyLines = historyLines + shell.countLinesForEntry(entry, maxTextWidth, shellFont)
@@ -784,7 +851,8 @@ function shell.countLinesForEntry(entry, maxWidth, font)
     lines = lines + #shell.wrapText(cmdText, maxWidth, font)
     
     if entry.result and entry.result ~= "" and entry.result ~= "nil" then
-        lines = lines + #shell.wrapText(entry.result, maxWidth - 20, font)
+        lines = lines + #shell.wrapText(entry.result,
+            math.max(minCenterWidth, maxWidth - resultIndent), font)
     end
     
     return lines
@@ -912,7 +980,7 @@ function shell.updateGhostText()
             end
             
             -- Position after cursor
-            local fbWidth, fbHeight = engine.getFramebufferSize()
+            local _, fbHeight = engine.getFramebufferSize()
             local boxHeight = shell.calculateBoxHeight()
             local baseX = marginLeft
             local baseY = fbHeight - marginBottom - boxHeight
@@ -1086,8 +1154,12 @@ function shell.onFramebufferResize(width, height)
         return
     end
 
-    -- Reset max input width cache so it gets recalculated
-    maxInputWidth = 0
+    -- #1959: nothing to invalidate here any more. This used to reset the
+    -- `maxInputWidth` memo, which was the ONLY width a resize refreshed --
+    -- the box geometry and the history budgets were recomputed from UI
+    -- scale alone, so a framebuffer-width change with an unchanged scale
+    -- reached none of them. Every width now derives from
+    -- shell.getContentWidth(), which reads the live framebuffer.
 
     -- #748 round 6: shell was never registered with the shared
     -- responsive.notifyResize contract — a UI-scale Apply/Save (same
@@ -1134,8 +1206,8 @@ function shell.rescale()
     marginTop = math.floor(baseMarginTop * uiscale)
     lineHeight = math.floor(baseLineHeight * uiscale)
     
-    -- Reset max input width cache
-    maxInputWidth = 0
+    -- `middleWidth` is the PREFERRED center only (#1959); the width the
+    -- box is drawn at is fitted per-framebuffer by shell.getContentWidth().
     
     engine.logDebug("Shell rescaled to: " .. tostring(uiscale))
     return true
