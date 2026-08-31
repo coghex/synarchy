@@ -84,10 +84,14 @@ import Engine.Core.State
   )
 
 -- | The UI\/focus\/HUD slice of @ui-hud-events@: the whole UI page
---   tree (pages, elements, text\/control focus, tooltip state), the
+--   tree (pages, elements, text\/control focus, tooltip state — the
+--   editable-widget @UI.TextBuffer@s among them, carried on each
+--   element as @ueTextBuffer@ inside 'uicUiManagerRef' and reached by
+--   @ElementHandle@, never by 'ObjectId'), the
 --   Lua-facing focus-target registry, the page id the global HUD info
---   panel currently reflects, and the editable-widget text buffers
---   keyed by scene 'ObjectId'. See
+--   panel currently reflects, and — a separate mechanism entirely —
+--   the SCENE-OBJECT text cache keyed by scene 'ObjectId' that
+--   @engine.getText@ answers from. See
 --   'docs/engineenv_capability_inventory.md' SS5 @ui-hud-events@ and
 --   SS7.7.
 data UiCapability = UiCapability
