@@ -33,6 +33,7 @@ import Engine.Graphics.Camera (CameraFacing(..))
 import World.Cursor.Types (CursorState(..), emptyCursorState)
 import World.Page.Types (WorldPageId(..), WorldIdentity(..))
 import World.Chunk.Types (ChunkCoord(..))
+import World.Chunk.Residency (ChunkOwner, emptyChunkOwner, newChunkGeneration)
 import World.Tile.Types (WorldTileData(..), emptyWorldTileData)
 import World.Render.Camera.Types (WorldCamera(..), WorldQuadCache(..))
 import World.Render.Textures.Types (WorldTextures(..), defaultWorldTextures)
@@ -108,6 +109,28 @@ data WorldState = WorldState
     , wsBakedZoomRef ∷ IORef (V.Vector BakedZoomEntry, WorldTextures, CameraFacing)  -- ^ Pre-baked
     , wsBakedBgRef ∷ IORef (V.Vector BakedZoomEntry, WorldTextures, CameraFacing)    -- ^ Pre-baked background entries with resolved textures and vertices
     , wsInitQueueRef ∷ IORef [ChunkCoord]  -- ^ Queue of chunks to generate at world init (for progress tracking)
+    , wsChunkResidencyRef ∷ IORef ChunkOwner
+      -- ^ This page's chunk-residency owner (#2001): for every canonical
+      --   'World.Chunk.Residency.ChunkKey', whether it is absent,
+      --   requested, in flight, or resident — plus the page's own
+      --   generation epoch, which every request it mints is tagged with.
+      --
+      --   It sits beside 'wsTilesRef' and 'wsInitQueueRef' because it is
+      --   the identity those two never had. 'wsTilesRef' is keyed by a
+      --   bare 'ChunkCoord' with no page and no canonicalisation, and
+      --   'wsInitQueueRef' is an ordered work list annotated "for
+      --   progress tracking"; neither can answer "is this physical
+      --   chunk already being worked on?" without the caller
+      --   reconstructing it, which is why that question used to need two
+      --   'IORef's read in a documented order (#43). This is ONE value,
+      --   so "World.Chunk.Admit"'s verbs each settle it with a single
+      --   'atomicModifyIORef''.
+      --
+      --   Mirrors the tile map by construction: every admission is an
+      --   insert into 'wsTilesRef' and every eviction is a removal from
+      --   it. Runtime residency bookkeeping, never persisted — a fresh
+      --   or loaded page starts with an empty owner and a brand-new
+      --   epoch (see docs\/persistence_state_inventory.md).
     , wsMapModeRef ∷ IORef ZoomMapMode
     , wsCursorRef ∷ IORef CursorState
     , wsToolModeRef ∷ IORef ToolMode
@@ -343,6 +366,11 @@ emptyWorldState = do
     bakedZoomRef ← newIORef (V.empty, defaultWorldTextures, FaceSouth)
     bakedBgRef   ← newIORef (V.empty, defaultWorldTextures, FaceSouth)
     wsInitQueueRef ← newIORef []
+    -- A brand-new epoch per WorldState, so a page id reused by a
+    -- reinit, an arena replacement or a load republish is a DIFFERENT
+    -- generation (#2001). Every one of those builds a fresh WorldState
+    -- through this function, which is why allocating here is enough.
+    wsChunkResidencyRef ← newIORef ∘ emptyChunkOwner =≪ newChunkGeneration
     wsMapModeRef ← newIORef ZMDefault
     wsCursorRef ← newIORef emptyCursorState
     wsToolModeRef ← newIORef DefaultTool
@@ -375,6 +403,7 @@ emptyWorldState = do
                         zoomCacheRef
                         quadCacheRef quadCacheGenRef zoomQCRef bgQCRef
                         bakedZoomRef bakedBgRef wsInitQueueRef
+                        wsChunkResidencyRef
                         wsMapModeRef
                         wsCursorRef wsToolModeRef wsCursorSnapshotRef
                         wsLoadPhaseRef wsZoomAtlasRef wsEditsRef

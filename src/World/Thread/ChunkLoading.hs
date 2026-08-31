@@ -26,7 +26,10 @@ import World.Types
 import World.Generate (generateLoadedChunk, cameraChunkCoord)
 import World.Generate.Arena (generateFlatChunk)
 import World.Generate.Constants (chunkLoadRadius)
-import World.Chunk.Queue (chunkQueueCanon)
+import World.Chunk.Admit
+    ( admitResidentChunks, claimChunkGeneration, claimedChunkCoord
+    , releaseEvictedChunks )
+import World.Chunk.Residency (canonicalChunkCoord)
 import World.Grid (zoomFadeEnd)
 import World.Slope (recomputeNeighborSlopes
                     , slopeRecomputeAffected
@@ -71,22 +74,46 @@ updateChunkLoading env _logger = do
                         Just params → do
                             tileData ← readIORef (wsTilesRef worldState)
                             let halfSize = wgpWorldSize params `div` 2
-                                -- Shared with the slope recompute's seam
-                                -- handling (World.Slope re-exports the
-                                -- canonical World.Chunk.Types.wrapChunkCoordU,
-                                -- also re-exported via World.Fluid.Internal for
-                                -- the fluid/magma/zoom paths) so insert-time
-                                -- and lookup-time wrapping can't diverge.
-                                wrapChunkU = wrapChunkCoordU (wgpWorldSize params)
+                                -- The ONE canonical identity (#2001).
+                                -- This used to be a bare
+                                -- 'wrapChunkCoordU (wgpWorldSize params)',
+                                -- which is the unguarded function applied
+                                -- to a field that is a SENTINEL on arena
+                                -- pages — so an arena coord past
+                                -- u = ±50000 would have been silently
+                                -- wrapped, and this loader disagreed with
+                                -- the init queue's identity for exactly
+                                -- the class of case #1723 was filed for.
+                                -- 'canonicalChunkCoord' carries both the
+                                -- arena-sentinel and the
+                                -- non-positive-world-size guard, and every
+                                -- other producer now measures through it
+                                -- too, so insert-time and lookup-time
+                                -- wrapping can't diverge.
+                                canon = canonicalChunkCoord params
                                 inBoundsV (ChunkCoord cx cy) =
                                     let v = cx + cy
                                         halfTiles = halfSize * chunkSize
                                     in abs (v * chunkSize) ≤ halfTiles
-                                validCoords = map wrapChunkU $ filter inBoundsV neededCoords
+                                validCoords = map canon $ filter inBoundsV neededCoords
                             let (_toPromote, toGenerate) = partitionChunks validCoords tileData
                             let toGenerateSorted = sortOn (\(ChunkCoord cx cy) →
                                     abs (cx - ccx) + abs (cy - ccy)) toGenerate
-                                batch = take maxChunksPerTick toGenerateSorted
+                                wanted = take maxChunksPerTick toGenerateSorted
+                            -- Claim the batch on the page's residency
+                            -- owner before generating any of it (#2001).
+                            -- A coord the init queue has already REQUESTED
+                            -- is claimed here rather than skipped — the
+                            -- camera and the queue name one physical
+                            -- chunk, and refusing would move generation
+                            -- out of the drain-then-camera order
+                            -- 'World.Thread.worldTick' runs. A coord
+                            -- something else already has in flight is
+                            -- refused and drops out of the batch, so a
+                            -- chunk is never generated twice.
+                            claims ← claimChunkGeneration worldState pageId
+                                                          params wanted
+                            let batch = map claimedChunkCoord claims
                             let isArena = isArenaParams params
                             when (not $ null batch) $ do
                                 let seed = wgpSeed params
@@ -142,6 +169,17 @@ updateChunkLoading env _logger = do
                                         td7 = applyConstructSlopesTd cdesigs
                                                 digCoords td6
                                     in (td7, evictedCoords)
+                                -- THE admission boundary (#2001): the
+                                -- payloads are in wsTilesRef, so the
+                                -- owner records exactly these claims as
+                                -- resident. The eviction the same
+                                -- transaction performed is applied after
+                                -- it, in that order, so a chunk admitted
+                                -- and immediately evicted ends absent —
+                                -- matching the tile map either way.
+                                admitResidentChunks worldState claims
+                                releaseEvictedChunks worldState pageId
+                                                     params evicted
                                 -- Notify sim thread of loaded chunks. Use
                                 -- newChunks' so the sim sees post-replay
                                 -- fluid + terrain (player edits matter).
@@ -272,10 +310,10 @@ drainInitQueues env logger = do
                             -- (#1723), which is what keeps this queue's length an
                             -- honest count of remaining physical chunks; this
                             -- defence stays regardless, and has to canonicalise
-                            -- exactly the way they do — 'chunkQueueCanon', not a
+                            -- exactly the way they do — 'canonicalChunkCoord', not a
                             -- bare 'wrapChunkCoordU', so an arena's sentinel
                             -- wgpWorldSize is identity on both sides.
-                            batchCanon = nub (map (chunkQueueCanon params) batch)
+                            batchCanon = nub (map (canonicalChunkCoord params) batch)
                         -- Skip coords already in wsTilesRef. The camera-visible
                         -- loader (updateChunkLoading) loads chunks straight into
                         -- wsTilesRef without going through this queue, so a coord
@@ -289,7 +327,19 @@ drainInitQueues env logger = do
                         -- (already-loaded + freshly generated) is dropped from the
                         -- queue below.
                         td0 ← readIORef (wsTilesRef worldState)
-                        let (_alreadyLoaded, toGen) = partitionChunks batchCanon td0
+                        let (_alreadyLoaded, notLoaded) =
+                                partitionChunks batchCanon td0
+                        -- Claim before generating (#2001), exactly as the
+                        -- camera loader above does. These keys are
+                        -- REQUESTED on the owner (every producer of this
+                        -- queue registers demand), so the claim converts
+                        -- that same demand to in-flight without adding an
+                        -- entry; a key the camera already has in flight is
+                        -- refused and left for the tile-map check on a
+                        -- later tick.
+                        claims ← claimChunkGeneration worldState pageId
+                                                      params notLoaded
+                        let toGen = map claimedChunkCoord claims
                         let seed = wgpSeed params
 
                         let newChunks = parMap rdeepseq
@@ -330,6 +380,13 @@ drainInitQueues env logger = do
                                         digCoords td5
                             in (td6, ())
 
+                        -- THE admission boundary (#2001), shared with the
+                        -- camera loader: these payloads are now in
+                        -- wsTilesRef. The already-loaded half of the batch
+                        -- was admitted when it was inserted and is
+                        -- untouched here.
+                        admitResidentChunks worldState claims
+
                         -- Notify the sim thread of the loaded chunks BEFORE
                         -- dropping the batch from the init queue. The dump
                         -- path treats an empty init queue as "safe to
@@ -348,7 +405,14 @@ drainInitQueues env logger = do
                         dispatchLocationStamps env params pageId newChunks'
 
                         -- The batch is now in wsTilesRef AND the sim has been
-                        -- notified, so drop it from the init queue — by coord,
+                        -- notified, so drop it from the init queue. A coord
+                        -- whose claim was REFUSED above is dropped too: a
+                        -- refusal means some other path on this same
+                        -- thread already has that physical chunk in
+                        -- flight and will admit it, exactly as the
+                        -- already-loaded half of the batch was admitted a
+                        -- tick earlier — so the demand is discharged
+                        -- either way. Dropped by coord,
                         -- which preserves any appends that arrived during
                         -- generation. Done here, after the insert and before
                         -- the progress read below, so a chunk is always in the

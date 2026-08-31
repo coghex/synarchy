@@ -87,6 +87,7 @@ import qualified Test.Headless.World.CursorInfo as CursorInfo
 import qualified Test.Headless.World.CursorTextureDispatch as CursorTextureDispatch
 import qualified Test.Headless.World.SelectTileZ as SelectTileZ
 import qualified Test.Headless.World.SelectChunk as SelectChunk
+import qualified Test.Headless.World.ChunkIdentity as ChunkIdentity
 import qualified Test.Headless.World.ChunkQueueFrame as ChunkQueueFrame
 import qualified Test.Headless.World.ActionOutcome as ActionOutcome
 import qualified Test.Headless.World.Spoil as Spoil
@@ -308,6 +309,7 @@ main = hspec $ do
         UITransferContextMenu.spec
         UIItemList.spec
         describe "World.ActionOutcome" ActionOutcome.spec
+        ChunkIdentity.spec
         ChunkQueueFrame.spec
         describe "Geology" Geology.spec
         describe "Chunk/Fast Parity" Parity.spec

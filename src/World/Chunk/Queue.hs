@@ -25,10 +25,19 @@
 --
 --   Every producer now measures and dedups through the functions here,
 --   and the consumer canonicalises through the SAME
---   'chunkQueueCanon' — producers and consumer disagreeing on the
+--   'canonicalChunkCoord' — producers and consumer disagreeing on the
 --   identity would put the guarantee back where it started.
+--
+--   Since #2001 that identity is no longer this module's own. It lives
+--   in "World.Chunk.Residency" (re-exported here for the producers that
+--   already used it, under its new name), because the camera-driven
+--   loader turned out to be running a SECOND canonicalisation beside
+--   it — a bare 'World.Chunk.Types.wrapChunkCoordU' with neither guard —
+--   and \"is this chunk already known?\" is now a state the page's
+--   residency owner names outright rather than something
+--   'enqueueChunkRequest' reconstructs.
 module World.Chunk.Queue
-    ( chunkQueueCanon
+    ( canonicalChunkCoord
     , dedupChunkQueue
     , newChunkQueueEntries
     , initialChunkQueue
@@ -38,28 +47,12 @@ module World.Chunk.Queue
 import UPrelude
 import Data.IORef (readIORef, atomicModifyIORef')
 import qualified Data.HashSet as HS
-import World.Chunk.Types (ChunkCoord(..), wrapChunkCoordU)
+import World.Chunk.Admit (registerChunkDemand)
+import World.Chunk.Residency (canonicalChunkCoord)
+import World.Chunk.Types (ChunkCoord(..))
 import World.Generate.Constants (chunkLoadRadius)
-import World.Generate.Types (WorldGenParams(..), isArenaParams)
+import World.Page.Types (WorldPageId(..))
 import World.State.Types (WorldState(..))
-import World.Tile.Types (lookupChunk)
-
--- | The physical identity of a chunk coord on a page with these
---   generation params: the key the chunk is (or will be) stored under.
---
---   Identity on a NON-wrapping page, and the two of those are selected
---   separately. @worldSize ≤ 0@ has no seam at all. An arena's
---   'wgpWorldSize' is a sentinel 100000 rather than a real extent
---   ('World.Thread.Command.Init.handleWorldInitArenaCommand'), so it is
---   recognised by 'isArenaParams' and never handed to
---   'wrapChunkCoordU' — passing that sentinel through would leave an
---   arena coord past u = ±50000 silently wrapped.
-chunkQueueCanon ∷ WorldGenParams → ChunkCoord → ChunkCoord
-chunkQueueCanon params
-    | isArenaParams params = id
-    | worldSize ≤ 0        = id
-    | otherwise            = wrapChunkCoordU worldSize
-  where worldSize = wgpWorldSize params
 
 -- | Keep one entry per PHYSICAL chunk, preserving the FIRST occurrence
 --   and the input order.
@@ -83,7 +76,7 @@ dedupChunkQueue canon = go HS.empty
 --   asked about the CANONICAL key, so an alias of a loaded or pending
 --   chunk is recognised as the same work.
 newChunkQueueEntries
-    ∷ (ChunkCoord → ChunkCoord)   -- ^ 'chunkQueueCanon' for the page
+    ∷ (ChunkCoord → ChunkCoord)   -- ^ 'canonicalChunkCoord' for the page
     → (ChunkCoord → Bool)         -- ^ is this canonical key already loaded or queued?
     → [ChunkCoord]                -- ^ the requested coords, in order
     → [ChunkCoord]
@@ -104,7 +97,7 @@ newChunkQueueEntries canon alreadyHave =
 --   Shared by fresh world init and saved-page restore so the two seed
 --   the queue identically.
 initialChunkQueue
-    ∷ (ChunkCoord → ChunkCoord)   -- ^ 'chunkQueueCanon' for the page
+    ∷ (ChunkCoord → ChunkCoord)   -- ^ 'canonicalChunkCoord' for the page
     → ChunkCoord                  -- ^ the centre chunk, already loaded
     → ([ChunkCoord], Int)
 initialChunkQueue canon centre = (queue, length queue + 1)
@@ -124,46 +117,38 @@ initialChunkQueue canon centre = (queue, length queue + 1)
 --   fill — the two producers that APPEND rather than seed, and so must
 --   dedup against what the page already holds.
 --
+--   Since #2001 the dedup is ONE atomic transition on the page's
+--   residency owner ("World.Chunk.Admit"), not a reconstruction from two
+--   'IORef's. The owner already knows every canonical key that is
+--   resident, requested or in flight, so a coord naming another spelling
+--   of any of them is neither counted nor appended. That replaces the
+--   snapshot protocol this function used to carry (#43): it had to read
+--   'wsInitQueueRef' BEFORE 'wsTilesRef', because the world thread keeps
+--   a chunk queued for the whole of its generation and removes it only
+--   after inserting, so the opposite order left a window in which an
+--   in-flight chunk was visible in neither snapshot and got queued
+--   twice. With a single owner value there is no pair of snapshots to
+--   order, and \"in flight\" is a state the owner names outright rather
+--   than an inference from queue membership.
+--
+--   The append that follows is still safe against the world thread: this
+--   queue has a single appending thread — the Lua thread in a live
+--   engine, the dump driver in dump mode (where no script issues region
+--   requests) — the drain removes a batch BY COORD so a concurrent
+--   append survives it, and the other two producers REPLACE the queue
+--   while setting the page up and never race this one.
+--
 --   A page with no generation params yet queues NOTHING and reports 0:
 --   its physical identity is unknown, so no alias could be recognised,
 --   and 'drainInitQueues' refuses to drain such a page anyway, which
 --   would leave the appended coords stuck in the queue inflating every
 --   remaining count that reads it.
-enqueueChunkRequest ∷ WorldState → [ChunkCoord] → IO Int
-enqueueChunkRequest ws coords = do
+enqueueChunkRequest ∷ WorldPageId → WorldState → [ChunkCoord] → IO Int
+enqueueChunkRequest pid ws coords = do
     mParams ← readIORef (wsGenParamsRef ws)
     case mParams of
         Nothing → pure 0
         Just params → do
-            -- Filter the requested coords against both the loaded tiles
-            -- and the pending/in-flight queue, race-free against the
-            -- world thread's load handoff. drainInitQueues
-            -- (World.Thread.ChunkLoading) keeps a chunk queued for the
-            -- whole of its generation, then inserts it into wsTilesRef
-            -- and only AFTER that removes it from this queue — both
-            -- writes via atomicModifyIORef'. So we must read in the
-            -- matching order: snapshot the queue FIRST (an
-            -- atomicModifyIORef' read, which acquires that release),
-            -- THEN read the tiles. A coord already gone from the queue
-            -- snapshot is then guaranteed visible in the tile snapshot,
-            -- so a chunk that is in flight or just-loaded is caught by
-            -- one snapshot or the other, never missed by both (no
-            -- duplicate queueing, no inflated count). Reading the tiles
-            -- first would reopen that window (#43).
-            let canon = chunkQueueCanon params
-            pending ← atomicModifyIORef' (wsInitQueueRef ws) $ \q → (q, q)
-            let queued = HS.fromList (map canon pending)
-            td ← readIORef (wsTilesRef ws)
-            let alreadyHave key = HS.member key queued
-                                ∨ isJust (lookupChunk key td)
-                needed = newChunkQueueEntries canon alreadyHave coords
-            -- `needed` is disjoint from the queue snapshot under the
-            -- canonical identity, and this queue has a single appending
-            -- thread — the Lua thread in a live engine, the dump driver
-            -- in dump mode (where no script issues region requests) —
-            -- so the append can't introduce a duplicate even if the
-            -- world thread removed (loaded) some coords in between. The
-            -- other two producers REPLACE the queue while setting the
-            -- page up and never race this one.
+            needed ← registerChunkDemand ws pid params coords
             atomicModifyIORef' (wsInitQueueRef ws) $ \q →
                 (q ⧺ needed, length needed)

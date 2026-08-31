@@ -43,7 +43,9 @@ import Structure.Types (emptyChunkStructures)
 import World.Generate (generateChunk, cameraChunkCoord)
 import World.Generate.Arena (generateArenaChunks, arenaGenForSeed)
 import World.Grid (worldToGrid)
-import World.Chunk.Queue (chunkQueueCanon, initialChunkQueue)
+import World.Chunk.Queue (initialChunkQueue)
+import World.Chunk.Residency (canonicalChunkCoord)
+import World.Chunk.Admit (registerChunkDemand, seedResidentChunks)
 import World.Plate (elevationAtGlobal)
 import World.Preview (buildPreviewFromPixels, PreviewImage(..))
 import World.Render (surfaceHeadroom)
@@ -335,6 +337,9 @@ stagePage logger registry palette catalog buildingDefs unitDefs
           _ ← evaluate (force arenaChunks)
           atomicModifyIORef' (wsTilesRef worldState) $ \_ →
               (WorldTileData { wtdChunks = chunkMap, wtdMaxChunks = 100 }, ())
+          -- Same admission boundary a fresh arena uses (#2001); this
+          -- staged WorldState is brand new, so its owner starts empty.
+          seedResidentChunks worldState pid params (map lcCoord arenaChunks)
           let seeds = [ (lcCoord c, lcFluidMap c, lcTerrainSurfaceMap c)
                       | c ← arenaChunks ]
           writeIORef (wsInitQueueRef worldState) []
@@ -376,7 +381,17 @@ stagePage logger registry palette catalog buildingDefs unitDefs
             else pure (Nothing, Nothing)
 
           when isActive $ writeIORef phaseRef (LoadPhase1 3 totalSteps)
-          let centerCoord =
+          -- The SAVED camera chunk, canonicalised (#2001).
+          -- 'cameraChunkCoord' does no wrapping, so a session saved past
+          -- the seam names an ALIAS — and this centre is generated and
+          -- inserted straight into wsTilesRef under whatever coord it is
+          -- given. Storing it raw would put the page's one synchronously
+          -- loaded chunk somewhere every canonicalising reader misses,
+          -- and leave the camera loader generating a SECOND copy of the
+          -- same physical chunk under the canonical key. Identity for
+          -- every restore that is not near the seam, and for arena and
+          -- zero-size pages.
+          let centerCoord = canonicalChunkCoord params $
                   cameraChunkCoord (wpsCameraFacing wps)
                                    (wpsCameraX wps)
                                    (wpsCameraY wps)
@@ -408,6 +423,9 @@ stagePage logger registry palette catalog buildingDefs unitDefs
           atomicModifyIORef' (wsTilesRef worldState) $ \_ →
               (WorldTileData { wtdChunks    = HM.singleton centerCoord centerChunk
                              , wtdMaxChunks = 200 }, ())
+          -- The restored centre is new residency (#2001), admitted the
+          -- same way a fresh world's centre is.
+          seedResidentChunks worldState pid params [centerCoord]
           let seeds = [ (centerCoord, lcFluidMap centerChunk
                         , lcTerrainSurfaceMap centerChunk) ]
               stamps = locationStampsFor params [centerChunk]
@@ -420,8 +438,11 @@ stagePage logger registry palette catalog buildingDefs unitDefs
           -- synchronously generated centre is excluded from the queue
           -- and counted once in the total.
           let (remainingCoords, totalInitialChunks) =
-                  initialChunkQueue (chunkQueueCanon params) centerCoord
+                  initialChunkQueue (canonicalChunkCoord params) centerCoord
           when isActive $ writeIORef phaseRef (LoadPhase1 4 totalSteps)
+          -- Register the restored box as durable demand before queueing
+          -- it (#2001), exactly as fresh world init does.
+          _ ← registerChunkDemand worldState pid params remainingCoords
           writeIORef (wsInitQueueRef worldState) remainingCoords
           writeIORef phaseRef (LoadPhase2 (length remainingCoords) totalInitialChunks)
 

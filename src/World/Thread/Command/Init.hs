@@ -35,7 +35,9 @@ import World.Types
 import Structure.Types (emptyChunkStructures)
 import World.Generate (generateChunk)
 import World.Generate.Arena (generateArenaChunks, arenaGenForSeed)
-import World.Chunk.Queue (chunkQueueCanon, initialChunkQueue)
+import World.Chunk.Queue (initialChunkQueue)
+import World.Chunk.Residency (canonicalChunkCoord)
+import World.Chunk.Admit (registerChunkDemand, seedResidentChunks)
 import World.Geology (buildTimeline)
 import World.Geology.Log (formatPlatesSummary)
 import World.Plate (generatePlates, elevationAtGlobal)
@@ -352,7 +354,7 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     -- is excluded from the queue but counted in the total.
     let centerCoord = ChunkCoord 0 0
         (remainingCoords, totalInitialChunks) =
-            initialChunkQueue (chunkQueueCanon params) centerCoord
+            initialChunkQueue (canonicalChunkCoord params) centerCoord
     sendGenLog env $ "Generating initial chunks ("
         <> tshow totalInitialChunks <> ")..."
     
@@ -381,6 +383,11 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     atomicModifyIORef' (wsTilesRef worldState) $ \_ →
         (WorldTileData { wtdChunks = HM.singleton centerCoord centerChunk
                        , wtdMaxChunks = 200 }, ())
+    -- The centre is new residency like any other chunk (#2001), so it
+    -- reaches the owner through the SAME admission boundary the camera
+    -- and init-queue batches use — on a brand-new page whose owner is
+    -- empty, hence the claim-then-admit seed form.
+    seedResidentChunks worldState pageId params [centerCoord]
 
     -- Stamp any placed location on the synchronously-generated centre
     -- chunk (#89). It is written straight to wsTilesRef and excluded from
@@ -389,6 +396,11 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
 
     -- Step 7: Queue remaining chunks
     writeIORef phaseRef (LoadPhase1 7 totalSteps)
+    -- Register the initial box as durable demand before it is queued
+    -- (#2001), so a world.loadChunksInRegion naming any of those chunks
+    -- — or the other seam spelling of one — is recognised as work
+    -- already pending instead of queueing a second copy.
+    _ ← registerChunkDemand worldState pageId params remainingCoords
     writeIORef (wsInitQueueRef worldState) remainingCoords
     
     -- Now switch to Phase 2 tracking
@@ -491,6 +503,10 @@ handleWorldInitArenaCommand env logger pageId = do
     -- Write tile data
     atomicModifyIORef' (wsTilesRef worldState) $ \_ →
         (WorldTileData { wtdChunks = chunkMap, wtdMaxChunks = 100 }, ())
+    -- Arena chunks are residency too (#2001): same admission boundary,
+    -- and 'canonicalChunkCoord' is the identity on an arena page, so the
+    -- sentinel wgpWorldSize never reaches 'wrapChunkCoordU'.
+    seedResidentChunks worldState pageId arenaParams (map lcCoord allChunks)
 
     -- Force the arena chunks to NF so the LoadDone below is honest (same
     -- contract as the progressive loader). Tiny 5×5 arena, negligible cost.
