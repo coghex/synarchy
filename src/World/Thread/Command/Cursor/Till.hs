@@ -1,7 +1,7 @@
 -- | Till designation tool (#333). Mirrors the mine/construct designation
 --   tools' anchor→rectangle commit: per-z-level like mining (a farmed
 --   field is flat ground), but the commit ALSO filters out tiles that
---   can't be tilled — fluid on top (no floor to till), an existing
+--   can't be tilled — sloped ground, fluid on top (no floor to till), an existing
 --   flora instance (can't till under a standing plant/tree), or
 --   already-tilled ground (idempotent re-sweep). The till AI
 --   (scripts/unit_ai.lua) is the consumer; completion goes through the
@@ -58,7 +58,7 @@ handleWorldClearTillAnchorCommand env _logger pageId = do
 
 -- | Commit a till designation. Per-z-level like mining: only tiles at
 --   the anchor's surface z are taken, further filtered to tillable
---   ground (no fluid, no flora, not already tilled). Unloaded-chunk
+--   flat ground (no slope, fluid, flora, or existing tilled soil). Unloaded-chunk
 --   tiles are skipped. Clears the anchor afterwards.
 handleWorldDesignateTillCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → Int → Int → IO ()
@@ -82,9 +82,12 @@ handleWorldDesignateTillCommand env logger pageId gx1 gy1 gx2 gy2 = do
                                        (fcdInstances (lcFlora lc))
                         col = lcTiles lc V.! idx
                         i   = z - ctStartZ col
+                        levelGround = i ≥ 0 ∧ i < VU.length (ctSlopes col)
+                                   ∧ ctSlopes col VU.! i ≡ 0
                         alreadyTilled = i ≥ 0 ∧ i < VU.length (ctVeg col)
                                       ∧ isTilledSoil (ctVeg col VU.! i)
-                    if isNothing fluid ∧ not hasFlora ∧ not alreadyTilled
+                    if levelGround ∧ isNothing fluid ∧ not hasFlora
+                        ∧ not alreadyTilled
                         then Just z
                         else Nothing
                 ((xLo, yLo), (xHi, yHi)) =

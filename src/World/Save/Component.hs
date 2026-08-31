@@ -202,15 +202,24 @@ dependencyOrder comps = go [] comps
 --
 --   Every step is REGISTRY-DRIVEN (requirement 6): there is no separate
 --   hard-coded list of components to apply that could drift from
---   'saveComponentRegistry'. Phase 1 asks each registered component for
---   its decode/self-validate errors ('rcDecodeErrors'); phase 2 folds
---   each component's contribution onto a skeleton via its mandatory
---   'rcApply', in dependency order so @"world-pages"@ installs the base
---   page map before any page-scoped component writes onto it, and
---   @"core-session"@ installs the global id allocators before
---   @"buildings"@/@"units"@ read them. Because 'rcApply' is required to
---   register, a component cannot be written+required yet silently skipped
---   on load.
+--   'saveComponentRegistry'. Phase 1 asks each registered component to
+--   PREPARE itself ('rcPrepare'): decode + self-validate its payload
+--   ONCE, yielding either its failures or the 'ComponentFold' that
+--   writes the value just decoded onto a snapshot. Phase 2 runs those
+--   already-prepared folds in dependency order, so @"world-pages"@
+--   installs the base page map before any page-scoped component writes
+--   onto it, and @"core-session"@ installs the global id allocators
+--   before @"buildings"@/@"units"@ read them. Because the fold is
+--   required to register, a component cannot be written+required yet
+--   silently skipped on load.
+--
+--   Issue #1919: phase 2 reuses phase 1's decoded values instead of
+--   decoding every payload a second time. Nothing about the
+--   all-or-nothing contract depends on that second decode — phase 1
+--   still visits EVERY registered component and collects EVERY failure
+--   before phase 2 folds anything, so a single failing component still
+--   yields no partial snapshot and every failure is still reported with
+--   its component id, encoded version, and phase.
 assembleSnapshot
     ∷ SaveMetadata → DecodedEnvelope → Either [ComponentError] SessionSnapshot
 assembleSnapshot meta de = do
@@ -228,19 +237,37 @@ assembleSnapshot meta de = do
     --    corrupted/adversarial envelope can carry an unbounded number of
     --    per-component decode failures just as easily as a cross-component
     --    one.
-    let decodeErrs = concatMap (`rcDecodeErrors` de) saveComponentRegistry
+    --    Visiting order is the registry's DECLARATION order, exactly as
+    --    before, so the pre-cap error list for a given failing envelope is
+    --    unchanged.
+    let prepared   = [ (rc, rcPrepare rc de) | rc ← saveComponentRegistry ]
+        decodeErrs = concat [ es | (_, Left es) ← prepared ]
     if not (null decodeErrs) then Left (capComponentErrors decodeErrs) else do
-        -- 2. Fold each component's contribution onto the skeleton, in
-        --    dependency order. Page-set-mismatch errors are independent per
-        --    component (they all check against the SAME base @"world-pages"@
-        --    installs first), so accumulate them all rather than
-        --    short-circuiting. Foundational folds (world-pages/core-session/
-        --    tex/lua) never error, so a failed page component leaves the
-        --    base intact for the next component's own check.
-        let (applyErrs, snap) = L.foldl' step ([], skeleton) ordered
-            step (es, s) rc = case rcApply rc de s of
-                Left e   → (es <> e, s)
-                Right s' → (es, s')
+        -- 2. Fold each component's ALREADY-DECODED contribution onto the
+        --    skeleton, in dependency order. Page-set-mismatch errors are
+        --    independent per component (they all check against the SAME
+        --    base @"world-pages"@ installs first), so accumulate them all
+        --    rather than short-circuiting. Foundational folds
+        --    (world-pages/core-session/tex/lua) never error, so a failed
+        --    page component leaves the base intact for the next
+        --    component's own check.
+        let foldFor = HM.fromList [ (rcId rc, f) | (rc, Right f) ← prepared ]
+            (applyErrs, snap) = L.foldl' step ([], skeleton) ordered
+            step (es, s) rc = case HM.lookup (rcId rc) foldFor of
+                -- Unreachable: 'ordered' is a permutation of the very
+                -- registry 'prepared' was built from, and phase 1 already
+                -- returned on ANY component that failed to prepare. Kept
+                -- as an explicit AssemblePhase failure rather than a
+                -- silent skip, because silently dropping a registered
+                -- component's contribution is precisely the outcome the
+                -- mandatory-fold design exists to make impossible.
+                Nothing → (es <> [ ComponentError (rcId rc) (rcVersion rc)
+                                     AssemblePhase
+                                     "component was not prepared for assembly" ]
+                          , s)
+                Just f  → case f s of
+                    Left e   → (es <> e, s)
+                    Right s' → (es, s')
         if not (null applyErrs) then Left (capComponentErrors applyErrs) else do
             -- 3. Cross-component invariants (requirement 6/9/12).
             --    'structureEditPaletteErrors' is called here rather than

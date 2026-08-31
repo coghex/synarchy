@@ -5,7 +5,10 @@ Verifies the boundary between versioned config *templates*
 (`config/*_default.yaml`, tracked) and local runtime config *state*
 (`config/video.local.yaml`, `config/keybinds.local.yaml`,
 `config/notifications.local.yaml`, `config/save.local.yaml`, gitignored)
-that the settings UI's Save actions write:
+that the settings UI's Save actions write — plus #1937's gitignored
+`config/*.legacy-neutral.local.yaml` records, which are runtime state on the
+same side of that boundary and are asserted here never to appear without
+a legacy file to judge:
 
   1. `git status` for `config/` + `.gitignore` starts clean.
   2. With no local config files AND no legacy pre-#661 config files
@@ -17,7 +20,9 @@ that the settings UI's Save actions write:
      `engine.setNotificationOverrides`) write the expected `*.local.yaml`
      files, not the legacy paths.
   4. None of that dirties git: `git status` for `config/` + `.gitignore`
-     is still clean afterward.
+     is still clean afterward — the #1937 record paths included, which is
+     what keeps requirement 7 ("runtime writes leave git status clean")
+     true now that a boot can write them.
   5. The `save` family (#913) additionally resolves as a KEY-LEVEL
      OVERLAY rather than "whole local file wins", and its local file
      records only genuine OVERRIDES (a key matching the tracked template
@@ -68,6 +73,16 @@ LEGACY_FILES = [
     "config/notifications.yaml",
 ]
 
+# #1937: gitignored records of a legacy file already judged a neutral
+# placeholder. Written by `Engine.Core.Init.migrateLegacyConfig` instead
+# of promoting that placeholder into `*.local.yaml`. Runtime state, so a
+# "simulated fresh clone" must hide these too — and a fresh-clone boot,
+# having no legacy file to judge, must not create one.
+RECORD_FILES = [
+    "config/video.legacy-neutral.local.yaml",
+    "config/keybinds.legacy-neutral.local.yaml",
+]
+
 
 def check(name: str, ok: bool, detail: str = "") -> bool:
     print(f"  [{'PASS' if ok else 'FAIL'}] {name}"
@@ -94,7 +109,7 @@ def backup_local_files() -> dict[str, str]:
     `git status -- config` checks this probe runs, contaminating them."""
     backups = {}
     os.makedirs(BACKUP_DIR, exist_ok=True)
-    for p in LOCAL_FILES + LEGACY_FILES:
+    for p in LOCAL_FILES + LEGACY_FILES + RECORD_FILES:
         if os.path.exists(p):
             bak = os.path.join(BACKUP_DIR, os.path.basename(p))
             shutil.move(p, bak)
@@ -109,7 +124,7 @@ def restore_local_files(backups: dict[str, str]) -> None:
     # `restore_legacy_files` never ran, e.g. an early exception) —
     # otherwise they're already correctly back in their tracked state
     # and must NOT be removed again.
-    for p in LOCAL_FILES:
+    for p in LOCAL_FILES + RECORD_FILES:
         if os.path.exists(p):
             os.remove(p)
     for p in LEGACY_FILES:
@@ -154,7 +169,7 @@ def main() -> int:
     backups = backup_local_files()
     proc = None
     try:
-        for p in LOCAL_FILES + LEGACY_FILES:
+        for p in LOCAL_FILES + LEGACY_FILES + RECORD_FILES:
             passed &= check(f"{p} absent pre-boot (simulated fresh clone)",
                              not os.path.exists(p))
 
@@ -263,6 +278,14 @@ def main() -> int:
         for p in LEGACY_FILES:
             passed &= check(f"legacy {p} not resurrected by a fresh-clone boot",
                              not os.path.exists(p))
+        # #1937: with no legacy file present there is nothing to judge
+        # neutral, so no record may appear either. A record written here
+        # would mean the mechanism ran against something that isn't a
+        # legacy placeholder.
+        for p in RECORD_FILES:
+            passed &= check(f"{p} not created by a fresh-clone boot "
+                            "(no legacy file to judge)",
+                            not os.path.exists(p))
 
         # The legacy paths are TRACKED (#786) — restore them on disk now,
         # well before the mid-run git-status post-check, rather than

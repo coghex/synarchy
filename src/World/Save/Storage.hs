@@ -151,6 +151,7 @@ module World.Save.Storage
     , GenerationSource(..)
     , LoadSelection(..)
     , selectLoadGeneration
+    , LoadFailure(..)
     ) where
 
 import UPrelude
@@ -172,6 +173,7 @@ import World.Save.Types (SaveData, SaveMetadata(..), checkWorldCount)
 import World.Save.Envelope
     ( decodeSessionEnvelope, decodeSessionEnvelopeClassified
     , GenerationFailure(..), renderGenerationFailure
+    , LoadProgress(..), generationFailureProgress
     , foreignOptionalComponentIds, LuaComponentSpec(..) )
 import World.Save.Envelope.Types (ComponentId(..))
 import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotToSaveData)
@@ -691,8 +693,8 @@ classifyAuthoritative luaKnownNames luaRequiredNames authPath = do
         else do
             decoded ← decodeGenerationFile luaKnownNames luaRequiredNames authPath
             pure $ case decoded of
-                Left (GenerationCorrupt _)      → AuthoritativeRecovering
-                Left (GenerationIncompatible _) → AuthoritativeRetained
+                Left (GenerationCorrupt _)        → AuthoritativeRecovering
+                Left (GenerationIncompatible _ _) → AuthoritativeRetained
                 Right _                         → AuthoritativeRetained
 
 -- | If a previous generation exists, move it onto a freshly claimed
@@ -816,6 +818,18 @@ data LoadSelection = LoadSelection
         --   default rather than treat it as missing.
     } deriving (Show)
 
+-- | Why load-source selection failed: the human-readable message it has
+--   always produced, PLUS how far the attempt structurally got (issue
+--   #1919). 'lfProgress' is assembled from the same structured failures
+--   the decode layers already carry, never parsed back out of
+--   'lfMessage' — so rewording any diagnostic in this module, in
+--   'World.Save.Envelope', or in 'World.Save.Component.Types' cannot
+--   change what @engine.getLoadStatus()@ reports.
+data LoadFailure = LoadFailure
+    { lfProgress ∷ !LoadProgress
+    , lfMessage  ∷ !Text
+    } deriving (Show, Eq)
+
 -- | Load-source selection (requirement 7). A fully valid authoritative
 --   generation always wins. A STORAGE-corrupt authoritative (absent,
 --   truncated, bad framing, or a checksum failure — see
@@ -828,17 +842,18 @@ data LoadSelection = LoadSelection
 --   generations: exactly one generation's 'SaveData' is ever returned.
 selectLoadGeneration
     ∷ HS.HashSet Text → HS.HashSet Text → FilePath → Text
-    → IO (Either Text LoadSelection)
+    → IO (Either LoadFailure LoadSelection)
 selectLoadGeneration luaKnownNames luaRequiredNames dir slotName = do
     safety ← rejectSymlinkedSlotDir dir
     case safety of
-        Left reason → pure (Left reason)
+        -- A refused slot directory never yielded a candidate to inspect.
+        Left reason → pure (Left (LoadFailure ReachedNothing reason))
         Right ()    →
             selectLoadGenerationUnsafe luaKnownNames luaRequiredNames dir slotName
 
 selectLoadGenerationUnsafe
     ∷ HS.HashSet Text → HS.HashSet Text → FilePath → Text
-    → IO (Either Text LoadSelection)
+    → IO (Either LoadFailure LoadSelection)
 selectLoadGenerationUnsafe luaKnownNames luaRequiredNames dir slotName = do
     let authPath = dir </> authoritativeFileName
         prevPath = dir </> previousGenerationFileName
@@ -851,8 +866,8 @@ selectLoadGenerationUnsafe luaKnownNames luaRequiredNames dir slotName = do
             Right (sd, luaComponents, isMigrated) →
                 pure (Right (LoadSelection FromAuthoritative
                         "authoritative generation" sd luaComponents isMigrated))
-            Left (GenerationIncompatible reason) →
-                pure (Left (incompatibleMessage reason))
+            Left (GenerationIncompatible progress reason) →
+                pure (Left (LoadFailure progress (incompatibleMessage reason)))
             Left (GenerationCorrupt reason) →
                 fallbackToPrevious prevPath reason
   where
@@ -863,9 +878,9 @@ selectLoadGenerationUnsafe luaKnownNames luaRequiredNames dir slotName = do
     fallbackToPrevious prevPath authReason = do
         prevExists ← doesFileExist prevPath
         if not prevExists
-          then pure (Left ("save '" <> slotName
+          then pure (Left (LoadFailure ReachedNothing ("save '" <> slotName
                 <> "' authoritative generation is unreadable (" <> authReason
-                <> ") and no previous generation exists to recover from"))
+                <> ") and no previous generation exists to recover from")))
           else do
             prevResult ← decodeGenerationFile luaKnownNames luaRequiredNames prevPath
             case prevResult of
@@ -874,12 +889,21 @@ selectLoadGenerationUnsafe luaKnownNames luaRequiredNames dir slotName = do
                         ("authoritative generation unreadable (" <> authReason
                          <> "); recovered from the previous generation")
                         sd luaComponents isMigrated))
+                -- Issue #1919: the composite message describes BOTH
+                -- candidates, but the progress reported is the PREVIOUS
+                -- candidate's own — it is the one this selection actually
+                -- got furthest with. The authoritative candidate is
+                -- 'GenerationCorrupt' here by construction (that is the
+                -- only classification that reaches a fallback), so it
+                -- contributes 'ReachedNothing' and could only ever lose
+                -- information.
                 Left prevFail →
-                    pure (Left ("save '" <> slotName
+                    pure (Left (LoadFailure (generationFailureProgress prevFail)
+                        ("save '" <> slotName
                         <> "' authoritative generation is unreadable ("
                         <> authReason
                         <> ") and the previous generation is also unusable ("
-                        <> renderGenerationFailure prevFail <> ")"))
+                        <> renderGenerationFailure prevFail <> ")")))
 
 -- | Decode + fully validate one candidate generation file, classified
 --   per 'GenerationFailure'. 'checkWorldCount' classifies as
@@ -925,7 +949,13 @@ decodeGenerationFile luaKnownNames luaRequiredNames path = do
                             luaKnownNames luaRequiredNames bytes
                     let req = SaveRequestMeta (smName meta) (smTimestamp meta)
                                     (smAutosave meta)
-                    sd ← either (Left . GenerationIncompatible) Right
+                    -- A content check that runs only AFTER assembly
+                    -- succeeded: every component decoded, migrated,
+                    -- validated and assembled, so no per-component phase
+                    -- describes this failure. 'ReachedEnvelope' is what it
+                    -- has always reported.
+                    sd ← either (Left . GenerationIncompatible ReachedEnvelope)
+                                Right
                            (checkWorldCount (snapshotToSaveData req snap))
                     pure (sd, [ (lcsId c, lcsVersion c, lcsPayload c)
                               | c ← luaComponents ]

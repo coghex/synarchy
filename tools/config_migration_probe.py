@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Headless config-migration probe (#786).
+"""Headless config-migration probe (#786, neutral suppression #1937).
 
 `Engine.Core.Init.migrateLegacyConfig` is the upgrade path from the
 pre-#786 tracked config layout (`config/video.yaml`,
@@ -7,31 +7,56 @@ pre-#786 tracked config layout (`config/video.yaml`,
 gitignored `*.local.yaml` runtime paths. Those three legacy paths stay
 tracked with content equal to the versioned default/registry (never a
 real player's values) purely so a readable legacy file always exists —
-see CLAUDE.md for why. This probe asserts the engine-side upgrade
-contract end to end:
+see CLAUDE.md for why.
+
+Because that content IS the versioned default, copying it was never the
+no-op it read as: it made the then-current defaults into durable local
+state that outranks the tracked template for ever after (#1937). Video
+and keybindings therefore carry a `LegacyNeutralityCheck`: a legacy file
+that says nothing its own `_default.yaml` would not already resolve is
+RECOGNISED, not copied, and the determination is recorded in a
+gitignored `*.legacy-neutral.local.yaml` file so a later revision of that
+template cannot make the untouched placeholder look like player state.
+Notifications keep the unconditional copy — they have no tracked
+template to be neutral against, and an absent overrides file already
+defers to `data/notification_categories.yaml`.
+
+This probe asserts the engine-side upgrade contract end to end:
 
   0. The REAL committed tree (not a hand-placed fixture) retains a
-     readable legacy file, resolves it to the versioned default, and
-     migrates it into the matching `*.local.yaml` on a plain boot —
-     the direct-updater path itself, not just the mechanism in
-     isolation.
+     readable legacy file and resolves it to the versioned default —
+     and, since #1937, does NOT promote video/keybindings into
+     `*.local.yaml`: it records the neutral determination instead, and
+     logs it in words that are not the migration line. Notifications
+     still materialize theirs.
+  0b. Requirement 5 end to end: after that boot, revising an
+     ALREADY-SHIPPED value in `config/video_default.yaml` and in
+     `config/keybinds_default.yaml` — leaving both legacy files exactly
+     as committed — reaches a player who has never saved on the very
+     next boot. This is what a stateless "is the legacy file equal to
+     today's default" check would fail.
+  0c. Neutrality is judged by the subsystem's own DECODE, not by bytes:
+     a legacy file reformatted (comments, flow style, key order) but
+     semantically identical to the template is still a placeholder.
   1. A legacy file with distinct non-default values, present with no
      local file yet, gets migrated on boot: the resolved config reflects
-     the legacy values, and the matching `*.local.yaml` is written.
+     the legacy values, the matching `*.local.yaml` is written, and the
+     `Migrated legacy config <legacy> -> <local>` line is unchanged.
   2. A second boot is idempotent: editing the legacy file afterward has
      no further effect — the already-migrated local file keeps winning.
   3. When both a legacy file and a genuine local file exist from the
      start, the local file wins outright and migration never touches
      either file.
   4. A malformed legacy file falls back safely to the versioned default
-     (video) without ever creating a local file — and, separately, a
-     malformed legacy file next to an already-valid local file leaves
-     that local file completely untouched.
+     (video) without ever creating a local file or a neutrality record —
+     and, separately, a malformed legacy file next to an already-valid
+     local file leaves that local file completely untouched.
 
-Any local config files present before the probe runs are backed up and
-restored afterward. Phases 1-4 additionally overwrite (then restore)
-the tracked legacy files with their own fixtures to drive the mechanism
-directly with known, distinct values.
+Any local config files (and neutrality records) present before the probe
+runs are backed up and restored afterward. Phase 0b additionally revises
+— then restores — the tracked `_default.yaml` templates, and phases
+0c-4 overwrite (then restore) the tracked legacy files with their own
+fixtures to drive the mechanism directly with known values.
 
 Usage:
   python3 tools/config_migration_probe.py [--port 9166]
@@ -41,6 +66,7 @@ Exit 0 = all checks passed.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -60,8 +86,23 @@ LEGACY_FILES = [
     "config/keybinds.yaml",
     "config/notifications.yaml",
 ]
+# #1937: gitignored records of a legacy file already judged neutral.
+# They are runtime state exactly like the *.local.yaml paths, so they
+# are backed up, cleared between fixtures, and restored the same way.
+RECORD_FILES = [
+    "config/video.legacy-neutral.local.yaml",
+    "config/keybinds.legacy-neutral.local.yaml",
+]
+# Tracked templates phase 0b revises in place (and restores).
+DEFAULT_FILES = [
+    "config/video_default.yaml",
+    "config/keybinds_default.yaml",
+]
 
 BACKUP_DIR = "/tmp/config_migration_probe_backup"
+
+MIGRATED_LINE = "Migrated legacy config {legacy} -> {local}"
+NEUTRAL_MARK = "carries no player state"
 
 LEGACY_VIDEO = """video:
   resolution:
@@ -102,6 +143,22 @@ LEGACY_NOTIFICATIONS = """categories:
 MALFORMED_YAML = "video: [this, is: not, valid: {yaml"
 
 
+def equivalent_video_fixture() -> str:
+    """A byte-different spelling of `config/video_default.yaml` that
+    decodes to the identical `VideoConfigFile`.
+
+    The committed legacy/default pair is byte-identical, so on its own it
+    cannot tell a semantic comparison apart from `cmp`. Built FROM the
+    tracked template (never a frozen copy) so it stays equivalent when
+    the template is revised: comments, flow style and reversed key order
+    change every byte while the decoder sees the same values."""
+    video = load_yaml("config/video_default.yaml")["video"]
+    body = ", ".join(f"{k}: {json.dumps(v)}"
+                      for k, v in reversed(list(video.items())))
+    return ("# pre-#786 placeholder, reformatted: same values, other bytes\n"
+            "video: {" + body + "}\n")
+
+
 def check(name: str, ok: bool, detail: str = "") -> bool:
     print(f"  [{'PASS' if ok else 'FAIL'}] {name}"
           + (f"  ({detail})" if detail else ""))
@@ -115,18 +172,34 @@ def git_status(paths: list[str]) -> str:
 
 
 def clear_all() -> None:
-    for p in LOCAL_FILES + LEGACY_FILES:
+    for p in LOCAL_FILES + LEGACY_FILES + RECORD_FILES:
         if os.path.exists(p):
             os.remove(p)
 
 
+def read_log() -> str:
+    """The most recent boot's engine output (probelib truncates per boot)."""
+    try:
+        with open(LOG) as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def migrated_line(name: str) -> str:
+    return MIGRATED_LINE.format(legacy=f"config/{name}.yaml",
+                                 local=f"config/{name}.local.yaml")
+
+
 def backup_local_only() -> dict[str, str]:
-    """Back up (move aside) only the *.local.yaml paths, leaving the
-    tracked legacy files exactly as committed — used for phase 0, which
-    tests the real repo tree rather than a hand-placed fixture."""
+    """Back up (move aside) only the gitignored runtime paths — the
+    *.local.yaml files and #1937's neutrality records — leaving the
+    tracked legacy files and templates exactly as committed. Used for
+    phases 0-0b, which test the real repo tree rather than a hand-placed
+    fixture."""
     backups = {}
     os.makedirs(BACKUP_DIR, exist_ok=True)
-    for p in LOCAL_FILES:
+    for p in LOCAL_FILES + RECORD_FILES:
         if os.path.exists(p):
             bak = os.path.join(BACKUP_DIR, os.path.basename(p) + ".orig")
             shutil.move(p, bak)
@@ -135,7 +208,7 @@ def backup_local_only() -> dict[str, str]:
 
 
 def restore_local_only(backups: dict[str, str]) -> None:
-    for p in LOCAL_FILES:
+    for p in LOCAL_FILES + RECORD_FILES:
         if os.path.exists(p):
             os.remove(p)
     for p, bak in backups.items():
@@ -145,7 +218,7 @@ def restore_local_only(backups: dict[str, str]) -> None:
 def backup_all() -> dict[str, str]:
     backups = {}
     os.makedirs(BACKUP_DIR, exist_ok=True)
-    for p in LOCAL_FILES + LEGACY_FILES:
+    for p in LOCAL_FILES + LEGACY_FILES + RECORD_FILES:
         if os.path.exists(p):
             bak = os.path.join(BACKUP_DIR, os.path.basename(p) + ".orig")
             shutil.move(p, bak)
@@ -186,7 +259,7 @@ def main() -> int:
     # the direct-updater path itself, not just the mechanism exercised
     # against synthetic fixtures below.
     # ----------------------------------------------------------------
-    print("0. the real committed legacy files resolve to versioned defaults and migrate")
+    print("0. the real committed legacy files are recognized as neutral placeholders")
     for p in LEGACY_FILES:
         passed &= check(f"tracked {p} is present on disk", os.path.exists(p))
     status = git_status(LEGACY_FILES)
@@ -194,8 +267,9 @@ def main() -> int:
                      status == "", status.strip())
 
     local_backups = backup_local_only()
+    default_backups: dict[str, str] = {}
     try:
-        for p in LOCAL_FILES:
+        for p in LOCAL_FILES + RECORD_FILES:
             passed &= check(f"{p} absent pre-boot", not os.path.exists(p))
 
         proc = boot(args.port, log=LOG)
@@ -219,20 +293,120 @@ def main() -> int:
         passed &= check("real legacy notifications.yaml resolves to the registry default",
                          r == "false", r)
 
-        for p in LOCAL_FILES:
-            passed &= check(f"{p} created by migrating the real committed legacy file",
-                             os.path.exists(p))
-
         quit_engine(args.port, proc)
         proc = None
+
+        # #1937: the placeholder must NOT become durable local state.
+        # This is the check that fails if promotion is reintroduced.
+        for p in ("config/video.local.yaml", "config/keybinds.local.yaml"):
+            passed &= check(f"{p} NOT created from a neutral placeholder",
+                             not os.path.exists(p))
+        for p in RECORD_FILES:
+            passed &= check(f"{p} records the neutral determination",
+                             os.path.exists(p))
+        passed &= check("config/notifications.local.yaml still materializes "
+                        "(no tracked template to be neutral against)",
+                        os.path.exists("config/notifications.local.yaml"))
+
+        log = read_log()
+        for name in ("video", "keybinds"):
+            passed &= check(f"boot log names {name} suppression distinguishably",
+                             f"Legacy config config/{name}.yaml" in log
+                             and NEUTRAL_MARK in log)
+            passed &= check(f"boot log does NOT claim a {name} migration",
+                             migrated_line(name) not in log)
+
+        # ------------------------------------------------------------
+        # Phase 0b: requirement 5 — revising an ALREADY-SHIPPED value in
+        # a tracked template reaches a player who never saved, on the
+        # boot after the placeholder was judged neutral. The legacy
+        # files are left exactly as committed, so a stateless equality
+        # check would now read them as player state and promote them.
+        # ------------------------------------------------------------
+        print("0b. a later revision of a tracked default still reaches a never-saved player")
+        os.makedirs(BACKUP_DIR, exist_ok=True)
+        for p in DEFAULT_FILES:
+            bak = os.path.join(BACKUP_DIR, os.path.basename(p) + ".orig")
+            shutil.copy2(p, bak)
+            default_backups[p] = bak
+
+        revised_scale = float(want_default["ui_scale"]) + 0.5
+        video_doc = load_yaml("config/video_default.yaml")
+        video_doc["video"]["ui_scale"] = revised_scale
+        with open("config/video_default.yaml", "w") as f:
+            yaml.safe_dump(video_doc, f, sort_keys=False)
+
+        # Deliberately NOT "Y"/"N"/"On"/"Off": PyYAML emits those bare,
+        # and a YAML 1.1 reader takes them for booleans, which the
+        # keybind decoder rejects outright ("list entries must be
+        # strings") -- the file would fall back to code defaults and the
+        # check would pass for the wrong reason.
+        revised_moveup = ["P", "O"]
+        kb_doc = load_yaml("config/keybinds_default.yaml")
+        kb_doc["keybinds"]["moveUp"] = revised_moveup
+        with open("config/keybinds_default.yaml", "w") as f:
+            yaml.safe_dump(kb_doc, f, sort_keys=False)
+
+        legacy_before = {p: open(p).read() for p in LEGACY_FILES}
+
+        proc = boot(args.port, log=LOG)
+        scale, _ = get_video_ui_scale(args.port)
+        passed &= check("revised video_default.yaml ui_scale is effective",
+                         abs(scale - revised_scale) < 1e-6, str(scale))
+        r = send(args.port, "local b = engine.getKeybinds(); return table.concat(b.moveUp, ',')")
+        passed &= check("revised keybinds_default.yaml moveUp is effective",
+                         r == ",".join(revised_moveup), r)
+        quit_engine(args.port, proc)
+        proc = None
+
+        for p in ("config/video.local.yaml", "config/keybinds.local.yaml"):
+            passed &= check(f"{p} STILL absent after the template revision",
+                             not os.path.exists(p))
+        log = read_log()
+        for name in ("video", "keybinds"):
+            passed &= check(f"the untouched {name} placeholder is still not migrated",
+                             migrated_line(name) not in log)
+        passed &= check("the tracked legacy files were never rewritten",
+                         all(open(p).read() == legacy_before[p] for p in LEGACY_FILES))
     finally:
         if proc is not None:
             quit_engine(args.port, proc)
             proc = None
+        for p, bak in default_backups.items():
+            shutil.move(bak, p)
         restore_local_only(local_backups)
 
     backups = backup_all()
     try:
+        # ------------------------------------------------------------
+        # Phase 0c: neutrality is decided by the subsystem's DECODE, not
+        # by bytes. The committed legacy/default pair is byte-identical,
+        # so only a deliberately reformatted fixture can tell a semantic
+        # comparison apart from `cmp`.
+        # ------------------------------------------------------------
+        print("0c. a reformatted but semantically identical legacy file is still neutral")
+        clear_all()
+        equivalent = equivalent_video_fixture()
+        with open("config/video.yaml", "w") as f:
+            f.write(equivalent)
+        passed &= check("the fixture really is byte-different from the template",
+                         equivalent != open("config/video_default.yaml").read())
+
+        proc = boot(args.port, log=LOG)
+        want_default = load_yaml("config/video_default.yaml")["video"]
+        scale, _ = get_video_ui_scale(args.port)
+        passed &= check("reformatted legacy resolves to the versioned default ui_scale",
+                         abs(scale - float(want_default["ui_scale"])) < 1e-6, str(scale))
+        quit_engine(args.port, proc)
+        proc = None
+        passed &= check("no video.local.yaml from a reformatted placeholder",
+                         not os.path.exists("config/video.local.yaml"))
+        log = read_log()
+        passed &= check("reformatted placeholder logs the suppression line",
+                         NEUTRAL_MARK in log)
+        passed &= check("reformatted placeholder logs no migration",
+                         migrated_line("video") not in log)
+
         # ------------------------------------------------------------
         # Phase 1: upgrade — legacy present, local absent, all three
         # ------------------------------------------------------------
@@ -270,6 +444,15 @@ def main() -> int:
 
         quit_engine(args.port, proc)
         proc = None
+        log = read_log()
+        for name in ("video", "keybinds", "notifications"):
+            passed &= check(f"{name}: the exact migration log line is unchanged",
+                             migrated_line(name) in log)
+        passed &= check("genuinely different content is never called neutral",
+                         NEUTRAL_MARK not in log)
+        for p in RECORD_FILES:
+            passed &= check(f"no {p} is written for a real migration",
+                             not os.path.exists(p))
 
         # ------------------------------------------------------------
         # Phase 2: idempotent second boot — legacy edited afterward,
@@ -329,6 +512,8 @@ def main() -> int:
                          not os.path.exists("config/video.local.yaml"))
         quit_engine(args.port, proc)
         proc = None
+        passed &= check("no neutrality record is written for a malformed legacy file",
+                         not os.path.exists("config/video.legacy-neutral.local.yaml"))
 
         print("4b. malformed legacy state does not destroy a valid newer local file")
         with open("config/video.local.yaml", "w") as f:

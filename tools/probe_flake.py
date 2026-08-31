@@ -75,6 +75,7 @@ RESULT_SCHEMA = "probe-flake-result/v1"
 PROTOCOL_PROBES: dict[str, str] = {
     "position_hold": probe_protocol.PROTOCOL_VERSION,
     "role": probe_protocol.PROTOCOL_VERSION,
+    "text_encoding": probe_protocol.PROTOCOL_VERSION,
     "thermo_altitude": probe_protocol.PROTOCOL_VERSION,
 }
 
