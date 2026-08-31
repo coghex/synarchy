@@ -1082,16 +1082,19 @@ test-suite synarchy-test-graphical
 test-suite synarchy-test-headless
     import: warnings, lang, build-policy
     type: exitcode-stdio-1.0
-    -- `app` is here for two pure modules: App.Cli's parser (#1191) and
-    -- App.Preview.Config's hidden-window policy. Both live in the
-    -- executable rather than the library and have no app-local imports,
-    -- so compiling them into this suite tests their policy without
-    -- booting a process. `test-headless` stays FIRST so main-is resolves
-    -- to test-headless/Spec.hs, not app/Main.hs.
+    -- `app` is here for three pure modules: App.Cli's parser (#1191),
+    -- App.Preview.Config's hidden-window policy, and
+    -- App.ResourceRoot's root precedence (#1949). All live in the
+    -- executable rather than the library, and their app-local imports
+    -- stay within this set, so compiling them into this suite tests
+    -- their policy without booting a process. `test-headless` stays
+    -- FIRST so main-is resolves to test-headless/Spec.hs, not
+    -- app/Main.hs.
     hs-source-dirs: test-headless, app
     main-is: Spec.hs
     other-modules: App.Cli
                    App.Preview.Config
+                   App.ResourceRoot
                    Test.Headless.UPrelude
                    Test.Headless.Harness
                    Test.Headless.Harness.Isolation
@@ -1300,6 +1303,7 @@ test-suite synarchy-test-headless
                    Test.Headless.App.Cli
                    Test.Headless.App.ChunkRegion
                    Test.Headless.App.PreviewConfig
+                   Test.Headless.App.ResourceRoot
                    Test.Headless.Core.LogCategoryEnv
                    Test.Headless.Core.LogMonad
                    Test.Headless.Core.LogParity

@@ -231,6 +231,7 @@ import qualified Test.Headless.Core.DebugListener as DebugListener
 import qualified Test.Headless.App.Cli as AppCli
 import qualified Test.Headless.App.ChunkRegion as AppChunkRegion
 import qualified Test.Headless.App.PreviewConfig as PreviewConfig
+import qualified Test.Headless.App.ResourceRoot as AppResourceRoot
 import qualified Test.Headless.Camera.GotoClamp as GotoClamp
 import qualified Test.Headless.Camera.ZoomScroll as ZoomScroll
 import qualified Test.Headless.Scene.BatchMerge as BatchMerge
@@ -761,6 +762,7 @@ main = hspec $ do
     DebugListener.spec
     AppCli.spec
     AppChunkRegion.spec
+    AppResourceRoot.spec
     describe "App.Preview.Config" PreviewConfig.spec
     describe "Camera.GotoClamp" GotoClamp.spec
     describe "Camera.ZoomScroll" ZoomScroll.spec
