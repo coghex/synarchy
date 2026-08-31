@@ -56,12 +56,16 @@
 --   own lifetimes instead. That coupling is enforced in
 --   "Engine.Scripting.Lua.Message.Scene" and nowhere else, which states
 --   the invariant in full and routes all four transitions through one
---   pair of helpers: an entry exists exactly when the active scene
---   graph holds a TEXT node at that id (#1961). Note the transition
---   that is easy to miss — 'Engine.Scene.Graph.addNode' is a
---   @Map.insert@, so spawning a SPRITE over a live text node replaces
---   it and retires its entry too. Those are the map's only writers and
---   only removers, so a session boundary has nothing left to reset.
+--   pair of helpers: an entry exists exactly when the scene graph holds
+--   a node at that id whose @nodeText@ is set, and equals it (#1961).
+--   The condition is a node BEARING TEXT, not a @TextObject@ —
+--   @engine.setText@ against a sprite's id sets that sprite's text and
+--   caches it, which is preserved behaviour. And note the transition
+--   that is easy to miss: 'Engine.Scene.Graph.addNode' is a
+--   @Map.insert@, so spawning a SPRITE over a node that bore text
+--   replaces it and retires its entry too. Those are the map's only
+--   writers and only removers, so a session boundary has nothing left
+--   to reset.
 --
 --   Like the other capability modules, this one imports only the
 --   narrow slice of @Engine.Core.State@ it needs (the bare 'EngineEnv'

@@ -18,11 +18,15 @@
 --   GPU calls, and every GPU step in 'processLuaMessages' sits behind
 --   @whenGraphical@, so the whole path runs headless.
 --
---   The one transition worth naming here is REPLACEMENT:
---   'Engine.Scene.Graph.addNode' is a @Map.insert@, so a spawn at an id
---   that already names a node overwrites it rather than failing, and a
---   sprite spawned over a text node leaves an object with no text. Two
---   cases below cover that in both directions.
+--   Two behaviours are easy to get wrong and are each pinned below.
+--   REPLACEMENT: 'Engine.Scene.Graph.addNode' is a @Map.insert@, so a
+--   spawn at an id that already names a node overwrites it rather than
+--   failing, and a sprite spawned over a text node leaves an object
+--   with no text (covered in both directions). And a SPRITE IS A LIVE
+--   NODE for @setText@ — 'Engine.Scene.Graph.modifySceneNode' does not
+--   check 'nodeType' — so text set on one is cached like any other,
+--   which is why the module's invariant speaks of nodes BEARING TEXT
+--   rather than of 'TextObject's.
 --
 --   The one thing headless does NOT give us is an active scene:
 --   'initializeEngineHeadless' inherits @defaultEngineState@'s empty
@@ -205,6 +209,27 @@ spec = describe "scene-text cache lifetime (issue #1961)" $ do
 
             nodeTypeOf env liveId `shouldReturn` Just TextObject
             cachedText env liveId `shouldReturn` Just "now text"
+
+    -- modifySceneNode succeeds for ANY live node, so setText against a
+    -- sprite's id sets that sprite's nodeText and caches it. That is
+    -- long-standing behaviour #1961 requires be preserved exactly
+    -- (requirement 2), and it is why the module's invariant is stated
+    -- over nodes BEARING TEXT rather than over TextObjects.
+    it "treats a sprite as a live node for setText, caching its text \
+       \and retiring it with the node like any other" $ \env →
+        withActiveScene env $ do
+            pump env [spawnSpriteOverLive]
+
+            pump env [LuaSetTextRequest liveId "on a sprite"]
+
+            -- Still a sprite; the text landed on it, and the cache
+            -- agrees with the node rather than with the node's TYPE.
+            nodeTypeOf env liveId `shouldReturn` Just SpriteObject
+            nodeTextOf env liveId `shouldReturn` Just "on a sprite"
+            cachedText env liveId `shouldReturn` Just "on a sprite"
+
+            pump env [LuaDestroyRequest liveId]
+            cachedText env liveId `shouldReturn` Nothing
 
     it "leaves the map empty across a spawn/set/destroy round trip, \
        \which is what makes its boot-process reset None honest" $ \env →

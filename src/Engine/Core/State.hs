@@ -164,7 +164,7 @@ data EngineEnv = EngineEnv
   --   input thread's shared state. 'Nothing' outside a key-down dispatch.
   , currentKeyDownRef   ∷ IORef (Maybe GLFW.Key)
   -- | The SCENE-OBJECT text cache @engine.getText@ answers from, keyed
-  --   by the text node's own 'ObjectId'. NOT editable-widget text — that
+  --   by the scene node's own 'ObjectId'. NOT editable-widget text — that
   --   is @UI.TextBuffer@ inside 'uiManagerRef', a different mechanism
   --   with its own code-point coordinate contract. @boot-process@, and
   --   deliberately not reset by
