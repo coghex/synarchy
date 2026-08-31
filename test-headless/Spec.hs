@@ -204,6 +204,7 @@ import qualified Test.Headless.World.Render.GroundItemSeam as GroundItemSeam
 import qualified Test.Headless.World.Render.StructureSeam as StructureSeam
 import qualified Test.Headless.World.Render.PickSeam as PickSeam
 import qualified Test.Headless.World.Render.QuadSnapshot as QuadSnapshot
+import qualified Test.Headless.World.Render.SceneStats as SceneStats
 import qualified Test.Headless.World.Render.SolarAttribution as SolarAttribution
 import qualified Test.Headless.World.Render.DesignationFaceMap as DesignationFaceMap
 import qualified Test.Headless.World.DesignationSeam as DesignationSeam
@@ -750,6 +751,10 @@ main = hspec $ do
     -- camera can be rewritten between capture and build the way the
     -- main thread's pan integration does under the world thread.
     describe "World.Render.QuadSnapshot" QuadSnapshot.spec
+
+    -- #1921: same shape again — its own headless engine and one
+    -- synthetic page, driven through the real 'updateWorldTiles'.
+    SceneStats.spec
 
     -- #1869: same shape as the line above and for the same reason —
     -- its own headless engine, two synthetic pages, no worker threads.
