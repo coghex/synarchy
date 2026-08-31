@@ -651,13 +651,53 @@ building again).
 `probelib.boot` and the four probes with their own private launchers
 (`debug_console_boot`, `preview_cli`, `resource_root`, `thermo_altitude`)
 alike. Handed an executable it execs that absolute path; handed none it
-falls back to the historical `cabal run` invocation, with the engine's own
-arguments in the same order either way. **That fallback is why running a
-probe by hand still needs no prior build step**: `python3
-tools/chop_probe.py` from the repository root behaves exactly as it always
-has. A supplied path that is relative, missing or not executable is a
-refusal rather than a quiet fallback — falling back would put a `cabal
-run` straight back inside a parallel sweep.
+reaches Cabal itself, with the engine's own arguments in the same order
+either way. **That is why running a probe by hand still needs no prior
+build step**: `python3 tools/chop_probe.py` from the repository root
+behaves exactly as it always has. A supplied path that is relative,
+missing or not executable is a refusal rather than a quiet fallback —
+falling back would put a Cabal process straight back inside a parallel
+sweep.
+
+**Preparation, not readiness (#1913).** In direct invocation that Cabal
+contact is a BUILD, and `probelib.boot` used to start its 180-second
+READY deadline the instant the child existed — so a cold compile was
+timed as though an engine were already starting. Two coordinated runs
+expired that way, both reported as `engine never printed READY` against
+an empty `-v0` log, one of them with the finished 179 MB executable
+timestamped 25 seconds AFTER the recorded timeout. `boot` now calls
+`probe_engine.prepare_executable` FIRST: one freshness `cabal build`
+plus one `cabal list-bin`, inside an **exclusive `cabal-build` hold**
+(the direct path's answer to the same race the preflight solves for a
+sweep), and what it launches afterwards is the resolved absolute binary.
+So `ready_timeout` measures engine startup and nothing else, and a probe
+that passes its own keeps exactly the readiness allowance it asked for.
+
+Preparation has its OWN finite allowance, `prepare_timeout`, defaulting
+to 1800 s — the repository's established full-cold-build watchdog — and
+covering lock acquisition, the build and the query together. It is not a
+second readiness budget and enlarging one does not enlarge the other.
+Every preparation failure names PREPARATION rather than readiness, and
+carries the build output: it goes to a `<engine log>.prepare` file whose
+path and tail appear in the diagnostic, so an operator never again reads
+"engine never printed READY" pointing at a log the engine never reached.
+The engine log itself is not even opened until preparation has
+succeeded. Each preparation subprocess owns its process group and the
+whole group is reaped on a nonzero exit, an overrun or an interrupt, so
+a `cabal` that fails cannot leave `setup`/GHC descendants compiling
+behind it. An engine that dies or hangs AFTER its executable exists is
+still diagnosed as the boot failure it is.
+
+`tools/deflake.py` prepares the same way but a step earlier: **before**
+the measurement takes its resource hold, never inside it. A measurement
+holds `cabal-build` (shared for an ordinary probe, exclusive for the
+three that drive Cabal themselves) across all ten runs, and
+`run_probes.run_one` strips the inherited runner variables on the way
+down — so a child left to prepare its own executable would take an
+exclusive interest underneath its own ancestor's hold and wait out its
+whole allowance for a holder blocked on it. Preparing first removes that
+by ordering, and the resolved path is installed as the runner's
+executable, which is also what stops each of the ten runs rebuilding.
 
 Three registered probes legitimately still drive Cabal themselves, and
 they are not engine boots: `persistence_contract`,
