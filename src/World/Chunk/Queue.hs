@@ -174,6 +174,22 @@ enqueueChunkRequest pid ws coords = do
                 atomicModifyIORef' (wsLoadPhaseRef ws) $ \ph → case ph of
                     LoadPhase2 remaining total →
                         (LoadPhase2 (remaining + count) (total + count), ())
+                    -- Appending over a FINISHED load re-opens the phase.
+                    -- The drain settles the phase from a queue length it
+                    -- read a moment earlier, so an append can always land
+                    -- after that read and leave a 'LoadDone' standing
+                    -- over real work — @world.getInitProgress@ and every
+                    -- waiter polling for the terminal phase would report
+                    -- a load that has not happened. Reopening here is the
+                    -- other half of 'settleDrainedPhase''s recheck, and
+                    -- between them the two orderings converge: if the
+                    -- drain finishes last its recheck sees this work and
+                    -- reopens, and if this runs last it reopens directly.
+                    --
+                    -- The drain reached 'LoadDone' with an empty queue,
+                    -- so these appended chunks are the whole of the new
+                    -- load and none of it is done yet.
+                    LoadDone → (LoadPhase2 count count, ())
                     other → (other, ())
             pure count
 
@@ -202,24 +218,29 @@ seedInitialQueue ∷ WorldPageId → WorldState → WorldGenParams
 seedInitialQueue pid ws params boxCoords = do
     needed ← registerChunkDemand ws pid params boxCoords
     atomicModifyIORef' (wsInitQueueRef ws) $ \q → (q ⧺ needed, ())
-    -- Read the queue back and INSTALL the phase here, rather than
-    -- handing the pair to the caller to write. A page is already
-    -- registered by this point, so any interval between establishing the
-    -- pair and writing it is one in which a @world.loadChunksInRegion@
-    -- can append: it would see 'LoadPhase1', correctly leave the phase
-    -- alone, and then be overwritten by a pair computed before it
-    -- arrived. Reading here rather than reusing the append's own count
-    -- also picks up a request that landed during 'registerChunkDemand'.
+    install
+  where
+    -- Install the phase HERE, rather than handing the pair to the caller
+    -- to write: any interval between establishing the pair and writing
+    -- it is one a @world.loadChunksInRegion@ can be lost in, because the
+    -- page is already registered and such a call would see 'LoadPhase1',
+    -- correctly leave the phase alone, and then be overwritten by a pair
+    -- computed before it arrived.
     --
-    -- A request landing between THIS read and the write is still missed,
-    -- which two IORefs cannot prevent; it costs an understated total for
-    -- one tick, and 'World.Thread.ChunkLoading.drainInitQueues' floors
-    -- the total at the remaining count every tick, so the pair is never
-    -- negative and is honest again on the next drain.
-    remaining ← length ⊚ readIORef (wsInitQueueRef ws)
-    let phase = (remaining, remaining + 1)
-    writeIORef (wsLoadPhaseRef ws) (uncurry LoadPhase2 phase)
-    pure phase
+    -- Installing it is not enough on its own, because the queue read and
+    -- the phase write are still two steps. So the pair has to come back
+    -- STABLE: read, write, and read again, repeating while the queue
+    -- moved underneath. That terminates rather than spins — the first
+    -- write publishes 'LoadPhase2', and from then on an appending
+    -- 'enqueueChunkRequest' raises the total itself instead of leaving
+    -- it to this function, so at most the appends racing the very first
+    -- write need a second pass.
+    install = do
+        remaining ← length ⊚ readIORef (wsInitQueueRef ws)
+        let phase = (remaining, remaining + 1)
+        writeIORef (wsLoadPhaseRef ws) (uncurry LoadPhase2 phase)
+        settled ← length ⊚ readIORef (wsInitQueueRef ws)
+        if settled ≡ remaining then pure phase else install
 
 -- | The 'LoadPhase' a drain tick installs, given the page's box-shaped
 --   fallback total, the number of chunks it observed still queued, and

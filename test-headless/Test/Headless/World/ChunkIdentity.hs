@@ -611,12 +611,21 @@ spec = describe "canonical chunk identity" $ do
         again `shouldBe` 0
         readIORef (wsLoadPhaseRef ws) `shouldReturn` phase
 
-        -- Outside LoadPhase2 there is no total to keep, so the phase is
-        -- untouched — the drain floors it when it re-enters the phase.
-        wsDone ← detachedPage params
-        writeIORef (wsLoadPhaseRef wsDone) LoadDone
-        _ ← enqueueChunkRequest pageA wsDone region
-        readIORef (wsLoadPhaseRef wsDone) `shouldReturn` LoadDone
+        -- A page still in SETUP is left alone: its box has not been
+        -- queued yet, and 'seedInitialQueue' installs the pair from the
+        -- whole queue — this request included — when it gets there.
+        -- (A finished load is the case that DOES reopen; see
+        -- "reopens a finished load when a region is appended".)
+        wsSetup ← detachedPage params
+        writeIORef (wsLoadPhaseRef wsSetup) (LoadPhase1 3 8)
+        _ ← enqueueChunkRequest pageA wsSetup region
+        readIORef (wsLoadPhaseRef wsSetup) `shouldReturn` LoadPhase1 3 8
+        -- ...and the seed then accounts for it.
+        let (box, _) = initialChunkQueue (canonicalChunkCoord params)
+                                         (ChunkCoord 0 0)
+        (seeded, seededTotal) ← seedInitialQueue pageA wsSetup params box
+        seeded `shouldBe` length region + length box
+        seededTotal `shouldBe` seeded + 1
 
     it "merges a concurrent total bump instead of clobbering it" $ \_ → do
         -- Two threads write wsLoadPhaseRef: the world thread on every
@@ -729,3 +738,67 @@ spec = describe "canonical chunk identity" $ do
             phase ← readIORef (wsLoadPhaseRef ws)
             queue ← readIORef (wsInitQueueRef ws)
             when (phase ≡ LoadDone) $ queue `shouldBe` []
+
+    it "reopens a finished load when a region is appended" $ \_ → do
+        -- The drain settles the phase from a queue length it read a
+        -- moment earlier, so an append can always land after that read
+        -- and leave LoadDone standing over real work — world.waitForInit
+        -- and world.getInitProgress would report a load that has not
+        -- happened. The appender reopens the phase, which is the other
+        -- half of settleDrainedPhase's recheck; between them the two
+        -- orderings converge.
+        let params = sizedParams wideWorldSize
+            region = [ ChunkCoord cx 60 | cx ← [0 .. 5] ]
+        ws ← detachedPage params
+        writeIORef (wsLoadPhaseRef ws) LoadDone
+
+        queued ← enqueueChunkRequest pageA ws region
+        queued `shouldBe` length region
+        -- The drain reached LoadDone with an empty queue, so this work is
+        -- the whole of the new load and none of it is done.
+        readIORef (wsLoadPhaseRef ws)
+            `shouldReturn` LoadPhase2 (length region) (length region)
+
+        -- The OTHER ordering: the drain finishes last, and its recheck
+        -- sees the work this append left behind and reopens the phase.
+        wsRace ← detachedPage params
+        _ ← enqueueChunkRequest pageA wsRace region
+        writeIORef (wsLoadPhaseRef wsRace) LoadDone   -- a stale settle
+        settleDrainedPhase wsRace 25
+        phase ← readIORef (wsLoadPhaseRef wsRace)
+        phase `shouldNotBe` LoadDone
+        case phase of
+            LoadPhase2 remaining total → do
+                remaining `shouldBe` length region
+                total `shouldSatisfy` (≥ remaining)
+            other → expectationFailure ("expected LoadPhase2, got " ⧺ show other)
+
+    it "seeds a phase pair the queue has stopped moving under" $ \_ → do
+        -- seedInitialQueue reads the queue and writes the phase in two
+        -- steps, so a region appended in between would be lost from the
+        -- installed total: it sees LoadPhase1 and correctly leaves the
+        -- phase alone. The pair therefore comes back STABLE — read,
+        -- write, read again — and once LoadPhase2 is published an
+        -- appending enqueueChunkRequest raises the total itself.
+        let params = sizedParams wideWorldSize
+            centre = ChunkCoord 0 0
+            (box, boxTotal) = initialChunkQueue
+                                  (canonicalChunkCoord params) centre
+            region = [ ChunkCoord cx 60 | cx ← [0 .. 9] ]
+        ws ← detachedPage params
+        (remaining, total) ← seedInitialQueue pageA ws params box
+        (remaining, total) `shouldBe` (length box, boxTotal)
+
+        -- The pair it returned is the pair it installed, and it agrees
+        -- with the queue it was derived from.
+        readIORef (wsLoadPhaseRef ws) `shouldReturn` LoadPhase2 remaining total
+        (length ⊚ readIORef (wsInitQueueRef ws)) `shouldReturn` remaining
+
+        -- From here the appender owns the total, so a later region is
+        -- accounted for without another seed pass.
+        added ← enqueueChunkRequest pageA ws region
+        added `shouldBe` length region
+        readIORef (wsLoadPhaseRef ws)
+            `shouldReturn` LoadPhase2 (remaining + added) (total + added)
+        (length ⊚ readIORef (wsInitQueueRef ws))
+            `shouldReturn` (remaining + added)
