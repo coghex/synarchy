@@ -108,15 +108,18 @@ import shutil
 import socket
 import stat
 import subprocess
-import sys
 import tempfile
 import time
 from pathlib import Path
 from probelib import (FixtureNotRegistered, capture_request_id, quit_engine,
                       boot, load_fixture_yaml, send, wait_load_published,
                       wait_save_complete, load_ai_stack)
+from run_probes import FailureEmitter   # durable failure records (#1982)
 
 REPO = Path(__file__).resolve().parent.parent
+#: #1982 — this run's durable failure records, built at import so the
+#: offset each carries is measured from the probe's own start.
+FAILURE = FailureEmitter("location_content_probe")
 #: How a save/load failure message refers to the engine log when the
 #: caller supplied no path. Spelled as a constant so the f-strings below
 #: need no escaped quote inside their expression, which only Python 3.12
@@ -345,8 +348,8 @@ def abandon_engine(proc) -> None:
     try:
         proc.wait(timeout=10)
     except subprocess.TimeoutExpired:
-        print(f"FAIL: the engine this run launched (pid {proc.pid}) did not "
-              f"die when killed", file=sys.stderr)
+        FAILURE.check(f"the engine this run launched (pid {proc.pid}) did "
+                      f"not die when killed")
 
 
 def release_artifacts(art: RunArtifacts, keep: bool) -> str | None:
@@ -979,8 +982,13 @@ def main() -> int:
         # the release below stays on the path and the summary names the
         # abort. A `finally` alone would still release, but the run's
         # own result would be lost with the propagating exit.
-        print(f"FAIL: the run aborted before finishing: {exc}",
-              file=sys.stderr)
+        # Durable (#1982), and the one path where it matters most: `run`
+        # never reached its own report, so this record is the ONLY thing
+        # naming why the run ended. The engine log is read here, before
+        # the release below removes the tree holding it.
+        FAILURE.check(f"the run aborted before finishing: {exc}")
+        FAILURE.context_log(art.engine_log)
+        FAILURE.context("artifact root", art.base)
     finally:
         # Every engine this run LAUNCHED must be dead before its files
         # go: each phase already quits its own in a `finally`, but that
@@ -997,7 +1005,7 @@ def main() -> int:
         # fixtures and log inside it are covered by the same removal.
         leftover = release_artifacts(art, args.keep_artifacts)
         if leftover:
-            print(f"FAIL: {leftover}", file=sys.stderr)
+            FAILURE.check(leftover)
         elif rc != 0 and not args.keep_artifacts:
             # A failure's primary evidence is the engine log, and some
             # paths above have already named it — `probelib.boot`'s
@@ -1975,8 +1983,16 @@ def run(args, art: RunArtifacts, token: str) -> int:
 
     print("-" * 56)
     if failures:
-        for f in failures:
-            print(f"FAIL: {f}", file=sys.stderr)
+        # Durable records rather than the unflushed stderr print this was
+        # (#1982): `run_probes.py` merges this probe's stderr into a
+        # block-buffered stdout pipe and prints only its last 25 lines, so
+        # a printed `FAIL:` overtook the buffered checks and landed above
+        # the retained tail. These are read back from the COMPLETE
+        # capture. Emitted here, inside `run`, because `main`'s cleanup
+        # removes the artifact tree the engine log lives in.
+        FAILURE.report(failures)
+        FAILURE.context_log(art.engine_log)
+        FAILURE.context("artifact root", art.base)
         return 1
     print("ALL CHECKS PASSED")
     return 0

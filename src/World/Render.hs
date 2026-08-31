@@ -14,8 +14,13 @@ import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv, resolveActiveWorld)
 import Engine.Core.Capability.RenderView
   (RenderViewCapability(..), toRenderViewCapability)
-import Engine.Scene.Types (LayeredQuads(..), mergeSortedQuads, sortQuadsByLayer
-                          , stampSolarPage)
+import Engine.Scene.Types (LayeredQuads(..), SortableQuad, mergeSortedQuads
+                          , sortQuadsByLayer, stampSolarPage)
+import Engine.Scene.Stats
+    ( SceneCategory(..), forcedLayeredQuadCount, forcedQuadCount
+    , measureCategory, publishSceneStats )
+import Engine.Core.Capability.RenderHandoff
+    (RenderHandoffCapability(..), toRenderHandoffCapability)
 import Engine.Graphics.Solar (SolarBase(..), SolarPageTable, solarPageNone)
 import World.Render.Solar (solarSlotAssignment, buildSolarPageTable)
 import qualified Data.HashMap.Strict as HM
@@ -25,16 +30,16 @@ import World.Generate (viewDepth)
 import World.Grid (zoomFadeStart, zoomFadeEnd, worldToGrid)
 import World.Generate.Coordinates (canonicalTileFrame)
 
-import World.Render.Zoom.Quads (generateZoomMapQuads)
+import World.Render.Zoom.Quads (generateZoomMapQuadsScanned)
 import World.Render.Camera (cameraChanged)
-import World.Render.Quads (renderWorldQuads)
-import World.Render.CursorQuads (renderWorldCursorQuads)
-import World.Render.GroundItemQuads (renderGroundItemQuads)
-import World.Render.SpoilQuads (renderSpoilQuads)
-import World.Render.BloodQuads (renderBloodDecalQuads)
-import Unit.Render (renderUnitQuads)
-import Building.Render (renderBuildingQuads, renderGhostQuad)
-import Structure.Render (renderStructureQuads)
+import World.Render.Quads (renderWorldQuadsScanned)
+import World.Render.CursorQuads (renderWorldCursorQuadsScanned)
+import World.Render.GroundItemQuads (renderGroundItemQuadsScanned)
+import World.Render.SpoilQuads (renderSpoilQuadsScanned)
+import World.Render.BloodQuads (renderBloodDecalQuadsScanned)
+import Unit.Render (renderUnitQuadsScanned)
+import Building.Render (renderBuildingQuadsScanned, renderGhostQuadScanned)
+import Structure.Render (renderStructureQuadsScanned)
 
 -- * Surface Headroom
 
@@ -67,8 +72,17 @@ updateWorldTiles env = do
     -- known, and the table those slots index travels out with the quads.
     (solarSlotOf, solarTable) ← buildFrameSolar env worldManager
 
-    tileQuads ← if tileAlpha ≤ 0.001
-        then return Map.empty
+    -- Scene-assembly telemetry (#1921). Every category below is
+    -- wrapped in 'measureCategory', which times it from BEFORE its
+    -- activation guard to AFTER both its scanned count and its emitted
+    -- quads have been forced — so a guard's early return is charged to
+    -- the category that took it, and no deferred assembly work is
+    -- charged to a later one. The measurement adds no per-object work
+    -- and no allocation proportional to the sources counted; only the
+    -- fixed-size snapshot published at the end of the pass.
+    (tilesStat, tileQuads) ← measureCategory ScTiles forcedLayeredQuadCount $
+      if tileAlpha ≤ 0.001
+        then return (0, Map.empty)
         else do
             let currentSnap = WorldCameraSnapshot
                     { wcsPosition = camPosition camera
@@ -77,7 +91,7 @@ updateWorldTiles env = do
                     , wcsFbSize   = (fbW, fbH)
                     , wcsFacing   = camFacing camera
                     }
-            quads ← forM (wmVisible worldManager) $ \pageId →
+            pages ← forM (wmVisible worldManager) $ \pageId →
                 case lookup pageId (wmWorlds worldManager) of
                     Just worldState → do
                         -- Snapshot the invalidation generation BEFORE building.
@@ -100,9 +114,13 @@ updateWorldTiles env = do
                             Just wqc | wqcGen wqc ≡ curGen
                                      , wqcSolarSlot wqc ≡ solarSlot
                                      , not (cameraChanged (wqcCamera wqc) currentSnap) →
-                                return (wqcQuads wqc)
+                                -- A reuse visits no terrain cell (#1921),
+                                -- but still contributes its cached quads.
+                                return (0, wqcQuads wqc)
                             _ → do
-                                result ← renderWorldQuads env worldState tileAlpha currentSnap
+                                (cells, result) ← renderWorldQuadsScanned
+                                                      env worldState tileAlpha
+                                                      currentSnap
                                 -- Group + depth-sort ONCE per rebuild, here on
                                 -- the world thread — the frame loop then only
                                 -- linear-merges dynamic quads into these runs
@@ -111,104 +129,90 @@ updateWorldTiles env = do
                                                      (sortQuadsByLayer result)
                                 writeIORef (wsQuadCacheRef worldState) $
                                     Just (WorldQuadCache curGen currentSnap solarSlot sorted)
-                                return sorted
-                    Nothing → return Map.empty
-            return $ Map.unionsWith mergeSortedQuads quads
+                                return (cells, sorted)
+                    Nothing → return (0, Map.empty)
+            return ( sum (map fst pages)
+                   , Map.unionsWith mergeSortedQuads (map snd pages) )
 
     -- Cursor quads are generated every frame (cheap: just 1-2 quads)
     -- so they respond instantly to mouse movement
-    worldCursorQuads ← if tileAlpha ≤ 0.001
-        then return V.empty
-        else do
-            cursorResults ← forM (wmVisible worldManager) $ \pageId →
-                case lookup pageId (wmWorlds worldManager) of
-                    Just worldState →
-                        stampSolarPage (solarSlotOf pageId) ⊚
-                            renderWorldCursorQuads env worldState tileAlpha
-                    Nothing → return V.empty
-            return $ V.concat cursorResults
+    (cursorStat, worldCursorQuads) ← measureCategory ScCursor forcedQuadCount $
+      if tileAlpha ≤ 0.001
+        then return (0, V.empty)
+        else perVisiblePage worldManager $ \pageId worldState →
+                stampPageQuads (solarSlotOf pageId) ⊚
+                    renderWorldCursorQuadsScanned env worldState tileAlpha
 
     -- Ground-item quads, also per-frame: resting height derives from
     -- the CURRENT terrain each frame, so items drop with dug tiles
     -- and sit on slopes without any re-grounding machinery.
-    groundItemQuads ← if tileAlpha ≤ 0.001
-        then return V.empty
-        else do
-            giResults ← forM (wmVisible worldManager) $ \pageId →
-                case lookup pageId (wmWorlds worldManager) of
-                    Just worldState →
-                        stampSolarPage (solarSlotOf pageId) ⊚
-                            renderGroundItemQuads env worldState tileAlpha
-                    Nothing → return V.empty
-            return $ V.concat giResults
+    (groundItemStat, groundItemQuads) ←
+      measureCategory ScGroundItems forcedQuadCount $
+        if tileAlpha ≤ 0.001
+          then return (0, V.empty)
+          else perVisiblePage worldManager $ \pageId worldState →
+                  stampPageQuads (solarSlotOf pageId) ⊚
+                      renderGroundItemQuadsScanned env worldState tileAlpha
 
     -- Spoil-pile overlays (dig yields): per-frame for the same
     -- reason — piles change every dig tick, and the partial fringe
     -- is small (full cells promote to real terrain and render
     -- through the cached tile pass).
-    spoilQuads ← if tileAlpha ≤ 0.001
-        then return V.empty
-        else do
-            spResults ← forM (wmVisible worldManager) $ \pageId →
-                case lookup pageId (wmWorlds worldManager) of
-                    Just worldState →
-                        stampSolarPage (solarSlotOf pageId) ⊚
-                            renderSpoilQuads env worldState tileAlpha
-                    Nothing → return V.empty
-            return $ V.concat spResults
+    (spoilStat, spoilQuads) ← measureCategory ScSpoil forcedQuadCount $
+      if tileAlpha ≤ 0.001
+        then return (0, V.empty)
+        else perVisiblePage worldManager $ \pageId worldState →
+                stampPageQuads (solarSlotOf pageId) ⊚
+                    renderSpoilQuadsScanned env worldState tileAlpha
 
     -- Blood decal quads (#606): per-frame, same reason as ground items —
     -- aging tint is derived from the current game time, and a texture
     -- only has GPU-resident data once 'uploadBloodTextures' catches up
     -- (Engine.Scripting.Lua.Message), so a decal simply doesn't
     -- contribute a quad until then.
-    bloodQuads ← if tileAlpha ≤ 0.001
-        then return V.empty
-        else do
-            blResults ← forM (wmVisible worldManager) $ \pageId →
-                case lookup pageId (wmWorlds worldManager) of
-                    Just worldState →
-                        stampSolarPage (solarSlotOf pageId) ⊚
-                            renderBloodDecalQuads env pageId worldState tileAlpha
-                    Nothing → return V.empty
-            return $ V.concat blResults
+    (bloodStat, bloodQuads) ← measureCategory ScBlood forcedQuadCount $
+      if tileAlpha ≤ 0.001
+        then return (0, V.empty)
+        else perVisiblePage worldManager $ \pageId worldState →
+                stampPageQuads (solarSlotOf pageId) ⊚
+                    renderBloodDecalQuadsScanned env pageId worldState tileAlpha
 
     -- Unit quads are generated every frame (cheap: handful of sprites)
     -- so they respond instantly to movement
-    unitQuads ← if tileAlpha ≤ 0.001
-        then return V.empty
+    (unitStat, unitQuads) ← measureCategory ScUnits forcedQuadCount $
+      if tileAlpha ≤ 0.001
+        then return (0, V.empty)
         else do
             let facing = camFacing camera
                 zSlice = camZSlice camera
-            renderUnitQuads env solarSlotOf facing zSlice effDepth tileAlpha
+            renderUnitQuadsScanned env solarSlotOf facing zSlice effDepth tileAlpha
 
     -- Buildings: same shape as units, simpler internals. Plus the
     -- optional ghost preview while in placement mode.
-    buildingQuads ← if tileAlpha ≤ 0.001
-        then return V.empty
+    (buildingStat, buildingQuads) ← measureCategory ScBuildings forcedQuadCount $
+      if tileAlpha ≤ 0.001
+        then return (0, V.empty)
         else do
             let facing = camFacing camera
                 zSlice = camZSlice camera
-            renderBuildingQuads env solarSlotOf facing zSlice effDepth tileAlpha
+            renderBuildingQuadsScanned env solarSlotOf facing zSlice effDepth tileAlpha
 
     -- Structures (walls / floors / ceilings) — same iso-sorted quad path
     -- as buildings, with each piece's own facemap slot.
-    structureQuads ← if tileAlpha ≤ 0.001
-        then return V.empty
+    (structureStat, structureQuads) ← measureCategory ScStructures forcedQuadCount $
+      if tileAlpha ≤ 0.001
+        then return (0, V.empty)
         else do
             let facing = camFacing camera
                 zSlice = camZSlice camera
-            stResults ← forM (wmVisible worldManager) $ \pageId →
-                case lookup pageId (wmWorlds worldManager) of
-                    Just worldState →
-                        stampSolarPage (solarSlotOf pageId) ⊚
-                            renderStructureQuads env worldState facing zSlice
-                                                 effDepth tileAlpha
-                    Nothing → return V.empty
-            return $ V.concat stResults
+            perVisiblePage worldManager $ \pageId worldState →
+                stampPageQuads (solarSlotOf pageId) ⊚
+                    renderStructureQuadsScanned env worldState facing zSlice
+                                                effDepth tileAlpha
 
-    ghostQuads ← if tileAlpha ≤ 0.001
-        then return V.empty
+    (ghostStat, ghostQuads) ← measureCategory ScGhost forcedQuadCount $
+      if tileAlpha ≤ 0.001
+        then return (0, V.empty)
         else do
             let facing = camFacing camera
                 zSlice = camZSlice camera
@@ -216,9 +220,10 @@ updateWorldTiles env = do
                 -- it is lit by that page (#1869).
                 activeSolarSlot = maybe solarPageNone (solarSlotOf . fst)
                                         (resolveActiveWorld worldManager)
-            renderGhostQuad env activeSolarSlot facing zSlice
+            renderGhostQuadScanned env activeSolarSlot facing zSlice
 
-    zoomQuads ← generateZoomMapQuads env solarSlotOf camera fbW fbH
+    (zoomStat, zoomQuads) ← measureCategory ScZoomMap forcedQuadCount $
+        generateZoomMapQuadsScanned env solarSlotOf camera fbW fbH
 
     let shouldTrack = camZTracking camera
                     ∨ (tileAlpha > 0.001 ∧ tileAlpha < 0.999)
@@ -258,6 +263,13 @@ updateWorldTiles env = do
                     Nothing → return ()
             Nothing → return ()
 
+    -- One atomic publication per completed pass (#1921), so a reader
+    -- never sees rows from two passes together. The sequence advances
+    -- exactly once here; a world teardown clears the whole snapshot.
+    publishSceneStats (rhSceneStatsRef (toRenderHandoffCapability env))
+        [ tilesStat, cursorStat, groundItemStat, spoilStat, bloodStat
+        , unitStat, buildingStat, structureStat, ghostStat, zoomStat ]
+
     -- Static terrain rides pre-sorted per layer; everything per-tick
     -- stays a flat run the frame loop sorts (it's small) and merges in.
     let dynQuads = worldCursorQuads <> spoilQuads
@@ -265,6 +277,31 @@ updateWorldTiles env = do
                 <> buildingQuads <> structureQuads
                 <> unitQuads <> ghostQuads <> zoomQuads
     return (LayeredQuads tileQuads dynQuads solarTable)
+
+-- | Run one per-page producer over every visible page, summing the
+--   scanned counts and concatenating the quads.
+--
+--   The five per-page categories all had this shape already; naming it
+--   keeps the telemetry (#1921) from duplicating the traversal five
+--   times. A visible id with no page state contributes nothing, exactly
+--   as before.
+perVisiblePage
+    ∷ WorldManager
+    → (WorldPageId → WorldState → IO (Int, V.Vector SortableQuad))
+    → IO (Int, V.Vector SortableQuad)
+perVisiblePage worldManager produce = do
+    results ← forM (wmVisible worldManager) $ \pageId →
+        case lookup pageId (wmWorlds worldManager) of
+            Just worldState → produce pageId worldState
+            Nothing         → return (0, V.empty)
+    return (sum (map fst results), V.concat (map snd results))
+
+-- | Stamp a per-page producer's quads with that page's solar slot
+--   (#1869), leaving its scanned count (#1921) untouched.
+stampPageQuads ∷ Word32 → (Int, V.Vector SortableQuad)
+               → (Int, V.Vector SortableQuad)
+stampPageQuads slot (scanned, quads) = (scanned, stampSolarPage slot quads)
+
 
 -- | This frame's page→slot lookup and the table those slots index.
 --

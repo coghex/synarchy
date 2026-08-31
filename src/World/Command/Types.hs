@@ -217,9 +217,21 @@ data WorldCommand
         --   the tile is tilled soil (world.isPlantable) and cropName
         --   names a registered plantable-crop species (row_crop or
         --   groundcover_crop worldGen category).
+        --
+        --   #1858: admission is no longer the LAST soil check. Tilled
+        --   soil is a continuous requirement — 'World.Plant.Validate'
+        --   re-runs the same 'World.Vegetation.isTilledSoil' test after
+        --   every write that can move a designated tile's resolved
+        --   surface and whenever terrain becomes resident, and REMOVES
+        --   the record when the soil is resident and lost. So this
+        --   command is where a designation starts, not where its
+        --   eligibility is settled for good.
     | WorldCancelPlant WorldPageId Int Int
         -- ^ Remove the plant designation at (gx, gy), if any (the farm
-        --   AI's completion, or a player cancel).
+        --   AI's completion, or a player cancel). NOT the only removal
+        --   path since #1858 — see 'World.Plant.Validate', whose
+        --   invalidation sweep is the farm AI's cancellation signal by
+        --   way of the record simply being gone on its next tick.
     | WorldSetPlantDesignateTexture WorldPageId TextureHandle
         -- ^ Texture for committed plant-designation markers.
     | WorldSetVeg WorldPageId Int Int Int Word8

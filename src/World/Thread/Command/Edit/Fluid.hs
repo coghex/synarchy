@@ -16,6 +16,7 @@ import World.Generate.Coordinates (globalToChunk)
 import World.Edit.Types (WorldEdit(..), appendEdit)
 import World.Edit.Apply (applyEdit)
 import World.Thread.Command.Edit.Sync (syncEditToSim)
+import World.Plant.Validate (revalidatePlantDesignations)
 
 -- | Place one tile of fluid on top of the column at (gx, gy). Records
 --   the edit in the world's log; in-memory mutation uses the same
@@ -50,6 +51,9 @@ handleWorldSetFluidTileCommand wsc logger pageId gx gy fluidType = do
                     bumpQuadCacheGen ws
                     writeIORef (wsZoomQuadCacheRef ws) Nothing
                     writeIORef (wsBgQuadCacheRef ws)   Nothing
+                    -- #1858: fluid raises the resolved surface, so a
+                    -- flooded tilled tile stops being plantable.
+                    _ ← revalidatePlantDesignations logger ws
                     logDebug logger CatWorld $
                         "Placed fluid " <> tshow fluidType
                           <> " at " <> tshow gx <> ","

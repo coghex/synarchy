@@ -71,9 +71,9 @@ pass broadened HPA-4, HPA-7, and HPA-35 with independently verified evidence.
 
 ## Status
 
-- [ ] HPA-1. Lateral fluid equalization can underflow its source volume
-- [ ] HPA-2. Runtime fluid ignores the cylindrical world seam
-- [ ] HPA-3. Transfers between unlike fluids silently change fluid identity
+- [x] HPA-1. Lateral fluid equalization can underflow its source volume — [#2042]
+- [x] HPA-2. Runtime fluid ignores the cylindrical world seam — [#2044]
+- [ ] HPA-3. Transfers between unlike fluids silently change fluid identity — [deferred]: reaction epic pending via /design-epic
 - [ ] HPA-4. Session replacement retains independent history and transient UI
 - [ ] HPA-5. Legacy save read exceptions leave the load transaction active
 - [ ] HPA-6. Forced worker shutdown returns before the worker has exited
@@ -138,7 +138,7 @@ pass broadened HPA-4, HPA-7, and HPA-35 with independently verified evidence.
 
 ## Fluid simulation integrity
 
-### HPA-1. Lateral fluid equalization can underflow its source volume
+### [#2042] HPA-1. Lateral fluid equalization can underflow its source volume
 
 **Severity:** High
 
@@ -160,7 +160,7 @@ A pure fixture placed volume 3 in a flat center cell and volume 1 in each of its
 - **Scope and constraints:** Preserve the existing integer-quarter equalization behavior and minimum-one-unit progress rule. Add a low-volume four-neighbor regression and randomized conservation checks over valid active grids.
 - **Remaining uncertainty:** None at draft time; the numerical failure was reproduced directly.
 
-### HPA-2. Runtime fluid ignores the cylindrical world seam
+### [#2044] HPA-2. Runtime fluid ignores the cylindrical world seam
 
 **Severity:** Medium–High
 
@@ -183,7 +183,9 @@ For a 64-chunk cylindrical world, a raw neighbor across the U boundary canonical
 - **Scope and constraints:** The simulation needs enough per-world topology context to canonicalize activation and reconciliation while processing each shared edge exactly once. Arena and zero-size worlds must retain identity behavior.
 - **Remaining uncertainty:** The coordinate mismatch is direct, but an end-to-end active-fluid fixture at the physical wrap boundary was not run.
 
-### HPA-3. Transfers between unlike fluids silently change fluid identity
+### [deferred] HPA-3. Transfers between unlike fluids silently change fluid identity
+
+> **Deferred:** Owner chose a lava+water→stone reaction feature, which is epic-sized — precondition: the unlike-fluid reaction design document is processed through `/process-design-doc` and its epic number exists to link here.
 
 **Severity:** Medium
 

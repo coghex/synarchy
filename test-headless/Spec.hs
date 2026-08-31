@@ -205,9 +205,11 @@ import qualified Test.Headless.World.Render.GroundItemSeam as GroundItemSeam
 import qualified Test.Headless.World.Render.StructureSeam as StructureSeam
 import qualified Test.Headless.World.Render.PickSeam as PickSeam
 import qualified Test.Headless.World.Render.QuadSnapshot as QuadSnapshot
+import qualified Test.Headless.World.Render.SceneStats as SceneStats
 import qualified Test.Headless.World.Render.SolarAttribution as SolarAttribution
 import qualified Test.Headless.World.Render.DesignationFaceMap as DesignationFaceMap
 import qualified Test.Headless.World.DesignationSeam as DesignationSeam
+import qualified Test.Headless.World.CropPlant as CropPlant
 import qualified Test.Headless.World.StructureStage as StructureStage
 import qualified Test.Headless.World.StructurePaletteResidue as StructurePaletteResidue
 import qualified Test.Headless.Structure.ArtCatalog as StructureArtCatalog
@@ -246,6 +248,8 @@ import qualified Test.Headless.Building.PageBinding as BuildingPageBinding
 import qualified Test.Headless.Building.PortalSpawnBinding as BuildingPortalSpawnBinding
 import qualified Test.Headless.Building.Placement as BuildingPlacement
 import qualified Test.Headless.Building.RemoteWarning as BuildingRemoteWarning
+import qualified Test.Headless.Building.MachineShopConstruction
+    as MachineShopConstruction
 import qualified Test.Headless.Building.WorkbenchConstruction
     as WorkbenchConstruction
 import qualified Test.Headless.Save.AutosaveGuards as AutosaveGuards
@@ -419,6 +423,11 @@ main = hspec $ do
     aroundAll withHeadlessEngine $ do
         FluidWritebackStaleness.spec
         describe "persistence contract" FluidWritebackStaleness.saveSpec
+    -- Own engine (#1858): the only example in the suite that PUBLISHES
+    -- a loaded session, which replaces every live page -- so it must
+    -- never run inside the shared-worlds engine, and nothing may be
+    -- registered after it in this block.
+    aroundAll withHeadlessEngine CropPlant.saveSpec
     -- Own engine: #913's failure-report cases queue a WorldSave for a
     -- page that does not exist, and assert on the shared event log --
     -- both of which would be noise (and, for the log, a source of
@@ -547,6 +556,7 @@ main = hspec $ do
     describe "Preview.UnitAnimation" PreviewUnitAnimation.spec
     describe "Preview.Building" PreviewBuilding.spec
     describe "Preview.Zoom" PreviewZoom.spec
+    describe "Machine Shop construction animation" MachineShopConstruction.spec
     describe "Workbench construction animation" WorkbenchConstruction.spec
     describe "Bindless texture filter rebinding" BindlessRebind.spec
     describe "Bindless texture release" BindlessRelease.spec
@@ -747,12 +757,18 @@ main = hspec $ do
     -- main thread's pan integration does under the world thread.
     describe "World.Render.QuadSnapshot" QuadSnapshot.spec
 
+    -- #1921: same shape again — its own headless engine and one
+    -- synthetic page, driven through the real 'updateWorldTiles'.
+    SceneStats.spec
+
     -- #1869: same shape as the line above and for the same reason —
     -- its own headless engine, two synthetic pages, no worker threads.
     SolarAttribution.spec
     describe "World.Render.DesignationFaceMap" DesignationFaceMap.spec
     describe "World.DesignationSeam" DesignationSeam.spec
     describe "World.DesignationSeam (engine)" DesignationSeam.engineSpec
+    describe "World.CropPlant" CropPlant.spec
+    describe "World.CropPlant (engine)" CropPlant.engineSpec
 
     -- #1674: its own headless engine (no worker threads), so the
     -- WorldSetStructure structure.place emits waits to be dequeued and
