@@ -1892,9 +1892,10 @@ def test_a_direct_run_one_leaves_the_child_on_the_fallback() -> None:
         script = tree.add("bare", exit_code=0)
         with patched(tree):
             # `patched` clears the resolved executable; nothing calls the
-            # preflight here. This is `tools/probe_flake.py`'s path, which
-            # runs ONE probe at a time and must keep the direct-invocation
-            # `cabal run` fallback rather than inherit a stale export.
+            # preflight here. What matters is the STRIPPING: an operator's
+            # stale export must not decide which binary the child runs, so
+            # a child that was handed nothing is left to prepare its own
+            # (#1913) rather than inheriting one nobody resolved.
             os.environ[probe_engine.ENV_ENGINE_EXE] = str(tree.executable)
             try:
                 ok, _t, _e, _out = run_probes.run_one(script, None, 120.0)
@@ -1902,8 +1903,8 @@ def test_a_direct_run_one_leaves_the_child_on_the_fallback() -> None:
                 os.environ.pop(probe_engine.ENV_ENGINE_EXE, None)
         expect(ok, "the probe still ran")
         expect(tree.engine_exes("bare") == [""],
-               f"and saw no runner-supplied executable, so probelib falls "
-               f"back to `cabal run` (got {tree.engine_exes('bare')})")
+               f"and saw no runner-supplied executable, so probelib "
+               f"prepares its own (got {tree.engine_exes('bare')})")
     finally:
         tree.cleanup()
 

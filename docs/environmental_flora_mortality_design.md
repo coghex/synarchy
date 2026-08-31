@@ -85,8 +85,8 @@ concrete precondition
 - `tools/texture_subset_audit.py` reconstructs all explicitly declared flora
   paths and rejects missing files. It does not discover undeclared files by
   filename.
-- Twelve shipped texture families have juvenile art. None has a dead-juvenile
-  texture. Eight have one generic `dead.png`; coconut palm, red mangrove, Scots
+- Fourteen shipped texture families have juvenile art. None has a dead-juvenile
+  texture. Ten have one generic `dead.png`; coconut palm, red mangrove, Scots
   pine, and white spruce have no dead art. Juvenile canvases range from 4×4 to
   128×128, so one shared dead-sprout bitmap is not a viable substitute.
 - Saguaro issue #1688 and PR #1725 add a 48×48 sprout, mature seasonal variants,
@@ -98,10 +98,10 @@ concrete precondition
 - Closed farming issue #334 deliberately made row crops ordinary
   `FloraInstance`s and groundcover crops `CropPlot`s so both reuse the same
   species growth and texture resolver as wild flora.
-- `data/flora/crops.yaml` currently gives tomato and wheat density zero and
-  points them at the red-raspberry and white-clover texture directories as
-  placeholders. There is no cultivated texture override or current
-  wild-versus-cultivated render selector.
+- `data/flora/crops.yaml` gives tomato and wheat density zero. Tomato now owns
+  its dedicated crop texture family; wheat still points at white clover as a
+  placeholder. There is no cultivated texture override or current
+  wild-versus-cultivated render selector for wheat.
 - A planted groundcover tile is recognizable as cultivated because it exists in
   the tile-keyed `CropPlots` map. A row crop becomes an ordinary
   `FloraInstance` reconstructed from `WePlaceFlora`; its render input carries no
@@ -891,9 +891,10 @@ tier and manifest:
 - common dandelion
 - paper birch
 - red mangrove (currently lacks any dead art)
-- red raspberry (also temporarily supplies tomato art)
+- red raspberry
 - Scots pine (currently lacks any dead art)
 - sugar maple
+- tomato plant after #1781's dedicated crop family
 - weeping willow
 - white clover (also temporarily supplies wheat art)
 - white oak
