@@ -29,6 +29,7 @@ import World.Generate.Constants (chunkLoadRadius)
 import World.Chunk.Admit
     ( admitResidentChunks, claimChunkGeneration, claimedChunkCoord
     , reconcileResidentChunks, releaseEvictedChunks )
+import World.Chunk.Queue (drainedLoadPhase)
 import World.Chunk.Residency (canonicalChunkCoord)
 import World.Grid (zoomFadeEnd)
 import World.Slope (recomputeNeighborSlopes
@@ -527,29 +528,20 @@ drainInitQueues env logger = do
                         -- initial load (a later loadChunksInRegion, so
                         -- the phase is no longer LoadPhase2) has no
                         -- recorded total to keep.
-                        phaseBefore ← readIORef (wsLoadPhaseRef worldState)
-                        let totalChunks = case phaseBefore of
-                                LoadPhase2 _ recorded → recorded
-                                _ → (2 * chunkLoadRadius + 1)
-                                      * (2 * chunkLoadRadius + 1)
-                        -- The total can never sit below the remaining
-                        -- count: @world.getInitProgress@ reports
-                        -- @total - remaining@ completed, so that pair
-                        -- would surface as negative progress. A request
-                        -- made DURING LoadPhase2 raises the recorded
-                        -- total with it ('enqueueChunkRequest'), but one
-                        -- made after LoadDone re-enters this phase with
-                        -- no recorded total at all, and the box-shaped
-                        -- fallback above can be smaller than what was
-                        -- just queued. Flooring it there reports zero
-                        -- completed rather than a negative count, and
-                        -- changes nothing in the ordinary case.
-                        let remaining = length rest
-                        writeIORef (wsLoadPhaseRef worldState)
-                            (if null rest
-                             then LoadDone
-                             else LoadPhase2 remaining
-                                      (max totalChunks remaining))
+                        -- ONE atomic read-modify-write, because the Lua
+                        -- thread also writes this ref: it raises the
+                        -- total whenever it appends during LoadPhase2
+                        -- (World.Chunk.Queue.enqueueChunkRequest). The
+                        -- old read-compute-write dropped any increment
+                        -- that landed in between — permanently, since
+                        -- the total is the value later ticks carry
+                        -- forward. 'drainedLoadPhase' merges instead:
+                        -- the remaining count is this drain's own, the
+                        -- total comes from the value being replaced.
+                        let fallbackTotal = (2 * chunkLoadRadius + 1)
+                                              * (2 * chunkLoadRadius + 1)
+                        atomicModifyIORef' (wsLoadPhaseRef worldState) $ \ph →
+                            (drainedLoadPhase fallbackTotal (length rest) ph, ())
 computeSideDecos ∷ Word64 → [ChunkCoord] → WorldTileData → WorldTileData
 computeSideDecos seed newCoords wtd =
     let chunks = wtdChunks wtd

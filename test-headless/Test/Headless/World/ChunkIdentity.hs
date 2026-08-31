@@ -41,12 +41,14 @@ import World.Chunk.Residency
     , isCurrentGeneration, mintChunkRequest, newChunkGeneration
     , releaseChunk, requestChunk )
 import World.Chunk.Queue
-    (enqueueChunkRequest, initialChunkQueue, seedInitialQueue)
+    ( drainedLoadPhase, enqueueChunkRequest, initialChunkQueue
+    , seedInitialQueue )
 import World.Chunk.Types (ChunkCoord(..), LoadedChunk(..), wrapChunkCoordU)
 import World.Command.Types (WorldCommand(..))
 import World.Generate.Types
     (WorldGenParams(..), defaultWorldGenParams, isArenaParams)
 import World.Page.Types (WorldPageId(..))
+import Data.Maybe (mapMaybe)
 import World.State.Types (WorldState(..), LoadPhase(..), emptyWorldState)
 import World.Tile.Types (WorldTileData(..), emptyWorldTileData, lookupChunk)
 import World.Generate.Arena (generateFlatChunk)
@@ -615,3 +617,51 @@ spec = describe "canonical chunk identity" $ do
         writeIORef (wsLoadPhaseRef wsDone) LoadDone
         _ ← enqueueChunkRequest pageA wsDone region
         readIORef (wsLoadPhaseRef wsDone) `shouldReturn` LoadDone
+
+    it "merges a concurrent total bump instead of clobbering it" $ \_ → do
+        -- Two threads write wsLoadPhaseRef: the world thread on every
+        -- drain, and the Lua thread whenever a region is appended during
+        -- LoadPhase2. The drain used to read, compute, and write, so an
+        -- increment landing in between was lost — permanently, because
+        -- the total is exactly what later ticks carry forward.
+        -- 'drainedLoadPhase' is applied inside one atomicModifyIORef',
+        -- and takes the total from the value it is replacing.
+        let boxTotal = 25
+
+        -- Ordinary tick: eight chunks drained, total carried forward.
+        drainedLoadPhase boxTotal 16 (LoadPhase2 24 boxTotal)
+            `shouldBe` LoadPhase2 16 boxTotal
+
+        -- THE RACE. The drain observed rest = 16 against a recorded 25,
+        -- then Lua appended ten chunks and atomically installed
+        -- LoadPhase2 34 35. The merge keeps that 35; the old
+        -- read-compute-write wrote 25 back and lost it for good.
+        drainedLoadPhase boxTotal 16 (LoadPhase2 34 35)
+            `shouldBe` LoadPhase2 16 35
+
+        -- The remaining count is the DRAIN's, never the recorded one:
+        -- that figure is the previous tick's and is always the larger,
+        -- so taking it would freeze progress. A concurrent append
+        -- understates it for one tick and the next drain corrects it.
+        drainedLoadPhase boxTotal 16 (LoadPhase2 34 35)
+            `shouldNotBe` LoadPhase2 34 35
+
+        -- Floored throughout: getInitProgress reports total - remaining,
+        -- so the pair may never run the other way round.
+        drainedLoadPhase boxTotal 26 (LoadPhase2 24 boxTotal)
+            `shouldBe` LoadPhase2 26 26
+        drainedLoadPhase boxTotal 30 LoadDone `shouldBe` LoadPhase2 30 30
+        drainedLoadPhase boxTotal 12 LoadIdle `shouldBe` LoadPhase2 12 boxTotal
+
+        -- An empty queue ends the phase whatever was recorded.
+        drainedLoadPhase boxTotal 0 (LoadPhase2 8 boxTotal) `shouldBe` LoadDone
+
+        -- Non-vacuity: every pair above reports non-negative progress.
+        let completed ph = case ph of
+                LoadPhase2 remaining total → Just (total - remaining)
+                _                          → Nothing
+            pairs = [ drainedLoadPhase boxTotal r ph
+                    | r ← [0 .. 40]
+                    , ph ← [ LoadIdle, LoadDone, LoadPhase2 24 boxTotal
+                           , LoadPhase2 34 35, LoadPhase2 0 0 ] ]
+        filter (< 0) (mapMaybe completed pairs) `shouldBe` []

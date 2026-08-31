@@ -42,6 +42,7 @@ module World.Chunk.Queue
     , newChunkQueueEntries
     , initialChunkQueue
     , seedInitialQueue
+    , drainedLoadPhase
     , enqueueChunkRequest
     ) where
 
@@ -218,3 +219,37 @@ seedInitialQueue pid ws params boxCoords = do
     let phase = (remaining, remaining + 1)
     writeIORef (wsLoadPhaseRef ws) (uncurry LoadPhase2 phase)
     pure phase
+
+-- | The 'LoadPhase' a drain tick installs, given the page's box-shaped
+--   fallback total, the number of chunks it observed still queued, and
+--   the phase currently recorded.
+--
+--   Pure, and applied through a single 'atomicModifyIORef'' so the drain
+--   cannot CLOBBER a concurrent total increment. The Lua thread raises
+--   the total whenever it appends during 'LoadPhase2'
+--   ('enqueueChunkRequest'), and the drain used to read the phase,
+--   compute from that snapshot, and write — losing any increment that
+--   landed in between, permanently, because the total is exactly the
+--   value later ticks carry forward. Reading the recorded total from the
+--   value being replaced is what makes the update a merge instead.
+--
+--   The remaining count is the DRAIN's own, not the recorded one: the
+--   queue is authoritative for it, and the recorded figure is the
+--   previous tick's, which is always the larger. A concurrent append
+--   therefore understates it for one tick and the next drain corrects
+--   it — whereas the total, which only ever grows, is preserved exactly.
+--
+--   The total is floored at the remaining count throughout.
+--   @world.getInitProgress@ reports @total - remaining@ completed, so a
+--   pair the other way round surfaces as NEGATIVE progress; a request
+--   accepted after 'LoadDone' re-enters this phase with no recorded
+--   total at all, and the box-shaped fallback can be smaller than what
+--   was just queued.
+drainedLoadPhase ∷ Int → Int → LoadPhase → LoadPhase
+drainedLoadPhase fallbackTotal remaining recorded
+    | remaining ≤ 0 = LoadDone
+    | otherwise     = LoadPhase2 remaining (max observedTotal remaining)
+  where
+    observedTotal = case recorded of
+        LoadPhase2 _ total → total
+        _                  → fallbackTotal
