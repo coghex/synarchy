@@ -58,10 +58,52 @@ local function indexOf(s, page, id)
     return nil
 end
 
-local function distance(ax, ay, bx, by)
-    local dx = ax - bx
-    local dy = ay - by
-    return math.sqrt(dx * dx + dy * dy)
+-- Half of a page's cylindrical u-wrap PERIOD, in tiles -- the one alias
+-- step World.Generate.Coordinates.tileAliasStep and
+-- Location.Bounds.seamAliases shift by. `wrapWidth` is the FULL period
+-- world.getWrapWidth reports; zero for a period that is absent,
+-- non-positive, or not a number, which collapses every comparison below
+-- to the plain Cartesian one.
+local function aliasStep(wrapWidth)
+    if type(wrapWidth) ~= "number" or wrapWidth <= 0 then return 0 end
+    return math.floor(wrapWidth / 2)
+end
+
+-- Euclidean distance from (ax, ay) to (bx, by), minimised over b's
+-- cylindrical u-images: itself plus one shift each way along (+u, -v) by
+-- `step`. That is the same three-image set localizeTileToAnchor and
+-- seamAliases search, so a remembered anchor directly across the U seam
+-- is measured at its real physical distance rather than at the width of
+-- the world (#1175, #1944).
+--
+-- Identity when step is 0 -- an arena, a non-wrapping page, or a period
+-- the engine could not supply -- where the loop runs exactly once.
+local function distance(ax, ay, bx, by, step)
+    local lo, hi = 0, 0
+    if step > 0 then lo, hi = -1, 1 end
+    local best = math.huge
+    for k = lo, hi do
+        local dx = ax - (bx + k * step)
+        local dy = ay - (by - k * step)
+        local d = math.sqrt(dx * dx + dy * dy)
+        if d < best then best = d end
+    end
+    return best
+end
+
+-- The page's wrap period, for the page NAMED in the call -- never the
+-- active or visible one, since two live pages can have different world
+-- sizes and world.getWrapWidth is page-scoped precisely so a caller need
+-- not guess. Zero (today's plain Euclidean ranking) whenever the engine,
+-- the verb, or the page cannot answer; a nil page falls through to the
+-- verb's own active-world reading.
+local function wrapPeriodFor(page)
+    if type(world) ~= "table" or type(world.getWrapWidth) ~= "function" then
+        return 0
+    end
+    local ok, w = pcall(world.getWrapWidth, page)
+    if not ok or type(w) ~= "number" then return 0 end
+    return w
 end
 
 -- Remember one location. Returns true when this is genuinely new
@@ -80,13 +122,20 @@ end
 -- because a memory of another world's ruin is not a candidate for
 -- anything the unit can walk to, and because two pages' instance ids
 -- collide by construction.
-function M.nearestKnownLocation(s, page, fromX, fromY)
+--
+-- `wrapWidth` is that page's FULL cylindrical u-wrap period in tiles
+-- (what world.getWrapWidth returns). It is an EXPLICIT input rather than
+-- an engine round-trip so this primitive stays callable from a bare Lua
+-- VM; the uid-keyed wrapper below is what obtains it. Omitted, zero, or
+-- non-numeric ranks by plain Euclidean distance, exactly as before.
+function M.nearestKnownLocation(s, page, fromX, fromY, wrapWidth)
     local list = s.knownLocations
     if not list or #list == 0 then return nil end
+    local step = aliasStep(wrapWidth)
     local best, bestD = nil, math.huge
     for _, k in ipairs(list) do
         if k.page == page then
-            local d = distance(fromX, fromY, k.x, k.y)
+            local d = distance(fromX, fromY, k.x, k.y, step)
             if d < bestD then best, bestD = k, d end
         end
     end
@@ -254,6 +303,10 @@ function M.register(unitAi, aiState)
     -- The nearest location this unit knows on `page` (defaulting to the
     -- active world), measured from (fromX, fromY) -- defaulting to the
     -- unit's own tile. nil when it knows none there.
+    --
+    -- Ranking is on that page's own cylinder: the wrap period is read
+    -- AFTER `page` is resolved, so a query about a loaded-but-not-visible
+    -- page is measured against its world size and not the active one.
     function unitAi.nearestKnownLocation(uid, page, fromX, fromY)
         local s = aiState[uid]
         if not s then return nil end
@@ -265,7 +318,8 @@ function M.register(unitAi, aiState)
             if not info then return nil end
             fromX, fromY = info.gridX, info.gridY
         end
-        return M.nearestKnownLocation(s, page, fromX, fromY)
+        return M.nearestKnownLocation(s, page, fromX, fromY,
+                                      wrapPeriodFor(page))
     end
 
     function unitAi.knowsLocation(uid, page, id)
