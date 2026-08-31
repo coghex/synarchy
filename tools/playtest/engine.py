@@ -285,6 +285,29 @@ def _lua_number(value: float) -> str:
     return repr(float(value))
 
 
+def _requested_repr(value) -> str:
+    """The delta the player asked for, as text for its own turn note.
+
+    Ints are arbitrary precision, so a schema-valid integer can carry
+    hundreds of digits and cannot be formatted through a float
+    presentation at all. The note is read back as the player's own
+    memory, so an outsized one says how big the number was instead of
+    spelling it out.
+    """
+    if isinstance(value, int):
+        text = str(value)
+        return text if len(text) <= 24 else f"{text[:12]}...({len(text)} digits)"
+    return f"{value:g}"
+
+
+def _clamped_dy_note(requested, effective: float) -> str:
+    return (f"scroll dy {_requested_repr(requested)} is outside the "
+            f"contract range [{SCROLL_DY_MIN:g}, {SCROLL_DY_MAX:g}] and "
+            f"was clamped to {effective:g}; one wheel notch is "
+            f"{SCROLL_DY_NOTCH:g} and negative dy zooms in toward the "
+            f"ground")
+
+
 def bound_scroll_dy(dy):
     """Apply the published wheel contract to one requested vertical delta.
 
@@ -294,13 +317,13 @@ def bound_scroll_dy(dy):
 
     The two outcomes are deliberately different, because the inputs are:
 
-    * A finite delta outside the range is a real gesture asking for too
+    * A FINITE delta outside the range is a real gesture asking for too
       much, so it is CLAMPED to the nearest bound. The turn still spends
       its one action on a wheel movement the camera actually performs,
       and the note carries both the requested and the effective value.
-    * A non-finite delta (NaN, +/-inf) is not a magnitude at all — there
-      is no nearest bound to clamp it to — so it is REJECTED and no
-      scroll call is generated for the turn.
+    * A delta that is not a finite number at all — NaN, +/-inf, or a
+      value of the wrong type entirely — has no nearest bound to clamp
+      it to, so it is REJECTED and no scroll call is generated.
 
     This is enforced here, at the translation boundary, rather than in the
     structured schema alone: a scripted agent and a lenient provider
@@ -318,20 +341,28 @@ def bound_scroll_dy(dy):
             f"action 'scroll' rejected: dy must be a number in "
             f"[{SCROLL_DY_MIN:g}, {SCROLL_DY_MAX:g}], got {dy!r}; "
             f"no scroll was sent")
+    if isinstance(dy, int):
+        # Python ints are arbitrary precision, so a schema-valid FINITE
+        # integer can sit entirely outside float range. Compare it exactly,
+        # before any conversion: `float(dy)` would raise OverflowError and
+        # turn a clampable finite value into a rejection, which is the one
+        # outcome the contract reserves for values that are not finite
+        # numbers. int/float comparison in Python is exact, so no
+        # intermediate rounding decides the branch either.
+        if SCROLL_DY_MIN <= dy <= SCROLL_DY_MAX:
+            return float(dy), None
+        effective = SCROLL_DY_MAX if dy > 0 else SCROLL_DY_MIN
+        return effective, _clamped_dy_note(dy, effective)
     value = float(dy)
     if not math.isfinite(value):
         raise ActionError(
             f"action 'scroll' rejected: dy must be a finite number in "
-            f"[{SCROLL_DY_MIN}, {SCROLL_DY_MAX}], got {value!r}; "
+            f"[{SCROLL_DY_MIN:g}, {SCROLL_DY_MAX:g}], got {value!r}; "
             f"no scroll was sent")
     if SCROLL_DY_MIN <= value <= SCROLL_DY_MAX:
         return value, None
     effective = _clamp(value, SCROLL_DY_MIN, SCROLL_DY_MAX)
-    return effective, (
-        f"scroll dy {value:g} is outside the contract range "
-        f"[{SCROLL_DY_MIN:g}, {SCROLL_DY_MAX:g}] and was clamped to "
-        f"{effective:g}; one wheel notch is {SCROLL_DY_NOTCH:g} and "
-        f"negative dy zooms in toward the ground")
+    return effective, _clamped_dy_note(value, effective)
 
 
 def translate_action(action: dict, fb_size: tuple[int, int], notes=None):
@@ -401,8 +432,6 @@ def translate_action(action: dict, fb_size: tuple[int, int], notes=None):
         # before it can be rejected. Only an absent dy defaults.
         raw_dy = action.get("dy")
         dy, dy_note = bound_scroll_dy(0 if raw_dy is None else raw_dy)
-        if dy_note:
-            add_note(dy_note)
         calls = []
         if action.get("x") is not None and action.get("y") is not None:
             x, y = xy()
@@ -418,6 +447,14 @@ def translate_action(action: dict, fb_size: tuple[int, int], notes=None):
         # historical formatting along with its historical forwarding; the
         # notch vocabulary and the bound are about dy alone.
         calls.append(f"return input.scroll({dx:.1f}, {_lua_number(dy)})")
+        # The note lands LAST, once every other part of the action has
+        # translated. A companion field that fails to convert (an invalid
+        # dx, an unusable cursor coordinate) raises from above and the
+        # turn injects nothing — and a note claiming a clamp that never
+        # reached the engine would be a false entry in both the trace and
+        # the player's own memory of the turn.
+        if dy_note:
+            add_note(dy_note)
         return calls, []
     if kind == "key":
         name = action.get("name")

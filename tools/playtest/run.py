@@ -1634,6 +1634,35 @@ def selftest() -> int:
                 typed = str(e)
             check(f"a non-numeric dy ({bogus!r}) is rejected, not coerced",
                   typed is not None and "rejected" in typed, str(typed))
+        # A schema-valid integer can be arbitrary precision and sit
+        # entirely outside float range. It is still FINITE, so the
+        # contract clamps it; converting first would raise OverflowError
+        # and reject it instead.
+        for huge, bound in ((10 ** 400, engine_mod.SCROLL_DY_MAX),
+                            (-(10 ** 400), engine_mod.SCROLL_DY_MIN)):
+            hcalls2, _, hnotes2 = scroll_calls({"do": "scroll", "dy": huge})
+            check("an integer too large to be a float is clamped, not "
+                  f"rejected (sign {'+' if huge > 0 else '-'})",
+                  scroll_dy_of(hcalls2) == [bound] and len(hcalls2) == 1
+                  and len(hnotes2) == 1 and "clamped" in hnotes2[0]
+                  and f"({len(str(huge))} digits)" in hnotes2[0],
+                  str(hcalls2) + str(hnotes2))
+        # A clamp note must describe a scroll the engine actually
+        # received. When a companion field fails to translate the turn
+        # injects nothing, so claiming a clamp would put a false entry in
+        # the trace and in the player's own memory.
+        for companion in ({"dx": "invalid"}, {"x": "a", "y": 1}):
+            bad_notes: list[str] = []
+            raised = None
+            try:
+                translate_action({"do": "scroll", "dy": 600, **companion},
+                                 (1280, 720), notes=bad_notes)
+            except Exception as e:
+                raised = e
+            check("a scroll that fails to translate records no clamp "
+                  f"note ({sorted(companion)})",
+                  raised is not None and bad_notes == [],
+                  f"{type(raised).__name__ if raised else None} {bad_notes}")
         absent, _, absent_notes = scroll_calls({"do": "scroll", "dx": 2})
         check("an absent dy still defaults to a zero vertical delta",
               scroll_dy_of(absent) == [0.0] and absent_notes == [],
