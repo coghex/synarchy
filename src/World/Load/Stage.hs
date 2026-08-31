@@ -457,9 +457,8 @@ stagePage logger registry palette catalog buildingDefs unitDefs
           -- World.Load.Publish, so nothing can race the queue here —
           -- sharing the one helper is what keeps the two seed paths from
           -- drifting, not a defence this path needs.
-          (queuedNow, phaseTotal) ←
-              seedInitialQueue pid worldState params remainingCoords
-          writeIORef phaseRef (LoadPhase2 queuedNow phaseTotal)
+          -- Installs LoadPhase2 itself, as fresh world init does.
+          _ ← seedInitialQueue pid worldState params remainingCoords
 
           mCam ← if isActive
             then do

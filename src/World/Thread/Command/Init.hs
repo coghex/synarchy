@@ -415,13 +415,12 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     -- The phase total comes back from the same call, derived from the
     -- queue rather than from this page's own box, so a retained request
     -- cannot make remaining exceed total.
-    (queuedNow, phaseTotal) ←
-        seedInitialQueue pageId worldState params remainingCoords
-    
-    -- Now switch to Phase 2 tracking. drainInitQueues recomputes the
+    -- Phase 2 tracking is installed by that call, not here: any interval
+    -- between computing the pair and writing it is one a concurrent
+    -- region request can be lost in. drainInitQueues recomputes the
     -- remaining count every tick from the same queue, so the two never
-    -- disagree.
-    writeIORef phaseRef (LoadPhase2 queuedNow phaseTotal)
+    -- disagree afterwards.
+    _ ← seedInitialQueue pageId worldState params remainingCoords
     
     sendGenLog env "Calculating surface elevation..."
     let (surfaceElev, _mat) = elevationAtGlobal seed (wgpPlates params)

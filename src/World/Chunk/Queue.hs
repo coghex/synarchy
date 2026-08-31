@@ -46,7 +46,7 @@ module World.Chunk.Queue
     ) where
 
 import UPrelude
-import Data.IORef (readIORef, atomicModifyIORef')
+import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import qualified Data.HashSet as HS
 import World.Chunk.Admit (registerChunkDemand)
 import World.Chunk.Residency (canonicalChunkCoord)
@@ -199,6 +199,22 @@ seedInitialQueue ∷ WorldPageId → WorldState → WorldGenParams
                  → [ChunkCoord] → IO (Int, Int)
 seedInitialQueue pid ws params boxCoords = do
     needed ← registerChunkDemand ws pid params boxCoords
-    remaining ← atomicModifyIORef' (wsInitQueueRef ws) $ \q →
-        let q' = q ⧺ needed in (q', length q')
-    pure (remaining, remaining + 1)
+    atomicModifyIORef' (wsInitQueueRef ws) $ \q → (q ⧺ needed, ())
+    -- Read the queue back and INSTALL the phase here, rather than
+    -- handing the pair to the caller to write. A page is already
+    -- registered by this point, so any interval between establishing the
+    -- pair and writing it is one in which a @world.loadChunksInRegion@
+    -- can append: it would see 'LoadPhase1', correctly leave the phase
+    -- alone, and then be overwritten by a pair computed before it
+    -- arrived. Reading here rather than reusing the append's own count
+    -- also picks up a request that landed during 'registerChunkDemand'.
+    --
+    -- A request landing between THIS read and the write is still missed,
+    -- which two IORefs cannot prevent; it costs an understated total for
+    -- one tick, and 'World.Thread.ChunkLoading.drainInitQueues' floors
+    -- the total at the remaining count every tick, so the pair is never
+    -- negative and is honest again on the next drain.
+    remaining ← length ⊚ readIORef (wsInitQueueRef ws)
+    let phase = (remaining, remaining + 1)
+    writeIORef (wsLoadPhaseRef ws) (uncurry LoadPhase2 phase)
+    pure phase

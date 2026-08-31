@@ -486,10 +486,15 @@ spec = describe "canonical chunk identity" $ do
 
         -- With nothing outstanding, the phase pair is exactly the box's
         -- own: every chunk but the synchronously loaded centre remains,
-        -- and the total is the box's physical total.
+        -- and the total is the box's physical total. The call INSTALLS
+        -- that phase rather than returning it for the caller to write —
+        -- an interval between the two is one a concurrent region request
+        -- can be lost in.
         wsPlain ← detachedPage params
         seedInitialQueue pageA wsPlain params box
             `shouldReturn` (length box, boxTotal)
+        readIORef (wsLoadPhaseRef wsPlain)
+            `shouldReturn` LoadPhase2 (length box) boxTotal
 
         -- Now the racing case: two off-box requests accepted before the
         -- box is queued.
@@ -508,6 +513,7 @@ spec = describe "canonical chunk identity" $ do
         total `shouldSatisfy` (> boxTotal)
         total - remaining `shouldBe` 1
         total `shouldSatisfy` (≥ remaining)
+        readIORef (wsLoadPhaseRef ws) `shouldReturn` LoadPhase2 remaining total
 
         -- A prior request INSIDE the box is not counted twice.
         wsOverlap ← detachedPage params
