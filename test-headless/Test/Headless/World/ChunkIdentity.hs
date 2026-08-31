@@ -880,3 +880,30 @@ spec = describe "canonical chunk identity" $ do
         -- log the pick head wrote.
         let onAlias = replayEdits saved (generateFlatChunk aliasCoord)
         lcTiles onAlias `shouldBe` lcTiles (generateFlatChunk aliasCoord)
+
+    it "carries a concurrent total across the settle's own retry" $ \_ → do
+        -- The settle concludes "done" from a queue it read empty, and
+        -- that write ERASES the recorded total. If an append landed in
+        -- between, the recheck reruns — and a rerun that re-read the
+        -- phase would find LoadDone and fall back to the box-shaped
+        -- figure, permanently underreporting a load the append had
+        -- already enlarged. The retry carries the total it replaced.
+        let params = sizedParams wideWorldSize
+            boxFallback = 25
+
+        -- The state that ordering leaves behind: one chunk queued, and a
+        -- phase the appender had already raised to 26.
+        ws ← detachedPage params
+        writeIORef (wsInitQueueRef ws) [ChunkCoord 9 9]
+        writeIORef (wsLoadPhaseRef ws) (LoadPhase2 2 26)
+        settleDrainedPhase ws boxFallback
+        readIORef (wsLoadPhaseRef ws) `shouldReturn` LoadPhase2 1 26
+
+        -- Non-vacuity: the box-shaped fallback really is the smaller
+        -- figure, so falling back to it would have lost a chunk of work.
+        boxFallback `shouldSatisfy` (< 26)
+
+        -- And the pure step it is built from never invents a total when
+        -- one is recorded.
+        drainedLoadPhase boxFallback 1 (LoadPhase2 2 26)
+            `shouldBe` LoadPhase2 1 26

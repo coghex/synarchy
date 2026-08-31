@@ -305,16 +305,29 @@ drainedLoadPhase fallbackTotal remaining recorded
 --   an appender producing work faster than one read could spin it, and
 --   the Lua thread appending to this queue is the thread that would then
 --   be blocked on nothing else.
+--
+--   The retry carries the total forward. Concluding \"done\" ERASES the
+--   recorded total, so a second pass that re-read the phase would find
+--   'LoadDone' and fall back to the box-shaped figure — permanently
+--   underreporting a load the concurrent append had already enlarged.
 settleDrainedPhase ∷ WorldState → Int → IO ()
-settleDrainedPhase ws fallbackTotal = go
+settleDrainedPhase ws = go
   where
-    go = do
+    go fallback = do
         rest ← readIORef (wsInitQueueRef ws)
-        atomicModifyIORef' (wsLoadPhaseRef ws) $ \ph →
-            (drainedLoadPhase fallbackTotal (length rest) ph, ())
+        -- The total this pass replaces comes back with it, because the
+        -- retry below has to carry it forward: writing 'LoadDone' erases
+        -- the recorded total, so a second pass reading that would fall
+        -- back to the box-shaped figure and permanently UNDERREPORT a
+        -- load a concurrent append had already enlarged.
+        observed ← atomicModifyIORef' (wsLoadPhaseRef ws) $ \ph →
+            ( drainedLoadPhase fallback (length rest) ph
+            , case ph of
+                LoadPhase2 _ total → total
+                _                  → fallback )
         when (null rest) $ do
             arrived ← readIORef (wsInitQueueRef ws)
-            unless (null arrived) go
+            unless (null arrived) $ go (max fallback observed)
 
 -- | Settle a page's phase back to 'LoadDone' when its queue has emptied
 --   under it.
