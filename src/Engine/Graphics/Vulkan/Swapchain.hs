@@ -3,13 +3,19 @@ module Engine.Graphics.Vulkan.Swapchain
   ( createVulkanSwapchain
   , createSwapchainImageViews
   , swapchainImageUsage
+    -- * Pure capability selection (#1954)
+  , preferredSurfaceFormat
+  , SurfaceFormatChoice(..)
+  , chooseSwapSurfaceFormat
+  , PresentModeChoice(..)
+  , chooseSwapPresentMode
   ) where
 
 import UPrelude
 import qualified Data.Vector as V
 import Engine.Core.Monad
 import Engine.Core.Log (LogCategory(..))
-import Engine.Core.Log.Monad (logDebugM, logDebugSM, logInfoSM)
+import Engine.Core.Log.Monad (logDebugM, logDebugSM, logInfoSM, logWarnM)
 import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Types.Cleanup (Cleanup(..))
 import Vulkan.Core10
@@ -64,11 +70,39 @@ createVulkanSwapchain pdev dev queues surface vsyncEnabled fbSize = do
   logDebugM CatSwapchain "Creating swapchain"
   SwapchainSupportDetails{..} ← querySwapchainSupport pdev surface
   let ssd = SwapchainSupportDetails{..}
-      SurfaceFormatKHR{format=form,colorSpace=cs} = chooseSwapSurfaceFormat ssd
+      (chosenFormat, formatChoice) = chooseSwapSurfaceFormat ssdFormats
+      SurfaceFormatKHR{format=form,colorSpace=cs} = chosenFormat
       desired    = Surf.minImageCount ssdCapabilities + 1
       maxImg     = Surf.maxImageCount ssdCapabilities
       imageCount = if maxImg > 0 then min desired maxImg else desired
-  spMode ← chooseSwapPresentMode ssd vsyncEnabled
+      (spMode, modeChoice) = chooseSwapPresentMode ssdPresentModes vsyncEnabled
+  -- Every warning here is driven by the pure selectors' OWN
+  -- classification (#1954), never by a second predicate re-derived from
+  -- the chosen value: the headless spec pins those classifications, so
+  -- production and the gate cannot drift apart.
+  case formatChoice of
+    SurfaceFormatPreferred → pure ()
+    SurfaceFormatFirstAdvertised → logWarnM CatSwapchain $
+      "preferred surface format not advertised, using the first advertised one instead — wanted "
+      <> describeSurfaceFormat preferredSurfaceFormat
+      <> ", using " <> describeSurfaceFormat chosenFormat
+    SurfaceFormatNoneAdvertised → logWarnM CatSwapchain $
+      "surface advertised no formats at all — requesting the preferred pair unverified: "
+      <> describeSurfaceFormat preferredSurfaceFormat
+  case modeChoice of
+    PresentModeRequested → pure ()
+    PresentModeLowLatency → pure ()
+    PresentModeFifoFallback → logWarnM CatSwapchain $
+      "VSync disabled but neither " <> tshow Swap.PRESENT_MODE_MAILBOX_KHR
+      <> " nor " <> tshow Swap.PRESENT_MODE_IMMEDIATE_KHR
+      <> " is advertised — falling back to " <> tshow spMode
+  -- The two pre-existing present-mode records keep their exact wording
+  -- and severity; only their emission moved out of the now-pure
+  -- selector (#1954 requirement 4).
+  if vsyncEnabled
+    then logDebugM CatSwapchain "VSync enabled: using FIFO present mode"
+    else logInfoSM CatSwapchain "VSync disabled: using present mode"
+           [("mode", tshow spMode)]
   let (usage, captureOK) =
         swapchainImageUsage (Surf.supportedUsageFlags ssdCapabilities)
   unless captureOK $ logDebugM CatSwapchain $
@@ -103,7 +137,10 @@ createVulkanSwapchain pdev dev queues surface vsyncEnabled fbSize = do
         , oldSwapchain = zero
         }
   
-  logDebugSM CatSwapchain "Swapchain created"
+  -- Info, not Debug: PR #14's delivery contract asks for the created
+  -- swapchain's format, present mode, extent and image count at Info
+  -- (#1954 requirement 8).
+  logInfoSM CatSwapchain "Swapchain created"
     [("format", tshow form)
     ,("present_mode", tshow spMode)
     ,("extent", tshow sExtent)
@@ -165,34 +202,84 @@ createSwapchainImageViews dev SwapchainInfo{..} = do
             , layerCount = 1 }
         } Nothing
 
--- | Choose the best swap surface format
-chooseSwapSurfaceFormat ∷ SwapchainSupportDetails → SurfaceFormatKHR
-chooseSwapSurfaceFormat (SwapchainSupportDetails _ ssdFormats _) = best
-  where best = if preferred `elem` ssdFormats then preferred else
-                 if V.null ssdFormats then preferred else V.head ssdFormats
-        preferred = zero { format = FORMAT_B8G8R8A8_UNORM
-                       , colorSpace = COLOR_SPACE_SRGB_NONLINEAR_KHR }
+-- | Both components of a surface-format pair, spelled out. The pair is
+--   selected as ONE capability, so a warning naming only the format
+--   would leave the colour space unaccounted for.
+describeSurfaceFormat ∷ SurfaceFormatKHR → Text
+describeSurfaceFormat SurfaceFormatKHR{format=f,colorSpace=c} =
+  tshow f <> " / " <> tshow c
 
-chooseSwapPresentMode ∷ SwapchainSupportDetails → Bool → EngineM σ Swap.PresentModeKHR
-chooseSwapPresentMode ssd vsyncEnabled = do
-  let available = ssdPresentModes ssd
-  
-  if vsyncEnabled
-    then do
-      -- VSync ON: Use FIFO (guaranteed to be available, caps at refresh rate)
-      logDebugM CatSwapchain "VSync enabled: using FIFO present mode"
-      pure Swap.PRESENT_MODE_FIFO_KHR
-    else do
-      -- VSync OFF: Prefer MAILBOX (triple buffering) or IMMEDIATE (no limit)
-      let preferred = if Swap.PRESENT_MODE_MAILBOX_KHR `V.elem` available
-                        then Swap.PRESENT_MODE_MAILBOX_KHR
-                        else if Swap.PRESENT_MODE_IMMEDIATE_KHR `V.elem` available
-                               then Swap.PRESENT_MODE_IMMEDIATE_KHR
-                               else Swap.PRESENT_MODE_FIFO_KHR
-      
-      logInfoSM CatSwapchain "VSync disabled: using present mode"
-        [("mode", tshow preferred)]
-      pure preferred
+-- | The surface format the engine asks for whenever the driver
+--   advertises it: 8-bit BGRA in the sRGB non-linear colour space.
+preferredSurfaceFormat ∷ SurfaceFormatKHR
+preferredSurfaceFormat = zero { format = FORMAT_B8G8R8A8_UNORM
+                              , colorSpace = COLOR_SPACE_SRGB_NONLINEAR_KHR }
+
+-- | Which branch of 'chooseSwapSurfaceFormat' ran. The chosen VALUE
+--   alone cannot answer that: the empty-advertisement anomaly returns
+--   'preferredSurfaceFormat' too, and it is the one case where the
+--   engine requests a pair the surface never confirmed.
+data SurfaceFormatChoice
+  = SurfaceFormatPreferred
+    -- ^ The preferred pair is advertised and was taken.
+  | SurfaceFormatFirstAdvertised
+    -- ^ The preferred pair is absent; the first advertised pair was
+    --   taken instead. A degraded selection.
+  | SurfaceFormatNoneAdvertised
+    -- ^ The surface advertised no formats at all — anomalous, since a
+    --   presentable surface must offer at least one. The preferred pair
+    --   is requested unverified.
+  deriving (Eq, Show)
+
+-- | Choose the swap surface format, reporting which branch ran.
+--
+--   Pure and exported, so the selection is testable against synthetic
+--   capability vectors with no driver — the same reason
+--   'swapchainImageUsage' (#700) and
+--   'Engine.Graphics.Vulkan.Instance.Plan.planVulkanInstance' (#1402)
+--   are. The branch ORDER is the historical one and is what keeps the
+--   chosen value unchanged (#1954 requirement 7).
+chooseSwapSurfaceFormat ∷ V.Vector SurfaceFormatKHR
+                        → (SurfaceFormatKHR, SurfaceFormatChoice)
+chooseSwapSurfaceFormat advertised
+  | preferredSurfaceFormat `V.elem` advertised
+      = (preferredSurfaceFormat, SurfaceFormatPreferred)
+  | V.null advertised
+      = (preferredSurfaceFormat, SurfaceFormatNoneAdvertised)
+  | otherwise
+      = (V.head advertised, SurfaceFormatFirstAdvertised)
+
+-- | Which branch of 'chooseSwapPresentMode' ran.
+data PresentModeChoice
+  = PresentModeRequested
+    -- ^ VSync is enabled, so FIFO is the mode actually REQUESTED. Every
+    --   Vulkan surface is required to support it, so this is never a
+    --   fallback.
+  | PresentModeLowLatency
+    -- ^ VSync is disabled and a low-latency mode was advertised —
+    --   MAILBOX preferred, IMMEDIATE equally accepted when MAILBOX is
+    --   absent. Not a degraded selection.
+  | PresentModeFifoFallback
+    -- ^ VSync is disabled and NEITHER low-latency mode is advertised,
+    --   so FIFO is reached as a compatibility fallback: the frame rate
+    --   stays capped at the refresh rate despite the request.
+  deriving (Eq, Show)
+
+-- | Choose the swap present mode, reporting which branch ran. Pure and
+--   exported for the same reason as 'chooseSwapSurfaceFormat'; the
+--   MAILBOX → IMMEDIATE → FIFO preference order is unchanged.
+chooseSwapPresentMode ∷ V.Vector Swap.PresentModeKHR → Bool
+                      → (Swap.PresentModeKHR, PresentModeChoice)
+chooseSwapPresentMode available vsyncEnabled
+  -- VSync ON: FIFO (guaranteed to be available, caps at refresh rate)
+  | vsyncEnabled = (Swap.PRESENT_MODE_FIFO_KHR, PresentModeRequested)
+  -- VSync OFF: prefer MAILBOX (triple buffering), then IMMEDIATE (no
+  -- limit), and only then fall back to FIFO.
+  | Swap.PRESENT_MODE_MAILBOX_KHR `V.elem` available
+      = (Swap.PRESENT_MODE_MAILBOX_KHR, PresentModeLowLatency)
+  | Swap.PRESENT_MODE_IMMEDIATE_KHR `V.elem` available
+      = (Swap.PRESENT_MODE_IMMEDIATE_KHR, PresentModeLowLatency)
+  | otherwise = (Swap.PRESENT_MODE_FIFO_KHR, PresentModeFifoFallback)
 
 -- | Clamp swapchain extent to surface capabilities. When currentExtent
 --   is the 0xFFFFFFFF sentinel the surface size is up to us, so the
