@@ -586,7 +586,7 @@ testing, scripted worldgen, and agent workflows.
 
 ### Tips for agents (read first)
 
-- **NEVER launch `cabal run synarchy` / `cabal run exe:synarchy` without `--dump`, `--headless`, or `--offscreen`** — otherwise it opens a graphical window that steals the user's focus (`--offscreen` uses the GPU but creates no window, so it is safe). **`--preview` (below) is NOT in this safe list** — it always opens a real window (no offscreen variant exists), so never launch it yourself even transiently; a bad target rejects before boot, but a valid one steals focus like the graphical path
+- **NEVER launch `cabal run synarchy` / `cabal run exe:synarchy` without `--dump`, `--headless`, or `--offscreen`** — otherwise it opens a graphical window that steals the user's focus (`--offscreen` uses the GPU but creates no window, so it is safe). **`--preview` (below) is NOT in this safe list** — outside the explicit sprite-signoff workflow below, never launch it yourself even transiently; a bad target rejects before boot, but a valid one steals focus like the graphical path
 - **Prefer `--dump` for testing** — self-contained, no TCP, JSON to stdout, implies headless
 - If you must use `--headless`, use `--port 9008` (or another non-8008 port) — 8008 may be the user's graphical instance
 - **NEVER use `pkill -f synarchy`** — it kills the user's GUI. Shut down your own instance with `echo 'engine.quit()' | nc -w 2 localhost 9008`, or track your PID (`HPID=$!`) and `kill $HPID`. If a port is busy with a stale instance: `lsof -ti:9008 | xargs kill`
@@ -645,6 +645,16 @@ world/unit/sim/combat thread, booting straight to
 a game session. **It always opens a real window** (see the warning
 above) — there is no offscreen/headless variant, so treat it exactly
 like the graphical path.
+
+**Sprite signoff deliberately uses that real window.** When an active task
+reaches owner approval of a sprite or sprite group, do not ask the owner to
+judge a chat thumbnail or contact sheet. From the task's isolated worktree,
+first run `cabal build all`; only after that build succeeds, launch that same
+worktree's executable with `cabal run exe:synarchy -- --preview
+<category>/<item>`. Leave the preview open so it appears in front of the owner
+and intentionally takes focus for the approval decision. This signoff step is
+the exception to the no-focus-stealing rule above. Record the owner's verdict;
+close or replace the preview only as the interactive review requires.
 
 Canonical category contract (`App.Cli.classifyPreviewCategory`) — the
 unknown-category error lists exactly this set, no compatibility aliases:

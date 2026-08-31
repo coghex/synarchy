@@ -7,6 +7,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -23,6 +24,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -39,6 +41,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -55,6 +58,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -71,6 +75,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -87,6 +92,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -103,6 +109,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -119,6 +126,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -135,6 +143,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -151,6 +160,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -167,6 +177,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -183,6 +194,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -199,6 +211,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -215,6 +228,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -231,6 +245,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -247,6 +262,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -263,6 +279,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -279,6 +296,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -295,6 +313,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -311,6 +330,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -327,6 +347,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -343,6 +364,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -359,6 +381,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -375,6 +398,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -391,6 +415,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -407,6 +432,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -423,6 +449,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -439,6 +466,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -455,6 +483,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -471,6 +500,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -487,6 +517,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -503,6 +534,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -519,6 +551,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -535,6 +568,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -551,6 +585,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -567,6 +602,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -583,6 +619,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -599,6 +636,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -615,6 +653,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -631,6 +670,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -644,16 +684,131 @@
       "census": {
         "acceptable_failures": 0,
         "acceptable_failures_justification": null,
-        "attempts": [],
-        "claims": [],
-        "current": null,
+        "attempts": [
+          {
+            "accepted": true,
+            "commit_sha": "a7b296ea481a78a5785ca40a78b2e78a9e92ae7a",
+            "completed_runs": 10,
+            "error": null,
+            "requested_runs": 10,
+            "retained_artifacts": [],
+            "status": "ok",
+            "timestamp_utc": "2026-08-31T19:24:10Z"
+          }
+        ],
+        "claims": [
+          {
+            "commit_sha": "a7b296ea481a78a5785ca40a78b2e78a9e92ae7a",
+            "host": "Vincents-MacBook-Pro.local",
+            "lease_seconds": 3600.0,
+            "owner": "vincentcoghlan@Vincents-MacBook-Pro.local:12861",
+            "pid": 12861,
+            "requested_runs": 10,
+            "timestamp_utc": "2026-08-31T19:24:00Z",
+            "token": "597355a144fe4bbeb3970030d17c258d"
+          }
+        ],
+        "current": {
+          "commit_sha": "a7b296ea481a78a5785ca40a78b2e78a9e92ae7a",
+          "samples": [
+            {
+              "check_counts": {
+                "console_responsive": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "engine_alive": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                }
+              },
+              "commit_sha": "a7b296ea481a78a5785ca40a78b2e78a9e92ae7a",
+              "completed_runs": 10,
+              "failure_count": 0,
+              "failure_rate": 0.0,
+              "peak_concurrency": 1,
+              "requested_runs": 10,
+              "retained_artifacts": [],
+              "rts_capabilities": 4,
+              "runs": [
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 4.602,
+                  "index": 1,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 2.183,
+                  "index": 2,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 2.184,
+                  "index": 3,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 2.17,
+                  "index": 4,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 2.166,
+                  "index": 5,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 2.359,
+                  "index": 6,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 2.163,
+                  "index": 7,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 2.176,
+                  "index": 8,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 2.181,
+                  "index": 9,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 2.39,
+                  "index": 10,
+                  "outcome": "PASS"
+                }
+              ],
+              "timeout_count": 0,
+              "timestamp_utc": "2026-08-31T19:24:10Z",
+              "total_elapsed_seconds": 24.572,
+              "worst_elapsed_seconds": 4.602
+            }
+          ]
+        },
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
       },
       "classification": "manual-only",
       "key": "lua_strict_msg",
-      "protocol": "legacy",
+      "protocol": "probe-result/v1",
       "script": "lua_strict_msg_probe.py"
     },
     {
@@ -663,6 +818,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -679,6 +835,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -695,6 +852,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -711,6 +869,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -727,6 +886,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -743,6 +903,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -759,6 +920,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -775,6 +937,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -791,6 +954,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -807,6 +971,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -823,6 +988,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -839,6 +1005,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -855,6 +1022,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -871,6 +1039,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -887,6 +1056,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -903,6 +1073,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -919,6 +1090,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -935,6 +1107,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -951,6 +1124,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -967,6 +1141,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -983,6 +1158,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -999,6 +1175,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -1015,6 +1192,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -1031,6 +1209,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -1047,6 +1226,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -1063,6 +1243,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -1076,9 +1257,189 @@
       "census": {
         "acceptable_failures": 0,
         "acceptable_failures_justification": null,
-        "attempts": [],
-        "claims": [],
-        "current": null,
+        "attempts": [
+          {
+            "accepted": true,
+            "commit_sha": "0dd0cdc8362b22f33e0932b7928f05f24645a855",
+            "completed_runs": 10,
+            "error": null,
+            "requested_runs": 10,
+            "retained_artifacts": [
+              "/private/var/folders/xs/kyf0vrg92c340wk3jncyp1fr0000gn/T/synarchy-probe-flake/role-20260830T171614Z-89431-6ca08be8/run-001",
+              "/private/var/folders/xs/kyf0vrg92c340wk3jncyp1fr0000gn/T/synarchy-probe-flake/role-20260830T171614Z-89431-6ca08be8/run-002",
+              "/private/var/folders/xs/kyf0vrg92c340wk3jncyp1fr0000gn/T/synarchy-probe-flake/role-20260830T171614Z-89431-6ca08be8/run-003",
+              "/private/var/folders/xs/kyf0vrg92c340wk3jncyp1fr0000gn/T/synarchy-probe-flake/role-20260830T171614Z-89431-6ca08be8/run-004",
+              "/private/var/folders/xs/kyf0vrg92c340wk3jncyp1fr0000gn/T/synarchy-probe-flake/role-20260830T171614Z-89431-6ca08be8/run-005",
+              "/private/var/folders/xs/kyf0vrg92c340wk3jncyp1fr0000gn/T/synarchy-probe-flake/role-20260830T171614Z-89431-6ca08be8/run-006",
+              "/private/var/folders/xs/kyf0vrg92c340wk3jncyp1fr0000gn/T/synarchy-probe-flake/role-20260830T171614Z-89431-6ca08be8/run-007",
+              "/private/var/folders/xs/kyf0vrg92c340wk3jncyp1fr0000gn/T/synarchy-probe-flake/role-20260830T171614Z-89431-6ca08be8/run-008",
+              "/private/var/folders/xs/kyf0vrg92c340wk3jncyp1fr0000gn/T/synarchy-probe-flake/role-20260830T171614Z-89431-6ca08be8/run-009",
+              "/private/var/folders/xs/kyf0vrg92c340wk3jncyp1fr0000gn/T/synarchy-probe-flake/role-20260830T171614Z-89431-6ca08be8/run-010"
+            ],
+            "status": "ok",
+            "timestamp_utc": "2026-08-30T17:16:14Z"
+          }
+        ],
+        "claims": [
+          {
+            "commit_sha": "0dd0cdc8362b22f33e0932b7928f05f24645a855",
+            "host": "Vincents-MacBook-Pro.local",
+            "lease_seconds": 3600.0,
+            "owner": "vincentcoghlan@Vincents-MacBook-Pro.local:89431",
+            "pid": 89431,
+            "requested_runs": 10,
+            "timestamp_utc": "2026-08-30T17:16:14Z",
+            "token": "3bb2a46bf32b49b084146e2cc6a54b1c"
+          }
+        ],
+        "current": {
+          "commit_sha": "0dd0cdc8362b22f33e0932b7928f05f24645a855",
+          "samples": [
+            {
+              "check_counts": {
+                "demote_laborer": {
+                  "FAIL": 0,
+                  "MISSING": 10,
+                  "PASS": 0
+                },
+                "derive_initial": {
+                  "FAIL": 0,
+                  "MISSING": 10,
+                  "PASS": 0
+                },
+                "derive_miner": {
+                  "FAIL": 0,
+                  "MISSING": 10,
+                  "PASS": 0
+                },
+                "hysteresis_flip": {
+                  "FAIL": 0,
+                  "MISSING": 10,
+                  "PASS": 0
+                },
+                "hysteresis_hold": {
+                  "FAIL": 0,
+                  "MISSING": 10,
+                  "PASS": 0
+                },
+                "steer_miner": {
+                  "FAIL": 0,
+                  "MISSING": 10,
+                  "PASS": 0
+                },
+                "steer_woodcutter": {
+                  "FAIL": 0,
+                  "MISSING": 10,
+                  "PASS": 0
+                },
+                "technomule_no_role": {
+                  "FAIL": 0,
+                  "MISSING": 10,
+                  "PASS": 0
+                },
+                "xp_construction": {
+                  "FAIL": 0,
+                  "MISSING": 10,
+                  "PASS": 0
+                },
+                "xp_woodcutting": {
+                  "FAIL": 0,
+                  "MISSING": 10,
+                  "PASS": 0
+                }
+              },
+              "commit_sha": "0dd0cdc8362b22f33e0932b7928f05f24645a855",
+              "completed_runs": 10,
+              "failure_count": 10,
+              "failure_rate": 1.0,
+              "peak_concurrency": 1,
+              "requested_runs": 10,
+              "retained_artifacts": [
+                "/private/var/folders/xs/kyf0vrg92c340wk3jncyp1fr0000gn/T/synarchy-probe-flake/role-20260830T171614Z-89431-6ca08be8/run-001",
+                "/private/var/folders/xs/kyf0vrg92c340wk3jncyp1fr0000gn/T/synarchy-probe-flake/role-20260830T171614Z-89431-6ca08be8/run-002",
+                "/private/var/folders/xs/kyf0vrg92c340wk3jncyp1fr0000gn/T/synarchy-probe-flake/role-20260830T171614Z-89431-6ca08be8/run-003",
+                "/private/var/folders/xs/kyf0vrg92c340wk3jncyp1fr0000gn/T/synarchy-probe-flake/role-20260830T171614Z-89431-6ca08be8/run-004",
+                "/private/var/folders/xs/kyf0vrg92c340wk3jncyp1fr0000gn/T/synarchy-probe-flake/role-20260830T171614Z-89431-6ca08be8/run-005",
+                "/private/var/folders/xs/kyf0vrg92c340wk3jncyp1fr0000gn/T/synarchy-probe-flake/role-20260830T171614Z-89431-6ca08be8/run-006",
+                "/private/var/folders/xs/kyf0vrg92c340wk3jncyp1fr0000gn/T/synarchy-probe-flake/role-20260830T171614Z-89431-6ca08be8/run-007",
+                "/private/var/folders/xs/kyf0vrg92c340wk3jncyp1fr0000gn/T/synarchy-probe-flake/role-20260830T171614Z-89431-6ca08be8/run-008",
+                "/private/var/folders/xs/kyf0vrg92c340wk3jncyp1fr0000gn/T/synarchy-probe-flake/role-20260830T171614Z-89431-6ca08be8/run-009",
+                "/private/var/folders/xs/kyf0vrg92c340wk3jncyp1fr0000gn/T/synarchy-probe-flake/role-20260830T171614Z-89431-6ca08be8/run-010"
+              ],
+              "rts_capabilities": 4,
+              "runs": [
+                {
+                  "artifact_dir": "/private/var/folders/xs/kyf0vrg92c340wk3jncyp1fr0000gn/T/synarchy-probe-flake/role-20260830T171614Z-89431-6ca08be8/run-001",
+                  "elapsed_seconds": 54.416,
+                  "index": 1,
+                  "outcome": "FAIL"
+                },
+                {
+                  "artifact_dir": "/private/var/folders/xs/kyf0vrg92c340wk3jncyp1fr0000gn/T/synarchy-probe-flake/role-20260830T171614Z-89431-6ca08be8/run-002",
+                  "elapsed_seconds": 47.051,
+                  "index": 2,
+                  "outcome": "FAIL"
+                },
+                {
+                  "artifact_dir": "/private/var/folders/xs/kyf0vrg92c340wk3jncyp1fr0000gn/T/synarchy-probe-flake/role-20260830T171614Z-89431-6ca08be8/run-003",
+                  "elapsed_seconds": 48.956,
+                  "index": 3,
+                  "outcome": "FAIL"
+                },
+                {
+                  "artifact_dir": "/private/var/folders/xs/kyf0vrg92c340wk3jncyp1fr0000gn/T/synarchy-probe-flake/role-20260830T171614Z-89431-6ca08be8/run-004",
+                  "elapsed_seconds": 47.043,
+                  "index": 4,
+                  "outcome": "FAIL"
+                },
+                {
+                  "artifact_dir": "/private/var/folders/xs/kyf0vrg92c340wk3jncyp1fr0000gn/T/synarchy-probe-flake/role-20260830T171614Z-89431-6ca08be8/run-005",
+                  "elapsed_seconds": 48.241,
+                  "index": 5,
+                  "outcome": "FAIL"
+                },
+                {
+                  "artifact_dir": "/private/var/folders/xs/kyf0vrg92c340wk3jncyp1fr0000gn/T/synarchy-probe-flake/role-20260830T171614Z-89431-6ca08be8/run-006",
+                  "elapsed_seconds": 51.941,
+                  "index": 6,
+                  "outcome": "FAIL"
+                },
+                {
+                  "artifact_dir": "/private/var/folders/xs/kyf0vrg92c340wk3jncyp1fr0000gn/T/synarchy-probe-flake/role-20260830T171614Z-89431-6ca08be8/run-007",
+                  "elapsed_seconds": 46.577,
+                  "index": 7,
+                  "outcome": "FAIL"
+                },
+                {
+                  "artifact_dir": "/private/var/folders/xs/kyf0vrg92c340wk3jncyp1fr0000gn/T/synarchy-probe-flake/role-20260830T171614Z-89431-6ca08be8/run-008",
+                  "elapsed_seconds": 46.261,
+                  "index": 8,
+                  "outcome": "FAIL"
+                },
+                {
+                  "artifact_dir": "/private/var/folders/xs/kyf0vrg92c340wk3jncyp1fr0000gn/T/synarchy-probe-flake/role-20260830T171614Z-89431-6ca08be8/run-009",
+                  "elapsed_seconds": 46.159,
+                  "index": 9,
+                  "outcome": "FAIL"
+                },
+                {
+                  "artifact_dir": "/private/var/folders/xs/kyf0vrg92c340wk3jncyp1fr0000gn/T/synarchy-probe-flake/role-20260830T171614Z-89431-6ca08be8/run-010",
+                  "elapsed_seconds": 46.3,
+                  "index": 10,
+                  "outcome": "FAIL"
+                }
+              ],
+              "timeout_count": 0,
+              "timestamp_utc": "2026-08-30T17:16:14Z",
+              "total_elapsed_seconds": 482.945,
+              "worst_elapsed_seconds": 54.416
+            }
+          ]
+        },
+        "deferred": {
+          "reason": "Biome-specific tree assets are still being implemented, so missing-tree results are not actionable game regressions.",
+          "resume_when": "All tree assets required by the role probe's supported biome set have been merged and registered in the live flora data."
+        },
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -1095,6 +1456,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -1111,6 +1473,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -1127,6 +1490,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -1143,6 +1507,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -1159,6 +1524,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -1175,6 +1541,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -1191,6 +1558,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -1204,25 +1572,300 @@
       "census": {
         "acceptable_failures": 0,
         "acceptable_failures_justification": null,
-        "attempts": [],
-        "claims": [],
-        "current": null,
+        "attempts": [
+          {
+            "accepted": true,
+            "commit_sha": "079f355dc52452c87e1149ad4d56e8e1260c50dd",
+            "completed_runs": 10,
+            "error": null,
+            "requested_runs": 10,
+            "retained_artifacts": [],
+            "status": "ok",
+            "timestamp_utc": "2026-08-31T16:36:14Z"
+          }
+        ],
+        "claims": [
+          {
+            "commit_sha": "079f355dc52452c87e1149ad4d56e8e1260c50dd",
+            "host": "Vincents-MacBook-Pro.local",
+            "lease_seconds": 3600.0,
+            "owner": "vincentcoghlan@Vincents-MacBook-Pro.local:79913",
+            "pid": 79913,
+            "requested_runs": 10,
+            "timestamp_utc": "2026-08-31T16:36:14Z",
+            "token": "a6601c5dd3854a82b4b768e1bdf00db2"
+          }
+        ],
+        "current": {
+          "commit_sha": "079f355dc52452c87e1149ad4d56e8e1260c50dd",
+          "samples": [
+            {
+              "check_counts": {
+                "console_responsive": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "engine_alive": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "malformed_text_call": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "malformed_text_roundtrip": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "malformed_world_show": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "well_formed_text_call": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "well_formed_text_roundtrip": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "well_formed_world_show": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                }
+              },
+              "commit_sha": "079f355dc52452c87e1149ad4d56e8e1260c50dd",
+              "completed_runs": 10,
+              "failure_count": 0,
+              "failure_rate": 0.0,
+              "peak_concurrency": 1,
+              "requested_runs": 10,
+              "retained_artifacts": [],
+              "rts_capabilities": 4,
+              "runs": [
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 13.4,
+                  "index": 1,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 10.964,
+                  "index": 2,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 7.754,
+                  "index": 3,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 10.971,
+                  "index": 4,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 3.349,
+                  "index": 5,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 3.37,
+                  "index": 6,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 2.835,
+                  "index": 7,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 2.849,
+                  "index": 8,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 2.86,
+                  "index": 9,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 2.942,
+                  "index": 10,
+                  "outcome": "PASS"
+                }
+              ],
+              "timeout_count": 0,
+              "timestamp_utc": "2026-08-31T16:36:14Z",
+              "total_elapsed_seconds": 61.295,
+              "worst_elapsed_seconds": 13.4
+            }
+          ]
+        },
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
       },
       "classification": "manual-only",
       "key": "text_encoding",
-      "protocol": "legacy",
+      "protocol": "probe-result/v1",
       "script": "text_encoding_probe.py"
     },
     {
       "census": {
         "acceptable_failures": 0,
         "acceptable_failures_justification": null,
-        "attempts": [],
-        "claims": [],
-        "current": null,
+        "attempts": [
+          {
+            "accepted": true,
+            "commit_sha": "cd34c956eb2073f98faf3ae1f5855d515d0fa596",
+            "completed_runs": 10,
+            "error": null,
+            "requested_runs": 10,
+            "retained_artifacts": [],
+            "status": "ok",
+            "timestamp_utc": "2026-08-30T20:00:41Z"
+          }
+        ],
+        "claims": [
+          {
+            "commit_sha": "cd34c956eb2073f98faf3ae1f5855d515d0fa596",
+            "host": "Vincents-MacBook-Pro.local",
+            "lease_seconds": 3600.0,
+            "owner": "vincentcoghlan@Vincents-MacBook-Pro.local:58615",
+            "pid": 58615,
+            "requested_runs": 10,
+            "timestamp_utc": "2026-08-30T20:00:41Z",
+            "token": "19027557b5d0453ea3a8b103631cd2bd"
+          }
+        ],
+        "current": {
+          "commit_sha": "cd34c956eb2073f98faf3ae1f5855d515d0fa596",
+          "samples": [
+            {
+              "check_counts": {
+                "arena_safety": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "bug_fix": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "ice_agreement": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "monotone": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "safety": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                }
+              },
+              "commit_sha": "cd34c956eb2073f98faf3ae1f5855d515d0fa596",
+              "completed_runs": 10,
+              "failure_count": 0,
+              "failure_rate": 0.0,
+              "peak_concurrency": 1,
+              "requested_runs": 10,
+              "retained_artifacts": [],
+              "rts_capabilities": 4,
+              "runs": [
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 120.711,
+                  "index": 1,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 121.057,
+                  "index": 2,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 114.741,
+                  "index": 3,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 104.803,
+                  "index": 4,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 93.027,
+                  "index": 5,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 91.406,
+                  "index": 6,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 150.385,
+                  "index": 7,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 87.367,
+                  "index": 8,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 85.781,
+                  "index": 9,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 87.62,
+                  "index": 10,
+                  "outcome": "PASS"
+                }
+              ],
+              "timeout_count": 0,
+              "timestamp_utc": "2026-08-30T20:00:41Z",
+              "total_elapsed_seconds": 1056.898,
+              "worst_elapsed_seconds": 150.385
+            }
+          ]
+        },
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -1239,6 +1882,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -1255,6 +1899,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -1271,6 +1916,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -1287,6 +1933,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -1303,6 +1950,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -1319,6 +1967,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -1335,6 +1984,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -1351,6 +2001,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -1367,6 +2018,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -1383,6 +2035,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -1563,6 +2216,7 @@
             }
           ]
         },
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -1579,6 +2233,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -1595,6 +2250,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -1611,6 +2267,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -1627,6 +2284,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -1643,6 +2301,7 @@
         "attempts": [],
         "claims": [],
         "current": null,
+        "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -1653,5 +2312,5 @@
       "script": "structure_rotation_probe.py"
     }
   ],
-  "schema": "probe-census/v4"
+  "schema": "probe-census/v5"
 }

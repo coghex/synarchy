@@ -37,6 +37,7 @@ import Engine.Scripting.Lua.Types (LuaMsg(..))
 import World.Edit.Apply (replayEdits)
 import World.Mine.Apply (applyDigSlopesTd)
 import World.Construct.Apply (applyConstructSlopesTd)
+import World.Plant.Validate (revalidatePlantDesignations)
 import Sim.Command.Types (SimCommand(..))
 
 -- | Maximum chunks to generate per world loop iteration.
@@ -46,7 +47,7 @@ maxChunksPerTick ∷ Int
 maxChunksPerTick = 8
 
 updateChunkLoading ∷ EngineEnv → LoggerState → IO ()
-updateChunkLoading env _logger = do
+updateChunkLoading env logger = do
     camera ← readIORef (rvCameraRef (toRenderViewCapability env))
     catalog ← readIORef (wsFloraCatalogRef (toWorldSimCapability env))
     registry ← readIORef (wsMaterialRegistryRef (toWorldSimCapability env))
@@ -176,6 +177,15 @@ updateChunkLoading env _logger = do
                                 bumpQuadCacheGen worldState
                                 writeIORef (wsZoomQuadCacheRef worldState) Nothing
                                 writeIORef (wsBgQuadCacheRef worldState) Nothing
+                                -- #1858: terrain just became resident, so
+                                -- every plant designation held as UNKNOWN
+                                -- over one of these chunks can finally be
+                                -- resolved. The eviction above only stops
+                                -- the marker drawing; it never removes a
+                                -- record.
+                                _ ← revalidatePlantDesignations logger
+                                                                worldState
+                                pure ()
 
 -- | Dispatch a location-stamp request to the Lua thread for any
 --   just-loaded chunk the overlay (#89) places a location on. Issued on
@@ -346,6 +356,12 @@ drainInitQueues env logger = do
                                     (lcTerrainSurfaceMap lc)
                         -- Stamp any placed locations on the loaded chunks (#89).
                         dispatchLocationStamps env params pageId newChunks'
+
+                        -- #1858: same publication boundary as the
+                        -- camera-driven loader above — an unresolved
+                        -- designation over one of these chunks is checked
+                        -- now that its terrain exists.
+                        _ ← revalidatePlantDesignations logger worldState
 
                         -- The batch is now in wsTilesRef AND the sim has been
                         -- notified, so drop it from the init queue — by coord,

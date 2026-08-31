@@ -107,6 +107,7 @@ import qualified Test.Headless.Input.Inject as InputInject
 import qualified Test.Headless.Input.Followup as InputFollowup
 import qualified Test.Headless.Input.InjectOwnership as InputInjectOwnership
 import qualified Test.Headless.Lua.DebugQueue as LuaDebugQueue
+import qualified Test.Headless.Lua.SceneText as LuaSceneText
 import qualified Test.Headless.Lua.RenderQueue as LuaRenderQueue
 import qualified Test.Headless.Lua.PreviewGeneration as LuaPreviewGeneration
 import qualified Test.Headless.Lua.PauseGate as LuaPauseGate
@@ -207,6 +208,7 @@ import qualified Test.Headless.World.Render.SceneStats as SceneStats
 import qualified Test.Headless.World.Render.SolarAttribution as SolarAttribution
 import qualified Test.Headless.World.Render.DesignationFaceMap as DesignationFaceMap
 import qualified Test.Headless.World.DesignationSeam as DesignationSeam
+import qualified Test.Headless.World.CropPlant as CropPlant
 import qualified Test.Headless.World.StructureStage as StructureStage
 import qualified Test.Headless.World.StructurePaletteResidue as StructurePaletteResidue
 import qualified Test.Headless.Structure.ArtCatalog as StructureArtCatalog
@@ -333,6 +335,13 @@ main = hspec $ do
         -- at all, just the live EngineEnv's queues/refs to construct a
         -- real Lua backend and drive processLuaMsg directly.
         describe "Lua.DebugQueue" LuaDebugQueue.spec
+        -- Same technique as Lua.DebugQueue above (#1961): the scene
+        -- handlers are GPU-free, so the real luaToEngineQueue →
+        -- processLuaMessages → Message.Scene route runs headless
+        -- against the live env. The spec installs and restores its
+        -- own active scene rather than leaking one into this shared
+        -- environment.
+        describe "Lua.SceneText" LuaSceneText.spec
         -- Same technique as Lua.DebugQueue above: the live EngineEnv's
         -- queues/refs are only there to build a real Lua backend, whose
         -- console boundary is what #1955's key contract lives on.
@@ -411,6 +420,11 @@ main = hspec $ do
     aroundAll withHeadlessEngine $ do
         FluidWritebackStaleness.spec
         describe "persistence contract" FluidWritebackStaleness.saveSpec
+    -- Own engine (#1858): the only example in the suite that PUBLISHES
+    -- a loaded session, which replaces every live page -- so it must
+    -- never run inside the shared-worlds engine, and nothing may be
+    -- registered after it in this block.
+    aroundAll withHeadlessEngine CropPlant.saveSpec
     -- Own engine: #913's failure-report cases queue a WorldSave for a
     -- page that does not exist, and assert on the shared event log --
     -- both of which would be noise (and, for the log, a source of
@@ -748,6 +762,8 @@ main = hspec $ do
     describe "World.Render.DesignationFaceMap" DesignationFaceMap.spec
     describe "World.DesignationSeam" DesignationSeam.spec
     describe "World.DesignationSeam (engine)" DesignationSeam.engineSpec
+    describe "World.CropPlant" CropPlant.spec
+    describe "World.CropPlant (engine)" CropPlant.engineSpec
 
     -- #1674: its own headless engine (no worker threads), so the
     -- WorldSetStructure structure.place emits waits to be dequeued and

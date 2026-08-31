@@ -208,18 +208,32 @@ renderWorldCursorQuadsScanned env worldState tileAlpha = do
 
     -- Plant-designation markers (#335): world annotations like the
     -- till markers, visible in every tool mode. Rendered from the
-    -- surface z stored at designation time.
+    -- surface z stored at designation time, through #1857's FLAT
+    -- top-surface helper — crop planting is work on level ground, so
+    -- the authored alpha owns the whole shape and no three-face mask
+    -- applies (#1858 requirement 1; the same one call Till makes, not
+    -- a copy of it).
+    --
+    -- The residency guard is a DRAWING suppression, never a validity
+    -- filter: a designation whose chunk is not resident is UNKNOWN, so
+    -- it is kept and simply not drawn until 'World.Plant.Validate' can
+    -- resolve it (requirement 6). Validity itself is world-owned and
+    -- lives entirely in that module — a resident record reaching here
+    -- is drawn, never re-judged. #1175: the storing chunk comes from
+    -- the canonical frame, so a legacy u-alias key resolves too.
     plantDesigns ← readIORef (wsPlantDesignationsRef worldState)
     let plantDesignQuads = case plantDesignTexture cs' of
             Nothing → V.empty
             Just tex
                 | HM.null plantDesigns → V.empty
                 | otherwise → V.fromList
-                    [ worldCursorToQuad lookupSlot lookupFmSlot textures
+                    [ worldFlatCursorToQuad lookupSlot lookupFmSlot textures
                           facing dgx dgy (ptZ pd) zSlice effectiveDepth
                           tileAlpha wrapOff tex
                     | ((dgx, dgy), pd) ← HM.toList plantDesigns
-                    , let (chunkCoord, _) = globalToChunk dgx dgy
+                    , let (chunkCoord, _, _) =
+                              canonicalTileFrame worldSize dgx dgy
+                    , Just _ ← [lookupChunk chunkCoord tileData]
                     , Just wrapOff ← [isChunkVisibleWrapped facing worldSize
                                           vb camX camY chunkCoord]
                     ]

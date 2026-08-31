@@ -740,6 +740,7 @@ library
                      World.Chop.Types
                      World.Till.Types
                      World.Plant.Types
+                     World.Plant.Validate
                      World.Render.SpoilQuads
                      World.Render.BloodQuads
                      World.Blood.Teardown
@@ -1192,6 +1193,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.ActionOutcome
                    Test.Headless.World.ChunkQueueFrame
                    Test.Headless.World.DesignationSeam
+                   Test.Headless.World.CropPlant
                    Test.Headless.World.StructureStage
                    Test.Headless.World.StructurePaletteResidue
                    Test.Headless.Structure.ArtCatalog
@@ -1373,6 +1375,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Capability.UnitCombat
                    Test.Headless.Capability.WorldSim
                    Test.Headless.Lua.DebugQueue
+                   Test.Headless.Lua.SceneText
                    Test.Headless.Lua.RenderQueue
                    Test.Headless.Lua.PreviewGeneration
                    Test.Headless.Lua.PauseGate
