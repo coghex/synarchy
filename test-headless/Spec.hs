@@ -366,6 +366,11 @@ main = hspec $ do
         -- the Lua-facing tutorial surface is exercised end to end (#957).
         TutorialDefinitions.luaSpec
         LuaTutorialEvaluation.luaSpec
+        -- Same technique (#1946): the loot-table load-and-register
+        -- boundary is entirely the live env's content-registry ref
+        -- projected through the real capability, so it rides the
+        -- shared engine and borrows/restores that one ref.
+        LocationLootDeterminism.luaSpec
     -- Own engine (not the shared-worlds one above): the #707 save/load
     -- story snapshots and reloads EVERY live page, so an empty world
     -- manager keeps it scoped to its own cheap private w8 pages instead
