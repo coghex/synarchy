@@ -9,6 +9,8 @@ import Engine.Scripting.Lua.API.Repair
 import Engine.Core.State (EngineEnv, unitManagerRef)
 import Engine.Core.Capability.ContentRegistries
   (toContentRegistriesCapability)
+import Engine.Core.Capability.ContentRegistriesView
+  (toContentRegistriesViewCapability)
 import qualified HsLua as Lua
 
 -- | Populate and install the @craft@, @power@, and @repair@ global
@@ -17,8 +19,13 @@ registerCraftAPI ∷ EngineEnv → Lua.LuaE Lua.Exception ()
 registerCraftAPI env = do
   -- craft.get/getNames and the whole repair surface read the recipe
   -- (and item) catalogue through the `content-registries` capability
-  -- (#890) rather than the full EngineEnv.
-  let regs = toContentRegistriesCapability env
+  -- (#890) rather than the full EngineEnv. They take DIFFERENT records
+  -- (#1896): `Engine.Scripting.Lua.API.Craft.Recipe` also owns
+  -- `engine.loadRecipeYaml`'s write, so it keeps the raw writer
+  -- interface, while `Engine.Scripting.Lua.API.Repair` only reads and
+  -- takes the read-only view.
+  let regs     = toContentRegistriesCapability env
+      regsView = toContentRegistriesViewCapability env
   -- Craft global — the crafting recipe catalogue (#325), loaded from
   -- data/recipes/*.yaml via engine.loadRecipeYaml. get/getNames are
   -- read-only queries; execute runs one craft against a unit's
@@ -77,7 +84,8 @@ registerCraftAPI env = do
   -- restricted to repair-tagged recipes; repairAt runs one repair
   -- against a targeted item instance.
   Lua.newtable
-  registerLuaFunction "get"      (repairGetFn regs)
-  registerLuaFunction "getNames" (repairGetNamesFn regs)
-  registerLuaFunction "repairAt" (repairAtFn regs (unitManagerRef env) env)
+  registerLuaFunction "get"      (repairGetFn regsView)
+  registerLuaFunction "getNames" (repairGetNamesFn regsView)
+  registerLuaFunction "repairAt"
+                     (repairAtFn regsView (unitManagerRef env) env)
   Lua.setglobal (Lua.Name "repair")

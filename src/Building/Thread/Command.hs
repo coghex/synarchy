@@ -15,7 +15,7 @@ module Building.Thread.Command
 
 import UPrelude
 import Engine.Core.Capability.Building (BuildingCapability(..))
-import Engine.Core.Capability.ContentRegistries (ContentRegistriesCapability)
+import Engine.Core.Capability.ContentRegistriesView (ContentRegistriesViewCapability)
 import Engine.Core.Capability.WorldSim (WorldSimCapability(..))
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (IORef, readIORef, atomicModifyIORef')
@@ -39,9 +39,11 @@ import Power.Live (retirePowerNodeEverywhere)
 --   Takes the content-registries view as well since #1087: an
 --   instant-built storage building seeds its container-knowledge record
 --   when it reaches Built, and weighing that observation needs the item
---   defs.
+--   defs. This module names no registry accessor itself — it carries
+--   the record only to build 'Building.Knowledge.Live.containerObserver'
+--   — so #1896 changed its type here without changing what it does.
 processAllBuildingCommands ∷ IORef LoggerState → WorldSimCapability
-                           → ContentRegistriesCapability
+                           → ContentRegistriesViewCapability
                            → BuildingCapability → IO ()
 processAllBuildingCommands logRef sim reg bld = do
     drain
@@ -59,7 +61,7 @@ processAllBuildingCommands logRef sim reg bld = do
             Nothing  → return ()
 
 handleBuildingCommand ∷ IORef LoggerState → WorldSimCapability
-                      → ContentRegistriesCapability → BuildingCapability
+                      → ContentRegistriesViewCapability → BuildingCapability
                       → BuildingCommand → IO ()
 handleBuildingCommand logRef sim reg bld
                       (BuildingSpawn bid defName gx gy gz pageId) = do
@@ -102,7 +104,7 @@ handleBuildingCommand _ sim _ bld BuildingClearAll = do
 --   afterwards. One body, two callers — the two can never diverge on
 --   what a spawn actually does.
 applyBuildingSpawn ∷ LoggerState → WorldSimCapability
-                   → ContentRegistriesCapability → BuildingCapability
+                   → ContentRegistriesViewCapability → BuildingCapability
                    → BuildingId → Text → Int → Int → Int → WorldPageId
                    → IO ()
 applyBuildingSpawn logger sim reg bld bid defName gx gy gz pageId = do

@@ -9,14 +9,15 @@ module Engine.Scripting.Lua.API.Units.Equipment
     where
 
 import UPrelude
-import Engine.Core.Capability.ContentRegistries
-    (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Engine.Core.Capability.ContentRegistriesView
+    (ContentRegistriesViewCapability(..), toContentRegistriesViewCapability)
 import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
-import Data.IORef (readIORef, atomicModifyIORef')
+import Data.IORef (atomicModifyIORef')
+import Engine.Core.ReadOnlyRef (readReadOnlyRef)
 import Engine.Core.State (EngineEnv)
 import Unit.Types
 import Unit.Stats (refreshAccessoryBuffs)
@@ -38,7 +39,8 @@ unitModifyItemFillFn env = do
                 defName = TE.decodeUtf8Lenient nameBS
                 delta   = realToFrac d ∷ Float
             applied ← Lua.liftIO $ do
-                itemMgr ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
+                itemMgr ← readReadOnlyRef
+                    (crvItemManagerRef (toContentRegistriesViewCapability env))
                 atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                     case HM.lookup uid (umInstances um) of
                         Nothing → (um, 0 ∷ Float)
@@ -75,7 +77,8 @@ unitModifyItemFillByIdFn env = do
                 iid   = fromIntegral iidI ∷ Word64
                 delta = realToFrac d ∷ Float
             mApplied ← Lua.liftIO $ do
-                itemMgr ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
+                itemMgr ← readReadOnlyRef
+                    (crvItemManagerRef (toContentRegistriesViewCapability env))
                 atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                     case HM.lookup uid (umInstances um) of
                         Nothing → (um, Nothing)
@@ -155,7 +158,8 @@ unitRepairItemFn env = do
                     _                   → 0
             -- For the accessory branch we may need the item def to refresh
             -- condition-scaled buffs; read the manager once up front.
-            itemMgr ← Lua.liftIO $ readIORef (crItemManagerRef (toContentRegistriesCapability env))
+            itemMgr ← Lua.liftIO $ readReadOnlyRef
+                (crvItemManagerRef (toContentRegistriesViewCapability env))
             mRes ← Lua.liftIO $ atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                 case HM.lookup uid (umInstances um) of
                     Nothing   → (um, Nothing)

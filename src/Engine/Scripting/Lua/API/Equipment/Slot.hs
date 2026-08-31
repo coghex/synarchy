@@ -11,14 +11,15 @@ module Engine.Scripting.Lua.API.Equipment.Slot
     ) where
 
 import UPrelude
-import Engine.Core.Capability.ContentRegistries
-    (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Engine.Core.Capability.ContentRegistriesView
+    (ContentRegistriesViewCapability(..), toContentRegistriesViewCapability)
 import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
-import Data.IORef (readIORef, atomicModifyIORef')
+import Data.IORef (atomicModifyIORef')
+import Engine.Core.ReadOnlyRef (readReadOnlyRef)
 import Engine.Core.State (EngineEnv)
 import Equipment.Types
 import Item.Types (ItemInstance(..), lookupItemDef, itemMatches, idKind)
@@ -59,8 +60,10 @@ equipmentEquipFn env = do
                 itemNm = TE.decodeUtf8Lenient itemBS
                 wantId = maybe 0 fromIntegral instArg
             ok ← Lua.liftIO $ do
-                itemMgr ← readIORef (crItemManagerRef (toContentRegistriesCapability env))
-                ecMgr   ← readIORef (crEquipmentClassManagerRef (toContentRegistriesCapability env))
+                itemMgr ← readReadOnlyRef
+                    (crvItemManagerRef (toContentRegistriesViewCapability env))
+                ecMgr   ← readReadOnlyRef
+                    (crvEquipmentClassManagerRef (toContentRegistriesViewCapability env))
                 atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                     case HM.lookup uid (umInstances um) of
                         Nothing → (um, False)

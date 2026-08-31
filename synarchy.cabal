@@ -372,10 +372,12 @@ library
                      Engine.Core.Defaults
                      Engine.Core.Init
                      Engine.Core.Monad
+                     Engine.Core.ReadOnlyRef
                      Engine.Core.State
                      Engine.Core.Capability.Building
                      Engine.Core.Capability.Core
                      Engine.Core.Capability.ContentRegistries
+                     Engine.Core.Capability.ContentRegistriesView
                      Engine.Core.Capability.Events
                      Engine.Core.Capability.Input
                      Engine.Core.Capability.InputView
@@ -1358,6 +1360,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.BuildingSpawnSentinel
                    Test.Headless.Lua.WorkClaimCapacity
                    Test.Headless.Capability.Building
+                   Test.Headless.Capability.ContentRegistriesView
                    Test.Headless.Capability.Events
                    Test.Headless.Capability.Input
                    Test.Headless.Capability.Render
