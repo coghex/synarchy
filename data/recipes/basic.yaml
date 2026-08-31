@@ -11,6 +11,12 @@
 #              offering it (furnace = smelt+repair_condition,
 #              workbench = forge+assemble+repair_sharpness)
 #   inputs:    list of { item, count }; count defaults 1  (required)
+#              An empty list is fine. Every `count` on an input, fuel or
+#              output line must be a POSITIVE integer: zero and negative
+#              are rejected at load and fail the whole file (#1940).
+#              Omitting `count` (or writing `count:` with no value)
+#              still means 1. To disable a line, delete or comment it
+#              out rather than zeroing it.
 #   fuel:      optional single { item, count } consumed alongside the
 #              inputs (fuel item content arrives with the smelting
 #              tier, #327)
