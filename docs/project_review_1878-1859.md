@@ -1,0 +1,38 @@
+# Project Review Findings: PRs #1878–#1859
+
+This report records the senior review of the next twelve uncovered merged pull requests in merge-time order — #1878, #1877, #1870, #1872, #1867, #1866, #1865, #1863, #1862, #1861, #1860, and #1859. The review read each pull request, its linked specification, merged diff and commits, then traced the surviving behavior at current HEAD. No direct first-parent commit landed in the same interval. Eleven selected pull requests produced no current concern; PR #1862's farm-probe yield trail still has one unsampled transition that contradicts its stated “picked up, carried or eaten all still count” contract, preserved below. No concern was explicitly excluded from this batch.
+
+Status legend: `[ ]` unprocessed · `[#N]` filed as issue N · `[no-issue]` reviewed and deliberately never to be filed · `[deferred]` blocked on a concrete precondition
+
+## Status
+
+- [ ] PRR-1. Farm yield trail can miss grain consumed before its first observation
+
+## 1. Farm-probe harvest evidence
+
+### PRR-1. Farm yield trail can miss grain consumed before its first observation
+
+> **Captured note:** Close PR #1862's remaining first-poll gap: arming the yield trail records only the pre-existing ground and inventory baseline. If the accelerated AI harvests the plot, collects the grain, and consumes it before the first later observation, every transient identity has disappeared and the probe reports `not-produced` even though the complete auto-harvest behavior succeeded.
+
+**Verification:** Verified by tracing the current probe and AI scheduling, then driving the shipped `YieldTrail` oracle directly. The probe arms the trail, raises the time scale to 50,000, and sleeps one real second before its first `observe`. The AI script is scheduled every 0.1 seconds, while its per-unit decision cadence uses accelerated game time. Harvest creates `harvestLoot`, a later collecting tick picks the item up and clears that transient state, and the needs action can synchronously consume carried food. A deterministic oracle drive with an empty baseline followed by an empty first observation, while the same phase reports `plot_cleared=True` and `farming_xp_grew=True`, produced `trail='not-produced'`, `ripeness_check=True`, and `harvest_check=False`. The focused farm-probe suite passes because its outrun-poll case leaves the new grain in inventory for the first observation; it does not exercise harvest, collection, and consumption all completing before that observation.
+
+**Evidence:**
+
+- `tools/farm_ai_probe.py:332-380` — the contract explicitly says a yield that was picked up, carried, hauled, or eaten counts and that arming before the time-scale jump records a harvest completed inside the first polling interval. The implementation nevertheless classifies only identities observed in current AI state, on the ground, or in inventory.
+- `tools/farm_ai_probe.py:405-483` — `YieldTrail` retains observed loot gids, ground rows, and carried instance ids, but its console query reads only the current `harvestLoot`, resolvable/current ground items, and current inventory. Arming cannot retain an event that occurs and disappears after its baseline query.
+- `tools/farm_ai_probe.py:933-963` — the trail takes its baseline immediately before `world.setTimeScale('probe', 50000)`, then the loop sleeps one full real second before the first `trail.observe`. The adjacent comment claims that this ordering alone records work completed during that interval.
+- `scripts/init_loader.lua:109-113` and `scripts/unit_ai_core.lua:98-123` — unit AI is invoked every 0.1 seconds, and its actual decision gate is expressed in `engine.gameTime`. Under the probe's accelerated clock, several eligible AI ticks can occur before the first one-second Python poll.
+- `scripts/unit_ai_harvest.lua:154-169,236-249` — one tick harvests the crop, exposes the yield gids in `s.harvestLoot`, and grants farming XP; a collecting tick picks up a gid and clears `harvestPhase`/`harvestLoot` when the list is empty. Those are transient observations, not durable history.
+- `scripts/unit_ai_needs.lua:210-217,220-261` — carried food is eligible for the eat action, whose bounded synchronous loop removes food through `unit.feed`. The harvest trail has no post-consumption identity to discover.
+- `tools/farm_ai_probe.py:1011-1032` — plot clearing plus the phase-local XP delta can satisfy the ripeness fallback, but the harvest result independently requires `trail.produced()`. The reachable empty-first-observation state therefore prints a successful causal ripeness fallback and a failed yield result.
+- `tools/test_farm_ai_probe.py:133-160` — the collection-outruns-poll regression covers a grain instance still present in inventory. No case removes the new instance before the first `ingest`, so the focused suite's pass does not cover the stated eaten-before-observation outcome.
+- All-state tracker searches for the farm probe, yield-trail cadence, consumption before observation, and wheat-grain identity found no current owner. Closed issue #1760 specified this contract and PR #1862 attempted to implement it; neither records the surviving unsampled interval. The project-review and findings-report corpus contains no matching entry.
+
+**Handoff context:**
+
+- **Current behavior:** A successful fast harvest can still fail the manual farm probe when all observable yield identities pass through ground, inventory, and consumption between the baseline and first poll. The plot-clear/XP evidence saves the ripeness check but cannot satisfy the separate yield check.
+- **Expected behavior:** Once this plot's accelerated auto-harvest actually produces its declared wheat yield, later pickup or consumption cannot erase the probe's proof. Pre-existing grain and unrelated forage must remain unable to satisfy the result.
+- **Scope and constraints:** This is a probe-oracle defect surfaced in PR #1862 / issue #1760, not a production farm-AI defect. Preserve the owning-page and exact-instance protections that prevent unrelated ground items from being credited. The correction needs either durable causally specific production evidence or observation timing that eliminates the unsampled interval; a bare cleared plot, XP delta, transient ground snapshot, or any wheat grain in inventory is insufficient alone.
+- **Verification target:** Add a deterministic regression in which the baseline is empty and the tested yield completes the harvest→ground→inventory→consumed path before the first ordinary observation; the oracle must pass with plot-specific production evidence, while pre-existing/unrelated grain cases still fail. Run `python3 tools/test_farm_ai_probe.py`, then repeat the real `farm_ai_probe.py` scenario enough times to cover the accelerated first interval.
+- **Deduplication:** No matching open or closed tracker owner beyond the originating #1760 specification, and no existing project-review/findings-report entry, was found. #1760 is closed and asserts the behavior that remains incomplete rather than tracking this correction.
+- **Remaining uncertainty:** Static scheduling proves the full transition is reachable and the deterministic oracle drive proves its false-negative verdict, but this review did not run the roughly eleven-minute real-engine farm probe to measure how often the worker is hungry enough to consume the grain inside that first second.

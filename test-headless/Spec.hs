@@ -123,6 +123,7 @@ import qualified Test.Headless.Graphics.InstancePlan as GraphicsInstancePlan
 import qualified Test.Headless.Graphics.WindowMode as GraphicsWindowMode
 import qualified Test.Headless.Graphics.AmbientLight as AmbientLight
 import qualified Test.Headless.Graphics.Screenshot as GraphicsScreenshot
+import qualified Test.Headless.Graphics.SwapchainSelection as GraphicsSwapchainSelection
 import qualified Test.Headless.Graphics.UniformLayout as GraphicsUniformLayout
 import qualified Test.Headless.Graphics.VertexLayout as GraphicsVertexLayout
 import qualified Test.Headless.Graphics.FontFallback as GraphicsFontFallback
@@ -638,6 +639,7 @@ main = hspec $ do
     describe "Graphics.WindowMode" GraphicsWindowMode.spec
     describe "Graphics.computeAmbientLight" AmbientLight.spec
     describe "Graphics.Screenshot" GraphicsScreenshot.spec
+    GraphicsSwapchainSelection.spec
     describe "Graphics.UniformLayout" GraphicsUniformLayout.spec
     describe "Graphics.VertexLayout" GraphicsVertexLayout.spec
     describe "Graphics.FontFallback" GraphicsFontFallback.spec

@@ -18,8 +18,8 @@ concrete precondition
 
 ## Processing status
 
-- [ ] EPIC. Give the Lua API a checked contract instead of a manually maintained ABI
-- [ ] LAC-1. Gate every Lua call site against the engine's real registration set
+- [x] EPIC. Give the Lua API a checked contract instead of a manually maintained ABI — [#1995]
+- [x] LAC-1. Gate every Lua call site against the engine's real registration set — [#1996]
 - [ ] LAC-2. Pilot a declarative registration contract on the `UI` namespace
 - [ ] LAC-3. Profile the boundary and record the rollout verdict
 
@@ -66,6 +66,42 @@ than one (`Craft.hs` → `craft`/`power`/`repair`; `Camera.hs` →
 Total 613 registrations. `src/Engine/Scripting/Lua/` additionally carries **719**
 `Lua.setfield` result-field writes, which is the return-shape half of the same
 problem.
+
+**Re-verified at `master@ff692087` (2026-08-30).** The tree has grown since
+`1845ac29`: **617** registrations and **742** `Lua.setfield` writes. The 13
+registrar modules and 27 namespaces are unchanged, and each namespace is still
+exactly one `Lua.newtable` … `Lua.setglobal (Lua.Name "<ns>")` block. The
+per-namespace verb table above is otherwise current. (`shellSandbox`, a 28th
+`setglobal`, is `API/Shell.hs`'s sandbox table, not an API namespace; it is
+indexed only dynamically and registers no verbs.)
+
+**Return-shape distribution.** Which namespace actually returns the richest
+result tables, measured as `Lua.setfield` writes in the implementation modules
+each registrar draws on:
+
+| Namespace | Verbs | `Lua.setfield` writes | Implementation modules | Impl. LOC |
+|---|---|---|---|---|
+| `unit` | 111 | **150** | `API/Units/` | 7,231 |
+| `world` (+ 1 sibling) | 113 | **181** | `API/World/`, `API/WorldQuery/`, `API/Forage/`, `API/Flora.hs` | 4,644 + |
+| `equipment` | 8 | 65 | `API/Equipment/` | — |
+| **`UI`** | **80** | **35** | `API/UI/` (8 modules) | **1,973** |
+| `item` | 15 | 33+ | `API/Items/`, `API/Blood.hs`, `API/LootTables.hs` | — |
+| `engine` | 111 | ~150 across ~25 modules | `API/Core.hs`, `API/Save.hs`, … | — |
+
+`UI` is the only namespace whose registrar maps 1:1 onto one implementation
+subtree (`Register/UI.hs` imports exactly `API.UI`, which re-exports exactly
+`API/UI/*`), so its 35 is exact. `unit`'s 150 is likewise all its own —
+`loadUnitYamlFn`, the one `API/Units/` function `engine` also uses, writes no
+result fields. Other namespaces share implementation modules across registrars,
+so their figures are attributions rather than partitions.
+
+Two further facts bear on the pilot choice. `UI` is by a wide margin the
+smallest self-contained conversion (1,973 implementation lines behind one
+re-export module, versus 7,231 for `Units/`). And `UI` returns **bare multiple
+values** as well as tables — `UI.placePopup(anchorX, …) -> x, y, flipped`
+(`API/UI/Placement.hs:39-73`) pushes three unnamed results — so a descriptor
+piloted there must model both return shapes, which a table-only namespace would
+not exercise.
 
 **The contract carrier.** `src/Engine/Scripting/Lua/API/Internal.hs:29-33`:
 
@@ -221,13 +257,41 @@ history above.
 Approved 2026-08-30. Resolves the first half of Q-3. LAC-2 converts the `UI`
 namespace's 80 verbs.
 
-**Rationale:** `UI` is where the one live defect appeared, and its verbs return
-the richest result tables in the API, so the pilot exercises the return-shape
-half of the contract rather than only names and arity. `craft` (15) and `power`
-(9) would land faster but are too small to surface the problems the contract
-exists to solve; `engine` (111) is a catch-all spanning FPS, config, textures,
-saves, keybinds and tutorials, making it the least representative of a typical
-namespace.
+**Rationale (corrected 2026-08-30).** Four grounds, none of them return-table
+volume:
+
+1. **It is the one live defect's home.** #1914's `UI.setSpriteColor` is the
+   failure this whole arc exists to make impossible.
+2. **It is the cleanest pilot boundary in the API.** `UI` is the only namespace
+   whose registrar maps 1:1 onto one implementation subtree —
+   `Register/UI.hs` imports exactly `API.UI`, which re-exports exactly
+   `API/UI/*`. Every alternative shares implementation modules across
+   registrars, or installs two namespaces from one module.
+3. **It exercises BOTH return shapes.** `UI` returns result tables (35
+   `Lua.setfield` writes, all in `API/UI/Property.hs`) and bare multiple values
+   — `UI.placePopup(anchorX, …) -> x, y, flipped` pushes three unnamed results
+   (`API/UI/Placement.hs:39-73`). A table-only namespace would leave the
+   multi-value shape unmodelled, and the descriptor has to carry both.
+4. **It is by far the smallest self-contained conversion** — 1,973
+   implementation lines behind one re-export module, versus 7,231 for
+   `API/Units/`. D-5 holds LAC-2 to one reviewable PR, and this is the
+   candidate that keeps that comfortable.
+
+**Alternatives and why they lost.** `unit` (150 result-field writes, 111 verbs)
+would exercise return shapes roughly 4× harder, and was the strongest
+challenger; it lost on D-5's one-PR constraint at 7,231 implementation lines.
+`world` (181 writes) is richer still but its registrar installs two namespaces
+from one module, making the pilot boundary the least clean of the three.
+`craft` (15 verbs) and `power` (9) would land faster but are too small to
+surface the problems the contract exists to solve. `engine` (111) is a
+catch-all spanning FPS, config, textures, saves, keybinds and tutorials, making
+it the least representative of a typical namespace.
+
+**Superseded rationale.** This decision originally read that `UI`'s "verbs
+return the richest result tables in the API". That was false — `UI` is fifth at
+35 writes — and the original comparison never evaluated `unit` or `world`. The
+conclusion survived the correction; the reasoning above replaces it. See
+§Current state and evidence, "Return-shape distribution".
 
 ### D-5. A second registrar function, not a changed signature
 
@@ -302,7 +366,9 @@ construction, but a new build step and a wholesale convention change.
 ### Q-3. Which namespace is the pilot?
 
 *Resolved by D-4* (`UI`). The second half of the original question — whether
-LAC-3 must deliver a bulk interface — is carried forward as Q-5.
+LAC-3 must deliver a bulk interface — is carried forward as Q-5. D-4's
+rationale was corrected on 2026-08-30 after measurement contradicted it; the
+choice was re-examined as Q-7 and `UI` was confirmed.
 
 ### Q-4. How do the piloted namespace and the other 26 coexist?
 
@@ -324,6 +390,17 @@ leaves the slice unsized until its own first half lands.
 section in `docs/engine_contracts.md` (already large and frequently rewritten,
 raising docs-lane conflict risk) and this design document (a working artifact,
 not where a future developer looks for the boundary's contract).
+
+### Q-7. Does `UI` stay the pilot now that its stated rationale is false?
+
+*Resolved by D-4 (corrected 2026-08-30)* — yes, `UI` stays, on four grounds
+that do not include return-table volume: the live defect's home, the only 1:1
+registrar↔subtree boundary in the API, the only candidate exercising both
+result tables and bare multiple values, and the smallest self-contained
+conversion. Rejected alternatives: `unit` (150 result-field writes, the
+strongest challenger, lost on D-5's one-PR constraint at 7,231 implementation
+lines) and `world` (181 writes, but its registrar installs two namespaces from
+one module).
 
 ## Verification strategy
 
@@ -385,7 +462,9 @@ lane rather than an implementation PR.
 - **Relevant decisions:** D-1, D-3, D-4, D-5
 - **Acceptance signals:** `UI`'s verbs are unchanged behaviorally; the UI hspec
   suites and probes stay green; the gate reports the same registered set for
-  `UI` before and after the conversion.
+  `UI` before and after the conversion; the descriptor expresses both `UI`
+  return shapes — `Property.hs`'s result tables and `UI.placePopup`'s bare
+  multiple values.
 - **Out of scope:** The other 26 namespaces; retiring `registerLuaFunction`;
   documentation generation; telemetry.
 - **Open questions:** `None`
