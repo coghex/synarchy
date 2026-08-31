@@ -5,26 +5,71 @@ module Test.Headless.Asset.FloraContent (spec) where
 
 import UPrelude
 import Test.Hspec
+import qualified Data.HashMap.Strict as HM
+import Data.List (nub, sort)
+import qualified Data.Text as T
+import qualified Data.Vector as V
+import qualified Data.Vector.Unboxed as VU
+import System.Directory (doesFileExist)
+import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Asset.YamlFlora
 import Engine.Asset.YamlMaterials (loadPopulatedMaterialRegistry)
 import Engine.Core.Log
     (LogBackend(..), LogConfig(..), defaultLogConfig, initLogger)
-import World.Flora.Placement (speciesFitnessDetail)
-import World.Flora.Types (FloraWorldGen(..))
+import World.Chunk.Types (ChunkCoord(..), chunkSize)
+import World.Flora.Growth (instanceLifespan)
+import World.Flora.Placement (computeChunkFlora, speciesFitnessDetail)
+import World.Flora.Render (resolveFloraTexture)
+import World.Flora.Types
+    ( AnnualCycleKey(..), AnnualStage(..), FloraChunkData(..)
+    , FloraId(..), FloraInstance(..), FloraSpecies(..), FloraWorldGen(..)
+    , LifePhase(..), LifecycleType(..), emptyFloraCatalog, insertSpecies
+    , insertWorldGen, newFloraSpecies )
+import World.Fluid.Types (FluidCell(..), FluidType(..))
 import World.Material
     (MaterialId(..), MaterialRegistry, materialIdByName)
+import World.Weather.Types
+    ( ClimateCoord(..), ClimateGrid(..), ClimateState(..), RegionClimate(..)
+    , SeasonalClimate(..), climateRegionCount, defaultRegionClimate
+    , initClimateState )
 
 spec ∷ Spec
-spec = describe "saguaro flora content" $ do
-    it "registers the approved texture family as decorative desert flora" $ do
-        logger ← initLogger defaultLogConfig
-            { lcBackend = LogToCallback (\_ → pure ()) }
-        defs ← loadFloraYaml logger "data/flora/saguaro.yaml"
-        registry ← loadPopulatedMaterialRegistry logger "data/materials"
-        case defs of
-            [def] → assertSaguaro registry def
-            _ → expectationFailure $
-                "expected exactly one saguaro definition, got " ⧺ show (length defs)
+spec = do
+    describe "saguaro flora content" $ do
+        it "registers the approved texture family as decorative desert flora" $ do
+            logger ← initLogger defaultLogConfig
+                { lcBackend = LogToCallback (\_ → pure ()) }
+            defs ← loadFloraYaml logger "data/flora/saguaro.yaml"
+            registry ← loadPopulatedMaterialRegistry logger "data/materials"
+            case defs of
+                [def] → assertSaguaro registry def
+                _ → expectationFailure $
+                    "expected exactly one saguaro definition, got "
+                    ⧺ show (length defs)
+
+    describe "cattail flora content" $ do
+        it "loads the exact decorative wetland contract and all textures" $
+            withCattail assertCattail
+
+        it "places only on the exposed version of an otherwise identical tile" $
+            withCattail assertCattailPlacement
+
+        it "resolves adult, juvenile, seasonal, and dead textures exactly" $
+            withCattail (\_ def → assertCattailTextures def)
+
+withCattail
+    ∷ (MaterialRegistry → FloraYamlDef → Expectation)
+    → Expectation
+withCattail action = do
+    logger ← initLogger defaultLogConfig
+        { lcBackend = LogToCallback (\_ → pure ()) }
+    defs ← loadFloraYaml logger "data/flora/wetlands.yaml"
+    registry ← loadPopulatedMaterialRegistry logger "data/materials"
+    case defs of
+        [def] → action registry def
+        _ → expectationFailure $
+            "expected exactly one common cattail definition, got "
+            ⧺ show (length defs)
 
 assertSaguaro ∷ MaterialRegistry → FloraYamlDef → Expectation
 assertSaguaro registry def = do
@@ -122,3 +167,220 @@ toRuntimeWorldGen wg soilIds =
         , fwSoils = soilIds
         , fwFootprint = fromMaybe 0 (fywFootprint wg)
         }
+
+assertCattail ∷ MaterialRegistry → FloraYamlDef → Expectation
+assertCattail registry def = do
+    fydName def `shouldBe` "common_cattail"
+    fydType def `shouldBe` "perennial_wetland_herb"
+    fydTexDir def `shouldBe` "assets/textures/flora/common_cattail"
+    fydLifecycle def `shouldBe` "perennial"
+    fydMinLife def `shouldBe` Just 1800
+    fydMaxLife def `shouldBe` Just 7200
+    fydDeathChance def `shouldBe` Just 0.05
+    fydHarvest def `shouldBe` Nothing
+
+    map (\p → (fypTag p, fypTexture p, fypAge p)) (fydPhases def)
+        `shouldBe`
+            [ ("sprout", "sprout.png", 0)
+            , ("matured", "matured.png", 180)
+            , ("dead", "dead.png", 7200)
+            ]
+
+    map (\c → (fycsTag c, fycsStartDay c, fycsTexture c))
+            (fydAnnualCycle def)
+        `shouldBe`
+            [ ("dormant", 0, "matured_dormant.png")
+            , ("budding", 60, "matured.png")
+            , ("flowering", 120, "matured_flowering.png")
+            , ("fruiting", 180, "matured_fruiting.png")
+            , ("senescing", 260, "matured_senescing.png")
+            ]
+
+    map (\o → (fycoPhase o, fycoCycle o, fycoTexture o))
+            (fydCycleOverrides def)
+        `shouldBe`
+            [ ("sprout", "dormant", "sprout_dormant.png")
+            , ("sprout", "budding", "sprout_budding.png")
+            , ("sprout", "flowering", "sprout_budding.png")
+            , ("sprout", "fruiting", "sprout_budding.png")
+            , ("sprout", "senescing", "sprout_senescing.png")
+            ]
+            ⧺ [ ("dead", cycle, "dead.png")
+              | cycle ← ["dormant", "budding", "flowering", "fruiting"
+                        , "senescing"] ]
+
+    let wg = fydWorldGen def
+    fywCategory wg `shouldBe` "wildflower"
+    (fywMinTemp wg, fywIdealTemp wg, fywMaxTemp wg)
+        `shouldBe` (-5, 14, 30)
+    (fywMinPrecip wg, fywIdealPrecip wg, fywMaxPrecip wg)
+        `shouldBe` (0.5, 0.8, 1.0)
+    (fywMinAlt wg, fywIdealAlt wg, fywMaxAlt wg)
+        `shouldBe` (Just (-30), Just 30, Just 350)
+    (fywMinHumidity wg, fywIdealHumidity wg, fywMaxHumidity wg)
+        `shouldBe` (Just 0.7, Just 0.9, Just 1.0)
+    fywMaxSlope wg `shouldBe` Just 1
+    fywDensity wg `shouldBe` Just 0.18
+    fywFootprint wg `shouldBe` Just 6
+    fywSoils wg `shouldBe` cattailSoils
+
+    let declaredTextures = sort ∘ nub $
+            map fypTexture (fydPhases def)
+            ⧺ map fycsTexture (fydAnnualCycle def)
+            ⧺ map fycoTexture (fydCycleOverrides def)
+    declaredTextures `shouldBe` sort cattailTextures
+    forM_ cattailTextures $ \texture →
+        doesFileExist (T.unpack (fydTexDir def) ⊘ T.unpack texture)
+            `shouldReturn` True
+
+    let resolvedSoils = map (materialIdByName registry) cattailSoils
+    resolvedSoils `shouldSatisfy` all isJust
+    case traverse (materialIdByName registry) cattailSoils of
+        Just soilIds@(firstSoil:_) → do
+            let runtimeWG = toRuntimeWorldGen wg (map unMaterialId soilIds)
+                idealScore soil = fst $ speciesFitnessDetail runtimeWG
+                    (unMaterialId soil) 0 14 0.8 0.9 30
+            map idealScore soilIds `shouldSatisfy` all (> 0)
+            case materialIdByName registry "loam" of
+                Just loam → fst (speciesFitnessDetail runtimeWG
+                    (unMaterialId loam) 0 14 0.8 0.9 30) `shouldBe` 0
+                Nothing → expectationFailure "expected ordinary loam to resolve"
+            fst (speciesFitnessDetail runtimeWG
+                (unMaterialId firstSoil) 0 14 0.8 0.6 30) `shouldBe` 0
+        Just [] → expectationFailure "expected at least one cattail soil"
+        Nothing → expectationFailure "expected all six cattail soils to resolve"
+
+assertCattailPlacement ∷ MaterialRegistry → FloraYamlDef → Expectation
+assertCattailPlacement registry def =
+    case traverse (materialIdByName registry) cattailSoils of
+        Just (targetSoil:_) → do
+            let worldSize = 64
+                area = chunkSize * chunkSize
+                target = 0
+                surfZ = 30
+                fid = FloraId 1
+                wg = toRuntimeWorldGen (fydWorldGen def)
+                    [ unMaterialId soil
+                    | soilName ← cattailSoils
+                    , Just soil ← [materialIdByName registry soilName] ]
+                species = (newFloraSpecies "common_cattail" (TextureHandle 0))
+                    { fsLifecycle = Perennial 1800 7200 0.05 }
+                catalog = insertWorldGen fid wg $
+                    insertSpecies fid species emptyFloraCatalog
+                surfaceMap = VU.replicate area minBound VU.// [(target, surfZ)]
+                surfaceMats = VU.replicate area (unMaterialId targetSoil)
+                surfaceSlopes = VU.replicate area 0
+                exposedFluid = V.replicate area Nothing
+                standingFluid = exposedFluid V.//
+                    [(target, Just (FluidCell Lake surfZ))]
+                climate = cattailClimate worldSize
+                place fluid = fcdInstances $ computeChunkFlora
+                    7 worldSize (ChunkCoord 0 0)
+                    surfaceMap surfaceMats surfaceSlopes fluid climate catalog
+                exposed = place exposedFluid
+                submerged = place standingFluid
+            length exposed `shouldSatisfy` (`elem` [2, 3])
+            map fiSpecies exposed `shouldSatisfy` all (≡ fid)
+            submerged `shouldBe` []
+        Just [] → expectationFailure "expected at least one cattail soil"
+        Nothing → expectationFailure "expected all six cattail soils to resolve"
+
+assertCattailTextures ∷ FloraYamlDef → Expectation
+assertCattailTextures def = do
+    let handles = HM.fromList $
+            zip cattailTextures (map TextureHandle [1..])
+        handleFor texture = fromMaybe (TextureHandle 999) $
+            HM.lookup texture handles
+        phaseRows =
+            [ (tag, LifePhase tag (fypAge phase) (handleFor (fypTexture phase)))
+            | phase ← fydPhases def
+            , Just tag ← [parsePhaseTag (fypTag phase)] ]
+        cycleRows =
+            [ AnnualStage tag (fycsStartDay stage)
+                (handleFor (fycsTexture stage))
+            | stage ← fydAnnualCycle def
+            , Just tag ← [parseCycleTag (fycsTag stage)] ]
+        overrideRows =
+            [ ( AnnualCycleKey phaseTag cycleTag
+              , handleFor (fycoTexture override) )
+            | override ← fydCycleOverrides def
+            , Just phaseTag ← [parsePhaseTag (fycoPhase override)]
+            , Just cycleTag ← [parseCycleTag (fycoCycle override)] ]
+        fid = FloraId 1
+        species = FloraSpecies
+            { fsName = fydName def
+            , fsBaseTexture = handleFor "matured.png"
+            , fsLifecycle = Perennial 1800 7200 0.05
+            , fsPhases = HM.fromList phaseRows
+            , fsAnnualCycle = cycleRows
+            , fsCycleOverrides = HM.fromList overrideRows
+            , fsHarvest = Nothing
+            }
+        catalog = insertSpecies fid species emptyFloraCatalog
+        mkInstance age health = FloraInstance
+            { fiSpecies = fid
+            , fiTileX = 0
+            , fiTileY = 0
+            , fiOffU = 0
+            , fiOffV = 0
+            , fiZ = 30
+            , fiAge = age
+            , fiHealth = health
+            , fiVariant = 0
+            , fiBaseWidth = 6
+            }
+        resolve day inst = resolveFloraTexture catalog 360 day inst
+        adult = mkInstance 300 1
+        juvenile = mkInstance 0 0
+
+    length phaseRows `shouldBe` length (fydPhases def)
+    length cycleRows `shouldBe` length (fydAnnualCycle def)
+    length overrideRows `shouldBe` length (fydCycleOverrides def)
+    resolve 0 adult `shouldBe` handleFor "matured_dormant.png"
+    resolve 60 adult `shouldBe` handleFor "matured.png"
+    resolve 120 adult `shouldBe` handleFor "matured_flowering.png"
+    resolve 180 adult `shouldBe` handleFor "matured_fruiting.png"
+    resolve 260 adult `shouldBe` handleFor "matured_senescing.png"
+    resolve 0 juvenile `shouldBe` handleFor "sprout_dormant.png"
+    resolve 60 juvenile `shouldBe` handleFor "sprout_budding.png"
+    resolve 120 juvenile `shouldBe` handleFor "sprout_budding.png"
+    resolve 180 juvenile `shouldBe` handleFor "sprout_budding.png"
+    resolve 260 juvenile `shouldBe` handleFor "sprout_senescing.png"
+    case instanceLifespan species (mkInstance 0 1) of
+        Just lifespan →
+            resolve 0 (mkInstance (lifespan + 1) 1)
+                `shouldBe` handleFor "dead.png"
+        Nothing → expectationFailure "expected cattail to be mortal"
+
+cattailClimate ∷ Int → ClimateState
+cattailClimate worldSize =
+    let regionCount = climateRegionCount worldSize
+        ideal = defaultRegionClimate
+            { rcAirTemp = SeasonalClimate 14 14
+            , rcPrecipitation = SeasonalClimate 0.8 0.8
+            , rcHumidity = 0.9
+            }
+        regions = HM.fromList
+            [ (ClimateCoord x y, ideal)
+            | x ← [0 .. regionCount - 1]
+            , y ← [0 .. regionCount - 1] ]
+    in (initClimateState worldSize)
+        { csClimate = ClimateGrid regions regionCount }
+
+cattailSoils ∷ [Text]
+cattailSoils =
+    ["peat", "mucky_peat", "muck", "silt", "silty_clay", "silty_clay_loam"]
+
+cattailTextures ∷ [Text]
+cattailTextures =
+    [ "sprout.png"
+    , "sprout_dormant.png"
+    , "sprout_budding.png"
+    , "sprout_senescing.png"
+    , "matured.png"
+    , "matured_dormant.png"
+    , "matured_flowering.png"
+    , "matured_fruiting.png"
+    , "matured_senescing.png"
+    , "dead.png"
+    ]
