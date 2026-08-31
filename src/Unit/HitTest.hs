@@ -10,7 +10,13 @@
 -- (`Unit.Render.pickFrame`, via `unitHitRect`), not from the static
 -- T-pose it once used: with atlas storage a frame's texture handle
 -- names the whole animation sheet, so only the sample knows the cell
--- size (#1259).
+-- size (#1259). It is PLACED the way the renderer places it too, off
+-- the continuous `uiRealZ` (#1957) — so the box tracks a climbing,
+-- falling or leaping unit's sprite instead of the tile it left.
+--
+-- The one thing that stays per-tile is the VISIBILITY band the two
+-- functions below apply to the integer `uiGridZ` (`gridZ <= zSlice`,
+-- `gridZ >= zSlice - effDepth`), which mirrors the renderer's own cull.
 --
 -- Returns the unit with the highest gridZ that contains the click —
 -- so clicking a tile with two stacked units selects the one on top.
@@ -187,10 +193,20 @@ hitTestUnitsInRect env x1d y1d x2d y2d = do
 --   requirement 4). The rest mirrors 'Unit.Render.unitToQuad': the
 --   continuous position means @rawY@ is already the ground point, so
 --   there is NO @tileHalfDiamondHeight@ term (that apex→centre shift is
---   only flora's and ground items'). The one deliberate difference from
---   the renderer is the height offset, which uses the INTEGER
---   @uiGridZ@ here against the renderer's continuous @uiRealZ@ — hit
---   testing is per-tile.
+--   only flora's and ground items').
+--
+--   Every placement term matches the renderer, the height offset
+--   INCLUDED: it reads the continuous @uiRealZ@, exactly as
+--   'Unit.Render.unitToQuad' does, so the rect sits on the sprite
+--   throughout a climb, fall or leap — the long windows in which
+--   @uiRealZ@ and @uiGridZ@ disagree. Offsetting by the integer
+--   @uiGridZ@ instead put the rect @|uiRealZ - uiGridZ| *
+--   tileSideHeight@ away from the sprite, and four z-levels of that is
+--   a whole 96x64 quad height, so the click missed the unit entirely
+--   (#1957). What IS per-tile, and the one thing that still reads the
+--   integer @uiGridZ@, is the VISIBILITY band ('hitTestUnitAt' and
+--   'hitTestUnitsInRect' apply it themselves, mirroring the renderer's
+--   own cull).
 unitHitRect
     ∷ CameraFacing
     → Int                                    -- ^ camera z-slice
@@ -207,8 +223,8 @@ unitHitRect facing zSlice texSizes sample inst =
         (faF, fbF) = applyFacingF facing (uiGridX inst) (uiGridY inst)
         rawX = (faF - fbF) * tileHalfWidth - tileHalfWidth
         rawY = (faF + fbF) * tileHalfDiamondHeight
-        relativeZ    = uiGridZ inst - zSlice
-        heightOffset = fromIntegral relativeZ * tileSideHeight
+        relativeZf   = uiRealZ inst - fromIntegral zSlice
+        heightOffset = relativeZf * tileSideHeight
         baseRadius   = uiBaseWidth inst * 0.5 / baseTileH * tileHeight
         drawX = rawX + (tileWidth - quadW) * 0.5
         drawY = rawY - heightOffset - quadH + baseRadius

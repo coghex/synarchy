@@ -26,6 +26,7 @@ import qualified Test.Headless.Unit.SimPageOwnership as SimPageOwnership
 import qualified Test.Headless.Unit.Pathing.AStar as PathingAStar
 import qualified Test.Headless.Unit.Pathing.Config as PathingConfig
 import qualified Test.Headless.Unit.Render.PickFrame as PickFrame
+import qualified Test.Headless.Unit.HitTest as UnitHitTest
 import qualified Test.Headless.Unit.Anim as AnimTest
 import qualified Test.Headless.Unit.Injury as InjuryTest
 import qualified Test.Headless.Unit.InjurySpeed as InjurySpeedTest
@@ -526,6 +527,7 @@ main = hspec $ do
     describe "Unit.Pathing.AStar" PathingAStar.spec
     describe "Unit.Pathing.Config" PathingConfig.spec
     describe "Unit.Render.pickFrame" PickFrame.spec
+    UnitHitTest.spec
     UnitAtlas.spec
     aroundAll withHeadlessEngine UnitAtlasLoader.spec
 

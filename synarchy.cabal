@@ -1117,6 +1117,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.Pathing.AStar
                    Test.Headless.Unit.Pathing.Config
                    Test.Headless.Unit.Render.PickFrame
+                   Test.Headless.Unit.HitTest
                    Test.Headless.Unit.Atlas
                    Test.Headless.Unit.Atlas.Loader
                    Test.Headless.Unit.Anim
