@@ -2,6 +2,7 @@
 -- | Generate zoom-map quads (the main zoomed-out world view).
 module World.Render.Zoom.Quads
     ( generateZoomMapQuads
+    , generateZoomMapQuadsScanned
     ) where
 
 import UPrelude
@@ -31,7 +32,8 @@ import World.Render.Zoom.ViewBounds (ZoomViewBounds(..), computeZoomViewBounds
 import World.Render.Zoom.Climate (tempToColorAt, pressureToColorAt, humidityToColorAt
                                  , precipToColorAt, precipTypeToColorAt, evapToColorAt
                                  , seaTempToColorAt)
-import World.Render.Zoom.Cursor (makeCursorQuad)
+import World.Render.Zoom.Cursor (makeCursorQuadScanned)
+import Location.Instance (instancesCount)
 import World.Render.Zoom.Textures (getZoomTexture)
 import World.Render.Zoom.Icons (locationIconTargetPixels, iconWorldSize
                                , buildLocationIconMap, makeLocationIconQuads)
@@ -47,30 +49,51 @@ import World.Render.Zoom.Icons (locationIconTargetPixels, iconWorldSize
 --   be.
 generateZoomMapQuads ∷ EngineEnv → (WorldPageId → Word32) → Camera2D → Int → Int
                      → IO (V.Vector SortableQuad)
-generateZoomMapQuads env solarSlotOf camera fbW fbH = do
+generateZoomMapQuads env solarSlotOf camera fbW fbH =
+    snd ⊚ generateZoomMapQuadsScanned env solarSlotOf camera fbW fbH
+
+-- | 'generateZoomMapQuads' with the scene-assembly telemetry (#1921)
+--   this pass contributes: the candidates evaluated while the zoom pass
+--   is ACTIVE, paired with the quads it produced.
+--
+--   A candidate is a baked zoom entry, a location instance, or a
+--   present hover/selection cursor position — summed over the visible
+--   pages. When the zoom fade leaves the pass inactive, or a page has
+--   no generation parameters yet, nothing is enumerated and the count
+--   is zero.
+generateZoomMapQuadsScanned
+    ∷ EngineEnv → (WorldPageId → Word32) → Camera2D → Int → Int
+    → IO (Int, V.Vector SortableQuad)
+generateZoomMapQuadsScanned env solarSlotOf camera fbW fbH = do
     worldManager ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
 
     let zoom = camZoom camera
         zoomAlpha = clamp01 ((zoom - zoomFadeStart) / (zoomFadeEnd - zoomFadeStart))
 
     if zoomAlpha ≤ 0.001
-        then return V.empty
+        then return (0, V.empty)
         else do
-            quads ← forM (wmVisible worldManager) $ \pageId →
+            pages ← forM (wmVisible worldManager) $ \pageId →
                 case lookup pageId (wmWorlds worldManager) of
-                    Just worldState →
-                        stampSolarPage (solarSlotOf pageId) ⊚
+                    Just worldState → do
+                        (scanned, quads) ←
                             renderFromBaked env worldState camera
                                 fbW fbH zoomAlpha getZoomTexture
                                 (wsBakedZoomRef worldState) zoomMapLayer
-                    Nothing → return V.empty
-            return $ V.concat quads
+                        return (scanned, stampSolarPage (solarSlotOf pageId) quads)
+                    Nothing → return (0, V.empty)
+            return (sum (map fst pages), V.concat (map snd pages))
 
+-- | One page's zoom-map contribution, paired with the candidates it
+--   evaluated (#1921): the baked entries the terrain quads are built
+--   from, the location instances the icon overlay walks (only when the
+--   icon size leaves that builder anything to enumerate), and the
+--   present hover and selection cursor candidates.
 renderFromBaked ∷ EngineEnv → WorldState → Camera2D → Int → Int → Float
               → (WorldTextures → Word8 → Int → TextureHandle)
               → IORef (V.Vector BakedZoomEntry, WorldTextures, CameraFacing)
               → LayerId
-              → IO (V.Vector SortableQuad)
+              → IO (Int, V.Vector SortableQuad)
 renderFromBaked env worldState camera fbW fbH alpha texturePicker bakedRef layer = do
     mParams  ← readIORef (wsGenParamsRef worldState)
     textures ← readIORef (wsTexturesRef worldState)
@@ -85,7 +108,7 @@ renderFromBaked env worldState camera fbW fbH alpha texturePicker bakedRef layer
         defFmSlot = noFaceMapVertexId
         facing = camFacing camera
     case mParams of
-        Nothing → return V.empty
+        Nothing → return (0, V.empty)
         Just params → do
             baked ← ensureBakedAtlas bakedRef rawCache textures facing
                         mAtlas texturePicker lookupSlot defFmSlot
@@ -111,10 +134,16 @@ renderFromBaked env worldState camera fbW fbH alpha texturePicker bakedRef layer
                                           (fromIntegral winH)
                 !iconQuads = makeLocationIconQuads params iconSet facing vb
                                  camX camY alpha iconSize layer lookupSlot defFmSlot
-            cursorQuad ← makeCursorQuad facing camera winW winH
-                                        fbW fbH ws (wsCursorRef worldState)
-                                        lookupSlot defFmSlot
-            return $ visibleQuads <> iconQuads <> cursorQuad
+            (cursorScanned, cursorQuad) ←
+                makeCursorQuadScanned facing camera winW winH
+                                      fbW fbH ws (wsCursorRef worldState)
+                                      lookupSlot defFmSlot
+            let scanned = V.length baked
+                        + (if iconSize ≤ 0 then 0
+                           else instancesCount
+                                    (wgpLocationInstances params))
+                        + cursorScanned
+            return (scanned, visibleQuads <> iconQuads <> cursorQuad)
 
 -- * Map Quads by Mode
 

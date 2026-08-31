@@ -100,8 +100,8 @@ They must not be guessed from log messages or ambiguous source strings.
 A tracker search on 2026-08-26 found no open or closed asset-telemetry,
 texture-statistics, descriptor-statistics, or texture-diagnostics epic. Closed
 #1585 and its blood lifecycle probe are the closest read-only-query precedent.
-Open #1689, #1690, #1691, and #1699 affect the behavior telemetry observes but
-already own their own correctness outcomes. The readiness recheck on the same
+Closed #1689, #1690, #1691, and #1699 delivered the correctness outcomes whose
+resource behavior this telemetry observes. The readiness recheck on the same
 date again found no competing epic; the only open epic returned by the broad
 diagnostics searches was unrelated determinism-test epic #1374.
 
@@ -590,7 +590,7 @@ minimum, so ATEL-6 remains last and consumes ATEL-5's baseline evidence.
   representative snapshots.
 - **Phase:** 5 — integration evidence.
 - **Depends on:** ATEL-2, ATEL-3; final expected failure/release transitions use
-  the landed behavior of open #1690, #1691, and #1699.
+  the landed behavior of closed #1690, #1691, and #1699.
 - **Ordering:** `critical path` before warnings.
 - **Relevant decisions:** D-1, D-2, D-4, D-6, D-7, D-8.
 - **Acceptance signals:** same-path reuse does not add a slot or bytes; a real
@@ -608,7 +608,7 @@ minimum, so ATEL-6 remains last and consumes ATEL-5's baseline evidence.
 - **Scope:** approved descriptor and handle thresholds, high-water crossing
   detection, rate limiting, one summary payload per crossing, and tests.
 - **Phase:** 6 — policy.
-- **Depends on:** ATEL-5 and the final capacity contract from open #1689.
+- **Depends on:** ATEL-5 and the landed capacity contract from closed #1689.
 - **Ordering:** `not on the critical path` until a budget is approved.
 - **Relevant decisions:** D-1, D-2, D-5, D-6, D-7, D-8.
 - **Acceptance signals:** warnings fire once per threshold epoch, name current/

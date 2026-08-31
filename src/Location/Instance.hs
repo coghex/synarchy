@@ -78,6 +78,7 @@ module Location.Instance
     , locationInstanceGeometry
       -- * Queries
     , instancesToList
+    , instancesCount
     , lookupLocationInstance
     , instancesInChunk
     , locationInstanceBounds
@@ -505,6 +506,13 @@ encounterFromDef seed iid def = case
 --   'Location.Overlay.Types.overlayToList' sorts).
 instancesToList ∷ LocationInstances → [LocationInstance]
 instancesToList = sortOn liId . HM.elems . lisById
+
+-- | How many instances there are, without materialising them. Exists
+--   for the scene-assembly telemetry (#1921), which must report how
+--   many the zoom-map icon pass enumerates without allocating a second
+--   ordered copy of the list it is counting.
+instancesCount ∷ LocationInstances → Int
+instancesCount = HM.size . lisById
 
 lookupLocationInstance
     ∷ LocationInstanceId → LocationInstances → Maybe LocationInstance

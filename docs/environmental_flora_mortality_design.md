@@ -85,8 +85,8 @@ concrete precondition
 - `tools/texture_subset_audit.py` reconstructs all explicitly declared flora
   paths and rejects missing files. It does not discover undeclared files by
   filename.
-- Twelve shipped texture families have juvenile art. None has a dead-juvenile
-  texture. Eight have one generic `dead.png`; coconut palm, red mangrove, Scots
+- Fourteen shipped texture families have juvenile art. None has a dead-juvenile
+  texture. Ten have one generic `dead.png`; coconut palm, red mangrove, Scots
   pine, and white spruce have no dead art. Juvenile canvases range from 4×4 to
   128×128, so one shared dead-sprout bitmap is not a viable substitute.
 - Saguaro issue #1688 and PR #1725 add a 48×48 sprout, mature seasonal variants,

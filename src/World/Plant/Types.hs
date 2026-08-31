@@ -13,6 +13,12 @@
 --   it; the record here is just the tile annotation the marker renders
 --   from, plus the resolved crop species. Persisted in saves
 --   (wpsPlantDesignations).
+--
+--   Its EXISTENCE is the whole contract with the farm AI (#1858): the
+--   record's presence is what keeps a claimed job alive, so removing it
+--   — which "World.Plant.Validate" does the moment the tile's soil is
+--   resident and no longer tilled — is the cancellation, and needs no
+--   field here to say so.
 module World.Plant.Types
     ( PlantDesignation(..)
     , PlantDesignations

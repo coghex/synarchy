@@ -524,6 +524,24 @@ jobs:
           python3 tools/test_lua_duplicate_function_audit.py
           python3 tools/lua_duplicate_function_audit.py
 
+      # Cheap, no-engine guard (#1996): fails if a scripts/**/*.lua call
+      # site names a verb the engine does not register on that namespace.
+      # The Haskell/Lua boundary is a runtime ABI, so an unregistered verb
+      # used to fail at the moment a player reached it -- scripts/ui/bar.lua
+      # called UI.setSpriteColor (the registered verb is UI.setColor) from
+      # 9af2585c until #1914 fixed it, purely because bar.setFillColor had
+      # no callers yet. The audit lexes both sides and resolves lexical
+      # shadowing, so comments, string literals, dotted module references,
+      # locals shadowing a registered global, and unitAi sub-table tails
+      # are not call sites. The fixture suite runs first: it pins both
+      # directions of every rule, keeps a certification failure distinct
+      # from a finding, and carries a UI.setSpriteColor fixture so #1914's
+      # defect stays detectable after its fix.
+      - name: Lua registration audit
+        run: |
+          python3 tools/test_lua_registration_audit.py
+          python3 tools/lua_registration_audit.py
+
       # Cheap, no-engine guard (#787): fails if a Haskell module split
       # to stay reviewable (the input-thread facade + its dispatch
       # submodules) grows back past its agreed line budget.
