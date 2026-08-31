@@ -231,6 +231,7 @@ import qualified Test.Headless.Core.DebugListener as DebugListener
 import qualified Test.Headless.App.Cli as AppCli
 import qualified Test.Headless.App.ChunkRegion as AppChunkRegion
 import qualified Test.Headless.App.PreviewConfig as PreviewConfig
+import qualified Test.Headless.App.ResourceRoot as AppResourceRoot
 import qualified Test.Headless.Camera.GotoClamp as GotoClamp
 import qualified Test.Headless.Camera.ZoomScroll as ZoomScroll
 import qualified Test.Headless.Scene.BatchMerge as BatchMerge
@@ -365,6 +366,11 @@ main = hspec $ do
         -- the Lua-facing tutorial surface is exercised end to end (#957).
         TutorialDefinitions.luaSpec
         LuaTutorialEvaluation.luaSpec
+        -- Same technique (#1946): the loot-table load-and-register
+        -- boundary is entirely the live env's content-registry ref
+        -- projected through the real capability, so it rides the
+        -- shared engine and borrows/restores that one ref.
+        LocationLootDeterminism.luaSpec
     -- Own engine (not the shared-worlds one above): the #707 save/load
     -- story snapshots and reloads EVERY live page, so an empty world
     -- manager keeps it scoped to its own cheap private w8 pages instead
@@ -761,6 +767,7 @@ main = hspec $ do
     DebugListener.spec
     AppCli.spec
     AppChunkRegion.spec
+    AppResourceRoot.spec
     describe "App.Preview.Config" PreviewConfig.spec
     describe "Camera.GotoClamp" GotoClamp.spec
     describe "Camera.ZoomScroll" ZoomScroll.spec
