@@ -115,10 +115,9 @@ createBindlessTextureSystem pdev dev cmdPool cmdQueue config = do
   -- filter. Every UNPINNED slot (and the undefined fallback) points at
   -- this one sampler, and a filter toggle swaps it via
   -- 'setTextureFilter'. A slot registered through
-  -- 'registerPinnedTexture' — the world preview, the zoom atlas, and
-  -- since #1259 every compiled unit-animation atlas, which must stay
-  -- NEAREST for D-6 — is recorded in 'btsPinned' instead and keeps its
-  -- own sampler across that toggle.
+  -- 'registerPinnedTexture' — the world preview or the zoom atlas — is
+  -- recorded in 'btsPinned' instead and keeps its own sampler across
+  -- that toggle. Gameplay unit atlases follow the shared sampler (#2085).
   env ← ask
   filterMode ← liftIO $ readIORef (rcTextureFilterRef (toRenderCapability env))
   let texKind = textureSamplerKind (textureFilterToVulkan filterMode)
@@ -576,4 +575,3 @@ setTextureFilter dev flt system = do
     -- Now no slot references the old sampler — safe to release.
     liftIO $ releaseSampler dev ref oldKind
     pure system { btsTextureSampler = newSampler, btsTextureKind = newKind }
-

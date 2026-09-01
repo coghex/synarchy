@@ -212,12 +212,12 @@ loadAndRegisterWithPool env poolRef lteq samplerPolicy name path = do
 --   (#1259).
 --
 --   Identical bookkeeping — ONE handle, ONE name, ONE queued upload per
---   animation (D-2\/D-10) — but the request carries the atlas policy, so
---   the engine registers the slot PINNED to the nearest sampler with a
---   single mip level (D-6). Unit art must stay nearest-neighbour even
---   after a runtime @setTextureFilter@ toggle repaints every ordinary
---   slot to the new global sampler; a whole sheet resampled bilinearly
---   would also bleed neighbouring cells across every frame edge.
+--   animation (D-2\/D-10) — but kept as a distinct request so the
+--   one-image-per-animation contract stays explicit. The engine registers
+--   atlas slots on the player-selected global sampler (#2085); the one-texel
+--   extrusion ring around every cell (#2076) keeps linear taps isolated,
+--   and the preview browser's existing forced-global-nearest setting keeps
+--   preview presentation pixel-crisp without a second loader path.
 loadAndRegisterAtlasWithPool ∷ EngineEnv → IORef AssetPool
                              → Q.Queue LuaToEngineMsg
                              → Text → FilePath → IO TextureHandle

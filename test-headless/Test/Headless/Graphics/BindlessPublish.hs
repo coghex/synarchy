@@ -212,7 +212,7 @@ spec = do
     it "cleans up after the failures only" $
       map fst (brCleanups result) `shouldBe` [TextureHandle 2, TextureHandle 3]
 
-  describe "a pinned-atlas batch that runs out of slots" $ do
+  describe "a pinned-texture batch that runs out of slots" $ do
     let result = runBatch UploadPinnedNearest exhaustedAllocator
                    Map.empty Map.empty [request 7 "walk.png" 20]
 
