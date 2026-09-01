@@ -1948,7 +1948,7 @@ def parse_projection_binding_expressions(source_text: str, projection: str
     lines = code.split("\n")
     start = None
     equation = re.compile(
-        rf"^{re.escape(projection)}\s+{PROJECTION_PARAMETER}\s*=")
+        rf"^[ \t]*{re.escape(projection)}\s+{PROJECTION_PARAMETER}\s*=")
     for i, line in enumerate(lines):
         if equation.match(line):
             start = i
@@ -2792,26 +2792,64 @@ def imports_name(declarations: list[ImportDecl], module: str, name: str,
 # the audit exited 0. Recognizing the declaration is therefore
 # separated from reading its fields: a capability type whose record
 # block this audit cannot read is a violation, not a skip.
+# Any layout COLUMN, because a module's body need not start at column
+# zero, but only the two plain declaration keywords: a `data`/`newtype`
+# `instance` or `family` naming a capability type is deliberately NOT
+# read here. It is a form SS2.1's convention does not describe, so the
+# backstop below reports it loudly instead -- "detect and fail" rather
+# than a modelling branch nothing in the tree exercises.
 _CAPABILITY_TYPE_DECL_PATTERN = (
-    r"^(?:data|newtype)\s+%s(?![A-Za-z0-9_'])")
+    r"^[ \t]*(?:data|newtype)\s+%s(?![A-Za-z0-9_'])")
 _CAPABILITY_TYPE_DECL_RE = re.compile(
     _CAPABILITY_TYPE_DECL_PATTERN
     % r"(?P<record>[A-Z][A-Za-z0-9_']*Capability)", re.MULTILINE)
 
+# The fail-closed BACKSTOP for this whole discovery. Everything above
+# recognizes the spellings this audit models; this recognizes that a
+# capability type was DECLARED at all, by looking only for the
+# `data`/`newtype` keyword and a `<Name>Capability` type name in the
+# same declaration head. `[^\n=]` keeps it inside that head, so a field
+# whose TYPE is a capability (`{ x ∷ RenderCapability }`, after the
+# `=` or on a later line) is never mistaken for a declaration of one.
+#
+# Any loose match the strict pattern did not produce is a form this
+# audit cannot read, and it is reported rather than skipped. That is
+# what makes the discovery closed the way SS6.5's recognized write
+# forms are closed: the NEXT unmodelled spelling -- whatever it turns
+# out to be -- fails loudly instead of quietly taking a record out of
+# the accessor map, so no legal respelling can leave a selector
+# unenforced while the gate exits 0.
+_LOOSE_CAPABILITY_DECL_RE = re.compile(
+    r"(?<![A-Za-z0-9_'])(?:data|newtype)(?![A-Za-z0-9_'])[^\n=]{0,160}?"
+    r"(?<![A-Za-z0-9_'])(?P<record>[A-Z][A-Za-z0-9_']*Capability)"
+    r"(?![A-Za-z0-9_'])")
+
 
 def _declaration_span(code: str, start: int) -> str:
-    """`code` from `start` through the end of that top-level
+    """`code` from the start of `start`'s LINE through the end of that
     declaration: its own line plus every following line that is blank
-    or indented, which is exactly Haskell's layout rule for one
-    top-level item.
+    or indented strictly PAST the declaration's own layout column,
+    which is Haskell's layout rule for one item of a block.
+
+    The column is read from the declaration rather than assumed to be
+    zero, because a module whose body is uniformly indented puts every
+    top-level declaration at the same non-zero column -- and treating
+    column zero as the boundary there would run one declaration's span
+    to the end of the file.
 
     Field extraction is bounded to this span so a declaration carrying
     no record block of its own cannot borrow the braces of a LATER
     declaration and report that one's fields as its own."""
-    lines = code[start:].split("\n")
+    line_start = code.rfind("\n", 0, start) + 1
+    lines = code[line_start:].split("\n")
+    # The column is the declaration KEYWORD's, not the match's: the
+    # pattern anchors before the leading whitespace, so measuring from
+    # `start` would read every indented declaration as column zero and
+    # run its span to the end of the file.
+    column = len(lines[0]) - len(lines[0].lstrip())
     span = [lines[0]]
     for line in lines[1:]:
-        if line.strip() and not line[0].isspace():
+        if line.strip() and len(line) - len(line.lstrip()) <= column:
             break
         span.append(line)
     return "\n".join(span)
@@ -2890,7 +2928,7 @@ def _capability_projection_re(record: str) -> re.Pattern[str]:
     """`to<Something> ∷ EngineEnv → <record>`, the SS2.1 projection
     signature, ASCII and Unicode arrows alike."""
     return re.compile(
-        r"^(to[A-Za-z0-9_']*)\s*(?:∷|::)\s*"
+        r"^[ \t]*(to[A-Za-z0-9_']*)\s*(?:∷|::)\s*"
         r"(?:[A-Z][A-Za-z0-9_']*\.)*EngineEnv\s*(?:→|->)\s*"
         rf"{re.escape(record)}(?![A-Za-z0-9_'])", re.MULTILINE)
 
@@ -2913,7 +2951,13 @@ def discover_capability_records(sources: dict[str, str]
     then declaration order.
 
     Comments are stripped first, so a Haddock example showing a record
-    or a signature is not mistaken for the real declaration."""
+    or a signature is not mistaken for the real declaration.
+
+    A declaration this pattern cannot read is NOT here -- it is
+    reported by `undiscovered_capability_declarations`, which the
+    completeness audit fails on. Read the two together: this answers
+    "what did we understand?", that one answers "did we understand
+    everything?", and only the pair is fail-closed."""
     records: list[CapabilityRecord] = []
     for relpath, text in sorted(sources.items()):
         module = module_identifier(relpath)
@@ -2927,6 +2971,39 @@ def discover_capability_records(sources: dict[str, str]
                 module, relpath, record,
                 signature.group(1) if signature else None))
     return records
+
+
+def undiscovered_capability_declarations(sources: dict[str, str]
+                                         ) -> list[tuple[str, str, str]]:
+    """`(module, relpath, record)` for every capability type a
+    `data`/`newtype` declaration head names that
+    `discover_capability_records` did NOT produce.
+
+    This is the backstop that makes the discovery a CLOSED set rather
+    than a list of spellings that happened to be thought of. Every hole
+    #2059 has closed had the same shape -- a legal declaration the
+    pattern did not match, so the record reached neither the accessor
+    map nor the completeness gate and a direct write through its
+    selector was filed as `other` while the audit exited 0. Naming the
+    keyword and the type is enough to know a capability record is
+    THERE; whether this audit can read its fields is a separate
+    question, and the honest answer to "no" is to fail."""
+    missed: list[tuple[str, str, str]] = []
+    discovered = {(entry.relpath, entry.record)
+                  for entry in discover_capability_records(sources)}
+    for relpath, text in sorted(sources.items()):
+        module = module_identifier(relpath)
+        if not module.startswith(CAPABILITY_MODULE_PREFIX):
+            continue
+        code = _strip_haskell_comments(text)
+        seen: set[str] = set()
+        for match in _LOOSE_CAPABILITY_DECL_RE.finditer(code):
+            record = match.group("record")
+            if record in seen or (relpath, record) in discovered:
+                continue
+            seen.add(record)
+            missed.append((module, relpath, record))
+    return missed
 
 
 def capability_accessor_map(sources: dict[str, str], live_fields: list[str]
@@ -2983,6 +3060,9 @@ def audit_capability_projection_completeness(
     field nobody writes -- so there must be none, and each of the three
     ways one can arise is reported here:
 
+    * the record's DECLARATION is in a form the discovery pattern
+      cannot read, which loses the record entirely
+      (`undiscovered_capability_declarations`);
     * the record's projection signature is not found at all, which
       loses every one of its fields at once;
     * a declared field has no binding the canonicalizer can read
@@ -2998,6 +3078,19 @@ def audit_capability_projection_completeness(
     nothing."""
     fields = set(live_fields)
     violations: list[str] = []
+    for module, relpath, record in undiscovered_capability_declarations(
+            sources):
+        violations.append(
+            f"`{module}` declares `{record}` in a form this audit cannot "
+            f"read ({relpath}) -- the `data`/`newtype` declaration is "
+            f"there, but `discover_capability_records` did not produce "
+            f"the record, so it reaches neither the capability accessor "
+            f"map nor the checks below and every direct write through "
+            f"one of its selectors would be filed as `other`. Teach "
+            f"`_CAPABILITY_TYPE_DECL_PATTERN` the spelling, or restate "
+            f"the declaration in one it reads; do NOT leave it "
+            f"undiscovered, because an undiscovered record is an "
+            f"unenforced one")
     for entry in discover_capability_records(sources):
         source = sources[entry.relpath]
         if entry.projection is None:

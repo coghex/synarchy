@@ -37,7 +37,7 @@ from engine_env_capability_audit import (  # type: ignore
     _import_chunks, _strip_haskell_comments,
     CAPABILITY_WRITER_MODULES, capability_accessor_map,
     discover_capability_records, canonical_projection_accessor,
-    capability_record_fields,
+    capability_record_fields, undiscovered_capability_declarations,
     parse_projection_binding_expressions,
     audit_capability_projection_completeness,
     scan_capability_writes, audit_writer_modules, format_residue,
@@ -2862,6 +2862,90 @@ toPsiCapability env = PsiA
   }
 """
 
+# A module whose body is uniformly indented. Legal Haskell -- the
+# layout column is set by the first token after `where`, and nothing
+# requires it to be zero -- and every top-level declaration then sits
+# at that column. The trailing unrelated record is the trap: the
+# declaration span must stop at the next declaration in the SAME
+# column, not run to the end of an all-indented file.
+_INDENTED_MODULE = """\
+module Engine.Core.Capability.Rho
+  ( RhoCapability(..)
+  , toRhoCapability
+  ) where
+
+  import Engine.Core.State (EngineEnv, fieldOne)
+
+  data RhoCapability = RhoCapability
+    { rhFieldOne ∷ IORef Int
+    }
+
+  toRhoCapability ∷ EngineEnv → RhoCapability
+  toRhoCapability env = RhoCapability
+    { rhFieldOne = fieldOne env
+    }
+
+  data Unrelated = Unrelated
+    { borrowed ∷ Int
+    }
+"""
+
+_INDENTED_CONSUMER = """\
+module Rho.Mod where
+
+import Data.IORef
+
+import Engine.Core.State (EngineEnv)
+import Engine.Core.Capability.Rho (RhoCapability(..), toRhoCapability)
+
+sneak ∷ EngineEnv → IO ()
+sneak env = writeIORef (rhFieldOne (toRhoCapability env)) 1
+"""
+
+# A declaration form this audit deliberately does not model. The
+# backstop must still see that a capability record was declared, so
+# the record fails loudly instead of vanishing.
+_UNMODELLED_DECLARATION = """\
+module Engine.Core.Capability.Sigma
+  ( SigmaCapability(..)
+  ) where
+
+import Engine.Core.State (EngineEnv, fieldOne)
+
+data instance Envelope SigmaCapability = SigmaCapability
+  { sgFieldOne ∷ IORef Int
+  }
+"""
+
+# The backstop's false-positive trap: a field whose TYPE is a
+# capability record is not a DECLARATION of one, and neither is a
+# GADT constructor's record field.
+_CAPABILITY_TYPED_FIELDS = """\
+module Engine.Core.Capability.Tau
+  ( TauCapability(..)
+  , toTauCapability
+  ) where
+
+import Engine.Core.State (EngineEnv, fieldOne)
+
+data TauCapability = TauCapability
+  { tuFieldOne ∷ IORef Int
+  }
+
+data Context = Context
+  { ctxRender ∷ RenderCapability
+  , ctxInput  ∷ InputCapability
+  }
+
+data Envelope where
+  Envelope ∷ { evRender ∷ RenderCapability } → Envelope
+
+toTauCapability ∷ EngineEnv → TauCapability
+toTauCapability env = TauCapability
+  { tuFieldOne = fieldOne env
+  }
+"""
+
 # The migrated reader: it CONSUMES the wrapped handle inline, exactly as
 # a `readIORef` consumer does, so it must not be counted as a pass-on.
 _WRAPPED_READER = """\
@@ -3081,6 +3165,10 @@ def _writer_sources(**modules: str) -> dict[str, str]:
         "omega": "src/Engine/Core/Capability/Omega.hs",
         "omegaConsumer": "src/Omega/Mod.hs",
         "psi": "src/Engine/Core/Capability/Psi.hs",
+        "rho": "src/Engine/Core/Capability/Rho.hs",
+        "rhoConsumer": "src/Rho/Mod.hs",
+        "sigma": "src/Engine/Core/Capability/Sigma.hs",
+        "tau": "src/Engine/Core/Capability/Tau.hs",
     }
     for key, body in modules.items():
         sources[paths[key]] = body
@@ -4199,6 +4287,119 @@ def test_a_capability_record_is_found_whatever_syntax_declares_it():
            "and raise no completeness violation")
 
 
+def test_an_indented_capability_module_is_fully_enforced():
+    """A module's layout column is set by the first token after
+    `where` and need not be zero, so every top-level declaration of a
+    uniformly indented module sits at a non-zero column. Anchoring
+    discovery at column zero made such a module invisible end to end --
+    no record, no accessor map entry, no completeness violation, and a
+    consumer's `writeIORef` through its selector filed as `other`.
+
+    The declaration SPAN has to follow the same column, or the fix
+    trades one silent failure for a false one: measured from column
+    zero, the record's span would run to the end of an all-indented
+    file and report the next declaration's fields as its own."""
+    sources = _writer_sources(rho=_INDENTED_MODULE,
+                              rhoConsumer=_INDENTED_CONSUMER)
+    records = {entry.record: entry.projection
+               for entry in discover_capability_records(sources)}
+    expect(records.get("RhoCapability") == "toRhoCapability",
+           f"an indented declaration and its indented projection must "
+           f"both be found, got: {records}")
+    expect(capability_record_fields(_INDENTED_MODULE, "RhoCapability")
+           == ["rhFieldOne"],
+           f"and the span must stop at the next declaration in the same "
+           f"column, got: "
+           f"{capability_record_fields(_INDENTED_MODULE, 'RhoCapability')}")
+    expect(capability_accessor_map(sources, _WRITER_FIELDS).get(
+               "rhFieldOne") == (
+        ("fieldOne", "Engine.Core.Capability.Rho", "RhoCapability"),),
+           "the indented projection must canonicalize")
+    expect(audit_capability_projection_completeness(
+               sources, _WRITER_FIELDS) == [],
+           "and raise no completeness violation")
+
+    writes, _ = _scan(sources)
+    expect(writes["fieldOne"] == {"Rho.Mod"},
+           f"and the write through its selector must be attributed, got: "
+           f"{sorted(writes['fieldOne'])}")
+    declared = {"fieldOne": frozenset(), "fieldTwo": frozenset(),
+                "fieldThree": frozenset()}
+    rejected = audit_writer_modules(writes, _WRITER_FIELDS, declared=declared)
+    expect(len(rejected) == 1 and "Rho.Mod" in rejected[0],
+           f"and the undeclared write must be rejected, got: {rejected}")
+
+
+def test_an_unmodelled_capability_declaration_fails_closed():
+    """The backstop, and the reason this discovery is a CLOSED set
+    rather than a list of spellings someone happened to think of.
+
+    Every hole closed here had one shape: a legal declaration the
+    pattern did not match, so the record reached neither the accessor
+    map nor the completeness gate and a write through its selector was
+    filed as `other` while the audit exited 0. Naming the
+    `data`/`newtype` keyword and a `<Name>Capability` type is enough to
+    know a capability record is THERE; whether this audit can read its
+    fields is a separate question, and the honest answer to "no" is to
+    fail. So the NEXT unmodelled spelling -- whatever it is -- stops the
+    gate instead of quietly disarming it."""
+    sources = _writer_sources(sigma=_UNMODELLED_DECLARATION)
+    missed = undiscovered_capability_declarations(sources)
+    expect([record for _, _, record in missed] == ["SigmaCapability"],
+           f"a declaration the pattern cannot read must still be seen, "
+           f"got: {missed}")
+    violations = audit_capability_projection_completeness(
+        sources, _WRITER_FIELDS)
+    expect(len(violations) == 1
+           and "SigmaCapability" in violations[0]
+           and "cannot read" in violations[0],
+           f"and must be reported by module and record, got: {violations}")
+
+    # The named forms SS2.1 does not describe, each reported rather
+    # than modelled: this is the "detect and fail" half, and it is what
+    # lets the strict pattern stay small without leaving a hole.
+    header = "module Engine.Core.Capability.Sigma where\n\n"
+    body = "  { sgFieldOne ∷ IORef Int\n  }\n"
+    for head in ("data instance SigmaCapability Int = SigmaCapability\n",
+                 "newtype instance SigmaCapability Int = SigmaCapability\n",
+                 "data instance Envelope SigmaCapability = SigmaCapability\n"):
+        reported = audit_capability_projection_completeness(
+            _writer_sources(sigma=header + head + body), _WRITER_FIELDS)
+        expect(len(reported) == 1 and "SigmaCapability" in reported[0],
+               f"`{head.strip()}` must be reported, got: {reported}")
+    family = audit_capability_projection_completeness(
+        _writer_sources(
+            sigma=header + "data family SigmaCapability ∷ Type → Type\n"),
+        _WRITER_FIELDS)
+    expect(len(family) == 1 and "SigmaCapability" in family[0],
+           f"and so must a `data family` naming one, got: {family}")
+
+
+def test_a_capability_typed_field_is_not_a_declaration():
+    """The backstop's own false-positive trap. Naming a capability
+    RECORD as a field's type -- a context record holding
+    `RenderCapability`, which is exactly D-7's shipped pass-on shape --
+    declares nothing, and reporting it would make the gate cry wolf on
+    the very pattern the residue exists to measure."""
+    sources = _writer_sources(tau=_CAPABILITY_TYPED_FIELDS)
+    expect(undiscovered_capability_declarations(sources) == [],
+           f"a capability-typed FIELD must not read as a declaration, "
+           f"got: {undiscovered_capability_declarations(sources)}")
+    expect(audit_capability_projection_completeness(
+               sources, _WRITER_FIELDS) == [],
+           "and must raise no violation")
+
+
+def test_the_real_repo_declares_no_unreadable_capability_record():
+    """The backstop against the live tree: every capability record it
+    declares is one this audit actually reads, so the ratchet is on the
+    real code rather than only on fixtures."""
+    expect(undiscovered_capability_declarations(
+               scan_production_sources(REPO_ROOT)) == [],
+           "the real repository must declare no capability record this "
+           "audit cannot read")
+
+
 def test_every_record_constructor_s_selectors_are_enumerated():
     """A capability type may declare more than one record constructor,
     and every constructor's selectors live in ONE scope -- so reading
@@ -4681,6 +4882,10 @@ def main() -> int:
         test_projection_binding_expressions_keep_the_unreadable_ones,
         test_projection_completeness_against_the_real_repo,
         test_a_capability_record_is_found_whatever_syntax_declares_it,
+        test_an_indented_capability_module_is_fully_enforced,
+        test_an_unmodelled_capability_declaration_fails_closed,
+        test_a_capability_typed_field_is_not_a_declaration,
+        test_the_real_repo_declares_no_unreadable_capability_record,
         test_every_record_constructor_s_selectors_are_enumerated,
         test_a_capability_type_with_no_record_block_fails_closed,
         test_a_read_only_ref_read_is_an_inline_use_not_a_pass_on,
