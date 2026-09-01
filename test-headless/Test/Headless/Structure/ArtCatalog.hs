@@ -25,7 +25,7 @@
 --   asks before anything exists), and it also makes the placement
 --   incapable of seeding the answer.
 --
---   The engine is this module's own 'initializeEngineHeadless' (the
+--   The engine is this module's own 'initializeEngineHeadlessQuiet' (the
 --   'Test.Headless.World.StructurePaletteResidue' shape): it runs NO
 --   worker threads, so a queued @WorldSetStructure@ stays in the queue
 --   and is readable as evidence, and the read-your-writes staging cache
@@ -61,7 +61,8 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 
 import Engine.Asset.Handle (TextureHandle(..))
-import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
+import Engine.Core.Init (EngineInitResult(..))
+import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 import Engine.Core.Log
     ( LogBackend(..), LogConfig(..), LogEntry(..), LogLevel(..)
     , defaultLogConfig, initLogger )
@@ -322,7 +323,7 @@ spec = aroundAll setup $ do
     -- `data/` and `assets/`, so the real pack modules load exactly as
     -- they do from the checkout.
     setup act = withIsolatedResourceRoot $ do
-        EngineInitResult env ← initializeEngineHeadless
+        EngineInitResult env ← initializeEngineHeadlessQuiet
         ls ← newBareLuaBackend env
         _  ← installScene env
         -- The production entry points, called exactly as

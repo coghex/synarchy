@@ -28,7 +28,8 @@ import qualified Data.Text as T
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 
-import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
+import Engine.Core.Init (EngineInitResult(..))
+import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 import Engine.Core.Log (LoggerState)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Thread (ThreadControl(..))
@@ -596,7 +597,7 @@ data Scene = Scene
 
 setUp ∷ IO Scene
 setUp = do
-    EngineInitResult env ← initializeEngineHeadless
+    EngineInitResult env ← initializeEngineHeadlessQuiet
     ls ← newBareLuaBackend env
     logger ← readIORef (loggerRef env)
     pure (Scene env ls logger)

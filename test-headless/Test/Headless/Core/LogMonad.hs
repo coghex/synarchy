@@ -22,7 +22,8 @@ import Test.Hspec
 import Data.List (isInfixOf)
 import Data.IORef (newIORef, readIORef, writeIORef, modifyIORef')
 import GHC.Stack (SrcLoc(..))
-import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
+import Engine.Core.Init (EngineInitResult(..))
+import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 import Engine.Core.Monad (runEngineM, EngineM')
 import Engine.Core.State (EngineEnv, loggerRef)
 import Engine.Core.Capability.Core (toCoreCapability)
@@ -101,7 +102,7 @@ withCapturingLogger showLocation act = do
 --   families) — the capturing logger is installed on the env.
 withCapturingEngine ∷ (EngineEnv → IO ()) → IO [LogEntry]
 withCapturingEngine act = do
-  EngineInitResult env ← initializeEngineHeadless
+  EngineInitResult env ← initializeEngineHeadlessQuiet
   capturedRef ← newIORef []
   logger ← initLogger defaultLogConfig
     { lcBackend = LogToCallback (\e → modifyIORef' capturedRef (e :))

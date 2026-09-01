@@ -240,6 +240,7 @@ import qualified Test.Headless.Lua.AssetFailure as LuaAssetFailure
 import qualified Test.Headless.Core.ConfigState as ConfigState
 import qualified Test.Headless.Core.Queue as CoreQueue
 import qualified Test.Headless.Core.LogCategoryEnv as LogCategoryEnv
+import qualified Test.Headless.Core.FixtureLogging as FixtureLogging
 import qualified Test.Headless.Core.LogMonad as LogMonad
 import qualified Test.Headless.Core.LogParity as LogParity
 import qualified Test.Headless.Core.LogThresholdEnv as LogThresholdEnv
@@ -840,6 +841,7 @@ main = hspec $ do
     describe "Render.ViewportGuard" ViewportGuard.spec
     describe "Render.QuadVertices" QuadVertices.spec
     describe "Core.ConfigState" ConfigState.spec
+    FixtureLogging.spec
     LogCategoryEnv.spec
     LogMonad.spec
     LogParity.spec

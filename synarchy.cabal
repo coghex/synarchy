@@ -1130,6 +1130,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Harness
                    Test.Headless.Harness.GeneratedIds
                    Test.Headless.Harness.Isolation
+                   Test.Headless.Harness.Log
                    Test.Headless.Harness.WorkerHealth
                    Test.Headless.WorldGen
                    Test.Headless.WorldGen.Geology
@@ -1361,6 +1362,7 @@ test-suite synarchy-test-headless
                    Test.Headless.App.PreviewConfig
                    Test.Headless.App.ResourceRoot
                    Test.Headless.Core.LogCategoryEnv
+                   Test.Headless.Core.FixtureLogging
                    Test.Headless.Core.LogMonad
                    Test.Headless.Core.LogParity
                    Test.Headless.Core.LogThresholdEnv
