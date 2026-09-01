@@ -15,17 +15,26 @@ import qualified Data.HashMap.Strict as HM
 
 -- ----- Healing -----
 -- A separate progress bar (woundHeal 0..1) from clotting. It fills
--- SLOWLY once the wound has clotted; the wound's effective severity is
--- woundSeverity × (1 − heal), so pain/impairment/residual bleed all ease
--- as it heals. At full heal the wound is removed, leaving a scar if it
--- was severe. UNIFORM rate across wound kinds (the user's call) — only
--- severed is excluded (a lost limb can't regrow). Constitution scales
--- it gently (the existing healCon), and clot gates it (an open wound
--- barely mends). The base rate is deliberately slow.
+-- SLOWLY once the wound has clotted; advancing it eases the wound's
+-- effective severity — 'Unit.Types.Wound.woundEffSeverity', which is
+-- max (woundSeverity × (1 − heal)) woundNecrosis — so pain/impairment/
+-- residual bleed all ease with it, down to the necrosis floor that
+-- healing cannot cross. Cleanup is driven by that effective severity,
+-- not by this bar: the wound is removed once it falls below
+-- woundCleanupThreshold, leaving a scar if it was severe — so a wound
+-- whose necrosis reaches that threshold can hit full heal and still not
+-- be removed, because the floor holds it there. UNIFORM rate across
+-- wound kinds (the user's call) — only severed is excluded (a lost limb
+-- can't regrow). Constitution scales it gently (the existing healCon),
+-- and clot gates it (an open wound barely mends). The base rate is
+-- deliberately slow.
 healBaseRate ∷ Float
 healBaseRate = 0.0016
--- Calibration (clotted, constitution 1.0): a sev-0.5 wound reaches
--- effSev < 0.01 at heal ≈ 0.98 — about 0.98 / 0.0016 ≈ 600 s ≈ 10 min of
+-- Calibration (clotted, constitution 1.0, and no necrosis — necrosis at or
+-- above woundCleanupThreshold floors effective severity there, so such a
+-- wound never heals out however far woundHeal advances; below the threshold
+-- the floor is invisible to cleanup): a sev-0.5 wound reaches effective
+-- severity < 0.01 at heal ≈ 0.98 — about 0.98 / 0.0016 ≈ 600 s ≈ 10 min of
 -- clotted time. A scratch (sev 0.05) heals out at heal ≈ 0.8 → faster.
 
 healClotFloor ∷ Float
