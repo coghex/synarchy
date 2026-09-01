@@ -202,9 +202,13 @@ WHAT IS DELIBERATELY NOT DONE
   * No lifecycle is manufactured. `world.setLocationLifecycle` is never
     called. The selected ruin's persisted zero-occupant encounter starts
     clear internally but stays `unknown` until sight, then becomes
-    `cleared` — and since #917 only once its guaranteed significant item
-    has actually been carried out, which this run does through the real
-    pickup boundary. An occupied ruin would first become `discovered`,
+    `discovered` — and only reaches `cleared` once its #917 guaranteed
+    significant item has actually been carried out, which this run does
+    through the real pickup boundary. WHO carries it is not asserted:
+    `processing_unit` is a Materials def, so a colonist standing in the
+    ruin may recover it of its own accord before the player's gesture,
+    which clears the location just as legitimately. An occupied ruin
+    would first become `discovered`,
     then `active` on autonomous aggression, and remain so until every
     assigned nomad is dead AND that item is taken.
   * No item is staged in the ruin. The measured extraction target is
@@ -1526,6 +1530,28 @@ def main() -> int:
             chk.ok(isinstance(inst, dict) and inst.get("lifecycle") == "unknown",
                    f"the ruin starts undiscovered — lifecycle "
                    f"{(inst or {}).get('lifecycle')!r} (nothing has approached it)")
+            # #917's conjunction, proved HERE because this is the only
+            # moment it is guaranteed observable: nothing has been near
+            # the ruin, so nothing can have recovered its guaranteed
+            # item yet. The selected ruin is zero-occupant, so its
+            # ENCOUNTER half has been satisfied since placement — and it
+            # is still not clearance-satisfied, which is exactly what
+            # the guaranteed item is authored to hold back.
+            chk.ok(isinstance(inst, dict)
+                   and inst.get("authors_clearance") is True
+                   and inst.get("clearance_satisfied") is False,
+                   f"…and is NOT clearance-satisfied even though its "
+                   f"zero-nomad encounter half already is — the guaranteed "
+                   f"item is what holds it back "
+                   f"(authors={(inst or {}).get('authors_clearance')!r}, "
+                   f"satisfied={(inst or {}).get('clearance_satisfied')!r})")
+            enc0 = (inst or {}).get("encounter") or {}
+            chk.ok(int(enc0.get("rolled_count", -1)) == 0
+                   and enc0.get("cleared") is True,
+                   f"the encounter half really is complete already (rolled "
+                   f"{enc0.get('rolled_count')!r}, cleared "
+                   f"{enc0.get('cleared')!r}), so the item is the ONLY "
+                   f"outstanding condition")
 
             portal_bid = place_portal(chk, port, home[0], home[1])
             if portal_bid < 0:
@@ -1851,13 +1877,27 @@ def main() -> int:
                    f"{arrive[control]['pose']!r})")
 
             # -- discovery: lifecycle, player event, per-unit knowledge
+            #
+            # Since #917 the expected state here is `discovered`, NOT
+            # `cleared`. This ruin's zero-nomad encounter half has been
+            # satisfied since placement, so before #917 first sight took
+            # it straight to `cleared`; now its guaranteed significant
+            # item is still outstanding, so the compound predicate is
+            # unsatisfied and sight can only reveal it. `cleared` is
+            # still accepted, because a colonist's own `store_materials`
+            # AI may already have recovered the item on the way in —
+            # which clears it legitimately, just not by the player's
+            # gesture. `active` remains accepted for the occupied ruins
+            # this scenario does not select.
             inst = poll_until(60.0, lambda: (
                 lambda i: i if isinstance(i, dict)
-                and i.get("lifecycle") in ("active", "cleared") else None)(
+                and i.get("lifecycle") in ("discovered", "active", "cleared")
+                else None)(
                     instance_by_id(port, PAGE, ruin_id)), interval=1.0)
             chk.ok(inst is not None,
-                   f"approaching the ruin promotes its encounter lifecycle to "
-                   f"'active' or 'cleared' "
+                   f"approaching the ruin reveals it — lifecycle "
+                   f"'discovered' (its guaranteed item is still outstanding), "
+                   f"or 'active'/'cleared' "
                    f"({(instance_by_id(port, PAGE, ruin_id) or {}).get('lifecycle')!r})")
             # The WHOLE log, deliberately not a slice from a mark taken
             # before departure. `Engine.PlayerEvent.Emit.pushBounded`
@@ -1964,58 +2004,48 @@ def main() -> int:
             fingerprint["recovered_def"] = recovered.get("defName")
 
             # --- #917: the ruin's GUARANTEED significant item, which is
-            # what its cleared state actually waits on. Recovered by the
-            # same carrier on the same trip, through the same player
-            # gesture, right after the incidental target above — so the
-            # survival control's measured journey is untouched and this
-            # is purely additive.
+            # what its cleared state actually waits on.
             #
-            # This ruin is the zero-occupant one the scenario selects,
-            # so its ENCOUNTER half has been satisfied since placement.
-            # That makes it the sharpest possible test of the
-            # conjunction: nothing but this pickup can be what clears
-            # it.
-            sig_before = significant_rows(port, ruin_id)
-            chk.ok(len(sig_before) == 1
-                   and sig_before[0].get("item_instance_id") is not None
-                   and not sig_before[0].get("taken"),
-                   f"the ruin owes exactly one guaranteed significant item, "
-                   f"spawned and not yet taken ({sig_before})")
-            pre_clear = len(clearance_events(port))
-            inst_pre = instance_by_id(port, PAGE, ruin_id)
-            chk.ok(isinstance(inst_pre, dict)
-                   and inst_pre.get("authors_clearance") is True
-                   and inst_pre.get("clearance_satisfied") is False
-                   and inst_pre.get("lifecycle") != "cleared",
-                   f"and the ruin is NOT cleared while it is still lying there, "
-                   f"even though its zero-nomad encounter half is already "
-                   f"complete ({(inst_pre or {}).get('lifecycle')!r}, "
-                   f"satisfied={(inst_pre or {}).get('clearance_satisfied')!r})")
+            # WHO carries it out is deliberately not asserted. It is a
+            # Materials def, so `store_materials` fires on any colonist
+            # holding one with the colony cargo in reach — and a
+            # colonist standing in the ruin will pick a loose Materials
+            # item up of its own accord. That is ordinary shipped
+            # behaviour, not a defect, and an observed run had the
+            # travelling acolyte recover it during the leg. What #917
+            # promises is that the location does not clear until the
+            # item is RECOVERED, not that a particular gesture recovers
+            # it, so the assertions below are about the outcome. The
+            # "still outstanding" half is proved at `setup`, at the only
+            # moment it is guaranteed observable: before anyone has been
+            # near the ruin.
+            sig_now = significant_rows(port, ruin_id)
+            sig_phys = (sig_now[0].get("item_instance_id") if sig_now else None)
+            if not chk.ok(len(sig_now) == 1 and sig_phys is not None,
+                          f"the ruin still owes exactly one guaranteed "
+                          f"significant item, bound to its spawned instance "
+                          f"({sig_now})"):
+                return 2
 
-            sig_phys = (sig_before[0].get("item_instance_id")
-                        if sig_before else None)
+            # Issue the player gesture only if it is still there to take;
+            # otherwise a colonist has already recovered it, which
+            # satisfies the loop just as well.
             sig_gid = next((int(g["id"]) for g in ground_items(port)
                             if int(g.get("instanceId", -1)) == sig_phys), None)
-            if not chk.ok(sig_gid is not None,
-                          f"the guaranteed item is on the ground under a "
-                          f"resolvable ground id (physical {sig_phys})"):
-                return 2
-            acc_s = send(port, f"return require('scripts.unit_ai').commandPickup("
-                               f"{prepared},{sig_gid})")
-            chk.ok(acc_s.strip() == "true",
-                   f"the retrieval order for it is accepted (commandPickup -> "
-                   f"{acc_s!r})")
-            sig_item = poll_until(
-                180.0,
-                lambda: find_instance(inventory(port, prepared), sig_phys),
-                interval=1.0)
-            if not chk.ok(sig_item is not None,
-                          f"the carrier picks up the guaranteed item (action "
-                          f"{current_action(port, prepared)}, pose "
-                          f"{pose(port, prepared)})"):
-                return 2
+            if sig_gid is not None:
+                acc_s = send(port,
+                             f"return require('scripts.unit_ai').commandPickup("
+                             f"{prepared},{sig_gid})")
+                chk.ok(acc_s.strip() == "true",
+                       f"the retrieval order for it is accepted (commandPickup "
+                       f"-> {acc_s!r})")
+            else:
+                print("  the guaranteed item was already recovered by the "
+                      "colony's own AI before the player gesture — the loop "
+                      "is unaffected, only who carried it", flush=True)
+
             sig_after = poll_until(
-                60.0,
+                180.0,
                 lambda: (significant_rows(port, ruin_id)
                          if all(r.get("taken")
                                 for r in significant_rows(port, ruin_id))
@@ -2023,8 +2053,8 @@ def main() -> int:
                 interval=1.0)
             chk.ok(sig_after is not None
                    and sig_after[0].get("item_instance_id") == sig_phys,
-                   f"the pickup latches THAT physical item as taken, keeping its "
-                   f"provenance ({sig_after})")
+                   f"recovering it latches THAT physical item as taken, keeping "
+                   f"its provenance ({sig_after})")
             cleared_inst = poll_until(
                 60.0,
                 lambda: (lambda i: i if isinstance(i, dict)
@@ -2035,11 +2065,16 @@ def main() -> int:
                    and cleared_inst.get("clearance_satisfied") is True,
                    f"and THAT is what clears the ruin — the last outstanding "
                    f"condition ({(cleared_inst or {}).get('lifecycle')!r})")
-            clear_evs = clearance_events(port)
-            chk.ok(len(clear_evs) == pre_clear + 1,
-                   f"exactly one clearance notice is emitted, not zero and not "
-                   f"two ({len(clear_evs) - pre_clear} new: "
-                   f"{[e.get('text') for e in clear_evs[pre_clear:]]})")
+            # Exactly one notice for THIS ruin across the whole run,
+            # counted by its own name rather than by a delta, since the
+            # recovery may have happened before this stage.
+            ruin_name = (cleared_inst or {}).get("name") or ""
+            clear_evs = [e for e in clearance_events(port)
+                         if ruin_name and ruin_name in (e.get("text") or "")]
+            chk.ok(len(clear_evs) == 1,
+                   f"exactly one clearance notice is emitted for it across the "
+                   f"whole run, not zero and not two "
+                   f"({[e.get('text') for e in clear_evs]})")
             fingerprint.update(significant_def=sig_after[0].get("item")
                                if sig_after else None,
                                significant_instance=sig_phys)
@@ -2079,16 +2114,18 @@ def main() -> int:
                    f"the exact recovered instance is in colony storage "
                    f"(bid {storage_bid})")
 
-            # #917: the guaranteed item makes the same trip. It may
-            # already have been banked autonomously — `processing_unit`
-            # is a Materials def, and `store_materials` fires on any
-            # Materials in inventory with the colony's cargo right there
-            # — so the deposit is issued only if it is still carried,
-            # and the assertion is on the OUTCOME either way: that exact
-            # physical instance ends up in colony storage.
-            if find_instance(inventory(port, prepared), sig_phys) is not None:
+            # #917: the guaranteed item makes the same trip, whoever
+            # ended up carrying it. It may already have been banked
+            # autonomously — `processing_unit` is a Materials def, and
+            # `store_materials` fires on any Materials in inventory with
+            # the colony's cargo in reach — so the deposit is issued
+            # only if this carrier still holds it, and the assertion is
+            # on the OUTCOME either way: that exact physical instance
+            # ends up in colony storage.
+            held_sig = find_instance(inventory(port, prepared), sig_phys)
+            if held_sig is not None:
                 send(port, f"return unit.depositToCargo({prepared},"
-                           f"{storage_bid},'{sig_item['defName']}',{sig_phys})")
+                           f"{storage_bid},'{held_sig['defName']}',{sig_phys})")
             banked = poll_until(
                 60.0,
                 lambda: find_instance(

@@ -28,7 +28,7 @@ import Location.Instance
     ( LocationEncounter(..), LocationEncounterOccupant(..)
     , LocationInstance(..), LocationLifecycle(..), instancesToList
     , lookupLocationInstance, locationDiscoveryLifecycle
-    , locationAuthorsClearance
+    , locationAuthorsClearance, locationClearanceSatisfied
     , markLocationEncounterCleared, resolveLocationClearance
     , promoteLifecycle, setLocationLifecycle )
 import Unit.Faction (isPlayerOwned)
@@ -60,14 +60,21 @@ import World.Types (WorldGenParams(..), WorldPageId(..), WorldState(..))
 --   wiped out). Three cost guards, all of which must stay:
 --
 --     * The whole page is skipped when NEITHER job has anything left
---       to do — no instance can still promote and none is awaiting
---       clearance. That is the steady state for a fully explored,
---       fully cleared world, and it short-circuits before the unit
---       manager is even read.
+--       to do — no instance can still promote, no roster is awaiting a
+--       death check, and none is READY to clear. That last one is
+--       narrow on purpose (#917): a location whose guaranteed item is
+--       still on the floor is not ready, so it admits nothing, and a
+--       fully explored world short-circuits before the unit manager is
+--       even read exactly as it did before significant contents
+--       existed. Nothing is lost by not polling an unsatisfied
+--       location — only two things can satisfy one, an encounter
+--       completing on this thread and an item being taken on the Lua
+--       thread, and the next tick sees either.
 --     * Sight is rasterized ONLY when some instance can still promote.
---       An unspent clearance condition alone admits the page (#916/PR
---       #1900 widened the guard so clearance keeps being polled, and
---       #917's significant-item rule joined it there), but on a page
+--       A pending roster check or a ready-to-clear location alone
+--       admits the page (#916/PR #1900 widened the guard so clearance
+--       keeps being polled, and #917's rule joined it there), but on a
+--       page
 --       where every location is already discovered that is clearance
 --       work, not discovery work: it needs the location roster and the
 --       unit manager, never a line-of-sight raster. So the clearance
@@ -113,7 +120,9 @@ tickLocationDiscovery env pageId@(WorldPageId pageText) ws = do
             -- 'findDiscoveries' is then handed.
             let placed         = instancesToList (wgpLocationInstances p)
                 needsSight     = any promotable placed
-                needsClearance = any pendingClearance placed
+                needsRoster    = any (encounterPending) placed
+                needsNotice    = any awaitingNotice placed
+                needsClearance = needsRoster ∨ needsNotice
             when (needsSight ∨ needsClearance) $ do
                 -- Every discovery input — bounds, display name,
                 -- lifecycle — is stored on the instance itself (#911), so
@@ -130,7 +139,8 @@ tickLocationDiscovery env pageId@(WorldPageId pageText) ws = do
                         Nothing → False
                 -- Clearance first, then the promotions — never the other
                 -- way round (see the note above).
-                when needsClearance $ clearancePass isActivePage um placed
+                when needsClearance $
+                    clearancePass isActivePage um needsRoster placed
                 when needsSight     $ discoveryPass isActivePage um p
   where
     -- | The non-sight half of the tick, in two ordered steps. Reads the
@@ -157,16 +167,24 @@ tickLocationDiscovery env pageId@(WorldPageId pageText) ws = do
     --   twice or never. 'resolveLocationClearance' is the sole writer
     --   of that transition and of the one-shot notice, so a 'Just'
     --   result is exactly the caller's licence to emit.
-    clearancePass isActivePage um placed = do
-        forM_ (filter (encounterDead um) placed) $ \inst →
-            atomicModifyIORef' (wsGenParamsRef ws) $ \mP → case mP of
-                Just p' → case markLocationEncounterCleared (liId inst)
-                                    (wgpLocationInstances p') of
-                    Just instances' →
-                        (Just p' { wgpLocationInstances = instances' }, ())
+    clearancePass isActivePage um needsRoster placed = do
+        when needsRoster $
+            forM_ (filter (encounterDead um) placed) $ \inst →
+                atomicModifyIORef' (wsGenParamsRef ws) $ \mP → case mP of
+                    Just p' → case markLocationEncounterCleared (liId inst)
+                                        (wgpLocationInstances p') of
+                        Just instances' →
+                            (Just p' { wgpLocationInstances = instances' }, ())
+                        Nothing → (mP, ())
                     Nothing → (mP, ())
-                Nothing → (mP, ())
-        forM_ (filter pendingClearance placed) $ \inst → do
+        -- Step 2 re-reads the table rather than reusing @placed@: step 1
+        -- may have just completed an encounter, and that instance is
+        -- then satisfied in the live table while the pre-clearance
+        -- snapshot still says otherwise. Reading once here keeps a
+        -- roster wiped out this tick clearing on this tick.
+        settled ← maybe [] (instancesToList ∘ wgpLocationInstances)
+                      <$> readIORef (wsGenParamsRef ws)
+        forM_ (filter awaitingNotice settled) $ \inst → do
             cleared ← atomicModifyIORef' (wsGenParamsRef ws) $ \mP → case mP of
                 Just p' → case resolveLocationClearance (liId inst)
                                     (wgpLocationInstances p') of
@@ -247,14 +265,22 @@ tickLocationDiscovery env pageId@(WorldPageId pageText) ws = do
 
     promotable inst =
         isJust (promoteLifecycle (liLifecycle inst) LifecycleDiscovered)
-    -- An instance still owes clearance WORK: it authors at least one
-    -- clearance condition and has not yet spent its one notice. That is
-    -- the exact condition 'resolveLocationClearance' can act on, so a
-    -- fully cleared page short-circuits the whole tick — and a location
-    -- authoring NO condition (#917's empty conjunction, which must
-    -- never clear) is never polled at all.
-    pendingClearance inst =
-        locationAuthorsClearance inst ∧ not (liClearEventEmitted inst)
+    -- The instance is ready to CLEAR right now: it authors at least one
+    -- clearance condition, every one of them is satisfied, and its one
+    -- notice is unspent. That is exactly — and only —
+    -- 'resolveLocationClearance' can act on, which is what keeps
+    -- #1990's cost guard honest: a ruin whose guaranteed item is still
+    -- on the floor is NOT satisfied, so it admits nothing and a
+    -- fully-explored page short-circuits the whole tick exactly as it
+    -- did before #917. Nothing is missed by not polling it: the two
+    -- things that can satisfy it are an encounter completing (step 1
+    -- above, on this thread) and an item being taken (the Lua thread's
+    -- latch), and the very next tick sees the result. A location
+    -- authoring NO condition is never admitted at all.
+    awaitingNotice inst =
+        locationAuthorsClearance inst
+            ∧ not (liClearEventEmitted inst)
+            ∧ locationClearanceSatisfied inst
     -- The separate, narrower question step 1 asks: is this a death-only
     -- encounter whose complete roster is now wholly dead? Kept
     -- deliberately distinct from 'pendingClearance' — #916's clearance

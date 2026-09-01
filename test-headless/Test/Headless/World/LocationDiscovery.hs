@@ -1160,6 +1160,25 @@ significantSpec =
             readIORef (wsGenParamsRef ws) >>= (\p →
                 lifecyclesOf p `shouldBe` Just [LifecycleCleared])
 
+        -- #1990's guard, held against #917's own widening. Before
+        -- significant contents a zero-roll ruin admitted the clearance
+        -- pass for nothing; a version of #917 that polled every
+        -- unsatisfied location would have reintroduced exactly that,
+        -- on every tick, for the whole life of an unlooted ruin.
+        it "does NOT rasterize sight for a discovered location whose \
+           \guaranteed item is still on the floor — an unsatisfied \
+           \obligation is not clearance WORK, so the page short-circuits" $
+           \env → do
+            let pageId = WorldPageId "sig_cost_guard"
+            ws ← newSignificantPage env pageId LifecycleDiscovered Nothing
+                     [owed 1 5081]
+            _ ← dropOnGround ws 5081
+            writeIORef (unitManagerRef env) $ emptyUnitManager
+                { umInstances = HM.singleton (UnitId 810)
+                    (testUnit pageId FactionPlayer 8 8) }
+            poisonSight ws
+            sightRasterized env pageId ws `shouldReturn` False
+
         it "refuses a ground id that names nothing, an unknown slot, and \
            \a slot already bound — so a retried spawn cannot repoint an \
            \obligation" $ \env → do
