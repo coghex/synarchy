@@ -52,6 +52,7 @@ row slot auto embedded = SaveListing
         , smWorldName  = Nothing
         , smWorldGloss = Nothing
         , smAutosave   = auto
+        , smGeneratedWorldIds = []
         }
     }
 

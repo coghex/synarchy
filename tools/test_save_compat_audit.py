@@ -1289,7 +1289,7 @@ def test_generate_session_rolls_back_fixture_and_summary_on_validation_failure()
 # version is bumped again.
 _CURRENT_FORMAT_FIXTURE_PATH = (
     sca.REPO_ROOT
-    / "test-headless/data/save-compat/f1-autosave-classification.bin")
+    / "test-headless/data/save-compat/u1-generated-world-identity.bin")
 
 _MAKE_TIMESTAMP_VARIANTS_GHCI = r"""
 :set -XOverloadedStrings

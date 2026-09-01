@@ -121,6 +121,7 @@ import Unit.Sim.Types
 import Unit.Direction (Direction(..))
 import Building.Knowledge (emptyContainerKnowledge, ContainerRecord(..))
 import World.Flora.Identity (firstPlantedFloraCursor)
+import Test.Headless.Harness.GeneratedIds (fixtureGeneratedWorldIdForPage)
 
 -- ---------------------------------------------------------------------
 -- Fixtures (mirror Test.Headless.Save.Snapshot's minimal* pattern)
@@ -193,6 +194,7 @@ minimalPage pid = PageSnapshot
     , pgsPlantDesignations = HM.empty
     , pgsContainerKnowledge = emptyContainerKnowledge
     , pgsIdentity     = Nothing
+    , pgsGeneratedId  = Just (fixtureGeneratedWorldIdForPage pid)
     }
 
 -- | A minimal, otherwise-valid frozen v90 (#759 B1-era) page — mirrors
@@ -237,12 +239,18 @@ minimalWorldPageSaveV90 pid = WorldPageSaveV90
 --   12's manifest/gameplay agreement check applies to a migrated
 --   session exactly like a modern one) — seed/size/plates come from
 --   'defaultGP', name/gloss from the page's 'Nothing' identity.
+--
+--   #2021: no generated-world ids either. A v90 payload migrates through
+--   @world-pages@ v1, which predates them, so its pages carry none — and
+--   an all-absent save is exactly the legacy shape
+--   'World.Save.Component.metadataErrors' accepts.
 minimalSaveMetadataV90 ∷ SaveMetadata
 minimalSaveMetadataV90 = SaveMetadata
     { smName = "b1-hand-built", smSeed = wgpSeed defaultGP
     , smWorldSize = wgpWorldSize defaultGP, smPlateCount = wgpPlateCount defaultGP
     , smTimestamp = "2026-07-16T00:00:00.000000Z"
-    , smWorldName = Nothing, smWorldGloss = Nothing, smAutosave = False }
+    , smWorldName = Nothing, smWorldGloss = Nothing, smAutosave = False
+    , smGeneratedWorldIds = [] }
 
 -- | The SAME values as 'minimalSaveMetadataV90', but as the frozen
 --   'SaveMetadataV90' type (round-17 review) -- the "session" payload's
@@ -608,7 +616,8 @@ pageCore pid = PageCoreDTO
     { pcPageId = pid, pcGenParams = toWorldGenParamsDTO defaultGP
     , pcCameraX = 0, pcCameraY = 0, pcTimeHour = 0, pcTimeMinute = 0
     , pcDateYear = 1, pcDateMonth = 1, pcDateDay = 1, pcMapMode = ZMDefault
-    , pcIdentity = Nothing }
+    , pcIdentity = Nothing
+    , pcGeneratedId = Just (fixtureGeneratedWorldIdForPage pid) }
 
 -- | The same page core in the frozen pre-#1092 v2 shape, WITH an identity
 --   — the field whose DTO actually differs between v2 and v3, so a v2
@@ -644,6 +653,7 @@ pageCoreV3 pid = PageCoreDTOv3
 minimalWorldPageSave ∷ WorldPageId → WorldPageSave
 minimalWorldPageSave pid = WorldPageSave
     { wpsPageId       = pid
+    , wpsGeneratedId  = Just (fixtureGeneratedWorldIdForPage pid)
     , wpsConstructNextAttempt = firstConstructAttemptId
     , wpsGenParams    = defaultGP
     , wpsCameraX      = 0, wpsCameraY = 0, wpsCameraZoom = 1
@@ -752,7 +762,11 @@ goldenRichPayloads ∷ [(Text, (Int, Text))]
 goldenRichPayloads =
     [ ("core-session",        (85,   "74d3010096cbbe2b"))
     , ("texture-palette",     (16,   "88201fb960ff6465"))
-    , ("world-pages",         (1306, "bbbd554013191bac"))
+      -- #2021 re-pinned: @world-pages@ v9 appends each page's optional
+      -- generated-world id (17 bytes per page here — a present tag plus
+      -- 128 opaque bits). Only this component's rows move; no other
+      -- component carries the id.
+    , ("world-pages",         (1340, "70b209601aaa96d0"))
       -- #1854 re-pinned: @world-edits@ v2 appends the page's
       -- planted-flora allocator cursor to every page slice (and a
       -- FloraInstanceId to every WePlaceFlora entry, of which this
@@ -777,7 +791,9 @@ goldenFullPayloads ∷ [(Text, (Int, Text))]
 goldenFullPayloads =
     [ ("core-session",        (85,  "0641eeed95100f9a"))
     , ("texture-palette",     (16,  "88201fb960ff6465"))
-    , ("world-pages",         (683, "d30d2ebf9922cf3d"))
+      -- #2021 re-pinned, same reason as goldenRichPayloads (one page
+      -- here, so 17 bytes rather than 34).
+    , ("world-pages",         (700, "e99c20c10976e8b9"))
       -- #1854 re-pinned, same two components as goldenRichPayloads.
     , ("world-edits",         (78,  "d70f14ce21048a09"))
       -- #1233 re-pinned: this fixture's page carries a ground item, and
@@ -1011,7 +1027,7 @@ spec = do
         it "declares a stable id and current version of 1" $ do
             ccId coreSessionCodec `shouldBe` coreSessionComponentId
             ccVersion coreSessionCodec `shouldBe` 1
-            ccVersion worldPagesCodec `shouldBe` 8
+            ccVersion worldPagesCodec `shouldBe` 9
 
         it "rejects a NEWER unsupported version, naming the phase" $
             case ccDecode worldPagesCodec 999 (ccEncode worldPagesCodec richSnapshot) of
@@ -1181,8 +1197,16 @@ spec = do
             degenerate = AbsBounds 6 6 6 6
 
             bytesAt ∷ Word32 → AbsBounds → BS.ByteString
-            bytesAt 8 b = S.encode (WorldPagesDTO
+            bytesAt 9 b = S.encode (WorldPagesDTO
                 [ (pageCore page1) { pcGenParams = toWorldGenParamsDTO (gpWith b) } ])
+            bytesAt 8 b = S.encode (WorldPagesDTOv8
+                [ PageCoreDTOv8
+                    { pc8PageId = page1
+                    , pc8GenParams = toWorldGenParamsDTO (gpWith b)
+                    , pc8CameraX = 0, pc8CameraY = 0
+                    , pc8TimeHour = 0, pc8TimeMinute = 0
+                    , pc8DateYear = 1, pc8DateMonth = 1, pc8DateDay = 1
+                    , pc8MapMode = ZMDefault, pc8Identity = Nothing } ])
             bytesAt 7 b = S.encode (WorldPagesDTOv7
                 [ PageCoreDTOv7
                     { pc7PageId = page1
@@ -1220,7 +1244,8 @@ spec = do
                     Right wp → Right (ccValidate worldPagesCodec wp)
 
             carriers ∷ [(String, Word32)]
-            carriers = [ ("v8 / LocationInstanceDTO",   8)
+            carriers = [ ("v9 / LocationInstanceDTO",   9)
+                       , ("v8 / LocationInstanceDTO",   8)
                        , ("v7 / LocationInstanceDTOv4", 7)
                        , ("v6 / LocationInstanceDTOv3", 6)
                        , ("v5 / LocationInstanceDTOv2", 5)
@@ -1381,13 +1406,13 @@ spec = do
                     DecodePhase
                     "unsupported schema version (reader supports v1, v2, v3)")
 
-        it "reports an unsupported version identically for an EIGHT-version \
+        it "reports an unsupported version identically for a NINE-version \
            \reader" $
-            decodeErrorOf worldPagesCodec 9 BS.empty
-                `shouldBe` Just (ComponentError worldPagesComponentId 9
+            decodeErrorOf worldPagesCodec 10 BS.empty
+                `shouldBe` Just (ComponentError worldPagesComponentId 10
                     DecodePhase
                     "unsupported schema version \
-                    \(reader supports v1, v2, v3, v4, v5, v6, v7, v8)")
+                    \(reader supports v1, v2, v3, v4, v5, v6, v7, v8, v9)")
 
         it "reports a malformed payload identically -- same component, \
            \supplied version, DecodePhase, and cereal-derived message -- at \
@@ -2485,11 +2510,19 @@ spec = do
            \merely this test's own encoder output -- proving the component \
            \envelope round-trips from real stored bytes" $ do
             let bytes = hexDecode trackedComponentFixtureHex
-            decodeSaveEnvelopeMetadata HS.empty bytes `shouldBe` Right richMeta
+            -- #2021: these bytes carry @"metadata"@ v2 and @world-pages@
+            -- v1, both of which predate generated-world identity, so
+            -- their migrations leave it absent on BOTH sides rather than
+            -- inventing one. The expectation is the live value with the
+            -- ids stripped, for the same reason the language-provenance
+            -- expectation below strips those: a drop anywhere ELSE still
+            -- fails the comparison.
+            decodeSaveEnvelopeMetadata HS.empty bytes
+                `shouldBe` Right (withoutGeneratedWorldIds richMeta)
             case decodeSessionEnvelope HS.empty HS.empty bytes of
                 Left err → expectationFailure (T.unpack err)
                 Right (meta, snap, _luaComponents, isMigrated) → do
-                    meta `shouldBe` richMeta
+                    meta `shouldBe` withoutGeneratedWorldIds richMeta
                     -- These are pre-#911 bytes (@world-pages@ v1), so
                     -- their pages come back with the old per-chunk
                     -- location flags PENDING rather than an instance
@@ -2507,7 +2540,8 @@ spec = do
                     -- fixture being re-cut. This is requirement 3 proven
                     -- against REAL historical bytes.
                     resolveFixturePages snap
-                        `shouldBe` withoutLanguageProvenance richSnapshot
+                        `shouldBe` withoutPageGeneratedIds
+                                       (withoutLanguageProvenance richSnapshot)
                     languageProvenanceOf snap page1 `shouldBe` Nothing
                     isMigrated `shouldBe` False
 
@@ -2987,6 +3021,22 @@ withoutLanguageProvenance snap = snap
   where
     stripPage p = p
         { pgsIdentity = (\i → i { wiLanguage = Nothing }) <$> pgsIdentity p }
+
+-- | The expectation for a fixture whose bytes predate #2021: identical
+--   except that the save declares no generated-world ids. A pre-v3
+--   @"metadata"@ payload migrates with an EMPTY inventory, never an
+--   invented one.
+withoutGeneratedWorldIds ∷ SaveMetadata → SaveMetadata
+withoutGeneratedWorldIds meta = meta { smGeneratedWorldIds = [] }
+
+-- | The page-side half of the same expectation: a pre-v9 @world-pages@
+--   payload's pages carry NO generated-world id, and load staging is
+--   what mints one — so the decoded snapshot legitimately differs from
+--   the live one in exactly this field and no other.
+withoutPageGeneratedIds ∷ SessionSnapshot → SessionSnapshot
+withoutPageGeneratedIds snap = snap
+    { snapPages = HM.map (\p → p { pgsGeneratedId = Nothing })
+                         (snapPages snap) }
 
 languageProvenanceOf
     ∷ SessionSnapshot → WorldPageId → Maybe LanguageProvenance
