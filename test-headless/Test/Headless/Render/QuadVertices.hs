@@ -19,7 +19,7 @@ import Test.Hspec
 import Engine.Graphics.Vulkan.Types.Vertex
     ( Vertex(..), Vec2(..), Vec4(..)
     , QuadCorners(..), QuadUV(..), QuadPayload(..)
-    , quadVertices, rectCorners, fullQuadUV, packWorldUV )
+    , quadVertices, rectCorners, fullQuadUV, tileWorldUV )
 
 -- A payload whose five values are pairwise distinct and none of them 0
 -- or 1, so any of them being dropped, defaulted or swapped shows up.
@@ -29,7 +29,7 @@ payload = QuadPayload
     , qpAtlasSlot = 17
     , qpFaceMap   = 23
     , qpFlags     = 1
-    , qpWorldUV   = packWorldUV 7 (-3)
+    , qpWorldUV   = tileWorldUV 7 (-3)
     }
 
 -- | The expected vertex at one corner: the position and UV under test,
@@ -40,7 +40,7 @@ at ∷ Float → Float → Float → Float → Vertex
 --   is known (#1869), so every producer's own output is page-less here.
 at px py u v = Vertex (Vec2 px py) (Vec2 u v)
                       (Vec4 0.25 0.5 0.75 0.125)
-                      17 23 1 (packWorldUV 7 (-3)) 0
+                      17 23 1 (tileWorldUV 7 (-3)) 0
 
 spec ∷ Spec
 spec = do
@@ -122,5 +122,5 @@ spec = do
                 trailing v = ( color v, atlasId v, faceMapId v
                              , renderFlags v, worldUV v )
                 expected = ( Vec4 0.25 0.5 0.75 0.125
-                           , 17, 23, 1, packWorldUV 7 (-3) )
+                           , 17, 23, 1, tileWorldUV 7 (-3) )
             map trailing [v0, v1, v2, v3] `shouldBe` replicate 4 expected

@@ -134,6 +134,7 @@ import qualified Test.Headless.Graphics.Screenshot as GraphicsScreenshot
 import qualified Test.Headless.Graphics.SwapchainSelection as GraphicsSwapchainSelection
 import qualified Test.Headless.Graphics.UniformLayout as GraphicsUniformLayout
 import qualified Test.Headless.Graphics.VertexLayout as GraphicsVertexLayout
+import qualified Test.Headless.Graphics.WorldVertexCoords as GraphicsWorldVertexCoords
 import qualified Test.Headless.Graphics.FontFallback as GraphicsFontFallback
 import qualified Test.Headless.Graphics.FontRepertoire as GraphicsFontRepertoire
 import qualified Test.Headless.Construct.Corners as ConstructCorners
@@ -697,6 +698,7 @@ main = hspec $ do
     GraphicsSwapchainSelection.spec
     describe "Graphics.UniformLayout" GraphicsUniformLayout.spec
     describe "Graphics.VertexLayout" GraphicsVertexLayout.spec
+    describe "world vertex coordinates" GraphicsWorldVertexCoords.spec
     describe "Graphics.FontFallback" GraphicsFontFallback.spec
     describe "Font SDF atlas repertoire" GraphicsFontRepertoire.spec
     describe "Construct.Corners" ConstructCorners.spec

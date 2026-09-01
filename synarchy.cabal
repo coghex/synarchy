@@ -1246,6 +1246,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Graphics.SwapchainSelection
                    Test.Headless.Graphics.UniformLayout
                    Test.Headless.Graphics.VertexLayout
+                   Test.Headless.Graphics.WorldVertexCoords
                    Test.Headless.Graphics.FontFallback
                    Test.Headless.Graphics.FontRepertoire
                    Test.Headless.Construct.Corners

@@ -51,7 +51,7 @@ import Engine.Core.Thread (ThreadControl(..))
 import qualified Data.Text as T
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..), defaultCamera)
 import Engine.Graphics.Vulkan.Types.Vertex
-    (Vec2(..), Vec4(..), mkVertexWorld, packWorldUV)
+    (Vec2(..), Vec4(..), mkVertexWorld, tileWorldUV)
 import Engine.Scene.Types (SortableQuad)
 import Engine.Scene.Stats
     ( SceneCategory(..), SceneCategoryStat(..), SceneStats(..)
@@ -391,7 +391,7 @@ bakedEntryAt x = BakedZoomEntry
     , bzeIsOcean = False, bzeHasLava = False, bzeElev = 0
     }
   where
-    corner p = mkVertexWorld (packWorldUV 0 0) p (Vec2 0 0)
+    corner p = mkVertexWorld (tileWorldUV 0 0) p (Vec2 0 0)
                              (Vec4 1 1 1 1) 0 0
 
 -- | Seed the page's baked zoom cache directly. An EMPTY raw cache is

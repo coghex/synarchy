@@ -27,7 +27,7 @@ import qualified Data.Vector as V
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Asset.TextureNameRegistry (TextureNameRegistry, lookupTextureName)
 import Engine.Graphics.Camera (CameraFacing(..))
-import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..), mkVertexWorld, packWorldUV)
+import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..), mkVertexWorld, tileWorldUV)
 import Engine.Scene.Base (LayerId(..))
 import Engine.Scene.Types (SortableQuad(..))
 import Location.Types
@@ -235,7 +235,7 @@ emitIconQuad
 emitIconQuad tex rgb drawX drawY size layer alpha sortKey gx gy lookupSlot defFmSlot =
     let slot  = fromIntegral (lookupSlot tex)
         color = Vec4 rgb rgb rgb alpha
-        wuv   = packWorldUV gx gy
+        wuv   = tileWorldUV gx gy
     in SortableQuad
         { sqSortKey = sortKey
         , sqV0 = mkVertexWorld wuv (Vec2 drawX drawY)                 (Vec2 0 0) color slot defFmSlot
