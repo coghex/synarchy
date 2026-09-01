@@ -42,15 +42,14 @@ data BindlessTextureSystem = BindlessTextureSystem
     --   the refcounted cache at creation; swapped on a filter toggle.
     --   No texture mints its own sampler — a slot either follows this
     --   one or is listed in 'btsPinned' and follows the sampler recorded
-    --   there (the world preview, the zoom atlas, and since #1259 every
-    --   compiled unit-animation atlas, which must stay nearest for D-6).
+    --   there (the world preview and the zoom atlas). Gameplay unit
+    --   atlases follow this shared sampler (#2085).
   , btsTextureKind      ∷ !SamplerKind
     -- ^ The kind 'btsTextureSampler' was acquired as — needed to
     --   release the right cache entry on a filter toggle.
   , btsPinned           ∷ !(Map.Map TextureHandle Sampler)
     -- ^ Handles pinned to a SPECIFIC sampler that must survive a global
-    --   filter toggle (world preview → NEAREST, zoom atlas → LINEAR,
-    --   unit-animation atlas → NEAREST).
+    --   filter toggle (world preview → NEAREST, zoom atlas → LINEAR).
     --   A filter toggle repaints every other slot to the new global
     --   sampler but rewrites these to their pinned sampler instead, so
     --   they keep their intended look. Registered via

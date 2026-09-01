@@ -34,14 +34,11 @@ data UploadSampler
       --   backward-compatible answer for a load that declares nothing
       --   (#2075, D-4).
     | UploadPinnedNearest
-      -- ^ Pinned to NEAREST regardless of the global filter (D-6). Two
-      --   unrelated populations share it: compiled unit-animation
-      --   atlases (#1259), where a filter toggle must not start
-      --   bilinearly resampling unit art and on a sheet would
-      --   additionally bleed neighbouring cells across every frame
-      --   edge; and UI chrome and the icons the UI\/HUD layers draw
-      --   (#2075), which are pixel art presented at a fixed scale and
-      --   were never meant to follow the player's scene-art filter.
+      -- ^ Pinned to NEAREST regardless of the global filter. UI chrome
+      --   and the icons the UI\/HUD layers draw use it (#2075), because
+      --   they are pixel art presented at a fixed scale and were never
+      --   meant to follow the player's scene-art filter. Gameplay unit
+      --   atlases are scene art and use 'UploadGlobalSampler' (#2085).
     deriving (Show, Eq, Ord)
 
 -- | The upload cache's key: one canonical slot per PATH per POLICY.

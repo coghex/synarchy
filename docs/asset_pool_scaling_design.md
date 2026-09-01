@@ -139,8 +139,10 @@ step; the game does not pack these source frames during startup.
 Each authored direction is a row and each frame is a column. The generated
 index records cell size, row, real frame count, UV geometry, mirroring, timing,
 and content digests. At runtime `Unit.Atlas` loads one texture handle for the
-whole animation and renders a frame by changing its UV rectangle. The atlas is
-pinned to nearest-neighbour sampling so filtering cannot bleed adjacent cells.
+whole animation and renders a frame by changing its UV rectangle. The atlas
+follows the player-selected nearest/linear sampler; each logical cell's
+one-texel extrusion ring prevents linear filtering from reaching adjacent
+cells.
 
 The tracked corpus currently contains:
 
@@ -514,7 +516,8 @@ implementation should name only lifecycle boundaries with real teardown events.
 
 - Introduce the normalized path plus explicit sampler/upload-policy key.
 - Migrate the resource and in-flight maps without changing rendering output.
-- Keep generated unit atlases pinned-nearest and ordinary textures global.
+- Keep generated gameplay unit atlases on the global scene sampler and UI-only
+  textures pinned nearest.
 - Add cross-policy same-path coverage so neither request inherits the wrong
   sampler.
 - **Depends on:** ATEL-5's measured baseline so the migration's resource/alias

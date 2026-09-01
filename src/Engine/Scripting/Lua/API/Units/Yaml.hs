@@ -127,9 +127,9 @@ registerUnitDefs env poolRef lteq resolveAtlases filePath defs = do
             --
             -- The one unit texture whose ONLY consumer is a UI panel,
             -- so it declares the UI policy (#2075) and keeps nearest
-            -- across a filter toggle. The sprite and directional
-            -- sprites above and below are world-drawn and stay scene
-            -- art; the animation atlases are pinned already.
+            -- across a filter toggle. The sprite, directional sprites,
+            -- and animation atlases are world-drawn scene art and all
+            -- follow the player-selected sampler (#2085).
             portraitH ← case uydPortrait def of
                 Nothing → return Nothing
                 Just p  → do
