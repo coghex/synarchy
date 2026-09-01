@@ -67,6 +67,30 @@ retrieverUid = UnitId 2
 wolfUid ∷ UnitId
 wolfUid = UnitId 3
 
+-- | uid 4, a @FactionDebug@ brown bear (#2030). Player-COMMANDABLE — the
+--   debug overlay spawns any armed species with that faction and
+--   'Unit.Faction.isPlayerCommandable' admits it — but @bear_brown@
+--   registers no @transfer_order@ action, so every Mode B gate has to
+--   refuse it for a reason the commandability filter cannot see.
+--
+--   Stands at (13,13): NEARER the hold at (40,40) than the acolyte at
+--   (12,12), so a Retrieve that ranked before it filtered would pick it.
+bearUid ∷ UnitId
+bearUid = UnitId 4
+
+-- | uid 5, a @FactionDebug@ red squirrel — the second species the issue
+--   names, and nearer still at (14,14), so it is what an unfiltered
+--   ranking actually resolves.
+squirrelUid ∷ UnitId
+squirrelUid = UnitId 5
+
+-- | uid 6, a technomule: the OTHER species that registers the order, and
+--   the farthest unit in the scene at (9,9). A Retrieve resolving it
+--   over two nearer debug animals is what proves the filter picks the
+--   nearest CAPABLE candidate rather than merely excluding a species.
+technomuleUid ∷ UnitId
+technomuleUid = UnitId 6
+
 -- | 1x1, Built, capacity 200 — thirty tiles from every unit, which is
 --   what makes every order here an at-a-distance one.
 farHold ∷ BuildingId
@@ -95,6 +119,16 @@ carrierInventory =
     , (mkItem "kit" 120 1.0) { iiContents = [mkItem "bandage" 121 0.05] }
     ]
 
+-- | One loose row apiece for the two unsupported debug species, so the
+--   Store gesture they must NOT be offered has a real row to be offered
+--   on. Distinct instance ids, so an order that escaped either gate
+--   would name the species that queued it.
+bearInventory ∷ [ItemInstance]
+bearInventory = [ mkItem "rope" 401 2.0 ]
+
+squirrelInventory ∷ [ItemInstance]
+squirrelInventory = [ mkItem "rope" 501 2.0 ]
+
 -- | The hold's real storage, mirroring that shape from the other side:
 --   two identical steel bars and one lone crowbar.
 holdStorage ∷ [ItemInstance]
@@ -119,7 +153,14 @@ resetWorld env = do
     writeIORef (unitManagerRef env) emptyUnitManager
         { umDefs = HM.fromList
             [ ("acolyte", minimalDef "acolyte" "Acolyte")
-            , ("wolf", minimalDef "wolf" "Wolf") ]
+            , ("technomule", minimalDef "technomule" "Technomule")
+            , ("wolf", minimalDef "wolf" "Wolf")
+            -- The REAL def names scripts/bear_ai.lua and
+            -- scripts/red_squirrel_ai.lua register under, so the gate
+            -- reads the shipped registry rather than a synthetic entry
+            -- planted beside it.
+            , ("bear_brown", minimalDef "bear_brown" "Brown Bear")
+            , ("red_squirrel", minimalDef "red_squirrel" "Red Squirrel") ]
         , umInstances = HM.fromList
             [ (carrierUid, onPage
                   (mkUnit "acolyte" FactionPlayer (10, 10) 100
@@ -127,7 +168,15 @@ resetWorld env = do
             , (retrieverUid, onPage
                   (mkUnit "acolyte" FactionPlayer (12, 12) 100 [] []))
             , (wolfUid, onPage
-                  (mkUnit "wolf" FactionWildlife (11, 11) 100 [] [])) ]
+                  (mkUnit "wolf" FactionWildlife (11, 11) 100 [] []))
+            , (bearUid, onPage
+                  (mkUnit "bear_brown" FactionDebug (13, 13) 100
+                          bearInventory []))
+            , (squirrelUid, onPage
+                  (mkUnit "red_squirrel" FactionDebug (14, 14) 100
+                          squirrelInventory []))
+            , (technomuleUid, onPage
+                  (mkUnit "technomule" FactionPlayer (9, 9) 100 [] [])) ]
         }
     writeIORef (buildingManagerRef env) emptyBuildingManager
         { bmDefs = HM.singleton "cargo_hold"
@@ -195,6 +244,17 @@ sceneLua ∷ Text
 sceneLua = luaLines
     [ "_G.__page = UI.newPage('gesture_base', 'overlay');"
     , "UI.showPage(_G.__page);"
+    -- The REAL per-species action registry, loaded HERE rather than
+    -- left to the lazy require inside `transfer_gestures.queueOrder`
+    -- (#2030). That require fires only after a menu callback has
+    -- already run, so at the moment a Store or Retrieve menu is BUILT
+    -- the registry would still be empty -- and an empty registry
+    -- answers "yes" for every species by unit_ai_actions' own
+    -- deliberate design, which would make every omission case below
+    -- pass with the gate reverted. Loading `scripts.unit_ai` is what
+    -- registers acolyte, technomule, bear_brown and red_squirrel from
+    -- the shipped lists, exactly as gameplay boot does.
+    , "require('scripts.unit_ai');"
     -- The unit-info singleton the context-menu module binds at load
     -- time. Only the fields that module reads are needed; its rendering
     -- is not what this gate is about.
@@ -214,9 +274,14 @@ sceneLua = luaLines
     -- Right-click the unit-info inventory row standing for `defName`,
     -- built from the SAME shared widget grouping the real panel uses, so
     -- a merged row here is merged for the same reason it is on screen.
-    , "_G.__storeMenu = function(defName, mutate)"
+    -- ...for ANY unit the panel could be showing, because the Store
+    -- gesture's executor IS that panel's active unit (#2030): the
+    -- singleton's `activeUid` is what the context-menu module forwards,
+    -- so a case about an unsupported carrier has to repoint it rather
+    -- than pass a uid alongside.
+    , "_G.__storeMenuAs = function(uid, defName, mutate)"
     , "  local il = require('scripts.ui.item_list');"
-    , "  local rows = il.groupItems(unit.getInventory(1) or {});"
+    , "  local rows = il.groupItems(unit.getInventory(uid) or {});"
     , "  local row; for _, r in ipairs(rows) do"
     , "    if r.defName == defName then row = r end end;"
     , "  if not row then return nil end;"
@@ -224,8 +289,12 @@ sceneLua = luaLines
     , "  _G.__captured = nil;"
     , "  require('scripts.unit_info_v2_context_menu');"
     , "  local uiv2 = package.loaded['scripts.unit_info_v2'];"
+    , "  local prev = uiv2.activeUid; uiv2.activeUid = uid;"
     , "  uiv2.handleInvItemRightClick(row);"
+    , "  uiv2.activeUid = prev;"
     , "  return _G.__captured end;"
+    , "_G.__storeMenu = function(defName, mutate)"
+    , "  return _G.__storeMenuAs(", tshow 1, ", defName, mutate) end;"
     -- ...and the container-window row standing for `defName`, through
     -- the widget's own right-click routing on the level's real list.
     , "_G.__windowMenu = function(defName)"
@@ -478,6 +547,202 @@ spec = aroundAll withSharedFixture $
             _ ← evalOk ls (openEndpoint "building" 7)
             r ← evalOk ls "return _G.__labels(_G.__windowMenu('crowbar'))"
             r `shouldNotSatisfy` T.isInfixOf "Withdraw"
+
+    -- #2030: a Mode B order queued for a species that never registered
+    -- `transfer_order` is never ticked at all, so it sits in the store
+    -- for ever -- no walk, no commit, nothing to show the player. The
+    -- debug overlay makes that reachable: FactionDebug is
+    -- player-commandable, so a debug-spawned bear or squirrel passed
+    -- every gate the gestures had.
+    --
+    -- Every case here depends on the REAL registry being loaded by
+    -- 'sceneLua'; the first one asserts that precondition rather than
+    -- assuming it, because an empty registry answers permissively by
+    -- design and would make the whole block vacuous.
+    describe "Executor capability — the order's own AI action (#2030)" $ do
+
+        it "loads the shipped registry, so the omissions below are \
+           \refusals rather than an absent inventory (requirement 5's \
+           \permissive path is NOT what is being exercised)" $
+           \(env, ls) → do
+            resetFixture env ls
+            reg ← evalOk ls $ luaLines
+                [ "local a = require('scripts.unit_ai_actions');"
+                , "local act = a.TRANSFER_ORDER_ACTION;"
+                , "return { registered = a.registered(),"
+                , "         acolyte = a.has('acolyte', act),"
+                , "         mule = a.has('technomule', act),"
+                , "         bear = a.has('bear_brown', act),"
+                , "         squirrel = a.has('red_squirrel', act) }" ]
+            reg `shouldSatisfy` T.isInfixOf "\"registered\":true"
+            reg `shouldSatisfy` T.isInfixOf "\"acolyte\":true"
+            reg `shouldSatisfy` T.isInfixOf "\"mule\":true"
+            reg `shouldSatisfy` T.isInfixOf "\"bear\":false"
+            reg `shouldSatisfy` T.isInfixOf "\"squirrel\":false"
+
+        -- Review round 1: the name had been defined independently in two
+        -- production modules, with this case merely asserting today's
+        -- two literals matched -- which is a drift DETECTOR, not a
+        -- single source. scripts/unit_ai_actions.lua now owns the one
+        -- definition and every asker reads it, so what is checked here
+        -- is that the registration really flows from that owner.
+        it "takes the action's name from ONE owner: the registry defines \
+           \it, the dispatch loop registers under it, and every gate \
+           \asks by it (requirement 1)" $ \(env, ls) → do
+            resetFixture env ls
+            owned ← evalOk ls $ luaLines
+                [ "local a = require('scripts.unit_ai_actions');"
+                , "local t = require('scripts.unit_ai_transfer');"
+                -- The registered action's own name IS the owner's value,
+                -- so a rename of the owner renames the registration --
+                -- which is what "one definition" has to mean.
+                , "return { owner = a.TRANSFER_ORDER_ACTION,"
+                , "         registeredUnder = t.action.name,"
+                , "         sameString = t.action.name =="
+                , "                      a.TRANSFER_ORDER_ACTION,"
+                -- ...and the species inventory really is keyed by it.
+                , "         inInventory = a.byDef['acolyte']"
+                , "                         [a.TRANSFER_ORDER_ACTION] == true }" ]
+            owned `shouldSatisfy` T.isInfixOf "\"owner\":\"transfer_order\""
+            owned `shouldSatisfy`
+                T.isInfixOf "\"registeredUnder\":\"transfer_order\""
+            owned `shouldSatisfy` T.isInfixOf "\"sameString\":true"
+            owned `shouldSatisfy` T.isInfixOf "\"inInventory\":true"
+            -- Neither consumer re-declares it: the gesture module and
+            -- the AI module are consumers, so the owner is the only
+            -- place the string is written.
+            noRedecl ← evalOk ls $ luaLines
+                [ "local g = require('scripts.transfer_gestures');"
+                , "local t = require('scripts.unit_ai_transfer');"
+                , "return { gesture = tostring(g.TRANSFER_ORDER_ACTION),"
+                , "         transfer = tostring(t.TRANSFER_ORDER_ACTION) }" ]
+            noRedecl `shouldSatisfy` T.isInfixOf "\"gesture\":\"nil\""
+            noRedecl `shouldSatisfy` T.isInfixOf "\"transfer\":\"nil\""
+
+        it "omits Store for a commandable species that cannot run the \
+           \order — a debug bear and a debug squirrel queue nothing, \
+           \while the acolyte in the same scene still gets it \
+           \(requirements 2 and 6)" $ \(env, ls) → do
+            resetFixture env ls
+            _ ← evalOk ls (openEndpoint "building" 7)
+            bear ← evalOk ls "return _G.__labels(_G.__storeMenuAs(4, 'rope'))"
+            bear `shouldNotSatisfy` T.isInfixOf "Store"
+            squirrel ← evalOk ls
+                "return _G.__labels(_G.__storeMenuAs(5, 'rope'))"
+            squirrel `shouldNotSatisfy` T.isInfixOf "Store"
+            -- The gate refuses a SPECIES, not the scene: the acolyte's
+            -- own row is still offered, so an omission that swallowed
+            -- everything would fail here.
+            acolyte ← evalOk ls
+                "return _G.__labels(_G.__storeMenuAs(1, 'rope'))"
+            acolyte `shouldSatisfy` T.isInfixOf "Store 1"
+            b ← evalOk ls "return _G.__orders(4)"
+            b `shouldBe` "\"\""
+            sq ← evalOk ls "return _G.__orders(5)"
+            sq `shouldBe` "\"\""
+
+        it "Retrieve filters BEFORE ranking: two nearer unsupported \
+           \units are skipped for the capable acolyte, and again for a \
+           \technomule that is farther than either (requirements 3 \
+           \and 6)" $ \(env, ls) → do
+            resetFixture env ls
+            _ ← evalOk ls (openEndpoint "building" 7)
+            -- Unfiltered, the squirrel at (14,14) really is what the
+            -- shared rule resolves — so the assertions below fail the
+            -- moment the capability argument stops being passed.
+            unfiltered ← evalOk ls $ luaLines
+                [ "local s = require('scripts.transfer_session');"
+                , "local ep = unit.transferEndpointInfo("
+                , "  {kind = 'building', id = 7});"
+                , "return { withMule = s.resolveSource({4, 5, 6}, nil, ep),"
+                , "         withAcolyte = s.resolveSource({4, 5, 2}, nil,"
+                , "                                       ep) }" ]
+            unfiltered `shouldSatisfy` T.isInfixOf "\"withMule\":5"
+            unfiltered `shouldSatisfy` T.isInfixOf "\"withAcolyte\":5"
+            _ ← evalOk ls (selectStub [4, 5, 2])
+            fired ← evalOk ls
+                "return _G.__fire(_G.__windowMenu('crowbar'), 'Retrieve 1')"
+            fired `shouldBe` "true"
+            o ← evalOk ls "return _G.__orders(2)"
+            o `shouldBe` "\"building:7>unit:2[210]\""
+            skipped ← evalOk ls
+                "return _G.__orders(4) .. '/' .. _G.__orders(5)"
+            skipped `shouldBe` "\"/\""
+            -- ...and a technomule wins the same way, so the capability
+            -- is the registry's answer rather than "is it an acolyte".
+            resetFixture env ls
+            _ ← evalOk ls (selectStub [4, 5, 6])
+            _ ← evalOk ls (openEndpoint "building" 7)
+            firedMule ← evalOk ls
+                "return _G.__fire(_G.__windowMenu('steel_bar'), 'Retrieve all')"
+            firedMule `shouldBe` "true"
+            mule ← evalOk ls "return _G.__orders(6)"
+            mule `shouldBe` "\"building:7>unit:6[201,202]\""
+
+        it "omits Retrieve entirely when every selected unit is an \
+           \unsupported species — no entries, never a disabled row \
+           \(requirements 3 and 6)" $ \(env, ls) → do
+            resetFixture env ls
+            _ ← evalOk ls (selectStub [4, 5])
+            _ ← evalOk ls (openEndpoint "building" 7)
+            r ← evalOk ls "return tostring(_G.__windowMenu('crowbar'))"
+            r `shouldBe` "\"nil\""
+            o ← evalOk ls
+                "return _G.__orders(4) .. '/' .. _G.__orders(5)"
+            o `shouldBe` "\"/\""
+
+        it "the reusable command boundary refuses an actionless executor \
+           \and stores NOTHING — the check precedes \
+           \unit.createTransferOrder, which is the verb that creates \
+           \and stores (requirement 4)" $ \(env, ls) → do
+            resetFixture env ls
+            -- Submitted DIRECTLY, bypassing both gestures: `M.create`'s
+            -- Mode A precedent, read for Mode B — the one boundary every
+            -- order is made through is re-checked rather than trusted.
+            refused ← evalOk ls $ luaLines
+                [ "local ai = require('scripts.unit_ai');"
+                , "return tostring(ai.commandTransferOrder(4, {"
+                , "  source = {kind = 'building', id = 7},"
+                , "  destination = {kind = 'unit', id = 4},"
+                , "  items = {{instanceId = 210, defName = 'crowbar'}} }))" ]
+            refused `shouldBe` "\"false\""
+            stored ← evalOk ls "return _G.__orders(4)"
+            stored `shouldBe` "\"\""
+            -- The IDENTICAL request for a capable carrier is accepted,
+            -- so the refusal names the species and not the request.
+            accepted ← evalOk ls $ luaLines
+                [ "local ai = require('scripts.unit_ai');"
+                , "return tostring(ai.commandTransferOrder(2, {"
+                , "  source = {kind = 'building', id = 7},"
+                , "  destination = {kind = 'unit', id = 2},"
+                , "  items = {{instanceId = 210, defName = 'crowbar'}} })"
+                , "  ~= false)" ]
+            accepted `shouldBe` "\"true\""
+            ok ← evalOk ls "return _G.__orders(2)"
+            ok `shouldBe` "\"building:7>unit:2[210]\""
+
+        it "invents no refusal where no AI is loaded: an EMPTY registry \
+           \still offers both gestures and still queues the order \
+           \(requirement 5)" $ \(env, ls) → do
+            resetFixture env ls
+            -- What a UI-only fixture or a menu screen looks like: the
+            -- module is present, nothing has registered. Answering
+            -- "false" from an absent inventory would break every such
+            -- process, which is why unit_ai_actions answers "true".
+            _ ← evalOk ls
+                "require('scripts.unit_ai_actions').byDef = {}; return true"
+            _ ← evalOk ls (selectStub [4])
+            _ ← evalOk ls (openEndpoint "building" 7)
+            retrieve ← evalOk ls
+                "return _G.__labels(_G.__windowMenu('crowbar'))"
+            retrieve `shouldSatisfy` T.isInfixOf "Retrieve 1"
+            fired ← evalOk ls
+                "return _G.__fire(_G.__storeMenuAs(4, 'rope'), 'Store 1')"
+            fired `shouldBe` "true"
+            -- ...and the command boundary is permissive too, so the
+            -- order really is stored rather than refused one layer down.
+            o ← evalOk ls "return _G.__orders(4)"
+            o `shouldBe` "\"unit:4>building:7[401]\""
 
     describe "Gesture-wide invariants" $ do
 

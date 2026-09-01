@@ -3613,8 +3613,20 @@ spec = aroundAll withSharedFixture $ do
                 , "      category='Materials', weight=2.0,"
                 , "      instanceId=4242 } } } end;"
                 , "unit.getSelected = function() return {7} end;"
+                -- `defName` is not decoration: the retriever is the
+                -- order's EXECUTOR, and both the gesture's resolution
+                -- and unit_ai's command boundary ask the action registry
+                -- whether that unit's species can run `transfer_order`
+                -- (#2030). The registry is empty when the MENU is built
+                -- and populated by the time the callback commits --
+                -- `transfer_gestures.queueOrder` requires
+                -- `scripts.unit_ai` lazily -- so a species-less stub
+                -- gets offered the gesture and then refused by it. A
+                -- real `unit.getInfo` always reports a species; this one
+                -- now does too.
                 , "unit.getInfo = function() return"
-                , "    { name='Sister Vela', gridX=10, gridY=11 } end;"
+                , "    { name='Sister Vela', defName='acolyte',"
+                , "      gridX=10, gridY=11 } end;"
                 , "unit.getFaction = function() return 'player' end;"
                 , "faction.isPlayerCommandable = function(f)"
                 , "    return f == 'player' end;"
