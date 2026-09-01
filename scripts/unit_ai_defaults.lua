@@ -8,7 +8,8 @@
 --     is seeing for the first time, and it set all three.
 --   * the save-restore path (unit_ai_save.lua) installs each decoded
 --     row VERBATIM -- saveModules.applyEntityRows deliberately knows
---     nothing about what any component's rows MEAN -- and it set none.
+--     nothing about what any component's rows MEAN -- and it set none,
+--     leaving the row to be reconciled after publish.
 --
 -- A row decoded from an accepted schema version need not carry them.
 -- unit_ai_save_validate.lua accepts a free-form state row on purpose
@@ -23,15 +24,18 @@
 -- all three fields, so only an accepted LEGACY payload -- or a
 -- current-format resave of one -- can be sparse.
 --
--- So the defaults are declared ONCE, here, and both paths normalize
--- against them. The restore side does it at the END OF decode(), which
--- is both where every accepted inputVersion's branch joins -- making
--- the fix version-independent rather than per-migration -- and a
--- FORWARD-ONLY boundary. That second half is load-bearing: apply() is
--- also applyAll's rollback entry point, and unwinding an abandoned
--- load must restore the old session verbatim, so filling defaults
--- there would edit pre-load state on a load that is being abandoned.
--- Nothing rolls back through decode.
+-- So the defaults are declared ONCE, here, and both installers
+-- normalize against them. The restore side does it at the POST-PUBLISH
+-- reconcile (scripts/unit_ai_reconcile.lua), which is the only
+-- boundary where all three of the things that matter hold at once: the
+-- restored clock is live (decode and apply run during staging, before
+-- World.Load.Publish swaps `gameTimeRef`, so `actionStartedAt` stamped
+-- there would carry the OUTGOING session's time), a rolled-back load
+-- never reaches it (apply() is also applyAll's rollback entry point,
+-- and that unwind must be verbatim), and nothing has ticked yet
+-- (onSaveLoaded is the first point the Lua thread reaches after
+-- publish). It is version-independent for free: every accepted
+-- inputVersion has already converged on live state by then.
 --
 -- FILL ONLY, NEVER OVERWRITE. A restored row that carries a value
 -- keeps it, whatever it is -- including a `nextActionAt` in the past
