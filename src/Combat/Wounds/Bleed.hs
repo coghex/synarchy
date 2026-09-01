@@ -46,8 +46,8 @@ kindBleedFactor _            = 0.5
 --   "Combat.Wounds" for the overall formula summary. The severity term
 --   comes from 'woundEffSeverity', the one definition of effective
 --   severity, which 'Combat.Wounds.Tick.tickOneUnit' also calls on the
---   wound it has just advanced, so a wound's live bleed and the drain
---   that tick applied agree by construction.
+--   wound it has just advanced — so this query, applied to the wound a
+--   tick has just returned, reproduces the drain that tick applied.
 perWoundBleedRate ∷ HM.HashMap Text BodyPart → Float → Wound → Float
 perWoundBleedRate parts bleedCon w =
     let effSev = woundEffSeverity w

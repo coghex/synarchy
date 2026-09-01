@@ -22,19 +22,20 @@ import qualified Data.HashMap.Strict as HM
 -- healing cannot cross. Cleanup is driven by that effective severity,
 -- not by this bar: the wound is removed once it falls below
 -- woundCleanupThreshold, leaving a scar if it was severe — so a wound
--- carrying dead tissue can reach full heal and still not be removed,
--- because the floor holds it above the threshold. UNIFORM rate across
+-- whose necrosis reaches that threshold can hit full heal and still not
+-- be removed, because the floor holds it there. UNIFORM rate across
 -- wound kinds (the user's call) — only severed is excluded (a lost limb
 -- can't regrow). Constitution scales it gently (the existing healCon),
 -- and clot gates it (an open wound barely mends). The base rate is
 -- deliberately slow.
 healBaseRate ∷ Float
 healBaseRate = 0.0016
--- Calibration (clotted, constitution 1.0, and a NON-NECROTIC wound — with
--- necrosis the floor holds effective severity up and the wound never heals
--- out at all): a sev-0.5 wound reaches effective severity < 0.01 at
--- heal ≈ 0.98 — about 0.98 / 0.0016 ≈ 600 s ≈ 10 min of clotted time. A
--- scratch (sev 0.05) heals out at heal ≈ 0.8 → faster.
+-- Calibration (clotted, constitution 1.0, and no necrosis — necrosis at or
+-- above woundCleanupThreshold floors effective severity there, so such a
+-- wound never heals out however far woundHeal advances; below the threshold
+-- the floor is invisible to cleanup): a sev-0.5 wound reaches effective
+-- severity < 0.01 at heal ≈ 0.98 — about 0.98 / 0.0016 ≈ 600 s ≈ 10 min of
+-- clotted time. A scratch (sev 0.05) heals out at heal ≈ 0.8 → faster.
 
 healClotFloor ∷ Float
 healClotFloor = 0.05   -- an un-clotted wound heals at 5 % of the rate

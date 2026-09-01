@@ -251,16 +251,14 @@ tickOneUnit gt def dt infMgr mClim gen0 inst testMode
                         -- that is 'woundEffSeverity', computed below on the
                         -- freshly advanced wound. TWO things separate them,
                         -- both deliberate: this reads `woundHeal w`, the value
-                        -- the tick STARTED with, and it omits the necrosis
-                        -- floor entirely. So where that floor dominates it
-                        -- sits below the effective severity, and where it does
-                        -- not the two differ only by the healing this tick
-                        -- went on to add. Infection grows in LIVE tissue, and
-                        -- dead tissue is what necrosis measures, so feeding
-                        -- the floor into the growth multiplier would be a
-                        -- balance change: whether it should is an open
-                        -- question this binding does not decide, and changing
-                        -- it needs its own issue.
+                        -- the tick STARTED with rather than the `newHeal` it
+                        -- ends with, and it omits the necrosis floor entirely.
+                        -- Neither number bounds the other in general. Infection
+                        -- grows in LIVE tissue, and dead tissue is what
+                        -- necrosis measures, so feeding the floor into the
+                        -- growth multiplier would be a balance change: whether
+                        -- it should is an open question this binding does not
+                        -- decide, and changing it needs its own issue.
                         acuteSev   = sev0 * (1 - woundHeal w)
                         infAge     = gt - woundAt w
                         kindInfF   = kindInfectFactor (woundKind w)
