@@ -76,6 +76,7 @@ import probe_claim_selftest_census as census_owner  # type: ignore  # noqa: E402
 import probe_claim_selftest_claim as claim_owner  # type: ignore  # noqa: E402
 import probe_claim_selftest_orchestration as orchestration_owner  # type: ignore  # noqa: E402
 import probe_claim_selftest_support as support  # type: ignore  # noqa: E402
+import selftestlib  # noqa: E402
 
 #: The three contract owners, by selector name.
 OWNERS = {
@@ -221,7 +222,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--only", choices=sorted(OWNERS),
         help="run one contract owner's cases only.")
+    # This module owns its own command line, so the shared verbosity
+    # flag joins that parser rather than being consumed behind its
+    # back; `begin` then starts this invocation's own count (#1922).
+    selftestlib.add_verbose_option(parser)
     args = parser.parse_args(argv)
+    selftestlib.begin(args.verbose)
 
     try:
         cases = selected_cases(args.only)
@@ -247,13 +253,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{len(support.FAILURES)} FAILED:")
         for message in support.FAILURES:
             print(f"  - {message}")
-        return 1
+        return selftestlib.concluded(1)
     if args.only is None:
-        print("probe_claim self-test: all cases pass")
-    else:
-        print(f"probe_claim self-test [{args.only}]: all {len(cases)} cases "
-              f"pass")
-    return 0
+        return selftestlib.concluded(0, "probe_claim self-test: all cases pass")
+    return selftestlib.concluded(
+        0, f"probe_claim self-test [{args.only}]: all {len(cases)} cases pass")
 
 
 if __name__ == "__main__":

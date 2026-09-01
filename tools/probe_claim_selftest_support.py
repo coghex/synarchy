@@ -13,7 +13,10 @@ Two of those are single-sourced for correctness rather than tidiness:
 
 * `FAILURES` is the ONE list `expect` and `expect_raises` append to.
   Three owners each holding a private copy would let the aggregate exit
-  0 while a sibling owner had recorded a failure.
+  0 while a sibling owner had recorded a failure. Since #1922 that one
+  list is `tools/selftestlib.py`'s, re-exported here so the owners import
+  it -- and the quiet-by-default `expect` behind it -- from the single
+  place they already import everything else shared from.
 * `ARTIFACTS` is created -- and its `atexit` removal registered -- once
   at import time, so importing all three owners together still produces
   one retained-artifact root and one cleanup, not three.
@@ -43,7 +46,7 @@ import probe_protocol  # type: ignore  # noqa: E402
 import probe_engine  # type: ignore  # noqa: E402
 import probe_runner_registry  # type: ignore  # noqa: E402
 
-FAILURES: list[str] = []
+from selftestlib import FAILURES, expect  # noqa: E402
 
 TOOLS = str(Path(__file__).resolve().parent)
 COMMIT_A = "a" * 40
@@ -54,12 +57,6 @@ SYNTHETIC = [
     ("beta", "beta_probe.py", "the second synthetic probe"),
     ("gamma", "gamma_probe.py", "the third synthetic probe"),
 ]
-
-
-def expect(cond: bool, msg: str) -> None:
-    if not cond:
-        FAILURES.append(msg)
-    print(f"  {'ok  ' if cond else 'FAIL'} {msg}")
 
 
 def skip(msg: str) -> None:

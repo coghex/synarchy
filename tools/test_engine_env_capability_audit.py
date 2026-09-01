@@ -48,15 +48,8 @@ from engine_env_capability_audit import (  # type: ignore
 )
 from persistence_inventory_audit import extract_record_fields  # type: ignore
 
-FAILURES: list[str] = []
-
-
-def expect(cond: bool, msg: str) -> None:
-    if not cond:
-        FAILURES.append(msg)
-        print(f"  FAIL: {msg}")
-    else:
-        print(f"  OK:   {msg}")
+import selftestlib  # noqa: E402
+from selftestlib import FAILURES, expect  # noqa: E402
 
 
 # ----- Fixtures ---------------------------------------------------------
@@ -3387,7 +3380,6 @@ def test_backticked_infix_mutations_are_writes():
            f"{sorted(bare['fieldOne'])}")
 
 
-
 def test_redundant_parentheses_change_nothing():
     """Parentheses around a primitive in a prefix application, and
     around an infix operand, are the same write. A primitive that
@@ -4724,6 +4716,7 @@ def test_writer_map_against_the_real_repo():
 
 
 def main() -> int:
+    selftestlib.parse_verbose()
     tests = [
         test_complete_inventory_has_no_violations,
         test_missing_row_detected,
@@ -4905,10 +4898,9 @@ def main() -> int:
         print(f"\n{len(FAILURES)} test failure(s):")
         for f in FAILURES:
             print(f"  {f}")
-        return 1
+        return selftestlib.concluded(1)
 
-    print(f"\nAll {len(tests)} test groups passed")
-    return 0
+    return selftestlib.concluded(0, f"\nAll {len(tests)} test groups passed")
 
 
 if __name__ == "__main__":
