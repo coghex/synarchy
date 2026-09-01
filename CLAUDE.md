@@ -992,10 +992,12 @@ before touching each area:
   against the item registry — the loader rejects the whole file
   otherwise, because an obligation that can never spawn is a
   permanently unclearable location, not a skippable warning. A
-  `loot_table` draw can never decide what a location owes; obligations
-  are created at PLACEMENT with the expected cardinality, and an
-  unspawned one — or one marked taken that names no item — keeps the
-  condition incomplete. Provenance is the item's physical
+  `loot_table` draw can never decide what a location owes; the LOAD
+  path refuses a save whose UNSPAWNED obligation names a def this build
+  no longer registers, for the same reason. Obligations are created at
+  PLACEMENT with the expected cardinality, and an unspawned one — or
+  one marked taken that names no item — keeps the condition
+  incomplete. Provenance is the item's physical
   `iiInstanceId`, never a ground id, and `taken` latches once at
   `pickupGroundOnPage` — the first SUCCESSFUL pickup by any unit of any
   faction — and nothing anywhere clears it. Full contract:

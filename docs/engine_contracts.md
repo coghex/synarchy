@@ -1507,6 +1507,16 @@ while a significant one that spawns nothing costs it its clearance
 forever, because the obligation is created at placement and
 `item.spawnGround` then fails on every chunk load.
 
+The LOAD path holds the same line from the other side
+(`World.Save.Types.missingSignificantItemReferences`, folded into
+`engine.loadSave`'s content-validation ladder): a save whose UNSPAWNED
+obligation names an item definition this build no longer registers is
+refused before anything publishes, because that obligation is exactly
+what the next chunk load would try to spawn. A BOUND obligation is
+exempt — nothing re-spawns a filled slot, so its def name is a
+historical record and the item may legitimately have been consumed or
+destroyed.
+
 That makes an ORDERING requirement load-bearing: items must be
 registered before `engine.loadLocationYaml` runs, or the shipped ruin is
 rejected and no location registers at all.

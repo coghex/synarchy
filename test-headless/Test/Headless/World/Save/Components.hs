@@ -62,7 +62,7 @@ import Location.Types (emptyLocationRegistry)
 import Location.Bounds (AbsBounds(..))
 import Location.Instance
     ( LocationInstance(..), LocationInstances(..), LocationInstanceId(..)
-    , LocationLifecycle(..) )
+    , LocationLifecycle(..), LocationSignificantItem(..) )
 import World.Save.Snapshot.Adapter
     (SaveRequestMeta(..), snapshotSaveMetadata, snapshotToSaveData)
 import World.Save.Types
@@ -70,6 +70,8 @@ import World.Save.Types
     , UnitSnapshot(..), UnitInstanceSnapshot(..)
     , MissingDefRef(..), renderMissingDefRef, missingDefReferences
     , MissingItemDefRef(..), missingItemDefReferences
+    , MissingSignificantItemRef(..), missingSignificantItemReferences
+    , renderMissingSignificantItemRef
     , MissingRecipeRef(..), missingRecipeReferences
     , MissingBillOutputItemRef(..), missingBillOutputItemReferences
     , MissingConstructDefRef(..)
@@ -327,6 +329,25 @@ minimalGlobals = SessionGlobals
     , sgLiveCamera     = LiveCameraSnapshot
         { lcsOwnerPage = Just page1
         , lcsX = 7, lcsY = 8, lcsZoom = 3, lcsFacing = FaceEast }
+    }
+
+-- | A placed location owing @entries@ (#917), with every other field
+--   at a value this check never reads.
+significantOwner ∷ [LocationSignificantItem] → LocationInstance
+significantOwner entries = LocationInstance
+    { liId              = LocationInstanceId 1
+    , liDefId           = "ruin_small"
+    , liChunk           = ChunkCoord 0 0
+    , liAnchor          = (8, 8)
+    , liBounds          = AbsBounds 6 6 10 10
+    , liDisplayName     = "Small Ruin"
+    , liGloss           = Nothing
+    , liEtymology       = Nothing
+    , liLifecycle       = LifecycleDiscovered
+    , liContentsSpawned = False
+    , liEncounter       = Nothing
+    , liSignificant     = entries
+    , liClearEventEmitted = False
     }
 
 minimalUnitInstance ∷ [ItemInstance] → UnitInstanceSnapshot
@@ -2719,6 +2740,69 @@ spec = do
                             (HM.singleton (UnitId 1) u) 10 })
             HS.fromList (map midrDefName missing)
                 `shouldBe` HS.fromList ["first_aid_kit", "ghost_helmet"]
+
+    -- #917: an UNSPAWNED significant obligation names the item the next
+    -- chunk load will try to spawn. A save written before that spawn,
+    -- loaded against a build whose item set has moved on, would
+    -- otherwise publish into a state where the spawn fails forever and
+    -- the location can never clear — the load-path counterpart of the
+    -- authoring-time rejection in
+    -- 'Engine.Asset.YamlLocations.significantItemErrors'.
+    describe "missing significant-obligation item rejection (#917)" $ do
+        let pageOwing entries = [(page1, (minimalWorldPageSave page1)
+                { wpsGenParams = defaultWorldGenParams
+                    { wgpLocationInstances = LocationInstances
+                        { lisNextId = 2
+                        , lisById = HM.singleton (LocationInstanceId 1)
+                            (significantOwner entries)
+                        , lisPendingLegacy = Nothing } } })]
+
+        it "accepts an obligation whose stored item def still resolves" $
+            missingSignificantItemReferences
+                (HS.singleton "processing_unit")
+                (pageOwing [ LocationSignificantItem 1 "processing_unit"
+                                 Nothing False ])
+                `shouldBe` []
+
+        it "flags an UNSPAWNED obligation whose stored item def is gone, \
+           \naming the page, the location, the slot and the def" $
+            case missingSignificantItemReferences HS.empty
+                     (pageOwing [ LocationSignificantItem 3 "ghost_core"
+                                      Nothing False ]) of
+                [r] → do
+                    msirPage r     `shouldBe` page1
+                    msirInstance r `shouldBe` 1
+                    msirSlot r     `shouldBe` 3
+                    msirDefName r  `shouldBe` "ghost_core"
+                    renderMissingSignificantItemRef r `shouldSatisfy`
+                        \m → all (`T.isInfixOf` m)
+                            ["location #1", "slot 3", "ghost_core"]
+                other → expectationFailure
+                    ("expected one finding, got " <> show other)
+
+        it "IGNORES an obligation that already names a spawned item, \
+           \however its def has since fared -- nothing re-spawns a bound \
+           \slot, so its def name is a historical record and the item \
+           \may legitimately have been consumed or destroyed" $ do
+            missingSignificantItemReferences HS.empty
+                (pageOwing [ LocationSignificantItem 1 "ghost_core"
+                                 (Just 900) False ])
+                `shouldBe` []
+            missingSignificantItemReferences HS.empty
+                (pageOwing [ LocationSignificantItem 1 "ghost_core"
+                                 (Just 900) True ])
+                `shouldBe` []
+
+        it "reports every unspawned offender on the page, and only those" $
+            map msirSlot (missingSignificantItemReferences
+                (HS.singleton "processing_unit")
+                (pageOwing
+                    [ LocationSignificantItem 1 "processing_unit" Nothing False
+                    , LocationSignificantItem 2 "ghost_core" Nothing False
+                    , LocationSignificantItem 3 "ghost_core" (Just 901) True
+                    , LocationSignificantItem 4 "other_ghost" Nothing False
+                    ]))
+                `shouldBe` [2, 4]
 
     -- #1090: the three item enumerations became one. These pin what
     -- unification is FOR — that every consumer observes every
