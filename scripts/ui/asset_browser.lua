@@ -90,6 +90,11 @@ function assetBrowser.new(params)
         id     = id,
         listId = listId,
         items  = items,
+        -- The keyboard path (#2026) owns preview-scoped
+        -- scroll-into-view. Keep this here rather than teaching
+        -- list.selectItem to scroll: that shared primitive also backs
+        -- save/settings/menu lists whose click behavior must not move.
+        maxVisible = maxVisible,
         panelBounds = {
             x = params.x + listWidth + gap,
             y = params.y,
@@ -148,6 +153,39 @@ function assetBrowser.selectEntrySilently(id, path)
     local b = browsers[id]
     if not b or #b.items == 0 then return end
     list.setSelectedIndex(b.listId, resolveIndex(b, path))
+end
+
+-- Select the adjacent entry and scroll only far enough to keep it
+-- visible (#2026). This deliberately ends in list.selectItem -- the
+-- exact call a row click uses -- so texture loading, readiness,
+-- playback restart and preview-object zoom rules cannot diverge between
+-- mouse and keyboard selection. Empty/unselected lists and either
+-- boundary are true no-ops: no callback is re-fired.
+function assetBrowser.selectAdjacent(id, step)
+    local b = browsers[id]
+    if not b or (step ~= -1 and step ~= 1) then return false end
+
+    local current = list.getSelectedIndex(b.listId)
+    if not current then return false end
+
+    local target = current + step
+    if target < 1 or target > #b.items then return false end
+
+    local offset = list.getScrollOffset(b.listId)
+    local firstVisible = offset + 1
+    local lastVisible = offset + b.maxVisible
+    local wantedOffset = offset
+    if target < firstVisible then
+        wantedOffset = target - 1
+    elseif target > lastVisible then
+        wantedOffset = target - b.maxVisible
+    end
+    if wantedOffset ~= offset then
+        list.setScrollOffset(b.listId, wantedOffset)
+    end
+
+    list.selectItem(b.listId, target)
+    return true
 end
 
 function assetBrowser.destroy(id)

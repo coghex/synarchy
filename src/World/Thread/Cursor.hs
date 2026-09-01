@@ -17,6 +17,7 @@ import World.Types
 import World.Generate.Coordinates (globalToChunk)
 import World.Fluid.Ocean (isOceanChunk)
 import World.Material (MaterialId(..), getMaterialProps, MaterialProps(..))
+import World.Chunk.Admit (withTransientChunkClaim)
 import World.Edit.Apply (replayEdits)
 import World.Generate (generateLoadedChunk)
 import World.Geology.Ore (chunkOreCounts)
@@ -98,7 +99,7 @@ pollCursorInfo env = do
                 sendHudWeatherInfo env ""
                 sendHudResourcesInfo env ""
             showChunk baseGX baseGY =
-                sendChunkInfo env worldState mParams baseGX baseGY
+                sendChunkInfo env pid worldState mParams baseGX baseGY
         if activeChanged
             -- The active world just changed: repaint the panel with THIS
             -- world's current selection from scratch (tile owns the panel
@@ -134,9 +135,9 @@ pollCursorInfo env = do
 
 -- | Format and send HUD info for a selected chunk (zoomed-out view).
 --   baseGX/baseGY are the chunk's global grid origin (i.e. chunkX * chunkSize).
-sendChunkInfo ∷ EngineEnv → WorldState → Maybe WorldGenParams
+sendChunkInfo ∷ EngineEnv → WorldPageId → WorldState → Maybe WorldGenParams
               → Int → Int → IO ()
-sendChunkInfo env worldState mParams baseGX baseGY = do
+sendChunkInfo env pid worldState mParams baseGX baseGY = do
     let cx = if baseGX >= 0 then baseGX `div` chunkSize
              else -(((-baseGX) + chunkSize - 1) `div` chunkSize)
         cy = if baseGY >= 0 then baseGY `div` chunkSize
@@ -184,7 +185,20 @@ sendChunkInfo env worldState mParams baseGX baseGY = do
                 case HM.lookup coord cacheMap of
                     Just (cachedEdits, cachedText)
                         | cachedEdits ≡ chunkEdits → pure cachedText
-                    _ → do
+                    _ →
+                      -- A TRANSIENT generation (#2001): claimed on the
+                      -- page's residency owner under the same canonical
+                      -- key every other path uses, so a concurrent
+                      -- world.loadChunksInRegion cannot start a second
+                      -- generation of this chunk while the survey runs —
+                      -- and released on the way out, however this block
+                      -- exits, so a throwaway chunk never leaves a
+                      -- permanent in-flight entry. It never becomes
+                      -- RESIDENT: the chunk goes into the local tdTmp
+                      -- below and is dropped, and only the rendered text
+                      -- is kept. The memo is keyed and flushed exactly as
+                      -- before.
+                      withTransientChunkClaim worldState pid params coord $ do
                         let lc0 = generateLoadedChunk materials catalog
                                                       params coord
                             lc1 = replayEdits edits lc0

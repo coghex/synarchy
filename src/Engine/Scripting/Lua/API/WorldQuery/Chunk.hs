@@ -15,7 +15,7 @@ import Data.IORef (readIORef)
 import Control.Concurrent (threadDelay)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..))
-import Engine.Core.State (activeWorldStateFrom)
+import Engine.Core.State (activeWorldPageFrom, activeWorldStateFrom)
 import World.Types
 import World.Chunk.Queue (enqueueChunkRequest)
 import Engine.Scripting.Lua.API.WorldQuery.Lookup (getWorldTileData)
@@ -116,10 +116,13 @@ worldLoadChunksInRegionFn wsc = do
             -- dedup and the #43 snapshot ordering all live in
             -- 'enqueueChunkRequest', shared with the dump path.
             count ← Lua.liftIO $ do
-                mWs ← activeWorldStateFrom (wsWorldManagerRef wsc)
-                case mWs of
-                    Just ws → enqueueChunkRequest ws coords
-                    Nothing → pure 0
+                -- The PAGE, not just its state: a chunk key is
+                -- page-qualified (#2001), so the request has to name the
+                -- page whose residency owner it registers on.
+                mPage ← activeWorldPageFrom (wsWorldManagerRef wsc)
+                case mPage of
+                    Just (pid, ws) → enqueueChunkRequest pid ws coords
+                    Nothing        → pure 0
             Lua.pushinteger (fromIntegral count)
             return 1
         _ → do

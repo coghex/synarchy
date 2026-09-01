@@ -25,6 +25,7 @@ module World.State.Types
     ) where
 
 import UPrelude
+import Control.Concurrent.MVar (MVar, newMVar)
 import Data.IORef (IORef, newIORef, atomicModifyIORef', readIORef)
 import Language.Generated.Types (LanguageProvenance)
 import qualified Data.HashMap.Strict as HM
@@ -34,6 +35,7 @@ import Engine.Graphics.Camera (CameraFacing(..))
 import World.Cursor.Types (CursorState(..), emptyCursorState)
 import World.Page.Types (WorldPageId(..), WorldIdentity(..))
 import World.Chunk.Types (ChunkCoord(..))
+import World.Chunk.Residency (ChunkOwner, emptyChunkOwner, newChunkGeneration)
 import World.Tile.Types (WorldTileData(..), emptyWorldTileData)
 import World.Render.Camera.Types (WorldCamera(..), WorldQuadCache(..))
 import World.Render.Textures.Types (WorldTextures(..), defaultWorldTextures)
@@ -110,6 +112,50 @@ data WorldState = WorldState
     , wsBakedZoomRef ∷ IORef (V.Vector BakedZoomEntry, WorldTextures, CameraFacing)  -- ^ Pre-baked
     , wsBakedBgRef ∷ IORef (V.Vector BakedZoomEntry, WorldTextures, CameraFacing)    -- ^ Pre-baked background entries with resolved textures and vertices
     , wsInitQueueRef ∷ IORef [ChunkCoord]  -- ^ Queue of chunks to generate at world init (for progress tracking)
+    , wsInitQueueLock ∷ MVar ()
+      -- ^ Held while this page's init QUEUE and its 'wsLoadPhaseRef' are
+      --   changed together (#2001).
+      --
+      --   The two are separate 'IORef's with two writing threads — the
+      --   world thread settles the phase as it drains, and the Lua
+      --   thread appends and accounts for its own request — so no
+      --   ordering of reads and writes makes them consistent on its own.
+      --   The failure that matters is a false TERMINAL phase: an append
+      --   landing between the drain's queue read and its phase write
+      --   leaves 'LoadDone' standing over accepted work, and every
+      --   waiter polling for that phase reports a load that has not
+      --   happened.
+      --
+      --   Each writer takes this for the whole read-decide-write, which
+      --   makes the pair atomic with respect to the other writer.
+      --   READERS do not take it: they read one value and may see it a
+      --   moment stale, which is inherent to any single read and is not
+      --   the inconsistency this closes.
+      --
+      --   Runtime-only, never persisted: it protects a transient queue
+      --   and a transient phase, and a fresh page gets a fresh lock.
+    , wsChunkResidencyRef ∷ IORef ChunkOwner
+      -- ^ This page's chunk-residency owner (#2001): for every canonical
+      --   'World.Chunk.Residency.ChunkKey', whether it is absent,
+      --   requested, in flight, or resident — plus the page's own
+      --   generation epoch, which every request it mints is tagged with.
+      --
+      --   It sits beside 'wsTilesRef' and 'wsInitQueueRef' because it is
+      --   the identity those two never had. 'wsTilesRef' is keyed by a
+      --   bare 'ChunkCoord' with no page and no canonicalisation, and
+      --   'wsInitQueueRef' is an ordered work list annotated "for
+      --   progress tracking"; neither can answer "is this physical
+      --   chunk already being worked on?" without the caller
+      --   reconstructing it, which is why that question used to need two
+      --   'IORef's read in a documented order (#43). This is ONE value,
+      --   so "World.Chunk.Admit"'s verbs each settle it with a single
+      --   'atomicModifyIORef''.
+      --
+      --   Mirrors the tile map by construction: every admission is an
+      --   insert into 'wsTilesRef' and every eviction is a removal from
+      --   it. Runtime residency bookkeeping, never persisted — a fresh
+      --   or loaded page starts with an empty owner and a brand-new
+      --   epoch (see docs\/persistence_state_inventory.md).
     , wsMapModeRef ∷ IORef ZoomMapMode
     , wsCursorRef ∷ IORef CursorState
     , wsToolModeRef ∷ IORef ToolMode
@@ -350,6 +396,12 @@ emptyWorldState = do
     bakedZoomRef ← newIORef (V.empty, defaultWorldTextures, FaceSouth)
     bakedBgRef   ← newIORef (V.empty, defaultWorldTextures, FaceSouth)
     wsInitQueueRef ← newIORef []
+    wsInitQueueLock ← newMVar ()
+    -- A brand-new epoch per WorldState, so a page id reused by a
+    -- reinit, an arena replacement or a load republish is a DIFFERENT
+    -- generation (#2001). Every one of those builds a fresh WorldState
+    -- through this function, which is why allocating here is enough.
+    wsChunkResidencyRef ← newIORef ∘ emptyChunkOwner =≪ newChunkGeneration
     wsMapModeRef ← newIORef ZMDefault
     wsCursorRef ← newIORef emptyCursorState
     wsToolModeRef ← newIORef DefaultTool
@@ -382,6 +434,8 @@ emptyWorldState = do
                         zoomCacheRef
                         quadCacheRef quadCacheGenRef zoomQCRef bgQCRef
                         bakedZoomRef bakedBgRef wsInitQueueRef
+                        wsInitQueueLock
+                        wsChunkResidencyRef
                         wsMapModeRef
                         wsCursorRef wsToolModeRef wsCursorSnapshotRef
                         wsLoadPhaseRef wsZoomAtlasRef wsEditsRef

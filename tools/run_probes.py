@@ -349,6 +349,10 @@ PROBES = [
      "disk-write-failure phase reporting (#762)"),
     ("sleep", "sleep_probe.py",
      "Sleeping pose + go_to_sleep AI goal: lie-down/wake chain, sleep_pressure regen, wake conditions (#612)"),
+    ("startup_asset_logging", "startup_asset_logging_probe.py",
+     "startup YAML logging ownership: one Info aggregate per registry family "
+     "from scripts/startup_loader.lua (12 normal / 11 arena), per-file path + "
+     "authoritative count only at CatAsset Debug (#1930; offscreen, needs a GPU)"),
     ("state_of_mind", "state_of_mind_probe.py",
      "unified consciousness/mood model: pain/awareness drift, no-hunger-config fallback, locomotor-collapse regression guard (#350)"),
     ("structure_rotation", "structure_rotation_probe.py",

@@ -139,8 +139,8 @@ spec = do
             -- Queue the whole (-4..0)² corner at once: interior, mixed
             -- (glacier-diagonal) and fully-beyond chunks together — the
             -- exact load shape that crashed.
-            queueChunks ws [ ChunkCoord cx cy
-                           | cx ← [-4 .. 0], cy ← [-4 .. 0] ]
+            queueChunks pid ws [ ChunkCoord cx cy
+                               | cx ← [-4 .. 0], cy ← [-4 .. 0] ]
             -- The MIXED rim chunks (real columns bordering beyond-glacier
             -- columns in-chunk) are the crashers — the full glacier
             -- anti-diagonal across this corner. They span more than one
@@ -194,8 +194,9 @@ spec = do
                 -- The seed-42 w128 volcano breaching a mountain lake sits
                 -- near tile (-78, 102) → chunk (-5, 6). Queue it plus a
                 -- ring so cross-chunk neighbours resolve.
-                queueChunks ws [ ChunkCoord cx cy
-                               | cx ← [-7 .. -3], cy ← [4 .. 8] ]
+                queueChunks (sharedWorldPageId 42 128 3) ws
+                            [ ChunkCoord cx cy
+                            | cx ← [-7 .. -3], cy ← [4 .. 8] ]
                 ok ← waitForChunksAt ws (ChunkCoord (-5) 6) 120
                 ok `shouldBe` True
                 -- Last queued coord — when it's in, the whole ring is.

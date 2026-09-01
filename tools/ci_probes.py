@@ -375,6 +375,15 @@ MANUAL_ONLY_REASONS: dict[str, tuple[Reason, ...]] = {
                            "CI runner. Publication, ordering, sequence and "
                            "every scanned meaning ARE gated on CI, by the pure "
                            "hspec group \"scene assembly telemetry\""),),
+    "startup_asset_logging": (Reason(NEEDS_GPU, "offscreen boot: a --headless "
+                             "engine never runs scripts/loading_screen.lua or "
+                             "scripts/ui_manager_boot.lua, so the startup "
+                             "asset queue this probe reads does not execute "
+                             "there at all and every check would pass "
+                             "vacuously -- no GPU on the CI runner (#1930). "
+                             "Both halves of the ownership contract ARE gated "
+                             "on CI, by the pure hspec group \"Startup asset "
+                             "logging\""),),
     "tutorial_hud": (Reason(NEEDS_GPU, "offscreen boot: verifies the tutorial checklist "
                                        "HUD's rendered overlay, real toggle clicks, wheel "
                                        "scrolling and click-through via screenshots — no "

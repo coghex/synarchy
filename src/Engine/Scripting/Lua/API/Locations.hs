@@ -25,7 +25,7 @@ import Engine.Core.State (EngineEnv)
 import Engine.Core.Capability.Core (CoreCapability)
 import Engine.Core.Capability.ContentRegistries
     (ContentRegistriesCapability(..))
-import Engine.Core.Log (LogCategory(..), logInfo, logWarn)
+import Engine.Core.Log (LogCategory(..), logDebug, logWarn)
 import Engine.Core.Log.Monad (getLoggerFor)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Engine.Scripting.Lua.API.YamlTextures
@@ -126,7 +126,7 @@ loadLocationYamlFn core regs env backendState = do
                             (registerLocation (toDef d) reg, ())
                         return (acc + 1)
                         ) (0 ∷ Int) defs
-                    logInfo logger CatAsset $
+                    logDebug logger CatAsset $
                         "loadLocationYaml: loaded " <> tshow total
                         <> " locations from " <> T.pack filePath
                     return total
