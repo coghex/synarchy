@@ -1987,6 +1987,108 @@
           "expectedCanonicalSummary": "test-headless/data/save-compat/t1-construct-attempt-receipt.expected.json"
         }
       ]
+    },
+    {
+      "id": "u1-generated-world-identity",
+      "description": "Every generated world page carries an opaque persistent GeneratedWorldId (issue #2021, world-map epic #2017 / WML-3): world-pages became v9 (each page stores the id of the generated foundation it descends from, authoritatively) and metadata became v3 (the same ids, as a duplicate-free per-save inventory, so a listSaves-depth read can obtain them without decoding any gameplay component). This baseline tracks a REAL current-format session written by the live engine at both versions: its page's id was minted by the production allocator at world creation and travelled through the ordinary engine.saveWorld path. Earlier payloads stay tracked by the b1/b2/b3/c3/d1/e1/f1/g1/h1/i1/j1/k1/l1/m1/n1/o1/p1/q1/r1/s1/t1 baselines above: their pages decode with no generated-world id at all, and their metadata with an empty inventory, which is exactly right -- those sessions had no such identity, and inventing one at decode time would fabricate the very content-derived id requirement 3 rejects.",
+      "declaredAt": "2026-09-01",
+      "declaredByIssue": 2021,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "identity for world-pages v9 and metadata v3 (this baseline IS both shapes); World.Save.Component.Page.migrateWorldPagesV8 and World.Save.Compat.MetadataV2.migrateSaveMetadataV2 decode every earlier payload with the generated-world id ABSENT, which World.Load.Stage then fills with a freshly minted id per page",
+      "components": [
+        {
+          "id": "metadata",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "core-session",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "texture-palette",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-pages",
+          "version": 9,
+          "required": true
+        },
+        {
+          "id": "world-edits",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "world-activity",
+          "version": 5,
+          "required": true
+        },
+        {
+          "id": "buildings",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "units",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "unit-sim",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "craft-bills",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "power-nodes",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "container-knowledge",
+          "version": 2,
+          "required": false
+        },
+        {
+          "id": "transfer-orders",
+          "version": 1,
+          "required": false
+        },
+        {
+          "id": "lua.unit_ai",
+          "version": 8,
+          "required": true
+        },
+        {
+          "id": "lua.building_spawn",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "lua.tutorial_progress",
+          "version": 1,
+          "required": false
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "u1-generated-world-identity-session",
+          "path": "test-headless/data/save-compat/u1-generated-world-identity.bin",
+          "kind": "complete-session",
+          "sha256": "7c380361c15e320dc48f7794740f5e08e7a8a64b14f651455484e4045ed2895c",
+          "sizeBytes": 908781,
+          "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3, 'Aldermoor Deep'), building.spawn('cargo_hold_S', 0, 0), unit.spawn('acolyte', 0,0, 0, 'player'), then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/u1-generated-world-identity.expected.json"
+        }
+      ]
     }
   ],
   "retiredBaselinesComment": "Empty for now (round-7 review): the #760-only split-Haskell-plus-opaque-lua-state shape previously listed here as 'never declared, no removal needed' is now a REAL declared baseline (b2-split-haskell-lua-state, above) -- issue #766 requirement 3 explicitly requires supporting it, regardless of whether a manifest existed to declare it at the time. Nothing this manifest has ever declared has since been retired.",

@@ -314,6 +314,19 @@ stagePage logger registry palette catalog buildingDefs unitDefs
     when isActive $ writeIORef phaseRef (LoadPhase1 1 totalSteps)
     writeIORef (wsGenParamsRef worldState) (Just params)
     writeIORef (wsIdentityRef worldState) (wpsIdentity wps)
+    -- #2021: the saved generated-world id, when the save has one
+    -- (@world-pages@ v9 and later). When it does NOT — every save this
+    -- build can still read from before v9 — the freshly-minted id
+    -- 'emptyWorldState' already put on this staged page stands, which is
+    -- requirement 7's "assigned a FRESH id during transactional load
+    -- staging, not derived from anything in the legacy save".
+    --
+    -- The source file is untouched either way (requirement 8): this
+    -- writes only into the staged, not-yet-published 'WorldState', so
+    -- loading the same legacy save twice legitimately produces two
+    -- different ids (D-21), and a staging failure publishes neither the
+    -- session nor the id, exactly as it publishes nothing else.
+    forM_ (wpsGeneratedId wps) $ writeIORef (wsGeneratedIdRef worldState)
     writeIORef (wsCameraRef worldState)
         (WorldCamera (wpsCameraX wps) (wpsCameraY wps))
     writeIORef (wsTimeRef worldState)

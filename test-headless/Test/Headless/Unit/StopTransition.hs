@@ -78,6 +78,7 @@ import Unit.Transfer.Orders (emptyTransferOrders)
 import qualified Data.Serialize as S
 import World.Construct.Attempt (firstConstructAttemptId)
 import World.Flora.Identity (firstPlantedFloraCursor)
+import Test.Headless.Harness.GeneratedIds (fixtureGeneratedWorldIdForPage)
 
 -- ---------------------------------------------------------------------
 -- Pure tick harness
@@ -293,6 +294,7 @@ pageWithSim ss = PageSnapshot
     , pgsPlantDesignations = HM.empty
     , pgsContainerKnowledge = emptyContainerKnowledge
     , pgsIdentity     = Nothing
+    , pgsGeneratedId  = Just (fixtureGeneratedWorldIdForPage testPage)
     }
 
 -- | Session globals stamped with the game time the save was taken at.
