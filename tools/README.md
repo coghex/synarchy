@@ -2212,15 +2212,15 @@ repository-relative paths before the `tools/` scope check is applied, since
 code — and a repair may not touch the measurement APPARATUS at all, because
 `measure`'s timeout and starting port are module constants and lengthening one
 would buy a calmer verification while both command records still compared
-equal. That apparatus is a CLOSED inventory of eleven paths
-(`HARNESS_MODULES`), pinned exactly by the self-test rather than spot-checked:
-`probe_flake`, `probe_protocol`, `probe_census`, `probe_claim`,
-`probe_resource_lock`, `probe_select`, `probe_engine`, `probelib`,
-`run_probes`, its five `probe_runner_*` owners, `deflake` and
-`deflake_diagnosis`, each of which owns probe
-selection, launch, port or resource leasing, protocol reconciliation,
-measurement timing and construction, result recording or census intake, or
-diagnosis semantics.
+equal. That apparatus is a CLOSED inventory (`HARNESS_MODULES`), pinned
+exactly by the self-test rather than spot-checked, and stated there rather
+than counted here — a hand-written total is the drift #1584 already cost
+this file once: `probe_flake`, `probe_protocol`, `probe_census`,
+`probe_claim`, `probe_resource_lock`, `probe_select`, `probe_engine`,
+`probelib`, `run_probes` and its five `probe_runner_*` owners, `deflake`
+and `deflake_diagnosis`, each of which owns probe selection, launch, port
+or resource leasing, protocol reconciliation, measurement timing and
+construction, result recording or census intake, or diagnosis semantics.
 
 **The producer's spelling is the contract, down to the argv FORM.**
 `deflake.build_handoff` writes `invocation.argv`, `cwd` and `timeout`, and a
