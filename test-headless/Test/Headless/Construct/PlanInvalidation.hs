@@ -30,7 +30,12 @@ import World.Chunk.Types
 import World.Construct.Attempt (ConstructAttemptId(..))
 import World.Construct.Receipt (ConstructPayment(..), mkMaterialReceipt)
 import World.Construct.Revalidate
-    (ConstructScope(..), revalidateConstructDesignations)
+    ( ConstructScope(..), constructStagingRefundDeps
+    , revalidateConstructDesignations
+    , revalidateStagedConstructDesignations )
+import World.Command.Types (WorldCommand(..))
+import World.Thread.Command (handleWorldCommand)
+import World.Thread.Command.Cursor (handleWorldCancelConstructCommand)
 import World.Construct.Types
     ( ConstructDesignation(..), ConstructStatus(..), ConstructTarget(..)
     , StructurePiece(..), newConstructDesignation )
@@ -185,11 +190,90 @@ spec = beforeAll initializeEngineHeadless $
       sweep env logger ws `shouldReturn` [tile]
       groundNames ws `shouldReturn` []
 
+    it "sweeps EVERY page when the catalogue itself changes" $
+        \(EngineInitResult env) → do
+      -- A terminal structure-art failure makes a whole pack resolve
+      -- nothing, on every page at once — including pages whose chunks
+      -- are already resident, where no terrain edit or chunk publication
+      -- would ever re-check them. That is the one reconciliation whose
+      -- scope really is the session.
+      (wsA, logger) ← scene env flatTiles
+      wsB ← extraPage env wsA
+      seedDesignation wsA ghostPiece CpUnpaid
+      writeIORef (wsConstructDesignationsRef wsB)
+          (HM.singleton tile (designation ghostPiece CpUnpaid CsPending))
+      handleWorldCommand env logger WorldRevalidateConstructAll
+      HM.size <$> readIORef (wsConstructDesignationsRef wsA) `shouldReturn` 0
+      HM.size <$> readIORef (wsConstructDesignationsRef wsB) `shouldReturn` 0
+
+    it "refunds a PAID job's receipt on the queued cancel path too" $
+        \(EngineInitResult env) → do
+      -- construction.cancelDesignation is a public verb the build AI
+      -- calls when a job cannot be finished. Popping a paid designation
+      -- without spending its receipt would destroy materials that had
+      -- already left an inventory — the synchronous refund verb hands
+      -- its receipt to the Lua caller, and this path has no caller to
+      -- hand it to, so it must spend it itself.
+      (ws, logger) ← scene env flatTiles
+      seedDesignation ws floorPiece
+          (CpPaid (mkMaterialReceipt [("steel_plate", 1)]))
+      handleWorldCancelConstructCommand env logger fixturePage
+          (fst tile) (snd tile) Nothing
+      HM.size <$> readIORef (wsConstructDesignationsRef ws) `shouldReturn` 0
+      groundNames ws `shouldReturn` ["steel_plate"]
+      -- The pop is what makes it exactly once: a second cancel finds
+      -- nothing and refunds nothing.
+      handleWorldCancelConstructCommand env logger fixturePage
+          (fst tile) (snd tile) Nothing
+      groundNames ws `shouldReturn` ["steel_plate"]
+
+    it "mints a STAGED refund from the staged allocator, never the live \
+       \one" $ \(EngineInitResult env) → do
+      -- A load stages a replacement session and swaps it in one window.
+      -- An item minted from the LIVE instance-id counter would land with
+      -- an id that can collide with a loaded item or sit at or above the
+      -- allocator the save publishes — which the next save's
+      -- item-allocator integrity check then rejects — and it would
+      -- mutate the session being replaced during a load that may fail.
+      (ws, logger) ← scene env flatTiles
+      liveBefore ← readIORef (nextItemInstanceIdRef env)
+      (deps, idRef) ← constructStagingRefundDeps env 500
+      cat ← readIORef (structureArtCatalogRef env)
+      seedDesignation ws ghostPiece
+          (CpPaid (mkMaterialReceipt [("steel_plate", 1)]))
+      revalidateStagedConstructDesignations deps cat logger ws
+          ConstructWholePage `shouldReturn` [tile]
+      groundInstanceIds ws `shouldReturn` [500]
+      readIORef idRef `shouldReturn` 501
+      readIORef (nextItemInstanceIdRef env) `shouldReturn` liveBefore
+
 -- * Fixture
 
 sweep ∷ EngineEnv → LoggerState → WorldState → IO [(Int, Int)]
 sweep env logger ws =
     revalidateConstructDesignations env logger ws ConstructWholePage
+
+-- | A second page in the same manager, so a session-wide sweep has
+--   something to prove it reached.
+extraPage ∷ EngineEnv → WorldState → IO WorldState
+extraPage env wsA = do
+    wsB ← emptyWorldState
+    writeIORef (wsGenParamsRef wsB)
+        (Just defaultWorldGenParams { wgpWorldSize = worldSize })
+    writeIORef (wsTilesRef wsB) flatTiles
+    writeIORef (wsGroundItemsRef wsB) emptyGroundItems
+    writeIORef (worldManagerRef env) emptyWorldManager
+        { wmWorlds = [(fixturePage, wsA), (secondPage, wsB)]
+        , wmVisible = [fixturePage] }
+    pure wsB
+
+secondPage ∷ WorldPageId
+secondPage = WorldPageId "construct_plan_invalidation_2"
+
+groundInstanceIds ∷ WorldState → IO [Word64]
+groundInstanceIds ws =
+    map (iiInstanceId ∘ giInst) ∘ HM.elems ∘ gisItems
+        <$> readIORef (wsGroundItemsRef ws)
 
 groundNames ∷ WorldState → IO [Text]
 groundNames ws =

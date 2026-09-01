@@ -34,10 +34,12 @@ module World.Construct.Revalidate
     ( ConstructScope(..)
     , ConstructRefundDeps(..)
     , constructRefundDeps
+    , constructStagingRefundDeps
     , constructPlanWorld
     , constructPlanWorldWith
     , pruneConstructDesignations
     , revalidateConstructDesignations
+    , revalidateStagedConstructDesignations
     , clearConstructDesignationSlope
     , refundConstructDesignation
     , spawnReceiptItems
@@ -46,7 +48,8 @@ module World.Construct.Revalidate
 import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
-import Data.IORef (IORef, readIORef, atomicModifyIORef', writeIORef)
+import Data.IORef
+    (IORef, newIORef, readIORef, atomicModifyIORef', writeIORef)
 import Engine.Core.Capability.ContentRegistriesView
     (ContentRegistriesViewCapability(..), toContentRegistriesViewCapability)
 import Engine.Core.Capability.Core (CoreCapability(..), toCoreCapability)
@@ -64,7 +67,7 @@ import Engine.Core.State (EngineEnv, freshItemInstanceId)
 import Item.Ground (spawnGroundItem)
 import Item.Materialize (materializeItem, pristineItem)
 import Item.Types (ItemManager(..))
-import System.Random (StdGen)
+import System.Random (StdGen, mkStdGen)
 
 import Structure.ArtCatalog (StructureArtCatalog)
 import World.Construct.Apply (clearConstructSlope)
@@ -125,6 +128,40 @@ constructRefundDeps env = do
         , crdRng     = ucStatRNGRef (toUnitCombatCapability env)
         , crdAllocId = freshItemInstanceId env
         }
+
+-- | The STAGING session's refund dependencies, plus the item-instance
+--   allocator they draw from.
+--
+--   A load stages a replacement session and swaps it in one quiesced
+--   window, so a staged refund must not touch the live session's state
+--   in EITHER direction. The live instance-id counter is the trap: it
+--   belongs to the session being replaced, and the staged session
+--   publishes the SAVE's own @sdNextItemInstanceId@ — so an item minted
+--   from the live counter can land with an id that collides with a
+--   loaded item or sits at or above the restored allocator, which the
+--   next save's item-allocator integrity check would then reject. It
+--   would also mutate the old session during a load that may still fail.
+--
+--   So the caller seeds this from the save's own allocator and publishes
+--   the returned ref's FINAL value as the session's. The RNG is local
+--   and deterministically seeded for the same reason: staging is a pure
+--   rebuild of a recorded session and must not consume the live stat
+--   stream, nor vary run to run.
+constructStagingRefundDeps
+    ∷ EngineEnv → Word64 → IO (ConstructRefundDeps, IORef Word64)
+constructStagingRefundDeps env firstItemId = do
+    im ← readReadOnlyRef (crvItemManagerRef
+                            (toContentRegistriesViewCapability env))
+    logger ← readIORef (ccLoggerRef (toCoreCapability env))
+    idRef ← newIORef firstItemId
+    rngRef ← newIORef (mkStdGen (fromIntegral firstItemId))
+    pure ( ConstructRefundDeps
+             { crdItems   = im
+             , crdLogger  = logger
+             , crdRng     = rngRef
+             , crdAllocId = atomicModifyIORef' idRef (\n → (n + 1, n))
+             }
+         , idRef )
 
 -- | Snapshot the coherent world one sweep resolves against: the tiles,
 --   the read-your-writes structure staging, the designation map and the
@@ -245,6 +282,37 @@ revalidateConstructDesignations env logger ws scope = do
             logDebug logger CatWorld $
                 "Construct designation invalidated at (" <> tshow gx <> ","
                 <> tshow gy <> "): " <> reason
+        pure [ k | (k, _, _) ← removed ]
+
+-- | 'revalidateConstructDesignations' for a STAGED page: the same
+--   resolver, the same removal, the same slope reset and the same
+--   receipt refund — into the staged page's own ground items, from the
+--   staged allocator.
+--
+--   Deliberately silent where the live sweep is not. The F4 outcome ring
+--   and the player-facing event log describe things happening to the
+--   session the player is looking at; a load rebuilding a recorded
+--   session is not that, and emitting into the OLD session (the only one
+--   those two reach during staging) would attribute a stale world's
+--   events to it and lose them at publication anyway. The debug log line
+--   stays: that is the diagnostic a load failure is read from.
+revalidateStagedConstructDesignations
+    ∷ ConstructRefundDeps → StructureArtCatalog → LoggerState → WorldState
+    → ConstructScope → IO [(Int, Int)]
+revalidateStagedConstructDesignations deps cat logger ws scope = do
+    designations ← readIORef (wsConstructDesignationsRef ws)
+    if HM.null designations then pure [] else do
+        pw ← constructPlanWorldWith cat ws
+        removed ← atomicModifyIORef' (wsConstructDesignationsRef ws) $
+            \current →
+                let (kept, gone) = pruneConstructDesignations pw scope current
+                in (kept, gone)
+        forM_ removed $ \(key@(gx, gy), cd, reason) → do
+            clearConstructDesignationSlope ws key cd
+            refundConstructDesignation deps ws key cd
+            logDebug logger CatWorld $
+                "Load: construction designation self-cleared at ("
+                <> tshow gx <> "," <> tshow gy <> "): " <> reason
         pure [ k | (k, _, _) ← removed ]
 
 -- | One removed designation, on the F4 action-outcome ring.

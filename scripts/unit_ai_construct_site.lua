@@ -7,6 +7,12 @@
 -- returns to the ground. The orchestration -- claims, utility, the phase
 -- machine -- stays in unit_ai_construct.lua.
 
+local fetch = require("scripts.unit_ai_fetch")
+local inventoryCountOf = fetch.inventoryCountOf
+local groundCountOf    = fetch.groundCountOf
+local findTechnomule   = fetch.findTechnomule
+local loadFeasible     = fetch.loadFeasible
+
 local M = {}
 
 -- Structure-pack build costs. The REGISTERED catalogue (#1842/#1844) is
@@ -114,6 +120,47 @@ function M.refundStructureMaterials(job)
             item.spawnGround(entry.name, job.x + 0.5, job.y + 0.5)
         end
     end
+end
+
+-- Can this unit source every material the piece needs (inventory +
+-- ground + mule) AND carry the shortfall (#1326)? Races lose gracefully
+-- at fetch time; this is only the "worth claiming" filter.
+function M.materialsAvailable(uid, fromX, fromY, mats, params)
+    if not loadFeasible(uid, mats) then return false end
+    for matType, need in pairs(mats or {}) do
+        local have = inventoryCountOf(uid, matType)
+        if have < need then
+            local ground = groundCountOf(uid, fromX, fromY, matType,
+                                         params.construct_scan_range)
+            if have + ground < need then
+                local mule = findTechnomule(uid, fromX, fromY)
+                local muleHave = mule and inventoryCountOf(mule.uid, matType) or 0
+                if have + ground + muleHave < need then return false end
+            end
+        end
+    end
+    return true
+end
+
+-- The SHARED resolver's verdict for one exact attempt (#1844
+-- requirement 10), or nil when the job is gone / is a building.
+--
+-- The worker asks this before it claims, before it pays and before it
+-- places. A designation admitted minutes ago is not evidence it is still
+-- buildable, and the world-side invalidator does not fire for every
+-- reason at every moment: nothing sweeps on the tick this unit happens
+-- to arrive. Asking the resolver is what makes the worker's view the
+-- SAME view admission had, instead of the three ad-hoc checks it used to
+-- make (a pack lookup, a floorZAt, a hasAt).
+--
+-- Absent verb (the bare-Lua headless fixtures) degrades to "valid": the
+-- engine-side guards on payment and placement still refuse anything the
+-- resolver would have, so this can loosen scheduling but never
+-- correctness.
+function M.planOutcome(wid, job)
+    if job.category == "building" then return nil end
+    if not (construction and construction.resolvePlan) then return "valid" end
+    return construction.resolvePlan(wid, job.x, job.y, job.attempt)
 end
 
 return M

@@ -179,6 +179,16 @@ data WorldCommand
         --   ghost marker's alpha ramps with it. Completion (placing
         --   the piece + removing the designation) stays Lua-side —
         --   the AI resolves art/materials, so it owns final placement.
+    | WorldRevalidateConstructAll
+        -- ^ #1844: the CATALOGUE-reconciliation sweep. A terminal
+        --   structure-art failure makes a whole pack resolve nothing
+        --   (#1842's all-or-nothing rule), which can invalidate
+        --   designations on ANY page — including ones over already
+        --   resident chunks, where no later terrain edit or chunk
+        --   publication would ever re-check them. It carries no page
+        --   because the catalogue is keyed by pack NAME and is global;
+        --   this is requirement 9's bounded page-level sweep, and it is
+        --   enqueued only when a failure actually CHANGED the catalogue.
     | WorldSetConstructDesignateTexture WorldPageId Text TextureHandle
         -- ^ Ghost texture for committed construction designations, keyed
         --   by target category ("structure" | "building").

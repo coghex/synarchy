@@ -56,7 +56,9 @@ import World.Construct.Types ( ConstructTarget(..), ConstructStatus(..)
                              , constructTargetCategory )
 import World.Plant.Validate (revalidatePlantDesignations)
 import World.Construct.Apply (applyConstructSlopeToChunk)
-import World.Construct.Revalidate (clearConstructDesignationSlope)
+import World.Construct.Revalidate
+    ( clearConstructDesignationSlope, constructRefundDeps
+    , refundConstructDesignation )
 import World.Thread.Command.Cursor.Common
     (recordDesignationOutcome, recordMissingWorldOutcome)
 
@@ -239,13 +241,30 @@ handleWorldDesignateConstructCommand env logger pageId gx1 gy1 gx2 gy2 tgt
             (r : _) → planOutcomeName (prOutcome r) <> ": " <> prReason r
             []      → "anchor tile ineligible or unloaded"
 
+-- | Remove the designation at a tile, REFUNDING its receipt.
+--
+--   The queued cancel is a real cancellation, not a bookkeeping delete:
+--   @construction.cancelDesignation@ is a public verb the build AI calls
+--   when a job cannot be finished, and popping a PAID designation
+--   without spending its receipt would destroy materials that had
+--   already left an inventory. The synchronous
+--   @cancelDesignationForRefund@ hands its receipt to the Lua caller
+--   instead; this path has no caller to hand it to, so it spends it
+--   here — and because the atomic pop returns the designation to exactly
+--   one caller, the refund still happens exactly once however many
+--   cancellations race.
 handleWorldCancelConstructCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → Maybe ConstructAttemptId → IO ()
 handleWorldCancelConstructCommand env _logger pageId gx gy mAttempt = do
     mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
-        Just worldState →
-            void $ popConstructDesignation worldState (gx, gy) mAttempt
+        Just worldState → do
+            mCd ← popConstructDesignation worldState (gx, gy) mAttempt
+            forM_ mCd $ \cd → do
+                deps ← constructRefundDeps env
+                worldSize ← pageWrapWorldSize worldState
+                refundConstructDesignation deps worldState
+                    (canonicalTile worldSize gx gy) cd
         Nothing → pure ()
 
 -- | Atomically remove a construction designation and reset its

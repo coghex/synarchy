@@ -40,7 +40,6 @@ local fetch = require("scripts.unit_ai_fetch")
 local inventoryCountOf     = fetch.inventoryCountOf
 local groundCountOf        = fetch.groundCountOf
 local findTechnomule       = fetch.findTechnomule
-local loadFeasible         = fetch.loadFeasible
 local fetchWantsFromGround = fetch.fetchWantsFromGround
 local fetchWantsFromMule   = fetch.fetchWantsFromMule
 
@@ -136,25 +135,7 @@ local function sweepConstructClaims(wid, jobs, now, timeout)
     end
 end
 
--- Can this unit source every material the piece needs (inventory +
--- ground + mule) AND carry the shortfall (#1326)? Races lose gracefully
--- at fetch time; this is only the "worth claiming" filter.
-local function constructMaterialsAvailable(uid, fromX, fromY, mats, params)
-    if not loadFeasible(uid, mats) then return false end
-    for matType, need in pairs(mats or {}) do
-        local have = inventoryCountOf(uid, matType)
-        if have < need then
-            local ground = groundCountOf(uid, fromX, fromY, matType,
-                                         params.construct_scan_range)
-            if have + ground < need then
-                local mule = findTechnomule(uid, fromX, fromY)
-                local muleHave = mule and inventoryCountOf(mule.uid, matType) or 0
-                if have + ground + muleHave < need then return false end
-            end
-        end
-    end
-    return true
-end
+
 
 -- Nearest viable pending job within construct_scan_range, or nil. Also
 -- runs the stale-claim sweep (the scan already paid for the job list).
@@ -183,11 +164,13 @@ local function findConstructJob(uid, fromX, fromY, params)
                 viable = true
             else
                 build = site.packBuildInfo(job.pack, job.kind)
+                -- #1844: the resolver decides buildability, not a
+                -- hand-rolled pack/floor pair. Material SCARCITY is a
+                -- scheduling concern and deliberately still ours.
                 -- A durably-paid job (#799) needs no sourceability check.
                 if build
-                   and (job.kind ~= "post"
-                        or structure.floorZAt(job.x, job.y))
-                   and (job.paid or constructMaterialsAvailable(uid, fromX, fromY,
+                   and site.planOutcome(wid, job) == "valid"
+                   and (job.paid or site.materialsAvailable(uid, fromX, fromY,
                            build.materials, params)) then
                     viable = true
                 end
@@ -357,17 +340,22 @@ local function constructExecute(uid, s, params)
                 -- irreversible material payment (#805, #1844): another
                 -- worker's piece can fill the slot between claim and
                 -- arrival, terrain can move under it, and the pack's art
-                -- or build metadata can go away. Cancel rather than pay
-                -- into a site that cannot be finished; nothing has left
-                -- the inventory yet, so nothing is lost.
-                local slot = site.jobSlot(job)
-                if slot and structure.hasAt(job.x, job.y, slot) then
-                    reportFailure(uid,
-                        "Construction site is already built")
+                -- or build metadata can go away. Nothing has left the
+                -- inventory yet, so a refusal here costs nothing.
+                local plan = site.planOutcome(wid, job)
+                if plan == "unresolved-terrain" then
+                    -- Not a refusal: the site's chunk is simply not
+                    -- resident, so nobody can judge it. Release to
+                    -- pending and let a later scan pick it up.
+                    releaseConstructJob(wid, s, uid, true)
+                    return
+                elseif plan and plan ~= "valid" then
+                    reportFailure(uid, "Construction site is no longer buildable")
                     debug.recordOutcome{
                         kind = "construction.designate", outcome = "rejected",
                         where = { x = job.x, y = job.y },
-                        reason = "requested structure slot filled before material payment",
+                        reason = "resolver refused the site before material "
+                                 .. "payment: " .. tostring(plan),
                     }
                     construction.cancelDesignation(job.x, job.y, job.attempt)
                     releaseConstructJob(wid, s, uid)
@@ -423,6 +411,20 @@ local function constructExecute(uid, s, params)
     -- drives the ghost's alpha ramp); the local copy just avoids a
     -- read-back race with the async command queue.
     if job.phase == "building" then
+        -- Requirement 10: an unresolved-terrain site cannot be
+        -- PROGRESSED either — its chunk evicting mid-build must stop the
+        -- pour rather than run it up to 1.0 and be refused at placement.
+        --
+        -- SKIPPING the tick, not releasing the job: "the chunk is not
+        -- resident" is not a refusal anywhere else in this arc, and
+        -- handing the tile back to the scan pool every tick while a
+        -- worker stands on it would churn the claim over a condition
+        -- that resolves itself. The claim stays fresh above, so nothing
+        -- expires; the pour simply resumes when the terrain does.
+        if site.planOutcome(wid, job) == "unresolved-terrain" then
+            s.lastConstructAt = now
+            return
+        end
         local elapsed = now - (s.lastConstructAt or now)
         s.lastConstructAt = now
         if elapsed > 0 then
@@ -444,6 +446,19 @@ local function constructExecute(uid, s, params)
             -- worker's own success as an external conflict, cancel the
             -- job and refund materials that were correctly spent. A
             -- false answer means the attempt is gone: place nothing.
+            -- The third of requirement 10's three re-checks. Runs
+            -- BEFORE the hand-off, so a site that has gone invalid is
+            -- cancelled (and its receipt refunded) rather than built.
+            local finalPlan = site.planOutcome(wid, job)
+            if finalPlan and finalPlan ~= "valid" then
+                local removed = construction.cancelDesignationForRefund(
+                    wid, job.x, job.y, job.attempt)
+                if removed then site.refundStructureMaterials(removed) end
+                reportFailure(uid,
+                    "Construction site changed — materials returned to the ground")
+                releaseConstructJob(wid, s, uid)
+                return
+            end
             if not construction.beginPlacement(wid, job.x, job.y,
                                                job.attempt) then
                 releaseConstructJob(wid, s, uid)

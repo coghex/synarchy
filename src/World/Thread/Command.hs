@@ -161,6 +161,10 @@ handleWorldCommand env logger
     (WorldDesignateConstruct pageId gx1 gy1 gx2 gy2 tgt mBindGen)
   = handleWorldDesignateConstructCommand env logger pageId gx1 gy1 gx2 gy2 tgt
                                          mBindGen
+handleWorldCommand env logger WorldRevalidateConstructAll = do
+  mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
+  forM_ (wmWorlds mgr) $ \(_, ws) →
+      void $ revalidateConstructDesignations env logger ws ConstructWholePage
 handleWorldCommand env logger (WorldCancelConstruct pageId gx gy att)
   = handleWorldCancelConstructCommand env logger pageId gx gy att
 handleWorldCommand env logger (WorldSetConstructStatus pageId gx gy st att)

@@ -50,7 +50,8 @@ import World.Save.Component.Page
     , StructurePieceDTO(..), fromConstructDTO, migrateConstructDesignations
     , toConstructDTO )
 import Item.Types (ItemInstance(..))
-import Structure.Types (emptyChunkStructures)
+import Structure.Types
+    (StructureSlot(..), StructurePieceData(..), emptyChunkStructures)
 import Unit.Types (UnitId(..), UnitInstance(..), UnitManager(..)
                   , emptyUnitManager)
 import World.Chunk.Types
@@ -223,6 +224,32 @@ guardSpec = describe "a delayed operation from a removed attempt" $ do
             [ "local j = construction.getDesignationAt('", pageText
             , "', 5, 5); return tostring(j and j.attempt)" ])
             `shouldReturn` tshow (raw aid)
+
+    it "answers the resolver for ONE exact attempt, and only that one" $
+        \sc → do
+        -- Requirement 10: the worker re-checks the plan before claiming,
+        -- paying and placing, through the SAME resolver admission used —
+        -- not the three ad-hoc checks it used to make.
+        ws ← resetScene sc
+        designate sc ws tile tile floorPiece
+        [aid] ← attemptsOf ws
+        resolvePlan sc (raw aid) `shouldReturn` "valid"
+        -- A foreign attempt names no job here, which is what the AI
+        -- reads as "my job is gone".
+        resolvePlan sc (raw aid + 1) `shouldReturn` "nil"
+        -- Its own designation is excluded from the occupancy check, so a
+        -- claimed job stays valid; a PLACED piece is not.
+        writeIORef (wsTilesRef ws) (withFloorAt tile)
+        resolvePlan sc (raw aid) `shouldReturn` "visible-invalid"
+        -- Terrain that is merely gone is not a refusal.
+        writeIORef (wsTilesRef ws) emptyTiles
+        resolvePlan sc (raw aid) `shouldReturn` "unresolved-terrain"
+
+    it "answers nothing for a BUILDING — DTV-10's scope" $ \sc → do
+        ws ← resetScene sc
+        designate sc ws tile tile (CtBuilding "cargo_hold_S")
+        [aid] ← attemptsOf ws
+        resolvePlan sc (raw aid) `shouldReturn` "nil"
 
 -- * Payment and the receipt
 
@@ -398,6 +425,20 @@ pay ∷ Scene → ConstructAttemptId → IO Text
 pay sc aid = evalLua sc $ T.concat
     [ "return tostring(construction.payMaterials('", pageText
     , "', 5, 5, ", tshow (raw aid), ", 1))" ]
+
+resolvePlan ∷ Scene → Word64 → IO Text
+resolvePlan sc n = evalLua sc $ T.concat
+    [ "return tostring(construction.resolvePlan('", pageText
+    , "', 5, 5, ", tshow n, "))" ]
+
+-- | The fixture geography with a floor already PLACED on a tile.
+withFloorAt ∷ (Int, Int) → WorldTileData
+withFloorAt (gx, gy) = flatTiles
+    { wtdChunks = HM.adjust addIt (ChunkCoord 0 0) (wtdChunks flatTiles) }
+  where
+    addIt lc = lc { lcStructures = HM.insert key piece (lcStructures lc) }
+    key = (gx, gy, fromIntegral (fromEnum SFloor) ∷ Word8)
+    piece = StructurePieceData 1 2 (zSlice + 1)
 
 beginPlacement ∷ Scene → Word64 → IO Text
 beginPlacement sc n = evalLua sc $ T.concat

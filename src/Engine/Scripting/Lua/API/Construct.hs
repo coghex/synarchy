@@ -17,6 +17,7 @@ module Engine.Scripting.Lua.API.Construct
     , constructSetJobStatusFn
     , constructAddJobProgressFn
     , constructBeginPlacementFn
+    , constructResolvePlanFn
     , constructSetDesignateTextureFn
     , constructSetLineModeFn
     , readAttemptArg
@@ -28,9 +29,15 @@ import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef)
 import qualified Engine.Core.Queue as Q
+import Engine.Core.Capability.RenderHandoff
+    (RenderHandoffCapability(..), toRenderHandoffCapability)
 import Engine.Core.Capability.WorldSim
-    (WorldSimCapability(..))
-import Engine.Core.State (activeWorldPageFrom, activeWorldStateFrom)
+    (WorldSimCapability(..), toWorldSimCapability)
+import Engine.Core.State
+    (EngineEnv, activeWorldPageFrom, activeWorldStateFrom)
+import World.Construct.Plan
+    ( PlanOp(..), PlanResult(..), PlanWorld(..), planOutcomeName
+    , resolveStructurePlan )
 import Engine.Asset.Handle (TextureHandle(..))
 import World.Construct.Attempt (ConstructAttemptId(..))
 import World.Construct.Receipt (receiptEntries)
@@ -428,6 +435,68 @@ constructAddJobProgressFn wsc = do
                     (realToFrac delta) attArg
         _ → pure ()
     return 0
+
+-- | @construction.resolvePlan(pageId, gx, gy, attempt) → outcome | nil@
+--   — re-run the shared structure-plan resolver for ONE exact attempt
+--   (#1844 requirement 10).
+--
+--   The worker has to ask this before it claims, before it pays and
+--   before it places: a designation admitted minutes ago is not evidence
+--   it is still buildable, and the world-side invalidator does not run
+--   for every possible reason at every possible moment (a catalogue
+--   failure sweeps, terrain publication sweeps, but nothing sweeps on
+--   the tick the worker happens to arrive). Answering here is what makes
+--   the worker's own view the SAME view the resolver has, rather than
+--   the three ad-hoc checks it used to make.
+--
+--   Returns the outcome name — @"valid"@, @"visible-invalid"@,
+--   @"missing-art"@ or @"unresolved-terrain"@ — resolved against the
+--   designation's OWN captured @cdZ@ and with its own attempt excluded
+--   from the occupancy check. nil when the page is gone, when nothing at
+--   that tile carries this attempt (the job is gone; the AI already
+--   treats that as a release), or when the target is a BUILDING, whose
+--   planning is DTV-10's scope and which this resolver does not judge.
+constructResolvePlanFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+constructResolvePlanFn env = do
+    pageIdArg ← Lua.tostring 1
+    gxArg ← Lua.tonumber 2
+    gyArg ← Lua.tonumber 3
+    attArg ← readAttemptArg 4
+    let wsc = toWorldSimCapability env
+    mOutcome ← case (pageIdArg, gxArg, gyArg, attArg) of
+        (Just pageIdBS, Just gxN, Just gyN, Just attempt) → Lua.liftIO $ do
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
+            mgr ← readIORef (wsWorldManagerRef wsc)
+            case lookup pageId (wmWorlds mgr) of
+                Nothing → pure Nothing
+                Just ws → do
+                    worldSize ← pageWrapWorldSize ws
+                    let key = canonicalTile worldSize (round gxN) (round gyN)
+                    designations ← readIORef (wsConstructDesignationsRef ws)
+                    case HM.lookup key designations of
+                        Just cd
+                          | cdAttempt cd ≡ attempt
+                          , CtStructure piece ← cdTarget cd → do
+                              tiles ← readIORef (wsTilesRef ws)
+                              stage ← readIORef (wsStructureStageRef ws)
+                              cat ← readIORef (rhStructureArtCatalogRef
+                                                 (toRenderHandoffCapability env))
+                              let pw = PlanWorld
+                                      { pwWorldSize    = worldSize
+                                      , pwTiles        = tiles
+                                      , pwStage        = stage
+                                      , pwDesignations = designations
+                                      , pwCatalog      = cat
+                                      }
+                              pure ∘ Just ∘ planOutcomeName ∘ prOutcome $
+                                  resolveStructurePlan pw
+                                      (PlanForAttempt attempt) (cdZ cd)
+                                      piece key
+                        _ → pure Nothing
+        _ → pure Nothing
+    case mOutcome of
+        Nothing → Lua.pushnil ≫ return 1
+        Just o  → Lua.pushstring (TE.encodeUtf8 o) ≫ return 1
 
 -- | @construction.beginPlacement(pageId, gx, gy, attempt) → bool@ — take
 --   the final-placement hand-off for ONE exact attempt (#1844

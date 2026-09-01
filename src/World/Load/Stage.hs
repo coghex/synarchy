@@ -63,7 +63,9 @@ import World.Mine.Apply (applyDigSlopes)
 import World.Construct.Apply (applyConstructSlopes)
 import World.Construct.Reconcile
     (ConstructReconcileError(..), reconcileStagedConstructDesignations)
-import World.Construct.Revalidate (ConstructRefundDeps, constructRefundDeps)
+import World.Construct.Revalidate
+    ( ConstructRefundDeps, ConstructScope(..), constructStagingRefundDeps
+    , revalidateStagedConstructDesignations )
 import Structure.ArtCatalog (StructureArtCatalog)
 import Engine.Core.Capability.RenderHandoff
     (RenderHandoffCapability(..), toRenderHandoffCapability)
@@ -149,7 +151,12 @@ stageSession env logger saveData registry = case sdWorlds saveData of
         -- building and unit defs above.
         artCatalog ← readIORef (rhStructureArtCatalogRef
                                   (toRenderHandoffCapability env))
-        refundDeps ← constructRefundDeps env
+        -- Seeded from the SAVE's own item-instance allocator, never the
+        -- live one, and its final value is what the session publishes —
+        -- see 'constructStagingRefundDeps' for why a staged refund
+        -- drawing from the live counter corrupts both sessions.
+        (refundDeps, stagedItemIdRef) ←
+            constructStagingRefundDeps env (sdNextItemInstanceId saveData)
 
         let activeWps    = fromMaybe firstWps (activeWorldPage saveData)
             activeWpsId  = wpsPageId activeWps
@@ -244,6 +251,10 @@ stageSession env logger saveData registry = case sdWorlds saveData of
                       [ (spPageId (psrPage r), w, h, bytes)
                       | r ← results, Just (w, h, bytes) ← [psrZoomAtlas r] ]
                   mPreview   = listToMaybe [ p | Just p ← map psrPreview results ]
+              -- Every staged refund drew from this ref, so its value now
+              -- is the allocator the published session must carry.
+              -- Identity when nothing self-cleared.
+              stagedNextItemId ← readIORef stagedItemIdRef
               pure $ case mCamera of
                   -- Every staged session resolves exactly one active page
                   -- (the fallback above), which always stages a camera —
@@ -262,7 +273,7 @@ stageSession env logger saveData registry = case sdWorlds saveData of
                       , ssUnitSimStates = mergedSimStates
                       , ssGameTime      = sdGameTime saveData
                       , ssTexPalette    = sdTexPalette saveData
-                      , ssNextItemId    = sdNextItemInstanceId saveData
+                      , ssNextItemId    = stagedNextItemId
                       , ssCamera        = camera
                       , ssZoomAtlas     = mZoomAtlas
                       , ssPreview       = mPreview
@@ -609,6 +620,20 @@ stagePage logger registry palette catalog buildingDefs unitDefs
     -- so most records are still UNKNOWN at this point and are retained
     -- for 'World.Thread.ChunkLoading' to resolve as the queue drains.
     _ ← revalidatePlantDesignations logger worldState
+    -- #1844: the same boundary, for structure designations. The
+    -- catalogue half already ran above, BEFORE any chunk existed; this
+    -- is the terrain half, and it is the only pass that sees the chunks
+    -- this page reconstructed synchronously — an arena rebuilds every
+    -- chunk here and has an EMPTY init queue, and an ordinary page's
+    -- centre chunk is excluded from the queue too, so neither would ever
+    -- reach 'World.Thread.ChunkLoading''s publication sweep. Without
+    -- this, a loaded designation whose surface has drifted, whose slot
+    -- is now filled, or whose supporting floor is gone could survive
+    -- indefinitely on exactly those chunks. Everything still unloaded
+    -- resolves as unresolved-terrain and is retained, which is what the
+    -- queue's own sweep then settles.
+    _ ← revalidateStagedConstructDesignations refundDeps artCatalog logger
+            worldState ConstructWholePage
 
     let (restoredBm, bOrphans) = fromBuildingSnapshot pid buildingDefs (wpsBuildings wps)
         (restoredUm, uOrphans, uUnknownFactions) =
