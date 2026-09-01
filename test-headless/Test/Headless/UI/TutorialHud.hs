@@ -38,7 +38,7 @@ import Data.Aeson (FromJSON(..), decode, withObject, (.:), (.:?))
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.ByteString.Lazy as BL
-import Data.IORef (newIORef, writeIORef, atomicModifyIORef')
+import Data.IORef (newIORef, readIORef, writeIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Thread (ThreadControl(..))
 import Engine.Graphics.Config (vcUIScale)
@@ -48,6 +48,7 @@ import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Test.Headless.Harness (withHeadlessEngine, installHudWorldPage)
 import Tutorial.Types (emptyTutorialRegistry)
+import UI.Manager.Presentation (snapshotArmedToken, witnessPresentation)
 import UI.Types (emptyUIPageManager)
 
 -- | Join Lua statements with a single space (mirrors ResponsiveMenus /
@@ -155,6 +156,75 @@ bootAt w h treeExpr = luaLines
 --   since row 1 is the composite root).
 subId ∷ Int → Text
 subId n = "sub_" <> T.justifyRight 3 '0' (tshow n)
+
+-- * The presentation boundary (#2056)
+--
+-- The boundary is a real handshake with the RENDERER, and this fixture
+-- has no renderer: @renderUIPages@ bails out headless for want of a
+-- bindless texture system, which is exactly the honest answer (a
+-- GPU-less engine draws no frame, so it witnesses nothing). So the
+-- boundary is crossed here by performing, against the same shared UI
+-- manager, EXACTLY the two steps 'UI.Render.renderUIPages' performs —
+-- read the manager once, then publish that snapshot's own armed token —
+-- rather than by poking the witness to a value of the test's choosing.
+--
+-- Keeping the two steps separately callable is what makes the
+-- stale-evidence cases possible: a snapshot BEGUN before a mutation and
+-- FINISHED after it publishes the token it actually held, which is the
+-- in-flight frame the boundary has to refuse.
+
+-- | The renderer's read: the token this snapshot is carrying.
+beginSnapshot ∷ EngineEnv → IO Word64
+beginSnapshot env = snapshotArmedToken ⊚ readIORef (uiManagerRef env)
+
+-- | The renderer's publication, once that snapshot has been rendered.
+finishSnapshot ∷ EngineEnv → Word64 → IO ()
+finishSnapshot env token =
+    atomicModifyIORef' (uiManagerRef env)
+                       (\m → (witnessPresentation token m, ()))
+
+-- | One complete, uninterrupted renderer snapshot of whatever is on
+--   screen right now.
+renderSnapshot ∷ EngineEnv → IO ()
+renderSnapshot env = beginSnapshot env ⌦ finishSnapshot env
+
+-- | The shipped shape with its prepare branch ALREADY latched and both
+--   subobjectives checked before the branch is ever revealed — #996's
+--   case, and the one #1941 retires. Ends with the branch revealed, the
+--   panel still collapsed and nothing presented.
+stickyBoot ∷ Int → Int → Text
+stickyBoot w h = luaLines
+    [ bootAt w h "shippedShape()"
+    , "tp.setSubobjectiveChecked('prepare_water', true);"
+    , "tp.setSubobjectiveChecked('prepare_food', true);"
+    , "tp.completeObjective('prepare_expedition');"
+    , "tp.completeObjective('place_portal');"
+    , "tp.completeObjective('secure_water');"
+    ]
+
+-- | Re-bind the three module locals. Every boundary case runs as
+--   SEVERAL console chunks — the snapshot has to happen between two of
+--   them, from Haskell — and @bootAt@'s locals do not outlive the chunk
+--   that declared them.
+reModules ∷ Text
+reModules = luaLines
+    [ "local tp = require('scripts.tutorial_progress');"
+    , "local th = require('scripts.tutorial_hud');"
+    , "local hud = require('scripts.hud');"
+    ]
+
+-- | The three ids of the already-latched prepare branch, comma-joined
+--   as every case here reports them.
+prepareBranch ∷ Text
+prepareBranch = T.intercalate ","
+    [ "prepare_expedition", "prepare_water", "prepare_food" ]
+
+-- | 'executeDebugLua' serialises a bare STRING return as JSON, quotes
+--   included, so a case that returns one compares against this rather
+--   than the raw text (a table return decodes through 'decodeOr'
+--   instead and needs none of it).
+quoted ∷ Text → Text
+quoted t = "\"" <> t <> "\""
 
 -- * Decoded probe shapes
 
@@ -567,136 +637,247 @@ spec = aroundAll withSharedFixture $ do
 
         -- #1941: and then it RETIRES. This surface is the only thing
         -- that can testify a row was actually put in front of the
-        -- player, so #958 hands it that job: the update tick reports the
-        -- viewport that has been on screen since the last one, the
-        -- sticky suppression is spent, and the ordinary hide rule takes
-        -- the branch off the list in that same tick's rebuild. The
-        -- acknowledgement runs BEFORE that rebuild, so what it reports
-        -- is a viewport the player really saw — never one this tick
-        -- built and unbuilt.
-        it "retires the presented branch on the update tick that reports \
-           \it, leaving the checklist empty (#1941)" $ \(env, ls) → do
+        -- player, so #958 hands it that job.
+        --
+        -- #2056 is what makes that testimony true. Before it, ONE Lua
+        -- update tick counted as presentation, and the four cases below
+        -- encoded that: the tick showed the page, acknowledged, and
+        -- rebuilt without the rows, all inside one uninterrupted call
+        -- that no renderer snapshot had to fall between. Every case here
+        -- now separates the two halves — nothing retires until a
+        -- COMPLETED snapshot has held exactly these rows, and then it
+        -- retires promptly.
+        it "does NOT retire on the update tick alone — no snapshot has \
+           \held the rows, so the branch is still waiting (#2056)" $ \(env, ls) → do
             resetFixture env ls
-            r ← evalOk ls $ luaLines
-                [ bootAt 1280 720 "shippedShape()"
-                , "tp.setSubobjectiveChecked('prepare_water', true);"
-                , "tp.setSubobjectiveChecked('prepare_food', true);"
-                , "tp.completeObjective('prepare_expedition');"
-                , "tp.completeObjective('place_portal');"
-                , "tp.completeObjective('secure_water');"
-                -- Opening builds the branch and nothing else: no tick
-                -- has run, so nothing has been reported yet.
+            built ← evalOk ls $ luaLines
+                [ stickyBoot 1280 720
                 , "th.setOpen(true);"
-                , "local shown = th.dump();"
-                -- The tick that reports it, and rebuilds without it.
-                , "th.update(0);"
-                , "local after = th.dump();"
-                , "return { shownIds = table.concat(shown.rowIds, ','),"
-                , "         shownActive = table.concat(shown.activeIds, ','),"
-                , "         afterIds = table.concat(after.rowIds, ','),"
-                , "         afterActive = table.concat(after.activeIds, ','),"
-                , "         afterRebuilds = after.rebuildCount"
-                , "                         - shown.rebuildCount }"
+                , "local d = th.dump();"
+                , "return { rowIds = table.concat(d.rowIds, ','),"
+                , "         activeIds = table.concat(d.activeIds, ',') }"
                 ]
-            probe ← decodeOr r ∷ IO PresentProbe
-            let want = T.intercalate ","
-                    [ "prepare_expedition", "prepare_water", "prepare_food" ]
-            -- Opening the panel renders the whole branch, exactly as
-            -- #996 requires — and a build alone reports nothing, so the
-            -- model still has it.
-            ppShownIds probe `shouldBe` want
-            ppShownActive probe `shouldBe` want
-            -- The reporting tick spends the suppression and rebuilds
-            -- once: the ordinary completed-history view, an empty
-            -- checklist.
-            ppAfterActive probe `shouldBe` ""
-            ppAfterIds probe `shouldBe` ""
-            ppAfterRebuilds probe `shouldBe` 1
+            shown ← decodeOr built ∷ IO ActiveRowsProbe
+            -- #996, unchanged: opening renders the whole branch.
+            arpRowIds shown `shouldBe` prepareBranch
+            arpActiveIds shown `shouldBe` prepareBranch
+            -- Ticks are free; frames are not. However many times the
+            -- module reports, nothing has been rendered, so nothing may
+            -- be acknowledged.
+            ticked ← evalOk ls $ luaLines
+                [ reModules
+                , "local before = th.dump().rebuildCount;"
+                , "for _ = 1, 8 do th.update(0) end;"
+                , "local d = th.dump();"
+                , "return { rowIds = table.concat(d.rowIds, ','),"
+                , "         activeIds = table.concat(d.activeIds, ','),"
+                , "         presented = d.presented,"
+                , "         rebuilds = d.rebuildCount - before }"
+                ]
+            held ← decodeOr ticked ∷ IO BoundaryProbe
+            bpRowIds held `shouldBe` prepareBranch
+            bpActiveIds held `shouldBe` prepareBranch
+            bpPresented held `shouldBe` False
+            bpRebuilds held `shouldBe` 0
 
-        it "never acknowledges from a COLLAPSED panel — the branch is \
-           \still waiting when it is finally opened (#1941)" $ \(env, ls) → do
+        it "retires on the first tick after a completed snapshot has \
+           \held exactly those rows (#1941 via #2056)" $ \(env, ls) → do
             resetFixture env ls
-            r ← evalOk ls $ luaLines
-                [ bootAt 1280 720 "shippedShape()"
-                , "tp.setSubobjectiveChecked('prepare_water', true);"
-                , "tp.setSubobjectiveChecked('prepare_food', true);"
-                , "tp.completeObjective('prepare_expedition');"
-                , "tp.completeObjective('place_portal');"
-                , "tp.completeObjective('secure_water');"
-                -- Ticks with the panel closed: the HUD is visible and
-                -- the branch is active in the model, but the checklist
-                -- lays out no rows at all, so nothing is presented.
-                , "for _ = 1, 5 do th.update(0) end;"
-                , "local suppressed = table.concat(th.dump().activeIds, ',');"
-                , "th.setOpen(true);"
-                , "local exposed = table.concat(th.dump().rowIds, ',');"
-                , "return { suppressed = suppressed, exposed = exposed }"
+            _ ← evalOk ls $ luaLines
+                [ stickyBoot 1280 720, "th.setOpen(true); return true" ]
+            -- The renderer sees the open panel.
+            renderSnapshot env
+            after ← evalOk ls $ luaLines
+                [ reModules
+                , "local before = th.dump().rebuildCount;"
+                , "local presented = th.dump().presented;"
+                , "th.update(0);"
+                , "local d = th.dump();"
+                , "return { rowIds = table.concat(d.rowIds, ','),"
+                , "         activeIds = table.concat(d.activeIds, ','),"
+                , "         presented = presented,"
+                , "         rebuilds = d.rebuildCount - before }"
                 ]
-            probe ← decodeOr r ∷ IO NoAckProbe
-            let want = T.intercalate ","
-                    [ "prepare_expedition", "prepare_water", "prepare_food" ]
-            napWhileSuppressed probe `shouldBe` want
-            napAfterExposed probe `shouldBe` want
+            probe ← decodeOr after ∷ IO BoundaryProbe
+            -- The boundary really had been crossed before the tick ran.
+            bpPresented probe `shouldBe` True
+            -- The reporting tick spends the suppression and rebuilds
+            -- ONCE: the ordinary completed-history view, an empty
+            -- checklist.
+            bpActiveIds probe `shouldBe` ""
+            bpRowIds probe `shouldBe` ""
+            bpRebuilds probe `shouldBe` 1
+
+        it "never acknowledges from a COLLAPSED panel, however many \
+           \frames are drawn over it (#1941)" $ \(env, ls) → do
+            resetFixture env ls
+            _ ← evalOk ls $ luaLines [ stickyBoot 1280 720, "return true" ]
+            -- Ticks AND frames with the panel closed: the HUD is
+            -- visible and the branch is active in the model, but the
+            -- checklist lays out no rows at all, so nothing is
+            -- presented. The frames are what makes this stronger than
+            -- the pre-#2056 version, which could only tick.
+            suppressed ← evalOk ls $ luaLines
+                [ reModules
+                , "for _ = 1, 3 do th.update(0) end;"
+                , "return table.concat(th.dump().activeIds, ',')" ]
+            renderSnapshot env
+            stillSuppressed ← evalOk ls $ luaLines
+                [ reModules
+                , "for _ = 1, 3 do th.update(0) end;"
+                , "return table.concat(th.dump().activeIds, ',')" ]
+            suppressed `shouldBe` quoted prepareBranch
+            stillSuppressed `shouldBe` quoted prepareBranch
+            -- Opened, it renders — and a snapshot taken BEFORE the open
+            -- (above) buys nothing, because opening re-armed.
+            exposed ← evalOk ls $ luaLines
+                [ reModules
+                , "th.setOpen(true); th.update(0);"
+                , "return table.concat(th.dump().rowIds, ',')" ]
+            exposed `shouldBe` quoted prepareBranch
+            renderSnapshot env
+            retired ← evalOk ls $ luaLines
+                [ reModules
+                , "th.update(0);"
+                , "return table.concat(th.dump().rowIds, ',')" ]
+            retired `shouldBe` quoted ""
 
         it "never acknowledges while the gameplay HUD is HIDDEN, and \
-           \does once it comes back (#1941)" $ \(env, ls) → do
+           \the rising edge alone is NOT the presentation (#2056)" $ \(env, ls) → do
             resetFixture env ls
-            r ← evalOk ls $ luaLines
-                [ bootAt 1280 720 "shippedShape()"
-                , "tp.setSubobjectiveChecked('prepare_water', true);"
-                , "tp.setSubobjectiveChecked('prepare_food', true);"
-                , "tp.completeObjective('prepare_expedition');"
-                , "tp.completeObjective('place_portal');"
-                , "tp.completeObjective('secure_water');"
-                -- Open, but with the whole HUD hidden: the page is not
-                -- painted, so a build behind it presents nothing.
-                , "th.setOpen(true);"
-                , "hud.visible = false;"
-                , "for _ = 1, 5 do th.update(0) end;"
-                , "local suppressed = table.concat(th.dump().activeIds, ',');"
-                -- The HUD comes back with no content change of any
-                -- kind: the transition alone is the presentation.
+            -- Open, but with the whole HUD hidden: the page is not
+            -- painted, so a build behind it presents nothing — and
+            -- neither do the frames drawn while it is hidden.
+            _ ← evalOk ls $ luaLines
+                [ stickyBoot 1280 720
+                , "hud.visible = false; th.update(0);"
+                , "th.setOpen(true); return true" ]
+            renderSnapshot env
+            suppressed ← evalOk ls $ luaLines
+                [ reModules
+                , "for _ = 1, 3 do th.update(0) end;"
+                , "return table.concat(th.dump().activeIds, ',')" ]
+            suppressed `shouldBe` quoted prepareBranch
+            -- THE DEFECT #2056 CLOSED. The HUD comes back with no
+            -- content change of any kind. Before #2056 this one call
+            -- showed the page, acknowledged the rows and deleted them
+            -- again with no frame in between, retiring a terminal
+            -- branch the player had never seen. The rows must survive
+            -- the rising edge, and survive every further tick until a
+            -- frame has actually drawn them.
+            edge ← evalOk ls $ luaLines
+                [ reModules
                 , "hud.visible = true;"
-                , "th.update(0); th.update(0);"
-                , "local exposed = table.concat(th.dump().rowIds, ',');"
-                , "return { suppressed = suppressed, exposed = exposed }"
+                , "th.update(0);"
+                , "local d = th.dump();"
+                , "return { rowIds = table.concat(d.rowIds, ','),"
+                , "         activeIds = table.concat(d.activeIds, ','),"
+                , "         presented = d.presented,"
+                , "         rebuilds = 0 }"
                 ]
-            probe ← decodeOr r ∷ IO NoAckProbe
-            napWhileSuppressed probe `shouldBe` T.intercalate ","
-                [ "prepare_expedition", "prepare_water", "prepare_food" ]
-            napAfterExposed probe `shouldBe` ""
+            edged ← decodeOr edge ∷ IO BoundaryProbe
+            bpRowIds edged `shouldBe` prepareBranch
+            bpActiveIds edged `shouldBe` prepareBranch
+            bpPresented edged `shouldBe` False
+            stillHeld ← evalOk ls $ luaLines
+                [ reModules
+                , "for _ = 1, 5 do th.update(0) end;"
+                , "return table.concat(th.dump().activeIds, ',')" ]
+            stillHeld `shouldBe` quoted prepareBranch
+            -- And then the frame arrives, and it retires.
+            renderSnapshot env
+            exposed ← evalOk ls $ luaLines
+                [ reModules
+                , "th.update(0);"
+                , "return table.concat(th.dump().rowIds, ',')" ]
+            exposed `shouldBe` quoted ""
 
         it "never acknowledges a sticky row scrolled OUT of the \
            \viewport, and does once it is scrolled back (#1941)" $ \(env, ls) → do
             resetFixture env ls
-            r ← evalOk ls $ luaLines
+            -- Scroll the composite itself off the top. Its
+            -- subobjectives stay on screen, so the panel is busy — but
+            -- the only STICKY id is no longer laid out, and frames
+            -- drawn in that state present it no more than ticks do.
+            suppressed ← evalOk ls $ luaLines
                 [ bootAt 1024 768 "stickyTree(60)"
                 , "preLatch(tp, 60);"
                 , "th.setOpen(true);"
-                -- Scroll the composite itself off the top. Its
-                -- subobjectives stay on screen, so the panel is busy —
-                -- but the only STICKY id is no longer laid out.
                 , "th.setScrollOffset(1);"
-                , "for _ = 1, 5 do th.update(0) end;"
+                , "for _ = 1, 3 do th.update(0) end;"
                 , "local d = th.dump();"
-                , "local suppressed = tostring(d.rows[1] ~= nil"
-                , "    and d.rows[1].id or 'none') .. '/'"
-                , "    .. tostring(d.activeIds[1] or 'none');"
-                -- Back to the top: now the sticky row IS in the
-                -- viewport, and the next tick spends the suppression.
-                , "th.setScrollOffset(0);"
-                , "th.update(0); th.update(0);"
-                , "local exposed = table.concat(th.dump().rowIds, ',');"
-                , "return { suppressed = suppressed, exposed = exposed }"
+                , "return tostring(d.rows[1] ~= nil and d.rows[1].id or 'none')"
+                , "    .. '/' .. tostring(d.activeIds[1] or 'none')"
                 ]
-            probe ← decodeOr r ∷ IO NoAckProbe
+            renderSnapshot env
+            stillSuppressed ← evalOk ls $ luaLines
+                [ reModules
+                , "for _ = 1, 3 do th.update(0) end;"
+                , "local d = th.dump();"
+                , "return tostring(d.rows[1] ~= nil and d.rows[1].id or 'none')"
+                , "    .. '/' .. tostring(d.activeIds[1] or 'none')"
+                ]
             -- The viewport starts at the first subobjective while the
             -- model still reports the sticky composite as active: the
             -- row was never rendered, so it was never presented.
-            napWhileSuppressed probe `shouldBe` (subId 1 <> "/branch")
+            let offscreen = quoted (subId 1 <> "/branch")
+            suppressed `shouldBe` offscreen
+            stillSuppressed `shouldBe` offscreen
+            -- Back to the top. The sticky row IS in the viewport now,
+            -- but the scroll re-armed, so the snapshot above — taken
+            -- while it was off screen — authorises nothing.
+            stale ← evalOk ls $ luaLines
+                [ reModules
+                , "th.setScrollOffset(0);"
+                , "for _ = 1, 3 do th.update(0) end;"
+                , "return table.concat(th.dump().rowIds, ',') ~= ''"
+                ]
+            stale `shouldBe` "true"
+            renderSnapshot env
+            exposed ← evalOk ls $ luaLines
+                [ reModules
+                , "th.update(0);"
+                , "return table.concat(th.dump().rowIds, ',')" ]
             -- Retired: the whole branch leaves the active view, so the
             -- rebuilt viewport is empty.
-            napAfterExposed probe `shouldBe` ""
+            exposed `shouldBe` quoted ""
+
+        -- The in-flight frame, which is the case a bare "a frame has
+        -- happened since" counter cannot tell apart from a good one.
+        -- The snapshot is BEGUN while the open panel is on screen and
+        -- FINISHED after a rebuild has destroyed and recreated every
+        -- element in it. What it publishes is the token it actually
+        -- held, so the rows it never saw stay unacknowledged.
+        it "refuses evidence from a snapshot that predates a rebuild \
+           \(#2056)" $ \(env, ls) → do
+            resetFixture env ls
+            _ ← evalOk ls $ luaLines
+                [ stickyBoot 1280 720, "th.setOpen(true); return true" ]
+            inFlight ← beginSnapshot env
+            -- The renderer is still working on that snapshot when the
+            -- panel rebuilds — same rows, all-new elements.
+            _ ← evalOk ls $ luaLines
+                [ reModules, "th.reflow(1280, 720); return true" ]
+            finishSnapshot env inFlight
+            stale ← evalOk ls $ luaLines
+                [ reModules
+                , "for _ = 1, 5 do th.update(0) end;"
+                , "local d = th.dump();"
+                , "return { rowIds = table.concat(d.rowIds, ','),"
+                , "         activeIds = table.concat(d.activeIds, ','),"
+                , "         presented = d.presented, rebuilds = 0 }"
+                ]
+            probe ← decodeOr stale ∷ IO BoundaryProbe
+            bpPresented probe `shouldBe` False
+            bpRowIds probe `shouldBe` prepareBranch
+            bpActiveIds probe `shouldBe` prepareBranch
+            -- A snapshot of the rebuilt list does authorise it.
+            renderSnapshot env
+            exposed ← evalOk ls $ luaLines
+                [ reModules
+                , "th.update(0);"
+                , "return table.concat(th.dump().rowIds, ',')" ]
+            exposed `shouldBe` quoted ""
 
     describe "scoped wheel capture and scrolling (requirements 4/7)" $ do
         it "captures the wheel only over the visible list — never on the toggle, never off it" $ \(env, ls) → do
@@ -1219,25 +1400,17 @@ instance FromJSON ReverseProbe where
 -- | #1941: the two views a retirement passes through — the build that
 --   rendered the sticky rows, and the tick that reported them presented
 --   and rebuilt without them.
-data PresentProbe = PresentProbe
-    { ppShownIds ∷ Text, ppShownActive ∷ Text
-    , ppAfterIds ∷ Text, ppAfterActive ∷ Text
-    , ppAfterRebuilds ∷ Int } deriving (Show, Eq)
-instance FromJSON PresentProbe where
-    parseJSON = withObject "PresentProbe" $ \o →
-        PresentProbe <$> o .: "shownIds" <*> o .: "shownActive"
-                      <*> o .: "afterIds" <*> o .: "afterActive"
-                      <*> o .: "afterRebuilds"
-
--- | #1941: a checklist observed while the panel was closed, or the HUD
---   hidden, or the sticky row scrolled out of the viewport — and then
---   again once that condition is lifted.
-data NoAckProbe = NoAckProbe
-    { napWhileSuppressed ∷ Text, napAfterExposed ∷ Text }
-    deriving (Show, Eq)
-instance FromJSON NoAckProbe where
-    parseJSON = withObject "NoAckProbe" $ \o →
-        NoAckProbe <$> o .: "suppressed" <*> o .: "exposed"
+-- | #2056: one reading of the checklist taken across the presentation
+--   boundary — what is laid out, what the model still holds active,
+--   whether a completed renderer snapshot has held THESE rows, and how
+--   many rebuilds the observed window cost.
+data BoundaryProbe = BoundaryProbe
+    { bpRowIds ∷ Text, bpActiveIds ∷ Text
+    , bpPresented ∷ Bool, bpRebuilds ∷ Int } deriving (Show, Eq)
+instance FromJSON BoundaryProbe where
+    parseJSON = withObject "BoundaryProbe" $ \o →
+        BoundaryProbe <$> o .: "rowIds" <*> o .: "activeIds"
+                       <*> o .: "presented" <*> o .: "rebuilds"
 
 data WheelProbe = WheelProbe
     { wpToggleCaptures ∷ Bool, wpRowCaptures ∷ Bool

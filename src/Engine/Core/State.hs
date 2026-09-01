@@ -261,6 +261,28 @@ data EngineEnv = EngineEnv
     --   'VkSampler' per kind is alive at a time. Destroyed wholesale at
     --   shutdown via 'destroySamplerCache'.
   , textureSizeRef      ∷ IORef (HM.HashMap TextureHandle (Int, Int))
+  , maxImageDimensionRef ∷ IORef (Maybe Int)
+    -- ^ The physical device's actual @maxImageDimension2D@, published
+    --   once by 'Engine.Graphics.Vulkan.Init.initializeVulkanCommon' as
+    --   soon as a device exists — for both the windowed and the
+    --   offscreen path (issue #2020).
+    --
+    --   It is here, on the one record every thread can reach, for a
+    --   single reason: the world thread must know whether a world's zoom
+    --   atlas can exist BEFORE it generates the pixels, and
+    --   'GraphicsState' — where 'vulkanPDevice' lives — is
+    --   main-render-thread-private (§3 of
+    --   @docs\/engineenv_capability_inventory.md@). The worker reads this
+    --   value; it never reaches the device.
+    --
+    --   'Nothing' means "no device limit is available". That is the
+    --   EXPECTED and correct state under @--headless@ and @--dump@,
+    --   which have no GPU at all; there it means no ceiling applies, not
+    --   that something failed. Under a GPU-capable mode it means the
+    --   query has not happened yet, and
+    --   'Engine.Map.ImageAdmission.resolveMapImageCeiling' turns it into
+    --   a refusal rather than letting an unchecked image through. The
+    --   boot mode — not this field — is what distinguishes the two.
   , bloodDisposeQueue   ∷ Q.Queue (IORef BloodTextureHandles)
     -- ^ Cross-thread GPU-dispose transport for #606 blood textures owned
     --   by a world page the world thread is removing/replacing (#788).

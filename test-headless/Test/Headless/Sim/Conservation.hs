@@ -30,6 +30,7 @@ import System.Random (StdGen, mkStdGen, randomR)
 import World.Chunk.Types (ChunkCoord(..), chunkSize)
 import World.Fluid.Types (FluidType(..))
 import Sim.State.Types (SimWorldState(..), SimChunkState(..))
+import Sim.Topology (SimTopology(..))
 import Sim.Fluid.Types (ActiveFluidCell(..))
 import Sim.Fluid.Active (simulateActiveTick)
 
@@ -67,6 +68,10 @@ mkState scs = SimWorldState
     { swsChunks      = HM.singleton (ChunkCoord 0 0) scs
     , swsDirtyChunks = HS.empty
     , swsActive      = True
+    -- One chunk, no neighbour to reach: these fixtures drive the
+    -- in-chunk phases, so the page's seam frame (#2044) is irrelevant
+    -- here and the no-seam topology is the honest fixture value.
+    , swsTopology    = SimFlatTopology
     }
 
 -- | Terrain that is flat at z=0 only on the listed cells, walled off

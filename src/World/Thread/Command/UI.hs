@@ -14,6 +14,7 @@ import Engine.Core.Log (logInfo, logDebug, logWarn, LogCategory(..), LoggerState
 import Engine.Graphics.Solar (maxSolarPages)
 import qualified Engine.Core.Queue as Q
 import Sim.Command.Types (SimCommand(..))
+import Sim.Topology (SimTopology(..))
 import World.Types
 import World.Render.Zoom.Types (ZoomMapMode(..))
 
@@ -77,13 +78,17 @@ handleWorldShowCommand wsc logger pageId = do
         -- finished loading) and the render thread only rebuilds when the
         -- generation no longer matches. Cheap insurance against showing a
         -- world with a stale cache (#35).
-        forM_ (lookup pageId (wmWorlds mgr)) bumpQuadCacheGen
+        let mWorldState = lookup pageId (wmWorlds mgr)
+        forM_ mWorldState bumpQuadCacheGen
 
         -- Activate this world in the sim thread. The sim no longer holds the
         -- tile ref — it emits WorldApplyFluids back to the world thread (the
         -- sole writer of wsTilesRef) — so this is just a per-world "is
-        -- active" signal.
-        Q.writeQueue (wsSimQueue wsc) (SimActivateWorld pageId)
+        -- active" signal, plus the page's seam topology: activation is what
+        -- lets the world tick, so its neighbour frame is established in the
+        -- same message (#2044).
+        topo ← maybe (pure SimFlatTopology) pageSimTopology mWorldState
+        Q.writeQueue (wsSimQueue wsc) (SimActivateWorld pageId topo)
 
 handleWorldHideCommand ∷ WorldSimCapability → LoggerState → WorldPageId → IO ()
 handleWorldHideCommand wsc logger pageId = do

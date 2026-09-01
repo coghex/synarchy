@@ -13,13 +13,16 @@ module World.Edit.Types
     , WorldEdits
     , emptyWorldEdits
     , appendEdit
+    , shiftWorldEdit
+    , canonicalizeWorldEdits
     ) where
 
 import UPrelude
 import Data.Serialize (Serialize)
 import GHC.Generics (Generic)
+import Data.List (sortOn)
 import qualified Data.HashMap.Strict as HM
-import World.Chunk.Types (ChunkCoord(..))
+import World.Chunk.Types (ChunkCoord(..), chunkSize)
 import World.Fluid.Types (FluidType(..))
 import World.Flora.Types (FloraId)
 import World.Material.Id (MaterialId(..))
@@ -116,3 +119,72 @@ emptyWorldEdits = HM.empty
 --   tens to low hundreds per chunk), so the O(n) append is fine.
 appendEdit ∷ ChunkCoord → WorldEdit → WorldEdits → WorldEdits
 appendEdit coord edit = HM.alter (Just . maybe [edit] (++ [edit])) coord
+
+-- | Translate an edit by a whole-chunk offset in TILES.
+--
+--   Every constructor carries its global tile coords as its first two
+--   fields and nothing else positional depends on them, so this is one
+--   uniform translation. Written out per constructor rather than
+--   generically so that adding a constructor is a compile error here
+--   rather than an edit that silently stops moving.
+shiftWorldEdit ∷ Int → Int → WorldEdit → WorldEdit
+shiftWorldEdit dgx dgy edit = case edit of
+    WeDeleteTile gx gy            → WeDeleteTile (gx + dgx) (gy + dgy)
+    WeSetFluidTile gx gy ft       → WeSetFluidTile (gx + dgx) (gy + dgy) ft
+    WeAddTile gx gy mat           → WeAddTile (gx + dgx) (gy + dgy) mat
+    WeSetSlope gx gy z bits       → WeSetSlope (gx + dgx) (gy + dgy) z bits
+    WeSetCell gx gy z mat         → WeSetCell (gx + dgx) (gy + dgy) z mat
+    WeSetStructure gx gy s t f z  →
+        WeSetStructure (gx + dgx) (gy + dgy) s t f z
+    WeClearStructure gx gy s      → WeClearStructure (gx + dgx) (gy + dgy) s
+    WeSetVeg gx gy z v            → WeSetVeg (gx + dgx) (gy + dgy) z v
+    WePlaceFlora gx gy fid d w    → WePlaceFlora (gx + dgx) (gy + dgy) fid d w
+    WeSetFluidSnapshot gx gy ft z →
+        WeSetFluidSnapshot (gx + dgx) (gy + dgy) ft z
+    WeClearFluidSnapshot gx gy    → WeClearFluidSnapshot (gx + dgx) (gy + dgy)
+
+-- | Normalize a page's edit log into that page's canonical chunk
+--   identity, moving both the key and the coordinates it holds.
+--
+--   Chunks are STORED u-wrapped, but this log is keyed by whatever coord
+--   the chunk carried when the entries were written — and one restore
+--   path stored a seam-crossing page's centre under its RAW alias, while
+--   'World.Thread.Command.Save.WriteWorld.appendFluidSnapshot' keys every
+--   settled-fluid snapshot by the chunk's own 'lcCoord'. So a save
+--   written that way holds entries under a key no canonicalising loader
+--   will ever produce, and 'World.Edit.Apply.applyEdit' refuses an edit
+--   whose coords do not belong to the chunk it is handed. Left alone
+--   those entries never replay again: the player's terrain changes, and
+--   the settled fluid taken from that chunk, silently gone the first
+--   time the chunk is evicted and streamed back.
+--
+--   The COORDINATES move with the key. A u-wrap displaces a chunk by a
+--   whole number of chunks, so the shift is a multiple of 'chunkSize'
+--   and every local column index is preserved — the entries address the
+--   same columns of the same physical place, in the frame the canonical
+--   chunk is generated in.
+--
+--   Merging is order-preserving and deterministic. Each list is
+--   oldest-first, and where an alias and its canonical twin both carry
+--   entries — possible exactly because the two were separate chunks for
+--   one physical place — the ALIAS's are replayed first and the
+--   canonical key's last, so the live chunk's later edits still win.
+--   Several aliases folding onto one key are ordered by coordinate, so
+--   the result never depends on hashmap iteration order.
+--
+--   Returns the input UNCHANGED when every key is already canonical,
+--   which is every page away from the seam: an ordinary save is not
+--   rebuilt, reordered, or otherwise touched.
+canonicalizeWorldEdits ∷ (ChunkCoord → ChunkCoord) → WorldEdits → WorldEdits
+canonicalizeWorldEdits canon edits
+    | all canonical (HM.keys edits) = edits
+    | otherwise                     = foldl' merge HM.empty ordered
+  where
+    canonical k = canon k ≡ k
+    ordered = sortOn (\(k, _) → (canonical k, k)) (HM.toList edits)
+    merge acc (k, es) = HM.insertWith (flip (⧺)) (canon k) (map shifted es) acc
+      where
+        ChunkCoord cx cy   = k
+        ChunkCoord cx' cy' = canon k
+        shifted = shiftWorldEdit ((cx' - cx) * chunkSize)
+                                 ((cy' - cy) * chunkSize)

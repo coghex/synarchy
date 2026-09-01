@@ -20,6 +20,17 @@
 --     hide suppression that kept an already-latched branch on screen.
 --     Reading the view model is not presentation and never acknowledges
 --     anything.
+--     Since #2056 a VISIBLE, OPEN page is necessary but not
+--     sufficient: showing a page and deleting its elements are both
+--     synchronous writes to the shared UI-manager ref from this
+--     thread, and the renderer reads that ref only when it snapshots
+--     it, so this module could once show, acknowledge and destroy a
+--     whole branch inside one uninterrupted call. It now arms a
+--     presentation token (`UI.armPresentation`) after every change to
+--     its viewport and acknowledges only once `UI.isPresented` says a
+--     COMPLETED renderer snapshot held that exact viewport. See
+--     `armPresentation` below and the Haskell-side contract in
+--     UI.Manager.Presentation.
 --   * Rows are DISPLAY-ONLY. They carry a tooltip and capture the
 --     wheel, and that is all: no click callback and no pointer
 --     blocking, so a click over the checklist reaches the terrain
@@ -77,6 +88,12 @@ tutorialHud._hudVisible = tutorialHud._hudVisible or false
 tutorialHud._sig        = tutorialHud._sig        or nil
 tutorialHud._toggleLabel  = tutorialHud._toggleLabel  or nil
 tutorialHud._assetsReady  = tutorialHud._assetsReady  or false
+-- #2056: the presentation token standing for the CURRENT viewport --
+-- these rows, on this page, at this visibility. Re-minted by
+-- armPresentation() below every time any of those three change, so
+-- evidence gathered for an older viewport can never authorise this one.
+-- nil means nothing is armed, which acknowledges nothing.
+tutorialHud._presentToken = tutorialHud._presentToken or nil
 
 local TOGGLE_CALLBACK = "onTutorialHudToggle"
 
@@ -444,14 +461,58 @@ local function contentSignature(rows)
     return table.concat(parts, "|")
 end
 
+-- #2056: mint a token for the viewport as it stands RIGHT NOW.
+--
+-- Called from the only two places that can change what this surface is
+-- putting in front of the player: rebuild() (content, geometry, the
+-- open flag and the scroll offset all funnel through it) and
+-- applyPageVisibility() (the page appearing or disappearing). Between
+-- them they cover every path #1941 left racy -- setOpen, setScrollOffset,
+-- reflow, resetPresentation, a content-driven rebuild, and the
+-- hidden-to-visible edge in update().
+--
+-- Arming AFTER those mutations is the whole point: UI.armPresentation
+-- writes the token into the same UI-manager IORef the elements and the
+-- page visibility were just written to, so a renderer snapshot carrying
+-- this token necessarily carries this viewport (see
+-- UI.Manager.Presentation). Re-minting is also what INVALIDATES stale
+-- evidence -- a token published for the previous viewport can never
+-- reach the new one, because the counter only goes up.
+local function armPresentation()
+    if type(UI.armPresentation) ~= "function" then
+        -- An engine without the boundary cannot prove presentation, so
+        -- it must never claim it: leaving the token nil denies
+        -- acknowledgement rather than falling back to #1941's race.
+        tutorialHud._presentToken = nil
+        return
+    end
+    local ok, token = pcall(UI.armPresentation)
+    tutorialHud._presentToken = (ok and type(token) == "number"
+                                 and token > 0) and token or nil
+end
+
 -- #1941: report the rows this surface has actually PUT IN FRONT OF THE
 -- PLAYER, so #958 can retire the #996 hide suppression that kept an
 -- already-latched branch on screen and let the ordinary hide rule
 -- resume.
 --
--- The one GATE is `_hudVisible`: applyPageVisibility paints this page
--- by it, so a build that happened behind a hidden gameplay HUD has put
--- nothing in front of anyone, however complete the model was.
+-- TWO gates, and #2056 added the second because the first is not
+-- sufficient:
+--
+--   * `_hudVisible`: applyPageVisibility paints this page by it, so a
+--     build that happened behind a hidden gameplay HUD has put nothing
+--     in front of anyone, however complete the model was.
+--   * `UI.isPresented(_presentToken)`: the page being VISIBLE only says
+--     the Lua thread has asked for it to be painted. UI.showPage and
+--     UI.deleteElement both mutate the shared UI-manager ref
+--     synchronously from this thread, and the renderer sees either only
+--     when it snapshots that ref -- so before #2056 a checklist built
+--     open behind a hidden HUD could be shown, acknowledged and
+--     destroyed inside ONE update() call, retiring a terminal branch
+--     the player never saw. The token proves a completed renderer
+--     snapshot really held THIS viewport. It is a boundary, never a
+--     duration: #1941's rejection of a timed or minimum-exposure
+--     interval stands, and one frame is enough.
 --
 -- Everything else the rule needs is already true of `_rows`, which is
 -- why nothing else is re-checked here. It holds precisely the slice the
@@ -459,16 +520,18 @@ end
 -- by the OPEN build path, and then only for
 -- `scrollOffset .. +visibleRows`. So a collapsed panel and a row
 -- scrolled out of range are both excluded by construction rather than
--- by a second condition that could drift from the build.
+-- by a second condition that could drift from the build; #2056 keeps
+-- that property by RE-ARMING on every such change instead of adding
+-- conditions here.
 --
 -- Fetching the model (activeRows) never reaches here, which is what
 -- keeps getViewModel a pure read.
 --
 -- Driven from the UPDATE TICK, never from rebuild() itself, and BEFORE
--- this tick's own rebuild: what it reports is the viewport that was on
--- screen for the frame just past, so a build is never unmade by the
--- same tick that created it, and rebuild() stays a pure build with no
--- cross-module side effect.
+-- this tick's own rebuild: what it reports is a viewport a frame has
+-- already drawn, so a build is never unmade by the same tick that
+-- created it, and rebuild() stays a pure build with no cross-module
+-- side effect.
 --
 -- Idempotent and cheap: acknowledgePresented only writes ids that are
 -- still sticky, so every call after the first is a no-op.
@@ -476,6 +539,7 @@ local function acknowledgePresentedRows()
     if not tutorialHud._hudVisible then return end
     -- Early-out only: an empty list acknowledges nothing either way.
     if #tutorialHud._rows == 0 then return end
+    if not tutorialHud.isPresented() then return end
     local progress = progressModule()
     if progress == nil
             or type(progress.acknowledgePresented) ~= "function" then
@@ -511,6 +575,11 @@ local function applyPageVisibility()
     else
         UI.hidePage(tutorialHud.page)
     end
+    -- #2056: the page appearing or disappearing changes what is in
+    -- front of the player as surely as a rebuild does, and the arm has
+    -- to follow the show/hide so the token stands for the page's NEW
+    -- state.
+    armPresentation()
 end
 
 -- Destroy and recreate every element from the live model + geometry.
@@ -664,6 +733,9 @@ function tutorialHud.rebuild()
     end
 
     tutorialHud._sig = contentSignature(rows)
+    -- #2056: last, after every element of this viewport exists. An arm
+    -- placed earlier would stand for a half-built list.
+    armPresentation()
     return true
 end
 
@@ -673,6 +745,19 @@ end
 
 function tutorialHud.isOpen()
     return tutorialHud.open == true
+end
+
+-- #2056: has the CURRENT viewport been in front of a completed renderer
+-- snapshot? False whenever nothing is armed, which is the state a
+-- GPU-less --headless engine stays in permanently -- it draws no frame,
+-- so it can never honestly answer yes, and tools/tutorial_probe.py
+-- performs the model transition explicitly instead of waiting for one.
+function tutorialHud.isPresented()
+    local token = tutorialHud._presentToken
+    if type(token) ~= "number" then return false end
+    if type(UI.isPresented) ~= "function" then return false end
+    local ok, presented = pcall(UI.isPresented, token)
+    return ok and presented == true
 end
 
 function tutorialHud.setOpen(open)
@@ -803,6 +888,13 @@ function tutorialHud.update(_dt)
     -- only after a rebuild -- a row can reach the screen with no
     -- content change at all, because hud.show() flips `_hudVisible`
     -- just above and paints a page that was built while hidden.
+    --
+    -- #2056: which is exactly why the rising edge above must not
+    -- acknowledge in this same call. applyPageVisibility() has just
+    -- re-armed, so the token stands for a page shown MICROSECONDS ago
+    -- that no renderer snapshot can yet have held; the gate inside
+    -- refuses, and a later tick -- once a frame has really drawn it --
+    -- is what spends the suppression.
     acknowledgePresentedRows()
     if not hudVisible then return end
     -- Content churn only: opening, scrolling and resizing rebuild
@@ -892,6 +984,15 @@ function tutorialHud.dump()
         scrollRange  = tutorialHud._maxOffset or 0,
         capacity     = lay.capacity,
         rebuildCount = tutorialHud.rebuildCount,
+        -- #2056: the live presentation boundary. `presentToken` is the
+        -- token standing for exactly the VIEWPORT above; `presented` is
+        -- whether a completed renderer snapshot has held that viewport
+        -- yet. Note it says nothing about ROWS: a collapsed panel's
+        -- empty viewport is presented as honestly as a full one, and
+        -- acknowledgement is gated on `presented` AND a non-empty
+        -- `rows` -- two independent conditions.
+        presentToken = tutorialHud._presentToken or 0,
+        presented    = tutorialHud.isPresented(),
         -- Whether hud's shared font AND box textures existed at build
         -- time. False means this build predates hud.init and is
         -- deliberately unlabelled/textureless; the update tick rebuilds

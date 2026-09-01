@@ -165,8 +165,21 @@ function worldManager.createWorld(params)
     -- rule: nil for every caller that has no generated name, which is
     -- indistinguishable from not passing them at all. Argument 9
     -- (#1104's name expression) follows it exactly.
-    world.init(worldId, seed, worldSize, plateCount, worldName,
-               worldGloss, languageSeed, languageVersion, nameExpr)
+    -- #2020: world.init admits the world's map image synchronously and
+    -- enqueues nothing when it refuses. Reaching a refusal HERE means
+    -- something already destroyed the previous world, so the caller
+    -- responsible for asking first (scripts/create_world/generation.lua,
+    -- via world.checkMapImagePlan, before its destroyWorld()) did not.
+    -- Nothing downstream can recover the lost world, so this reports the
+    -- diagnostic as loudly as it can and returns nil rather than handing
+    -- back a world id no page will ever exist under.
+    local queued, refusal = world.init(worldId, seed, worldSize, plateCount,
+                                       worldName, worldGloss, languageSeed,
+                                       languageVersion, nameExpr)
+    if queued == false then
+        engine.logError("World creation refused: " .. tostring(refusal))
+        return nil
+    end
 
     -- Send all textures
     sendStructuralTextures(worldId, params.structural)

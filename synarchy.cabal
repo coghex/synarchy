@@ -251,6 +251,7 @@ library
                      Engine.Graphics.Font.Upload
                      Engine.Graphics.Font.Util
                      Engine.Graphics.Font.STB
+                     Engine.Map.ImageAdmission
                      Engine.Input.Bindings
                      Engine.Input.Callback
                      Engine.Input.Inject
@@ -327,6 +328,7 @@ library
                      Engine.Scripting.Lua.API.UI.Property
                      Engine.Scripting.Lua.API.UI.Tooltip
                      Engine.Scripting.Lua.API.UI.Placement
+                     Engine.Scripting.Lua.API.UI.Presentation
                      Engine.Scripting.Lua.API.Faction
                      Engine.Scripting.Lua.API.Units
                      Engine.Scripting.Lua.API.Units.Page
@@ -449,6 +451,7 @@ library
                      UI.Manager.Query
                      UI.Manager.Text
                      UI.Manager.BoxTexture
+                     UI.Manager.Presentation
                      UI.Render
                      UI.TextBuffer
                      UI.Tooltip
@@ -634,6 +637,8 @@ library
                      Combat.Wounds.Sever
                      Combat.Wounds.Tick
                      Sim.State.Types
+                     Sim.Topology
+                     Sim.Chunk
                      Sim.Fluid.Types
                      Sim.Fluid.Active
                      World.Base
@@ -641,6 +646,8 @@ library
                      World.Command.Types
                      World.Chunk.Types
                      World.Chunk.Queue
+                     World.Chunk.Residency
+                     World.Chunk.Admit
                      World.Cursor.Types
                      World.Edit.Types
                      World.Edit.Apply
@@ -895,6 +902,7 @@ library
                      World.Fluid.River.Identify.ChunkIndex
                      World.Fluid.Lava
                      World.Magma.Overlay
+                     World.Map.ImagePlan
                      World.Magma.Types
                      World.Magma.Field
                      World.Magma.Shape
@@ -1189,11 +1197,14 @@ test-suite synarchy-test-headless
                    Test.Headless.Save.Snapshot
                    Test.Headless.World.ArenaSeed
                    Test.Headless.World.Identity
+                   Test.Headless.World.MapImagePlan
+                   Test.Headless.World.MapImageAdmission
                    Test.Headless.World.CursorInfo
                    Test.Headless.World.CursorTextureDispatch
                    Test.Headless.World.SelectTileZ
                    Test.Headless.World.SelectChunk
                    Test.Headless.World.ActionOutcome
+                   Test.Headless.World.ChunkIdentity
                    Test.Headless.World.ChunkQueueFrame
                    Test.Headless.World.DesignationSeam
                    Test.Headless.World.CropPlant
@@ -1339,6 +1350,7 @@ test-suite synarchy-test-headless
                    Test.Headless.River.Naming
                    Test.Headless.Location.LootDeterminism
                    Test.Headless.Location.MapIcons
+                   Test.Headless.Location.StampCommit
                    Test.Headless.Location.Stamping
                    Test.Headless.Tutorial.Definitions
                    Test.Headless.Building.Knowledge
