@@ -15,7 +15,8 @@ import Unit.Types
 import World.Page.Types (WorldPageId(..))
 import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
-import Combat.Wounds (tickOneUnit)
+import Combat.Wounds (tickOneUnit, bleedRateFor)
+import Combat.Wounds.Constants (woundCleanupThreshold)
 import Infection.Types (InfectionManager(..), InfectionDef(..)
                        , emptyInfectionManager)
 import qualified System.Random as Random
@@ -101,6 +102,7 @@ firstWound i = case uiWounds i of
 spec ∷ Spec
 spec = do
   effSeveritySpec
+  tickEffSeverityLockstepSpec
   describe "Combat.Wounds infection" $ do
 
     it "a dirty open wound accrues infection after the grace period" $ do
@@ -165,9 +167,11 @@ spec = do
                      in woundInfection (firstWound i')
         grow 41.0 `shouldSatisfy` (< grow 37.0)
 
--- The single source of truth every consumer (bleed display, medic
--- targeting, injured-anim, pain, movement, attack-gate) routes through.
--- Mirrors the per-tick `effSev` in tickOneUnit: max (sev×(1−heal)) nec.
+-- The one definition of effective severity, which every consumer (bleed
+-- display, medic targeting, injured-anim, pain, movement, attack-gate)
+-- routes through — including the wound tick itself, which calls it on
+-- the wound it has just advanced. These four cases pin the formula;
+-- 'tickEffSeverityLockstepSpec' below pins the tick's use of it.
 effSeveritySpec ∷ Spec
 effSeveritySpec = describe "Wound.woundEffSeverity" $ do
 
@@ -186,3 +190,67 @@ effSeveritySpec = describe "Wound.woundEffSeverity" $ do
     it "a festering wound (heal reversed below 0) climbs above the inflicted value" $
         -- heal −0.5 → sev × 1.5 = 0.75 > the inflicted 0.5.
         woundEffSeverity (mkWound "slash" 0.5 (-0.5) 0.0 False) `shouldBe` 0.75
+
+-- The tick does not respell the formula: the effective severity it bleeds
+-- and cleans up on is 'woundEffSeverity' of the wound it hands back. A
+-- helper-only test cannot see that, so both cases here run a REAL
+-- 'tickOneUnit' and observe the value through the tick's own behavior —
+-- blood removed, and the healed-out decision — on wounds where the
+-- necrosis floor (not the acute severity term) is what governs.
+tickEffSeverityLockstepSpec ∷ Spec
+tickEffSeverityLockstepSpec = describe "Combat.Wounds tick effective severity" $ do
+
+    it "the tick's bleed uses woundEffSeverity of the wound it returns" $ do
+        -- 0.3 of dead tissue floors effective severity far above the acute
+        -- term (0.5 × (1 − 0.9) = 0.05), and a "necrosis"-tagged infection
+        -- makes the rot GROW during the tick — so the governing value
+        -- exists only on the POST-tick wound. Untreated (bandage 1.0) so
+        -- the drain is comfortably readable back out of uiBlood.
+        let dt     = 10
+            w      = (mkWound "slash" 0.5 0.9 0.5 False)
+                       { woundBandage = 1.0, woundNecrosis = 0.3
+                       , woundInfectionType = "bug" }
+            before = inst [w]
+            (after, _, _) = tickOneUnit 100 def dt (mgrWith ["necrosis"]) Nothing
+                                (Random.mkStdGen 1) before False
+            w'     = firstWound after
+            -- What the tick actually did: blood removed over the step.
+            observed  = (uiBlood before - uiBlood after) / dt
+            -- What woundEffSeverity of the RETURNED wound predicts, through
+            -- the same public per-wound bleed formula.
+            expected  = bleedRateFor def after
+            -- What the acute term alone would have predicted. Far smaller,
+            -- which is what makes the equality above discriminating rather
+            -- than a tautology.
+            acuteOnly = bleedRateFor def
+                          (after { uiWounds = [w' { woundNecrosis = 0 }] })
+        -- Preconditions: the rot really advanced, and it really governs.
+        woundNecrosis w' `shouldSatisfy` (> 0.3)
+        woundNecrosis w' `shouldSatisfy`
+            (> woundSeverity w' * (1 - woundHeal w'))
+        expected `shouldSatisfy` (> 4 * acuteOnly)
+        -- Lockstep. The blood readback costs a few ulps against uiBlood's
+        -- magnitude, hence a relative bound rather than shouldBe.
+        abs (observed - expected) `shouldSatisfy` (< 1e-3 * expected)
+
+    it "the tick's cleanup decision uses woundEffSeverity, not the acute term" $ do
+        -- Acute severity 0.5 × (1 − 0.995) is under the 0.01 cleanup
+        -- threshold; 0.05 of dead tissue is not. Clean, uninfected and with
+        -- no infection catalogue, so necrosis holds still and the ONLY
+        -- difference between the two runs is the floor.
+        let base   = mkWound "slash" 0.5 0.995 0.0 True
+            rotted = base { woundNecrosis = 0.05 }
+            run w  = let (i', _, _) = tickOneUnit 100 def 10 emptyInfectionManager
+                                        Nothing (Random.mkStdGen 1) (inst [w]) False
+                     in uiWounds i'
+        -- Acute severity alone heals it out …
+        run base `shouldBe` []
+        -- … while the necrosis floor keeps it, at exactly the effective
+        -- severity woundEffSeverity reports for the wound that survived.
+        case run rotted of
+            [w'] → do
+                woundEffSeverity w' `shouldBe` 0.05
+                woundEffSeverity w' `shouldSatisfy` (≥ woundCleanupThreshold)
+            ws   → expectationFailure
+                     ("the necrotic wound should have survived cleanup; got "
+                      <> show (length ws) <> " wounds")

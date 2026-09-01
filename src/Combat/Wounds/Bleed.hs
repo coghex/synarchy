@@ -41,10 +41,13 @@ kindBleedFactor _            = 0.5
 
 -- | The per-wound bleed-rate term (litres/second), shared by
 --   'bleedRateFor', 'externalBleedRateFor', and
---   'dominantExternalBleedWound' — mirrors 'Combat.Wounds.Tick.tickOneUnit's
---   inline formula exactly (severity² × kind × part.bleed_factor ×
---   bandage × clot × bleedScale / clamp(con); see "Combat.Wounds" for
---   the overall formula summary).
+--   'dominantExternalBleedWound': effective severity² × kind ×
+--   part.bleed_factor × bandage × clot × bleedScale / clamp(con) — see
+--   "Combat.Wounds" for the overall formula summary. The severity term
+--   comes from 'woundEffSeverity', the one definition of effective
+--   severity, which 'Combat.Wounds.Tick.tickOneUnit' also calls on the
+--   wound it has just advanced, so a wound's live bleed and the drain
+--   that tick applied agree by construction.
 perWoundBleedRate ∷ HM.HashMap Text BodyPart → Float → Wound → Float
 perWoundBleedRate parts bleedCon w =
     let effSev = woundEffSeverity w
