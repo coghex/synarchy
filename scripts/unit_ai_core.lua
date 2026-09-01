@@ -22,6 +22,9 @@ local stall = require("scripts.unit_ai_stall")
 -- Position hold after a completed player move order (#1216). Requires
 -- stall only, never this module -- so the verbs below can clear a hold.
 local hold = require("scripts.unit_ai_hold")
+-- A row's transient runtime fields and their fresh-unit values, shared
+-- with the save-restore path that normalizes sparse legacy rows (#2055).
+local defaults = require("scripts.unit_ai_defaults")
 
 local M = {}
 
@@ -81,15 +84,12 @@ local aiState = unitAi.aiState
 -- Helpers
 -----------------------------------------------------------
 
+-- Built from unit_ai_defaults' ONE declaration, never an inline table:
+-- this path and the restore path must not drift (#2055).
 local function ensureState(uid)
     local s = aiState[uid]
     if not s then
-        s = {
-            currentAction   = "idle",
-            actionStartedAt = engine.gameTime(),
-            nextActionAt    = 0,      -- decide on first sight
-            commandedTask   = nil,
-        }
+        s = defaults.normalize({})
         aiState[uid] = s
     end
     return s

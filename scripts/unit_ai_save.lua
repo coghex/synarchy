@@ -270,6 +270,15 @@ function M.register(aiState)
             -- fromGround/groundGid, and their ABSENCE already means
             -- "this repair target did not come off the ground", which
             -- is the only thing those bytes could have meant.
+            --
+            -- #2055's runtime-default normalization is deliberately NOT
+            -- here either. One of the three defaults reads the CLOCK,
+            -- and decode runs during staging -- `gameTimeRef` is not
+            -- swapped to the save's own game time until
+            -- World.Load.Publish, so a value stamped here would be the
+            -- OUTGOING session's time (0 in a fresh process), not the
+            -- restored one. It runs at the post-publish reconcile
+            -- instead: scripts/unit_ai_reconcile.lua.
             if version == 1 then return refsMod.wrapAiState(data) end
             if version == 2 then return refsMod.addOwnerToAiState(data) end
             return data
@@ -291,6 +300,14 @@ function M.register(aiState)
         -- OTHER module) never changes -- only the bytes on disk do. The
         -- table is mutated in place: consumers hold direct references to
         -- it and rebinding would orphan every one of them.
+        --
+        -- #2055's runtime-default normalization is deliberately NOT
+        -- here: apply() is also the ROLLBACK entry point (applyAll
+        -- hands it the OLD session's own snapshot, contextless, and
+        -- that unwind is required to be verbatim), so normalizing at
+        -- this boundary would edit pre-load state during a load that
+        -- is being abandoned. It runs at the post-publish reconcile
+        -- instead -- see scripts/unit_ai_reconcile.lua.
         apply = function(data, entities)
             saveMods.applyEntityRows(aiState, refsMod.unwrapAiState(data),
                 entities, { kind = "unit", component = "unit_ai" })

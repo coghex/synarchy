@@ -109,5 +109,11 @@
       "expr": "type(require('scripts.building_spawn').state[1].lastUid)",
       "expected": "number"
     }
+  ],
+  "liveTickChecks": [
+    {
+      "$comment": "Issue #2055. Every check above -- structural, dumped-state and luaStateChecks alike -- is evaluated while the session is PAUSED, and the second resave follows the second round of them immediately. This fixture's v1 unit_ai payload is a SPARSE row, {[1] = {buildTarget = 1}}, carrying none of the transient runtime fields a thought tick reads before it has decided anything; restored verbatim it passed every one of those checks and then errored on its first live tick at `engine.gameTime() < s.nextActionAt`. Declaring the row's own unit here makes the probe unpause and watch unit 1 actually complete a decision cycle, so a recurrence fails the migration matrix instead of passing after the codec checks.",
+      "unitId": 1
+    }
   ]
 }

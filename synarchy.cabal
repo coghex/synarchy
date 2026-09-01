@@ -330,6 +330,7 @@ library
                      Engine.Scripting.Lua.API.UI.Property
                      Engine.Scripting.Lua.API.UI.Tooltip
                      Engine.Scripting.Lua.API.UI.Placement
+                     Engine.Scripting.Lua.API.UI.Presentation
                      Engine.Scripting.Lua.API.Faction
                      Engine.Scripting.Lua.API.Units
                      Engine.Scripting.Lua.API.Units.Page
@@ -452,6 +453,7 @@ library
                      UI.Manager.Query
                      UI.Manager.Text
                      UI.Manager.BoxTexture
+                     UI.Manager.Presentation
                      UI.Render
                      UI.TextBuffer
                      UI.Tooltip
