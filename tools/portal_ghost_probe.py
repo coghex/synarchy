@@ -53,7 +53,7 @@ from location_content_probe import (load_defs, gen_world, placed_ready,
                                     wait_floor, make_isolated_root,
                                     remove_isolated_root, save_and_wait)
 from offscreen_probe import screenshot, png_stats, png_differs
-from run_probes import FailureEmitter   # durable failure records (#1982)
+from probe_runner_diagnostics import FailureEmitter   # durable failure records (#1982)
 
 LOG_PREP = "/tmp/portal_ghost_prep_engine.log"
 LOG_GPU = "/tmp/portal_ghost_gpu_engine.log"

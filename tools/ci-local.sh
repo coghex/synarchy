@@ -362,7 +362,8 @@ python3 tools/world_check.py --quick
 # SIGKILLing one of them, because a claim that must hold between OS
 # processes cannot be proved by threads.
 # test_probe_resource_lock is #1436's cross-process reader/writer lock --
-# the half run_probes' in-process ledger cannot provide -- proved with
+# the half probe_runner_resources' in-process ledger cannot provide --
+# proved with
 # separate interpreters and one SIGKILLed holder; test_deflake is the
 # /deflake orchestrator, driven entirely through injected adapters, with
 # probe_census and probe_flake.Measurement themselves real against

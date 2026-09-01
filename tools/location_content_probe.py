@@ -114,7 +114,7 @@ from pathlib import Path
 from probelib import (FixtureNotRegistered, capture_request_id, quit_engine,
                       boot, load_fixture_yaml, send, wait_load_published,
                       wait_save_complete, load_ai_stack)
-from run_probes import FailureEmitter   # durable failure records (#1982)
+from probe_runner_diagnostics import FailureEmitter   # durable failure records (#1982)
 
 REPO = Path(__file__).resolve().parent.parent
 #: #1982 — this run's durable failure records, built at import so the

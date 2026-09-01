@@ -73,7 +73,7 @@ can tell it apart from a roster where everything happened to be claimed.
 
 Every remaining tie breaks lexicographically on the exact registered
 key. Registration order, display purpose, script filename and census
-array order affect nothing: `run_probes.PROBES` registers
+array order affect nothing: `probe_runner_registry.PROBES` registers
 `blood_gpu_lifecycle` ahead of `bleeding_trail` while the two sort the
 other way round, so an implementation that iterated the registry would
 pass a census-order-only test and still be wrong.

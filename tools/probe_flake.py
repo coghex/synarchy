@@ -20,7 +20,7 @@ to find out would boot a real engine (~11 minutes for `farm_ai`).
 
 What this owns, and what it deliberately does not:
 
-* `run_probes.run_one` still owns process launch, combined output
+* `probe_runner_lifecycle.run_one` still owns process launch, combined output
   capture, elapsed timing, deferred SIGINT, timeout escalation, and
   process-group cleanup. This module reuses it rather than growing a
   second subprocess lifecycle.
@@ -37,7 +37,7 @@ Exit codes:
      legacy probe, descriptor mismatch, bad run/capability count,
      port 8008, unusable artifact root)
   3  no clear, leasable span of the probe's declared port width
-     (`run_probes.PROBE_PORT_SPANS`, #1571) anywhere in the range
+     (`probe_runner_registry.PROBE_PORT_SPANS`, #1571) anywhere in the range
   4  harness error: the protocol stream was malformed, truncated,
      duplicated, out of order, or otherwise unclassifiable, so no
      trustworthy rate exists
@@ -63,7 +63,9 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ci_probes  # noqa: E402
 import probe_protocol  # noqa: E402
-import run_probes  # noqa: E402
+import probe_engine  # noqa: E402
+import probe_runner_lifecycle  # noqa: E402
+import probe_runner_registry  # noqa: E402
 
 RESULT_SCHEMA = "probe-flake-result/v1"
 
@@ -100,7 +102,7 @@ PORT_MAX = 8999
 # condition to tune away.
 DEFAULT_RTS_CAPS = 4
 
-DEFAULT_TIMEOUT = run_probes.DEFAULT_TIMEOUT
+DEFAULT_TIMEOUT = probe_runner_registry.DEFAULT_TIMEOUT
 
 ARTIFACT_DIR_NAME = "synarchy-probe-flake"
 
@@ -180,7 +182,7 @@ class HarnessError(Exception):
 # --------------------------------------------------------------------------
 def registered_scripts() -> dict[str, str]:
     """Every registered probe key -> its script filename."""
-    return {key: script for key, script, _purpose in run_probes.PROBES}
+    return {key: script for key, script, _purpose in probe_runner_registry.PROBES}
 
 
 def protocol_status(key: str) -> str:
@@ -198,7 +200,7 @@ def resolve_probe(key: str) -> str:
     scripts = registered_scripts()
     if key not in scripts:
         raise Rejection(
-            f"unknown probe {key!r}: not registered in run_probes.PROBES. "
+            f"unknown probe {key!r}: not registered in probe_runner_registry.PROBES. "
             f"`python3 tools/run_probes.py --list` names every probe.")
     if key in ci_probes.CI_ELIGIBLE:
         raise Rejection(
@@ -225,7 +227,7 @@ def fetch_descriptor(key: str, script: str,
     """
     cmd = ["python3", os.path.join("tools", script), "--describe"]
     try:
-        done = subprocess.run(cmd, cwd=run_probes.REPO_ROOT, text=True,
+        done = subprocess.run(cmd, cwd=probe_engine.REPO_ROOT, text=True,
                               capture_output=True, timeout=timeout)
     except (OSError, subprocess.SubprocessError, UnicodeDecodeError) as error:
         raise Rejection(
@@ -666,11 +668,11 @@ def default_artifact_root() -> Path:
 
 def _worktree_paths() -> list[Path]:
     """Every git worktree registered to this checkout, plus the checkout."""
-    paths = [Path(run_probes.REPO_ROOT).resolve()]
+    paths = [Path(probe_engine.REPO_ROOT).resolve()]
     try:
         done = subprocess.run(
             ["git", "worktree", "list", "--porcelain"],
-            cwd=run_probes.REPO_ROOT, text=True, capture_output=True, timeout=30)
+            cwd=probe_engine.REPO_ROOT, text=True, capture_output=True, timeout=30)
     except (OSError, subprocess.SubprocessError):
         return paths
     if done.returncode != 0:
@@ -862,7 +864,7 @@ class Measurement:
 def _commit_sha() -> str:
     try:
         done = subprocess.run(["git", "rev-parse", "HEAD"],
-                              cwd=run_probes.REPO_ROOT, text=True,
+                              cwd=probe_engine.REPO_ROOT, text=True,
                               capture_output=True, timeout=30)
     except (OSError, subprocess.SubprocessError):
         return "unknown"
@@ -952,14 +954,14 @@ def measure(probe: str, runs: int, *, artifact_root: Path | None = None,
             # `debug_console_boot` and `offscreen` derive a second live
             # listener from the base they are handed, and leasing one port
             # would leave that second engine on a port another harness is
-            # free to take. `run_probes.port_span` is the single
+            # free to take. `probe_runner_registry.port_span` is the single
             # declaration; nothing here knows any probe by name.
-            leases, cursor = acquire_span(cursor, run_probes.port_span(probe))
+            leases, cursor = acquire_span(cursor, probe_runner_registry.port_span(probe))
             base_port = leases[0].port
             try:
                 if announce:
                     announce(index, runs, base_port)
-                ok, timed_out, elapsed, out = run_probes.run_one(
+                ok, timed_out, elapsed, out = probe_runner_lifecycle.run_one(
                     script, base_port, timeout, None,
                     event_path=str(events_path),
                     artifact_dir=str(run_dir),
