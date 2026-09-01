@@ -1105,6 +1105,7 @@ jobs:
           python3 tools/test_movement_probe.py
           python3 tools/test_farm_ai_probe.py
           python3 tools/test_probe_boot_logs.py
+          python3 tools/test_item_list_widget_probe.py
 
       # The decision `.github/workflows/review-gate.yml` makes on every
       # synchronize push: keep `reviewed:approve` only when the push left
