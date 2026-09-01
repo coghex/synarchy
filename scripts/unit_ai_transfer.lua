@@ -138,21 +138,16 @@ local TRANSFER_ORDER_TIMEOUT = 60.0
 
 local M = {}
 
--- The AI action a Mode B order's EXECUTOR must be able to run for the
--- order to mean anything (#2030). Named once here, beside the action it
--- names, and exported so the player ingress that queues an order asks
--- about it by the same string the dispatch loop registers -- rather than
--- three literals free to drift from the registration.
---
--- The Mode A counterpart is transfer_session.ESCORT_ACTION, which names
--- scripts/unit_ai_escort.lua's action the same way for the same reason.
-local TRANSFER_ORDER_ACTION = "transfer_order"
-M.TRANSFER_ORDER_ACTION = TRANSFER_ORDER_ACTION
-
--- The per-species action inventory (#1250). A leaf module with no
+-- The per-species action inventory (#1250), which also OWNS the name of
+-- the action registered below (#2030). A leaf module with no
 -- dependencies of its own, so requiring it at the top costs nothing and
 -- closes no cycle.
+--
+-- The action's registration, the command boundary's refusal and the two
+-- player gestures all read that one value, so a gate cannot come to ask
+-- about a string the dispatch loop never registered.
 local aiActions = require("scripts.unit_ai_actions")
+local TRANSFER_ORDER_ACTION = aiActions.TRANSFER_ORDER_ACTION
 
 -- Walk to the nearest tile of the ring just OUTSIDE an endpoint's
 -- footprint. Rect-generic because a counterpart may be a unit (a 1x1
@@ -268,7 +263,7 @@ local function transferUtility(uid, s)
     -- resets only on a NEW closest approach -- so a carrier circling an
     -- unreachable endpoint never refreshes it -- and only time this
     -- action actually held the unit is charged (#1291).
-    local eligible = s.currentAction == "transfer_order"
+    local eligible = s.currentAction == TRANSFER_ORDER_ACTION
     local info = eligible and unit.getInfo(uid)
     if info then
         local d = approachDist(info, order.approach)

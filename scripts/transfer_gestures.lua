@@ -49,8 +49,6 @@
 --   storeEntries(uid, row)               -- unit-info row -> that window
 --   retrieveEntries(endpoint, row)       -- window row -> resolved unit
 --   entries(opts)                        -- the shared 1/all builder
---   TRANSFER_ORDER_ACTION                -- the executor capability both
---                                           gestures gate on
 --
 -- Both gestures require their EXECUTOR's species to be able to run the
 -- queued order (#2030) -- Store the panel's own unit, Retrieve the
@@ -58,28 +56,25 @@
 -- never registered for is never ticked and stays pending for ever. The
 -- rule comes from the same registration the dispatch loop uses
 -- (scripts/unit_ai_actions.lua), never a species list beside it, so the
--- two cannot drift as species are added.
+-- two cannot drift as species are added -- and it asks by that module's
+-- own TRANSFER_ORDER_ACTION, the single definition of the name.
 
 local M = package.loaded["scripts.transfer_gestures"] or {}
 package.loaded["scripts.transfer_gestures"] = M
 
 local itemList = require("scripts.ui.item_list")
 -- The per-species AI action inventory (#1250): a leaf module with no
--- dependencies, so requiring it at the top closes no cycle.
+-- dependencies, so requiring it at the top closes no cycle -- and the
+-- one OWNER of the transfer order's action name (#2030), which is why
+-- the gates below read it from there rather than spelling it.
+--
+-- Deliberately not imported from scripts/unit_ai_transfer.lua, which
+-- registers the action: that module reads
+-- package.loaded["scripts.unit_ai"] at module scope and would fault when
+-- required from a UI module in a process that never loaded the AI. The
+-- registry is the module both sides CAN reach, so it holds the name.
 local aiActions = require("scripts.unit_ai_actions")
-
--- The AI action a Mode B order's EXECUTOR must be able to run
--- (scripts/unit_ai_transfer.lua's own name for it, exported there as
--- TRANSFER_ORDER_ACTION). Named here rather than spelled as a literal at
--- each of the two gates below, exactly as transfer_session.lua names
--- ESCORT_ACTION for Mode A -- and for the same reason it does not import
--- it: scripts/unit_ai_transfer.lua reads
--- package.loaded["scripts.unit_ai"] at module scope, so requiring it
--- from a UI module that never loaded the AI would fault rather than
--- answer. 'Test.Headless.UI.TransferGestures' pins the two strings
--- together so they cannot drift apart in silence.
-local TRANSFER_ORDER_ACTION = "transfer_order"
-M.TRANSFER_ORDER_ACTION = TRANSFER_ORDER_ACTION
+local TRANSFER_ORDER_ACTION = aiActions.TRANSFER_ORDER_ACTION
 
 -- Can `uid`'s species run a queued transfer order?
 --

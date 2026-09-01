@@ -568,33 +568,56 @@ spec = aroundAll withSharedFixture $
             resetFixture env ls
             reg ← evalOk ls $ luaLines
                 [ "local a = require('scripts.unit_ai_actions');"
-                , "local g = require('scripts.transfer_gestures');"
+                , "local act = a.TRANSFER_ORDER_ACTION;"
                 , "return { registered = a.registered(),"
-                , "         acolyte = a.has('acolyte', g.TRANSFER_ORDER_ACTION),"
-                , "         mule = a.has('technomule', g.TRANSFER_ORDER_ACTION),"
-                , "         bear = a.has('bear_brown', g.TRANSFER_ORDER_ACTION),"
-                , "         squirrel = a.has('red_squirrel',"
-                , "                          g.TRANSFER_ORDER_ACTION) }" ]
+                , "         acolyte = a.has('acolyte', act),"
+                , "         mule = a.has('technomule', act),"
+                , "         bear = a.has('bear_brown', act),"
+                , "         squirrel = a.has('red_squirrel', act) }" ]
             reg `shouldSatisfy` T.isInfixOf "\"registered\":true"
             reg `shouldSatisfy` T.isInfixOf "\"acolyte\":true"
             reg `shouldSatisfy` T.isInfixOf "\"mule\":true"
             reg `shouldSatisfy` T.isInfixOf "\"bear\":false"
             reg `shouldSatisfy` T.isInfixOf "\"squirrel\":false"
 
-        it "gates on the name the dispatch loop actually registers: the \
-           \gesture module's constant and the AI action's own name are \
-           \one string (requirement 1 — a registry answer, never a \
-           \species list)" $ \(env, ls) → do
+        -- Review round 1: the name had been defined independently in two
+        -- production modules, with this case merely asserting today's
+        -- two literals matched -- which is a drift DETECTOR, not a
+        -- single source. scripts/unit_ai_actions.lua now owns the one
+        -- definition and every asker reads it, so what is checked here
+        -- is that the registration really flows from that owner.
+        it "takes the action's name from ONE owner: the registry defines \
+           \it, the dispatch loop registers under it, and every gate \
+           \asks by it (requirement 1)" $ \(env, ls) → do
             resetFixture env ls
-            agree ← evalOk ls $ luaLines
+            owned ← evalOk ls $ luaLines
+                [ "local a = require('scripts.unit_ai_actions');"
+                , "local t = require('scripts.unit_ai_transfer');"
+                -- The registered action's own name IS the owner's value,
+                -- so a rename of the owner renames the registration --
+                -- which is what "one definition" has to mean.
+                , "return { owner = a.TRANSFER_ORDER_ACTION,"
+                , "         registeredUnder = t.action.name,"
+                , "         sameString = t.action.name =="
+                , "                      a.TRANSFER_ORDER_ACTION,"
+                -- ...and the species inventory really is keyed by it.
+                , "         inInventory = a.byDef['acolyte']"
+                , "                         [a.TRANSFER_ORDER_ACTION] == true }" ]
+            owned `shouldSatisfy` T.isInfixOf "\"owner\":\"transfer_order\""
+            owned `shouldSatisfy`
+                T.isInfixOf "\"registeredUnder\":\"transfer_order\""
+            owned `shouldSatisfy` T.isInfixOf "\"sameString\":true"
+            owned `shouldSatisfy` T.isInfixOf "\"inInventory\":true"
+            -- Neither consumer re-declares it: the gesture module and
+            -- the AI module are consumers, so the owner is the only
+            -- place the string is written.
+            noRedecl ← evalOk ls $ luaLines
                 [ "local g = require('scripts.transfer_gestures');"
                 , "local t = require('scripts.unit_ai_transfer');"
-                , "return { gesture = g.TRANSFER_ORDER_ACTION,"
-                , "         action = t.action.name,"
-                , "         boundary = t.TRANSFER_ORDER_ACTION }" ]
-            agree `shouldSatisfy` T.isInfixOf "\"gesture\":\"transfer_order\""
-            agree `shouldSatisfy` T.isInfixOf "\"action\":\"transfer_order\""
-            agree `shouldSatisfy` T.isInfixOf "\"boundary\":\"transfer_order\""
+                , "return { gesture = tostring(g.TRANSFER_ORDER_ACTION),"
+                , "         transfer = tostring(t.TRANSFER_ORDER_ACTION) }" ]
+            noRedecl `shouldSatisfy` T.isInfixOf "\"gesture\":\"nil\""
+            noRedecl `shouldSatisfy` T.isInfixOf "\"transfer\":\"nil\""
 
         it "omits Store for a commandable species that cannot run the \
            \order — a debug bear and a debug squirrel queue nothing, \
