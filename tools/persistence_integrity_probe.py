@@ -105,7 +105,7 @@ def bootstrap_defs(port: int) -> None:
         ("data/units/*.yaml",      "engine.loadUnitYaml"),
         # Just the one def the #1484 scenario stakes -- a shipped
         # `build_work: 240.0` building, so a `building.spawn`ed instance
-        # reports "appearing" with real build work outstanding and stays
+        # reports "constructing" with real build work outstanding and stays
         # there (no construction tick runs in this probe), which is
         # exactly what `findNearestUnbuilt` looks for.
         (BUILD_SITE_YAML,          "engine.loadBuildingYaml"),
@@ -279,13 +279,13 @@ def main() -> int:
                 f"tostring(building.getBuildRequired({bid}))").strip('"')
 
         def site_is_a_build_target() -> str | None:
-            """`site_state()` once it reads "appearing,<work>" with the
+            """`site_state()` once it reads "constructing,<work>" with the
             work above zero -- the exact shape `findNearestUnbuilt`
             accepts -- and None on every other answer, so the wait keeps
             going instead of ending on the first sample."""
             v = site_state()
             activity, _, work = v.partition(",")
-            if activity != "appearing":
+            if activity != "constructing":
                 return None
             try:
                 return v if float(work) > 0 else None

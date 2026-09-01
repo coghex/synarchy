@@ -71,7 +71,7 @@ local function findDeliveryTarget(uid, fromX, fromY, params)
     if not ids or #ids == 0 then return nil end
     local best, bestD = nil, params.deliver_scan_range
     for _, bid in ipairs(ids) do
-        if bid and building.getActivity(bid) == "appearing"
+        if bid and building.getActivity(bid) == "constructing"
            and not building.areMaterialsSatisfied(bid) then
             local need      = building.getMaterialNeed(bid) or {}
             local delivered = building.getMaterialDelivered(bid) or {}

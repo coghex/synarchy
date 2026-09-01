@@ -212,10 +212,14 @@ buildingAddBuildProgressFn env = do
             Lua.pushnil
             return 1
 
--- | building.getActivity(id) — returns "appearing" while the appear
---   animation is still playing, "built" afterwards. nil if the
---   building doesn't exist. Computed from elapsed time vs the def's
---   appearing anim duration (no stored state to query).
+-- | building.getActivity(id) — "constructing" while a worker-driven
+--   build is short of its target, "appearing" while a zero-work
+--   definition is still inside its timed appearance, "built"
+--   afterwards (#2080 split the old overloaded "appearing"). nil if the
+--   building doesn't exist. Derived, with no stored state to query.
+--
+--   Code that only asks whether a building is OPERABLE keeps comparing
+--   against "built": both "constructing" and "appearing" are not-built.
 buildingGetActivityFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 buildingGetActivityFn env = do
     idArg ← Lua.tointeger 1
@@ -236,9 +240,9 @@ buildingGetActivityFn env = do
                             -- Appearing→Built transition freezes on
                             -- pause and doesn't drift against POSIX.
                             now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
-                            pure $ Just $ case currentActivity now inst def of
-                                Appearing → "appearing" ∷ Text
-                                Built     → "built"
+                            pure $ Just
+                                (buildingActivityLabel
+                                     (currentActivity now inst def) ∷ Text)
             case mLabel of
                 Just lbl → do
                     Lua.pushstring (TE.encodeUtf8 lbl)

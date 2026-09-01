@@ -310,7 +310,7 @@ local function freshDeliveryScenario(acolyteCapacity)
         table.insert(units[2].inventory, { defName = "steel_plate" })
     end
     buildings[1] = {
-        defName = "cargo_hold_S", activity = "appearing",
+        defName = "cargo_hold_S", activity = "constructing",
         gridX = 8, gridY = 8, tileW = 2, tileH = 2,
         need = { steel_plate = 4 }, delivered = {},
         spawnRemaining = 0,

@@ -42,7 +42,7 @@ import Engine.Core.State (EngineEnv, luaToEngineQueue, luaQueue, assetPoolRef
 import Engine.Core.Thread (ThreadControl(..))
 import Engine.Scripting.Lua.API.Items.Defs (registerItemDefs)
 import Item.Types (ItemDef(..), ItemManager(..))
-import Building.Types (BuildingDef(..), BuildingManager(..))
+import Building.Types (BuildingDef(..), BuildingManager(..), bdSouthTexture)
 import qualified Engine.Core.Queue as Q
 import Engine.Graphics.Vulkan.Texture.Handle (BindlessTextureHandle(..))
 import Engine.Graphics.Vulkan.Texture.Policy
@@ -301,7 +301,7 @@ spec = do
             pinned = [ p | (p, UploadPinnedNearest) ← queued ]
         published `shouldSatisfy` (not ∘ HM.null)
         forM_ (HM.elems published) $ \d → do
-            (bdName d, bdTexture d ≡ bdIconTexture d)
+            (bdName d, bdSouthTexture d ≡ bdIconTexture d)
                 `shouldBe` (bdName d, False)
         -- Exactly the sprites are pinned. An animation frame is drawn
         -- only in the world, so a frame turning up here would mean the

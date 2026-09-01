@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict #-}
 module Building.Render
-    ( renderBuildingQuads
+    ( pickBuildingFrame
+    , renderBuildingQuads
     , renderBuildingQuadsScanned
     , renderGhostQuad
     , renderGhostQuadScanned
@@ -30,49 +31,58 @@ import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..)
 import World.Grid (tileWidth, tileHeight, tileSideHeight
                   , tileHalfWidth, tileHalfDiamondHeight
                   , worldLayer, applyFacingF, baseTileW, baseTileH)
-import Unit.Direction (Direction(..))
+import Building.Schema
 import World.State.Types (wmVisible)
 import World.Page.Types (WorldPageId(..))
 import Building.Types
 
 -- | Pick a frame for a building at the given POSIX time. Mirrors
---   Unit.Render.pickFrame but simpler — only one direction key
---   ("default") and no reverse-playback flag.
+--   Unit.Render.pickFrame but simpler — no reverse-playback flag and,
+--   in this slice, no camera selection: BDA-1 keeps reading the SOUTH
+--   view of the four a definition now declares, and BDA-2 owns picking
+--   a view from the active camera.
 pickBuildingFrame ∷ Double → BuildingInstance → BuildingDef → TextureHandle
 pickBuildingFrame now inst def =
-    let activity   = currentActivity now inst def
-        stateKey   = case activity of
-                       Appearing → "appearing" ∷ Text
-                       Built     → "built"
-        -- Find the animation for the current state. If we're Built
-        -- and no "built" animation is defined, fall back to the LAST
-        -- frame of "appearing" so the visible sprite doesn't snap
-        -- back to bdTexture (which may differ from the final
+    let activity  = currentActivity now inst def
+        stateRole = case activity of
+                      Constructing → RoleConstruction
+                      Appearing    → RoleAppearance
+                      Built        → RoleBuilt
+        -- The role a Built building pins its last frame from when it
+        -- declares no `built` animation: whichever role its own
+        -- build_work put it through on the way up (#2080). Reading
+        -- the definition's own discriminator, rather than one fixed
+        -- role, is what keeps Cargo Hold / Furnace / Workbench /
+        -- Machine Shop pinning their final construction frame instead
+        -- of snapping back to the static sprite.
+        pinRole = legacyRoleFor (bdBuildWork def)
+        -- Find the animation for the current role. If we're Built and
+        -- no "built" animation is defined, fall back to the LAST frame
+        -- of `pinRole` so the visible sprite doesn't snap back to the
+        -- static south sprite (which may differ from the final
         -- construction frame). pinLastFrame flags that mode.
         (mAnim, pinLastFrame) =
-            case HM.lookup stateKey (bdStateAnims def) of
+            case Map.lookup stateRole (bdRoleAnims def) of
                 Just animName
                     | Just a ← HM.lookup animName (bdAnimations def)
                     → (Just a, False)
                 _ → case activity of
-                    Built → case HM.lookup "appearing" (bdStateAnims def) of
+                    Built → case Map.lookup pinRole (bdRoleAnims def) of
                         Just animName →
                             (HM.lookup animName (bdAnimations def), True)
                         Nothing → (Nothing, False)
                     _ → (Nothing, False)
     in case mAnim of
-        Nothing → bdTexture def
+        Nothing → bdSouthTexture def
         -- Buildings are never compiled to atlases (D-8): they carry
         -- their own per-frame `BuildingAnimation`, which #1261 split
         -- off the unit record when unit animations retired theirs.
-        Just a  → case Map.lookup DirS (banFrames a) of
-            Nothing → bdTexture def
-            Just fs
-                | V.null fs → bdTexture def
-                | otherwise →
+        Just a  →
+            let fs = facingAsset FaceSouth (banFrames a)
+            in if V.null fs then bdSouthTexture def else
                     let n = V.length fs
-                        -- Worker-driven construction: while Appearing
-                        -- and bdBuildWork > 0, the visible frame tracks
+                        -- Worker-driven construction: while
+                        -- Constructing the visible frame tracks
                         -- progress directly. No workers → frac stays
                         -- put → animation freezes mid-build.
                         progressIdx =
@@ -87,9 +97,9 @@ pickBuildingFrame now inst def =
                                then raw `mod` n
                                else min raw (n - 1)
                         idx
-                          | pinLastFrame                              = n - 1
-                          | activity ≡ Appearing ∧ bdBuildWork def > 0 = progressIdx
-                          | otherwise                                  = timeIdx
+                          | pinLastFrame          = n - 1
+                          | activity ≡ Constructing = progressIdx
+                          | otherwise               = timeIdx
                     in fs V.! idx
 
 -- | Like 'Unit.Render.renderUnitQuads', one sweep over every visible
@@ -185,7 +195,7 @@ buildingToQuad lookupSlot defFmSlot facing zSlice effDepth tileAlpha isSel inst 
                 Nothing → False
             texHandle = case mDef of
                 Just def
-                    | isGhost   → bdTexture def
+                    | isGhost   → bdSouthTexture def
                     | otherwise → pickBuildingFrame now inst def
                 Nothing → biTexture inst
 
@@ -314,7 +324,7 @@ renderGhostQuadScanned env solarSlot facing zSlice = do
                             -- buildings carry no directional face map (#1696).
                             let lookupSlot h = fromIntegral (toInt h) ∷ Word32
                                 defFmSlot = noFaceMapVertexId
-                                texHandle = bdTexture def
+                                texHandle = bdSouthTexture def
                                 (texW, texH) = case HM.lookup texHandle texSizes of
                                     Just (w, h) → (fromIntegral w, fromIntegral h)
                                     Nothing     → (baseTileW, baseTileH)

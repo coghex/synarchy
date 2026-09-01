@@ -94,7 +94,7 @@ prelude = lns
     , "  if kind == 'store' then"
     , "    b.activity, b.required, b.capacity, b.used = 'built', 0, 100, 0"
     , "  else"
-    , "    b.activity, b.required, b.capacity, b.used = 'appearing', 240.0, 0, 0"
+    , "    b.activity, b.required, b.capacity, b.used = 'constructing', 240.0, 0, 0"
     , "  end"
     , "  for k, v in pairs(extra or {}) do b[k] = v end"
     , "  BUILDINGS[#BUILDINGS + 1] = b"

@@ -76,7 +76,7 @@ lns = T.intercalate "\n"
 --   A row is @{ bid, x, y, activity, required, capacity, used }@:
 --   @findStorageTarget@ wants @activity == 'built'@ with
 --   @used < capacity@, @findNearestUnbuilt@ wants
---   @activity == 'appearing'@ with @required > 0@. Emptying
+--   @activity == 'constructing'@ with @required > 0@. Emptying
 --   @BUILDINGS@, or leaving only rows of the other shape, is how a case
 --   makes resolution fail — the same way a destroyed site fails it in
 --   game.
@@ -152,7 +152,7 @@ prelude = lns
     , "    BUILDINGS = { { bid = bid, x = d, y = 0, activity = 'built',"
     , "                    required = 0, capacity = 100, used = 0 } }"
     , "  else"
-    , "    BUILDINGS = { { bid = bid, x = d, y = 0, activity = 'appearing',"
+    , "    BUILDINGS = { { bid = bid, x = d, y = 0, activity = 'constructing',"
     , "                    required = 240.0, capacity = 0, used = 0 } }"
     , "  end"
     , "end"

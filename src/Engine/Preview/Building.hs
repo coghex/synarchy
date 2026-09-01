@@ -53,6 +53,8 @@ import System.Directory
 import System.Posix.Files (getSymbolicLinkStatus, isRegularFile)
 import System.FilePath
     ( (</>), (<.>), dropExtension, takeDirectory, takeFileName, pathSeparator )
+import Data.Foldable (toList)
+import Building.Schema (faViews)
 import Engine.Asset.YamlBuildings (BuildingYamlAnim(..))
 import Engine.Core.Types (PreviewBuilding(..), PreviewBuildingEntry(..))
 import Engine.Preview.Discovery
@@ -151,12 +153,15 @@ loadBuildingPreviewMeta name = do
 
 -- * Pure classification / ordering rules
 
--- | Every frame path a YAML animation declares, across all of its
---   direction keys (buildings only ever use @default@, but nothing in
---   the schema enforces that, and a stray key must not hide frames from
---   the association below).
+-- | Every frame path a YAML animation declares, across all four camera
+--   facings (#2080). A legacy @frames.default@ declaration repeats one
+--   list through all four views, so this yields duplicates there; every
+--   consumer below is an existence test, which duplicates cannot
+--   change. Enumerating every facing is what keeps a canonical
+--   declaration's west/north/east art from hiding from the association
+--   below.
 animFramePaths ∷ BuildingYamlAnim → [Text]
-animFramePaths = concat ∘ Map.elems ∘ byaFrames
+animFramePaths = concat ∘ toList ∘ faViews ∘ byaFrames
 
 -- | The YAML animation whose declared frames live in @dir@ — the
 --   CONTENT association that makes @portal-idle@ resolve to the

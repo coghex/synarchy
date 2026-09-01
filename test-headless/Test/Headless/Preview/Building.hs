@@ -29,6 +29,7 @@ import System.Directory
     , doesDirectoryExist )
 import System.FilePath ((</>))
 import System.Posix.Files (createNamedPipe, stdFileMode)
+import Building.Schema (legacyAssets)
 import Engine.Asset.YamlBuildings (BuildingYamlAnim(..))
 import Engine.Core.Types (PreviewBuilding(..), PreviewBuildingEntry(..))
 import Engine.Preview.Building
@@ -67,7 +68,7 @@ realEntries name = do
 anim ∷ Float → Bool → [Text] → BuildingYamlAnim
 anim fps loop framePaths = BuildingYamlAnim
     { byaFps = fps, byaLoop = loop
-    , byaFrames = Map.singleton "default" framePaths }
+    , byaFrames = legacyAssets framePaths }
 
 static ∷ Text → Text → PreviewBuildingEntry
 static lbl path = PreviewBuildingEntry
@@ -375,7 +376,7 @@ spec = do
                     { bpmAnims  = Map.singleton "x-construct"
                                     (anim 4 False
                                         ["assets/textures/buildings/x/construct/frame_001.png"])
-                    , bpmStates = Map.singleton "appearing" "x-construct"
+                    , bpmStates = Map.singleton "construction" "x-construct"
                     , bpmSprite = Just sprite
                     }
                 entries = [ animated "construct"
