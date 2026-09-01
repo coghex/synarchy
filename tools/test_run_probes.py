@@ -81,8 +81,8 @@ import probe_runner_resources  # type: ignore
 import probe_runner_scheduler  # type: ignore
 import run_probes  # type: ignore
 
-import selftest  # noqa: E402
-from selftest import FAILURES, expect  # noqa: E402
+import selftestlib  # noqa: E402
+from selftestlib import FAILURES, expect  # noqa: E402
 
 TOOLS_DIR = str(Path(__file__).resolve().parent)
 
@@ -4528,7 +4528,7 @@ def test_the_readme_states_no_registry_total() -> None:
 
 
 def main() -> int:
-    selftest.parse_verbose()
+    selftestlib.parse_verbose()
     test_the_synthetic_fixtures_are_valid_python()
     test_liveness_check_does_not_count_a_zombie_as_running()
     test_group_running_ignores_a_zombie_only_group()
@@ -4606,8 +4606,8 @@ def main() -> int:
         print(f"\n{len(FAILURES)} test(s) failed:")
         for failure in FAILURES:
             print(f"  {failure}")
-        return selftest.concluded(1)
-    return selftest.concluded(0, "\nAll run_probes teardown tests passed")
+        return selftestlib.concluded(1)
+    return selftestlib.concluded(0, "\nAll run_probes teardown tests passed")
 
 
 if __name__ == "__main__":

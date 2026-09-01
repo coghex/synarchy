@@ -49,8 +49,8 @@ from persistence_contract_sweep import (  # type: ignore
 import probe_runner_diagnostics  # type: ignore
 from probe_runner_registry import PROBES  # type: ignore
 
-import selftest  # noqa: E402
-from selftest import FAILURES, expect  # noqa: E402
+import selftestlib  # noqa: E402
+from selftestlib import FAILURES, expect  # noqa: E402
 
 
 def test_todays_selectable_keys_are_all_registered() -> None:
@@ -186,7 +186,7 @@ def test_the_latest_sweep_phase_survives_a_long_tail() -> None:
 
 
 def main() -> int:
-    selftest.parse_verbose()
+    selftestlib.parse_verbose()
     test_todays_selectable_keys_are_all_registered()
     test_a_key_the_registry_drops_is_caught()
     test_every_stale_key_is_named_at_once()
@@ -199,8 +199,8 @@ def main() -> int:
         print(f"\n{len(FAILURES)} test(s) failed:")
         for failure in FAILURES:
             print(f"  {failure}")
-        return selftest.concluded(1)
-    return selftest.concluded(
+        return selftestlib.concluded(1)
+    return selftestlib.concluded(
         0, "\nAll persistence_contract_sweep registry-drift and "
         "phase-record tests passed")
 

@@ -30,8 +30,8 @@ import sys
 import tempfile
 from pathlib import Path
 
-import selftest
-from selftest import FAILURES, expect
+import selftestlib
+from selftestlib import FAILURES, expect
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "tools" / "docs_land.sh"
@@ -467,7 +467,7 @@ def test_bash_32_compatible() -> None:
 
 
 def main() -> int:
-    selftest.parse_verbose()
+    selftestlib.parse_verbose()
     if not SCRIPT.is_file():
         print(f"error: {SCRIPT} not found")
         return 1
@@ -483,8 +483,8 @@ def main() -> int:
         print(f"\n{len(FAILURES)} test(s) failed:")
         for failure in FAILURES:
             print(f"  {failure}")
-        return selftest.concluded(1)
-    return selftest.concluded(0, "\nAll docs_land tests passed")
+        return selftestlib.concluded(1)
+    return selftestlib.concluded(0, "\nAll docs_land tests passed")
 
 
 if __name__ == "__main__":

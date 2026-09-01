@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Self-test for tools/selftest.py, the shared assertion helper (#1922).
+"""Self-test for tools/selftestlib.py, the shared assertion helper (#1922).
 
 Two halves, and both are load-bearing.
 
@@ -9,15 +9,16 @@ verbose spelling, a failure that always prints and always registers, an
 assertion tally that counts pass and fail alike, and the vacuity guard
 that refuses a run which executed no assertion at all. A fixture is a
 real process, so each observes an invocation's own count from zero --
-the property `selftest.concluded` depends on and the property an
+the property `selftestlib.concluded` depends on and the property an
 in-process check could accidentally satisfy by sharing this script's
 state.
 
-**Conversion**, proved statically over every ``tools/test_*.py`` that
-imports the module: it defines no local assertion helper, it routes both
-verdicts through `selftest.concluded`, and it offers the verbose flag.
-Plus the tree-wide search requirement 1 states -- the narrating body
-survives in the shared module and nowhere else.
+**Conversion**, proved statically over every ``tools/`` file that
+imports the module: none defines a local assertion helper or registers a
+failure behind the count, and each one that is a self-test in its own
+right routes both verdicts through `selftestlib.concluded` and offers
+the verbose flag. Plus the tree-wide search requirement 1 states -- the
+narrating body survives in the shared module and nowhere else.
 
 The static half is deliberately not "run all thirty and diff": CI
 already runs most of them, several take minutes, and one drives
@@ -25,7 +26,7 @@ already runs most of them, several take minutes, and one drives
 importing the shared helper, which is what these checks are for.
 
 Usage:
-  python3 tools/test_selftest.py [-v]
+  python3 tools/test_selftestlib.py [-v]
 Exit codes: 0 = all tests passed, 1 = one or more failed.
 """
 from __future__ import annotations
@@ -37,25 +38,36 @@ import sys
 import tempfile
 from pathlib import Path
 
-import selftest
-from selftest import FAILURES, expect
+import selftestlib
+from selftestlib import FAILURES, expect
 
 TOOLS = Path(__file__).resolve().parent
 
-#: A converted script is one that imports the shared helper. Deriving
-#: the roster instead of freezing it means a newly converted script
-#: joins these checks the day it lands.
-CONVERTED = sorted(
-    path for path in TOOLS.glob("test_*.py")
-    if path.name != Path(__file__).name
-    and re.search(r"^from selftest import ", path.read_text(encoding="utf-8"),
-                  re.M))
+IMPORT = re.compile(
+    r"^(import selftestlib\b|from selftestlib import )", re.M)
 
-#: #1922 converted thirty scripts. A roster that shrinks below that is a
-#: script that stopped importing the helper, which is exactly the
-#: regression the static half exists to catch -- and, like every check
-#: here, one an emptied glob would otherwise report as green.
-MINIMUM_CONVERTED = 30
+#: Everything under `tools/` that imports the shared helper, in either
+#: spelling. Deriving the roster instead of freezing it means a newly
+#: converted file joins these checks the day it lands.
+IMPORTERS = sorted(
+    path for path in TOOLS.glob("*.py")
+    if path.name not in {"selftestlib.py", Path(__file__).name}
+    and IMPORT.search(path.read_text(encoding="utf-8")))
+
+#: The subset that is a self-test in its own right, and so has a verdict
+#: to route and a command line to carry the flag. The rest are shared
+#: modules a self-test is composed from -- since #2100 the probe-claim
+#: gate keeps its assertion helper in `probe_claim_selftest_support`,
+#: which owns no `main` and offers no CLI.
+SCRIPTS = [path for path in IMPORTERS if path.name.startswith("test_")]
+
+#: #1922 converted thirty self-tests, one of them (`test_probe_claim.py`)
+#: through a shared support module. A roster that shrinks below either
+#: figure is a file that stopped importing the helper, which is exactly
+#: the regression the static half exists to catch -- and, like every
+#: check here, one an emptied glob would otherwise report as green.
+MINIMUM_SCRIPTS = 30
+MINIMUM_IMPORTERS = 31
 
 #: The two narrating bodies #1922 removed. Requirement 1: a tree-wide
 #: search finds them only in the shared module.
@@ -64,18 +76,18 @@ NARRATION = re.compile(r'print\(f"  (OK:|\{.ok  .)')
 FIXTURE = '''\
 import sys
 sys.path.insert(0, {tools!r})
-import selftest
-from selftest import FAILURES, expect
+import selftestlib
+from selftestlib import FAILURES, expect
 
 def main() -> int:
-    selftest.parse_verbose()
+    selftestlib.parse_verbose()
 {body}
     if FAILURES:
         print(f"{{len(FAILURES)}} failed:")
         for message in FAILURES:
             print(f"  {{message}}")
-        return selftest.concluded(1)
-    return selftest.concluded(0, "fixture passed")
+        return selftestlib.concluded(1)
+    return selftestlib.concluded(0, "fixture passed")
 
 raise SystemExit(main())
 '''
@@ -185,7 +197,7 @@ def test_record_fail_can_show_more_than_it_registers() -> None:
     # `expect_raises` registers a summary and prints the exception it
     # actually saw; both halves have to survive.
     result = run_fixture(
-        ['selftest.record_fail("registered text", "shown detail")'])
+        ['selftestlib.record_fail("registered text", "shown detail")'])
     expect("  FAIL: shown detail" in result.stdout,
            f"the shown text is what prints ({result.stdout!r})")
     expect("  registered text" in result.stdout,
@@ -194,10 +206,10 @@ def test_record_fail_can_show_more_than_it_registers() -> None:
 
 
 def test_record_pass_obeys_the_same_default() -> None:
-    result = run_fixture(['selftest.record_pass("a bare pass")'])
+    result = run_fixture(['selftestlib.record_pass("a bare pass")'])
     expect("a bare pass" not in result.stdout,
            f"record_pass is quiet by default ({result.stdout!r})")
-    verbose = run_fixture(['selftest.record_pass("a bare pass")'], "-v")
+    verbose = run_fixture(['selftestlib.record_pass("a bare pass")'], "-v")
     expect("  OK:   a bare pass" in verbose.stdout,
            f"and narrates under --verbose ({verbose.stdout!r})")
 
@@ -215,14 +227,16 @@ def test_each_invocation_counts_from_zero() -> None:
 # ----- Conversion ----------------------------------------------------------
 
 def test_the_roster_is_not_truncated() -> None:
-    expect(len(CONVERTED) >= MINIMUM_CONVERTED,
-           f"at least {MINIMUM_CONVERTED} self-tests import the shared helper "
-           f"(found {len(CONVERTED)}: "
-           f"{sorted(p.name for p in CONVERTED)})")
+    expect(len(SCRIPTS) >= MINIMUM_SCRIPTS,
+           f"at least {MINIMUM_SCRIPTS} self-tests import the shared helper "
+           f"(found {len(SCRIPTS)}: {sorted(p.name for p in SCRIPTS)})")
+    expect(len(IMPORTERS) >= MINIMUM_IMPORTERS,
+           f"at least {MINIMUM_IMPORTERS} tools/ files import it in total "
+           f"(found {len(IMPORTERS)}: {sorted(p.name for p in IMPORTERS)})")
 
 
-def test_no_converted_script_keeps_a_local_helper() -> None:
-    for path in CONVERTED:
+def test_no_importer_keeps_a_local_helper() -> None:
+    for path in IMPORTERS:
         tree = ast.parse(path.read_text(encoding="utf-8"))
         local = [node.name for node in tree.body
                  if isinstance(node, ast.FunctionDef) and node.name == "expect"]
@@ -230,10 +244,10 @@ def test_no_converted_script_keeps_a_local_helper() -> None:
                f"{path.name} defines no local expect (found {local})")
 
 
-def test_no_converted_script_registers_a_failure_behind_the_count() -> None:
+def test_no_importer_registers_a_failure_behind_the_count() -> None:
     # A direct `FAILURES.append` would report a failure the tally never
-    # saw, which is the one way a converted script can still miscount.
-    for path in CONVERTED:
+    # saw, which is the one way a converted file can still miscount.
+    for path in IMPORTERS:
         text = path.read_text(encoding="utf-8")
         expect("FAILURES.append" not in text,
                f"{path.name} registers failures through the helper, not by "
@@ -241,19 +255,19 @@ def test_no_converted_script_registers_a_failure_behind_the_count() -> None:
 
 
 def test_every_converted_script_routes_both_verdicts() -> None:
-    for path in CONVERTED:
+    for path in SCRIPTS:
         text = path.read_text(encoding="utf-8")
-        expect("return selftest.concluded(1)" in text,
+        expect("return selftestlib.concluded(1)" in text,
                f"{path.name}'s failing verdict goes through concluded()")
-        expect(re.search(r"return selftest\.concluded\(\s*0", text) is not None,
+        expect(re.search(r"return selftestlib\.concluded\(\s*0", text) is not None,
                f"{path.name}'s passing verdict goes through concluded()")
 
 
 def test_every_converted_script_offers_the_flag() -> None:
-    for path in CONVERTED:
+    for path in SCRIPTS:
         text = path.read_text(encoding="utf-8")
-        expect("selftest.parse_verbose()" in text
-               or "selftest.add_verbose_option(" in text,
+        expect("selftestlib.parse_verbose()" in text
+               or "selftestlib.add_verbose_option(" in text,
                f"{path.name} accepts -v/--verbose")
 
 
@@ -261,7 +275,7 @@ def test_the_narrating_body_survives_only_in_the_module() -> None:
     narrating = sorted(
         path.name for path in TOOLS.glob("*.py")
         if NARRATION.search(path.read_text(encoding="utf-8")))
-    expect(narrating == ["selftest.py"],
+    expect(narrating == ["selftestlib.py"],
            f"only the shared module narrates a passing assertion "
            f"(found {narrating})")
 
@@ -280,8 +294,8 @@ TESTS = [
     test_record_pass_obeys_the_same_default,
     test_each_invocation_counts_from_zero,
     test_the_roster_is_not_truncated,
-    test_no_converted_script_keeps_a_local_helper,
-    test_no_converted_script_registers_a_failure_behind_the_count,
+    test_no_importer_keeps_a_local_helper,
+    test_no_importer_registers_a_failure_behind_the_count,
     test_every_converted_script_routes_both_verdicts,
     test_every_converted_script_offers_the_flag,
     test_the_narrating_body_survives_only_in_the_module,
@@ -289,7 +303,7 @@ TESTS = [
 
 
 def main() -> int:
-    selftest.parse_verbose()
+    selftestlib.parse_verbose()
     for test in TESTS:
         print(f"{test.__name__}:")
         test()
@@ -297,8 +311,8 @@ def main() -> int:
         print(f"\n{len(FAILURES)} test(s) failed:")
         for failure in FAILURES:
             print(f"  {failure}")
-        return selftest.concluded(1)
-    return selftest.concluded(0, f"\nAll {len(TESTS)} selftest tests passed")
+        return selftestlib.concluded(1)
+    return selftestlib.concluded(0, f"\nAll {len(TESTS)} selftestlib tests passed")
 
 
 if __name__ == "__main__":

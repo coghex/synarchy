@@ -44,8 +44,8 @@ TOOLS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TOOLS))
 import movement_probe as probe  # type: ignore  # noqa: E402
 
-import selftest  # noqa: E402
-from selftest import FAILURES, expect  # noqa: E402
+import selftestlib  # noqa: E402
+from selftestlib import FAILURES, expect  # noqa: E402
 
 
 @contextlib.contextmanager
@@ -375,7 +375,7 @@ def test_an_unreadable_source_fails_the_guard_too() -> None:
 
 
 def main() -> int:
-    selftest.parse_verbose()
+    selftestlib.parse_verbose()
     test_the_shipped_inventory_is_complete_and_sorted()
     test_list_prints_the_inventory_without_booting()
     test_list_is_honoured_for_every_mode()
@@ -395,8 +395,8 @@ def main() -> int:
         print(f"\n{len(FAILURES)} test(s) failed:")
         for failure in FAILURES:
             print(f"  {failure}")
-        return selftest.concluded(1)
-    return selftest.concluded(
+        return selftestlib.concluded(1)
+    return selftestlib.concluded(
         0, "\nAll movement_probe course-listing tests passed")
 
 

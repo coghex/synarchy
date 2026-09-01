@@ -27,8 +27,8 @@ from unicode_operator_audit import (  # type: ignore
     WHOLE_FILE_EXEMPT,
 )
 
-import selftest  # noqa: E402
-from selftest import FAILURES, expect  # noqa: E402
+import selftestlib  # noqa: E402
+from selftestlib import FAILURES, expect  # noqa: E402
 
 # The ASCII tokens and the noncanonical Unicode ones are found by two
 # different code paths, so the shared comment/string/detection fixtures
@@ -484,7 +484,7 @@ def test_ascii_and_noncanonical_violations_report_in_source_order():
 
 
 def main() -> int:
-    selftest.parse_verbose()
+    selftestlib.parse_verbose()
     for fn in [
         test_each_forbidden_operator_detected_as_real_code,
         test_replacement_table_is_self_consistent,
@@ -525,8 +525,8 @@ def main() -> int:
         fn()
     if FAILURES:
         print(f"\n{len(FAILURES)} failure(s)")
-        return selftest.concluded(1)
-    return selftest.concluded(0, "\nall tests passed")
+        return selftestlib.concluded(1)
+    return selftestlib.concluded(0, "\nall tests passed")
 
 
 if __name__ == "__main__":

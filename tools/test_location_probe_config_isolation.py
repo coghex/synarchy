@@ -68,8 +68,8 @@ import location_overlay_probe as overlay  # type: ignore  # noqa: E402
 import location_stamp_idempotent_probe as stamp  # type: ignore  # noqa: E402
 import portal_ghost_probe as portal  # type: ignore  # noqa: E402
 
-import selftest  # noqa: E402
-from selftest import FAILURES, expect  # noqa: E402
+import selftestlib  # noqa: E402
+from selftestlib import FAILURES, expect  # noqa: E402
 
 #: Every DISTINCT root builder in scope. `portal_ghost_probe` is
 #: deliberately absent: it does not define one, and the test below pins
@@ -490,7 +490,7 @@ def test_no_builder_symlinks_config_any_more() -> None:
 
 
 def main() -> int:
-    selftest.parse_verbose()
+    selftestlib.parse_verbose()
     test_config_is_a_private_copy_and_not_an_alias()
     test_the_developers_local_overrides_are_absent()
     test_the_content_families_are_still_shared_symlinks()
@@ -507,8 +507,8 @@ def main() -> int:
         print(f"\n{len(FAILURES)} test(s) failed:")
         for failure in FAILURES:
             print(f"  {failure}")
-        return selftest.concluded(1)
-    return selftest.concluded(
+        return selftestlib.concluded(1)
+    return selftestlib.concluded(
         0, "\nAll location probe config-isolation tests passed")
 
 

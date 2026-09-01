@@ -61,8 +61,8 @@ import probelib  # type: ignore  # noqa: E402
 import probe_runner_resources  # type: ignore  # noqa: E402
 from probelib import send, send_json  # type: ignore  # noqa: E402
 
-import selftest  # noqa: E402
-from selftest import FAILURES, expect  # noqa: E402
+import selftestlib  # noqa: E402
+from selftestlib import FAILURES, expect  # noqa: E402
 
 
 # ---------------------------------------------------------------------
@@ -1367,7 +1367,7 @@ def test_the_build_resource_is_named_once() -> None:
 
 
 def main() -> int:
-    selftest.parse_verbose()
+    selftestlib.parse_verbose()
     test_valid_json_decodes()
     test_lua_nil_is_none()
     test_empty_result_is_none_not_empty_string()
@@ -1406,8 +1406,8 @@ def main() -> int:
         print(f"\n{len(FAILURES)} test(s) failed:")
         for failure in FAILURES:
             print(f"  {failure}")
-        return selftest.concluded(1)
-    return selftest.concluded(0, "\nAll probelib tests passed")
+        return selftestlib.concluded(1)
+    return selftestlib.concluded(0, "\nAll probelib tests passed")
 
 
 if __name__ == "__main__":

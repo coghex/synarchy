@@ -82,8 +82,8 @@ sys.path.insert(0, str(TOOLS))
 import probelib  # type: ignore  # noqa: E402
 import flora_growth_probe as probe  # type: ignore  # noqa: E402
 
-import selftest  # noqa: E402
-from selftest import FAILURES, expect  # noqa: E402
+import selftestlib  # noqa: E402
+from selftestlib import FAILURES, expect  # noqa: E402
 
 # The three process-global names the probe used before #1682. Nothing it
 # writes may resolve to one of them again.
@@ -926,7 +926,7 @@ def test_a_rejected_fixture_still_stops_the_probe_at_setup() -> None:
 
 
 def main() -> int:
-    selftest.parse_verbose()
+    selftestlib.parse_verbose()
     test_two_invocations_share_no_path()
     test_no_artifact_keeps_a_legacy_fixed_tmp_name()
     test_release_never_touches_what_the_run_did_not_create()
@@ -955,8 +955,8 @@ def main() -> int:
         print(f"\n{len(FAILURES)} check(s) failed:")
         for failure in FAILURES:
             print(f"  {failure}")
-        return selftest.concluded(1)
-    return selftest.concluded(
+        return selftestlib.concluded(1)
+    return selftestlib.concluded(
         0, "\nAll flora_growth_probe artifact-ownership tests passed")
 
 

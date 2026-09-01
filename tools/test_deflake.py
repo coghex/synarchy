@@ -65,8 +65,8 @@ import probe_select  # type: ignore
 import probe_runner_lifecycle  # type: ignore
 import probe_runner_resources  # type: ignore
 
-import selftest  # noqa: E402
-from selftest import FAILURES, expect  # noqa: E402
+import selftestlib  # noqa: E402
+from selftestlib import FAILURES, expect  # noqa: E402
 
 TOOLS_DIR = str(Path(__file__).resolve().parent)
 
@@ -2034,7 +2034,7 @@ def test_the_real_preparation_runs_outside_the_real_hold() -> None:
 
 
 def main() -> int:
-    selftest.parse_verbose()
+    selftestlib.parse_verbose()
     test_the_harness_is_told_ten_runs_and_four_capabilities()
     test_pass_fail_and_timeout_are_all_valid_observations()
     test_no_qualifying_probe_is_a_successful_no_work_outcome()
@@ -2091,8 +2091,8 @@ def main() -> int:
         print(f"\n{len(FAILURES)} test(s) failed:")
         for failure in FAILURES:
             print(f"  {failure}")
-        return selftest.concluded(1)
-    return selftest.concluded(0, "\nAll deflake orchestration tests passed")
+        return selftestlib.concluded(1)
+    return selftestlib.concluded(0, "\nAll deflake orchestration tests passed")
 
 
 if __name__ == "__main__":

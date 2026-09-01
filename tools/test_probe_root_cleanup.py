@@ -79,8 +79,8 @@ import subprocess
 import sys
 import tempfile
 
-import selftest
-from selftest import FAILURES, expect
+import selftestlib
+from selftestlib import FAILURES, expect
 
 TOOLS = os.path.dirname(os.path.abspath(__file__))
 
@@ -596,7 +596,7 @@ def test_cleanup_decides_the_item_instance_exit_status() -> None:
 
 
 def main() -> int:
-    selftest.parse_verbose()
+    selftestlib.parse_verbose()
     for module in PROBES:
         test_a_staging_failure_removes_the_invocation_base(module)
         test_removal_that_cannot_finish_is_still_non_zero(module)
@@ -608,8 +608,8 @@ def main() -> int:
         print(f"\n{len(FAILURES)} check(s) failed:")
         for failure in FAILURES:
             print(f"  {failure}")
-        return selftest.concluded(1)
-    return selftest.concluded(
+        return selftestlib.concluded(1)
+    return selftestlib.concluded(
         0, f"\nAll isolated-root cleanup tests passed for "
         f"{len(CONFIG_COPY_PROBES)} probes")
 

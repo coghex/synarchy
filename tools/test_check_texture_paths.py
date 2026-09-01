@@ -48,8 +48,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import check_texture_paths as ctp  # type: ignore
 
-import selftest  # noqa: E402
-from selftest import FAILURES, expect  # noqa: E402
+import selftestlib  # noqa: E402
+from selftestlib import FAILURES, expect  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TEMP_TREES: list[Path] = []
@@ -565,7 +565,7 @@ def test_real_repository() -> None:
 
 
 def main() -> int:
-    selftest.parse_verbose()
+    selftestlib.parse_verbose()
     try:
         test_comment_references_are_skipped()
         test_multiline_comment_state_and_code_resumption()
@@ -592,8 +592,8 @@ def main() -> int:
         print(f"\n{len(FAILURES)} test(s) failed:")
         for failure in FAILURES:
             print(f"  {failure}")
-        return selftest.concluded(1)
-    return selftest.concluded(0, "\nAll check_texture_paths tests passed")
+        return selftestlib.concluded(1)
+    return selftestlib.concluded(0, "\nAll check_texture_paths tests passed")
 
 
 if __name__ == "__main__":

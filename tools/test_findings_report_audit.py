@@ -25,8 +25,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import findings_report_audit as fra  # type: ignore
 
-import selftest  # noqa: E402
-from selftest import FAILURES, expect  # noqa: E402
+import selftestlib  # noqa: E402
+from selftestlib import FAILURES, expect  # noqa: E402
 
 
 def report(checklist: list[str], findings: list[str]) -> str:
@@ -311,7 +311,7 @@ def test_real_report() -> None:
 
 
 def main() -> int:
-    selftest.parse_verbose()
+    selftestlib.parse_verbose()
     test_agreeing_markers_pass()
     test_marker_present_on_one_side_only_fails()
     test_differing_nonempty_markers_fail()
@@ -327,8 +327,8 @@ def main() -> int:
         print(f"\n{len(FAILURES)} test(s) failed:")
         for failure in FAILURES:
             print(f"  {failure}")
-        return selftest.concluded(1)
-    return selftest.concluded(0, "\nAll findings_report_audit tests passed")
+        return selftestlib.concluded(1)
+    return selftestlib.concluded(0, "\nAll findings_report_audit tests passed")
 
 
 if __name__ == "__main__":

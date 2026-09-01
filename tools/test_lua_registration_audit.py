@@ -44,8 +44,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lua_registration_audit import (  # type: ignore
     EXIT_CERTIFICATION, EXIT_FINDINGS, EXIT_OK, main)
 
-import selftest  # noqa: E402
-from selftest import FAILURES, expect  # noqa: E402
+import selftestlib  # noqa: E402
+from selftestlib import FAILURES, expect  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -1133,14 +1133,14 @@ TESTS = [
 
 
 def main_() -> int:
-    selftest.parse_verbose()
+    selftestlib.parse_verbose()
     for test in TESTS:
         print(f"{test.__name__}:")
         test()
     if FAILURES:
         print(f"\n{len(FAILURES)} test failure(s)")
-        return selftest.concluded(1)
-    return selftest.concluded(0, f"\nAll {len(TESTS)} tests passed")
+        return selftestlib.concluded(1)
+    return selftestlib.concluded(0, f"\nAll {len(TESTS)} tests passed")
 
 
 if __name__ == "__main__":

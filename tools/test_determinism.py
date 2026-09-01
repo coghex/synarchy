@@ -22,8 +22,8 @@ from world_determinism import (  # type: ignore
     canonical_dump, hash_dump, diff_dumps, field_diff_summary,
 )
 
-import selftest  # noqa: E402
-from selftest import FAILURES, expect  # noqa: E402
+import selftestlib  # noqa: E402
+from selftestlib import FAILURES, expect  # noqa: E402
 
 
 # ----- Helpers -------------------------------------------------------------
@@ -94,7 +94,7 @@ def test_canonical_form_is_stable() -> None:
 
 
 def main() -> int:
-    selftest.parse_verbose()
+    selftestlib.parse_verbose()
     tests = [
         test_array_order_is_ignored,
         test_key_order_is_ignored,
@@ -110,9 +110,9 @@ def main() -> int:
         print(f"\n{len(FAILURES)} test failure(s):")
         for f in FAILURES:
             print(f"  {f}")
-        return selftest.concluded(1)
+        return selftestlib.concluded(1)
 
-    return selftest.concluded(0, f"\nAll {len(tests)} test groups passed")
+    return selftestlib.concluded(0, f"\nAll {len(tests)} test groups passed")
 
 
 if __name__ == "__main__":

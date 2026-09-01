@@ -48,8 +48,8 @@ from engine_env_capability_audit import (  # type: ignore
 )
 from persistence_inventory_audit import extract_record_fields  # type: ignore
 
-import selftest  # noqa: E402
-from selftest import FAILURES, expect  # noqa: E402
+import selftestlib  # noqa: E402
+from selftestlib import FAILURES, expect  # noqa: E402
 
 
 # ----- Fixtures ---------------------------------------------------------
@@ -4716,7 +4716,7 @@ def test_writer_map_against_the_real_repo():
 
 
 def main() -> int:
-    selftest.parse_verbose()
+    selftestlib.parse_verbose()
     tests = [
         test_complete_inventory_has_no_violations,
         test_missing_row_detected,
@@ -4898,9 +4898,9 @@ def main() -> int:
         print(f"\n{len(FAILURES)} test failure(s):")
         for f in FAILURES:
             print(f"  {f}")
-        return selftest.concluded(1)
+        return selftestlib.concluded(1)
 
-    return selftest.concluded(0, f"\nAll {len(tests)} test groups passed")
+    return selftestlib.concluded(0, f"\nAll {len(tests)} test groups passed")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """The one assertion helper the ``tools/test_*.py`` self-tests share (#1922).
 
+Named ``selftestlib`` after ``tools/probelib.py``, and deliberately not
+``selftest``: ``tools/playtest/selftest.py`` (#2040) already owns that
+module name, and several ``tools/playtest/`` modules put ``tools/``
+ahead of ``tools/playtest/`` on ``sys.path``, so a module named
+``selftest`` here shadows theirs.
+
 Twenty-nine of those scripts each carried a byte-identical copy of the
 same six-line ``expect``, and every copy printed a line for each
 **passing** assertion. ``make ci`` and CI run most of them, so that
@@ -23,19 +29,20 @@ manipulation.
 Converting a self-test is three edits::
 
     import selftest
-    from selftest import FAILURES, expect      # replaces the local pair
+    from selftestlib import FAILURES, expect   # replaces the local pair
 
     def main() -> int:
-        selftest.parse_verbose()               # or add_verbose_option()
+        selftestlib.parse_verbose()               # or add_verbose_option()
         ...
         if FAILURES:
             ...unchanged failure reporting...
-            return selftest.concluded(1)
+            return selftestlib.concluded(1)
         print("...unchanged passing summary...")
-        return selftest.concluded(0)
+        return selftestlib.concluded(0)
 
 ``FAILURES`` is deliberately this module's own list rather than a
-per-script one. ``from selftest import FAILURES`` binds the same list
+per-script one. ``from selftestlib import FAILURES`` binds the same
+list
 object, so every script's existing ``if FAILURES`` / ``len(FAILURES)``
 reporting keeps working untouched, and a helper defined here can append
 to it. Each invocation is its own process, so each starts from an empty

@@ -33,8 +33,8 @@ from world_check import (  # type: ignore
     check_seed, format_result, PASS, FAIL, IMPROVED, SKIP,
 )
 
-import selftest  # noqa: E402
-from selftest import FAILURES, expect  # noqa: E402
+import selftestlib  # noqa: E402
+from selftestlib import FAILURES, expect  # noqa: E402
 
 
 # ----- Emitted-category inventory ------------------------------------------
@@ -2321,7 +2321,7 @@ def test_missing_baseline_keeps_its_skip_disposition() -> None:
 # ----- Runner --------------------------------------------------------------
 
 def main() -> int:
-    selftest.parse_verbose()
+    selftestlib.parse_verbose()
     tests = [
         test_clean_grid,
         test_stats,
@@ -2395,9 +2395,9 @@ def main() -> int:
         print(f"\n{len(FAILURES)} test failure(s):")
         for f in FAILURES:
             print(f"  {f}")
-        return selftest.concluded(1)
+        return selftestlib.concluded(1)
 
-    return selftest.concluded(0, f"\nAll {len(tests)} test groups passed")
+    return selftestlib.concluded(0, f"\nAll {len(tests)} test groups passed")
 
 
 if __name__ == "__main__":

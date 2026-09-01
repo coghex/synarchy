@@ -92,8 +92,8 @@ import probelib  # type: ignore  # noqa: E402
 import location_content_probe as probe  # type: ignore  # noqa: E402
 import portal_ghost_probe as portal  # type: ignore  # noqa: E402
 
-import selftest  # noqa: E402
-from selftest import FAILURES, expect  # noqa: E402
+import selftestlib  # noqa: E402
+from selftestlib import FAILURES, expect  # noqa: E402
 
 #: The six process-global names the probe used before #1884. Nothing it
 #: writes may resolve to one of them again, and a real run must leave
@@ -855,7 +855,7 @@ def test_the_public_helpers_other_probes_import_are_intact() -> None:
 
 
 def main() -> int:
-    selftest.parse_verbose()
+    selftestlib.parse_verbose()
     test_two_invocations_share_no_path()
     test_every_fixture_path_is_absolute_and_owned()
     test_no_artifact_keeps_a_legacy_fixed_tmp_name()
@@ -886,8 +886,8 @@ def main() -> int:
         print(f"\n{len(FAILURES)} check(s) failed:")
         for failure in FAILURES:
             print(f"  {failure}")
-        return selftest.concluded(1)
-    return selftest.concluded(
+        return selftestlib.concluded(1)
+    return selftestlib.concluded(
         0, "\nAll location_content_probe artifact-ownership tests passed")
 
 

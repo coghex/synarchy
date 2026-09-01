@@ -56,8 +56,8 @@ import probe_engine  # type: ignore  # noqa: E402
 import probe_runner_lifecycle  # type: ignore  # noqa: E402
 import probe_runner_registry  # type: ignore  # noqa: E402
 
-import selftest  # noqa: E402
-from selftest import FAILURES, expect  # noqa: E402
+import selftestlib  # noqa: E402
+from selftestlib import FAILURES, expect  # noqa: E402
 
 SKIPS: list[str] = []
 
@@ -70,19 +70,19 @@ def expect_raises(exc, fn, msg: str, substring: str | None = None) -> None:
         fn()
     except exc as error:
         if substring is not None and substring not in str(error):
-            selftest.record_fail(
+            selftestlib.record_fail(
                 f"{msg} (raised {exc.__name__} but not about "
                 f"{substring!r}: {error})",
                 f"{msg} — wrong message: {error}")
             return
-        selftest.record_pass(msg)
+        selftestlib.record_pass(msg)
         return
     except Exception as error:  # noqa: BLE001 - a wrong exception is a failure
-        selftest.record_fail(
+        selftestlib.record_fail(
             f"{msg} (raised {type(error).__name__}: {error})",
             f"{msg} — raised {type(error).__name__}: {error}")
         return
-    selftest.record_fail(f"{msg} (nothing raised)", f"{msg} — nothing raised")
+    selftestlib.record_fail(f"{msg} (nothing raised)", f"{msg} — nothing raised")
 
 
 def skip(msg: str) -> None:
@@ -3503,7 +3503,7 @@ def test_run_one_defaults() -> None:
 
 # ==========================================================================
 def main() -> int:
-    selftest.parse_verbose()
+    selftestlib.parse_verbose()
     for test in (test_descriptor, test_event_stream, test_trusted_prefix,
                  test_forbidden_markers,
                  test_eligibility, test_descriptor_mismatch_rejection,
@@ -3537,8 +3537,8 @@ def main() -> int:
         print(f"\n{len(FAILURES)} FAILED:")
         for message in FAILURES:
             print(f"  - {message}")
-        return selftest.concluded(1)
-    return selftest.concluded(0, "probe_flake self-test: all cases pass")
+        return selftestlib.concluded(1)
+    return selftestlib.concluded(0, "probe_flake self-test: all cases pass")
 
 
 if __name__ == "__main__":

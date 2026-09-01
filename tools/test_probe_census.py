@@ -51,8 +51,8 @@ import probe_protocol  # type: ignore  # noqa: E402
 import probe_engine  # type: ignore  # noqa: E402
 import probe_runner_registry  # type: ignore  # noqa: E402
 
-import selftest  # noqa: E402
-from selftest import FAILURES, expect  # noqa: E402
+import selftestlib  # noqa: E402
+from selftestlib import FAILURES, expect  # noqa: E402
 
 
 COMMIT_A = "a" * 40
@@ -4663,7 +4663,7 @@ def test_deferral_gate() -> None:
 
 
 def main() -> int:
-    selftest.parse_verbose()
+    selftestlib.parse_verbose()
     for test in (test_record_shape, test_migration, test_seed_and_noop,
                  test_reconciliation, test_ingest_accepted,
                  test_ci_eligible_takes_no_measurement,
@@ -4702,8 +4702,8 @@ def main() -> int:
         print(f"{len(FAILURES)} FAILED:")
         for message in FAILURES:
             print(f"  - {message}")
-        return selftest.concluded(1)
-    return selftest.concluded(0, "probe_census self-test: all cases pass")
+        return selftestlib.concluded(1)
+    return selftestlib.concluded(0, "probe_census self-test: all cases pass")
 
 
 if __name__ == "__main__":

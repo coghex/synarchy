@@ -34,8 +34,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cabal_module_audit as cma  # type: ignore
 
-import selftest  # noqa: E402
-from selftest import FAILURES, expect  # noqa: E402
+import selftestlib  # noqa: E402
+from selftestlib import FAILURES, expect  # noqa: E402
 
 
 # A fixture with every shape the real file uses: a comment line
@@ -372,7 +372,7 @@ def test_runs_from_any_directory() -> None:
 
 
 def main() -> int:
-    selftest.parse_verbose()
+    selftestlib.parse_verbose()
     test_parses_every_shape()
     test_terminates_at_next_field_key()
     test_scoped_to_library_stanza()
@@ -392,8 +392,8 @@ def main() -> int:
         print(f"\n{len(FAILURES)} test(s) failed:")
         for f in FAILURES:
             print(f"  {f}")
-        return selftest.concluded(1)
-    return selftest.concluded(0, "\nAll cabal_module_audit tests passed")
+        return selftestlib.concluded(1)
+    return selftestlib.concluded(0, "\nAll cabal_module_audit tests passed")
 
 
 if __name__ == "__main__":

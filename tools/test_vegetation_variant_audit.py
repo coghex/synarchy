@@ -23,8 +23,8 @@ from PIL import Image, PngImagePlugin
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from vegetation_variant_audit import main as audit_main  # type: ignore
 
-import selftest  # noqa: E402
-from selftest import FAILURES, expect  # noqa: E402
+import selftestlib  # noqa: E402
+from selftestlib import FAILURES, expect  # noqa: E402
 
 
 def _write_registry(root: Path, name: str, variants: list[str]) -> None:
@@ -120,7 +120,7 @@ def test_visibly_distinct_multi_variant_family_passes() -> None:
 
 
 def main() -> int:
-    selftest.parse_verbose()
+    selftestlib.parse_verbose()
     tests = [
         test_encoded_different_decoded_duplicate_fails,
         test_single_frame_family_passes,
@@ -131,13 +131,13 @@ def main() -> int:
         try:
             test()
         except Exception as exc:  # keep running so every fixture reports
-            selftest.record_fail(
+            selftestlib.record_fail(
                 f"{test.__name__} raised {type(exc).__name__}: {exc}")
 
     if FAILURES:
         print(f"\nFAILED — {len(FAILURES)} assertion(s)")
-        return selftest.concluded(1)
-    return selftest.concluded(
+        return selftestlib.concluded(1)
+    return selftestlib.concluded(
         0, f"\nOK — {len(tests)} vegetation variant audit tests passed")
 
 
