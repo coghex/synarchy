@@ -93,15 +93,8 @@ import save_compat_audit_generate as generate  # type: ignore
 import save_compat_audit_manifest as manifest_audit  # type: ignore
 import save_compat_audit_register as register  # type: ignore
 
-FAILURES: list[str] = []
-
-
-def expect(cond: bool, msg: str) -> None:
-    if not cond:
-        FAILURES.append(msg)
-        print(f"  FAIL: {msg}")
-    else:
-        print(f"  OK:   {msg}")
+import selftestlib  # noqa: E402
+from selftestlib import FAILURES, expect  # noqa: E402
 
 
 #: The real tracked manifest, resolved straight from the repository root
@@ -1399,7 +1392,7 @@ def test_generate_session_rolls_back_fixture_and_summary_on_validation_failure()
 # version is bumped again.
 _CURRENT_FORMAT_FIXTURE_PATH = (
     common.REPO_ROOT
-    / "test-headless/data/save-compat/f1-autosave-classification.bin")
+    / "test-headless/data/save-compat/u1-generated-world-identity.bin")
 
 _MAKE_TIMESTAMP_VARIANTS_GHCI = r"""
 :set -XOverloadedStrings
@@ -2371,7 +2364,13 @@ def main(argv: list[str] | None = None) -> int:
         "--without-reproducibility", action="store_true",
         help="run every member EXCEPT the cabal-repl reproducibility "
              "member (#1360).")
+    # This script already owns its command line, and CI drives it through
+    # both selective forms, so the shared verbosity flag joins that parser
+    # rather than being consumed behind its back; `begin` then
+    # starts this invocation's own count (#1922).
+    selftestlib.add_verbose_option(parser)
     args = parser.parse_args(argv)
+    selftestlib.begin(args.verbose)
 
     # A member listed as expensive but absent from the run order would
     # silently vanish from BOTH selective forms, which is exactly the
@@ -2393,9 +2392,9 @@ def main(argv: list[str] | None = None) -> int:
         fn()
     if FAILURES:
         print(f"\n{len(FAILURES)} failure(s)")
-        return 1
-    print(f"\nall tests passed ({len(tests)} of {len(ALL_TESTS)} members)")
-    return 0
+        return selftestlib.concluded(1)
+    return selftestlib.concluded(
+        0, f"\nall tests passed ({len(tests)} of {len(ALL_TESTS)} members)")
 
 
 if __name__ == "__main__":

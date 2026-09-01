@@ -573,15 +573,26 @@ METADATA_COMPONENT_INPUT_VERSIONS_RE = re.compile(
     r"^metadataComponentInputVersions\s*=\s*\[([^\]]*)\]", re.MULTILINE)
 LEGACY_METADATA_COMPONENT_VERSION_RE = re.compile(
     r"^legacyMetadataComponentVersion\s*=\s*(\d+)", re.MULTILINE)
+# #2021: metadata reached v3, so the input-version list now names TWO
+# frozen predecessors by binding (legacy v1 and predecessor v2) rather
+# than one. Resolving those names from a hard-coded pair would need a
+# tool edit per bump -- and a forgotten edit fails LOUDLY but for the
+# wrong reason. Instead every top-level `<name> :: Word32` /
+# `<name> = <int>` pair in the envelope source is resolvable, which is
+# exactly the shape each of those bindings has. An entry naming anything
+# else still raises.
+WORD32_BINDING_RE = re.compile(
+    r"^(\w+)\s*(?:∷|::)\s*Word32\s*\n\1\s*=\s*(\d+)\s*$", re.MULTILINE)
 
 
 def metadata_input_versions(envelope_text: str, current: int) -> list[int]:
     """Every "metadata" schema version World.Save.Envelope can decode.
 
     Resolves the literal `metadataComponentInputVersions` list, whose
-    entries are either integers or the `legacyMetadataComponentVersion`
-    binding declared alongside it. Raises if the binding is missing or an
-    entry cannot be resolved -- an unparseable declaration must fail
+    entries are either integers or one of the `Word32` version bindings
+    declared alongside it (`legacyMetadataComponentVersion`,
+    `predecessorMetadataComponentVersion`, and any future sibling).
+    Raises if the list is missing or an entry cannot be resolved -- an unparseable declaration must fail
     loudly rather than silently degrade to "only the current version",
     which would wrongly accuse every historical baseline of declaring a
     version whose decoder had been removed."""
@@ -590,8 +601,13 @@ def metadata_input_versions(envelope_text: str, current: int) -> list[int]:
         raise ValueError(
             f"could not find metadataComponentInputVersions in "
             f"{common.ENVELOPE_SOURCE_PATH}")
+    names = {name: int(value)
+             for name, value in WORD32_BINDING_RE.findall(envelope_text)}
+    # The CURRENT version is supplied by the caller (which reads it the
+    # same way every other check does), so a disagreement between the two
+    # can never be papered over by the generic scan above.
+    names["metadataComponentVersion"] = current
     legacy_m = LEGACY_METADATA_COMPONENT_VERSION_RE.search(envelope_text)
-    names = {"metadataComponentVersion": current}
     if legacy_m:
         names["legacyMetadataComponentVersion"] = int(legacy_m.group(1))
     versions: list[int] = []
