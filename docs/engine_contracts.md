@@ -596,13 +596,34 @@ while the rest of `icons/` is toolbar chrome;
 `*_designate` markers are loaded in `hud.init` beside real chrome but
 handed to `world.set*CursorTexture` / `<tool>.setDesignateTexture` and
 drawn in the world; and `assets/textures/utility/white.png` is drawn by
-both layers. In Lua the declaration is `engine.loadTexture(path,
-"ui"|"scene")`. OMITTING it selects `"scene"`, so every pre-#2075 call
-site is unchanged; a policy argument that is PRESENT but unrecognised —
-a typo, or any non-string value — is REFUSED with a warning and a `nil`
-handle rather than silently classified. Haskell-side YAML art
-(`loadAndRegisterWithPool`) is always scene; unit atlases keep their own
-`LuaLoadAtlasTextureRequest`.
+both layers.
+
+In Lua the declaration is `engine.loadTexture(path, "ui"|"scene")`.
+OMITTING the argument selects `"scene"`, so every pre-#2075 call site is
+unchanged. That is the ONLY shape that selects the default: an argument
+that is PRESENT but names no policy — a typo, an explicit `nil`, or any
+non-string value — is REFUSED with a warning and a `nil` handle, and
+queues no load. An explicit `nil` is refused with the rest because it is
+almost always a pass-through helper that lost its value, and accepting it
+would file the texture as scene art on the strength of a bug
+(`scripts/startup_loader.lua`'s preload helpers therefore *require*
+their policy argument rather than defaulting it).
+
+Haskell-side YAML art declares the same way: `loadAndRegisterWithPool`
+takes an `UploadSampler` per call site. Most of it is world-drawn and
+passes `UploadGlobalSampler`; the families whose only consumer is a UI
+panel — a unit's authored `portrait:`, an equipment silhouette — pass
+`UploadPinnedNearest`; and **genuinely dual-use art is loaded twice, once
+per policy**, because one slot cannot carry two samplers:
+
+| art | scene handle | UI handle |
+|---|---|---|
+| item `sprite:` | `idTexture` (ground-item quads) | `idIconTexture` (inventory / equipment / container rows) |
+| building `sprite:` | `bdTexture` (`Building.Render`) | `bdIconTexture` (`building.listDefs`'s `iconTex`) |
+| broken-equipment badge | texture name `broken_equipment` | texture name `broken_equipment_ui` |
+
+Unit atlases keep their own `LuaLoadAtlasTextureRequest` and stay
+pinned.
 
 **The path cache is keyed by `(path, policy)`,** not by path:
 `apAssetPaths` is a `Map TextureCacheKey AssetId`. Each policy therefore

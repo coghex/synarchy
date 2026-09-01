@@ -105,16 +105,21 @@ loadTextureFn backendState = do
 -- | The upload policy argument 2 asks for.
 --
 --   @Just@ wraps a decision; @Nothing@ is a REFUSAL, not a default.
---   Absent (or explicitly @nil@) is the one shape that yields the
---   backward-compatible 'UploadGlobalSampler'. A string is looked up in
---   'parseUploadPolicy'; ANY other type is refused outright rather than
---   coerced — @Lua.tostring@ would happily turn the number @2@ into
---   @"2"@, and a coercion that can only ever fail the lookup adds
---   nothing but a confusing diagnostic.
+--   An ABSENT argument ('Lua.TypeNone') is the ONLY shape that yields
+--   the backward-compatible 'UploadGlobalSampler'. An explicit @nil@ is
+--   a present argument that names no policy and is refused with every
+--   other unsupported value: a @nil@ reaching here is almost always a
+--   variable that lost its value on the way — a pass-through helper
+--   called without its policy — and accepting it would silently file
+--   that texture as scene art, which is the one outcome this argument
+--   exists to prevent. A string is looked up in 'parseUploadPolicy';
+--   ANY other type is refused outright rather than coerced —
+--   @Lua.tostring@ would happily turn the number @2@ into @"2"@, and a
+--   coercion that can only ever fail the lookup adds nothing but a
+--   confusing diagnostic.
 requestedUploadPolicy ∷ Lua.LuaE Lua.Exception (Maybe UploadSampler)
 requestedUploadPolicy = Lua.ltype 2 ⌦ \case
   Lua.TypeNone   → pure (Just UploadGlobalSampler)
-  Lua.TypeNil    → pure (Just UploadGlobalSampler)
   Lua.TypeString → do
     raw ← Lua.tostring 2
     pure (parseUploadPolicy . TE.decodeUtf8Lenient =≪ raw)
@@ -129,6 +134,7 @@ describePolicyArgument = Lua.ltype 2 ⌦ \case
     raw ← Lua.tostring 2
     pure $ maybe "(unreadable)"
         (\bs → "'" <> TE.decodeUtf8Lenient bs <> "'") raw
+  Lua.TypeNil → pure "an explicit nil (omit the argument instead)"
   other → pure $ "of type " <> T.pack (show other)
 
 -- | engine.getTextureSize(handle) → {width=, height=} | nil

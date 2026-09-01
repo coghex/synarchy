@@ -69,7 +69,7 @@ import LootTable.Types (LootTableDef(..), LootTableEntry(..))
 --   twenty-field literal.
 bareDef ∷ Text → ItemDef
 bareDef name = ItemDef
-    { idName = name, idDisplayName = name, idTexture = TextureHandle 0
+    { idName = name, idDisplayName = name, idTexture = TextureHandle 0, idIconTexture = TextureHandle 0
     , idWeight = 0.5, idWeightSpec = Nothing, idBulk = 1.0
     , idStorage = Nothing, idKind = "misc"
     , idCategory = "Misc", idMake = "", idMaterial = ""
@@ -202,7 +202,7 @@ authoredContents body = withTempItemYaml body $ \path → do
     logger ← silentLogger
     defs ← loadItemYaml logger path
     pure [ ( iydName d
-           , idDefaultContents (itemDefFromYaml path (TextureHandle 0) d) )
+           , idDefaultContents (itemDefFromYaml path (TextureHandle 0) (TextureHandle 0) d) )
          | d ← defs ]
 
 -- * The structural guard
@@ -946,5 +946,5 @@ shippedItems = do
     defs ← concat <$> mapM (\p → map ((,) p) <$> loadItemYaml logger p)
                            (sort files)
     pure ∘ ItemManager $ HM.fromList
-        [ (iydName d, itemDefFromYaml p (TextureHandle 0) d)
+        [ (iydName d, itemDefFromYaml p (TextureHandle 0) (TextureHandle 0) d)
         | (p, d) ← defs ]

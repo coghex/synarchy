@@ -114,7 +114,7 @@ bareDef name = BuildingDef
     , bdDisplayName     = name
     , bdCategory        = "Test"
     , bdDescription     = ""
-    , bdTexture         = TextureHandle 0
+    , bdTexture         = TextureHandle 0, bdIconTexture         = TextureHandle 0
     , bdTileW           = 1
     , bdTileH           = 1
     , bdPlacement       = "flat_ground"
@@ -197,7 +197,7 @@ testItems = ItemManager $ HM.fromList
 
 bareItemDef ∷ Text → Float → ItemDef
 bareItemDef name w = ItemDef
-    { idName = name, idDisplayName = name, idTexture = TextureHandle 0
+    { idName = name, idDisplayName = name, idTexture = TextureHandle 0, idIconTexture = TextureHandle 0
     , idWeight = w, idWeightSpec = Nothing, idBulk = 1.0
     , idStorage = Nothing, idKind = "misc"
     , idCategory = "Misc", idMake = "", idMaterial = ""

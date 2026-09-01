@@ -25,15 +25,24 @@ module Test.Headless.Graphics.TextureSamplerPolicy (spec) where
 import UPrelude
 import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
-import Data.IORef (newIORef)
 import Test.Hspec
+import Control.Exception (finally)
+import qualified Data.HashMap.Strict as HM
+import Data.IORef (atomicModifyIORef', readIORef, newIORef)
 import Engine.Asset.Base (AssetId(..))
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Asset.TextureCache
   (BatchClassification(..), classifyBatchRequests)
+import Engine.Asset.Types (defaultAssetPool)
+import Engine.Asset.YamlItems (ItemYamlDef(..), loadItemYaml)
+import Engine.Core.Capability.Building
+  (BuildingCapability(..), toBuildingCapability)
 import Engine.Core.State (EngineEnv, luaToEngineQueue, luaQueue, assetPoolRef
     , nextObjectIdRef, inputStateRef, loggerRef)
 import Engine.Core.Thread (ThreadControl(..))
+import Engine.Scripting.Lua.API.Items.Defs (registerItemDefs)
+import Item.Types (ItemDef(..), ItemManager(..))
+import Building.Types (BuildingDef(..), BuildingManager(..))
 import qualified Engine.Core.Queue as Q
 import Engine.Graphics.Vulkan.Texture.Handle (BindlessTextureHandle(..))
 import Engine.Graphics.Vulkan.Texture.Policy
@@ -87,6 +96,53 @@ loadWith env ls args = do
 uiPath, scenePath ∷ Text
 uiPath    = "assets/textures/ui/highlight.png"
 scenePath = "assets/textures/world/loam/loam.png"
+
+
+-- * The YAML declaration seam
+
+-- | The ordinary uploads a loader queued, as @(path, policy)@.
+queuedPolicies ∷ [LuaToEngineMsg] → [(FilePath, UploadSampler)]
+queuedPolicies msgs = [ (p, pol) | LuaLoadTextureRequest _ p pol ← msgs ]
+
+-- | One shipped item YAML through the REAL registration path, against a
+--   throwaway pool, queue and item manager, so the shared engine's own
+--   definitions are untouched.
+runItemYaml ∷ EngineEnv → FilePath → IO ([ItemYamlDef], [LuaToEngineMsg]
+                                        , HM.HashMap Text ItemDef)
+runItemYaml env path = do
+    logger ← readIORef (loggerRef env)
+    defs ← loadItemYaml logger path
+    poolRef ← newIORef =≪ defaultAssetPool
+    q ← Q.newQueue
+    mgrRef ← newIORef (ItemManager HM.empty)
+    _ ← registerItemDefs env logger poolRef q mgrRef path defs
+    msgs ← Q.flushQueue q
+    mgr ← readIORef mgrRef
+    pure (defs, msgs, imDefs mgr)
+
+-- | One shipped building YAML through the real Lua entry point, with
+--   the shared engine's building definitions restored afterwards — the
+--   loader has no injectable manager the way the item one does.
+runBuildingYaml ∷ EngineEnv → LuaBackendState → FilePath
+                → IO ([LuaToEngineMsg], HM.HashMap Text BuildingDef)
+runBuildingYaml env ls path = do
+    let defsRef = bcBuildingManagerRef (toBuildingCapability env)
+    bm0 ← readIORef defsRef
+    let restore = atomicModifyIORef' defsRef $ \bm →
+            (bm { bmDefs = bmDefs bm0 }, ())
+    (`finally` restore) $ do
+        _ ← Q.flushQueue (luaToEngineQueue env)
+        _ ← evalDebug ls
+            ("return engine.loadBuildingYaml('" <> T.pack path <> "')")
+        msgs ← Q.flushQueue (luaToEngineQueue env)
+        bm ← readIORef defsRef
+        pure (msgs, bmDefs bm)
+
+shippedItemYaml ∷ FilePath
+shippedItemYaml = "data/items/axe_steel.yaml"
+
+shippedBuildingYaml ∷ FilePath
+shippedBuildingYaml = "data/buildings/acolyte_portal.yaml"
 
 -- * Fabricated GPU-side values
 
@@ -143,11 +199,15 @@ spec = do
         ok `shouldBe` True
         queued `shouldBe` [(T.unpack scenePath, UploadGlobalSampler)]
 
-    it "treats an explicit nil the same as omission" $ \env → do
+    -- ONLY an absent argument selects the default. An explicit nil is a
+    -- present argument naming no policy, and is almost always a
+    -- pass-through helper that lost its value; accepting it would file
+    -- the texture as scene art on the strength of a bug.
+    it "REFUSES an explicit nil, which only omission may stand for" $ \env → do
         ls ← newBareLuaBackend env
         (ok, queued) ← loadWith env ls ("'" <> scenePath <> "', nil")
-        ok `shouldBe` True
-        queued `shouldBe` [(T.unpack scenePath, UploadGlobalSampler)]
+        ok `shouldBe` False
+        queued `shouldBe` []
 
     it "accepts \"scene\" as the explicit spelling of that default" $ \env → do
         ls ← newBareLuaBackend env
@@ -212,6 +272,43 @@ spec = do
     it "never absorbs an atlas request" $ \_env → do
         let msgs = [ LuaLoadAtlasTextureRequest (TextureHandle 9) "walk.png" ]
         spanTextureLoads UploadPinnedNearest msgs `shouldBe` ([], msgs)
+
+  -- The YAML loaders declare a policy per texture ROLE, exactly as the
+  -- Lua call sites do. These drive the real registration paths and
+  -- assert on what they queued.
+  describe "the YAML loaders' declared policies" $ do
+    it "loads a dual-use ITEM sprite under BOTH policies, on two \
+       \handles" $ \env → do
+        (defs, msgs, published) ← runItemYaml env shippedItemYaml
+        let queued = queuedPolicies msgs
+            sprites = [ T.unpack (iydSprite d) | d ← defs ]
+        sprites `shouldSatisfy` (not ∘ null)
+        forM_ sprites $ \sprite → do
+            -- The ground-item renderer's slot...
+            (sprite, UploadGlobalSampler) `shouldSatisfy` (`elem` queued)
+            -- ...and the inventory icon's, which must not follow the
+            -- player's filter.
+            (sprite, UploadPinnedNearest) `shouldSatisfy` (`elem` queued)
+        forM_ (HM.elems published) $ \d →
+            (idName d, idTexture d ≡ idIconTexture d)
+                `shouldBe` (idName d, False)
+
+    it "loads a dual-use BUILDING sprite under BOTH policies, on two \
+       \handles, while its animation frames stay scene art" $ \env → do
+        ls ← newBareLuaBackend env
+        (msgs, published) ← runBuildingYaml env ls shippedBuildingYaml
+        let queued = queuedPolicies msgs
+            pinned = [ p | (p, UploadPinnedNearest) ← queued ]
+        published `shouldSatisfy` (not ∘ HM.null)
+        forM_ (HM.elems published) $ \d → do
+            (bdName d, bdTexture d ≡ bdIconTexture d)
+                `shouldBe` (bdName d, False)
+        -- Exactly the sprites are pinned. An animation frame is drawn
+        -- only in the world, so a frame turning up here would mean the
+        -- icon policy had leaked across the loader.
+        pinned `shouldSatisfy` (not ∘ null)
+        forM_ pinned $ \p →
+            (p, UploadGlobalSampler) `shouldSatisfy` (`elem` queued)
 
   describe "the policy-scoped upload cache" $ do
     -- A file both layers draw. The whole cache question is what a

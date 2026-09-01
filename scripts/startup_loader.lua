@@ -164,18 +164,30 @@ local function addYamlTree(dir, label, loaderFn)
     addYamlFamily(dir, label, loaderFn, paths)
 end
 
--- `policy` is engine.loadTexture's upload policy (#2075) and is passed
--- through verbatim, nil included. A PRELOAD must declare the SAME policy
--- its eventual consumer declares: the cache is keyed by (path, policy),
--- so preloading under the wrong one uploads a slot nobody will ever
--- sample and leaves the consumer to upload the real one anyway.
+-- `policy` is engine.loadTexture's upload policy (#2075) and is
+-- MANDATORY here, passed through verbatim. A preload must declare the
+-- SAME policy its eventual consumer declares: the cache is keyed by
+-- (path, policy), so preloading under the wrong one uploads a slot
+-- nobody will ever sample and leaves the consumer to upload the real one
+-- anyway. Required rather than defaulted because engine.loadTexture
+-- refuses a present-but-nil policy — a forgotten argument here would
+-- otherwise turn into a whole texture family that silently never loads.
+local function requirePolicy(who, policy)
+    if policy ~= "ui" and policy ~= "scene" then
+        error(who .. ": upload policy must be \"ui\" or \"scene\", got "
+              .. tostring(policy), 2)
+    end
+end
+
 local function addTextureList(label, paths, policy)
+    requirePolicy("addTextureList", policy)
     for _, p in ipairs(paths) do
         addItem(label, function() engine.loadTexture(p, policy) end)
     end
 end
 
 local function addTextureDir(dir, label, policy)
+    requirePolicy("addTextureDir", policy)
     local files = engine.listFiles(dir, ".png")
     if not files then return end
     for _, fname in ipairs(files) do

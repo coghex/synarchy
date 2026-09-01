@@ -162,7 +162,7 @@ runtimeContent = do
     steelYaml ← expectOne "steel substance"
         =≪ filter ((≡ "steel") ∘ syName)
             <$> loadSubstanceYaml logger "data/substances/metals.yaml"
-    let itemDef = itemDefFromYaml helmetItemPath (TextureHandle 0) itemYaml
+    let itemDef = itemDefFromYaml helmetItemPath (TextureHandle 0) (TextureHandle 0) itemYaml
         humanoid = equipmentClassFromYaml humanoidYaml
         steel = substanceFromYaml steelYaml
     pure ( ItemManager (HM.singleton "steel_helmet" itemDef)
@@ -190,7 +190,7 @@ spec = describe "steel helmet content" $ do
             iydSprite itemYaml `shouldBe` T.pack helmetTexturePath
             doesFileExist helmetTexturePath `shouldReturn` True
             let itemDef = itemDefFromYaml helmetItemPath
-                              (TextureHandle 0) itemYaml
+                              (TextureHandle 0) (TextureHandle 0) itemYaml
             ( idName itemDef, idDisplayName itemDef, idWeight itemDef
               , idBulk itemDef, idKind itemDef, idCategory itemDef
               , idMake itemDef, idMaterial itemDef )
