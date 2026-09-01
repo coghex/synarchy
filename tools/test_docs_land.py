@@ -30,24 +30,18 @@ import sys
 import tempfile
 from pathlib import Path
 
+import selftestlib
+from selftestlib import FAILURES, expect
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "tools" / "docs_land.sh"
 
-FAILURES: list[str] = []
 
 # A 20-line body so an upstream edit to the LAST line and a local edit to
 # the FIRST line merge cleanly. The force-override case needs a file that
 # is dirty here and also changed upstream (to trip the risk predictor)
 # without the autostash replay then conflicting for unrelated reasons.
 B_SEED = "".join(f"b line {i}\n" for i in range(1, 21))
-
-
-def expect(cond: bool, msg: str) -> None:
-    if not cond:
-        FAILURES.append(msg)
-        print(f"  FAIL: {msg}")
-    else:
-        print(f"  OK:   {msg}")
 
 
 class Sandbox:
@@ -473,6 +467,7 @@ def test_bash_32_compatible() -> None:
 
 
 def main() -> int:
+    selftestlib.parse_verbose()
     if not SCRIPT.is_file():
         print(f"error: {SCRIPT} not found")
         return 1
@@ -488,9 +483,8 @@ def main() -> int:
         print(f"\n{len(FAILURES)} test(s) failed:")
         for failure in FAILURES:
             print(f"  {failure}")
-        return 1
-    print("\nAll docs_land tests passed")
-    return 0
+        return selftestlib.concluded(1)
+    return selftestlib.concluded(0, "\nAll docs_land tests passed")
 
 
 if __name__ == "__main__":

@@ -1884,6 +1884,31 @@ interpreters against a shared barrier file and its crash case SIGKILLs one of
 them, because a claim that must hold between OS processes cannot be proved by
 threads.
 
+That bare invocation is the whole gate and the only one CI or `make ci` runs.
+Its 29 cases live with three independently changing contract owners, and
+`--only` runs one owner's cases for iteration (#2100):
+
+```bash
+python3 tools/test_probe_claim.py --only claim          # 12 cases, ~7 s
+python3 tools/test_probe_claim.py --only census         #  4 cases
+python3 tools/test_probe_claim.py --only orchestration  # 13 cases
+```
+
+| Owner module | `--only` | Owns |
+|---|---|---|
+| `probe_claim_selftest_claim.py` | `claim` | the atomic claim and its lease: namespace and key validation, exclusive acquisition, cross-process contention, expiry, renewal, stale reclaim, owner-safe release, acquisition timing, malformed claims, managed exit, crash recovery, the renewer |
+| `probe_claim_selftest_census.py` | `census` | acquisition recording, the claim log kept separate from the measurement log, lossless schema migration, and `probe_flake` staying usable with no `docs-wip` worktree |
+| `probe_claim_selftest_orchestration.py` | `orchestration` | the claimed measurement end to end: denied and audit-failure paths, harness-error ingestion, pre-claim rejection, lease validation, lost claims, serialized audit and ingestion, the retained result and its `--result` destination, the CLI |
+
+`probe_claim_selftest_support.py` is the single source of everything the three
+share — the assertion helpers and the ONE failure accumulator behind them, the
+synthetic registries, the scratch trees and scratch repository, the real
+`probe_flake.Measurement` builder, and the subprocess programs the concurrency
+cases race. None of the four is a gate of its own; `test_probe_claim.py` holds
+no case body and is composition and selection only, spelling out the
+interleaved run sequence the aggregate has always used and refusing to run at
+all if it and the three inventories have drifted apart.
+
 ### `probe_select.py` — which probe does `/deflake` measure next? (#1435)
 
 The census (#1428/#1429), the acceptable-failure policy (#1430), the in-flight

@@ -838,7 +838,7 @@ locationInstanceAllocatorErrors lis =
 --
 --   The SAVE decode path is the construction site the authored-bounds
 --   gate does not cover at all:
---   'World.Save.Component.WorldGen.fromAbsBoundsDTO' copies four
+--   'World.Save.Component.WorldGenNaming.fromAbsBoundsDTO' copies four
 --   unrestricted 'Int's straight off the wire, so a corrupt or
 --   hand-edited payload reaches an 'AbsBounds' without passing
 --   "Engine.Asset.YamlLocations" 's inverted-bounds rejection (#777) —
@@ -861,7 +861,7 @@ locationInstanceAllocatorErrors lis =
 --   never could.
 --
 --   This check is NOT thereby redundant, and stays exactly as it is:
---   'World.Save.Component.WorldGen.fromAbsBoundsDTO' still copies four
+--   'World.Save.Component.WorldGenNaming.fromAbsBoundsDTO' still copies four
 --   unrestricted wire 'Int's, which no construction-time proof can
 --   reach. A wrapped box is not a usable footprint, so refusing to
 --   publish it is correct whichever site produced it.
