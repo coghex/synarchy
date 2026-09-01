@@ -34,6 +34,7 @@ import Engine.Scripting.Lua.Types (LuaMsg(..))
 import World.Types
 import Structure.Types (emptyChunkStructures)
 import World.Generate (generateChunk)
+import World.Flora.Designation (admitChunkFlora)
 import World.Generate.Arena (generateArenaChunks, arenaGenForSeed)
 import World.Chunk.Queue (initialChunkQueue, seedInitialQueue)
 import World.Chunk.Residency (canonicalChunkCoord)
@@ -413,13 +414,13 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     -- so the owner has reported it in flight for this whole
     -- initialization — including the generateChunk below.
     let (ct, cs, cterrain, cf, cice, cflora, cwt, cmagma) =
-            generateChunk registry catalog params centerCoord
+            generateChunk registry catalog pageId params centerCoord
         seededSurf = VU.imap (\idx surfZ →
             case cf V.! idx of
                 Just fc → max surfZ (fcSurface fc)
                 Nothing → surfZ
             ) cs
-        centerChunk = LoadedChunk
+        centerChunkRaw = LoadedChunk
             { lcCoord      = centerCoord
             , lcTiles      = ct
             , lcSurfaceMap = seededSurf
@@ -435,7 +436,11 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
 
     -- The centre is new residency like any other chunk (#2001), so it
     -- reaches the owner through the SAME admission boundary the camera
-    -- and init-queue batches use, carrying the claim taken above.
+    -- and init-queue batches use, carrying the claim taken above — and
+    -- through #1854's per-instance flora admission too, which for a
+    -- brand-new page is the identity (nothing is designated, nothing is
+    -- pending) but must not be the one residency path that skips it.
+    centerChunk ← admitChunkFlora worldState catalog logger centerChunkRaw
     publishSeedChunks worldState centreClaims
         WorldTileData { wtdChunks = HM.singleton centerCoord centerChunk
                       , wtdMaxChunks = 200 }

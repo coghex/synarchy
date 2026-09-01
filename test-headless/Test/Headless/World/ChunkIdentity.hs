@@ -61,6 +61,7 @@ import World.Material.Id (MaterialId(..))
 import World.Edit.Types
     ( WorldEdit(..), appendEdit, canonicalizeWorldEdits, emptyWorldEdits
     , shiftWorldEdit )
+import World.Flora.Identity (plantedFloraInstanceId)
 import Test.Headless.Harness
     (getWorldState, sendWorldCommand, waitForWorldInit)
 
@@ -145,6 +146,7 @@ editCoords edit = case edit of
     WeClearStructure gx gy _     → (gx, gy)
     WeSetVeg gx gy _ _           → (gx, gy)
     WePlaceFlora gx gy _ _ _     → (gx, gy)
+    WePlaceFloraWithId gx gy _ _ _ _ → (gx, gy)
     WeSetFluidSnapshot gx gy _ _ → (gx, gy)
     WeClearFluidSnapshot gx gy   → (gx, gy)
 
@@ -998,6 +1000,8 @@ spec = describe "canonical chunk identity" $ do
                 , WeClearStructure 1 2 5
                 , WeSetVeg 1 2 3 9
                 , WePlaceFlora 1 2 (FloraId 3) 4 1.5
+                , WePlaceFloraWithId 1 2 (FloraId 3) 4 1.5
+                      (plantedFloraInstanceId 1)
                 , WeSetFluidSnapshot 1 2 River 3
                 , WeClearFluidSnapshot 1 2
                 ]

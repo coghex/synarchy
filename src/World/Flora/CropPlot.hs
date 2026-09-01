@@ -30,6 +30,7 @@ import GHC.Generics (Generic)
 import Control.DeepSeq (NFData)
 import Data.Serialize (Serialize)
 import qualified Data.HashMap.Strict as HM
+import World.Flora.Identity (floraInstanceIdNone)
 import World.Flora.Types (FloraId, FloraInstance(..))
 
 -- | One planted tile. Field order is load-bearing (positional Generic
@@ -67,6 +68,17 @@ cropPlotElapsedDays absDay cp = max 0 (absDay - cpPlantedDay cp)
 --   stays 0), which is what makes the plot's timeline start at zero on
 --   its planted day rather than being pinned to an absolute placement
 --   baseline like a naturally-placed FloraInstance.
+--
+--   #1854: this value is deliberately NOT identity-bearing. It is not a
+--   plant — it is a growth-math adapter over a tile-keyed plot, it never
+--   enters chunk data, and a plot never coexists with wild
+--   'FloraInstance's on the same tile (tilled soil excludes natural
+--   flora placement). It therefore carries the reserved
+--   'World.Flora.Identity.floraInstanceIdNone', which belongs to
+--   neither the generated nor the planted namespace and so can collide
+--   with no real plant's id; no durable designation, claim or harvest
+--   timer may ever key on it. Crop PLOTS stay tile-keyed and unchanged
+--   by #1854 — one plot per tile is true by construction.
 cropPlotInstance ∷ CropPlot → FloraInstance
 cropPlotInstance cp = FloraInstance
     { fiSpecies   = cpSpecies cp
@@ -79,4 +91,6 @@ cropPlotInstance cp = FloraInstance
     , fiHealth    = cpHealth cp
     , fiVariant   = 0
     , fiBaseWidth = 0
+    , fiInstanceId = floraInstanceIdNone
+    , fiChopDesignated = False
     }

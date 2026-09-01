@@ -22,6 +22,7 @@ import World.Edit.Types (WorldEdit(..), appendEdit)
 import World.Edit.Apply (applyEdit)
 import World.Vegetation (isTilledSoil)
 import World.Plant.Validate (revalidatePlantDesignations)
+import World.Flora.Designation (replaceChunkForgettingFlora)
 
 -- | Set the vegetation id of an existing tile at (gx,gy,z) via the
 --   WeSetVeg edit path. Mirrors handleWorldSetSlopeCommand exactly —
@@ -64,8 +65,11 @@ handleWorldSetVegCommand wsc logger pageId rawGX rawGY z vegId = do
                                <> " z=" <> tshow z
                       else do
                         let lc' = applyEdit edit lc
-                        atomicModifyIORef' (wsTilesRef ws) $ \w →
-                            (insertChunk lc' w, ())
+                        -- #1854 requirement 16: an edit that takes the tile's
+                        -- rooted flora with it must take that plant's
+                        -- designation and regrowth timer too, or an orphan
+                        -- entry outlives the plant it addressed.
+                        replaceChunkForgettingFlora ws lc lc'
                         atomicModifyIORef' (wsEditsRef ws) $ \es →
                             (appendEdit coord edit es, ())
                         bumpQuadCacheGen ws
@@ -154,13 +158,26 @@ handleWorldPlantRowCropAtCommand wsc logger pageId rawGX rawGY cropName = do
                         Just (fid, baseWidth) → do
                             paramsM ← readIORef (wsGenParamsRef ws)
                             date ← readIORef (wsDateRef ws)
+                            -- #1854: one id off the page's own planted
+                            -- allocator, taken atomically so two planting
+                            -- commands can never share one, and recorded
+                            -- IN the edit — replay then recreates the same
+                            -- identity rather than allocating a second.
+                            instanceId ← atomicModifyIORef'
+                                (wsPlantedFloraCursorRef ws) $ \c →
+                                    let (iid, c') = nextPlantedFloraCursor c
+                                    in (c', iid)
                             let calendar = maybe defaultCalendarConfig
                                                wgpCalender paramsM
                                 absDay = worldAbsoluteDay calendar date
-                                edit = WePlaceFlora gx gy fid absDay baseWidth
+                                edit = WePlaceFloraWithId gx gy fid absDay
+                                                          baseWidth instanceId
                                 lc'  = applyEdit edit lc
-                            atomicModifyIORef' (wsTilesRef ws) $ \w →
-                                (insertChunk lc' w, ())
+                            -- #1854 requirement 16: an edit that takes the tile's
+                            -- rooted flora with it must take that plant's
+                            -- designation and regrowth timer too, or an orphan
+                            -- entry outlives the plant it addressed.
+                            replaceChunkForgettingFlora ws lc lc'
                             atomicModifyIORef' (wsEditsRef ws) $ \es →
                                 (appendEdit coord edit es, ())
                             bumpQuadCacheGen ws

@@ -27,6 +27,7 @@ import World.Edit.Apply (applyEdit)
 import World.Material.Id (MaterialId(..))
 import World.Thread.Command.Edit.Sync (syncEditToSim)
 import World.Plant.Validate (revalidatePlantDesignations)
+import World.Flora.Designation (replaceChunkForgettingFlora)
 
 -- | Dig the top of the column at (gx, gy) down by 1 Z.
 --   Records the edit in the world's edit log so it survives chunk
@@ -69,8 +70,11 @@ handleWorldDeleteTileCommand env logger pageId gx gy = do
                                <> " len=" <> tshow colLen
                       else do
                         let lc' = applyEdit edit lc
-                        atomicModifyIORef' (wsTilesRef ws) $ \w →
-                            (insertChunk lc' w, ())
+                        -- #1854 requirement 16: an edit that takes the tile's
+                        -- rooted flora with it must take that plant's
+                        -- designation and regrowth timer too, or an orphan
+                        -- entry outlives the plant it addressed.
+                        replaceChunkForgettingFlora ws lc lc'
                         atomicModifyIORef' (wsEditsRef ws) $ \es →
                             (appendEdit coord edit es, ())
                         -- Keep the sim's chunk in step with the new terrain.
@@ -133,8 +137,11 @@ handleWorldAddTileCommand env logger pageId gx gy mat = do
                                <> " topZ=" <> tshow oldTopZ
                       else do
                         let lc' = applyEdit edit lc
-                        atomicModifyIORef' (wsTilesRef ws) $ \w →
-                            (insertChunk lc' w, ())
+                        -- #1854 requirement 16: an edit that takes the tile's
+                        -- rooted flora with it must take that plant's
+                        -- designation and regrowth timer too, or an orphan
+                        -- entry outlives the plant it addressed.
+                        replaceChunkForgettingFlora ws lc lc'
                         atomicModifyIORef' (wsEditsRef ws) $ \es →
                             (appendEdit coord edit es, ())
                         syncEditToSim (toWorldSimCapability env) pageId ws lc'
@@ -185,8 +192,11 @@ handleWorldSetSlopeCommand env logger pageId gx gy z bits = do
                                <> " z=" <> tshow z
                       else do
                         let lc' = applyEdit edit lc
-                        atomicModifyIORef' (wsTilesRef ws) $ \w →
-                            (insertChunk lc' w, ())
+                        -- #1854 requirement 16: an edit that takes the tile's
+                        -- rooted flora with it must take that plant's
+                        -- designation and regrowth timer too, or an orphan
+                        -- entry outlives the plant it addressed.
+                        replaceChunkForgettingFlora ws lc lc'
                         atomicModifyIORef' (wsEditsRef ws) $ \es →
                             (appendEdit coord edit es, ())
                         -- No syncEditToSim here: a slope bitmask is pure
@@ -238,8 +248,11 @@ handleWorldSetCellCommand env logger pageId gx gy z mat = do
                                <> " startZ=" <> tshow (ctStartZ col)
                       else do
                         let lc' = applyEdit edit lc
-                        atomicModifyIORef' (wsTilesRef ws) $ \w →
-                            (insertChunk lc' w, ())
+                        -- #1854 requirement 16: an edit that takes the tile's
+                        -- rooted flora with it must take that plant's
+                        -- designation and regrowth timer too, or an orphan
+                        -- entry outlives the plant it addressed.
+                        replaceChunkForgettingFlora ws lc lc'
                         atomicModifyIORef' (wsEditsRef ws) $ \es →
                             (appendEdit coord edit es, ())
                         syncEditToSim (toWorldSimCapability env) pageId ws lc'

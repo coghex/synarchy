@@ -22,6 +22,7 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import World.Chunk.Types (LoadedChunk(..), ColumnTiles(..), columnIndex)
 import Structure.Types (StructurePieceData(..))
+import World.Flora.Identity (floraInstanceIdNone)
 import World.Flora.Types (FloraChunkData(..), FloraInstance(..))
 import World.Fluid.Types (FluidCell(..), FluidType(..), renderedSurfaceZ)
 import World.Edit.Types (WorldEdit(..), WorldEdits)
@@ -205,7 +206,15 @@ applyEdit (WeSetVeg gx gy z vegId) lc
            else
                let col' = col { ctVeg = ctVeg col VU.// [(i, vegId)] }
                in lc { lcTiles = lcTiles lc V.// [(idx, col')] }
-applyEdit (WePlaceFlora gx gy fid plantedDay baseWidth) lc
+-- | The LEGACY id-less form (pre-#1854). Reached only while a
+--   @world-edits@ v1 log is being assembled — 'World.Save.Component.
+--   Page.applyWorldEdits' rewrites every one into the identity-bearing
+--   form before the page is published — but kept total, and honest about
+--   what it can offer: the reserved non-identity value.
+applyEdit (WePlaceFlora gx gy fid plantedDay baseWidth) lc =
+    applyEdit (WePlaceFloraWithId gx gy fid plantedDay baseWidth
+                   floraInstanceIdNone) lc
+applyEdit (WePlaceFloraWithId gx gy fid plantedDay baseWidth instanceId) lc
     | not (edgeBelongsTo gx gy lc) = lc
     | otherwise =
         let (_, (lx, ly)) = globalToChunk gx gy
@@ -227,6 +236,11 @@ applyEdit (WePlaceFlora gx gy fid plantedDay baseWidth) lc
                 , fiHealth    = 1.0
                 , fiVariant   = 0
                 , fiBaseWidth = baseWidth
+                  -- #1854: the id is REPLAYED, never re-allocated, so a
+                  -- planted crop keeps one identity across every chunk
+                  -- eviction and every load of the save that recorded it.
+                , fiInstanceId = instanceId
+                , fiChopDesignated = False
                 }
         in lc { lcFlora = FloraChunkData
                     (inst : fcdInstances (lcFlora lc)) }

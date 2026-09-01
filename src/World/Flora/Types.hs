@@ -21,6 +21,7 @@ module World.Flora.Types
     , FloraWorldGen(..)
       -- * Per-Instance Data
     , FloraInstance(..)
+    , floraInstanceOnTile
     , FloraChunkData(..)
     , emptyFloraChunkData
       -- * Runtime Catalog
@@ -42,6 +43,7 @@ import Data.Serialize (Serialize)
 import qualified Data.HashMap.Strict as HM
 import Data.Hashable (Hashable(..))
 import Engine.Asset.Handle (TextureHandle(..))
+import World.Flora.Identity (FloraInstanceId)
 
 -- * Species Identity
 
@@ -216,7 +218,13 @@ data FloraWorldGen = FloraWorldGen
 --
 --   Multiple instances can share the same tile. A meadow
 --   tile might have 3-4 dandelions at different offsets;
---   a forest tile has one oak at (0,0).
+--   a forest tile has one oak at (0,0), but two wood-tagged
+--   trees on one tile are legitimate too. Since #1854 that
+--   co-tenancy is addressable: 'fiInstanceId' names ONE
+--   plant, and every mutable per-plant authority (Chop
+--   designations, regrowth timers, the Lua chop claims) is
+--   keyed by it rather than by the tile — designating or
+--   felling one plant leaves its co-tenants alone.
 data FloraInstance = FloraInstance
     { fiSpecies ∷ !FloraId
     , fiTileX   ∷ !Word8         -- ^ column X within chunk (0–15)
@@ -228,12 +236,36 @@ data FloraInstance = FloraInstance
     , fiHealth  ∷ !Float         -- ^ 0.0 dead … 1.0 full
     , fiVariant ∷ !Word8         -- ^ visual variant (0–3)
     , fiBaseWidth  ∷ !Float         -- ^ base width in pixels for offset clamp
+    , fiInstanceId ∷ !FloraInstanceId
+      -- ^ Stable per-plant identity (#1854). Assigned by
+      --   'World.Flora.Placement.computeChunkFlora' for generated
+      --   flora (deterministic, so it survives chunk eviction and
+      --   reload) and by the page-scoped planted allocator for a
+      --   'World.Edit.Types.WePlaceFlora' row crop. Opaque — see
+      --   "World.Flora.Identity".
+    , fiChopDesignated ∷ !Bool
+      -- ^ Is THIS plant slated for felling (#1854 requirement 7)? The
+      --   loaded mirror of the durable identity-keyed authority
+      --   ('World.Chop.Types.ChopDesignations'); the two are only ever
+      --   written together, by "World.Flora.Designation" (requirement
+      --   8), so they cannot drift. Chunk data is regenerated on every
+      --   eviction, which is exactly why the DURABLE side is the
+      --   authority and this is the mirror, never the other way round.
     } deriving (Show, Eq, Generic, Serialize)
 instance NFData FloraInstance where
-    rnf (FloraInstance s tx ty ou ov z a h v bw) =
+    rnf (FloraInstance s tx ty ou ov z a h v bw i cd) =
         rnf s `seq` rnf tx `seq` rnf ty `seq`
         rnf ou `seq` rnf ov `seq` rnf z `seq`
-        rnf a `seq` rnf h `seq` rnf v `seq` rnf bw
+        rnf a `seq` rnf h `seq` rnf v `seq` rnf bw `seq`
+        rnf i `seq` rnf cd
+
+-- | Does this instance stand on the given LOCAL chunk column? The one
+--   spelling of the @fiTileX@\/@fiTileY@ comparison every tile-scoped
+--   flora walk makes, so a co-tenancy filter cannot drift between the
+--   render pass, the forage lookups and the designation commits.
+floraInstanceOnTile ∷ Int → Int → FloraInstance → Bool
+floraInstanceOnTile lx ly fi =
+    fromIntegral (fiTileX fi) ≡ lx ∧ fromIntegral (fiTileY fi) ≡ ly
 
 -- | All flora placed in one chunk.
 data FloraChunkData = FloraChunkData
