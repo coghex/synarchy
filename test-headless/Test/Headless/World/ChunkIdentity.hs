@@ -934,3 +934,45 @@ spec = describe "canonical chunk identity" $ do
         -- Neither spelling is work any more.
         enqueueChunkRequest pageA ws [aliasCoord] `shouldReturn` 0
         enqueueChunkRequest pageA ws [canonCoord] `shouldReturn` 0
+
+    it "confirms an empty queue before publishing a finished load" $ \_ → do
+        -- LoadDone is the one conclusion that is wrong to publish even
+        -- briefly: world.getInitProgress and every waiter polling for the
+        -- terminal phase would report a load that has not happened. Both
+        -- reconciliations therefore re-read the queue before concluding
+        -- it, so the value is never published from a snapshot an append
+        -- has already invalidated — and both recheck afterwards too,
+        -- because two IORefs cannot be read as one.
+        let params = sizedParams wideWorldSize
+            fallback = 25
+            pending = [ChunkCoord 2 2, ChunkCoord 3 3]
+
+        -- Work present: neither reconciliation retires the phase.
+        wsBusy ← detachedPage params
+        writeIORef (wsInitQueueRef wsBusy) pending
+        writeIORef (wsLoadPhaseRef wsBusy) (LoadPhase2 5 fallback)
+        reconcileQueuedPhase wsBusy
+        readIORef (wsLoadPhaseRef wsBusy) `shouldReturn` LoadPhase2 5 fallback
+        settleDrainedPhase wsBusy fallback
+        readIORef (wsLoadPhaseRef wsBusy)
+            `shouldReturn` LoadPhase2 (length pending) fallback
+
+        -- Genuinely empty: both conclude done.
+        wsIdle ← detachedPage params
+        writeIORef (wsInitQueueRef wsIdle) []
+        writeIORef (wsLoadPhaseRef wsIdle) (LoadPhase2 1 fallback)
+        reconcileQueuedPhase wsIdle
+        readIORef (wsLoadPhaseRef wsIdle) `shouldReturn` LoadDone
+
+        wsIdle2 ← detachedPage params
+        writeIORef (wsInitQueueRef wsIdle2) []
+        writeIORef (wsLoadPhaseRef wsIdle2) (LoadPhase2 1 fallback)
+        settleDrainedPhase wsIdle2 fallback
+        readIORef (wsLoadPhaseRef wsIdle2) `shouldReturn` LoadDone
+
+        -- The invariant both maintain, checked against the queue rather
+        -- than assumed: a page reports done only with nothing left.
+        forM_ [wsBusy, wsIdle, wsIdle2] $ \ws → do
+            phase ← readIORef (wsLoadPhaseRef ws)
+            queue ← readIORef (wsInitQueueRef ws)
+            when (phase ≡ LoadDone) $ queue `shouldBe` []

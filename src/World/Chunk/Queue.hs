@@ -315,17 +315,31 @@ settleDrainedPhase ws = go
   where
     go fallback = do
         rest ← readIORef (wsInitQueueRef ws)
+        -- CONFIRM an empty queue before concluding anything from it.
+        -- Publishing 'LoadDone' is the one conclusion that is wrong to
+        -- show even briefly: @world.getInitProgress@ and every waiter
+        -- polling for the terminal phase would report a load that has
+        -- not happened, and a poll landing in the window between the
+        -- write and the recheck below would see exactly that. Re-reading
+        -- first means the value is never published from a snapshot an
+        -- append has already invalidated. A snapshot with work in it
+        -- needs no confirming — it publishes 'LoadPhase2', which is true
+        -- whether or not more arrives.
+        settled ← if null rest then readIORef (wsInitQueueRef ws) else pure rest
         -- The total this pass replaces comes back with it, because the
         -- retry below has to carry it forward: writing 'LoadDone' erases
         -- the recorded total, so a second pass reading that would fall
         -- back to the box-shaped figure and permanently UNDERREPORT a
         -- load a concurrent append had already enlarged.
         observed ← atomicModifyIORef' (wsLoadPhaseRef ws) $ \ph →
-            ( drainedLoadPhase fallback (length rest) ph
+            ( drainedLoadPhase fallback (length settled) ph
             , case ph of
                 LoadPhase2 _ total → total
                 _                  → fallback )
-        when (null rest) $ do
+        -- ...and recheck afterwards regardless, because two IORefs
+        -- cannot be read as one: an append landing between the confirm
+        -- and the write is still possible, and this is what heals it.
+        when (null settled) $ do
             arrived ← readIORef (wsInitQueueRef ws)
             unless (null arrived) $ go (max fallback observed)
 
@@ -348,7 +362,13 @@ settleDrainedPhase ws = go
 reconcileQueuedPhase ∷ WorldState → IO ()
 reconcileQueuedPhase ws = do
     pending ← readIORef (wsInitQueueRef ws)
-    when (null pending) $
-        atomicModifyIORef' (wsLoadPhaseRef ws) $ \ph → case ph of
-            LoadPhase2 _ _ → (LoadDone, ())
-            other          → (other, ())
+    when (null pending) $ do
+        -- Confirmed before concluding, for the same reason
+        -- 'settleDrainedPhase' confirms: 'LoadDone' is the conclusion
+        -- that is wrong to publish even briefly, and this thread is not
+        -- the only writer of either ref.
+        confirmed ← readIORef (wsInitQueueRef ws)
+        when (null confirmed) $
+            atomicModifyIORef' (wsLoadPhaseRef ws) $ \ph → case ph of
+                LoadPhase2 _ _ → (LoadDone, ())
+                other          → (other, ())
