@@ -126,8 +126,14 @@ ownership metadata (the qualified key and `source`) goes stale, so it
 fails until `--update-baseline` records the new owner. `relocations()`
 states every clause of that recognition and why each one is narrow; the
 short version is that a rename, an ambiguous pairing, a constructor
-change alongside the move, and a genuine deletion are all still
-INCOMPATIBLE, and the self-test proves each of them.
+change alongside the move, a change to the type's save-wire attribution,
+and a genuine deletion are all still INCOMPATIBLE, and the self-test
+proves each of them. The attribution clause is the one that is not
+obvious: attribution is walked by bare TYPE NAME, so without it a
+persisted enum could be deleted from its DTO and an unrelated off-wire
+enum of the same name introduced elsewhere, and the ratchet would
+rewrite the entry to `onSaveWire: false` — erasing the component
+attribution that a later deletion's diagnostic reads back.
 
 === Which gate owns what
 
@@ -1222,6 +1228,11 @@ class BaselineEntry:
     components: tuple[str, ...] = ()
     carriers: tuple[tuple[str, str], ...] = ()   # (label, via-path)
     source: str = ""
+    # The captured `onSaveWire` flag, or None when the entry never
+    # recorded one (a hand-added entry). `relocations()` needs the
+    # captured value rather than a guess, because "was on the wire, now
+    # is not" is exactly the change it must refuse to absorb.
+    on_save_wire: bool | None = None
 
 
 def load_baseline(path: Path) -> dict[str, BaselineEntry]:
@@ -1287,11 +1298,13 @@ def load_baseline(path: Path) -> dict[str, BaselineEntry]:
                     f"{BASELINE_REL}: `{qualified}` has a `carriers` entry "
                     f"without both `carrier` and `via`")
             recorded.append((str(item["carrier"]), str(item["via"])))
+        on_wire = entry.get("onSaveWire")
         out[qualified] = BaselineEntry(
             constructors=ctors,
             components=tuple(str(c) for c in entry.get("components", [])),
             carriers=tuple(recorded),
-            source=str(entry.get("source", "")))
+            source=str(entry.get("source", "")),
+            on_save_wire=on_wire if isinstance(on_wire, bool) else None)
     if not out:
         raise AuditError(
             f"{BASELINE_REL}: declares no types — a vacuous baseline would "
@@ -1406,8 +1419,38 @@ def describe_incompatibility(baseline: list[Constructor],
     return lines
 
 
+def wire_attribution(qualified: str,
+                     carriers: dict[str, list[Carrier]]) -> tuple:
+    """One type's save-wire attribution, spelled exactly as
+    `render_baseline` records it, so a freshly walked attribution and a
+    captured one are directly comparable."""
+    recorded = sorted(carriers.get(qualified, ()),
+                      key=lambda c: (c.sort_key, c.path))
+    return (
+        qualified in carriers,
+        tuple(sorted({component for carrier in recorded
+                      for component in carrier.components})),
+        tuple((carrier.label, " → ".join(carrier.path))
+              for carrier in recorded),
+    )
+
+
+def recorded_attribution(entry: BaselineEntry) -> tuple:
+    """The same tuple, read back from a baseline entry. An entry that
+    never captured `onSaveWire` is read as claiming whatever its
+    components/carriers imply — and one that captured no attribution at
+    all therefore claims to be OFF the wire, which is the honest
+    reading: a relocation must not be the thing that quietly puts it
+    on."""
+    on_wire = entry.on_save_wire
+    if on_wire is None:
+        on_wire = bool(entry.carriers) or bool(entry.components)
+    return (on_wire, tuple(entry.components), tuple(entry.carriers))
+
+
 def relocations(guarded: dict[str, GuardedType],
-                baseline: dict[str, BaselineEntry]) -> dict[str, str]:
+                baseline: dict[str, BaselineEntry],
+                carriers: dict[str, list[Carrier]]) -> dict[str, str]:
     """Baseline key → live key, for types whose OWNING MODULE moved and
     whose wire contract did not.
 
@@ -1435,10 +1478,23 @@ def relocations(guarded: dict[str, GuardedType],
     - its constructor list is IDENTICAL to the baseline's, slot for
       slot. A move that also reorders, renames, appends to or re-pays a
       constructor is still the byte-reinterpreting change the audit
-      exists to catch, and is reported as one.
+      exists to catch, and is reported as one;
+    - its freshly walked save-wire ATTRIBUTION — on-wire status,
+      components, and carrier paths — equals the attribution the
+      baseline captured. This clause is what stops a deletion wearing a
+      module move's clothes: attribution is walked by bare TYPE NAME, so
+      dropping a persisted enum from its DTO and adding an unrelated
+      OFF-wire enum with the same name and constructors elsewhere would
+      otherwise pair, and `--update-baseline` would rewrite the entry to
+      `onSaveWire: false` with no components — erasing the very
+      attribution the diagnostic for a later deletion depends on. A
+      genuine move leaves all three identical, because the carrier
+      labels name the CODEC's module and the `via` paths name types, not
+      the declaring module.
 
-    A genuine DELETION therefore still fails: nothing answers to the
-    bare name, so no pairing is made."""
+    A genuine DELETION therefore still fails twice over: nothing answers
+    to the bare name, and if something does, its attribution does not
+    match."""
     unmatched_live: dict[str, list[str]] = {}
     for qualified, entry in guarded.items():
         if qualified in baseline:
@@ -1458,15 +1514,24 @@ def relocations(guarded: dict[str, GuardedType],
         source, destination = sources[0], destinations[0]
         if guarded[destination].constructors != baseline[source].constructors:
             continue
+        if wire_attribution(destination, carriers) \
+                != recorded_attribution(baseline[source]):
+            continue
         moved[source] = destination
     return moved
 
 
 def compare(guarded: dict[str, GuardedType],
-            baseline: dict[str, BaselineEntry]) -> list[Finding]:
-    """Cross-check the discovered set against the baseline BOTH ways."""
+            baseline: dict[str, BaselineEntry],
+            carriers: dict[str, list[Carrier]]) -> list[Finding]:
+    """Cross-check the discovered set against the baseline BOTH ways.
+
+    `carriers` is REQUIRED rather than defaulted: `relocations()` reads
+    it to prove a relocated type still sits on the same save wire, and a
+    caller that forgot to pass it would silently treat every type as off
+    the wire."""
     findings: list[Finding] = []
-    moved = relocations(guarded, baseline)
+    moved = relocations(guarded, baseline, carriers)
     arrived = {destination: source for source, destination in moved.items()}
     for qualified in sorted(guarded):
         if qualified not in baseline:
@@ -1483,8 +1548,10 @@ def compare(guarded: dict[str, GuardedType],
                     f"({', '.join(c.render() for c in entry.constructors)})"
                     f" — the declaration moved between modules and no "
                     f"saved byte changed meaning.",
-                    f"    Only the baseline's ownership metadata (its "
-                    f"qualified key and `source`) is stale.",
+                    f"    Its save-wire attribution — on-wire status, "
+                    f"components and carrier paths — is unchanged too, so "
+                    f"only the baseline's ownership metadata (its qualified "
+                    f"key and `source`) is stale.",
                 ]))
                 continue
             findings.append(Finding(qualified, True, [
@@ -1667,7 +1734,7 @@ def run_repository_audit(root: Path = REPO_ROOT) -> int:
     except AuditError as err:
         print(f"enum_append_only_audit.py: {err}")
         return 1
-    return report(compare(scan.guarded, baseline), carriers,
+    return report(compare(scan.guarded, baseline, carriers), carriers,
                   len(scan.guarded), stale)
 
 
@@ -1685,7 +1752,7 @@ def run_update_baseline(root: Path = REPO_ROOT) -> int:
     except AuditError as err:
         print(f"enum_append_only_audit.py: {err}")
         return 1
-    findings = compare(scan.guarded, existing)
+    findings = compare(scan.guarded, existing, carriers)
     incompatible = [f for f in findings if not f.compatible]
     if incompatible:
         print(f"refusing to update {BASELINE_REL}: {len(incompatible)} "
@@ -2216,6 +2283,58 @@ def _self_test() -> list[str]:
                         f"qualified key:\n{moved_baseline}")
     expect_clean("relocation ratcheted",
                  dict(move, **{BASELINE_REL: moved_baseline}))
+
+    # The mutation Codex's round-1 review caught: attribution is walked
+    # by bare TYPE NAME, so a persisted enum DELETED from its DTO plus an
+    # unrelated OFF-wire enum of the same name and constructors
+    # elsewhere pairs on every other clause. Absorbing that as a
+    # relocation would ratchet the entry to `onSaveWire: false` with no
+    # components, erasing the attribution a later deletion's diagnostic
+    # reads back — so the attribution must match too.
+    lookalike = {k: v for k, v in _clean_tree().items()
+                 if k != "src/Unit/Sim/Types.hs"}
+    lookalike["src/World/Save/Component/Entities.hs"] = (
+        _ENTITIES_HS.replace("usdPose ∷ !Pose", "usdSeq ∷ !Int")
+                    .replace("uidPose ∷ !Pose", "uidSeq ∷ !Int"))
+    lookalike["src/Extra/Types.hs"] = _pose(
+        "Standing", "Crouching", "Crawling").replace(
+            "module Unit.Sim.Types where", "module Extra.Types where")
+    code, lookalike_out = _run(lookalike)
+    if code == 0:
+        failures.append("off-wire lookalike: expected a failure")
+    for needle in ("INCOMPATIBLE", "Unit.Sim.Types.Pose", "baseline only"):
+        if needle not in lookalike_out:
+            failures.append(f"off-wire lookalike: output did not mention "
+                            f"{needle!r}:\n{lookalike_out}")
+    if "RELOCATED" in lookalike_out:
+        failures.append(f"off-wire lookalike: absorbed as a relocation, "
+                        f"which erases the recorded attribution:"
+                        f"\n{lookalike_out}")
+    # ...and the ratchet must not write it either, which is the step that
+    # would actually destroy the captured components.
+    code, lookalike_update = _run(lookalike, update=True)
+    if code == 0:
+        failures.append(f"off-wire lookalike: --update-baseline erased the "
+                        f"recorded attribution:\n{lookalike_update}")
+    if "refusing to update" not in lookalike_update:
+        failures.append(f"off-wire lookalike: --update-baseline did not "
+                        f"refuse loudly:\n{lookalike_update}")
+    # The narrower half of the same rule: a move that keeps the type on
+    # the wire but changes WHICH components carry it is not a relocation
+    # either.
+    fewer = relocated("Unit.Sim.Pose")
+    fewer["src/World/Save/Component/Entities.hs"] = _ENTITIES_HS.replace(
+        "uidPose ∷ !Pose", "uidSeq ∷ !Int")
+    code, fewer_out = _run(fewer)
+    if code == 0:
+        failures.append("narrowed attribution: expected a failure")
+    if "RELOCATED" in fewer_out:
+        failures.append(f"narrowed attribution: a move that dropped the "
+                        f'"units" carrier was absorbed as a relocation:'
+                        f"\n{fewer_out}")
+    if "INCOMPATIBLE" not in fewer_out:
+        failures.append(f"narrowed attribution: not reported as "
+                        f"incompatible:\n{fewer_out}")
 
     # The mutation that must NOT be absorbed: a move that also changes a
     # constructor is still the silent reinterpretation this audit exists
