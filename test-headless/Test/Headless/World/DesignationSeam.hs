@@ -297,7 +297,7 @@ forageItems = ItemManager $ HM.fromList
     , ("probe_timber", baseItem { idName = "probe_timber" }) ]
   where
     baseItem = ItemDef
-        { idName = "", idDisplayName = "", idTexture = TextureHandle 0
+        { idName = "", idDisplayName = "", idTexture = TextureHandle 0, idIconTexture = TextureHandle 0
         , idWeight = 1, idWeightSpec = Nothing, idBulk = 1
         , idStorage = Nothing, idKind = "misc", idCategory = "Misc"
         , idMake = "", idMaterial = "", idQualitySpec = Nothing

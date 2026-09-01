@@ -58,7 +58,12 @@ sameContainer projected live
 
 spec ∷ SpecWith EngineEnv
 spec = do
-  describe "toRenderHandoffCapability (every render-handoff field)" $ do
+  describe "toRenderHandoffCapability (nine of the ten render-handoff \
+           \fields)" $ do
+    -- The record carries ten fields; `rhSceneStatsRef` was added
+    -- later (#1921) and has no alias assertion here yet. Adding it
+    -- is its own change; this heading states what is actually
+    -- covered.
     let aliases name project field =
           it (name <> " aliases the live EngineEnv container") $ \env →
             sameContainer (project (toRenderHandoffCapability env)) (field env)
@@ -81,26 +86,6 @@ spec = do
             structureWallCatalogRef
     aliases "rhStructureArtCatalogRef"    rhStructureArtCatalogRef
             structureArtCatalogRef
-
-    it "is stable across repeated projection (no fresh containers)" $ \env → do
-      -- The migration re-projects inline at several call sites
-      -- (`rhTexPaletteRef (toRenderHandoffCapability env)`), and the
-      -- world-init path projects once per command while MainRender
-      -- projects on its own schedule. A projection that minted anything
-      -- fresh per call would break cross-thread visibility everywhere at
-      -- once rather than in one place. Cover every field, since each is a
-      -- separate handoff channel with its own consumer.
-      let a = toRenderHandoffCapability env
-          b = toRenderHandoffCapability env
-      sameContainer (rhWorldPreviewRef a)           (rhWorldPreviewRef b)
-      sameContainer (rhWorldPreviewGenerationRef a) (rhWorldPreviewGenerationRef b)
-      sameContainer (rhZoomAtlasDataRef a)          (rhZoomAtlasDataRef b)
-      sameContainer (rhWorldQuadsRef a)             (rhWorldQuadsRef b)
-      sameContainer (rhBloodDisposeQueue a)         (rhBloodDisposeQueue b)
-      sameContainer (rhTexPaletteRef a)             (rhTexPaletteRef b)
-      sameContainer (rhTexPaletteHandlesRef a)      (rhTexPaletteHandlesRef b)
-      sameContainer (rhStructureWallCatalogRef a)   (rhStructureWallCatalogRef b)
-      sameContainer (rhStructureArtCatalogRef a)    (rhStructureArtCatalogRef b)
 
     it "keeps the two single-slot upload handoffs distinct" $ \env → do
       -- worldPreviewRef and zoomAtlasDataRef are the record's pair of

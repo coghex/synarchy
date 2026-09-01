@@ -96,7 +96,7 @@ fixturePage = WorldPageId "coffee_gesture_page"
 coffeeDef ∷ ItemDef
 coffeeDef = ItemDef
     { idName = "coffee_pot", idDisplayName = "Coffee Pot"
-    , idTexture = TextureHandle 0, idWeight = 0.4, idWeightSpec = Nothing
+    , idTexture = TextureHandle 0, idIconTexture = TextureHandle 0, idWeight = 0.4, idWeightSpec = Nothing
     , idBulk = 1.6, idStorage = Nothing, idKind = "misc"
     , idCategory = "Supplies", idMake = "", idMaterial = ""
     -- Present ONLY so `quality` reaches Lua at all — without a spec the

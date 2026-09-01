@@ -37,6 +37,7 @@ import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.State (EngineEnv, loggerRef)
 import qualified Engine.Core.Queue as Q
+import Engine.Graphics.Vulkan.Texture.Policy (UploadSampler(..))
 import Engine.Scripting.Lua.API.Units.Yaml (AtlasResolver, registerUnitDefs)
 import Engine.Scripting.Lua.Types (LuaToEngineMsg(..))
 import System.Directory (getTemporaryDirectory, removeFile)
@@ -104,8 +105,8 @@ atlasFor name frames = AtlasAnimation
     { aaName = name, aaFormat = AtlasFormatPng
     , aaPath = "assets/textures/units/" ⧺ T.unpack fixtureUnit
                    ⧺ "/atlas/" ⧺ T.unpack name ⧺ ".png"
-    , aaAtlasWidth = frames * 16, aaAtlasHeight = 16
-    , aaCellWidth = 16, aaCellHeight = 16
+    , aaAtlasWidth = frames * 18, aaAtlasHeight = 18
+    , aaCellWidth = 16, aaCellHeight = 16, aaCellPadding = 1
     , aaColumns = frames, aaRows = 1
     , aaFlip = False, aaFps = 8, aaLoop = True
     , aaDirections = Map.singleton DirS (AtlasDirectionRow DirS 0 frames)
@@ -129,7 +130,12 @@ atlasRequests ∷ [LuaToEngineMsg] → [(TextureHandle, FilePath)]
 atlasRequests msgs = [ (h, p) | LuaLoadAtlasTextureRequest h p ← msgs ]
 
 plainRequests ∷ [LuaToEngineMsg] → [(TextureHandle, FilePath)]
-plainRequests msgs = [ (h, p) | LuaLoadTextureRequest h p ← msgs ]
+plainRequests msgs = [ (h, p) | LuaLoadTextureRequest h p _ ← msgs ]
+
+-- | The ordinary (non-atlas) uploads with the sampler policy each one
+--   declared (#2075).
+plainPolicies ∷ [LuaToEngineMsg] → [(FilePath, UploadSampler)]
+plainPolicies msgs = [ (p, pol) | LuaLoadTextureRequest _ p pol ← msgs ]
 
 publishedDef ∷ EngineEnv → IO (Maybe UnitDef)
 publishedDef env = do
@@ -307,6 +313,34 @@ spec = describe "Unit.Atlas.Load — the real unit registration boundary" $ do
                         nub loaded `shouldMatchList` nub allowed
                     _ → expectationFailure
                         (T.unpack unitName ⧺ " failed to register")
+
+        -- #2075: the authored portrait is the ONE unit texture whose
+        -- only consumer is a UI panel, so it is the one the loader
+        -- declares as UI. Everything else it queues is world-drawn and
+        -- stays on the player's filter. red_squirrel is the shipped def
+        -- that ships a `portrait:`.
+        it "declares the authored portrait as UI art and every other \
+           \ordinary texture as scene art" $ \env → do
+            (defs, msgs, _) ← runShipped env "red_squirrel"
+            case defs of
+                [yamlDef] → do
+                    portraitPath ← case uydPortrait yamlDef of
+                        Just p  → pure (T.unpack p)
+                        Nothing → do
+                            expectationFailure
+                                "red_squirrel no longer declares a portrait; \
+                                \pick another shipped unit that does"
+                            pure ""
+                    let queued = plainPolicies msgs
+                    lookup portraitPath queued
+                        `shouldBe` Just UploadPinnedNearest
+                    [ path | (path, UploadPinnedNearest) ← queued ]
+                        `shouldBe` [portraitPath]
+                    -- The sprite and the directional sprites are the
+                    -- world-drawn rest, and none of them slipped over.
+                    [ path | (path, UploadGlobalSampler) ← queued ]
+                        `shouldSatisfy` (not ∘ null)
+                _ → expectationFailure "red_squirrel YAML no longer holds one def"
 
         it "registers the whole shipped gameplay animation corpus" $ \env → do
             totals ← forM shippedUnits $ \unitName → do

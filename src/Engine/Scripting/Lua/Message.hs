@@ -14,6 +14,8 @@
 module Engine.Scripting.Lua.Message
   ( processLuaMessages
   , discardLuaMessagesForActiveLoad
+    -- * Exposed for regression coverage
+  , spanTextureLoads
   ) where
 
 import UPrelude
@@ -41,6 +43,8 @@ import Engine.Scripting.Lua.Message.Video ( handleSetResolution
                                            , handleSetTextureFilter)
 import Engine.Scripting.Lua.Message.WorldTexture ( handleWorldPreview
                                                    , handleZoomAtlasUpload)
+import Engine.Asset.Handle (TextureHandle)
+import Engine.Graphics.Vulkan.Texture.Policy (UploadSampler)
 import Engine.Scripting.Lua.Types
 import World.Render.BloodQuads (uploadBloodTextures, disposeQueuedBloodTextures)
 
@@ -63,14 +67,22 @@ processLuaMessages = do
     disposeQueuedBloodTextures
   where
     process [] = pure ()
-    process (LuaLoadTextureRequest handle path : rest) = do
-        let (burst, rest') = span isTextureLoad rest
-            requests = (handle, path) : unwrapTextureLoads burst
-        whenGraphical $ handleLoadTextureBatch requests
+    -- One burst carries ONE policy. A run of ordinary loads extends only
+    -- while the declared 'UploadSampler' stays the same (#2075): the
+    -- batch registers every slot in it with one sampler, and its
+    -- within-batch same-path dedup folds a later request into an earlier
+    -- request's slot, so a mixed burst would hand some request the other
+    -- category's filtering. Adjacent runs of different policies are just
+    -- consecutive batches, which is what the queue already was before
+    -- policies existed.
+    process (LuaLoadTextureRequest handle path policy : rest) = do
+        let (burst, rest') = spanTextureLoads policy rest
+            requests = (handle, path) : burst
+        whenGraphical $ handleLoadTextureBatch policy requests
         process rest'
     -- Atlases batch among THEMSELVES, never with ordinary textures:
-    -- the two differ in how the slot is registered (pinned nearest vs
-    -- the global sampler), and one burst can only carry one policy.
+    -- beyond the sampler, an atlas request also carries D-2's
+    -- one-image-per-animation upload contract.
     process (LuaLoadAtlasTextureRequest handle path : rest) = do
         let (burst, rest') = span isAtlasLoad rest
             requests = (handle, path) : unwrapAtlasLoads burst
@@ -80,17 +92,36 @@ processLuaMessages = do
         handleLuaMessage msg
         process rest
 
-    isTextureLoad (LuaLoadTextureRequest _ _) = True
-    isTextureLoad _                           = False
-
-    unwrapTextureLoads msgs =
-        [ (handle, path) | LuaLoadTextureRequest handle path ← msgs ]
-
     isAtlasLoad (LuaLoadAtlasTextureRequest _ _) = True
     isAtlasLoad _                                = False
 
     unwrapAtlasLoads msgs =
         [ (handle, path) | LuaLoadAtlasTextureRequest handle path ← msgs ]
+
+-- | Peel the leading run of ordinary texture loads that all declare
+--   @policy@ off a message list, unwrapped into upload requests.
+--
+--   The burst stops at the FIRST message that is not an ordinary texture
+--   load under this exact policy — a different policy ends it just as an
+--   unrelated message does. That is the whole of #2075's batching rule,
+--   and it is not cosmetic: 'handleLoadTextureBatch' registers every
+--   slot in one batch with one sampler, and its within-batch same-path
+--   dedup folds a later request into an earlier request's slot, so a
+--   burst carrying two policies would hand some request the other
+--   category's filtering. Adjacent runs of different policies simply
+--   become consecutive batches.
+spanTextureLoads
+  ∷ UploadSampler
+  → [LuaToEngineMsg]
+  → ([(TextureHandle, FilePath)], [LuaToEngineMsg])
+spanTextureLoads policy msgs =
+    ( [ (handle, path) | LuaLoadTextureRequest handle path _ ← burst ]
+    , rest )
+  where
+    (burst, rest) = span isTextureLoadUnder msgs
+
+    isTextureLoadUnder (LuaLoadTextureRequest _ _ p) = p ≡ policy
+    isTextureLoadUnder _                             = False
 
 -- | Drop work produced by the old Lua/UI session while a whole-session load
 --   holds its publication boundary.  The render consumers call this only
@@ -158,11 +189,12 @@ handleLuaMessage msg = do
                 ,("handle", tshow handle)]
             handleLoadFont handle path size
 
-        LuaLoadTextureRequest handle path → whenGraphical $ do
+        LuaLoadTextureRequest handle path policy → whenGraphical $ do
             logDebugSM CatLua "Loading texture"
                 [("path", T.pack path)
-                ,("handle", tshow handle)]
-            handleLoadTexture handle path
+                ,("handle", tshow handle)
+                ,("policy", tshow policy)]
+            handleLoadTexture handle path policy
 
         LuaLoadAtlasTextureRequest handle path → whenGraphical $ do
             logDebugSM CatLua "Loading unit animation atlas"

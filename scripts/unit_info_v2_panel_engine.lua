@@ -17,9 +17,9 @@ local utf8Safe  = require("scripts.ui.utf8_safe")
 
 local M = {}
 
--- engine.loadTexture caches by path, but we keep a per-key map so each
--- key resolves to a (texture, def) pair once and we don't re-hit the
--- engine each rebuild. A miss with no per-family "<kind>_unknown" entry
+-- engine.loadTexture caches by (path, policy) (#2075), but we keep a
+-- per-key map so each key resolves to a (texture, def) pair once and we
+-- don't re-hit the engine each rebuild. A miss with no per-family "<kind>_unknown" entry
 -- falls back to text (#478).
 local iconCache = {}
 
@@ -54,7 +54,7 @@ local function loadIconFor(iconKey, kind)
     end
     if not iconIndex then buildIconIndex() end
     local path = iconIndex[iconKey] or (kind and iconIndex[kind .. "_unknown"])
-    local tex  = path and engine.loadTexture(path) or nil
+    local tex  = path and engine.loadTexture(path, "ui") or nil
     iconCache[cacheKey] = tex or false
     return tex
 end

@@ -73,7 +73,7 @@ end
 function list.init()
     if assetsLoaded then return end
 
-    highlightTex = engine.loadTexture("assets/textures/ui/highlight.png")
+    highlightTex = engine.loadTexture("assets/textures/ui/highlight.png", "ui")
 
     scrollbar.init()
 

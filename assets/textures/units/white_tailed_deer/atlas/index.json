@@ -1,7 +1,7 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "generator": "tools/pack_atlas.py",
-  "tool_version": 1,
+  "tool_version": 2,
   "digest_algorithm": "sha256",
   "unit": "white_tailed_deer",
   "direction_order": [
@@ -19,10 +19,11 @@
       "name": "alert",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/white_tailed_deer/atlas/alert.png",
-      "atlas_width": 496,
-      "atlas_height": 620,
+      "atlas_width": 504,
+      "atlas_height": 630,
       "cell_width": 124,
       "cell_height": 124,
+      "cell_padding": 1,
       "columns": 4,
       "rows": 5,
       "flip": true,
@@ -55,17 +56,18 @@
           "frame_count": 4
         }
       ],
-      "source_digest": "5acf681194796b0e03c1f3b500fc8486dc8db5fd6d84324ff4c013a486397f82",
-      "atlas_digest": "1c9e8882911dd0f85fb84c860ffa8010d4ef08b2eb72e32e69b82d119a6a9fdf"
+      "source_digest": "5e537889d7c85126c44749da5f328294736876230f4de96c4674be9ab7d637b8",
+      "atlas_digest": "4d2a81f44f7821428dc75f6f9f76db84df8d9a6fc2c16e5bfa9976ba1008f40d"
     },
     {
       "name": "attack",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/white_tailed_deer/atlas/attack.png",
-      "atlas_width": 1116,
-      "atlas_height": 620,
+      "atlas_width": 1134,
+      "atlas_height": 630,
       "cell_width": 124,
       "cell_height": 124,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 5,
       "flip": true,
@@ -98,17 +100,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "81b8d2e1294f05431a81ee3821aaf8e163a1dadecbfac6b870a59c418b16ca31",
-      "atlas_digest": "f19bd583afbfe07e9d09e8ce1dfa41e3bb470d9f40b5b5b1d912cf014eef344c"
+      "source_digest": "48ef237a1efc9c889cf2480eef2f2e475a6b64bba0fe08ed7e39ca3e4a90a07e",
+      "atlas_digest": "9c3fe66d9c9fcfe8540afcc9dad3062f7feb34157fff1cac3ebfc06a011f04c0"
     },
     {
       "name": "death",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/white_tailed_deer/atlas/death.png",
-      "atlas_width": 1116,
-      "atlas_height": 620,
+      "atlas_width": 1134,
+      "atlas_height": 630,
       "cell_width": 124,
       "cell_height": 124,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 5,
       "flip": true,
@@ -141,17 +144,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "abb7bafce06a655f86beabde3f9e62ecf2fa11611851a2f1c72294d2b680759f",
-      "atlas_digest": "b0634acf6e620aa50fa7d8115faa6e5ecc619507a691bf8e54d87e1f2a4bf525"
+      "source_digest": "26ea5f445487fff1c82eafcd9b921aca6910dc30ee1736710ac0a1f0fa5131e8",
+      "atlas_digest": "6ac57105edb0dd94a5b7c65095bd160ff5d883c90907a94032feb38afcebb332"
     },
     {
       "name": "drink",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/white_tailed_deer/atlas/drink.png",
-      "atlas_width": 992,
-      "atlas_height": 620,
+      "atlas_width": 1008,
+      "atlas_height": 630,
       "cell_width": 124,
       "cell_height": 124,
+      "cell_padding": 1,
       "columns": 8,
       "rows": 5,
       "flip": true,
@@ -184,17 +188,18 @@
           "frame_count": 8
         }
       ],
-      "source_digest": "483427f6fd76b1d06b8be32f526e83b7b266a5b541f73ea0d70b9467eb13dfa5",
-      "atlas_digest": "84fcdcaf6d845e3701271e0760bd222312f603f1425bb5bf465faf0847714db1"
+      "source_digest": "a5e811fdeffdf73b57fd72e4014d0625a97546c1dd39255d5bb0f18d755cb9bd",
+      "atlas_digest": "6d94dea1b62c4b8c6c055e49bb53b566168125c8a5ae4b3ce6ac00128a635db0"
     },
     {
       "name": "eat",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/white_tailed_deer/atlas/eat.png",
-      "atlas_width": 992,
-      "atlas_height": 620,
+      "atlas_width": 1008,
+      "atlas_height": 630,
       "cell_width": 124,
       "cell_height": 124,
+      "cell_padding": 1,
       "columns": 8,
       "rows": 5,
       "flip": true,
@@ -227,17 +232,18 @@
           "frame_count": 8
         }
       ],
-      "source_digest": "5af41c206adc979a258a2a5671a413fd1a58fbaa2562d3e8c7131cc5c273308e",
-      "atlas_digest": "0bfe3dee183bf9f9a8fde33d72d4b14310f25b35c6672850ddeebed07e1b5765"
+      "source_digest": "648d194eaa0a8dc191936df9a7296d0450f677ac6033442a440f62d192d3ce91",
+      "atlas_digest": "765a6b82072f7e0b947d0ce6dccc078213203ed8f71f46148e8522488c23fa15"
     },
     {
       "name": "hit_react",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/white_tailed_deer/atlas/hit_react.png",
-      "atlas_width": 1116,
-      "atlas_height": 620,
+      "atlas_width": 1134,
+      "atlas_height": 630,
       "cell_width": 124,
       "cell_height": 124,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 5,
       "flip": true,
@@ -270,17 +276,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "62b3fb5fdb723210a7900d58dc0b17e1a5737e3792fc8521cba14e25bc2edfb2",
-      "atlas_digest": "6213f7d5c2b3c5bbe92d8edbb8fff5e6558e1c24613ab1a35b1f3be5fa1d9fad"
+      "source_digest": "e16ffb833c0592b00680cd05a166a1810565df33564b1f82ddb140fafdcfcbd4",
+      "atlas_digest": "a5243cc77dd1c542dc0a16551e8ec1292510f9084f8c0ecf3927f13f8ba0cf4c"
     },
     {
       "name": "idle",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/white_tailed_deer/atlas/idle.png",
-      "atlas_width": 496,
-      "atlas_height": 620,
+      "atlas_width": 504,
+      "atlas_height": 630,
       "cell_width": 124,
       "cell_height": 124,
+      "cell_padding": 1,
       "columns": 4,
       "rows": 5,
       "flip": true,
@@ -313,17 +320,18 @@
           "frame_count": 4
         }
       ],
-      "source_digest": "f9f3e6bbea1841c3a36c4114e71509a0134118e82b23a8010f215f3904f28d51",
-      "atlas_digest": "ccb6a2ba09846ccbeec761a7704fb4e4b89e2dd7c116f66ba1ff895580b3f6a7"
+      "source_digest": "bbc65d8b4cdca80a34bf7adda938dc23ef0d8b512adc33cfc89afc5dc1e59894",
+      "atlas_digest": "18abaded747adc3e90f92f5142db11eb08330ad1cc78924f249e425e45064b0b"
     },
     {
       "name": "lying_idle",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/white_tailed_deer/atlas/lying_idle.png",
-      "atlas_width": 496,
-      "atlas_height": 620,
+      "atlas_width": 504,
+      "atlas_height": 630,
       "cell_width": 124,
       "cell_height": 124,
+      "cell_padding": 1,
       "columns": 4,
       "rows": 5,
       "flip": true,
@@ -356,17 +364,18 @@
           "frame_count": 4
         }
       ],
-      "source_digest": "df95b0db34069e39d9ae864cb3fef36e2b938552fcddc082fc513369204c39b3",
-      "atlas_digest": "199187f0ec099c0997d7c533c15494912d7ce64006714505d4e9faa8cc05c68e"
+      "source_digest": "0ff5722e84568d2ba5c4dd39755496681d426fe84fcb3b946998c709d3a1c863",
+      "atlas_digest": "f5a553fd0fba3d4f9806dd6f2abe9f6097c8c712975179ccfa8226d7f05e0fd9"
     },
     {
       "name": "lying_to_sleeping",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/white_tailed_deer/atlas/lying_to_sleeping.png",
-      "atlas_width": 1116,
-      "atlas_height": 620,
+      "atlas_width": 1134,
+      "atlas_height": 630,
       "cell_width": 124,
       "cell_height": 124,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 5,
       "flip": true,
@@ -399,17 +408,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "8f753d9efc4c8cff71078fb58fdc428c047f375c4d12287c875fb34ff9462b4c",
-      "atlas_digest": "e4427a796ba8bbd0b3d2a8899cae33c1ce159afed418d29fa6dea23c15b2dcc9"
+      "source_digest": "0e6443bbc9b873c258ca91368b6f16a9a2c103529c431ff033bcd78bc3853413",
+      "atlas_digest": "ca3f86f8f304edc1b03275a3c528d64a00f72f21261642d79f132a62a9b50d6f"
     },
     {
       "name": "run",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/white_tailed_deer/atlas/run.png",
-      "atlas_width": 992,
-      "atlas_height": 620,
+      "atlas_width": 1008,
+      "atlas_height": 630,
       "cell_width": 124,
       "cell_height": 124,
+      "cell_padding": 1,
       "columns": 8,
       "rows": 5,
       "flip": true,
@@ -442,17 +452,18 @@
           "frame_count": 8
         }
       ],
-      "source_digest": "dd5c9c9c5c4bdf6938b011645170b3f4bb54bb826437e26ec0dfb7436d48ca94",
-      "atlas_digest": "53b735f0d43a397236ac998bd1d58cac6320143d3bc0053c5d66030409cb742c"
+      "source_digest": "10d0eaf9102346cbd1a040e11e198fdf40ce1d5150af3277aa9f6fdb72d734d1",
+      "atlas_digest": "ee72513ea7090409cbcfd920479e7e3822afd4338f36cf7e85f447bce21467cf"
     },
     {
       "name": "sleeping_idle",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/white_tailed_deer/atlas/sleeping_idle.png",
-      "atlas_width": 496,
-      "atlas_height": 620,
+      "atlas_width": 504,
+      "atlas_height": 630,
       "cell_width": 124,
       "cell_height": 124,
+      "cell_padding": 1,
       "columns": 4,
       "rows": 5,
       "flip": true,
@@ -485,17 +496,18 @@
           "frame_count": 4
         }
       ],
-      "source_digest": "31b00b09f781ed09320e155fee4c534152f5f0277f0418413bed618a98d857c4",
-      "atlas_digest": "9bfe9084f2b5a47c23e4e19b7e915555e3b29e4be55847d57d3a7fb9fa12a591"
+      "source_digest": "482475d63c7d7464ee62a4eb0b4673bc3ff15b7adfb3a172074528b0dfa55310",
+      "atlas_digest": "4fa32f28f08d94ad97be4c8abbf85838b6c6694def066236c380e12637f631c3"
     },
     {
       "name": "standing_to_lying",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/white_tailed_deer/atlas/standing_to_lying.png",
-      "atlas_width": 1116,
-      "atlas_height": 620,
+      "atlas_width": 1134,
+      "atlas_height": 630,
       "cell_width": 124,
       "cell_height": 124,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 5,
       "flip": true,
@@ -528,17 +540,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "faedeac2492cc6c0f29a9d7327b7a130b9d14fda04a2c54142c567ed4c516074",
-      "atlas_digest": "8dd7bc2af3a137341ac9714b3bb1af3c039adf6aacf05c03317213ab4236385b"
+      "source_digest": "c18bbc169bf510ea3a2ff5d9da003dc0dbcfb196d0cc7325eb21eaa5689455e6",
+      "atlas_digest": "6e2142df9fa168dfd2541e39d0c7c2a2cf5fef3c43993a5a30fc613e1576c626"
     },
     {
       "name": "walk",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/white_tailed_deer/atlas/walk.png",
-      "atlas_width": 992,
-      "atlas_height": 620,
+      "atlas_width": 1008,
+      "atlas_height": 630,
       "cell_width": 124,
       "cell_height": 124,
+      "cell_padding": 1,
       "columns": 8,
       "rows": 5,
       "flip": true,
@@ -571,8 +584,8 @@
           "frame_count": 8
         }
       ],
-      "source_digest": "b711f9278a29435e805d95c1ab7c22c51efab92c1ceeae8dd7281920059e6ee1",
-      "atlas_digest": "37ff37cd2d28af528fe1412ed60bb6d26dab89e23b1c4f5e700afdc33a33829c"
+      "source_digest": "43b38af6f0414760cd850af0edf908513468d560010e337c49b83abbbd3d8557",
+      "atlas_digest": "90765df74b0841b72469228dce0f976befe92e66d41b67b2f2cc4abf12d59bf2"
     }
   ]
 }

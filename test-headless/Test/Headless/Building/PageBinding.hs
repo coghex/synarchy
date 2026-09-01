@@ -245,7 +245,7 @@ mkDef name starting = BuildingDef
     , bdDisplayName     = name
     , bdCategory        = "Test"
     , bdDescription     = ""
-    , bdTexture         = TextureHandle 0
+    , bdTexture         = TextureHandle 0, bdIconTexture         = TextureHandle 0
     , bdTileW           = 1
     , bdTileH           = 1
     , bdPlacement       = "flat_ground"

@@ -1,7 +1,7 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "generator": "tools/pack_atlas.py",
-  "tool_version": 1,
+  "tool_version": 2,
   "digest_algorithm": "sha256",
   "unit": "tiller",
   "direction_order": [
@@ -19,10 +19,11 @@
       "name": "idle",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/tiller/atlas/idle.png",
-      "atlas_width": 92,
-      "atlas_height": 460,
+      "atlas_width": 94,
+      "atlas_height": 470,
       "cell_width": 92,
       "cell_height": 92,
+      "cell_padding": 1,
       "columns": 1,
       "rows": 5,
       "flip": true,
@@ -55,17 +56,18 @@
           "frame_count": 1
         }
       ],
-      "source_digest": "abd92b63c3af7494775f6cb6f6159afab24c7256a2b82cc90bc45175ee5d85eb",
-      "atlas_digest": "2f53a838ab615a8352bcef6ada69b33fa790b67baf29be0266844a3f76c91fee"
+      "source_digest": "ae8cb389df05219a493382003f46ae0607481f22ba6527880aaa95f058fa285e",
+      "atlas_digest": "19b8cc856733b625663a089cfaa6c41016c16a23b2560df65b7be07f62dd43b4"
     },
     {
       "name": "run",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/tiller/atlas/run.png",
-      "atlas_width": 460,
-      "atlas_height": 460,
+      "atlas_width": 470,
+      "atlas_height": 470,
       "cell_width": 92,
       "cell_height": 92,
+      "cell_padding": 1,
       "columns": 5,
       "rows": 5,
       "flip": true,
@@ -98,8 +100,8 @@
           "frame_count": 5
         }
       ],
-      "source_digest": "f4029065d9fe56f9a723d3e9f3079b58155f28d1b074fad5f2b30d4191e3c8df",
-      "atlas_digest": "704de88015ccfb4c4410dab35c97c337c5a9aa019529f68d2ae9a4bd63bab108"
+      "source_digest": "38c324d904d91ecec5bdb4536c6dcf69fbce62cca5f760e7f371ed5380d2de60",
+      "atlas_digest": "7829a25bd1b8f391b4cd10dbb4b21400440a6fbbc94279757f13241f7a3fbe05"
     }
   ]
 }

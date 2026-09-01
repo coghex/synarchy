@@ -17,7 +17,9 @@ import Vulkan.Zero
 getVertexBindingDescription ∷ VertexInputBindingDescription
 getVertexBindingDescription = zero
     { binding = 0
-    , stride = 52  -- = vertexTotalSize: 2+2+4+1+1 floats + 3 uints
+    , stride = 56  -- = vertexTotalSize: 2+2+4+1+1 floats (40 B), one
+                  --   uint of flags (44), worldUV's two signed ints
+                  --   (52), one uint of solar page (56)
     , inputRate = VERTEX_INPUT_RATE_VERTEX
     }
 
@@ -70,12 +72,15 @@ getVertexAttributeDescriptions = V.fromList
         , format = FORMAT_R32_UINT
         , offset = 40  -- = vertexRenderFlagsOffset
         }
-    , zero  -- Packed world (u,v) — #483 longitude-local day/night.
-             -- Only the bindless world vertex shader declares/reads this;
-             -- other pipelines (UI, font) leave it unused, like renderFlags.
+    , zero  -- World cylinder (u,v) — #483 longitude-local day/night,
+             -- widened to two whole signed 32-bit components by #2019
+             -- (eight bytes, which is why the solar page below sits at
+             -- 52 rather than 48). Only the bindless world vertex shader
+             -- declares/reads this; other pipelines (UI, font) leave it
+             -- unused, like renderFlags.
         { location = 6
         , binding = 0
-        , format = FORMAT_R32_UINT
+        , format = FORMAT_R32G32_SINT
         , offset = 44  -- = vertexWorldUVOffset
         }
     , zero  -- Solar page slot — #1869 per-page day/night attribution.
@@ -86,6 +91,6 @@ getVertexAttributeDescriptions = V.fromList
         { location = 7
         , binding = 0
         , format = FORMAT_R32_UINT
-        , offset = 48  -- = vertexSolarPageOffset
+        , offset = 52  -- = vertexSolarPageOffset
         }
     ]

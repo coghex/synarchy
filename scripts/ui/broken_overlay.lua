@@ -16,7 +16,11 @@ local _tex = nil
 -- Returns the handle, or nil if it isn't resident yet.
 function brokenOverlay.tex()
     if _tex then return _tex end
-    local h = engine.getTextureHandle("broken_equipment")
+    -- The UI-policy registration of the badge (#2075). The plain
+    -- "broken_equipment" name is the SCENE slot the ground-item
+    -- renderer draws; this overlay sits on an inventory icon, so it
+    -- must stay nearest across a filter toggle.
+    local h = engine.getTextureHandle("broken_equipment_ui")
     if h and h >= 0 then _tex = h end
     return _tex
 end

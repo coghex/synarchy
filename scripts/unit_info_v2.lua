@@ -123,12 +123,12 @@ local function bootstrap()
     unitInfoV2.bootstrapped = true
     unitInfoV2.page = UI.newPage("unit_info_v2", "overlay")
 
-    -- engine.loadTexture caches by path so this returns the same
-    -- handle that drag_select / tooltip separators already use.
+    -- Cached by (path, policy) (#2075): drag_select and the tooltip
+    -- separator also request white.png as "ui", so this shares theirs.
     unitInfoV2.whitePixelTex = engine.loadTexture(
-        "assets/textures/utility/white.png")
+        "assets/textures/utility/white.png", "ui")
     unitInfoV2.tabSelectedTex = engine.loadTexture(
-        "assets/textures/ui/unittabselected.png")
+        "assets/textures/ui/unittabselected.png", "ui")
 
     -- Sub-tab look (Status / Stats / Mental / …) re-uses the menu
     -- tab textures so it visually matches the settings + create-world

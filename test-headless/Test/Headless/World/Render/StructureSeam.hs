@@ -42,7 +42,8 @@ import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
 import Engine.Core.State (EngineEnv(..))
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..), defaultCamera)
-import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..))
+import Engine.Graphics.Vulkan.Types.Vertex
+    (Vertex(..), Vec2(..), Vec4(..), WorldUV)
 import Engine.Scene.Base (LayerId)
 import Engine.Scene.Types (SortableQuad(..))
 import Structure.Palette (TexPalette, emptyTexPalette, internPath)
@@ -221,13 +222,13 @@ wrapDisplacement facing =
 
 -- | Everything about a vertex EXCEPT its position: the fields a
 --   screen-space translation must leave alone.
-vertexPayload ∷ Vertex → (Vec2, Vec4, Float, Float, Word32, Word32)
+vertexPayload ∷ Vertex → (Vec2, Vec4, Float, Float, Word32, WorldUV)
 vertexPayload v =
     (tex v, color v, atlasId v, faceMapId v, renderFlags v, worldUV v)
 
 quadPayload ∷ SortableQuad
             → ( Float, TextureHandle, LayerId
-              , [(Vec2, Vec4, Float, Float, Word32, Word32)] )
+              , [(Vec2, Vec4, Float, Float, Word32, WorldUV)] )
 quadPayload q =
     ( sqSortKey q
     , sqTexture q
