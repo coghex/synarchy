@@ -26,6 +26,7 @@ registerWorldAPI env backendState = do
   registerLuaFunction "getGenDefaults" (worldGetGenDefaultsFn (toWorldSimCapability env))
   registerLuaFunction "setGenConfig" (worldSetGenConfigFn (toWorldSimCapability env))
   registerLuaFunction "init" (worldInitFn env)
+  registerLuaFunction "checkMapImagePlan" (worldCheckMapImagePlanFn env)
   registerLuaFunction "getIdentity" (worldGetIdentityFn env)
   registerLuaFunction "getLanguageProvenance" (worldGetLanguageProvenanceFn env)
   registerLuaFunction "suggestName" (worldSuggestNameFn backendState)

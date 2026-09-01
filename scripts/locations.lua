@@ -358,12 +358,15 @@ end
 -- Resolve location `id` to its def, then call the builder it names.
 --
 -- Returns (ok, failedPlacementCount). `ok` is true only when the def
--- resolved, the builder ran, AND every placement it attempted succeeded
--- (#1719) — the durable "this location's geometry is complete" answer
--- scripts/location_stamper.lua gates world.markLocationStamped on. An
--- unknown id or an unknown builder still returns false, with a count of
--- zero: nothing was attempted, and each of those paths logs its own
--- warning here, so the stamper must not summarise them a second time.
+-- resolved, the builder ran, AND every placement it attempted was
+-- ACCEPTED (#1719) — the first of the two gates
+-- scripts/location_stamper.lua puts in front of the durable marker. It
+-- is a synchronous answer, so it cannot see a placement the world thread
+-- later declines; #2051's commit window is the second gate, and it runs
+-- on the world thread. An unknown id or an unknown builder still returns
+-- false, with a count of zero: nothing was attempted, and each of those
+-- paths logs its own warning here, so the stamper must not summarise
+-- them a second time.
 local function buildAt(id, gx, gy, worldId)
     local def = locations.getDef(id)
     if not def then

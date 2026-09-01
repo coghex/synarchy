@@ -84,12 +84,15 @@ import qualified Test.Headless.World.Save.Integrity as SaveIntegrity
 import qualified Test.Headless.World.Save.Storage as SaveStorage
 import qualified Test.Headless.World.Save.Contract as SaveContract
 import qualified Test.Headless.World.Identity as WorldIdentity
+import qualified Test.Headless.World.MapImagePlan as MapImagePlan
+import qualified Test.Headless.World.MapImageAdmission as MapImageAdmission
 import qualified Test.Headless.World.TransferOrders as WorldTransferOrders
 import qualified Test.Headless.World.FluidWritebackStaleness as FluidWritebackStaleness
 import qualified Test.Headless.World.CursorInfo as CursorInfo
 import qualified Test.Headless.World.CursorTextureDispatch as CursorTextureDispatch
 import qualified Test.Headless.World.SelectTileZ as SelectTileZ
 import qualified Test.Headless.World.SelectChunk as SelectChunk
+import qualified Test.Headless.World.ChunkIdentity as ChunkIdentity
 import qualified Test.Headless.World.ChunkQueueFrame as ChunkQueueFrame
 import qualified Test.Headless.World.ActionOutcome as ActionOutcome
 import qualified Test.Headless.World.Spoil as Spoil
@@ -271,6 +274,7 @@ import qualified Test.Headless.River.Naming as RiverNaming
 import qualified Test.Headless.Location.LootDeterminism as LocationLootDeterminism
 import qualified Test.Headless.Location.MapIcons as LocationMapIcons
 import qualified Test.Headless.Location.Stamping as LocationStamping
+import qualified Test.Headless.Location.StampCommit as LocationStampCommit
 import qualified Test.Headless.Tutorial.Definitions as TutorialDefinitions
 import qualified Test.Headless.Lua.SaveModules as LuaSaveModules
 import qualified Test.Headless.Lua.SharedHelpers as LuaSharedHelpers
@@ -316,6 +320,7 @@ main = hspec $ do
         UITransferContextMenu.spec
         UIItemList.spec
         describe "World.ActionOutcome" ActionOutcome.spec
+        ChunkIdentity.spec
         ChunkQueueFrame.spec
         describe "Geology" Geology.spec
         describe "Chunk/Fast Parity" Parity.spec
@@ -403,6 +408,12 @@ main = hspec $ do
     -- of re-restoring the shared worlds.
     aroundAll withHeadlessEngine $
         describe "World identity (#707)" WorldIdentity.spec
+    -- #2020 (WML-2). The pure half needs no engine at all. The
+    -- boundary half gets its OWN engine: it creates a private w8 page
+    -- and saves it, which the shared-worlds engine above must not gain,
+    -- for the same reason "World identity" is isolated.
+    MapImagePlan.spec
+    aroundAll withHeadlessEngine MapImageAdmission.spec
     -- Own engine (#1718): creates an arena page, which the shared-worlds
     -- engine above must not gain. Its describe names "Arena" so the
     -- issue's `--match "Arena"` acceptance command selects it alongside
@@ -832,6 +843,7 @@ main = hspec $ do
     LocationLootDeterminism.spec
     LocationMapIcons.spec
     LocationStamping.spec
+    LocationStampCommit.spec
     TutorialDefinitions.spec
     BuildingPlacement.spec
     BuildingRemoteWarning.spec

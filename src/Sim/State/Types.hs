@@ -16,6 +16,7 @@ import World.Chunk.Types (ChunkCoord(..))
 import World.Page.Types (WorldPageId(..))
 import World.Fluid.Internal (FluidMap)
 import Sim.Fluid.Types (ActiveFluidCell(..))
+import Sim.Topology (SimTopology(..))
 
 -- | Simulation state, scoped per world. Each visible/active world owns
 --   an independent 'SimWorldState' (its own chunk map, dirty set and
@@ -37,6 +38,13 @@ data SimWorldState = SimWorldState
         --   world. The sim never holds the world's tile ref — it emits
         --   'WorldApplyFluids' (tagged with this world's page id) to the
         --   world thread, the sole writer of 'wsTilesRef'.
+    , swsTopology    ∷ !SimTopology
+        -- ^ This page's seam topology (#2044): how a chunk coord maps to
+        --   the key the page STORES it under, so the sim's neighbour
+        --   probes reach the physically adjacent chunk across the u seam
+        --   instead of missing on a raw key. Carried by every command
+        --   that seeds a chunk into this world or activates it, so a page
+        --   with anything to simulate always has it.
     }
 
 data SimChunkState = SimChunkState
@@ -70,4 +78,10 @@ emptySimWorldState = SimWorldState
     { swsChunks      = HM.empty
     , swsDirtyChunks = HS.empty
     , swsActive      = False
+    -- A world nothing has seeded or activated yet has no chunks, so it
+    -- neither ticks nor fast-settles; 'SimFlatTopology' is the honest
+    -- placeholder until the first command that carries the real one, the
+    -- same answer 'World.State.Types.pageWrapWorldSize' gives a page with
+    -- no gen params.
+    , swsTopology    = SimFlatTopology
     }

@@ -27,7 +27,7 @@ import Engine.Core.Capability.RenderView
     (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
-import Engine.Core.Log (logInfo, logDebug, logWarn, LogCategory(..), LoggerState)
+import Engine.Core.Log (logInfo, logDebug, logWarn, logError, LogCategory(..), LoggerState)
 import Engine.Graphics.Solar (maxSolarPages)
 import Engine.Graphics.Camera (Camera2D(..))
 import Engine.Scripting.Lua.Types (LuaMsg(..))
@@ -35,7 +35,9 @@ import World.Types
 import Structure.Types (emptyChunkStructures)
 import World.Generate (generateChunk)
 import World.Generate.Arena (generateArenaChunks, arenaGenForSeed)
-import World.Chunk.Queue (chunkQueueCanon, initialChunkQueue)
+import World.Chunk.Queue (initialChunkQueue, seedInitialQueue)
+import World.Chunk.Residency (canonicalChunkCoord)
+import World.Chunk.Admit (claimChunkGeneration, publishSeedChunks)
 import World.Geology (buildTimeline)
 import World.Geology.Log (formatPlatesSummary)
 import World.Plate (generatePlates, elevationAtGlobal)
@@ -58,6 +60,8 @@ import World.Render (surfaceHeadroom)
 import World.ZoomMap.Cache (buildZoomCacheWithPixels)
 import World.ZoomMap.ColorPalette (buildColorPalette)
 import World.ZoomMap.ChunkTexture (buildZoomAtlas, ZoomAtlasData(..))
+import World.Map.ImagePlan (mapImageRefusalText)
+import Engine.Map.ImageAdmission (admitWorldZoomAtlas)
 import World.Weather (initEarlyClimate, formatWeather)
 import World.Weather.Types (ClimateState(..))
 import World.Generate.Config (WorldGenConfig(..)
@@ -298,6 +302,21 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
             sendGenLog env msg
         _ → pure ()
 
+    -- Claim the centre BEFORE the params become observable (#2001).
+    -- Publishing them is what makes world.loadChunksInRegion able to act
+    -- on this page at all, and the centre is not generated until step 6;
+    -- a request naming it in that span would otherwise register demand,
+    -- queue it, and count it for a chunk this page is committed to
+    -- producing itself — leaving an entry for an already resident chunk
+    -- on the queue and the phase pair overstating the work.
+    --
+    -- The claim needs the params VALUE, not the ref, so it can precede
+    -- the write; any request able to see this page therefore already
+    -- sees the centre in flight. It is carried to admission by
+    -- publishSeedChunks in step 6.
+    let centerCoord = ChunkCoord 0 0
+    centreClaims ← claimChunkGeneration worldState pageId params [centerCoord]
+
     writeIORef (wsGenParamsRef worldState) (Just params)
     
     -- Step 4: Zoom cache + texture atlas
@@ -306,42 +325,76 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     palette ← buildColorPalette logger "data/materials" "data/vegetation"
     _ ← evaluate (force palette)
 
-    sendGenLog env "Building zoom cache with per-chunk textures..."
-    let (zoomCache, chunkPixels) =
-            buildZoomCacheWithPixels params registry palette
-                                     (Just borderedCache)
-    _ ← evaluate (force zoomCache)
-    _ ← evaluate (force chunkPixels)
-    writeIORef (wsZoomCacheRef worldState) zoomCache
+    -- #2020: the map image this page's zoom map needs is admitted
+    -- BEFORE 'buildZoomCacheWithPixels' generates and forces a single
+    -- 4096-byte chunk block, and before anything allocates the
+    -- contiguous atlas. Validating at the atlas step instead would
+    -- still have paid for the whole pixel corpus first.
+    --
+    -- Reaching a refusal here is not the player-facing path: 'world.init'
+    -- runs this SAME admission synchronously and enqueues no 'WorldInit'
+    -- when it refuses (requirement 6), so the fresh-world case is
+    -- already settled before the worker sees it. This is the backstop
+    -- for a caller that reached the queue another way, and it is
+    -- deliberately NOT fatal — 'World.Thread' treats an uncaught worker
+    -- exception as fatal, and 'scripts/create_world/generation.lua'
+    -- recognizes only RUNNING and DONE, so throwing here would trade an
+    -- oversized image for a dead engine or a permanently spinning
+    -- progress bar. The page comes up with no zoom map, loudly.
+    mZoomPlan ← admitWorldZoomAtlas env worldSize
+    case mZoomPlan of
+      Left refusal → do
+        let msg = "Zoom map skipped: " <> mapImageRefusalText refusal
+        logError logger CatWorld msg
+        sendGenLog env msg
+        writeIORef (wsZoomCacheRef worldState) V.empty
+        writeIORef (wsZoomAtlasRef worldState) Nothing
+        writeIORef phaseRef (LoadPhase1 5 totalSteps)
+      Right zoomPlan → do
+        sendGenLog env "Building zoom cache with per-chunk textures..."
+        let (zoomCache, chunkPixels) =
+                buildZoomCacheWithPixels params registry palette
+                                         (Just borderedCache)
+        _ ← evaluate (force zoomCache)
+        _ ← evaluate (force chunkPixels)
+        writeIORef (wsZoomCacheRef worldState) zoomCache
 
-    sendGenLog env "Assembling zoom texture atlas..."
-    let atlas = buildZoomAtlas (V.length zoomCache) chunkPixels
-    _ ← evaluate (force atlas)
-    -- Issue #763: pair the atlas with the EXACT
-    -- WorldState it belongs to (this init's own page), mirroring
-    -- World.Load.Publish's identical fix -- see EngineEnv.zoomAtlasDataRef.
-    writeIORef (rhZoomAtlasDataRef handoff) $
-        Just (zadWidth atlas, zadHeight atlas, zadPixelData atlas, [worldState])
-    -- Store atlas metadata (chunksPerRow) for UV computation during baking
-    writeIORef (wsZoomAtlasRef worldState) Nothing  -- will be filled after GPU upload
-    -- Store chunksPerRow for later use
-    logInfo logger CatWorld $ "Zoom atlas: "
-        <> tshow (zadWidth atlas) <> "×"
-        <> tshow (zadHeight atlas) <> " ("
-        <> tshow (V.length zoomCache) <> " chunks)"
-    
-    -- Step 5: Preview
-    writeIORef phaseRef (LoadPhase1 5 totalSteps)
-    sendGenLog env "Rendering world preview..."
-    let preview = buildPreviewFromPixels params zoomCache chunkPixels
-    _ ← evaluate (force preview)
-    -- Stamp with a fresh generation (see
-    -- Engine.Core.State.worldPreviewGenerationRef / World.Load.Publish).
-    previewGen ← atomicModifyIORef' (rhWorldPreviewGenerationRef handoff)
-                    (\g → (g + 1, g + 1))
-    writeIORef (rhWorldPreviewRef handoff) $
-        Just (piWidth preview, piHeight preview, piData preview, previewGen)
-    sendGenLog env "World preview ready."
+        sendGenLog env "Assembling zoom texture atlas..."
+        case buildZoomAtlas zoomPlan (V.length zoomCache) chunkPixels of
+          Left refusal → do
+            let msg = "Zoom atlas skipped: " <> mapImageRefusalText refusal
+            logError logger CatWorld msg
+            sendGenLog env msg
+            writeIORef (wsZoomAtlasRef worldState) Nothing
+          Right atlas → do
+            _ ← evaluate (force atlas)
+            -- Issue #763: pair the atlas with the EXACT
+            -- WorldState it belongs to (this init's own page), mirroring
+            -- World.Load.Publish's identical fix -- see
+            -- EngineEnv.zoomAtlasDataRef.
+            writeIORef (rhZoomAtlasDataRef handoff) $
+                Just ( zadWidth atlas, zadHeight atlas
+                     , zadPixelData atlas, [worldState] )
+            -- Store atlas metadata (chunksPerRow) for UV computation
+            -- during baking
+            writeIORef (wsZoomAtlasRef worldState) Nothing  -- filled after GPU upload
+            logInfo logger CatWorld $ "Zoom atlas: "
+                <> tshow (zadWidth atlas) <> "×"
+                <> tshow (zadHeight atlas) <> " ("
+                <> tshow (V.length zoomCache) <> " chunks)"
+
+        -- Step 5: Preview
+        writeIORef phaseRef (LoadPhase1 5 totalSteps)
+        sendGenLog env "Rendering world preview..."
+        let preview = buildPreviewFromPixels params zoomCache chunkPixels
+        _ ← evaluate (force preview)
+        -- Stamp with a fresh generation (see
+        -- Engine.Core.State.worldPreviewGenerationRef / World.Load.Publish).
+        previewGen ← atomicModifyIORef' (rhWorldPreviewGenerationRef handoff)
+                        (\g → (g + 1, g + 1))
+        writeIORef (rhWorldPreviewRef handoff) $
+            Just (piWidth preview, piHeight preview, piData preview, previewGen)
+        sendGenLog env "World preview ready."
     
     -- Step 6: Center chunk
     writeIORef phaseRef (LoadPhase1 6 totalSteps)
@@ -350,13 +403,15 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     -- the seam, and this total is what LoadPhase2 progresses towards
     -- (#1723). The centre is generated synchronously just below and so
     -- is excluded from the queue but counted in the total.
-    let centerCoord = ChunkCoord 0 0
-        (remainingCoords, totalInitialChunks) =
-            initialChunkQueue (chunkQueueCanon params) centerCoord
+    let (remainingCoords, totalInitialChunks) =
+            initialChunkQueue (canonicalChunkCoord params) centerCoord
     sendGenLog env $ "Generating initial chunks ("
         <> tshow totalInitialChunks <> ")..."
     
     catalog ← readIORef (wsFloraCatalogRef worldSim)
+    -- The centre has been claimed since before the params were published,
+    -- so the owner has reported it in flight for this whole
+    -- initialization — including the generateChunk below.
     let (ct, cs, cterrain, cf, cice, cflora, cwt, cmagma) =
             generateChunk registry catalog params centerCoord
         seededSurf = VU.imap (\idx surfZ →
@@ -378,9 +433,12 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
             , lcStructures = emptyChunkStructures
             }
 
-    atomicModifyIORef' (wsTilesRef worldState) $ \_ →
-        (WorldTileData { wtdChunks = HM.singleton centerCoord centerChunk
-                       , wtdMaxChunks = 200 }, ())
+    -- The centre is new residency like any other chunk (#2001), so it
+    -- reaches the owner through the SAME admission boundary the camera
+    -- and init-queue batches use, carrying the claim taken above.
+    publishSeedChunks worldState centreClaims
+        WorldTileData { wtdChunks = HM.singleton centerCoord centerChunk
+                      , wtdMaxChunks = 200 }
 
     -- Stamp any placed location on the synchronously-generated centre
     -- chunk (#89). It is written straight to wsTilesRef and excluded from
@@ -389,10 +447,25 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
 
     -- Step 7: Queue remaining chunks
     writeIORef phaseRef (LoadPhase1 7 totalSteps)
-    writeIORef (wsInitQueueRef worldState) remainingCoords
-    
-    -- Now switch to Phase 2 tracking
-    writeIORef phaseRef (LoadPhase2 (length remainingCoords) totalInitialChunks)
+    -- Register the initial box as durable demand and APPEND exactly what
+    -- still needs scheduling (#2001) — never a wholesale write, because
+    -- this page was registered in wmWorlds near the top of this function
+    -- so Lua could watch the loading phase, and its generation params
+    -- went in before the expensive cache/preview work above. A
+    -- world.loadChunksInRegion accepted in that window has already been
+    -- counted and registered on the owner; overwriting the queue would
+    -- drop its coords while leaving them requested, deduplicating every
+    -- later request for them.
+    --
+    -- The phase total comes back from the same call, derived from the
+    -- queue rather than from this page's own box, so a retained request
+    -- cannot make remaining exceed total.
+    -- Phase 2 tracking is installed by that call, not here: any interval
+    -- between computing the pair and writing it is one a concurrent
+    -- region request can be lost in. drainInitQueues recomputes the
+    -- remaining count every tick from the same queue, so the two never
+    -- disagree afterwards.
+    _ ← seedInitialQueue pageId worldState params remainingCoords
     
     sendGenLog env "Calculating surface elevation..."
     let (surfaceElev, _mat) = elevationAtGlobal seed (wgpPlates params)
@@ -488,9 +561,16 @@ handleWorldInitArenaCommand env logger pageId = do
         allChunks = generateArenaChunks (arenaGenForSeed (wgpSeed arenaParams))
         chunkMap  = HM.fromList [ (lcCoord c, c) | c ← allChunks ]
 
-    -- Write tile data
-    atomicModifyIORef' (wsTilesRef worldState) $ \_ →
-        (WorldTileData { wtdChunks = chunkMap, wtdMaxChunks = 100 }, ())
+    -- Write tile data. Arena chunks are residency too (#2001): same
+    -- lifecycle, same owner-before-payloads order, and
+    -- 'canonicalChunkCoord' is the identity on an arena page, so the
+    -- sentinel wgpWorldSize never reaches 'wrapChunkCoordU'. Claiming
+    -- before the 'evaluate (force allChunks)' below covers this page's
+    -- own generation window; reading lcCoord forces only the list spine.
+    arenaClaims ← claimChunkGeneration worldState pageId arenaParams
+                                       (map lcCoord allChunks)
+    publishSeedChunks worldState arenaClaims
+        WorldTileData { wtdChunks = chunkMap, wtdMaxChunks = 100 }
 
     -- Force the arena chunks to NF so the LoadDone below is honest (same
     -- contract as the progressive loader). Tiny 5×5 arena, negligible cost.

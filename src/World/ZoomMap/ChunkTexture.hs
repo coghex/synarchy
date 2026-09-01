@@ -1,7 +1,15 @@
 {-# LANGUAGE Strict #-}
 -- | Generate a texture atlas for the zoom map.
---   Each chunk contributes a zoomTileSize×zoomTileSize pixel tile to the atlas.
---   The atlas is a single large RGBA8 image packed in row-major order.
+--   Each chunk contributes a zoomTileSize×zoomTileSize pixel tile to the
+--   atlas. The atlas is a single large RGBA8 image packed in row-major
+--   order.
+--
+--   Since #2020 this module does not decide its own dimensions. An
+--   accepted 'MapImagePlan' — produced by "World.Map.ImagePlan" and
+--   admitted against the device's real @maxImageDimension2D@ before a
+--   single chunk pixel was generated — is the allocation authority, and
+--   this module verifies the supplied blocks against it before it
+--   allocates or copies anything.
 module World.ZoomMap.ChunkTexture
     ( ZoomAtlasData(..)
     , buildZoomAtlas
@@ -13,6 +21,9 @@ import qualified Data.ByteString.Internal as BSI
 import qualified Data.Vector as V
 import Control.DeepSeq (NFData(..))
 import Foreign.Marshal.Utils (copyBytes, fillBytes)
+import World.Map.ImagePlan
+    ( MapImageLayout(..), MapImagePlan(..), MapImageRefusal
+    , checkPlannedBlocks, checkPlannedCount )
 import World.ZoomMap.Types (zoomTileSize)
 
 -- | The atlas image data ready for GPU upload.
@@ -29,31 +40,43 @@ instance NFData ZoomAtlasData where
 
 -- * Atlas Construction
 
--- | Build the zoom atlas from per-chunk color data.
---   Each chunk's 16×16 pixel tile is generated from the
---   material and vegetation at each tile position.
+-- | Build the zoom atlas from per-chunk color data, against an already
+--   accepted plan.
 --
---   Input: a vector of per-chunk pixel data (each 16×16×4 bytes)
---   plus the total number of chunks.
-buildZoomAtlas ∷ Int → V.Vector BS.ByteString → ZoomAtlasData
-buildZoomAtlas numChunks chunkPixels =
-    let chunksPerRow = ceilSqrt numChunks
-        atlasRowCount = (numChunks + chunksPerRow - 1) `div` chunksPerRow
-        atlasW = chunksPerRow * zoomTileSize
-        atlasH = atlasRowCount * zoomTileSize
-        -- Allocate the full atlas
-        atlasSize = atlasW * atlasH * 4  -- RGBA8
-        atlas = assembleAtlas atlasW atlasH chunksPerRow chunkPixels atlasSize
-    in ZoomAtlasData
-        { zadWidth       = atlasW
-        , zadHeight      = atlasH
+--   Inputs: the accepted 'MapImagePlan' for this world's atlas, the
+--   number of entries in the page's zoom CACHE, and one pixel block per
+--   chunk (each @zoomTileSize * zoomTileSize * 4@ bytes).
+--
+--   Nothing is allocated or copied until all three agree with the plan:
+--   the cache count, the block count, and every block's exact byte
+--   length. A disagreement is a typed refusal, because the alternative
+--   is a @copyBytes@ reading past a short block into whatever follows
+--   it.
+buildZoomAtlas ∷ MapImagePlan → Int → V.Vector BS.ByteString
+               → Either MapImageRefusal ZoomAtlasData
+buildZoomAtlas plan cacheCount chunkPixels = do
+    checkPlannedCount plan "zoom cache entr(ies)" cacheCount
+    checkPlannedBlocks plan chunkPixels
+    let atlasW = mipWidth plan
+        atlasH = mipHeight plan
+        chunksPerRow = case mipLayout plan of
+            LayoutTiled { milTilesPerRow = n } → n
+            -- Unreachable: 'checkPlannedCount' above already refused
+            -- every non-tiled plan. Answering honestly rather than
+            -- partially, so this cannot become a pattern-match failure.
+            LayoutWhole → 1
+        atlasSize = mipByteCount plan
+    pure ZoomAtlasData
+        { zadWidth        = atlasW
+        , zadHeight       = atlasH
         , zadChunksPerRow = chunksPerRow
-        , zadPixelData   = atlas
+        , zadPixelData    =
+            assembleAtlas atlasW chunksPerRow chunkPixels atlasSize
         }
 
 -- | Assemble per-chunk pixel blocks into a single atlas ByteString.
-assembleAtlas ∷ Int → Int → Int → V.Vector BS.ByteString → Int → BS.ByteString
-assembleAtlas atlasW _atlasH chunksPerRow chunkPixels totalSize =
+assembleAtlas ∷ Int → Int → V.Vector BS.ByteString → Int → BS.ByteString
+assembleAtlas atlasW chunksPerRow chunkPixels totalSize =
     BSI.unsafeCreate totalSize $ \destPtr → do
         -- Zero-fill (for any padding chunks at the end)
         fillBytes destPtr 0 totalSize
@@ -73,10 +96,3 @@ assembleAtlas atlasW _atlasH chunksPerRow chunkPixels totalSize =
                     copyBytes (destPtr `plusPtr` destOff)
                               (srcBasePtr `plusPtr` srcOff)
                               tileStride
-
--- * UV Computation
-
--- * Helpers
-
-ceilSqrt ∷ Int → Int
-ceilSqrt n = ceiling (sqrt (fromIntegral n ∷ Double))

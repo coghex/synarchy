@@ -64,6 +64,30 @@ function generation.start(menu, logPanel)
         .. " size=" .. tostring(sizeNum)
         .. " plates=" .. tostring(plateNum))
 
+    -- #2020: ask whether this world size's map image can exist BEFORE
+    -- anything is destroyed. It has to be here rather than on
+    -- world.init's return value: destroyWorld() below is irreversible,
+    -- and worldView.startGeneration() may DEFER the actual world.init
+    -- until textures finish loading, so a refusal arriving from there
+    -- would arrive after the player's world was already gone. The verb
+    -- shares world.init's planner and device ceiling, so the two cannot
+    -- disagree.
+    local admitted, refusal = world.checkMapImagePlan(sizeNum)
+    if admitted == false then
+        local message = tostring(refusal or "world size is not supported")
+        engine.logWarn("Create World refused: " .. message)
+        logPanel.clear(menu)
+        logPanel.setStatus(menu, "Cannot generate this world")
+        logPanel.addLine(menu, message)
+        -- F4 (#646): the reject half of this commit boundary. Nothing
+        -- was destroyed, no world command was queued, and genState stays
+        -- IDLE -- the player keeps whatever world they already had.
+        debug.recordOutcome{
+            kind = "createWorld.generate", outcome = "rejected",
+        }
+        return
+    end
+
     -- Destroy any previous world
     if worldManager.isActive() then
         worldManager.destroyWorld()
@@ -148,12 +172,13 @@ function generation.start(menu, logPanel)
 
     worldView.startGeneration()
 
-    -- F4 (#646): the cold-boot session's first commit boundary. No
-    -- reject path exists today (bad seed/size input silently falls
-    -- back to a default rather than refusing) — always "accepted";
-    -- the checker in tools/action_outcome_coverage.py tracks this verb
-    -- so a future validation gate can't land without also wiring the
-    -- rejected/partial outcome it would introduce.
+    -- F4 (#646): the cold-boot session's first commit boundary. Reached
+    -- only once #2020's map-image admission above has ACCEPTED this
+    -- world size; the refusal path returns early with outcome
+    -- "rejected" and never gets here. Everything else about the inputs
+    -- (a bad seed, an out-of-range plate count) still silently falls
+    -- back to a default rather than refusing, so those remain
+    -- "accepted".
     debug.recordOutcome{
         kind = "createWorld.generate", outcome = "accepted",
     }

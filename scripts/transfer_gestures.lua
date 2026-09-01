@@ -49,11 +49,49 @@
 --   storeEntries(uid, row)               -- unit-info row -> that window
 --   retrieveEntries(endpoint, row)       -- window row -> resolved unit
 --   entries(opts)                        -- the shared 1/all builder
+--
+-- Both gestures require their EXECUTOR's species to be able to run the
+-- queued order (#2030) -- Store the panel's own unit, Retrieve the
+-- resolved one -- because an order queued for a species the action was
+-- never registered for is never ticked and stays pending for ever. The
+-- rule comes from the same registration the dispatch loop uses
+-- (scripts/unit_ai_actions.lua), never a species list beside it, so the
+-- two cannot drift as species are added -- and it asks by that module's
+-- own TRANSFER_ORDER_ACTION, the single definition of the name.
 
 local M = package.loaded["scripts.transfer_gestures"] or {}
 package.loaded["scripts.transfer_gestures"] = M
 
 local itemList = require("scripts.ui.item_list")
+-- The per-species AI action inventory (#1250): a leaf module with no
+-- dependencies, so requiring it at the top closes no cycle -- and the
+-- one OWNER of the transfer order's action name (#2030), which is why
+-- the gates below read it from there rather than spelling it.
+--
+-- Deliberately not imported from scripts/unit_ai_transfer.lua, which
+-- registers the action: that module reads
+-- package.loaded["scripts.unit_ai"] at module scope and would fault when
+-- required from a UI module in a process that never loaded the AI. The
+-- registry is the module both sides CAN reach, so it holds the name.
+local aiActions = require("scripts.unit_ai_actions")
+local TRANSFER_ORDER_ACTION = aiActions.TRANSFER_ORDER_ACTION
+
+-- Can `uid`'s species run a queued transfer order?
+--
+-- Both gestures ask this about their EXECUTOR -- the unit that would
+-- walk the order and commit it on arrival -- because an order queued for
+-- a species the action was never registered for is never ticked at all:
+-- it sits in the store for ever, with nothing to show the player and
+-- nothing to cancel it (#2030). Derived from the same registration that
+-- decides who CAN run it, never a species list beside it.
+--
+-- An EMPTY registry answers true, which is unit_ai_actions' own
+-- deliberate rule (requirement 5): a UI-only fixture or a menu process
+-- that never loaded any AI has no inventory to consult and must not
+-- invent a refusal from its absence.
+local function canCarryOrder(uid)
+    return aiActions.unitHas(uid, TRANSFER_ORDER_ACTION)
+end
 
 -- Batch granularity is 1 and all (signed off 2026-08-11), in BOTH
 -- modes: #1250 shipped Mode A's session menus on this same builder, and
@@ -188,6 +226,11 @@ end
 function M.storeEntries(uid, row)
     local destination = M.activeEndpoint()
     if not destination then return {} end
+    -- The panel's own unit is BOTH source and executor here, so a
+    -- species that cannot run the order omits the gesture entirely
+    -- (#2030) -- omission, never a disabled row, like every other reason
+    -- above.
+    if not canCarryOrder(uid) then return {} end
     return M.entries({
         verb        = "Store",
         row         = row,
@@ -199,7 +242,8 @@ end
 
 -- "Retrieve": a container-window row into the unit the SHARED selection
 -- rule picks (`transfer_session.resolveSource` -- nearest of the
--- selection, lowest uid breaking a tie, non-commandable units skipped).
+-- selection, lowest uid breaking a tie, non-commandable units and units
+-- whose species cannot run the order both skipped).
 -- Reusing it is the point: a third copy of "which selected unit acts?"
 -- is exactly what this consumes rather than adds.
 --
@@ -215,7 +259,13 @@ function M.retrieveEntries(endpoint, row)
     -- Ranked against the endpoint's OWN reported tile, which is the
     -- point the resolver measures to.
     local target = unit.transferEndpointInfo(endpoint)
-    local uid = session.resolveSource(unit.getSelected(), excludeUid, target)
+    -- Capability filters BEFORE ranking (#2030), which is the whole
+    -- reason the shared rule takes the action rather than being asked
+    -- afterwards: a nearer unit that cannot carry an order must not win
+    -- the resolution and then do nothing. The nearest CAPABLE candidate
+    -- wins; none at all omits the gesture, the same as no candidate.
+    local uid = session.resolveSource(unit.getSelected(), excludeUid, target,
+                                      TRANSFER_ORDER_ACTION)
     if not uid then return {} end
     return M.entries({
         verb        = "Retrieve",

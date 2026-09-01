@@ -138,6 +138,17 @@ local TRANSFER_ORDER_TIMEOUT = 60.0
 
 local M = {}
 
+-- The per-species action inventory (#1250), which also OWNS the name of
+-- the action registered below (#2030). A leaf module with no
+-- dependencies of its own, so requiring it at the top costs nothing and
+-- closes no cycle.
+--
+-- The action's registration, the command boundary's refusal and the two
+-- player gestures all read that one value, so a gate cannot come to ask
+-- about a string the dispatch loop never registered.
+local aiActions = require("scripts.unit_ai_actions")
+local TRANSFER_ORDER_ACTION = aiActions.TRANSFER_ORDER_ACTION
+
 -- Walk to the nearest tile of the ring just OUTSIDE an endpoint's
 -- footprint. Rect-generic because a counterpart may be a unit (a 1x1
 -- rect) as easily as a multi-tile building; the three building-only
@@ -252,7 +263,7 @@ local function transferUtility(uid, s)
     -- resets only on a NEW closest approach -- so a carrier circling an
     -- unreachable endpoint never refreshes it -- and only time this
     -- action actually held the unit is charged (#1291).
-    local eligible = s.currentAction == "transfer_order"
+    local eligible = s.currentAction == TRANSFER_ORDER_ACTION
     local info = eligible and unit.getInfo(uid)
     if info then
         local d = approachDist(info, order.approach)
@@ -383,6 +394,28 @@ end
 -- into room for eight queue eight, the four that did not fit ride along
 -- as terminal entries of the same order, and the warning says so.
 function unitAi.commandTransferOrder(uid, request)
+    -- Species capability, ahead of everything (#2030). This is the ONE
+    -- boundary every Mode B order is created through, and it is
+    -- deliberately reusable by surfaces that never ran a gesture's
+    -- omission rule, so the capability is re-checked here rather than
+    -- trusted -- the same defence in depth Mode A's `transfer_session.
+    -- create` keeps behind its own menu omission.
+    --
+    -- It must precede `unit.createTransferOrder`, which is the verb that
+    -- CREATES AND STORES: a refusal reported after it would leave a
+    -- pending order behind for a carrier whose dispatch loop can never
+    -- tick the action that reads it -- an order that sits in the store
+    -- for ever, which is the bug.
+    --
+    -- Reported on the player-visible channel rather than the
+    -- developer-log one below, because this is the Mode A analogue: the
+    -- player right-clicked and chose an entry, so a silent refusal would
+    -- leave them watching a gesture vanish with no explanation.
+    if not aiActions.unitHas(uid, TRANSFER_ORDER_ACTION) then
+        reportFailure(uid, string.format(
+            "%s can't carry a transfer order", unitLabel(uid)))
+        return false
+    end
     local result, err = unit.createTransferOrder(uid, request)
     if not result then
         if err then engine.logWarn("commandTransferOrder: " .. tostring(err)) end
@@ -411,7 +444,7 @@ function unitAi.commandTransferOrder(uid, request)
 end
 
 M.action = {
-    name = "transfer_order",
+    name = TRANSFER_ORDER_ACTION,
     utility = transferUtility,
     execute = transferExecute,
 }

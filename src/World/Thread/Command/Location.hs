@@ -13,6 +13,8 @@ import qualified Data.HashSet as HS
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..))
+import Engine.Core.Log (logWarn, LogCategory(..), LoggerState)
+import Structure.Types (StructureCommitWindow(..), takeDeclinedInWindow)
 import Location.Instance
     ( LocationEncounterOccupant(..), LocationInstanceId, LocationLifecycle
     , adjustLocationEncounterOccupant
@@ -97,9 +99,43 @@ handleWorldSetLocationLifecycleCommand wsc pageId iid lifecycle =
 --   chunk, and that is what makes stamping idempotent under player edits.
 --   Only a stamp whose every attempted placement succeeded queues this;
 --   a partial one is left unmarked to be retried on the next load.
+--
+--   __That Lua-side answer is necessary, not sufficient (#2051).__ It is
+--   taken from @structure.place@'s synchronous return, which is true as
+--   soon as the placement is staged and its 'WorldSetStructure' queued —
+--   the target chunk can still evict before this thread's own residency
+--   check, which declines the commit, retracts the stage and appends no
+--   edit. The command therefore carries the invocation's
+--   'StructureCommitWindow', and the marker is withheld when any attempt
+--   in it was declined, leaving the every-load dispatch in
+--   "World.Thread.ChunkLoading" to retry the whole builder next load.
+--
+--   The queue is FIFO and this thread dispatches it sequentially, so
+--   every 'WorldSetStructure' the window names has already been decided
+--   by the time this command runs: the answer is complete, never a
+--   snapshot of work still in flight.
+--
+--   Reading the window also RETIRES the declines it consumed, so the
+--   retry is judged on its own attempts. A command carrying no window
+--   (the bare console verb) marks unconditionally, as before.
 handleWorldMarkLocationStampedCommand
-    ∷ WorldSimCapability → WorldPageId → Int → Int → IO ()
-handleWorldMarkLocationStampedCommand wsc pageId gx gy =
-    withPageParams wsc pageId $ \params → params
-        { wgpLocationStamped =
-            HS.insert (fst (globalToChunk gx gy)) (wgpLocationStamped params) }
+    ∷ WorldSimCapability → LoggerState → WorldPageId → Int → Int
+    → Maybe StructureCommitWindow → IO ()
+handleWorldMarkLocationStampedCommand wsc logger pageId gx gy mWindow = do
+    declined ← case mWindow of
+        Nothing     → pure False
+        Just window → do
+            mgr ← readIORef (wsWorldManagerRef wsc)
+            case lookup pageId (wmWorlds mgr) of
+                Nothing → pure False
+                Just ws → atomicModifyIORef' (wsStructureStageRef ws) $
+                    takeDeclinedInWindow window
+    if declined
+        then logWarn logger CatWorld $
+            "Location stamp at " <> tshow gx <> "," <> tshow gy
+              <> " on page " <> unWorldPageId pageId
+              <> " had a placement declined after it was queued — chunk left"
+              <> " unmarked, will retry on next load"
+        else withPageParams wsc pageId $ \params → params
+            { wgpLocationStamped =
+                HS.insert (fst (globalToChunk gx gy)) (wgpLocationStamped params) }
