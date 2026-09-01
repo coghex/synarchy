@@ -39,6 +39,8 @@ import World.Slope (recomputeNeighborSlopes
 import World.SideFace.Compute (computeChunkSideDecos)
 import Engine.Scripting.Lua.Types (LuaMsg(..))
 import World.Edit.Apply (replayEdits)
+import World.Flora.Designation
+    (admitChunkFloraBatch, forgetFloraDroppedSince)
 import World.Mine.Apply (applyDigSlopesTd)
 import World.Construct.Apply (applyConstructSlopesTd)
 import World.Plant.Validate (revalidatePlantDesignations)
@@ -123,7 +125,8 @@ updateChunkLoading env logger = do
                                 let !newChunks = if isArena
                                         then map generateFlatChunk batch
                                         else parMap rdeepseq
-                                            (generateLoadedChunk registry catalog params)
+                                            (generateLoadedChunk registry catalog
+                                                 pageId params)
                                             batch
                                 -- Replay player edits onto the fresh chunks
                                 -- before inserting. Chunks evicted earlier
@@ -132,7 +135,15 @@ updateChunkLoading env logger = do
                                 edits ← readIORef (wsEditsRef worldState)
                                 desigs ← readIORef (wsMineDesignationsRef worldState)
                                 cdesigs ← readIORef (wsConstructDesignationsRef worldState)
-                                let newChunks' = map (replayEdits edits) newChunks
+                                -- #1854 requirement 15: per-instance flora
+                                -- state is resolved and hydrated BEFORE a
+                                -- chunk becomes resident, so no Chop,
+                                -- forage, render or regrowth consumer can
+                                -- ever see a resident chunk whose pending
+                                -- legacy migration is still outstanding.
+                                newChunks' ← admitChunkFloraBatch worldState
+                                    catalog logger
+                                    (map (replayEdits edits) newChunks)
                                 -- Built against the snapshot read at the
                                 -- top of this page's iteration, and
                                 -- committed below. That is exact rather
@@ -210,6 +221,16 @@ updateChunkLoading env logger = do
                                                      params evicted
                                 atomicModifyIORef' (wsTilesRef worldState) $ \_ →
                                     (finalTd, ())
+                                -- #1854: the dig/construct corner-mask
+                                -- passes above run AFTER admission and
+                                -- shed a progressed tile's rooted flora,
+                                -- so a plant admission just resolved a
+                                -- legacy entry onto can be gone by the
+                                -- time the transaction commits. Sweep the
+                                -- committed result rather than trusting
+                                -- the admitted chunks.
+                                forgetFloraDroppedSince worldState
+                                    newChunks' finalTd
                                 -- Notify sim thread of loaded chunks. Use
                                 -- newChunks' so the sim sees post-replay
                                 -- fluid + terrain (player edits matter).
@@ -384,7 +405,8 @@ drainInitQueues env logger = do
                         let seed = wgpSeed params
 
                         let newChunks = parMap rdeepseq
-                                (generateLoadedChunk registry catalog params)
+                                (generateLoadedChunk registry catalog
+                                     pageId params)
                                 toGen
 
                         -- Replay player edits onto the fresh chunks
@@ -394,7 +416,9 @@ drainInitQueues env logger = do
                         edits ← readIORef (wsEditsRef worldState)
                         desigs ← readIORef (wsMineDesignationsRef worldState)
                         cdesigs ← readIORef (wsConstructDesignationsRef worldState)
-                        let newChunks' = map (replayEdits edits) newChunks
+                        -- #1854 requirement 15 — see updateChunkLoading.
+                        newChunks' ← admitChunkFloraBatch worldState catalog
+                            logger (map (replayEdits edits) newChunks)
 
                         -- Insert new chunks, then recompute slopes
                         -- for the new chunks + their existing neighbors,
@@ -436,6 +460,13 @@ drainInitQueues env logger = do
                                 td6 = applyConstructSlopesTd cdesigs
                                         digCoords td5
                             in (td6, ())
+                        -- #1854 — see updateChunkLoading's identical
+                        -- sweep: the corner-mask passes above shed a
+                        -- progressed tile's rooted flora after admission
+                        -- already resolved any pending legacy entry onto
+                        -- it.
+                        finalTd ← readIORef (wsTilesRef worldState)
+                        forgetFloraDroppedSince worldState newChunks' finalTd
 
                         -- Notify the sim thread of the loaded chunks BEFORE
                         -- dropping the batch from the init queue. The dump

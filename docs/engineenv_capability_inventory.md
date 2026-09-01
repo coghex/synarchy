@@ -1617,7 +1617,7 @@ scope by §1: field-by-field inventories of `EngineState`,
   mention them. `Test.Headless.Capability.Input` covers projection
   aliasing for both records — including that the two same-typed
   `TVar Int` barrier fields resolve to their correct, distinct live
-  containers, and that repeated projection mints nothing fresh.
+  containers.
 - **Cross-capability surface (all of it).** These reads/writes cross
   out of `input-lua-transport` and are legitimate; per E1 a narrowed
   module takes its own capability record **plus strictly narrower
@@ -1744,11 +1744,11 @@ change, no behaviour change.
   `world-sim-render-handoff` set shrunk 54 → 4, checked in both
   directions against the live scan and against §6.2), plus
   projection-aliasing coverage in `Test.Headless.Capability.WorldSim` —
-  all nine fields asserted to be the same live container as
-  `EngineEnv`'s, plus stability across repeated projection (E5a
-  re-projects inline at most call sites) and explicit
-  same-shape-swap checks on `worldQueue`/`simQueue` and
-  `enginePausedRef`/`gameTimeRef`.
+  nine of the record's current eleven fields asserted to be the same
+  live container as `EngineEnv`'s (`wsPlayerIntentGenRef` and
+  `wsEnginePauseGenRef`, added after E5a, carry no alias assertion
+  yet), plus explicit same-shape-swap checks on `worldQueue`/`simQueue`
+  and `enginePausedRef`/`gameTimeRef`.
 
 **What landed in E5b (#894):**
 `Engine.Core.Capability.RenderHandoff` exports `RenderHandoffCapability`
@@ -1801,12 +1801,12 @@ through a projected field instead of an `EngineEnv` one.
   `world-sim-render-handoff` set shrunk 4 → 0, checked in both
   directions against the live scan and against §6.2), plus
   projection-aliasing coverage in
-  `Test.Headless.Capability.RenderHandoff` — all seven fields asserted
-  to be the same live container as `EngineEnv`'s, plus stability across
-  repeated projection (several call sites re-project inline) and
-  explicit non-swap checks on the two single-slot upload handoffs and
-  on the palette/handle-table pair. The behaviour this refactor must
-  not disturb keeps its own pre-existing gates:
+  `Test.Headless.Capability.RenderHandoff` — nine of the record's
+  current ten fields asserted to be the same live container as
+  `EngineEnv`'s (`rhSceneStatsRef`, added by #1921, carries no alias
+  assertion yet), plus explicit non-swap checks on the two single-slot
+  upload handoffs and on the palette/handle-table pair. The behaviour
+  this refactor must not disturb keeps its own pre-existing gates:
   `Test.Headless.Lua.PreviewGeneration` for the delivery-time preview
   staleness policy and `Test.Headless.Blood.Teardown` for live-ref
   draining, exactly-once cleanup and teardown/FIFO overlap.
@@ -1925,9 +1925,8 @@ call sequence over the same containers.
   directions against the live scan and against §6.2), plus
   projection-aliasing coverage in `Test.Headless.Capability.UnitCombat`
   — all ten fields asserted to be the same live container as
-  `EngineEnv`'s, stability across repeated projection (E6a re-projects
-  inline at most call sites), and explicit non-transposition checks on
-  the three identically-typed `IORef (Seq CombatEvent)` streams
+  `EngineEnv`'s, and explicit non-transposition checks on the three
+  identically-typed `IORef (Seq CombatEvent)` streams
   (`combatEventsRef`/`injuryEventsRef`/`thoughtEventsRef`), on the
   `unitQueue`/`combatQueue` producer-consumer pair, and on the
   `unitManagerRef`/`utsRef` pair a load publish swaps together.
@@ -1988,10 +1987,9 @@ same containers.
   directions against the live scan and against §6.2), plus
   projection-aliasing coverage in `Test.Headless.Capability.Building`
   — all three fields asserted to be the same live container as
-  `EngineEnv`'s, and stability across repeated projection (E6b
-  re-projects inline at most call sites). There is no transposition
-  example, unlike E6a's three identically-typed `IORef (Seq
-  CombatEvent)` streams: the three building fields have three distinct
+  `EngineEnv`'s. There is no transposition example, unlike E6a's three
+  identically-typed `IORef (Seq CombatEvent)` streams: the three
+  building fields have three distinct
   types, so a swapped binding cannot typecheck, leaving copying as the
   only failure mode the aliasing examples already catch.
 
@@ -2192,9 +2190,7 @@ containers.
   `ui-hud-events` set shrunk 13 → 2, checked in both directions
   against the live scan and against §6.2), plus projection-aliasing
   coverage in `Test.Headless.Capability.Ui` — all four fields asserted
-  to be the same live container as `EngineEnv`'s, stability across
-  repeated projection (E7a re-projects inline at most call sites,
-  several times within a single input event), and an explicit check
+  to be the same live container as `EngineEnv`'s, and an explicit check
   that the two focus-carrying refs are not transposed.
 - **Deferred to E7b (#898) — named individually, nothing silently
   dropped:** `Engine.PlayerEvent.Emit` and
@@ -2265,9 +2261,8 @@ sequence over the same containers.
   in `Test.Headless.Capability.Events` — the three ref-shaped fields
   asserted to be the same live container as `EngineEnv`'s,
   `notificationOrder` asserted by value (it has no identity),
-  stability across repeated projection (E7b re-projects inline on
-  every emit), and an explicit check that the two event `TVar` fields
-  are each pinned to their own named counterpart. That last one was
+  and an explicit check that the two event `TVar` fields are each
+  pinned to their own named counterpart. That last one was
   written when both were `TVar (Seq PlayerEvent)` and a transposition
   the compiler could not catch; #1714 gave the log ring its own
   `TVar EventStore`, so the swap is now a type error and the check

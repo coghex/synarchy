@@ -64,7 +64,7 @@ import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..)
                                            , QuadCorners(..), QuadPayload(..)
                                            , quadVertices, fullQuadUV
-                                           , packWorldUV, noFaceMapVertexId)
+                                           , tileWorldUV, noFaceMapVertexId)
 import Blood.Types
 import Blood.Texture (generateBloodTexture, btiWidth, btiHeight, btiPixels)
 import Blood.Render (BloodRenderRecord(..), bloodRenderRecords)
@@ -379,7 +379,7 @@ renderBloodDecalQuadsScanned env pageId worldState tileAlpha = do
                         tint = Vec4 (brrTintR r) (brrTintG r) (brrTintB r)
                                     (brrAlpha r * tileAlpha)
                         slotF = fromIntegral (lookupSlot texHandle)
-                        wuv = packWorldUV tx ty
+                        wuv = tileWorldUV tx ty
 
                         -- Each corner is rotated about the decal's
                         -- centre independently, so there is no

@@ -470,22 +470,40 @@ are the exact invariants.
   recorded explicitly so nothing downstream re-derives the order.
 - **Columns** are the max authored frame count. Unequal per-direction
   lengths are real (D-5): the index records each direction's TRUE count,
-  shorter rows are padded with transparent RGBA8 zero cells, and no
-  padding cell is addressable — `frame_count` is the sole authority.
-- **Cells are exact integers**: frame `c` of row `r` at
-  `(c*cell_width, r*cell_height)`. A size mismatch is a compile error,
-  never an implicit rescale (D-6). Each cell is a byte-for-byte copy of
-  its source frame's decoded RGBA8 SAMPLES, alpha included.
+  shorter rows are padded with transparent RGBA8 zero SLOTS, and no
+  padding slot is addressable — `frame_count` is the sole authority.
+- **Cells are exact integers, at a PADDED stride** (#2076). Each cell
+  occupies a physical SLOT of `(cell_width + 2*cell_padding)` x
+  `(cell_height + 2*cell_padding)`, and frame `c` of row `r` has its
+  LOGICAL cell at `(c*slot_width + cell_padding,
+  r*slot_height + cell_padding)`. `cell_padding` is one texel per side
+  and is the only value the runtime accepts; widening it is a schema
+  change, not a constant edit. A size mismatch is a compile error, never
+  an implicit rescale (D-6). Each cell is a byte-for-byte copy of its
+  source frame's decoded RGBA8 SAMPLES, alpha included.
+- **The gutter is that cell's own edge texels, extruded.** Sides copy the
+  adjacent edge row or column; each corner square copies the single
+  corner texel it touches. Nothing is blended or resampled — every gutter
+  byte is a duplicate of a real frame texel. That is what isolates a cell
+  under a LINEAR filter (epic #2072's TSR-3 precondition): a bilinear tap
+  taken anywhere inside a logical cell reaches at most one texel past its
+  edge, and so reads a copy of its own cell rather than the neighbouring
+  frame. A rectangularization slot has no art, so its gutter is
+  transparent too. NEAREST is unchanged by construction — the index
+  addresses the inner cell, so no fragment centre moves.
 - **The index** carries `schema_version` (the format the runtime parses)
   separately from `tool_version`, a documented `direction_order`, and
   per animation its storage format and path, atlas/cell dimensions,
-  columns, rows, per-direction row and frame count, `flip`/`fps`/`loop`
-  as the engine will hold them (`fps` narrowed to 32-bit), and two
-  `sha256` digests: a PER-ANIMATION `source_digest` over that
-  animation's own declarations and decoded pixels, and an `atlas_digest`
-  over the atlas's decoded CONTENT rather than its file bytes.
-  Per-animation is the point — one animation's edit must not invalidate
-  an unrelated atlas (D-12).
+  `cell_padding`, columns, rows, per-direction row and frame count,
+  `flip`/`fps`/`loop` as the engine will hold them (`fps` narrowed to
+  32-bit), and two `sha256` digests: a PER-ANIMATION `source_digest` over
+  that animation's own declarations, cell geometry INCLUDING the gutter,
+  and decoded pixels, and an `atlas_digest` over the atlas's decoded
+  CONTENT rather than its file bytes. Per-animation is the point — one
+  animation's edit must not invalidate an unrelated atlas (D-12).
+  `source_digest`'s domain tag carries `v2` for the gutter, so no digest
+  recorded before #2076 can collide with one taken over the same art at
+  the padded stride.
 - **Determinism and locality.** A clean rebuild under an unchanged
   toolchain is byte-identical; an incremental run writes only on a real
   content difference (an mtime-only touch changes nothing); obsolete
@@ -498,11 +516,14 @@ are the exact invariants.
   cannot certify a tampered atlas. Compilation refuses outright on an
   invalid inventory.
 
-Corpus numbers, kept out of CLAUDE.md because prose counts drift: 116
-committed atlas PNGs + seven `index.json`, all tracked; 6.93 MiB of
-animation sources → 4.88 MiB of atlases = **0.70x** against D-12's 2x
-on-disk ceiling (animation sources only), so the
-choose-a-distribution-strategy clause is not reached.
+Corpus numbers, kept out of CLAUDE.md because prose counts drift: 131
+committed atlas PNGs + eight `index.json`, all tracked, well under
+D-12's 2x on-disk ceiling (animation sources only), so the
+choose-a-distribution-strategy clause is not reached. Resident cost is
+the SEPARATE budget in `tools/unit_texture_budget.json`, re-measured at
+121,620,320 bytes (115.99 MiB) after #2076's gutter — a 5.10% increase
+over the edge-adjacent stride, leaving 152 MiB of headroom under the
+unchanged 384 MiB threshold.
 
 ---
 
@@ -523,9 +544,16 @@ first, stopping at the first failure.
 `schema_version` and `digest_algorithm`; the unit's own identity;
 duplicate animation names; containment of `atlas_path` inside that unit's
 `atlas/` directory AND its equality with that animation's canonical
-`<animation>.png`; positive geometry; every reachable cell lying inside
-the sheet; unique and in-range direction rows; real frame counts bounded
-by row capacity; a positive finite `fps`.
+`<animation>.png`; positive geometry; a `cell_padding` equal to the one
+supported layout; every reachable SLOT — the padded slot, not the bare
+cell — lying inside the sheet; unique and in-range direction rows; real
+frame counts bounded by row capacity; a positive finite `fps`.
+
+`schema_version` is read off the RAW document and checked BEFORE the full
+decode. A genuine v1 index legitimately lacks #2076's `cell_padding`, so
+decoding first would blame that missing field and send a reader looking
+for a corrupt index rather than an outdated one; the version has to be
+the reported cause.
 
 The canonical-path equality is what makes D-2's one-atlas-per-animation
 hold *by construction*: no two animations can name one file, so the
@@ -544,7 +572,12 @@ animation's index record — with no second lookup that could miss.
 
 **(3) Each atlas decodes to the image the index describes** (dimensions
 plus `atlas_digest` over decoded RGBA8), AND every declared SOURCE frame
-decodes to exactly the pixels its atlas cell holds.
+decodes to exactly the pixels its atlas cell holds AND its slot carries
+the one-texel extrusion ring compiled from that same frame, corners
+included (#2076). The gutter is generated, so it is verified rather than
+assumed: an artifact whose ring does not reproduce is exactly as stale as
+one whose cell does not, and a wrong ring is what would let a linear tap
+read a neighbour.
 
 ### Both digests earn their keep
 
@@ -647,10 +680,14 @@ consumer declares (`scripts/startup_loader.lua` splits `hudUiPaths` from
 `hudScenePaths` for exactly this reason), or it uploads a slot nobody
 samples and the consumer uploads the real one anyway.
 
-Cell UVs sit on exact cell EDGES with no half-texel inset: unit art is
-nearest and pixel-snapped, so a fragment centre lands inside its cell,
-and an inset would shift the sampled texels and break pixel-identity with
-what the per-frame path drew.
+Cell UVs sit on the LOGICAL cell's own exact edges — one texel inside its
+padded slot (#2076) — with no half-texel inset: unit art is nearest and
+pixel-snapped, so a fragment centre lands inside its cell, and an inset
+would shift the sampled texels and break pixel-identity with what the
+per-frame path drew. Isolation under a linear filter comes from the
+extrusion gutter instead, which moves no sampled texel at all — epic
+#2072's D-3, and the reason TSR-3 depends on TSR-2 rather than on an
+inset.
 
 ---
 

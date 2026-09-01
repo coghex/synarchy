@@ -2,6 +2,7 @@
 module Engine.Graphics.Vulkan.Types.Vertex where
 import UPrelude
 import Control.DeepSeq (NFData(..), rwhnf)
+import Data.Int (Int32)
 import qualified Foreign.Storable as Storable
 import Engine.Graphics.Solar (solarPageNone)
 
@@ -26,11 +27,13 @@ vertexFaceMapIdOffset = 36
 vertexRenderFlagsOffset ∷ Int
 vertexRenderFlagsOffset = 40
 
--- | Packed world tile coordinates (#483 longitude-local day/night):
--- two signed 16-bit halves, low = u = gx-gy, high = v = gx+gy. See
--- 'packWorldUV'. Ignored by pipelines that don't declare the matching
--- vertex input (UI/font) — same "extra trailing field, inert unless
--- read" pattern as 'vertexRenderFlagsOffset'.
+-- | World cylinder coordinates (#483 longitude-local day/night,
+-- widened by #2019): TWO signed 32-bit components, u = gx-gy first then
+-- v = gx+gy, declared as @FORMAT_R32G32_SINT@ \/ GLSL @ivec2@ and
+-- occupying eight bytes. See 'WorldUV' and 'tileWorldUV'. Ignored by
+-- pipelines that don't declare the matching vertex input (UI/font) —
+-- same "extra trailing field, inert unless read" pattern as
+-- 'vertexRenderFlagsOffset'.
 vertexWorldUVOffset ∷ Int
 vertexWorldUVOffset = 44
 
@@ -48,10 +51,10 @@ vertexWorldUVOffset = 44
 --   whose bits are allocated one at a time, and a page index sharing it
 --   would be corrupted the day someone allocates a bit above it.
 vertexSolarPageOffset ∷ Int
-vertexSolarPageOffset = 48
+vertexSolarPageOffset = 52
 
 vertexTotalSize ∷ Int
-vertexTotalSize = 52
+vertexTotalSize = 56
 
 -- | The ONE value a quad's 'faceMapId' \/ 'qpFaceMap' carries when its
 -- producer has NO directional face map of its own (#1696).
@@ -78,42 +81,96 @@ noFaceMapVertexId = -1
 renderFlagSelected ∷ Word32
 renderFlagSelected = 1
 
--- | Pack already-computed cylinder coordinates (u = gx-gy, v = gx+gy)
--- into the vertex's worldUV attribute: two Word16 halves, v in the high
--- bits. 'fromIntegral' to 'Word16' truncates by wrapping
--- (two's-complement), matching the GLSL decode's @(x & 0xFFFF)@
--- sign-restore exactly — so this round-trips correctly for negative
--- u/v, only wrapping (not clamping) once |u| or |v| exceeds 32767
--- tiles (worldSize ≳ 2048, beyond any world this engine generates
--- today). Split from 'packWorldUV' for callers that already have u,v
--- in hand (e.g. the zoom map's per-corner bake, #483 review) rather
--- than a (gx,gy) pair.
-packUV ∷ Int → Int → Word32
-packUV u v =
-    let u16 = fromIntegral (fromIntegral u ∷ Word16) ∷ Word32
-        v16 = fromIntegral (fromIntegral v ∷ Word16) ∷ Word32
-    in (v16 `shiftL` 16) ⌄ u16
+-- | A world vertex's cylinder coordinates (#483 longitude-local
+-- day\/night; widened by #2019): @u = gx - gy@ and @v = gx + gy@, each
+-- carried WHOLE as a signed 32-bit integer rather than packed into
+-- halves of one word.
+--
+-- Until #2019 the pair lived in a single 'Word32' as two 'Word16'
+-- halves, which round-tripped negatives correctly but WRAPPED — silently,
+-- with no clamp, warning or refusal — once |u| or |v| passed 32767
+-- (worldSize ≳ 2048). #2017 commits to a 1024 guarantee with map
+-- addressing designed through 8192, so that boundary is retired here:
+-- the attribute is @FORMAT_R32G32_SINT@ \/ GLSL @ivec2@, and nothing on
+-- the path from a tile coordinate to the shader packs, truncates or
+-- wraps.
+--
+-- 'wuvV' is transported but not yet consumed — the shader reads only
+-- 'wuvU'. That is deliberate (design D-9): @v@ is intended for the
+-- future seasonal\/directional shading model, and paying the stride
+-- increase once now avoids a second whole-renderer vertex-format
+-- migration later. It is not dead weight to be optimized away; every
+-- producer supplies it and every copying path preserves it exactly.
+data WorldUV = WorldUV
+    { wuvU ∷ !Int32   -- ^ @gx - gy@
+    , wuvV ∷ !Int32   -- ^ @gx + gy@
+    } deriving (Show, Eq)
 
--- | Pack a tile's cylinder coordinates (u = gx-gy, v = gx+gy — see
--- 'World.Plate.worldWidthTiles' / 'World.Time.Local.localSunAngle') into
--- the vertex's worldUV attribute. See 'packUV' for the encoding.
-packWorldUV ∷ Int → Int → Word32
-packWorldUV gx gy = packUV (gx - gy) (gx + gy)
+instance NFData WorldUV where
+    rnf = rwhnf
+
+-- NB: lazy (~) patterns for the same reason 'Vec2' uses them — this
+-- module is compiled with Strict and Storable calls @sizeOf undefined@.
+instance Storable WorldUV where
+    sizeOf ~_ = 8
+    alignment ~_ = 4
+    peek ptr = do
+        u ← Storable.peekElemOff (castPtr ptr ∷ Ptr Int32) 0
+        v ← Storable.peekElemOff (castPtr ptr ∷ Ptr Int32) 1
+        return $! WorldUV u v
+    poke ptr (WorldUV u v) = do
+        Storable.pokeElemOff (castPtr ptr ∷ Ptr Int32) 0 u
+        Storable.pokeElemOff (castPtr ptr ∷ Ptr Int32) 1 v
+
+-- | The coordinates a vertex with no world position carries: the origin.
+-- What 'mkVertex' defaults to, exactly as it defaulted the packed word
+-- to @0@ before #2019.
+worldUVNone ∷ WorldUV
+worldUVNone = WorldUV 0 0
+
+-- | One component of a 'WorldUV', from the 'Int' the render code
+-- computes in. REFUSES a value the signed 32-bit carrier cannot hold
+-- instead of letting 'fromIntegral' wrap it (#2019): a wrapped
+-- coordinate is a DIFFERENT tile, and the old packed encoding's only
+-- symptom for that was mislit geometry. Unreachable for any world this
+-- engine addresses — worldSize 8192 reaches |u|,|v| ≤ 262144, four
+-- orders of magnitude inside the bound — so this is a tripwire for a
+-- future coordinate space, not a hot-path branch anyone pays for.
+worldUVComponent ∷ String → Int → Int32
+worldUVComponent name n
+    | n < fromIntegral (minBound ∷ Int32) ∨ n > fromIntegral (maxBound ∷ Int32)
+    = error $ "worldUVComponent: world cylinder coordinate " ⧺ name
+           ⧺ " = " ⧺ show n ⧺ " does not fit the vertex's signed 32-bit "
+           ⧺ "worldUV attribute"
+    | otherwise = fromIntegral n
+
+-- | Build the vertex attribute from already-computed cylinder
+-- coordinates (u = gx-gy, v = gx+gy). Split from 'tileWorldUV' for
+-- callers that already have u,v in hand (e.g. the zoom map's per-corner
+-- bake, #483 review) rather than a (gx,gy) pair.
+mkWorldUV ∷ Int → Int → WorldUV
+mkWorldUV u v = WorldUV (worldUVComponent "u" u) (worldUVComponent "v" v)
+
+-- | Build the vertex attribute from a tile's grid coordinates, deriving
+-- the cylinder pair (u = gx-gy, v = gx+gy — see
+-- 'World.Plate.worldWidthTiles' / 'World.Time.Local.localSunAngle').
+tileWorldUV ∷ Int → Int → WorldUV
+tileWorldUV gx gy = mkWorldUV (gx - gy) (gx + gy)
 
 -- | Backward-compatible Vertex constructor: takes the original 5 fields
--- and defaults renderFlags AND worldUV to 0. Use the full `Vertex`
--- constructor when you need to set flags (e.g. Unit.Render for selected
--- units) or 'mkVertexWorld' when you need real world coordinates (e.g.
--- tile/flora/structure quads, #483).
+-- and defaults renderFlags to 0 AND worldUV to 'worldUVNone'. Use the
+-- full `Vertex` constructor when you need to set flags (e.g. Unit.Render
+-- for selected units) or 'mkVertexWorld' when you need real world
+-- coordinates (e.g. tile/flora/structure quads, #483).
 mkVertex ∷ Vec2 → Vec2 → Vec4 → Float → Float → Vertex
-mkVertex p t c a f = Vertex p t c a f 0 0 solarPageNone
+mkVertex p t c a f = Vertex p t c a f 0 worldUVNone solarPageNone
 
--- | Like 'mkVertex', but stamps the tile's packed world coordinates
--- (pass the result of 'packWorldUV') instead of defaulting worldUV to
--- 0. renderFlags still defaults to 0 — for a whole sprite quad that
--- needs both a non-zero worldUV AND flags, build its four corners with
+-- | Like 'mkVertex', but stamps the tile's world cylinder coordinates
+-- (pass the result of 'tileWorldUV') instead of defaulting worldUV to
+-- the origin. renderFlags still defaults to 0 — for a whole sprite quad
+-- that needs both a real worldUV AND flags, build its four corners with
 -- 'quadVertices' rather than restating the 'Vertex' constructor.
-mkVertexWorld ∷ Word32 → Vec2 → Vec2 → Vec4 → Float → Float → Vertex
+mkVertexWorld ∷ WorldUV → Vec2 → Vec2 → Vec4 → Float → Float → Vertex
 mkVertexWorld wuv p t c a f = Vertex p t c a f 0 wuv solarPageNone
 
 -- | The four corner POSITIONS of a sprite quad, in the order
@@ -173,7 +230,7 @@ data QuadPayload = QuadPayload
     , qpAtlasSlot ∷ !Float  -- ^ 'atlasId'
     , qpFaceMap   ∷ !Float  -- ^ 'faceMapId'
     , qpFlags     ∷ !Word32 -- ^ 'renderFlags'
-    , qpWorldUV   ∷ !Word32 -- ^ 'worldUV', from 'packWorldUV'
+    , qpWorldUV   ∷ !WorldUV -- ^ 'worldUV', from 'tileWorldUV'
     } deriving (Show, Eq)
 
 -- | Build a textured quad's four vertices (#1152).
@@ -270,7 +327,7 @@ data Vertex = Vertex
     , atlasId     ∷ !Float  -- ^ Atlas ID (layout = 3)
     , faceMapId   ∷ !Float  -- ^ Face map texture slot (layout = 4)
     , renderFlags ∷ !Word32 -- ^ Render-flag bitset, see renderFlag* (layout = 5)
-    , worldUV     ∷ !Word32 -- ^ Packed world (u,v), see packWorldUV (layout = 6)
+    , worldUV     ∷ !WorldUV -- ^ Signed world (u,v), see 'WorldUV' (layout = 6)
     , solarPage   ∷ !Word32 -- ^ Solar page slot, see vertexSolarPageOffset (layout = 7)
     } deriving (Show, Eq)
 
@@ -287,7 +344,7 @@ instance Storable Vertex where
         a ← Storable.peekElemOff (castPtr (ptr `plusPtr` vertexAtlasIdOffset) ∷ Ptr Float) 0
         f ← Storable.peekElemOff (castPtr (ptr `plusPtr` vertexFaceMapIdOffset) ∷ Ptr Float) 0
         rf ← Storable.peekElemOff (castPtr (ptr `plusPtr` vertexRenderFlagsOffset) ∷ Ptr Word32) 0
-        wuv ← Storable.peekElemOff (castPtr (ptr `plusPtr` vertexWorldUVOffset) ∷ Ptr Word32) 0
+        wuv ← peek (ptr `plusPtr` vertexWorldUVOffset)
         sp ← Storable.peekElemOff (castPtr (ptr `plusPtr` vertexSolarPageOffset) ∷ Ptr Word32) 0
         return $! Vertex p t c a f rf wuv sp
     poke ptr (Vertex p t c a f rf wuv sp) = do
@@ -297,5 +354,5 @@ instance Storable Vertex where
         Storable.pokeElemOff (castPtr (ptr `plusPtr` vertexAtlasIdOffset) ∷ Ptr Float) 0 a
         Storable.pokeElemOff (castPtr (ptr `plusPtr` vertexFaceMapIdOffset) ∷ Ptr Float) 0 f
         Storable.pokeElemOff (castPtr (ptr `plusPtr` vertexRenderFlagsOffset) ∷ Ptr Word32) 0 rf
-        Storable.pokeElemOff (castPtr (ptr `plusPtr` vertexWorldUVOffset) ∷ Ptr Word32) 0 wuv
+        poke (ptr `plusPtr` vertexWorldUVOffset) wuv
         Storable.pokeElemOff (castPtr (ptr `plusPtr` vertexSolarPageOffset) ∷ Ptr Word32) 0 sp

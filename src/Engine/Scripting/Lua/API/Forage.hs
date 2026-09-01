@@ -3,13 +3,15 @@
 --   Lua-facing function from the sub-modules so existing call-sites
 --   keep working. Forage.Query is the read-only surface (getFloraAt,
 --   getFloraGrowthAt, findHarvestableFlora, getFood, getCropPlotAt),
---   Forage.Harvest is the reap verb (harvestFlora — rolls + spawns
---   yields), and Forage.Crop is the groundcover planting verb
+--   Forage.Harvest is the reap verb (harvestFlora and #1854's exact
+--   harvestFloraInstance — both roll + spawn yields), and Forage.Crop
+--   is the groundcover planting verb
 --   (plantCropAt). Forage.Lookup holds the flora-instance/growth-clock
 --   helpers all three share.
 --
 --   Harvest STATE lives in the world-level 'wsFloraHarvestsRef' map
---   (tile → regrowth game-seconds), not in the chunk — see
+--   (flora INSTANCE id → regrowth game-seconds since #1854), not in the
+--   chunk — see
 --   World.Flora.Harvest for why. All functions run directly on the Lua
 --   thread against the active world's refs, the same pattern as the
 --   WorldQuery reads and item.spawnGround.

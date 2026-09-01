@@ -769,6 +769,10 @@ tilesWithFloraAt tile =
                     , fiTileX = fromIntegral lx, fiTileY = fromIntegral ly
                     , fiOffU = 0, fiOffV = 0, fiZ = zSlice
                     , fiAge = 1, fiHealth = 1, fiVariant = 0, fiBaseWidth = 8
+                    , fiInstanceId = generatedFloraInstanceId
+                          "crop_plant_probe" (fst tile) (snd tile)
+                          "probe_crop" 0
+                    , fiChopDesignated = False
                     } ] } }
         base = tilesWith vegTilledSoil []
     in base { wtdChunks = HM.adjust occupied storedChunk (wtdChunks base) }
