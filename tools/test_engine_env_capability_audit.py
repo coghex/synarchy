@@ -36,6 +36,9 @@ from engine_env_capability_audit import (  # type: ignore
     SAVE_LOAD_FIELD_MAP, SAVE_LOAD_PROJECTION,
     _import_chunks, _strip_haskell_comments,
     CAPABILITY_WRITER_MODULES, capability_accessor_map,
+    discover_capability_records, canonical_projection_accessor,
+    parse_projection_binding_expressions,
+    audit_capability_projection_completeness,
     scan_capability_writes, audit_writer_modules, format_residue,
     tokenize_haskell, parse_imports, imports_name,
     _first_argument_head, _infix_left_operand_head, _applied_head,
@@ -2585,6 +2588,137 @@ toDeltaViewCapability env = DeltaViewCapability
   }
 """
 
+# Issue #2059: the SAME two bindings, spelled with semantically inert
+# grouping. Haskell reads `(fieldOne env)` and `(fieldTwo) env` exactly
+# as their ungrouped forms; before #2059 the surface regexes read
+# NEITHER, so both selectors were absent from the accessor map and the
+# consumer write below was filed as `other` while the gate exited 0.
+_GROUPED_PROJECTION = """\
+module Engine.Core.Capability.Epsilon
+  ( EpsilonCapability(..)
+  , toEpsilonCapability
+  ) where
+
+import Engine.Core.State (EngineEnv, fieldOne, fieldTwo)
+
+data EpsilonCapability = EpsilonCapability
+  { epFieldOne ∷ IORef Int
+  , epFieldTwo ∷ IORef Text
+  }
+
+toEpsilonCapability ∷ EngineEnv → EpsilonCapability
+toEpsilonCapability env = EpsilonCapability
+  { epFieldOne = (fieldOne env)
+  , epFieldTwo = (fieldTwo) env
+  }
+"""
+
+# The write that must be attributed through the grouped projection --
+# the module is in no field's writing-module map, so it must fail.
+_GROUPED_CONSUMER = """\
+module Grouped.Mod where
+
+import Data.IORef
+
+import Engine.Core.State (EngineEnv)
+import Engine.Core.Capability.Epsilon
+  (EpsilonCapability(..), toEpsilonCapability)
+
+sneak ∷ EngineEnv → IO ()
+sneak env = writeIORef (epFieldOne (toEpsilonCapability env)) 1
+"""
+
+# SS2.1's wrapped form carries the same grouping freedom, and it is
+# parsed by its own path -- inside the wrapper's argument and around
+# the whole application.
+_GROUPED_WRAPPED_PROJECTION = """\
+module Engine.Core.Capability.ZetaView
+  ( ZetaViewCapability(..)
+  , toZetaViewCapability
+  ) where
+
+import Engine.Core.ReadOnlyRef (ReadOnlyRef, toReadOnlyRef)
+import Engine.Core.State (EngineEnv, fieldOne, fieldTwo)
+
+data ZetaViewCapability = ZetaViewCapability
+  { ztFieldOne ∷ ReadOnlyRef Int
+  , ztFieldTwo ∷ ReadOnlyRef Text
+  }
+
+toZetaViewCapability ∷ EngineEnv → ZetaViewCapability
+toZetaViewCapability env = ZetaViewCapability
+  { ztFieldOne = toReadOnlyRef ((fieldOne env))
+  , ztFieldTwo = (toReadOnlyRef (fieldTwo env))
+  }
+"""
+
+# Two bindings the canonicalizer genuinely cannot read: an
+# unrecognized wrapper (which might copy) and an operator expression.
+# Widening the canonicalizer to guess at either is exactly what #2059
+# forbids -- the requirement is that they FAIL, not that they parse.
+_UNREADABLE_PROJECTION = """\
+module Engine.Core.Capability.Eta
+  ( EtaCapability(..)
+  , toEtaCapability
+  ) where
+
+import Engine.Core.State (EngineEnv, fieldOne, fieldTwo, fieldThree)
+
+data EtaCapability = EtaCapability
+  { etFieldOne   ∷ IORef Int
+  , etFieldTwo   ∷ IORef Text
+  , etFieldThree ∷ Q.Queue Int
+  }
+
+toEtaCapability ∷ EngineEnv → EtaCapability
+toEtaCapability env = EtaCapability
+  { etFieldOne   = fieldOne env
+  , etFieldTwo   = snapshotOf (fieldTwo env)
+  , etFieldThree = chooseRef . pick $ env
+  }
+"""
+
+# A record whose projection is not named `to<Name>Capability`, so no
+# SS2.1 signature is discoverable: legal Haskell that loses EVERY
+# selector of the record at once.
+_UNPROJECTED_CAPABILITY = """\
+module Engine.Core.Capability.Theta
+  ( ThetaCapability(..)
+  ) where
+
+import Engine.Core.State (EngineEnv, fieldThree)
+
+data ThetaCapability = ThetaCapability
+  { thFieldThree ∷ Q.Queue Int
+  }
+
+thetaFrom ∷ EngineEnv → ThetaCapability
+thetaFrom env = ThetaCapability
+  { thFieldThree = fieldThree env
+  }
+"""
+
+# A binding that canonicalizes onto a name that is not a live
+# `EngineEnv` field. `capability_accessor_map` discards it at exactly
+# the same cost as an unreadable one, so it must fail the same way.
+_DEAD_ACCESSOR_PROJECTION = """\
+module Engine.Core.Capability.Iota
+  ( IotaCapability(..)
+  , toIotaCapability
+  ) where
+
+import Engine.Core.State (EngineEnv, fieldRenamed)
+
+data IotaCapability = IotaCapability
+  { ioFieldRenamed ∷ IORef Int
+  }
+
+toIotaCapability ∷ EngineEnv → IotaCapability
+toIotaCapability env = IotaCapability
+  { ioFieldRenamed = fieldRenamed env
+  }
+"""
+
 # The migrated reader: it CONSUMES the wrapped handle inline, exactly as
 # a `readIORef` consumer does, so it must not be counted as a pass-on.
 _WRAPPED_READER = """\
@@ -2791,6 +2925,12 @@ def _writer_sources(**modules: str) -> dict[str, str]:
         "wrappedReader": "src/WrappedReader/Mod.hs",
         "wrappedPassOn": "src/WrappedPassOn/Mod.hs",
         "localReadOnly": "src/LocalReadOnly/Mod.hs",
+        "epsilon": "src/Engine/Core/Capability/Epsilon.hs",
+        "grouped": "src/Grouped/Mod.hs",
+        "zetaView": "src/Engine/Core/Capability/ZetaView.hs",
+        "eta": "src/Engine/Core/Capability/Eta.hs",
+        "theta": "src/Engine/Core/Capability/Theta.hs",
+        "iota": "src/Engine/Core/Capability/Iota.hs",
     }
     for key, body in modules.items():
         sources[paths[key]] = body
@@ -3636,6 +3776,220 @@ def test_a_view_field_wrapped_by_a_named_alias_wrapper_canonicalizes():
            f"got: {accessors.get('dvFieldTwo')}")
 
 
+def test_a_redundantly_grouped_projection_canonicalizes_and_is_enforced():
+    """Issue #2059's requirement 1, bare form. `(fieldOne env)` and
+    `(fieldTwo) env` are the ungrouped bindings with semantically inert
+    parentheses, so they must canonicalize identically -- and a direct
+    write through the selector must fail the writing-module map exactly
+    as the ungrouped spelling does.
+
+    Before the fix both bindings were unreadable: the accessor map
+    omitted both selectors, `writeIORef (epFieldOne ...)` resolved to no
+    field and was recorded as `other`, and `audit_writer_modules` had
+    nothing to reject while `audit_mutation_sites` saw nothing
+    unclassifiable. The gate exited 0 on an unenforced write."""
+    sources = _writer_sources(epsilon=_GROUPED_PROJECTION,
+                              grouped=_GROUPED_CONSUMER)
+    accessors = capability_accessor_map(sources, _WRITER_FIELDS)
+    expect(accessors.get("epFieldOne") == (
+        ("fieldOne", "Engine.Core.Capability.Epsilon",
+         "EpsilonCapability"),),
+           f"a binding grouped as `(accessor env)` must canonicalize to "
+           f"the bare field, got: {accessors.get('epFieldOne')}")
+    expect(accessors.get("epFieldTwo") == (
+        ("fieldTwo", "Engine.Core.Capability.Epsilon",
+         "EpsilonCapability"),),
+           f"and so must one grouped as `(accessor) env`, got: "
+           f"{accessors.get('epFieldTwo')}")
+
+    expect(canonical_projection_accessor("((fieldOne env))") == "fieldOne",
+           "nested inert grouping must canonicalize too")
+    expect(canonical_projection_accessor("State.fieldOne env") == "fieldOne",
+           "a qualified accessor must still report bare")
+
+    violations = audit_capability_projection_completeness(
+        sources, _WRITER_FIELDS)
+    expect(violations == [],
+           f"a fully readable grouped projection must raise no "
+           f"completeness violation, got: {violations}")
+
+    writes, _ = _scan(sources)
+    expect(writes["fieldOne"] == {"Grouped.Mod"},
+           f"the write through the grouped selector must be attributed, "
+           f"got: {sorted(writes['fieldOne'])}")
+
+    declared = {"fieldOne": frozenset(), "fieldTwo": frozenset(),
+                "fieldThree": frozenset()}
+    rejected = audit_writer_modules(writes, _WRITER_FIELDS, declared=declared)
+    expect(len(rejected) == 1 and "Grouped.Mod" in rejected[0],
+           f"and the undeclared write through it must be rejected, got: "
+           f"{rejected}")
+
+
+def test_a_redundantly_grouped_wrapped_projection_canonicalizes():
+    """Requirement 1's other half. The wrapped form
+    (`wrapper (accessor env)`) is read by its own path, so its grouping
+    freedom needs its own case: parentheses INSIDE the wrapper's
+    argument and parentheses AROUND the whole application both leave
+    the same live handle, and both must reach the same field."""
+    sources = _writer_sources(zetaView=_GROUPED_WRAPPED_PROJECTION)
+    accessors = capability_accessor_map(sources, _WRITER_FIELDS)
+    expect(accessors.get("ztFieldOne") == (
+        ("fieldOne", "Engine.Core.Capability.ZetaView",
+         "ZetaViewCapability"),),
+           f"`toReadOnlyRef ((accessor env))` must canonicalize, got: "
+           f"{accessors.get('ztFieldOne')}")
+    expect(accessors.get("ztFieldTwo") == (
+        ("fieldTwo", "Engine.Core.Capability.ZetaView",
+         "ZetaViewCapability"),),
+           f"and so must `(toReadOnlyRef (accessor env))`, got: "
+           f"{accessors.get('ztFieldTwo')}")
+
+    violations = audit_capability_projection_completeness(
+        sources, _WRITER_FIELDS)
+    expect(violations == [],
+           f"a fully readable grouped WRAPPED projection must raise no "
+           f"completeness violation, got: {violations}")
+
+
+def test_an_unreadable_projection_binding_fails_closed():
+    """Requirement 2, and the reason requirement 1 is not enough on its
+    own: widening the canonicalizer can never be finished, so the
+    spellings it does NOT read must fail loudly instead of vanishing.
+
+    An unrecognized wrapper might copy and an operator expression might
+    be anything, so neither canonicalizes -- and both are named, with
+    their module, projection and field, rather than leaving the
+    selector quietly out of the accessor map."""
+    sources = _writer_sources(eta=_UNREADABLE_PROJECTION)
+
+    accessors = capability_accessor_map(sources, _WRITER_FIELDS)
+    expect("etFieldOne" in accessors
+           and "etFieldTwo" not in accessors
+           and "etFieldThree" not in accessors,
+           f"the map must still refuse to INVENT an alias for an "
+           f"unreadable binding, got: {sorted(accessors)}")
+
+    violations = audit_capability_projection_completeness(
+        sources, _WRITER_FIELDS)
+    expect(len(violations) == 2,
+           f"exactly the two unreadable bindings must be reported, got: "
+           f"{violations}")
+    for field in ("etFieldTwo", "etFieldThree"):
+        expect(any(field in v
+                   and "Engine.Core.Capability.Eta" in v
+                   and "toEtaCapability" in v
+                   for v in violations),
+               f"the violation for `{field}` must name the capability "
+               f"module, projection and field, got: {violations}")
+    expect(not any("etFieldOne" in v for v in violations),
+           f"the readable binding beside them must not be reported, got: "
+           f"{violations}")
+
+    # The refusal itself, pinned directly. Dropping unrecognized
+    # characters instead of refusing on them would leave the two
+    # bindings above unreadable by accident -- their operators happen
+    # to sit beside a THIRD identifier -- while quietly canonicalizing
+    # a two-identifier operator expression that shares no handle at
+    # all. Each of these applies SOMETHING to `env` that is not the
+    # accessor, and none may reach a field.
+    for expression in ("pickRef <$> env",
+                       "toReadOnlyRef $ fieldOne env",
+                       "fieldOne <$> pure env",
+                       "either fieldOne fieldTwo env",
+                       "fieldOne @Int env",
+                       "(fieldOne env",
+                       "fieldOne env (",
+                       "fieldOne env)"):
+        expect(canonical_projection_accessor(expression) is None,
+               f"`{expression}` names no accessor this audit can read, so "
+               f"it must not canonicalize; got: "
+               f"{canonical_projection_accessor(expression)}")
+
+
+def test_a_capability_record_with_no_discoverable_projection_fails_closed():
+    """The same hole one level up. A record whose projection the audit
+    cannot find loses EVERY selector at once, which is strictly worse
+    than one unreadable field -- so an undiscoverable projection is a
+    violation naming the record, never a module quietly skipped."""
+    sources = _writer_sources(theta=_UNPROJECTED_CAPABILITY)
+    records = {entry.record: entry.projection
+               for entry in discover_capability_records(sources)}
+    expect(records.get("ThetaCapability", "missing") is None,
+           f"the record must be discovered WITHOUT a projection rather "
+           f"than not discovered at all, got: {records}")
+
+    violations = audit_capability_projection_completeness(
+        sources, _WRITER_FIELDS)
+    expect(len(violations) == 1
+           and "ThetaCapability" in violations[0]
+           and "Engine.Core.Capability.Theta" in violations[0],
+           f"an undiscoverable projection must be reported by record and "
+           f"module, got: {violations}")
+
+
+def test_a_projection_binding_onto_a_dead_accessor_fails_closed():
+    """The reviewer's amendment to requirement 2.
+    `capability_accessor_map` drops a parsed binding whose accessor is
+    not a live `EngineEnv` field, at exactly the same cost as an
+    unreadable one -- so a renamed or mistyped accessor must fail here
+    too, naming the accessor it could not find."""
+    sources = _writer_sources(iota=_DEAD_ACCESSOR_PROJECTION)
+    expect("ioFieldRenamed" not in capability_accessor_map(
+               sources, _WRITER_FIELDS),
+           "the map must not carry a selector bound from a dead accessor")
+
+    violations = audit_capability_projection_completeness(
+        sources, _WRITER_FIELDS)
+    expect(len(violations) == 1
+           and "ioFieldRenamed" in violations[0]
+           and "fieldRenamed" in violations[0],
+           f"a binding onto a name that is not a live EngineEnv field "
+           f"must be reported by field and accessor, got: {violations}")
+
+
+def test_projection_binding_expressions_keep_the_unreadable_ones():
+    """The two parsers are deliberately different. The accessor map
+    reads only what canonicalizes, but the completeness gate must see
+    every binding the construction WRITES -- otherwise an unreadable
+    one would be indistinguishable from an absent one and could not be
+    quoted back in the failure message."""
+    expressions = parse_projection_binding_expressions(
+        _UNREADABLE_PROJECTION, "toEtaCapability")
+    expect(expressions == {"etFieldOne": "fieldOne env",
+                           "etFieldTwo": "snapshotOf (fieldTwo env)",
+                           "etFieldThree": "chooseRef . pick $ env"},
+           f"every binding must be returned verbatim, readable or not, "
+           f"got: {expressions}")
+    expect(parse_projection_binding_expressions(
+               _UNREADABLE_PROJECTION, "toNothingCapability") == {},
+           "and a projection with no equation returns nothing at all")
+
+
+def test_projection_completeness_against_the_real_repo():
+    """Requirement 3: the live tree passes. Every capability record has
+    a discoverable projection, and every field it declares canonicalizes
+    onto a live `EngineEnv` accessor -- so the gate added here is a
+    ratchet on the real code, not a rule only fixtures satisfy."""
+    sources = scan_production_sources(REPO_ROOT)
+    live_fields = extract_record_fields(
+        (REPO_ROOT / ENGINE_ENV_FILE).read_text(encoding="utf-8"),
+        ENGINE_ENV_PATTERN)
+    records = discover_capability_records(sources)
+    expect(len(records) >= 14,
+           f"every capability module must contribute a record, got: "
+           f"{len(records)}")
+    expect([entry.module for entry in records
+            if entry.projection is None] == [],
+           "every live capability record must have a discoverable "
+           "projection")
+    violations = audit_capability_projection_completeness(
+        sources, live_fields)
+    expect(violations == [],
+           f"the real repository must raise no capability projection "
+           f"completeness violation, got: {violations}")
+
+
 def test_a_read_only_ref_read_is_an_inline_use_not_a_pass_on():
     """`readReadOnlyRef` consumes the handle exactly as `readIORef`
     does, so a migrated reader is an inline use. Without that, every
@@ -4020,6 +4374,13 @@ def main() -> int:
         test_a_wildcard_grants_only_its_own_type_s_selectors,
         test_a_projection_may_name_its_accessor_qualified,
         test_a_view_field_wrapped_by_a_named_alias_wrapper_canonicalizes,
+        test_a_redundantly_grouped_projection_canonicalizes_and_is_enforced,
+        test_a_redundantly_grouped_wrapped_projection_canonicalizes,
+        test_an_unreadable_projection_binding_fails_closed,
+        test_a_capability_record_with_no_discoverable_projection_fails_closed,
+        test_a_projection_binding_onto_a_dead_accessor_fails_closed,
+        test_projection_binding_expressions_keep_the_unreadable_ones,
+        test_projection_completeness_against_the_real_repo,
         test_a_read_only_ref_read_is_an_inline_use_not_a_pass_on,
         test_one_selector_may_belong_to_two_capabilities,
         test_a_primitive_must_be_the_one_from_data_ioref,

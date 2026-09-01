@@ -112,6 +112,23 @@ queue/`TVar`/`MVar` -- is printed as the non-blocking pass-on residue
 the measurement. See SS6.5 of the inventory doc and
 docs/capability_mutation_authority_design.md.
 
+Since issue #2059 that ownership map is also derived FAIL-CLOSED. The
+map is built entirely from the live projections, so anything the
+parser failed to read simply was not in it -- and a write through the
+missing selector then resolved to no field, was filed as `other`, and
+left the writing-module map, the residue and requirement 6's
+closed-form check while the gate still exited 0. Two changes close
+that: projection right-hand sides are canonicalized STRUCTURALLY
+(`canonical_projection_accessor`), so semantically inert grouping --
+`(accessor env)`, `(accessor) env`, `wrapper ((accessor env))` --
+canonicalizes exactly as its ungrouped spelling does; and
+`audit_capability_projection_completeness` requires every field of
+every live capability record to reach a live `EngineEnv` accessor,
+naming the module, projection and field when one does not. Widening
+what canonicalizes stays deliberately bounded (no dataflow, type or
+scope analysis); what changed is that an unread binding now FAILS
+instead of disappearing.
+
 Usage:
   python3 tools/engine_env_capability_audit.py
 Exit codes: 0 = every live EngineEnv field is validly classified and
@@ -1754,16 +1771,6 @@ SAVE_LOAD_FIELD_MAP = {
     "slNextItemInstanceIdRef": "nextItemInstanceIdRef",
 }
 
-# `field = accessor env`, with the accessor optionally QUALIFIED: a
-# capability module may import `Engine.Core.State` under an alias and
-# project `fkFieldOne = State.fieldOne env`. Missing that spelling
-# would drop the accessor from `capability_accessor_map` entirely, and
-# with it every write made through the record.
-_PROJECTION_BINDING_RE = re.compile(
-    r"(?<![A-Za-z0-9_'])([A-Za-z][A-Za-z0-9_']*)\s*=\s*"
-    r"((?:[A-Z][A-Za-z0-9_']*\.)*[A-Za-z][A-Za-z0-9_']*)"
-    r"\s+env(?![A-Za-z0-9_'])")
-
 # docs/engineenv_capability_inventory.md SS2.1's abstract-wrapper
 # extension (issue #1896): a view field may be
 # `field = wrapper (accessor env)` instead of `field = accessor env`.
@@ -1773,11 +1780,11 @@ _PROJECTION_BINDING_RE = re.compile(
 # caller's live handle and never to copy it, so the projected field is
 # the same container the accessor named. A projection that applied any
 # other function would be transforming the state, and inventing an
-# alias for it is exactly what this regex must not do -- so an
-# unrecognized wrapper is skipped, and the field simply does not
-# canonicalize.
+# alias for it is exactly what this canonicalizer must not do -- so an
+# unrecognized wrapper does not canonicalize, and the field's binding
+# is reported as underivable rather than guessed at.
 #
-# Missing this shape is not cosmetic. `capability_accessor_map` is what
+# Reading this shape is not cosmetic. `capability_accessor_map` is what
 # turns a record selector into an `EngineEnv` field for BOTH the write
 # scan and the pass-on residue, so a dropped view accessor would make
 # every use of it invisible -- including the context-record pass-on in
@@ -1785,33 +1792,163 @@ _PROJECTION_BINDING_RE = re.compile(
 # have silently left the residue CMA-3 weighs.
 ALIAS_PRESERVING_WRAPPERS = frozenset({"toReadOnlyRef"})
 
-_WRAPPED_PROJECTION_BINDING_RE = re.compile(
-    r"(?<![A-Za-z0-9_'])([A-Za-z][A-Za-z0-9_']*)\s*=\s*"
-    r"((?:[A-Z][A-Za-z0-9_']*\.)*[A-Za-z][A-Za-z0-9_']*)"
-    r"\s*\(\s*"
-    r"((?:[A-Z][A-Za-z0-9_']*\.)*[A-Za-z][A-Za-z0-9_']*)"
-    r"\s+env\s*\)")
+# The name every projection binds its `EngineEnv` argument to. SS2.1's
+# convention gives each capability exactly one
+# `to<Name>Capability env = <Name>Capability { ... }` equation, and
+# `parse_projection_binding_expressions` finds that equation by this
+# same name -- so a projection that renamed the parameter would not be
+# found at all, which `audit_capability_projection_completeness` then
+# reports rather than silently deriving nothing.
+PROJECTION_PARAMETER = "env"
+
+# A projection binding's right-hand side is canonicalized
+# STRUCTURALLY, not matched as a surface string (issue #2059). Two
+# shapes denote the live container: the bare application
+# `accessor env` -- with the accessor optionally QUALIFIED, since a
+# capability module may import `Engine.Core.State` under an alias and
+# project `fkFieldOne = State.fieldOne env` -- and SS2.1's wrapped
+# `wrapper (accessor env)`.
+#
+# Haskell lets EITHER be written with semantically inert grouping:
+# `(accessor env)`, `(accessor) env`, `wrapper ((accessor env))`. The
+# regexes this replaced matched only the ungrouped spellings, so a
+# parenthesized-but-equivalent projection silently produced NO
+# binding: `capability_accessor_map` omitted the selector, every
+# direct write through it resolved to no field and was recorded as
+# `other`, and the write vanished from `CAPABILITY_WRITER_MODULES`
+# enforcement, the residue and the closed-form safety check while the
+# gate still exited 0. Grouping is stripped here so no legal
+# respelling can do that, and anything this canonicalizer cannot read
+# fails LOUDLY through the completeness audit instead of disappearing.
+_PROJECTION_ATOM_RE = re.compile(
+    r"(?P<paren>[()])"
+    r"|(?P<name>(?:[A-Z][A-Za-z0-9_']*\.)*[A-Za-z_][A-Za-z0-9_']*)"
+    r"|(?P<space>\s+)"
+    r"|(?P<other>\S)")
 
 
-def parse_projection_bindings(source_text: str, projection: str
-                              ) -> dict[str, str]:
-    """`{capability field: EngineEnv accessor}` for every
-    `field = accessor env` binding inside `projection`'s record
-    construction, the accessor reported BARE whether it was written
-    qualified or not. Comments are stripped first, so a Haddock example
-    never counts as a binding. Returns `{}` if the projection is not
-    defined in `source_text` at all.
+def _projection_expression_tree(expression: str) -> list | None:
+    """`expression` as a nested list -- an identifier per string, one
+    level of nesting per parenthesis group -- or `None` when it holds
+    anything else or its parentheses do not balance.
 
-    A view field wrapped by a named alias-preserving wrapper --
-    `field = toReadOnlyRef (accessor env)`, SS2.1's abstract-wrapper
-    extension -- reports the same accessor as the bare form, because it
-    names the same live container (`ALIAS_PRESERVING_WRAPPERS` says
-    which wrappers make that promise). Any other function around the
-    accessor is not recognized, and the field does not canonicalize."""
+    Refusing everything else is the fail-closed half. An operator, a
+    literal, a lambda, a visible type application or a record update is
+    an expression this canonicalizer does not model, and guessing at
+    one would invent an alias; returning `None` instead leaves the
+    field underivable, which
+    `audit_capability_projection_completeness` reports by name."""
+    stack: list[list] = [[]]
+    for match in _PROJECTION_ATOM_RE.finditer(expression):
+        kind = match.lastgroup
+        if kind == "space":
+            continue
+        if kind == "other":
+            return None
+        if kind == "name":
+            stack[-1].append(match.group())
+            continue
+        if match.group() == "(":
+            stack.append([])
+        else:
+            if len(stack) == 1:
+                return None
+            group = stack.pop()
+            stack[-1].append(group)
+    return stack[0] if len(stack) == 1 else None
+
+
+def _ungroup(node: "str | list"):
+    """`(x)` is `x`, however deeply nested: a group holding exactly one
+    item is inert grouping and unwraps to that item. A group holding
+    two or more is an APPLICATION and must survive, which is what keeps
+    `(accessor env)` distinguishable from `(accessor) env` only in
+    spelling and not in meaning."""
+    while isinstance(node, list) and len(node) == 1:
+        node = node[0]
+    return node
+
+
+def _canonical_application(node: "str | list",
+                           wrappers: frozenset[str]) -> str | None:
+    """The bare accessor `node` applies to `PROJECTION_PARAMETER`, or
+    `None`. Recursive only through a recognized alias-preserving
+    wrapper, so `toReadOnlyRef (fieldOne env)` reaches `fieldOne` while
+    `snapshotOf (fieldOne env)` reaches nothing."""
+    node = _ungroup(node)
+    if not isinstance(node, list) or len(node) != 2:
+        return None
+    head, argument = _ungroup(node[0]), _ungroup(node[1])
+    if isinstance(head, list):
+        return None
+    base = head.rpartition(".")[2]
+    if argument == PROJECTION_PARAMETER:
+        return base
+    if base not in wrappers:
+        return None
+    return _canonical_application(argument, wrappers)
+
+
+def canonical_projection_accessor(
+    expression: str, *,
+    wrappers: frozenset[str] = ALIAS_PRESERVING_WRAPPERS,
+) -> str | None:
+    """The BARE `EngineEnv` accessor a projection binding's right-hand
+    side names, or `None` when this canonicalizer cannot read it.
+
+    Semantically inert grouping is stripped, so every spelling of the
+    same projection canonicalizes identically -- `accessor env`,
+    `(accessor env)`, `(accessor) env`, `((accessor env))`, and the
+    wrapped `wrapper (accessor env)` with the same freedom. The
+    accessor is reported bare whether it was written qualified or not:
+    the qualifier says which module it came from, which is already
+    settled by the time we get here, and the FIELD name is what every
+    consumer wants."""
+    tree = _projection_expression_tree(expression)
+    if tree is None:
+        return None
+    return _canonical_application(tree, wrappers)
+
+
+_BINDING_HEAD_RE = re.compile(
+    r"^\s*([a-z_][A-Za-z0-9_']*)\s*=(?![=<>:!#$%&*+./\\?@^|~-])")
+
+
+def _split_top_level(text: str) -> list[str]:
+    """`text` split on the commas that are not inside a nested brace,
+    parenthesis or bracket -- i.e. one segment per record binding."""
+    segments: list[str] = []
+    depth = 0
+    start = 0
+    for index, character in enumerate(text):
+        if character in "([{":
+            depth += 1
+        elif character in ")]}":
+            depth -= 1
+        elif character == "," and depth == 0:
+            segments.append(text[start:index])
+            start = index + 1
+    segments.append(text[start:])
+    return segments
+
+
+def parse_projection_binding_expressions(source_text: str, projection: str
+                                         ) -> dict[str, str]:
+    """`{capability field: right-hand-side text}` for every top-level
+    binding in `projection`'s record construction, WHETHER OR NOT the
+    right-hand side canonicalizes.
+
+    Comments are stripped first, so a Haddock example never counts as a
+    binding. Returns `{}` if the projection has no
+    `<projection> env = <Record> { ... }` equation in `source_text` at
+    all -- a state `audit_capability_projection_completeness` reports,
+    because a projection the parser cannot find is every one of its
+    fields lost at once."""
     code = _strip_haskell_comments(source_text)
     lines = code.split("\n")
     start = None
-    equation = re.compile(rf"^{re.escape(projection)}\s+env\s*=")
+    equation = re.compile(
+        rf"^{re.escape(projection)}\s+{PROJECTION_PARAMETER}\s*=")
     for i, line in enumerate(lines):
         if equation.match(line):
             start = i
@@ -1829,18 +1966,46 @@ def parse_projection_bindings(source_text: str, projection: str
             seen_open = True
         if seen_open and depth <= 0:
             break
-    # The qualifier says which module the accessor came from, which is
-    # already settled by the time we get here; the FIELD name is what
-    # every consumer wants, so it is returned bare.
     text = "\n".join(body)
-    bindings = {field: accessor.rpartition(".")[2]
-                for field, accessor
-                in _PROJECTION_BINDING_RE.findall(text)}
-    for field, wrapper, accessor in (
-            _WRAPPED_PROJECTION_BINDING_RE.findall(text)):
-        if wrapper.rpartition(".")[2] in ALIAS_PRESERVING_WRAPPERS:
-            bindings[field] = accessor.rpartition(".")[2]
+    opening = text.find("{")
+    if opening == -1:
+        return {}
+    closing = text.rfind("}")
+    if closing < opening:
+        return {}
+
+    bindings: dict[str, str] = {}
+    for segment in _split_top_level(text[opening + 1:closing]):
+        head = _BINDING_HEAD_RE.match(segment)
+        if head is None:
+            continue
+        bindings[head.group(1)] = segment[head.end():].strip()
     return bindings
+
+
+def parse_projection_bindings(source_text: str, projection: str
+                              ) -> dict[str, str]:
+    """`{capability field: EngineEnv accessor}` for every binding
+    inside `projection`'s record construction that canonicalizes
+    (`canonical_projection_accessor`), the accessor reported BARE
+    whether it was written qualified or not.
+
+    A binding whose right-hand side does not canonicalize is ABSENT
+    from this map rather than guessed at -- inventing an alias for
+    `snapshotOf (fieldOne env)` would claim a guarantee nothing gives.
+    Absence is not the end of the story: every declared field of a live
+    capability record must appear here, and
+    `audit_capability_projection_completeness` is what turns a missing
+    one into a loud failure instead of a silent hole in the write
+    map."""
+    return {
+        field: accessor
+        for field, accessor in (
+            (field, canonical_projection_accessor(expression))
+            for field, expression
+            in parse_projection_binding_expressions(
+                source_text, projection).items())
+        if accessor is not None}
 
 
 def audit_save_load_projection(
@@ -2609,6 +2774,60 @@ def imports_name(declarations: list[ImportDecl], module: str, name: str,
     return False
 
 
+# One discovery feeds BOTH the accessor map and the completeness gate
+# below (issue #2059), so the map can never quietly describe a smaller
+# set of records than the gate checks -- which is the shape the
+# original hole took: `capability_accessor_map` was the only thing
+# that read the projections, and anything it failed to read simply was
+# not there.
+_CAPABILITY_RECORD_DECL_RE = re.compile(
+    r"^data\s+(?P<record>[A-Z][A-Za-z0-9_']*Capability)\s*=\s*(?P=record)\s*\{",
+    re.MULTILINE)
+
+
+def _capability_projection_re(record: str) -> re.Pattern[str]:
+    """`to<Something> ∷ EngineEnv → <record>`, the SS2.1 projection
+    signature, ASCII and Unicode arrows alike."""
+    return re.compile(
+        r"^(to[A-Za-z0-9_']*)\s*(?:∷|::)\s*"
+        r"(?:[A-Z][A-Za-z0-9_']*\.)*EngineEnv\s*(?:→|->)\s*"
+        rf"{re.escape(record)}(?![A-Za-z0-9_'])", re.MULTILINE)
+
+
+class CapabilityRecord(NamedTuple):
+    """One `Engine.Core.Capability.*` record declaration and the
+    projection that builds it. `projection` is `None` when the module
+    declares the record but no `EngineEnv → <record>` signature was
+    found -- a state that is itself a violation, never a skip."""
+    module: str
+    relpath: str
+    record: str
+    projection: str | None
+
+
+def discover_capability_records(sources: dict[str, str]
+                                ) -> list[CapabilityRecord]:
+    """Every `<Name>Capability` record declared under
+    `Engine.Core.Capability.*`, paired with its projection, in module
+    then declaration order.
+
+    Comments are stripped first, so a Haddock example showing a record
+    or a signature is not mistaken for the real declaration."""
+    records: list[CapabilityRecord] = []
+    for relpath, text in sorted(sources.items()):
+        module = module_identifier(relpath)
+        if not module.startswith(CAPABILITY_MODULE_PREFIX):
+            continue
+        code = _strip_haskell_comments(text)
+        for declaration in _CAPABILITY_RECORD_DECL_RE.finditer(code):
+            record = declaration.group("record")
+            signature = _capability_projection_re(record).search(code)
+            records.append(CapabilityRecord(
+                module, relpath, record,
+                signature.group(1) if signature else None))
+    return records
+
+
 def capability_accessor_map(sources: dict[str, str], live_fields: list[str]
                             ) -> dict[str, tuple[tuple[str, str, str], ...]]:
     """`{capability accessor: ((field, defining module, record type), ...)}`
@@ -2629,27 +2848,118 @@ def capability_accessor_map(sources: dict[str, str], live_fields: list[str]
     keys canonicalizing onto the same `videoConfigRef` field. A binding
     whose right-hand side is not a live `EngineEnv` field is skipped
     rather than invented -- `audit_save_load_projection` and the
-    boundary checks are where a mis-bound projection is caught."""
+    boundary checks are where a mis-bound projection is caught, and
+    `audit_capability_projection_completeness` is what stops such a
+    skip from being SILENT."""
     fields = set(live_fields)
     candidates: dict[str, set[tuple[str, str, str]]] = {}
-    for relpath, text in sorted(sources.items()):
-        module = module_identifier(relpath)
-        if not module.startswith(CAPABILITY_MODULE_PREFIX):
+    for entry in discover_capability_records(sources):
+        if entry.projection is None:
             continue
-        match = re.search(
-            r"^(to[A-Za-z0-9_']*)\s*(?:∷|::)\s*"
-            r"(?:[A-Z][A-Za-z0-9_']*\.)*EngineEnv\s*(?:→|->)\s*"
-            r"([A-Z][A-Za-z0-9_']*)", text, re.MULTILINE)
-        if not match:
-            continue
-        record = match.group(2)
         for capability_field, accessor in parse_projection_bindings(
-                text, match.group(1)).items():
+                sources[entry.relpath], entry.projection).items():
             if accessor in fields:
                 candidates.setdefault(capability_field, set()).add(
-                    (accessor, module, record))
+                    (accessor, entry.module, entry.record))
     return {name: tuple(sorted(owners, key=lambda entry: entry[1]))
             for name, owners in candidates.items()}
+
+
+def audit_capability_projection_completeness(
+    sources: dict[str, str], live_fields: list[str],
+) -> list[str]:
+    """Issue #2059's fail-closed half: every field of every live
+    capability record must canonicalize onto a live `EngineEnv` field,
+    or the audit STOPS and names the module, projection and field.
+
+    `capability_accessor_map` is the whole ownership map behind
+    `CAPABILITY_WRITER_MODULES` enforcement, the SS6.5 residue and
+    requirement 6's closed-form safety check. Before this check, a
+    field the parser could not read was simply absent from that map:
+    every direct write through the selector resolved to no field, was
+    filed as `other`, and disappeared from all three while the gate
+    exited 0. A silent omission is therefore indistinguishable from a
+    field nobody writes -- so there must be none, and each of the three
+    ways one can arise is reported here:
+
+    * the record's projection signature is not found at all, which
+      loses every one of its fields at once;
+    * a declared field has no binding the canonicalizer can read
+      (`canonical_projection_accessor`) -- an unrecognized wrapper, an
+      operator, a record update, or no binding in the construction;
+    * a binding canonicalizes onto a name that is NOT a live
+      `EngineEnv` field, which `capability_accessor_map` discards at
+      the same cost (the reviewer's amendment to requirement 2).
+
+    This does not widen what canonicalizes. Reading MORE spellings is
+    `canonical_projection_accessor`'s job and stays deliberately
+    bounded; this check only refuses to let an unread one pass as
+    nothing."""
+    fields = set(live_fields)
+    violations: list[str] = []
+    for entry in discover_capability_records(sources):
+        source = sources[entry.relpath]
+        if entry.projection is None:
+            violations.append(
+                f"`{entry.module}` declares `{entry.record}` but no "
+                f"`to... ∷ EngineEnv → {entry.record}` projection was "
+                f"found ({entry.relpath}) -- without it EVERY selector of "
+                f"the record is absent from the capability accessor map, "
+                f"so every direct write through one is filed as `other` "
+                f"and silently leaves SS5 writing-module enforcement. Give "
+                f"the record its SS2.1 projection, or teach "
+                f"`discover_capability_records` the spelling")
+            continue
+        try:
+            declared = extract_record_fields(
+                source, rf"^data {re.escape(entry.record)} = "
+                        rf"{re.escape(entry.record)}\b")
+        except ValueError as error:
+            violations.append(
+                f"`{entry.module}`'s `{entry.record}` declaration cannot "
+                f"be read ({entry.relpath}): {error}")
+            continue
+        expressions = parse_projection_binding_expressions(
+            source, entry.projection)
+        for field in declared:
+            expression = expressions.get(field)
+            if expression is None:
+                violations.append(
+                    f"`{entry.module}`'s `{entry.projection}` binds no "
+                    f"readable right-hand side for `{entry.record}`'s "
+                    f"`{field}` ({entry.relpath}) -- a field the parser "
+                    f"cannot pair with an `EngineEnv` accessor is missing "
+                    f"from the capability accessor map, which silently "
+                    f"exempts every direct write through `{field}` from "
+                    f"SS5's writing-module map")
+                continue
+            accessor = canonical_projection_accessor(expression)
+            if accessor is None:
+                violations.append(
+                    f"`{entry.module}`'s `{entry.projection}` binds "
+                    f"`{field}` as `{expression}`, which this audit "
+                    f"cannot canonicalize onto an `EngineEnv` accessor "
+                    f"({entry.relpath}) -- SS2.1 requires every field to "
+                    f"be the live handle an accessor names, spelled "
+                    f"`accessor env` or `wrapper (accessor env)` for a "
+                    f"named alias-preserving wrapper "
+                    f"({', '.join(sorted(ALIAS_PRESERVING_WRAPPERS))}), "
+                    f"with grouping optional. Restate the binding in a "
+                    f"recognized form, or extend "
+                    f"`canonical_projection_accessor` and SS2.1 together; "
+                    f"do NOT leave it unread, because an unread binding "
+                    f"is an unenforced field")
+                continue
+            if accessor not in fields:
+                violations.append(
+                    f"`{entry.module}`'s `{entry.projection}` binds "
+                    f"`{field}` from `{accessor}`, which is not a live "
+                    f"`EngineEnv` field ({entry.relpath}) -- "
+                    f"`capability_accessor_map` drops a binding it cannot "
+                    f"canonicalize onto the live record, so a renamed or "
+                    f"mistyped accessor would take `{field}` out of SS5's "
+                    f"writing-module map without failing anything")
+    return violations
 
 
 def resolve_primitive(declarations: list[ImportDecl], name: str) -> str | None:
@@ -3427,6 +3737,15 @@ def main() -> int:
             print(f"  - {v}")
         return 1
 
+    projection_violations = audit_capability_projection_completeness(
+        production_sources, live_fields)
+    if projection_violations:
+        print(f"{len(projection_violations)} capability projection "
+              f"completeness violation(s):")
+        for v in projection_violations:
+            print(f"  - {v}")
+        return 1
+
     save_load_violations = audit_save_load_projection(
         production_sources, (REPO_ROOT / "synarchy.cabal").read_text(encoding="utf-8"))
     if save_load_violations:
@@ -3476,6 +3795,11 @@ def main() -> int:
         return 1
 
     total_fields = len(live_fields)
+    capability_records = discover_capability_records(production_sources)
+    projected_fields = sum(
+        len(parse_projection_bindings(production_sources[entry.relpath],
+                                      entry.projection))
+        for entry in capability_records if entry.projection is not None)
     mapped_fields = sum(1 for m in CAPABILITY_WRITER_MODULES.values() if m)
     mapped_pairs = sum(len(m) for m in CAPABILITY_WRITER_MODULES.values())
     temporary_total = sum(len(m) for m in TEMPORARY_CEILING.values())
@@ -3490,6 +3814,9 @@ def main() -> int:
           f"`engineStateRef` (SS3), {len(INPUT_LUA_ONLY_MODULES)} LuaThread "
           f"module(s) holding the full input capability and no non-owner "
           f"naming `inputBarrierNextRef`/`currentKeyDownRef` (SS7.3), "
+          f"{len(capability_records)} capability record(s) whose "
+          f"{projected_fields} projected field(s) all canonicalize onto a "
+          f"live EngineEnv accessor (SS2.1), "
           f"{mapped_fields}/{total_fields} field(s) carrying a non-empty "
           f"writing-module map covering {mapped_pairs} field-module pair(s) "
           f"with no undeclared or stale entry (SS5) over "

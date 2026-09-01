@@ -193,6 +193,19 @@ here:
   exact same `IORef`/`TVar`/`Queue` handle (or immutable value)
   `EngineEnv` already carries — the projection aliases live state, it
   does not snapshot or duplicate it.
+* **Every binding must be readable, and grouping is free** (#2059).
+  `tools/engine_env_capability_audit.py` derives the whole
+  capability-accessor ownership map behind §5's write map and §6.5's
+  residue from these projections, so a binding it cannot pair with an
+  `EngineEnv` accessor takes that selector out of enforcement. It
+  therefore canonicalizes each right-hand side structurally: semantically
+  inert grouping — `(accessor env)`, `(accessor) env`, and the same
+  freedom inside the wrapped form below — reads exactly as the ungrouped
+  spelling, so no legal respelling can quietly drop a field. Anything
+  else is a *hard audit failure* naming the module, projection and
+  field, never a silent omission: an unread binding is an unenforced
+  field. Widening what the audit reads and restating this bullet are one
+  change, made together.
 * **An abstract wrapper narrows AUTHORITY, and must still alias**
   (#1896). A view may present a field through an abstract wrapper
   around the *same live handle* — today exactly one exists,
