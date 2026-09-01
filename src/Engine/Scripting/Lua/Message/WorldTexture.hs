@@ -125,10 +125,9 @@ handleWorldPreview = do
                     (imageView, cleanView) ← createVulkanImageView' dev image
                         FORMAT_R8G8B8A8_UNORM IMAGE_ASPECT_COLOR_BIT
 
-                    -- Preview registers with NEAREST (shares the cached
-                    -- nearest sampler). A live filter toggle repaints all
-                    -- slots to the global sampler until the next regen —
-                    -- same as the pre-cache behaviour.
+                    -- Preview registers PINNED to NEAREST (sharing the
+                    -- cached sampler), so a live global-filter toggle
+                    -- rewrites this slot to the same pinned sampler.
                     let cacheRef = rcSamplerCacheRef (toRenderCapability env)
                     sampler ← liftIO $ acquireSampler dev cacheRef SamplerTextureNearest
                     let cleanSampler = releaseSampler dev cacheRef SamplerTextureNearest
@@ -285,7 +284,9 @@ handleZoomAtlasUpload = do
                               transitionImageLayout image FORMAT_R8G8B8A8_UNORM
                                   TransDst_ShaderRO 1 cmdBuf
 
-                      -- Create image view and sampler (LINEAR for smooth zoom)
+                      -- Create image view and a sampler PINNED to LINEAR for
+                      -- smooth zoom. A live global-filter toggle rewrites this
+                      -- slot to the same pinned sampler.
                       (imageView, cleanView) ← createVulkanImageView' dev image
                           FORMAT_R8G8B8A8_UNORM IMAGE_ASPECT_COLOR_BIT
 

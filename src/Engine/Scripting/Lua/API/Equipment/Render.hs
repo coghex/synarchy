@@ -138,7 +138,8 @@ equipmentGetLoadoutFn env = do
                                     (Lua.Number (realToFrac
                                         (itemTotalWeight itemMgr inst)))
                                 Lua.setfield (-2) "weight"
-                                let TextureHandle texInt = idTexture iDef
+                                -- UI-policy handle (#2075).
+                                let TextureHandle texInt = idIconTexture iDef
                                 Lua.pushinteger (fromIntegral texInt)
                                 Lua.setfield (-2) "iconTex"
                                 case idWeapon iDef of
@@ -255,7 +256,8 @@ pushItemInstance inst itemMgr = do
             Lua.setfield (-2) "make"
             Lua.pushstring (TE.encodeUtf8 (idMaterial iDef))
             Lua.setfield (-2) "material"
-            let TextureHandle texInt = idTexture iDef
+            -- UI-policy handle (#2075).
+            let TextureHandle texInt = idIconTexture iDef
             Lua.pushinteger (fromIntegral texInt)
             Lua.setfield (-2) "iconTex"
             Lua.pushboolean (idUnequippable iDef)

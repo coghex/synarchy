@@ -73,6 +73,17 @@ function M.key(wid, x, y)
     return tostring(wid) .. ":" .. x .. "," .. y
 end
 
+-- Page-qualified IDENTITY claim key (#1854). Chop claims name the
+-- exact PLANT being felled rather than the tile it stands on, because
+-- two wood-tagged trees can legitimately share one tile and a tile key
+-- would let one acolyte's claim block the other's tree. `iid` is a
+-- world.getFloraAt().instanceId -- always a number -- so the ":"
+-- separator stays unambiguous however a page id is spelled, exactly as
+-- M.key's own note explains.
+function M.instanceKey(wid, iid)
+    return tostring(wid) .. ":#" .. iid
+end
+
 -- Empty every enrolled table in place; returns how many entries were
 -- dropped, for the caller's load diagnostic.
 function M.resetAll()

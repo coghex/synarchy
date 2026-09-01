@@ -2994,7 +2994,7 @@ def selftest() -> int:
             A ZOMBIE counts as gone — it has already exited and released
             its port and every other resource, and only waits to be
             reaped by an init that may never do so. That is exactly the
-            distinction `run_probes` draws, and asserting on `os.kill(pid,
+            distinction `probe_runner_lifecycle` draws, and asserting on `os.kill(pid,
             0)` instead would read a not-yet-reaped orphan as alive."""
             if pid is None:
                 return False

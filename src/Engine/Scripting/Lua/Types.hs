@@ -13,6 +13,7 @@ import Engine.Input.Types
 import Engine.Scene.Base
 import Engine.Graphics.Vulkan.Types.Vertex
 import Engine.Graphics.Config (WindowMode(..), TextureFilter(..))
+import Engine.Graphics.Vulkan.Texture.Policy (UploadSampler(..))
 import UI.Types (ElementHandle(..))
 import qualified Graphics.UI.GLFW as GLFW
 import qualified Engine.Core.Queue as Q
@@ -132,13 +133,25 @@ data LuaToEngineMsg = LuaLog LuaLogLevel String
                     | LuaSetPixelSnap Bool
                     | LuaSetTextureFilter TextureFilter
                     | LuaLoadTextureRequest TextureHandle FilePath
+                                            UploadSampler
+                      -- ^ An ordinary image-file load, carrying the
+                      --   sampler policy its REQUESTER declared (#2075).
+                      --   The policy travels on the request rather than
+                      --   being decided by the handler, because it
+                      --   cannot be recovered from the path: the same
+                      --   directory holds world-drawn map icons and
+                      --   toolbar chrome, and @utility\/white.png@ is
+                      --   drawn by both. Omitting the declaration at the
+                      --   call site yields 'UploadGlobalSampler', which
+                      --   is exactly the pre-#2075 behavior.
                     | LuaLoadAtlasTextureRequest TextureHandle FilePath
                       -- ^ A compiled unit-animation atlas (#1259). Same
-                      --   upload as 'LuaLoadTextureRequest' but the slot
-                      --   is registered PINNED to the nearest sampler
-                      --   with one mip level, so unit art stays
-                      --   nearest-neighbour (D-6) across a runtime
-                      --   global filter toggle.
+                      --   upload as a global-policy
+                      --   'LuaLoadTextureRequest', so gameplay unit art
+                      --   follows the player's nearest/linear setting
+                      --   (#2085). Kept a constructor of its own because
+                      --   the atlas path also carries D-2's
+                      --   one-image-per-animation contract.
                     | LuaLoadFontRequest FontHandle FilePath Int
                     | LuaSpawnTextRequest ObjectId Float Float FontHandle
                                                    Text Vec4 LayerId Float

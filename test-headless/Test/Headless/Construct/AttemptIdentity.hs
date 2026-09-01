@@ -959,6 +959,7 @@ savePage designs next = PageActivityDTO
     , padFloraHarvests = HM.empty, padCropPlots = HM.empty
     , padGroundItems = GroundItemsDTO 0 HM.empty
     , padSpoilPiles = HM.empty
+    , padPendingChop = HM.empty, padPendingHarvests = HM.empty
     , padConstructNextAttempt = next
     }
 

@@ -1,7 +1,7 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "generator": "tools/pack_atlas.py",
-  "tool_version": 1,
+  "tool_version": 2,
   "digest_algorithm": "sha256",
   "unit": "technomule",
   "direction_order": [
@@ -19,10 +19,11 @@
       "name": "hit_react",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/technomule/atlas/hit_react.png",
-      "atlas_width": 368,
-      "atlas_height": 460,
+      "atlas_width": 376,
+      "atlas_height": 470,
       "cell_width": 92,
       "cell_height": 92,
+      "cell_padding": 1,
       "columns": 4,
       "rows": 5,
       "flip": true,
@@ -55,17 +56,18 @@
           "frame_count": 4
         }
       ],
-      "source_digest": "713b3f615ce4c5b72a4e5af9d69bd86c8584e4221ff54968b9b5f619442ee2ba",
-      "atlas_digest": "b956b26359a4729ea777496d9d96a3384e50afc427d2cacd6adf473a30a4afd0"
+      "source_digest": "e00b36916dc9b9d740c6963d655eb60200a44a0f9d52a7f64d90bcc12b07ae80",
+      "atlas_digest": "9d31f0cee3a5a0a7d70972d873e7c6977c8d6a86cc3c8eb4af0d19584c59b92d"
     },
     {
       "name": "idle",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/technomule/atlas/idle.png",
-      "atlas_width": 828,
-      "atlas_height": 460,
+      "atlas_width": 846,
+      "atlas_height": 470,
       "cell_width": 92,
       "cell_height": 92,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 5,
       "flip": true,
@@ -98,17 +100,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "2f3bfde51c22b5ec12d9686f7daf2237555813afcfddfc7416ab1c30c3f698d3",
-      "atlas_digest": "0c8c291ea5e6404fd1bb43b94d7f26c1c65eaf9692cff84217faf41dce7f98d8"
+      "source_digest": "b1e3a51d965a9094101d3a113234b493754c4639a50d8eda20eca659f56597ef",
+      "atlas_digest": "ba88e54a39c2e76e81315a3fee79eb7e30ceee2849ea929304745c76be540380"
     },
     {
       "name": "run",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/technomule/atlas/run.png",
-      "atlas_width": 736,
-      "atlas_height": 460,
+      "atlas_width": 752,
+      "atlas_height": 470,
       "cell_width": 92,
       "cell_height": 92,
+      "cell_padding": 1,
       "columns": 8,
       "rows": 5,
       "flip": true,
@@ -141,17 +144,18 @@
           "frame_count": 8
         }
       ],
-      "source_digest": "c0fcb8256b4ba1ee8e5cbe7754c91145d7d4cdb7d6cf59228e0885875486250c",
-      "atlas_digest": "b9144c4bd8154844ad121546594c4ab325b16560415ea522e470f7dc1598fdd1"
+      "source_digest": "a7da36f9f4d0b57fa4947b551473abbf77609c83cfcdb25a83cdbefbbe399dfd",
+      "atlas_digest": "17a93624caf60af209920970d39d6a2a5ffa2611b4838b52d987dcd220debdff"
     },
     {
       "name": "walk",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/technomule/atlas/walk.png",
-      "atlas_width": 736,
-      "atlas_height": 460,
+      "atlas_width": 752,
+      "atlas_height": 470,
       "cell_width": 92,
       "cell_height": 92,
+      "cell_padding": 1,
       "columns": 8,
       "rows": 5,
       "flip": true,
@@ -184,8 +188,8 @@
           "frame_count": 8
         }
       ],
-      "source_digest": "1c8494cf3736994f8ac6e55104947232d9992a9d39a6f672affc6058825a46ab",
-      "atlas_digest": "e3b6a6cbdecaae6cafc14b0b1892d5d1326da82b791ede69098528439e565f32"
+      "source_digest": "160a9c665d65aedf296d0860db9bcd29566d12ef5ef58dd5a8f7666c6a70fa71",
+      "atlas_digest": "e0d04aa30b950908f2eca641510bc5278d5cb15779920492bc61a86248761362"
     }
   ]
 }

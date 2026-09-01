@@ -120,6 +120,9 @@ import Unit.Sim.Types
     (UnitSimState(..), Pose(..), UnitActivity(..), MoveTarget(..)
     , MoveHazardPolicy(..))
 import Unit.Direction (Direction(..))
+import World.Flora.Identity
+    ( firstPlantedFloraCursor, generatedFloraInstanceId
+    , plantedFloraInstanceId )
 
 page1, page2 ∷ WorldPageId
 page1 = WorldPageId "page1"
@@ -371,8 +374,20 @@ richPage = PageSnapshot
     , pgsUnits        = UnitSnapshot
         { usnInstances = HM.singleton (UnitId 1) richUnit, usnNextId = 2 }
     , pgsUnitSimStates = HM.singleton (UnitId 1) richSimState
-    , pgsFloraHarvests = HM.singleton (15, 16) 1234.5
-    , pgsChopDesignations = HM.singleton (7, 8) (ChopDesignation 0)
+      -- #1854: both maps are keyed by flora INSTANCE now, and the
+      -- fixture uses one id from each namespace so the disjointness and
+      -- both wire encodings ride the representative session.
+    , pgsFloraHarvests = HM.singleton
+          (generatedFloraInstanceId "page1" 15 16 "probe_berry" 0) 1234.5
+    , pgsChopDesignations = HM.singleton
+          (plantedFloraInstanceId 2) (ChopDesignation 0 7 8)
+      -- #1854: the two deferred legacy-migration maps and the planted
+      -- allocator, populated so a round trip proves an unresolved
+      -- pre-identity entry survives repeated save/load rather than being
+      -- silently dropped.
+    , pgsPendingChopMigration = HM.singleton (21, 22) (ChopDesignation 4 21 22)
+    , pgsPendingFloraHarvests = HM.singleton (23, 24) 77.5
+    , pgsPlantedFloraCursor = 3
     , pgsCraftBills   = richBills
     , pgsTransferOrders = richTransferOrders
     , pgsPowerNodes   = richNodes
@@ -495,6 +510,9 @@ minimalPage2 = PageSnapshot
     , pgsUnitSimStates = HM.empty
     , pgsFloraHarvests = emptyFloraHarvests
     , pgsChopDesignations = HM.empty
+    , pgsPendingChopMigration = HM.empty
+    , pgsPendingFloraHarvests = HM.empty
+    , pgsPlantedFloraCursor = firstPlantedFloraCursor
     , pgsCraftBills   = emptyCraftBills
     , pgsTransferOrders = emptyTransferOrders
     , pgsPowerNodes   = emptyPowerNodes

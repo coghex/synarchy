@@ -24,8 +24,8 @@ local assetsLoaded = false
 function checkbox.init()
     if assetsLoaded then return end
     
-    texChecked = engine.loadTexture("assets/textures/ui/checkboxchecked.png")
-    texUnchecked = engine.loadTexture("assets/textures/ui/checkboxunchecked.png")
+    texChecked = engine.loadTexture("assets/textures/ui/checkboxchecked.png", "ui")
+    texUnchecked = engine.loadTexture("assets/textures/ui/checkboxunchecked.png", "ui")
     
     assetsLoaded = true
     engine.logDebug("Checkbox module initialized")

@@ -197,7 +197,7 @@ local function structureTex(texName)
     if not buildTool.structureTex[texName] then
         buildTool.structureTex[texName] = engine.loadTexture(
             "assets/textures/buildings/" .. STRUCTURE_PACK .. "/"
-            .. texName .. ".png")
+            .. texName .. ".png", "ui")
     end
     return buildTool.structureTex[texName]
 end
@@ -235,7 +235,7 @@ end
 local function wireTex()
     if buildTool.wireTex then return buildTool.wireTex end
     buildTool.wireTex = engine.loadTexture(
-        "assets/textures/structures/wire/cross.png")
+        "assets/textures/structures/wire/cross.png", "ui")
     return buildTool.wireTex
 end
 
@@ -509,7 +509,7 @@ function buildTool.showPicker()
     -- cached, but going through it on every rebuild is wasted work.
     if not buildTool.whitePixelTex then
         buildTool.whitePixelTex = engine.loadTexture(
-            "assets/textures/utility/white.png")
+            "assets/textures/utility/white.png", "ui")
     end
 
     local visible = visibleEntries()

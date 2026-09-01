@@ -62,7 +62,8 @@ import probe_flake  # type: ignore
 import probe_protocol  # type: ignore
 import probe_resource_lock  # type: ignore
 import probe_select  # type: ignore
-import run_probes  # type: ignore
+import probe_runner_lifecycle  # type: ignore
+import probe_runner_resources  # type: ignore
 
 TOOLS_DIR = str(Path(__file__).resolve().parent)
 FAILURES: list[str] = []
@@ -286,7 +287,7 @@ class Preparer:
 
 
 class saved_runner_executable:
-    """Restore `run_probes.ENGINE_EXECUTABLE`, which `deflake` installs.
+    """Restore `probe_runner_resources.ENGINE_EXECUTABLE`, which `deflake` installs.
 
     It is a module global the runner reads when it hands a child probe
     its executable, so a case that leaves it set would decide what a
@@ -294,11 +295,11 @@ class saved_runner_executable:
     """
 
     def __enter__(self):
-        self._saved = run_probes.ENGINE_EXECUTABLE
+        self._saved = probe_runner_resources.ENGINE_EXECUTABLE
         return self
 
     def __exit__(self, *exc):
-        run_probes.ENGINE_EXECUTABLE = self._saved
+        probe_runner_resources.ENGINE_EXECUTABLE = self._saved
         return False
 
 
@@ -1832,7 +1833,7 @@ def test_the_real_writer_produces_a_readable_document() -> None:
 # preparation takes `cabal-build` EXCLUSIVELY. A measurement holds the
 # same resource — shared for an ordinary probe, exclusive for the three
 # that drive Cabal themselves — for the whole of its runs, and
-# `run_probes.run_one` strips the inherited runner variables on the way
+# `probe_runner_lifecycle.run_one` strips the inherited runner variables on the way
 # down, so a child could neither see that hold nor upgrade past it. It
 # would wait out its whole allowance for a holder blocked waiting on it.
 #
@@ -1862,7 +1863,7 @@ def test_the_engine_is_prepared_before_the_resource_hold() -> None:
     order: list[str] = []
     try:
         with saved_runner_executable():
-            run_probes.ENGINE_EXECUTABLE = None
+            probe_runner_resources.ENGINE_EXECUTABLE = None
             prepare = Preparer(observe=lambda: order.append("prepare"))
 
             def take(probe, *, namespace=None, repo_root=None):
@@ -1873,7 +1874,7 @@ def test_the_engine_is_prepared_before_the_resource_hold() -> None:
             class Watching(Recorder):
                 def __call__(self, *args, **kwargs):
                     order.append("measure")
-                    self.seen_executable = run_probes.ENGINE_EXECUTABLE
+                    self.seen_executable = probe_runner_resources.ENGINE_EXECUTABLE
                     return super().__call__(*args, **kwargs)
 
             measure = Watching(measurement(scratch))
@@ -1981,7 +1982,7 @@ def test_the_real_preparation_runs_outside_the_real_hold() -> None:
     try:
         os.environ["PATH"] = f"{scratch.root}{os.pathsep}{saved_path}"
         with saved_runner_executable():
-            run_probes.ENGINE_EXECUTABLE = None
+            probe_runner_resources.ENGINE_EXECUTABLE = None
 
             class Watching(Recorder):
                 def __call__(self, *args, **kwargs):
@@ -1990,7 +1991,7 @@ def test_the_real_preparation_runs_outside_the_real_hold() -> None:
                     # child probe's own preparation would take — is
                     # refused. That is the deadlock this ordering
                     # avoids, observed rather than assumed.
-                    self.seen_executable = run_probes.ENGINE_EXECUTABLE
+                    self.seen_executable = probe_runner_resources.ENGINE_EXECUTABLE
                     try:
                         probe_resource_lock.acquire(
                             exclusive={probe_engine.BUILD_RESOURCE},

@@ -175,6 +175,12 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                                 spoilPiles ← readIORef (wsSpoilRef ws)
                                 floraHarvests ← readIORef (wsFloraHarvestsRef ws)
                                 chopDesigs ← readIORef (wsChopDesignationsRef ws)
+                                pendingChop ← readIORef
+                                    (wsPendingChopMigrationRef ws)
+                                pendingHarvests ← readIORef
+                                    (wsPendingFloraHarvestsRef ws)
+                                plantedCursor ← readIORef
+                                    (wsPlantedFloraCursorRef ws)
                                 tillDesigs ← readIORef (wsTillDesignationsRef ws)
                                 cropPlots ← readIORef (wsCropPlotsRef ws)
                                 plantDesigs ← readIORef (wsPlantDesignationsRef ws)
@@ -217,6 +223,9 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                                     , pgsUnitSimStates = simStates
                                     , pgsFloraHarvests = floraHarvests
                                     , pgsChopDesignations = chopDesigs
+                                    , pgsPendingChopMigration = pendingChop
+                                    , pgsPendingFloraHarvests = pendingHarvests
+                                    , pgsPlantedFloraCursor = plantedCursor
                                     , pgsCraftBills  = craftBills
                                     , pgsTransferOrders = transferOrders
                                     , pgsPowerNodes  = powerNodes

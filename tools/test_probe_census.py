@@ -9,7 +9,7 @@ two-worktree scratch repository the CLI cases can resolve) and this same
 interpreter (for the independent-process contention case).
 
 The real `tools/probe_census.py` is imported and driven — with
-`run_probes.PROBES`, `run_probes.REPO_ROOT`, `ci_probes.CI_ELIGIBLE` and
+`probe_runner_registry.PROBES`, `probe_engine.REPO_ROOT`, `ci_probes.CI_ELIGIBLE` and
 `probe_flake.PROTOCOL_PROBES` pointed at a synthetic registry — so this
 exercises the shipped code paths rather than a copy.
 
@@ -48,7 +48,8 @@ import ci_probes  # type: ignore  # noqa: E402
 import probe_census  # type: ignore  # noqa: E402
 import probe_flake  # type: ignore  # noqa: E402
 import probe_protocol  # type: ignore  # noqa: E402
-import run_probes  # type: ignore  # noqa: E402
+import probe_engine  # type: ignore  # noqa: E402
+import probe_runner_registry  # type: ignore  # noqa: E402
 
 FAILURES: list[str] = []
 
@@ -112,16 +113,16 @@ def registry(probes=None, ci_eligible=(), protocol=None, reasons=None):
     so a case that needs a synthetic probe to be `needs-gpu` states it
     here rather than reaching into the real registry.
     """
-    saved = (run_probes.PROBES, ci_probes.CI_ELIGIBLE,
+    saved = (probe_runner_registry.PROBES, ci_probes.CI_ELIGIBLE,
              probe_flake.PROTOCOL_PROBES, ci_probes.MANUAL_ONLY_REASONS)
-    run_probes.PROBES = list(SYNTHETIC if probes is None else probes)
+    probe_runner_registry.PROBES = list(SYNTHETIC if probes is None else probes)
     ci_probes.CI_ELIGIBLE = set(ci_eligible)
     probe_flake.PROTOCOL_PROBES = dict(protocol or {})
     ci_probes.MANUAL_ONLY_REASONS = dict(reasons or {})
     try:
         yield
     finally:
-        (run_probes.PROBES, ci_probes.CI_ELIGIBLE,
+        (probe_runner_registry.PROBES, ci_probes.CI_ELIGIBLE,
          probe_flake.PROTOCOL_PROBES,
          ci_probes.MANUAL_ONLY_REASONS) = saved
 
@@ -2681,12 +2682,12 @@ def cli_repo():
         run("git", "config", "user.name", "Census Test")
         run("git", "commit", "-q", "--allow-empty", "-m", "root")
         run("git", "worktree", "add", "-q", str(docs_wt), "-b", "docs-wip")
-        saved = run_probes.REPO_ROOT
-        run_probes.REPO_ROOT = str(main_wt)
+        saved = probe_engine.REPO_ROOT
+        probe_engine.REPO_ROOT = str(main_wt)
         try:
             yield main_wt, docs_wt / probe_census.MANIFEST_RELPATH
         finally:
-            run_probes.REPO_ROOT = saved
+            probe_engine.REPO_ROOT = saved
 
 
 def cli(*argv):
@@ -2845,14 +2846,14 @@ def test_cli() -> None:
         with scratch() as bare:
             subprocess.run(["git", "init", "-q", str(bare / "solo")],
                            check=True, capture_output=True)
-            was = run_probes.REPO_ROOT
-            run_probes.REPO_ROOT = str(bare / "solo")
+            was = probe_engine.REPO_ROOT
+            probe_engine.REPO_ROOT = str(bare / "solo")
             try:
                 code, _, err = cli("--validate")
                 expect(code == 2 and "git worktree add" in err,
                        "a missing docs worktree exits 2 with its repair")
             finally:
-                run_probes.REPO_ROOT = was
+                probe_engine.REPO_ROOT = was
 
     with registry(ci_eligible={"beta"}), cli_repo() as (_root, path):
         code, out, _ = cli("--seed")
@@ -3480,14 +3481,14 @@ def test_head_movement_is_not_a_census_event() -> None:
         # And the census never consults git for a summary: the same
         # document summarizes identically with the live registry's repo
         # root pointed somewhere else entirely.
-        saved = run_probes.REPO_ROOT
-        run_probes.REPO_ROOT = str(root)
+        saved = probe_engine.REPO_ROOT
+        probe_engine.REPO_ROOT = str(root)
         try:
             expect(summary_of(path) == before,
                    "a summary reads the stored cohort, never the working "
                    "tree it happens to run in")
         finally:
-            run_probes.REPO_ROOT = saved
+            probe_engine.REPO_ROOT = saved
 
 
 def test_staleness_boundary() -> None:

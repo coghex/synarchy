@@ -1,11 +1,9 @@
 # Texture sampler routing design
 
-The engine ships a player-facing nearest/linear texture-filter setting, but the
-surfaces it reaches are close to the inverse of the intended contract: compiled
-unit-animation atlases are permanently pinned to nearest and ignore the player
-entirely, while UI chrome and icons follow the player and blur when linear is
-selected. This arc routes every texture surface to the sampler it should have,
-and does the cell-isolation work that makes the unit half safe.
+The engine ships a player-facing nearest/linear texture-filter setting. This arc
+routes every texture surface to the sampler it should have: gameplay unit
+atlases follow the player through isolated cells, UI chrome and icons stay
+pinned nearest, and derived world surfaces keep their explicit samplers.
 
 Design state: `ready for issue processing`
 
@@ -36,19 +34,18 @@ concrete precondition
 
 ## Current state and evidence
 
-Three families are pinned today via `registerPinnedTexture`, and everything else
-follows one shared sampler that `setTextureFilter` repaints:
+The completed routing separates scene art from pinned UI and derived surfaces:
 
 | Family | Sampler today | Follows the player? |
 |---|---|---|
-| Unit-animation atlases | pinned nearest | No |
+| Unit-animation atlases | shared global | Yes |
 | World preview thumbnail | pinned nearest | No |
 | Zoom (world map) atlas | pinned linear | No |
 | Font atlases | own fixed `SamplerFont` | No |
 | UI chrome, icons, tiles, buildings, flora, blood | shared global sampler | Yes |
 
-- `src/Engine/Scripting/Lua/Message/Texture.hs:302` — `handleLoadAtlasTextureBatch`
-  selects `UploadPinnedNearest` unconditionally for every compiled unit atlas.
+- `src/Engine/Scripting/Lua/Message/Texture.hs` — `handleLoadAtlasTextureBatch`
+  selects `UploadGlobalSampler` for every compiled gameplay unit atlas.
 - `src/Engine/Scripting/Lua/Message/WorldTexture.hs:133,280` — the world preview
   pins nearest and the zoom atlas pins linear.
 - `src/Engine/Graphics/Vulkan/Texture/Rebind.hs:74` — `planFilterRebind` keeps
@@ -59,14 +56,24 @@ follows one shared sampler that `setTextureFilter` repaints:
 - `scripts/settings/data.lua:477` — the setting is player-reachable and applied
   live through `engine.setTextureFilter`.
 
-The bleed risk is real rather than theoretical. `src/Engine/Loop/Camera.hs:252`
-integrates zoom as a float with velocity and friction, so scene art is sampled
-at arbitrary non-integer scale; pixel snap only removes a fractional *position*
-offset (`src/Engine/Graphics/Vulkan/ShaderCode.hs:105`) and does not make one
-texel equal one screen pixel. `tools/pack_atlas.py:130` packs cells edge to edge
-at exact integer boundaries and `docs/engine_contracts.md:592` records that cell
-UVs sit on exact cell edges with no inset, so a linear sample near a cell edge
-would read the neighbouring animation frame.
+The bleed risk was real rather than theoretical, and TSR-2 (#2076) has now
+removed it. `src/Engine/Loop/Camera.hs:252` integrates zoom as a float with
+velocity and friction, so scene art is sampled at arbitrary non-integer scale;
+pixel snap only removes a fractional *position* offset
+(`src/Engine/Graphics/Vulkan/ShaderCode.hs:105`) and does not make one texel
+equal one screen pixel. `pack_atlas.py` used to pack cells edge to edge at exact
+integer boundaries, so a linear sample near a cell edge would read the
+neighbouring animation frame.
+
+**As of TSR-2 it no longer can.** Every cell now occupies a
+`(cell_width + 2) x (cell_height + 2)` slot with the logical frame at offset
+`(1, 1)` and a one-texel gutter copying that cell's own edge texels outward,
+corners included (`pack_atlas.py`'s `extruded_slot`; index `schema_version` 2's
+required `cell_padding`). `atlasCellUV` strides by the slot and still addresses
+the inner cell exactly, so nearest-mode output is unchanged texel for texel and
+D-3's precondition is satisfied. TSR-3 routes those isolated atlases through
+`UploadGlobalSampler`, so the table above now describes the shipped sampler
+routing.
 
 The divergence has a traceable cause. Epic #1256 states that gameplay atlases
 "continue to honor the user-selectable global nearest/linear texture-filter
@@ -76,10 +83,11 @@ sampling, restated the *pre-epic* D-6 in its own body and requirement 7, so the
 correction never reached the child that would have implemented it. The epic
 closed with its acceptance criteria 5 and 12 unmet.
 
-Two comments describe behavior that no longer exists:
+Two comments described behavior that no longer existed:
 `src/Engine/Scripting/Lua/Message/WorldTexture.hs:125` and `:274` both claim a
 live filter toggle repaints those slots "to the global sampler until the next
-regen", which predates `btsPinned` being honored in the rebind plan.
+regen", which predates `btsPinned` being honored in the rebind plan. TSR-3
+corrects both comments to state that each derived slot retains its pin.
 
 ## Desired experience
 
@@ -172,8 +180,10 @@ leaves the zoom atlas and preview thumbnail as they are.
 
 Extrusion padding, or a proven equivalent, lands first and the unpin depends on
 it. The half-texel UV inset is rejected because it breaks nearest-mode
-pixel-identity. Unpinning the current edge-adjacent sheets is not an acceptable
-intermediate state, so TSR-3 may not land before TSR-2.
+pixel-identity. Unpinning sheets whose cells are not isolated is not an
+acceptable intermediate state, so TSR-3 may not land before TSR-2. TSR-2 (#2076)
+has landed the one-texel gutter, so this precondition is met and TSR-3 is free
+to proceed.
 
 ### D-4. The caller declares a load's upload policy
 
@@ -194,7 +204,9 @@ this arc keeps; two texels would only buy headroom for mipmaps, which are
 explicitly out of scope. Growth is roughly +13% pixels on a 32px cell and +6% on
 a 64px cell. TSR-2 re-measures the resident total against the owner-confirmed
 384 MiB threshold and records the new baseline as part of the slice, rather than
-treating the movement as a breach.
+treating the movement as a breach. Measured on the shipped corpus (#2076): the
+whole roster moved from 115,723,968 to 121,620,320 bytes, +5.10%, projecting to
+231.97 MiB against the unchanged 384 MiB threshold.
 
 ### D-6. Headless proofs block; GPU confirmation is recorded, not blocking
 
@@ -247,9 +259,9 @@ architectural change with no bearing on this arc's goal.
 - Pure headless tests are the arc's blocking gate: sampler-policy selection per
   category, and texel-level proof that a cell's sampled footprint under linear
   never reaches a neighbouring cell's source texels.
-- The existing hspec group asserting an atlas slot stays nearest across a filter
-  toggle (`test-headless/Test/Headless/Unit/Atlas.hs:1199`) currently encodes
-  the opposite of the target contract and is inverted by TSR-3, not deleted.
+- The former hspec group asserting an atlas slot stayed nearest across a filter
+  toggle is inverted by TSR-3, not deleted: it now proves both global sampler
+  values reach the atlas while a derived preview slot remains pinned.
 - `tools/pack_atlas.py --validate-only --strict` must stay green with the new
   cell geometry, including the artifact-count and digest checks.
 - `pickFrame`'s logical-frame matrix must be unchanged, proving TSR-2 moved
@@ -279,6 +291,11 @@ architectural change with no bearing on this arc's goal.
 
 ### TSR-2. Add cell extrusion padding to the unit atlas compiler and runtime
 
+- **Status:** DELIVERED as [#2076]. One texel per side, index
+  `schema_version` 2 with a required `cell_padding`, `source_digest` domain tag
+  at `v2`, all 131 tracked atlases regenerated, nearest-mode output verified
+  pixel-identical, and the resident baseline re-recorded at 121,620,320 bytes
+  against the unchanged threshold. TSR-3's precondition is met.
 - **Outcome:** Compiled atlases carry isolated cells; nothing about sampling
   policy changes yet.
 - **Scope:** `pack_atlas.py` layout, index format version, both per-animation

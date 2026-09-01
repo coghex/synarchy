@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Cross-process shared/exclusive probe resources (#1436).
 
-`run_probes.ResourceLedger` is a reader/writer lock over the probes
+`probe_runner_resources.ResourceLedger` is a reader/writer lock over the probes
 inside ONE runner process — its own docstring says so, and the scheduler
 owns it from a single thread. That is the whole coordination that exists
 today, and it coordinates nobody else: a `/deflake` measurement and a
@@ -15,19 +15,20 @@ This module is the missing half: the same reader/writer model, between
 processes.
 
     hold = probe_resource_lock.acquire(
-        exclusive=run_probes.exclusive_resources(key),
-        shared=run_probes.shared_resources(key),
-        namespace=run_probes.resource_namespace())
+        exclusive=probe_runner_resources.exclusive_resources(key),
+        shared=probe_runner_resources.shared_resources(key),
+        namespace=probe_runner_resources.resource_namespace())
     try:
         ...run the probe...
     finally:
         hold.release()
 
-What the interests mean is NOT redefined here. `run_probes` owns the two
-declaration tables and the two accessors; this module is told a set of
-names and an interest, and coordinates them. It deliberately imports
-nothing from the rest of `tools/`, which is what lets `run_probes`
-import it: `probe_flake` and `probe_claim` both import `run_probes`, so
+What the interests mean is NOT redefined here. `probe_runner_resources`
+owns the two declaration tables and the two accessors (#2074); this
+module is told a set of names and an interest, and coordinates them. It
+deliberately imports nothing from the rest of `tools/`, which is what
+lets `probe_runner_resources` and `probe_engine` import it: `probe_flake`
+and `probe_claim` both reach this module through those owners, so
 anything reaching back into them from here would close an import cycle.
 The two consequences of that are called out where they bite — the
 scratch-directory checks below, and `repository_namespace`.
@@ -65,13 +66,13 @@ it, and repairs nothing: a shared directory is not ours to chmod.
 
 `probe_flake` performs the identical three checks for the identical
 reason, and the duplication is forced rather than chosen: `probe_flake`
-imports `run_probes`, `run_probes` imports this module, so importing its
-helpers here would be a cycle. Neither copy may be relaxed without the
-other.
+imports `probe_engine` and `probe_runner_lifecycle`, both of which reach
+this module, so importing its helpers here would be a cycle. Neither copy
+may be relaxed without the other.
 
 The namespace is the REPOSITORY, not the worktree
 -------------------------------------------------
-`run_probes.REPO_ROOT` is derived from the tools file's own location, so
+`probe_engine.REPO_ROOT` is derived from the tools file's own location, so
 every linked worktree resolves a different value and two worktrees of one
 repository would namespace separately — while both drive the same
 tracked `config/` tree through the same build directory, which is the
@@ -166,7 +167,8 @@ NOTE_REAP_GRACE_SECONDS = 30.0
 DEFAULT_POLL_SECONDS = 1.0
 DEFAULT_ANNOUNCE_SECONDS = 30.0
 
-# A resource name is a table key in `run_probes`, but it becomes part of
+# A resource name is a table key in `probe_runner_resources`, but it becomes
+# part of
 # a filename in a world-writable directory, so it is validated rather
 # than trusted: no separators, no leading dot, nothing that could walk
 # out of `LOCK_ROOT`.
@@ -598,7 +600,7 @@ class ResourceHold:
 def _normalize(exclusive, shared) -> tuple[frozenset, frozenset]:
     """The two interest sets, validated and made disjoint.
 
-    `run_probes.shared_resources` already subtracts what a probe
+    `probe_runner_resources.shared_resources` already subtracts what a probe
     declares exclusively, so an overlap should not reach here. It is
     resolved rather than trusted, and resolved toward EXCLUSIVE, because
     the alternative — taking both interests on one name — would mean
@@ -712,7 +714,8 @@ def wait_acquire(*, exclusive=(), shared=(), namespace: str,
     holder releases everything instantly and there is no stale state to
     time out against. Only a live process still doing the work it
     declared can keep us here, which is the same wait
-    `run_probes.ResourceLedger` already imposes within one sweep.
+    `probe_runner_resources.ResourceLedger` already imposes within one
+    sweep.
 
     Time spent here is the caller's to account for. Nothing about it is
     charged to the probe: the wait finishes before the probe process is

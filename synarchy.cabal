@@ -171,6 +171,7 @@ library
                      Math
                      Engine.ActionOutcome
                      Engine.Asset.Base
+                     Engine.Asset.TextureCache
                      Engine.Asset.Types
                      Engine.Asset.Handle
                      Engine.Asset.Manager
@@ -235,6 +236,7 @@ library
                      Engine.Graphics.Vulkan.Texture.Handle
                      Engine.Graphics.Vulkan.Texture.Rebind
                      Engine.Graphics.Vulkan.Texture.Release
+                     Engine.Graphics.Vulkan.Texture.Policy
                      Engine.Graphics.Vulkan.Texture.Publish
                      Engine.Graphics.Vulkan.Texture.Bindless
                      Engine.Graphics.Vulkan.Uniform.Layout
@@ -328,6 +330,7 @@ library
                      Engine.Scripting.Lua.API.UI.Property
                      Engine.Scripting.Lua.API.UI.Tooltip
                      Engine.Scripting.Lua.API.UI.Placement
+                     Engine.Scripting.Lua.API.UI.Presentation
                      Engine.Scripting.Lua.API.Faction
                      Engine.Scripting.Lua.API.Units
                      Engine.Scripting.Lua.API.Units.Page
@@ -450,6 +453,7 @@ library
                      UI.Manager.Query
                      UI.Manager.Text
                      UI.Manager.BoxTexture
+                     UI.Manager.Presentation
                      UI.Render
                      UI.TextBuffer
                      UI.Tooltip
@@ -878,7 +882,9 @@ library
                      World.Tile.Types
                      World.Time.Types
                      World.Time.Local
+                     World.Flora.Identity
                      World.Flora.Types
+                     World.Flora.Designation
                      World.Flora.Growth
                      World.Flora.Placement
                      World.Flora.Render
@@ -1249,6 +1255,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Graphics.SwapchainSelection
                    Test.Headless.Graphics.UniformLayout
                    Test.Headless.Graphics.VertexLayout
+                   Test.Headless.Graphics.WorldVertexCoords
                    Test.Headless.Graphics.FontFallback
                    Test.Headless.Graphics.FontRepertoire
                    Test.Headless.Construct.AttemptIdentity
@@ -1268,6 +1275,13 @@ test-suite synarchy-test-headless
                    Test.Headless.Power.Network
                    Test.Headless.Language.Semantic
                    Test.Headless.Language.Generated
+                   Test.Headless.Language.Generated.Support
+                   Test.Headless.Language.Generated.Core
+                   Test.Headless.Language.Generated.Onset
+                   Test.Headless.Language.Generated.Boundary
+                   Test.Headless.Language.Generated.Bound
+                   Test.Headless.Language.Generated.Golden
+                   Test.Headless.Language.Generated.Orthography
                    Test.Headless.Language.Suggest
                    Test.Headless.Language.Etymology
                    Test.Headless.Language.EtymologyPageScope
@@ -1312,6 +1326,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Climate
                    Test.Headless.World.TimeLocal
                    Test.Headless.World.FloraGrowth
+                   Test.Headless.World.FloraIdentity
                    Test.Headless.River.CalderaHazard
                    Test.Headless.River.InlandSources
                    Test.Headless.World.Render.FrontWallLift
@@ -1417,6 +1432,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.LogSource
                    Test.Headless.Lua.InjuryNarration
                    Test.Headless.Graphics.BindlessRebind
+                   Test.Headless.Graphics.TextureSamplerPolicy
                    Test.Headless.Graphics.BindlessRelease
                    Test.Headless.Graphics.BindlessPublish
                    Test.Headless.Lua.AssetFailure

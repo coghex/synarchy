@@ -76,6 +76,7 @@ import Unit.Types (UnitId(..))
 import Unit.Direction (Direction(..))
 import Building.Knowledge (emptyContainerKnowledge)
 import World.Construct.Attempt (firstConstructAttemptId)
+import World.Flora.Identity (firstPlantedFloraCursor)
 
 page1, page2 ∷ WorldPageId
 page1 = WorldPageId "page1"
@@ -104,6 +105,9 @@ minimalPage pid = PageSnapshot
     , pgsUnitSimStates = HM.empty
     , pgsFloraHarvests = emptyFloraHarvests
     , pgsChopDesignations = HM.empty
+    , pgsPendingChopMigration = HM.empty
+    , pgsPendingFloraHarvests = HM.empty
+    , pgsPlantedFloraCursor = firstPlantedFloraCursor
     , pgsCraftBills   = emptyCraftBills
     , pgsTransferOrders = emptyTransferOrders
     , pgsPowerNodes   = emptyPowerNodes

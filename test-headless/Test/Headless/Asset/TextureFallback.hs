@@ -69,6 +69,7 @@ import Engine.Graphics.Vulkan.Texture.Bindless
     , writeHandleSlotEntryPtr, handleSlotTableSize )
 import Engine.Graphics.Vulkan.Texture.Handle
     (BindlessTextureHandle(..), toBindlessHandle)
+import Engine.Graphics.Vulkan.Texture.Policy (UploadSampler(..), TextureCacheKey(..))
 import Engine.Graphics.Vulkan.Texture.Slot
     (TextureSlot(..), TextureSlotAllocator(..), createSlotAllocator)
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
@@ -96,6 +97,7 @@ import World.Render.Textures.Types (defaultWorldTextures)
 import Unit.Direction (Direction(..))
 import World.Flora.Types (FloraCatalog(..), FloraId(..), FloraSpecies(..)
     , FloraHarvest(..), FloraInstance(..), lookupSpecies)
+import World.Flora.Identity (floraInstanceIdNone)
 
 -- A real, always-present repo asset — stands in for both "the preferred
 -- path" (existing case) and "the fallback path" (missing case) so the
@@ -395,7 +397,7 @@ sentinelHandleSpec = do
                 -- WARN below stops naming handle 0 at all.
                 let freshPath = "assets/textures/ui/not_in_the_cache.png"
                     action ∷ EngineM' ()
-                    action = handleLoadTextureBatch
+                    action = handleLoadTextureBatch UploadGlobalSampler
                         [ (missingTextureHandle, freshPath)
                         , (aliasHandle,          T.unpack cachedAtlasPath)
                         ]
@@ -441,6 +443,8 @@ sentinelHandleSpec = do
                     , fiHealth    = 1
                     , fiVariant   = 0
                     , fiBaseWidth = 8
+                    , fiInstanceId = floraInstanceIdNone
+                    , fiChopDesignated = False
                     }
                 lookupSlot = toInt
             case floraToQuad lookupSlot defaultWorldTextures FaceSouth
@@ -786,7 +790,7 @@ unrepresentableHandleSpec = do
                     canonical = TextureHandle handleSlotTableSize
                     alias     = TextureHandle (handleSlotTableSize + 1)
                     action ∷ EngineM' ()
-                    action = handleLoadTextureBatch
+                    action = handleLoadTextureBatch UploadGlobalSampler
                         [ (canonical, freshPath), (alias, freshPath) ]
                 _ ← either (fail ∘ show) pure
                         =≪ runEngineM action (rfEnv fx) pure
@@ -841,7 +845,9 @@ unrepresentableHandleSpec = do
                 sizes ← readIORef (textureSizeRef (rfEnv fx))
                 HM.member canonical sizes `shouldBe` False
                 HM.member alias sizes `shouldBe` False
-                Map.member (T.pack freshPath) (apAssetPaths pool)
+                Map.member
+                    (TextureCacheKey (T.pack freshPath) UploadGlobalSampler)
+                    (apAssetPaths pool)
                     `shouldBe` False
 
         -- The public entry point Lua reaches, end to end.
@@ -853,7 +859,7 @@ unrepresentableHandleSpec = do
                 -- and neither needs a Vulkan device.
                 let spent = TextureHandle handleSlotTableSize
                     action ∷ EngineM' ()
-                    action = handleLoadTextureBatch
+                    action = handleLoadTextureBatch UploadGlobalSampler
                         [ (spent,       T.unpack cachedAtlasPath)
                         , (aliasHandle, T.unpack cachedAtlasPath) ]
                 _ ← either (fail ∘ show) pure
@@ -1079,7 +1085,10 @@ seedPathCache ∷ RegistrationFixture → IO ()
 seedPathCache fx = do
     pool ← readIORef (assetPoolRef (rfEnv fx))
     writeIORef (assetPoolRef (rfEnv fx)) pool
-        { apAssetPaths = Map.insert cachedAtlasPath cachedAssetId
+        { apAssetPaths = Map.insert
+                             (TextureCacheKey cachedAtlasPath
+                                 UploadGlobalSampler)
+                             cachedAssetId
                              (apAssetPaths pool) }
 
 cachedAssetId ∷ AssetId

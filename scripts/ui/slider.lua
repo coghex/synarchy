@@ -39,11 +39,11 @@ local dragOffsetX = 0  -- offset from knob center to mouse X at grab time
 function slider.init()
     if assetsLoaded then return end
 
-    texLeft  = engine.loadTexture("assets/textures/ui/slider/sliderleft.png")
-    texTrack = engine.loadTexture("assets/textures/ui/slider/slidertrack.png")
-    texRight = engine.loadTexture("assets/textures/ui/slider/sliderright.png")
-    texKnob  = engine.loadTexture("assets/textures/ui/slider/sliderknob.png")
-    texHighlight = engine.loadTexture("assets/textures/ui/highlight.png")
+    texLeft  = engine.loadTexture("assets/textures/ui/slider/sliderleft.png", "ui")
+    texTrack = engine.loadTexture("assets/textures/ui/slider/slidertrack.png", "ui")
+    texRight = engine.loadTexture("assets/textures/ui/slider/sliderright.png", "ui")
+    texKnob  = engine.loadTexture("assets/textures/ui/slider/sliderknob.png", "ui")
+    texHighlight = engine.loadTexture("assets/textures/ui/highlight.png", "ui")
 
     assetsLoaded = true
     engine.logDebug("Slider module initialized")

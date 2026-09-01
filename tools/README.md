@@ -406,8 +406,8 @@ relevant to what you changed.
 
 Each probe is self-contained (own `main()`, own engine boot/teardown, own
 default port chosen to avoid the user's GUI on 8008) and prints PASS/FAIL
-plus `sys.exit(0 or 1)`. Every probe registered in `run_probes.py` (the
-table below) takes `--port` to avoid colliding with another running
+plus `sys.exit(0 or 1)`. Every probe registered in
+`probe_runner_registry.PROBES` (the table below) takes `--port` to avoid colliding with another running
 instance, defaulting to its own historical fixed port when unset (#723).
 
 "Boot" below is `arena` (flat synthetic terrain via
@@ -497,8 +497,8 @@ instance, defaulting to its own historical fixed port when unset (#723).
 | `thermo_altitude_probe.py` | #308 | worldgen (size 128) | Altitude-lapse thermal effect. |
 | `thought_probe.py` | #351 | arena | Thought event stream (`thought.emit`/`drainEvents`), STATE/ENVIRONMENTAL thought triggers, state-of-mind-biased selection (mood-weighted valence), and the thought-log data path. |
 | `till_probe.py` | #333 | worldgen (isolated resource root) | Till-designation layer + till AI end to end: designate/cancel, fluid-tile exclusion, save/load, autonomous tilling (`world.getVegAt` confirms the flip), idempotent re-sweep. |
-| `tutorial_probe.py` | #922 | worldgen (four engine boots, two real save/loads) | First-session tutorial integration gate: the shipped `data/tutorials/first_session.yaml` branch driven end to end from real gameplay state — a fresh session revealing only the root row, a placed `acolyte_portal` completing the portal objective, one acolyte discovering generated water by FOV scan and radio-sharing it with a second acolyte held immobile with no water anywhere in its own `getVisibleTiles` field of view (so a received source cannot be a second independent discovery, and must be one of the finder's own), the live water/food subobjectives checking one at a time as supplies are restored stepwise, the composite latching when a single acolyte holds both, that latch surviving the supplies being stripped again, and a fresh-process save/load round trip preserving every completed objective while the HUD returns collapsed and the live subobjectives recompute from the loaded world. A separate boot covers the #996 branch that latches before it is ever revealed and, since #1941, what happens to it next: the real `scripts/hud.lua` is booted and shown, a visible HUD over a COLLAPSED panel still presents nothing, opening the panel renders the whole branch, the update tick that reports the presentation retires it, and the shipped session's checklist reaches the empty completed state it could never reach before — after which stripping the supplies brings the RETIRED branch back under the ordinary hide rule. A fourth boot then reloads that finished session in a fresh process and requires the checklist to stay empty across further evaluation ticks. Injects no tree and stubs no predicate. |
-| `tutorial_hud_probe.py` | #960 | worldgen, `--offscreen` (needs-gpu, manual-only) | Tutorial checklist HUD rendered over a real world: collapsed at session entry, real toggle clicks opening/closing the list (located through the module's own `dump()`, never a hardcoded coordinate), a transparent overlay that leaves terrain visible inside the list's rect, a 41-row injected tree scrolling under a real wheel event, and a real click landing on a row still selecting the terrain tile beneath it. Since #1941 it also drives the presentation contract end to end on the GPU: an already-latched branch renders on the open panel, the update tick that reports it retires it, the still-open checklist reaches its empty completed state, and a real save/load of that finished session brings the panel back collapsed and does not repopulate it. Since #1419 it also measures the toggle caption's own RENDERED GLYPH COLUMNS — separately for the collapsed `> Objectives` and the open `v Objectives`, by hiding and re-showing the caption element and diffing the frames, so the 9-slice box behind it is never mistaken for text — and requires a non-empty glyph set contained half-open inside both the toggle box and the framebuffer. Since #1581 the same rendered-glyph measurement covers the OBJECTIVE ROWS over SHIPPED content: the live `engine.getTutorialTree()` registry tree is restored (never a copy of the labels in Python or Lua), so the strings measured are the authored `Place portal` / `Secure water source` / `Prepare an expedition` / `Prepare water` / `Prepare food` at all four authored depths. Since #1941 all five are reached in TWO stable captures rather than one: a suppression is now spent by the very act of showing it, so the old single capture — which latched the whole chain sticky at once — could not survive a measurement lasting several screenshots. Each stage instead picks a durable set under which its rows are not hideable at all (only the root latched, then the whole chain with no subobjective checked), and the depths actually rendered are collected as evidence that the two between them still cover every authored depth. Each row is hidden and re-shown individually — requiring a live text handle, a non-empty glyph set, a stable rebuild count and handle identity, and no drift between the two rendered frames — and its ink must fall half-open inside both the checklist panel and the framebuffer, with any violation naming the offending row's shipped id and authored label. That oracle proved every shipped row below the root overrunning the panel, so #1581 also gave the rows the width fit they never had (`scripts/ui/text_wrap.lua`'s shared #1157 truncation, against the budget each row's indent leaves) — the renderer still never clips a row, so that fit is the only thing the assertions have to hold onto. Containment is proved for the size actually run, not for every scale. |
+| `tutorial_probe.py` | #922 | worldgen (four engine boots, two real save/loads) | First-session tutorial integration gate: the shipped `data/tutorials/first_session.yaml` branch driven end to end from real gameplay state — a fresh session revealing only the root row, a placed `acolyte_portal` completing the portal objective, one acolyte discovering generated water by FOV scan and radio-sharing it with a second acolyte held immobile with no water anywhere in its own `getVisibleTiles` field of view (so a received source cannot be a second independent discovery, and must be one of the finder's own), the live water/food subobjectives checking one at a time as supplies are restored stepwise, the composite latching when a single acolyte holds both, that latch surviving the supplies being stripped again, and a fresh-process save/load round trip preserving every completed objective while the HUD returns collapsed and the live subobjectives recompute from the loaded world. A separate boot covers the #996 branch that latches before it is ever revealed and, since #1941, what happens to it next: the real `scripts/hud.lua` is booted and shown, a visible HUD over a COLLAPSED panel still presents nothing, and opening the panel renders the whole branch. Since #2056 this GPU-less probe owns the NEGATIVE half of the presentation boundary rather than the presentation itself — an open panel on a visible HUD retires nothing while no frame is drawn, because `--headless` has no renderer to witness one — and then makes the transition explicitly through #958's own `acknowledgePresented`, after which the shipped session's checklist reaches the empty completed state it could never reach before and stripping the supplies brings the RETIRED branch back under the ordinary hide rule. The positive proof that the rows reach a rendered frame is `tutorial_hud_probe.py`'s, which runs `--offscreen`. A fourth boot then reloads that finished session in a fresh process and requires the checklist to stay empty across further evaluation ticks. Injects no tree and stubs no predicate. |
+| `tutorial_hud_probe.py` | #960 | worldgen, `--offscreen` (needs-gpu, manual-only) | Tutorial checklist HUD rendered over a real world: collapsed at session entry, real toggle clicks opening/closing the list (located through the module's own `dump()`, never a hardcoded coordinate), a transparent overlay that leaves terrain visible inside the list's rect, a 41-row injected tree scrolling under a real wheel event, and a real click landing on a row still selecting the terrain tile beneath it. Since #1941 it also drives the presentation contract end to end on the GPU, and since #2056 it is the arc's only PIXEL proof of it: an already-latched branch renders on the open panel and the sticky composite's own ink is attributed in a real captured frame (its text element hidden and re-shown, the columns that change being its marker and label — the #1581 oracle's technique) before the update tick that reports it retires it, the still-open checklist reaches its empty completed state, and a real save/load of that finished session brings the panel back collapsed and does not repopulate it. The captures and #2056's boundary crossing run inside one Lua chunk, so no update tick can interleave and the measured frames provably precede the empty state; `tutorial_probe.py`, being GPU-less, owns only the negative half. Since #1419 it also measures the toggle caption's own RENDERED GLYPH COLUMNS — separately for the collapsed `> Objectives` and the open `v Objectives`, by hiding and re-showing the caption element and diffing the frames, so the 9-slice box behind it is never mistaken for text — and requires a non-empty glyph set contained half-open inside both the toggle box and the framebuffer. Since #1581 the same rendered-glyph measurement covers the OBJECTIVE ROWS over SHIPPED content: the live `engine.getTutorialTree()` registry tree is restored (never a copy of the labels in Python or Lua), so the strings measured are the authored `Place portal` / `Secure water source` / `Prepare an expedition` / `Prepare water` / `Prepare food` at all four authored depths. Since #1941 all five are reached in TWO stable captures rather than one: a suppression is now spent by the very act of showing it, so the old single capture — which latched the whole chain sticky at once — could not survive a measurement lasting several screenshots. Each stage instead picks a durable set under which its rows are not hideable at all (only the root latched, then the whole chain with no subobjective checked), and the depths actually rendered are collected as evidence that the two between them still cover every authored depth. Each row is hidden and re-shown individually — requiring a live text handle, a non-empty glyph set, a stable rebuild count and handle identity, and no drift between the two rendered frames — and its ink must fall half-open inside both the checklist panel and the framebuffer, with any violation naming the offending row's shipped id and authored label. That oracle proved every shipped row below the root overrunning the panel, so #1581 also gave the rows the width fit they never had (`scripts/ui/text_wrap.lua`'s shared #1157 truncation, against the budget each row's indent leaves) — the renderer still never clips a row, so that fit is the only thing the assertions have to hold onto. Containment is proved for the size actually run, not for every scale. |
 | `transactional_load_probe.py` | #763 | worldgen (three real engine boots, isolated resource root) | Whole-session load transaction: several deliberately invalid loads (missing save, corrupt save, missing gameplay definition) each leave the current session unchanged and paused, reporting `LoadFailed` via `engine.getLoadStatus()`; mutual exclusion rejects a save mid-load (creating no save, and starting no save transaction), rejects a second concurrent load, keeps the original request authoritative and non-terminal across both, and makes `scripts.pause.set(false)` a complete no-op — all against an in-flight window ESTABLISHED and positively observed by request id via the test-only `debug.armLoadStageGate` staging gate (#1181), never raced for, and failing rather than skipping if that window cannot be established; a successful load REPLACES the complete session (a page live only pre-load, never part of the save, does not survive publication) rather than merging; Haskell and Lua state agree immediately post-publication; a paused dwell advances no gameplay state and unpausing lands on the default time scale; repeated loads accumulate no ghost pages. |
 | `transfer_order_probe.py` | #1247, #1253 | arena (phases 1-8, 10, 11) + worldgen with two further engine boots (phase 9); manual-only, ~10 min | The transfer-order unit job (`scripts/unit_ai_transfer.lua`) driven by the real `unit_ai.update` tick: a queued order walks its carrier to a 3x1 hold and commits exactly once on arrival — approached from the FAR end, so arrival is measured against the footprint rather than the anchor — advancing `queued -> in_transit -> ready_to_commit -> completed` in the store, emitting exactly one attributed `unit_event`, never losing the carrier to the wander tick, and committing nothing further over ten more seconds of ticking. Then the refusals: the command-time capacity gate (nothing queued, a warning naming unit and item), a partial twelve-into-eight batch, the arrival gate re-checking capacity as `became_stale/receiver_full`, an instance that left the carrier's hands mid-walk as `became_stale/instance_missing` while its sibling still lands, a demolished destination retiring as `became_stale/receiver_missing`, a blocked approach (an ocean ring) stalling out to `out_of_range`, and a progressing ~90-tile haul completing despite outlasting the 60 s stall budget. #1253's terminal cleanup rides every one of those: each phase checks the outcome was surfaced EXACTLY once (summing the event log's own coalesced `count`, not rows) and that the store is left holding no terminal order, since an order that ends is pruned on the tick that ended it. Phase 10 is the player's own "Cancel transfer" mid-walk: nothing moves, the order goes, the carrier stops walking at the hold, and a second cancel is inert. Phase 11 KILLS a carrier mid-walk — the corpse stays a live instance, so every reference still resolves and nothing downstream would have flagged the abandoned order, but the AI short-circuits a `dead` pose and the order must be retired anyway. Phase 9 saves an order mid-walk, quits, and reloads it in a FRESH process on a real world page (never an arena, #365), where the carrier resumes and completes it — and carries a SECOND carrier destroyed mid-order, whose orphaned order must never reach the save, asserted by both boundaries logging no integrity diagnostic at all. |
 | `transfer_context_menu_probe.py` | #1014, #1085 | worldgen, `--offscreen` (needs-gpu, manual-only) | The "Transfer" context-menu entry end to end: a real right-click on a real built storage building, a real technomule and (since #1085's faction-based widening) a second real player acolyte, with the "Transfer" row located through `ui.dumpWidgets()` by its visible label (never a hardcoded coordinate), the existing "Contents"/"Info" rows still present alongside it, `debug.drainActionOutcomes()` confirming the click routed through the context-menu handler and never fell through to a move order, a real click on the row producing a `scripts.transfer_session` session naming the exact NAMED source/destination endpoints (and no operation field), and the two exclusions that must survive the widening — self-transfer and a non-player-commandable wildlife target both offer no row. |
@@ -520,6 +520,24 @@ tools/ci_probes.py --status` prints the derived CI-eligible / manual-only
 / total counts. This doc states no total of its own: a hand-written one
 drifted three times (#539, #721, #1584), so `tools/test_run_probes.py`
 fails if this section states one again.
+
+`run_probes.py` is the COMMAND and nothing else (#2074) — argument parsing,
+invocation validation, `--list`, dependency construction, scheduler dispatch
+and the process exit. The implementation sits in five importable owners
+beside it: `probe_runner_registry.py` (the probe list, selection, port spans,
+per-key timeout declarations), `probe_runner_diagnostics.py` (the durable
+progress and failure record protocols), `probe_runner_resources.py` (the
+reader/writer conflict model, the cross-process holds, the inherited ancestor
+holds, the engine preflight and its `ENGINE_EXECUTABLE` cell),
+`probe_runner_lifecycle.py` (launching one probe and reaping its whole process
+group) and `probe_runner_scheduler.py` (sequential and `--jobs` orchestration,
+retries, presentation, summary). Dependencies run one way — registry and
+diagnostics are leaves, resources and lifecycle build on them, the scheduler
+builds on all four. A facility has exactly one owner and `run_probes.py`
+re-exports none of them, so a tool or test reaching for `PROBES`, `run_one` or
+a record parser imports the owner and an assignment there reaches the
+implementation. Every operator and CI invocation stays `python3
+tools/run_probes.py`.
 
 ```bash
 # Run everything, sequentially (slow — low tens of minutes)
@@ -580,9 +598,9 @@ pipe the runner drains only when the child exits, and the child is a plain
 `python3` with no `-u` — so ordinary `print` output sits in the child's own
 block buffer and is LOST when a hung probe is SIGKILLed at `--timeout`. A
 long probe that wants a phase to survive that emits a *progress record*
-instead: one flushed line in the single convention `run_probes.py` defines
-(`PROGRESS_MARKER`, `ProgressEmitter`, `parse_progress`) and its failure
-presentation reads back.
+instead: one flushed line in the single convention
+`probe_runner_diagnostics` defines (`PROGRESS_MARKER`, `ProgressEmitter`,
+`parse_progress`) and the runner's failure presentation reads back.
 
 ```
 #probe-progress# 19:25:04 +0.0s   | phase | engine A                            | build the scenario, save 'gen1'
@@ -667,7 +685,8 @@ presentation it always had.
 **Timeouts are per probe.** Most registered probes use the ordinary 900-second
 default. A scenario whose complete expected workload structurally exceeds that
 class declares a validated key-specific default in
-`run_probes.PROBE_TIMEOUT_OVERRIDES`; the runner prints each probe's effective
+`probe_runner_registry.PROBE_TIMEOUT_OVERRIDES`; the runner prints each
+probe's effective
 budget when it starts or completes. `save_compat_migration` uses 3600 seconds
 because its manifest-wide two-process/two-real-codec-dump path has a measured
 clean runtime above 2300 seconds. Passing `--timeout SECONDS` explicitly
@@ -746,7 +765,8 @@ still diagnosed as the boot failure it is.
 the measurement takes its resource hold, never inside it. A measurement
 holds `cabal-build` (shared for an ordinary probe, exclusive for the
 three that drive Cabal themselves) across all ten runs, and
-`run_probes.run_one` strips the inherited runner variables on the way
+`probe_runner_lifecycle.run_one` strips the inherited runner variables
+on the way
 down — so a child left to prepare its own executable would take an
 exclusive interest underneath its own ancestor's hold and wait out its
 whole allowance for a holder blocked on it. Preparing first removes that
@@ -766,8 +786,8 @@ each other, nor a probe reading the binary they may be relinking — the
 same scheduling mechanism `repo-config` already used, with no new one
 invented.
 
-**Shared repository resources (#1322, #1444, #1570).** `run_probes`
-declares two tables: `IMPLICIT_SHARED_RESOURCES`, which EVERY registered
+**Shared repository resources (#1322, #1444, #1570).**
+`probe_runner_resources` declares two tables: `IMPLICIT_SHARED_RESOURCES`, which EVERY registered
 probe holds in a shared interest (`repo-config`, the checkout's tracked
 `config/` tree, and `cabal-build`, its `dist-newstyle`), and
 `EXCLUSIVE_RESOURCES`, which names the few probes that need one to
@@ -785,7 +805,8 @@ registered probes derive a second, concurrently live listener from it:
 `debug_console_boot_probe.py` boots its successful-bind and
 widget-module checks on `--port + 1`, and `offscreen_probe.py` starts a
 second offscreen engine on `--port + 1` while the first is still up. So a
-probe's port count is DATA — `run_probes.PROBE_PORT_SPANS` declares 2 for
+probe's port count is DATA — `probe_runner_registry.PROBE_PORT_SPANS`
+declares 2 for
 each of those two, and every other probe reserves its base alone. A
 declared count `N` reserves the contiguous span `base … base + N - 1`, and
 `--jobs` lays the selected probes' spans end to end so no two concurrent
@@ -1174,10 +1195,10 @@ Only probes that implement the shared `probe-result/v1` protocol
 is rejected BY NAME before execution, without running the probe at all —
 heuristically parsing free-form stdout is the guesswork a reliability harness
 must not do, and invoking a legacy probe to find out would boot a real engine.
-`circadian`, `concussion_revive`, `disarm`, `lua_strict_msg`, `position_hold`,
-`remote_warning_page_guard`, `role`, `state_of_mind`, `text_encoding` and
-`thermo_altitude` are the migrated probes today; later changes normally migrate
-one at a time.
+`blood_impact`, `circadian`, `concussion_revive`, `disarm`, `lua_strict_msg`,
+`position_hold`, `remote_warning_page_guard`, `role`, `state_of_mind`,
+`text_encoding` and `thermo_altitude` are the migrated probes today; later
+changes normally migrate one at a time.
 
 A migrated probe prints its ordered, stable check declaration with
 `--describe` (no engine) and, when the harness supplies an event path, writes
@@ -1186,7 +1207,8 @@ hand it is unchanged: `python3 tools/role_probe.py --port N` still prints its
 `[PASS]`/`[FAIL]` lines and exits 0/1, and `run_probes.py --only role` behaves
 exactly as before.
 
-`run_probes.run_one` still owns process launch, output capture, elapsed
+`probe_runner_lifecycle.run_one` still owns process launch, output capture,
+elapsed
 timing, deferred SIGINT, timeout escalation and process-group cleanup; the
 harness reuses it through four keyword-only parameters (event path, artifact
 dir, engine-log dir, RTS capabilities) that default to today's behavior.
@@ -1656,7 +1678,7 @@ the state tree and rewrites `registry.json` with a fresh `updated_at`. Reading
 the JSON directly is the only way to honour the permission boundary — and the
 only way that works when the machine-local coordinator is not installed.
 
-A `run_probes.PROBES` key maps to TWO `$test` run ids by
+A `probe_runner_registry.PROBES` key maps to TWO `$test` run ids by
 underscores-to-hyphens: `probe:<hyphenated-key>` for an ordinary execution and
 `probe-flake:<hyphenated-key>` for a flakiness measurement, so `transfer_order`
 maps to both `probe:transfer-order` and `probe-flake:transfer-order`. Both name
@@ -1763,7 +1785,8 @@ single-successor — reclaiming a lapsed claim is unavoidably a read-then-write,
 and two unserialized reclaimers is the race where the second lands on top of
 the first's fresh claim.
 
-Claims are keyed by the canonical `run_probes.PROBES` key, so the several
+Claims are keyed by the canonical `probe_runner_registry.PROBES` key, so the
+several
 human spellings of one probe cannot claim it twice, and the namespace is the
 REPOSITORY-common git directory: every linked worktree of one repository
 resolves the same directory, and none of the three things that would split it
@@ -1936,7 +1959,8 @@ into `make ci` or GitHub CI.
 
 ### `probe_resource_lock.py` — cross-process shared/exclusive resources (#1436)
 
-`run_probes.ResourceLedger` is a reader/writer lock over the probes inside ONE
+`probe_runner_resources.ResourceLedger` is a reader/writer lock over the probes
+inside ONE
 runner process — its own docstring says so, and the scheduler owns it from a
 single thread. So it coordinates nobody else: a `/deflake` measurement and a
 `tools/run_probes.py` sweep are independent processes, both driving the same
@@ -1948,9 +1972,10 @@ against. This is the same model between processes.
 python3 tools/test_probe_resource_lock.py   # the deterministic self-test
 ```
 
-There is no CLI. `run_probes` and `tools/deflake.py` both import it, and both
-read the interests from `run_probes.shared_resources` /
-`exclusive_resources`, so there is one conflict model rather than two.
+There is no CLI. `probe_runner_resources` and `tools/deflake.py` both import
+it, and both read the interests from
+`probe_runner_resources.shared_resources` / `exclusive_resources`, so there is
+one conflict model rather than two.
 
 The lock IS an `flock` on one file per (namespace, resource): `LOCK_SH` for a
 shared interest, `LOCK_EX` for an exclusive one. Nothing counts holders or
@@ -1968,7 +1993,7 @@ resource to two processes. `_check_shared_dir` verifies sticky, root-or-us
 ownership and writability rather than assuming them, and repairs nothing.
 
 The namespace is the repository's COMMON git directory, hashed:
-`run_probes.REPO_ROOT` is derived from the tools file's own location, so every
+`probe_engine.REPO_ROOT` is derived from the tools file's own location, so every
 linked worktree resolves a different value and two worktrees of one repository
 would namespace separately while driving the same tracked tree. A checkout git
 cannot answer for is a controlled refusal, never a path-derived guess.
@@ -2187,14 +2212,15 @@ repository-relative paths before the `tools/` scope check is applied, since
 code — and a repair may not touch the measurement APPARATUS at all, because
 `measure`'s timeout and starting port are module constants and lengthening one
 would buy a calmer verification while both command records still compared
-equal. That apparatus is a CLOSED inventory of eleven paths
-(`HARNESS_MODULES`), pinned exactly by the self-test rather than spot-checked:
-`probe_flake`, `probe_protocol`, `probe_census`, `probe_claim`,
-`probe_resource_lock`, `probe_select`, `probe_engine`, `probelib`,
-`run_probes`, `deflake` and `deflake_diagnosis`, each of which owns probe
-selection, launch, port or resource leasing, protocol reconciliation,
-measurement timing and construction, result recording or census intake, or
-diagnosis semantics.
+equal. That apparatus is a CLOSED inventory (`HARNESS_MODULES`), pinned
+exactly by the self-test rather than spot-checked, and stated there rather
+than counted here — a hand-written total is the drift #1584 already cost
+this file once: `probe_flake`, `probe_protocol`, `probe_census`,
+`probe_claim`, `probe_resource_lock`, `probe_select`, `probe_engine`,
+`probelib`, `run_probes` and its five `probe_runner_*` owners, `deflake`
+and `deflake_diagnosis`, each of which owns probe selection, launch, port
+or resource leasing, protocol reconciliation, measurement timing and
+construction, result recording or census intake, or diagnosis semantics.
 
 **The producer's spelling is the contract, down to the argv FORM.**
 `deflake.build_handoff` writes `invocation.argv`, `cwd` and `timeout`, and a
@@ -3087,6 +3113,20 @@ a focused text field with Backspace/Enter editing, UI-vs-game scroll
 routing, and a full drag with `"game"` down/up route pairing. The
 fixture tears itself down afterwards.
 
+The end-to-end run stays human-run, but the harness's own missed-click
+handling (#2052) has an offline gate needing no engine, window or
+network:
+
+```bash
+python3 tools/input_check.py --selftest   # or --self-test
+```
+
+A missed click leaves the fixture's nil `shiftAtClick` out of the
+serialized state; the self-test replays exactly that state and asserts
+the dependent checks report a diagnostic naming the absent field
+instead of raising, so the primary click failure stays first, the later
+sections and the summary still run, and the status stays non-zero.
+
 ### `action_outcome_layer_a_check.py`
 
 The F4 (#646) Layer A gate: `Engine.Input.Thread`'s `ClickRoute`
@@ -3209,7 +3249,12 @@ tools/
 ├── lua_module_budget.py    (Lua module split line-budget guard)
 ├── action_outcome_coverage.py (F4 action-outcome verb instrumentation self-audit; --verify-tier1 is the CI gate)
 ├── language_report.py      (generated-language native-name report/check, #710/#1094/#1095/#1096)
-├── run_probes.py           (opt-in aggregate behavior-probe runner)
+├── run_probes.py           (opt-in aggregate behavior-probe runner — the command)
+├── probe_runner_registry.py    (its probe registry, selection, port spans, per-key timeouts)
+├── probe_runner_diagnostics.py (its durable progress/failure record protocols)
+├── probe_runner_resources.py   (its resource conflict model, cross-process holds, engine preflight)
+├── probe_runner_lifecycle.py   (its one-probe launch and process-group teardown)
+├── probe_runner_scheduler.py   (its sequential/--jobs orchestration, retries, summary)
 ├── gameplay_scenarios.py   (manual first-expedition scenarios, #925 — outside CI)
 ├── screenshot_check.py     (GUI-attached debug.captureScreenshot check — see above)
 ├── video_window_check.py   (GUI-attached video/window settings check, #891 — see above)

@@ -80,6 +80,29 @@ prelude = lns
     , "YAML_READS = 0"
     , "local function dk(x, y) return x .. ',' .. y end"
     , "local function desig(w, x, y) return DESIG[w] and DESIG[w][dk(x, y)] end"
+    -- #1854: chop claims key on the FLORA INSTANCE, so the fixture needs
+    -- a stable synthetic instance id per tile (and the reverse map the
+    -- exact-instance verbs read). Deliberately page-INDEPENDENT, so the
+    -- "same coordinate on two pages is two distinct claims" example
+    -- still tests page qualification rather than being handed two
+    -- different ids for free.
+    , "IIDS, IIDTILE, IIDN, DESIG_N = {}, {}, 0, {}"
+    -- A tile normally carries ONE designated plant; DESIG_N[tile] = n
+    -- gives it n, which is what the co-tenant example needs.
+    , "function iidOf(x, y, slot)"
+    , "  local k = dk(x, y) .. '#' .. (slot or 1)"
+    , "  if not IIDS[k] then"
+    , "    IIDN = IIDN + 1; IIDS[k] = IIDN; IIDTILE[IIDN] = { x = x, y = y }"
+    , "  end"
+    , "  return IIDS[k]"
+    , "end"
+    , "function iidsAt(x, y)"
+    , "  local out = {}"
+    , "  for slot = 1, (DESIG_N[dk(x, y)] or 1) do"
+    , "    out[#out + 1] = iidOf(x, y, slot)"
+    , "  end"
+    , "  return out"
+    , "end"
     , "engine = { gameTime = function() return NOW end,"
     , "  logInfo = function() end, logWarn = function() end,"
     , "  logError = function() end, emitEventForUnit = function() end,"
@@ -101,11 +124,24 @@ prelude = lns
     , "  getDigInfoAt = function() return nil, 1.0, 1.0, false end,"
     , "  getFluidAt = function() return nil end,"
     , "  getFloraAt = function() return nil end,"
+    , "  getFloraGrowthAt = function() return nil end,"
+    , "  harvestFloraInstance = function() end,"
     , "  getSurfaceAt = function() return 0 end,"
     , "  harvestFlora = function() end, setVegAt = function() end,"
     , "  plantCropAt = function() end, plantRowCropAt = function() end }"
     , "chop = { getDesignationAt = function(w, x, y)"
-    , "    return desig(w, x, y) and { z = 0 } or nil end,"
+    , "    return desig(w, x, y) and"
+    , "      { z = 0, x = x, y = y, instanceId = iidOf(x, y) } or nil end,"
+    , "  getDesignationForInstance = function(w, i)"
+    , "    local t = IIDTILE[i]"
+    , "    return t and desig(w, t.x, t.y) and"
+    , "      { z = 0, x = t.x, y = t.y, instanceId = i } or nil end,"
+    , "  getDesignationsAt = function(w, x, y)"
+    , "    if not desig(w, x, y) then return nil end"
+    , "    local out = {}"
+    , "    for _, i in ipairs(iidsAt(x, y)) do"
+    , "      out[#out + 1] = { z = 0, x = x, y = y, instanceId = i } end"
+    , "    return out end,"
     , "  nearestDesignation = function() return nil end,"
     , "  cancelDesignation = function() end }"
     , "till = { getDesignationAt = function(w, x, y)"
@@ -175,7 +211,7 @@ prelude = lns
     , "  local s = CORE.ensureState(uid)"
     , "  s.digCandidate = { x = x, y = y, tool = 'shovel' }"
     , "  DIG.digExecute(uid, s, P)"
-    , "  s.chopCandidate = { x = x, y = y }"
+    , "  s.chopCandidate = { x = x, y = y, iid = iidOf(x, y) }"
     , "  CHOP.chopExecute(uid, s, P)"
     , "  s.tillCandidate = { x = x, y = y }"
     , "  AI.till.execute(uid, s, P)"
@@ -192,7 +228,7 @@ prelude = lns
     , "  local out, s = {}, nil"
     , "  s = { digCandidate = { x = x, y = y, tool = 'shovel' } }"
     , "  DIG.digExecute(uid, s, P); out.dig = s.digJob ~= nil"
-    , "  s = { chopCandidate = { x = x, y = y } }"
+    , "  s = { chopCandidate = { x = x, y = y, iid = iidOf(x, y) } }"
     , "  CHOP.chopExecute(uid, s, P); out.chop = s.chopJob ~= nil"
     , "  s = { tillCandidate = { x = x, y = y } }"
     , "  AI.till.execute(uid, s, P); out.till = s.tillJob ~= nil"
@@ -377,6 +413,56 @@ spec = describe "unit AI load reset (#1329)" $ do
             , "assert(b.construct, 'page B construct should be free after abandonClaim')"
             , "assert(not (b.dig or b.chop or b.till or b.plant),"
             , "       'abandonClaim should touch construct only: ' .. names(b))"
+            ]
+    -- #1854: chopJob.iid is stripped at snapshot time, so a job that
+    -- survives a load names only its TILE. A tile can carry several
+    -- designated plants, and re-resolving every restored job to the same
+    -- one would have two acolytes fell one tree together, orphan the
+    -- other's designation, and silently overwrite the loser's claim.
+    it "gives two acolytes whose restored chop jobs share a tile a \
+       \DISTINCT designated plant each" $
+        runsOk $ prelude <> "\n" <> lns
+            [ "NOW = 1000"
+            , "DESIG[PAGE][dk(5, 5)] = true"
+            , "-- Two wood-tagged co-tenants on the one tile."
+            , "DESIG_N[dk(5, 5)] = 2"
+            , "LIVE[7], LIVE[8] = true, true"
+            , "-- Exactly what a load leaves behind: the tile, no id."
+            , "local sA = { chopJob = { x = 5, y = 5 }, chopPhase = 'walking' }"
+            , "local sB = { chopJob = { x = 5, y = 5 }, chopPhase = 'walking' }"
+            , "CHOP.chopExecute(7, sA, P)"
+            , "CHOP.chopExecute(8, sB, P)"
+            , "assert(sA.chopJob and sA.chopJob.iid,"
+            , "       'unit 7 adopted no plant for its restored chop job')"
+            , "assert(sB.chopJob and sB.chopJob.iid,"
+            , "       'unit 8 adopted no plant for its restored chop job')"
+            , "assert(sA.chopJob.iid ~= sB.chopJob.iid,"
+            , "       'both units adopted the same plant: ' .. sA.chopJob.iid)"
+            , "-- And each holds the claim on the plant it adopted, so"
+            , "-- neither can be preempted by the other next tick."
+            , "CHOP.chopExecute(7, sA, P)"
+            , "CHOP.chopExecute(8, sB, P)"
+            , "assert(sA.chopJob and sA.chopJob.iid,"
+            , "       'unit 7 lost its restored chop job to unit 8')"
+            , "assert(sB.chopJob and sB.chopJob.iid,"
+            , "       'unit 8 lost its restored chop job to unit 7')"
+            ]
+    it "drops a restored chop job whose tile no longer designates \
+       \anything this unit may hold" $
+        runsOk $ prelude <> "\n" <> lns
+            [ "NOW = 1000"
+            , "DESIG[PAGE][dk(5, 5)] = true"
+            , "LIVE[7], LIVE[8] = true, true"
+            , "-- One designated plant, two restored jobs: the second has"
+            , "-- nothing left to adopt and must release rather than steal."
+            , "local sA = { chopJob = { x = 5, y = 5 }, chopPhase = 'walking' }"
+            , "local sB = { chopJob = { x = 5, y = 5 }, chopPhase = 'walking' }"
+            , "CHOP.chopExecute(7, sA, P)"
+            , "CHOP.chopExecute(8, sB, P)"
+            , "assert(sA.chopJob and sA.chopJob.iid,"
+            , "       'unit 7 adopted no plant')"
+            , "assert(sB.chopJob == nil,"
+            , "       'unit 8 kept a job on a plant unit 7 holds')"
             ]
     it "re-adopts an engine-side claimed construction job after the\
            \ reset" $

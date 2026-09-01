@@ -468,23 +468,49 @@ spec = describe "Location instance identity" $ do
 
     describe "persistent ranged encounters (#916)" $ do
         let iid = LocationInstanceId 1
-            make seed = expectGeometry
-                (newLocationInstanceWithSeed seed Nothing iid
-                    (ChunkCoord 0 0) encounterDef)
-            rolled seed = leRolledCount .
+            makeAt iid' coord seed = expectGeometry
+                (newLocationInstanceWithSeed seed Nothing iid'
+                    coord encounterDef)
+            make = makeAt iid (ChunkCoord 0 0)
+            rolledAt iid' coord seed = leRolledCount .
                 fromMaybe (error "encounter fixture missing") . liEncounter $
-                    make seed
+                    makeAt iid' coord seed
+            rolled = rolledAt iid (ChunkCoord 0 0)
             seedFor n = fromMaybe (error "encounter outcome fixture missing")
                 (find ((≡ n) . rolled) [0 .. 255])
 
-        it "rolls one stable inclusive 0..3 count from only the page seed \
-           \and stable instance id" $ do
+        it "rolls one inclusive 0..3 count from the page seed and the \
+           \stable instance id, and from nothing else" $ do
             map rolled [0 .. 255] `shouldSatisfy`
                 all (\n → n ≥ 0 ∧ n ≤ 3)
             -- Every authored outcome is reachable; the implementation's
             -- modulo over a stateless 64-bit avalanche is the uniform draw.
             sort (nub (map rolled [0 .. 255])) `shouldBe` [0, 1, 2, 3]
-            map rolled [0 .. 255] `shouldBe` map rolled [0 .. 255]
+            -- The stable instance id IS in the mix. Dropping 'rawId' from
+            -- 'encounterFromDef' would give every location on one page the
+            -- same encounter count, and would satisfy both assertions
+            -- above; sweeping a second id is what notices.
+            map (rolledAt (LocationInstanceId 2) (ChunkCoord 0 0)) [0 .. 255]
+                `shouldNotBe` map rolled [0 .. 255]
+            -- The chunk coord is NOT ("independent of chunk/load order").
+            -- Compared over the whole sweep rather than one draw, because
+            -- a single 0..3 result collides one time in four by chance.
+            map (rolledAt iid (ChunkCoord (-3) 4)) [0 .. 255]
+                `shouldBe` map rolled [0 .. 255]
+            -- A source-level fixed vector for the canonical id (#948
+            -- requirement 8's policy, applied to the neighbouring roll):
+            -- a deliberate change to the avalanche or to the id multiplier
+            -- must update this list rather than pass silently.
+            --
+            -- What it protects: fresh-world regeneration consistency —
+            -- two processes generating one world seed place identical
+            -- encounters. What it is NOT: a save-compatibility contract.
+            -- 'leRolledCount' is computed and stored when the instance is
+            -- allocated, then serialized and restored verbatim, never
+            -- re-derived on load, so no save's contents depend on this
+            -- mapping.
+            map rolled [0 .. 15]
+                `shouldBe` [1, 1, 3, 2, 3, 2, 0, 0, 3, 2, 0, 3, 3, 0, 2, 3]
 
         it "treats a zero roll as internally clear without revealing it \
            \or inventing a clearance event" $ do

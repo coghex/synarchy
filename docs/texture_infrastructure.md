@@ -210,7 +210,7 @@ whose freshness cannot be verified.
 - Runtime horizontal mirroring remains an animation-level declaration. The
   compiler must not silently infer mirroring by deleting asymmetric source rows.
 - Atlas UV selection must compose with render clipping, hit testing, texture
-  handle indirection, and nearest-neighbor filtering.
+  handle indirection, nearest filtering, and isolated linear filtering.
 - Unit sprites remain non-mipmapped unless a later design establishes an
   art-safe sampling policy.
 - A missing, stale, unsupported, or corrupt compiled artifact fails with the unit
@@ -273,10 +273,13 @@ Atlas rows may have different logical frame counts. The compiled index records
 the real count per direction, and transparent row padding is never exposed as an
 animation frame.
 
-### D-6. Retain nearest-neighbor sampling without mipmaps
+### D-6. Honor the player-selected sampler without mipmaps
 
-Unit atlases use nearest-neighbor sampling and no mipmaps in this arc, preserving
-the current pixel-art presentation.
+Gameplay unit atlases follow the player-selected global nearest/linear sampler
+and use no mipmaps. The one-texel extrusion ring around each logical cell keeps
+linear footprints inside that cell; nearest output remains pixel-identical to
+the original per-frame presentation. The preview browser continues to force the
+same global sampler to nearest for its session.
 
 ### D-7. Require restart-to-reload
 

@@ -166,7 +166,7 @@ bareDef ∷ Text → BuildingDef
 bareDef name = BuildingDef
     { bdName = name, bdDisplayName = name
     , bdCategory = "Power", bdDescription = ""
-    , bdTexture = TextureHandle 0
+    , bdTexture = TextureHandle 0, bdIconTexture = TextureHandle 0
     , bdTileW = 1, bdTileH = 1, bdPlacement = "flat_ground"
     , bdIsStarting = False, bdRace = "acolyte"
     , bdSpriteAnchor = "diamond_bottom", bdBuildWork = 0

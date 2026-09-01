@@ -897,7 +897,8 @@ jobs:
       # hold between OS processes cannot be proved by threads. Still
       # engine-free and GPU-free: no probe is ever executed.
       # test_probe_resource_lock is #1436's cross-process reader/writer
-      # lock — the half run_probes' in-process ledger cannot provide —
+      # lock — the half probe_runner_resources' in-process ledger cannot
+      # provide —
       # proved with separate interpreters and one SIGKILLed holder,
       # because a lock that has to hold between OS processes cannot be
       # proved by threads either. test_deflake is the /deflake

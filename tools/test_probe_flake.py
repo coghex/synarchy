@@ -6,7 +6,7 @@ synthetic script in a throwaway tree that writes a protocol event stream
 and exits, so nothing boots Vulkan, generates a world, or runs a
 registered probe. The real `tools/probe_protocol.py`,
 `tools/probe_flake.py` and `tools/probe_census.py` are imported and
-driven — with `run_probes.REPO_ROOT`/`PROBES`, `ci_probes.CI_ELIGIBLE`,
+driven — with `probe_engine.REPO_ROOT`/`PROBES`, `ci_probes.CI_ELIGIBLE`,
 `probe_flake.PROTOCOL_PROBES` and `probe_flake.LEASE_ROOT` pointed at
 the temp tree — so this exercises the shipped code paths rather than a
 copy. `LEASE_ROOT` is the one deliberate redirection the module allows:
@@ -52,7 +52,9 @@ import ci_probes  # type: ignore  # noqa: E402
 import probe_census  # type: ignore  # noqa: E402
 import probe_flake  # type: ignore  # noqa: E402
 import probe_protocol  # type: ignore  # noqa: E402
-import run_probes  # type: ignore  # noqa: E402
+import probe_engine  # type: ignore  # noqa: E402
+import probe_runner_lifecycle  # type: ignore  # noqa: E402
+import probe_runner_registry  # type: ignore  # noqa: E402
 
 FAILURES: list[str] = []
 SKIPS: list[str] = []
@@ -252,14 +254,14 @@ class SyntheticTree:
 
     def __enter__(self):
         self._saved = {
-            "REPO_ROOT": run_probes.REPO_ROOT,
-            "PROBES": run_probes.PROBES,
+            "REPO_ROOT": probe_engine.REPO_ROOT,
+            "PROBES": probe_runner_registry.PROBES,
             "CI_ELIGIBLE": ci_probes.CI_ELIGIBLE,
             "PROTOCOL_PROBES": probe_flake.PROTOCOL_PROBES,
             "LEASE_ROOT": probe_flake.LEASE_ROOT,
         }
-        run_probes.REPO_ROOT = str(self.root)
-        run_probes.PROBES = self.probes
+        probe_engine.REPO_ROOT = str(self.root)
+        probe_runner_registry.PROBES = self.probes
         ci_probes.CI_ELIGIBLE = set()
         probe_flake.PROTOCOL_PROBES = {
             key: probe_protocol.PROTOCOL_VERSION for key in self.keys}
@@ -272,8 +274,8 @@ class SyntheticTree:
         return self
 
     def __exit__(self, *exc):
-        run_probes.REPO_ROOT = self._saved["REPO_ROOT"]
-        run_probes.PROBES = self._saved["PROBES"]
+        probe_engine.REPO_ROOT = self._saved["REPO_ROOT"]
+        probe_runner_registry.PROBES = self._saved["PROBES"]
         ci_probes.CI_ELIGIBLE = self._saved["CI_ELIGIBLE"]
         probe_flake.PROTOCOL_PROBES = self._saved["PROTOCOL_PROBES"]
         probe_flake.LEASE_ROOT = self._saved["LEASE_ROOT"]
@@ -657,7 +659,7 @@ def test_descriptor_mismatch_rejection() -> None:
         impostor.write_text(
             SYNTHETIC_PROBE.format(tools=TOOLS_DIR, key="somethingelse"),
             encoding="utf-8")
-        run_probes.PROBES = tree.probes + [
+        probe_runner_registry.PROBES = tree.probes + [
             ("impostor", "impostor_probe.py", "synthetic"),
             ("v2probe", "v2_probe.py", "synthetic"),
             ("noflag", "noflag_probe.py", "synthetic")]
@@ -1027,8 +1029,8 @@ def test_measure_leases_the_probes_whole_declared_span() -> None:
     print("\n-- measure leases the DECLARED span, and only lets go after the "
           "reap --")
     with SyntheticTree() as tree:
-        saved_spans = run_probes.PROBE_PORT_SPANS
-        real_run_one = run_probes.run_one
+        saved_spans = probe_runner_registry.PROBE_PORT_SPANS
+        real_run_one = probe_runner_lifecycle.run_one
         seen: dict[str, object] = {}
 
         def spy(script, port, timeout, groups, **kwargs):
@@ -1041,13 +1043,13 @@ def test_measure_leases_the_probes_whole_declared_span() -> None:
             seen["held"] = _held_ports(port, 3)
             return real_run_one(script, port, timeout, groups, **kwargs)
 
-        run_probes.PROBE_PORT_SPANS = {"synthetic": 2}
-        run_probes.run_one = spy
+        probe_runner_registry.PROBE_PORT_SPANS = {"synthetic": 2}
+        probe_runner_lifecycle.run_one = spy
         try:
             measurement = run_synthetic(tree, "pass", runs=1)
         finally:
-            run_probes.run_one = real_run_one
-            run_probes.PROBE_PORT_SPANS = saved_spans
+            probe_runner_lifecycle.run_one = real_run_one
+            probe_runner_registry.PROBE_PORT_SPANS = saved_spans
 
         base = seen.get("base")
         expect(isinstance(base, int) and base is not None,
@@ -1615,7 +1617,7 @@ def test_artifacts() -> None:
 
         expect_raises(probe_flake.Rejection,
                       lambda: probe_flake.check_artifact_root(
-                          Path(run_probes.REPO_ROOT) / "artifacts"),
+                          Path(probe_engine.REPO_ROOT) / "artifacts"),
                       "an artifact root inside a working tree is refused",
                       "inside the working tree")
 
@@ -1913,24 +1915,24 @@ def test_manifest_fixture() -> None:
 def test_manifest_real_registry() -> None:
     print("\n-- census manifest (real registry, 86 probes) --")
     manifest = probe_census.build_manifest()
-    expect(len(manifest["probes"]) == len(run_probes.PROBES),
-           f"the manifest lists all {len(run_probes.PROBES)} registered probes")
-    expect(len({e["key"] for e in manifest["probes"]}) == len(run_probes.PROBES),
+    expect(len(manifest["probes"]) == len(probe_runner_registry.PROBES),
+           f"the manifest lists all {len(probe_runner_registry.PROBES)} registered probes")
+    expect(len({e["key"] for e in manifest["probes"]}) == len(probe_runner_registry.PROBES),
            "each registered probe appears exactly once")
     expect(probe_census.validate_manifest(manifest) == [],
-           "the built manifest agrees with run_probes.PROBES and ci_probes.py")
+           "the built manifest agrees with probe_runner_registry.PROBES and ci_probes.py")
     ci = sum(1 for e in manifest["probes"]
              if e["classification"] == "ci-eligible")
     expect(ci == len(ci_probes.CI_ELIGIBLE),
            f"{ci} entries are CI-eligible, matching tools/ci_probes.py")
     migrated = [e["key"] for e in manifest["probes"]
                 if e["protocol"] != "legacy"]
-    expect(migrated == ["circadian", "concussion_revive", "disarm",
+    expect(migrated == ["blood_impact", "circadian", "concussion_revive", "disarm",
                         "lua_strict_msg", "position_hold",
                         "remote_warning_page_guard", "role",
                         "state_of_mind", "text_encoding", "thermo_altitude"],
-           f"the ten migrated probes are probe-result/v1 probes in "
-           f"run_probes.PROBES order (got {migrated})")
+           f"the eleven migrated probes are probe-result/v1 probes in "
+           f"probe_runner_registry.PROBES order (got {migrated})")
 
     # The REAL docs-wip manifest, only when one is resolvable.
     try:
@@ -1948,7 +1950,7 @@ def test_manifest_real_registry() -> None:
 
 
 # ==========================================================================
-# Five-probe replenishment batch
+# Migrated probe standalone/protocol compatibility
 # ==========================================================================
 def _migration_descriptor(script: str, probe: str, expected_ids: tuple[str, ...]):
     repo_root = Path(__file__).resolve().parent.parent
@@ -1967,6 +1969,125 @@ def _migration_descriptor(script: str, probe: str, expected_ids: tuple[str, ...]
            f"{probe} declares its stable checks in execution order "
            f"(got {descriptor.ids})")
     return descriptor
+
+
+def _drive_blood_impact(rep, *, high_opacity=0.9, setup_failure=False):
+    import blood_impact_probe as blood_impact  # type: ignore
+
+    launches = {}
+
+    class FakeProc:
+        pass
+
+    def fake_boot(port, log=None, args=None, **_kw):
+        launches["engine"] = {"port": port, "log": log,
+                              "args": list(args or [])}
+        return FakeProc()
+
+    def fake_reset():
+        if setup_failure:
+            raise blood_impact.ProbeSetupError(
+                "blood.clear() returned synthetic setup failure")
+        return {"cleared": True, "remaining_count": 0}
+
+    def fake_blood(kind, severity, _label, _rep, styles=None):
+        fake_reset()
+        opacity = (high_opacity if kind == "stab" and severity > 0.5
+                   else 0.2)
+        return {
+            "woundKind": kind,
+            "severity": ("major" if kind in ("arterial", "severed")
+                         else "moderate"),
+            "opacity": opacity,
+            "style": (styles or ("pool",))[0],
+        }
+
+    def fake_no_blood(kind, severity, _label, _rep):
+        fake_reset()
+        return {"kind": kind, "severity": severity, "decal_count": 0}
+
+    saved = (blood_impact.boot, blood_impact.quit_engine,
+             blood_impact.bootstrap_defs, blood_impact.init_arena,
+             blood_impact.expect_blood, blood_impact.expect_no_blood,
+             blood_impact.reset_blood)
+    blood_impact.boot = fake_boot
+    blood_impact.quit_engine = lambda *a, **k: None
+    blood_impact.bootstrap_defs = lambda _port: None
+    blood_impact.init_arena = lambda _port: None
+    blood_impact.expect_blood = fake_blood
+    blood_impact.expect_no_blood = fake_no_blood
+    blood_impact.reset_blood = fake_reset
+    try:
+        rc = blood_impact._run(9010, rep)
+    finally:
+        (blood_impact.boot, blood_impact.quit_engine,
+         blood_impact.bootstrap_defs, blood_impact.init_arena,
+         blood_impact.expect_blood, blood_impact.expect_no_blood,
+         blood_impact.reset_blood) = saved
+    return rc, launches
+
+
+def test_blood_impact_standalone() -> None:
+    ids = ("stab_style", "stab_severity_scaling", "slash_style",
+           "ordinary_blunt_dry", "ordinary_fracture_concussion_dry",
+           "catastrophic_blunt_family_blood",
+           "arterial_severed_volume_floor", "internal_dry",
+           "clear_removes_decals")
+    if _migration_descriptor("blood_impact_probe.py", "blood_impact",
+                             ids) is None:
+        return
+
+    import io
+    import blood_impact_probe as blood_impact  # type: ignore
+
+    standalone = io.StringIO()
+    rc, launches = _drive_blood_impact(
+        probe_protocol.Reporter(blood_impact.DESCRIPTOR, stream=standalone))
+    expect(rc == 0, f"blood_impact standalone exits 0 (got {rc})")
+    expect(standalone.getvalue().count("[PASS]") == len(ids),
+           "blood_impact standalone prints one human PASS line per stable check")
+    expect(launches["engine"]["args"] == [],
+           "blood_impact standalone passes no RTS override")
+    expect(launches["engine"]["log"] == blood_impact.LOG,
+           "blood_impact standalone preserves its historical engine-log path")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        events = Path(tmp) / "events.jsonl"
+        stream = io.StringIO()
+        rep = probe_protocol.Reporter(
+            blood_impact.DESCRIPTOR, events_path=str(events),
+            engine_log_dir=tmp, rts_caps=4, stream=stream)
+        rc, launches = _drive_blood_impact(rep, high_opacity=0.1)
+        rep.close()
+        _seen, outcomes = probe_protocol.parse_event_stream(
+            events.read_text(encoding="utf-8"), blood_impact.DESCRIPTOR)
+        expect(rc == 1
+               and outcomes["stab_style"] == "PASS"
+               and outcomes["stab_severity_scaling"] == "FAIL"
+               and all(outcomes[cid] == "MISSING" for cid in ids[2:]),
+               f"blood_impact attributes severity scaling and leaves only "
+               f"unreached successors missing (got rc={rc}, {outcomes})")
+        expect(stream.getvalue() == "",
+               "blood_impact protocol mode prints nothing to stdout")
+        expect(launches["engine"]["args"] == ["+RTS", "-N4", "-RTS"]
+               and launches["engine"]["log"]
+               == os.path.join(tmp, blood_impact.LOG_NAME),
+               "blood_impact uses harness RTS and isolated engine log")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        events = Path(tmp) / "events.jsonl"
+        rep = probe_protocol.Reporter(
+            blood_impact.DESCRIPTOR, events_path=str(events),
+            engine_log_dir=tmp, rts_caps=4)
+        rc, _launches = _drive_blood_impact(rep, setup_failure=True)
+        rep.close()
+        seen, outcomes = probe_protocol.parse_event_stream(
+            events.read_text(encoding="utf-8"), blood_impact.DESCRIPTOR)
+        expect(rc == 2 and all(value == "MISSING" for value in outcomes.values()),
+               "blood_impact preserves exit 2 and leaves checks missing on setup abort")
+        expect(any(isinstance(event, probe_protocol.DiagnosticEvent)
+                   and event.level == "WARN" for event in seen),
+               "blood_impact records a setup abort as a protocol diagnostic")
 
 
 def _drive_concussion_revive(rep, *, second_pass=True):
@@ -3333,9 +3454,9 @@ def test_thermo_altitude_standalone() -> None:
 
 def test_run_one_defaults() -> None:
     print("\n-- run_one's extended interface --")
-    expect(run_probes.probe_protocol_env() == {},
+    expect(probe_runner_lifecycle.probe_protocol_env() == {},
            "no protocol wiring produces no environment override")
-    env = run_probes.probe_protocol_env(
+    env = probe_runner_lifecycle.probe_protocol_env(
         event_path="/e", artifact_dir="/a", engine_log_dir="/l", rts_caps=4)
     expect(env == {probe_protocol.ENV_EVENTS: "/e",
                    probe_protocol.ENV_ARTIFACT_DIR: "/a",
@@ -3356,11 +3477,11 @@ def test_run_one_defaults() -> None:
                 import probe_protocol
                 print(repr(os.environ.get(probe_protocol.ENV_EVENTS)))
             '''), encoding="utf-8")
-            _ok, _t, _e, out = run_probes.run_one("echoenv_probe.py", None, 60.0)
+            _ok, _t, _e, out = probe_runner_lifecycle.run_one("echoenv_probe.py", None, 60.0)
             expect(out.strip() == "None",
                    f"an inherited SYNARCHY_PROBE_EVENTS is stripped from an "
                    f"ordinary run (got {out.strip()!r})")
-            _ok, _t, _e, out = run_probes.run_one(
+            _ok, _t, _e, out = probe_runner_lifecycle.run_one(
                 "echoenv_probe.py", None, 60.0, event_path="/tmp/wanted.jsonl")
             expect(out.strip() == "'/tmp/wanted.jsonl'",
                    f"the harness's own event path wins (got {out.strip()!r})")
@@ -3371,7 +3492,7 @@ def test_run_one_defaults() -> None:
             os.environ[probe_protocol.ENV_EVENTS] = saved
 
     import inspect
-    signature = inspect.signature(run_probes.run_one)
+    signature = inspect.signature(probe_runner_lifecycle.run_one)
     positional = [n for n, p in signature.parameters.items()
                   if p.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD]
     expect(positional == ["script", "port", "timeout", "groups"],
@@ -3395,7 +3516,8 @@ def main() -> int:
                  test_concurrency_accounting, test_artifacts,
                  test_no_tmpdir_default, test_result_document,
                  test_exit_codes, test_render, test_manifest_fixture,
-                 test_manifest_real_registry, test_role_standalone,
+                 test_manifest_real_registry, test_blood_impact_standalone,
+                 test_role_standalone,
                  test_circadian_standalone,
                  test_concussion_revive_standalone,
                  test_disarm_standalone,

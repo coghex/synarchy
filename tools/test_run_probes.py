@@ -74,6 +74,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import probe_engine  # type: ignore
 import probe_resource_lock  # type: ignore
+import probe_runner_diagnostics  # type: ignore
+import probe_runner_lifecycle  # type: ignore
+import probe_runner_registry  # type: ignore
+import probe_runner_resources  # type: ignore
+import probe_runner_scheduler  # type: ignore
 import run_probes  # type: ignore
 
 TOOLS_DIR = str(Path(__file__).resolve().parent)
@@ -245,8 +250,13 @@ _UNIVERSAL_PROBE_SUBJECT = r"(?:all|every)\s+(?:the\s+)?(?:registered\s+)?probes
 # English phrase does. It has to be matched CASE-SENSITIVELY: `PROBES` is
 # the identifier, and case-insensitively it is the word "probes", which this
 # section says twenty times about individual probes.
+# The module qualifier is part of the OBJECT, not of the words between a
+# quantity and it: the gap the inverted branch below walks forbids `.`, so
+# an unlisted qualifier would put a dot in that gap and silently stop the
+# rule from firing. `probe_runner_registry` is the owner since #2074;
+# `run_probes` is kept because older prose still spells it that way.
 _REGISTRY_OBJECT = (
-    r"(?:run_probes\.)?PROBES"
+    r"(?:(?:run_probes|probe_runner_registry)\.)?PROBES"
     r"(?:\s+(?:list|dict|table|map|registry|roster))?")
 
 # "~90" has no word boundary before the tilde, so the two spellings need
@@ -637,7 +647,7 @@ def probe_src(root: Path, name: str, *, exit_code: int = 0,
 
     ``progress`` is a sequence of ``(kind, identity, detail)`` triples the
     probe emits, in order, BEFORE its ``tail_lines`` -- through the real
-    ``run_probes.ProgressEmitter``, never a hand-copied string, so these
+    ``probe_runner_diagnostics.ProgressEmitter``, never a hand-copied string, so these
     cases exercise the shipped convention on both sides (#1768). Emitting
     them first is what lets a case bury them under more than ``--tail``
     ordinary lines and still require the failure presentation to surface
@@ -645,7 +655,7 @@ def probe_src(root: Path, name: str, *, exit_code: int = 0,
 
     ``failures`` is the same for #1982's durable failure records --
     ``(kind, identity, detail)`` triples emitted through the real
-    ``run_probes.FailureEmitter``. They are emitted FLUSHED, before the
+    ``probe_runner_diagnostics.FailureEmitter``. They are emitted FLUSHED, before the
     block-buffered ``tail_lines``, which is exactly the displacement the
     real probes suffer: their ``FAIL:`` lines go to an unbuffered stderr
     the runner merges into a piped, block-buffered stdout, so they
@@ -758,8 +768,8 @@ def probe_src(root: Path, name: str, *, exit_code: int = 0,
         # the consumer drift apart without a test noticing.
         lines += [
             f"sys.path.insert(0, {str(Path(__file__).resolve().parent)!r})",
-            "import run_probes as _run_probes",
-            "_progress = _run_probes.ProgressEmitter()",
+            "import probe_runner_diagnostics as _diag",
+            "_progress = _diag.ProgressEmitter()",
         ]
         for kind, identity, detail in progress:
             lines.append(
@@ -770,8 +780,8 @@ def probe_src(root: Path, name: str, *, exit_code: int = 0,
         # without a test noticing (#1982).
         lines += [
             f"sys.path.insert(0, {str(Path(__file__).resolve().parent)!r})",
-            "import run_probes as _run_probes",
-            "_failure = _run_probes.FailureEmitter('synthetic')",
+            "import probe_runner_diagnostics as _diag",
+            "_failure = _diag.FailureEmitter('synthetic')",
         ]
         for kind, identity, detail in failures:
             lines.append(
@@ -977,7 +987,7 @@ def wait_file(path: Path, seconds: float = 60.0) -> bool:
 class PreflightRecorder:
     """A deterministic stand-in for the preflight's subprocess entry point.
 
-    `run_probes.engine_preflight` makes the ONE Cabal contact an aggregate
+    `probe_runner_resources.engine_preflight` makes the ONE Cabal contact an aggregate
     run is allowed (#1570): a freshness `cabal build` and then a read-only
     `cabal list-bin`. This answers both without a toolchain — the build
     succeeds silently, the query prints the synthetic tree's own
@@ -1056,33 +1066,33 @@ class patched:
         self.timeouts = {} if timeouts is None else dict(timeouts)
 
     def __enter__(self):
-        self._saved = (run_probes.REPO_ROOT, run_probes.PROBES,
-                       run_probes.GROUP_GRACE, run_probes.RESOURCE_NAMESPACE,
-                       run_probes.PROBE_PORT_SPANS,
-                       run_probes.PROBE_TIMEOUT_OVERRIDES,
-                       run_probes.ENGINE_EXECUTABLE,
-                       run_probes.ENGINE_PREFLIGHT_RUNNER)
+        self._saved = (probe_engine.REPO_ROOT, probe_runner_registry.PROBES,
+                       probe_runner_lifecycle.GROUP_GRACE, probe_runner_resources.RESOURCE_NAMESPACE,
+                       probe_runner_registry.PROBE_PORT_SPANS,
+                       probe_runner_registry.PROBE_TIMEOUT_OVERRIDES,
+                       probe_runner_resources.ENGINE_EXECUTABLE,
+                       probe_runner_resources.ENGINE_PREFLIGHT_RUNNER)
         # An operator's own export of the runner's variables must not
         # decide what a case here observes; `main` re-derives all of them.
         self._saved_env = {name: os.environ.pop(name, None)
-                           for name in run_probes.RUNNER_ENV_VARS}
-        run_probes.REPO_ROOT = str(self.tree.root)
-        run_probes.PROBES = list(self.tree.probes)
-        run_probes.GROUP_GRACE = self.grace
-        run_probes.RESOURCE_NAMESPACE = self.namespace
-        run_probes.PROBE_PORT_SPANS = self.spans
-        run_probes.PROBE_TIMEOUT_OVERRIDES = self.timeouts
-        run_probes.ENGINE_EXECUTABLE = None
-        run_probes.ENGINE_PREFLIGHT_RUNNER = self.preflight
+                           for name in probe_runner_resources.RUNNER_ENV_VARS}
+        probe_engine.REPO_ROOT = str(self.tree.root)
+        probe_runner_registry.PROBES = list(self.tree.probes)
+        probe_runner_lifecycle.GROUP_GRACE = self.grace
+        probe_runner_resources.RESOURCE_NAMESPACE = self.namespace
+        probe_runner_registry.PROBE_PORT_SPANS = self.spans
+        probe_runner_registry.PROBE_TIMEOUT_OVERRIDES = self.timeouts
+        probe_runner_resources.ENGINE_EXECUTABLE = None
+        probe_runner_resources.ENGINE_PREFLIGHT_RUNNER = self.preflight
         return self
 
     def __exit__(self, *exc):
-        (run_probes.REPO_ROOT, run_probes.PROBES, run_probes.GROUP_GRACE,
-         run_probes.RESOURCE_NAMESPACE,
-         run_probes.PROBE_PORT_SPANS,
-         run_probes.PROBE_TIMEOUT_OVERRIDES,
-         run_probes.ENGINE_EXECUTABLE,
-         run_probes.ENGINE_PREFLIGHT_RUNNER) = self._saved
+        (probe_engine.REPO_ROOT, probe_runner_registry.PROBES, probe_runner_lifecycle.GROUP_GRACE,
+         probe_runner_resources.RESOURCE_NAMESPACE,
+         probe_runner_registry.PROBE_PORT_SPANS,
+         probe_runner_registry.PROBE_TIMEOUT_OVERRIDES,
+         probe_runner_resources.ENGINE_EXECUTABLE,
+         probe_runner_resources.ENGINE_PREFLIGHT_RUNNER) = self._saved
         for name, value in self._saved_env.items():
             if value is None:
                 os.environ.pop(name, None)
@@ -1125,7 +1135,7 @@ def test_success_reaps_the_engine() -> None:
     try:
         script = tree.add("success", exit_code=0)
         with patched(tree):
-            ok, timed_out, elapsed, out = run_probes.run_one(script, None, 120.0)
+            ok, timed_out, elapsed, out = probe_runner_lifecycle.run_one(script, None, 120.0)
         pid = tree.engine_pid("success")
         expect(ok is True, "a zero-exit probe is still reported ok")
         expect(timed_out is False, "a zero-exit probe is not reported as timed out")
@@ -1142,7 +1152,7 @@ def test_failure_reaps_the_engine_and_keeps_the_tail() -> None:
     try:
         script = tree.add("failure", exit_code=1, tail_lines=30)
         with patched(tree):
-            ok, timed_out, elapsed, out = run_probes.run_one(script, None, 120.0)
+            ok, timed_out, elapsed, out = probe_runner_lifecycle.run_one(script, None, 120.0)
         pid = tree.engine_pid("failure")
         expect(ok is False, "a nonzero-exit probe is still reported as failed")
         expect(timed_out is False, "a plain failure is not reported as a timeout")
@@ -1160,7 +1170,7 @@ def test_clean_probe_is_unaffected() -> None:
     try:
         script = tree.add("clean", exit_code=0, tail_lines=3, descendant=False)
         with patched(tree):
-            ok, timed_out, elapsed, out = run_probes.run_one(script, None, 120.0)
+            ok, timed_out, elapsed, out = probe_runner_lifecycle.run_one(script, None, 120.0)
         expect(ok is True, "a probe that tore down its own engine still passes")
         expect("diagnostic line 2" in out, "its output is untouched")
         # The grace is only ever spent on a group that is still alive, so a
@@ -1180,7 +1190,7 @@ def test_timeout_escalates_to_sigkill() -> None:
         script = tree.add("stuck", hang=True, ignore_term=True,
                           engine_ignores_term=True, exit_code=0)
         with patched(tree):
-            ok, timed_out, elapsed, out = run_probes.run_one(script, None, 3.0)
+            ok, timed_out, elapsed, out = probe_runner_lifecycle.run_one(script, None, 3.0)
         pid = tree.engine_pid("stuck")
         expect(timed_out is True, "the hung probe is reported as a timeout")
         expect(ok is False, "a timed-out probe is not reported as ok")
@@ -1199,7 +1209,7 @@ def test_stubborn_engine_is_killed_without_charging_the_probe() -> None:
         # escalating past the SIGTERM it ignores.
         script = tree.add("stubborn", exit_code=0, engine_ignores_term=True)
         with patched(tree):
-            ok, timed_out, elapsed, out = run_probes.run_one(script, None, 120.0)
+            ok, timed_out, elapsed, out = probe_runner_lifecycle.run_one(script, None, 120.0)
         pid = tree.engine_pid("stubborn")
         expect(ok is True, "the probe itself is still reported as passing")
         expect(timed_out is False, "and not as a timeout")
@@ -1223,10 +1233,10 @@ def test_a_stopping_runner_launches_no_further_probe() -> None:
     tree = Tree()
     try:
         script = tree.add("never_run", exit_code=0)
-        groups = run_probes.ProbeGroups()
+        groups = probe_runner_lifecycle.ProbeGroups()
         groups.stopping.set()
         with patched(tree):
-            ok, timed_out, elapsed, out = run_probes.run_one(
+            ok, timed_out, elapsed, out = probe_runner_lifecycle.run_one(
                 script, 9401, 120.0, groups)
         expect(tree.started("never_run") is False,
                "no probe process was spawned at all")
@@ -1254,14 +1264,14 @@ def test_reap_group_on_a_dead_group_is_a_noop() -> None:
     proc.wait()
     started = time.monotonic()
     try:
-        run_probes.reap_group(proc.pid, grace=TEST_GRACE)
+        probe_runner_lifecycle.reap_group(proc.pid, grace=TEST_GRACE)
         raised = None
     except Exception as exc:  # pragma: no cover - the assertion reports it
         raised = exc
     expect(raised is None, f"reap_group on an empty group raises nothing (got {raised!r})")
     expect(time.monotonic() - started < TEST_GRACE,
            "and returns immediately rather than spending the grace period")
-    expect(run_probes._group_alive(proc.pid) is False,
+    expect(probe_runner_lifecycle._group_alive(proc.pid) is False,
            "_group_alive reports an empty group as gone")
 
 
@@ -1349,22 +1359,22 @@ def test_aggregate_exit_codes_unchanged() -> None:
 
 def test_timeout_overrides_are_validated_registry_data() -> None:
     print("\n-- per-probe timeout defaults are validated registry data")
-    expect(run_probes.timeout_override_problems() == [],
+    expect(probe_runner_registry.timeout_override_problems() == [],
            "the shipped timeout declarations are valid")
-    expect(run_probes.effective_timeout("save_compat_migration") == 3600.0,
+    expect(probe_runner_registry.effective_timeout("save_compat_migration") == 3600.0,
            "save_compat_migration receives its declared 3600s default")
-    expect(run_probes.effective_timeout("movement")
-           == run_probes.DEFAULT_TIMEOUT,
+    expect(probe_runner_registry.effective_timeout("movement")
+           == probe_runner_registry.DEFAULT_TIMEOUT,
            "an ordinary registered probe keeps the shared default")
-    expect(run_probes.effective_timeout("save_compat_migration", 17.0) == 17.0,
+    expect(probe_runner_registry.effective_timeout("save_compat_migration", 17.0) == 17.0,
            "an explicit CLI value wins over the key-specific default")
 
-    unknown = run_probes.timeout_override_problems(
+    unknown = probe_runner_registry.timeout_override_problems(
         overrides={"not_registered": 1.0})
     expect(any("unknown probe key" in problem for problem in unknown),
            f"an unknown declaration is rejected ({unknown})")
     for bad in (0, -1, float("inf"), float("nan"), True, "900"):
-        problems = run_probes.timeout_override_problems(
+        problems = probe_runner_registry.timeout_override_problems(
             overrides={"movement": bad})
         expect(any("finite and positive" in problem for problem in problems),
                f"an unusable timeout {bad!r} is rejected ({problems})")
@@ -1431,7 +1441,7 @@ def test_parallel_retry_reuses_the_key_specific_timeout() -> None:
 # --------------------------------------------------------------------------
 # Parallel scheduling honours the reader/writer resource model (#1322, #1444)
 #
-# These drive the SHIPPED `run_probes.EXCLUSIVE_RESOURCES` and
+# These drive the SHIPPED `probe_runner_resources.EXCLUSIVE_RESOURCES` and
 # `IMPLICIT_SHARED_RESOURCES` -- only `PROBES` and `REPO_ROOT` are redirected
 # at the synthetic tree, and the synthetic probes are deliberately named
 # `config_migration` and `config_state` so the real declaration is what
@@ -1625,35 +1635,35 @@ def test_conflict_is_released_after_a_timeout() -> None:
 
 def test_exclusive_resource_declaration_is_data_about_real_probes() -> None:
     print("\n-- the shipped EXCLUSIVE_RESOURCES table names registered probes")
-    known = {p[0] for p in run_probes.PROBES}
-    unknown = sorted(k for k in run_probes.EXCLUSIVE_RESOURCES if k not in known)
+    known = {p[0] for p in probe_runner_registry.PROBES}
+    unknown = sorted(k for k in probe_runner_resources.EXCLUSIVE_RESOURCES if k not in known)
     expect(not unknown,
            f"every declared key names a registered probe (unknown: {unknown})")
-    empty = sorted(k for k, v in run_probes.EXCLUSIVE_RESOURCES.items() if not v)
+    empty = sorted(k for k, v in probe_runner_resources.EXCLUSIVE_RESOURCES.items() if not v)
     expect(not empty,
            f"and every declaration names at least one resource (empty: {empty})")
-    both = (run_probes.exclusive_resources("config_migration")
-            & run_probes.exclusive_resources("config_state"))
+    both = (probe_runner_resources.exclusive_resources("config_migration")
+            & probe_runner_resources.exclusive_resources("config_state"))
     expect(bool(both),
            f"the two config probes still declare an intersecting resource "
            f"(shared: {sorted(both)})")
-    expect(not run_probes.exclusive_resources("combat_anim"),
+    expect(not probe_runner_resources.exclusive_resources("combat_anim"),
            "an undeclared probe needs nothing exclusively")
 
 
 def test_every_probe_declares_what_an_exclusive_holder_takes() -> None:
     print("\n-- the shipped declaration serializes EVERY exclusive holder "
           "against the whole registry (#1444, #1570)")
-    expect(bool(run_probes.IMPLICIT_SHARED_RESOURCES),
+    expect(bool(probe_runner_resources.IMPLICIT_SHARED_RESOURCES),
            "there is an implicit shared interest at all "
-           f"(got {run_probes.IMPLICIT_SHARED_RESOURCES!r})")
-    declared = set(run_probes.EXCLUSIVE_RESOURCES)
+           f"(got {probe_runner_resources.IMPLICIT_SHARED_RESOURCES!r})")
+    declared = set(probe_runner_resources.EXCLUSIVE_RESOURCES)
     config_probes = {"config_migration", "config_state"}
     expect(config_probes <= declared,
            f"both config probes are still exclusive holders (#1322/#1444) "
            f"(declared: {sorted(declared)})")
     for key in sorted(config_probes):
-        expect("repo-config" in run_probes.exclusive_resources(key),
+        expect("repo-config" in probe_runner_resources.exclusive_resources(key),
                f"{key} still takes repo-config exclusively")
     # The three probes that still drive Cabal themselves -- a `cabal repl`
     # through persistence_snapshot / save_compat_audit, which is NOT an
@@ -1664,13 +1674,13 @@ def test_every_probe_declares_what_an_exclusive_holder_takes() -> None:
            f"every GHCi consumer is an exclusive holder too "
            f"(missing: {sorted(ghci - declared)})")
     for key in sorted(ghci):
-        expect("cabal-build" in run_probes.exclusive_resources(key),
+        expect("cabal-build" in probe_runner_resources.exclusive_resources(key),
                f"{key} takes the shared Cabal build state exclusively")
     for key in sorted(declared):
         # An interest is one or the other, never both, or a release would
         # drop the exclusive half and leave the shared count behind.
-        overlap = (run_probes.exclusive_resources(key)
-                   & run_probes.shared_resources(key))
+        overlap = (probe_runner_resources.exclusive_resources(key)
+                   & probe_runner_resources.shared_resources(key))
         expect(not overlap,
                f"{key} holds no resource in both interests "
                f"(both: {sorted(overlap)})")
@@ -1681,12 +1691,12 @@ def test_every_probe_declares_what_an_exclusive_holder_takes() -> None:
     # exclusive holders of one resource exclude each other too, which is
     # how the three GHCi consumers stay off each other's `cabal repl`.
     for key in sorted(declared):
-        taken = run_probes.exclusive_resources(key)
+        taken = probe_runner_resources.exclusive_resources(key)
         unguarded = sorted(
-            other for other, _, _ in run_probes.PROBES
+            other for other, _, _ in probe_runner_registry.PROBES
             if other != key
-            and not taken <= (run_probes.shared_resources(other)
-                              | run_probes.exclusive_resources(other)))
+            and not taken <= (probe_runner_resources.shared_resources(other)
+                              | probe_runner_resources.exclusive_resources(other)))
         expect(not unguarded,
                f"every other registered probe declares an interest in "
                f"everything {key} takes, so none can be scheduled beside it "
@@ -1834,7 +1844,7 @@ def test_gui_port_refusal_still_precedes_the_build() -> None:
         with patched(tree, preflight=recorder):
             rc, _out = _main_refusal(
                 tree, ["--only", "alpha", "--exact", "--port",
-                       str(run_probes.GUI_PORT)])
+                       str(probe_runner_registry.GUI_PORT)])
         expect(rc != 0, f"the GUI port is still refused (got {rc})")
         expect(not recorder.calls,
                f"and nothing was built first "
@@ -1898,7 +1908,7 @@ def test_a_direct_run_one_leaves_the_child_on_the_fallback() -> None:
             # (#1913) rather than inheriting one nobody resolved.
             os.environ[probe_engine.ENV_ENGINE_EXE] = str(tree.executable)
             try:
-                ok, _t, _e, _out = run_probes.run_one(script, None, 120.0)
+                ok, _t, _e, _out = probe_runner_lifecycle.run_one(script, None, 120.0)
             finally:
                 os.environ.pop(probe_engine.ENV_ENGINE_EXE, None)
         expect(ok, "the probe still ran")
@@ -1915,7 +1925,7 @@ def test_a_nested_runner_adopts_the_executable_without_rebuilding() -> None:
     try:
         recorder = PreflightRecorder(tree.executable)
         with patched(tree, preflight=recorder):
-            adopted = run_probes.engine_preflight(
+            adopted = probe_runner_resources.engine_preflight(
                 environ={probe_engine.ENV_ENGINE_EXE: str(tree.executable)})
         expect(adopted == str(tree.executable),
                f"the inherited executable is adopted verbatim (got {adopted})")
@@ -1924,7 +1934,7 @@ def test_a_nested_runner_adopts_the_executable_without_rebuilding() -> None:
 
         recorder = PreflightRecorder(tree.executable)
         with patched(tree, preflight=recorder):
-            resolved = run_probes.engine_preflight(environ={})
+            resolved = probe_runner_resources.engine_preflight(environ={})
         expect(resolved == str(tree.executable),
                "and with nothing inherited it resolves one itself")
         expect(len(recorder.calls) == 2,
@@ -1937,9 +1947,9 @@ def test_a_nested_runner_adopts_the_executable_without_rebuilding() -> None:
 def test_an_ancestors_exclusive_hold_is_not_waited_on() -> None:
     print("\n-- a nested runner never waits on its own ancestor's hold")
     namespace = f"selftest{uuid.uuid4().hex[:12]}"
-    env = {run_probes.ENV_HELD_NAMESPACE: namespace,
-           run_probes.ENV_HELD_EXCLUSIVE: "cabal-build"}
-    lock_exclusive, lock_shared = run_probes.cross_process_interests(
+    env = {probe_runner_resources.ENV_HELD_NAMESPACE: namespace,
+           probe_runner_resources.ENV_HELD_EXCLUSIVE: "cabal-build"}
+    lock_exclusive, lock_shared = probe_runner_resources.cross_process_interests(
         "chop", namespace, env)
     expect("cabal-build" not in lock_shared,
            f"an inherited exclusive drops out of a shared request "
@@ -1947,7 +1957,7 @@ def test_an_ancestors_exclusive_hold_is_not_waited_on() -> None:
     expect("repo-config" in lock_shared,
            f"while everything else is still requested "
            f"(got {sorted(lock_shared)})")
-    nested_exclusive, _ = run_probes.cross_process_interests(
+    nested_exclusive, _ = probe_runner_resources.cross_process_interests(
         "save_compat_migration", namespace, env)
     expect(not nested_exclusive,
            f"and out of an exclusive request too "
@@ -1955,14 +1965,14 @@ def test_an_ancestors_exclusive_hold_is_not_waited_on() -> None:
 
     # The in-process ledger keeps the FULL declarations, so a nested sweep
     # still serializes its own probes against each other.
-    expect("cabal-build" in run_probes.exclusive_resources(
+    expect("cabal-build" in probe_runner_resources.exclusive_resources(
                "save_compat_migration"),
            "the declaration itself is untouched")
 
     # A DIFFERENT namespace inherits nothing: a resource name means
     # nothing outside the repository its lock was taken in.
-    foreign = dict(env, **{run_probes.ENV_HELD_NAMESPACE: "somewhere-else"})
-    _fx, foreign_shared = run_probes.cross_process_interests(
+    foreign = dict(env, **{probe_runner_resources.ENV_HELD_NAMESPACE: "somewhere-else"})
+    _fx, foreign_shared = probe_runner_resources.cross_process_interests(
         "chop", namespace, foreign)
     expect("cabal-build" in foreign_shared,
            f"a hold from another namespace is ignored "
@@ -2038,10 +2048,10 @@ def test_the_preflight_build_excludes_a_foreign_runner() -> None:
             # Asked from INSIDE the build, which is the only instant that
             # answers the question the concern is about.
             observed.append(foreign_interest(namespace,
-                                              run_probes.BUILD_RESOURCE,
+                                              probe_runner_resources.BUILD_RESOURCE,
                                               "shared"))
             observed.append(foreign_interest(namespace,
-                                              run_probes.BUILD_RESOURCE,
+                                              probe_runner_resources.BUILD_RESOURCE,
                                               "exclusive"))
             return recorder(argv, cwd=cwd, capture_output=capture_output,
                             text=text)
@@ -2053,7 +2063,7 @@ def test_the_preflight_build_excludes_a_foreign_runner() -> None:
         expect(observed and all(answer == "busy" for answer in observed),
                f"every foreign interest in the build state was refused for "
                f"the whole preflight (got {observed})")
-        expect(foreign_interest(namespace, run_probes.BUILD_RESOURCE,
+        expect(foreign_interest(namespace, probe_runner_resources.BUILD_RESOURCE,
                                  "exclusive") == "free",
                "and the hold is released once the preflight is done, so the "
                "sweep's own probes are never queued behind it")
@@ -2072,14 +2082,14 @@ def test_the_preflight_build_waits_for_a_foreign_runner() -> None:
         resolved: list[str] = []
         failed: list[BaseException] = []
         holder = ForeignHolder(namespace, "exclusive",
-                               run_probes.BUILD_RESOURCE)
+                               probe_runner_resources.BUILD_RESOURCE)
         expect(holder.wait_until_held(), "the foreign runner holds the "
                                           "build state exclusively")
 
         def resolve() -> None:
             try:
                 with patched(tree, namespace=namespace, preflight=recorder):
-                    resolved.append(run_probes.engine_preflight(namespace,
+                    resolved.append(probe_runner_resources.engine_preflight(namespace,
                                                                  environ={}))
             except BaseException as error:      # reported, never swallowed
                 failed.append(error)
@@ -2118,14 +2128,14 @@ def test_a_nested_preflight_does_not_wait_on_its_ancestor() -> None:
     try:
         recorder = PreflightRecorder(tree.executable)
         ancestor = probe_resource_lock.acquire(
-            exclusive={run_probes.BUILD_RESOURCE}, namespace=namespace,
+            exclusive={probe_runner_resources.BUILD_RESOURCE}, namespace=namespace,
             purpose="selftest ancestor")
         # The environment a nested runner is handed: no executable (so it
         # really does build), but its ancestor's exclusive hold declared.
-        env = {run_probes.ENV_HELD_NAMESPACE: namespace,
-               run_probes.ENV_HELD_EXCLUSIVE: run_probes.BUILD_RESOURCE}
+        env = {probe_runner_resources.ENV_HELD_NAMESPACE: namespace,
+               probe_runner_resources.ENV_HELD_EXCLUSIVE: probe_runner_resources.BUILD_RESOURCE}
         with patched(tree, namespace=namespace, preflight=recorder):
-            resolved = run_probes.engine_preflight(namespace, environ=env)
+            resolved = probe_runner_resources.engine_preflight(namespace, environ=env)
         expect(resolved == str(tree.executable),
                f"it resolved without waiting on its ancestor (got {resolved})")
         expect(len(recorder.calls) == 2,
@@ -2140,14 +2150,14 @@ def test_a_nested_preflight_does_not_wait_on_its_ancestor() -> None:
 def test_the_hold_environment_names_what_a_probe_holds() -> None:
     print("\n-- a probe is told what its runner holds exclusively for it")
     namespace = "selftest-hold-env"
-    env = run_probes.descendant_hold_env("save_compat_migration", namespace)
-    expect(env.get(run_probes.ENV_HELD_EXCLUSIVE) == "cabal-build",
+    env = probe_runner_resources.descendant_hold_env("save_compat_migration", namespace)
+    expect(env.get(probe_runner_resources.ENV_HELD_EXCLUSIVE) == "cabal-build",
            f"an exclusive holder exports its resource (got {env!r})")
-    expect(env.get(run_probes.ENV_HELD_NAMESPACE) == namespace,
+    expect(env.get(probe_runner_resources.ENV_HELD_NAMESPACE) == namespace,
            f"qualified by the namespace it was taken in (got {env!r})")
-    expect(run_probes.descendant_hold_env("chop", namespace) == {},
+    expect(probe_runner_resources.descendant_hold_env("chop", namespace) == {},
            "a probe holding nothing exclusively exports nothing")
-    expect(run_probes.descendant_hold_env("save_compat_migration", None) == {},
+    expect(probe_runner_resources.descendant_hold_env("save_compat_migration", None) == {},
            "and without a namespace there is nothing to export")
 
 
@@ -2178,7 +2188,7 @@ def registered_probe_sources() -> dict[str, str]:
     """Every registered probe script's source text, keyed by probe key."""
     tools = Path(TOOLS_DIR)
     out = {}
-    for key, script, _ in run_probes.PROBES:
+    for key, script, _ in probe_runner_registry.PROBES:
         path = tools / script
         if path.is_file():
             out[key] = path.read_text(encoding="utf-8")
@@ -2240,7 +2250,7 @@ def test_no_registered_probe_spells_a_cabal_engine_launch() -> None:
 
 def test_resource_ledger_is_a_reader_writer_lock() -> None:
     print("\n-- the ledger grants many readers at once and a writer only alone")
-    ledger = run_probes.ResourceLedger()
+    ledger = probe_runner_resources.ResourceLedger()
     shared, exclusive = {"repo-config"}, {"repo-config"}
     expect(ledger.idle(), "a fresh ledger holds nothing")
     expect(not ledger.blocked(exclusive, set()),
@@ -2352,8 +2362,8 @@ def test_a_foreign_exclusive_holder_makes_the_sweep_wait() -> None:
         # RuntimeError here and took the sweep down.
         tree.add("unrelated_a", dwell=0.2, descendant=False)
         tree.add("unrelated_b", dwell=0.2, descendant=False)
-        saved_poll = run_probes.RESOURCE_WAIT_POLL
-        run_probes.RESOURCE_WAIT_POLL = 0.2
+        saved_poll = probe_runner_resources.RESOURCE_WAIT_POLL
+        probe_runner_resources.RESOURCE_WAIT_POLL = 0.2
         result: dict = {}
 
         def sweep() -> None:
@@ -2371,7 +2381,7 @@ def test_a_foreign_exclusive_holder_makes_the_sweep_wait() -> None:
                                    and not tree.started("unrelated_b"))
         holder.stop()
         thread.join(timeout=90)
-        run_probes.RESOURCE_WAIT_POLL = saved_poll
+        probe_runner_resources.RESOURCE_WAIT_POLL = saved_poll
 
         expect(seen["took_lock"], "the foreign process took the lock")
         expect(seen["still_waiting"],
@@ -2406,8 +2416,8 @@ def test_waiting_for_a_foreign_holder_is_not_charged_to_the_probe() -> None:
     try:
         seen["took_lock"] = holder.wait_until_held()
         tree.add("unrelated_a", dwell=0.2, descendant=False)
-        saved_poll = run_probes.RESOURCE_WAIT_POLL
-        run_probes.RESOURCE_WAIT_POLL = 0.2
+        saved_poll = probe_runner_resources.RESOURCE_WAIT_POLL
+        probe_runner_resources.RESOURCE_WAIT_POLL = 0.2
         result: dict = {}
 
         def sweep() -> None:
@@ -2424,7 +2434,7 @@ def test_waiting_for_a_foreign_holder_is_not_charged_to_the_probe() -> None:
         seen["still_waiting"] = thread.is_alive()
         holder.stop()
         thread.join(timeout=90)
-        run_probes.RESOURCE_WAIT_POLL = saved_poll
+        probe_runner_resources.RESOURCE_WAIT_POLL = saved_poll
         out = result.get("out") or ""
 
         expect(seen["took_lock"], "the foreign process took the lock")
@@ -2630,18 +2640,22 @@ def test_retry_reaps_between_attempts() -> None:
 DRIVER_SRC = textwrap.dedent("""\
     import sys, time
     sys.path.insert(0, {tools!r})
+    import probe_engine
+    import probe_runner_lifecycle
+    import probe_runner_registry
+    import probe_runner_resources
     import run_probes
-    run_probes.REPO_ROOT = {root!r}
-    run_probes.PROBES = {probes!r}
+    probe_engine.REPO_ROOT = {root!r}
+    probe_runner_registry.PROBES = {probes!r}
     # Like the in-process fixture, a synthetic registry starts with no
     # shipped key-specific timeout declarations.
-    run_probes.PROBE_TIMEOUT_OVERRIDES = {{}}
-    run_probes.GROUP_GRACE = {grace!r}
+    probe_runner_registry.PROBE_TIMEOUT_OVERRIDES = {{}}
+    probe_runner_lifecycle.GROUP_GRACE = {grace!r}
     # The synthetic tree is not a git checkout, so the cross-process
     # resource namespace (#1436) has to be supplied the same way the
     # in-process `patched` fixture supplies it -- otherwise the runner
     # refuses to start and the interrupt below has nothing to interrupt.
-    run_probes.RESOURCE_NAMESPACE = {namespace!r}
+    probe_runner_resources.RESOURCE_NAMESPACE = {namespace!r}
     # ... and the engine-executable preflight (#1570) the same way, for
     # the same reason: the synthetic tree is no Cabal project, so a real
     # freshness build would refuse the run before the interrupt could
@@ -2653,7 +2667,7 @@ DRIVER_SRC = textwrap.dedent("""\
         out = "" if "build" in tuple(argv) else _synthetic_exe + chr(10)
         return _sp.CompletedProcess(tuple(argv), 0, out, "")
 
-    run_probes.ENGINE_PREFLIGHT_RUNNER = _preflight
+    probe_runner_resources.ENGINE_PREFLIGHT_RUNNER = _preflight
     submit_delay = {submit_delay!r}
     if submit_delay:
         # Widen the SUBMISSION window so an interrupt can land inside it.
@@ -2812,7 +2826,7 @@ def test_ctrl_c_during_submission_starts_nothing_more() -> None:
         tree.cleanup()
 
 
-class StopOnAdd(run_probes.ProbeGroups):
+class StopOnAdd(probe_runner_lifecycle.ProbeGroups):
     """Forces the interleaving a natural run only hits by chance.
 
     Shutdown begins AFTER run_one's pre-Popen stop check and before
@@ -2851,7 +2865,7 @@ def test_probe_launched_into_shutdown_is_killed_promptly() -> None:
                           engine_ignores_term=True)
         started = time.monotonic()
         with patched(tree):
-            ok, timed_out, elapsed, out = run_probes.run_one(
+            ok, timed_out, elapsed, out = probe_runner_lifecycle.run_one(
                 script, None, 30.0,
                 StopOnAdd(tree.root / "late.enginepid"))
         wall = time.monotonic() - started
@@ -2893,16 +2907,16 @@ def test_ctrl_c_in_the_launch_window_leaves_nothing() -> None:
             return proc
 
         raised = None
-        run_probes.subprocess.Popen = popen_then_interrupt
+        probe_runner_lifecycle.subprocess.Popen = popen_then_interrupt
         try:
             with patched(tree):
-                run_probes.run_one(script, None, 120.0, run_probes.ProbeGroups())
+                probe_runner_lifecycle.run_one(script, None, 120.0, probe_runner_lifecycle.ProbeGroups())
         except KeyboardInterrupt:
             raised = "KeyboardInterrupt"
         except BaseException as exc:  # pragma: no cover - reported below
             raised = repr(exc)
         finally:
-            run_probes.subprocess.Popen = real_popen
+            probe_runner_lifecycle.subprocess.Popen = real_popen
         expect(raised == "KeyboardInterrupt",
                f"the interrupt still reaches the caller (got {raised})")
         expect("pgid" in launched, "the probe really was spawned")
@@ -2970,7 +2984,7 @@ def test_reap_returns_only_once_the_group_is_observed_gone() -> None:
     try:
         script = tree.add("kill_wait", exit_code=1, engine_ignores_term=True)
         seen: list[bool] = []
-        real_running = run_probes._group_running
+        real_running = probe_runner_lifecycle._group_running
 
         def watched(pgid: int) -> bool:
             answer = real_running(pgid)
@@ -2980,12 +2994,12 @@ def test_reap_returns_only_once_the_group_is_observed_gone() -> None:
         # _group_running is the predicate the reap gates its return on: a
         # zombie is not a running member, so this is what "the group is
         # gone" actually means for a port about to be reused.
-        run_probes._group_running = watched
+        probe_runner_lifecycle._group_running = watched
         try:
             with patched(tree):
-                run_probes.run_one(script, None, 120.0)
+                probe_runner_lifecycle.run_one(script, None, 120.0)
         finally:
-            run_probes._group_running = real_running
+            probe_runner_lifecycle._group_running = real_running
         expect(bool(seen), "the reap really did inspect the group")
         expect(True in seen,
                "it saw a live member first -- otherwise it reaped nothing and "
@@ -3053,26 +3067,26 @@ def free_port_span(width: int) -> int:
 
 def test_port_span_declaration_is_data_about_real_probes() -> None:
     print("\n-- the shipped PROBE_PORT_SPANS table names registered probes")
-    known = {p[0] for p in run_probes.PROBES}
-    unknown = sorted(k for k in run_probes.PROBE_PORT_SPANS if k not in known)
+    known = {p[0] for p in probe_runner_registry.PROBES}
+    unknown = sorted(k for k in probe_runner_registry.PROBE_PORT_SPANS if k not in known)
     expect(not unknown,
            f"every declared key names a registered probe (unknown: {unknown})")
-    bad = sorted(k for k, v in run_probes.PROBE_PORT_SPANS.items()
+    bad = sorted(k for k, v in probe_runner_registry.PROBE_PORT_SPANS.items()
                  if not isinstance(v, int) or isinstance(v, bool) or v < 1)
     expect(not bad,
            f"every declaration is a positive port COUNT (bad: {bad})")
-    expect(run_probes.port_span("debug_console_boot") == 2,
+    expect(probe_runner_registry.port_span("debug_console_boot") == 2,
            "debug_console_boot declares two ports -- it binds base and base+1")
-    expect(run_probes.port_span("offscreen") == 2,
+    expect(probe_runner_registry.port_span("offscreen") == 2,
            "offscreen declares two ports -- its second engine runs alongside "
            "the first")
-    expect(run_probes.port_span("combat_anim") == run_probes.DEFAULT_PORT_SPAN
+    expect(probe_runner_registry.port_span("combat_anim") == probe_runner_registry.DEFAULT_PORT_SPAN
            == 1,
            "an undeclared probe reserves its base alone")
-    expect(list(run_probes.reserved_ports("debug_console_boot", 9400))
+    expect(list(probe_runner_registry.reserved_ports("debug_console_boot", 9400))
            == [9400, 9401],
            "a declared count N reserves base .. base+N-1, contiguously")
-    expect(list(run_probes.reserved_ports("combat_anim", 9400)) == [9400],
+    expect(list(probe_runner_registry.reserved_ports("combat_anim", 9400)) == [9400],
            "and an undeclared probe reserves exactly its base")
 
 
@@ -3080,13 +3094,13 @@ def test_parallel_allocation_never_overlaps() -> None:
     print("\n-- the parallel allocation lays declared spans end to end")
     # Every registered probe at once: whatever the table says, no two
     # selected probes may be handed a port the other may bind.
-    ports = run_probes.allocate_parallel_ports(run_probes.PROBES)
-    expect(len(ports) == len(run_probes.PROBES),
+    ports = probe_runner_registry.allocate_parallel_ports(probe_runner_registry.PROBES)
+    expect(len(ports) == len(probe_runner_registry.PROBES),
            "every selected probe gets exactly one base")
     claimed: dict[int, str] = {}
     overlaps: list[str] = []
-    for (key, _, _), base in zip(run_probes.PROBES, ports):
-        for port in run_probes.reserved_ports(key, base):
+    for (key, _, _), base in zip(probe_runner_registry.PROBES, ports):
+        for port in probe_runner_registry.reserved_ports(key, base):
             if port in claimed:
                 overlaps.append(f"{key} and {claimed[port]} both reserve {port}")
             claimed[port] = key
@@ -3094,43 +3108,43 @@ def test_parallel_allocation_never_overlaps() -> None:
            f"no two probes reserve the same port (overlaps: {overlaps[:3]})")
     expect(ports == sorted(ports) and len(set(ports)) == len(ports),
            "bases are handed out in registry order, each strictly after the last")
-    expect(ports[0] == run_probes.PARALLEL_PORT_BASE,
-           f"the default origin is still {run_probes.PARALLEL_PORT_BASE} "
+    expect(ports[0] == probe_runner_registry.PARALLEL_PORT_BASE,
+           f"the default origin is still {probe_runner_registry.PARALLEL_PORT_BASE} "
            f"(got {ports[0]})")
 
     # The exact pair from #1571, in the order that broke: a two-port
     # probe immediately before a one-port one.
     pair = [("debug_console_boot", "a.py", ""), ("transactional_load", "b.py", "")]
-    got = run_probes.allocate_parallel_ports(pair, 9400)
+    got = probe_runner_registry.allocate_parallel_ports(pair, 9400)
     expect(got == [9400, 9402],
            f"debug_console_boot's neighbour starts past its span (got {got})")
-    expect(run_probes.allocate_parallel_ports(pair, 9500) == [9500, 9502],
+    expect(probe_runner_registry.allocate_parallel_ports(pair, 9500) == [9500, 9502],
            "and the layout follows a caller-supplied origin")
 
 
 def test_gui_port_refusal_covers_the_whole_span() -> None:
     print("\n-- a span that REACHES the GUI port is refused, not just a base "
           "that equals it")
-    expect(run_probes.GUI_PORT == 8008,
-           f"the GUI port is still 8008 (got {run_probes.GUI_PORT})")
+    expect(probe_runner_registry.GUI_PORT == 8008,
+           f"the GUI port is still 8008 (got {probe_runner_registry.GUI_PORT})")
     spans = {"wide": 2}
-    saved = run_probes.PROBE_PORT_SPANS
-    run_probes.PROBE_PORT_SPANS = spans
+    saved = probe_runner_registry.PROBE_PORT_SPANS
+    probe_runner_registry.PROBE_PORT_SPANS = spans
     try:
-        conflicts = run_probes.gui_port_conflicts(
+        conflicts = probe_runner_registry.gui_port_conflicts(
             [("wide", 8007), ("narrow", 8007), ("wide", 9400)])
         expect(conflicts == [("wide", 8007)],
                f"only the span that actually covers 8008 conflicts "
                f"(got {conflicts})")
-        text = run_probes.describe_gui_conflicts(conflicts)
+        text = probe_runner_registry.describe_gui_conflicts(conflicts)
         expect("8007-8008" in text and "wide" in text and "8008" in text,
                f"the refusal names the probe and the span (got {text!r})")
-        expect(run_probes.gui_port_conflicts(
+        expect(probe_runner_registry.gui_port_conflicts(
                    [("wide", 8007), ("wide", 8007)]) == [("wide", 8007)],
                "the same probe at the same base is one conflict, not two -- a "
                "parallel plan lists it twice (allocation and solo-retry origin)")
     finally:
-        run_probes.PROBE_PORT_SPANS = saved
+        probe_runner_registry.PROBE_PORT_SPANS = saved
 
     for jobs in ("1", "2"):
         tree = Tree()
@@ -3210,8 +3224,8 @@ def test_port_with_jobs_bases_the_parallel_allocation() -> None:
         rc, _ = _main_with(tree, ["--only", "alpha,beta", "--exact",
                                   "--jobs", "2"])
         expect(rc == 0, f"the default-origin run still passes (got {rc})")
-        expect(tree.ports("alpha") == [run_probes.PARALLEL_PORT_BASE]
-               and tree.ports("beta") == [run_probes.PARALLEL_PORT_BASE + 1],
+        expect(tree.ports("alpha") == [probe_runner_registry.PARALLEL_PORT_BASE]
+               and tree.ports("beta") == [probe_runner_registry.PARALLEL_PORT_BASE + 1],
                f"unset --port keeps the 9400 origin "
                f"(alpha {tree.ports('alpha')}, beta {tree.ports('beta')})")
     finally:
@@ -3330,17 +3344,17 @@ def test_group_running_ignores_a_zombie_only_group() -> None:
         expect(process_state(pgid) == "Z",
                f"the child is a zombie and nothing has reaped it "
                f"(state {process_state(pgid)!r})")
-        expect(run_probes._group_alive(pgid) is True,
+        expect(probe_runner_lifecycle._group_alive(pgid) is True,
                "signals still report its group -- so the distinction below is "
                "real here, not an artifact of it having already gone")
-        expect(run_probes._group_running(pgid) is False,
+        expect(probe_runner_lifecycle._group_running(pgid) is False,
                "but nothing in it is RUNNING")
     finally:
         child.wait()
     live = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"],
                             start_new_session=True)
     try:
-        expect(run_probes._group_running(live.pid) is True,
+        expect(probe_runner_lifecycle._group_running(live.pid) is True,
                "while a group with a live member still counts as running")
     finally:
         live.kill()
@@ -3365,10 +3379,10 @@ class ProgressStub:
     kind = ""
 
 
-def progress_records(out: str) -> list[run_probes.ProgressRecord]:
+def progress_records(out: str) -> list[probe_runner_diagnostics.ProgressRecord]:
     """Every progress record in some output, in order."""
     return [record for record in
-            (run_probes.parse_progress(line) for line in out.splitlines())
+            (probe_runner_diagnostics.parse_progress(line) for line in out.splitlines())
             if record is not None]
 
 
@@ -3381,10 +3395,10 @@ def test_progress_records_round_trip_and_stay_out_of_the_verdict_shape() -> None
     print("\n-- a progress record round-trips, and can never be miscounted "
           "as a verdict announcement")
     now = time.time()
-    line = run_probes.format_progress(
+    line = probe_runner_diagnostics.format_progress(
         "phase", "engine A", "build the scenario, save 'gen1'",
         elapsed=12.34, now=now)
-    record = run_probes.parse_progress(line)
+    record = probe_runner_diagnostics.parse_progress(line)
     expect(record is not None, f"the rendered record parses back ({line!r})")
     expect(record.kind == "phase" and record.identity == "engine A",
            f"with its kind and identity intact (got {record!r})")
@@ -3398,34 +3412,34 @@ def test_progress_records_round_trip_and_stay_out_of_the_verdict_shape() -> None
 
     # Free text may contain the field separator; only the first three
     # fields are structural.
-    awkward = run_probes.format_progress(
+    awkward = probe_runner_diagnostics.format_progress(
         "end", "chop (chop_probe.py) attempt 1/2", "FAIL | exit 1",
         elapsed=1.0, now=now)
-    expect(run_probes.parse_progress(awkward).detail == "FAIL | exit 1",
+    expect(probe_runner_diagnostics.parse_progress(awkward).detail == "FAIL | exit 1",
            "a detail containing the separator survives the round trip")
-    expect(run_probes.parse_progress(awkward).identity
+    expect(probe_runner_diagnostics.parse_progress(awkward).identity
            == "chop (chop_probe.py) attempt 1/2",
            "and the identity is not confused by it")
 
-    expect(run_probes.parse_progress("[3/12] chop_probe.py ... PASS (4.0s)")
+    expect(probe_runner_diagnostics.parse_progress("[3/12] chop_probe.py ... PASS (4.0s)")
            is None,
            "an ordinary verdict announcement is not a progress record")
-    expect(run_probes.parse_progress("diagnostic line 7") is None,
+    expect(probe_runner_diagnostics.parse_progress("diagnostic line 7") is None,
            "and neither is ordinary probe output")
 
     # The other direction, which is the one that could break a shipped
     # test: `progress_lines` counts a verdict by "starts with [ and
     # contains ' <script> ... '". A progress record naming a script must
     # not match that shape.
-    dispatch = run_probes.format_progress(
-        "begin", run_probes.attempt_identity("chop", "chop_probe.py", 1, 2),
+    dispatch = probe_runner_diagnostics.format_progress(
+        "begin", probe_runner_diagnostics.attempt_identity("chop", "chop_probe.py", 1, 2),
         "dispatched", elapsed=0.1, now=now)
     expect(progress_lines(dispatch, "chop_probe.py") == 0,
            f"a dispatch record naming a script is not counted as that "
            f"probe's verdict ({dispatch!r})")
 
     try:
-        run_probes.format_progress("nonsense", "x", "y", elapsed=0.0, now=now)
+        probe_runner_diagnostics.format_progress("nonsense", "x", "y", elapsed=0.0, now=now)
     except ValueError:
         expect(True, "an unknown record kind is refused at the source")
     else:
@@ -3438,17 +3452,17 @@ def test_progress_attribution_derives_the_in_flight_set() -> None:
     now = time.time()
 
     def line(kind, identity, detail, elapsed):
-        return run_probes.format_progress(kind, identity, detail,
+        return probe_runner_diagnostics.format_progress(kind, identity, detail,
                                           elapsed=elapsed, now=now)
 
-    expect(run_probes.progress_attribution("") == [],
+    expect(probe_runner_diagnostics.progress_attribution("") == [],
            "a capture with no progress records yields no attribution at all")
-    expect(run_probes.progress_attribution("just some probe output\n") == [],
+    expect(probe_runner_diagnostics.progress_attribution("just some probe output\n") == [],
            "and neither does ordinary probe output")
 
-    alpha = run_probes.attempt_identity("chop", "chop_probe.py", 1, 2)
-    beta = run_probes.attempt_identity("till", "till_probe.py", 1, 2)
-    gamma = run_probes.attempt_identity("till", "till_probe.py", 2, 2)
+    alpha = probe_runner_diagnostics.attempt_identity("chop", "chop_probe.py", 1, 2)
+    beta = probe_runner_diagnostics.attempt_identity("till", "till_probe.py", 1, 2)
+    gamma = probe_runner_diagnostics.attempt_identity("till", "till_probe.py", 2, 2)
     capture = "\n".join([
         line("phase", "engine A", "build the scenario", 0.1),
         "some ordinary output",
@@ -3459,7 +3473,7 @@ def test_progress_attribution_derives_the_in_flight_set() -> None:
         line("end", beta, "FAIL (10.0s)", 510.2),
         line("begin", gamma, "solo retry", 510.3),
     ]) + "\n"
-    got = run_probes.progress_attribution(capture)
+    got = probe_runner_diagnostics.progress_attribution(capture)
     text = "\n".join(got)
     expect(any("cross-probes" in ln for ln in got),
            f"the LATEST phase is named, not the first (got {got!r})")
@@ -3478,7 +3492,7 @@ def test_progress_attribution_derives_the_in_flight_set() -> None:
 
     # A retry that finishes clears only its own attempt.
     finished = capture + line("end", gamma, "PASS (5.0s)", 515.0) + "\n"
-    remaining = "\n".join(run_probes.progress_attribution(finished))
+    remaining = "\n".join(probe_runner_diagnostics.progress_attribution(finished))
     expect(alpha in remaining and gamma not in remaining,
            f"completing the retry leaves only the still-running attempt "
            f"(got {remaining!r})")
@@ -3504,7 +3518,7 @@ def test_progress_survives_a_forced_timeout_outside_the_ordinary_tail() -> None:
                f"the attribution line is printed:\n{out}")
         expect("engine C" in out and "load 'gen2', save 'gen3'" in out,
                f"naming the phase that was active at the kill:\n{out}")
-        expect(run_probes.PROGRESS_MARKER not in out,
+        expect(probe_runner_diagnostics.PROGRESS_MARKER not in out,
                f"the raw record is NOT reprinted -- it fell outside the "
                f"25-line tail:\n{out}")
         expect("diagnostic line 39" in out,
@@ -3524,11 +3538,11 @@ def test_in_flight_attempts_are_derivable_from_the_default_report() -> None:
         # nested runner dispatches two attempts into the SAME pipe and
         # completes one before everything is killed. The records are the
         # real ones -- `probe_src` emits them through
-        # `run_probes.ProgressEmitter` -- so this is the shipped
+        # `probe_runner_diagnostics.ProgressEmitter` -- so this is the shipped
         # convention crossing a real process boundary and a real SIGKILL.
-        finished = run_probes.attempt_identity("chop", "chop_probe.py", 1, 2)
-        running = run_probes.attempt_identity("till", "till_probe.py", 1, 2)
-        retrying = run_probes.attempt_identity("chop", "chop_probe.py", 2, 2)
+        finished = probe_runner_diagnostics.attempt_identity("chop", "chop_probe.py", 1, 2)
+        running = probe_runner_diagnostics.attempt_identity("till", "till_probe.py", 1, 2)
+        retrying = probe_runner_diagnostics.attempt_identity("chop", "chop_probe.py", 2, 2)
         tree.add("nested",
                  progress=(("phase", "cross-probes", "running 2 probe(s)"),
                            ("begin", finished, "dispatched"),
@@ -3567,9 +3581,9 @@ def test_parallel_dispatch_and_retry_records_name_every_attempt() -> None:
         expect(rc == 1, f"the failing probe still fails the run (exit {rc})")
 
         pairs = record_pairs(out)
-        alpha_1 = run_probes.attempt_identity("alpha", "alpha_probe.py", 1, 2)
-        beta_1 = run_probes.attempt_identity("beta", "beta_probe.py", 1, 2)
-        beta_2 = run_probes.attempt_identity("beta", "beta_probe.py", 2, 2)
+        alpha_1 = probe_runner_diagnostics.attempt_identity("alpha", "alpha_probe.py", 1, 2)
+        beta_1 = probe_runner_diagnostics.attempt_identity("beta", "beta_probe.py", 1, 2)
+        beta_2 = probe_runner_diagnostics.attempt_identity("beta", "beta_probe.py", 2, 2)
         for kind, identity in (("begin", alpha_1), ("end", alpha_1),
                                ("begin", beta_1), ("end", beta_1),
                                ("begin", beta_2), ("end", beta_2)):
@@ -3604,8 +3618,8 @@ def test_parallel_dispatch_and_retry_records_name_every_attempt() -> None:
         # reported in flight.
         mid_batch = "\n".join(
             line for line in out.splitlines()
-            if (run_probes.parse_progress(line) or ProgressStub).kind != "end")
-        derived = "\n".join(run_probes.progress_attribution(mid_batch))
+            if (probe_runner_diagnostics.parse_progress(line) or ProgressStub).kind != "end")
+        derived = "\n".join(probe_runner_diagnostics.progress_attribution(mid_batch))
         expect(alpha_1 in derived and beta_1 in derived and beta_2 in derived,
                f"the runner's own records derive the in-flight set when the "
                f"completions are missing (got {derived!r})")
@@ -3630,21 +3644,21 @@ def test_parallel_dispatch_and_retry_records_name_every_attempt() -> None:
 # lines -- and require the DEFAULT presentation, on both of its paths, to
 # surface every one of them without dumping the capture.
 # --------------------------------------------------------------------------
-def failure_records(out: str) -> list[run_probes.FailureRecord]:
+def failure_records(out: str) -> list[probe_runner_diagnostics.FailureRecord]:
     """Every failure record in some output, in order."""
     return [record for record in
-            (run_probes.parse_failure(line) for line in out.splitlines())
+            (probe_runner_diagnostics.parse_failure(line) for line in out.splitlines())
             if record is not None]
 
 
 def test_failure_records_round_trip_and_stay_off_the_progress_channel() -> None:
     print("\n-- a failure record round-trips, and is not a progress record")
     now = time.time()
-    line = run_probes.format_failure(
+    line = probe_runner_diagnostics.format_failure(
         "check", "location_embark_probe",
         "the discovered icon never appeared at (12,7)",
         elapsed=279.4, now=now)
-    record = run_probes.parse_failure(line)
+    record = probe_runner_diagnostics.parse_failure(line)
     expect(record is not None, f"the rendered record parses back ({line!r})")
     expect(record.kind == "check"
            and record.identity == "location_embark_probe",
@@ -3655,45 +3669,45 @@ def test_failure_records_round_trip_and_stay_off_the_progress_channel() -> None:
            f"the stamp carries the elapsed offset, so 'at the very end of "
            f"a 279.5 s run' is readable (got {record.stamp!r})")
 
-    awkward = run_probes.format_failure(
+    awkward = probe_runner_diagnostics.format_failure(
         "setup", "probe", "no [flat] site | tried 6 seeds",
         elapsed=1.0, now=now)
-    expect(run_probes.parse_failure(awkward).detail
+    expect(probe_runner_diagnostics.parse_failure(awkward).detail
            == "no [flat] site | tried 6 seeds",
            "a detail containing the separator survives the round trip")
 
     # A detail spanning lines would split into a marked line and an
     # unmarked orphan the parser could only drop; one record is one line.
-    multi = run_probes.format_failure(
+    multi = probe_runner_diagnostics.format_failure(
         "check", "probe", "first\nsecond\n   third", elapsed=1.0, now=now)
     expect("\n" not in multi,
            f"a multi-line detail is collapsed to one line ({multi!r})")
-    expect(run_probes.parse_failure(multi).detail == "first second third",
-           f"keeping every word (got {run_probes.parse_failure(multi)!r})")
+    expect(probe_runner_diagnostics.parse_failure(multi).detail == "first second third",
+           f"keeping every word (got {probe_runner_diagnostics.parse_failure(multi)!r})")
 
     # The two conventions must not read each other's records: #1768's
     # promise is that a capture with no PROGRESS records yields no
     # progress attribution at all, and a failing probe emitting only
     # failure records must not break it.
-    expect(run_probes.parse_progress(line) is None,
+    expect(probe_runner_diagnostics.parse_progress(line) is None,
            "a failure record is not a progress record")
-    expect(run_probes.progress_attribution(line + "\n") == [],
+    expect(probe_runner_diagnostics.progress_attribution(line + "\n") == [],
            "and yields no progress attribution")
-    progress = run_probes.format_progress("phase", "engine A", "build",
+    progress = probe_runner_diagnostics.format_progress("phase", "engine A", "build",
                                           elapsed=1.0, now=now)
-    expect(run_probes.parse_failure(progress) is None,
+    expect(probe_runner_diagnostics.parse_failure(progress) is None,
            "and a progress record is not a failure record")
-    expect(run_probes.failure_attribution(progress + "\n") == [],
+    expect(probe_runner_diagnostics.failure_attribution(progress + "\n") == [],
            "nor does it yield failure attribution")
 
-    expect(run_probes.parse_failure("FAIL: something broke") is None,
+    expect(probe_runner_diagnostics.parse_failure("FAIL: something broke") is None,
            "an ordinary printed FAIL line is not a record")
     expect(progress_lines(line, "location_embark_probe.py") == 0,
            f"and a record naming a probe is not counted as its verdict "
            f"({line!r})")
 
     try:
-        run_probes.format_failure("nonsense", "x", "y", elapsed=0.0, now=now)
+        probe_runner_diagnostics.format_failure("nonsense", "x", "y", elapsed=0.0, now=now)
     except ValueError:
         expect(True, "an unknown record kind is refused at the source")
     else:
@@ -3706,12 +3720,12 @@ def test_failure_attribution_names_every_recorded_failure_once() -> None:
     now = time.time()
 
     def line(kind, identity, detail, elapsed):
-        return run_probes.format_failure(kind, identity, detail,
+        return probe_runner_diagnostics.format_failure(kind, identity, detail,
                                          elapsed=elapsed, now=now)
 
-    expect(run_probes.failure_attribution("") == [],
+    expect(probe_runner_diagnostics.failure_attribution("") == [],
            "a capture with no failure records yields no attribution at all")
-    expect(run_probes.failure_attribution("just some probe output\n") == [],
+    expect(probe_runner_diagnostics.failure_attribution("just some probe output\n") == [],
            "and neither does ordinary probe output")
 
     capture = "\n".join([
@@ -3722,7 +3736,7 @@ def test_failure_attribution_names_every_recorded_failure_once() -> None:
         line("context", "engine log", "/tmp/x/engine.log", 12.0),
         line("context", "engine log tail", "vulkan: device lost", 12.0),
     ]) + "\n"
-    got = run_probes.failure_attribution(capture)
+    got = probe_runner_diagnostics.failure_attribution(capture)
     text = "\n".join(got)
     expect("3 recorded failure(s)" in text,
            f"the count covers both vocabularies (got {got!r})")
@@ -3745,8 +3759,8 @@ def test_failure_attribution_names_every_recorded_failure_once() -> None:
 
     # The tail is printed BESIDE the attribution, so the records
     # themselves must be withheld from it or every failure appears twice.
-    stripped = run_probes.without_failure_records(capture)
-    expect(run_probes.FAILURE_MARKER not in stripped,
+    stripped = probe_runner_diagnostics.without_failure_records(capture)
+    expect(probe_runner_diagnostics.FAILURE_MARKER not in stripped,
            f"the records are withheld from the ordinary tail ({stripped!r})")
     expect("some ordinary output" in stripped,
            "while everything else survives it")
@@ -3808,7 +3822,7 @@ def test_failed_checks_survive_outside_the_ordinary_tail() -> None:
                f"while the ordinary tail is preserved as context:\n{out}")
         expect("diagnostic line 14" not in out,
                f"bounded at exactly --tail lines:\n{out}")
-        expect(run_probes.FAILURE_MARKER not in out,
+        expect(probe_runner_diagnostics.FAILURE_MARKER not in out,
                f"and the raw records are not reprinted beside the "
                f"attribution that already carries them:\n{out}")
     finally:
@@ -3853,7 +3867,7 @@ def test_failed_checks_survive_the_parallel_presentation() -> None:
                f"and the complete capture is NOT dumped:\n{out}")
         expect("diagnostic line 39" in block,
                f"while the ordinary tail is preserved:\n{out}")
-        expect(run_probes.FAILURE_MARKER not in out,
+        expect(probe_runner_diagnostics.FAILURE_MARKER not in out,
                f"and no raw record is reprinted:\n{out}")
 
         # A passing probe's block does not exist at all, so nothing of
@@ -3947,7 +3961,7 @@ def test_a_probes_setup_exit_is_recorded_and_recoverable() -> None:
 
     # Nothing reaches stderr on this path any more, and the runner's own
     # consumer recovers the whole thing from the capture.
-    derived = "\n".join(run_probes.failure_attribution(out))
+    derived = "\n".join(probe_runner_diagnostics.failure_attribution(out))
     expect("SETUP FAILURE: phase 1 (headless prep)" in derived,
            f"the runner's presentation recovers it (got {derived!r})")
     expect("no ruin_small with resolvable bounds" in derived,
@@ -4176,12 +4190,12 @@ def test_the_readme_states_no_registry_total() -> None:
             # no verb, probe noun or partitive to reach either.
             "PROBES: 93.",
             "The PROBES list has 93 entries.",
-            "`run_probes.PROBES` has 93 entries.",
+            "`probe_runner_registry.PROBES` has 93 entries.",
             "PROBES holds 93.",
             "The PROBES dict is 93 long.",
             # Inverted, the same way.
             "There are 93 entries in PROBES.",
-            "93 rows sit in `run_probes.PROBES`.",
+            "93 rows sit in `probe_runner_registry.PROBES`.",
         ),
         # A quantity reached directly by a verb of having or listing, with
         # neither a registry subject nor a noun.
@@ -4406,7 +4420,7 @@ def test_the_readme_states_no_registry_total() -> None:
             # These two pin the universal subject's LEADING-only position:
             # both put "every probe" downstream of a number.
             "Ctrl-C exits 130 after terminating every probe still running.",
-            "`run_probes.PROBE_PORT_SPANS` declares 2 for each of those two, "
+            "`probe_runner_registry.PROBE_PORT_SPANS` declares 2 for each of those two, "
             "and every other probe reserves its base alone.",
             "The runner reaps each probe's process group on EVERY completion "
             "path (#1323) — success, ordinary nonzero exit, timeout.",
@@ -4431,12 +4445,12 @@ def test_the_readme_states_no_registry_total() -> None:
             # A PORT is not something the registry holds, so this stays a
             # sentence about ports even with a count noun two words from a
             # probe and a number fifty characters on.
-            "So a probe's port count is DATA -- `run_probes.PROBE_PORT_SPANS` "
+            "So a probe's port count is DATA -- `probe_runner_registry.PROBE_PORT_SPANS` "
             "declares 2 for each of those two.",
-            "`run_probes.PROBE_TIMEOUT_OVERRIDES` declares 3600 for one key.",
+            "`probe_runner_registry.PROBE_TIMEOUT_OVERRIDES` declares 3600 for one key.",
             # An identifier's underscores and an expression's star are not
             # emphasis, so neither dissolves into a fake number.
-            "`run_probes.PROBE_TIMEOUT_OVERRIDES` and "
+            "`probe_runner_registry.PROBE_TIMEOUT_OVERRIDES` and "
             "`save_compat_migration` name 3600 between them.",
             "The span is 2*3 wide.",
             # The three subset words the count-noun class must NOT swallow.
@@ -4511,7 +4525,7 @@ def test_the_readme_states_no_registry_total() -> None:
             "ordinary 900-second\ndefault. A scenario whose complete "
             "expected workload structurally exceeds that\nclass declares a "
             "validated key-specific default in\n"
-            "`run_probes.PROBE_TIMEOUT_OVERRIDES`.",
+            "`probe_runner_registry.PROBE_TIMEOUT_OVERRIDES`.",
             "The whole plan is computed before the first subprocess exists, "
             "and a span that reaches 8008 is refused (exit 2)."):
         fired = rules_fired(benign)

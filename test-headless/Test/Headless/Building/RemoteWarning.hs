@@ -47,7 +47,7 @@ mkDef starting w h = BuildingDef
     , bdDisplayName     = "Test Building"
     , bdCategory        = "Test"
     , bdDescription     = ""
-    , bdTexture         = TextureHandle 0
+    , bdTexture         = TextureHandle 0, bdIconTexture         = TextureHandle 0
     , bdTileW           = w
     , bdTileH           = h
     , bdPlacement       = "flat_ground"

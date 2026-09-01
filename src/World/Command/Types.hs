@@ -14,6 +14,7 @@ import Engine.Asset.Handle (TextureHandle(..))
 import Location.Instance (LocationInstanceId, LocationLifecycle)
 import Structure.Types (StructureStageToken(..), StructureCommitWindow(..))
 import World.Chunk.Types (ChunkCoord(..))
+import World.Flora.Identity (FloraInstanceId)
 import World.Material.Id (MaterialId(..))
 import World.Material (MaterialRegistry)
 import Building.Types (BuildingId(..))
@@ -230,9 +231,14 @@ data WorldCommand
         --   harvest tag (the tool passes "wood") are designated, each at
         --   its own surface z — trees grow across slopes, so unlike
         --   mine/construct there is no per-z-level filter.
-    | WorldCancelChop WorldPageId Int Int
-        -- ^ Remove the chop designation at (gx, gy), if any (the chop
-        --   AI's completion, or a player cancel).
+    | WorldCancelChop WorldPageId Int Int (Maybe FloraInstanceId)
+        -- ^ Remove a chop designation (the chop AI's completion, or a
+        --   player cancel). #1854: with an instance id, EXACTLY that
+        --   plant's designation goes — the felling acolyte cancels the
+        --   tree it claimed and leaves its co-tenants designated. Without
+        --   one the gesture is the player's tile-granularity cancel and
+        --   clears every designation standing on (gx, gy), pending legacy
+        --   entries included.
     | WorldSetChopDesignateTexture WorldPageId TextureHandle
         -- ^ Texture for committed chop-designation markers.
     | WorldSetTillAnchor WorldPageId Int Int

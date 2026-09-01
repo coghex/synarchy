@@ -50,7 +50,7 @@ import Structure.Types (StructureStage, emptyStructureStage)
 import World.Mine.Types (MineDesignations)
 import World.Construct.Types (ConstructDesignations)
 import World.Construct.Attempt (ConstructAttemptId, firstConstructAttemptId)
-import World.Chop.Types (ChopDesignations)
+import World.Chop.Types (ChopDesignations, PendingChopDesignations)
 import World.Till.Types (TillDesignations)
 import World.Plant.Types (PlantDesignations)
 import Craft.Bills (CraftBills, emptyCraftBills)
@@ -61,8 +61,10 @@ import Power.Types (PowerNodes, emptyPowerNodes)
 import Blood.Types (BloodStore, BloodTextureId, emptyBloodStore, defaultBloodTextureCap)
 import Engine.Asset.Handle (TextureHandle)
 import World.Spoil.Types (SpoilPiles, emptySpoilPiles)
-import World.Flora.Harvest (FloraHarvests, emptyFloraHarvests)
+import World.Flora.Harvest (FloraHarvests, PendingFloraHarvests,
+                            emptyFloraHarvests, emptyPendingFloraHarvests)
 import World.Flora.CropPlot (CropPlots, emptyCropPlots)
+import World.Flora.Identity (firstPlantedFloraCursor)
 import Item.Ground (GroundItems, emptyGroundItems)
 
 -- | Per-world GPU-upload bookkeeping for #606's procedurally generated
@@ -266,17 +268,45 @@ data WorldState = WorldState
       --   created after a load must not be able to collide with one the
       --   save already holds.
     , wsFloraHarvestsRef ∷ IORef FloraHarvests
-      -- ^ Harvested flora tiles (#94): tile (gx, gy) → regrowth
-      --   game-seconds remaining. World-level (NOT in lcFlora) so chunk
+      -- ^ Harvested flora (#94): flora INSTANCE id → regrowth
+      --   game-seconds remaining (#1854 re-keyed this off the tile, so
+      --   one berry bush's timer no longer depletes every harvestable
+      --   co-tenant beside it). World-level (NOT in lcFlora) so chunk
       --   eviction can't wipe it; written by world.harvestFlora + the
       --   regrowth tick, read by the flora render pass and the foraging
-      --   AI's queries. Persisted in saves (wpsFloraHarvests, v66).
+      --   AI's queries. Persisted in saves (wpsFloraHarvests).
     , wsChopDesignationsRef ∷ IORef ChopDesignations
-      -- ^ Chop-designation set (#97): tile (gx, gy) → designation
-      --   (surface z; see World.Chop.Types). Written by the world
-      --   thread (WorldDesignateChop / cancel commands), read by the
-      --   render pass (marker) and the chop AI. Persisted in saves
-      --   (wpsChopDesignations, v67).
+      -- ^ Chop-designation set (#97): flora INSTANCE id → designation
+      --   (surface z + the plant's canonical tile; see
+      --   World.Chop.Types). #1854 re-keyed this off the tile too, so
+      --   designating one of two trees on a tile marks exactly one.
+      --   Written by the world thread (WorldDesignateChop / cancel
+      --   commands) THROUGH "World.Flora.Designation", which is the one
+      --   operation that keeps this map and the loaded
+      --   'fiChopDesignated' mirror in step; read by the render pass
+      --   (marker) and the chop AI. Persisted in saves
+      --   (wpsChopDesignations).
+    , wsPendingChopMigrationRef ∷ IORef PendingChopDesignations
+      -- ^ Pre-#1854 tile-keyed chop designations read out of a save
+      --   whose chunk was not loaded, so no instance could be resolved
+      --   yet. Deferred, NEVER authoritative: no designation, marker,
+      --   claim or harvest query may be answered from it, and
+      --   "World.Flora.Designation" drains an entry the moment its
+      --   chunk is admitted. Persisted (wpsPendingChopMigration) so
+      --   repeated save/load cannot quietly discard it.
+    , wsPendingFloraHarvestsRef ∷ IORef PendingFloraHarvests
+      -- ^ Pre-#1854 tile-keyed regrowth timers awaiting their chunk,
+      --   on exactly the terms above. Drained by expanding one legacy
+      --   tile timer onto every harvestable instance on that tile with
+      --   the same remaining time — the observable behaviour the
+      --   tile-keyed map used to produce. Persisted
+      --   (wpsPendingFloraHarvests).
+    , wsPlantedFloraCursorRef ∷ IORef Word64
+      -- ^ This page's planted-flora id allocator (#1854 requirement 5).
+      --   Strictly above every planted 'FloraInstanceId' the page has
+      --   ever issued, so a plant after a load can never reuse a live
+      --   id. Persisted (wpsPlantedFloraCursor) in @world-edits@ v2
+      --   beside the WePlaceFlora edits whose ids it accounts for.
     , wsCraftBillsRef ∷ IORef CraftBills
       -- ^ Craft-bill queue (#329): per-station standing craft orders
       --   (see Craft.Bills). Unlike the designation layers this has no
@@ -435,6 +465,9 @@ emptyWorldState = do
     wsConstructAttemptRef ← newIORef firstConstructAttemptId
     wsFloraHarvestsRef ← newIORef emptyFloraHarvests
     wsChopDesignationsRef ← newIORef HM.empty
+    wsPendingChopMigrationRef ← newIORef HM.empty
+    wsPendingFloraHarvestsRef ← newIORef emptyPendingFloraHarvests
+    wsPlantedFloraCursorRef ← newIORef firstPlantedFloraCursor
     wsCraftBillsRef ← newIORef emptyCraftBills
     wsTransferOrdersRef ← newIORef emptyTransferOrders
     wsPowerNodesRef ← newIORef emptyPowerNodes
@@ -461,7 +494,11 @@ emptyWorldState = do
                         wsGroundItemsRef wsSpoilRef wsStructureStageRef
                         wsConstructDesignationsRef wsConstructAttemptRef
                         wsFloraHarvestsRef
-                        wsChopDesignationsRef wsCraftBillsRef
+                        wsChopDesignationsRef
+                        wsPendingChopMigrationRef
+                        wsPendingFloraHarvestsRef
+                        wsPlantedFloraCursorRef
+                        wsCraftBillsRef
                         wsTransferOrdersRef
                         wsPowerNodesRef wsContainerKnowledgeRef
                         wsPendingContainerSeedsRef

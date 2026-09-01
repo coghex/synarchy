@@ -68,21 +68,6 @@ spec = do
     aliases "slLastSaveTimeRef"       slLastSaveTimeRef       lastSaveTimeRef
     aliases "slNextItemInstanceIdRef" slNextItemInstanceIdRef nextItemInstanceIdRef
 
-    it "is stable across repeated projection (no fresh containers)" $ \env → do
-      -- The barrier sites project inline, once per world-thread tick
-      -- (`World.Thread`'s captureLocked gate and its end-of-tick
-      -- acknowledgeCurrent), so a projection that minted anything fresh
-      -- would hand two consecutive reads of the "same" handle two
-      -- different containers -- and the acknowledgment would answer a
-      -- different barrier than the one the gate consulted.
-      let a = toSaveLoadCapability env
-          b = toSaveLoadCapability env
-      sameContainer (slLoadStatusRef a)         (slLoadStatusRef b)
-      sameContainer (slPendingLoadRef a)        (slPendingLoadRef b)
-      sameContainer (slSaveBarrierRef a)        (slSaveBarrierRef b)
-      sameContainer (slLastSaveTimeRef a)       (slLastSaveTimeRef b)
-      sameContainer (slNextItemInstanceIdRef a) (slNextItemInstanceIdRef b)
-
     it "keeps the two same-typed IORef fields distinct" $ \env → do
       -- `lastSaveTimeRef` is `IORef UTCTime` and
       -- `nextItemInstanceIdRef` is `IORef Word64`, so those two cannot

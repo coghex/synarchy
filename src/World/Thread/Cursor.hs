@@ -200,7 +200,7 @@ sendChunkInfo env pid worldState mParams baseGX baseGY = do
                       -- before.
                       withTransientChunkClaim worldState pid params coord $ do
                         let lc0 = generateLoadedChunk materials catalog
-                                                      params coord
+                                                      pid params coord
                             lc1 = replayEdits edits lc0
                             tdTmp = patchEdgeStrata [coord]
                                         (insertChunk lc1 tileData)

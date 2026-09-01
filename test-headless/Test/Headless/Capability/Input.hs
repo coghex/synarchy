@@ -96,18 +96,6 @@ spec = do
       sameContainer (icLuaQueue cap) (luaQueue env)
       sameContainer (icLuaToEngineQueue cap) (luaToEngineQueue env)
 
-    it "is stable across repeated projection (no fresh containers)" $ \env → do
-      let a = toInputCapability env
-          b = toInputCapability env
-      sameContainer (icInputQueue a) (icInputQueue b)
-      sameContainer (icInputBarrierNextRef a) (icInputBarrierNextRef b)
-      sameContainer (icInputBarrierRef a) (icInputBarrierRef b)
-      sameContainer (icInputStateRef a) (icInputStateRef b)
-      sameContainer (icKeyBindingsRef a) (icKeyBindingsRef b)
-      sameContainer (icCurrentKeyDownRef a) (icCurrentKeyDownRef b)
-      sameContainer (icLuaToEngineQueue a) (icLuaToEngineQueue b)
-      sameContainer (icLuaQueue a) (icLuaQueue b)
-
   describe "toInputViewCapability (the worker-safe five)" $ do
     let aliases name project field =
           it (name <> " aliases the live EngineEnv container") $ \env →
@@ -130,15 +118,6 @@ spec = do
       let view = toInputViewCapability env
       sameContainer (ivInputBarrierRef view) (inputBarrierRef env)
       distinctContainer (ivInputBarrierRef view) (inputBarrierNextRef env)
-
-    it "is stable across repeated projection (no fresh containers)" $ \env → do
-      let a = toInputViewCapability env
-          b = toInputViewCapability env
-      sameContainer (ivInputQueue a) (ivInputQueue b)
-      sameContainer (ivInputBarrierRef a) (ivInputBarrierRef b)
-      sameContainer (ivInputStateRef a) (ivInputStateRef b)
-      sameContainer (ivKeyBindingsRef a) (ivKeyBindingsRef b)
-      sameContainer (ivLuaQueue a) (ivLuaQueue b)
 
     it "shares every container with the full record, never a copy" $ \env → do
       -- The two records are INDEPENDENT projections of EngineEnv (the

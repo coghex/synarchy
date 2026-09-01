@@ -20,6 +20,7 @@ import World.Thread.Command.Edit.Sync (syncEditToSim)
 import World.Plant.Validate (revalidatePlantDesignations)
 import World.Construct.Revalidate
     (ConstructScope(..), revalidateConstructDesignations)
+import World.Flora.Designation (replaceChunkForgettingFlora)
 
 -- | Place one tile of fluid on top of the column at (gx, gy). Records
 --   the edit in the world's log; in-memory mutation uses the same
@@ -44,8 +45,11 @@ handleWorldSetFluidTileCommand env logger pageId gx gy fluidType = do
                           <> tshow gx <> "," <> tshow gy
                 Just lc → do
                     let lc' = applyEdit edit lc
-                    atomicModifyIORef' (wsTilesRef ws) $ \w →
-                        (insertChunk lc' w, ())
+                    -- #1854 requirement 16: an edit that takes the tile's
+                    -- rooted flora with it must take that plant's
+                    -- designation and regrowth timer too, or an orphan
+                    -- entry outlives the plant it addressed.
+                    replaceChunkForgettingFlora ws lc lc'
                     atomicModifyIORef' (wsEditsRef ws) $ \es →
                         (appendEdit coord edit es, ())
                     -- Re-seed the sim with the placed fluid so it flows /

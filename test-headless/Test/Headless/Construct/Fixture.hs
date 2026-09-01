@@ -127,6 +127,7 @@ fixtureItems = ItemManager $ HM.fromList
 itemDef ∷ Text → ItemDef
 itemDef name = ItemDef
     { idName = name, idDisplayName = name, idTexture = TextureHandle 0
+    , idIconTexture = TextureHandle 0
     , idWeight = 1.0, idWeightSpec = Nothing, idBulk = 1.0
     , idStorage = Nothing, idKind = "misc"
     , idCategory = "Materials", idMake = "", idMaterial = ""

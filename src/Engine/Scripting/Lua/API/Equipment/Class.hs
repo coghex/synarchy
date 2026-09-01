@@ -37,6 +37,7 @@ import Engine.Core.Log (LogCategory(..), logDebug)
 import Engine.Core.Log.Monad (getLoggerFor)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
+import Engine.Graphics.Vulkan.Texture.Policy (UploadSampler(..))
 import Engine.Scripting.Lua.API.YamlTextures (loadAndRegister, resolveTexturePath)
 import Engine.Asset.YamlEquipment
 import Equipment.Types
@@ -76,7 +77,12 @@ loadEquipmentYamlFn core regs env backendState = do
                     silhouettePath ← resolveTexturePath env
                         "Equipment silhouette" missingEquipmentSilhouette
                         (T.unpack (eycSilhouette c))
+                    -- UI-only art (#2075): the silhouette is the
+                    -- equipment panel's backdrop and is drawn nowhere
+                    -- else, so it is pinned nearest rather than
+                    -- following the player's scene filter.
                     handle ← loadAndRegister env backendState lteq
+                                UploadPinnedNearest
                                 regName silhouettePath
 
                     let slots = map

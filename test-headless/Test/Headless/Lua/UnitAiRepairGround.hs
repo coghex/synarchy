@@ -125,7 +125,7 @@ itemDefs = ItemManager $ HM.fromList
 
 bareDef ∷ Text → Text → Float → ItemDef
 bareDef name kind w = ItemDef
-    { idName = name, idDisplayName = name, idTexture = TextureHandle 0
+    { idName = name, idDisplayName = name, idTexture = TextureHandle 0, idIconTexture = TextureHandle 0
     , idWeight = w, idWeightSpec = Nothing, idBulk = 1.0
     , idStorage = Nothing, idKind = kind
     , idCategory = "Misc", idMake = "", idMaterial = ""

@@ -9,7 +9,7 @@ import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (CameraFacing(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..), mkVertexWorld
-                                           , packWorldUV, noFaceMapVertexId)
+                                           , tileWorldUV, noFaceMapVertexId)
 import World.Grid (gridToScreen, tileWidth, tileHeight, tileSideHeight
                   , tileHalfWidth, tileHalfDiamondHeight
                   , worldLayer, applyFacing, baseTileW, baseTileH)
@@ -98,7 +98,7 @@ floraToQuad lookupSlot _textures facing
             b = 1.0 * (1.0 - hazeT) + 0.95 * hazeT
 
             tint = Vec4 r g b tileAlpha
-            wuv = packWorldUV gx gy
+            wuv = tileWorldUV gx gy
 
             v0 = mkVertexWorld wuv (Vec2 drawX drawY)
                          (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot

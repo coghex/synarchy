@@ -85,7 +85,7 @@ mkItem name iid contents = ItemInstance
 
 bareItemDef ∷ Text → Text → ItemDef
 bareItemDef name kind = ItemDef
-    { idName = name, idDisplayName = name, idTexture = TextureHandle 0
+    { idName = name, idDisplayName = name, idTexture = TextureHandle 0, idIconTexture = TextureHandle 0
     , idWeight = 0.5, idWeightSpec = Nothing, idBulk = 1.0
     , idStorage = Nothing, idKind = kind
     , idCategory = "Misc", idMake = "", idMaterial = ""
@@ -127,7 +127,7 @@ cargoDef ∷ BuildingDef
 cargoDef = BuildingDef
     { bdName = "cargo_hold_S", bdDisplayName = "Cargo Hold"
     , bdCategory = "Storage", bdDescription = ""
-    , bdTexture = TextureHandle 0
+    , bdTexture = TextureHandle 0, bdIconTexture = TextureHandle 0
     , bdTileW = 1, bdTileH = 1, bdPlacement = "flat_ground"
     , bdIsStarting = False, bdRace = "acolyte"
     , bdSpriteAnchor = "diamond_bottom", bdBuildWork = 0

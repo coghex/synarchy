@@ -29,11 +29,11 @@ data Wound = Wound
       --   factor, healing characteristics, and combat-log flavor.
     , woundSeverity ∷ !Float
       -- ^ inflicted severity 0..1, static for the wound's lifetime.
-      --   The EFFECTIVE severity used elsewhere (pain, bleed,
-      --   impairment) is `woundSeverity × (1 - woundHeal)`, which
-      --   eases as `woundHeal` advances. A new hit always appends a
-      --   fresh 'Wound'; existing wounds on the same part aren't
-      --   merged.
+      --   This is NOT the number that drives pain, bleed and
+      --   impairment: those read the EFFECTIVE severity, which
+      --   'woundEffSeverity' owns (healing eases it, necrosis floors
+      --   it). A new hit always appends a fresh 'Wound'; existing
+      --   wounds on the same part aren't merged.
     , woundAt       ∷ !Double
       -- ^ gameTime (seconds) when inflicted.
     , woundBandage  ∷ !Float
@@ -60,8 +60,10 @@ data Wound = Wound
       --   open wound barely heals). woundSeverity is the INFLICTED
       --   severity (static); the wound's EFFECTIVE severity — what
       --   drives bleed magnitude, pain, and impairment — is
-      --   woundSeverity × (1 − woundHeal), so a unit recovers function
-      --   as it heals. When effective severity falls below cleanup
+      --   'woundEffSeverity', which eases as this heal advances but
+      --   never drops below the woundNecrosis floor, so a unit
+      --   recovers function as it heals only to the extent tissue is
+      --   still alive. When effective severity falls below cleanup
       --   threshold the wound is removed, leaving a Scar if it was
       --   severe enough. Severed wounds don't heal (the limb is gone).
     , woundDressing ∷ !Text
@@ -103,15 +105,19 @@ data Wound = Wound
       --   by gangrene. Future: a debridement action removes it.
     } deriving (Show, Eq, Generic, Serialize)
 
--- | The authoritative EFFECTIVE severity of a wound — what actually
+-- | The one definition of a wound's EFFECTIVE severity — what actually
 --   drives bleed magnitude, pain, impairment, medic priority, and the
 --   injured-animation flag. Healing eases it (@sev × (1 − heal)@, which
 --   climbs back above the inflicted value when a festering wound's heal
 --   goes negative), while necrosis (dead tissue) is a PERMANENT floor:
 --   a rotting wound is at least as bad as the fraction of tissue that
---   has died. Mirrors the per-tick @effSev@ in
---   'Combat.Wounds.tickOneUnit' (the source of truth) so every
---   downstream consumer stays in lockstep with it.
+--   has died.
+--
+--   This function owns the formula; nothing respells it. The wound tick
+--   ('Combat.Wounds.tickOneUnit') calls it on the wound carrying that
+--   tick's freshly advanced heal and necrosis, so the value governing
+--   the tick's own bleed and cleanup is the same one every downstream
+--   consumer reads afterwards.
 woundEffSeverity ∷ Wound → Float
 woundEffSeverity w =
     max (woundSeverity w * (1 - woundHeal w)) (woundNecrosis w)

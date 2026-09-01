@@ -110,6 +110,34 @@ local function snapshotUnitState(s)
         jobCopy.build = nil
         copy.constructJob = jobCopy
     end
+    -- chopJob.iid (#1854) is stripped on exactly the constructJob.build
+    -- pattern above, and for the same class of reason: it is a durable
+    -- FloraInstanceId, and persisting it as a bare number would carry a
+    -- reference kind unit_ai_save_refs.lua does not declare and the
+    -- integrity graph could not check -- the same hazard the
+    -- TransientOrderFields note records for TransferOrderId. The chop
+    -- DESIGNATION is the durable authority and is persisted engine-side
+    -- (world-activity), so unit_ai_chop.lua's jobInstance() re-resolves
+    -- the target from the job's own saved tile on the first tick after
+    -- a load. The job itself (tile, phase, progress) still persists
+    -- exactly as before, so lua.unit_ai's schema is untouched by the
+    -- #1854 re-key -- no version bump, no new reference kind.
+    --
+    -- Re-resolution is CLAIM-AWARE, and it has to be: a tile can carry
+    -- several designated plants, so two acolytes can restore jobs on
+    -- one. jobInstance() walks chop.getDesignationsAt's deterministic
+    -- list and adopts (claiming in the same step) the first plant no
+    -- other acolyte holds, and chopExecute refuses to refresh a claim
+    -- that is not its own -- without both, the pair would fell one tree
+    -- together, orphan the other's designation, and silently overwrite
+    -- the loser's claim. Pinned by Test.Headless.Lua.UnitAiLoadReset's
+    -- two restored-chop-job examples.
+    if copy.chopJob and copy.chopJob.iid ~= nil then
+        local jobCopy = {}
+        for jk, jv in pairs(copy.chopJob) do jobCopy[jk] = jv end
+        jobCopy.iid = nil
+        copy.chopJob = jobCopy
+    end
     return copy
 end
 
@@ -296,6 +324,15 @@ function M.register(aiState)
             -- PUBLISHED session's designations, which exist neither at
             -- decode time nor at apply() time. It happens in
             -- unit_ai_reconcile.lua, off the onSaveLoaded broadcast.
+            --
+            -- #2055's runtime-default normalization is deliberately NOT
+            -- here either. One of the three defaults reads the CLOCK,
+            -- and decode runs during staging -- `gameTimeRef` is not
+            -- swapped to the save's own game time until
+            -- World.Load.Publish, so a value stamped here would be the
+            -- OUTGOING session's time (0 in a fresh process), not the
+            -- restored one. It runs at the post-publish reconcile
+            -- instead: scripts/unit_ai_reconcile.lua.
             if version == 1 then return refsMod.wrapAiState(data) end
             if version == 2 then return refsMod.addOwnerToAiState(data) end
             return data
@@ -317,6 +354,14 @@ function M.register(aiState)
         -- OTHER module) never changes -- only the bytes on disk do. The
         -- table is mutated in place: consumers hold direct references to
         -- it and rebinding would orphan every one of them.
+        --
+        -- #2055's runtime-default normalization is deliberately NOT
+        -- here: apply() is also the ROLLBACK entry point (applyAll
+        -- hands it the OLD session's own snapshot, contextless, and
+        -- that unwind is required to be verbatim), so normalizing at
+        -- this boundary would edit pre-load state during a load that
+        -- is being abandoned. It runs at the post-publish reconcile
+        -- instead -- see scripts/unit_ai_reconcile.lua.
         apply = function(data, entities)
             saveMods.applyEntityRows(aiState, refsMod.unwrapAiState(data),
                 entities, { kind = "unit", component = "unit_ai" })

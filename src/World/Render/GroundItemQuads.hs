@@ -38,7 +38,7 @@ import Engine.Graphics.Viewport (windowDegenerate)
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..)
                                            , QuadPayload(..), quadVertices
                                            , rectCorners, fullQuadUV
-                                           , renderFlagSelected, packWorldUV
+                                           , renderFlagSelected, tileWorldUV
                                            , noFaceMapVertexId)
 import Engine.Scene.Types (SortableQuad(..))
 import Item.Ground (GroundItem(..), GroundItems(..))
@@ -287,7 +287,7 @@ renderGroundItemQuadsScanned env worldState tileAlpha = do
                         flags = if selectedGid ≡ Just gid
                                 then renderFlagSelected else 0
                         slotF = fromIntegral (actualSlot ∷ Int)
-                        wuv = packWorldUV tx ty
+                        wuv = tileWorldUV tx ty
                         (v0, v1, v2, v3) =
                             quadVertices
                                 (rectCorners (Vec2 drawX drawY)

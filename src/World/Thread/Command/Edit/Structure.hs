@@ -25,6 +25,7 @@ import World.Edit.Apply (applyEdit)
 import Structure.Types
     ( StructureStageToken, dropStagedAttempt, recordDeclinedAttempt
     , emptyChunkStructures )
+import World.Flora.Designation (replaceChunkForgettingFlora)
 
 -- | Place a structure piece (floor/wall/post/ceiling) at (gx,gy,slot-tag) via
 --   the WeSetStructure edit path: live-apply to the loaded chunk's structure
@@ -77,8 +78,11 @@ handleWorldSetStructureCommand env logger pageId gx gy slotTag texId faceId z to
                           <> tshow gx <> "," <> tshow gy
                 Just lc → do
                     let lc' = applyEdit edit lc
-                    atomicModifyIORef' (wsTilesRef ws) $ \w →
-                        (insertChunk lc' w, ())
+                    -- #1854 requirement 16: an edit that takes the tile's
+                    -- rooted flora with it must take that plant's
+                    -- designation and regrowth timer too, or an orphan
+                    -- entry outlives the plant it addressed.
+                    replaceChunkForgettingFlora ws lc lc'
                     atomicModifyIORef' (wsEditsRef ws) $ \es →
                         (appendEdit coord edit es, ())
                     -- #1844: the tile's slot occupancy just changed, so
@@ -118,8 +122,11 @@ handleWorldClearStructureCommand env logger pageId gx gy slotTag = do
                 Nothing → pure ()
                 Just lc → do
                     let lc' = applyEdit edit lc
-                    atomicModifyIORef' (wsTilesRef ws) $ \w →
-                        (insertChunk lc' w, ())
+                    -- #1854 requirement 16: an edit that takes the tile's
+                    -- rooted flora with it must take that plant's
+                    -- designation and regrowth timer too, or an orphan
+                    -- entry outlives the plant it addressed.
+                    replaceChunkForgettingFlora ws lc lc'
             -- #1844: a CLEAR can free a slot a designation wanted, and
             -- can remove the floor a post designation stands on. Fired
             -- whatever the chunk's residency, since the clear is

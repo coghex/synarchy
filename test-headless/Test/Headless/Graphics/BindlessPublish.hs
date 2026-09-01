@@ -212,7 +212,7 @@ spec = do
     it "cleans up after the failures only" $
       map fst (brCleanups result) `shouldBe` [TextureHandle 2, TextureHandle 3]
 
-  describe "a pinned-atlas batch that runs out of slots" $ do
+  describe "a pinned-texture batch that runs out of slots" $ do
     let result = runBatch UploadPinnedNearest exhaustedAllocator
                    Map.empty Map.empty [request 7 "walk.png" 20]
 
@@ -234,11 +234,12 @@ spec = do
       brPaths result `shouldBe` Map.empty
 
   describe "a cross-policy re-upload that fails" $ do
-    -- @apAssetPaths@ is keyed by path alone while a slot's sampler is
-    -- fixed by whichever policy first uploaded it, so a same-path entry
-    -- under the OPPOSITE policy is valid and is exactly why this request
-    -- is a fresh upload rather than a cache hit. Its failure must not
-    -- insert, overwrite, or DELETE that entry.
+    -- A slot's sampler is fixed by whichever policy uploaded it, so a
+    -- same-path entry under the OPPOSITE policy is valid and is exactly
+    -- why this request is a fresh upload rather than a cache hit. Since
+    -- #2075 that entry sits at its own (path, policy) key; this fold is
+    -- key-generic, so the keys here stand in for that pair. Its failure
+    -- must not insert, overwrite, or DELETE the entry.
     let existingPaths = Map.fromList [("walk.png", AssetId 5)]
         existingAtlases = Map.fromList [(AssetId 5, "walk.png")]
         result = runBatch UploadPinnedNearest exhaustedAllocator

@@ -17,15 +17,15 @@ function boxTextures.load(basePath, prefix)
     end
     
     -- Load all 9 textures
-    local texCenter = engine.loadTexture(basePath .. "/" .. prefix .. ".png")
-    local texN = engine.loadTexture(basePath .. "/" .. prefix .. "n.png")
-    local texS = engine.loadTexture(basePath .. "/" .. prefix .. "s.png")
-    local texE = engine.loadTexture(basePath .. "/" .. prefix .. "e.png")
-    local texW = engine.loadTexture(basePath .. "/" .. prefix .. "w.png")
-    local texNE = engine.loadTexture(basePath .. "/" .. prefix .. "ne.png")
-    local texNW = engine.loadTexture(basePath .. "/" .. prefix .. "nw.png")
-    local texSE = engine.loadTexture(basePath .. "/" .. prefix .. "se.png")
-    local texSW = engine.loadTexture(basePath .. "/" .. prefix .. "sw.png")
+    local texCenter = engine.loadTexture(basePath .. "/" .. prefix .. ".png", "ui")
+    local texN = engine.loadTexture(basePath .. "/" .. prefix .. "n.png", "ui")
+    local texS = engine.loadTexture(basePath .. "/" .. prefix .. "s.png", "ui")
+    local texE = engine.loadTexture(basePath .. "/" .. prefix .. "e.png", "ui")
+    local texW = engine.loadTexture(basePath .. "/" .. prefix .. "w.png", "ui")
+    local texNE = engine.loadTexture(basePath .. "/" .. prefix .. "ne.png", "ui")
+    local texNW = engine.loadTexture(basePath .. "/" .. prefix .. "nw.png", "ui")
+    local texSE = engine.loadTexture(basePath .. "/" .. prefix .. "se.png", "ui")
+    local texSW = engine.loadTexture(basePath .. "/" .. prefix .. "sw.png", "ui")
     
     -- Register with UI system
     local texSet = UI.loadBoxTextures(texCenter, texN, texS, texE, texW, texNE, texNW, texSE, texSW)

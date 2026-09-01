@@ -31,6 +31,7 @@ import Engine.Asset.Handle (TextureHandle(..), AssetState(..))
 import Engine.Asset.Types (AssetPool)
 import Engine.Asset.Manager (generateTextureHandle, updateTextureState)
 import Engine.Asset.TextureNameRegistry (lookupTextureName, registerTextureName)
+import Engine.Graphics.Vulkan.Texture.Policy (UploadSampler(..))
 import Engine.Asset.YamlMaterials
     (MaterialDef(..), loadMaterialYaml, materialPropsFromDef)
 import Engine.Asset.YamlVegetation (VegetationDef(..), loadVegetationYaml)
@@ -83,11 +84,11 @@ loadMaterialYamlFn env backendState = do
                                    unknownMaterial (T.unpack (mdZoom def))
                     bgPath   ← resolveTexturePath env "Material background"
                                    unknownMaterial (T.unpack (mdBg def))
-                    tileH ← loadAndRegister env backendState lteq
+                    tileH ← loadAndRegister env backendState lteq UploadGlobalSampler
                                 ("mat_tile_" <> name) tilePath
-                    zoomH ← loadAndRegister env backendState lteq
+                    zoomH ← loadAndRegister env backendState lteq UploadGlobalSampler
                                 ("mat_zoom_" <> name) zoomPath
-                    bgH   ← loadAndRegister env backendState lteq
+                    bgH   ← loadAndRegister env backendState lteq UploadGlobalSampler
                                 ("mat_bg_"   <> name) bgPath
 
                     -- Also register by numeric ID for world.setTexture
@@ -157,7 +158,7 @@ loadVegetationYamlFn env backendState = do
                         resolved ← resolveTexturePath env "Vegetation variant"
                                        "assets/textures/utility/blanktexture.png"
                                        (T.unpack texPath)
-                        _ ← loadAndRegister env backendState lteq
+                        _ ← loadAndRegister env backendState lteq UploadGlobalSampler
                                 regName resolved
                         return (vacc + 1)
                         ) (0 ∷ Int) (zip [0..] variants)
@@ -172,9 +173,20 @@ loadVegetationYamlFn env backendState = do
             Lua.pushnumber (Lua.Number (fromIntegral count))
             return 1
 
--- | Helper: generate a handle, register the name, queue the load request.
+-- | Helper: generate a handle, register the name, queue the load
+--   request under an EXPLICIT upload policy.
+--
+--   The policy is a parameter, not a constant, for the same reason
+--   @engine.loadTexture@'s is (#2075, D-4): what a texture is FOR is
+--   known at the declaring call site and nowhere else. Most YAML art is
+--   world-drawn and passes 'UploadGlobalSampler'; the families whose
+--   only consumer is a UI panel — a unit's authored portrait, an
+--   equipment silhouette — pass 'UploadPinnedNearest'; and genuinely
+--   dual-use art (an item sprite, a building sprite) is loaded TWICE,
+--   once per policy, so the world quad and the inventory icon each get
+--   the sampler they need.
 loadAndRegister ∷ EngineEnv → LuaBackendState → Q.Queue LuaToEngineMsg
-                → Text → FilePath → IO TextureHandle
+                → UploadSampler → Text → FilePath → IO TextureHandle
 loadAndRegister env backendState =
     loadAndRegisterWithPool env (lbsAssetPool backendState)
 
@@ -185,27 +197,27 @@ loadAndRegister env backendState =
 --   asset-loading test with a real 'EngineEnv' but no Lua state — drive
 --   the same registration path.
 loadAndRegisterWithPool ∷ EngineEnv → IORef AssetPool → Q.Queue LuaToEngineMsg
-                        → Text → FilePath → IO TextureHandle
-loadAndRegisterWithPool env poolRef lteq name path = do
+                        → UploadSampler → Text → FilePath → IO TextureHandle
+loadAndRegisterWithPool env poolRef lteq samplerPolicy name path = do
     pool ← readIORef poolRef
     handle ← generateTextureHandle pool
     updateTextureState handle (AssetLoading path [] 0.0) pool
     -- Register name → handle
     registerTextureName (rvTextureNameRegistryRef (toRenderViewCapability env)) name handle
     -- Queue for actual GPU loading on the engine thread
-    Q.writeQueue lteq (LuaLoadTextureRequest handle path)
+    Q.writeQueue lteq (LuaLoadTextureRequest handle path samplerPolicy)
     return handle
 
 -- | 'loadAndRegisterWithPool' for a compiled unit-animation atlas
 --   (#1259).
 --
 --   Identical bookkeeping — ONE handle, ONE name, ONE queued upload per
---   animation (D-2\/D-10) — but the request carries the atlas policy, so
---   the engine registers the slot PINNED to the nearest sampler with a
---   single mip level (D-6). Unit art must stay nearest-neighbour even
---   after a runtime @setTextureFilter@ toggle repaints every ordinary
---   slot to the new global sampler; a whole sheet resampled bilinearly
---   would also bleed neighbouring cells across every frame edge.
+--   animation (D-2\/D-10) — but kept as a distinct request so the
+--   one-image-per-animation contract stays explicit. The engine registers
+--   atlas slots on the player-selected global sampler (#2085); the one-texel
+--   extrusion ring around every cell (#2076) keeps linear taps isolated,
+--   and the preview browser's existing forced-global-nearest setting keeps
+--   preview presentation pixel-crisp without a second loader path.
 loadAndRegisterAtlasWithPool ∷ EngineEnv → IORef AssetPool
                              → Q.Queue LuaToEngineMsg
                              → Text → FilePath → IO TextureHandle
@@ -282,7 +294,7 @@ registerFloraSpecies env backendState lteq catRef def = do
     -- Load base texture
     resolvedBase ← resolveTexturePath env "Flora base"
                        unknownFloraTexture baseTexPath
-    baseH ← loadAndRegister env backendState lteq
+    baseH ← loadAndRegister env backendState lteq UploadGlobalSampler
                 ("flora_base_" <> name) resolvedBase
     texCount ← newIORef (1 ∷ Int)
 
@@ -304,7 +316,7 @@ registerFloraSpecies env backendState lteq catRef def = do
                 let path = texDir <> "/" <> T.unpack (fypTexture yp)
                 resolved ← resolveTexturePath env "Flora phase"
                                unknownFloraTexture path
-                h ← loadAndRegister env backendState lteq
+                h ← loadAndRegister env backendState lteq UploadGlobalSampler
                         ("flora_phase_" <> name <> "_" <> fypTag yp) resolved
                 atomicModifyIORef' texCount (\n → (n + 1, ()))
                 let phase = LifePhase
@@ -323,7 +335,7 @@ registerFloraSpecies env backendState lteq catRef def = do
                 let path = texDir <> "/" <> T.unpack (fycsTexture ycs)
                 resolved ← resolveTexturePath env "Flora annual-cycle stage"
                                unknownFloraTexture path
-                h ← loadAndRegister env backendState lteq
+                h ← loadAndRegister env backendState lteq UploadGlobalSampler
                         ("flora_cycle_" <> name <> "_" <> fycsTag ycs) resolved
                 atomicModifyIORef' texCount (\n → (n + 1, ()))
                 let stage = AnnualStage
@@ -341,7 +353,7 @@ registerFloraSpecies env backendState lteq catRef def = do
                 let path = texDir <> "/" <> T.unpack (fycoTexture yco)
                 resolved ← resolveTexturePath env "Flora cycle override"
                                unknownFloraTexture path
-                h ← loadAndRegister env backendState lteq
+                h ← loadAndRegister env backendState lteq UploadGlobalSampler
                         ("flora_ov_" <> name <> "_" <> fycoPhase yco
                          <> "_" <> fycoCycle yco) resolved
                 atomicModifyIORef' texCount (\n → (n + 1, ()))
@@ -360,7 +372,7 @@ registerFloraSpecies env backendState lteq catRef def = do
                     let path = texDir <> "/" <> T.unpack tex
                     resolved ← resolveTexturePath env "Flora harvested"
                                    unknownFloraTexture path
-                    h ← loadAndRegister env backendState lteq
+                    h ← loadAndRegister env backendState lteq UploadGlobalSampler
                             ("flora_harvested_" <> name) resolved
                     atomicModifyIORef' texCount (\n → (n + 1, ()))
                     return h

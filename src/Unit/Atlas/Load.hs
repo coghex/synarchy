@@ -26,7 +26,9 @@
 --        counts, columns ('Unit.Atlas.Index.planUnitAtlasStorage');
 --     3. each atlas decodes to the image the index describes; every
 --        declared SOURCE frame decodes to exactly the pixels its atlas
---        cell holds ('Unit.Atlas.Index.validateSourceFrame'); and the
+--        cell holds, and its slot carries the one-texel extrusion ring
+--        compiled from that same frame
+--        ('Unit.Atlas.Index.validateSourceFrame'); and the
 --        animation's whole @source_digest@ is recomputed from those
 --        same inputs and compared
 --        ('Unit.Atlas.Index.validateSourceDigest').
@@ -219,15 +221,16 @@ checkSourceFrames root unit yamlAnims anim atlas =
                 Left err → Left err
                 Right dirInputs →
                     validateSourceDigest unit anim SourceAnimInput
-                        { saiUnit       = unit
-                        , saiName       = aaName anim
-                        , saiFlip       = aaFlip anim
-                        , saiLoop       = aaLoop anim
-                        , saiFps        = aaFps anim
-                        , saiCellWidth  = aaCellWidth anim
-                        , saiCellHeight = aaCellHeight anim
-                        , saiColumns    = aaColumns anim
-                        , saiDirections = reverse dirInputs
+                        { saiUnit        = unit
+                        , saiName        = aaName anim
+                        , saiFlip        = aaFlip anim
+                        , saiLoop        = aaLoop anim
+                        , saiFps         = aaFps anim
+                        , saiCellWidth   = aaCellWidth anim
+                        , saiCellHeight  = aaCellHeight anim
+                        , saiCellPadding = aaCellPadding anim
+                        , saiColumns     = aaColumns anim
+                        , saiDirections  = reverse dirInputs
                         }
   where
     miss reason = AtlasLoadError

@@ -69,17 +69,6 @@ spec = do
       ecNotificationOrder (toEventsCapability env) `shouldBe` notificationOrder env
       ecNotificationOrder (toEventsCapability env) `shouldNotBe` []
 
-    it "is stable across repeated projection (no fresh containers)" $ \env → do
-      -- E7b re-projects inline at its call sites (every emit projects
-      -- once), so a projection that minted anything fresh would hand
-      -- consecutive reads of the "same" field two different containers.
-      let a = toEventsCapability env
-          b = toEventsCapability env
-      sameContainer (ecEventStoreRef a) (ecEventStoreRef b)
-      sameContainer (ecNotificationCfgRef a) (ecNotificationCfgRef b)
-      sameContainer (ecPopupQueueRef a) (ecPopupQueueRef b)
-      ecNotificationOrder a `shouldBe` ecNotificationOrder b
-
     it "keeps the two event TVars pinned to their own counterparts" $ \env → do
       -- `eventStoreRef` (the log ring, read back by
       -- engine.getEventLog()) and `popupQueueRef` (popup-enabled

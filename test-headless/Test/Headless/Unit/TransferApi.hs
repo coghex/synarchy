@@ -156,7 +156,7 @@ mkUnit defName f (gx, gy) cap inv worn = UnitInstance
 storageDef ∷ Text → Text → (Int, Int) → Float → Float → BuildingDef
 storageDef name display (w, h) work cap = BuildingDef
     { bdName = name, bdDisplayName = display, bdCategory = "Test"
-    , bdDescription = "", bdTexture = TextureHandle 0
+    , bdDescription = "", bdTexture = TextureHandle 0, bdIconTexture = TextureHandle 0
     , bdTileW = w, bdTileH = h, bdPlacement = "flat_ground"
     , bdIsStarting = False, bdRace = "acolyte_cult"
     , bdSpriteAnchor = "diamond_bottom", bdBuildWork = work

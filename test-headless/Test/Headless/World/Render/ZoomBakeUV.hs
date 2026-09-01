@@ -9,10 +9,10 @@
 module Test.Headless.World.Render.ZoomBakeUV (spec) where
 
 import UPrelude
-import Data.List (sort)
+import Data.List (sortOn)
 import Test.Hspec
 import Engine.Graphics.Camera (CameraFacing(..))
-import Engine.Graphics.Vulkan.Types.Vertex (packUV)
+import Engine.Graphics.Vulkan.Types.Vertex (WorldUV(..), mkWorldUV)
 import World.Render.Zoom.Bake (zoomQuadWorldUVs)
 
 -- A chunk whose four corners' (u,v) are NOT all equal, so a
@@ -22,40 +22,43 @@ spec ∷ Spec
 spec = describe "zoomQuadWorldUVs" $ do
     it "FaceSouth: recovers the bounding min/max (u,v) directly (identity rotation)" $
         zoomQuadWorldUVs FaceSouth 0 0
-            `shouldBe` ( packUV (-16) 0
-                       , packUV 16 0
-                       , packUV 16 32
-                       , packUV (-16) 32
+            `shouldBe` ( mkWorldUV (-16) 0
+                       , mkWorldUV 16 0
+                       , mkWorldUV 16 32
+                       , mkWorldUV (-16) 32
                        )
 
     it "FaceNorth (180 deg): the same four values, rotated by 2 (opposite corner)" $
         zoomQuadWorldUVs FaceNorth 0 0
-            `shouldBe` ( packUV 16 32
-                       , packUV (-16) 32
-                       , packUV (-16) 0
-                       , packUV 16 0
+            `shouldBe` ( mkWorldUV 16 32
+                       , mkWorldUV (-16) 32
+                       , mkWorldUV (-16) 0
+                       , mkWorldUV 16 0
                        )
 
     it "FaceWest (90 deg): the same four values, cyclically rotated by 1" $
         zoomQuadWorldUVs FaceWest 0 0
-            `shouldBe` ( packUV 16 0
-                       , packUV 16 32
-                       , packUV (-16) 32
-                       , packUV (-16) 0
+            `shouldBe` ( mkWorldUV 16 0
+                       , mkWorldUV 16 32
+                       , mkWorldUV (-16) 32
+                       , mkWorldUV (-16) 0
                        )
 
     it "FaceEast (270 deg): the same four values, cyclically rotated by 3" $
         zoomQuadWorldUVs FaceEast 0 0
-            `shouldBe` ( packUV (-16) 32
-                       , packUV (-16) 0
-                       , packUV 16 0
-                       , packUV 16 32
+            `shouldBe` ( mkWorldUV (-16) 32
+                       , mkWorldUV (-16) 0
+                       , mkWorldUV 16 0
+                       , mkWorldUV 16 32
                        )
 
     it "every facing uses the SAME set of 4 values, just permuted (no value invented/lost)" $
         let asList (a, b, c, d) = [a, b, c, d]
+            -- 'WorldUV' has no Ord (it is a coordinate pair, not an
+            -- ordered quantity), so canonicalise on its components.
+            canon = sortOn (\w → (wuvU w, wuvV w))
             south = asList (zoomQuadWorldUVs FaceSouth 5 (-3))
             west  = asList (zoomQuadWorldUVs FaceWest  5 (-3))
             north = asList (zoomQuadWorldUVs FaceNorth 5 (-3))
             east  = asList (zoomQuadWorldUVs FaceEast  5 (-3))
-        in mapM_ (\s → sort s `shouldBe` sort south) [west, north, east]
+        in mapM_ (\s → canon s `shouldBe` canon south) [west, north, east]

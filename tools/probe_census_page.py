@@ -82,7 +82,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ci_probes  # noqa: E402
 import probe_census  # noqa: E402
 import probe_protocol  # noqa: E402
-import run_probes  # noqa: E402
+import probe_runner_registry  # noqa: E402
 
 PAGE_RELPATH = "docs/probe_census.md"
 # Deliberately NOT a `probe_census.STAGING_PREFIX` extension: the census
@@ -143,14 +143,14 @@ class PageError(probe_census.CensusError):
 # The registries this page is derived from
 # ==========================================================================
 def registered_keys() -> set:
-    """Every registered probe key, read from `run_probes.PROBES`.
+    """Every registered probe key, read from `probe_runner_registry.PROBES`.
 
     Read from the registry rather than `ci_probes.ALL_KEYS`, which is
     computed once at import: a test pointing the registry at a
     synthetic probe set must move this too, or it would audit a page
     against the shipped ninety.
     """
-    return {key for key, _script, _purpose in run_probes.PROBES}
+    return {key for key, _script, _purpose in probe_runner_registry.PROBES}
 
 
 def manual_only_keys() -> list:
@@ -456,7 +456,7 @@ def _why_not_listed(key: str) -> str:
         return ("it is CI-eligible, so it keeps its manifest row and its "
                 "history but takes no page row")
     if key not in registered_keys():
-        return "it is not registered in run_probes.PROBES"
+        return "it is not registered in probe_runner_registry.PROBES"
     return "it is not a manual-only probe"
 
 

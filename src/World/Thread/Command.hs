@@ -181,8 +181,8 @@ handleWorldCommand env logger (WorldClearChopAnchor pageId)
   = handleWorldClearChopAnchorCommand env logger pageId
 handleWorldCommand env logger (WorldDesignateChop pageId gx1 gy1 gx2 gy2 tag)
   = handleWorldDesignateChopCommand env logger pageId gx1 gy1 gx2 gy2 tag
-handleWorldCommand env logger (WorldCancelChop pageId gx gy)
-  = handleWorldCancelChopCommand env logger pageId gx gy
+handleWorldCommand env logger (WorldCancelChop pageId gx gy mIid)
+  = handleWorldCancelChopCommand env logger pageId gx gy mIid
 handleWorldCommand env logger (WorldSetChopDesignateTexture pageId texHandle)
   = handleWorldSetChopDesignateTextureCommand env logger pageId texHandle
 handleWorldCommand env logger (WorldSetTillAnchor pageId gx gy)

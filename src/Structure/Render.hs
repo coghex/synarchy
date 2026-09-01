@@ -64,7 +64,7 @@ import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..)
                                            , QuadCorners(..), QuadUV(..)
                                            , QuadPayload(..), quadVertices
                                            , rectCorners, fullQuadUV
-                                           , packWorldUV)
+                                           , tileWorldUV)
 import World.Grid (tileWidth
                    , tileHeight
                    , tileSideHeight
@@ -408,7 +408,7 @@ structureToQuad lookupSlot facing zSlice effDepth tileAlpha gx gy slot piece tex
             faceSlot   = fromIntegral (lookupSlot (spFaceMap piece))
             tint  = Vec4 1.0 1.0 1.0 tileAlpha
             flags = 0
-            wuv   = packWorldUV gx gy
+            wuv   = tileWorldUV gx gy
 
             (v0, v1, v2, v3) =
                 quadVertices (rectCorners (Vec2 drawX drawY) (Vec2 quadW quadH))
@@ -493,7 +493,7 @@ frontWallStrips lookupSlot facing zSlice effDepth tileAlpha gx gy slot piece tex
             faceSlot   = fromIntegral (lookupSlot (spFaceMap piece))
             tint  = Vec4 1.0 1.0 1.0 tileAlpha
             flags = 0
-            wuv   = packWorldUV gx gy
+            wuv   = tileWorldUV gx gy
 
             -- The screen edge this wall is drawn on and its art's canvas-x
             -- span. The end at canvas CENTRE (u 0.5) is the screen-bottom
@@ -626,7 +626,7 @@ postToQuad lookupSlot facing zSlice effDepth tileAlpha gx gy slot piece texSizes
             faceSlot   = fromIntegral (lookupSlot (spFaceMap piece))  -- postface
             tint  = Vec4 1.0 1.0 1.0 tileAlpha
             flags = 0
-            wuv   = packWorldUV gx gy
+            wuv   = tileWorldUV gx gy
             (v0, v1, v2, v3) =
                 quadVertices (rectCorners (Vec2 drawX drawY) (Vec2 quadW quadH))
                              fullQuadUV

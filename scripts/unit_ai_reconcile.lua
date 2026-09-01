@@ -42,6 +42,10 @@ local schema    = require("scripts.unit_ai_ref_schema")
 -- module scope itself (the same reason unit_ai_save_refs.lua requires
 -- it directly).
 local locations = require("scripts.unit_ai_locations")
+-- #2055: the transient runtime fields a thought tick reads before it
+-- has decided anything, and their fresh-unit values. Requires nothing
+-- at module scope itself.
+local defaults  = require("scripts.unit_ai_defaults")
 
 -- Session-global reference kinds: one allocator for the whole session,
 -- so the id alone identifies the entity. Mirrors luaEdgeResolves.
@@ -310,6 +314,47 @@ function M.reconcile(aiState, survUnitIds, survBuildingIds, raw, hooks)
     for k in pairs(aiState) do aiState[k] = nil end
     for k, v in pairs(rebuilt) do aiState[k] = v; kept = kept + 1 end
 
+    -- #2055: a row restored from an accepted schema version need not
+    -- carry the transient runtime fields a thought tick reads before it
+    -- has decided anything -- this component's validator accepts a
+    -- free-form state row on purpose, and applyEntityRows installs each
+    -- decoded row VERBATIM. Such a row survived decode, canonical
+    -- comparison, resave, restart and reload and then errored on its
+    -- first live tick at `engine.gameTime() < s.nextActionAt`; the
+    -- tracked b3-lua-versioned-session-v1 fixture's v1 payload,
+    -- `{[1] = {buildTarget = 1}}`, is exactly one.
+    --
+    -- HERE, and not at decode() or apply(), for three reasons that all
+    -- have to hold at once:
+    --
+    --   * THE CLOCK IS RIGHT. `actionStartedAt` defaults to
+    --     `engine.gameTime()`, and decode/apply run during STAGING --
+    --     World.Load.Publish does not swap `gameTimeRef` to the save's
+    --     own game time until afterwards, so a value stamped there
+    --     would be the OUTGOING session's time (0 in a fresh process).
+    --     A partially sparse `currentAction = "wander"` row would then
+    --     have unit_ai_needs.lua's wanderUtility subtract that stale
+    --     stamp from the restored clock and abandon the wander on a
+    --     time it never spent -- and the wrong stamp would persist on
+    --     the next save.
+    --   * ROLLBACK STAYS VERBATIM. apply() is also applyAll's rollback
+    --     entry point: an abandoned load re-applies each component's
+    --     OWN pre-load snapshot, and that unwind must restore the old
+    --     session untouched. This broadcast is post-PUBLICATION, so a
+    --     rolled-back load never reaches it.
+    --   * NOTHING TICKS FIRST. onSaveLoaded is the first point the Lua
+    --     thread reaches after publish (luaTick drains luaQueue ahead
+    --     of debug commands and script updates), so no unit_ai update
+    --     can observe a row between the swap and this fill.
+    --
+    -- Version-independent by construction, too: every accepted
+    -- inputVersion has already converged on live state by now, so this
+    -- is one stage rather than a back-fill per migration branch. Fills
+    -- only what is missing and overwrites nothing -- a save's own
+    -- scheduling is the save's to state. Runs BEFORE the scrub below so
+    -- every drop hook sees a well-formed row.
+    local filled = defaults.normalizeAll(aiState)
+
     local ctx = M.buildContext(survUnitSet, survBuildingSet, raw)
     local scrubbed, forgotten, jobsDropped = 0, 0, 0
     for uid, s in pairs(aiState) do
@@ -327,7 +372,8 @@ function M.reconcile(aiState, survUnitIds, survBuildingIds, raw, hooks)
         forgotten = forgotten + locations.scrubStaleKnownLocations(uid, s)
     end
     engine.logInfo("Unit AI: reconciled AI state after load ("
-        .. kept .. " kept, " .. scrubbed .. " stale ref(s) scrubbed, "
+        .. kept .. " kept, " .. filled .. " row(s) given runtime "
+        .. "defaults, " .. scrubbed .. " stale ref(s) scrubbed, "
         .. forgotten .. " stale location memory/memories dropped, "
         .. jobsDropped .. " construct job(s) dropped)")
 end

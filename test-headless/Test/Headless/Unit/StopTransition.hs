@@ -77,6 +77,7 @@ import World.Spoil.Types (emptySpoilPiles)
 import Unit.Transfer.Orders (emptyTransferOrders)
 import qualified Data.Serialize as S
 import World.Construct.Attempt (firstConstructAttemptId)
+import World.Flora.Identity (firstPlantedFloraCursor)
 
 -- ---------------------------------------------------------------------
 -- Pure tick harness
@@ -281,6 +282,9 @@ pageWithSim ss = PageSnapshot
     , pgsUnitSimStates = HM.singleton testUnit ss
     , pgsFloraHarvests = emptyFloraHarvests
     , pgsChopDesignations = HM.empty
+    , pgsPendingChopMigration = HM.empty
+    , pgsPendingFloraHarvests = HM.empty
+    , pgsPlantedFloraCursor = firstPlantedFloraCursor
     , pgsCraftBills   = emptyCraftBills
     , pgsTransferOrders = emptyTransferOrders
     , pgsPowerNodes   = emptyPowerNodes
