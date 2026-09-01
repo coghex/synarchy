@@ -113,11 +113,18 @@ function M.registerPackArt()
                               facemap = h.facePath, faceHandle = h.face }
         end
     end
+    -- #1844: a buildable kind states its exact cost, which is what the
+    -- engine charges and what a refund receipt records.
+    local buildable = (b ~= nil) and (b.build_work ~= nil)
+                      and (b.materials ~= nil)
+    local kindEntry = { kind = "wire", buildable = buildable }
+    if buildable then
+        kindEntry.build_work = b.build_work
+        kindEntry.materials = b.materials
+    end
     structure.registerPackArt{
         pack  = "wire",
-        kinds = { { kind = "wire",
-                    buildable = (b ~= nil) and (b.build_work ~= nil)
-                                and (b.materials ~= nil) } },
+        kinds = { kindEntry },
         art   = art,
     }
 end

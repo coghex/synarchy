@@ -89,18 +89,21 @@ local function snapshotUnitState(s)
     for _, f in ipairs(TRANSIENT_ORDER_FIELDS) do copy[f] = nil end
     for _, f in ipairs(TRANSIENT_WORK_FIELDS) do copy[f] = nil end
     -- constructJob (round-5 review) retains the full parsed structure-
-    -- pack YAML build-cost table (unit_ai_construct.lua's
-    -- packBuildInfo -- materials/build_work/etc.) rather than a stable
-    -- id, which requirement 14 forbids persisting as a copy. Unlike
-    -- the *Candidate fields above, constructJob is a multi-tick
-    -- DURABLE job (can't just be dropped and re-derived next tick), so
-    -- only its .build sub-field is stripped, on a shallow copy of the
-    -- job table itself -- constructJob is a reference SHARED with the
-    -- live aiState entry, so mutating it in place here would corrupt
-    -- the live job the AI is still working. unit_ai_construct.lua's
-    -- refundStructureMaterials already falls back to a fresh
-    -- packBuildInfo(job.pack, job.kind) lookup whenever job.build is
-    -- absent, so nothing needs to re-populate it after a load.
+    -- pack build-cost table (unit_ai_construct.lua's packBuildInfo:
+    -- materials/build_work) rather than a stable id, which requirement
+    -- 14 forbids persisting as a copy. Unlike the *Candidate fields
+    -- above, constructJob is a multi-tick DURABLE job (can't just be
+    -- dropped and re-derived next tick), so only its .build sub-field is
+    -- stripped, on a shallow copy of the job table itself: constructJob
+    -- is a reference SHARED with the live aiState entry, so mutating it
+    -- in place here would corrupt the live job the AI is still working.
+    --
+    -- Nothing needs to re-populate it after a load. It is a FETCH PLAN
+    -- and nothing else: a resumed job re-reads the registered cost
+    -- through packBuildInfo when it next needs one, and since #1844 the
+    -- REFUND does not consult it at all -- that comes from the
+    -- designation's own durable receipt, which is engine-side state this
+    -- payload never carried.
     if copy.constructJob and copy.constructJob.build ~= nil then
         local jobCopy = {}
         for jk, jv in pairs(copy.constructJob) do jobCopy[jk] = jv end
@@ -217,8 +220,25 @@ function M.register(aiState)
         -- resolves it against the OWNING unit's page like every other
         -- one; an unresolvable gid drops the job through the same abort
         -- path any other stale reference does.
-        version = 7,
-        inputVersions = { 1, 2, 3, 4, 5, 6, 7 },
+        -- v8 (issue #1844): a constructJob carries the exact
+        -- construction-designation ATTEMPT it claimed
+        -- (constructJob.attempt). Durable rather than derived: every
+        -- lifecycle call the resumed job makes -- status, progress,
+        -- payment, cancellation, completion -- names that attempt, and a
+        -- job that came back naming only its TILE would happily pour
+        -- work into, and complete, a successor designation a player made
+        -- there while the save sat on disk. A v1-v7 payload predates the
+        -- field, so its jobs are settled at the POST-PUBLICATION
+        -- reconcile boundary (unit_ai_reconcile.lua's
+        -- settleConstructJob): a legacy job adopts the attempt of the
+        -- designation really standing at its page and tile, a v8 job has
+        -- its own verified against it, and anything that does not match
+        -- exactly is dropped -- never guessed, never left attempt-less.
+        -- Not at apply() time: Lua components are applied while the
+        -- OUTGOING session is still current, so a designation query
+        -- there answers about the world being replaced.
+        version = 8,
+        inputVersions = { 1, 2, 3, 4, 5, 6, 7, 8 },
         required = true,
         scope = "global",
         -- Requirement 2 (round-8 review): unit_ai_save_refs.lua's
@@ -298,6 +318,12 @@ function M.register(aiState)
             -- fromGround/groundGid, and their ABSENCE already means
             -- "this repair target did not come off the ground", which
             -- is the only thing those bytes could have meant.
+            --
+            -- v7 -> v8 (#1844) cannot be done here at all, and that is
+            -- the point: settling a constructJob's attempt needs the
+            -- PUBLISHED session's designations, which exist neither at
+            -- decode time nor at apply() time. It happens in
+            -- unit_ai_reconcile.lua, off the onSaveLoaded broadcast.
             --
             -- #2055's runtime-default normalization is deliberately NOT
             -- here either. One of the three defaults reads the CLOCK,

@@ -534,6 +534,7 @@ library
                      Engine.Scripting.Lua.API.Structure
                      Engine.Scripting.Lua.API.StructureArt
                      Engine.Scripting.Lua.API.Construct
+                     Engine.Scripting.Lua.API.Construct.Payment
                      Engine.Scripting.Lua.API.Chop
                      Engine.Scripting.Lua.API.Till
                      Engine.Scripting.Lua.API.Plant
@@ -744,6 +745,12 @@ library
                      World.Geology.Ore.Types
                      World.Mine.Types
                      World.Construct.Art
+                     World.Construct.Attempt
+                     World.Construct.Extent
+                     World.Construct.Plan
+                     World.Construct.Receipt
+                     World.Construct.Reconcile
+                     World.Construct.Revalidate
                      World.Construct.Types
                      World.Construct.Apply
                      World.Chop.Types
@@ -1251,8 +1258,12 @@ test-suite synarchy-test-headless
                    Test.Headless.Graphics.WorldVertexCoords
                    Test.Headless.Graphics.FontFallback
                    Test.Headless.Graphics.FontRepertoire
+                   Test.Headless.Construct.AttemptIdentity
                    Test.Headless.Construct.Corners
+                   Test.Headless.Construct.Fixture
                    Test.Headless.Construct.Footprint
+                   Test.Headless.Construct.Plan
+                   Test.Headless.Construct.PlanInvalidation
                    Test.Headless.Construct.PendingRefusal
                    Test.Headless.Craft.Execute
                    Test.Headless.Craft.Bills

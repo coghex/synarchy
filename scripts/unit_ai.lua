@@ -457,6 +457,7 @@ function unitAi.onSaveLoaded(survUnitIds, survBuildingIds, reconcileCtx)
     reconcile.reconcile(aiState, survUnitIds, survBuildingIds, reconcileCtx)
 end
 
+
 function unitAi.update(dt)
     -- #1610: nothing runs between Exit to Menu and the next session --
     -- the engine's UnitClearAll is still draining, so the entity queries

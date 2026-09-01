@@ -40,6 +40,7 @@ import Unit.Types (UnitId(..))
 import Unit.Sim.Types (UnitSimState(..), Pose(..), UnitActivity(..))
 import Unit.Direction (Direction(..))
 import Building.Knowledge (emptyContainerKnowledge)
+import World.Construct.Attempt (firstConstructAttemptId)
 import World.Flora.Identity (firstPlantedFloraCursor)
 
 page1, page2 ∷ WorldPageId
@@ -62,6 +63,7 @@ minimalPage pid = PageSnapshot
     , pgsEdits        = emptyWorldEdits
     , pgsMineDesignations      = HM.empty
     , pgsConstructDesignations = HM.empty
+    , pgsConstructNextAttempt = firstConstructAttemptId
     , pgsGroundItems  = emptyGroundItems
     , pgsSpoilPiles   = emptySpoilPiles
     , pgsBuildings    = BuildingSnapshot { bsnInstances = HM.empty, bsnNextId = 1 }

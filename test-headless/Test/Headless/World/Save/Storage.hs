@@ -67,6 +67,7 @@ import Craft.Bills (emptyCraftBills)
 import Unit.Transfer.Orders (emptyTransferOrders)
 import Power.Types (emptyPowerNodes)
 import Building.Knowledge (emptyContainerKnowledge)
+import World.Construct.Attempt (firstConstructAttemptId)
 import World.Flora.Identity (firstPlantedFloraCursor)
 
 -- ---------------------------------------------------------------------
@@ -102,6 +103,7 @@ minimalPage gp = PageSnapshot
     , pgsEdits        = emptyWorldEdits
     , pgsMineDesignations      = HM.empty
     , pgsConstructDesignations = HM.empty
+    , pgsConstructNextAttempt = firstConstructAttemptId
     , pgsGroundItems  = emptyGroundItems
     , pgsSpoilPiles   = emptySpoilPiles
     , pgsBuildings    = BuildingSnapshot { bsnInstances = HM.empty, bsnNextId = 1 }

@@ -20,6 +20,8 @@ module World.Construct.Types
     , ConstructDesignation(..)
     , ConstructDesignations
     , newConstructDesignation
+    , constructDesignationPaid
+    , constructDesignationReceipt
     , constructCorners
     , constructStatusToText
     , textToConstructStatus
@@ -34,6 +36,9 @@ import Control.DeepSeq (NFData)
 import Data.Serialize (Serialize)
 import qualified Data.HashMap.Strict as HM
 import Building.Types (BuildingDef(..), footprintTiles)
+import World.Construct.Attempt (ConstructAttemptId)
+import World.Construct.Receipt
+    (ConstructPayment(..), MaterialReceipt, isPaid, paymentReceipt)
 
 -- | Abstract structure-piece descriptor: pack + kind (+ wall edge).
 --   Deliberately art-free — the build AI (#96) resolves this to the
@@ -61,7 +66,11 @@ data ConstructTarget
 --   variants go at the end). Pending: unclaimed work. Claimed: a worker
 --   has taken it (#96 sets this). Complete: built (the designation is
 --   cleared on completion, so this is mostly a transient signal).
-data ConstructStatus = CsPending | CsClaimed | CsComplete
+--   Placing: the claimant is inside its final placement hand-off (#1844
+--   requirement 18) — see 'World.Thread.Command.Cursor.Construct.beginConstructPlacement'
+--   for why that window needs a state of its own, and
+--   "World.Construct.Revalidate" for what skips it.
+data ConstructStatus = CsPending | CsClaimed | CsComplete | CsPlacing
     deriving (Show, Eq, Generic, Serialize, NFData)
 
 -- | One designated tile. Field order is load-bearing (positional
@@ -75,22 +84,44 @@ data ConstructDesignation = ConstructDesignation
     , cdProgress ∷ !Float
       -- ^ Build progress 0.0 → 1.0, filled by the build AI (#96). 0 at
       --   designation time.
-    , cdMaterialsPaid ∷ !Bool
-      -- ^ #799: has the piece's full material cost already been taken
-      --   from SOME claimant's inventory? This is the durable payment
-      --   marker — unlike the build AI's in-memory @job.consumed@ (lost
-      --   when its claimant dies), it rides the designation itself, so
-      --   a replacement worker (or the same worker after a save/load)
-      --   never re-sources and re-pays a cost that was already spent.
-      --   False at designation time; append-only field (positional
-      --   Generic Serialize).
+    , cdAttempt  ∷ !ConstructAttemptId
+      -- ^ #1844: this designation's durable, never-reused ATTEMPT
+      --   identity, allocated from the page's own monotonic allocator at
+      --   admission. Every delayed lifecycle operation — claim, status,
+      --   progress, payment, cancellation, completion, designation
+      --   removal, slope cleanup — carries the identity it OBSERVED and
+      --   applies only when this field matches it, so an operation from
+      --   a removed attempt is a no-op against a successor at the same
+      --   tile rather than a silent corruption of it.
+    , cdPayment  ∷ !ConstructPayment
+      -- ^ #1844: the durable payment authority, replacing #799's bare
+      --   @cdMaterialsPaid :: Bool@. A receipt records the EXACT
+      --   material multiset removed for THIS attempt, so a refund
+      --   reproduces what was actually spent instead of re-reading pack
+      --   metadata that may since have changed or vanished. Receipt
+      --   presence IS the paid state — there is deliberately no second
+      --   boolean anywhere that could disagree with it (see
+      --   "World.Construct.Receipt").
     } deriving (Show, Eq, Generic, Serialize, NFData)
 
 type ConstructDesignations = HM.HashMap (Int, Int) ConstructDesignation
 
--- | Fresh designation: pending, no progress, unpaid.
-newConstructDesignation ∷ Int → ConstructTarget → ConstructDesignation
-newConstructDesignation z tgt = ConstructDesignation z tgt CsPending 0.0 False
+-- | Has material been removed for this designation's attempt? The ONE
+--   answer — every consumer reads it here rather than testing a field of
+--   its own (#1844 requirement 15).
+constructDesignationPaid ∷ ConstructDesignation → Bool
+constructDesignationPaid = isPaid ∘ cdPayment
+
+-- | The receipt a refund for this designation would spawn, or 'Nothing'.
+constructDesignationReceipt ∷ ConstructDesignation → Maybe MaterialReceipt
+constructDesignationReceipt = paymentReceipt ∘ cdPayment
+
+-- | Fresh designation: pending, no progress, unpaid, carrying the
+--   attempt identity its admission allocated.
+newConstructDesignation
+    ∷ Int → ConstructTarget → ConstructAttemptId → ConstructDesignation
+newConstructDesignation z tgt aid =
+    ConstructDesignation z tgt CsPending 0.0 aid CpUnpaid
 
 -- | Corner-progress state derived from a designation's build progress
 --   (#96) — the input 'World.Mine.Types.digSlopeMask' expects, so a
@@ -110,11 +141,13 @@ constructStatusToText ∷ ConstructStatus → Text
 constructStatusToText CsPending  = "pending"
 constructStatusToText CsClaimed  = "claimed"
 constructStatusToText CsComplete = "complete"
+constructStatusToText CsPlacing  = "placing"
 
 textToConstructStatus ∷ Text → Maybe ConstructStatus
 textToConstructStatus "pending"  = Just CsPending
 textToConstructStatus "claimed"  = Just CsClaimed
 textToConstructStatus "complete" = Just CsComplete
+textToConstructStatus "placing"  = Just CsPlacing
 textToConstructStatus _          = Nothing
 
 -- | "structure" | "building" — used to pick which ghost texture a

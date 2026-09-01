@@ -36,6 +36,7 @@ import Data.Int (Int64)
 import Data.IORef (newIORef)
 
 import World.Chop.Types
+import World.Construct.Attempt (firstConstructAttemptId)
 import World.Chunk.Types
 import World.Edit.Types (WorldEdit(..), WorldEdits)
 import World.Flora.CropPlot (CropPlot(..), cropPlotInstance)
@@ -389,9 +390,9 @@ spec = do
                     padPendingHarvests s `shouldBe` HM.singleton (13, 14) 42.5
                 _ → expectationFailure "expected one page slice"
 
-      it "accepts v1, v2, v3 and v4, so no shipped payload lost its \
+      it "accepts v1, v2, v3, v4 and v5, so no shipped payload lost its \
          \decoder" $
-        ccInputVers worldActivityCodec `shouldBe` [1, 2, 3, 4]
+        ccInputVers worldActivityCodec `shouldBe` [1, 2, 3, 4, 5]
 
       it "does not follow the live harvest alias into the frozen v1/v2 \
          \layout: a tile-keyed timer still decodes as a tile-keyed timer" $ do
@@ -755,7 +756,8 @@ engineSpec = beforeAll setup $ do
               , padGroundItems = GroundItemsDTO 0 HM.empty
               , padSpoilPiles = HM.empty
               , padPendingChop = HM.map (ChopDesignationDTOv1 . chZ) pendingChop
-              , padPendingHarvests = pendingHarv }
+              , padPendingHarvests = pendingHarv
+              , padConstructNextAttempt = firstConstructAttemptId }
       -- Round-trip the v4 slice through the real codec, then restore it
       -- and prove the deferred entries are still there to resolve.
       case ccDecode worldActivityCodec 4 (S.encode (WorldActivityDTO [slice])) of

@@ -139,6 +139,92 @@ prelude = lns
 
 spec ∷ Spec
 spec = describe "unit AI reconciliation boundary (#1589)" $ do
+    it "settles every restored constructJob against the PUBLISHED \
+       \session's designations (#1844): a pre-v8 job adopts the attempt \
+       \of the designation really standing at its tile, a v8 job has its \
+       \own verified, and anything that does not match exactly is \
+       \dropped" $ runsOk $ lns
+        [ prelude
+        -- One live designation per tile. (10,10) is what the fixture's
+        -- jobs claim to be; (11,11) is a DIFFERENT job the player made
+        -- at that tile while the save sat on disk; (12,12) carries
+        -- nothing at all — a designation load staging self-cleared.
+        , "construction = { getDesignationAt = function(_w, x, y)"
+        , "  if x == 10 then return { x = 10, y = 10, attempt = 4,"
+        , "    category = 'structure', pack = 'dungeon_1', kind = 'floor' } end"
+        , "  if x == 11 then return { x = 11, y = 11, attempt = 9,"
+        , "    category = 'structure', pack = 'wire', kind = 'wire' } end"
+        , "  return nil end }"
+        , "local function job(t) return { [1] = { constructJob = t } } end"
+        -- A pre-v8 job: no attempt, and the designation is the same job.
+        , "local legacy = job{ x = 10, y = 10, category = 'structure',"
+        , "  pack = 'dungeon_1', kind = 'floor' }"
+        , "R.reconcile(legacy, {1}, {}, CTX)"
+        , "assert(legacy[1].constructJob ~= nil, 'a matching legacy job stays')"
+        , "assert(legacy[1].constructJob.attempt == 4,"
+        , "  'it adopts the live designation\\'s attempt')"
+        -- A pre-v8 job whose tile now carries someone else's designation.
+        , "local wrong = job{ x = 11, y = 11, category = 'structure',"
+        , "  pack = 'dungeon_1', kind = 'floor' }"
+        , "R.reconcile(wrong, {1}, {}, CTX)"
+        , "assert(wrong[1].constructJob == nil,"
+        , "  'a legacy job must not adopt a DIFFERENT job at its tile')"
+        -- A v8 job whose designation load staging self-cleared.
+        , "local gone = job{ x = 12, y = 12, attempt = 4,"
+        , "  category = 'structure', pack = 'dungeon_1', kind = 'floor' }"
+        , "R.reconcile(gone, {1}, {}, CTX)"
+        , "assert(gone[1].constructJob == nil,"
+        , "  'a v8 job over a self-cleared designation must be dropped')"
+        -- A v8 job whose attempt was replaced by a successor.
+        , "local stale = job{ x = 10, y = 10, attempt = 3,"
+        , "  category = 'structure', pack = 'dungeon_1', kind = 'floor' }"
+        , "R.reconcile(stale, {1}, {}, CTX)"
+        , "assert(stale[1].constructJob == nil,"
+        , "  'a v8 job naming a retired attempt must be dropped')"
+        -- …and one that still names exactly what is there.
+        , "local good = job{ x = 10, y = 10, attempt = 4,"
+        , "  category = 'structure', pack = 'dungeon_1', kind = 'floor' }"
+        , "R.reconcile(good, {1}, {}, CTX)"
+        , "assert(good[1].constructJob ~= nil and"
+        , "  good[1].constructJob.attempt == 4, 'an exact v8 job survives')"
+        ]
+
+    it "abandons only the invalidated attempt's CLAIM, never a \
+       \successor's (#1844)" $ runsOk $ lns
+        [ prelude
+        , "package.loaded['scripts.unit_ai'].getState = function() return nil end"
+        , "local construct = require('scripts.unit_ai_construct')"
+        , "local claims = require('scripts.unit_ai_claims')"
+        -- The registry is module-private, so drive it the way the AI
+        -- does: a claim recorded for attempt B, then a DELAYED
+        -- invalidation for the retired attempt A at the same tile.
+        , "local site = require('scripts.unit_ai_construct_site')"
+        , "local reg, key = {}, claims.key"
+        , "reg[key('P', 4, 4)] = { uid = 1, at = 0, attempt = 9 }"
+        , "site.abandonClaim(reg, key, 'P', 4, 4, 3)"
+        , "assert(reg[key('P', 4, 4)] ~= nil,"
+        , "  'a stale invalidation must not erase the successor claim')"
+        -- …and the successor's OWN invalidation does clear it.
+        , "site.abandonClaim(reg, key, 'P', 4, 4, 9)"
+        , "assert(reg[key('P', 4, 4)] == nil,"
+        , "  'the matching attempt clears its own claim')"
+        -- An adopted orphan carries no attempt and is still matched by
+        -- coordinate, exactly as it was before the attempt existed.
+        , "reg[key('P', 5, 5)] = { uid = nil, at = 0 }"
+        , "site.abandonClaim(reg, key, 'P', 5, 5, 3)"
+        , "assert(reg[key('P', 5, 5)] == nil,"
+        , "  'an attempt-less adopted orphan still clears')"
+        -- A COMPLETION releases the claim too, and for the same reason
+        -- an invalidation does: a scanner passing during the hand-off
+        -- makes the sweep adopt an anonymous entry the claimant's own
+        -- release cannot clear, which would then refuse a successor.
+        , "reg[key('P', 6, 6)] = { uid = nil, at = 0, attempt = 9 }"
+        , "site.abandonClaim(reg, key, 'P', 6, 6, 9)"
+        , "assert(reg[key('P', 6, 6)] == nil,"
+        , "  'a completed attempt releases its adopted claim')"
+        , "assert(construct ~= nil)"
+        ]
+
     it "clears a stale reference from EVERY family the schema declares \
        \-- craftJob, repairJob, pickupOrder, a ground forageTarget, \
        \forageLoot and harvestLoot included, none of which the pre-#1589 \

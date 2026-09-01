@@ -49,6 +49,7 @@ import World.Edit.Types (WorldEdit, WorldEdits, emptyWorldEdits)
 import Structure.Types (StructureStage, emptyStructureStage)
 import World.Mine.Types (MineDesignations)
 import World.Construct.Types (ConstructDesignations)
+import World.Construct.Attempt (ConstructAttemptId, firstConstructAttemptId)
 import World.Chop.Types (ChopDesignations, PendingChopDesignations)
 import World.Till.Types (TillDesignations)
 import World.Plant.Types (PlantDesignations)
@@ -251,6 +252,21 @@ data WorldState = WorldState
       --   (WorldDesignateConstruct / cancel / set-status commands), read
       --   by the render pass (blueprint ghost) and the build AI (#96).
       --   Persisted in saves (wpsConstructDesignations).
+    , wsConstructAttemptRef ∷ IORef ConstructAttemptId
+      -- ^ This page's construction ATTEMPT allocator (#1844): the id the
+      --   next designation admitted here will take.
+      --
+      --   It only ever advances — a cancellation, a completion, a
+      --   self-clearing load and a whole-page sweep all leave it where
+      --   it is — so an id that named a removed attempt can never come
+      --   to name a live one while delayed work for the first may still
+      --   be in flight. That is the entire point of the identity; see
+      --   "World.Construct.Attempt".
+      --
+      --   Durable, and persisted beside the designations it hands ids to
+      --   (the @world-activity@ page slice), because a designation
+      --   created after a load must not be able to collide with one the
+      --   save already holds.
     , wsFloraHarvestsRef ∷ IORef FloraHarvests
       -- ^ Harvested flora (#94): flora INSTANCE id → regrowth
       --   game-seconds remaining (#1854 re-keyed this off the tile, so
@@ -446,6 +462,7 @@ emptyWorldState = do
     wsSpoilRef ← newIORef emptySpoilPiles
     wsStructureStageRef ← newIORef emptyStructureStage
     wsConstructDesignationsRef ← newIORef HM.empty
+    wsConstructAttemptRef ← newIORef firstConstructAttemptId
     wsFloraHarvestsRef ← newIORef emptyFloraHarvests
     wsChopDesignationsRef ← newIORef HM.empty
     wsPendingChopMigrationRef ← newIORef HM.empty
@@ -475,7 +492,8 @@ emptyWorldState = do
                         wsChunkEditGenRef
                         wsOreSurveyRef wsMineDesignationsRef
                         wsGroundItemsRef wsSpoilRef wsStructureStageRef
-                        wsConstructDesignationsRef wsFloraHarvestsRef
+                        wsConstructDesignationsRef wsConstructAttemptRef
+                        wsFloraHarvestsRef
                         wsChopDesignationsRef
                         wsPendingChopMigrationRef
                         wsPendingFloraHarvestsRef

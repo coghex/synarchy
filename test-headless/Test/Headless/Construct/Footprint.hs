@@ -19,6 +19,7 @@ import Test.Hspec
 import qualified Data.HashMap.Strict as HM
 import Building.Types (BuildingDef(..), footprintTiles)
 import Engine.Asset.Handle (TextureHandle(..))
+import World.Construct.Attempt (firstConstructAttemptId)
 import World.Construct.Types
     ( ConstructTarget(..), StructurePiece(..), ConstructStatus(..)
     , ConstructDesignation(..), newConstructDesignation
@@ -55,7 +56,7 @@ spec ∷ Spec
 spec = describe "Construction blueprint footprint" $ do
     it "expands a multi-tile building designation into its full footprint, staying one pending job" $ do
         let defs = HM.fromList [("cargo_hold_2x3", fixtureDef "cargo_hold_2x3" 2 3)]
-            cd   = newConstructDesignation 5 (CtBuilding "cargo_hold_2x3")
+            cd   = newConstructDesignation 5 (CtBuilding "cargo_hold_2x3") firstConstructAttemptId
             footprint = constructDesignationFootprint defs (100, 200) cd
         cdStatus cd `shouldBe` CsPending
         footprint `shouldBe`
@@ -66,21 +67,21 @@ spec = describe "Construction blueprint footprint" $ do
 
     it "leaves an existing 1x1 building blueprint unchanged" $ do
         let defs = HM.fromList [("portal", fixtureDef "portal" 1 1)]
-            cd   = newConstructDesignation 0 (CtBuilding "portal")
+            cd   = newConstructDesignation 0 (CtBuilding "portal") firstConstructAttemptId
         constructDesignationFootprint defs (5, 5) cd `shouldBe` [(5, 5)]
 
     it "leaves a structure-piece designation single-tile regardless of building defs" $ do
         let piece = StructurePiece
                 { spPack = "dungeon_1", spKind = "wall", spEdge = Just "ne" }
-            cd = newConstructDesignation 0 (CtStructure piece)
+            cd = newConstructDesignation 0 (CtStructure piece) firstConstructAttemptId
         constructDesignationFootprint HM.empty (7, 8) cd `shouldBe` [(7, 8)]
 
     it "falls back to the anchor tile alone for a def missing from the map" $ do
-        let cd = newConstructDesignation 0 (CtBuilding "does_not_exist")
+        let cd = newConstructDesignation 0 (CtBuilding "does_not_exist") firstConstructAttemptId
         constructDesignationFootprint HM.empty (1, 1) cd `shouldBe` [(1, 1)]
 
     it "matches Building.Types.footprintTiles' anchor+tile_size convention directly (#807 req 4)" $ do
         let defs = HM.fromList [("wide", fixtureDef "wide" 3 1)]
-            cd   = newConstructDesignation 0 (CtBuilding "wide")
+            cd   = newConstructDesignation 0 (CtBuilding "wide") firstConstructAttemptId
         constructDesignationFootprint defs (9, 4) cd
             `shouldBe` footprintTiles 9 4 3 1

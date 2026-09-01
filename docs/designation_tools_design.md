@@ -367,8 +367,11 @@ cursor-following preview (0.6) is more opaque than the committed marker
 side effect, and a reviewer should expect to see it change.
 
 The Building-state transitions are unchanged from D-15/D-16: for a structure
-the durable trigger is `cdMaterialsPaid`; for a work-constructed building it
-is the material gate opening and the instance entering progress rendering.
+the durable trigger is the designation's payment record — DTV-13 (#1844)
+replaced `cdMaterialsPaid` with `cdPayment`, whose RECEIPT records the exact
+materials removed and whose presence IS the paid state; for a work-constructed
+building it is the material gate opening and the instance entering progress
+rendering.
 
 ### Interaction and target identity
 
@@ -615,9 +618,11 @@ removed, not retuned. That ramp never worked for buildings anyway
 
 Once construction actually enters its progress phase, the ghost disappears.
 D-16 settles what, if anything, replaces it; completion then hands off to the
-built target. For a structure, the durable transition is material payment
-(`cdMaterialsPaid`), which occurs when the worker arrives and enters the
-building phase — not mere claim or travel. For a work-constructed building, it
+built target. For a structure, the durable transition is material payment — the
+designation's `cdPayment` gaining its receipt, which is where DTV-13 (#1844)
+put the state the bare `cdMaterialsPaid` boolean used to hold — and it occurs
+when the worker arrives and enters the building phase, not on mere claim or
+travel. For a work-constructed building, it
 is the material gate opening and the instance entering progress rendering.
 
 ### D-16. Structures build invisibly; constructed buildings require their own progress art
@@ -1345,7 +1350,9 @@ or generate missing frames.
   D-25's per-tile invalid feedback, drawing missing-art candidates not at all;
   derive the same final grid z and dynamic wall cap
   facemap as the eventual placer rather than rendering at raw `cdZ`; suppress
-  rendering once `cdMaterialsPaid`; keep the #359 line-mode preview snapping
+  rendering once the designation is PAID (its `cdPayment` carries a receipt;
+  a bare `cdMaterialsPaid` boolean until #1844); keep the #359 line-mode
+  preview snapping
   to what commits; remove `construct_designate_structure.png` with its handle,
   setter and HUD wiring; redirect stale #1780-era documentation once the
   tracker numbers exist; and add focused render plus visual verification.

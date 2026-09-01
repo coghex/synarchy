@@ -13,7 +13,10 @@ import UPrelude
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.Capability.WorldSim
-    (WorldSimCapability(..))
+    (WorldSimCapability(..), toWorldSimCapability)
+import Engine.Core.State (EngineEnv)
+import World.Construct.Revalidate
+    (ConstructScope(..), revalidateConstructDesignations)
 import Engine.Core.Log (logWarn, LogCategory(..), LoggerState)
 import World.Types
 import World.Generate.Coordinates (globalToChunk)
@@ -51,9 +54,10 @@ import World.Flora.Designation (replaceChunkForgettingFlora)
 --   attempt's token joins 'ssDeclined' in the same atomic update, where
 --   'World.Thread.Command.Location.handleWorldMarkLocationStampedCommand'
 --   consults it before writing a durable completion marker.
-handleWorldSetStructureCommand ∷ WorldSimCapability → LoggerState → WorldPageId
+handleWorldSetStructureCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → Word8 → Int → Int → Int → StructureStageToken → IO ()
-handleWorldSetStructureCommand wsc logger pageId gx gy slotTag texId faceId z tok = do
+handleWorldSetStructureCommand env logger pageId gx gy slotTag texId faceId z tok = do
+    let wsc = toWorldSimCapability env
     mgr ← readIORef (wsWorldManagerRef wsc)
     case lookup pageId (wmWorlds mgr) of
         Nothing →
@@ -81,6 +85,15 @@ handleWorldSetStructureCommand wsc logger pageId gx gy slotTag texId faceId z to
                     replaceChunkForgettingFlora ws lc lc'
                     atomicModifyIORef' (wsEditsRef ws) $ \es →
                         (appendEdit coord edit es, ())
+                    -- #1844: the tile's slot occupancy just changed, so
+                    -- any structure designation on it is re-resolved —
+                    -- scoped to that one tile. A designation inside its
+                    -- own claimant's placement hand-off is skipped
+                    -- there, which is what stops a worker's successful
+                    -- placement from cancelling its own job.
+                    _ ← revalidateConstructDesignations env logger ws
+                            (ConstructKeys [(gx, gy)])
+                    pure ()
 
 -- | Remove the structure piece at (gx,gy,slot-tag) via WeClearStructure.
 --   Unlike the SET path, the clear is recorded in the per-chunk edit log
@@ -90,9 +103,10 @@ handleWorldSetStructureCommand wsc logger pageId gx gy slotTag texId faceId z to
 --   reload / after save/load. The live lcStructures overlay is additionally
 --   updated when the chunk happens to be loaded. (Replaying a clear with no
 --   matching set is a harmless no-op — a HM.delete on an absent key.)
-handleWorldClearStructureCommand ∷ WorldSimCapability → LoggerState → WorldPageId
+handleWorldClearStructureCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → Word8 → IO ()
-handleWorldClearStructureCommand wsc logger pageId gx gy slotTag = do
+handleWorldClearStructureCommand env logger pageId gx gy slotTag = do
+    let wsc = toWorldSimCapability env
     mgr ← readIORef (wsWorldManagerRef wsc)
     case lookup pageId (wmWorlds mgr) of
         Nothing →
@@ -113,6 +127,13 @@ handleWorldClearStructureCommand wsc logger pageId gx gy slotTag = do
                     -- designation and regrowth timer too, or an orphan
                     -- entry outlives the plant it addressed.
                     replaceChunkForgettingFlora ws lc lc'
+            -- #1844: a CLEAR can free a slot a designation wanted, and
+            -- can remove the floor a post designation stands on. Fired
+            -- whatever the chunk's residency, since the clear is
+            -- recorded either way.
+            _ ← revalidateConstructDesignations env logger ws
+                    (ConstructKeys [(gx, gy)])
+            pure ()
 
 -- | Remove EVERY structure piece in the world. Clears the live per-chunk
 --   'lcStructures' overlay on all loaded chunks AND strips the structure
@@ -122,9 +143,10 @@ handleWorldClearStructureCommand wsc logger pageId gx gy slotTag = do
 --   read, so a cleared world stays cleared after a chunk evicts or a
 --   save/load round-trip. (No quad-cache bust: the structure pass renders
 --   from 'lcStructures' live every frame, never from the cached terrain quads.)
-handleWorldClearAllStructuresCommand ∷ WorldSimCapability → LoggerState → WorldPageId
+handleWorldClearAllStructuresCommand ∷ EngineEnv → LoggerState → WorldPageId
     → IO ()
-handleWorldClearAllStructuresCommand wsc logger pageId = do
+handleWorldClearAllStructuresCommand env logger pageId = do
+    let wsc = toWorldSimCapability env
     mgr ← readIORef (wsWorldManagerRef wsc)
     case lookup pageId (wmWorlds mgr) of
         Nothing →
@@ -136,6 +158,12 @@ handleWorldClearAllStructuresCommand wsc logger pageId = do
                 , () )
             atomicModifyIORef' (wsEditsRef ws) $ \es →
                 (HM.map (filter (not . isStructureEdit)) es, ())
+            -- #1844: a wholesale wipe changes every tile's occupancy at
+            -- once, which is the one structure write whose scope really
+            -- is the page.
+            _ ← revalidateConstructDesignations env logger ws
+                    ConstructWholePage
+            pure ()
   where
     clearChunkStructures lc = lc { lcStructures = emptyChunkStructures }
     isStructureEdit (WeSetStructure {})   = True

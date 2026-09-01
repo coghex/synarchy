@@ -42,6 +42,8 @@ import World.Spoil.Types (SpoilPile(..), spoilCapacity, depositSpoil
 import World.Thread.Command.Edit.Terrain (handleWorldDeleteTileCommand)
 import World.Thread.Command.Edit.Sync (syncEditToSim)
 import World.Plant.Validate (revalidatePlantDesignations)
+import World.Construct.Revalidate
+    (ConstructScope(..), revalidateConstructDesignations)
 import World.Flora.Designation (replaceChunkForgettingFlora)
 
 -- | Apply dig progress to the designated tile at (gx, gy).
@@ -237,6 +239,14 @@ handleWorldDigTileCommand env rngRef unitQ logger pageId rawGX rawGY rawUX rawUY
                                     -- deletion, is where such a tile
                                     -- stops being tilled soil.
                                     _ ← revalidatePlantDesignations logger ws
+                                    -- #1844: the dig moved this tile's
+                                    -- resolved surface, so its own
+                                    -- structure designation (if any) is
+                                    -- re-checked against the 'cdZ' it
+                                    -- captured. Scoped to the dug tile.
+                                    _ ← revalidateConstructDesignations
+                                            env logger ws
+                                            (ConstructKeys [(gx, gy)])
                                     pure ()
 
 -- | Spawn @n@ yield items (chunks, gems) as ground items scattered
@@ -350,6 +360,10 @@ promoteFullSpoilTiles env unitQ logger pageId ws startV = do
                         -- #1858: the promotion raises the surface, so
                         -- re-run the tilled-soil check.
                         _ ← revalidatePlantDesignations logger ws
+                        -- #1844: and the structure-plan check, for the
+                        -- one tile the promotion raised.
+                        _ ← revalidateConstructDesignations env logger ws
+                                (ConstructKeys [(tx, ty)])
                         -- Anything standing on the tile rides up.
                         Q.writeQueue unitQ (UnitReGround pageId tx ty)
                         logDebug logger CatWorld $

@@ -96,6 +96,8 @@ import World.Flora.CropPlot (emptyCropPlots)
 import World.Edit.Types (emptyWorldEdits, WorldEdit(..))
 import World.Chunk.Types (ChunkCoord(..))
 import World.Mine.Types (MineDesignation(..))
+import World.Construct.Attempt (firstConstructAttemptId)
+import World.Construct.Receipt (ConstructPayment(..))
 import World.Construct.Types
     ( ConstructDesignation(..), ConstructTarget(..), ConstructStatus(..) )
 import World.Time.Types (CalendarConfig(..))
@@ -167,6 +169,7 @@ minimalPage pid = PageSnapshot
     , pgsEdits        = emptyWorldEdits
     , pgsMineDesignations      = HM.empty
     , pgsConstructDesignations = HM.empty
+    , pgsConstructNextAttempt = firstConstructAttemptId
     , pgsGroundItems  = emptyGroundItems
     , pgsSpoilPiles   = emptySpoilPiles
     -- Per-page bsnNextId/usnNextId equal the global allocator: production
@@ -421,6 +424,7 @@ richItem = ItemInstance
 toActivity ∷ WorldPageId → PageActivityDTO
 toActivity pid = PageActivityDTO
     { padPageId        = pid
+    , padConstructNextAttempt = firstConstructAttemptId
     , padMine          = HM.empty
     , padConstruct     = HM.empty
     , padChop          = HM.empty
@@ -640,6 +644,7 @@ pageCoreV3 pid = PageCoreDTOv3
 minimalWorldPageSave ∷ WorldPageId → WorldPageSave
 minimalWorldPageSave pid = WorldPageSave
     { wpsPageId       = pid
+    , wpsConstructNextAttempt = firstConstructAttemptId
     , wpsGenParams    = defaultGP
     , wpsCameraX      = 0, wpsCameraY = 0, wpsCameraZoom = 1
     , wpsCameraFacing = FaceSouth
@@ -755,7 +760,10 @@ goldenRichPayloads =
       -- deferred legacy-migration maps and re-keys Chop/harvest state
       -- onto FloraInstanceId. Every other row is unchanged.
     , ("world-edits",         (66,   "5f4fc96e8f002516"))
-    , ("world-activity",      (226,  "266dc52796fe89a4"))
+      -- #1844 re-pinned again: world-activity v5 appends each
+      -- designation's attempt identity and payment record, and the
+      -- page's own attempt allocator.
+    , ("world-activity",      (242,  "d5f6a72687031136"))
     , ("buildings",           (151,  "3dafc93879ea3b82"))
     , ("units",               (249,  "fc6ed2ffd1c79265"))
     , ("unit-sim",            (123,  "81797b8874157310"))
@@ -777,7 +785,9 @@ goldenFullPayloads =
       -- absent Maybe pair per item, ×3 nesting levels). #1854 re-pinned
       -- it again for v4's two deferred-migration maps. Every other row
       -- is unchanged, because no other fixture slice holds an item.
-    , ("world-activity",      (370, "1fe67e3b0ceccc81"))
+      -- #1844 re-pinned again for world-activity v5, exactly as
+      -- goldenRichPayloads is.
+    , ("world-activity",      (378, "401b1ef21412a4ee"))
     , ("buildings",           (130, "2b6c80ab8c216329"))
     , ("units",               (228, "4b3dd9531385aafc"))
     , ("unit-sim",            (102, "2977ea9721e11313"))
@@ -885,6 +895,7 @@ emptyPageActivity ∷ WorldPageId → PageActivityDTO
 emptyPageActivity pid = PageActivityDTO pid HM.empty HM.empty HM.empty
     HM.empty HM.empty emptyFloraHarvests HM.empty
     (toGroundItemsDTO emptyGroundItems) HM.empty HM.empty HM.empty
+    firstConstructAttemptId
 
 -- | #1667: one well-formed bill, so a floor test can pair an invalid
 --   allocator with a live id and see BOTH findings reported.
@@ -1112,7 +1123,8 @@ spec = do
                 bad = WorldActivityDTO
                     [ PageActivityDTO page1 HM.empty HM.empty HM.empty
                         HM.empty HM.empty emptyFloraHarvests HM.empty
-                        badGround HM.empty HM.empty HM.empty ]
+                        badGround HM.empty HM.empty HM.empty
+                        firstConstructAttemptId ]
             ccValidate worldActivityCodec bad `shouldSatisfy` (not . null)
 
         it "world-activity accepts ground items whose ids all sit below \
@@ -1124,7 +1136,8 @@ spec = do
                         (GroundItemsDTO 2
                             (HM.singleton 1 (toGroundItemDTO
                                 (GroundItem richItem 0 0))))
-                        HM.empty HM.empty HM.empty ])
+                        HM.empty HM.empty HM.empty
+                        firstConstructAttemptId ])
                 `shouldBe` []
 
     -- #1668: the stored footprint of a persisted location instance is
@@ -1573,7 +1586,7 @@ spec = do
                             (GroundItems 2 (HM.singleton 1
                                 (GroundItem richItem 3.5 4.5))) } ]
                 bytes = S.encode legacy
-            ccInputVers worldActivityCodec `shouldBe` [1, 2, 3, 4]
+            ccInputVers worldActivityCodec `shouldBe` [1, 2, 3, 4, 5]
             forM_ [1, 2] $ \ver → do
                 mv ← expectDecode ("v" ⧺ show ver)
                           (ccDecode worldActivityCodec ver bytes)
@@ -2822,7 +2835,8 @@ spec = do
              \(#760 round 8)" $ do
         let designation defName = HM.singleton (1, 2) ConstructDesignation
                 { cdZ = 0, cdTarget = CtBuilding defName, cdStatus = CsPending
-                , cdProgress = 0, cdMaterialsPaid = False }
+                , cdProgress = 0, cdAttempt = firstConstructAttemptId
+                , cdPayment = CpUnpaid }
 
         it "accepts a construct designation whose building target resolves" $
             missingConstructDefReferences (HS.fromList ["cargo_hold_S"])

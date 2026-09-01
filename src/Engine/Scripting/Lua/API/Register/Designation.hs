@@ -7,6 +7,7 @@ import Engine.Scripting.Lua.API.Internal (registerLuaFunction)
 import Engine.Scripting.Lua.API.Structure
 import Engine.Scripting.Lua.API.StructureArt
 import Engine.Scripting.Lua.API.Construct
+import Engine.Scripting.Lua.API.Construct.Payment (constructPayMaterialsFn)
 import Engine.Scripting.Lua.API.Chop
 import Engine.Scripting.Lua.API.Till
 import Engine.Scripting.Lua.API.Plant
@@ -37,6 +38,7 @@ registerDesignationAPI env = do
   registerLuaFunction "registerWallFamily" (structureRegisterWallFamilyFn env)
   registerLuaFunction "registerPackArt" (structureRegisterPackArtFn env)
   registerLuaFunction "isPackKindBuildable" (structurePackKindBuildableFn env)
+  registerLuaFunction "packBuildCost"      (structurePackBuildCostFn env)
   registerLuaFunction "resolvePieceArt" (structureResolvePieceArtFn env)
   registerLuaFunction "wireShape"    structureWireShapeFn
   registerLuaFunction "wireNeighbors" (structureWireNeighborsFn env)
@@ -60,7 +62,10 @@ registerDesignationAPI env = do
   registerLuaFunction "nearestDesignation" (constructNearestDesignationFn (toWorldSimCapability env))
   registerLuaFunction "setJobStatus"       (constructSetJobStatusFn (toWorldSimCapability env))
   registerLuaFunction "addJobProgress"     (constructAddJobProgressFn (toWorldSimCapability env))
-  registerLuaFunction "setMaterialsPaid"   (constructSetMaterialsPaidFn (toWorldSimCapability env))
+  registerLuaFunction "payMaterials"       (constructPayMaterialsFn env)
+  registerLuaFunction "beginPlacement"     (constructBeginPlacementFn (toWorldSimCapability env))
+  registerLuaFunction "abortPlacement"     (constructAbortPlacementFn (toWorldSimCapability env))
+  registerLuaFunction "resolvePlan"        (constructResolvePlanFn env)
   registerLuaFunction "setDesignateTexture" (constructSetDesignateTextureFn (toWorldSimCapability env))
   registerLuaFunction "setLineMode"        (constructSetLineModeFn (toWorldSimCapability env))
   Lua.setglobal (Lua.Name "construction")

@@ -3,6 +3,22 @@
 --   (build target + status + progress) in wsConstructDesignationsRef.
 --   The build AI (#96) is the consumer. Split out of
 --   "World.Thread.Command.Cursor" (issue #564).
+--
+--   #1844 moved STRUCTURE planning off the generic rectangle path:
+--   candidates come from "World.Construct.Extent" (the same helper the
+--   preview uses) and each is admitted only if "World.Construct.Plan"'s
+--   resolver says @PlanValid@ at click time, whatever the preview
+--   believed. BUILDING commits are deliberately unchanged — anchor-only,
+--   @requested = 1@, and #1595's outstanding-designation refusal —
+--   because building planning is DTV-10's scope.
+--
+--   Every lifecycle operation here is ATTEMPT-GUARDED (#1844
+--   requirement 11): the caller names the designation attempt it
+--   observed, and a mutation applies only when the stored attempt
+--   matches. A delayed status change, progress pour, cancellation or
+--   completion from a removed attempt is therefore a no-op against a
+--   successor at the same canonical tile, rather than a silent
+--   corruption of it.
 module World.Thread.Command.Cursor.Construct
     ( handleWorldSetConstructAnchorCommand
     , handleWorldClearConstructAnchorCommand
@@ -13,31 +29,44 @@ module World.Thread.Command.Cursor.Construct
     , handleWorldSetConstructDesignateTextureCommand
     , handleWorldSetConstructLineModeCommand
     , popConstructDesignation
+    , beginConstructPlacement
+    , abortConstructPlacement
     ) where
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Engine.Asset.Handle (TextureHandle)
+import Engine.Core.Capability.RenderHandoff
+    (RenderHandoffCapability(..), toRenderHandoffCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import Engine.Core.State (EngineEnv)
 import Engine.Core.Log (logDebug, LogCategory(..), LoggerState)
-import qualified Data.Vector.Unboxed as VU
 import World.Types
 import World.Generate (globalToChunk)
-import World.Generate.Coordinates (canonicalTile, canonicalTileFrame)
+import World.Generate.Coordinates (canonicalTile)
+import World.Construct.Attempt (ConstructAttemptId, takeConstructAttempts)
+import World.Construct.Extent (structureDragExtent)
+import World.Construct.Plan
+    ( PlanOp(..), PlanOutcome(..), PlanResult(..), PlanWorld(..)
+    , planOutcomeName, planSurfaceZAt, resolveStructurePlan )
+import World.Construct.Revalidate (constructPlanWorld)
 import World.Construct.Types ( ConstructTarget(..), ConstructStatus(..)
                              , ConstructDesignation(..)
-                             , StructurePiece(..)
                              , newConstructDesignation
                              , constructTargetCategory )
 import World.Plant.Validate (revalidatePlantDesignations)
-import World.Construct.Apply ( applyConstructSlopeToChunk
-                             , clearConstructSlope )
+import World.Construct.Apply (applyConstructSlopeToChunk)
+import Structure.Types
+    (StructureCommitWindow(..), takeDeclinedInWindow)
+import World.Construct.Art (structurePresentAt)
+import World.Construct.Revalidate
+    ( clearConstructDesignationSlope, constructRefundDeps
+    , notifyConstructCompleted, notifyConstructInvalidated
+    , refundConstructDesignation )
 import World.Thread.Command.Cursor.Common
-    (designateRect, recordDesignationOutcome, recordMissingWorldOutcome)
-import Structure.Types (StructureSlot, slotFromText)
+    (recordDesignationOutcome, recordMissingWorldOutcome)
 import World.Flora.Designation (replaceChunkForgettingFlora)
 
 handleWorldSetConstructAnchorCommand ∷ EngineEnv → LoggerState → WorldPageId
@@ -62,51 +91,26 @@ handleWorldClearConstructAnchorCommand env _logger pageId = do
                 (cs { constructAnchor = Nothing }, ())
         Nothing → pure ()
 
--- | Which structure slot a designation targets, mirroring
---   scripts/unit_ai_construct.lua's placeStructurePiece slot derivation
---   (a wall with no recorded edge defaults to "ne", a post to "n" — the
---   designation tool has no corner picker yet) so occupancy is checked
---   against the exact slot the worker will eventually place into (#805).
-structurePieceSlot ∷ StructurePiece → Maybe StructureSlot
-structurePieceSlot (StructurePiece _ kind edge) = case kind of
-    "floor"   → slotFromText "floor"
-    "ceiling" → slotFromText "ceiling"
-    "wire"    → slotFromText "wire"
-    "wall"    → slotFromText ("wall_" <> fromMaybe "ne" edge)
-    "post"    → slotFromText ("post_" <> fromMaybe "n" edge)
-    _         → Nothing
-
--- | Is a structure piece already placed at this (tile, slot)? Reads only
---   the authoritative per-chunk overlay ('lcStructures') — this handler
---   runs on the world thread's single command queue, so any
---   WorldSetStructure queued earlier (e.g. a worker's prior piece
---   placement) has already applied by the time this command runs; there
---   is no need to also consult the Lua read-your-writes staging cache
---   ('wsStructureStageRef'), which exists only for same-tick reads from
---   the debug builder (#805).
+-- | Commit a construction designation.
 --
---   #1175: the tile arrives in the drag's anchor-local alias frame, so
---   both the chunk and the per-tile key are canonicalised — 'lcStructures'
---   is keyed by global tile coord inside the chunk that stores it.
-structureOccupiedAt ∷ Int → WorldTileData → Int → Int → StructureSlot → Bool
-structureOccupiedAt worldSize tileData gx gy slot =
-    let (coord, _, (dgx, dgy)) = canonicalTileFrame worldSize gx gy
-        key = (gx + dgx, gy + dgy, fromIntegral (fromEnum slot) ∷ Word8)
-    in maybe False (HM.member key . lcStructures) (lookupChunk coord tileData)
-
--- | Commit a construction designation. Per-z-level like mining: only
---   tiles at the anchor's surface z are taken. STRUCTURE targets fill the
---   whole rectangle (paint a floor / wall run), skipping any tile whose
---   requested slot is already occupied by a placed piece (#805 — a
---   structure designation must never spawn a job that would overwrite an
---   existing floor/ceiling/wall edge/post corner/wire; compatible slots
---   on the same tile, e.g. a floor and a wall, coexist once PLACED, but
---   only one designation at a time may be OUTSTANDING on a tile, because
---   'ConstructDesignations' is keyed by tile coordinate alone — #1595);
---   BUILDING targets mark only the anchor tile (one footprint, not a
---   grid of buildings) and are unaffected by the placed-slot check,
---   though not by the outstanding-designation one.
---   Unloaded-chunk tiles are skipped. Clears the anchor afterwards.
+--   STRUCTURE targets enumerate 'structureDragExtent' — the ONE bounded
+--   drag helper the anchor→hover preview also uses, in the anchor's own
+--   alias frame and capped at 64 cells per axis INCLUDING the anchor —
+--   and then re-resolve every candidate through
+--   'resolveStructurePlan' at click time. Commit does not trust preview
+--   state: the world can have moved since the ghost was drawn, and each
+--   candidate is filtered independently, so partial acceptance is
+--   unchanged. Only @PlanValid@ candidates land; visible-invalid and
+--   missing-art candidates are omitted (requirement 8).
+--
+--   BUILDING targets mark only the anchor tile at its own surface z, one
+--   footprint rather than a grid of them, and are subject to #1595's
+--   outstanding-designation refusal and nothing else. Their @requested@
+--   accounting stays 1 and their outcome coordinates stay the anchor's:
+--   building planning and building invalidation are DTV-10's scope, and
+--   this path is deliberately byte-identical to what it was.
+--
+--   Clears the anchor afterwards.
 handleWorldDesignateConstructCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → Int → Int → ConstructTarget → Maybe Word64 → IO ()
 handleWorldDesignateConstructCommand env logger pageId gx1 gy1 gx2 gy2 tgt
@@ -131,53 +135,74 @@ handleWorldDesignateConstructCommand env logger pageId gx1 gy1 gx2 gy2 tgt
         Nothing → recordMissingWorldOutcome env "construction.designate"
             pageId gx1 gy1
         Just worldState → do
-            tileData ← readIORef (wsTilesRef worldState)
             worldSize ← pageWrapWorldSize worldState
-            -- #1175: canonicalised column read, so an anchor-local alias
-            -- resolves the chunk that stores the tile. Identity inland.
-            let surfaceZAt gx gy = do
-                    let (coord, (lx, ly), _) = canonicalTileFrame worldSize gx gy
-                    lc ← lookupChunk coord tileData
-                    pure (lcSurfaceMap lc VU.! columnIndex lx ly)
-                ((xLo, yLo), (xHi, yHi)) =
-                    designateRect worldSize (gx1, gy1) (gx2, gy2)
+            tileData ← readIORef (wsTilesRef worldState)
+            stage ← readIORef (wsStructureStageRef worldState)
+            designations ← readIORef (wsConstructDesignationsRef worldState)
+            cat ← readIORef (rhStructureArtCatalogRef
+                               (toRenderHandoffCapability env))
+            cs ← readIORef (wsCursorRef worldState)
+            let pw = PlanWorld
+                    { pwWorldSize    = worldSize
+                    , pwTiles        = tileData
+                    , pwStage        = stage
+                    , pwDesignations = designations
+                    , pwCatalog      = cat
+                    }
+                -- The wire path tool's line mode is read from the PAGE's
+                -- own cursor state, which is the very value the preview
+                -- reads — not a second flag travelling on the command —
+                -- so the two cannot disagree about the shape of the drag.
+                lineMode = constructLineMode cs
+                mAnchorZ = planSurfaceZAt worldSize tileData (gx1, gy1)
+                extent = structureDragExtent worldSize lineMode
+                             (gx1, gy1) (gx2, gy2)
                 -- A building only ever targets its single anchor tile
                 -- (never the swept rectangle), so it always "requests"
                 -- exactly 1 regardless of the two-click rectangle size.
                 requested = case tgt of
                     CtBuilding _  → 1
-                    CtStructure _ → (xHi - xLo + 1) * (yHi - yLo + 1)
-                candidates = case surfaceZAt gx1 gy1 of
-                    Nothing → []   -- anchor chunk unloaded: nothing
-                    Just anchorZ → case tgt of
-                        -- A building is a single footprint: only the
-                        -- anchor tile, at its own surface z.
-                        CtBuilding _ →
-                            [ ( canonicalTile worldSize gx1 gy1
-                              , newConstructDesignation anchorZ tgt ) ]
-                        -- Structure pieces tile the rectangle, per-z-level,
-                        -- skipping any tile whose target slot is occupied.
-                        CtStructure piece →
-                            [ ( canonicalTile worldSize gx gy
-                              , newConstructDesignation z tgt )
-                            | gx ← [xLo .. xHi]
-                            , gy ← [yLo .. yHi]
-                            , Just z ← [surfaceZAt gx gy]
-                            , z ≡ anchorZ
-                            , maybe True
-                                (not . structureOccupiedAt worldSize tileData gx gy)
-                                (structurePieceSlot piece)
-                            ]
+                    CtStructure _ → length extent
+                -- Structure candidates carry the resolver's verdict, so
+                -- the outcome reason below can name what actually
+                -- refused them rather than guessing.
+                resolved = case (tgt, mAnchorZ) of
+                    (CtStructure piece, Just anchorZ) →
+                        [ (canonicalTile worldSize gx gy, r)
+                        | (gx, gy) ← extent
+                        , let r = resolveStructurePlan pw PlanForPlacement
+                                      anchorZ piece (gx, gy) ]
+                    _ → []
+                accepted = [ (k, cdZOf r) | (k, r) ← resolved
+                                          , prOutcome r ≡ PlanValid ]
+                cdZOf r = fromMaybe 0 (prSurfaceZ r)
+                candidateZs = case (tgt, mAnchorZ) of
+                    -- A building is a single footprint: only the anchor
+                    -- tile, at its own surface z.
+                    (CtBuilding _, Just anchorZ) →
+                        [ (canonicalTile worldSize gx1 gy1, anchorZ) ]
+                    (CtBuilding _, Nothing) → []   -- anchor chunk unloaded
+                    _ → accepted
+            -- Attempt ids are allocated in ONE atomic step, before the
+            -- insert, and are never reissued — a candidate the insert
+            -- then refuses simply burns its id. See
+            -- "World.Construct.Attempt".
+            attempts ← atomicModifyIORef' (wsConstructAttemptRef worldState) $
+                \next → let (as, next') = takeConstructAttempts
+                                              (length candidateZs) next
+                        in (next', as)
+            let candidates = [ (k, newConstructDesignation z tgt aid)
+                             | ((k, z), aid) ← zip candidateZs attempts ]
                 -- #1595: the map is keyed by tile coordinate alone, so a
                 -- plain 'HM.insert' would REPLACE whatever job the tile
                 -- already carries — silently discarding a claimed and
-                -- possibly already-paid designation without the refund and
-                -- 'constructAi.abandonClaim' the cancel path
-                -- (scripts/build_tool.lua) performs for exactly that
-                -- state. Admission therefore treats ANY existing entry as
+                -- possibly already-paid designation without the refund
+                -- the cancel path performs for exactly that state.
+                -- Admission therefore treats ANY existing entry as
                 -- occupying the tile, whatever its status, progress,
-                -- payment marker or target category, and both target
-                -- categories go through it.
+                -- payment or target category. The structure resolver
+                -- already refuses those tiles; this is the BUILDING
+                -- path's own refusal, and the atomic backstop for both.
                 addOne (m, n) (k, v)
                     | HM.member k m = (m, n)
                     | otherwise     = (HM.insert k v m, n + 1)
@@ -188,79 +213,309 @@ handleWorldDesignateConstructCommand env logger pageId gx1 gy1 gx2 gy2 tgt
             -- delete exists to close.
             applied ← atomicModifyIORef' (wsConstructDesignationsRef worldState) $
                 \m → foldl' addOne (m, 0 ∷ Int) candidates
-            atomicModifyIORef' (wsCursorRef worldState) $ \cs →
-                (cs { constructAnchor = Nothing }, ())
+            atomicModifyIORef' (wsCursorRef worldState) $ \cs' →
+                (cs' { constructAnchor = Nothing }, ())
             logDebug logger CatWorld $
                 "Construct designation: +" <> tshow applied
                 <> " tiles (" <> constructTargetCategory tgt <> ")"
-            -- Nothing landed and something was excluded post-filter ⇒ every
-            -- otherwise-eligible tile was blocked by an existing job, so
-            -- say that rather than blaming the placed-slot check (which
-            -- for a still-empty tile would be false).
-            let blocked = length candidates - applied
+            let ((xLo, yLo), _) = extentBounds extent (gx1, gy1)
             recordDesignationOutcome env "construction.designate"
-                (if blocked > 0
-                    then "tile already carries an outstanding construction \
-                         \designation"
-                    else "anchor tile ineligible, unloaded, or requested \
-                         \slot already occupied")
+                (rejectionReason tgt resolved candidates applied)
                 xLo yLo requested applied
+  where
+    -- The swept rectangle's low corner, for the F4 record. Derived from
+    -- the extent itself rather than recomputed, so the two cannot drift;
+    -- the extent is never empty (the anchor is always in it), and the
+    -- anchor is the honest fallback if it somehow were.
+    extentBounds [] anchor = (anchor, anchor)
+    extentBounds tiles _   =
+        ( (minimum (map fst tiles), minimum (map snd tiles))
+        , (maximum (map fst tiles), maximum (map snd tiles)) )
 
+    -- Nothing landed: say WHICH check refused, taking the resolver's own
+    -- reason when there is one rather than blaming a check that for
+    -- these tiles was never reached.
+    rejectionReason (CtBuilding _) _ candidates applied
+        | applied ≡ 0 ∧ not (null candidates) =
+            "tile already carries an outstanding construction designation"
+        | otherwise = "anchor tile ineligible or unloaded"
+    -- The first candidate the resolver actually refused, which for a
+    -- one-tile drag is the only one and for a rectangle is a
+    -- representative rather than a summary. A resolved list with nothing
+    -- refused cannot reach here: every entry would have been applied.
+    rejectionReason (CtStructure _) resolved _ _ =
+        case [ r | (_, r) ← resolved, prOutcome r ≢ PlanValid ] of
+            (r : _) → planOutcomeName (prOutcome r) <> ": " <> prReason r
+            []      → "anchor tile ineligible or unloaded"
+
+-- | Remove the designation at a tile, REFUNDING its receipt.
+--
+--   The queued cancel is a real cancellation, not a bookkeeping delete:
+--   @construction.cancelDesignation@ is a public verb the build AI calls
+--   when a job cannot be finished, and popping a PAID designation
+--   without spending its receipt would destroy materials that had
+--   already left an inventory. The synchronous
+--   @cancelDesignationForRefund@ hands its receipt to the Lua caller
+--   instead; this path has no caller to hand it to, so it spends it
+--   here — and because the atomic pop returns the designation to exactly
+--   one caller, the refund still happens exactly once however many
+--   cancellations race.
 handleWorldCancelConstructCommand ∷ EngineEnv → LoggerState → WorldPageId
-    → Int → Int → IO ()
-handleWorldCancelConstructCommand env _logger pageId gx gy = do
+    → Int → Int → Maybe ConstructAttemptId → IO ()
+handleWorldCancelConstructCommand env _logger pageId gx gy mAttempt = do
     mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
-        Just worldState → void $ popConstructDesignation worldState (gx, gy)
+        Just worldState → do
+            mCd ← popConstructDesignation worldState (gx, gy) mAttempt
+            forM_ mCd $ \cd → do
+                deps ← constructRefundDeps env
+                worldSize ← pageWrapWorldSize worldState
+                -- #1175: the CANONICAL key throughout — the refund's
+                -- position and the broadcast's coordinate alike. The Lua
+                -- claim registry is keyed by the coords the AI reads
+                -- back, which are canonical, so an alias-named cancel
+                -- that broadcast its alias would leave the real claim
+                -- standing and block a successor.
+                let ckey = canonicalTile worldSize gx gy
+                refundConstructDesignation deps worldState ckey cd
+                -- …and detach the claimant, exactly as a world-side
+                -- invalidation does. Without it this documented
+                -- cancellation API leaves the old claim holding the
+                -- tile until a decision tick or a timeout, blocking a
+                -- successor designated there immediately — which is the
+                -- very thing the exact-attempt contract promises.
+                notifyConstructInvalidated env worldState ckey cd
         Nothing → pure ()
 
 -- | Atomically remove a construction designation and reset its
 --   corner-progress display, returning the removed designation if any
---   was present. Factored out of 'handleWorldCancelConstructCommand'
---   so a SYNCHRONOUS caller (construction.cancelDesignationForRefund,
---   #799) gets the SAME atomic pop-and-return the
---   queued command does — the atomicModifyIORef' delete is what
---   actually serializes competing cancellations (a rapid double
---   right-click, or a cancel racing the build AI's own CsComplete
---   removal): whichever caller's delete runs first sees Just the
---   removed designation; every other caller (this tick or later) sees
---   Nothing, since there is nothing left to remove. No Lua-side timing
---   heuristic can replicate that guarantee. Since #1595 a NEW
---   designation is not one of those racers — admission refuses a tile
---   that already carries a job rather than replacing it — but the
---   atomicity is what lets the refusal itself be a safe
---   test-and-insert against these same off-thread callers.
+--   was present.
 --
---   #1175: the tile is canonicalised HERE, once, so both callers — the
---   queued cancel command and the synchronous refund verb — accept any
---   u-alias and resolve the one stored key.
-popConstructDesignation ∷ WorldState → (Int, Int) → IO (Maybe ConstructDesignation)
-popConstructDesignation worldState (rawGX, rawGY) = do
+--   The atomicModifyIORef' delete is what serializes competing
+--   cancellations (a rapid double right-click, a cancel racing the build
+--   AI's own completion removal, a world-thread invalidation racing a
+--   player click): whichever caller's delete runs first sees @Just@ the
+--   removed designation; every other caller sees 'Nothing', since there
+--   is nothing left to remove. That is also what makes a receipt refund
+--   happen EXACTLY once — only the winner is handed the receipt.
+--
+--   #1844: @mAttempt@ makes the pop exact. 'Just' removes the
+--   designation only when its attempt matches, so a delayed cancellation
+--   for an attempt that has already gone cannot remove a SUCCESSOR at
+--   the same tile. 'Nothing' is the player's coordinate-only erase —
+--   "remove whatever is here", which has no attempt to name until it
+--   looks, and is still exact because the pop returns the one attempt it
+--   removed.
+--
+--   A designation inside its placement HAND-OFF ('CsPlacing') is not
+--   poppable at all, whatever attempt is named. The claimant has by then
+--   staged its piece and queued the world command that commits it;
+--   removing the designation here would refund the receipt while that
+--   command still lands, leaving the player with both the structure and
+--   its materials back. Cancellation simply loses that race — the window
+--   is one Lua callback wide, and the completion that follows settles
+--   the attempt either way (committing it, or cancelling and refunding
+--   it when the placement was declined or its site drifted).
+--
+--   A hand-off cannot strand the tile: 'World.Construct.Reconcile'
+--   demotes a restored 'CsPlacing' to pending, and the AI's own
+--   stale-claim sweep releases one whose claimant stopped refreshing.
+--
+--   #1175: the tile is canonicalised HERE, once, so every caller accepts
+--   any u-alias and resolves the one stored key.
+popConstructDesignation ∷ WorldState → (Int, Int)
+                        → Maybe ConstructAttemptId
+                        → IO (Maybe ConstructDesignation)
+popConstructDesignation worldState (rawGX, rawGY) mAttempt = do
     worldSize ← pageWrapWorldSize worldState
     let key = canonicalTile worldSize rawGX rawGY
-    mCd ← atomicModifyIORef' (wsConstructDesignationsRef worldState) $
-        \m → (HM.delete key m, HM.lookup key m)
-    forM_ mCd $ resetConstructSlope worldState key
+    mCd ← atomicModifyIORef' (wsConstructDesignationsRef worldState) $ \m →
+        case HM.lookup key m of
+            Just cd | maybe True (≡ cdAttempt cd) mAttempt
+                    , cdStatus cd ≢ CsPlacing →
+                (HM.delete key m, Just cd)
+            _ → (m, Nothing)
+    forM_ mCd $ clearConstructDesignationSlope worldState key
+    pure mCd
+
+-- | The final-placement hand-off (#1844 requirement 18): mark ONE exact
+--   attempt as entering placement.
+--
+--   The worker used to queue the piece placement and @CsComplete@ as two
+--   independent operations, with the designation still live between
+--   them — and read-your-writes staging exposes the placed piece the
+--   instant it is staged. A naive occupancy invalidator would see the
+--   worker's OWN successful placement as an external conflict, cancel
+--   the job and refund materials that were correctly spent.
+--
+--   'CsPlacing' closes that window without moving art resolution off the
+--   Lua thread: revalidation skips a designation in this state, and the
+--   whole placement→completion sequence runs inside ONE Lua callback, so
+--   the window cannot span a tick. Returns whether the transition was
+--   taken; 'False' means the attempt is gone (cancelled, completed, or
+--   replaced) and the worker must not place anything.
+beginConstructPlacement ∷ WorldState → (Int, Int) → ConstructAttemptId
+                        → IO Bool
+beginConstructPlacement worldState (rawGX, rawGY) attempt = do
+    worldSize ← pageWrapWorldSize worldState
+    let key = canonicalTile worldSize rawGX rawGY
+    atomicModifyIORef' (wsConstructDesignationsRef worldState) $ \m →
+        case HM.lookup key m of
+            Just cd | cdAttempt cd ≡ attempt ∧ cdStatus cd ≢ CsComplete →
+                (HM.insert key (cd { cdStatus = CsPlacing }) m, True)
+            _ → (m, False)
+
+-- | ABORT one exact attempt's placement hand-off, returning the removed
+--   designation (#1844).
+--
+--   The mirror of 'beginConstructPlacement', and the ONE way a
+--   'CsPlacing' designation comes off the map other than its completion.
+--   A cancellation is refused during the hand-off because it would
+--   refund a receipt while the claimant's queued placement still lands —
+--   but the CLAIMANT is not a racer, it is the owner of the window, and
+--   it is the only caller that can know it staged nothing at all (its
+--   own 'structure.place' returned false, the target chunk having
+--   evicted between the final resolver check and the placement). Without
+--   this it would be left holding a paid, placing designation with no
+--   completion coming.
+--
+--   Restricted to 'CsPlacing' AND the exact attempt, so it cannot stand
+--   in for the ordinary cancel: a job that never took the hand-off, or a
+--   successor at the same tile, is untouched.
+abortConstructPlacement ∷ WorldState → (Int, Int) → ConstructAttemptId
+                        → IO (Maybe ConstructDesignation)
+abortConstructPlacement worldState (rawGX, rawGY) attempt = do
+    worldSize ← pageWrapWorldSize worldState
+    let key = canonicalTile worldSize rawGX rawGY
+    mCd ← atomicModifyIORef' (wsConstructDesignationsRef worldState) $ \m →
+        case HM.lookup key m of
+            Just cd | cdAttempt cd ≡ attempt, cdStatus cd ≡ CsPlacing →
+                (HM.delete key m, Just cd)
+            _ → (m, Nothing)
+    forM_ mCd $ clearConstructDesignationSlope worldState key
     pure mCd
 
 -- | Build AI hook (#96): set a designation's status. Complete removes it
 --   (and resets the corner-progress display back to flat ground — the
 --   placed piece takes over from there).
+--
+--   #1844: attempt-guarded, and the attempt is REQUIRED. A completion
+--   for an attempt that is no longer there removes nothing, so a stale
+--   worker cannot delete the successor designation a player just made at
+--   the same tile — and there is no attempt-less form that could.
 handleWorldSetConstructStatusCommand ∷ EngineEnv → LoggerState → WorldPageId
-    → Int → Int → ConstructStatus → IO ()
-handleWorldSetConstructStatusCommand env _logger pageId gx gy st = do
+    → Int → Int → ConstructStatus → ConstructAttemptId
+    → Maybe StructureCommitWindow → IO ()
+handleWorldSetConstructStatusCommand env _logger pageId gx gy st attempt
+                                     mWindow = do
     mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
         Just worldState → do
             -- #1175: a build-AI job coord is a point op like any other.
             worldSize ← pageWrapWorldSize worldState
             let key = canonicalTile worldSize gx gy
+            -- #1844: @structure.place@ returning true means STAGED AND
+            -- QUEUED, not committed — the world thread declines the
+            -- queued placement when the target chunk evicted in between,
+            -- retracting the staged entry and recording the token. A
+            -- completion that carries the placement's own commit window
+            -- is therefore CONDITIONAL: if anything in that span was
+            -- declined, nothing was really built, and deleting the
+            -- designation would leave a paid attempt with neither a
+            -- structure nor its materials. Same protocol
+            -- 'handleWorldMarkLocationStampedCommand' uses for the same
+            -- hazard (#2051). No window means no claim to check, which
+            -- is every non-completion and every caller that placed
+            -- nothing.
+            declined ← case (st, mWindow) of
+                (CsComplete, Just window) →
+                    atomicModifyIORef' (wsStructureStageRef worldState)
+                                       (takeDeclinedInWindow window)
+                _ → pure False
+            -- …and the placement's own SITE is re-resolved one last
+            -- time. Requirement 18's hand-off state exempts a placing
+            -- designation from the occupancy check — the piece in its
+            -- slot is the worker's own — but nothing else, and the world
+            -- thread can have drained a terrain, fluid or catalogue
+            -- mutation between @beginPlacement@ and this command. A site
+            -- whose surface has drifted or whose pack has gone must be
+            -- cancelled and refunded here rather than completed, or the
+            -- structure lands on ground the plan no longer describes.
+            -- 'PlanForCommit' is that exemption, and only that one.
+            invalid ← case st of
+                CsComplete → do
+                    designations ← readIORef
+                        (wsConstructDesignationsRef worldState)
+                    case HM.lookup key designations of
+                        Just cd
+                          | cdAttempt cd ≡ attempt
+                          , CtStructure piece ← cdTarget cd → do
+                              pw ← constructPlanWorld env worldState
+                              let r = resolveStructurePlan pw
+                                          (PlanForCommit attempt)
+                                          (cdZ cd) piece key
+                                  -- The piece has to BE there. A window
+                                  -- with no declines proves only that
+                                  -- nothing was retracted, and an EMPTY
+                                  -- span (which the public verb can
+                                  -- supply) proves nothing at all — so
+                                  -- the completion is bound to the
+                                  -- committed overlay itself: the target
+                                  -- slot the plan resolved must now hold
+                                  -- a piece, and the window must actually
+                                  -- span an attempt.
+                                  landed = maybe False
+                                      (\slot → structurePresentAt
+                                          (pwWorldSize pw) (pwTiles pw)
+                                          (pwStage pw) slot (fst key) (snd key))
+                                      (prSlot r)
+                                  staged = maybe False
+                                      (\(StructureCommitWindow lo hi) → lo < hi)
+                                      mWindow
+                              pure (prOutcome r ≢ PlanValid
+                                      ∨ not landed ∨ not staged)
+                        _ → pure False
+                _ → pure False
+            let unbuilt = declined ∨ invalid
             mCd ← atomicModifyIORef' (wsConstructDesignationsRef worldState) $
-                \m → case st of
-                    CsComplete → (HM.delete key m, HM.lookup key m)
-                    _          → (HM.adjust (\cd → cd { cdStatus = st })
-                                           key m, Nothing)
-            forM_ mCd $ resetConstructSlope worldState key
+                \m → case HM.lookup key m of
+                    Just cd | cdAttempt cd ≡ attempt → case st of
+                        -- A STRUCTURE completion must PROVE its placement
+                        -- committed. Without a window there is nothing to
+                        -- check, and deleting on that would lose a paid
+                        -- designation's receipt for a piece that may never
+                        -- have landed — so a windowless structure
+                        -- completion does nothing at all. A BUILDING never
+                        -- goes through 'structure.place' (it stakes via
+                        -- 'building.spawn', which reports its own success
+                        -- synchronously), so it has no window to give and
+                        -- keeps the plain flow.
+                        CsComplete
+                          | CtStructure _ ← cdTarget cd
+                          , isNothing mWindow → (m, Nothing)
+                          | otherwise → (HM.delete key m, Just cd)
+                        _ → (HM.insert key (cd { cdStatus = st }) m, Nothing)
+                    _ → (m, Nothing)
+            forM_ mCd $ \cd → do
+                clearConstructDesignationSlope worldState key cd
+                if unbuilt
+                    -- The placement was declined, or its site stopped
+                    -- being buildable while the completion was in
+                    -- flight: either way nothing was really built, so
+                    -- this is a CANCELLATION wearing a completion's
+                    -- clothes. The receipt goes back to the ground
+                    -- exactly as any other cancellation's would, and the
+                    -- claimant is detached.
+                    then do
+                        deps ← constructRefundDeps env
+                        refundConstructDesignation deps worldState key cd
+                        notifyConstructInvalidated env worldState key cd
+                    -- …and a CONFIRMED completion says so, which is what
+                    -- lets the claimant grant its work XP only for a
+                    -- piece that really landed (#1844). Structures only:
+                    -- a building's own stake path reports synchronously.
+                    else when (st ≡ CsComplete) $
+                        notifyConstructCompleted env worldState key cd
         Nothing → pure ()
 
 -- | Build AI hook (#96): pour progress into a designation. Deltas are
@@ -270,9 +525,13 @@ handleWorldSetConstructStatusCommand env _logger pageId gx gy st = do
 --   CsComplete. Each application re-stamps the tile's corner-progress
 --   display (the mining slope-mask pipeline, 'World.Construct.Apply')
 --   so the site visibly works corner-by-corner.
+--
+--   #1844: attempt-guarded, and the attempt is REQUIRED, so a delayed
+--   pour from a removed attempt cannot advance — or visibly stamp
+--   progress onto — a successor.
 handleWorldAddConstructProgressCommand ∷ EngineEnv → LoggerState → WorldPageId
-    → Int → Int → Float → IO ()
-handleWorldAddConstructProgressCommand env logger pageId gx gy delta = do
+    → Int → Int → Float → ConstructAttemptId → IO ()
+handleWorldAddConstructProgressCommand env logger pageId gx gy delta attempt = do
     mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
         Just worldState → do
@@ -281,12 +540,12 @@ handleWorldAddConstructProgressCommand env logger pageId gx gy delta = do
             let key = canonicalTile worldSize gx gy
             mUpd ← atomicModifyIORef' (wsConstructDesignationsRef worldState) $
                 \m → case HM.lookup key m of
-                    Nothing → (m, Nothing)
-                    Just cd →
+                    Just cd | cdAttempt cd ≡ attempt →
                         let cd' = cd { cdProgress = max 0.0 (min 1.0
                                           (cdProgress cd + delta)) }
                         in ( HM.insert key cd' m
                            , Just (cdProgress cd, cd') )
+                    _ → (m, Nothing)
             forM_ mUpd $ \(prevProgress, cd') →
                 withConstructChunk worldState key $
                     applyConstructSlopeToChunk key prevProgress cd'
@@ -294,8 +553,7 @@ handleWorldAddConstructProgressCommand env logger pageId gx gy delta = do
             -- vegetation the moment any corner has progressed, so a
             -- build site's own progress write is a way a tile stops
             -- being tilled soil with no vegetation or terrain EDIT
-            -- anywhere. ('resetConstructSlope' passes full corners and
-            -- therefore never touches ctVeg — see there.)
+            -- anywhere.
             _ ← revalidatePlantDesignations logger worldState
             pure ()
         Nothing → pure ()
@@ -307,8 +565,7 @@ handleWorldAddConstructProgressCommand env logger pageId gx gy delta = do
 --
 --   Takes a CANONICAL tile coord (#1175): every caller canonicalises
 --   before touching the designation map, and the transform it passes
---   ('applyConstructSlopeToChunk' / 'clearConstructSlope') indexes the
---   resolved chunk with the same coord.
+--   indexes the resolved chunk with the same coord.
 withConstructChunk ∷ WorldState → (Int, Int)
                    → (LoadedChunk → LoadedChunk) → IO ()
 withConstructChunk worldState (gx, gy) f = do
@@ -327,17 +584,6 @@ withConstructChunk worldState (gx, gy) f = do
             writeIORef (wsZoomQuadCacheRef worldState) Nothing
             writeIORef (wsBgQuadCacheRef worldState)   Nothing
 
--- | Reset a removed designation's corner-progress display to flat
---   (guarded inside 'clearConstructSlope' to the designation's own
---   mask, so natural/authored slopes are untouched).
--- Deliberately NOT a #1858 revalidation point: this passes FULL
--- corners, so 'applyCornerSlopeToChunk' leaves 'ctVeg' alone — the
--- vegetation a site shed during prep stays shed, and nothing here can
--- change a tile's tilled-soil answer in either direction.
-resetConstructSlope ∷ WorldState → (Int, Int) → ConstructDesignation → IO ()
-resetConstructSlope worldState (gx, gy) cd =
-    withConstructChunk worldState (gx, gy) $ clearConstructSlope (gx, gy) cd
-
 handleWorldSetConstructDesignateTextureCommand ∷ EngineEnv → LoggerState
     → WorldPageId → Text → TextureHandle → IO ()
 handleWorldSetConstructDesignateTextureCommand env _logger pageId cat tid = do
@@ -351,7 +597,9 @@ handleWorldSetConstructDesignateTextureCommand env _logger pageId cat tid = do
         Nothing → pure ()
 
 -- | Wire path tool (#359): toggle the anchor→hover preview between the
---   default filled rectangle and a straight 1-wide line.
+--   default filled rectangle and a straight 1-wide line. The COMMIT
+--   reads this same flag (#1844), so the two cannot disagree about the
+--   shape of the drag.
 handleWorldSetConstructLineModeCommand ∷ EngineEnv → LoggerState
     → WorldPageId → Bool → IO ()
 handleWorldSetConstructLineModeCommand env _logger pageId enabled = do

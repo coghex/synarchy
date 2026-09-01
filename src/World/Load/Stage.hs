@@ -62,6 +62,14 @@ import World.Edit.Apply (replayEdits)
 import World.Edit.Types (canonicalizeWorldEdits)
 import World.Mine.Apply (applyDigSlopes)
 import World.Construct.Apply (applyConstructSlopes)
+import World.Construct.Reconcile
+    (ConstructReconcileError(..), reconcileStagedConstructDesignations)
+import World.Construct.Revalidate
+    ( ConstructRefundDeps, ConstructScope(..), constructStagingRefundDeps
+    , revalidateStagedConstructDesignations )
+import Structure.ArtCatalog (StructureArtCatalog)
+import Engine.Core.Capability.RenderHandoff
+    (RenderHandoffCapability(..), toRenderHandoffCapability)
 import Building.Types (BuildingManager(..), BuildingId(..), BuildingDef)
 import Building.Knowledge (prunedContainerIds, retainContainers)
 import World.Save.Integrity
@@ -136,6 +144,20 @@ stageSession env logger saveData registry = case sdWorlds saveData of
         catalog ← readIORef (floraCatalogRef env)
         buildingDefs ← bmDefs <$> readIORef (buildingManagerRef env)
         unitDefs     ← umDefs <$> readIORef (unitManagerRef env)
+        -- #1844: the registered structure art/build catalogue and the
+        -- item-minting dependencies a self-clear's refund needs, read
+        -- ONCE here and passed down as values. 'stagePage' deliberately
+        -- never touches a live env ref (see this module's haddock), and
+        -- the catalogue is session-independent content exactly like the
+        -- building and unit defs above.
+        artCatalog ← readIORef (rhStructureArtCatalogRef
+                                  (toRenderHandoffCapability env))
+        -- Seeded from the SAVE's own item-instance allocator, never the
+        -- live one, and its final value is what the session publishes —
+        -- see 'constructStagingRefundDeps' for why a staged refund
+        -- drawing from the live counter corrupts both sessions.
+        (refundDeps, stagedItemIdRef) ←
+            constructStagingRefundDeps env (sdNextItemInstanceId saveData)
 
         let activeWps    = fromMaybe firstWps (activeWorldPage saveData)
             activeWpsId  = wpsPageId activeWps
@@ -173,7 +195,8 @@ stageSession env logger saveData registry = case sdWorlds saveData of
          [] → do
           results ← forM orderedPages $
             stagePage logger registry palette catalog
-                      buildingDefs unitDefs mapCeiling activeWpsId
+                      buildingDefs unitDefs artCatalog refundDeps
+                      mapCeiling activeWpsId
 
           let buildingOrphans = concatMap psrBuildingOrphans results
               unitOrphans     = concatMap psrUnitOrphans results
@@ -229,6 +252,10 @@ stageSession env logger saveData registry = case sdWorlds saveData of
                       [ (spPageId (psrPage r), w, h, bytes)
                       | r ← results, Just (w, h, bytes) ← [psrZoomAtlas r] ]
                   mPreview   = listToMaybe [ p | Just p ← map psrPreview results ]
+              -- Every staged refund drew from this ref, so its value now
+              -- is the allocator the published session must carry.
+              -- Identity when nothing self-cleared.
+              stagedNextItemId ← readIORef stagedItemIdRef
               pure $ case mCamera of
                   -- Every staged session resolves exactly one active page
                   -- (the fallback above), which always stages a camera —
@@ -247,7 +274,7 @@ stageSession env logger saveData registry = case sdWorlds saveData of
                       , ssUnitSimStates = mergedSimStates
                       , ssGameTime      = sdGameTime saveData
                       , ssTexPalette    = sdTexPalette saveData
-                      , ssNextItemId    = sdNextItemInstanceId saveData
+                      , ssNextItemId    = stagedNextItemId
                       , ssCamera        = camera
                       , ssZoomAtlas     = mZoomAtlas
                       , ssPreview       = mPreview
@@ -268,9 +295,10 @@ stageSession env logger saveData registry = case sdWorlds saveData of
 stagePage
     ∷ LoggerState → MaterialRegistry → ZoomColorPalette
     → FloraCatalog → HM.HashMap Text BuildingDef → HM.HashMap Text UnitDef
+    → StructureArtCatalog → ConstructRefundDeps
     → MapImageCeiling → WorldPageId → WorldPageSave → IO PageStageResult
 stagePage logger registry palette catalog buildingDefs unitDefs
-          mapCeiling activeWpsId wps = do
+          artCatalog refundDeps mapCeiling activeWpsId wps = do
     let pid      = wpsPageId wps
         isActive = pid ≡ activeWpsId
         params    = wpsGenParams wps
@@ -314,7 +342,23 @@ stagePage logger registry palette catalog buildingDefs unitDefs
     writeIORef (wsMineDesignationsRef worldState) (wpsMineDesignations wps)
     writeIORef (wsConstructDesignationsRef worldState)
         (wpsConstructDesignations wps)
+    writeIORef (wsConstructAttemptRef worldState)
+        (wpsConstructNextAttempt wps)
     writeIORef (wsGroundItemsRef worldState) (wpsGroundItems wps)
+    -- #1844: reconcile the saved structure designations against the
+    -- CURRENTLY registered content before anything is visible. It runs
+    -- here — after the designations and this page's own ground items are
+    -- in place, and BEFORE any chunk is generated — for two reasons: a
+    -- self-clear's refund must land in the staged page's ground items
+    -- (a live-session verb would deposit it into the session being
+    -- replaced), and a job cleared now never has its progress slope
+    -- stamped by the 'applyConstructSlopes' pass below at all.
+    --
+    -- Terrain-dependent reconciliation is deliberately NOT this
+    -- boundary's job: a load publishes with almost nothing resident, so
+    -- it belongs to the chunk-publication hook.
+    mConstructErr ← reconcileStagedConstructDesignations
+                        refundDeps artCatalog logger worldState
     writeIORef (wsSpoilRef worldState) (wpsSpoilPiles wps)
     writeIORef (wsFloraHarvestsRef worldState) (wpsFloraHarvests wps)
     writeIORef (wsChopDesignationsRef worldState) (wpsChopDesignations wps)
@@ -593,6 +637,20 @@ stagePage logger registry palette catalog buildingDefs unitDefs
     -- so most records are still UNKNOWN at this point and are retained
     -- for 'World.Thread.ChunkLoading' to resolve as the queue drains.
     _ ← revalidatePlantDesignations logger worldState
+    -- #1844: the same boundary, for structure designations. The
+    -- catalogue half already ran above, BEFORE any chunk existed; this
+    -- is the terrain half, and it is the only pass that sees the chunks
+    -- this page reconstructed synchronously — an arena rebuilds every
+    -- chunk here and has an EMPTY init queue, and an ordinary page's
+    -- centre chunk is excluded from the queue too, so neither would ever
+    -- reach 'World.Thread.ChunkLoading''s publication sweep. Without
+    -- this, a loaded designation whose surface has drifted, whose slot
+    -- is now filled, or whose supporting floor is gone could survive
+    -- indefinitely on exactly those chunks. Everything still unloaded
+    -- resolves as unresolved-terrain and is retained, which is what the
+    -- queue's own sweep then settles.
+    _ ← revalidateStagedConstructDesignations refundDeps artCatalog logger
+            worldState ConstructWholePage
 
     let (restoredBm, bOrphans) = fromBuildingSnapshot pid buildingDefs (wpsBuildings wps)
         (restoredUm, uOrphans, uUnknownFactions) =
@@ -617,5 +675,11 @@ stagePage logger registry palette catalog buildingDefs unitDefs
         , psrCamera          = mCamera
         , psrZoomAtlas       = mZoomAtlas
         , psrPreview         = mPreview
-        , psrStageError      = mStageErr
+          -- Either failure aborts the whole transaction; the construct
+          -- reconciliation's is reported first because it names a
+          -- concrete designation and a concrete missing definition,
+          -- which is the more actionable of the two.
+        , psrStageError      = case mConstructErr of
+            Left (ConstructReconcileError t) → Just (StageError t)
+            Right () → mStageErr
         }

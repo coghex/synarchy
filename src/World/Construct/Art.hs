@@ -31,6 +31,7 @@
 --   cannot be confused for one another.
 module World.Construct.Art
     ( structurePresentAt
+    , structureGridZAt
     , postCornerSlot
     , wallCapsAt
     , wireDesignatedAt
@@ -41,7 +42,8 @@ import UPrelude
 import qualified Data.HashMap.Strict as HM
 import Structure.Facing (WallEdge, WallCaps(..), PostCorner(..), wallEdgeEnds)
 import Structure.Types
-    (StructureSlot(..), StructureStage(..))
+    ( StructureSlot(..), StructureStage(..), StagedStructurePiece(..)
+    , StructurePieceData(..) )
 import Structure.Wire (WireNeighbors(..))
 import World.Chunk.Types (LoadedChunk(..))
 import World.Construct.Types
@@ -59,6 +61,22 @@ structurePresentAt ∷ Int → WorldTileData → StructureStage → StructureSlo
 structurePresentAt worldSize tileData stage slot gx gy =
     HM.member key (ssEntries stage)
       ∨ maybe False (HM.member key ∘ lcStructures) (lookupChunk coord tileData)
+  where
+    (coord, _, (dgx, dgy)) = canonicalTileFrame worldSize gx gy
+    key = (gx + dgx, gy + dgy, fromIntegral (fromEnum slot) ∷ Word8)
+
+-- | The grid z of the piece in this slot, or 'Nothing' when there is
+--   none. Same two authorities in the same order as 'structurePresentAt'
+--   — which is what @structure.floorZAt@ reads, and it is read for the
+--   same reason: a post takes its supporting FLOOR's z, not a z derived
+--   from terrain (#1844).
+structureGridZAt ∷ Int → WorldTileData → StructureStage → StructureSlot
+                 → Int → Int → Maybe Int
+structureGridZAt worldSize tileData stage slot gx gy =
+    case HM.lookup key (ssEntries stage) of
+        Just staged → Just (spdGridZ (stgPiece staged))
+        Nothing     → spdGridZ ⊚ (lookupChunk coord tileData
+                                    ⌦ HM.lookup key ∘ lcStructures)
   where
     (coord, _, (dgx, dgy)) = canonicalTileFrame worldSize gx gy
     key = (gx + dgx, gy + dgy, fromIntegral (fromEnum slot) ∷ Word8)

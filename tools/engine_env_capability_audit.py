@@ -2449,6 +2449,7 @@ CAPABILITY_WRITER_MODULES: dict[str, frozenset[str]] = {
         "Combat.Resolution",
         "Combat.Resolution.Wear",
         "Combat.Wounds.Tick",
+        "Engine.Scripting.Lua.API.Construct.Payment",
         "Engine.Scripting.Lua.API.Craft.Execute",
         "Engine.Scripting.Lua.API.Equipment.Accessory",
         "Engine.Scripting.Lua.API.Equipment.Slot",

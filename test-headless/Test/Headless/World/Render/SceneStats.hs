@@ -102,6 +102,7 @@ import World.State.Types
 import World.Thread.Command.Basic
     (handleWorldDestroyAllCommand, handleWorldDestroyCommand)
 import World.Tile.Types (WorldTileData(..))
+import World.Construct.Attempt (firstConstructAttemptId)
 
 -- * Fixture
 
@@ -559,7 +560,8 @@ scannedMeaningSpec = describe "the per-category scanned meanings" $ do
         writeIORef (buildingManagerRef env) bm
             { bmDefs = HM.singleton (bdName footprintDef) footprintDef }
         writeIORef (wsConstructDesignationsRef ws) $ HM.singleton (0, 0)
-            (newConstructDesignation 0 (CtBuilding (bdName footprintDef)))
+            (newConstructDesignation 0 (CtBuilding (bdName footprintDef))
+                                 firstConstructAttemptId)
         cs ← readIORef (wsCursorRef ws)
         writeIORef (wsCursorRef ws)
             cs { constructBuildingTexture = Just (TextureHandle 9) }

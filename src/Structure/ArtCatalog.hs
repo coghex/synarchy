@@ -63,6 +63,9 @@ module Structure.ArtCatalog
       -- * Art
     , ArtAsset(..)
     , PieceArt(..)
+      -- * Build cost
+    , BuildCost(..)
+    , mkBuildCost
       -- * The catalogue
     , PackArt(..)
     , StructureArtCatalog(..)
@@ -83,6 +86,7 @@ module Structure.ArtCatalog
     , defaultPieceArtContext
     , resolveUnplacedArt
     , packKindBuildable
+    , packKindBuild
     , packArtResolves
     ) where
 
@@ -187,6 +191,35 @@ data PieceArt = PieceArt
     , paFacemap ∷ !ArtAsset
     } deriving (Show, Eq)
 
+-- * Build cost
+
+-- | One kind's COMPLETE @build:@ entry, as the engine needs it (#1844):
+--   worker-seconds of effort and the exact material multiset a job
+--   consumes when construction starts.
+--
+--   Both halves are required for a kind to be buildable at all, which is
+--   why this is one value rather than two independently-present fields —
+--   @scripts\/structures.lua@'s @buildableKind@ has always meant exactly
+--   "@build_work@ AND @materials@".
+data BuildCost = BuildCost
+    { bcWork      ∷ !Double
+      -- ^ @build_work@: worker-seconds at build rate 1.0.
+    , bcMaterials ∷ ![(Text, Int)]
+      -- ^ (item def name, count) — summed per name, positive counts
+      --   only, ASCENDING by name. Canonical because a reconstructed
+      --   material receipt must be deterministic and a Lua table's
+      --   iteration order is not; build it with 'mkBuildCost'.
+    } deriving (Show, Eq)
+
+-- | Canonicalise a raw cost: counts summed per material, non-positive
+--   totals dropped, ascending by name.
+mkBuildCost ∷ Double → [(Text, Int)] → BuildCost
+mkBuildCost work raw = BuildCost
+    { bcWork      = work
+    , bcMaterials = [ (n, c) | (n, c) ← M.toAscList (M.fromListWith (+) raw)
+                             , c > 0 ]
+    }
+
 -- * The catalogue
 
 -- | One registered pack.
@@ -198,6 +231,16 @@ data PackArt = PackArt
       -- ^ The declared kinds whose @build:@ entry is complete
       --   (@build_work@ AND @materials@). A subset of 'pkKinds', and
       --   deliberately independent of whether the kind's art resolves.
+    , pkBuild     ∷ !(M.Map PieceKind BuildCost)
+      -- ^ #1844: the exact COST of each kind whose registration supplied
+      --   one. A separate answer from 'pkBuildable', which stays the
+      --   pack's own declaration: the engine needs the numbers because
+      --   it charges structure jobs and reconstructs a pre-#1844 paid
+      --   designation's material receipt itself, and the world thread
+      --   cannot call into Lua to read a pack YAML. A payload that
+      --   declares a kind buildable without stating its cost is not
+      --   refused — it simply cannot be PAID for, which is what a
+      --   registration carrying no numbers honestly means.
     , pkArt       ∷ !(M.Map ArtKey PieceArt)
     , pkFailures  ∷ !(HM.HashMap Text Text)
       -- ^ Terminal texture-load failures: the failed PATH → its reason,
@@ -247,10 +290,16 @@ artFaultMessage f = mconcat
 -- | One pack's complete art declaration.
 data PackArtRegistration = PackArtRegistration
     { parPack    ∷ !Text
-    , parKinds   ∷ ![(PieceKind, Bool)]
+    , parKinds   ∷ ![(PieceKind, Bool, Maybe BuildCost)]
       -- ^ The declared picker kinds, each with whether its @build:@
-      --   entry is complete. Declaring a kind is what obliges the
-      --   payload to carry all of its 'requiredArtKeys'.
+      --   entry is complete and — since #1844 — that entry's exact cost
+      --   when the payload states one. Declaring a kind is what obliges
+      --   the payload to carry all of its 'requiredArtKeys'.
+      --
+      --   @buildable@ is MANDATORY per kind (art and buildability are
+      --   independent answers); the COST is optional, because a
+      --   registration that omits it is not malformed, it is simply one
+      --   the engine cannot charge against.
     , parEntries ∷ ![(ArtKey, PieceArt)]
     } deriving (Show, Eq)
 
@@ -290,6 +339,7 @@ registerPackArt reg cat = case validate of
     -- loads.
     sameDeclaration a b = pkKinds a ≡ pkKinds b
                         ∧ pkBuildable a ≡ pkBuildable b
+                        ∧ pkBuild a ≡ pkBuild b
                         ∧ pkArt a ≡ pkArt b
 
     -- Name WHAT differs rather than dumping both declarations: the
@@ -310,6 +360,7 @@ registerPackArt reg cat = case validate of
             | (what, differs) ←
                 [ ("declared kinds", pkKinds existing ≢ pkKinds pack)
                 , ("buildable kinds", pkBuildable existing ≢ pkBuildable pack)
+                , ("build costs", pkBuild existing ≢ pkBuild pack)
                 , ("art", pkArt existing ≢ pkArt pack) ]
             , differs ]
 
@@ -321,9 +372,10 @@ registerPackArt reg cat = case validate of
     validate = do
         when (name ≡ "") $
             Left (fault Nothing "pack name" Nothing "the pack name is empty")
-        let kinds     = map fst (parKinds reg)
+        let kinds     = [ k | (k, _, _) ← parKinds reg ]
             kindSet   = S.fromList kinds
-            buildable = S.fromList [ k | (k, True) ← parKinds reg ]
+            buildable = S.fromList [ k | (k, True, _) ← parKinds reg ]
+            buildMap  = M.fromList [ (k, c) | (k, _, Just c) ← parKinds reg ]
         when (null kinds) $
             Left (fault Nothing "declared kinds" Nothing
                         "the registration declares no piece kinds")
@@ -349,6 +401,7 @@ registerPackArt reg cat = case validate of
                             "the registration supplies no art for this slot")
         pure PackArt { pkKinds     = kindSet
                      , pkBuildable = buildable
+                     , pkBuild     = buildMap
                      , pkArt       = artMap
                      , pkFailures  = HM.empty }
 
@@ -519,3 +572,16 @@ packKindBuildable cat pack kindText = fromMaybe False $ do
     p    ← HM.lookup pack (sacPacks cat)
     kind ← pieceKindFromText kindText
     pure (kind `S.member` pkBuildable p)
+
+-- | That kind's COMPLETE build cost, or 'Nothing' when the pack is
+--   unregistered, the kind undeclared, or its @build:@ entry incomplete.
+--
+--   The engine-side authority for what a structure job costs (#1844).
+--   Like 'packKindBuildable' it ignores art failures entirely: a texture
+--   that would not load says nothing about what a job costs, and a job
+--   already PAID never consults this at all — its receipt does.
+packKindBuild ∷ StructureArtCatalog → Text → Text → Maybe BuildCost
+packKindBuild cat pack kindText = do
+    p    ← HM.lookup pack (sacPacks cat)
+    kind ← pieceKindFromText kindText
+    M.lookup kind (pkBuild p)

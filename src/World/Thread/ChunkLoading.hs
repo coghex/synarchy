@@ -44,6 +44,8 @@ import World.Flora.Designation
 import World.Mine.Apply (applyDigSlopesTd)
 import World.Construct.Apply (applyConstructSlopesTd)
 import World.Plant.Validate (revalidatePlantDesignations)
+import World.Construct.Revalidate
+    (ConstructScope(..), revalidateConstructDesignations)
 import Sim.Command.Types (SimCommand(..))
 import Sim.Topology (simTopologyForParams)
 
@@ -275,6 +277,16 @@ updateChunkLoading env logger = do
                                 -- record.
                                 _ ← revalidatePlantDesignations logger
                                                                 worldState
+                                -- #1844: same publication boundary, and
+                                -- the same reason it is a PAGE sweep
+                                -- rather than a scoped one — which
+                                -- designations were being held as
+                                -- unresolved-terrain is not derivable
+                                -- from the published chunk list once
+                                -- eviction and the seam are in play.
+                                _ ← revalidateConstructDesignations
+                                        env logger worldState
+                                        ConstructWholePage
                                 pure ()
 
 -- | Dispatch a location-stamp request to the Lua thread for any
@@ -492,6 +504,10 @@ drainInitQueues env logger = do
                         -- designation over one of these chunks is checked
                         -- now that its terrain exists.
                         _ ← revalidatePlantDesignations logger worldState
+                        -- #1844: and the structure-plan sweep, for the
+                        -- same reason.
+                        _ ← revalidateConstructDesignations env logger
+                                worldState ConstructWholePage
 
                         -- The settled work is now in wsTilesRef AND the sim
                         -- has been notified, so drop it from the init queue —

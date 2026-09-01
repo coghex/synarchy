@@ -593,6 +593,42 @@
         }
       ]
     },
+    "World.Construct.Receipt.ConstructPayment": {
+      "source": "src/World/Construct/Receipt.hs",
+      "onSaveWire": true,
+      "components": [
+        "world-activity"
+      ],
+      "carriers": [
+        {
+          "carrier": "\"world-activity\" — World.Save.Component.Page",
+          "via": "PageActivityDTO → ConstructDesignationDTO → ConstructPayment"
+        },
+        {
+          "carrier": "World.Save.Types — the transitional in-memory load bridge and the `metadata` component's payload",
+          "via": "WorldPageSave → ConstructDesignations → ConstructDesignation → ConstructPayment"
+        }
+      ],
+      "constructors": [
+        {
+          "name": "CpUnpaid",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "CpPaid",
+          "arity": 1,
+          "payload": [
+            "MaterialReceipt"
+          ]
+        },
+        {
+          "name": "CpLegacyPaid",
+          "arity": 0,
+          "payload": []
+        }
+      ]
+    },
     "World.Construct.Types.ConstructStatus": {
       "source": "src/World/Construct/Types.hs",
       "onSaveWire": true,
@@ -606,7 +642,7 @@
         },
         {
           "carrier": "World.Save.Compat.SessionV90 — matches src/World/Save/Compat/*.hs",
-          "via": "WorldPageSaveV90 → ConstructDesignationDTO → ConstructStatus"
+          "via": "WorldPageSaveV90 → ConstructDesignationDTOv1 → ConstructStatus"
         },
         {
           "carrier": "World.Save.Types — the transitional in-memory load bridge and the `metadata` component's payload",
@@ -626,6 +662,11 @@
         },
         {
           "name": "CsComplete",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "CsPlacing",
           "arity": 0,
           "payload": []
         }
@@ -1684,7 +1725,7 @@
         },
         {
           "carrier": "World.Save.Compat.SessionV90 — matches src/World/Save/Compat/*.hs",
-          "via": "WorldPageSaveV90 → ConstructDesignationDTO → ConstructTargetDTO"
+          "via": "WorldPageSaveV90 → ConstructDesignationDTOv1 → ConstructTargetDTO"
         }
       ],
       "constructors": [

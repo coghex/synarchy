@@ -88,6 +88,7 @@ import World.Fluid.Types (emptyIceMap)
 import World.Generate.Coordinates (canonicalTile, globalToChunk)
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import World.Page.Types (WorldPageId(..))
+import World.Construct.Attempt (firstConstructAttemptId)
 import World.Construct.Types
     (ConstructTarget(..), StructurePiece(..), newConstructDesignation)
 import World.State.Types
@@ -891,7 +892,8 @@ designateWire ws tile =
     writeIORef (wsConstructDesignationsRef ws) $ HM.singleton
         (canonicalTile worldSizeChunks (fst tile) (snd tile))
         (newConstructDesignation 0
-            (CtStructure (StructurePiece wirePack "wire" Nothing)))
+            (CtStructure (StructurePiece wirePack "wire" Nothing))
+            firstConstructAttemptId)
 
 -- | Loaded chunks around one tile and its four neighbours, for the two
 --   examples that step outside 'allScenarioTiles'.

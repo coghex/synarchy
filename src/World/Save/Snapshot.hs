@@ -50,6 +50,7 @@ import World.Page.Types (WorldPageId, WorldIdentity)
 import World.Render.Zoom.Types (ZoomMapMode)
 import World.Edit.Types (WorldEdit(..), WorldEdits)
 import World.Mine.Types (MineDesignations)
+import World.Construct.Attempt (ConstructAttemptId)
 import World.Construct.Types (ConstructDesignations)
 import Craft.Bills (CraftBills)
 import Unit.Transfer.Orders (TransferOrders)
@@ -130,6 +131,12 @@ data PageSnapshot = PageSnapshot
     , pgsEdits        ∷ !WorldEdits
     , pgsMineDesignations      ∷ !MineDesignations
     , pgsConstructDesignations ∷ !ConstructDesignations
+    , pgsConstructNextAttempt ∷ !ConstructAttemptId
+      -- ^ #1844: this page's construction ATTEMPT allocator. Durable
+      --   because a designation admitted after a load must not be able
+      --   to collide with one the save already holds; it only ever
+      --   advances, so a legacy payload's reconstructed ids are
+      --   unreachable by any later allocation.
     , pgsGroundItems  ∷ !GroundItems
     , pgsSpoilPiles   ∷ !SpoilPiles
     , pgsBuildings    ∷ !BuildingSnapshot

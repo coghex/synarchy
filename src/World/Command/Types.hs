@@ -22,6 +22,7 @@ import Unit.Types (UnitId)
 import World.Page.Types (WorldPageId(..), WorldIdentity(..))
 import World.Render.Zoom.Types (ZoomMapMode(..))
 import World.Tool.Types (ToolMode(..))
+import World.Construct.Attempt (ConstructAttemptId)
 import World.Construct.Types (ConstructTarget(..), ConstructStatus(..))
 import World.Save.Payload (LuaComponentSpec, LuaRefEdge)
 import World.Save.Types (SaveData(..), AutosaveRequest(..))
@@ -155,20 +156,61 @@ data WorldCommand
         --   surface z; tiles in unloaded chunks are skipped. Per-z-level
         --   like mine designation. Building targets only mark the anchor
         --   tile (a building is one footprint, not a rectangle of them).
-    | WorldCancelConstruct WorldPageId Int Int
+    | WorldCancelConstruct WorldPageId Int Int (Maybe ConstructAttemptId)
         -- ^ Remove the construction designation at (gx, gy), if any
         --   (cancel mode / right-click on an existing blueprint).
+        --
+        --   #1844: 'Just' removes ONLY that exact attempt, so a delayed
+        --   cancellation from a job that has already gone cannot remove
+        --   a successor designated at the same tile. 'Nothing' is the
+        --   player's coordinate-only erase — "remove whatever is here",
+        --   which has no attempt to name until it looks.
     | WorldSetConstructStatus WorldPageId Int Int ConstructStatus
+                              ConstructAttemptId
+                              (Maybe StructureCommitWindow)
         -- ^ Build AI (#96): mark a designation Claimed / Complete. A
         --   Complete designation is removed (the structure/building it
         --   represents now exists).
+        --
+        --   #1844: the attempt is REQUIRED, not optional. Cancellation
+        --   has an honest coordinate-only form — the player's
+        --   right-click erases whatever is at a tile — but a status
+        --   transition never does: it is always some worker reporting on
+        --   the job it observed, and an attempt-less completion that
+        --   matched anything would delete a successor at that tile.
+        --   Making it unrepresentable is cheaper than checking for it.
+        --
+        --   #1844: a COMPLETION may additionally carry the
+        --   'StructureCommitWindow' of the placement it is completing —
+        --   @structure.place@ returning true means STAGED AND QUEUED,
+        --   not committed, and the world thread can still decline the
+        --   queued placement when the target chunk has evicted. Given a
+        --   window, the handler completes only if nothing in it was
+        --   declined; otherwise it cancels that same attempt and refunds
+        --   its receipt, because the alternative is a paid job with
+        --   neither a structure nor its materials. Exactly the protocol
+        --   'WorldMarkLocationStamped' uses for the same hazard (#2051).
     | WorldAddConstructProgress WorldPageId Int Int Float
+                                ConstructAttemptId
+        -- ^ #1844: required for the same reason — an attempt-less pour
+        --   would advance, and visibly stamp progress onto, a job its
+        --   sender never claimed.
         -- ^ Build AI (#96): add build progress to the designation at
         --   (gx, gy). Deltas are pre-normalised to the job's total
         --   work (1.0 = done) and the sum is clamped to [0, 1]; the
         --   ghost marker's alpha ramps with it. Completion (placing
         --   the piece + removing the designation) stays Lua-side —
         --   the AI resolves art/materials, so it owns final placement.
+    | WorldRevalidateConstructAll
+        -- ^ #1844: the CATALOGUE-reconciliation sweep. A terminal
+        --   structure-art failure makes a whole pack resolve nothing
+        --   (#1842's all-or-nothing rule), which can invalidate
+        --   designations on ANY page — including ones over already
+        --   resident chunks, where no later terrain edit or chunk
+        --   publication would ever re-check them. It carries no page
+        --   because the catalogue is keyed by pack NAME and is global;
+        --   this is requirement 9's bounded page-level sweep, and it is
+        --   enqueued only when a failure actually CHANGED the catalogue.
     | WorldSetConstructDesignateTexture WorldPageId Text TextureHandle
         -- ^ Ghost texture for committed construction designations, keyed
         --   by target category ("structure" | "building").

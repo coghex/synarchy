@@ -176,6 +176,16 @@ processLuaMsg env ls stateRef msg = case msg of
     broadcastToModules ls "onStampLocation"
         [ ScriptString pageId, ScriptString locId
         , ScriptNumber (fromIntegral gx), ScriptNumber (fromIntegral gy) ]
+  LuaConstructInvalidated pageId gx gy attempt →
+    broadcastToModules ls "onConstructInvalidated"
+        [ ScriptString pageId
+        , ScriptNumber (fromIntegral gx), ScriptNumber (fromIntegral gy)
+        , ScriptNumber (fromIntegral attempt) ]
+  LuaConstructCompleted pageId gx gy attempt →
+    broadcastToModules ls "onConstructCompleted"
+        [ ScriptString pageId
+        , ScriptNumber (fromIntegral gx), ScriptNumber (fromIntegral gy)
+        , ScriptNumber (fromIntegral attempt) ]
   LuaOpenArena →
     broadcastToModules ls "onOpenArena" []
   LuaDebugToggle → do
@@ -249,6 +259,15 @@ processLuaMsg env ls stateRef msg = case msg of
         then pure (ArtFailureReport False Nothing)
         else atomicModifyIORef' (structureArtCatalogRef env)
                                 (failPackArtPath path reason)
+    -- #1844: a NEW terminal failure makes the whole pack resolve nothing,
+    -- which invalidates every outstanding designation naming it —
+    -- including ones over chunks that are already resident, where no
+    -- later terrain edit or chunk publication would ever re-check them.
+    -- Requirement 9's catalogue-reconciliation sweep, enqueued only when
+    -- the catalogue actually CHANGED (a repeat for an already-recorded
+    -- asset yields no report and enqueues nothing).
+    forM_ (afrFailure report) $ \_ →
+        Q.writeQueue (worldQueue env) WorldRevalidateConstructAll
     if afrTracked report
         then forM_ (afrFailure report) $
                  logWarn logger CatAsset ∘ artAssetFailureMessage

@@ -117,7 +117,7 @@ import World.Save.Component.Session
 import World.Save.Component.Page
     ( WorldGenParamsDTOv1
     , WorldIdentityDTOv1(..), MineDesignationDTO(..)
-    , ConstructDesignationDTO(..)
+    , ConstructDesignationDTOv1(..)
     , TillDesignationDTO(..), PlantDesignationDTO(..), CropPlotDTO(..)
     , GroundItemsDTOv1(..), SpoilPileDTO(..)
     , PageCoreDTOv1(..), WorldPagesDTOv1(..), WorldPages(..)
@@ -190,7 +190,13 @@ data WorldPageSaveV90 = WorldPageSaveV90
         -- ^ Decoded, then discarded — resets on load (#103).
     , wp90Edits        ∷ !(HM.HashMap ChunkCoord [WorldEditDTOv1])
     , wp90MineDesignations      ∷ !(HM.HashMap (Int, Int) MineDesignationDTO)
-    , wp90ConstructDesignations ∷ !(HM.HashMap (Int, Int) ConstructDesignationDTO)
+    , wp90ConstructDesignations
+        ∷ !(HM.HashMap (Int, Int) ConstructDesignationDTOv1)
+        -- ^ #1844: the FROZEN pre-attempt-identity shape. v90's bytes
+        --   are what they were; the attempt id and payment record a
+        --   modern designation carries are added by the same
+        --   @world-activity@ v3→v4 migration this slice then flows
+        --   through, not by reinterpreting these five fields.
     , wp90GroundItems  ∷ !GroundItemsDTOv1
     , wp90SpoilPiles   ∷ !(HM.HashMap (Int, Int) SpoilPileDTO)
     , wp90Buildings    ∷ !BuildingSnapshotV90

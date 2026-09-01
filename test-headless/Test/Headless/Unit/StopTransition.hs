@@ -76,6 +76,7 @@ import World.Save.Types
 import World.Spoil.Types (emptySpoilPiles)
 import Unit.Transfer.Orders (emptyTransferOrders)
 import qualified Data.Serialize as S
+import World.Construct.Attempt (firstConstructAttemptId)
 import World.Flora.Identity (firstPlantedFloraCursor)
 
 -- ---------------------------------------------------------------------
@@ -270,6 +271,7 @@ pageWithSim ss = PageSnapshot
     , pgsEdits        = emptyWorldEdits
     , pgsMineDesignations      = HM.empty
     , pgsConstructDesignations = HM.empty
+    , pgsConstructNextAttempt = firstConstructAttemptId
     , pgsGroundItems  = emptyGroundItems
     , pgsSpoilPiles   = emptySpoilPiles
     , pgsBuildings    = BuildingSnapshot { bsnInstances = HM.empty
