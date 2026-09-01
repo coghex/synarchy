@@ -2780,9 +2780,68 @@ def imports_name(declarations: list[ImportDecl], module: str, name: str,
 # original hole took: `capability_accessor_map` was the only thing
 # that read the projections, and anything it failed to read simply was
 # not there.
-_CAPABILITY_RECORD_DECL_RE = re.compile(
-    r"^data\s+(?P<record>[A-Z][A-Za-z0-9_']*Capability)\s*=\s*(?P=record)\s*\{",
-    re.MULTILINE)
+#
+# A capability type is recognized by its NAME and its `data`/`newtype`
+# keyword alone, never by the shape of its body. GHC2024 enables
+# `GADTs`, so `data XCapability where XCapability ∷ { ... } → XCapability`
+# is a legal respelling of the same record, and a `newtype` is legal
+# for a one-field one -- matching only `data X = X { ... }` left both
+# undiscovered, which is the SAME silent omission one level up:
+# neither the accessor map nor the completeness gate saw the record at
+# all, so a direct write through its selector was filed as `other` and
+# the audit exited 0. Recognizing the declaration is therefore
+# separated from reading its fields: a capability type whose record
+# block this audit cannot read is a violation, not a skip.
+_CAPABILITY_TYPE_DECL_PATTERN = (
+    r"^(?:data|newtype)\s+%s(?![A-Za-z0-9_'])")
+_CAPABILITY_TYPE_DECL_RE = re.compile(
+    _CAPABILITY_TYPE_DECL_PATTERN
+    % r"(?P<record>[A-Z][A-Za-z0-9_']*Capability)", re.MULTILINE)
+
+
+def _declaration_span(code: str, start: int) -> str:
+    """`code` from `start` through the end of that top-level
+    declaration: its own line plus every following line that is blank
+    or indented, which is exactly Haskell's layout rule for one
+    top-level item.
+
+    Field extraction is bounded to this span so a declaration carrying
+    no record block of its own cannot borrow the braces of a LATER
+    declaration and report that one's fields as its own."""
+    lines = code[start:].split("\n")
+    span = [lines[0]]
+    for line in lines[1:]:
+        if line.strip() and not line[0].isspace():
+            break
+        span.append(line)
+    return "\n".join(span)
+
+
+def capability_record_fields(source_text: str, record: str) -> list[str]:
+    """The field names `record`'s own declaration brings into scope,
+    whichever legal syntax declares it -- `data X = X { ... }`,
+    `newtype X = X { ... }`, or the GADT
+    `data X where X ∷ { ... } → X`. All three put the same selectors
+    in scope, so all three must be read.
+
+    Raises `ValueError` when the declaration is absent or carries no
+    record block, which the completeness audit reports rather than
+    treating as a record with no fields."""
+    code = _strip_haskell_comments(source_text)
+    declaration = _CAPABILITY_TYPE_DECL_RE.search(code)
+    while declaration is not None and declaration.group("record") != record:
+        declaration = _CAPABILITY_TYPE_DECL_RE.search(code, declaration.end())
+    if declaration is None:
+        raise ValueError(
+            f"no `data` or `newtype` declaration of `{record}` was found")
+    try:
+        return extract_record_fields(
+            _declaration_span(code, declaration.start()),
+            _CAPABILITY_TYPE_DECL_PATTERN % re.escape(record))
+    except ValueError as error:
+        raise ValueError(
+            f"`{record}`'s declaration carries no record block of its "
+            f"own") from error
 
 
 def _capability_projection_re(record: str) -> re.Pattern[str]:
@@ -2819,7 +2878,7 @@ def discover_capability_records(sources: dict[str, str]
         if not module.startswith(CAPABILITY_MODULE_PREFIX):
             continue
         code = _strip_haskell_comments(text)
-        for declaration in _CAPABILITY_RECORD_DECL_RE.finditer(code):
+        for declaration in _CAPABILITY_TYPE_DECL_RE.finditer(code):
             record = declaration.group("record")
             signature = _capability_projection_re(record).search(code)
             records.append(CapabilityRecord(
@@ -2911,13 +2970,15 @@ def audit_capability_projection_completeness(
                 f"`discover_capability_records` the spelling")
             continue
         try:
-            declared = extract_record_fields(
-                source, rf"^data {re.escape(entry.record)} = "
-                        rf"{re.escape(entry.record)}\b")
+            declared = capability_record_fields(source, entry.record)
         except ValueError as error:
             violations.append(
-                f"`{entry.module}`'s `{entry.record}` declaration cannot "
-                f"be read ({entry.relpath}): {error}")
+                f"`{entry.module}`'s `{entry.record}` declares no record "
+                f"block this audit can read ({entry.relpath}): {error} -- "
+                f"SS2.1 requires a record whose every field projects an "
+                f"`EngineEnv` handle, and a declaration whose selectors "
+                f"cannot be enumerated puts every one of them outside "
+                f"SS5's writing-module map")
             continue
         expressions = parse_projection_binding_expressions(
             source, entry.projection)

@@ -37,6 +37,7 @@ from engine_env_capability_audit import (  # type: ignore
     _import_chunks, _strip_haskell_comments,
     CAPABILITY_WRITER_MODULES, capability_accessor_map,
     discover_capability_records, canonical_projection_accessor,
+    capability_record_fields,
     parse_projection_binding_expressions,
     audit_capability_projection_completeness,
     scan_capability_writes, audit_writer_modules, format_residue,
@@ -2719,6 +2720,84 @@ toIotaCapability env = IotaCapability
   }
 """
 
+# GHC2024 enables `GADTs`, so this declares exactly the record
+# `data KappaCapability = KappaCapability { ... }` declares -- the same
+# two selectors, in the same scope. Recognizing only the ordinary form
+# left the whole record undiscovered, which is a strictly worse silent
+# omission than an unreadable field: nothing about it reached the map
+# or the completeness gate.
+_GADT_PROJECTION = """\
+module Engine.Core.Capability.Kappa
+  ( KappaCapability(..)
+  , toKappaCapability
+  ) where
+
+import Engine.Core.State (EngineEnv, fieldOne, fieldTwo)
+
+data KappaCapability where
+  KappaCapability ∷ { kaFieldOne ∷ IORef Int
+                    , kaFieldTwo ∷ IORef Text } → KappaCapability
+
+toKappaCapability ∷ EngineEnv → KappaCapability
+toKappaCapability env = KappaCapability
+  { kaFieldOne = fieldOne env
+  , kaFieldTwo = (fieldTwo env)
+  }
+"""
+
+_GADT_CONSUMER = """\
+module Kappa.Mod where
+
+import Data.IORef
+
+import Engine.Core.State (EngineEnv)
+import Engine.Core.Capability.Kappa (KappaCapability(..), toKappaCapability)
+
+sneak ∷ EngineEnv → IO ()
+sneak env = writeIORef (kaFieldOne (toKappaCapability env)) 1
+"""
+
+# The third legal spelling: a one-field record may be a `newtype`.
+_NEWTYPE_PROJECTION = """\
+module Engine.Core.Capability.Lambda
+  ( LambdaCapability(..)
+  , toLambdaCapability
+  ) where
+
+import Engine.Core.State (EngineEnv, fieldThree)
+
+newtype LambdaCapability = LambdaCapability
+  { laFieldThree ∷ Q.Queue Int
+  }
+
+toLambdaCapability ∷ EngineEnv → LambdaCapability
+toLambdaCapability env = LambdaCapability
+  { laFieldThree = fieldThree env
+  }
+"""
+
+# A capability type with no record block at all, followed by an
+# unrelated record that HAS one. Reading the declaration by name means
+# the audit must also refuse to borrow the later declaration's braces
+# and report `borrowed` as this record's field.
+_BLOCKLESS_CAPABILITY = """\
+module Engine.Core.Capability.Nu
+  ( NuCapability(..)
+  , toNuCapability
+  ) where
+
+import Engine.Core.State (EngineEnv)
+
+data NuCapability = NuAlpha | NuBeta
+
+toNuCapability ∷ EngineEnv → NuCapability
+toNuCapability env = NuAlpha
+
+data Unrelated = Unrelated
+  { borrowed ∷ Int
+  }
+"""
+
 # The migrated reader: it CONSUMES the wrapped handle inline, exactly as
 # a `readIORef` consumer does, so it must not be counted as a pass-on.
 _WRAPPED_READER = """\
@@ -2931,6 +3010,10 @@ def _writer_sources(**modules: str) -> dict[str, str]:
         "eta": "src/Engine/Core/Capability/Eta.hs",
         "theta": "src/Engine/Core/Capability/Theta.hs",
         "iota": "src/Engine/Core/Capability/Iota.hs",
+        "kappa": "src/Engine/Core/Capability/Kappa.hs",
+        "kappaConsumer": "src/Kappa/Mod.hs",
+        "lambda": "src/Engine/Core/Capability/Lambda.hs",
+        "nu": "src/Engine/Core/Capability/Nu.hs",
     }
     for key, body in modules.items():
         sources[paths[key]] = body
@@ -3990,6 +4073,84 @@ def test_projection_completeness_against_the_real_repo():
            f"completeness violation, got: {violations}")
 
 
+def test_a_capability_record_is_found_whatever_syntax_declares_it():
+    """A capability type is recognized by its NAME and its
+    `data`/`newtype` keyword, never by the shape of its body.
+
+    GHC2024 enables `GADTs`, so
+    `data X where X ∷ { ... } → X` declares the very same record --
+    same selectors, same scope -- as `data X = X { ... }`, and a
+    one-field record may be a `newtype`. Matching only the ordinary
+    form left both records undiscovered, which is the same silent
+    omission #2059 closes but one level up and strictly worse: the
+    record reached neither the accessor map nor the completeness gate,
+    so a direct write through its selector was filed as `other` and the
+    audit exited 0 with nothing to report."""
+    sources = _writer_sources(kappa=_GADT_PROJECTION,
+                              kappaConsumer=_GADT_CONSUMER)
+    expect(capability_record_fields(_GADT_PROJECTION, "KappaCapability")
+           == ["kaFieldOne", "kaFieldTwo"],
+           f"a GADT record's selectors must be enumerated, got: "
+           f"{capability_record_fields(_GADT_PROJECTION, 'KappaCapability')}")
+
+    records = {entry.record: entry.projection
+               for entry in discover_capability_records(sources)}
+    expect(records.get("KappaCapability") == "toKappaCapability",
+           f"the GADT record and its projection must be discovered, got: "
+           f"{records}")
+
+    accessors = capability_accessor_map(sources, _WRITER_FIELDS)
+    expect(accessors.get("kaFieldOne") == (
+        ("fieldOne", "Engine.Core.Capability.Kappa", "KappaCapability"),)
+           and accessors.get("kaFieldTwo") == (
+        ("fieldTwo", "Engine.Core.Capability.Kappa", "KappaCapability"),),
+           f"both GADT selectors must canonicalize, got: "
+           f"{accessors.get('kaFieldOne')}, {accessors.get('kaFieldTwo')}")
+    expect(audit_capability_projection_completeness(
+               sources, _WRITER_FIELDS) == [],
+           "a fully readable GADT projection must raise no completeness "
+           "violation")
+
+    writes, _ = _scan(sources)
+    expect(writes["fieldOne"] == {"Kappa.Mod"},
+           f"and the write through the GADT selector must be attributed, "
+           f"got: {sorted(writes['fieldOne'])}")
+    declared = {"fieldOne": frozenset(), "fieldTwo": frozenset(),
+                "fieldThree": frozenset()}
+    rejected = audit_writer_modules(writes, _WRITER_FIELDS, declared=declared)
+    expect(len(rejected) == 1 and "Kappa.Mod" in rejected[0],
+           f"and the undeclared write must be rejected, got: {rejected}")
+
+    newtype_sources = _writer_sources(**{"lambda": _NEWTYPE_PROJECTION})
+    expect(capability_accessor_map(newtype_sources, _WRITER_FIELDS).get(
+               "laFieldThree") == (
+        ("fieldThree", "Engine.Core.Capability.Lambda",
+         "LambdaCapability"),),
+           "a `newtype` capability record must canonicalize the same way")
+    expect(audit_capability_projection_completeness(
+               newtype_sources, _WRITER_FIELDS) == [],
+           "and raise no completeness violation")
+
+
+def test_a_capability_type_with_no_record_block_fails_closed():
+    """Recognizing a declaration by name is separated from reading its
+    fields, so a `<Name>Capability` whose declaration carries no record
+    block is a violation rather than a skip -- and the audit must not
+    borrow the braces of a LATER declaration and report ITS field as
+    this record's."""
+    sources = _writer_sources(nu=_BLOCKLESS_CAPABILITY)
+    violations = audit_capability_projection_completeness(
+        sources, _WRITER_FIELDS)
+    expect(len(violations) == 1
+           and "NuCapability" in violations[0]
+           and "record block" in violations[0],
+           f"a capability type with no readable record block must be "
+           f"reported, got: {violations}")
+    expect(not any("borrowed" in v for v in violations),
+           f"and the unrelated record's field must not be read as its "
+           f"own, got: {violations}")
+
+
 def test_a_read_only_ref_read_is_an_inline_use_not_a_pass_on():
     """`readReadOnlyRef` consumes the handle exactly as `readIORef`
     does, so a migrated reader is an inline use. Without that, every
@@ -4381,6 +4542,8 @@ def main() -> int:
         test_a_projection_binding_onto_a_dead_accessor_fails_closed,
         test_projection_binding_expressions_keep_the_unreadable_ones,
         test_projection_completeness_against_the_real_repo,
+        test_a_capability_record_is_found_whatever_syntax_declares_it,
+        test_a_capability_type_with_no_record_block_fails_closed,
         test_a_read_only_ref_read_is_an_inline_use_not_a_pass_on,
         test_one_selector_may_belong_to_two_capabilities,
         test_a_primitive_must_be_the_one_from_data_ioref,
