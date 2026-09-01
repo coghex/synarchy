@@ -17,6 +17,7 @@ import qualified Test.Headless.WorldGen.ZoomParity as ZoomParity
 import qualified Test.Headless.WorldGen.BorderProbe as BorderProbe
 import qualified Test.Headless.WorldGen.WrapSeam as WrapSeam
 import qualified Test.Headless.WorldGen.CoastBreach as CoastBreach
+import qualified Test.Headless.WorldGen.Breakthrough as Breakthrough
 import qualified Test.Headless.WorldGen.BedDepth as BedDepth
 import qualified Test.Headless.WorldGen.FluidSurfaceFold as FluidSurfaceFold
 import qualified Test.Headless.Unit.Pathing.Cost as PathingCost
@@ -65,6 +66,7 @@ import qualified Test.Headless.Asset.FloraRegrowthSchema as FloraRegrowthSchema
 import qualified Test.Headless.Asset.UnitInventory as AssetUnitInventory
 import qualified Test.Headless.Asset.Types as AssetTypes
 import qualified Test.Headless.Asset.YamlList as AssetYamlList
+import qualified Test.Headless.Startup.AssetLogging as StartupAssetLogging
 import qualified Test.Headless.Asset.MaterialMoveCost as AssetMaterialMoveCost
 import qualified Test.Headless.Preview.Discovery as PreviewDiscovery
 import qualified Test.Headless.Unit.Atlas as UnitAtlas
@@ -72,6 +74,7 @@ import qualified Test.Headless.Unit.Atlas.Loader as UnitAtlasLoader
 import qualified Test.Headless.Preview.UnitAnimation as PreviewUnitAnimation
 import qualified Test.Headless.Preview.Building as PreviewBuilding
 import qualified Test.Headless.Preview.Zoom as PreviewZoom
+import qualified Test.Headless.Preview.KeyboardNavigation as PreviewKeyboardNavigation
 import qualified Test.Headless.World.Save.Sanitize as SaveSanitize
 import qualified Test.Headless.World.Save.Serialize as SaveSerialize
 import qualified Test.Headless.World.Save.Envelope as SaveEnvelope
@@ -543,6 +546,7 @@ main = hspec $ do
     describe "Wrap Seam" WrapSeam.spec
     describe "Arena base seeding (#1718)" ArenaSeed.pureSpec
     describe "WorldGen.CoastBreach" CoastBreach.spec
+    describe "WorldGen.Breakthrough" Breakthrough.spec
     describe "WorldGen.BedDepth" BedDepth.spec
     describe "WorldGen.FluidSurfaceFold" FluidSurfaceFold.spec
     describe "Asset.Types" AssetTypes.spec
@@ -550,12 +554,14 @@ main = hspec $ do
     describe "Asset.FloraRegrowthSchema" FloraRegrowthSchema.spec
     describe "Asset.UnitInventory" AssetUnitInventory.spec
     describe "Asset.YamlList" AssetYamlList.spec
+    StartupAssetLogging.spec
     describe "material move_cost validation" AssetMaterialMoveCost.spec
     describe "Preview.Discovery" PreviewDiscovery.spec
     describe "Preview.UnitAnimation" PreviewUnitAnimation.spec
     describe "Preview.Building" PreviewBuilding.spec
     describe "Preview.Zoom" PreviewZoom.spec
     describe "Machine Shop construction animation" MachineShopConstruction.spec
+    describe "Preview.KeyboardNavigation" PreviewKeyboardNavigation.spec
     describe "Workbench construction animation" WorkbenchConstruction.spec
     describe "Bindless texture filter rebinding" BindlessRebind.spec
     describe "Bindless texture release" BindlessRelease.spec

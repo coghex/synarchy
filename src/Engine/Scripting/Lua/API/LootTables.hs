@@ -26,7 +26,7 @@ import System.Random (StdGen)
 import Engine.Core.Capability.Core (CoreCapability)
 import Engine.Core.Capability.ContentRegistries
     (ContentRegistriesCapability(..))
-import Engine.Core.Log (LogCategory(..), logInfo)
+import Engine.Core.Log (LogCategory(..), logDebug)
 import Engine.Core.Log.Monad (getLoggerFor)
 import Engine.Asset.YamlLootTables
 import LootTable.Types
@@ -51,7 +51,16 @@ loadLootTableYamlFn core regs = do
                 logger ← getLoggerFor core
                 mDef ← loadLootTableYaml logger filePath
                 case mDef of
-                    Nothing → return (0 ∷ Int)
+                    Nothing → do
+                        -- The parse failure itself already warned in
+                        -- 'Engine.Asset.YamlLootTables'; this is the same
+                        -- per-file Debug detail the successful branch
+                        -- carries, so the value handed back to Lua is
+                        -- recoverable for BOTH outcomes (#1930).
+                        logDebug logger CatAsset $
+                            "loadLootTableYaml: loaded 0 loot tables from "
+                            <> T.pack filePath
+                        return (0 ∷ Int)
                     Just d → do
                         let def = LootTableDef
                                 { ltdId      = ltydId d
@@ -59,9 +68,14 @@ loadLootTableYamlFn core regs = do
                                 }
                         atomicModifyIORef' (crLootTableRegistryRef regs) $ \reg →
                             (registerLootTable def reg, ())
-                        logInfo logger CatAsset $
-                            "loadLootTableYaml: loaded '" <> ltdId def
-                            <> "' from " <> T.pack filePath
+                        -- Debug, not Info (#1930): the aggregate is
+                        -- scripts/startup_loader.lua's. Unlike its eleven
+                        -- siblings this line named the table id but no
+                        -- count, so the 1 it returns to Lua is spelled out
+                        -- here — a loot table file holds exactly one def.
+                        logDebug logger CatAsset $
+                            "loadLootTableYaml: loaded 1 loot table '"
+                            <> ltdId def <> "' from " <> T.pack filePath
                         return 1
             Lua.pushnumber (Lua.Number (fromIntegral count))
             return 1

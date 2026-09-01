@@ -15,7 +15,7 @@ import qualified HsLua as Lua
 import Control.Monad (foldM)
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv, loggerRef)
-import Engine.Core.Log (LogCategory(..), logInfo, logDebug)
+import Engine.Core.Log (LogCategory(..), logDebug)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Engine.Scripting.Lua.API.YamlTextures (loadAndRegister, resolveTexturePath)
 import Engine.Asset.YamlBuildings (BuildingYamlDef(..), BuildingYamlAnim(..),
@@ -122,7 +122,7 @@ loadBuildingYamlFn env backendState = do
                     return (acc + 1)
                     ) (0 ∷ Int) defs
 
-                logInfo logger CatAsset $
+                logDebug logger CatAsset $
                     "loadBuildingYaml: loaded " <> tshow total
                     <> " building definitions from " <> T.pack filePath
                 return total

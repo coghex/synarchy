@@ -10,7 +10,10 @@ the repair.* Lua API end-to-end:
   1. Catalogue: repair.getNames lists exactly the two shipped repair
      recipes (repair_condition, repair_sharpness) and NOT the ordinary
      craft recipes; repair.get returns the repairAxis field craft.get
-     also exposes but ordinary recipes omit.
+     also exposes but ordinary recipes omit, and reports work == 0 for
+     both axes (#1965 — a repair visit is one synchronous
+     repair.repairAt call, so the shared recipe table must not
+     advertise effort the repair path never spends).
   2. craft.execute/executeAt refuse repair-tagged recipes with a clear
      "use repair.repairAt" reason, leaving inventory untouched.
   3. repair.repairAt refuses: unknown recipe id, a non-repair recipe
@@ -147,6 +150,21 @@ def repair_at(port, uid, recipe_id, iid, bid):
     return None, str(raw)
 
 
+def is_zero_work(recipe):
+    """#1965: the published `work` must be numerically zero.
+
+    pushRecipe emits it with Lua.pushnumber, so the console can render
+    it as `0` or `0.0`; a numeric comparison keeps a formatting change
+    from faking a failure. A bool is rejected outright — `True == 1`
+    and `False == 0` in Python, and neither is a work value.
+    """
+    if not isinstance(recipe, dict):
+        return False
+    work = recipe.get("work")
+    return isinstance(work, (int, float)) and not isinstance(work, bool) \
+        and work == 0
+
+
 def check(passed, ok, label, detail=""):
     print(f"  [{'PASS' if ok else 'FAIL'}] {label}" + (f": {detail}" if detail else ""))
     return passed and ok
@@ -177,11 +195,22 @@ def main():
               and r.get("repairAxis") == "condition"
               and r.get("inputs") == [{"item": "lignite_chunk", "count": 1}])
         passed = check(passed, ok, "repair.get('repair_condition') shape", r)
+        # #1965: the published table must not advertise effort the
+        # repair path cannot spend — a repair visit is one synchronous
+        # repair.repairAt call, so `work` is 0. pushRecipe publishes it
+        # with Lua.pushnumber, so compare numerically (0.0 == 0) rather
+        # than against a rendered token.
+        passed = check(passed, is_zero_work(r),
+                       "repair.get('repair_condition') reports work == 0",
+                       repr(r.get("work")) if isinstance(r, dict) else repr(r))
         r = send_json(port, "return repair.get('repair_sharpness')")
         ok = (isinstance(r, dict) and r.get("station") == "repair_sharpness"
               and r.get("repairAxis") == "sharpness"
               and r.get("inputs") == [{"item": "whetstone", "count": 1}])
         passed = check(passed, ok, "repair.get('repair_sharpness') shape", r)
+        passed = check(passed, is_zero_work(r),
+                       "repair.get('repair_sharpness') reports work == 0",
+                       repr(r.get("work")) if isinstance(r, dict) else repr(r))
         ok = send(port, "return repair.get('forge_steel_dagger') and 'yes' or 'nil'"
                   ).strip('"') == "nil"
         passed = check(passed, ok, "repair.get refuses an ordinary craft recipe")

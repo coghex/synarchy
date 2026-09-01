@@ -125,11 +125,19 @@ spec = do
                         ryRepairAxis cond `shouldBe` Just "condition"
                         map ryiItem (ryInputs cond) `shouldBe` ["lignite_chunk"]
                         ryOutputs cond `shouldBe` []
+                        -- #1965: a repair visit is one synchronous
+                        -- repair.repairAt call — no consumer burns
+                        -- `work` down on the repair path, so the
+                        -- shipped value must stay 0 rather than
+                        -- advertising effort nothing spends. Only
+                        -- craft recipes are operative here.
+                        ryWork cond `shouldBe` 0
                         ryId sharp `shouldBe` "repair_sharpness"
                         ryStation sharp `shouldBe` "repair_sharpness"
                         ryRepairAxis sharp `shouldBe` Just "sharpness"
                         map ryiItem (ryInputs sharp) `shouldBe` ["whetstone"]
                         ryOutputs sharp `shouldBe` []
+                        ryWork sharp `shouldBe` 0
                     ds → expectationFailure $
                         "expected exactly two recipes, got " <> show (length ds)
 
