@@ -1624,6 +1624,10 @@ reconstruction discards both for the same reason.
 `Location.Instance.locationSignificantItemErrors` rejects a slot below
 1 (unbindable — the registration boundary refuses a non-positive slot,
 so the content spawn would orphan an item on every load for ever), a
+bound item id of 0 (the never-minted "no id given" sentinel; because
+the provenance rules skip a TAKEN obligation by design, it is the one
+value that would otherwise satisfy clearance with nothing ever spawned
+— `significantRecovered` refuses to count it either way), a
 duplicated slot, a CONTENTS-SPAWNED instance still owing an unbound slot
 (unrecoverable — `spawnContents` returns at its one-time
 `hasSpawnedLocationContents` gate and never fills it, and neither the

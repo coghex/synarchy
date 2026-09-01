@@ -369,8 +369,22 @@ locationSignificantCondition inst
 --   An obligation that was never spawned is therefore incomplete for
 --   BOTH reasons, which is what requirement 4 wants: an unspawned,
 --   failed-to-spawn or missing item keeps the loot condition open.
+--
+--   The bound id must also be one that could exist. 0 is the
+--   never-minted sentinel (see 'isMintedItemId'), and the provenance
+--   rules skip a TAKEN obligation by design, so a forged @Just 0@
+--   beside @taken = True@ would otherwise satisfy clearance with no
+--   item ever spawned or picked up. 'locationSignificantItemErrors'
+--   rejects the shape at decode as well.
 significantRecovered ∷ LocationSignificantItem → Bool
-significantRecovered e = isJust (lsiInstanceId e) ∧ lsiTaken e
+significantRecovered e =
+    maybe False isMintedItemId (lsiInstanceId e) ∧ lsiTaken e
+
+-- | Could this be a real 'Item.Types.iiInstanceId'?
+--   'Engine.Core.State.freshItemInstanceId' is seeded to 1 and only ever
+--   counts up, so 0 is never minted — it is the "no id given" sentinel
+--   'Item.Types.itemMatches' falls back on. A stored 0 therefore names
+--   no item that has ever existed, and must not be mistaken for one.
 
 -- | Does this instance author ANY clearance condition? A location with
 --   neither an encounter nor a significant item authors none, and must
@@ -933,6 +947,7 @@ registerLocationSignificantSpawn iid slot defName itemId lis = do
     entry ← find ((≡ slot) . lsiSlot) (liSignificant inst)
     guard (isNothing (lsiInstanceId entry))
     guard (lsiItemDefName entry ≡ defName)
+    guard (isMintedItemId itemId)
     guard (not (itemAlreadyOwed itemId lis))
     pure $ adjustLocationInstance iid (\i → i
         { liSignificant =
@@ -943,6 +958,9 @@ registerLocationSignificantSpawn iid slot defName itemId lis = do
 -- | Is this physical item already named by some obligation on the
 --   page? Ids come from one global allocator, so a second claim on one
 --   id can never be a second real item.
+isMintedItemId ∷ Word64 → Bool
+isMintedItemId = (> 0)
+
 itemAlreadyOwed ∷ Word64 → LocationInstances → Bool
 itemAlreadyOwed itemId lis = or
     [ lsiInstanceId e ≡ Just itemId
@@ -1216,6 +1234,11 @@ locationInstanceBoundsErrors lis =
 --     resuming content spawn registers against, so two slots sharing a
 --     number would let one spawn satisfy both, or repoint the wrong
 --     one;
+--   * a bound id is one an allocator could have minted, i.e. positive.
+--     0 is the never-minted "no id given" sentinel, and because the
+--     provenance rules skip a TAKEN obligation by design it is the one
+--     value that would otherwise let a forged payload satisfy clearance
+--     with no item ever spawned or picked up;
 --   * an instance whose contents are SPAWNED has every obligation
 --     bound. The two are written together and in that order —
 --     @scripts\/locations.lua@ returns without marking unless every
@@ -1258,6 +1281,16 @@ locationSignificantItemErrors lis =
     , (slot, n) ← sortOn fst (HM.toList (HM.fromListWith (+)
         [ (lsiSlot e, 1 ∷ Int) | e ← liSignificant inst ]))
     , n > 1
+    ]
+    ⧺
+    [ "location instance #" <> tshow (unLocationInstanceId (liId inst))
+        <> " significant slot " <> tshow (lsiSlot e)
+        <> " names item instance " <> tshow itemId
+        <> ", which no allocator can ever have minted"
+    | inst ← instancesToList lis
+    , e ← sortOn lsiSlot (liSignificant inst)
+    , Just itemId ← [lsiInstanceId e]
+    , not (isMintedItemId itemId)
     ]
     ⧺
     [ "location instance #" <> tshow (unLocationInstanceId (liId inst))

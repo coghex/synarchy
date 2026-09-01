@@ -271,6 +271,18 @@ spec = describe "Location significant contents (#917)" $ do
             locationSignificantCondition (instOf both) `shouldBe` Just True
             resolveLocationClearance iid both `shouldSatisfy` isJust
 
+        it "refuses to count a TAKEN obligation naming item instance 0 — \
+           \the never-minted sentinel, and the one value the provenance \
+           \rules cannot catch because they skip taken obligations" $ do
+            let forged = adjustLocationInstance iid
+                    (\i → i { liSignificant =
+                        [ e { lsiTaken = True, lsiInstanceId = Just 0 }
+                        | e ← liSignificant i ] })
+                    (discover (tableFor 0 significantOnlyDef))
+            locationSignificantCondition (instOf forged) `shouldBe` Just False
+            locationClearanceSatisfied (instOf forged) `shouldBe` False
+            resolveLocationClearance iid forged `shouldBe` Nothing
+
         it "refuses to count an obligation that is marked taken but \
            \names no item — the one shape that could otherwise clear a \
            \location with nothing ever spawned" $ do
@@ -446,6 +458,10 @@ spec = describe "Location significant contents (#917)" $ do
                 "processing_unit" 777 lis
                 `shouldBe` Nothing
 
+        it "refuses to bind the never-minted sentinel id 0" $
+            registerLocationSignificantSpawn iid 1 "processing_unit" 0
+                (tableFor 0 twoSignificantDef) `shouldBe` Nothing
+
         it "refuses an item already owed by another obligation, so one \
            \pickup can never discharge two required items" $ do
             let bound = fromMaybe (error "expected a binding")
@@ -532,6 +548,17 @@ spec = describe "Location significant contents (#917)" $ do
                 (adjustLocationInstance iid (\i → i { liContentsSpawned = True })
                     (spawnAll (tableFor 0 twoSignificantDef)))
                 `shouldBe` []
+
+        it "rejects a bound id no allocator could have minted" $ do
+            let broken = adjustLocationInstance iid
+                    (\i → i { liSignificant =
+                        [ (head' (liSignificant i))
+                            { lsiInstanceId = Just 0, lsiTaken = True } ] })
+                    (tableFor 0 significantOnlyDef)
+            locationSignificantItemErrors broken
+                `shouldBe` [ "location instance #1 significant slot 1 names \
+                             \item instance 0, which no allocator can ever \
+                             \have minted" ]
 
         it "rejects an obligation marked taken that names no item" $ do
             let broken = adjustLocationInstance iid
