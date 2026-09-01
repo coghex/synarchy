@@ -645,7 +645,7 @@ spec = do
                 [e] → do
                     ieCode e `shouldBe` "wrong-scope-reference"
                     ieActual e `shouldSatisfy` T.isInfixOf
-                        "held in an inventory or storage"
+                        "is held in an inventory"
                 other → expectationFailure
                     ("expected one held-while-untaken finding, got "
                         <> show other)
@@ -678,6 +678,44 @@ spec = do
             let p1 = withNamedGroundItem "rations" 7009
                         (pageOwing page1 (owedItem 1 7009 True))
             sessionIntegrityErrors (buildSnap page1 [p1]) `shouldBe` []
+
+        it "hard-fails an untaken obligation whose item exists only NESTED \
+           \inside a container on the ground — only a ground entry's \
+           \OUTER item can be picked up, so a nested one could never \
+           \latch and the location could never clear" $ do
+            -- pickupGroundOnPage removes a ground-map entry and latches
+            -- the outer `giInst`. An id reachable only through
+            -- `iiContents` is therefore undischargeable, which is
+            -- exactly the state this check exists to refuse — so the
+            -- ground set is deliberately NOT flattened.
+            let kit = (namedGroundItem "first_aid_kit" 7010)
+                    { iiContents = [namedGroundItem "processing_unit" 7011] }
+                p1 = (pageOwing page1 (owedItem 1 7011 False))
+                    { pgsGroundItems = fst (spawnGroundItem kit 8 8
+                                                emptyGroundItems) }
+                snap = buildSnap page1 [p1]
+            case sessionIntegrityErrors snap of
+                [e] → do
+                    ieCode e `shouldBe` "wrong-scope-reference"
+                    ieRefValue e `shouldBe` "7011"
+                    ieActual e `shouldSatisfy`
+                        T.isInfixOf "nested inside a container"
+                other → expectationFailure
+                    ("expected one nested-container finding, got "
+                        <> show other)
+
+        it "still accepts the CONTAINER itself as an obligation's item — \
+           \a top-level ground entry is pickable whatever it holds" $ do
+            let kit = (namedGroundItem "first_aid_kit" 7012)
+                    { iiContents = [namedGroundItem "bandage" 7013] }
+                p1 = (pageOwing page1
+                        (LocationSignificantItem 1 "first_aid_kit"
+                            (Just 7012) False))
+                    { pgsGroundItems = fst (spawnGroundItem kit 8 8
+                                                emptyGroundItems) }
+                snap = buildSnap page1 [p1]
+            sessionIntegrityErrors snap `shouldBe` []
+            sessionIntegrityWarnings snap `shouldBe` []
 
         it "tolerates an untaken obligation whose item is absent from the \
            \whole session, reporting it while leaving the obligation \

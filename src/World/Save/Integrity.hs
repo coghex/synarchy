@@ -371,9 +371,8 @@ data PageEntities = PageEntities
     , peBuildings ∷ !(HS.HashSet BuildingId)
     , peItems     ∷ !(HS.HashSet Word64)
     , peGroundItems ∷ !(HM.HashMap Word64 Text)
-      -- ^ The subset of 'peItems' reachable from the page's GROUND
-      --   items alone (#917), each mapped to its own
-      --   'Item.Types.iiDefName'. Kept beside the whole-page set rather
+      -- ^ The page's ground items, each mapped to its own
+      --   'Item.Types.iiDefName' (#917). Kept beside 'peItems' rather
       --   than derived from it because a significant item's provenance
       --   asks two questions the whole-page set cannot answer: an
       --   untaken obligation must still be LYING on the ground —
@@ -382,6 +381,20 @@ data PageEntities = PageEntities
       --   having been picked up, which is the one thing that latches
       --   @taken@ — and the item lying there must BE the thing the
       --   obligation says is owed, which needs the def name.
+      --
+      --   TOP-LEVEL ONLY: each ground entry's own @giInst@, never
+      --   recursed through 'Item.Types.iiContents'. That is the whole
+      --   point rather than an omission.
+      --   'Engine.Scripting.Lua.API.Items.Ground.pickupGroundOnPage'
+      --   removes a GROUND-MAP entry and latches @iiInstanceId
+      --   (giInst gi)@ — the outer item — so an id that exists only
+      --   inside a container on the ground is not pickable as its own
+      --   ground item and can never latch its obligation. Admitting it
+      --   here would pass a save whose obligation is permanently
+      --   undischargeable, which is exactly the state this check
+      --   exists to refuse. 'peItems' still flattens, because the
+      --   question IT answers — does this id exist anywhere on the
+      --   page — is a different one.
     } deriving (Show, Eq)
 
 -- | Build a page's resolvable identities from its three item-bearing
@@ -411,9 +424,8 @@ pageEntitiesFrom groundOf unitsOf buildingsOf page = PageEntities
         , inst ← insts
         , i    ← flattenItemInstances inst ]
     , peGroundItems = HM.fromList
-        [ (iiInstanceId i, iiDefName i)
-        | inst ← map giInst (HM.elems (gisItems (groundOf page)))
-        , i    ← flattenItemInstances inst ]
+        [ (iiInstanceId inst, iiDefName inst)
+        | inst ← map giInst (HM.elems (gisItems (groundOf page))) ]
     }
 
 resolvesOn ∷ PageEntities → OrderRefTarget → Bool
@@ -578,7 +590,8 @@ significantProvenanceErrors snap = resolutionErrors ⧺ ownershipErrors
         Nothing → case pagesHolding of
             [] → Nothing
             ps | pid `elem` ps →
-                   Just "is held in an inventory or storage on that page"
+                   Just "is held in an inventory, in storage, or nested \
+                        \inside a container on that page"
                | otherwise →
                    Just ("resolves on page(s) "
                        <> T.intercalate ", " (map unWorldPageId ps))

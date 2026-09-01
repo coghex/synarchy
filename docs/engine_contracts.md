@@ -1612,11 +1612,23 @@ so the content spawn would orphan an item on every load for ever), a
 duplicated slot, an obligation marked taken that names no item, and
 same-page duplicate ownership at component decode;
 `World.Save.Integrity.significantProvenanceErrors` hard-fails an UNTAKEN
-obligation whose item resolves on another page or in an
-inventory/storage (it cannot be held without having been picked up) and
-one physical id owed by two obligations, while
+obligation whose item resolves on another page, in an inventory or
+storage (it cannot be held without having been picked up), or only
+NESTED inside a ground container; one whose ground item is the wrong
+DEFINITION; and one physical id owed by two obligations. Meanwhile
 `significantDanglingWarnings` reports an absent item and tolerates it,
 leaving the obligation untaken. Once taken there is no rule at all.
+
+The ground set it resolves against is each ground entry's OUTER item
+only, never recursed through `iiContents`, and that is load-bearing:
+`pickupGroundOnPage` removes a ground-map entry and latches the OUTER
+item, so an id reachable only from inside a container is not pickable
+as its own ground item and could never discharge its obligation —
+accepting it would pass a save that is permanently unclearable. The
+container ITSELF is a perfectly good obligation item; a top-level
+ground entry is pickable whatever it holds. `peItems` still flattens,
+because the question it answers — does this id exist anywhere on the
+page — is a different one.
 
 **Queries.** `world.listPlacedLocations` / `world.getLocationInstance`
 expose `significant` (always an array; `{slot, item, taken}` plus
