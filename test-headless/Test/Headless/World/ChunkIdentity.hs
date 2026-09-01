@@ -930,48 +930,6 @@ spec = describe "canonical chunk identity" $ do
         enqueueChunkRequest pageA ws [aliasCoord] `shouldReturn` 0
         enqueueChunkRequest pageA ws [canonCoord] `shouldReturn` 0
 
-    it "confirms an empty queue before publishing a finished load" $ \_ → do
-        -- LoadDone is the one conclusion that is wrong to publish even
-        -- briefly: world.getInitProgress and every waiter polling for the
-        -- terminal phase would report a load that has not happened. Both
-        -- reconciliations therefore re-read the queue before concluding
-        -- it, so the value is never published from a snapshot an append
-        -- has already invalidated — and both recheck afterwards too,
-        -- because two IORefs cannot be read as one.
-        let params = sizedParams wideWorldSize
-            fallback = 25
-            pending = [ChunkCoord 2 2, ChunkCoord 3 3]
-
-        -- Work present: neither reconciliation retires the phase.
-        wsBusy ← detachedPage params
-        writeIORef (wsInitQueueRef wsBusy) pending
-        writeIORef (wsLoadPhaseRef wsBusy) (LoadPhase2 5 fallback)
-        reconcileQueuedPhase wsBusy
-        readIORef (wsLoadPhaseRef wsBusy) `shouldReturn` LoadPhase2 5 fallback
-        settleDrainedPhase wsBusy fallback
-        readIORef (wsLoadPhaseRef wsBusy)
-            `shouldReturn` LoadPhase2 (length pending) fallback
-
-        -- Genuinely empty: both conclude done.
-        wsIdle ← detachedPage params
-        writeIORef (wsInitQueueRef wsIdle) []
-        writeIORef (wsLoadPhaseRef wsIdle) (LoadPhase2 1 fallback)
-        reconcileQueuedPhase wsIdle
-        readIORef (wsLoadPhaseRef wsIdle) `shouldReturn` LoadDone
-
-        wsIdle2 ← detachedPage params
-        writeIORef (wsInitQueueRef wsIdle2) []
-        writeIORef (wsLoadPhaseRef wsIdle2) (LoadPhase2 1 fallback)
-        settleDrainedPhase wsIdle2 fallback
-        readIORef (wsLoadPhaseRef wsIdle2) `shouldReturn` LoadDone
-
-        -- The invariant both maintain, checked against the queue rather
-        -- than assumed: a page reports done only with nothing left.
-        forM_ [wsBusy, wsIdle, wsIdle2] $ \ws → do
-            phase ← readIORef (wsLoadPhaseRef ws)
-            queue ← readIORef (wsInitQueueRef ws)
-            when (phase ≡ LoadDone) $ queue `shouldBe` []
-
     it "normalizes a seam save's edit log into the canonical frame" $ \_ → do
         -- A save written by the old restore path holds entries keyed to
         -- a seam ALIAS — every settled-fluid snapshot included, since
@@ -1048,3 +1006,62 @@ spec = describe "canonical chunk identity" $ do
         -- A zero shift is the identity, which is what an already
         -- canonical key gets.
         map (shiftWorldEdit 0 0) every `shouldBe` every
+
+    it "never publishes a terminal phase over a queue that holds work" $ \_ → do
+        -- The init queue and the load phase are separate IORefs with two
+        -- writing threads, so no ordering of reads and writes makes them
+        -- consistent on its own: an append landing between the drain's
+        -- queue read and its phase write left LoadDone standing over
+        -- accepted work, and every waiter polling for that phase reads it
+        -- as a load that has not happened. Each writer now takes the
+        -- page's queue lock for the whole read-decide-write, which makes
+        -- the pair atomic with respect to the other writer.
+        --
+        -- What a single-threaded example can pin is the resulting
+        -- INVARIANT, over every writer and every starting phase.
+        let params = sizedParams wideWorldSize
+            fallback = 25
+            work = [ChunkCoord 2 2, ChunkCoord 3 3]
+            phases = [ LoadIdle, LoadDone, LoadPhase1 3 8
+                     , LoadPhase2 1 fallback, LoadPhase2 9 9 ]
+            writers = [ ("settle", \ws → settleDrainedPhase ws fallback)
+                      , ("reconcile", reconcileQueuedPhase)
+                      , ("request", \ws →
+                            void (enqueueChunkRequest pageA ws [ChunkCoord 8 8]))
+                      ]
+
+        forM_ [[], work] $ \queued →
+            forM_ phases $ \ph →
+                forM_ writers $ \(label, run) → do
+                    ws ← detachedPage params
+                    writeIORef (wsInitQueueRef ws) queued
+                    writeIORef (wsLoadPhaseRef ws) ph
+                    run ws
+                    phase' ← readIORef (wsLoadPhaseRef ws)
+                    queue' ← readIORef (wsInitQueueRef ws)
+                    -- A terminal phase and outstanding work never coexist.
+                    when (phase' ≡ LoadDone ∧ not (null queue')) $
+                        expectationFailure $
+                            "LoadDone over " ⧺ show (length queue')
+                            ⧺ " queued chunk(s) after " ⧺ label
+                            ⧺ " from " ⧺ show ph
+                    -- ...and progress is never negative.
+                    case phase' of
+                        LoadPhase2 remaining total →
+                            total `shouldSatisfy` (≥ remaining)
+                        _ → pure ()
+
+        -- Non-vacuity: the sweep really does reach both a terminal phase
+        -- and a live one.
+        wsDone ← detachedPage params
+        writeIORef (wsInitQueueRef wsDone) []
+        writeIORef (wsLoadPhaseRef wsDone) (LoadPhase2 1 fallback)
+        settleDrainedPhase wsDone fallback
+        readIORef (wsLoadPhaseRef wsDone) `shouldReturn` LoadDone
+
+        wsBusy ← detachedPage params
+        writeIORef (wsInitQueueRef wsBusy) work
+        writeIORef (wsLoadPhaseRef wsBusy) (LoadPhase2 9 9)
+        settleDrainedPhase wsBusy fallback
+        readIORef (wsLoadPhaseRef wsBusy)
+            `shouldReturn` LoadPhase2 (length work) 9

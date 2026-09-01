@@ -49,6 +49,7 @@ module World.Chunk.Queue
     ) where
 
 import UPrelude
+import Control.Concurrent.MVar (withMVar)
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import qualified Data.HashSet as HS
 import World.Chunk.Admit (registerChunkDemand)
@@ -136,12 +137,19 @@ initialChunkQueue canon centre = (queue, length queue + 1)
 --   order, and \"in flight\" is a state the owner names outright rather
 --   than an inference from queue membership.
 --
---   The append that follows is still safe against the world thread: this
---   queue has a single appending thread — the Lua thread in a live
---   engine, the dump driver in dump mode (where no script issues region
---   requests) — the drain removes a batch BY COORD so a concurrent
---   append survives it, and the other two producers REPLACE the queue
---   while setting the page up and never race this one.
+--   The append that follows is safe against the world thread: this queue
+--   has a single appending thread — the Lua thread in a live engine, the
+--   dump driver in dump mode (where no script issues region requests) —
+--   the drain removes a batch BY COORD so a concurrent append survives
+--   it, and the other two producers REPLACE the queue while setting the
+--   page up and never race this one.
+--
+--   The whole sequence runs under the page's queue lock
+--   ('World.State.Types.wsInitQueueLock'), because the request has to
+--   land on the queue AND be accounted for in 'LoadPhase2' as one step.
+--   Those are two 'IORef's, so without the lock the drain can settle the
+--   phase from a queue read taken before this append and publish a
+--   terminal 'LoadDone' over work it has just accepted.
 --
 --   A page with no generation params yet queues NOTHING and reports 0:
 --   its physical identity is unknown, so no alias could be recognised,
@@ -154,6 +162,7 @@ enqueueChunkRequest pid ws coords = do
     case mParams of
         Nothing → pure 0
         Just params → do
+          withMVar (wsInitQueueLock ws) $ \_ → do
             needed ← registerChunkDemand ws pid params coords
             count ← atomicModifyIORef' (wsInitQueueRef ws) $ \q →
                 (q ⧺ needed, length needed)
@@ -175,32 +184,20 @@ enqueueChunkRequest pid ws coords = do
                 atomicModifyIORef' (wsLoadPhaseRef ws) $ \ph → case ph of
                     LoadPhase2 remaining total →
                         (LoadPhase2 (remaining + count) (total + count), ())
-                    -- Appending over a FINISHED load re-opens the phase.
-                    -- The drain settles the phase from a queue length it
-                    -- read a moment earlier, so an append can always land
-                    -- after that read and leave a 'LoadDone' standing
-                    -- over real work — @world.getInitProgress@ and every
-                    -- waiter polling for the terminal phase would report
-                    -- a load that has not happened. Reopening here is the
-                    -- other half of 'settleDrainedPhase''s recheck, and
-                    -- between them the two orderings converge: if the
-                    -- drain finishes last its recheck sees this work and
-                    -- reopens, and if this runs last it reopens directly.
-                    --
-                    -- The drain reached 'LoadDone' with an empty queue,
-                    -- so these appended chunks are the whole of the new
+                    -- Appending over a FINISHED load re-opens the
+                    -- phase: the drain reached 'LoadDone' with an empty
+                    -- queue, so these chunks are the whole of the new
                     -- load and none of it is done yet.
                     LoadDone → (LoadPhase2 count count, ())
                     other → (other, ())
-            -- ...and then VALIDATE that against the queue. The append
-            -- above and the update just now are two steps, and the world
-            -- thread can drain the appended work to completion between
-            -- them — leaving this reopening a phase over an empty queue.
-            -- 'drainInitQueues' returns immediately for an empty queue,
-            -- so nothing would ever settle it back: @world.waitForInit@
-            -- would block for ever while @world.waitForChunks@ reported
-            -- nothing remaining.
-            reconcileQueuedPhase ws
+            -- Settle the phase against the queue before releasing the
+            -- lock, so a request the drain finished while this was
+            -- deciding does not leave the phase reopened over an empty
+            -- queue: 'drainInitQueues' returns immediately for an empty
+            -- queue, so nothing would settle it back and
+            -- @world.waitForInit@ would block for ever while
+            -- @world.waitForChunks@ reported nothing remaining.
+            reconcileQueuedPhaseLocked ws
             pure count
 
 -- | Seed a page's init queue with its initial box and report the
@@ -225,32 +222,18 @@ enqueueChunkRequest pid ws coords = do
 --   that would surface as NEGATIVE progress through the public API.
 seedInitialQueue ∷ WorldPageId → WorldState → WorldGenParams
                  → [ChunkCoord] → IO (Int, Int)
-seedInitialQueue pid ws params boxCoords = do
-    needed ← registerChunkDemand ws pid params boxCoords
-    atomicModifyIORef' (wsInitQueueRef ws) $ \q → (q ⧺ needed, ())
-    install
-  where
-    -- Install the phase HERE, rather than handing the pair to the caller
-    -- to write: any interval between establishing the pair and writing
-    -- it is one a @world.loadChunksInRegion@ can be lost in, because the
-    -- page is already registered and such a call would see 'LoadPhase1',
-    -- correctly leave the phase alone, and then be overwritten by a pair
-    -- computed before it arrived.
-    --
-    -- Installing it is not enough on its own, because the queue read and
-    -- the phase write are still two steps. So the pair has to come back
-    -- STABLE: read, write, and read again, repeating while the queue
-    -- moved underneath. That terminates rather than spins — the first
-    -- write publishes 'LoadPhase2', and from then on an appending
-    -- 'enqueueChunkRequest' raises the total itself instead of leaving
-    -- it to this function, so at most the appends racing the very first
-    -- write need a second pass.
-    install = do
-        remaining ← length ⊚ readIORef (wsInitQueueRef ws)
+seedInitialQueue pid ws params boxCoords =
+    withMVar (wsInitQueueLock ws) $ \_ → do
+        needed ← registerChunkDemand ws pid params boxCoords
+        -- Append, then install the phase from the queue that append
+        -- produced. Both happen under the page's queue lock, so no
+        -- request can land between them and be left out of the pair.
+        remaining ← atomicModifyIORef' (wsInitQueueRef ws) $ \q →
+            let q' = q ⧺ needed in (q', length q')
         let phase = (remaining, remaining + 1)
         writeIORef (wsLoadPhaseRef ws) (uncurry LoadPhase2 phase)
-        settled ← length ⊚ readIORef (wsInitQueueRef ws)
-        if settled ≡ remaining then pure phase else install
+        pure phase
+
 
 -- | The 'LoadPhase' a drain tick installs, given the page's box-shaped
 --   fallback total, the number of chunks it observed still queued, and
@@ -286,65 +269,33 @@ drainedLoadPhase fallbackTotal remaining recorded
         LoadPhase2 _ total → total
         _                  → fallbackTotal
 
--- | Install the phase a drain tick has produced, and do not leave a
---   'LoadDone' standing over a queue that is no longer empty.
+-- | Install the phase a drain tick has produced.
 --
---   The phase write itself is atomic ('drainedLoadPhase'), but the
---   QUEUE LENGTH it is computed from is a separate read, and the Lua
---   thread appends between the two. That does not matter while work
---   remains — the next tick recomputes the count — but it matters for
---   the FINAL batch: a snapshot of an empty queue becomes 'LoadDone',
---   and a region appended in that window leaves @world.getInitProgress@
---   and every waiter that polls for the terminal phase reporting a load
---   that has not happened.
+--   Taken under the page's queue lock
+--   ('World.State.Types.wsInitQueueLock') so the queue read and the
+--   phase write are one step with respect to the other writer. Without
+--   it the Lua thread can append between the two, and this write then
+--   publishes 'LoadDone' over accepted work — which
+--   @world.getInitProgress@ and every waiter polling for the terminal
+--   phase read as a load that has not happened. That is the one
+--   conclusion which is wrong to show even briefly, and no ordering of
+--   two independent reads and writes prevents it.
 --
---   So a settle that concluded \"done\" re-reads the queue and, if
---   something arrived, settles again. The retry terminates on that
---   second pass by construction: it sees the non-empty queue and writes
---   'LoadPhase2', which is not a conclusion that needs rechecking. Only
---   an appender producing work faster than one read could spin it, and
---   the Lua thread appending to this queue is the thread that would then
---   be blocked on nothing else.
---
---   The retry carries the total forward. Concluding \"done\" ERASES the
---   recorded total, so a second pass that re-read the phase would find
---   'LoadDone' and fall back to the box-shaped figure — permanently
---   underreporting a load the concurrent append had already enlarged.
+--   Readers do not take the lock. They read one value and may see it a
+--   moment stale, which is inherent to any single read and is a
+--   different thing from the phase disagreeing with the queue it was
+--   derived from.
 settleDrainedPhase ∷ WorldState → Int → IO ()
-settleDrainedPhase ws = go
-  where
-    go fallback = do
+settleDrainedPhase ws fallbackTotal =
+    withMVar (wsInitQueueLock ws) $ \_ → do
         rest ← readIORef (wsInitQueueRef ws)
-        -- CONFIRM an empty queue before concluding anything from it.
-        -- Publishing 'LoadDone' is the one conclusion that is wrong to
-        -- show even briefly: @world.getInitProgress@ and every waiter
-        -- polling for the terminal phase would report a load that has
-        -- not happened, and a poll landing in the window between the
-        -- write and the recheck below would see exactly that. Re-reading
-        -- first means the value is never published from a snapshot an
-        -- append has already invalidated. A snapshot with work in it
-        -- needs no confirming — it publishes 'LoadPhase2', which is true
-        -- whether or not more arrives.
-        settled ← if null rest then readIORef (wsInitQueueRef ws) else pure rest
-        -- The total this pass replaces comes back with it, because the
-        -- retry below has to carry it forward: writing 'LoadDone' erases
-        -- the recorded total, so a second pass reading that would fall
-        -- back to the box-shaped figure and permanently UNDERREPORT a
-        -- load a concurrent append had already enlarged.
-        observed ← atomicModifyIORef' (wsLoadPhaseRef ws) $ \ph →
-            ( drainedLoadPhase fallback (length settled) ph
-            , case ph of
-                LoadPhase2 _ total → total
-                _                  → fallback )
-        -- ...and recheck afterwards regardless, because two IORefs
-        -- cannot be read as one: an append landing between the confirm
-        -- and the write is still possible, and this is what heals it.
-        when (null settled) $ do
-            arrived ← readIORef (wsInitQueueRef ws)
-            unless (null arrived) $ go (max fallback observed)
+        atomicModifyIORef' (wsLoadPhaseRef ws) $ \ph →
+            (drainedLoadPhase fallbackTotal (length rest) ph, ())
 
--- | Settle a page's phase back to 'LoadDone' when its queue has emptied
---   under it.
+
+-- | Settle a page's phase against its queue: retire it to 'LoadDone'
+--   when the queue has emptied under it, and reopen it when work is
+--   present under a phase that says the load has finished.
 --
 --   The repair half of 'enqueueChunkRequest''s phase update: an append
 --   and the phase update that accounts for it are two steps, and the
@@ -354,21 +305,30 @@ settleDrainedPhase ws = go
 --   generation and removes it only after inserting — so the phase is
 --   settled from the queue rather than from what the appender expected.
 --
---   Deliberately NARROW. It only ever retires a 'LoadPhase2', never
---   'LoadPhase1': a page still in setup has not queued its box yet
+--   Deliberately NARROW. It only ever moves between 'LoadPhase2' and
+--   'LoadDone', and never touches 'LoadPhase1': a page still in setup has not queued its box yet
 --   ('seedInitialQueue' does that at the end), so its empty queue is not
 --   a finished load and forcing one would report a world ready before it
 --   has any chunks at all.
+--
+--   Takes the page's queue lock, for the same reason the two above do.
 reconcileQueuedPhase ∷ WorldState → IO ()
-reconcileQueuedPhase ws = do
+reconcileQueuedPhase ws =
+    withMVar (wsInitQueueLock ws) $ \_ → reconcileQueuedPhaseLocked ws
+
+-- | 'reconcileQueuedPhase' for a caller that already holds the page's
+--   queue lock. The lock is not reentrant, so the two forms are separate
+--   rather than one function that takes it conditionally.
+reconcileQueuedPhaseLocked ∷ WorldState → IO ()
+reconcileQueuedPhaseLocked ws = do
     pending ← readIORef (wsInitQueueRef ws)
-    when (null pending) $ do
-        -- Confirmed before concluding, for the same reason
-        -- 'settleDrainedPhase' confirms: 'LoadDone' is the conclusion
-        -- that is wrong to publish even briefly, and this thread is not
-        -- the only writer of either ref.
-        confirmed ← readIORef (wsInitQueueRef ws)
-        when (null confirmed) $
-            atomicModifyIORef' (wsLoadPhaseRef ws) $ \ph → case ph of
-                LoadPhase2 _ _ → (LoadDone, ())
-                other          → (other, ())
+    let remaining = length pending
+    atomicModifyIORef' (wsLoadPhaseRef ws) $ \ph → case (ph, remaining) of
+        -- Nothing left: retire the phase.
+        (LoadPhase2 _ _, 0) → (LoadDone, ())
+        -- Work present under a phase that says otherwise: reopen it, so
+        -- the invariant holds from either side rather than only from the
+        -- one this happens to be called on. The load ENDED with an empty
+        -- queue, so whatever is on it now is the whole of a new one.
+        (LoadDone, _)       → (LoadPhase2 remaining remaining, ())
+        (other, _)          → (other, ())
