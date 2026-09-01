@@ -602,24 +602,22 @@ local function spawnSignificantContent(def, gx, gy, worldId, placed)
         if not obligation.item_instance_id then
             local slot = obligation.slot
             local ox, oy = contentOffset(def, authored[slot] or {})
-            local gid = item.spawnGround(obligation.item, gx + ox, gy + oy,
-                                         nil, worldId)
-            if not gid then
-                engine.logWarn("locations: significant item content '" ..
-                    tostring(obligation.item) .. "' failed to spawn")
-                return false
-            end
-            -- Registered IMMEDIATELY, one item at a time, so an
-            -- interruption leaves a bound prefix a retry can resume
-            -- past rather than an orphaned item with no provenance.
-            -- The GROUND id is what goes over the boundary — the verb
-            -- resolves it to the item's durable physical identity
-            -- engine-side, so item.spawnGround keeps its single-value
-            -- contract that the debug console's callers depend on.
-            if not world.registerLocationSignificantSpawn(
-                    placed.instance_id, slot, gid, worldId) then
-                engine.logWarn("locations: could not register significant " ..
-                    "item '" .. tostring(obligation.item) .. "' for slot " ..
+            -- ONE engine call spawns the item and binds it to the slot.
+            -- This script never chooses WHICH item fills an obligation
+            -- — only where it lands: the engine takes the definition
+            -- from the obligation's own persisted record and binds the
+            -- instance it just created. A two-step spawn-then-bind
+            -- would let any caller substitute an unrelated item of the
+            -- right kind, and the location would then never spawn its
+            -- own guaranteed one.
+            --
+            -- Filled one at a time, so an interruption leaves a bound
+            -- prefix a retry resumes past rather than an orphaned item
+            -- with no provenance.
+            if not world.spawnLocationSignificantItem(
+                    placed.instance_id, slot, gx + ox, gy + oy, worldId) then
+                engine.logWarn("locations: could not spawn significant item '"
+                    .. tostring(obligation.item) .. "' for slot " ..
                     tostring(slot))
                 return false
             end

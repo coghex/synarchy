@@ -1550,7 +1550,9 @@ keep the condition incomplete rather than silently vanish.
 `Item.Types.iiInstanceId`, never a page-local ground id: the physical id
 survives pickup, transfer, storage and drop, while `spawnGroundItem`
 hands out a NEW ground id every time an item is dropped or a failed
-pickup is rolled back. `registerLocationSignificantSpawn` is WRITE-ONCE
+pickup is rolled back. `Location.Instance.registerLocationSignificantSpawn`
+— the pure binding step behind the verb, not a verb of its own — is
+WRITE-ONCE
 per slot — a retried content spawn cannot repoint an obligation and
 orphan the item it first named, and the refusal is exactly the edge a
 resuming spawn uses to tell "still owed" from "already done". It also
@@ -1567,10 +1569,26 @@ save rules reject the duplicate state only once it is already on disk. `signific
 boundary, for an untaken obligation whose item is on the right ground
 but is the wrong thing.
 
-Lua hands that verb the GROUND id `item.spawnGround` returned, and the
-verb resolves it to the physical id AND commits the binding
-SYNCHRONOUSLY, on the calling thread — unlike every sibling location
-editor, which queues to the world thread. That is load-bearing rather
+There is deliberately NO public binding verb. `world.spawnLocationSignificantItem(instanceId, slot, x, y [, pageId])`
+spawns the item AND binds it in one engine call, and it is the only way
+an obligation is ever filled. A separate bind-this-ground-item API
+would let a caller spawn or pick out an unrelated item of the right
+definition, bind it, and take THAT: the location would never spawn its
+own guaranteed item — a bound slot is skipped — and the unrelated
+pickup would clear the ruin. Neither the definition nor the
+duplicate-identity check can see that, because the substitute is
+exactly the right kind of item. So Lua chooses only WHERE: the
+definition comes from the obligation's own persisted
+`lsiItemDefName`, the item is materialized engine-side through the same
+`spawnSalvageOnPage` core `item.spawnGround` uses (so a guaranteed
+reward is worn by #1421's rules like any other find), and the binding
+names the instance that call just created — never one read back off the
+ground map, which is the very window a substitution needs. A refused
+call spawns nothing, and a binding that loses a race takes its item
+back off the ground rather than leaving an unowned duplicate reward.
+
+The binding commits SYNCHRONOUSLY, on the calling thread — unlike every
+sibling location editor, which queues to the world thread. That is load-bearing rather
 than a shortcut: every ground pickup runs on that same thread
 (`pickupGroundOnPage` is reached only from `item.pickupGround`) and its
 latch matches on the obligation's BOUND id, so a queued binding would
@@ -1624,7 +1642,8 @@ reconstruction discards both for the same reason.
 `Location.Instance.significantEntryErrors` is the ONE per-entry rule
 set, and both boundaries that can admit an obligation consult it —
 component decode through `locationSignificantItemErrors`, and
-`registerLocationSignificantSpawn`, which refuses a binding whose
+`Location.Instance.registerLocationSignificantSpawn`, the pure binding
+step, which refuses a binding whose
 RESULTING entry would fail it. That sharing is deliberate: every rule
 below was added because some path could reach a state the other checks
 could not see, and two copies is how the next one gets added to a

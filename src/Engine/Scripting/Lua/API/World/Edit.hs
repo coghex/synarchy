@@ -11,7 +11,6 @@ module Engine.Scripting.Lua.API.World.Edit
     , worldMarkLocationContentsSpawnedFn
     , worldMarkLocationContentsSpawnedByIdFn
     , worldRegisterLocationEncounterOccupantsFn
-    , worldRegisterLocationSignificantSpawnFn
     , worldSetLocationEncounterOccupantStateFn
     , worldSetLocationEncounterEpisodeStateFn
     , worldSetLocationLifecycleFn
@@ -22,23 +21,19 @@ import UPrelude
 import qualified HsLua as Lua
 import Data.ByteString (ByteString)
 import qualified Data.Text.Encoding as TE
-import Data.IORef (readIORef, atomicModifyIORef')
+import Data.IORef (readIORef)
 import qualified Engine.Core.Queue as Q
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..))
 import Engine.Core.State (activeWorldPageFrom)
 import Location.Instance
     ( LocationInstance(..), LocationInstanceId(..)
-    , instancesInChunk, lifecycleFromName
-    , registerLocationSignificantSpawn )
+    , instancesInChunk, lifecycleFromName )
 import Structure.Types
     (StructureCommitWindow(..), StructureStageToken(..))
 import World.Generate.Coordinates (globalToChunk)
 import World.Types hiding (activeWorldPage)
 import World.Material (MaterialId(..), materialIdByName)
-import qualified Data.HashMap.Strict as HM
-import Item.Ground (GroundItem(..), GroundItems(..))
-import Item.Types (ItemInstance(..))
 import Unit.Types (UnitId(..))
 
 -- | The live page this call targets: the named one when a pageId string
@@ -162,99 +157,6 @@ worldRegisterLocationEncounterOccupantsFn wsc = do
         value ← Lua.tonumber (-1)
         Lua.pop 1
         pure ((\(Lua.Number v) → realToFrac v) ⊚ value)
-
--- | world.registerLocationSignificantSpawn(instanceId, slot, groundId
---   [, pageId]) → bool (#917). Binds one guaranteed significant item,
---   just spawned by @scripts\/locations.lua@, to the obligation slot
---   the placed instance was created owing.
---
---   @groundId@ is exactly what @item.spawnGround@ hands back — that
---   verb answers ONE value and must keep doing so (see its haddock) —
---   and this resolves it to the item's PHYSICAL
---   'Item.Types.iiInstanceId' HERE, synchronously on the calling
---   thread, before anything is queued. The physical id is what the
---   obligation stores, because the taken latch has to follow the item
---   through pickup, transfer and drop and a ground id survives none of
---   them; resolving it now rather than on the world thread means the
---   binding names the item the caller actually just spawned, not
---   whatever occupies that ground id by the time the command runs.
---
---   Applied SYNCHRONOUSLY, on this thread, rather than queued to the
---   world thread like its sibling location editors — and that is the
---   whole point rather than a shortcut. Every ground pickup runs on
---   this same thread
---   ('Engine.Scripting.Lua.API.Items.Ground.pickupGroundOnPage' is
---   reached only from @item.pickupGround@), and the latch it applies
---   matches on the obligation's BOUND id. A queued binding therefore
---   leaves a window in which the item is already lying on the ground,
---   pickable, with its slot still unbound: a pickup landing there
---   latches nothing, the queued command then binds an item that is
---   already in somebody's inventory, no second ground pickup can ever
---   happen, @contents_spawned@ blocks a respawn, and the location is
---   permanently unclearable — with a save that
---   'World.Save.Integrity.significantProvenanceErrors' would then
---   refuse outright, an untaken obligation resolving inside an
---   inventory. Committing here puts the spawn, the binding and any
---   pickup in one serial order on one thread, so that window does not
---   exist.
---
---   Returns whether the binding was APPLIED: a non-negative instance
---   id, a positive slot, a resolvable page, a ground id that really
---   names an item on it, and a slot that exists, is still unbound, and
---   whose authored item definition is the one that ground item actually
---   IS — an obligation names WHAT is owed, so binding a ration to a
---   @processing_unit@ slot would otherwise let picking the ration up
---   clear the location with the guaranteed item still on the floor —
---   and whose item is owed by no other obligation, since one item bound
---   twice would let a single pickup discharge two required items.
---   'Location.Instance.registerLocationSignificantSpawn' is write-once,
---   so a retried content spawn re-registering a slot it already filled
---   answers false and changes nothing — which is exactly the edge the
---   resuming spawn in @scripts\/locations.lua@ reads.
-worldRegisterLocationSignificantSpawnFn
-    ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
-worldRegisterLocationSignificantSpawnFn wsc = do
-    idArg    ← Lua.tointeger 1
-    slotArg  ← Lua.tointeger 2
-    groundArg ← Lua.tointeger 3
-    pageArg  ← Lua.tostring 4
-    queued ← case (idArg, slotArg, groundArg) of
-        (Just rawId, Just slot, Just gid)
-            | rawId ≥ 0 ∧ slot > 0 ∧ gid ≥ 0 → Lua.liftIO $ do
-                mPid ← targetPage wsc pageArg
-                case mPid of
-                    Nothing → pure False
-                    Just pid → do
-                        mgr ← readIORef (wsWorldManagerRef wsc)
-                        case lookup pid (wmWorlds mgr) of
-                            Nothing → pure False
-                            Just ws → do
-                                gis ← readIORef (wsGroundItemsRef ws)
-                                case HM.lookup (fromIntegral gid)
-                                         (gisItems gis) of
-                                    Nothing → pure False
-                                    Just gi →
-                                        atomicModifyIORef'
-                                            (wsGenParamsRef ws) $ \mP →
-                                          case mP of
-                                            Nothing → (mP, False)
-                                            Just p → case
-                                                registerLocationSignificantSpawn
-                                                    (LocationInstanceId
-                                                        (fromIntegral rawId))
-                                                    (fromIntegral slot)
-                                                    (iiDefName (giInst gi))
-                                                    (iiInstanceId (giInst gi))
-                                                    (wgpLocationInstances p) of
-                                                Just instances' →
-                                                    ( Just p
-                                                        { wgpLocationInstances =
-                                                            instances' }
-                                                    , True )
-                                                Nothing → (mP, False)
-        _ → pure False
-    Lua.pushboolean queued
-    return 1
 
 -- | world.setLocationEncounterOccupantState(instanceId, uid, engaged,
 --   returning [, pageId]) → bool.

@@ -47,12 +47,11 @@ import Location.Bounds (RelBounds(..))
 import Test.Headless.Location.Fixture (expectGeometry)
 import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
-import Engine.Core.Capability.WorldSim (toWorldSimCapability)
 import Engine.Scripting.Lua.API.Items.Ground (pickupGroundOnPage)
-import Engine.Scripting.Lua.API.World.Edit
-    (worldRegisterLocationSignificantSpawnFn)
+import Engine.Scripting.Lua.API.Items.Ground
+    (worldSpawnLocationSignificantItemFn)
 import Item.Ground (GroundItems(..), spawnGroundItem)
-import Item.Types (ItemInstance(..))
+import Item.Types (ItemInstance(..), ItemDef(..), ItemManager(..))
 import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
 import Unit.Types
@@ -1055,6 +1054,7 @@ newSignificantPage
     → Maybe [LocationEncounterOccupant] → [LocationSignificantItem]
     → IO WorldState
 newSignificantPage env pageId lifecycle mOccupants entries = do
+    writeIORef (itemManagerRef env) significantItemDefs
     ws ← emptyWorldState
     writeIORef (wsGenParamsRef ws) $
         Just (significantParams lifecycle mOccupants entries)
@@ -1069,6 +1069,29 @@ owed slot itemId = LocationSignificantItem
     , lsiItemDefName = "processing_unit"
     , lsiInstanceId  = Just itemId
     , lsiTaken       = False
+    }
+
+-- | The two item definitions #917's own verb needs registered: it
+--   materializes from the obligation's persisted def name, so an
+--   unregistered one is a refusal rather than a spawn. `rations` is the
+--   decoy the substitution case needs.
+significantItemDefs ∷ ItemManager
+significantItemDefs = ItemManager $ HM.fromList
+    [ ("processing_unit", fixtureDef "processing_unit")
+    , ("rations", fixtureDef "rations") ]
+
+fixtureDef ∷ Text → ItemDef
+fixtureDef name = ItemDef
+    { idName = name, idDisplayName = name
+    , idTexture = TextureHandle 0, idIconTexture = TextureHandle 0
+    , idWeight = 0.4, idWeightSpec = Nothing
+    , idBulk = 0.4, idStorage = Nothing, idKind = "misc"
+    , idCategory = "Materials", idMake = "", idMaterial = ""
+    , idQualitySpec = Nothing, idQualityTiers = []
+    , idContainer = Nothing
+    , idDefaultContents = [], idFood = Nothing, idWeapon = Nothing
+    , idArmor = Nothing, idUnequippable = False, idBuffs = []
+    , idInsulation = 0, idSourcePath = "test-fixture"
     }
 
 groundItem ∷ Word64 → ItemInstance
@@ -1091,6 +1114,19 @@ dropOnGround ∷ WorldState → Word64 → IO Int
 dropOnGround ws iid =
     atomicModifyIORef' (wsGroundItemsRef ws) (spawnGroundItem (groundItem iid) 8 8)
 
+-- | The one ground item on a page, for a fixture that spawned exactly
+--   one. Fails loudly rather than silently picking one of several.
+onlyGroundId ∷ WorldState → IO Int
+onlyGroundId ws = do
+    gis ← readIORef (wsGroundItemsRef ws)
+    case HM.keys (gisItems gis) of
+        [gid] → pure gid
+        other → error ("expected exactly one ground item, got "
+                          <> show (length other))
+
+groundCount ∷ WorldState → IO Int
+groundCount ws = HM.size ∘ gisItems <$> readIORef (wsGroundItemsRef ws)
+
 takenFlags ∷ WorldState → IO [Bool]
 takenFlags ws = do
     mp ← readIORef (wsGenParamsRef ws)
@@ -1099,20 +1135,25 @@ takenFlags ws = do
          , inst ← instancesToList (wgpLocationInstances p)
          , e ← liSignificant inst ]
 
--- | Call @world.registerLocationSignificantSpawn(instanceId, slot,
---   groundId, pageId)@ through the real Lua binding and answer what it
---   handed back — the only way to observe whether the binding is
---   applied by the time the verb RETURNS, which is the property that
---   closes the pickup race.
-registerSpawn
-    ∷ EngineEnv → WorldPageId → Int → Int → Int → IO Bool
-registerSpawn env (WorldPageId page) iid slot gid = Lua.run $ do
+-- | Call @world.spawnLocationSignificantItem(instanceId, slot, x, y,
+--   pageId)@ through the real Lua binding and answer what it handed
+--   back.
+--
+--   This is the ONLY way an obligation is ever filled (#917): the verb
+--   spawns the item AND binds it in one engine call, so nothing outside
+--   the engine ever chooses which item fills a slot. Driving the real
+--   binding is also the only way to observe that the binding is applied
+--   by the time the verb RETURNS, which is what closes the pickup race.
+spawnSignificant
+    ∷ EngineEnv → WorldPageId → Int → Int → (Float, Float) → IO Bool
+spawnSignificant env (WorldPageId page) iid slot (x, y) = Lua.run $ do
     Lua.openlibs
     Lua.pushinteger (fromIntegral iid)
     Lua.pushinteger (fromIntegral slot)
-    Lua.pushinteger (fromIntegral gid)
+    Lua.pushnumber (realToFrac x)
+    Lua.pushnumber (realToFrac y)
     Lua.pushstring (TE.encodeUtf8 page)
-    _ ← worldRegisterLocationSignificantSpawnFn (toWorldSimCapability env)
+    _ ← worldSpawnLocationSignificantItemFn env
     Lua.toboolean Lua.top
 
 boundIds ∷ WorldState → IO [Maybe Word64]
@@ -1141,7 +1182,6 @@ significantSpec =
             let pageId = WorldPageId "sig_bind_race"
             ws ← newSignificantPage env pageId LifecycleDiscovered Nothing
                      [ (owed 1 0) { lsiInstanceId = Nothing } ]
-            gid ← dropOnGround ws 5061
             writeIORef (unitManagerRef env) $ emptyUnitManager
                 { umInstances = HM.singleton (UnitId 809)
                     (testUnit pageId FactionPlayer 8 8) }
@@ -1150,10 +1190,13 @@ significantSpec =
             -- binding would still be unapplied here — which is exactly
             -- the state the racing pickup below would find.
             boundIds ws `shouldReturn` [Nothing]
-            registerSpawn env pageId 1 1 gid `shouldReturn` True
-            boundIds ws `shouldReturn` [Just 5061]
+            spawnSignificant env pageId 1 1 (8, 8) `shouldReturn` True
+            bound ← boundIds ws
+            bound `shouldSatisfy` all isJust
 
-            -- …and because it landed first, the pickup latches.
+            -- …and because the item and its binding landed together,
+            -- the pickup latches.
+            gid ← onlyGroundId ws
             pickupGroundOnPage env ws (UnitId 809) gid `shouldReturn` True
             takenFlags ws `shouldReturn` [True]
             tickLocationDiscovery env pageId ws
@@ -1179,50 +1222,59 @@ significantSpec =
             poisonSight ws
             sightRasterized env pageId ws `shouldReturn` False
 
-        it "refuses to bind one ground item to a SECOND obligation, so a \
-           \single pickup can never discharge two required items" $
-           \env → do
-            -- The verb is public Lua, not only the content spawn's own
-            -- path, so this is the boundary that has to hold: the
-            -- decode and save validators reject the duplicate state,
-            -- but only once it is already on disk.
-            let pageId = WorldPageId "sig_dup_binding"
+        -- The whole reason binding is not a verb of its own. With a
+        -- public bind-this-ground-item API, a caller could spawn or
+        -- pick out an unrelated item of the right definition, bind it,
+        -- and take THAT — the location would never spawn its own
+        -- guaranteed item (a bound slot is skipped) and the unrelated
+        -- pickup would clear the ruin. Definition and duplicate-identity
+        -- checks cannot see it: the substitute is exactly the right
+        -- kind of item.
+        it "gives Lua no way to choose WHICH item fills a slot — an \
+           \unrelated ground item of the very same definition cannot \
+           \satisfy an obligation" $ \env → do
+            let pageId = WorldPageId "sig_no_substitution"
             ws ← newSignificantPage env pageId LifecycleDiscovered Nothing
-                     [ (owed 1 0) { lsiInstanceId = Nothing }
-                     , (owed 2 0) { lsiSlot = 2, lsiInstanceId = Nothing } ]
-            gid ← dropOnGround ws 5091
-            registerSpawn env pageId 1 1 gid `shouldReturn` True
-            registerSpawn env pageId 1 2 gid `shouldReturn` False
-            boundIds ws `shouldReturn` [Just 5091, Nothing]
+                     [ (owed 1 0) { lsiInstanceId = Nothing } ]
+            -- A decoy of the RIGHT definition, lying on the same page.
+            decoy ← dropOnGround ws 5101
+            spawnSignificant env pageId 1 1 (8, 8) `shouldReturn` True
+            bound ← boundIds ws
+            -- The binding names the item the ENGINE just made, never
+            -- the decoy that was already there.
+            bound `shouldSatisfy` (≢ [Just 5101])
+            bound `shouldSatisfy` all isJust
 
-            -- Picking it up therefore latches slot 1 only, and the
-            -- location stays uncleared with slot 2 outstanding.
+            -- Taking the decoy therefore latches nothing and clears
+            -- nothing, however identical it looks.
             writeIORef (unitManagerRef env) $ emptyUnitManager
                 { umInstances = HM.singleton (UnitId 811)
                     (testUnit pageId FactionPlayer 8 8) }
-            pickupGroundOnPage env ws (UnitId 811) gid `shouldReturn` True
-            takenFlags ws `shouldReturn` [True, False]
+            pickupGroundOnPage env ws (UnitId 811) decoy `shouldReturn` True
+            takenFlags ws `shouldReturn` [False]
             tickLocationDiscovery env pageId ws
             readIORef (wsGenParamsRef ws) >>= (\p →
                 lifecyclesOf p `shouldBe` Just [LifecycleDiscovered])
 
-        it "refuses a ground id that names nothing, an unknown slot, and \
-           \a slot already bound — so a retried spawn cannot repoint an \
-           \obligation" $ \env → do
-            let pageId = WorldPageId "sig_bind_refusals"
+        it "refuses an unknown slot, an unknown instance, and a slot \
+           \already filled — and a refusal leaves NO item on the ground, \
+           \so a retry cannot orphan one" $ \env → do
+            let pageId = WorldPageId "sig_spawn_refusals"
             ws ← newSignificantPage env pageId LifecycleDiscovered Nothing
                      [ (owed 1 0) { lsiInstanceId = Nothing } ]
-            gid ← dropOnGround ws 5071
-            registerSpawn env pageId 1 1 9999 `shouldReturn` False
-            registerSpawn env pageId 1 7 gid  `shouldReturn` False
-            registerSpawn env pageId 99 1 gid `shouldReturn` False
+            spawnSignificant env pageId 1 7 (8, 8) `shouldReturn` False
+            spawnSignificant env pageId 99 1 (8, 8) `shouldReturn` False
             boundIds ws `shouldReturn` [Nothing]
-            registerSpawn env pageId 1 1 gid `shouldReturn` True
-            -- Write-once: a second registration of the same slot is
-            -- refused and the first binding stands.
-            other ← dropOnGround ws 5072
-            registerSpawn env pageId 1 1 other `shouldReturn` False
-            boundIds ws `shouldReturn` [Just 5071]
+            groundCount ws `shouldReturn` 0
+
+            spawnSignificant env pageId 1 1 (8, 8) `shouldReturn` True
+            filled ← boundIds ws
+            groundCount ws `shouldReturn` 1
+            -- Write-once: a second call for the same slot is refused,
+            -- the first binding stands, and no second item is spawned.
+            spawnSignificant env pageId 1 1 (8, 8) `shouldReturn` False
+            boundIds ws `shouldReturn` filled
+            groundCount ws `shouldReturn` 1
 
         it "holds a location with a completed encounter uncleared while \
            \its guaranteed item is still on the floor, then clears it \
