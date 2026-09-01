@@ -45,6 +45,7 @@ import World.Save.Component.Knowledge
     ( ContainerKnowledgeDTO(..), PageContainerKnowledgeDTO(..)
     , ContainerRecordDTO(..), containerKnowledgeCodec )
 import World.Save.Component.Page (blankPageSnapshot)
+import Test.Headless.Harness.GeneratedIds (fixtureGeneratedWorldIdForPage)
 import World.Save.Component.Types
     ( ComponentCodec(..), ComponentError(..), ComponentPhase(..)
     , containerKnowledgeComponentId, metadataComponentId )
@@ -292,7 +293,8 @@ recordOf sc bid = lookupContainer bid <$> knowledgeOn (scPageB sc)
 knowledgePage ∷ WorldPageId → PageSnapshot
 knowledgePage pid =
     (blankPageSnapshot pid (defaultWorldGenParams { wgpSeed = 7 }))
-        { pgsBuildings = BuildingSnapshot
+        { pgsGeneratedId = Just (fixtureGeneratedWorldIdForPage pid)
+        , pgsBuildings = BuildingSnapshot
             { bsnInstances = HM.empty, bsnNextId = 9 }
         , pgsUnits = (pgsUnits (blankPageSnapshot pid defaultWorldGenParams))
         , pgsContainerKnowledge = ContainerKnowledge $ HM.fromList
@@ -864,6 +866,8 @@ spec = describe "Container knowledge" $ do
                         { lcsOwnerPage = Just pageB }
                     , snapPages = HM.singleton pageB
                         (blankPageSnapshot pageB defaultWorldGenParams)
+                            { pgsGeneratedId =
+                                Just (fixtureGeneratedWorldIdForPage pageB) }
                     }
             case decodeFor (encodeFor otherSnap) of
                 Left err → expectationFailure (show err)

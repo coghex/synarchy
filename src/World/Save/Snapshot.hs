@@ -47,6 +47,7 @@ import qualified Data.HashMap.Strict as HM
 import Structure.Palette (TexPalette(..))
 import World.Generate.Types (WorldGenParams)
 import World.Page.Types (WorldPageId, WorldIdentity)
+import World.Page.GeneratedId (GeneratedWorldId)
 import World.Render.Zoom.Types (ZoomMapMode)
 import World.Edit.Types (WorldEdit(..), WorldEdits)
 import World.Mine.Types (MineDesignations)
@@ -177,6 +178,27 @@ data PageSnapshot = PageSnapshot
     , pgsCropPlots    ∷ !CropPlots
     , pgsPlantDesignations ∷ !PlantDesignations
     , pgsIdentity     ∷ !(Maybe WorldIdentity)
+    , pgsGeneratedId  ∷ !(Maybe GeneratedWorldId)
+      -- ^ #2021: which generated FOUNDATION this page descends from.
+      --
+      --   'Just' for every page captured from a live session — a live
+      --   'World.State.Types.WorldState' always holds one
+      --   ('wsGeneratedIdRef' is not optional). 'Nothing' occurs on the
+      --   LOAD side only, and means exactly one thing: this page was
+      --   decoded from a @world-pages@ payload older than v9, which
+      --   predates generated-world identity entirely. Requirement 7
+      --   then has transactional load staging
+      --   ("World.Load.Stage") assign it a FRESH id — the legacy save
+      --   carries nothing an id could honestly be derived from, and
+      --   deriving one from the seed or the page id would be the
+      --   content dedup requirement 3 rejects.
+      --
+      --   Deliberately NOT an invariant of 'validateSessionSnapshot':
+      --   that validator runs on the load path too
+      --   ('World.Save.Component.assembleSnapshot'), where 'Nothing' is
+      --   the correct, expected value for every legacy save. The
+      --   save-side rule — a CAPTURED page always has one — is enforced
+      --   where captures happen, by the non-optional live ref.
     } deriving (Show, Eq)
 
 -- | The whole-session capture: every persistable page plus the

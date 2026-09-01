@@ -15,6 +15,10 @@
 --   again, so a future edit to the LIVE 'SaveMetadata' can not silently
 --   reinterpret bytes already on disk.
 --
+--   Schema version 3 (#2021) appended the per-page generated-world id
+--   inventory; its own frozen predecessor is
+--   "World.Save.Compat.MetadataV2", and this module stays v1's.
+--
 --   The migration itself is total and lossless in the only direction
 --   that exists: v1 predates the classification entirely, and the
 --   issue's contract for that case is explicit — \"legacy saves without
@@ -73,4 +77,8 @@ migrateSaveMetadataV1 m = SaveMetadata
     , smWorldName  = sm1WorldName m
     , smWorldGloss = sm1WorldGloss m
     , smAutosave   = False
+    -- #2021: a v1 payload predates generated-world identity by two
+    -- component versions; its pages carry no id either, and staging
+    -- mints fresh ones. See "World.Save.Compat.MetadataV2".
+    , smGeneratedWorldIds = []
     }
