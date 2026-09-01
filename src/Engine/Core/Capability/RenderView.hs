@@ -22,7 +22,7 @@
 --
 --   == What is deliberately absent
 --
---   Beyond @engineStateRef@, the 21-field @render-gpu-asset@ set's
+--   Beyond @engineStateRef@, the 22-field @render-gpu-asset@ set's
 --   remaining @MainRender@-only fields are omitted because no
 --   non-@MainRender@ consumer reads them (SS5's Readers\/Writers
 --   cells): @windowStateRef@, @brightnessRef@, @samplerCacheRef@,
@@ -67,6 +67,7 @@ import Engine.Core.State
   , framebufferMinimizeGenRef, pixelSnapRef
   , fpsRef, textureFilterRef, assetPoolRef, textureNameRegistryRef, fontCacheRef
   , textureSystemRef, textureSizeRef, cameraRef, screenshotRequestQueue
+  , maxImageDimensionRef
   )
 
 -- | The worker-safe slice of @render-gpu-asset@: window\/framebuffer
@@ -94,6 +95,12 @@ data RenderViewCapability = RenderViewCapability
   , rvFontCacheRef           ∷ IORef FontCache
   , rvTextureSystemRef       ∷ IORef (Maybe BindlessTextureSystem)
   , rvTextureSizeRef         ∷ IORef (HM.HashMap TextureHandle (Int, Int))
+  , rvMaxImageDimensionRef   ∷ IORef (Maybe Int)
+    -- ^ Read-only here: the device's real @maxImageDimension2D@, which
+    --   the world thread needs before it generates a world's zoom-map
+    --   pixels (#2020). This record is how it reaches that thread
+    --   WITHOUT reaching @vulkanPDevice@, which lives in the
+    --   main-render-private @GraphicsState@.
   , rvCameraRef              ∷ IORef Camera2D
   , rvScreenshotRequestQueue ∷ Q.Queue ScreenshotRequest
   }
@@ -117,6 +124,7 @@ toRenderViewCapability env = RenderViewCapability
   , rvFontCacheRef           = fontCacheRef env
   , rvTextureSystemRef       = textureSystemRef env
   , rvTextureSizeRef         = textureSizeRef env
+  , rvMaxImageDimensionRef   = maxImageDimensionRef env
   , rvCameraRef              = cameraRef env
   , rvScreenshotRequestQueue = screenshotRequestQueue env
   }

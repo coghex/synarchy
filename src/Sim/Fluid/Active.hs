@@ -13,11 +13,12 @@ import qualified Data.Vector.Unboxed.Mutable as MVU
 import Data.Maybe (mapMaybe)
 import Control.Monad.ST (ST, runST)
 import Data.STRef (STRef, newSTRef, readSTRef, writeSTRef, modifySTRef')
-import World.Chunk.Types (ChunkCoord(..), chunkSize)
+import World.Chunk.Types (ChunkCoord, chunkSize)
 import World.Fluid.Types (FluidCell(..))
 import World.SideFace.Base (SideDecoType(..), sideDecoBase)
 import Sim.State.Types (SimWorldState(..), SimChunkState(..))
 import Sim.Fluid.Types (ActiveFluidCell(..), volumePerLevel, volumeToSurface)
+import Sim.Topology (SimTopology, simSeamNeighbor)
 
 -- | Ticks at equilibrium before a chunk is deactivated.
 equilThreshold ∷ Int
@@ -31,7 +32,7 @@ simulateActiveTick sws =
             activeChunks = HM.filter scsActive chunks
         in if HM.null activeChunks
            then sws
-           else let results = reconcileSeams
+           else let results = reconcileSeams (swsTopology sws)
                                  (HM.mapWithKey (simulateActiveChunk chunks) activeChunks)
                     dirty = HM.foldlWithKey' (\acc cc (_, changed) →
                         if changed then HS.insert cc acc else acc
@@ -196,18 +197,27 @@ southEdgePairs =
 --   shared edge is processed once (via the +X / +Y neighbour), live in
 --   ST so corner cells stay conserved; both chunks in any transfer are
 --   re-derived and flagged changed (so they stay active + re-render).
-reconcileSeams ∷ HM.HashMap ChunkCoord (SimChunkState, Bool)
+--
+--   The neighbour is the physically adjacent chunk's STORED key, not the
+--   raw @(cx+1, cy)@ / @(cx, cy+1)@ one: on a cylindrical page the coord
+--   across the u seam has both components changed, so the raw lookup
+--   missed and fluid piled up against an artificial wall (#2044). The
+--   canonicalisation is a bijection on stored keys, so every shared edge
+--   still belongs to exactly one @(chunk, direction)@ probe and is still
+--   processed exactly once. Identity on a flat page and away from the
+--   seam.
+reconcileSeams ∷ SimTopology
                → HM.HashMap ChunkCoord (SimChunkState, Bool)
-reconcileSeams results
+               → HM.HashMap ChunkCoord (SimChunkState, Bool)
+reconcileSeams topo results
     | HM.size results < 2 = results
     | otherwise =
         let (grids', touched) = runST $ do
                 mgrids ← traverse (\(scs, _) → V.thaw (scsActiveFluid scs)) results
                 touchedRef ← newSTRef HS.empty
-                forM_ (HM.toList results) $ \(coord, (scsA, _)) → do
-                    let ChunkCoord cx cy = coord
-                    forM_ [ (ChunkCoord (cx + 1) cy, eastEdgePairs)
-                          , (ChunkCoord cx (cy + 1), southEdgePairs) ] $ \(nbr, pairs) →
+                forM_ (HM.toList results) $ \(coord, (scsA, _)) →
+                    forM_ [ (simSeamNeighbor topo 1 0 coord, eastEdgePairs)
+                          , (simSeamNeighbor topo 0 1 coord, southEdgePairs) ] $ \(nbr, pairs) →
                         case HM.lookup nbr results of
                             Nothing → pure ()
                             Just (scsB, _) → do
@@ -328,6 +338,17 @@ phaseLateral mv terrainV changedRef = do
                     lx = idx `mod` chunkSize
                     ly = idx `div` chunkSize
                     nbrs = cardinalNeighbors lx ly
+                -- Every request below is sized from the FROZEN snapshot but
+                -- paid out of the LIVE grid, so the cumulative spend has to
+                -- be tracked and each payment capped by what the source has
+                -- left — the same shape 'phaseGravity' and 'phaseWaterfall'
+                -- already use. Without the cap a low-volume cell with
+                -- several thirstier neighbours pays out more than it holds
+                -- and its 'Word16' volume wraps to ~65535, manufacturing
+                -- fluid (#2042). The rate ('diff div 4') and the
+                -- minimum-one-unit progress rule are untouched for every
+                -- transfer the source can actually afford.
+                spentRef ← newSTRef (0 ∷ Int)
                 forM_ nbrs $ \(nx, ny) →
                     when (nx ≥ 0 ∧ nx < chunkSize ∧ ny ≥ 0 ∧ ny < chunkSize) $ do
                         let nIdx = ny * chunkSize + nx
@@ -340,31 +361,51 @@ phaseLateral mv terrainV changedRef = do
                                         diff   = srcVol - dstVol
                                     -- Only transfer from higher side to avoid double-counting
                                     when (diff > 1) $ do
-                                        let transfer = max 1 (diff `div` 4)
+                                        spent ← readSTRef spentRef
+                                        let transfer = min (max 1 (diff `div` 4))
+                                                           (srcVol - spent)
+                                        when (transfer > 0) $ do
+                                            curSrc ← MV.read mv idx
+                                            curDst ← MV.read mv nIdx
+                                            case (curSrc, curDst) of
+                                                (Just s, Just d) → do
+                                                    writeSTRef spentRef (spent + transfer)
+                                                    MV.write mv idx (Just s
+                                                        { afcVolume = afcVolume s - fromIntegral transfer })
+                                                    MV.write mv nIdx (Just d
+                                                        { afcVolume = afcVolume d + fromIntegral transfer })
+                                                    writeSTRef changedRef True
+                                                _ → pure ()
+                                Nothing | srcVol > volumePerLevel → do
+                                    spent ← readSTRef spentRef
+                                    let transfer = min (max 1 (srcVol `div` 4))
+                                                       (srcVol - spent)
+                                    when (transfer > 0) $ do
                                         curSrc ← MV.read mv idx
-                                        curDst ← MV.read mv nIdx
-                                        case (curSrc, curDst) of
-                                            (Just s, Just d) → do
+                                        case curSrc of
+                                            Just s → do
+                                                writeSTRef spentRef (spent + transfer)
                                                 MV.write mv idx (Just s
                                                     { afcVolume = afcVolume s - fromIntegral transfer })
-                                                MV.write mv nIdx (Just d
-                                                    { afcVolume = afcVolume d + fromIntegral transfer })
+                                                -- Read the LIVE destination: an
+                                                -- earlier source this same phase
+                                                -- may already have spilled into
+                                                -- this snapshot-empty cell, and
+                                                -- overwriting it would destroy
+                                                -- that fluid (#2042).
+                                                curDst ← MV.read mv nIdx
+                                                case curDst of
+                                                    Nothing →
+                                                        MV.write mv nIdx (Just ActiveFluidCell
+                                                            { afcType = afcType afc
+                                                            , afcVolume = fromIntegral transfer
+                                                            , afcFlowDir = 0
+                                                            })
+                                                    Just d →
+                                                        MV.write mv nIdx (Just d
+                                                            { afcVolume = afcVolume d + fromIntegral transfer })
                                                 writeSTRef changedRef True
-                                            _ → pure ()
-                                Nothing | srcVol > volumePerLevel → do
-                                    let transfer = max 1 (srcVol `div` 4)
-                                    curSrc ← MV.read mv idx
-                                    case curSrc of
-                                        Just s → do
-                                            MV.write mv idx (Just s
-                                                { afcVolume = afcVolume s - fromIntegral transfer })
-                                            MV.write mv nIdx (Just ActiveFluidCell
-                                                { afcType = afcType afc
-                                                , afcVolume = fromIntegral transfer
-                                                , afcFlowDir = 0
-                                                })
-                                            writeSTRef changedRef True
-                                        Nothing → pure ()
+                                            Nothing → pure ()
                                 _ → pure ()
 
 -- * Phase C: Waterfall detection

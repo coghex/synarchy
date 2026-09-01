@@ -514,10 +514,14 @@ end
 -- candidate that cannot do the job must not win by being nearest and
 -- then do nothing. Mode A passes "escort_transfer", because a source
 -- whose species never registered it would sit in `approaching`
--- forever. Mode B's own resolution (transfer_gestures.retrieveEntries)
--- deliberately passes nothing: this issue does not change a shipped
--- gesture, and the equivalent question for a QUEUED order's executor is
--- its own concern to raise.
+-- forever.
+--
+-- BOTH modes pass one now (#2030): Mode B's own resolution
+-- (transfer_gestures.retrieveEntries) passes "transfer_order", because
+-- an executor whose species never registered THAT would leave a queued
+-- order pending for ever. The argument stays optional because a caller
+-- with no capability question -- one resolving a unit for something
+-- every species can do -- still has none to ask.
 function M.resolveSource(selectedUids, excludeUid, target, requiredAction)
     if not selectedUids then return nil end
     local aiActions = require("scripts.unit_ai_actions")

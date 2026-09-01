@@ -28,6 +28,21 @@ package.loaded["scripts.unit_ai_actions"] = M
 -- defName -> { [actionName] = true }
 M.byDef = M.byDef or {}
 
+-- The ONE definition of the Mode B transfer order's action name
+-- (#2030). It lives here, in the registry, because that is the only
+-- module every asker already depends on: the action's own registration
+-- (scripts/unit_ai_transfer.lua's `M.action.name`), the command boundary
+-- that refuses an actionless carrier, and the two player gestures
+-- (scripts/transfer_gestures.lua) all read THIS value, so the string a
+-- gate asks about and the string the dispatch loop registers cannot
+-- become two strings.
+--
+-- Here rather than in unit_ai_transfer.lua because a UI module cannot
+-- require that one: it reads package.loaded["scripts.unit_ai"] at module
+-- scope and faults in a process that never loaded the AI. This module
+-- has no dependencies at all, so every consumer can require it directly.
+M.TRANSFER_ORDER_ACTION = "transfer_order"
+
 -- Record `list` as `defName`'s action list and return it unchanged, so
 -- the caller can keep assigning in one expression.
 function M.record(defName, list)
