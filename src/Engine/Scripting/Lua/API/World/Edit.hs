@@ -200,7 +200,11 @@ worldRegisterLocationEncounterOccupantsFn wsc = do
 --
 --   Returns whether the binding was APPLIED: a non-negative instance
 --   id, a positive slot, a resolvable page, a ground id that really
---   names an item on it, and a slot that exists and is still unbound.
+--   names an item on it, and a slot that exists, is still unbound, and
+--   whose authored item definition is the one that ground item actually
+--   IS — an obligation names WHAT is owed, so binding a ration to a
+--   @processing_unit@ slot would otherwise let picking the ration up
+--   clear the location with the guaranteed item still on the floor.
 --   'Location.Instance.registerLocationSignificantSpawn' is write-once,
 --   so a retried content spawn re-registering a slot it already filled
 --   answers false and changes nothing — which is exactly the edge the
@@ -237,6 +241,7 @@ worldRegisterLocationSignificantSpawnFn wsc = do
                                                     (LocationInstanceId
                                                         (fromIntegral rawId))
                                                     (fromIntegral slot)
+                                                    (iiDefName (giInst gi))
                                                     (iiInstanceId (giInst gi))
                                                     (wgpLocationInstances p) of
                                                 Just instances' →

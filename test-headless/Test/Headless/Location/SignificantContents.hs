@@ -129,7 +129,8 @@ spawnAll ∷ LocationInstances → LocationInstances
 spawnAll lis = foldl' bind lis (map lsiSlot (liSignificant (instOf lis)))
   where
     bind acc slot = fromMaybe acc
-        (registerLocationSignificantSpawn iid slot (itemIdFor slot) acc)
+        (registerLocationSignificantSpawn iid slot "processing_unit"
+            (itemIdFor slot) acc)
 
 itemIdFor ∷ Int → Word64
 itemIdFor slot = 9000 + fromIntegral slot
@@ -422,26 +423,40 @@ spec = describe "Location significant contents (#917)" $ do
     describe "spawn registration" $ do
         it "binds one item to one slot" $ do
             let bound = fromMaybe (error "expected a binding")
-                    (registerLocationSignificantSpawn iid 1 777
-                        (tableFor 0 twoSignificantDef))
+                    (registerLocationSignificantSpawn iid 1 "processing_unit"
+                        777 (tableFor 0 twoSignificantDef))
             map lsiInstanceId (liSignificant (instOf bound))
                 `shouldBe` [Just 777, Nothing]
 
         it "is WRITE-ONCE: a retried spawn cannot repoint a bound slot \
            \and orphan the item it first named" $ do
             let bound = fromMaybe (error "expected a binding")
-                    (registerLocationSignificantSpawn iid 1 777
-                        (tableFor 0 twoSignificantDef))
-            registerLocationSignificantSpawn iid 1 888 bound
+                    (registerLocationSignificantSpawn iid 1 "processing_unit"
+                        777 (tableFor 0 twoSignificantDef))
+            registerLocationSignificantSpawn iid 1 "processing_unit" 888 bound
                 `shouldBe` Nothing
             map lsiInstanceId (liSignificant (instOf bound))
                 `shouldBe` [Just 777, Nothing]
 
         it "refuses an unknown slot and an unknown instance" $ do
             let lis = tableFor 0 twoSignificantDef
-            registerLocationSignificantSpawn iid 3 777 lis `shouldBe` Nothing
-            registerLocationSignificantSpawn (LocationInstanceId 99) 1 777 lis
+            registerLocationSignificantSpawn iid 3 "processing_unit" 777 lis
                 `shouldBe` Nothing
+            registerLocationSignificantSpawn (LocationInstanceId 99) 1
+                "processing_unit" 777 lis
+                `shouldBe` Nothing
+
+        it "refuses an item that is not the definition the slot names — \
+           \an obligation says WHAT is owed, so any ground item must \
+           \not satisfy it" $ do
+            let lis = tableFor 0 twoSignificantDef
+            -- Binding a ration here would let picking the RATION up
+            -- latch the slot and clear the location, with the
+            -- guaranteed processing unit still lying where it spawned.
+            registerLocationSignificantSpawn iid 1 "rations" 777 lis
+                `shouldBe` Nothing
+            map lsiInstanceId (liSignificant (instOf lis))
+                `shouldBe` [Nothing, Nothing]
 
     describe "decoded-table validation" $ do
         it "accepts a well-formed table" $
@@ -456,6 +471,17 @@ spec = describe "Location significant contents (#917)" $ do
             locationSignificantItemErrors broken
                 `shouldBe` [ "location instance #1 declares significant \
                              \slot 1 more than once" ]
+
+        it "rejects a slot below the first valid one — it is UNBINDABLE, \
+           \so the content spawn would orphan an item on every load \
+           \for ever" $ do
+            let broken = adjustLocationInstance iid
+                    (\i → i { liSignificant =
+                        [ (head' (liSignificant i)) { lsiSlot = 0 } ] })
+                    (tableFor 0 significantOnlyDef)
+            locationSignificantItemErrors broken
+                `shouldBe` [ "location instance #1 declares significant \
+                             \slot 0, below the first valid slot (1)" ]
 
         it "rejects an obligation marked taken that names no item" $ do
             let broken = adjustLocationInstance iid

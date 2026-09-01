@@ -900,17 +900,28 @@ markLocationEncounterCleared iid lis = do
 --   WRITE-ONCE per slot, and refused rather than overwritten: a slot
 --   that already names an item keeps it, so a retried or duplicated
 --   content spawn cannot repoint an obligation at a second physical
---   item and orphan the first. 'Nothing' when the instance or the slot
---   is unknown, or the slot is already bound — which is exactly the
---   edge a resuming spawn uses to tell "still owed" from "already
---   done".
+--   item and orphan the first.
+--
+--   @defName@ is the SPAWNED item's own definition name, and it must
+--   equal the slot's authored 'lsiItemDefName'. Without that check any
+--   ground item would satisfy any obligation: binding a ration to a
+--   @processing_unit@ slot would let picking the ration up latch the
+--   slot and clear the location, with the guaranteed item still lying
+--   where it spawned. The obligation names WHAT is owed, so the
+--   binding has to prove the item it is offered is that thing.
+--
+--   'Nothing' when the instance or the slot is unknown, the slot is
+--   already bound, or the item is the wrong definition. The
+--   already-bound case is exactly the edge a resuming spawn uses to
+--   tell "still owed" from "already done"; the others are refusals.
 registerLocationSignificantSpawn
-    ∷ LocationInstanceId → Int → Word64 → LocationInstances
+    ∷ LocationInstanceId → Int → Text → Word64 → LocationInstances
     → Maybe LocationInstances
-registerLocationSignificantSpawn iid slot itemId lis = do
+registerLocationSignificantSpawn iid slot defName itemId lis = do
     inst ← lookupLocationInstance iid lis
     entry ← find ((≡ slot) . lsiSlot) (liSignificant inst)
     guard (isNothing (lsiInstanceId entry))
+    guard (lsiItemDefName entry ≡ defName)
     pure $ adjustLocationInstance iid (\i → i
         { liSignificant =
             [ if lsiSlot e ≡ slot then e { lsiInstanceId = Just itemId } else e
@@ -1168,11 +1179,19 @@ locationInstanceBoundsErrors lis =
 --   obligation-shaped payload that no engine path can produce is
 --   rejected at decode rather than published as gameplay authority.
 --
---   Two rules, both about the obligation SET rather than about whether
---   any particular item still exists (which is
---   "World.Save.Integrity" 's reference question, tolerant of absence
---   by design):
+--   Rules about the obligation SET rather than about whether any
+--   particular item still exists (which is "World.Save.Integrity" 's
+--   reference question, tolerant of absence by design):
 --
+--   * a slot is at or above 1. 'significantItemsFromDef' numbers from
+--     there and nothing else allocates one, but the field is an
+--     unrestricted wire 'Int', and a slot below the floor is
+--     UNBINDABLE: 'Engine.Scripting.Lua.API.World.Edit' refuses a
+--     non-positive slot outright, so the content spawn would fail,
+--     leave @contents_spawned@ unmarked, and re-spawn an orphaned item
+--     on every chunk load for ever. Same shape as the allocator floor
+--     'locationInstanceAllocatorErrors' checks (#1667), and hardening
+--     against the same corrupt-or-hand-crafted payload;
 --   * slots are unique within one instance — they are the address a
 --     resuming content spawn registers against, so two slots sharing a
 --     number would let one spawn satisfy both, or repoint the wrong
@@ -1194,6 +1213,14 @@ locationInstanceBoundsErrors lis =
 --   violation is reported once, in a deterministic order.
 locationSignificantItemErrors ∷ LocationInstances → [Text]
 locationSignificantItemErrors lis =
+    [ "location instance #" <> tshow (unLocationInstanceId (liId inst))
+        <> " declares significant slot " <> tshow (lsiSlot e)
+        <> ", below the first valid slot (1)"
+    | inst ← instancesToList lis
+    , e ← sortOn lsiSlot (liSignificant inst)
+    , lsiSlot e < 1
+    ]
+    ⧺
     [ "location instance #" <> tshow (unLocationInstanceId (liId inst))
         <> " declares significant slot " <> tshow slot <> " more than once"
     | inst ← instancesToList lis

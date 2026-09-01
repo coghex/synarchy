@@ -370,15 +370,18 @@ data PageEntities = PageEntities
     { peUnits     ∷ !(HS.HashSet UnitId)
     , peBuildings ∷ !(HS.HashSet BuildingId)
     , peItems     ∷ !(HS.HashSet Word64)
-    , peGroundItems ∷ !(HS.HashSet Word64)
+    , peGroundItems ∷ !(HM.HashMap Word64 Text)
       -- ^ The subset of 'peItems' reachable from the page's GROUND
-      --   items alone (#917). Kept beside the whole-page set rather
+      --   items alone (#917), each mapped to its own
+      --   'Item.Types.iiDefName'. Kept beside the whole-page set rather
       --   than derived from it because a significant item's provenance
-      --   asks a question the whole-page set cannot answer: an untaken
-      --   obligation must still be lying on the ground, and finding its
-      --   item in a unit's inventory or a building's storage is a
-      --   contradiction — it cannot be there without having been picked
-      --   up, which is the one thing that latches @taken@.
+      --   asks two questions the whole-page set cannot answer: an
+      --   untaken obligation must still be LYING on the ground —
+      --   finding its item in a unit's inventory or a building's
+      --   storage is a contradiction, since it cannot be there without
+      --   having been picked up, which is the one thing that latches
+      --   @taken@ — and the item lying there must BE the thing the
+      --   obligation says is owed, which needs the def name.
     } deriving (Show, Eq)
 
 -- | Build a page's resolvable identities from its three item-bearing
@@ -407,8 +410,8 @@ pageEntitiesFrom groundOf unitsOf buildingsOf page = PageEntities
                            groundOf unitsOf buildingsOf page
         , inst ← insts
         , i    ← flattenItemInstances inst ]
-    , peGroundItems = HS.fromList
-        [ iiInstanceId i
+    , peGroundItems = HM.fromList
+        [ (iiInstanceId i, iiDefName i)
         | inst ← map giInst (HM.elems (gisItems (groundOf page)))
         , i    ← flattenItemInstances inst ]
     }
@@ -538,8 +541,9 @@ significantProvenanceErrors snap = resolutionErrors ⧺ ownershipErrors
             , iePath          = path
             , ieRefKind       = RefItemInstance
             , ieRefValue      = tshow itemId
-            , ieExpectedScope = "a ground item on the owning page ('"
-                <> unWorldPageId pid <> "') while untaken"
+            , ieExpectedScope = "a ground '" <> lsiItemDefName entry
+                <> "' on the owning page ('" <> unWorldPageId pid
+                <> "') while untaken"
             , ieActual        = actual
             , ieCode          = "wrong-scope-reference"
             , ieMessage       = "untaken significant item " <> tshow itemId
@@ -550,15 +554,28 @@ significantProvenanceErrors snap = resolutionErrors ⧺ ownershipErrors
         | (pid, inst, entry, path) ← refs
         , not (lsiTaken entry)
         , Just itemId ← [lsiInstanceId entry]
-        , Just actual ← [misresolution pid itemId]
+        , Just actual ← [misresolution pid (lsiItemDefName entry) itemId]
         ]
 
-    -- 'Nothing' when the item is where an untaken obligation requires,
-    -- or absent from the session entirely (which 'significantWarnings'
-    -- reports and tolerates). 'Just' names the contradiction.
-    misresolution pid itemId
-        | onOwnGround = Nothing
-        | otherwise = case pagesHolding of
+    -- 'Nothing' when the item is where an untaken obligation requires
+    -- AND is the thing it says is owed, or absent from the session
+    -- entirely (which 'significantDanglingWarnings' reports and
+    -- tolerates). 'Just' names the contradiction.
+    misresolution pid owedDef itemId = case onOwnGround of
+        -- Lying on the owning page's ground, as required — but is it
+        -- the RIGHT item? A binding that named the wrong definition
+        -- would otherwise let picking that item up latch the slot and
+        -- clear the location with the guaranteed one still on the
+        -- floor. The registration boundary refuses such a binding
+        -- ('Location.Instance.registerLocationSignificantSpawn'); this
+        -- is the save-side half, for a payload that never went through
+        -- it.
+        Just actualDef
+            | actualDef ≡ owedDef → Nothing
+            | otherwise → Just ("is a '" <> actualDef
+                <> "' lying on that page's ground, not the '" <> owedDef
+                <> "' the obligation names")
+        Nothing → case pagesHolding of
             [] → Nothing
             ps | pid `elem` ps →
                    Just "is held in an inventory or storage on that page"
@@ -566,8 +583,8 @@ significantProvenanceErrors snap = resolutionErrors ⧺ ownershipErrors
                    Just ("resolves on page(s) "
                        <> T.intercalate ", " (map unWorldPageId ps))
       where
-        onOwnGround = maybe False (HS.member itemId ∘ peGroundItems)
-                          (HM.lookup pid entitiesByPage)
+        onOwnGround = HM.lookup itemId ∘ peGroundItems
+                          =≪ HM.lookup pid entitiesByPage
         pagesHolding = L.sort
             [ p | (p, pe) ← HM.toList entitiesByPage
                 , HS.member itemId (peItems pe) ]

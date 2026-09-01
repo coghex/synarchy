@@ -1543,7 +1543,14 @@ hands out a NEW ground id every time an item is dropped or a failed
 pickup is rolled back. `registerLocationSignificantSpawn` is WRITE-ONCE
 per slot — a retried content spawn cannot repoint an obligation and
 orphan the item it first named, and the refusal is exactly the edge a
-resuming spawn uses to tell "still owed" from "already done".
+resuming spawn uses to tell "still owed" from "already done". It also
+refuses an item that is not the DEFINITION the slot names: an
+obligation says what is owed, so binding a ration to a
+`processing_unit` slot would otherwise let picking the ration up latch
+the slot and clear the location with the guaranteed item still on the
+floor. `significantProvenanceErrors` holds the same line at the save
+boundary, for an untaken obligation whose item is on the right ground
+but is the wrong thing.
 
 Lua hands that verb the GROUND id `item.spawnGround` returned, and the
 verb resolves it to the physical id AND commits the binding
@@ -1599,9 +1606,11 @@ instance, and adds NO obligations — reading them off today's YAML would
 owe a materialized world an item it never spawned, permanently blocking
 a clearance the pre-#917 build had already granted. The v1
 reconstruction discards both for the same reason.
-`Location.Instance.locationSignificantItemErrors` rejects a duplicated
-slot, an obligation marked taken that names no item, and same-page
-duplicate ownership at component decode;
+`Location.Instance.locationSignificantItemErrors` rejects a slot below
+1 (unbindable — the registration boundary refuses a non-positive slot,
+so the content spawn would orphan an item on every load for ever), a
+duplicated slot, an obligation marked taken that names no item, and
+same-page duplicate ownership at component decode;
 `World.Save.Integrity.significantProvenanceErrors` hard-fails an UNTAKEN
 obligation whose item resolves on another page or in an
 inventory/storage (it cannot be held without having been picked up) and

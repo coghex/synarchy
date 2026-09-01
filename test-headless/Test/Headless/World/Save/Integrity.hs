@@ -295,15 +295,21 @@ owedItem slot itemId taken =
     LocationSignificantItem slot "processing_unit" (Just itemId) taken
 
 groundItemInstance ∷ Word64 → ItemInstance
-groundItemInstance iid = ItemInstance
-    { iiDefName = "processing_unit", iiCurrentFill = 0, iiQuality = 100
+groundItemInstance = namedGroundItem "processing_unit"
+
+namedGroundItem ∷ Text → Word64 → ItemInstance
+namedGroundItem defName iid = ItemInstance
+    { iiDefName = defName, iiCurrentFill = 0, iiQuality = 100
     , iiCondition = 100, iiWeight = 0.4, iiSharpness = 100, iiContents = []
     , iiInstanceId = iid, iiTemp = Nothing, iiBulk = Just 0.4
     , iiStorage = Nothing }
 
 withGroundItem ∷ Word64 → PageSnapshot → PageSnapshot
-withGroundItem iid page = page
-    { pgsGroundItems = fst (spawnGroundItem (groundItemInstance iid) 8 8
+withGroundItem = withNamedGroundItem "processing_unit"
+
+withNamedGroundItem ∷ Text → Word64 → PageSnapshot → PageSnapshot
+withNamedGroundItem defName iid page = page
+    { pgsGroundItems = fst (spawnGroundItem (namedGroundItem defName iid) 8 8
                                 (pgsGroundItems page)) }
 
 buildSnap ∷ WorldPageId → [PageSnapshot] → SessionSnapshot
@@ -643,6 +649,35 @@ spec = do
                 other → expectationFailure
                     ("expected one held-while-untaken finding, got "
                         <> show other)
+
+        it "hard-fails an untaken obligation whose item is lying on the \
+           \right page's ground but is the WRONG definition — any ground \
+           \item must not satisfy an obligation that names one" $ do
+            -- Otherwise picking THAT item up would latch the slot and
+            -- clear the location with the guaranteed one still on the
+            -- floor. The registration boundary refuses such a binding;
+            -- this is the save-side half, for a payload that never went
+            -- through it.
+            let p1 = withNamedGroundItem "rations" 7008
+                        (pageOwing page1 (owedItem 1 7008 False))
+                snap = buildSnap page1 [p1]
+            case sessionIntegrityErrors snap of
+                [e] → do
+                    ieCode e `shouldBe` "wrong-scope-reference"
+                    ieRefValue e `shouldBe` "7008"
+                    ieActual e `shouldSatisfy` T.isInfixOf "is a 'rations'"
+                    ieActual e `shouldSatisfy`
+                        T.isInfixOf "not the 'processing_unit'"
+                other → expectationFailure
+                    ("expected one wrong-definition finding, got "
+                        <> show other)
+
+        it "imposes no definition rule once the obligation is TAKEN — \
+           \the item may since have become anything, anywhere, or \
+           \nothing" $ do
+            let p1 = withNamedGroundItem "rations" 7009
+                        (pageOwing page1 (owedItem 1 7009 True))
+            sessionIntegrityErrors (buildSnap page1 [p1]) `shouldBe` []
 
         it "tolerates an untaken obligation whose item is absent from the \
            \whole session, reporting it while leaving the obligation \
