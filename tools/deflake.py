@@ -56,8 +56,8 @@ Ownership, in order, and what each step may not do
    means one build serves all ten runs and no child makes a Cabal
    contact at all. A failure releases the claim and refuses to run.
 5. RESOURCES. The probe's declared shared and exclusive interests, taken
-   across processes. `run_probes.ResourceLedger` coordinates only the
-   probes inside one runner process, so without this a `/deflake`
+   across processes. `probe_runner_resources.ResourceLedger` coordinates
+   only the probes inside one runner process, so without this a `/deflake`
    measurement and a `tools/run_probes.py` sweep would happily boot two
    engines into the same tracked `config/` tree. Non-blocking here: a
    conflict is reported as `resource-busy` and the claim is given back,
@@ -191,7 +191,9 @@ import probe_flake  # noqa: E402
 import probe_protocol  # noqa: E402
 import probe_resource_lock  # noqa: E402
 import probe_select  # noqa: E402
-import run_probes  # noqa: E402
+import probe_engine  # noqa: E402
+import probe_runner_lifecycle  # noqa: E402
+import probe_runner_resources  # noqa: E402
 
 # One census measurement, in runs. Taken from the policy module rather
 # than restated: it is the same N the selection ladder measures a cohort
@@ -402,7 +404,7 @@ def configuration_manifest(root) -> list:
     the measurement begins, so it describes the configuration the runs
     actually read rather than whatever the directory held afterwards.
     """
-    base = Path(root if root is not None else run_probes.REPO_ROOT)
+    base = Path(root if root is not None else probe_engine.REPO_ROOT)
     entries = []
     for path in sorted(base.glob(CONFIG_GLOB)):
         if not path.is_file():
@@ -744,7 +746,7 @@ def _probe_resource_namespace(*, namespace, repo_root=None) -> str:
     if namespace is not None:
         return namespace
     if repo_root is None:
-        return run_probes.resource_namespace()
+        return probe_runner_resources.resource_namespace()
     return probe_resource_lock.repository_namespace(repo_root)
 
 
@@ -755,7 +757,7 @@ def _prepare_probe_engine(*, namespace, repo_root=None, announce=None) -> str:
     was handed no executable prepares its own (#1913) — which takes
     `cabal-build` EXCLUSIVELY. This process is by then holding that same
     resource, SHARED for an ordinary probe and exclusive for the three
-    that drive Cabal themselves, and `run_probes.run_one` strips the
+    that drive Cabal themselves, and `probe_runner_lifecycle.run_one` strips the
     inherited runner variables on the way down, so the child could
     neither see the ancestor's hold nor upgrade past it: it would wait
     out its whole allowance for a holder that is itself blocked waiting
@@ -775,10 +777,11 @@ def _prepare_probe_engine(*, namespace, repo_root=None, announce=None) -> str:
 def _acquire_probe_resources(probe: str, *, namespace, repo_root=None):
     """The probe's declared interests, taken across processes.
 
-    The declarations are `run_probes`'s, read through its own accessors
-    so there is one conflict model rather than a second copy here — and
-    so is the NAMESPACE, through `run_probes.resource_namespace`, which
-    is the single resolution point both sides of the conflict use. Two
+    The declarations are `probe_runner_resources`'s, read through its
+    own accessors so there is one conflict model rather than a second
+    copy here — and so is the NAMESPACE, through that module's
+    `resource_namespace`, which is the single resolution point both
+    sides of the conflict use. Two
     independent resolutions that agreed today would be two places for a
     future edit to make them disagree, and a disagreement here is
     silent: both processes would take a lock and neither would see the
@@ -786,8 +789,8 @@ def _acquire_probe_resources(probe: str, *, namespace, repo_root=None):
     """
     token = _probe_resource_namespace(namespace=namespace, repo_root=repo_root)
     return probe_resource_lock.acquire(
-        exclusive=run_probes.exclusive_resources(probe),
-        shared=run_probes.shared_resources(probe),
+        exclusive=probe_runner_resources.exclusive_resources(probe),
+        shared=probe_runner_resources.shared_resources(probe),
         namespace=token, purpose=f"deflake {probe}")
 
 
@@ -904,13 +907,14 @@ def _measure_claimed(*, probe, claim, selection, target, repo_root, namespace,
             f"({error}); the probe was not run"),
             ownership=(OWNERSHIP_CLAIM_HELD if problem else OWNERSHIP_NONE),
             commit=captured, **common)
-    # `run_probes.run_one` reads this module global for the executable it
-    # hands each child through `$SYNARCHY_PROBE_ENGINE_EXE`, and it is
-    # the same fill-in `run_probes.main` performs after ITS preflight —
-    # `probe_flake` sits between us and `run_one` and forwards nothing of
-    # its own, so this is where a de-flake measurement declares which
-    # binary its runs are measuring.
-    run_probes.ENGINE_EXECUTABLE = engine_exe
+    # `probe_runner_lifecycle.run_one` reads THIS cell for the executable
+    # it hands each child through `$SYNARCHY_PROBE_ENGINE_EXE` — the one
+    # authoritative cell (#2074), and the same fill-in
+    # `tools/run_probes.py` performs after ITS preflight. `probe_flake`
+    # sits between us and `run_one` and forwards nothing of its own, so
+    # this is where a de-flake measurement declares which binary its runs
+    # are measuring.
+    probe_runner_resources.ENGINE_EXECUTABLE = engine_exe
     say(f"engine: {engine_exe}")
 
     # ---- 6. Resources ---------------------------------------------------

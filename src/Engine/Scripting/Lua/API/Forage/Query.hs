@@ -35,8 +35,15 @@ import Item.Types (ItemDef(..), ItemFood(..), lookupItemDef)
 import Engine.Scripting.Lua.API.Forage.Lookup
     (canonicalPageTile, floraAt, growthClock)
 
--- | world.getFloraAt(gx, gy) → {id, harvestable, regrowthRemaining,
---   tags} | nil
+-- | Push a 'FloraInstanceId' as a Lua integer. The whole id space fits
+--   in a positive Int64 by construction ("World.Flora.Identity"), so
+--   this round-trips losslessly through Lua, JSON and the debug
+--   console.
+pushInstanceId ∷ FloraInstanceId → Lua.LuaE Lua.Exception ()
+pushInstanceId = Lua.pushinteger . fromIntegral . floraInstanceIdToLua
+
+-- | world.getFloraAt(gx, gy) → {id, instanceId, chopDesignated,
+--   harvestable, regrowthRemaining, tags} | nil
 --
 --   nil when the tile has no flora (or its chunk isn't loaded). When
 --   several instances share the tile, an instance a bare harvest would
@@ -49,8 +56,16 @@ import Engine.Scripting.Lua.API.Forage.Lookup
 --   when none). @tags@ is the species' harvest-tag array (#97 — "wood"
 --   marks a choppable tree; empty for non-harvestable flora).
 --
+--   #1854 added two ADDITIVE fields describing the REPORTED PLANT:
+--   @instanceId@, its stable opaque identity, and @chopDesignated@,
+--   whether that plant in particular is slated for felling. @id@ still
+--   means the SPECIES name — repurposing it would break every existing
+--   caller — and the whole report, @regrowthRemaining@ included, is now
+--   that one plant's own state rather than its tile's, so a berry bush
+--   picked beside an oak no longer reports the oak as depleted.
+--
 --   Designation flows must NOT read @harvestable@ (it is the
---   forage-facing signal): the chop AI's claim check keys on
+--   forage-facing signal): the chop AI keys its claim on the plant's own
 --   @regrowthRemaining@ + @tags@, so a designated tree stays choppable
 --   as a sprout or standing dead. Per-instance gated state is
 --   world.getFloraGrowthAt.
@@ -91,16 +106,23 @@ worldGetFloraAtFn env = do
                                 <> harvestables <> insts
                         pure $ case harvestFirst of
                             [] → Nothing
-                            (p@(_, sp):_) →
-                                let timer = HM.lookupDefault 0 (gx, gy) harvests
+                            (p@(i, sp):_) →
+                                -- #1854: the timer belongs to the
+                                -- REPORTED plant, not to its tile, so a
+                                -- berry bush picked beside an oak no
+                                -- longer reports the oak as depleted.
+                                let timer = HM.lookupDefault 0
+                                                (fiInstanceId i) harvests
                                 in Just ( fsName sp
                                         , isJust (fsHarvest sp) ∧ timer ≤ 0
                                             ∧ open p
                                         , timer
-                                        , maybe [] fhTags (fsHarvest sp) )
+                                        , maybe [] fhTags (fsHarvest sp)
+                                        , fiInstanceId i
+                                        , fiChopDesignated i )
             case mResult of
                 Nothing → Lua.pushnil
-                Just (name, harvestable, timer, tags) → do
+                Just (name, harvestable, timer, tags, iid, designated) → do
                     Lua.newtable
                     Lua.pushstring (TE.encodeUtf8 name)
                     Lua.setfield (-2) "id"
@@ -108,6 +130,14 @@ worldGetFloraAtFn env = do
                     Lua.setfield (-2) "harvestable"
                     Lua.pushnumber (Lua.Number (realToFrac timer))
                     Lua.setfield (-2) "regrowthRemaining"
+                    -- #1854, ADDITIVE: the reported plant's stable
+                    -- identity and its own chop-designated flag. The
+                    -- existing @id@ field keeps meaning the SPECIES
+                    -- name — repurposing it would break every caller.
+                    pushInstanceId iid
+                    Lua.setfield (-2) "instanceId"
+                    Lua.pushboolean designated
+                    Lua.setfield (-2) "chopDesignated"
                     Lua.newtable
                     forM_ (zip [1 ∷ Int ..] tags) $ \(i, tg) → do
                         Lua.pushstring (TE.encodeUtf8 tg)
@@ -116,8 +146,9 @@ worldGetFloraAtFn env = do
             return 1
         _ → Lua.pushnil >> return 1
 
--- | world.getFloraGrowthAt(gx, gy) → array of {id, age, health, phase,
---   stage, generation, dead, harvestable, regrowthRemaining} | nil
+-- | world.getFloraGrowthAt(gx, gy) → array of {id, instanceId, age,
+--   health, phase, stage, generation, dead, harvestable,
+--   regrowthRemaining, chopDesignated} | nil
 --
 --   The growth-state inspection window (#332): one entry per flora
 --   instance on the tile, with the DERIVED state — effective age in
@@ -126,6 +157,11 @@ worldGetFloraAtFn env = do
 --   whether a harvest would yield right now. nil when the tile has no
 --   flora or its chunk isn't loaded. Poke the state by moving the
 --   clock: world.setDate / world.setTime / world.setTimeScale.
+--
+--   #1854: each entry additionally carries its plant's stable
+--   @instanceId@ and its own @chopDesignated@ flag, and its
+--   @regrowthRemaining@ is that plant's OWN timer — under the old
+--   tile-keyed map every harvestable co-tenant reported the same one.
 --
 --   Alias-accepting on the same terms as world.getFloraAt (#1707).
 worldGetFloraGrowthAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
@@ -147,7 +183,8 @@ worldGetFloraGrowthAtFn env = do
                         insts ← floraAt (toWorldSimCapability env) ws gx gy
                         harvests ← readIORef (wsFloraHarvestsRef ws)
                         (doy, absDay) ← growthClock ws
-                        let timer = HM.lookupDefault 0 (gx, gy) harvests
+                        -- #1854: one timer per PLANT, so each entry
+                        -- reports its own rather than the tile's.
                         pure
                             [ ( fsName sp, g
                               , fiHealth i
@@ -155,9 +192,13 @@ worldGetFloraGrowthAtFn env = do
                               , annualStageText <$> activeStageTag sp doy
                               , isJust (fsHarvest sp) ∧ timer ≤ 0
                                   ∧ harvestOpen sp doy g
-                              , timer )
+                              , timer
+                              , fiInstanceId i
+                              , fiChopDesignated i )
                             | (i, sp) ← insts
                             , let g = floraGrowth sp absDay i
+                                  timer = HM.lookupDefault 0
+                                              (fiInstanceId i) harvests
                             ]
             case entries of
                 [] → Lua.pushnil
@@ -165,7 +206,7 @@ worldGetFloraGrowthAtFn env = do
                     Lua.newtable
                     forM_ (zip [1 ∷ Int ..] entries) $
                         \(n, (name, g, health, mPhase, mStage
-                             , harvestable, timer)) → do
+                             , harvestable, timer, iid, designated)) → do
                             Lua.newtable
                             Lua.pushstring (TE.encodeUtf8 name)
                             Lua.setfield (-2) "id"
@@ -191,6 +232,11 @@ worldGetFloraGrowthAtFn env = do
                             Lua.setfield (-2) "harvestable"
                             Lua.pushnumber (Lua.Number (realToFrac timer))
                             Lua.setfield (-2) "regrowthRemaining"
+                            -- #1854, ADDITIVE — see world.getFloraAt.
+                            pushInstanceId iid
+                            Lua.setfield (-2) "instanceId"
+                            Lua.pushboolean designated
+                            Lua.setfield (-2) "chopDesignated"
                             Lua.rawseti (-2) (fromIntegral n)
             return 1
         _ → Lua.pushnil >> return 1
@@ -222,6 +268,14 @@ worldGetFloraGrowthAtFn env = do
 --   is what the auto-harvest action divides into its utility. Ties keep
 --   their historical order: distance, then canonical gx, gy, species
 --   name. Identity inland and on a non-wrapping page.
+--
+--   #1854: a wild-flora winner additionally carries its plant's stable
+--   @instanceId@ (ready for world.harvestFloraInstance), and the
+--   regrowth skip is now per PLANT — one picked berry bush no longer
+--   hides the oak sharing its tile. A CROP PLOT winner carries no
+--   @instanceId@ at all: a plot is tile-keyed by construction and has no
+--   instance identity to give, and the reserved non-identity value is
+--   never handed out as if it were a usable id.
 worldFindHarvestableFloraFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldFindHarvestableFloraFn env = do
     mGx ← Lua.tointeger 1
@@ -293,7 +347,7 @@ worldFindHarvestableFloraFn env = do
                             -- gx/gy stay in the frame every other verb
                             -- accepts.
                             candidates =
-                                [ (d2, tgx, tgy, fsName sp)
+                                [ (d2, tgx, tgy, fsName sp, fiInstanceId i)
                                 | (coord, lc) ← HM.toList (wtdChunks tileData)
                                 , inRange coord
                                 , i ← fcdInstances (lcFlora lc)
@@ -311,7 +365,10 @@ worldFindHarvestableFloraFn env = do
                                         (fromIntegral (fiTileY i))
                                       d2 = dist2 (tgx, tgy)
                                 , d2 ≤ r2
-                                , not (HM.member (tgx, tgy) harvests)
+                                -- #1854: skip a plant whose OWN timer is
+                                -- live, not every plant on a tile where
+                                -- something was picked.
+                                , not (HM.member (fiInstanceId i) harvests)
                                 ]
                             -- Planted groundcover crop plots (#334) are a
                             -- world-level flat map, not chunk-embedded
@@ -326,7 +383,8 @@ worldFindHarvestableFloraFn env = do
                             cropCandidates = case tagFilter of
                                 Just _  → []
                                 Nothing →
-                                    [ (d2, tgx, tgy, fsName sp)
+                                    [ (d2, tgx, tgy, fsName sp
+                                      , floraInstanceIdNone)
                                     | ((tgx, tgy), cp) ← HM.toList cropPlots
                                     , Just sp ← [lookupSpecies (cpSpecies cp) cat]
                                     , Just fh ← [fsHarvest sp]
@@ -358,7 +416,7 @@ worldFindHarvestableFloraFn env = do
                             cs → Just (minimum cs)
             case mBest of
                 Nothing → Lua.pushnil
-                Just (d2, tgx, tgy, name) → do
+                Just (d2, tgx, tgy, name, iid) → do
                     Lua.newtable
                     Lua.pushinteger (fromIntegral tgx)
                     Lua.setfield (-2) "gx"
@@ -368,6 +426,14 @@ worldFindHarvestableFloraFn env = do
                     Lua.setfield (-2) "id"
                     Lua.pushnumber (Lua.Number (realToFrac (sqrt d2)))
                     Lua.setfield (-2) "dist"
+                    -- #1854, ADDITIVE: the winning plant's stable
+                    -- identity, ABSENT for a crop plot (which has no
+                    -- instance identity to give — the reserved
+                    -- non-identity value is never exposed as a usable
+                    -- id). @id@ still means the species name.
+                    unless (isFloraInstanceIdNone iid) $ do
+                        pushInstanceId iid
+                        Lua.setfield (-2) "instanceId"
             return 1
         _ → Lua.pushnil >> return 1
 

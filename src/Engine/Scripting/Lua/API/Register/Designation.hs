@@ -75,6 +75,10 @@ registerDesignationAPI env = do
   registerLuaFunction "designate"           (chopDesignateFn (toWorldSimCapability env))
   registerLuaFunction "cancelDesignation"   (chopCancelDesignationFn (toWorldSimCapability env))
   registerLuaFunction "getDesignationAt"    (chopGetDesignationAtFn (toWorldSimCapability env))
+  registerLuaFunction "getDesignationsAt"
+      (chopGetDesignationsAtFn (toWorldSimCapability env))
+  registerLuaFunction "getDesignationForInstance"
+      (chopGetDesignationForInstanceFn (toWorldSimCapability env))
   registerLuaFunction "getDesignationCount" (chopGetDesignationCountFn (toWorldSimCapability env))
   registerLuaFunction "nearestDesignation"  (chopNearestDesignationFn (toWorldSimCapability env))
   registerLuaFunction "setDesignateTexture" (chopSetDesignateTextureFn (toWorldSimCapability env))

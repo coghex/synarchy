@@ -41,7 +41,7 @@ from location_content_probe import (
     load_defs, gen_world, placed_ready, wait_floor, ruin_geometry,
     spawn_counts,
 )
-from run_probes import FailureEmitter   # durable failure records (#1982)
+from probe_runner_diagnostics import FailureEmitter   # durable failure records (#1982)
 
 LOG = "/tmp/portal_location_engine.log"
 #: #1982 — this run's durable failure records, built at import so the

@@ -96,7 +96,7 @@ import Building.Types (BuildingId)
 import Unit.Types (UnitId)
 import Engine.Graphics.Camera (CameraFacing(..))
 import World.Chunk.Types (ChunkCoord)
-import World.Flora.Harvest (FloraHarvests)
+
 import World.Page.Types (WorldPageId)
 import World.Render.Zoom.Types (ZoomMapMode)
 import World.Tool.Types (ToolMode)
@@ -116,12 +116,13 @@ import World.Save.Component.Session
     ( TexPaletteDTO(..), fromTexPaletteDTO, validateTexPalette )
 import World.Save.Component.Page
     ( WorldGenParamsDTOv1
-    , WorldIdentityDTOv1(..), WorldEditDTO(..), MineDesignationDTO(..)
-    , ConstructDesignationDTO(..), ChopDesignationDTO(..)
+    , WorldIdentityDTOv1(..), MineDesignationDTO(..)
+    , ConstructDesignationDTO(..)
     , TillDesignationDTO(..), PlantDesignationDTO(..), CropPlotDTO(..)
     , GroundItemsDTOv1(..), SpoilPileDTO(..)
     , PageCoreDTOv1(..), WorldPagesDTOv1(..), WorldPages(..)
-    , PageEditsDTO(..), WorldEditsDTO(..)
+    , PageEditsDTOv1(..), WorldEditsDTOv1(..), migrateWorldEditsV1
+    , WorldEditDTOv1, ChopDesignationDTOv1, FloraHarvestsDTOv1
     , PageActivityDTOv2(..), WorldActivityDTOv2(..), migrateWorldActivityV2
     , migrateWorldPagesV1, applyWorldEdits, applyWorldActivity
     , validatePages, validateWorldActivity )
@@ -187,7 +188,7 @@ data WorldPageSaveV90 = WorldPageSaveV90
     , wp90MapMode      ∷ !ZoomMapMode
     , wp90ToolMode     ∷ !ToolMode
         -- ^ Decoded, then discarded — resets on load (#103).
-    , wp90Edits        ∷ !(HM.HashMap ChunkCoord [WorldEditDTO])
+    , wp90Edits        ∷ !(HM.HashMap ChunkCoord [WorldEditDTOv1])
     , wp90MineDesignations      ∷ !(HM.HashMap (Int, Int) MineDesignationDTO)
     , wp90ConstructDesignations ∷ !(HM.HashMap (Int, Int) ConstructDesignationDTO)
     , wp90GroundItems  ∷ !GroundItemsDTOv1
@@ -195,8 +196,8 @@ data WorldPageSaveV90 = WorldPageSaveV90
     , wp90Buildings    ∷ !BuildingSnapshotV90
     , wp90Units        ∷ !UnitSnapshotV90
     , wp90UnitSimStates ∷ !(HM.HashMap UnitId UnitSimStateDTOv1)
-    , wp90FloraHarvests ∷ !FloraHarvests
-    , wp90ChopDesignations ∷ !(HM.HashMap (Int, Int) ChopDesignationDTO)
+    , wp90FloraHarvests ∷ !FloraHarvestsDTOv1
+    , wp90ChopDesignations ∷ !(HM.HashMap (Int, Int) ChopDesignationDTOv1)
     , wp90CraftBills   ∷ !BillQueueDTOv1
     , wp90PowerNodes   ∷ !NodeRegistryDTOv1
     , wp90TillDesignations ∷ !(HM.HashMap (Int, Int) TillDesignationDTO)
@@ -333,8 +334,12 @@ migrateSessionV90 meta sd = do
             ++ validatePowerNodes powerNodesDTO
     when (not (null componentLocalErrs)) $ Left componentLocalErrs
     let base = wpBase pagesValue
+    -- #1854: v90's edit log predates planted-flora identity exactly as
+    -- @world-edits@ v1 does, so it reshapes into the FROZEN v1 slice and
+    -- reaches the current one through the same migration a v1 envelope
+    -- takes -- one translation, not a second hand-written copy.
     afterEdits ← applyWorldEdits 1
-        (WorldEditsDTO (map toPageEditsV90 ps)) base
+        (migrateWorldEditsV1 (WorldEditsDTOv1 (map toPageEditsV90 ps))) base
     afterActivity ← applyWorldActivity 1 activityDTO afterEdits
     afterBuildings ← applyBuildings 1 nextBuildingId
         (migrateBuildingsDTOv1 (BuildingsDTOv1 (map toPageBuildingsV90 ps)))
@@ -423,8 +428,8 @@ toPageCoreV90 p = PageCoreDTOv1
     , pc1Identity   = wp90Identity p
     }
 
-toPageEditsV90 ∷ WorldPageSaveV90 → PageEditsDTO
-toPageEditsV90 p = PageEditsDTO (wp90PageId p) (wp90Edits p)
+toPageEditsV90 ∷ WorldPageSaveV90 → PageEditsDTOv1
+toPageEditsV90 p = PageEditsDTOv1 (wp90PageId p) (wp90Edits p)
 
 toPageActivityV90 ∷ WorldPageSaveV90 → PageActivityDTOv2
 toPageActivityV90 p = PageActivityDTOv2

@@ -38,6 +38,7 @@ import World.Construct.Apply ( applyConstructSlopeToChunk
 import World.Thread.Command.Cursor.Common
     (designateRect, recordDesignationOutcome, recordMissingWorldOutcome)
 import Structure.Types (StructureSlot, slotFromText)
+import World.Flora.Designation (replaceChunkForgettingFlora)
 
 handleWorldSetConstructAnchorCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → IO ()
@@ -317,8 +318,11 @@ withConstructChunk worldState (gx, gy) f = do
         Nothing → pure ()
         Just lc → do
             let lc' = f lc
-            atomicModifyIORef' (wsTilesRef worldState) $ \w →
-                (insertChunk lc' w, ())
+            -- #1854 requirement 16: an edit that takes the tile's
+            -- rooted flora with it must take that plant's
+            -- designation and regrowth timer too, or an orphan
+            -- entry outlives the plant it addressed.
+            replaceChunkForgettingFlora worldState lc lc'
             bumpQuadCacheGen worldState
             writeIORef (wsZoomQuadCacheRef worldState) Nothing
             writeIORef (wsBgQuadCacheRef worldState)   Nothing

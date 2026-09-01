@@ -58,7 +58,7 @@ sys.path.insert(0, str(TOOLS))
 import probe_engine  # type: ignore  # noqa: E402
 import probe_resource_lock  # type: ignore  # noqa: E402
 import probelib  # type: ignore  # noqa: E402
-import run_probes  # type: ignore  # noqa: E402
+import probe_runner_resources  # type: ignore  # noqa: E402
 from probelib import send, send_json  # type: ignore  # noqa: E402
 
 FAILURES: list[str] = []
@@ -1363,12 +1363,13 @@ def test_the_runner_path_prepares_nothing() -> None:
 
 def test_the_build_resource_is_named_once() -> None:
     print("\n-- the direct path and the runner name the same resource")
-    expect(run_probes.BUILD_RESOURCE is probe_engine.BUILD_RESOURCE,
-           f"run_probes reads the name from probe_engine, so the two "
-           f"cannot drift (got {run_probes.BUILD_RESOURCE!r} / "
+    expect(probe_runner_resources.BUILD_RESOURCE is probe_engine.BUILD_RESOURCE,
+           f"probe_runner_resources reads the name from probe_engine, "
+           f"so the two "
+           f"cannot drift (got {probe_runner_resources.BUILD_RESOURCE!r} / "
            f"{probe_engine.BUILD_RESOURCE!r})")
     expect(probe_engine.BUILD_RESOURCE
-           in run_probes.IMPLICIT_SHARED_RESOURCES,
+           in probe_runner_resources.IMPLICIT_SHARED_RESOURCES,
            "and it is the same resource every probe already declares")
 
 

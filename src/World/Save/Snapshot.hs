@@ -55,11 +55,11 @@ import Craft.Bills (CraftBills)
 import Unit.Transfer.Orders (TransferOrders)
 import Building.Knowledge (ContainerKnowledge)
 import Power.Types (PowerNodes)
-import World.Chop.Types (ChopDesignations)
+import World.Chop.Types (ChopDesignations, PendingChopDesignations)
 import World.Till.Types (TillDesignations)
 import World.Plant.Types (PlantDesignations)
 import World.Spoil.Types (SpoilPiles)
-import World.Flora.Harvest (FloraHarvests)
+import World.Flora.Harvest (FloraHarvests, PendingFloraHarvests)
 import World.Flora.CropPlot (CropPlots)
 import Item.Ground (GroundItems(..))
 import Item.Types (ItemInstance(..))
@@ -137,6 +137,18 @@ data PageSnapshot = PageSnapshot
     , pgsUnitSimStates ∷ !(HM.HashMap UnitId UnitSimState)
     , pgsFloraHarvests ∷ !FloraHarvests
     , pgsChopDesignations ∷ !ChopDesignations
+    , pgsPendingChopMigration ∷ !PendingChopDesignations
+      -- ^ #1854: pre-identity, tile-keyed chop designations still
+      --   waiting for their chunk. Deferred migration state, never a
+      --   second authority — see "World.Chop.Types". Captured so a
+      --   session that saves before every chunk has been visited cannot
+      --   lose them.
+    , pgsPendingFloraHarvests ∷ !PendingFloraHarvests
+      -- ^ #1854: pre-identity, tile-keyed regrowth timers on the same
+      --   terms.
+    , pgsPlantedFloraCursor ∷ !Word64
+      -- ^ #1854: this page's planted-flora id allocator cursor,
+      --   strictly above every planted id its edit log has issued.
     , pgsCraftBills   ∷ !CraftBills
     , pgsPowerNodes   ∷ !PowerNodes
     , pgsContainerKnowledge ∷ !ContainerKnowledge

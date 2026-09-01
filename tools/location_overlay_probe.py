@@ -63,7 +63,7 @@ from pathlib import Path
 from probelib import (FixtureNotRegistered, capture_request_id, quit_engine,
                       boot, load_fixture_yaml, send, wait_load_published,
                       wait_save_complete)
-from run_probes import FailureEmitter   # durable failure records (#1982)
+from probe_runner_diagnostics import FailureEmitter   # durable failure records (#1982)
 
 LOG = "/tmp/location_overlay_engine.log"
 #: #1982 — this run's durable failure records, built at import so the

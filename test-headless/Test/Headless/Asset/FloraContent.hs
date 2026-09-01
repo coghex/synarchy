@@ -22,6 +22,7 @@ import World.Chunk.Types (ChunkCoord(..), chunkSize)
 import World.Flora.Growth (instanceLifespan)
 import World.Flora.Placement (computeChunkFlora, speciesFitnessDetail)
 import World.Flora.Render (resolveFloraTexture)
+import World.Flora.Identity (floraInstanceIdNone)
 import World.Flora.Types
     ( AnnualCycleKey(..), AnnualStage(..), FloraChunkData(..)
     , FloraId(..), FloraInstance(..), FloraSpecies(..), FloraWorldGen(..)
@@ -396,7 +397,7 @@ assertCattailPlacement registry def =
                     [(target, Just (FluidCell Lake surfZ))]
                 climate = cattailClimate worldSize
                 place fluid = fcdInstances $ computeChunkFlora
-                    7 worldSize (ChunkCoord 0 0)
+                    "test-page" 7 worldSize (ChunkCoord 0 0)
                     surfaceMap surfaceMats surfaceSlopes fluid climate catalog
                 exposed = place exposedFluid
                 submerged = place standingFluid
@@ -449,6 +450,8 @@ assertCattailTextures def = do
             , fiHealth = health
             , fiVariant = 0
             , fiBaseWidth = 6
+            , fiInstanceId = floraInstanceIdNone
+            , fiChopDesignated = False
             }
         resolve day inst = resolveFloraTexture catalog 360 day inst
         adult = mkInstance 300 1

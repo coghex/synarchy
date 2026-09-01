@@ -88,7 +88,8 @@ from pathlib import Path
 from probelib import (boot, quit_engine, send, send_json, wait_load_published,
                        wait_save_complete, capture_request_id)
 from persistence_snapshot import compare_session_files
-from run_probes import PROBES as REGISTERED_PROBES, ProgressEmitter
+from probe_runner_diagnostics import ProgressEmitter
+from probe_runner_registry import PROBES as REGISTERED_PROBES
 from save_compat_audit import dump_canonical_summary
 
 REPO = Path(__file__).resolve().parent.parent
@@ -209,8 +210,8 @@ def unregistered_selectable_probe_keys(
 
     Pure and parameterized so a test can feed it a deliberately stale
     pairing without touching either real list. `main` calls this with
-    the real `SELECTABLE_CROSS_REFERENCED_PROBE_KEYS` and `run_probes`'s
-    real `PROBES` registry before anything boots — a key renamed or
+    the real `SELECTABLE_CROSS_REFERENCED_PROBE_KEYS` and
+    `probe_runner_registry`'s real `PROBES` before anything boots — a key renamed or
     removed there would otherwise be silently dropped by
     `run_probes.py --exact` and reported as "all passed" (the false-
     green this check exists to prevent), rather than caught here up

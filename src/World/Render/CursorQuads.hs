@@ -26,7 +26,7 @@ import World.Mine.Types (MineDesignation(..))
 import World.Construct.Types (ConstructDesignation(..), ConstructTarget(..)
                             , constructDesignationFootprint
                             , constructDesignationFootprintSize)
-import World.Chop.Types (ChopDesignation(..))
+import World.Chop.Types (ChopDesignation(..), chopDesignationTile)
 import World.Till.Types (TillDesignation(..))
 import World.Plant.Types (PlantDesignation(..))
 import World.Render.ViewBounds (computeViewBounds)
@@ -179,11 +179,15 @@ renderWorldCursorQuadsScanned env worldState tileAlpha = do
             Just tex
                 | HM.null chopDesigns → V.empty
                 | otherwise → V.fromList
+                    -- #1854: keyed by the designated PLANT now, so the
+                    -- tile to draw the marker on comes off the record
+                    -- itself rather than out of the key.
                     [ worldCursorToQuad lookupSlot lookupFmSlot textures
                           facing dgx dgy (chZ cd) zSlice effectiveDepth
                           tileAlpha wrapOff tex
-                    | ((dgx, dgy), cd) ← HM.toList chopDesigns
-                    , let (chunkCoord, _) = globalToChunk dgx dgy
+                    | cd ← HM.elems chopDesigns
+                    , let (dgx, dgy) = chopDesignationTile cd
+                          (chunkCoord, _) = globalToChunk dgx dgy
                     , Just wrapOff ← [isChunkVisibleWrapped facing worldSize
                                           vb camX camY chunkCoord]
                     ]
