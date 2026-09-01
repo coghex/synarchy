@@ -147,12 +147,14 @@ runDump layers gen region = do
         liftIO $ do
             manager ← readIORef (worldManagerRef env')
             case wmWorlds manager of
-                ((_, ws):_) → do
+                ((pid, ws):_) → do
                     -- Physical chunks, not coordinate spellings: a
                     -- seam-crossing --region names one chunk twice, and
                     -- the reported count is what waitForChunks below is
-                    -- actually waiting for (#1723).
-                    queued ← enqueueChunkRequest ws $
+                    -- actually waiting for (#1723). The page id qualifies
+                    -- the canonical key the demand registers under
+                    -- (#2001).
+                    queued ← enqueueChunkRequest pid ws $
                         map (uncurry ChunkCoord) (chunkRegionCoords region)
                     hPutStrLn stderr $ "dump: queued "
                         ⧺ show queued ⧺ " chunks"

@@ -46,7 +46,7 @@ import qualified Data.HashSet as HS
 import Engine.Core.State (EngineEnv)
 import World.Chunk.Types (ChunkCoord(..), wrapChunkCoordU)
 import World.Chunk.Queue
-    (chunkQueueCanon, dedupChunkQueue, enqueueChunkRequest, initialChunkQueue)
+    (canonicalChunkCoord, dedupChunkQueue, enqueueChunkRequest, initialChunkQueue)
 import World.Generate.Constants (chunkLoadRadius)
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import World.Page.Types (WorldPageId(..))
@@ -68,9 +68,14 @@ seamWorldSize = 8
 wideWorldSize ∷ Int
 wideWorldSize = 64
 
-page, dedupPage ∷ WorldPageId
+page, dedupPage, detachedPageId ∷ WorldPageId
 page      = WorldPageId "chunk_queue_frame"
 dedupPage = WorldPageId "chunk_queue_dedup"
+-- | The id the DETACHED-page examples request under. A chunk key is
+--   page-qualified (#2001), so even a page with no engine behind it has
+--   to name one; these pages are never registered, so the id is theirs
+--   alone.
+detachedPageId = WorldPageId "chunk_queue_detached"
 
 -- | The alias a caller might hand the queue, and the key the chunk must
 --   actually land under. (4,0): u = 4, v = 4 → wraps to u = -4 → (0,4).
@@ -117,7 +122,7 @@ spec = describe "init-queue chunks land under canonical keys" $ do
 
         -- queueChunks is the harness analogue of the unwrapped append
         -- world.loadChunksInRegion performs.
-        queueChunks ws [aliasCoord]
+        queueChunks page ws [aliasCoord]
         loaded ← waitForChunksAt ws canonCoord 120
         loaded `shouldBe` True
 
@@ -136,15 +141,15 @@ spec = describe "init-queue chunks land under canonical keys" $ do
     it "reads a page's identity from its OWN size, and only where there is a seam" $ \_ → do
         -- Two live pages can have different sizes at once, so the
         -- identity is per-page, never a global.
-        let narrow = chunkQueueCanon (sizedParams seamWorldSize)
-            wide   = chunkQueueCanon (sizedParams wideWorldSize)
+        let narrow = canonicalChunkCoord (sizedParams seamWorldSize)
+            wide   = canonicalChunkCoord (sizedParams wideWorldSize)
         narrow aliasCoord `shouldBe` canonCoord
         wide aliasCoord `shouldBe` aliasCoord
 
         -- An arena's wgpWorldSize is a 100000 sentinel, not an extent,
         -- so it is recognised by isArenaParams rather than handed to
         -- wrapChunkCoordU — which would wrap a coord past u = ±50000.
-        let arena = chunkQueueCanon
+        let arena = canonicalChunkCoord
                 (defaultWorldGenParams { wgpSeed = 0, wgpWorldSize = 100000 })
             far = ChunkCoord 60000 0
         wrapChunkCoordU 100000 far `shouldNotBe` far
@@ -152,10 +157,10 @@ spec = describe "init-queue chunks land under canonical keys" $ do
         arena (ChunkCoord 2 (-2)) `shouldBe` ChunkCoord 2 (-2)
 
         -- A sizeless page has no seam either.
-        chunkQueueCanon (sizedParams 0) aliasCoord `shouldBe` aliasCoord
+        canonicalChunkCoord (sizedParams 0) aliasCoord `shouldBe` aliasCoord
 
     it "keeps the first spelling and the queue order when deduping" $ \_ → do
-        let canon = chunkQueueCanon (sizedParams seamWorldSize)
+        let canon = canonicalChunkCoord (sizedParams seamWorldSize)
             twins = [ChunkCoord 4 0, ChunkCoord 1 1, ChunkCoord 0 4]
         -- drainInitQueues takes the FRONT of the queue and drops a
         -- drained batch BY COORD, so the surviving spelling must be the
@@ -166,15 +171,15 @@ spec = describe "init-queue chunks land under canonical keys" $ do
         -- spellings both.
         let straight = [ChunkCoord 1 1, ChunkCoord 0 0, ChunkCoord (-1) 2]
         dedupChunkQueue canon straight `shouldBe` straight
-        dedupChunkQueue (chunkQueueCanon (sizedParams wideWorldSize)) twins
+        dedupChunkQueue (canonicalChunkCoord (sizedParams wideWorldSize)) twins
             `shouldBe` twins
 
     it "seeds fresh init and saved-page restore with unique physical chunks" $ \_ → do
         -- Both producers go through initialChunkQueue, so this covers
         -- world init (centre at the origin) and a save restored near
         -- the seam (centre at the saved camera chunk) alike.
-        let narrow = chunkQueueCanon (sizedParams seamWorldSize)
-            wide   = chunkQueueCanon (sizedParams wideWorldSize)
+        let narrow = canonicalChunkCoord (sizedParams seamWorldSize)
+            wide   = canonicalChunkCoord (sizedParams wideWorldSize)
             box    = rawInitialBox (ChunkCoord 0 0)
             (narrowQueue, narrowTotal) = initialChunkQueue narrow (ChunkCoord 0 0)
             (wideQueue, wideTotal)     = initialChunkQueue wide (ChunkCoord 0 0)
@@ -216,18 +221,18 @@ spec = describe "init-queue chunks land under canonical keys" $ do
 
         -- Two aliases in ONE request are one chunk: counted once,
         -- appended once, under the spelling the caller asked with.
-        queued ← enqueueChunkRequest ws [aliasCoord, canonCoord]
+        queued ← enqueueChunkRequest detachedPageId ws [aliasCoord, canonCoord]
         queued `shouldBe` 1
         readIORef (wsInitQueueRef ws) `shouldReturn` [aliasCoord]
 
         -- A later request naming the OTHER alias of a pending chunk is
         -- already-queued work: nothing to add, nothing to report.
-        again ← enqueueChunkRequest ws [canonCoord]
+        again ← enqueueChunkRequest detachedPageId ws [canonCoord]
         again `shouldBe` 0
         readIORef (wsInitQueueRef ws) `shouldReturn` [aliasCoord]
 
         -- A genuinely new chunk still appends, at the back.
-        more ← enqueueChunkRequest ws [ChunkCoord 1 1, aliasCoord]
+        more ← enqueueChunkRequest detachedPageId ws [ChunkCoord 1 1, aliasCoord]
         more `shouldBe` 1
         readIORef (wsInitQueueRef ws)
             `shouldReturn` [aliasCoord, ChunkCoord 1 1]
@@ -235,7 +240,7 @@ spec = describe "init-queue chunks land under canonical keys" $ do
         -- The same two coords on a page WITHOUT a seam between them are
         -- two chunks — the identity is the page's own.
         wide ← detachedPage (Just (sizedParams wideWorldSize))
-        wideQueued ← enqueueChunkRequest wide [aliasCoord, canonCoord]
+        wideQueued ← enqueueChunkRequest detachedPageId wide [aliasCoord, canonCoord]
         wideQueued `shouldBe` 2
         readIORef (wsInitQueueRef wide)
             `shouldReturn` [aliasCoord, canonCoord]
@@ -246,7 +251,7 @@ spec = describe "init-queue chunks land under canonical keys" $ do
         -- anyway, so an append would sit there inflating every
         -- remaining count that reads the queue.
         ws ← detachedPage Nothing
-        enqueueChunkRequest ws [aliasCoord, canonCoord] `shouldReturn` 0
+        enqueueChunkRequest detachedPageId ws [aliasCoord, canonCoord] `shouldReturn` 0
         readIORef (wsInitQueueRef ws) `shouldReturn` []
 
     it "reports a live seam-crossing request as the work it actually queues" $ \env → do
@@ -255,7 +260,7 @@ spec = describe "init-queue chunks land under canonical keys" $ do
         -- loads chunks for it and every count below is deterministic.
         sendWorldCommand env (WorldInit dedupPage 42 seamWorldSize 3 Nothing)
         ws ← waitForWorldInit env dedupPage 300
-        let canon = chunkQueueCanon (sizedParams seamWorldSize)
+        let canon = canonicalChunkCoord (sizedParams seamWorldSize)
 
         -- Init loaded the unique PHYSICAL chunks of its box — the total
         -- LoadPhase2 was progressing towards — not 25 raw coords.
@@ -270,7 +275,7 @@ spec = describe "init-queue chunks land under canonical keys" $ do
         canon aliasOfLoaded `shouldBe` loadedKey
         HM.member loadedKey (wtdChunks td) `shouldBe` True
         HM.member aliasOfLoaded (wtdChunks td) `shouldBe` False
-        enqueueChunkRequest ws [aliasOfLoaded] `shouldReturn` 0
+        enqueueChunkRequest dedupPage ws [aliasOfLoaded] `shouldReturn` 0
         readIORef (wsInitQueueRef ws) `shouldReturn` []
 
         -- The dump path's --region fill goes through this same call, so
@@ -287,4 +292,4 @@ spec = describe "init-queue chunks land under canonical keys" $ do
                     , not (HM.member (canon c) loadedNow) ]
         -- Non-vacuity: the raw walk really would over-report here.
         physicalCount `shouldSatisfy` (< rawCount)
-        enqueueChunkRequest ws region `shouldReturn` physicalCount
+        enqueueChunkRequest dedupPage ws region `shouldReturn` physicalCount

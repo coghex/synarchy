@@ -102,8 +102,9 @@ spec = do
             ws ← sharedWorld env 1840733254 64 10
             -- Load a wide ring so the comparison includes coastline,
             -- not just the init region around the origin.
-            queueChunks ws [ ChunkCoord cx cy
-                           | cx ← [-6 .. 6], cy ← [-6 .. 6] ]
+            queueChunks (sharedWorldPageId 1840733254 64 10) ws
+                        [ ChunkCoord cx cy
+                        | cx ← [-6 .. 6], cy ← [-6 .. 6] ]
             ok ← waitForChunksAt ws (ChunkCoord 6 6) 240
             ok `shouldBe` True
             tiles ← getWorldTileData ws
