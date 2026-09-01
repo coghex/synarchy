@@ -30,6 +30,7 @@ module World.Flora.Designation
     , hydrateChunkChopFlags
       -- * Removal
     , forgetFloraInstances
+    , forgetFloraDroppedSince
     , replaceChunkForgettingFlora
       -- * Shared selection rules
     , legacyChopTargetOnTile
@@ -274,6 +275,38 @@ forgetFloraInstances ws iids = do
     setChopDesignations ws
         [ (iid, chopDesignationTile cd, Nothing)
         | iid ← iids, Just cd ← [HM.lookup iid desigs] ]
+
+-- | Forget the per-instance state of every plant that was in the
+--   ADMITTED chunks but is gone from @final@ — the tile data the chunk
+--   pipeline is about to commit.
+--
+--   'admitChunkFlora' runs BEFORE a chunk is inserted (requirement 15),
+--   but the passes that follow the insert are not all non-destructive:
+--   'World.Mine.Apply.applyDigSlopesTd' and
+--   'World.Construct.Apply.applyConstructSlopesTd' re-apply mid-dig and
+--   build-progress corner masks, and a progressed tile sheds its rooted
+--   flora. Most of the time that plant's state was already cleared when
+--   the dig actually happened, and the regenerated copy simply goes
+--   again — but a legacy PENDING entry that admission just resolved onto
+--   it would be left addressing a plant this very transaction removed.
+--   This is the sweep that closes that window, and it runs on the
+--   committed result rather than guessing which pass dropped what.
+--   A chunk that is ABSENT from @final@ was EVICTED in the same
+--   transaction, not stripped of its flora, and is skipped: an evicted
+--   plant still exists and keeps its designation and its timer, which is
+--   the whole reason those maps are world-level rather than chunk-local.
+forgetFloraDroppedSince
+    ∷ WorldState → [LoadedChunk] → WorldTileData → IO ()
+forgetFloraDroppedSince ws admitted final =
+    forgetFloraInstances ws
+        [ fiInstanceId fi
+        | lc ← admitted
+        , Just lc' ← [HM.lookup (lcCoord lc) (wtdChunks final)]
+        , let kept = HM.fromList
+                  [ (fiInstanceId f, ()) | f ← fcdInstances (lcFlora lc') ]
+        , fi ← fcdInstances (lcFlora lc)
+        , not (HM.member (fiInstanceId fi) kept)
+        ]
 
 -- | Replace a chunk in the tile store, forgetting the per-instance
 --   state of every plant the replacement dropped.

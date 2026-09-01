@@ -32,6 +32,7 @@ import Engine.Scripting.Lua.API (registerLuaAPI)
 import Engine.Scripting.Lua.Thread (createLuaBackendState)
 import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
+import Data.Int (Int64)
 import Data.IORef (newIORef)
 
 import World.Chop.Types
@@ -331,6 +332,25 @@ spec = do
         -- read twice never renames a crop.
         migrated `shouldBe` migrateLegacyEdits
 
+      it "orders a seam ALIAS chunk key against its canonical twin \
+         \deterministically, never by hashmap traversal" $ do
+        -- Two DISTINCT keys that canonicalize to the same chunk — the
+        -- case World.Edit.Types.canonicalizeWorldEdits exists to merge.
+        -- Sorting on the canonical coordinate alone leaves their order
+        -- to HM.toList (sortOn is stable), so the ids handed out would
+        -- vary with hashmap traversal. The alias sorts FIRST, matching
+        -- canonicalizeWorldEdits' own merge order.
+        wrapChunkCoordU worldSize aliasChunk `shouldBe` homeChunk
+        aliasChunk `shouldNotBe` homeChunk
+        let (edits, cursor) = migrateAliasedLegacyEdits
+        map plantedIdOf (chunkLog edits aliasChunk)
+          `shouldBe` [plantedFloraInstanceId 1]
+        map plantedIdOf (chunkLog edits homeChunk)
+          `shouldBe` [plantedFloraInstanceId 2]
+        cursor `shouldBe` 3
+        -- Repeatable, which is the property that actually matters.
+        migrateAliasedLegacyEdits `shouldBe` migrateAliasedLegacyEdits
+
       it "initializes the cursor strictly above every id it assigned" $
         legacyCursor `shouldBe` plantedFloraCursorAbove
             [ plantedFloraInstanceId 1, plantedFloraInstanceId 2
@@ -413,6 +433,31 @@ legacyEditsDTO = WorldEditsDTOv1
                            , WePlaceFloraDv1 3 4 berryId 6 1.5 ])
         , (ChunkCoord 1 0, [ WePlaceFloraDv1 20 2 berryId 7 1.5 ]) ]
     ]
+
+-- | The u-alias of 'homeChunk': one wrap step along the seam axis, so
+--   it is a different KEY naming the same physical chunk.
+aliasChunk ∷ ChunkCoord
+aliasChunk =
+    let ChunkCoord cx cy = homeChunk
+        step = worldSize `div` 2
+    in ChunkCoord (cx + step) (cy - step)
+
+-- | A v1 log holding one planted edit under a seam ALIAS key and
+--   another under its canonical twin, driven through the real decoder
+--   and apply step.
+migrateAliasedLegacyEdits ∷ (WorldEdits, Word64)
+migrateAliasedLegacyEdits =
+    let dto = WorldEditsDTOv1
+            [ PageEditsDTOv1 fixturePage $ HM.fromList
+                [ (homeChunk,  [WePlaceFloraDv1 1 2 berryId 5 1.5])
+                , (aliasChunk, [WePlaceFloraDv1 3 4 berryId 6 1.5]) ] ]
+    in case ccDecode worldEditsCodec 1 (S.encode dto) of
+        Left e → error (show e)
+        Right d → case applyWorldEdits 1 d (HM.singleton fixturePage basePage) of
+            Left errs → error (show errs)
+            Right pages → case HM.lookup fixturePage pages of
+                Nothing → error "page missing"
+                Just p → (pgsEdits p, pgsPlantedFloraCursor p)
 
 basePage ∷ PageSnapshot
 basePage = blankPageSnapshot fixturePage
@@ -608,6 +653,29 @@ engineSpec = beforeAll setup $ do
           [ tshow (fst homeTile), ",", tshow (snd homeTile)
           , ",", tshow (idNum oakIid) ]
 
+    it "lists EVERY designation on a tile, ascending by id — the order a \
+       \restored chop job walks to find one nobody else holds" $
+        \(env, ls) → do
+      -- chopJob.iid is deliberately not persisted, so a job restored
+      -- from a save knows only its TILE. scripts/unit_ai_chop.lua walks
+      -- this list and adopts (and claims, in the same step) the first
+      -- plant no other acolyte holds — which is what stops two units
+      -- restoring jobs here from both taking the lower id, felling one
+      -- tree together and orphaning the other's designation. The Lua
+      -- half is pinned by "Test.Headless.Lua.UnitAiLoadReset".
+      ws ← resetPage env coTenants
+      designateChopInstances ws
+          [ (oakIid, fst homeTile, snd homeTile, zSlice)
+          , (berryIid, fst homeTile, snd homeTile, zSlice) ]
+      evalDebug ls (T.concat
+          [ "local ds = chop.getDesignationsAt('", pageKey, "', "
+          , tshow (fst homeTile), ", ", tshow (snd homeTile), "); "
+          , "if not ds then return 'nil' end; local o = {}; "
+          , "for _, d in ipairs(ds) do o[#o+1] = tostring(d.instanceId) end; "
+          , "return table.concat(o, ' ')" ])
+        `shouldReturn` T.unwords
+            (map (tshow . idNum) (L.sort [oakIid, berryIid]))
+
   describe "flora instance persistence" $ do
 
     it "resolves a deferred legacy chop designation to the plant the old \
@@ -711,6 +779,47 @@ engineSpec = beforeAll setup $ do
                   HM.size <$> readIORef (wsFloraHarvestsRef ws)
                     `shouldReturn` 2
 
+    it "forgets a plant the post-admission passes shed, so a legacy entry \
+       \admission just resolved cannot outlive it" $ \(env, _) → do
+      -- Admission runs BEFORE a chunk is inserted (requirement 15), but
+      -- the dig / build-progress corner-mask passes that follow the
+      -- insert shed a progressed tile's rooted flora. Most of the time
+      -- that plant's state was already cleared when the dig happened —
+      -- but a PENDING legacy entry admission has only just resolved onto
+      -- it would be left addressing a plant the same transaction removed.
+      ws ← resetPageEmpty env
+      logger ← readIORef (loggerRef env)
+      writeIORef (wsPendingChopMigrationRef ws)
+          (HM.singleton homeTile (ChopDesignation zSlice
+              (fst homeTile) (snd homeTile)))
+      writeIORef (wsPendingFloraHarvestsRef ws) (HM.singleton homeTile 88.5)
+      admitted ← admitChunkFlora ws probeCatalog logger (chunkWith coTenants)
+      HM.keys <$> readIORef (wsChopDesignationsRef ws) `shouldReturn` [oakIid]
+      -- What a corner-mask pass leaves behind: the oak is gone from the
+      -- committed tile data, its co-tenants are not.
+      let survivors = filter ((≢ oakIid) . fiInstanceId) coTenants
+      writeIORef (wsTilesRef ws) (tilesWith survivors)
+      readIORef (wsTilesRef ws) ⌦ forgetFloraDroppedSince ws [admitted]
+      HM.null <$> readIORef (wsChopDesignationsRef ws) `shouldReturn` True
+      HM.keys <$> readIORef (wsFloraHarvestsRef ws) `shouldReturn` [berryIid]
+
+    it "leaves an EVICTED chunk's plants alone — eviction is not removal" $
+        \(env, _) → do
+      -- The control the sweep above must not break: a chunk that leaves
+      -- the tile map in the same transaction was evicted, and an evicted
+      -- plant still exists. Its designation and timer are world-level
+      -- precisely so they survive that.
+      ws ← resetPage env coTenants
+      logger ← readIORef (loggerRef env)
+      designateChopInstances ws [(oakIid, fst homeTile, snd homeTile, zSlice)]
+      writeIORef (wsFloraHarvestsRef ws) (HM.singleton berryIid 60)
+      admitted ← admitChunkFlora ws probeCatalog logger (chunkWith coTenants)
+      writeIORef (wsTilesRef ws)
+          WorldTileData { wtdChunks = HM.empty, wtdMaxChunks = 200 }
+      readIORef (wsTilesRef ws) ⌦ forgetFloraDroppedSince ws [admitted]
+      HM.keys <$> readIORef (wsChopDesignationsRef ws) `shouldReturn` [oakIid]
+      HM.keys <$> readIORef (wsFloraHarvestsRef ws) `shouldReturn` [berryIid]
+
     it "discards a legacy entry whose resolved tile holds no eligible \
        \flora" $ \(env, _) → do
       ws ← resetPageEmpty env
@@ -737,8 +846,8 @@ engineSpec = beforeAll setup $ do
 -- | The id as Lua sees it. The whole space is a positive Int64 by
 --   construction, which is what makes this a plain number in every
 --   script, log line and console reply.
-idNum ∷ FloraInstanceId → Word64
-idNum = unFloraInstanceId
+idNum ∷ FloraInstanceId → Int64
+idNum = floraInstanceIdToLua
 
 newBareLuaBackend ∷ EngineEnv → IO LuaBackendState
 newBareLuaBackend env = do

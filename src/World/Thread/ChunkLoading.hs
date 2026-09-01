@@ -39,7 +39,8 @@ import World.Slope (recomputeNeighborSlopes
 import World.SideFace.Compute (computeChunkSideDecos)
 import Engine.Scripting.Lua.Types (LuaMsg(..))
 import World.Edit.Apply (replayEdits)
-import World.Flora.Designation (admitChunkFloraBatch)
+import World.Flora.Designation
+    (admitChunkFloraBatch, forgetFloraDroppedSince)
 import World.Mine.Apply (applyDigSlopesTd)
 import World.Construct.Apply (applyConstructSlopesTd)
 import World.Plant.Validate (revalidatePlantDesignations)
@@ -220,6 +221,16 @@ updateChunkLoading env logger = do
                                                      params evicted
                                 atomicModifyIORef' (wsTilesRef worldState) $ \_ →
                                     (finalTd, ())
+                                -- #1854: the dig/construct corner-mask
+                                -- passes above run AFTER admission and
+                                -- shed a progressed tile's rooted flora,
+                                -- so a plant admission just resolved a
+                                -- legacy entry onto can be gone by the
+                                -- time the transaction commits. Sweep the
+                                -- committed result rather than trusting
+                                -- the admitted chunks.
+                                forgetFloraDroppedSince worldState
+                                    newChunks' finalTd
                                 -- Notify sim thread of loaded chunks. Use
                                 -- newChunks' so the sim sees post-replay
                                 -- fluid + terrain (player edits matter).
@@ -449,6 +460,13 @@ drainInitQueues env logger = do
                                 td6 = applyConstructSlopesTd cdesigs
                                         digCoords td5
                             in (td6, ())
+                        -- #1854 — see updateChunkLoading's identical
+                        -- sweep: the corner-mask passes above shed a
+                        -- progressed tile's rooted flora after admission
+                        -- already resolved any pending legacy entry onto
+                        -- it.
+                        finalTd ← readIORef (wsTilesRef worldState)
+                        forgetFloraDroppedSince worldState newChunks' finalTd
 
                         -- Notify the sim thread of the loaded chunks BEFORE
                         -- dropping the batch from the init queue. The dump

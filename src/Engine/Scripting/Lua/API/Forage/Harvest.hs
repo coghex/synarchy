@@ -145,11 +145,10 @@ worldHarvestFloraInstanceFn env = do
     mGy ← Lua.tointeger 2
     mIid ← Lua.tointeger 3
     mTag ← Lua.tostring 4
-    case (mGx, mGy, mIid) of
-        (Just gx', Just gy', Just iid') → do
+    case (mGx, mGy, floraInstanceIdFromLua . fromIntegral =≪ mIid) of
+        (Just gx', Just gy', Just iid) → do
             let rawGX = fromIntegral gx'
                 rawGY = fromIntegral gy'
-                iid = FloraInstanceId (fromIntegral iid')
                 tagFilter = TE.decodeUtf8Lenient <$> mTag
             mSpawned ← Lua.liftIO $ do
                 mWs ← activeWorldStateFrom

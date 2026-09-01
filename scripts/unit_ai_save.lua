@@ -119,6 +119,16 @@ local function snapshotUnitState(s)
     -- a load. The job itself (tile, phase, progress) still persists
     -- exactly as before, so lua.unit_ai's schema is untouched by the
     -- #1854 re-key -- no version bump, no new reference kind.
+    --
+    -- Re-resolution is CLAIM-AWARE, and it has to be: a tile can carry
+    -- several designated plants, so two acolytes can restore jobs on
+    -- one. jobInstance() walks chop.getDesignationsAt's deterministic
+    -- list and adopts (claiming in the same step) the first plant no
+    -- other acolyte holds, and chopExecute refuses to refresh a claim
+    -- that is not its own -- without both, the pair would fell one tree
+    -- together, orphan the other's designation, and silently overwrite
+    -- the loser's claim. Pinned by Test.Headless.Lua.UnitAiLoadReset's
+    -- two restored-chop-job examples.
     if copy.chopJob and copy.chopJob.iid ~= nil then
         local jobCopy = {}
         for jk, jv in pairs(copy.chopJob) do jobCopy[jk] = jv end

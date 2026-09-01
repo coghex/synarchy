@@ -244,7 +244,7 @@ import World.Construct.Types
     , ConstructStatus, ConstructDesignations )
 import World.Chop.Types (ChopDesignation(..), ChopDesignations)
 import World.Flora.Identity
-    ( FloraInstanceId, unFloraInstanceId
+    ( FloraInstanceId, floraInstanceIdToLua
     , isFloraInstanceIdNone, isPlantedFloraInstanceId
     , firstPlantedFloraCursor, nextPlantedFloraCursor
     , plantedFloraCursorAbove )
@@ -1528,7 +1528,7 @@ validateWorldEdits ∷ WorldEditsDTO → [ComponentError]
 validateWorldEdits (WorldEditsDTO slices) =
     [ ComponentError worldEditsComponentId 2 ValidatePhase
         ("page '" <> tshow (pedPageId s) <> "': planted flora id "
-         <> tshow (unFloraInstanceId iid) <> " is not below the page's \
+         <> tshow (floraInstanceIdToLua iid) <> " is not below the page's \
             \planted-flora allocator ("
          <> tshow (pedPlantedFloraCursor s) <> ")")
     | s     ← slices
@@ -1591,8 +1591,7 @@ applyWorldEdits ver (WorldEditsDTO slices) =
 --   that sits strictly above every planted id it now carries.
 assignPlantedIds ∷ Int → Word64 → WorldEdits → (WorldEdits, Word64)
 assignPlantedIds worldSize seed edits =
-    let ordered = L.sortOn (canonicalChunkKey worldSize . fst)
-                           (HM.toList edits)
+    let ordered = L.sortOn (chunkOrderKey worldSize . fst) (HM.toList edits)
         (rebuilt, cursor) = L.foldl' perChunk ([], max firstPlantedFloraCursor seed)
                                      ordered
         allocated = [ iid | (_, es) ← rebuilt, WePlaceFloraWithId _ _ _ _ _ iid ← es ]
@@ -1614,8 +1613,19 @@ assignPlantedIds worldSize seed edits =
     reId (WePlaceFloraWithId gx gy fid day w _) iid =
         WePlaceFloraWithId gx gy fid day w iid
     reId e _ = e
-    canonicalChunkKey ws coord =
-        let ChunkCoord cx cy = wrapChunkCoordU ws coord in (cx, cy)
+    -- Canonical coordinate FIRST, then the raw key as a tie-break. The
+    -- canonical key alone is not a total order over this map: near the
+    -- seam two distinct alias keys canonicalize to the same chunk (which
+    -- is exactly the case 'World.Edit.Types.canonicalizeWorldEdits'
+    -- exists to merge), and 'L.sortOn' is stable — so their relative
+    -- order would have fallen back to 'HM.toList''s, making the ids this
+    -- assignment hands out depend on hashmap traversal. Ordering the
+    -- alias before its canonical twin also matches canonicalizeWorldEdits'
+    -- own merge order, so the two agree about which entry came first.
+    chunkOrderKey ws coord =
+        let ChunkCoord cx cy = wrapChunkCoordU ws coord
+            ChunkCoord rx ry = coord
+        in ((cx, cy), (cx, cy) ≡ (rx, ry), (rx, ry))
 
 -- world-activity ----------------------------------------------------
 

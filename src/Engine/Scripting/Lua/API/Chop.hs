@@ -21,6 +21,7 @@ module Engine.Scripting.Lua.API.Chop
     , chopDesignateFn
     , chopCancelDesignationFn
     , chopGetDesignationAtFn
+    , chopGetDesignationsAtFn
     , chopGetDesignationForInstanceFn
     , chopGetDesignationCountFn
     , chopNearestDesignationFn
@@ -44,7 +45,7 @@ import World.Types (WorldManager(..), WorldState(..), pageWrapWorldSize)
 import World.Page.Types (WorldPageId(..))
 import World.Command.Types (WorldCommand(..))
 import World.Flora.Identity
-    (FloraInstanceId(..), unFloraInstanceId)
+    (FloraInstanceId, floraInstanceIdToLua, floraInstanceIdFromLua)
 import World.Generate.Coordinates (canonicalTile, seamTileDist2)
 import World.Chop.Types
 
@@ -115,19 +116,20 @@ chopCancelDesignationFn wsc = do
                 Just (pageId, _) → Lua.liftIO $
                     Q.writeQueue (wsWorldQueue wsc) $
                         WorldCancelChop pageId (round gx) (round gy)
-                            (toInstanceId <$> iidArg)
+                            (toInstanceId =≪ iidArg)
                 Nothing → pure ()
         _ → pure ()
     return 0
 
--- | A Lua integer back to a 'FloraInstanceId'. The whole id space fits
---   in a positive Int64 by construction ("World.Flora.Identity"), so
---   this is lossless in both directions.
-toInstanceId ∷ Lua.Integer → FloraInstanceId
-toInstanceId = FloraInstanceId . fromIntegral
+-- | A Lua integer back to a 'FloraInstanceId'. Partial by design: a
+--   number in neither namespace names no plant that could exist, and
+--   "World.Flora.Identity" refuses to mint one rather than hand back an
+--   id that silently matches nothing.
+toInstanceId ∷ Lua.Integer → Maybe FloraInstanceId
+toInstanceId = floraInstanceIdFromLua . fromIntegral
 
 pushInstanceId ∷ FloraInstanceId → Lua.LuaE Lua.Exception ()
-pushInstanceId = Lua.pushinteger . fromIntegral . unFloraInstanceId
+pushInstanceId = Lua.pushinteger . fromIntegral . floraInstanceIdToLua
 
 -- | chop.getDesignationAt(pageId, gx, gy) → {x, y, z, instanceId} | nil.
 --   Accepts any u-alias of the tile and reports the CANONICAL stored
@@ -162,6 +164,48 @@ chopGetDesignationAtFn wsc = do
                         Nothing → Lua.pushnil >> return 1
         _ → Lua.pushnil >> return 1
 
+-- | chop.getDesignationsAt(pageId, gx, gy)
+--   → array of {x, y, z, instanceId} | nil
+--
+--   EVERY designation standing on the tile (#1854), ascending by
+--   instance id — the deterministic order 'chopGetDesignationAtFn'
+--   takes its single answer from. nil when the tile carries none.
+--
+--   The chop AI needs the whole list, not just the first: a job
+--   restored from a save knows its TILE but not which of that tile's
+--   plants it had claimed (the id is deliberately not persisted), so it
+--   walks these and adopts the first one no OTHER acolyte is holding.
+--   Answering only the lowest id would make two units restoring jobs on
+--   one tile both take the same tree and leave its co-tenant's
+--   designation orphaned.
+chopGetDesignationsAtFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+chopGetDesignationsAtFn wsc = do
+    pageIdArg ← Lua.tostring 1
+    gxArg ← Lua.tonumber 2
+    gyArg ← Lua.tonumber 3
+    case (pageIdArg, gxArg, gyArg) of
+        (Just pageIdBS, Just gxN, Just gyN) → do
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
+            mgr ← Lua.liftIO $ readIORef (wsWorldManagerRef wsc)
+            case lookup pageId (wmWorlds mgr) of
+                Nothing → Lua.pushnil >> return 1
+                Just ws → do
+                    m ← Lua.liftIO $ readIORef (wsChopDesignationsRef ws)
+                    worldSize ← Lua.liftIO $ pageWrapWorldSize ws
+                    let tile = canonicalTile worldSize (round gxN) (round gyN)
+                        here = L.sortOn fst
+                            [ (iid, cd) | (iid, cd) ← HM.toList m
+                                        , chopDesignationTile cd ≡ tile ]
+                    case here of
+                        [] → Lua.pushnil >> return 1
+                        _  → do
+                            Lua.newtable
+                            forM_ (zip [1 ∷ Int ..] here) $ \(i, (iid, cd)) → do
+                                pushDesignation iid cd
+                                Lua.rawseti (-2) (fromIntegral i)
+                            return 1
+        _ → Lua.pushnil >> return 1
+
 -- | chop.getDesignationForInstance(pageId, instanceId)
 --   → {x, y, z, instanceId} | nil.
 --
@@ -177,15 +221,14 @@ chopGetDesignationForInstanceFn wsc = do
     case (pageIdArg, iidArg) of
         (Just pageIdBS, Just iidN) → do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-                iid = toInstanceId iidN
             mgr ← Lua.liftIO $ readIORef (wsWorldManagerRef wsc)
-            case lookup pageId (wmWorlds mgr) of
-                Nothing → Lua.pushnil >> return 1
-                Just ws → do
+            case (toInstanceId iidN, lookup pageId (wmWorlds mgr)) of
+                (Just iid, Just ws) → do
                     m ← Lua.liftIO $ readIORef (wsChopDesignationsRef ws)
                     case HM.lookup iid m of
                         Just cd → pushDesignation iid cd >> return 1
                         Nothing → Lua.pushnil >> return 1
+                _ → Lua.pushnil >> return 1
         _ → Lua.pushnil >> return 1
 
 pushDesignation

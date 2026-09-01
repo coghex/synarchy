@@ -45,22 +45,6 @@ local function instanceRegrowth(x, y, iid)
     return nil
 end
 
--- The job's target instance. `iid` is DELIBERATELY not persisted
--- (stripped in unit_ai_save.lua, on the constructJob.build precedent):
--- a durable FloraInstanceId carried as a bare number is a reference
--- kind unit_ai_save_refs.lua does not declare and the integrity graph
--- could not check. The designation authority is durable, so a job
--- restored from a save re-resolves its target from the tile it saved,
--- and the whole re-key stays inside lua.unit_ai's existing schema.
-local function jobInstance(wid, s)
-    local job = s.chopJob
-    if not job then return nil end
-    if job.iid then return job.iid end
-    local d = chop.getDesignationAt(wid, job.x, job.y)
-    if d then job.iid = d.instanceId end
-    return job.iid
-end
-
 local function chopClaimedByOther(key, uid, now, timeout)
     local c = chopClaims[key]
     if not c or c.uid == uid then return false end
@@ -69,6 +53,38 @@ local function chopClaimedByOther(key, uid, now, timeout)
         return false
     end
     return true
+end
+
+-- The job's target instance. `iid` is DELIBERATELY not persisted
+-- (stripped in unit_ai_save.lua, on the constructJob.build precedent):
+-- a durable FloraInstanceId carried as a bare number is a reference
+-- kind unit_ai_save_refs.lua does not declare and the integrity graph
+-- could not check. The designation authority is durable, so a job
+-- restored from a save re-resolves its target from the tile it saved,
+-- and the whole re-key stays inside lua.unit_ai's existing schema.
+--
+-- Re-resolution is CLAIM-AWARE, and adopting a plant CLAIMS it in the
+-- same step. A tile can carry several designated plants, and two
+-- acolytes can restore jobs on it: resolving both to the same (say,
+-- lowest-id) designation would have them fell one tree together while
+-- the other's designation was orphaned, and the loser's claim silently
+-- overwritten. Walking the tile's designations in the engine's own
+-- deterministic order and taking the first one nobody else holds gives
+-- them one tree each; claiming as we adopt is what stops two units
+-- ticking in the same frame from both adopting it.
+local function jobInstance(wid, s, uid, params, now)
+    local job = s.chopJob
+    if not job then return nil end
+    if job.iid then return job.iid end
+    for _, d in ipairs(chop.getDesignationsAt(wid, job.x, job.y) or {}) do
+        local key = chopKey(wid, d.instanceId)
+        if not chopClaimedByOther(key, uid, now, params.chop_claim_timeout) then
+            chopClaims[key] = { uid = uid, at = now }
+            job.iid = d.instanceId
+            return job.iid
+        end
+    end
+    return nil
 end
 
 -- Best chopping speed among carried tools; bare hands as the floor.
@@ -136,7 +152,7 @@ local function chopUtility(uid, s, params)
     -- the same tile no longer keeps a unit locked onto a job whose own
     -- target the player cancelled.
     if s.chopJob then
-        local iid = jobInstance(wid, s)
+        local iid = jobInstance(wid, s, uid, params, engine.gameTime())
         if iid and chop.getDesignationForInstance(wid, iid) then
             return params.chop_lock_utility
         end
@@ -203,15 +219,24 @@ local function chopExecute(uid, s, params)
     end
 
     local job = s.chopJob
-    local iid = jobInstance(wid, s)
+    local iid = jobInstance(wid, s, uid, params, now)
     -- A job restored from a save whose tile no longer resolves to a
-    -- designated plant has nothing left to fell.
+    -- designated plant this unit may hold has nothing left to fell.
     if not iid then
         chopComplete(wid, uid, s)
         return
     end
+    local key = chopKey(wid, iid)
+    -- Never refresh a claim that is not ours. A held job normally owns
+    -- its target, but a restored one adopted it above and could have
+    -- raced; overwriting here would take another acolyte's tree out from
+    -- under it mid-swing.
+    if chopClaimedByOther(key, uid, now, params.chop_claim_timeout) then
+        chopComplete(wid, uid, s)
+        return
+    end
     -- Keep the claim fresh while we hold the job.
-    chopClaims[chopKey(wid, iid)] = { uid = uid, at = now }
+    chopClaims[key] = { uid = uid, at = now }
 
     if s.chopPhase == "walking" then
         local utx = math.floor(info.gridX)

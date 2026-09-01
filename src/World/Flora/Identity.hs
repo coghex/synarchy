@@ -10,8 +10,13 @@
 --   stands on. Two wood-tagged trees can legitimately share one tile,
 --   and a tile key cannot tell them apart.
 --
---   The id is OPAQUE: nothing outside this module may take it apart,
---   and only the two constructors below may build one.
+--   The id is OPAQUE, and structurally so: the constructor is not
+--   exported, so the only ways to obtain one are the two allocators
+--   below and 'floraInstanceIdFromLua', which refuses a number that
+--   belongs to neither namespace. Nothing outside this module can
+--   manufacture the reserved non-identity value or an id outside the
+--   space. 'floraInstanceIdToLua' is the matching way out, for the
+--   script boundary and for diagnostics.
 --
 --   == Namespaces
 --
@@ -38,7 +43,14 @@
 --   value is not a plant, is never stored in chunk data, and must
 --   never key a designation, claim or harvest timer.
 module World.Flora.Identity
-    ( FloraInstanceId(..)
+    ( -- * The identity
+      --
+      --   Exported ABSTRACTLY (#1854 round-1 review): the constructor
+      --   stays in this module, so no consumer can manufacture a value
+      --   outside the two namespaces — the reserved non-identity zero
+      --   included. The only ways in are the two allocators below and
+      --   'floraInstanceIdFromLua', which refuses anything else.
+      FloraInstanceId
     , floraInstanceIdNone
     , isFloraInstanceIdNone
     , generatedFloraInstanceId
@@ -48,6 +60,9 @@ module World.Flora.Identity
     , firstPlantedFloraCursor
     , nextPlantedFloraCursor
     , plantedFloraCursorAbove
+      -- * Boundary encoding
+    , floraInstanceIdToLua
+    , floraInstanceIdFromLua
     ) where
 
 import UPrelude
@@ -56,6 +71,7 @@ import GHC.Generics (Generic)
 import Data.Serialize (Serialize)
 import Data.Hashable (Hashable(..))
 import qualified Data.Text.Encoding as TE
+import Data.Int (Int64)
 import qualified Data.ByteString as BS
 
 -- | An opaque stable flora-instance identity. The 'Word64' payload is
@@ -65,6 +81,25 @@ newtype FloraInstanceId = FloraInstanceId { unFloraInstanceId ∷ Word64 }
     deriving stock (Show, Eq, Ord, Generic)
     deriving newtype (NFData, Hashable)
     deriving anyclass (Serialize)
+
+-- | Send an id across the Lua\/diagnostic boundary. Lossless and
+--   always positive: bit 63 is clear in both namespaces by
+--   construction, so the whole space fits in an 'Int64' and round-trips
+--   through Lua, JSON and the debug console unchanged.
+floraInstanceIdToLua ∷ FloraInstanceId → Int64
+floraInstanceIdToLua (FloraInstanceId w) = fromIntegral w
+
+-- | Read an id back from Lua. The ONLY way to build a
+--   'FloraInstanceId' from a number, and deliberately partial: a value
+--   that is in neither namespace — the reserved zero, or anything with
+--   bit 63 set — names no plant that could ever exist, so it is refused
+--   here rather than turned into an id that silently matches nothing
+--   (or, worse, matches the crop-plot adapter's reserved value).
+floraInstanceIdFromLua ∷ Int64 → Maybe FloraInstanceId
+floraInstanceIdFromLua n
+    | isGeneratedFloraInstanceId fid ∨ isPlantedFloraInstanceId fid = Just fid
+    | otherwise                                                     = Nothing
+  where fid = FloraInstanceId (fromIntegral n)
 
 -- | The reserved non-identity value (see the module header). Belongs to
 --   neither namespace, so it can never collide with a generated or

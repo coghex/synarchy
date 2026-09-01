@@ -40,7 +40,7 @@ import Engine.Scripting.Lua.API.Forage.Lookup
 --   this round-trips losslessly through Lua, JSON and the debug
 --   console.
 pushInstanceId ∷ FloraInstanceId → Lua.LuaE Lua.Exception ()
-pushInstanceId = Lua.pushinteger . fromIntegral . unFloraInstanceId
+pushInstanceId = Lua.pushinteger . fromIntegral . floraInstanceIdToLua
 
 -- | world.getFloraAt(gx, gy) → {id, instanceId, chopDesignated,
 --   harvestable, regrowthRemaining, tags} | nil
