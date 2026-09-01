@@ -48,21 +48,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import check_texture_paths as ctp  # type: ignore
 
+import selftestlib  # noqa: E402
+from selftestlib import FAILURES, expect  # noqa: E402
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
-FAILURES: list[str] = []
 TEMP_TREES: list[Path] = []
 
 #: Present in every fixture tree, so a case can carry a reference that
 #: resolves without depending on the repository's own assets.
 BASE_ASSETS = ("assets/textures/real/ok.png", "assets/textures/dir/")
-
-
-def expect(cond: bool, msg: str) -> None:
-    if not cond:
-        FAILURES.append(msg)
-        print(f"  FAIL: {msg}")
-    else:
-        print(f"  OK:   {msg}")
 
 
 def build_tree(files: dict[str, str | bytes],
@@ -571,6 +565,7 @@ def test_real_repository() -> None:
 
 
 def main() -> int:
+    selftestlib.parse_verbose()
     try:
         test_comment_references_are_skipped()
         test_multiline_comment_state_and_code_resumption()
@@ -597,9 +592,8 @@ def main() -> int:
         print(f"\n{len(FAILURES)} test(s) failed:")
         for failure in FAILURES:
             print(f"  {failure}")
-        return 1
-    print("\nAll check_texture_paths tests passed")
-    return 0
+        return selftestlib.concluded(1)
+    return selftestlib.concluded(0, "\nAll check_texture_paths tests passed")
 
 
 if __name__ == "__main__":

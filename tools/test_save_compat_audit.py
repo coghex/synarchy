@@ -56,15 +56,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import save_compat_audit as sca  # type: ignore
 
-FAILURES: list[str] = []
-
-
-def expect(cond: bool, msg: str) -> None:
-    if not cond:
-        FAILURES.append(msg)
-        print(f"  FAIL: {msg}")
-    else:
-        print(f"  OK:   {msg}")
+import selftestlib  # noqa: E402
+from selftestlib import FAILURES, expect  # noqa: E402
 
 
 def make_fixture(tmp: Path, name: str, content: bytes) -> Path:
@@ -2261,7 +2254,13 @@ def main(argv: list[str] | None = None) -> int:
         "--without-reproducibility", action="store_true",
         help="run every member EXCEPT the cabal-repl reproducibility "
              "member (#1360).")
+    # This script already owns its command line, and CI drives it through
+    # both selective forms, so the shared verbosity flag joins that parser
+    # rather than being consumed behind its back; `begin` then
+    # starts this invocation's own count (#1922).
+    selftestlib.add_verbose_option(parser)
     args = parser.parse_args(argv)
+    selftestlib.begin(args.verbose)
 
     # A member listed as expensive but absent from the run order would
     # silently vanish from BOTH selective forms, which is exactly the
@@ -2283,9 +2282,9 @@ def main(argv: list[str] | None = None) -> int:
         fn()
     if FAILURES:
         print(f"\n{len(FAILURES)} failure(s)")
-        return 1
-    print(f"\nall tests passed ({len(tests)} of {len(ALL_TESTS)} members)")
-    return 0
+        return selftestlib.concluded(1)
+    return selftestlib.concluded(
+        0, f"\nall tests passed ({len(tests)} of {len(ALL_TESTS)} members)")
 
 
 if __name__ == "__main__":
