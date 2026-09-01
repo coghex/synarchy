@@ -55,7 +55,8 @@ import probe_census  # type: ignore
 import deflake  # type: ignore
 import probe_flake  # type: ignore
 import probe_protocol  # type: ignore
-import run_probes  # type: ignore
+import probe_runner_registry  # type: ignore
+import probe_runner_resources  # type: ignore
 
 TOOL = str(Path(__file__).resolve().parent / "deflake_diagnosis.py")
 
@@ -385,9 +386,9 @@ def resource_hold(*, probe: str = PROBE, held: bool = True,
     """
     record = {
         "held": held,
-        "exclusive": (sorted(run_probes.exclusive_resources(probe))
+        "exclusive": (sorted(probe_runner_resources.exclusive_resources(probe))
                       if exclusive is None else list(exclusive)),
-        "shared": (sorted(run_probes.shared_resources(probe))
+        "shared": (sorted(probe_runner_resources.shared_resources(probe))
                    if shared is None else list(shared)),
         "covers_configuration_install": covers,
     }
@@ -520,7 +521,7 @@ def test_an_unregistered_probe_is_refused() -> None:
 
 def test_a_probe_with_no_descriptor_is_refused() -> None:
     """A legacy probe has no per-check evidence to diagnose."""
-    legacy = next(key for key, _script, _purpose in run_probes.PROBES
+    legacy = next(key for key, _script, _purpose in probe_runner_registry.PROBES
                   if key not in probe_flake.PROTOCOL_PROBES)
     document = handoff_document(probe=legacy)
     document["result"]["probe"] = legacy

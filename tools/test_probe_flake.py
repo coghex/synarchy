@@ -6,7 +6,7 @@ synthetic script in a throwaway tree that writes a protocol event stream
 and exits, so nothing boots Vulkan, generates a world, or runs a
 registered probe. The real `tools/probe_protocol.py`,
 `tools/probe_flake.py` and `tools/probe_census.py` are imported and
-driven — with `run_probes.REPO_ROOT`/`PROBES`, `ci_probes.CI_ELIGIBLE`,
+driven — with `probe_engine.REPO_ROOT`/`PROBES`, `ci_probes.CI_ELIGIBLE`,
 `probe_flake.PROTOCOL_PROBES` and `probe_flake.LEASE_ROOT` pointed at
 the temp tree — so this exercises the shipped code paths rather than a
 copy. `LEASE_ROOT` is the one deliberate redirection the module allows:
@@ -52,7 +52,9 @@ import ci_probes  # type: ignore  # noqa: E402
 import probe_census  # type: ignore  # noqa: E402
 import probe_flake  # type: ignore  # noqa: E402
 import probe_protocol  # type: ignore  # noqa: E402
-import run_probes  # type: ignore  # noqa: E402
+import probe_engine  # type: ignore  # noqa: E402
+import probe_runner_lifecycle  # type: ignore  # noqa: E402
+import probe_runner_registry  # type: ignore  # noqa: E402
 
 FAILURES: list[str] = []
 SKIPS: list[str] = []
@@ -252,14 +254,14 @@ class SyntheticTree:
 
     def __enter__(self):
         self._saved = {
-            "REPO_ROOT": run_probes.REPO_ROOT,
-            "PROBES": run_probes.PROBES,
+            "REPO_ROOT": probe_engine.REPO_ROOT,
+            "PROBES": probe_runner_registry.PROBES,
             "CI_ELIGIBLE": ci_probes.CI_ELIGIBLE,
             "PROTOCOL_PROBES": probe_flake.PROTOCOL_PROBES,
             "LEASE_ROOT": probe_flake.LEASE_ROOT,
         }
-        run_probes.REPO_ROOT = str(self.root)
-        run_probes.PROBES = self.probes
+        probe_engine.REPO_ROOT = str(self.root)
+        probe_runner_registry.PROBES = self.probes
         ci_probes.CI_ELIGIBLE = set()
         probe_flake.PROTOCOL_PROBES = {
             key: probe_protocol.PROTOCOL_VERSION for key in self.keys}
@@ -272,8 +274,8 @@ class SyntheticTree:
         return self
 
     def __exit__(self, *exc):
-        run_probes.REPO_ROOT = self._saved["REPO_ROOT"]
-        run_probes.PROBES = self._saved["PROBES"]
+        probe_engine.REPO_ROOT = self._saved["REPO_ROOT"]
+        probe_runner_registry.PROBES = self._saved["PROBES"]
         ci_probes.CI_ELIGIBLE = self._saved["CI_ELIGIBLE"]
         probe_flake.PROTOCOL_PROBES = self._saved["PROTOCOL_PROBES"]
         probe_flake.LEASE_ROOT = self._saved["LEASE_ROOT"]
@@ -657,7 +659,7 @@ def test_descriptor_mismatch_rejection() -> None:
         impostor.write_text(
             SYNTHETIC_PROBE.format(tools=TOOLS_DIR, key="somethingelse"),
             encoding="utf-8")
-        run_probes.PROBES = tree.probes + [
+        probe_runner_registry.PROBES = tree.probes + [
             ("impostor", "impostor_probe.py", "synthetic"),
             ("v2probe", "v2_probe.py", "synthetic"),
             ("noflag", "noflag_probe.py", "synthetic")]
@@ -1027,8 +1029,8 @@ def test_measure_leases_the_probes_whole_declared_span() -> None:
     print("\n-- measure leases the DECLARED span, and only lets go after the "
           "reap --")
     with SyntheticTree() as tree:
-        saved_spans = run_probes.PROBE_PORT_SPANS
-        real_run_one = run_probes.run_one
+        saved_spans = probe_runner_registry.PROBE_PORT_SPANS
+        real_run_one = probe_runner_lifecycle.run_one
         seen: dict[str, object] = {}
 
         def spy(script, port, timeout, groups, **kwargs):
@@ -1041,13 +1043,13 @@ def test_measure_leases_the_probes_whole_declared_span() -> None:
             seen["held"] = _held_ports(port, 3)
             return real_run_one(script, port, timeout, groups, **kwargs)
 
-        run_probes.PROBE_PORT_SPANS = {"synthetic": 2}
-        run_probes.run_one = spy
+        probe_runner_registry.PROBE_PORT_SPANS = {"synthetic": 2}
+        probe_runner_lifecycle.run_one = spy
         try:
             measurement = run_synthetic(tree, "pass", runs=1)
         finally:
-            run_probes.run_one = real_run_one
-            run_probes.PROBE_PORT_SPANS = saved_spans
+            probe_runner_lifecycle.run_one = real_run_one
+            probe_runner_registry.PROBE_PORT_SPANS = saved_spans
 
         base = seen.get("base")
         expect(isinstance(base, int) and base is not None,
@@ -1615,7 +1617,7 @@ def test_artifacts() -> None:
 
         expect_raises(probe_flake.Rejection,
                       lambda: probe_flake.check_artifact_root(
-                          Path(run_probes.REPO_ROOT) / "artifacts"),
+                          Path(probe_engine.REPO_ROOT) / "artifacts"),
                       "an artifact root inside a working tree is refused",
                       "inside the working tree")
 
@@ -1913,12 +1915,12 @@ def test_manifest_fixture() -> None:
 def test_manifest_real_registry() -> None:
     print("\n-- census manifest (real registry, 86 probes) --")
     manifest = probe_census.build_manifest()
-    expect(len(manifest["probes"]) == len(run_probes.PROBES),
-           f"the manifest lists all {len(run_probes.PROBES)} registered probes")
-    expect(len({e["key"] for e in manifest["probes"]}) == len(run_probes.PROBES),
+    expect(len(manifest["probes"]) == len(probe_runner_registry.PROBES),
+           f"the manifest lists all {len(probe_runner_registry.PROBES)} registered probes")
+    expect(len({e["key"] for e in manifest["probes"]}) == len(probe_runner_registry.PROBES),
            "each registered probe appears exactly once")
     expect(probe_census.validate_manifest(manifest) == [],
-           "the built manifest agrees with run_probes.PROBES and ci_probes.py")
+           "the built manifest agrees with probe_runner_registry.PROBES and ci_probes.py")
     ci = sum(1 for e in manifest["probes"]
              if e["classification"] == "ci-eligible")
     expect(ci == len(ci_probes.CI_ELIGIBLE),
@@ -1930,7 +1932,7 @@ def test_manifest_real_registry() -> None:
                         "remote_warning_page_guard", "role",
                         "state_of_mind", "text_encoding", "thermo_altitude"],
            f"the eleven migrated probes are probe-result/v1 probes in "
-           f"run_probes.PROBES order (got {migrated})")
+           f"probe_runner_registry.PROBES order (got {migrated})")
 
     # The REAL docs-wip manifest, only when one is resolvable.
     try:
@@ -3452,9 +3454,9 @@ def test_thermo_altitude_standalone() -> None:
 
 def test_run_one_defaults() -> None:
     print("\n-- run_one's extended interface --")
-    expect(run_probes.probe_protocol_env() == {},
+    expect(probe_runner_lifecycle.probe_protocol_env() == {},
            "no protocol wiring produces no environment override")
-    env = run_probes.probe_protocol_env(
+    env = probe_runner_lifecycle.probe_protocol_env(
         event_path="/e", artifact_dir="/a", engine_log_dir="/l", rts_caps=4)
     expect(env == {probe_protocol.ENV_EVENTS: "/e",
                    probe_protocol.ENV_ARTIFACT_DIR: "/a",
@@ -3475,11 +3477,11 @@ def test_run_one_defaults() -> None:
                 import probe_protocol
                 print(repr(os.environ.get(probe_protocol.ENV_EVENTS)))
             '''), encoding="utf-8")
-            _ok, _t, _e, out = run_probes.run_one("echoenv_probe.py", None, 60.0)
+            _ok, _t, _e, out = probe_runner_lifecycle.run_one("echoenv_probe.py", None, 60.0)
             expect(out.strip() == "None",
                    f"an inherited SYNARCHY_PROBE_EVENTS is stripped from an "
                    f"ordinary run (got {out.strip()!r})")
-            _ok, _t, _e, out = run_probes.run_one(
+            _ok, _t, _e, out = probe_runner_lifecycle.run_one(
                 "echoenv_probe.py", None, 60.0, event_path="/tmp/wanted.jsonl")
             expect(out.strip() == "'/tmp/wanted.jsonl'",
                    f"the harness's own event path wins (got {out.strip()!r})")
@@ -3490,7 +3492,7 @@ def test_run_one_defaults() -> None:
             os.environ[probe_protocol.ENV_EVENTS] = saved
 
     import inspect
-    signature = inspect.signature(run_probes.run_one)
+    signature = inspect.signature(probe_runner_lifecycle.run_one)
     positional = [n for n, p in signature.parameters.items()
                   if p.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD]
     expect(positional == ["script", "port", "timeout", "groups"],

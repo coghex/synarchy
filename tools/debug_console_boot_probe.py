@@ -796,7 +796,7 @@ def main() -> int:
     # port + 1 (check 8 SEQUENTIALLY reuses check 7's, so #1365 widened
     # the probe's coverage without widening the ports it claims). This
     # probe therefore RESERVES two ports, base and base + 1, which is why
-    # `run_probes.PROBE_PORT_SPANS` declares 2 for it — stride-1 parallel
+    # `probe_runner_registry.PROBE_PORT_SPANS` declares 2 for it — stride-1 parallel
     # allocation is NOT valid for it and handed the next probe in the
     # batch this one's second port (#1571).
     # Guarding only the base let `--port 8007` put check 7 on the GUI

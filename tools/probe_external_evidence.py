@@ -75,7 +75,7 @@ is that shared primitive.
 
 Identity
 --------
-`run_probes.PROBES` keys are the canonical input. A key maps to its
+`probe_runner_registry.PROBES` keys are the canonical input. A key maps to its
 `$test` run identifiers by underscores-to-hyphens under two namespaces:
 
 * `probe:<hyphenated-key>` — an ORDINARY execution of the probe;
@@ -93,7 +93,7 @@ Both are derived from the KEY, never from the script filename:
 Matching is EXACT against the two generated identifiers, so
 `probe:transfer-order-extra`, `probe:transfer_order`,
 `probe-flake:transfer_order` and `gameplay:transfer-order` are all
-non-matches, and a probe key that is not in `run_probes.PROBES` is a
+non-matches, and a probe key that is not in `probe_runner_registry.PROBES` is a
 controlled unknown-key rejection, NOT a "no external evidence" answer.
 
 Reporting
@@ -152,7 +152,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import run_probes  # noqa: E402
+import probe_engine  # noqa: E402
+import probe_runner_registry  # noqa: E402
 
 EVIDENCE_SCHEMA = "probe-external-evidence/v1"
 
@@ -282,12 +283,12 @@ def entry_state(path: Path) -> tuple[bool, int | None, str | None]:
 
 def probe_keys() -> list[str]:
     """Every registered probe key, in registry order."""
-    return [key for key, _script, _purpose in run_probes.PROBES]
+    return [key for key, _script, _purpose in probe_runner_registry.PROBES]
 
 
 def probe_script(probe_key: str) -> str | None:
     """The registered script filename for `probe_key`, or None."""
-    for key, script, _purpose in run_probes.PROBES:
+    for key, script, _purpose in probe_runner_registry.PROBES:
         if key == probe_key:
             return script
     return None
@@ -350,7 +351,7 @@ def _test_id_index() -> dict[str, tuple[str, str]]:
 
 
 def require_known_probe(probe_key: str) -> None:
-    """Reject a key `run_probes.PROBES` does not register.
+    """Reject a key `probe_runner_registry.PROBES` does not register.
 
     Deliberately distinct from the absent-state result: an unknown key
     is a caller mistake, not evidence that no external runs exist.
@@ -359,7 +360,7 @@ def require_known_probe(probe_key: str) -> None:
         return
     raise EvidenceRejected(
         f"unknown probe key {probe_key!r}: it is not registered in "
-        f"run_probes.PROBES. Run `python3 tools/run_probes.py --list` "
+        f"probe_runner_registry.PROBES. Run `python3 tools/run_probes.py --list` "
         f"for the registered keys."
     )
 
@@ -376,7 +377,7 @@ def resolve_state_root(repo: str | os.PathLike[str] | None = None) -> Path:
     file and the shared `$test` state lives under the main checkout's
     git directory. Never creates anything.
     """
-    start = Path(repo) if repo is not None else Path(run_probes.REPO_ROOT)
+    start = Path(repo) if repo is not None else Path(probe_engine.REPO_ROOT)
     try:
         completed = subprocess.run(
             ["git", "-C", str(start), "rev-parse", "--git-common-dir"],
@@ -887,7 +888,7 @@ def main(argv: list[str] | None = None) -> int:
         description="Read the Codex $test record for one registered probe "
                     "(read-only; never writes, locks, or invokes the coordinator).")
     parser.add_argument("--probe", required=True,
-                        help="a registered run_probes.PROBES key, e.g. role")
+                        help="a registered probe_runner_registry.PROBES key, e.g. role")
     parser.add_argument("--json", action="store_true",
                         help="emit the evidence document instead of a table")
     parser.add_argument("--state-root", default=None,

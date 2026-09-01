@@ -88,7 +88,8 @@ from pathlib import Path
 from probelib import (boot, quit_engine, send, send_json, wait_load_published,
                        wait_save_complete, capture_request_id)
 from persistence_snapshot import compare_session_files
-from run_probes import PROBES as REGISTERED_PROBES, ProgressEmitter
+from probe_runner_diagnostics import ProgressEmitter
+from probe_runner_registry import PROBES as REGISTERED_PROBES
 from save_compat_audit import dump_canonical_summary
 
 REPO = Path(__file__).resolve().parent.parent

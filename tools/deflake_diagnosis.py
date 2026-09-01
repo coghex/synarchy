@@ -374,7 +374,8 @@ import deflake  # noqa: E402
 import probe_census  # noqa: E402
 import probe_flake  # noqa: E402
 import probe_protocol  # noqa: E402
-import run_probes  # noqa: E402
+import probe_engine  # noqa: E402
+import probe_runner_resources  # noqa: E402
 
 HANDOFF_SCHEMA = "deflake-handoff/v1"
 DIAGNOSIS_SCHEMA = "deflake-diagnosis/v1"
@@ -1343,7 +1344,7 @@ def worktree_paths() -> list:
     """Every registered worktree, the primary checkout FIRST.
 
     Delegated to `probe_flake`, which already computes exactly this for
-    `check_artifact_root` and puts `run_probes.REPO_ROOT` at the head.
+    `check_artifact_root` and puts `probe_engine.REPO_ROOT` at the head.
     Answering it a second way is how the artifact root and the result
     document would come to disagree about what "inside a worktree" means.
     """
@@ -2415,8 +2416,8 @@ def resource_hold_problems(section, *, what: str, probe: str) -> list:
             f"{probe!r}'s declared cross-process interests has not shown it "
             f"was isolated from an independent `run_probes.py` sweep")
     for field, expected in (
-            ("exclusive", sorted(run_probes.exclusive_resources(probe))),
-            ("shared", sorted(run_probes.shared_resources(probe)))):
+            ("exclusive", sorted(probe_runner_resources.exclusive_resources(probe))),
+            ("shared", sorted(probe_runner_resources.shared_resources(probe)))):
         declared = record.get(field)
         if not isinstance(declared, list) or not all(
                 isinstance(name, str) for name in declared):

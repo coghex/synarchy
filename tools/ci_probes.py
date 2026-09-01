@@ -39,7 +39,7 @@ from dataclasses import dataclass
 from typing import Sequence
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from run_probes import PROBES  # noqa: E402
+from probe_runner_registry import PROBES  # noqa: E402
 
 ALL_KEYS = {p[0] for p in PROBES}
 

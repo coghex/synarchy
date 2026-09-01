@@ -65,7 +65,11 @@ import probe_resource_lock
 
 #: This checkout's root, derived from this file's own location, so a
 #: directly invoked probe needs no Cabal contact to say where to build.
-#: `run_probes.REPO_ROOT` derives the identical value the identical way.
+#: This is the ONE authoritative cell (#2074): the aggregate runner's
+#: resource and lifecycle owners, and every tool that used to read
+#: `run_probes.REPO_ROOT`, read THIS one at call time rather than
+#: re-deriving their own — so a test that repoints it repoints it for
+#: all of them at once.
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 #: The runner -> probe contract. Its value is an ABSOLUTE path to an
@@ -84,9 +88,9 @@ ENGINE_TARGET = "exe:synarchy"
 #: The shared Cabal build state — this checkout's one `dist-newstyle`,
 #: whose concurrent mutation is the whole of #1570. Named HERE, in the
 #: module that owns every Cabal contact a probe makes, so the aggregate
-#: preflight, the direct preparation below and `run_probes`'s two
-#: declaration tables cannot drift apart. `run_probes.BUILD_RESOURCE`
-#: is this name.
+#: preflight, the direct preparation below and
+#: `probe_runner_resources`'s two declaration tables cannot drift
+#: apart. `probe_runner_resources.BUILD_RESOURCE` is this name.
 BUILD_RESOURCE = "cabal-build"
 
 #: How long direct-invocation preparation gets, end to end: lock
@@ -390,7 +394,8 @@ def _build_state_hold(namespace, *, deadline, announce, lock_root):
     inside a sweep's preflight or a `cabal repl` probe.
 
     The wait is BOUNDED by the preparation allowance rather than
-    unbounded like `run_probes.preflight_hold`, because this one runs
+    unbounded like `probe_runner_resources.preflight_hold`, because this
+    one runs
     inside a probe: a probe that waits forever is indistinguishable from
     the hang this issue is about, and the caller needs a diagnostic
     naming the holder.

@@ -227,7 +227,8 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import probe_census  # noqa: E402
 import probe_external_evidence as evidence  # noqa: E402
-import run_probes  # noqa: E402
+import probe_engine  # noqa: E402
+import probe_runner_registry  # noqa: E402
 
 INFLIGHT_SCHEMA = "probe-inflight/v1"
 
@@ -338,7 +339,7 @@ def build_identity_index(probes=None) -> dict[tuple[str, ...], frozenset[str]]:
     mark the occurrence ambiguous — not to pick a winner silently.
     """
     index: dict[tuple[str, ...], set[str]] = {}
-    for key, script, _purpose in (run_probes.PROBES if probes is None else probes):
+    for key, script, _purpose in (probe_runner_registry.PROBES if probes is None else probes):
         for form in identity_forms(key, script):
             index.setdefault(form, set()).add(key)
     return {form: frozenset(keys) for form, keys in index.items()}
@@ -532,7 +533,7 @@ def resolve_target_repository(repo_root=None) -> str:
     a source error naming the remote — never a hard-coded fallback and
     never a silent skip of the issue and pull-request sources.
     """
-    root = str(repo_root or run_probes.REPO_ROOT)
+    root = str(repo_root or probe_engine.REPO_ROOT)
     try:
         done = subprocess.run(["git", "-C", root, "remote", "get-url", "origin"],
                               text=True, capture_output=True, timeout=30)
@@ -968,7 +969,7 @@ def evaluate_reports(probe_key: str, index, *, repo_root=None,
     as an absent one — and "present" here means present on the
     filesystem, not merely present as a readable regular file.
     """
-    checkout = Path(repo_root or run_probes.REPO_ROOT)
+    checkout = Path(repo_root or probe_engine.REPO_ROOT)
     docs = resolve_docs_worktree(repo_root) if docs_root is _UNSET else docs_root
     scopes = [(WORKTREE_CHECKOUT, checkout, True)]
     if docs is not None:
@@ -1039,7 +1040,7 @@ def evaluate_probe_inflight(probe_key: str, *,
 
     Returns an eligibility SNAPSHOT document whose `result` is exactly
     one of `clear`, `in-flight` or `source-error`. Raises
-    `InflightRejected` only for a probe key `run_probes.PROBES` does not
+    `InflightRejected` only for a probe key `probe_runner_registry.PROBES` does not
     register — a caller mistake, never evidence that nothing is in
     flight.
 
@@ -1158,7 +1159,7 @@ def main(argv: list[str] | None = None) -> int:
         description="Whether one registered probe already has related work in "
                     "flight (read-only; claims nothing and launches nothing).")
     parser.add_argument("--probe", required=True,
-                        help="a registered run_probes.PROBES key, e.g. injury_log")
+                        help="a registered probe_runner_registry.PROBES key, e.g. injury_log")
     parser.add_argument("--json", action="store_true",
                         help="emit the eligibility document instead of a table")
     args = parser.parse_args(argv)

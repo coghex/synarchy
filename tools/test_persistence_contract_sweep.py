@@ -46,8 +46,8 @@ from persistence_contract_sweep import (  # type: ignore
     engine_cycle_phase,
     unregistered_selectable_probe_keys,
 )
-import run_probes  # type: ignore
-from run_probes import PROBES  # type: ignore
+import probe_runner_diagnostics  # type: ignore
+from probe_runner_registry import PROBES  # type: ignore
 
 FAILURES: list[str] = []
 
@@ -102,7 +102,7 @@ def test_empty_selectable_list_has_nothing_stale() -> None:
 # --------------------------------------------------------------------------
 # Durable phase records (#1768)
 # --------------------------------------------------------------------------
-class CapturedEmitter(run_probes.ProgressEmitter):
+class CapturedEmitter(probe_runner_diagnostics.ProgressEmitter):
     """The real emitter, with its flushed line kept instead of printed.
 
     Subclassing rather than redirecting stdout keeps the formatting under
@@ -114,7 +114,7 @@ class CapturedEmitter(run_probes.ProgressEmitter):
         self.lines: list[str] = []
 
     def emit(self, kind: str, identity: str, detail: str) -> str:
-        line = run_probes.format_progress(kind, identity, detail,
+        line = probe_runner_diagnostics.format_progress(kind, identity, detail,
                                           elapsed=0.0, now=0.0)
         self.lines.append(line)
         return line
@@ -163,7 +163,7 @@ def test_every_declared_phase_emits_a_record_the_runner_recognizes() -> None:
         expect(emitter.lines == [line],
                f"{identity!r} emitted exactly one record (got "
                f"{emitter.lines!r})")
-        record = run_probes.parse_progress(line)
+        record = probe_runner_diagnostics.parse_progress(line)
         expect(record is not None,
                f"{identity!r}'s record parses as a progress record "
                f"({line!r})")
@@ -183,7 +183,7 @@ def test_the_latest_sweep_phase_survives_a_long_tail() -> None:
         announce_phase(emitter, identity, f"detail for {identity}")
     capture = "\n".join(
         emitter.lines + [f"ordinary sweep output {i}" for i in range(60)])
-    got = run_probes.progress_attribution(capture)
+    got = probe_runner_diagnostics.progress_attribution(capture)
     text = "\n".join(got)
     latest = SWEEP_PHASE_IDENTITIES[-1]
     expect(latest in text,
