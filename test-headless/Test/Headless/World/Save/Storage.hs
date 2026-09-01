@@ -67,6 +67,7 @@ import Craft.Bills (emptyCraftBills)
 import Unit.Transfer.Orders (emptyTransferOrders)
 import Power.Types (emptyPowerNodes)
 import Building.Knowledge (emptyContainerKnowledge)
+import World.Flora.Identity (firstPlantedFloraCursor)
 
 -- ---------------------------------------------------------------------
 -- Fixtures (mirror Test.Headless.Save.Snapshot's minimal* pattern)
@@ -108,6 +109,9 @@ minimalPage gp = PageSnapshot
     , pgsUnitSimStates = HM.empty
     , pgsFloraHarvests = emptyFloraHarvests
     , pgsChopDesignations = HM.empty
+    , pgsPendingChopMigration = HM.empty
+    , pgsPendingFloraHarvests = HM.empty
+    , pgsPlantedFloraCursor = firstPlantedFloraCursor
     , pgsCraftBills   = emptyCraftBills
     , pgsTransferOrders = emptyTransferOrders
     , pgsPowerNodes   = emptyPowerNodes

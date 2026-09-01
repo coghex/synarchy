@@ -31,7 +31,7 @@ import Engine.Core.Capability.RenderView
 import Engine.Graphics.Camera (Camera2D(..))
 import Engine.Asset.Handle (toInt)
 import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..), mkVertexWorld
-                                           , packWorldUV)
+                                           , tileWorldUV)
 import Engine.Scene.Types (SortableQuad(..))
 import World.Generate (viewDepth)
 import World.Generate.Coordinates (globalToChunk)
@@ -178,7 +178,7 @@ renderSpoilQuadsScanned env worldState tileAlpha = do
                         slotF  = lookupSlot tex
                         fmF    = lookupFmSlot fmTex
                         tint   = Vec4 1.0 1.0 1.0 tileAlpha
-                        wuv    = packWorldUV tx ty
+                        wuv    = tileWorldUV tx ty
                         v0 = mkVertexWorld wuv (Vec2 drawX drawY)
                                  (Vec2 0 0) tint slotF fmF
                         v1 = mkVertexWorld wuv (Vec2 (drawX + tileWidth) drawY)

@@ -875,7 +875,9 @@ library
                      World.Tile.Types
                      World.Time.Types
                      World.Time.Local
+                     World.Flora.Identity
                      World.Flora.Types
+                     World.Flora.Designation
                      World.Flora.Growth
                      World.Flora.Placement
                      World.Flora.Render
@@ -1246,6 +1248,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Graphics.SwapchainSelection
                    Test.Headless.Graphics.UniformLayout
                    Test.Headless.Graphics.VertexLayout
+                   Test.Headless.Graphics.WorldVertexCoords
                    Test.Headless.Graphics.FontFallback
                    Test.Headless.Graphics.FontRepertoire
                    Test.Headless.Construct.Corners
@@ -1305,6 +1308,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Climate
                    Test.Headless.World.TimeLocal
                    Test.Headless.World.FloraGrowth
+                   Test.Headless.World.FloraIdentity
                    Test.Headless.River.CalderaHazard
                    Test.Headless.River.InlandSources
                    Test.Headless.World.Render.FrontWallLift

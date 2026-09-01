@@ -396,22 +396,51 @@ def frame_colour(direction: str, index: int) -> tuple[int, int, int, int]:
     return (10 + slot * 20, 30 + index * 25, 200 - slot * 10, 255)
 
 
-def atlas_cells(path: Path, cell_w: int, cell_h: int) -> List[List[tuple]]:
-    """Every cell's flat pixel set, row-major, as decoded RGBA8."""
+def atlas_slots(path: Path, cell_w: int, cell_h: int) -> List[List[List[list]]]:
+    """Every physical SLOT's texels, row-major, as decoded RGBA8.
+
+    A slot is the logical cell plus its one-texel extrusion gutter
+    (#2076), so `slot[y][x]` is indexed from the slot's own top-left
+    corner: `(pad, pad)` is the cell's first texel and `(0, 0)` is the
+    top-left corner square.
+    """
+    pad = pack_atlas.CELL_PADDING
+    slot_w = cell_w + 2 * pad
+    slot_h = cell_h + 2 * pad
     image_mod = pack_atlas.image_module()
     with image_mod.open(path) as handle:
         image = handle.convert("RGBA")
         pixels = image.load()
-        rows = image.height // cell_h
-        columns = image.width // cell_w
+        rows = image.height // slot_h
+        columns = image.width // slot_w
         return [
             [
-                {pixels[c * cell_w + x, r * cell_h + y]
-                 for y in range(cell_h) for x in range(cell_w)}
+                [
+                    [pixels[c * slot_w + x, r * slot_h + y]
+                     for x in range(slot_w)]
+                    for y in range(slot_h)
+                ]
                 for c in range(columns)
             ]
             for r in range(rows)
         ]
+
+
+def atlas_cells(path: Path, cell_w: int, cell_h: int) -> List[List[tuple]]:
+    """Every LOGICAL cell's flat pixel set, row-major, as decoded RGBA8.
+
+    Reads the cell inside its padded slot, which is what `atlas_cell_uv`
+    addresses — the gutter is `atlas_slots`' business.
+    """
+    pad = pack_atlas.CELL_PADDING
+    return [
+        [
+            {slot[pad + y][pad + x]
+             for y in range(cell_h) for x in range(cell_w)}
+            for slot in row
+        ]
+        for row in atlas_slots(path, cell_w, cell_h)
+    ]
 
 
 def mtimes(paths: Sequence[Path]) -> Dict[str, int]:
@@ -1404,9 +1433,13 @@ def assert_atlas_matches(
     assert record["columns"] == max(counts.values())
     assert record["rows"] == len(rows)
     assert record["cell_width"] == CELL[0] and record["cell_height"] == CELL[1]
-    assert record["atlas_width"] == record["columns"] * CELL[0]
-    assert record["atlas_height"] == record["rows"] * CELL[1]
+    # The gutter is declared, and the sheet is sized for padded SLOTS.
+    pad = pack_atlas.CELL_PADDING
+    assert record["cell_padding"] == pad
+    assert record["atlas_width"] == record["columns"] * (CELL[0] + 2 * pad)
+    assert record["atlas_height"] == record["rows"] * (CELL[1] + 2 * pad)
 
+    slots = atlas_slots(fx.atlas_path(unit, anim), CELL[0], CELL[1])
     cells = atlas_cells(fx.atlas_path(unit, anim), CELL[0], CELL[1])
     assert len(cells) == record["rows"]
     for row, direction in enumerate(rows):
@@ -1415,18 +1448,127 @@ def assert_atlas_matches(
             f"{direction} records {record['directions'][row]['frame_count']} "
             f"frames, authored {declared}")
         for column, cell in enumerate(cells[row]):
+            slot = slots[row][column]
             if column < declared:
                 assert cell == {frame_colour(direction, column)}, (
                     f"{unit}/{anim} cell ({row},{column}) holds {cell}, "
                     f"expected frame {column} of {direction}")
+                # #2076: the whole slot — gutter, edges and all four
+                # corner squares — is that same frame's own texels
+                # extruded outward. These fixture frames are solid, so
+                # any texel in the slot that is NOT the frame's colour
+                # is a gutter built from something else.
+                assert {t for line in slot for t in line} == cell, (
+                    f"{unit}/{anim} slot ({row},{column}) carries texels "
+                    f"its own cell does not: "
+                    f"{ {t for line in slot for t in line} - cell }")
             else:
                 # Padding rectangularizes the sheet and nothing else: it
                 # is transparent, and `frame_count` above already proves
-                # it is unreachable as a frame.
+                # it is unreachable as a frame. Its gutter is
+                # transparent too — a rectangularization slot has no art
+                # to extrude.
                 assert cell == TRANSPARENT, (
                     f"{unit}/{anim} padding cell ({row},{column}) is not "
                     f"transparent: {cell}")
+                assert {t for line in slot for t in line} == TRANSPARENT, (
+                    f"{unit}/{anim} padding slot ({row},{column}) has a "
+                    f"non-transparent gutter")
     return record
+
+
+def gradient_png(width: int, height: int, seed: int) -> bytes:
+    """A PNG whose every texel differs — the opposite of `rgba_png`.
+
+    Solid frames cannot distinguish a gutter built from the RIGHT edge
+    row from one built from any other row of the same frame, so the
+    extrusion geometry needs art where every position is identifiable.
+    """
+    image_mod = pack_atlas.image_module()
+    image = image_mod.new("RGBA", (width, height))
+    pixels = image.load()
+    for y in range(height):
+        for x in range(width):
+            pixels[x, y] = ((seed * 37 + x * 29) % 251 + 4,
+                            (seed * 53 + y * 41) % 251 + 4,
+                            (x * 17 + y * 13 + seed * 7) % 251 + 4,
+                            255)
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+@scenario("each cell's gutter is its OWN edge texels, corners included")
+def _compile_extrusion_ring(fx: Fixture) -> None:
+    """#2076's core guarantee, measured texel by texel.
+
+    Two directions of two frames each, every frame a distinct gradient,
+    so a gutter sourced from the wrong row, the wrong column, the
+    neighbouring cell, or the wrong corner is a different colour than
+    the one this asserts.
+    """
+    unit, anim = "hero", "idle"
+    width, height = 5, 4
+    pad = pack_atlas.CELL_PADDING
+    # `flip: true` over the canonical five, so the layout is legal with
+    # only a couple of rows of art to reason about.
+    directions = CANON5
+    counts = {d: 2 for d in directions}
+    art: Dict[tuple[str, int], bytes] = {}
+    for index, direction in enumerate(directions):
+        target = (fx.root / "assets" / "textures" / "units" / unit
+                  / "animations" / anim / direction)
+        target.mkdir(parents=True, exist_ok=True)
+        for i in range(counts[direction]):
+            seed = index * 11 + i * 3 + 1
+            art[(direction, i)] = gradient_png(width, height, seed)
+            (target / f"frame_{i:03d}.png").write_bytes(art[(direction, i)])
+    fx.yaml(unit, f"asset_units:\n  - name: {unit}\n    animations:\n"
+            + anim_yaml_ragged(unit, anim, counts, True))
+    fx.compile_ok()
+
+    record = entry(fx.index(unit), anim)
+    assert record["cell_padding"] == pad
+    assert record["cell_width"] == width and record["cell_height"] == height
+    assert record["atlas_width"] == 2 * (width + 2 * pad)
+    assert record["atlas_height"] == len(directions) * (height + 2 * pad)
+
+    slots = atlas_slots(fx.atlas_path(unit, anim), width, height)
+    ordered = [d for d in EXPECTED_ROW_ORDER if d in counts]
+    for row, direction in enumerate(ordered):
+        for column in range(counts[direction]):
+            frame = decode_rgba_texels(art[(direction, column)])
+            slot = slots[row][column]
+            for sy in range(height + 2 * pad):
+                for sx in range(width + 2 * pad):
+                    # The extrusion rule, stated independently of the
+                    # compiler: clamp the slot coordinate into the cell
+                    # on BOTH axes. A side takes its adjacent edge
+                    # texel; a corner square takes the one corner texel
+                    # it touches.
+                    cx = min(max(sx - pad, 0), width - 1)
+                    cy = min(max(sy - pad, 0), height - 1)
+                    assert slot[sy][sx] == frame[cy][cx], (
+                        f"{unit}/{anim} slot ({row},{column}) texel "
+                        f"({sx},{sy}) is {slot[sy][sx]}, expected the "
+                        f"cell's ({cx},{cy}) = {frame[cy][cx]}")
+
+    # And the cells really are distinguishable, so the sweep above is
+    # not passing on frames that happen to agree.
+    distinct = {tuple(tuple(line) for line in
+                      decode_rgba_texels(art[(d, i)]))
+                for d in directions for i in range(counts[d])}
+    assert len(distinct) == sum(counts.values())
+
+
+def decode_rgba_texels(png: bytes) -> List[List[tuple]]:
+    """A PNG's texels as `[y][x]`, through the compiler's own decoder."""
+    image_mod = pack_atlas.image_module()
+    with image_mod.open(io.BytesIO(png)) as handle:
+        image = handle.convert("RGBA")
+        pixels = image.load()
+        return [[pixels[x, y] for x in range(image.width)]
+                for y in range(image.height)]
 
 
 @scenario("a five-direction mirroring layout compiles to five ordered rows")

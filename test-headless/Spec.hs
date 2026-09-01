@@ -134,6 +134,7 @@ import qualified Test.Headless.Graphics.Screenshot as GraphicsScreenshot
 import qualified Test.Headless.Graphics.SwapchainSelection as GraphicsSwapchainSelection
 import qualified Test.Headless.Graphics.UniformLayout as GraphicsUniformLayout
 import qualified Test.Headless.Graphics.VertexLayout as GraphicsVertexLayout
+import qualified Test.Headless.Graphics.WorldVertexCoords as GraphicsWorldVertexCoords
 import qualified Test.Headless.Graphics.FontFallback as GraphicsFontFallback
 import qualified Test.Headless.Graphics.FontRepertoire as GraphicsFontRepertoire
 import qualified Test.Headless.Construct.Corners as ConstructCorners
@@ -215,6 +216,7 @@ import qualified Test.Headless.World.Render.SceneStats as SceneStats
 import qualified Test.Headless.World.Render.SolarAttribution as SolarAttribution
 import qualified Test.Headless.World.Render.DesignationFaceMap as DesignationFaceMap
 import qualified Test.Headless.World.DesignationSeam as DesignationSeam
+import qualified Test.Headless.World.FloraIdentity as FloraIdentity
 import qualified Test.Headless.World.CropPlant as CropPlant
 import qualified Test.Headless.World.StructureStage as StructureStage
 import qualified Test.Headless.World.StructurePaletteResidue as StructurePaletteResidue
@@ -697,6 +699,7 @@ main = hspec $ do
     GraphicsSwapchainSelection.spec
     describe "Graphics.UniformLayout" GraphicsUniformLayout.spec
     describe "Graphics.VertexLayout" GraphicsVertexLayout.spec
+    describe "world vertex coordinates" GraphicsWorldVertexCoords.spec
     describe "Graphics.FontFallback" GraphicsFontFallback.spec
     describe "Font SDF atlas repertoire" GraphicsFontRepertoire.spec
     describe "Construct.Corners" ConstructCorners.spec
@@ -789,6 +792,8 @@ main = hspec $ do
     describe "World.Render.DesignationFaceMap" DesignationFaceMap.spec
     describe "World.DesignationSeam" DesignationSeam.spec
     describe "World.DesignationSeam (engine)" DesignationSeam.engineSpec
+    FloraIdentity.spec
+    FloraIdentity.engineSpec
     describe "World.CropPlant" CropPlant.spec
     describe "World.CropPlant (engine)" CropPlant.engineSpec
 

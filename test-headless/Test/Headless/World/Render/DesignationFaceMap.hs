@@ -14,7 +14,7 @@ import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Graphics.Camera (CameraFacing(..))
 import Engine.Graphics.Vulkan.Types.Vertex
     ( Vec2(..), Vec4(..), Vertex, faceMapId, mkVertexWorld, noFaceMapVertexId
-    , packWorldUV )
+    , tileWorldUV )
 import Engine.Scene.Base (LayerId)
 import Engine.Scene.Types (SortableQuad(..))
 import World.Grid
@@ -25,8 +25,10 @@ import World.Render.TileQuads (worldCursorToQuad, worldFlatCursorToQuad)
 spec ∷ Spec
 spec = do
     describe "designation facemap" $ do
-        it "keeps ordinary cursor output field-for-field on the isometric map" $
+        it "keeps ordinary cursor output field-for-field on the isometric map" $ do
             quadSnapshot ordinaryQuad `shouldBe` quadSnapshot expectedOrdinaryQuad
+            sqSortKey ordinaryQuad
+                `shouldSatisfy` withinSortNudge (sqSortKey expectedOrdinaryQuad)
 
         it "uses the neutral face map for flat Till surfaces in every facing" $
             forM_ [FaceSouth, FaceWest, FaceNorth, FaceEast] $ \facing →
@@ -90,7 +92,7 @@ expectedOrdinaryQuad =
                 + fromIntegral relativeZ * 0.001 + 0.0004
         tint = Vec4 1.0 1.0 1.0 0.7
         atlas = fromIntegral (lookupSlot cursorTexture)
-        wuv = packWorldUV gx gy
+        wuv = tileWorldUV gx gy
         vertex position uv = mkVertexWorld wuv position uv tint atlas isoFaceMapId
     in SortableQuad
         { sqSortKey = sortKey
@@ -103,13 +105,29 @@ expectedOrdinaryQuad =
         , sqLayer = worldLayer
         }
 
-quadSnapshot ∷ SortableQuad → (Float, [Vertex], TextureHandle, LayerId)
+-- | Everything about the quad that is compared EXACTLY. The sort key is
+--   deliberately absent: it is the one field both sides compute by
+--   float arithmetic rather than carry, and GHC folds the fixture's
+--   copy of that expression at a different precision than it evaluates
+--   the production one at, so exact equality there was pinning an
+--   optimisation decision rather than the cursor's behaviour. It is
+--   checked separately, by 'withinSortNudge'.
+quadSnapshot ∷ SortableQuad → ([Vertex], TextureHandle, LayerId)
 quadSnapshot quad =
-    ( sqSortKey quad
-    , [sqV0 quad, sqV1 quad, sqV2 quad, sqV3 quad]
+    ( [sqV0 quad, sqV1 quad, sqV2 quad, sqV3 quad]
     , sqTexture quad
     , sqLayer quad
     )
+
+-- | The sort key agrees to far better than the nudge it encodes.
+--
+--   That nudge is what the key is FOR: a cursor sorts at its tile's key
+--   plus 0.0004, after terrain (+0.0) and before fluid (+0.0005). A
+--   tolerance of 1e-5 is two orders of magnitude inside the 1e-4 gap to
+--   either neighbour, so a drift that could reorder anything fails
+--   while a last-bit float difference does not.
+withinSortNudge ∷ Float → Float → Bool
+withinSortNudge expected actual = abs (actual - expected) < 1.0e-5
 
 faceMaps ∷ SortableQuad → [Float]
 faceMaps quad = map faceMapId [sqV0 quad, sqV1 quad, sqV2 quad, sqV3 quad]

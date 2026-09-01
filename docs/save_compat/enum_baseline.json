@@ -774,6 +774,18 @@
             "Int",
             "Int"
           ]
+        },
+        {
+          "name": "WePlaceFloraWithId",
+          "arity": 6,
+          "payload": [
+            "Int",
+            "Int",
+            "FloraId",
+            "Int",
+            "Float",
+            "FloraInstanceId"
+          ]
         }
       ]
     },
@@ -908,7 +920,7 @@
         },
         {
           "carrier": "World.Save.Compat.SessionV90 — matches src/World/Save/Compat/*.hs",
-          "via": "WorldPageSaveV90 → WorldEditDTO → FluidType"
+          "via": "WorldPageSaveV90 → WorldEditDTOv1 → FluidType"
         },
         {
           "carrier": "World.Save.Types — the transitional in-memory load bridge and the `metadata` component's payload",
@@ -1702,10 +1714,6 @@
         {
           "carrier": "\"world-edits\" — World.Save.Component.Page",
           "via": "PageEditsDTO → WorldEditDTO"
-        },
-        {
-          "carrier": "World.Save.Compat.SessionV90 — matches src/World/Save/Compat/*.hs",
-          "via": "WorldPageSaveV90 → WorldEditDTO"
         }
       ],
       "constructors": [
@@ -1809,6 +1817,143 @@
         },
         {
           "name": "WeClearFluidSnapshotD",
+          "arity": 2,
+          "payload": [
+            "Int",
+            "Int"
+          ]
+        },
+        {
+          "name": "WePlaceFloraWithIdD",
+          "arity": 6,
+          "payload": [
+            "Int",
+            "Int",
+            "FloraId",
+            "Int",
+            "Float",
+            "FloraInstanceId"
+          ]
+        }
+      ]
+    },
+    "World.Save.Component.Page.WorldEditDTOv1": {
+      "source": "src/World/Save/Component/Page.hs",
+      "onSaveWire": true,
+      "components": [
+        "world-edits"
+      ],
+      "carriers": [
+        {
+          "carrier": "\"world-edits\" — World.Save.Component.Page",
+          "via": "WorldEditsDTOv1 → PageEditsDTOv1 → WorldEditDTOv1"
+        },
+        {
+          "carrier": "World.Save.Compat.SessionV90 — matches src/World/Save/Compat/*.hs",
+          "via": "WorldPageSaveV90 → WorldEditDTOv1"
+        }
+      ],
+      "constructors": [
+        {
+          "name": "WeDeleteTileDv1",
+          "arity": 2,
+          "payload": [
+            "Int",
+            "Int"
+          ]
+        },
+        {
+          "name": "WeSetFluidTileDv1",
+          "arity": 3,
+          "payload": [
+            "Int",
+            "Int",
+            "FluidType"
+          ]
+        },
+        {
+          "name": "WeAddTileDv1",
+          "arity": 3,
+          "payload": [
+            "Int",
+            "Int",
+            "MaterialId"
+          ]
+        },
+        {
+          "name": "WeSetSlopeDv1",
+          "arity": 4,
+          "payload": [
+            "Int",
+            "Int",
+            "Int",
+            "Word8"
+          ]
+        },
+        {
+          "name": "WeSetCellDv1",
+          "arity": 4,
+          "payload": [
+            "Int",
+            "Int",
+            "Int",
+            "MaterialId"
+          ]
+        },
+        {
+          "name": "WeSetStructureDv1",
+          "arity": 6,
+          "payload": [
+            "Int",
+            "Int",
+            "Word8",
+            "Int",
+            "Int",
+            "Int"
+          ]
+        },
+        {
+          "name": "WeClearStructureDv1",
+          "arity": 3,
+          "payload": [
+            "Int",
+            "Int",
+            "Word8"
+          ]
+        },
+        {
+          "name": "WeSetVegDv1",
+          "arity": 4,
+          "payload": [
+            "Int",
+            "Int",
+            "Int",
+            "Word8"
+          ]
+        },
+        {
+          "name": "WePlaceFloraDv1",
+          "arity": 5,
+          "payload": [
+            "Int",
+            "Int",
+            "FloraId",
+            "Int",
+            "Float"
+          ]
+        },
+        {
+          "name": "WeSetFluidSnapshotDv1",
+          "arity": 4,
+          "payload": [
+            "Int",
+            "Int",
+            "FluidType",
+            "Int"
+          ]
+        },
+        {
+          "name": "WeClearFluidSnapshotDv1",
           "arity": 2,
           "payload": [
             "Int",

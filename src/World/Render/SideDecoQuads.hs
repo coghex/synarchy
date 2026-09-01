@@ -9,7 +9,7 @@ import qualified Data.Vector.Unboxed as VU
 import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (CameraFacing(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..), mkVertexWorld
-                                           , packWorldUV)
+                                           , tileWorldUV)
 import qualified Data.HashMap.Strict as HM
 import World.Chunk.Types (ChunkCoord(..), chunkSize, columnIndex)
 import World.Fluid.Types (FluidCell(..), FluidType(..))
@@ -182,7 +182,7 @@ waterSideQuad ctx ftype wx wy wz isLeft vb =
 
             -- No tinting — color comes from texture
             tint = Vec4 1.0 1.0 1.0 tileAlpha
-            wuv = packWorldUV gx gy
+            wuv = tileWorldUV gx gy
 
             v0 = mkVertexWorld wuv (Vec2 drawX drawY)
                          (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot

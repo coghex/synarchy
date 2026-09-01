@@ -74,10 +74,11 @@ fakeAtlas name fps loop flipV dirs = AtlasAnimation
     , aaFormat       = AtlasFormatPng
     , aaPath         = "assets/textures/units/fake/atlas/"
                        ⧺ T.unpack name ⧺ ".png"
-    , aaAtlasWidth   = cols * cellW
-    , aaAtlasHeight  = rows * cellH
+    , aaAtlasWidth   = cols * (cellW + 2 * cellPad)
+    , aaAtlasHeight  = rows * (cellH + 2 * cellPad)
     , aaCellWidth    = cellW
     , aaCellHeight   = cellH
+    , aaCellPadding  = cellPad
     , aaColumns      = cols
     , aaRows         = rows
     , aaFlip         = flipV
@@ -91,6 +92,10 @@ fakeAtlas name fps loop flipV dirs = AtlasAnimation
   where
     cellW = 16
     cellH = 24
+    -- The #2076 extrusion gutter. The preview viewer resolves its cells
+    -- through the game's own `atlasCellUV`, so the sheet it describes
+    -- has to be the padded one the compiler emits.
+    cellPad = 1
     ordered = [ (d, n) | d ← previewDirectionOrder, Just n ← [lookup d dirs] ]
     rows = length ordered
     cols = maximum (1 : map snd ordered)
@@ -206,15 +211,16 @@ withCompiledUnitFixture mIndex action = do
 --   a rejection here can only be about the format.
 unknownFormatIndex ∷ String → String
 unknownFormatIndex unit = concat
-    [ "{\"schema_version\":1,\"generator\":\"tools/pack_atlas.py\""
-    , ",\"tool_version\":1,\"digest_algorithm\":\"sha256\""
+    [ "{\"schema_version\":2,\"generator\":\"tools/pack_atlas.py\""
+    , ",\"tool_version\":2,\"digest_algorithm\":\"sha256\""
     , ",\"unit\":\"", unit, "\""
     , ",\"direction_order\":[\"south\",\"south-west\",\"west\""
     , ",\"north-west\",\"north\",\"north-east\",\"east\",\"south-east\"]"
     , ",\"animations\":[{\"name\":\"idle\",\"storage_format\":\"ktx2\""
     , ",\"atlas_path\":\"assets/textures/units/", unit, "/atlas/idle.png\""
-    , ",\"atlas_width\":32,\"atlas_height\":32"
-    , ",\"cell_width\":32,\"cell_height\":32,\"columns\":1,\"rows\":1"
+    , ",\"atlas_width\":34,\"atlas_height\":34"
+    , ",\"cell_width\":32,\"cell_height\":32,\"cell_padding\":1"
+    , ",\"columns\":1,\"rows\":1"
     , ",\"flip\":true,\"fps\":8,\"loop\":true"
     , ",\"directions\":[{\"direction\":\"south\",\"row\":0"
     , ",\"frame_count\":1}]"
@@ -572,7 +578,7 @@ spec = do
 
         it "addresses frames as atlas CELLS: real per-direction counts \
            \(never the padded column count), a cell size from the index, \
-           \and contiguous non-overlapping sub-rects across a row" $ do
+           \and gutter-separated non-overlapping sub-rects across a row" $ do
             result ← buildPreviewUnit unitsCategoryRoot realUnit
             case result of
                 Left err → expectationFailure
@@ -593,18 +599,36 @@ spec = do
                                         | d ← paDirs a, f ← pfdFrames d ]
                             nub cells `shouldSatisfy` \cs →
                                 length cs ≡ 1 ∧ all (\(w, hh) → w > 0 ∧ hh > 0) cs
-                            -- …and one direction's columns tile its row
-                            -- left to right without gaps or overlap.
+                            -- …and one direction's columns march left to
+                            -- right across its row, separated by exactly
+                            -- the #2076 extrusion gutter — two texels of
+                            -- padding between neighbouring cell
+                            -- interiors, never zero (which would be the
+                            -- old edge-adjacent stride) and never a
+                            -- whole cell (which would mean a skipped
+                            -- column).
                             case paDirs a of
                                 [] → expectationFailure "injured_idle has no directions"
                                 (d : _) → do
                                     let uvs = map pfUV (pfdFrames d)
                                         us  = [ (u0, u1) | (u0, _, u1, _) ← uvs ]
                                         vs  = [ (v0, v1) | (_, v0, _, v1) ← uvs ]
+                                        -- Widths in texels, from the
+                                        -- index's own cell size, so the
+                                        -- gap is asserted absolutely.
+                                        sheetW = case nub [ pfCell f
+                                                          | f ← pfdFrames d ] of
+                                            ((cw, _) : _) → case us of
+                                                ((u0, u1) : _) | u1 > u0 →
+                                                    fromIntegral cw / (u1 - u0)
+                                                _ → 0
+                                            [] → 0
+                                        gaps = [ (u0' - u1) * sheetW
+                                               | ((_, u1), (u0', _)) ←
+                                                   zip us (drop 1 us) ]
                                     length (nub vs) `shouldBe` 1
-                                    us `shouldSatisfy` \xs →
-                                        and [ u1 ≡ u0'
-                                            | ((_, u1), (u0', _)) ← zip xs (drop 1 xs) ]
+                                    gaps `shouldSatisfy` all
+                                        (\g → abs (g - 2) < 0.01)
                                     us `shouldSatisfy` all (\(u0, u1) → u0 < u1)
 
         it "mirrors an atlas-backed clip from its own eastern cells, and \

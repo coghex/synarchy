@@ -160,19 +160,32 @@ eightDirUnequal = AnimShape False
 --   restricted to authored directions), columns are the longest row,
 --   and every cell is 24x32 so a wrong cell size is visible in the
 --   arithmetic rather than hiding behind a square.
-atlasCellW, atlasCellH ∷ Int
+--
+--   Cells sit at the #2076 padded stride: each occupies a
+--   @(24+2) x (32+2)@ slot whose one-texel border is extrusion, and the
+--   LOGICAL cell starts one texel in. Every unequal number here — cell
+--   vs slot, 24 vs 32, and the padding vs neither — is deliberate, so a
+--   sub-rect computed at the wrong stride or without the offset lands
+--   somewhere this file's arithmetic can see.
+atlasCellW, atlasCellH, atlasCellPad ∷ Int
 atlasCellW = 24
 atlasCellH = 32
+atlasCellPad = 1
+
+atlasSlotW, atlasSlotH ∷ Int
+atlasSlotW = atlasCellW + 2 * atlasCellPad
+atlasSlotH = atlasCellH + 2 * atlasCellPad
 
 atlasAnimOf ∷ Float → Bool → AnimShape → AtlasAnimation
 atlasAnimOf fps loop shape = AtlasAnimation
     { aaName         = "clip"
     , aaFormat       = AtlasFormatPng
     , aaPath         = "assets/textures/units/test-unit/atlas/clip.png"
-    , aaAtlasWidth   = cols * atlasCellW
-    , aaAtlasHeight  = rows * atlasCellH
+    , aaAtlasWidth   = cols * atlasSlotW
+    , aaAtlasHeight  = rows * atlasSlotH
     , aaCellWidth    = atlasCellW
     , aaCellHeight   = atlasCellH
+    , aaCellPadding  = atlasCellPad
     , aaColumns      = cols
     , aaRows         = rows
     , aaFlip         = shapeFlip shape
@@ -213,8 +226,13 @@ chosenAtlas shape smp
     | otherwise =
         let aa = atlasAnimOf 1 True shape
             (u0, v0, _, _) = fsUV smp
-            col = round (u0 * fromIntegral (aaAtlasWidth aa)) `div` aaCellWidth aa
-            row = round (v0 * fromIntegral (aaAtlasHeight aa)) `div` aaCellHeight aa
+            -- Undo the extrusion offset before striding: the UV
+            -- origin is the LOGICAL cell, which sits one texel into
+            -- its slot.
+            col = (round (u0 * fromIntegral (aaAtlasWidth aa))
+                      - aaCellPadding aa) `div` atlasSlotW
+            row = (round (v0 * fromIntegral (aaAtlasHeight aa))
+                      - aaCellPadding aa) `div` atlasSlotH
         in case [ d | (d, r) ← Map.toList (aaDirections aa), adrRow r ≡ row ] of
             (d:_) → Chosen d col
             []    → TPose
@@ -491,6 +509,26 @@ spec = do
                 (v1 - v0) `shouldBeNear`
                     fromIntegral atlasCellH / fromIntegral (aaAtlasHeight aa)
 
+        -- #2076: the sub-rect addresses the LOGICAL cell inside its
+        -- padded slot, never the extrusion gutter. Recovered in TEXELS
+        -- so the offset is asserted as an offset rather than as a
+        -- ratio that a wrong stride could still satisfy.
+        it "addresses the cell inside its slot, never the extrusion gutter" $
+            forM_ (Map.toList (aaDirections aa)) $ \(d, row) → do
+                let (u0, v0, u1, v1) = fsUV (sampleAt 0 d)
+                    px u = round (u * fromIntegral (aaAtlasWidth aa)) ∷ Int
+                    py v = round (v * fromIntegral (aaAtlasHeight aa)) ∷ Int
+                -- Frame 0 of this row: one texel in on both axes, and
+                -- exactly one cell wide/tall.
+                px u0 `shouldBe` atlasCellPad
+                py v0 `shouldBe` adrRow row * atlasSlotH + atlasCellPad
+                px u1 - px u0 `shouldBe` atlasCellW
+                py v1 - py v0 `shouldBe` atlasCellH
+                -- And a full gutter still separates this cell from the
+                -- next column's, which is what a bilinear tap needs.
+                let nextU0 = atlasSlotW + atlasCellPad
+                nextU0 - (px u0 + atlasCellW) `shouldBe` 2 * atlasCellPad
+
         -- D-5: a short row is padded out to the sheet's column count,
         -- and no padding cell is addressable. DirNW authors ONE frame in
         -- a six-column sheet, so every time must resolve to column 0.
@@ -502,8 +540,8 @@ spec = do
         it "resolves each direction to its OWN indexed row" $
             forM_ (Map.toList (aaDirections aa)) $ \(d, row) → do
                 let (_, v0, _, _) = fsUV (sampleAt 0 d)
-                    got = round (v0 * fromIntegral (aaAtlasHeight aa))
-                              `div` aaCellHeight aa
+                    got = (round (v0 * fromIntegral (aaAtlasHeight aa))
+                              - aaCellPadding aa) `div` atlasSlotH
                 got `shouldBe` adrRow row
 
     describe "pickFrame — a mirrored atlas cell flips its own sub-rect" $ do

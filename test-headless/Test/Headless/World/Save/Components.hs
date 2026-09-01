@@ -118,6 +118,7 @@ import Unit.Sim.Types
     , MoveHazardPolicy(..))
 import Unit.Direction (Direction(..))
 import Building.Knowledge (emptyContainerKnowledge, ContainerRecord(..))
+import World.Flora.Identity (firstPlantedFloraCursor)
 
 -- ---------------------------------------------------------------------
 -- Fixtures (mirror Test.Headless.Save.Snapshot's minimal* pattern)
@@ -178,6 +179,9 @@ minimalPage pid = PageSnapshot
     , pgsUnitSimStates = HM.empty
     , pgsFloraHarvests = emptyFloraHarvests
     , pgsChopDesignations = HM.empty
+    , pgsPendingChopMigration = HM.empty
+    , pgsPendingFloraHarvests = HM.empty
+    , pgsPlantedFloraCursor = firstPlantedFloraCursor
     , pgsCraftBills   = emptyCraftBills
     , pgsTransferOrders = emptyTransferOrders
     , pgsPowerNodes   = emptyPowerNodes
@@ -216,7 +220,7 @@ minimalWorldPageSaveV90 pid = WorldPageSaveV90
     , wp90Buildings    = BuildingSnapshotV90 HM.empty 1
     , wp90Units        = UnitSnapshotV90 HM.empty 1
     , wp90UnitSimStates = HM.empty
-    , wp90FloraHarvests = emptyFloraHarvests
+    , wp90FloraHarvests = HM.empty
     , wp90ChopDesignations = HM.empty
     , wp90CraftBills   = BillQueueDTOv1 HM.empty 1
     , wp90PowerNodes   = NodeRegistryDTOv1 HM.empty 1
@@ -426,6 +430,8 @@ toActivity pid = PageActivityDTO
     , padCropPlots     = HM.empty
     , padGroundItems   = toGroundItemsDTO emptyGroundItems
     , padSpoilPiles    = HM.empty
+    , padPendingChop   = HM.empty
+    , padPendingHarvests = HM.empty
     }
 
 -- | The same at the FROZEN pre-#1233 layout (@world-activity@ v1/v2).
@@ -437,7 +443,7 @@ toActivityV2 pid = PageActivityDTOv2
     , pad2Chop          = HM.empty
     , pad2Till          = HM.empty
     , pad2Plant         = HM.empty
-    , pad2FloraHarvests = emptyFloraHarvests
+    , pad2FloraHarvests = HM.empty
     , pad2CropPlots     = HM.empty
     , pad2GroundItems   = toGroundItemsDTOv1 emptyGroundItems
     , pad2SpoilPiles    = HM.empty
@@ -652,6 +658,9 @@ minimalWorldPageSave pid = WorldPageSave
     , wpsUnitSimStates = HM.empty
     , wpsFloraHarvests = emptyFloraHarvests
     , wpsChopDesignations = HM.empty
+    , wpsPendingChopMigration = HM.empty
+    , wpsPendingFloraHarvests = HM.empty
+    , wpsPlantedFloraCursor = firstPlantedFloraCursor
     , wpsCraftBills   = emptyCraftBills
     , wpsTransferOrders = emptyTransferOrders
     , wpsPowerNodes   = emptyPowerNodes
@@ -739,8 +748,14 @@ goldenRichPayloads =
     [ ("core-session",        (85,   "74d3010096cbbe2b"))
     , ("texture-palette",     (16,   "88201fb960ff6465"))
     , ("world-pages",         (1306, "bbbd554013191bac"))
-    , ("world-edits",         (50,   "1ed7627acac89064"))
-    , ("world-activity",      (194,  "251087e70708d624"))
+      -- #1854 re-pinned: @world-edits@ v2 appends the page's
+      -- planted-flora allocator cursor to every page slice (and a
+      -- FloraInstanceId to every WePlaceFlora entry, of which this
+      -- fixture has none), and @world-activity@ v4 appends the two
+      -- deferred legacy-migration maps and re-keys Chop/harvest state
+      -- onto FloraInstanceId. Every other row is unchanged.
+    , ("world-edits",         (66,   "5f4fc96e8f002516"))
+    , ("world-activity",      (226,  "266dc52796fe89a4"))
     , ("buildings",           (151,  "3dafc93879ea3b82"))
     , ("units",               (249,  "fc6ed2ffd1c79265"))
     , ("unit-sim",            (123,  "81797b8874157310"))
@@ -755,12 +770,14 @@ goldenFullPayloads =
     [ ("core-session",        (85,  "0641eeed95100f9a"))
     , ("texture-palette",     (16,  "88201fb960ff6465"))
     , ("world-pages",         (683, "d30d2ebf9922cf3d"))
-    , ("world-edits",         (70,  "814069e34515f996"))
+      -- #1854 re-pinned, same two components as goldenRichPayloads.
+    , ("world-edits",         (78,  "d70f14ce21048a09"))
       -- #1233 re-pinned: this fixture's page carries a ground item, and
-      -- world-activity v3 appends the item tree's physical values (an
-      -- absent Maybe pair per item, ×3 nesting levels). Every other row
+      -- world-activity v3 appended the item tree's physical values (an
+      -- absent Maybe pair per item, ×3 nesting levels). #1854 re-pinned
+      -- it again for v4's two deferred-migration maps. Every other row
       -- is unchanged, because no other fixture slice holds an item.
-    , ("world-activity",      (354, "f6900c182f08a441"))
+    , ("world-activity",      (370, "1fe67e3b0ceccc81"))
     , ("buildings",           (130, "2b6c80ab8c216329"))
     , ("units",               (228, "4b3dd9531385aafc"))
     , ("unit-sim",            (102, "2977ea9721e11313"))
@@ -867,7 +884,7 @@ mentions needle = any (T.isInfixOf needle ∘ ceMessage)
 emptyPageActivity ∷ WorldPageId → PageActivityDTO
 emptyPageActivity pid = PageActivityDTO pid HM.empty HM.empty HM.empty
     HM.empty HM.empty emptyFloraHarvests HM.empty
-    (toGroundItemsDTO emptyGroundItems) HM.empty
+    (toGroundItemsDTO emptyGroundItems) HM.empty HM.empty HM.empty
 
 -- | #1667: one well-formed bill, so a floor test can pair an invalid
 --   allocator with a live id and see BOTH findings reported.
@@ -1095,7 +1112,7 @@ spec = do
                 bad = WorldActivityDTO
                     [ PageActivityDTO page1 HM.empty HM.empty HM.empty
                         HM.empty HM.empty emptyFloraHarvests HM.empty
-                        badGround HM.empty ]
+                        badGround HM.empty HM.empty HM.empty ]
             ccValidate worldActivityCodec bad `shouldSatisfy` (not . null)
 
         it "world-activity accepts ground items whose ids all sit below \
@@ -1107,7 +1124,7 @@ spec = do
                         (GroundItemsDTO 2
                             (HM.singleton 1 (toGroundItemDTO
                                 (GroundItem richItem 0 0))))
-                        HM.empty ])
+                        HM.empty HM.empty HM.empty ])
                 `shouldBe` []
 
     -- #1668: the stored footprint of a persisted location instance is
@@ -1556,7 +1573,7 @@ spec = do
                             (GroundItems 2 (HM.singleton 1
                                 (GroundItem richItem 3.5 4.5))) } ]
                 bytes = S.encode legacy
-            ccInputVers worldActivityCodec `shouldBe` [1, 2, 3]
+            ccInputVers worldActivityCodec `shouldBe` [1, 2, 3, 4]
             forM_ [1, 2] $ \ver → do
                 mv ← expectDecode ("v" ⧺ show ver)
                           (ccDecode worldActivityCodec ver bytes)

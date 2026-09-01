@@ -27,6 +27,7 @@
 module Test.Headless.World.FloraGrowth (spec) where
 
 import UPrelude
+import World.Flora.Identity (generatedFloraInstanceId)
 import Test.Hspec
 import qualified Data.HashMap.Strict as HM
 import Engine.Asset.Handle (TextureHandle(..))
@@ -113,6 +114,9 @@ seedling = FloraInstance
     { fiSpecies = FloraId 1, fiTileX = 3, fiTileY = 7
     , fiOffU = 0.1, fiOffV = -0.2, fiZ = 5
     , fiAge = 0.0, fiHealth = 1.0, fiVariant = 2, fiBaseWidth = 10.0
+    , fiInstanceId = generatedFloraInstanceId "flora_growth_probe" 3 7
+                         "probe_species" 0
+    , fiChopDesignated = False
     }
 
 -- The same placement as 'seedling', written out independently rather
@@ -124,6 +128,9 @@ regenerated = FloraInstance
     { fiSpecies = FloraId 1, fiTileX = 3, fiTileY = 7
     , fiOffU = 0.1, fiOffV = -0.2, fiZ = 5
     , fiAge = 0.0, fiHealth = 1.0, fiVariant = 2, fiBaseWidth = 10.0
+    , fiInstanceId = generatedFloraInstanceId "flora_growth_probe" 3 7
+                         "probe_species" 0
+    , fiChopDesignated = False
     }
 
 -- The five placement fields 'instanceHashFrac' mixes, each varied ONE

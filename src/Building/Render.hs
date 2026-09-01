@@ -25,7 +25,7 @@ import Engine.Graphics.Camera (CameraFacing(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..)
                                           , QuadPayload(..), quadVertices
                                           , rectCorners, fullQuadUV
-                                          , renderFlagSelected, packWorldUV
+                                          , renderFlagSelected, tileWorldUV
                                           , noFaceMapVertexId)
 import World.Grid (tileWidth, tileHeight, tileSideHeight
                   , tileHalfWidth, tileHalfDiamondHeight
@@ -241,7 +241,7 @@ buildingToQuad lookupSlot defFmSlot facing zSlice effDepth tileAlpha isSel inst 
             ghostFactor = if isGhost then 0.6 else 1.0
             tint = Vec4 1.0 1.0 1.0 (tileAlpha * ghostFactor)
             flags = if isSel then renderFlagSelected else 0
-            wuv = packWorldUV (biAnchorX inst) (biAnchorY inst)
+            wuv = tileWorldUV (biAnchorX inst) (biAnchorY inst)
 
             (v0, v1, v2, v3) =
                 quadVertices (rectCorners (Vec2 drawX drawY) (Vec2 quadW quadH))
@@ -352,7 +352,7 @@ renderGhostQuadScanned env solarSlot facing zSlice = do
                                 tint = ghostTint (bgValid ghost)
                                 actualSlot = lookupSlot texHandle
                                 sortKey = (faF + fbF) + quadH / tileHalfDiamondHeight * 0.5 + 0.01
-                                wuv = packWorldUV (bgGridX ghost) (bgGridY ghost)
+                                wuv = tileWorldUV (bgGridX ghost) (bgGridY ghost)
                                 (v0, v1, v2, v3) =
                                     quadVertices
                                         (rectCorners (Vec2 drawX drawY)

@@ -1,7 +1,7 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "generator": "tools/pack_atlas.py",
-  "tool_version": 1,
+  "tool_version": 2,
   "digest_algorithm": "sha256",
   "unit": "acolyte",
   "direction_order": [
@@ -19,10 +19,11 @@
       "name": "attack_heavy_RH_dagger",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/attack_heavy_RH_dagger.png",
-      "atlas_width": 432,
-      "atlas_height": 384,
+      "atlas_width": 450,
+      "atlas_height": 400,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 8,
       "flip": false,
@@ -70,17 +71,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "73818dbb185923a43c634484908095d70f65ad6ae5d56a3d8bb39a874e3672b2",
-      "atlas_digest": "b8781695f8e773dcd015c7a897fb689f5a9775e4d59f5a2f9b982d264bcedebb"
+      "source_digest": "4d567aac550982e82311c2bb5578d637398e463826a5f40f02a2479faf84c1d5",
+      "atlas_digest": "58009e0892bfb2864c55a77d1f02e4126d24edea13fe83413d4fa2f0395b87e9"
     },
     {
       "name": "attack_heavy_unarmed",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/attack_heavy_unarmed.png",
-      "atlas_width": 432,
-      "atlas_height": 240,
+      "atlas_width": 450,
+      "atlas_height": 250,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 5,
       "flip": true,
@@ -113,17 +115,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "4253466a0274c592d7b229879f6e245749d7db13982922e0a74dddb8c3288e40",
-      "atlas_digest": "bbd45c806962bcf558864c46fc2b4476823cc4a7e5ffbff2da664935f86de52f"
+      "source_digest": "0724b72ca588f7ec792bb2bf494919b10e4f8521a914f03a4494e06d29c73112",
+      "atlas_digest": "56cd037e03cdb10e74451450be0fe7a7319263d0aeb4b01a17bc2994318f2330"
     },
     {
       "name": "attack_quick_RH_dagger",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/attack_quick_RH_dagger.png",
-      "atlas_width": 240,
-      "atlas_height": 384,
+      "atlas_width": 250,
+      "atlas_height": 400,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 5,
       "rows": 8,
       "flip": false,
@@ -171,17 +174,18 @@
           "frame_count": 5
         }
       ],
-      "source_digest": "b6f50312fd540d6ecbf2976de7b23c1da0af68ad207f4f1a505fe9bc7e4b1e44",
-      "atlas_digest": "60c32ceec4c3c94de4f4d48e89eb29ca554cd6cfd1df7070742a6d713a52e187"
+      "source_digest": "3a7d203ec1380170460af8777b7cf3bfe73aed86929c1b82d8929dbba7793bfc",
+      "atlas_digest": "edef95a542f6aa9ff86dbd46aed4d2787ab14076b74def586e75002d1bd4b52b"
     },
     {
       "name": "attack_quick_unarmed",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/attack_quick_unarmed.png",
-      "atlas_width": 240,
-      "atlas_height": 240,
+      "atlas_width": 250,
+      "atlas_height": 250,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 5,
       "rows": 5,
       "flip": true,
@@ -214,17 +218,18 @@
           "frame_count": 5
         }
       ],
-      "source_digest": "27b658b6332c5c3914c2ba3f6672943944a136ddf6a88821864539c1787f7baf",
-      "atlas_digest": "504710842eb98da441788bb7c01ef030dad8dec6e0d2e037619085ddcf6d7d97"
+      "source_digest": "ae38d0cc4a9592b7ed9ce512b39ca4e7a9de2e3dbdede6ba0d603aa9a5fb3c7b",
+      "atlas_digest": "3d1aef9a8957d5c609f255254f70a723df25410b55bb6ca8fb57a484ff4412fe"
     },
     {
       "name": "climb",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/climb.png",
-      "atlas_width": 432,
-      "atlas_height": 240,
+      "atlas_width": 450,
+      "atlas_height": 250,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 5,
       "flip": true,
@@ -257,17 +262,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "9e01119eaf6d070552774681879979c27d29eac6071727e8ab519dca4012e971",
-      "atlas_digest": "3a8568ad69cd32885a09c378cf2d225ad46be92b390c21cf8c61d118bcc4e2a0"
+      "source_digest": "ddf7e7296509b51c55f736d8c89d95f6466ebb9ff0591fb9de74efb3cd0138fd",
+      "atlas_digest": "6b26a036ad42edea7e752eb9b400439653f326a243e239f3a5ef577daa668f83"
     },
     {
       "name": "climb_idle",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/climb_idle.png",
-      "atlas_width": 432,
-      "atlas_height": 240,
+      "atlas_width": 450,
+      "atlas_height": 250,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 5,
       "flip": true,
@@ -300,17 +306,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "0e6f34ee8f8d092766320e7077790d412180da8e109224f32f75878c1878f747",
-      "atlas_digest": "7a7b0eb1fde10eeef8b00c0524d2101d7796032a1eb4b1971c6da9750fa9749a"
+      "source_digest": "46ffcbf31549a4845af54c58d69d67d2de10d34e723bc6b8335e4dc3baac22ce",
+      "atlas_digest": "eb8d6b5c69bf8fa106f4d3b59e7b7cdd2e0059ca8510147a30a4ce751d8d64a7"
     },
     {
       "name": "climb_pullup",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/climb_pullup.png",
-      "atlas_width": 432,
-      "atlas_height": 240,
+      "atlas_width": 450,
+      "atlas_height": 250,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 5,
       "flip": true,
@@ -343,17 +350,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "6d879ad187a888baa13bef277fe3eec08aa7e4f4046e49f10daab0ff3b73280b",
-      "atlas_digest": "1024b233f18232c3f793ea2a59419929688ff3b96b30132c89453b9576492927"
+      "source_digest": "e9f4d1934d53185890dba7e6d3f60089651092393622b2adb5f0181745e685fc",
+      "atlas_digest": "08405d6ff37e22f72682498731852c12e1e6b0e842f8521a90b1601fac9647f6"
     },
     {
       "name": "collapse",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/collapse.png",
-      "atlas_width": 432,
-      "atlas_height": 240,
+      "atlas_width": 450,
+      "atlas_height": 250,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 5,
       "flip": true,
@@ -386,17 +394,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "51eaa0f18069835f4c57141b4bf3371876616573456e88937e4b3184457b1e85",
-      "atlas_digest": "819fee6b85f8d37a0f08e69d450ebaef5fe2c26d72e4fa9068c43742aac7eaea"
+      "source_digest": "c9971d8df3869e5f6f3b19f62dec230c828c4ecb69cf57e3b0edcb2f7a6f5883",
+      "atlas_digest": "235e6f3f31b7421e5d5e8bfedff3c20c8f375b078484ffbe126de370710ef395"
     },
     {
       "name": "combat_hit_react_RH_dagger",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/combat_hit_react_RH_dagger.png",
-      "atlas_width": 240,
-      "atlas_height": 384,
+      "atlas_width": 250,
+      "atlas_height": 400,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 5,
       "rows": 8,
       "flip": false,
@@ -444,17 +453,18 @@
           "frame_count": 5
         }
       ],
-      "source_digest": "9445890998d721f2964b09f2b5b921e14b8eb6b8f7f9d870168ac84f07541ac1",
-      "atlas_digest": "12f25360a18d17626a54d02861a992cb998875de1e10d4dc80f3633c09ded8ff"
+      "source_digest": "3a43c314430f8938128f691d336ba0f97542bdb9167789c5e2d1b655d91093be",
+      "atlas_digest": "618bbfab7506cbe618cfd42115f077046b3054ccc023d333c42002139e666e0a"
     },
     {
       "name": "combat_hit_react_unarmed",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/combat_hit_react_unarmed.png",
-      "atlas_width": 432,
-      "atlas_height": 240,
+      "atlas_width": 450,
+      "atlas_height": 250,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 5,
       "flip": true,
@@ -487,17 +497,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "45b4709156288f361592a55455b557d2b41d2833524574c22ed5bc214a166fdf",
-      "atlas_digest": "084c1f6e60cec5eea8b65504fedef3e07d6ef573aa193df2fbc718cf07cd4209"
+      "source_digest": "ad5c9e33f5890124014a5b8496dae2bc4e5593f1e45398f30b7b5a30f679c9f3",
+      "atlas_digest": "f3c59f78ffa7f92078acc8d71da9d6c5ebd4953a94123c3eec35305c961e600a"
     },
     {
       "name": "combat_idle_RH_dagger",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/combat_idle_RH_dagger.png",
-      "atlas_width": 432,
-      "atlas_height": 384,
+      "atlas_width": 450,
+      "atlas_height": 400,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 8,
       "flip": false,
@@ -545,17 +556,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "4d932ce508aa842078670b2ab625fdeec9a1ddd782d54325ebc847befbbe0f52",
-      "atlas_digest": "930f4e918136e21022f780d4d9d0def47abad53f6719410226a7e9c6dd4432f5"
+      "source_digest": "07b49b1f0438c48304f0683defba2888f518d877e771fcdb6e93dc7bfccad919",
+      "atlas_digest": "c5a0359926b7322e40245580300f23430477b9a4abc2596468d6558964c92464"
     },
     {
       "name": "combat_idle_unarmed",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/combat_idle_unarmed.png",
-      "atlas_width": 432,
-      "atlas_height": 240,
+      "atlas_width": 450,
+      "atlas_height": 250,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 5,
       "flip": true,
@@ -588,17 +600,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "e7f470548d394b78de0b070b967f47db416480f3aa79cc40c09bc649d4378067",
-      "atlas_digest": "2dd8fcc17fa99ed5e0cccbd1a878a3879c5e660a5480685c64df130cf977368c"
+      "source_digest": "0e3d84df39d60b3206cf75148d78963522a4111bdbe89f5b5d462bcd9b5cedb4",
+      "atlas_digest": "6a0f8a6a24b483ebeb915d6c626701f80c43afc7758f4aa64cc5cd60f7ffe872"
     },
     {
       "name": "crawling",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/crawling.png",
-      "atlas_width": 432,
-      "atlas_height": 240,
+      "atlas_width": 450,
+      "atlas_height": 250,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 5,
       "flip": true,
@@ -631,17 +644,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "6342aead92e63a7a1ec42b3463ae1d5cdd36d23df2c3f3571e86ef181cc68ad4",
-      "atlas_digest": "55a449809c9041ca5e5b7cac6e39b98dcfdcf1a9e28ce83908fbfea884a986f6"
+      "source_digest": "79b0561192a593238d8cb9273e659d219cb0dc79bf341d63c9c61edec1dd1ef0",
+      "atlas_digest": "752ed34df7f546f9d168b1053533d6338853cee6d716219a699c1a660636ea69"
     },
     {
       "name": "crawling_idle",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/crawling_idle.png",
-      "atlas_width": 432,
-      "atlas_height": 240,
+      "atlas_width": 450,
+      "atlas_height": 250,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 5,
       "flip": true,
@@ -674,17 +688,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "b6a4fb4d5054bcfbe6febfc67ebff6e433a413e363c2a0a7c0343f3ad13b3a21",
-      "atlas_digest": "362b2b99607af023b0cd572f77aa2068f90095daea542f925cdcaa2510b05f9f"
+      "source_digest": "ac62214b348171ca4220be7c5653b07771d02a84012364286f6715a4a82a4614",
+      "atlas_digest": "a10876a69c6a5b02474e7e71f81f95ea646b88e468b85101b594860b79af7b40"
     },
     {
       "name": "crawling_to_collapsed",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/crawling_to_collapsed.png",
-      "atlas_width": 432,
-      "atlas_height": 240,
+      "atlas_width": 450,
+      "atlas_height": 250,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 5,
       "flip": true,
@@ -717,17 +732,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "fb7fa63dff2aa56549ef7c34e74ba8c9bb2a03ac0a7dd6b5628737de9f0d7dc9",
-      "atlas_digest": "b2739a7ce6fe936d3105f693eb19f82e39d5feb3b8841413ad22c2d566a3b52b"
+      "source_digest": "32eff8d3c4ea5e687e2af13f92b88bd436a2131fc2dff299b665a3f5ec2d566e",
+      "atlas_digest": "933e5001212313ab8d31cb918a1e4872ceeb5e3ef6b3aca5a7f26e895f4deb30"
     },
     {
       "name": "crawling_to_sleeping",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/crawling_to_sleeping.png",
-      "atlas_width": 432,
-      "atlas_height": 240,
+      "atlas_width": 450,
+      "atlas_height": 250,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 5,
       "flip": true,
@@ -760,17 +776,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "08475a349f8e8cc94131b3741e2c8ab085959ced57a98f030a89a1347b1d3a7c",
-      "atlas_digest": "d3f01c8def5cf3b4a34b26f95fa1e8e7931d8b968dc4b62cfd981fbb99feca6f"
+      "source_digest": "0db29f85e7c06fe4d0da10f0a0da7c56b27b6254d38d1c34d5c12b7857d90de7",
+      "atlas_digest": "88bac7064821a2f3a05c812e0cf9e9a9dd80562ab9e494ea3ee4ceb11026b96a"
     },
     {
       "name": "crouching_idle",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/crouching_idle.png",
-      "atlas_width": 432,
-      "atlas_height": 240,
+      "atlas_width": 450,
+      "atlas_height": 250,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 5,
       "flip": true,
@@ -803,17 +820,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "2a2fda39bf85aa40435df52a6bd1a403c67a09d11db2490ce929c28947926dbf",
-      "atlas_digest": "96c595abc59b4acff599988b40fa4cb3c5c4d8826195f9ceaa5555904f0b8a2a"
+      "source_digest": "2ccbda0619349fc9d709309f8a9200e3420890e0a7fd20c3002a3e259310e57e",
+      "atlas_digest": "5a45cf94d9c43b515dd9c22f35df11c70e1c43d120df588c3f2569aac815c8b2"
     },
     {
       "name": "crouching_to_crawling",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/crouching_to_crawling.png",
-      "atlas_width": 432,
-      "atlas_height": 240,
+      "atlas_width": 450,
+      "atlas_height": 250,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 5,
       "flip": true,
@@ -846,17 +864,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "7d640c4af746e9f5725a814e39054e1946b4e83cdddbd80830b1889e3631a41c",
-      "atlas_digest": "900dedb2f9c1053b884f678123272634f6ccde7c2febf9140d1b5e5119706c0b"
+      "source_digest": "bdff367cb40741b5d8902604b53251396f04eb60e7e755351dbb13c9decc897c",
+      "atlas_digest": "c56b7f71767af8bc2ab96bc770b0ee759f70f44f812251b0f38dbb9f1a484217"
     },
     {
       "name": "death",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/death.png",
-      "atlas_width": 336,
-      "atlas_height": 240,
+      "atlas_width": 350,
+      "atlas_height": 250,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 7,
       "rows": 5,
       "flip": true,
@@ -889,17 +908,18 @@
           "frame_count": 7
         }
       ],
-      "source_digest": "36f151d9376177828e6aaaca9006bbe83606a65e334521713232e478ec359afe",
-      "atlas_digest": "fd82b19e133b7d62e737b245d24d442ded6d392e26dd7b089114cf85514d8e9a"
+      "source_digest": "1eac6611605ccb4b1ff94a2a52262f20e1e4da85fdecb3d0371155e763612dfb",
+      "atlas_digest": "cc1dae66853ed75f0d4746d270c4c23578833b4c38a864a6996f959f1c766c6a"
     },
     {
       "name": "drink",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/drink.png",
-      "atlas_width": 288,
-      "atlas_height": 240,
+      "atlas_width": 300,
+      "atlas_height": 250,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 6,
       "rows": 5,
       "flip": true,
@@ -932,17 +952,18 @@
           "frame_count": 6
         }
       ],
-      "source_digest": "6e1c354e132102fcd4d8c2410731102fe9665553adcf7fc1039f7bb70e659909",
-      "atlas_digest": "bd81f63f4de613fbf6460f35fc5db9ae173b775689637fad2d167bb2246ff65b"
+      "source_digest": "00dc3309daa56d6b7e1c89d9c5c3e05903c89f9428591f8768e2d11db768e1a9",
+      "atlas_digest": "7f18365afccbdc78ab7b7e7291c2160229bba65b74f6886ec5313184e316f8e6"
     },
     {
       "name": "falling",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/falling.png",
-      "atlas_width": 240,
-      "atlas_height": 240,
+      "atlas_width": 250,
+      "atlas_height": 250,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 5,
       "rows": 5,
       "flip": true,
@@ -975,17 +996,18 @@
           "frame_count": 5
         }
       ],
-      "source_digest": "00f5ceeb7beac784bd91a05b58a5f8c88abb68c3c11601be51c47e47ec488474",
-      "atlas_digest": "e59bbf9b5eacd964ed7be484211178b330e6941084af95482c4a792e4e2728ec"
+      "source_digest": "ca33ebc18ad4e2872e49a743df716a23b1c9017a2d21e0aa4aaff1e897700157",
+      "atlas_digest": "0683a6b22ed522c8e244b9228f1cf7d8ac6c3c2241627dcf20d811bcbe9d06c4"
     },
     {
       "name": "hit_react",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/hit_react.png",
-      "atlas_width": 432,
-      "atlas_height": 240,
+      "atlas_width": 450,
+      "atlas_height": 250,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 5,
       "flip": true,
@@ -1018,17 +1040,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "3b7f80dfb6a0dc8613acb5d8f6f5a1741d3021fe32b2f70572b1deea88603cc5",
-      "atlas_digest": "09005b176f2fd7c9de3d3b36a0efff14dbe3cebeb2321b6921a98cb1ee118a87"
+      "source_digest": "60626f65105ed30bd73776daacf4b45791fb7d55adfab0618e41aed48d435eba",
+      "atlas_digest": "4e820ba90c93c9821f87137fa87cec9333be6cfbb7c2fb3fa681c08b5b10969b"
     },
     {
       "name": "idle",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/idle.png",
-      "atlas_width": 192,
-      "atlas_height": 240,
+      "atlas_width": 200,
+      "atlas_height": 250,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 4,
       "rows": 5,
       "flip": true,
@@ -1061,17 +1084,18 @@
           "frame_count": 4
         }
       ],
-      "source_digest": "9b8602111c74e30e4b17ad24bc774fb2ab7d89fd54631147e577e04886b65c19",
-      "atlas_digest": "19380137c3184edd7dbc726089d0f17c2539291571fcdbaaaefbaf77e3a810bf"
+      "source_digest": "43984bc1ce9e32725811773e4a5fdb7ce4e003421bae06f20ca16c5cb6eb2172",
+      "atlas_digest": "10f6453dc137508fcfe1fae3b0c05e200afc3595b8c11cb22433b2d654314d5a"
     },
     {
       "name": "injured_attack_heavy_RH_dagger",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/injured_attack_heavy_RH_dagger.png",
-      "atlas_width": 432,
-      "atlas_height": 384,
+      "atlas_width": 450,
+      "atlas_height": 400,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 8,
       "flip": false,
@@ -1119,17 +1143,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "fa03e73e15d3d30bce69cefd7e966a9484f9ed3bf0b008575281e5895833bea8",
-      "atlas_digest": "6fd75d0ef0fc5a6303b2f0f320ca4bfe242697239e30b29c2195c948fa318793"
+      "source_digest": "e9ec3b5a23e12a7c3a23a882225e2a3930c2b4351d2eea5ce9df47a6c99ab3ba",
+      "atlas_digest": "a29680b1b62f140cd78b56a361e25eb3b90bfb98752f83a3b94147cd753b787f"
     },
     {
       "name": "injured_attack_heavy_unarmed",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/injured_attack_heavy_unarmed.png",
-      "atlas_width": 432,
-      "atlas_height": 240,
+      "atlas_width": 450,
+      "atlas_height": 250,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 5,
       "flip": true,
@@ -1162,17 +1187,18 @@
           "frame_count": 5
         }
       ],
-      "source_digest": "1088edb8f645ba4b3d800822479ff9ab1f47ef5c56c2d4a82a7883cd005fa6f9",
-      "atlas_digest": "e08161ffe925e042875a0915d7b74bb82a264acce84919c94a2d1845d4c59913"
+      "source_digest": "d04e62d27432b5c8ab16ce54c382ac9aa0ffbda49e58f495f4e3a86f62ab9f9a",
+      "atlas_digest": "611120983f7dca75efab7dcbfe119ff4aa1498b9a9cc3ebd79275f94ebdf6ce4"
     },
     {
       "name": "injured_attack_quick_RH_dagger",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/injured_attack_quick_RH_dagger.png",
-      "atlas_width": 240,
-      "atlas_height": 384,
+      "atlas_width": 250,
+      "atlas_height": 400,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 5,
       "rows": 8,
       "flip": false,
@@ -1220,17 +1246,18 @@
           "frame_count": 5
         }
       ],
-      "source_digest": "1a215f5ab6835ef2af4b5f63beb21a929809be32576050eae8a822cb08d79b2d",
-      "atlas_digest": "f750a5a99032b01a1e564e51ec5ea9eb37bc041bd0b15d287b0b0b40cd5b87ed"
+      "source_digest": "de613180643cbf19870205b69e956ad889e601ad4ea7b48ece3a58e232d323c9",
+      "atlas_digest": "b4c53efdceb53bae3fafdb9b4663427a1ad99e4c4c8f6d541cbb07fd6bc5ec7c"
     },
     {
       "name": "injured_attack_quick_unarmed",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/injured_attack_quick_unarmed.png",
-      "atlas_width": 240,
-      "atlas_height": 240,
+      "atlas_width": 250,
+      "atlas_height": 250,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 5,
       "rows": 5,
       "flip": true,
@@ -1263,17 +1290,18 @@
           "frame_count": 5
         }
       ],
-      "source_digest": "b718d5133994ae949a869e20d3acb848ffd52f3df30aa23f69e267951a37def7",
-      "atlas_digest": "8e625ee4ce0fcf00409d19f4401af119f9fbaa68058c539ba7511489bf2f3006"
+      "source_digest": "52b12119950095b0fcef6c2165c4c224a8a9e8a0bf8fe776c5b876b7f3833124",
+      "atlas_digest": "26c5ac458c0c4cf4e1a04af4c0e2a5039433c6277a9214dc3349ce6a84260782"
     },
     {
       "name": "injured_collapse",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/injured_collapse.png",
-      "atlas_width": 432,
-      "atlas_height": 240,
+      "atlas_width": 450,
+      "atlas_height": 250,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 5,
       "flip": true,
@@ -1306,17 +1334,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "60f72166ac3d61bea97ff216cc939cf4445480a075cf30e000dc298135c71406",
-      "atlas_digest": "6cfafb4ab4a9c8928d835a43f0ee44232af9305509f51bac6b34a40a5712bda6"
+      "source_digest": "7b41bf414ed158eebf653f8689d2543e21f8edf6cea9c70585d6798e7e6d6e46",
+      "atlas_digest": "136725e79cecbe513027b05f6fa92bba0527fb42a3025e0f90d15b72f9a26649"
     },
     {
       "name": "injured_combat_hit_react_RH_dagger",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/injured_combat_hit_react_RH_dagger.png",
-      "atlas_width": 240,
-      "atlas_height": 384,
+      "atlas_width": 250,
+      "atlas_height": 400,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 5,
       "rows": 8,
       "flip": false,
@@ -1364,17 +1393,18 @@
           "frame_count": 5
         }
       ],
-      "source_digest": "bdb4f76e342143cafae8f7e905c99ed60e23f61a8ac61df903877357cd018086",
-      "atlas_digest": "982ce5758d8e1bd721d231b1355c81db6454b445a8349eebe295af165b5dde75"
+      "source_digest": "0bf77c15481c965958dbbb2633bb55d70910b16e2a73168208fc9c9a4442350c",
+      "atlas_digest": "04263e85d76b10a15ba19dac67fec36767e89d6506879204c74d89b58a89ccee"
     },
     {
       "name": "injured_combat_hit_react_unarmed",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/injured_combat_hit_react_unarmed.png",
-      "atlas_width": 240,
-      "atlas_height": 240,
+      "atlas_width": 250,
+      "atlas_height": 250,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 5,
       "rows": 5,
       "flip": true,
@@ -1407,17 +1437,18 @@
           "frame_count": 5
         }
       ],
-      "source_digest": "089e1e696e5a8da1f011d4a7fa8bf5b5729137adc1886b78d728df4734eac61c",
-      "atlas_digest": "09674f4ea5b69b7745c63e6b3cbf608d0d954971c57b20ab9013c2b38f11136f"
+      "source_digest": "aab9908ed9080016ec66c30b4de2f2f75b8a699a922ee543f4abe44f9378e87b",
+      "atlas_digest": "2b64fabf9dcf311ba42829cc357d887b7912ca650f207a30c18f5bac4a7b3195"
     },
     {
       "name": "injured_combat_idle_RH_dagger",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/injured_combat_idle_RH_dagger.png",
-      "atlas_width": 432,
-      "atlas_height": 384,
+      "atlas_width": 450,
+      "atlas_height": 400,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 8,
       "flip": false,
@@ -1465,17 +1496,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "1acfa45832c96e7b5dfaf2ecac46d9dcb242efe1270365cfc0b2f351a3afe535",
-      "atlas_digest": "42e68b3b8e212c9f1d64b3fb44a584b0e8739979c33eab26fa750454060933da"
+      "source_digest": "2ef850627ae50713110e6ccca56178c56e1f83c434b4b7c82d95ba63b64c9751",
+      "atlas_digest": "8cf0b9fd57e4434520724d5470f02c191a3d51e69ab6defc40f5b0554fb4b132"
     },
     {
       "name": "injured_combat_idle_unarmed",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/injured_combat_idle_unarmed.png",
-      "atlas_width": 432,
-      "atlas_height": 240,
+      "atlas_width": 450,
+      "atlas_height": 250,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 5,
       "flip": true,
@@ -1508,17 +1540,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "71b14b96779983f846dc1bea9813a08a18cd85cdeab509731f59662bfcc8b70e",
-      "atlas_digest": "1a5cf1b496e568f6a50e054cd9e93125d9260f098fcc4711568a29ce6b027672"
+      "source_digest": "a975d2899bc609beed30d95196dd6d9a154f9404d8b77587d4f76e5901d5be51",
+      "atlas_digest": "3a9df788a9cb9964d39da2089fdbc1a442425ce41341a79d6320f5666990c923"
     },
     {
       "name": "injured_death",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/injured_death.png",
-      "atlas_width": 432,
-      "atlas_height": 240,
+      "atlas_width": 450,
+      "atlas_height": 250,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 5,
       "flip": true,
@@ -1551,17 +1584,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "793482cd018cbf4834aa0d1332ed497eb3a3c197f96623299a66f6f805912b9f",
-      "atlas_digest": "355dde30e14b45b6915edc19b6080bec99b4ceb698fbf14f821ead4387eebfb6"
+      "source_digest": "57dc32b9a12d524b6d07509dfddcd564e36cc21638dbbafe233d158f1a00db0d",
+      "atlas_digest": "ec7a78884774b45a2635e4cec80c063de8e1fe0e018ab16680b6e755bd18d6da"
     },
     {
       "name": "injured_drink",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/injured_drink.png",
-      "atlas_width": 432,
-      "atlas_height": 240,
+      "atlas_width": 450,
+      "atlas_height": 250,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 5,
       "flip": true,
@@ -1594,17 +1628,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "45da87afa1568081f3bd3a3178ffe0d0b9dce3cf1b486bbe744a13a740db3035",
-      "atlas_digest": "f6397dbc374900f1a76911b50184a4a0d7cc9370150180fd1cae596c263690d5"
+      "source_digest": "17de820afae68a5337fc0b2db45135102ae0918eaf86cca4f7a0b0726c7afffe",
+      "atlas_digest": "3847e0349761d16c1a4e1ee123a97b85c652b5638da63a61c103edcde5c34f60"
     },
     {
       "name": "injured_hit_react",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/injured_hit_react.png",
-      "atlas_width": 240,
-      "atlas_height": 240,
+      "atlas_width": 250,
+      "atlas_height": 250,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 5,
       "rows": 5,
       "flip": true,
@@ -1637,17 +1672,18 @@
           "frame_count": 5
         }
       ],
-      "source_digest": "c3b1c3a338e6cd5027739041a64a90fcd32af96da67523befc82c9f69f53da0e",
-      "atlas_digest": "6cfb3c8a0ea829c07ccf9e98d038fd489cf59e6624d97c9b436c2408cedd9ca6"
+      "source_digest": "babfd41db73cc2936b15dbcd37b74782b5767600cf9df46624291dec10b1ada9",
+      "atlas_digest": "f9b6d8152c5a1eb27f7eb24fba84e57c483ccd92772806e0a9fed7a0ad411589"
     },
     {
       "name": "injured_idle",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/injured_idle.png",
-      "atlas_width": 432,
-      "atlas_height": 240,
+      "atlas_width": 450,
+      "atlas_height": 250,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 5,
       "flip": true,
@@ -1680,17 +1716,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "c77b4b08fac34977d4a954d72358168171abf8aae3528282740b7599a75c3f85",
-      "atlas_digest": "419fe875ffd7d7dff1b6ca1d9ad9d2aa06bdd38f5fb325b2b20de37f194f093f"
+      "source_digest": "a5b23d46905b15f5ef9f6508cd26e70834510224bae5ffe71442e85ca1388c6a",
+      "atlas_digest": "2fb51b31cda44a78fb665687ebd3120ed773efd127751306f9419181c0d48014"
     },
     {
       "name": "injured_pickup",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/injured_pickup.png",
-      "atlas_width": 432,
-      "atlas_height": 240,
+      "atlas_width": 450,
+      "atlas_height": 250,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 5,
       "flip": true,
@@ -1723,17 +1760,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "6cf73876296eab7cadc55758988062661a4448a4e922086c439601bcf1bf30b1",
-      "atlas_digest": "c5ab67ad9fe541d2192885929e066aec4fdb2a4bcb40c162271be0124cc0836f"
+      "source_digest": "5ffa9689870b742c0249512edb35065d20f76223c13515c45ecbc8366dda4d0b",
+      "atlas_digest": "fdcdde0d1350c1dce5abc7d2b4056e25e86d2bdb7df93cbefb644990eff35496"
     },
     {
       "name": "injured_run",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/injured_run.png",
-      "atlas_width": 432,
-      "atlas_height": 240,
+      "atlas_width": 450,
+      "atlas_height": 250,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 5,
       "flip": true,
@@ -1766,17 +1804,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "2dec44296b21ccd1ffab16a495749a5a43e75bbea69765c908a709976cd21f66",
-      "atlas_digest": "39df67503cdef7114805eea145b467ab2636ba59bb37344a62a5fac2560e8cec"
+      "source_digest": "3c4afcae1070e6931113b1e5f93a18053c077cc7f78a14a64dae75d0098b7432",
+      "atlas_digest": "5996960576ba1a6657dfe00fbffa6c8ee13c509c26e21dbfd80984cc3d5db157"
     },
     {
       "name": "injured_walk",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/injured_walk.png",
-      "atlas_width": 432,
-      "atlas_height": 240,
+      "atlas_width": 450,
+      "atlas_height": 250,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 5,
       "flip": true,
@@ -1809,17 +1848,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "4396709a56efbe4ef8cef1da4c0d09bb8acfabbbb64b852f9341eda55949e9e8",
-      "atlas_digest": "e89a5d09e20064a691c1a2b846edd080dbc452fdbb5d7de8d51dbb839e743e31"
+      "source_digest": "f24c3e949dd7ff25d2ef8a901d7c04b31272246a275e3801844716cb0951faaf",
+      "atlas_digest": "01aba8c8c68a3131199234c477305a095779b59e9a916c5b1df801fb991140f7"
     },
     {
       "name": "landing",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/landing.png",
-      "atlas_width": 432,
-      "atlas_height": 240,
+      "atlas_width": 450,
+      "atlas_height": 250,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 5,
       "flip": true,
@@ -1852,17 +1892,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "b533e60a784cc84632b8e20beb9d1ce4a6cab04fabdd6419226fba04cb3555d8",
-      "atlas_digest": "7eb0758249d3b8e007f312a9c7b528346211c5fe1ff4720acc8de1c8a5399e9f"
+      "source_digest": "e225c6cb31ec3085d00a55ae8808d779c27013ec5bf47687decba4aa3f6cff85",
+      "atlas_digest": "e5ef923e754b8e629a8f593188d7aa0170c41da04d252b1a3f8fb561d7301570"
     },
     {
       "name": "pickup",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/pickup.png",
-      "atlas_width": 240,
-      "atlas_height": 240,
+      "atlas_width": 250,
+      "atlas_height": 250,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 5,
       "rows": 5,
       "flip": true,
@@ -1895,17 +1936,18 @@
           "frame_count": 5
         }
       ],
-      "source_digest": "b47eb70828f28b7798d8c011cb09f2d382cd936e35648c3573958084c832332c",
-      "atlas_digest": "05ca67e9d34fea2251e493c5982be39cf144a29db6322998aae6f25c55cf2c68"
+      "source_digest": "00632aca6061df39b041234225e763099fbb6afb363c086c36e3ddc17edbae48",
+      "atlas_digest": "7f2d58976a031ead8c4c995be9fa53489b7e7798fff03fa2e77f7ce85ad657ba"
     },
     {
       "name": "pushing",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/pushing.png",
-      "atlas_width": 432,
-      "atlas_height": 240,
+      "atlas_width": 450,
+      "atlas_height": 250,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 5,
       "flip": true,
@@ -1938,17 +1980,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "891613527b7c3a7a8d88a15e0d0160139dd9e87cdee4386e97c624b69f399b39",
-      "atlas_digest": "4f7d2dbcac4e2880a9e6651a76c31cdfc8cf0351992c5951ce495fd2dce52e79"
+      "source_digest": "d472f3124f3e23e7a8a3d1fd7ed0685239161b47e9c122c5822d219f0d8ed259",
+      "atlas_digest": "a12eb8e3e1926892ba73ecb628edc5bfa892f892a7812257d1d4411a84a5ec0e"
     },
     {
       "name": "pushing_idle",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/pushing_idle.png",
-      "atlas_width": 432,
-      "atlas_height": 240,
+      "atlas_width": 450,
+      "atlas_height": 250,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 5,
       "flip": true,
@@ -1981,17 +2024,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "1c25784401ee995b6152090bdc4a183b24e1fc3906ac5a3bcae5fe44b429e509",
-      "atlas_digest": "872a04670e18602cab6049cf8c0ad8c2d9c539b086b0330fdf7d871cd3d2f1df"
+      "source_digest": "5ad0c20d30c38df8ab97c99cfc822c7975453c3c21c44c325aef7e07802d873a",
+      "atlas_digest": "70a9cb256194ed858270fa16e1d80e2236447d1f4f205a8d133cd54a2d10a43b"
     },
     {
       "name": "run",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/run.png",
-      "atlas_width": 288,
-      "atlas_height": 240,
+      "atlas_width": 300,
+      "atlas_height": 250,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 6,
       "rows": 5,
       "flip": true,
@@ -2024,17 +2068,18 @@
           "frame_count": 6
         }
       ],
-      "source_digest": "3a564ee260d68878adfa2a1ddd4a9b78456120a7132b761753ecc86de0380c01",
-      "atlas_digest": "03137286197784fb5dc7deec1e14fb42f74e87c4a7cec1d0ffda29b8de98ac4d"
+      "source_digest": "a9084486b180e950838ce8ffbc588032e2d40252b5f780bb476bed6f2362bcc0",
+      "atlas_digest": "da97f8ac64705514c331d7b9842a3ffa6a0cf26ee3a0927a3eb15333f13c93fc"
     },
     {
       "name": "shoveling",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/shoveling.png",
-      "atlas_width": 432,
-      "atlas_height": 240,
+      "atlas_width": 450,
+      "atlas_height": 250,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 5,
       "flip": true,
@@ -2067,17 +2112,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "c673fb92f371a1ca6475c3cfb5065a76fd275bbc62f5eb240c699fb473e1ba71",
-      "atlas_digest": "dc950048de5b9c1c5910f6b860f071d3878ebc78551653954bb399824149ee48"
+      "source_digest": "9bf6998b8ff0f7a370d7fa8d4fb3879625f82bbefb095d9d7e92b417c30b8da8",
+      "atlas_digest": "b9ceefbc937e297d38ffa465f47b616ca6ee1eeb4905bf8a1640434e0dd61b1c"
     },
     {
       "name": "sleeping_idle",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/sleeping_idle.png",
-      "atlas_width": 432,
-      "atlas_height": 240,
+      "atlas_width": 450,
+      "atlas_height": 250,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 5,
       "flip": true,
@@ -2110,17 +2156,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "4e8dc88612ff3cd9b327fac9a9445ec93e553a5f6a928f70654840050cb7ac22",
-      "atlas_digest": "8b897cf40a161946223f2e4949494d8fe6deffcd1b5a1aaa87bd10894294d72e"
+      "source_digest": "a8caab131a43b09476aae9c4b0841157f62c75357279688b2f7d39b3e44af0ad",
+      "atlas_digest": "f2aa3fcbc649f61bb8b6ce93bbe0f146fb407f8a9fb91ad25c0d02538a7564e1"
     },
     {
       "name": "standing_to_collapsed",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/standing_to_collapsed.png",
-      "atlas_width": 432,
-      "atlas_height": 240,
+      "atlas_width": 450,
+      "atlas_height": 250,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 5,
       "flip": true,
@@ -2153,17 +2200,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "22488afb87b7ba7e40ae9691d478565bcfc94085c6dd7f09501ad7c0ca7f755f",
-      "atlas_digest": "a5fa32aab6ada52cb79d782f749f0d461657bf56fd03fdaf1a945fecde4cfef2"
+      "source_digest": "63af948997f454e78c8f8b72a145701cf95d04c82530007d3b8fa3175fa46d90",
+      "atlas_digest": "b209a420c474aa728aeab20386529fda01d1ac50f8d2cc2c647327465b03ab0f"
     },
     {
       "name": "standing_to_crawling",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/standing_to_crawling.png",
-      "atlas_width": 432,
-      "atlas_height": 240,
+      "atlas_width": 450,
+      "atlas_height": 250,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 5,
       "flip": true,
@@ -2196,17 +2244,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "b16531962b0a01a869c902bdf6c16cfc72e602b374c6f9100b60100729bc994f",
-      "atlas_digest": "26c6907b3020a8c2d2c01be33a068a767b51137510dbcc07e5f577a7dc03849f"
+      "source_digest": "cc0cb193c288dbe2fe0c8af18f48ed9891517dcb14dbcde0d53bf5e4ee1d1e72",
+      "atlas_digest": "7ff02dd1bdf4bba8c711ad3547b0d6d90b6b9397a77d0ce2fd38928b23d428cf"
     },
     {
       "name": "standing_to_crouching",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/standing_to_crouching.png",
-      "atlas_width": 432,
-      "atlas_height": 240,
+      "atlas_width": 450,
+      "atlas_height": 250,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 5,
       "flip": true,
@@ -2239,17 +2288,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "c2aeb45aad39bdb8a9282b08b1b5f7688ea65e3a30f87cf6b1335470a6fc67df",
-      "atlas_digest": "d8b68f35e423d9e37063fbb9cb30f4623c55781eca5b251ffc13131383a057f5"
+      "source_digest": "e82043495aa9e0d56b2eea8f4a9193a658e1221f92c0b39982d9da506dc2a5b1",
+      "atlas_digest": "cc4daa4222cf0fbceade522dcacd5990010df785bc3b008e6cee62433f349695"
     },
     {
       "name": "standing_to_holding_pickaxe",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/standing_to_holding_pickaxe.png",
-      "atlas_width": 432,
-      "atlas_height": 240,
+      "atlas_width": 450,
+      "atlas_height": 250,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 5,
       "flip": true,
@@ -2282,17 +2332,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "fec7b8a14742029ca9c9044a8b559e834d0add59634270d6860d85af7d0087b3",
-      "atlas_digest": "891808e7bbb020cea6978b0d3fecf9d7e73e02c20be017289892e59ead13fa11"
+      "source_digest": "b5986b8c0b379f087c8a0b9fdccf2e4950f0b598ca989b473802d4dda9c496df",
+      "atlas_digest": "b9fa00927de697702b14a87112cd98666f2a1756a3163477db2f408a66bd65f2"
     },
     {
       "name": "standing_to_holding_shovel",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/standing_to_holding_shovel.png",
-      "atlas_width": 432,
-      "atlas_height": 240,
+      "atlas_width": 450,
+      "atlas_height": 250,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 5,
       "flip": true,
@@ -2325,17 +2376,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "d30182a00cc9d3f5b8bc3ad31580bc06b36ea2f3e3a6f883c57766e3e00877b8",
-      "atlas_digest": "31ec57c981e799c439c138451c74c2c6926a418505db8b1fa512225fc70d5025"
+      "source_digest": "ccc2ded5a9f8fe5e6cce90d8853872e481c613c9e48fedc393e4ac023bc1cafb",
+      "atlas_digest": "74bb2a717d611ebc186afbaed290d0bfa06558821de5a92fab027e7ff6ad2717"
     },
     {
       "name": "standing_to_pushing",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/standing_to_pushing.png",
-      "atlas_width": 240,
-      "atlas_height": 240,
+      "atlas_width": 250,
+      "atlas_height": 250,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 5,
       "rows": 5,
       "flip": true,
@@ -2368,17 +2420,18 @@
           "frame_count": 5
         }
       ],
-      "source_digest": "a30b57c76d253f50957d9b8c8e1920ba903533c7c5fe9eefab81a6de180c96ec",
-      "atlas_digest": "7d7de7f925d78446acf81b39d17cb8d7f03665f7bc52db4899c53c38fbc1fcaa"
+      "source_digest": "55e15e1509b00a687a1574980f4ecea61e83576adbbcfa18d4db07d18ec323dc",
+      "atlas_digest": "8fd4f1aaa3d086915aed803a2818710c37e3158fff2e5396e3ae235a4012db3e"
     },
     {
       "name": "using_pickaxe",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/using_pickaxe.png",
-      "atlas_width": 432,
-      "atlas_height": 240,
+      "atlas_width": 450,
+      "atlas_height": 250,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 5,
       "flip": true,
@@ -2411,17 +2464,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "f6db339a0e3c131384800699011c081f691f2ecfcf07d5441ef173303bc767ee",
-      "atlas_digest": "bd7ba0503c602263081e49cda62b77452f5a6d790239be583ec55965d4790f7f"
+      "source_digest": "9eae2518a71dcf6ce2c5eb0a5fd807c6f2f685712d0133f241cb39cc49951c19",
+      "atlas_digest": "becf1e0fcd7bd4c0286420fcf2fe37791427e3710683b2fa5f3ae21d282bc635"
     },
     {
       "name": "walk",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/acolyte/atlas/walk.png",
-      "atlas_width": 288,
-      "atlas_height": 240,
+      "atlas_width": 300,
+      "atlas_height": 250,
       "cell_width": 48,
       "cell_height": 48,
+      "cell_padding": 1,
       "columns": 6,
       "rows": 5,
       "flip": true,
@@ -2454,8 +2508,8 @@
           "frame_count": 6
         }
       ],
-      "source_digest": "717a0d4682ce2fa5d1cdec620f2a6e4efeaa13943351d406ccf3e3f66c36d080",
-      "atlas_digest": "4d8a7f82e2459c4da90da66c75d02ba9ff6d0b57f24cb4eed79afef6259e6efa"
+      "source_digest": "bd9127986738ed124864a31ddcd4cceab9bfee94558247e2b2d9737b01ea8a0b",
+      "atlas_digest": "28effacc63c0b0d56fedb8968056af50026424627ffe3297130b0f4944a56a54"
     }
   ]
 }

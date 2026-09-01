@@ -1376,10 +1376,15 @@ Output is **one atlas per ANIMATION** (D-2),
 `atlas/index.json`. Rows are the AUTHORED directions in the engine's own
 `Unit.Direction` order (five for `flip: true`, eight for `flip: false`);
 columns are the max authored frame count, with the index recording each
-direction's TRUE count — no padding cell is addressable. Cells are exact
+direction's TRUE count — no padding slot is addressable. Cells are exact
 integer copies of the source frames' decoded RGBA8 samples; a size
-mismatch is a compile error, never an implicit rescale (D-6). The index
-carries two PER-ANIMATION `sha256` digests, so one animation's edit
+mismatch is a compile error, never an implicit rescale (D-6). Since
+#2076 each cell sits one texel inside a `(cell+2) x (cell+2)` SLOT whose
+gutter copies that cell's own edge texels outward, corners included — a
+linear tap can no longer reach a neighbouring frame, and nearest is
+untouched because the index still addresses the inner cell. The index
+records that `cell_padding` as a required field at `schema_version` 2,
+and carries two PER-ANIMATION `sha256` digests, so one animation's edit
 never invalidates an unrelated atlas (D-12); rebuilds are deterministic
 and incremental runs write only on real content differences.
 `--validate-only` is index-aware: a unit with NO index is valid to the
@@ -1487,9 +1492,10 @@ previous frame's rect.
 Atlas slots are registered PINNED to the nearest sampler with one mip
 level (D-6), so a runtime `setTextureFilter` toggle cannot start
 bilinearly resampling unit art; the upload path's path cache is
-therefore policy-aware, and cell UVs sit on exact cell EDGES with no
-half-texel inset — see `docs/engine_contracts.md` §Unit animation atlas
-runtime.
+therefore policy-aware, and cell UVs sit on the LOGICAL cell's own exact
+edges — one texel inside its padded slot — with no half-texel inset; the
+#2076 extrusion gutter is what buys linear isolation, moving no sampled
+texel. See `docs/engine_contracts.md` §Unit animation atlas runtime.
 
 Gates: hspec `--match "pickFrame"` (the whole logical-choice matrix
 checked against an independently written `expectedChoice` table, so an

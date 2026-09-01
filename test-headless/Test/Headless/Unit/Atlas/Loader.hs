@@ -105,8 +105,8 @@ atlasFor name frames = AtlasAnimation
     { aaName = name, aaFormat = AtlasFormatPng
     , aaPath = "assets/textures/units/" ⧺ T.unpack fixtureUnit
                    ⧺ "/atlas/" ⧺ T.unpack name ⧺ ".png"
-    , aaAtlasWidth = frames * 16, aaAtlasHeight = 16
-    , aaCellWidth = 16, aaCellHeight = 16
+    , aaAtlasWidth = frames * 18, aaAtlasHeight = 18
+    , aaCellWidth = 16, aaCellHeight = 16, aaCellPadding = 1
     , aaColumns = frames, aaRows = 1
     , aaFlip = False, aaFps = 8, aaLoop = True
     , aaDirections = Map.singleton DirS (AtlasDirectionRow DirS 0 frames)

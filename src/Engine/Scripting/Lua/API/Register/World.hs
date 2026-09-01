@@ -149,6 +149,7 @@ registerWorldAPI env backendState = do
   registerLuaFunction "getFloraAt" (worldGetFloraAtFn env)
   registerLuaFunction "getFloraGrowthAt" (worldGetFloraGrowthAtFn env)
   registerLuaFunction "harvestFlora" (worldHarvestFloraFn env)
+  registerLuaFunction "harvestFloraInstance" (worldHarvestFloraInstanceFn env)
   registerLuaFunction "findHarvestableFlora"
     (worldFindHarvestableFloraFn env)
   registerLuaFunction "plantCropAt" (worldPlantCropAtFn (toWorldSimCapability env))

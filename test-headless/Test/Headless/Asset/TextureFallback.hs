@@ -97,6 +97,7 @@ import World.Render.Textures.Types (defaultWorldTextures)
 import Unit.Direction (Direction(..))
 import World.Flora.Types (FloraCatalog(..), FloraId(..), FloraSpecies(..)
     , FloraHarvest(..), FloraInstance(..), lookupSpecies)
+import World.Flora.Identity (floraInstanceIdNone)
 
 -- A real, always-present repo asset — stands in for both "the preferred
 -- path" (existing case) and "the fallback path" (missing case) so the
@@ -442,6 +443,8 @@ sentinelHandleSpec = do
                     , fiHealth    = 1
                     , fiVariant   = 0
                     , fiBaseWidth = 8
+                    , fiInstanceId = floraInstanceIdNone
+                    , fiChopDesignated = False
                     }
                 lookupSlot = toInt
             case floraToQuad lookupSlot defaultWorldTextures FaceSouth

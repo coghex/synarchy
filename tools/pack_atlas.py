@@ -122,21 +122,33 @@ Each direction's row index is nevertheless recorded EXPLICITLY, so the
 runtime reads a row rather than re-deriving the order.
 
 Columns are the animation's maximum authored frame count. A shorter row
-is rectangularized with transparent RGBA8 zero cells and NOTHING ELSE
-(D-5): padding exists so the sheet is a rectangle, and the index's
-per-direction `frame_count` is the only frame authority — no padding
-cell is addressable as a frame.
+is rectangularized with transparent RGBA8 zero slots and NOTHING ELSE
+(D-5): they exist so the sheet is a rectangle, and the index's
+per-direction `frame_count` is the only frame authority — no such slot
+is addressable as a frame.
 
-Cell geometry is exact INTEGER pixels: frame `c` of the direction whose
-row is `r` occupies `x = c * cell_width`, `y = r * cell_height`,
-`cell_width` x `cell_height`. Every frame of one animation must decode
-to those same dimensions; a mismatch is a compile error, never an
-implicit rescale or crop (D-6 — nothing here resamples or blends).
+Cell geometry is exact INTEGER pixels, at a stride widened by the
+one-texel extrusion gutter (#2076). Each cell occupies a physical SLOT
+of `(cell_width + 2 * CELL_PADDING)` x `(cell_height + 2 *
+CELL_PADDING)`, and frame `c` of the direction whose row is `r` has its
+LOGICAL cell at `x = c * slot_width + CELL_PADDING`,
+`y = r * slot_height + CELL_PADDING`, `cell_width` x `cell_height`.
+Every frame of one animation must decode to those same cell
+dimensions; a mismatch is a compile error, never an implicit rescale or
+crop (D-6 — nothing here resamples or blends).
+
+The gutter around each slot is filled by copying that cell's own
+outermost texels outward, corners included, so a bilinear tap taken
+anywhere inside a logical cell reads only that cell's colours instead
+of bleeding into the neighbouring frame. Nearest sampling is unchanged
+by construction: the index addresses the INNER cell, so no fragment
+centre moves and the picture stays pixel-identical.
 
 Every atlas cell is a byte-for-byte copy of its source frame's
-canonical decoded RGBA8 samples, alpha included. "Byte-for-byte" is
-about those decoded samples, not about PNG-encoded file bytes: the
-engine's own upload path decodes to RGBA8 as well
+canonical decoded RGBA8 samples, alpha included, and the gutter around
+it is a byte-for-byte copy of that frame's own edge texels.
+"Byte-for-byte" is about those decoded samples, not about PNG-encoded
+file bytes: the engine's own upload path decodes to RGBA8 as well
 (`Engine.Scripting.Lua.Message.Texture`'s convertRGBA8).
 
 The index. One JSON document per unit, generated end to end — see
@@ -144,16 +156,17 @@ The index. One JSON document per unit, generated end to end — see
 `schema_version` (the FORMAT contract TEX-3 will parse, bumped when the
 document shape changes) separately from `tool_version` (this compiler's
 own revision), a documented `direction_order`, and per animation: the
-storage format and atlas path, atlas/cell dimensions, columns, rows,
-each authored direction's row and REAL frame count, the mirroring
-declaration, and two digests.
+storage format and atlas path, atlas/cell dimensions, the extrusion
+gutter (`cell_padding`), columns, rows, each authored direction's row
+and REAL frame count, the mirroring declaration, and two digests.
 
 Digests are `sha256` and are named as such in the document:
 
   * `source_digest` is PER ANIMATION, over a canonically ordered,
     length-prefixed stream of that animation's own inputs — name, flip,
-    fps, loop, and for every direction in atlas order its declared
-    frame paths and their canonical decoded RGBA8 pixels. Per-animation
+    fps, loop, cell geometry including `cell_padding`, and for every
+    direction in atlas order its declared frame paths and their
+    canonical decoded RGBA8 pixels. Per-animation
     is the point: one animation's edit must not invalidate an unrelated
     atlas (D-12).
   * `atlas_digest` is over the atlas's decoded RGBA8 CONTENT
@@ -412,13 +425,33 @@ PNG_IEND_CHUNK = (struct.pack(">I", 0) + b"IEND"
 # `docs/texture_infrastructure.md` requires an incompatible index to be
 # rejectable, so this number is the runtime's compatibility gate and
 # changes only when the document SHAPE does.
-INDEX_SCHEMA_VERSION = 1
+#
+# v2 (#2076) added the REQUIRED per-animation `cell_padding`. A v1
+# document describes edge-adjacent cells at a different stride, so
+# reading one under v2 geometry would sample the wrong texels — the
+# runtime rejects it on the version alone, before it can miss the field.
+INDEX_SCHEMA_VERSION = 2
 
 # This compiler's own revision, deliberately separate from the schema
 # version: a change in how artifacts are produced (encoder settings,
 # padding, digest inputs) that leaves the document shape alone bumps
 # only this, and every index carrying an older value is regenerated.
-TOOL_VERSION = 1
+#
+# v2 (#2076): cells are extruded by one texel per side.
+TOOL_VERSION = 2
+
+# The extrusion gutter, in texels per side (#2076, epic #2072 TSR-3's
+# precondition). Every cell occupies a `(cell_width + 2 * CELL_PADDING)`
+# x `(cell_height + 2 * CELL_PADDING)` slot whose border is a copy of
+# the cell's own edge texels, so a bilinear tap anywhere inside the
+# logical cell reads only that cell's colours. Nearest sampling is
+# untouched: the UV rect still addresses the INNER cell exactly, so no
+# fragment centre moves.
+#
+# One texel is the supported layout and the runtime validates for
+# exactly it. Widening this is a schema change, not a constant edit: the
+# stride, the digest, and every recorded index would all move with it.
+CELL_PADDING = 1
 
 GENERATOR = "tools/pack_atlas.py"
 DIGEST_ALGORITHM = "sha256"
@@ -452,7 +485,7 @@ DEFAULT_FLIP = False
 # Digest domain tags. Each carries its own version so a change to what
 # goes INTO a digest invalidates every recorded one rather than
 # silently producing a colliding value from different inputs.
-SOURCE_DIGEST_TAG = b"synarchy-atlas-source-v1"
+SOURCE_DIGEST_TAG = b"synarchy-atlas-source-v2"
 ATLAS_DIGEST_TAG = b"synarchy-atlas-content-v1"
 
 
@@ -1454,12 +1487,26 @@ class AnimPlan:
         return len(self.directions)
 
     @property
+    def cell_padding(self) -> int:
+        """The extrusion gutter this plan compiles with, per side."""
+        return CELL_PADDING
+
+    @property
+    def slot_width(self) -> int:
+        """One cell's PHYSICAL width, gutters included."""
+        return self.cell_width + 2 * self.cell_padding
+
+    @property
+    def slot_height(self) -> int:
+        return self.cell_height + 2 * self.cell_padding
+
+    @property
     def atlas_width(self) -> int:
-        return self.columns * self.cell_width
+        return self.columns * self.slot_width
 
     @property
     def atlas_height(self) -> int:
-        return self.rows * self.cell_height
+        return self.rows * self.slot_height
 
 
 def atlas_dir_rel(unit: str) -> PurePosixPath:
@@ -1549,31 +1596,79 @@ def plan_animation(
     )
 
 
+def extruded_slot(plan: AnimPlan, frame: Frame) -> bytes:
+    """One frame's PHYSICAL slot: the frame plus its extrusion ring.
+
+    The result is `slot_width` x `slot_height` canonical RGBA8 samples,
+    with the frame occupying the inner rect at offset
+    `(cell_padding, cell_padding)` and the border filled by copying the
+    frame's own outermost texels outward — edges from the adjacent edge
+    row or column, and each corner from the single corner texel it
+    touches, duplicated into the whole corner square.
+
+    That is the whole of #2076: a bilinear tap taken anywhere inside the
+    logical cell reaches at most `cell_padding` texels past its edge and
+    so reads a copy of this frame rather than a neighbouring one. The
+    samples are COPIED, never blended or resampled — the ring holds
+    exact duplicates of real frame texels, which is what keeps the
+    nearest-mode picture byte-identical (the UV rect still addresses the
+    inner rect alone).
+    """
+    pad = plan.cell_padding
+    src_row = plan.cell_width * 4
+    dst_row = plan.slot_width * 4
+    slot = bytearray(dst_row * plan.slot_height)
+
+    for line in range(plan.cell_height):
+        source = frame.pixels[line * src_row:(line + 1) * src_row]
+        left = source[:4] * pad
+        right = source[-4:] * pad
+        start = (line + pad) * dst_row
+        slot[start:start + dst_row] = left + source + right
+
+    # The horizontal gutters are whole padded rows copied from the
+    # already-extruded first and last interior rows, which is what makes
+    # every corner square a duplicate of the corner texel it touches
+    # without a second special case.
+    first = bytes(slot[pad * dst_row:(pad + 1) * dst_row])
+    last = bytes(slot[(pad + plan.cell_height - 1) * dst_row:
+                      (pad + plan.cell_height) * dst_row])
+    for line in range(pad):
+        slot[line * dst_row:(line + 1) * dst_row] = first
+        bottom = pad + plan.cell_height + line
+        slot[bottom * dst_row:(bottom + 1) * dst_row] = last
+
+    return bytes(slot)
+
+
 def compose_atlas(plan: AnimPlan) -> bytes:
     """The atlas's canonical RGBA8 samples.
 
-    The buffer starts as zeroes, so every cell a direction does not
-    reach stays fully transparent RGBA(0, 0, 0, 0). That is the ONLY
-    thing padding is for: rectangularizing a row shorter than the
-    animation's maximum authored frame count. Nothing addresses a
-    padding cell as a frame — the index's per-direction `frame_count`
-    is the sole frame authority.
+    The buffer starts as zeroes, so every SLOT a direction does not
+    reach stays fully transparent RGBA(0, 0, 0, 0), gutters included.
+    That is the ONLY thing a rectangularization slot is for: squaring
+    off a row shorter than the animation's maximum authored frame
+    count. Nothing addresses one as a frame — the index's per-direction
+    `frame_count` is the sole frame authority — and an authored cell
+    beside one still reads its OWN extrusion ring, never the transparent
+    neighbour, because the gutters belong to the cells they surround.
 
-    Each frame is copied scanline by scanline as raw bytes, so no
-    blending, compositing or resampling can occur.
+    Each frame is written as its `extruded_slot`, scanline by scanline
+    as raw bytes, so no blending, compositing or resampling can occur.
     """
     stride = plan.atlas_width * 4
     buffer = bytearray(stride * plan.atlas_height)
-    row_bytes = plan.cell_width * 4
+    slot_row = plan.slot_width * 4
     for direction in plan.directions:
-        top = direction.row * plan.cell_height
+        top = direction.row * plan.slot_height
         for column, frame in enumerate(direction.frames):
-            left = column * row_bytes
-            for line in range(plan.cell_height):
+            left = column * slot_row
+            slot = extruded_slot(plan, frame)
+            for line in range(plan.slot_height):
                 start = (top + line) * stride + left
-                source = line * row_bytes
-                buffer[start:start + row_bytes] = \
-                    frame.pixels[source:source + row_bytes]
+                source = line * slot_row
+                buffer[start:start + slot_row] = \
+                    slot[source:source + slot_row]
     return bytes(buffer)
 
 
@@ -1604,9 +1699,16 @@ def source_digest(plan: AnimPlan) -> str:
     animation is that editing one cannot invalidate another, and a
     digest taken over a whole unit would give that back. The inputs are
     everything the compiled artifacts depend on — the animation's
-    identity, its mirroring/timing declarations, and for each direction
-    in atlas order its declared source paths and their canonical
-    decoded pixels — in one fixed order.
+    identity, its mirroring/timing declarations, its cell geometry
+    INCLUDING the extrusion gutter, and for each direction in atlas
+    order its declared source paths and their canonical decoded
+    pixels — in one fixed order.
+
+    `cell_padding` is a digest input because it changes the artifact
+    every other input would otherwise describe identically: the same
+    frames at a different gutter compile to a different sheet. The
+    domain tag carries `v2` for that addition, so no recorded v1 digest
+    can collide with a v2 one taken over the same art.
     """
     fields: List[Tuple[str, bytes]] = [
         ("unit", plan.unit.encode("utf-8")),
@@ -1615,6 +1717,7 @@ def source_digest(plan: AnimPlan) -> str:
         ("loop", b"1" if plan.loop else b"0"),
         ("fps", repr(plan.fps).encode("ascii")),
         ("cell", f"{plan.cell_width}x{plan.cell_height}".encode("ascii")),
+        ("cell_padding", str(plan.cell_padding).encode("ascii")),
         ("columns", str(plan.columns).encode("ascii")),
         ("direction_count", str(len(plan.directions)).encode("ascii")),
     ]
@@ -1668,6 +1771,7 @@ def build_index_document(unit: str, plans: Sequence[AnimPlan]) -> Dict[str, Any]
             "atlas_height": plan.atlas_height,
             "cell_width": plan.cell_width,
             "cell_height": plan.cell_height,
+            "cell_padding": plan.cell_padding,
             "columns": plan.columns,
             "rows": plan.rows,
             "flip": plan.flip,
