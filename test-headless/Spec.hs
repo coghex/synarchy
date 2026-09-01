@@ -270,6 +270,7 @@ import qualified Test.Headless.River.Naming as RiverNaming
 import qualified Test.Headless.Location.LootDeterminism as LocationLootDeterminism
 import qualified Test.Headless.Location.MapIcons as LocationMapIcons
 import qualified Test.Headless.Location.Stamping as LocationStamping
+import qualified Test.Headless.Location.StampCommit as LocationStampCommit
 import qualified Test.Headless.Tutorial.Definitions as TutorialDefinitions
 import qualified Test.Headless.Lua.SaveModules as LuaSaveModules
 import qualified Test.Headless.Lua.SharedHelpers as LuaSharedHelpers
@@ -830,6 +831,7 @@ main = hspec $ do
     LocationLootDeterminism.spec
     LocationMapIcons.spec
     LocationStamping.spec
+    LocationStampCommit.spec
     TutorialDefinitions.spec
     BuildingPlacement.spec
     BuildingRemoteWarning.spec

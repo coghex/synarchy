@@ -26,6 +26,7 @@ registerDesignationAPI env = do
   -- structure.place(gx,gy,slot,texHandle,faceHandle[,z]) / clear / clearAll / count.
   Lua.newtable
   registerLuaFunction "place"    (structurePlaceFn env)
+  registerLuaFunction "stageWatermark" (structureStageWatermarkFn env)
   registerLuaFunction "clear"    (structureClearFn env)
   registerLuaFunction "clearAll" (structureClearAllFn env)
   registerLuaFunction "count"    (structureCountFn env)

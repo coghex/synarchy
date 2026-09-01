@@ -68,7 +68,7 @@ lns = T.intercalate "\n"
 harness ∷ Text
 harness = lns
     [ "local rec = { warns = {}, infos = {}, marks = 0, spawnCalls = 0,"
-    , "              stamped = false, markArgs = nil }"
+    , "              stamped = false, markArgs = nil, watermarkPages = {} }"
     , "local defs = {}"
     , "engine = {"
     , "  logWarn = function(m) rec.warns[#rec.warns + 1] = m end,"
@@ -80,9 +80,9 @@ harness = lns
     , "  setCell = function() end,"
     , "  setSlope = function() end,"
     , "  hasStampedLocation = function() return rec.stamped end,"
-    , "  markLocationStamped = function(gx, gy, page)"
+    , "  markLocationStamped = function(gx, gy, page, fromTok, toTok)"
     , "    rec.marks = rec.marks + 1"
-    , "    rec.markArgs = { gx, gy, page }"
+    , "    rec.markArgs = { gx, gy, page, fromTok, toTok }"
     , "    rec.stamped = true"
     , "  end,"
     , "  hasSpawnedLocationContents = function()"
@@ -93,9 +93,21 @@ harness = lns
     , "}"
     , "local calls = {}"
     , "local failIf = nil"
+    -- The engine `structure` global the stamper reads its commit window
+    -- from (#2051). Only ACCEPTED placements take a token, so a stub
+    -- placement that reports failure must not advance the watermark —
+    -- mirroring structure.place, which validates before it stages.
+    , "local watermark = 0"
+    , "structure = {"
+    , "  stageWatermark = function(page)"
+    , "    rec.watermarkPages[#rec.watermarkPages + 1] = page"
+    , "    return watermark"
+    , "  end,"
+    , "}"
     , "local function record(slot, gx, gy)"
     , "  calls[#calls + 1] = string.format('%s@%d,%d', slot, gx, gy)"
     , "  if failIf and failIf(#calls, slot) then return false end"
+    , "  watermark = watermark + 1"
     , "  return true"
     , "end"
     , "package.loaded['scripts.structures'] = {"
@@ -268,6 +280,36 @@ spec = describe "location stamp completion" $ do
                 , "assert(rec.marks == 1, 'an already-stamped dispatch marked again')"
                 , "assert(rec.spawnCalls == 3, 'content spawning still runs every dispatch')"
                 , "assert(#rec.warns == 1, 'only the one failed attempt warned')"
+                ]
+
+        it "carries the commit window bracketing exactly this \
+           \invocation's accepted placements (#2051)" $
+            runsOk $ lns
+                [ harness
+                , "defs = { def('ruin', 'room_small') }"
+                , "local stamper = require('scripts.location_stamper')"
+                -- A first, FAILING attempt: its 48 accepted placements
+                -- advance the page watermark, so the retry's window must
+                -- start above them rather than at zero.
+                , "failIf = function(i) return i == 3 end"
+                , "stamper.onStampLocation('page1', 'ruin', 8, 8)"
+                , "assert(rec.marks == 0)"
+                , "resetCalls()"
+                , "failIf = nil"
+                , "stamper.onStampLocation('page1', 'ruin', 8, 8)"
+                , "assert(rec.marks == 1)"
+                , "local fromTok, toTok = rec.markArgs[4], rec.markArgs[5]"
+                , "assert(fromTok == INTACT - 1, 'window starts after the failed '"
+                , "       .. 'attempt\\'s accepted placements, got ' .. tostring(fromTok))"
+                , "assert(toTok - fromTok == INTACT, 'window spans this '"
+                , "       .. 'invocation\\'s placements, got ' .. tostring(toTok - fromTok))"
+                -- Both reads name the page being stamped, never the
+                -- active one: a hidden secondary page has its own counter.
+                , "for _, p in ipairs(rec.watermarkPages) do"
+                , "  assert(p == 'page1', 'watermark read on the wrong page')"
+                , "end"
+                , "assert(#rec.watermarkPages == 4, 'one read either side of '"
+                , "       .. 'each of the two builder runs')"
                 ]
 
         it "every failed retry warns again — the warning is per attempt, \
