@@ -56,7 +56,6 @@ def ruins_ready(port: int, page: str, tries: int = 40) -> list[dict]:
     return last
 
 
-
 def check_generated_names(args, state: ScenarioState,
                           failures: list[str]) -> bool:
     """Generate the named world and the unnamed one on the same terrain

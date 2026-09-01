@@ -133,7 +133,6 @@ def wait_knows(port: int, uid: int, key: str, tries: int = 40) -> bool:
     return False
 
 
-
 def observe_initial_discovery(args, state: ScenarioState,
                               failures: list[str]) -> None:
     """The initial process's discovery and knowledge half.

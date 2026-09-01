@@ -66,7 +66,6 @@ def stamp_ruins(port: int, ruins: list[dict], reverse: bool = False) -> None:
         time.sleep(0.5)
 
 
-
 def observe_initial_content(args, state: ScenarioState,
                             failures: list[str]) -> None:
     """The initial process's content half (#90/#91): what the placed

@@ -25,16 +25,12 @@ from pathlib import Path
 
 from probelib import (boot, capture_request_id, send, wait_load_published,
                       wait_save_complete)
-from probe_runner_diagnostics import FailureEmitter   # durable failure records (#1982)
 
 #: The repository root. This module sits two directories deeper than the
 #: probe it was split out of (`tools/location_content/`), so the walk up
 #: is one longer -- the VALUE is the same repository root
 #: `tools/test_location_probe_config_isolation.py` pins.
 REPO = Path(__file__).resolve().parent.parent.parent
-#: #1982 — this run's durable failure records, built at import so the
-#: offset each carries is measured from the probe's own start.
-FAILURE = FailureEmitter("location_content_probe")
 #: How a save/load failure message refers to the engine log when the
 #: caller supplied no path. Spelled as a constant so the f-strings below
 #: need no escaped quote inside their expression, which only Python 3.12
@@ -237,9 +233,13 @@ def _describe_held(path: str) -> str:
     return f" ({', '.join(held)})" if held else " (empty)"
 
 
-def abandon_engine(proc) -> None:
+def abandon_engine(proc, failure) -> None:
     """Make sure an engine this run launched is dead, without talking to
     the port. A no-op on a handle that has already exited.
+
+    `failure` is the probe's own `FailureEmitter` (#1982). Passed in
+    rather than reached for: how a run RECORDS a failure belongs to the
+    probe, and this module holds no emitter of its own to reach.
 
     The facade already shuts each process's engine down through
     `quit_engine` in a `finally`. This is the backstop for the windows
@@ -264,7 +264,7 @@ def abandon_engine(proc) -> None:
     try:
         proc.wait(timeout=10)
     except subprocess.TimeoutExpired:
-        FAILURE.check(f"the engine this run launched (pid {proc.pid}) did "
+        failure.check(f"the engine this run launched (pid {proc.pid}) did "
                       f"not die when killed")
 
 
@@ -386,8 +386,8 @@ class ScenarioState:
     field here is a value `run` used to accumulate in a local variable
     across its phases.
 
-    Deliberately NOT here: the import-time `FAILURE` emitter, `REPO`,
-    `ROOT_PREFIX` and the five fixture bodies. Those are invocation
+    Deliberately NOT here: the probe's import-time `FAILURE` emitter,
+    `REPO`, `ROOT_PREFIX` and the five fixture bodies. Those are
     infrastructure and immutable configuration -- not state one scenario
     produces for another -- and moving them into this record would
     rebuild them per run for no gain.

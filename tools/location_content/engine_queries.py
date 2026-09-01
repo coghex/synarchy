@@ -220,4 +220,3 @@ def unregistered_item_ids(names: set[str], registered: set[str]) -> set[str]:
     a synthetic id, independent of whatever a real spawn happens to
     produce (#800)."""
     return set(names) - registered
-

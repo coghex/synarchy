@@ -114,6 +114,7 @@ import tempfile
 import time
 
 from probelib import FixtureNotRegistered, load_ai_stack, quit_engine, send
+from probe_runner_diagnostics import FailureEmitter   # durable failure records (#1982)
 
 from location_content import content, dispatch, knowledge, naming
 from location_content.engine_queries import (gen_world, load_defs,
@@ -125,12 +126,20 @@ from location_content.engine_queries import (gen_world, load_defs,
 # `save_and_wait`'s exact signature, so a delegating wrapper would break
 # both. `REPO` is here for the same reason -- that companion resolves the
 # repository through this module -- and is unused by the code below.
-from location_content.invocation import (FAILURE, REPO, ROOT_PREFIX,
-                                         RunArtifacts, ScenarioState,
-                                         _PhaseAborted, abandon_engine,
-                                         boot_isolated, load_and_wait,
-                                         make_isolated_root, release_artifacts,
+from location_content.invocation import (REPO, ROOT_PREFIX, RunArtifacts,
+                                         ScenarioState, _PhaseAborted,
+                                         abandon_engine, boot_isolated,
+                                         load_and_wait, make_isolated_root,
+                                         release_artifacts,
                                          remove_isolated_root, save_and_wait)
+
+#: #1982 — this run's durable failure records, built at import so the
+#: offset each carries is measured from the probe's own start. It lives
+#: here, in the file the runner launches: the invocation module makes
+#: engines and trees, and takes this emitter as an argument on the one
+#: path that has a failure to record, rather than deciding for the probe
+#: how a failure is reported.
+FAILURE = FailureEmitter("location_content_probe")
 
 #: The nine names `tools/portal_ghost_probe.py`,
 #: `tools/portal_location_probe.py` and `tools/location_embark_probe.py`
@@ -203,7 +212,7 @@ def main() -> int:
         # no-op on a handle that has already exited, so the orderly
         # shutdowns above are untouched.
         for proc in art.launched:
-            abandon_engine(proc)
+            abandon_engine(proc, FAILURE)
         # Reported, never swallowed, and reported even when `run` is
         # leaving by an exception — a root that survived is exactly the
         # artifact #1620 requirement 6 forbids, and since #1884 the
