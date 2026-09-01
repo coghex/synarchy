@@ -23,6 +23,9 @@ import World.ZoomMap.Cache (buildZoomCacheWithPixels)
 import World.ZoomMap.ColorPalette (buildColorPalette)
 import World.Geology.Timeline.Stitch
     (buildTimelineStageCache, finishBorderedCache)
+import World.Material
+    ( MaterialId(..), MaterialProps(..), getMaterialProps, matGranite
+    , registerMaterial )
 
 spec ∷ Spec
 spec = describe "exact zoom reconstruction artifact" $ do
@@ -43,6 +46,9 @@ spec = describe "exact zoom reconstruction artifact" $ do
             `shouldSatisfy` isLeft
         decodeZoomArtifact fixtureKey
             { zakProducerDigest = BS.replicate 32 9 } bytes
+            `shouldSatisfy` isLeft
+        decodeZoomArtifact fixtureKey
+            { zakRegistryDigest = BS.replicate 32 9 } bytes
             `shouldSatisfy` isLeft
         decodeZoomArtifact fixtureKey (BS.take (BS.length bytes - 1) bytes)
             `shouldSatisfy` isLeft
@@ -109,7 +115,7 @@ worldSpec = describe "fresh/cache and load/scratch zoom identity" $
         scratch' ← evaluate (force scratch)
         cached' `shouldBe` scratch'
 
-        keyResult ← buildZoomArtifactKey params
+        keyResult ← buildZoomArtifactKey params registry
         key ← case keyResult of
             Left reason → expectationFailure (T.unpack reason) >> error "unreachable"
             Right value → pure value
@@ -121,11 +127,24 @@ worldSpec = describe "fresh/cache and load/scratch zoom identity" $
             (zaEntries ⊚ loaded, zaPixels ⊚ loaded)
                 `shouldBe` (Right (fst scratch'), Right (snd scratch'))
 
+            let granite = getMaterialProps registry matGranite
+                overriddenRegistry = registerMaterial (unMaterialId matGranite)
+                    (granite { mpHardness = mpHardness granite + 0.25 }) registry
+            overriddenKeyResult ← buildZoomArtifactKey params overriddenRegistry
+            overriddenKey ← case overriddenKeyResult of
+                Left reason → expectationFailure (T.unpack reason)
+                    >> error "unreachable"
+                Right value → pure value
+            overriddenKey `shouldNotBe` key
+            loadZoomArtifactAt path overriddenKey
+                ≫= (`shouldSatisfy` isLeft)
+
 fixtureKey ∷ ZoomArtifactKey
 fixtureKey = ZoomArtifactKey
     { zakProducerDigest = BS.replicate 32 0
     , zakParamsDigest = BS.replicate 32 1
     , zakResourcesDigest = BS.replicate 32 2
+    , zakRegistryDigest = BS.replicate 32 3
     , zakEntryCount = 2
     }
 

@@ -33,6 +33,7 @@ import Data.Serialize.Put
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Vector as V
+import GHC.Float (castFloatToWord32)
 import System.Directory
     ( createDirectoryIfMissing, doesDirectoryExist, doesFileExist
     , doesPathExist, getFileSize, listDirectory, makeAbsolute
@@ -42,12 +43,16 @@ import System.IO (hClose, hFlush, openBinaryTempFile)
 import Language.Haskell.TH.Syntax
     ( Loc(..), addDependentFile, lift, location, runIO )
 import World.Generate.Types (WorldGenParams(..))
+import World.Material
+    ( MaterialId(..), MaterialProps(..), MaterialRegistry
+    , getMaterialProps, isKnownMaterial )
 import World.ZoomMap.Types (ZoomChunkEntry(..), zoomTileSize)
 
 data ZoomArtifactKey = ZoomArtifactKey
     { zakProducerDigest  ∷ !BS.ByteString
     , zakParamsDigest    ∷ !BS.ByteString
     , zakResourcesDigest ∷ !BS.ByteString
+    , zakRegistryDigest  ∷ !BS.ByteString
     , zakEntryCount      ∷ !Int
     } deriving (Eq, Show)
 
@@ -67,7 +72,7 @@ magic ∷ BS.ByteString
 magic = "SZARF001"
 
 schemaVersion, semanticVersion ∷ Word32
-schemaVersion = 2
+schemaVersion = 3
 -- Bump only for a deliberate artifact-semantic change. Ordinary production
 -- code/build changes invalidate automatically through 'artifactProducerDigest'.
 semanticVersion = 1
@@ -75,7 +80,7 @@ semanticVersion = 1
 entryRecordBytes, pixelBlockBytes, headerBytes ∷ Int
 entryRecordBytes = 24
 pixelBlockBytes = zoomTileSize * zoomTileSize * 4
-headerBytes = 8 + 5 * 4 + 5 * 32
+headerBytes = 8 + 5 * 4 + 6 * 32
 
 -- | SHA-256 of every production Haskell/C source and Cabal build input,
 -- embedded at compile time.  'addDependentFile' makes GHC rebuild this module
@@ -119,8 +124,9 @@ resourceRoots =
 -- | The full structural encoding is intentionally conservative: a field
 -- that cannot affect zoom output may cause a miss, but can never permit a
 -- stale hit.  Resource paths and bytes are both included in stable order.
-buildZoomArtifactKey ∷ WorldGenParams → IO (Either Text ZoomArtifactKey)
-buildZoomArtifactKey params =
+buildZoomArtifactKey
+    ∷ WorldGenParams → MaterialRegistry → IO (Either Text ZoomArtifactKey)
+buildZoomArtifactKey params registry =
   case artifactEntryCount params ≫= validateArtifactSize of
     Left reason → pure (Left reason)
     Right (_, count) → do
@@ -136,6 +142,7 @@ buildZoomArtifactKey params =
             { zakProducerDigest = artifactProducerDigest
             , zakParamsDigest = SHA256.hash (encode params)
             , zakResourcesDigest = resources
+            , zakRegistryDigest = materialRegistryDigest registry
             , zakEntryCount = count
             }
       pure $ case (result ∷ Either IOException (Either Text ZoomArtifactKey)) of
@@ -234,6 +241,7 @@ encodeZoomArtifact key entries pixels = do
             mapM_ putByteString
                 [ zakProducerDigest key, zakParamsDigest key
                 , zakResourcesDigest key
+                , zakRegistryDigest key
                 , SHA256.hash entryPayload, SHA256.hash pixelPayload ]
         artifact = header <> entryPayload <> pixelPayload
     unless (toInteger (BS.length artifact) ≡ projectedBytes) $
@@ -244,7 +252,7 @@ decodeZoomArtifact ∷ ZoomArtifactKey → BS.ByteString → Either Text ZoomArt
 decodeZoomArtifact key bytes = do
     unless (digestLengthOK key) $ Left "zoom artifact key digest length mismatch"
     unless (BS.length bytes >= headerBytes) $ Left "zoom artifact is truncated"
-    (count, producerDigest, paramsDigest, resourcesDigest
+    (count, producerDigest, paramsDigest, resourcesDigest, registryDigest
         , entriesDigest, pixelsDigest) ←
         first T.pack $ runGet getHeader (BS.take headerBytes bytes)
     unless (count ≡ zakEntryCount key) $ Left "zoom artifact count is stale"
@@ -254,6 +262,8 @@ decodeZoomArtifact key bytes = do
         Left "zoom artifact parameters are stale"
     unless (resourcesDigest ≡ zakResourcesDigest key) $
         Left "zoom artifact resources are stale"
+    unless (registryDigest ≡ zakRegistryDigest key) $
+        Left "zoom artifact material registry is stale"
     let expectedInteger = toInteger headerBytes
             + toInteger count * toInteger entryRecordBytes
             + toInteger count * toInteger pixelBlockBytes
@@ -275,7 +285,7 @@ decodeZoomArtifact key bytes = do
 
 getHeader
     ∷ Get ( Int, BS.ByteString, BS.ByteString, BS.ByteString
-          , BS.ByteString, BS.ByteString )
+          , BS.ByteString, BS.ByteString, BS.ByteString )
 getHeader = do
     observedMagic ← getByteString 8
     unless (observedMagic ≡ magic) $ fail "zoom artifact magic mismatch"
@@ -296,10 +306,11 @@ getHeader = do
     producerDigest ← getByteString 32
     paramsDigest ← getByteString 32
     resourcesDigest ← getByteString 32
+    registryDigest ← getByteString 32
     entriesDigest ← getByteString 32
     pixelsDigest ← getByteString 32
     pure ( fromIntegral countWord, producerDigest, paramsDigest, resourcesDigest
-         , entriesDigest, pixelsDigest )
+         , registryDigest, entriesDigest, pixelsDigest )
 
 encodeEntries ∷ V.Vector ZoomChunkEntry → Either Text BS.ByteString
 encodeEntries entries = runPut . mapM_ putEntry ⊚ mapM checked (V.toList entries)
@@ -352,6 +363,35 @@ digestLengthOK ∷ ZoomArtifactKey → Bool
 digestLengthOK key = BS.length (zakProducerDigest key) ≡ 32
                   ∧ BS.length (zakParamsDigest key) ≡ 32
                   ∧ BS.length (zakResourcesDigest key) ≡ 32
+                  ∧ BS.length (zakRegistryDigest key) ≡ 32
+
+-- | Hash the complete effective registry in numeric material-id order.  Zoom
+-- generation currently reads hardness directly, but retaining every property
+-- is deliberately conservative: a future zoom-relevant use cannot turn an
+-- artifact built under different runtime YAML overrides into a stale hit.
+materialRegistryDigest ∷ MaterialRegistry → BS.ByteString
+materialRegistryDigest registry = SHA256.hash $ runPut $
+    forM_ ([0 .. 255] ∷ [Word8]) $ \mid → do
+        let materialId = MaterialId mid
+            props = getMaterialProps registry materialId
+        putWord8 mid
+        putBool (isKnownMaterial registry materialId)
+        putText (mpName props)
+        mapM_ (putWord32be . castFloatToWord32)
+            [ mpHardness props, mpDensity props, mpAlbedo props
+            , mpDrainage props, mpPickSpeed props, mpShovelSpeed props
+            , mpDigBulking props, mpMoveCost props ]
+        putMaybeText (mpDigSpoil props)
+        putMaybeText (mpDigChunk props)
+        putBool (mpDigGems props)
+  where
+    putBool value = putWord8 (if value then 1 else 0)
+    putText value = do
+        let bytes = TE.encodeUtf8 value
+        putWord64be (fromIntegral (BS.length bytes))
+        putByteString bytes
+    putMaybeText Nothing = putWord8 0
+    putMaybeText (Just value) = putWord8 1 >> putText value
 
 artifactEntryCount ∷ WorldGenParams → Either Text Int
 artifactEntryCount params =
