@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict #-}
+{-# LANGUAGE Strict, TemplateHaskell #-}
 -- | A non-authoritative, exact cache of the expensive zoom-map
 -- reconstruction.  Every read failure is a cache miss: saves remain the
 -- authority and the existing pure builder remains the fallback.
@@ -7,7 +7,9 @@ module World.ZoomMap.Artifact
     , ZoomArtifact(..)
     , buildZoomArtifactKey
     , loadZoomArtifact
+    , loadZoomArtifactAt
     , publishZoomArtifact
+    , publishZoomArtifactAt
     , encodeZoomArtifact
     , decodeZoomArtifact
     , zoomArtifactPath
@@ -16,6 +18,7 @@ module World.ZoomMap.Artifact
 
 import UPrelude
 import Control.Exception (IOException, try, finally)
+import Control.Monad (filterM)
 import qualified Crypto.Hash.SHA256 as SHA256
 import Data.Bifunctor (first)
 import qualified Data.ByteString as BS
@@ -25,21 +28,25 @@ import Data.Serialize (encode)
 import Data.Serialize.Get
     ( Get, getByteString, getInt32be, getWord8, getWord32be, runGet )
 import Data.Serialize.Put
-    ( Put, putByteString, putInt32be, putWord8, putWord32be, runPut )
+    ( Put, putByteString, putInt32be, putWord8, putWord32be, putWord64be
+    , runPut )
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Vector as V
 import System.Directory
     ( createDirectoryIfMissing, doesDirectoryExist, doesFileExist
-    , doesPathExist, getFileSize, listDirectory, pathIsSymbolicLink
-    , removeFile, renameFile )
-import System.FilePath (makeRelative)
+    , doesPathExist, getFileSize, listDirectory, makeAbsolute
+    , pathIsSymbolicLink, removeFile, renameFile )
+import System.FilePath (makeRelative, takeDirectory, takeExtension)
 import System.IO (hClose, hFlush, openBinaryTempFile)
+import Language.Haskell.TH.Syntax
+    ( Loc(..), addDependentFile, lift, location, runIO )
 import World.Generate.Types (WorldGenParams(..))
 import World.ZoomMap.Types (ZoomChunkEntry(..), zoomTileSize)
 
 data ZoomArtifactKey = ZoomArtifactKey
-    { zakParamsDigest    ∷ !BS.ByteString
+    { zakProducerDigest  ∷ !BS.ByteString
+    , zakParamsDigest    ∷ !BS.ByteString
     , zakResourcesDigest ∷ !BS.ByteString
     , zakEntryCount      ∷ !Int
     } deriving (Eq, Show)
@@ -60,13 +67,46 @@ magic ∷ BS.ByteString
 magic = "SZARF001"
 
 schemaVersion, semanticVersion ∷ Word32
-schemaVersion = 1
+schemaVersion = 2
+-- Bump only for a deliberate artifact-semantic change. Ordinary production
+-- code/build changes invalidate automatically through 'artifactProducerDigest'.
 semanticVersion = 1
 
 entryRecordBytes, pixelBlockBytes, headerBytes ∷ Int
 entryRecordBytes = 24
 pixelBlockBytes = zoomTileSize * zoomTileSize * 4
-headerBytes = 8 + 5 * 4 + 4 * 32
+headerBytes = 8 + 5 * 4 + 5 * 32
+
+-- | SHA-256 of every production Haskell/C source and Cabal build input,
+-- embedded at compile time.  'addDependentFile' makes GHC rebuild this module
+-- when any member changes, so an artifact produced by another code build
+-- cannot become a hit merely because params and resources stayed the same.
+artifactProducerDigest ∷ BS.ByteString
+artifactProducerDigest = BS.pack $(do
+    loc ← location
+    sourcePath ← runIO $ makeAbsolute (loc_filename loc)
+    let projectRoot = iterate takeDirectory sourcePath !! 4
+        walk dir = do
+            names ← L.sort ⊚ listDirectory dir
+            concat ⊚ forM names (\name → do
+                let path = dir ⊘ name
+                directory ← doesDirectoryExist path
+                if directory then walk path else pure [path])
+        accepted path = takeExtension path ∈ [".hs", ".c", ".h"]
+        length64 bytes = runPut $ putWord64be (fromIntegral (BS.length bytes))
+        configNames = ["synarchy.cabal", "cabal.project", "cabal.project.freeze"]
+    sourceFiles ← runIO $ concat ⊚ mapM walk
+        [projectRoot ⊘ "src", projectRoot ⊘ "app", projectRoot ⊘ "cbits"]
+    configFiles ← runIO $ filterM doesFileExist
+        [projectRoot ⊘ name | name ← configNames]
+    let inputs = L.sort (filter accepted sourceFiles <> configFiles)
+    mapM_ addDependentFile inputs
+    fields ← runIO $ forM inputs (\path → do
+        content ← BS.readFile path
+        let relative = TE.encodeUtf8 (T.pack (makeRelative projectRoot path))
+        pure [length64 relative, relative, length64 content, content])
+    lift $ BS.unpack $ SHA256.finalize $
+        SHA256.updates SHA256.init (concat fields))
 
 resourceRoots ∷ [FilePath]
 resourceRoots =
@@ -80,8 +120,11 @@ resourceRoots =
 -- that cannot affect zoom output may cause a miss, but can never permit a
 -- stale hit.  Resource paths and bytes are both included in stable order.
 buildZoomArtifactKey ∷ WorldGenParams → IO (Either Text ZoomArtifactKey)
-buildZoomArtifactKey params = do
-    result ← try $ do
+buildZoomArtifactKey params =
+  case artifactEntryCount params ≫= validateArtifactSize of
+    Left reason → pure (Left reason)
+    Right (_, count) → do
+      result ← try $ do
         paths ← L.sort . concat ⊚ mapM listFilesRecursive resourceRoots
         fields ← forM paths $ \path → do
             content ← BS.readFile path
@@ -89,40 +132,42 @@ buildZoomArtifactKey params = do
             pure [lengthField relative, relative, lengthField content, content]
         let resources = SHA256.finalize $
                 SHA256.updates SHA256.init (concat fields)
-            worldSize = wgpWorldSize params
-            countInteger = toInteger worldSize * toInteger worldSize `div` 2
-        if worldSize <= 0 ∨ countInteger > toInteger (maxBound ∷ Int)
-          then pure $ Left "invalid zoom artifact world size"
-          else pure $ Right ZoomArtifactKey
-              { zakParamsDigest = SHA256.hash (encode params)
-              , zakResourcesDigest = resources
-              , zakEntryCount = fromInteger countInteger
-              }
-    pure $ case (result ∷ Either IOException (Either Text ZoomArtifactKey)) of
+        pure $ Right ZoomArtifactKey
+            { zakProducerDigest = artifactProducerDigest
+            , zakParamsDigest = SHA256.hash (encode params)
+            , zakResourcesDigest = resources
+            , zakEntryCount = count
+            }
+      pure $ case (result ∷ Either IOException (Either Text ZoomArtifactKey)) of
         Left e → Left ("cannot fingerprint zoom inputs: " <> T.pack (show e))
         Right value → value
 
 loadZoomArtifact ∷ ZoomArtifactKey → IO (Either Text ZoomArtifact)
-loadZoomArtifact key = do
+loadZoomArtifact = loadZoomArtifactAt zoomArtifactPath
+
+loadZoomArtifactAt ∷ FilePath → ZoomArtifactKey → IO (Either Text ZoomArtifact)
+loadZoomArtifactAt path key = do
     result ← try $ do
-        unsafeRoot ← existingSymlink "cache"
-        unsafeDir ← existingSymlink ("cache" ⊘ "zoom")
-        unsafeFile ← existingSymlink zoomArtifactPath
+        let cacheDir = takeDirectory path
+            cacheRoot = takeDirectory cacheDir
+        unsafeRoot ← existingSymlink cacheRoot
+        unsafeDir ← existingSymlink cacheDir
+        unsafeFile ← existingSymlink path
         if unsafeRoot ∨ unsafeDir ∨ unsafeFile
           then pure $ Left "cache path contains a symbolic link"
           else do
-            exists ← doesPathExist zoomArtifactPath
+            exists ← doesPathExist path
             if not exists
               then pure $ Left "artifact is absent"
               else do
-                regular ← doesFileExist zoomArtifactPath
+                regular ← doesFileExist path
                 if not regular
                   then pure $ Left "artifact path is not a regular file"
                   else do
-                    bytesOnDisk ← getFileSize zoomArtifactPath
+                    bytesOnDisk ← getFileSize path
                     if bytesOnDisk > zoomArtifactMaxBytes
                       then pure $ Left "artifact exceeds the 64 MiB limit"
-                      else decodeZoomArtifact key ⊚ BS.readFile zoomArtifactPath
+                      else decodeZoomArtifact key ⊚ BS.readFile path
     pure $ case (result ∷ Either IOException (Either Text ZoomArtifact)) of
         Left e → Left ("cannot read zoom artifact: " <> T.pack (show e))
         Right value → value
@@ -132,16 +177,21 @@ loadZoomArtifact key = do
 publishZoomArtifact
     ∷ ZoomArtifactKey → V.Vector ZoomChunkEntry
     → V.Vector BS.ByteString → IO (Either Text Int)
-publishZoomArtifact key entries pixels =
+publishZoomArtifact = publishZoomArtifactAt zoomArtifactPath
+
+publishZoomArtifactAt
+    ∷ FilePath → ZoomArtifactKey → V.Vector ZoomChunkEntry
+    → V.Vector BS.ByteString → IO (Either Text Int)
+publishZoomArtifactAt path key entries pixels =
     case encodeZoomArtifact key entries pixels of
       Left reason → pure (Left reason)
       Right bytes → do
         result ← try $ do
-            let cacheRoot = "cache"
-                cacheDir = cacheRoot ⊘ "zoom"
+            let cacheDir = takeDirectory path
+                cacheRoot = takeDirectory cacheDir
             unsafeRoot ← existingSymlink cacheRoot
             unsafeDir ← existingSymlink cacheDir
-            unsafeFile ← existingSymlink zoomArtifactPath
+            unsafeFile ← existingSymlink path
             if unsafeRoot ∨ unsafeDir ∨ unsafeFile
               then pure $ Left "cache path contains a symbolic link"
               else do
@@ -155,7 +205,7 @@ publishZoomArtifact key entries pixels =
                 (do BS.hPut handle bytes
                     hFlush handle
                     hClose handle
-                    renameFile candidate zoomArtifactPath
+                    renameFile candidate path
                     pure (Right (BS.length bytes))) `finally` cleanup
         pure $ case (result ∷ Either IOException (Either Text Int)) of
             Left e → Left ("cannot publish zoom artifact: " <> T.pack (show e))
@@ -166,6 +216,7 @@ encodeZoomArtifact
     → V.Vector BS.ByteString → Either Text BS.ByteString
 encodeZoomArtifact key entries pixels = do
     unless (digestLengthOK key) $ Left "zoom artifact key digest length mismatch"
+    (projectedBytes, _) ← validateArtifactSize (zakEntryCount key)
     unless (V.length entries ≡ zakEntryCount key
             ∧ V.length pixels ≡ zakEntryCount key) $
         Left "zoom artifact entry/block count mismatch"
@@ -181,20 +232,24 @@ encodeZoomArtifact key entries pixels = do
             putWord32be (fromIntegral entryRecordBytes)
             putWord32be (fromIntegral pixelBlockBytes)
             mapM_ putByteString
-                [ zakParamsDigest key, zakResourcesDigest key
+                [ zakProducerDigest key, zakParamsDigest key
+                , zakResourcesDigest key
                 , SHA256.hash entryPayload, SHA256.hash pixelPayload ]
         artifact = header <> entryPayload <> pixelPayload
-    unless (toInteger (BS.length artifact) <= zoomArtifactMaxBytes) $
-        Left "zoom artifact exceeds the 64 MiB limit"
+    unless (toInteger (BS.length artifact) ≡ projectedBytes) $
+        Left "internal zoom artifact length mismatch"
     pure artifact
 
 decodeZoomArtifact ∷ ZoomArtifactKey → BS.ByteString → Either Text ZoomArtifact
 decodeZoomArtifact key bytes = do
     unless (digestLengthOK key) $ Left "zoom artifact key digest length mismatch"
     unless (BS.length bytes >= headerBytes) $ Left "zoom artifact is truncated"
-    (count, paramsDigest, resourcesDigest, entriesDigest, pixelsDigest) ←
+    (count, producerDigest, paramsDigest, resourcesDigest
+        , entriesDigest, pixelsDigest) ←
         first T.pack $ runGet getHeader (BS.take headerBytes bytes)
     unless (count ≡ zakEntryCount key) $ Left "zoom artifact count is stale"
+    unless (producerDigest ≡ zakProducerDigest key) $
+        Left "zoom artifact producer is stale"
     unless (paramsDigest ≡ zakParamsDigest key) $
         Left "zoom artifact parameters are stale"
     unless (resourcesDigest ≡ zakResourcesDigest key) $
@@ -218,7 +273,9 @@ decodeZoomArtifact key bytes = do
     pure ZoomArtifact
         { zaEntries = entries, zaPixels = pixels, zaBytes = BS.length bytes }
 
-getHeader ∷ Get (Int, BS.ByteString, BS.ByteString, BS.ByteString, BS.ByteString)
+getHeader
+    ∷ Get ( Int, BS.ByteString, BS.ByteString, BS.ByteString
+          , BS.ByteString, BS.ByteString )
 getHeader = do
     observedMagic ← getByteString 8
     unless (observedMagic ≡ magic) $ fail "zoom artifact magic mismatch"
@@ -236,11 +293,12 @@ getHeader = do
     let countInteger = toInteger countWord
     when (countInteger > toInteger (maxBound ∷ Int)) $
         fail "zoom artifact entry count overflows Int"
+    producerDigest ← getByteString 32
     paramsDigest ← getByteString 32
     resourcesDigest ← getByteString 32
     entriesDigest ← getByteString 32
     pixelsDigest ← getByteString 32
-    pure ( fromIntegral countWord, paramsDigest, resourcesDigest
+    pure ( fromIntegral countWord, producerDigest, paramsDigest, resourcesDigest
          , entriesDigest, pixelsDigest )
 
 encodeEntries ∷ V.Vector ZoomChunkEntry → Either Text BS.ByteString
@@ -291,8 +349,32 @@ boolBit bit True = fromIntegral (2 ^ bit ∷ Int)
 boolBit _ False = 0
 
 digestLengthOK ∷ ZoomArtifactKey → Bool
-digestLengthOK key = BS.length (zakParamsDigest key) ≡ 32
+digestLengthOK key = BS.length (zakProducerDigest key) ≡ 32
+                  ∧ BS.length (zakParamsDigest key) ≡ 32
                   ∧ BS.length (zakResourcesDigest key) ≡ 32
+
+artifactEntryCount ∷ WorldGenParams → Either Text Int
+artifactEntryCount params =
+    let worldSize = wgpWorldSize params
+        countInteger = toInteger worldSize * toInteger worldSize `div` 2
+    in if worldSize <= 0 ∨ countInteger > toInteger (maxBound ∷ Int)
+       then Left "invalid zoom artifact world size"
+       else Right (fromInteger countInteger)
+
+-- The size is exact, so reject an unsupported world before fingerprinting
+-- resources, traversing vectors, concatenating blocks, hashing, or opening a
+-- candidate file.  w128 fits; w256 and larger deliberately use the unchanged
+-- reconstruction path without paying any artifact materialization cost.
+validateArtifactSize ∷ Int → Either Text (Integer, Int)
+validateArtifactSize count =
+    let projected = toInteger headerBytes
+            + toInteger count
+                * (toInteger entryRecordBytes + toInteger pixelBlockBytes)
+    in if count < 0 ∨ toInteger count > toInteger (maxBound ∷ Word32)
+       then Left "invalid zoom artifact entry count"
+       else if projected > zoomArtifactMaxBytes
+       then Left "zoom artifact exceeds the 64 MiB limit"
+       else Right (projected, count)
 
 lengthField ∷ BS.ByteString → BS.ByteString
 lengthField bytes = runPut $ putWord32be (fromIntegral (BS.length bytes))

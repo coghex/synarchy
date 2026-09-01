@@ -332,6 +332,7 @@ main = hspec $ do
         describe "Biome Flatness" Flatness.spec
         describe "Column Exposure" Exposure.spec
         describe "Zoom/Detail Parity" ZoomParity.spec
+        ZoomArtifact.worldSpec
         describe "Border Probe" BorderProbe.spec
         Climate.spec
         describe "Asset.TextureFallback" TextureFallback.spec
