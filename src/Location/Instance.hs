@@ -110,6 +110,7 @@ module Location.Instance
       -- * Validation
     , locationInstanceAllocatorErrors
     , locationInstanceBoundsErrors
+    , significantEntryErrors
     , locationSignificantItemErrors
     ) where
 
@@ -947,8 +948,11 @@ registerLocationSignificantSpawn iid slot defName itemId lis = do
     entry ← find ((≡ slot) . lsiSlot) (liSignificant inst)
     guard (isNothing (lsiInstanceId entry))
     guard (lsiItemDefName entry ≡ defName)
-    guard (isMintedItemId itemId)
     guard (not (itemAlreadyOwed itemId lis))
+    -- The RESULTING entry must satisfy the same per-entry rules a
+    -- decoded one does, so a rule added there binds this boundary too.
+    guard (null (significantEntryErrors (liContentsSpawned inst)
+                     (entry { lsiInstanceId = Just itemId })))
     pure $ adjustLocationInstance iid (\i → i
         { liSignificant =
             [ if lsiSlot e ≡ slot then e { lsiInstanceId = Just itemId } else e
@@ -1265,14 +1269,62 @@ locationInstanceBoundsErrors lis =
 --
 --   Entries are addressed by their instance's id and slot, and each
 --   violation is reported once, in a deterministic order.
+-- | Everything that can be wrong with ONE obligation on its own, given
+--   whether its instance has spawned its contents. Messages are
+--   unattributed; callers add the instance.
+--
+--   THE single per-entry rule set (#917). Both boundaries that can
+--   admit an obligation consult it — component decode below, and
+--   'registerLocationSignificantSpawn', which refuses a binding whose
+--   RESULTING entry would fail here. That is deliberate: every rule in
+--   this list was added because some path could reach a state the
+--   other checks could not see, and keeping two copies is how the next
+--   one gets added to a validator and missed by the live API.
+--
+--   Set-wide rules (a duplicated slot, one item owed twice) are NOT
+--   here: they are about the relationship BETWEEN entries, so they
+--   cannot be decided from one, and they live with the table walk.
+significantEntryErrors ∷ Bool → LocationSignificantItem → [Text]
+significantEntryErrors contentsSpawned e =
+    -- The slot is the address a resuming content spawn registers
+    -- against, and the registration boundary refuses a non-positive
+    -- one — so a slot below the floor can never be filled, the spawn
+    -- never completes, and an orphaned item is re-spawned on every
+    -- chunk load for ever.
+    [ "declares significant slot " <> tshow (lsiSlot e)
+        <> ", below the first valid slot (1)"
+    | lsiSlot e < 1 ]
+    ⧺
+    -- 0 is the never-minted "no id given" sentinel, and the provenance
+    -- rules skip a TAKEN obligation by design — so it is the one value
+    -- that would otherwise satisfy clearance with nothing spawned.
+    [ "significant slot " <> tshow (lsiSlot e)
+        <> " names item instance " <> tshow itemId
+        <> ", which no allocator can ever have minted"
+    | Just itemId ← [lsiInstanceId e], not (isMintedItemId itemId) ]
+    ⧺
+    -- The content spawn marks the one-time flag only once every slot is
+    -- filled, so the other shape is unreachable — and unrecoverable if
+    -- it ever lands, because @spawnContents@ then returns at that very
+    -- flag and never fills the slot.
+    [ "has spawned its contents but significant slot "
+        <> tshow (lsiSlot e) <> " names no item instance"
+    | contentsSpawned, isNothing (lsiInstanceId e) ]
+    ⧺
+    -- Nothing can latch an unbound slot, so a taken one names the item
+    -- that was taken. Also the one shape the provenance rules cannot
+    -- see: there is no id for them to resolve.
+    [ "significant slot " <> tshow (lsiSlot e)
+        <> " is marked taken but names no item instance"
+    | lsiTaken e, isNothing (lsiInstanceId e) ]
+
 locationSignificantItemErrors ∷ LocationInstances → [Text]
 locationSignificantItemErrors lis =
     [ "location instance #" <> tshow (unLocationInstanceId (liId inst))
-        <> " declares significant slot " <> tshow (lsiSlot e)
-        <> ", below the first valid slot (1)"
+        <> " " <> msg
     | inst ← instancesToList lis
     , e ← sortOn lsiSlot (liSignificant inst)
-    , lsiSlot e < 1
+    , msg ← significantEntryErrors (liContentsSpawned inst) e
     ]
     ⧺
     [ "location instance #" <> tshow (unLocationInstanceId (liId inst))
@@ -1281,34 +1333,6 @@ locationSignificantItemErrors lis =
     , (slot, n) ← sortOn fst (HM.toList (HM.fromListWith (+)
         [ (lsiSlot e, 1 ∷ Int) | e ← liSignificant inst ]))
     , n > 1
-    ]
-    ⧺
-    [ "location instance #" <> tshow (unLocationInstanceId (liId inst))
-        <> " significant slot " <> tshow (lsiSlot e)
-        <> " names item instance " <> tshow itemId
-        <> ", which no allocator can ever have minted"
-    | inst ← instancesToList lis
-    , e ← sortOn lsiSlot (liSignificant inst)
-    , Just itemId ← [lsiInstanceId e]
-    , not (isMintedItemId itemId)
-    ]
-    ⧺
-    [ "location instance #" <> tshow (unLocationInstanceId (liId inst))
-        <> " has spawned its contents but significant slot "
-        <> tshow (lsiSlot e) <> " names no item instance"
-    | inst ← instancesToList lis
-    , liContentsSpawned inst
-    , e ← sortOn lsiSlot (liSignificant inst)
-    , isNothing (lsiInstanceId e)
-    ]
-    ⧺
-    [ "location instance #" <> tshow (unLocationInstanceId (liId inst))
-        <> " significant slot " <> tshow (lsiSlot e)
-        <> " is marked taken but names no item instance"
-    | inst ← instancesToList lis
-    , e ← sortOn lsiSlot (liSignificant inst)
-    , lsiTaken e
-    , isNothing (lsiInstanceId e)
     ]
     ⧺
     [ "significant item instance " <> tshow itemId

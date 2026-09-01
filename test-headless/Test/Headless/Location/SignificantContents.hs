@@ -507,6 +507,57 @@ spec = describe "Location significant contents (#917)" $ do
             map lsiInstanceId (liSignificant (instOf lis))
                 `shouldBe` [Nothing, Nothing]
 
+    -- The recurring shape of this feature's review history: a rule
+    -- added to one boundary and missed by the other. These pin that
+    -- the two now consult ONE list, so a rule added to
+    -- 'significantEntryErrors' binds both by construction rather than
+    -- by anyone remembering.
+    describe "one shared per-entry rule set" $ do
+        let sound = LocationSignificantItem 1 "processing_unit" (Just 900) False
+
+        it "accepts a sound entry and names every unsound one" $ do
+            significantEntryErrors False sound `shouldBe` []
+            map (length ∘ significantEntryErrors False)
+                [ sound { lsiSlot = 0 }
+                , sound { lsiInstanceId = Just 0 }
+                , sound { lsiInstanceId = Nothing, lsiTaken = True }
+                ] `shouldBe` [1, 1, 1]
+            -- contents-spawned is the one rule that needs the instance
+            significantEntryErrors True (sound { lsiInstanceId = Nothing })
+                `shouldSatisfy` ((≡ 1) ∘ length)
+            significantEntryErrors False (sound { lsiInstanceId = Nothing })
+                `shouldBe` []
+
+        it "the DECODE validator reports exactly what the shared rules \
+           \say, for every unsound entry shape" $
+            forM_ [ sound { lsiSlot = 0 }
+                  , sound { lsiInstanceId = Just 0 }
+                  , sound { lsiInstanceId = Nothing, lsiTaken = True }
+                  ] $ \bad → do
+                let lis = adjustLocationInstance iid
+                        (\i → i { liSignificant = [bad] })
+                        (tableFor 0 significantOnlyDef)
+                    shared = significantEntryErrors False bad
+                length (locationSignificantItemErrors lis)
+                    `shouldBe` length shared
+                and [ m `T.isSuffixOf` full
+                    | (m, full) ← zip shared (locationSignificantItemErrors lis) ]
+                    `shouldBe` True
+
+        it "the BINDING boundary refuses every binding whose resulting \
+           \entry the shared rules reject" $ do
+            let lis = tableFor 0 twoSignificantDef
+            -- slot 0: unsound slot. id 0: unsound id. Both are refused
+            -- by the same list the decode validator reads.
+            registerLocationSignificantSpawn iid 0 "processing_unit" 900 lis
+                `shouldBe` Nothing
+            registerLocationSignificantSpawn iid 1 "processing_unit" 0 lis
+                `shouldBe` Nothing
+            -- …and a sound one is accepted, so the guard is not simply
+            -- refusing everything.
+            registerLocationSignificantSpawn iid 1 "processing_unit" 900 lis
+                `shouldSatisfy` isJust
+
     describe "decoded-table validation" $ do
         it "accepts a well-formed table" $
             locationSignificantItemErrors

@@ -1621,19 +1621,27 @@ instance, and adds NO obligations — reading them off today's YAML would
 owe a materialized world an item it never spawned, permanently blocking
 a clearance the pre-#917 build had already granted. The v1
 reconstruction discards both for the same reason.
-`Location.Instance.locationSignificantItemErrors` rejects a slot below
-1 (unbindable — the registration boundary refuses a non-positive slot,
-so the content spawn would orphan an item on every load for ever), a
-bound item id of 0 (the never-minted "no id given" sentinel; because
-the provenance rules skip a TAKEN obligation by design, it is the one
-value that would otherwise satisfy clearance with nothing ever spawned
-— `significantRecovered` refuses to count it either way), a
-duplicated slot, a CONTENTS-SPAWNED instance still owing an unbound slot
-(unrecoverable — `spawnContents` returns at its one-time
-`hasSpawnedLocationContents` gate and never fills it, and neither the
-missing-definition check nor the provenance rules can see the shape), an
-obligation marked taken that names no item, and same-page duplicate
-ownership at component decode;
+`Location.Instance.significantEntryErrors` is the ONE per-entry rule
+set, and both boundaries that can admit an obligation consult it —
+component decode through `locationSignificantItemErrors`, and
+`registerLocationSignificantSpawn`, which refuses a binding whose
+RESULTING entry would fail it. That sharing is deliberate: every rule
+below was added because some path could reach a state the other checks
+could not see, and two copies is how the next one gets added to a
+validator and missed by the live API. The rules are: a slot below 1
+(unbindable — the registration boundary refuses a non-positive slot, so
+the content spawn would orphan an item on every load for ever); a bound
+item id of 0 (the never-minted "no id given" sentinel; because the
+provenance rules skip a TAKEN obligation by design, it is the one value
+that would otherwise satisfy clearance with nothing ever spawned —
+`significantRecovered` refuses to count it either way); a
+CONTENTS-SPAWNED instance still owing an unbound slot (unrecoverable —
+`spawnContents` returns at its one-time `hasSpawnedLocationContents`
+gate and never fills it, and neither the missing-definition check nor
+the provenance rules can see the shape); and an obligation marked taken
+that names no item. Two SET-wide rules stay with the table walk, since
+they are about the relationship between entries rather than any one of
+them: a duplicated slot, and same-page duplicate ownership;
 `World.Save.Integrity.significantProvenanceErrors` hard-fails an UNTAKEN
 obligation whose item resolves on another page, in an inventory or
 storage (it cannot be held without having been picked up), or only
