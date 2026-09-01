@@ -139,7 +139,7 @@ bindlessVertexShaderCode = $(compileShaderQ Nothing "vert" Nothing [glsl|
         // (this fragment shader's sin/cos and computeAmbientLight) is
         // built from sin()/cos(), which are exactly periodic for any
         // real input — so no fract() is needed anywhere in the pipeline.
-        int rawU = inWorldUV.x;
+        int worldU = inWorldUV.x;
         // Per-page attribution (#1869): several world pages can be
         // visible at once, each advancing on its own clock and
         // generated at its own size. inSolarPage names which one owns
@@ -157,7 +157,7 @@ bindlessVertexShaderCode = $(compileShaderQ Nothing "vert" Nothing [glsl|
             circumferenceTiles = ubo.solarPages[slot].y;
         }
         float circumference = max(circumferenceTiles, 1.0);
-        fragSunAngle = baseSunAngle + float(rawU) / circumference;
+        fragSunAngle = baseSunAngle + float(worldU) / circumference;
 
         fragCameraFacing = ubo.cameraFacing;
         fragRenderFlags = inRenderFlags;

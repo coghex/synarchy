@@ -17,8 +17,9 @@ import Vulkan.Zero
 getVertexBindingDescription ∷ VertexInputBindingDescription
 getVertexBindingDescription = zero
     { binding = 0
-    , stride = 56  -- = vertexTotalSize: 2+2+4+1+1 floats + 2 uints
-                  --   + 2 signed ints (worldUV) + 1 uint
+    , stride = 56  -- = vertexTotalSize: 2+2+4+1+1 floats (40 B), one
+                  --   uint of flags (44), worldUV's two signed ints
+                  --   (52), one uint of solar page (56)
     , inputRate = VERTEX_INPUT_RATE_VERTEX
     }
 
