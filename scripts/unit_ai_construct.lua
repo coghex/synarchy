@@ -93,6 +93,12 @@ end
 -- constructUtility only notices on that unit's own next decision tick
 -- — too late to stop it placing the piece. This clears the claim
 -- immediately instead. `wid` is the CANCELLED job's own page.
+--
+-- #1844 also reaches it from the WORLD side, through unit_ai.lua's
+-- onConstructInvalidated broadcast: an invalidated designation whose
+-- claim registry entry survived would keep the tile reserved until the
+-- claimant's next decision tick or its claim timeout, blocking a
+-- successor designated there immediately.
 local function abandonClaim(wid, gx, gy, attempt)
     local key = constructKey(wid, gx, gy)
     local c = constructClaims[key]
@@ -111,6 +117,19 @@ local function abandonClaim(wid, gx, gy, attempt)
     end
 end
 M.abandonClaim = abandonClaim
+
+-- The world-side half of that, as an engine BROADCAST callback (#1844).
+-- Attached to the shared singleton rather than declared in
+-- unit_ai.lua, which is at its #538 line budget: broadcastToModules
+-- dispatches over loaded SCRIPTS, and the singleton's table is the one
+-- scripts/unit_ai.lua exposes. Same arrangement unit_ai_core.lua uses
+-- for getState/getRole.
+local unitAi = package.loaded["scripts.unit_ai"]
+if unitAi then
+    function unitAi.onConstructInvalidated(pageId, gx, gy, attempt)
+        abandonClaim(pageId, gx, gy, attempt)
+    end
+end
 
 -- Nearest viable pending job within construct_scan_range, or nil. Also
 -- runs the stale-claim sweep (the scan already paid for the job list).

@@ -53,7 +53,8 @@ import Engine.Asset.Handle (TextureHandle(..), toInt)
 import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
 import Engine.Core.Capability.WorldSim (toWorldSimCapability)
 import Engine.Core.State (EngineEnv(..))
-import World.Construct.Types (ConstructTarget(..), StructurePiece(..))
+import World.Construct.Types
+    (ConstructDesignation(..), ConstructTarget(..), StructurePiece(..))
 import Engine.Graphics.Camera
     (Camera2D(..), CameraFacing(..), defaultCamera)
 import Engine.Graphics.Vulkan.Types.Vertex
@@ -646,8 +647,14 @@ engineSpec = beforeAll setup $ do
           wirePiece Nothing
       HM.keys <$> readIORef (wsConstructDesignationsRef ws)
           `shouldReturn` [plantTile]
+      -- #1844: a progress pour names the attempt it observed, so the
+      -- designation the commit just made supplies it.
+      constructAttempt ← maybe (fail "no construction designation")
+                               (pure ∘ cdAttempt)
+                           ∘ HM.lookup plantTile
+                           =<< readIORef (wsConstructDesignationsRef ws)
       handleWorldAddConstructProgressCommand env logger fixturePage
-          (fst plantTile) (snd plantTile) 0.5 Nothing
+          (fst plantTile) (snd plantTile) 0.5 constructAttempt
       HM.keys <$> readIORef (wsPlantDesignationsRef ws) `shouldReturn` []
 
     it "keeps — and does not draw — a designation whose chunk is gone" $

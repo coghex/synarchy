@@ -389,13 +389,15 @@ constructNearestDesignationFn wsc = do
                 Nothing → Lua.pushnil >> return 1
         _ → Lua.pushnil >> return 1
 
--- | construction.setJobStatus(pageId, gx, gy, status[, attempt]) — build
+-- | construction.setJobStatus(pageId, gx, gy, status, attempt) — build
 --   AI marks a job "claimed" / "complete" (complete removes the
 --   designation). Unknown status strings are ignored.
 --
---   #1844: @attempt@ guards the write exactly as it guards
---   @cancelDesignation@ — a completion for a job that is gone must not
---   delete the successor at its tile.
+--   #1844: @attempt@ is REQUIRED and guards the write. A completion for
+--   a job that is gone must not delete the successor at its tile, and
+--   unlike cancellation there is no honest coordinate-only form of a
+--   status transition — it is always some worker reporting on the job it
+--   observed. A call without one enqueues nothing at all.
 constructSetJobStatusFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
 constructSetJobStatusFn wsc = do
     pageIdArg ← Lua.tostring 1
@@ -403,14 +405,18 @@ constructSetJobStatusFn wsc = do
     gyArg ← Lua.tonumber 3
     statusArg ← Lua.tostring 4
     attArg ← readAttemptArg 5
-    case (pageIdArg, gxArg, gyArg, statusArg) of
-        (Just pageIdBS, Just gx, Just gy, Just statusBS) →
+    -- #1844: no attempt, no command. A status transition is always a
+    -- worker reporting on the job it observed, so an attempt-less call
+    -- is a caller bug and enqueuing it would let a stale completion
+    -- delete a successor at the tile.
+    case (pageIdArg, gxArg, gyArg, statusArg, attArg) of
+        (Just pageIdBS, Just gx, Just gy, Just statusBS, Just attempt) →
             case textToConstructStatus (TE.decodeUtf8Lenient statusBS) of
                 Just st → Lua.liftIO $ do
                     let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                     Q.writeQueue (wsWorldQueue wsc) $
                         WorldSetConstructStatus pageId (round gx) (round gy)
-                            st attArg
+                            st attempt
                 Nothing → pure ()
         _ → pure ()
     return 0
@@ -427,12 +433,14 @@ constructAddJobProgressFn wsc = do
     gyArg ← Lua.tonumber 3
     deltaArg ← Lua.tonumber 4
     attArg ← readAttemptArg 5
-    case (pageIdArg, gxArg, gyArg, deltaArg) of
-        (Just pageIdBS, Just gx, Just gy, Just delta) → Lua.liftIO $ do
-            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            Q.writeQueue (wsWorldQueue wsc) $
-                WorldAddConstructProgress pageId (round gx) (round gy)
-                    (realToFrac delta) attArg
+    -- #1844: no attempt, no command — see setJobStatus above.
+    case (pageIdArg, gxArg, gyArg, deltaArg, attArg) of
+        (Just pageIdBS, Just gx, Just gy, Just delta, Just attempt) →
+            Lua.liftIO $ do
+                let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
+                Q.writeQueue (wsWorldQueue wsc) $
+                    WorldAddConstructProgress pageId (round gx) (round gy)
+                        (realToFrac delta) attempt
         _ → pure ()
     return 0
 

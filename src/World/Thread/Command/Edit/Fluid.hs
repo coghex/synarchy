@@ -9,7 +9,8 @@ module World.Thread.Command.Edit.Fluid
 import UPrelude
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Engine.Core.Capability.WorldSim
-    (WorldSimCapability(..))
+    (WorldSimCapability(..), toWorldSimCapability)
+import Engine.Core.State (EngineEnv)
 import Engine.Core.Log (logDebug, logWarn, LogCategory(..), LoggerState)
 import World.Types
 import World.Generate.Coordinates (globalToChunk)
@@ -17,13 +18,16 @@ import World.Edit.Types (WorldEdit(..), appendEdit)
 import World.Edit.Apply (applyEdit)
 import World.Thread.Command.Edit.Sync (syncEditToSim)
 import World.Plant.Validate (revalidatePlantDesignations)
+import World.Construct.Revalidate
+    (ConstructScope(..), revalidateConstructDesignations)
 
 -- | Place one tile of fluid on top of the column at (gx, gy). Records
 --   the edit in the world's log; in-memory mutation uses the same
 --   `applyEdit` helper.
-handleWorldSetFluidTileCommand ∷ WorldSimCapability → LoggerState → WorldPageId
+handleWorldSetFluidTileCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → FluidType → IO ()
-handleWorldSetFluidTileCommand wsc logger pageId gx gy fluidType = do
+handleWorldSetFluidTileCommand env logger pageId gx gy fluidType = do
+    let wsc = toWorldSimCapability env
     mgr ← readIORef (wsWorldManagerRef wsc)
     case lookup pageId (wmWorlds mgr) of
         Nothing →
@@ -54,6 +58,12 @@ handleWorldSetFluidTileCommand wsc logger pageId gx gy fluidType = do
                     -- #1858: fluid raises the resolved surface, so a
                     -- flooded tilled tile stops being plantable.
                     _ ← revalidatePlantDesignations logger ws
+                    -- #1844: and it moves the very surface a structure
+                    -- designation captured as its 'cdZ', so the same
+                    -- edit can strand a build site under water. Scoped
+                    -- to the edited tile, like every other live hook.
+                    _ ← revalidateConstructDesignations env logger ws
+                            (ConstructKeys [(gx, gy)])
                     logDebug logger CatWorld $
                         "Placed fluid " <> tshow fluidType
                           <> " at " <> tshow gx <> ","

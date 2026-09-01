@@ -176,6 +176,11 @@ processLuaMsg env ls stateRef msg = case msg of
     broadcastToModules ls "onStampLocation"
         [ ScriptString pageId, ScriptString locId
         , ScriptNumber (fromIntegral gx), ScriptNumber (fromIntegral gy) ]
+  LuaConstructInvalidated pageId gx gy attempt →
+    broadcastToModules ls "onConstructInvalidated"
+        [ ScriptString pageId
+        , ScriptNumber (fromIntegral gx), ScriptNumber (fromIntegral gy)
+        , ScriptNumber (fromIntegral attempt) ]
   LuaOpenArena →
     broadcastToModules ls "onOpenArena" []
   LuaDebugToggle → do

@@ -209,6 +209,16 @@ data LuaMsg = LuaTextureLoaded TextureHandle AssetId
               --   the chunk (the stamper skips it if already stamped), so
               --   a location always materializes from the persisted
               --   overlay, even after a save/load that preceded stamping.
+            | LuaConstructInvalidated Text Int Int Word64
+              -- ^ #1844: the world thread removed a construction
+              --   designation out from under a live claimant —
+              --   (pageId, gx, gy, attempt id). Broadcast to Lua as
+              --   @onConstructInvalidated@ so the build AI drops that
+              --   EXACT attempt's claim and job immediately, rather than
+              --   holding the tile until the claimant's next decision
+              --   tick or its claim timeout. The attempt is what keeps a
+              --   SUCCESSOR designated at the same tile untouched: a
+              --   worker that has since claimed one keeps its own job.
             | LuaOpenArena
             | LuaFocusLost Word32
             | LuaCharInput Word32 Char

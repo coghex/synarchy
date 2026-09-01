@@ -63,7 +63,10 @@ import Engine.Core.Capability.WorldSim
 import Engine.ActionOutcome (ActionOutcome(..), pushActionOutcome)
 import Engine.PlayerEvent.Emit (emitEventAt)
 import Engine.Core.Log (logDebug, LogCategory(..), LoggerState)
-import Engine.Core.State (EngineEnv, freshItemInstanceId)
+import Engine.Core.State (EngineEnv, freshItemInstanceId, luaQueue)
+import qualified Engine.Core.Queue as Q
+import Engine.Scripting.Lua.Types (LuaMsg(..))
+import World.Construct.Attempt (ConstructAttemptId(..))
 import Item.Ground (spawnGroundItem)
 import Item.Materialize (materializeItem, pristineItem)
 import Item.Types (ItemManager(..))
@@ -269,6 +272,14 @@ revalidateConstructDesignations env logger ws scope = do
             -- borrowing @construction.designate@: nobody asked for a
             -- designation here, the world withdrew one.
             recordConstructInvalidation env gx gy reason
+            -- …and tell the build AI, so the claimant that was working
+            -- this EXACT attempt drops its claim and job now rather than
+            -- on its next decision tick. Its module-local claim registry
+            -- is what would otherwise block a successor designated at
+            -- this tile until the claim timed out; naming the attempt is
+            -- what keeps a worker that has since claimed a successor
+            -- untouched.
+            notifyConstructInvalidated env ws gx gy cd
             -- …and, when materials really came back, a PLAYER-facing
             -- line. The F4 ring is a debug oracle; a designation the
             -- world withdrew after its cost was already spent is
@@ -314,6 +325,22 @@ revalidateStagedConstructDesignations deps cat logger ws scope = do
                 "Load: construction designation self-cleared at ("
                 <> tshow gx <> "," <> tshow gy <> "): " <> reason
         pure [ k | (k, _, _) ← removed ]
+
+-- | Tell the Lua build AI that one exact attempt is gone.
+notifyConstructInvalidated
+    ∷ EngineEnv → WorldState → Int → Int → ConstructDesignation → IO ()
+notifyConstructInvalidated env ws gx gy cd = do
+    mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
+    let ConstructAttemptId aid = cdAttempt cd
+    forM_ [ pid | (pid, ws') ← wmWorlds mgr, sameContainer ws' ] $ \pid →
+        Q.writeQueue (luaQueue env)
+            (LuaConstructInvalidated (unWorldPageId pid) gx gy aid)
+  where
+    -- The page this WorldState belongs to. Compared by the designation
+    -- ref's own identity rather than by any id the caller passes, so the
+    -- broadcast can never name a page the removal did not happen on.
+    sameContainer ws' = wsConstructDesignationsRef ws'
+                          ≡ wsConstructDesignationsRef ws
 
 -- | One removed designation, on the F4 action-outcome ring.
 recordConstructInvalidation ∷ EngineEnv → Int → Int → Text → IO ()

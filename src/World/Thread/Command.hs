@@ -227,7 +227,7 @@ handleWorldCommand env logger (WorldLoadPublish requestId)
 handleWorldCommand env logger (WorldDeleteTile pageId gx gy)
   = handleWorldDeleteTileCommand env logger pageId gx gy
 handleWorldCommand env logger (WorldSetFluidTile pageId gx gy fluidType)
-  = handleWorldSetFluidTileCommand (toWorldSimCapability env) logger pageId gx gy fluidType
+  = handleWorldSetFluidTileCommand env logger pageId gx gy fluidType
 handleWorldCommand env logger (WorldSetSlope pageId gx gy z bits)
   = handleWorldSetSlopeCommand env logger pageId gx gy z bits
 handleWorldCommand env logger (WorldSetCell pageId gx gy z mat)

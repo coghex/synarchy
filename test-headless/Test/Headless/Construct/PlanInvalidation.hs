@@ -33,7 +33,12 @@ import World.Construct.Revalidate
     ( ConstructScope(..), constructStagingRefundDeps
     , revalidateConstructDesignations
     , revalidateStagedConstructDesignations )
+import qualified Engine.Core.Queue as Q
+import Engine.Scripting.Lua.Types (LuaMsg(..))
 import World.Command.Types (WorldCommand(..))
+import World.Fluid.Types (FluidType(..))
+import World.Page.Types (WorldPageId(..))
+import World.Thread.Command.Edit (handleWorldSetFluidTileCommand)
 import World.Thread.Command (handleWorldCommand)
 import World.Thread.Command.Cursor (handleWorldCancelConstructCommand)
 import World.Construct.Types
@@ -42,7 +47,6 @@ import World.Construct.Types
 import World.Flora.Types (emptyFloraChunkData)
 import World.Fluid.Types (emptyIceMap)
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
-import World.Page.Types (WorldPageId(..))
 import World.State.Types
     (WorldManager(..), WorldState(..), emptyWorldState, emptyWorldManager)
 import World.Tile.Types (WorldTileData(..))
@@ -69,6 +73,19 @@ artOnlyPiece = CtStructure (StructurePiece artOnlyPackName "floor" Nothing)
 
 attempt ∷ ConstructAttemptId
 attempt = ConstructAttemptId 7
+
+attemptRaw ∷ Word64
+attemptRaw = 7
+
+-- | Everything currently queued for the Lua thread, removed from it.
+drainLuaQueue ∷ EngineEnv → IO [LuaMsg]
+drainLuaQueue env = go []
+  where
+    go acc = do
+        m ← Q.tryReadQueue (luaQueue env)
+        case m of
+            Nothing → pure (reverse acc)
+            Just x  → go (x : acc)
 
 spec ∷ Spec
 spec = beforeAll initializeEngineHeadless $
@@ -226,6 +243,33 @@ spec = beforeAll initializeEngineHeadless $
       handleWorldCancelConstructCommand env logger fixturePage
           (fst tile) (snd tile) Nothing
       groundNames ws `shouldReturn` ["steel_plate"]
+
+    it "invalidates on a FLUID edit, which moves the very surface the \
+       \site was captured at" $ \(EngineInitResult env) → do
+      -- The resolved surface is max(terrain, fluid), so flooding a build
+      -- site strands it exactly as digging under it would — and a fluid
+      -- edit is its own command path, reached by neither the terrain
+      -- hooks nor a chunk publication.
+      (ws, logger) ← scene env flatTiles
+      seedDesignation ws floorPiece CpUnpaid
+      handleWorldSetFluidTileCommand env logger fixturePage
+          (fst tile) (snd tile) Lake
+      HM.size <$> readIORef (wsConstructDesignationsRef ws) `shouldReturn` 0
+
+    it "tells the build AI which exact attempt it withdrew" $
+        \(EngineInitResult env) → do
+      -- The claim registry is Lua-side and module-local, so an
+      -- invalidated designation whose claim outlives it keeps the tile
+      -- reserved until the claimant's next decision tick — blocking a
+      -- successor designated there immediately.
+      (ws, logger) ← scene env flatTiles
+      seedDesignation ws ghostPiece CpUnpaid
+      _ ← drainLuaQueue env
+      sweep env logger ws `shouldReturn` [tile]
+      msgs ← drainLuaQueue env
+      [ (p, x, y, a) | LuaConstructInvalidated p x y a ← msgs ]
+          `shouldBe` [(unWorldPageId fixturePage, fst tile, snd tile
+                      , attemptRaw)]
 
     it "mints a STAGED refund from the staged allocator, never the live \
        \one" $ \(EngineInitResult env) → do

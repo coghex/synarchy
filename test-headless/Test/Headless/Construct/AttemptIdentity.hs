@@ -183,11 +183,11 @@ guardSpec = describe "a delayed operation from a removed attempt" $ do
         let logger = scLogger sc
             env = scEnv sc
         handleWorldSetConstructStatusCommand env logger fixturePage
-            (fst tile) (snd tile) CsClaimed (Just old)
+            (fst tile) (snd tile) CsClaimed old
         handleWorldAddConstructProgressCommand env logger fixturePage
-            (fst tile) (snd tile) 0.75 (Just old)
+            (fst tile) (snd tile) 0.75 old
         handleWorldSetConstructStatusCommand env logger fixturePage
-            (fst tile) (snd tile) CsComplete (Just old)
+            (fst tile) (snd tile) CsComplete old
         cancel sc ws tile (Just old)
         _ ← evalLua sc (T.concat
                 [ "return tostring(construction.payMaterials('", pageText
@@ -203,7 +203,7 @@ guardSpec = describe "a delayed operation from a removed attempt" $ do
         designate sc ws tile tile floorPiece
         [aid] ← attemptsOf ws
         handleWorldSetConstructStatusCommand (scEnv sc) (scLogger sc)
-            fixturePage (fst tile) (snd tile) CsClaimed (Just aid)
+            fixturePage (fst tile) (snd tile) CsClaimed aid
         cdStatus <$> designationAt ws `shouldReturn` CsClaimed
 
     it "takes the placement hand-off only for the exact attempt" $

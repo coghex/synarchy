@@ -165,14 +165,23 @@ data WorldCommand
         --   player's coordinate-only erase — "remove whatever is here",
         --   which has no attempt to name until it looks.
     | WorldSetConstructStatus WorldPageId Int Int ConstructStatus
-                              (Maybe ConstructAttemptId)
+                              ConstructAttemptId
         -- ^ Build AI (#96): mark a designation Claimed / Complete. A
         --   Complete designation is removed (the structure/building it
         --   represents now exists).
         --
-        --   #1844: attempt-guarded exactly as 'WorldCancelConstruct' is.
+        --   #1844: the attempt is REQUIRED, not optional. Cancellation
+        --   has an honest coordinate-only form — the player's
+        --   right-click erases whatever is at a tile — but a status
+        --   transition never does: it is always some worker reporting on
+        --   the job it observed, and an attempt-less completion that
+        --   matched anything would delete a successor at that tile.
+        --   Making it unrepresentable is cheaper than checking for it.
     | WorldAddConstructProgress WorldPageId Int Int Float
-                                (Maybe ConstructAttemptId)
+                                ConstructAttemptId
+        -- ^ #1844: required for the same reason — an attempt-less pour
+        --   would advance, and visibly stamp progress onto, a job its
+        --   sender never claimed.
         -- ^ Build AI (#96): add build progress to the designation at
         --   (gx, gy). Deltas are pre-normalised to the job's total
         --   work (1.0 = done) and the sum is clamped to [0, 1]; the

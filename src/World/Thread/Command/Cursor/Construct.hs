@@ -334,22 +334,22 @@ beginConstructPlacement worldState (rawGX, rawGY) attempt = do
 --   (and resets the corner-progress display back to flat ground — the
 --   placed piece takes over from there).
 --
---   #1844: attempt-guarded. A completion for an attempt that is no
---   longer there removes nothing, so a stale worker cannot delete the
---   successor designation a player just made at the same tile.
+--   #1844: attempt-guarded, and the attempt is REQUIRED. A completion
+--   for an attempt that is no longer there removes nothing, so a stale
+--   worker cannot delete the successor designation a player just made at
+--   the same tile — and there is no attempt-less form that could.
 handleWorldSetConstructStatusCommand ∷ EngineEnv → LoggerState → WorldPageId
-    → Int → Int → ConstructStatus → Maybe ConstructAttemptId → IO ()
-handleWorldSetConstructStatusCommand env _logger pageId gx gy st mAttempt = do
+    → Int → Int → ConstructStatus → ConstructAttemptId → IO ()
+handleWorldSetConstructStatusCommand env _logger pageId gx gy st attempt = do
     mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
         Just worldState → do
             -- #1175: a build-AI job coord is a point op like any other.
             worldSize ← pageWrapWorldSize worldState
             let key = canonicalTile worldSize gx gy
-                matches cd = maybe True (≡ cdAttempt cd) mAttempt
             mCd ← atomicModifyIORef' (wsConstructDesignationsRef worldState) $
                 \m → case HM.lookup key m of
-                    Just cd | matches cd → case st of
+                    Just cd | cdAttempt cd ≡ attempt → case st of
                         CsComplete → (HM.delete key m, Just cd)
                         _          → ( HM.insert key (cd { cdStatus = st }) m
                                      , Nothing )
@@ -365,21 +365,21 @@ handleWorldSetConstructStatusCommand env _logger pageId gx gy st mAttempt = do
 --   display (the mining slope-mask pipeline, 'World.Construct.Apply')
 --   so the site visibly works corner-by-corner.
 --
---   #1844: attempt-guarded, so a delayed pour from a removed attempt
---   cannot advance — or visibly stamp progress onto — a successor.
+--   #1844: attempt-guarded, and the attempt is REQUIRED, so a delayed
+--   pour from a removed attempt cannot advance — or visibly stamp
+--   progress onto — a successor.
 handleWorldAddConstructProgressCommand ∷ EngineEnv → LoggerState → WorldPageId
-    → Int → Int → Float → Maybe ConstructAttemptId → IO ()
-handleWorldAddConstructProgressCommand env logger pageId gx gy delta mAttempt = do
+    → Int → Int → Float → ConstructAttemptId → IO ()
+handleWorldAddConstructProgressCommand env logger pageId gx gy delta attempt = do
     mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
         Just worldState → do
             -- #1175: a build-AI job coord is a point op like any other.
             worldSize ← pageWrapWorldSize worldState
             let key = canonicalTile worldSize gx gy
-                matches cd = maybe True (≡ cdAttempt cd) mAttempt
             mUpd ← atomicModifyIORef' (wsConstructDesignationsRef worldState) $
                 \m → case HM.lookup key m of
-                    Just cd | matches cd →
+                    Just cd | cdAttempt cd ≡ attempt →
                         let cd' = cd { cdProgress = max 0.0 (min 1.0
                                           (cdProgress cd + delta)) }
                         in ( HM.insert key cd' m

@@ -687,12 +687,14 @@ engineSpec = beforeAll setup $ do
           , tshow agx, ", ", tshow agy, "); "
           , "return j and (j.x .. ',' .. j.y) or 'nil'" ])
         `shouldReturn` tshow cgx <> "," <> tshow cgy
+      claimAttempt ← cdAttempt <$> designationAt ws anchorTile
       handleWorldSetConstructStatusCommand env logger fixturePage
-          agx agy CsClaimed Nothing
+          agx agy CsClaimed claimAttempt
       cdStatus <$> designationAt ws anchorTile `shouldReturn` CsClaimed
       _ ← evalDebug ls (T.concat
           [ "construction.addJobProgress('", pageText, "', "
-          , tshow agx, ", ", tshow agy, ", 0.5); return 'ok'" ])
+          , tshow agx, ", ", tshow agy, ", 0.5, "
+          , tshow (rawAttempt claimAttempt), "); return 'ok'" ])
       -- #1844: the two NEW coordinate verbs are alias-tolerant like
       -- every other one here. `beginPlacement` is a compare-and-set on
       -- the exact attempt, so it also proves the alias resolved to the
@@ -1112,6 +1114,9 @@ previewFbW = 800
 previewFbH = 600
 previewWinW = 8000
 previewWinH = 6000
+
+rawAttempt ∷ ConstructAttemptId → Word64
+rawAttempt (ConstructAttemptId n) = n
 
 designationAt ∷ WorldState → (Int, Int) → IO ConstructDesignation
 designationAt ws k = do
