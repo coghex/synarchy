@@ -132,6 +132,7 @@ buildings:
     category: "Cargo"
     description: "Throwaway #1247 test fixture - not shipped content."
     sprite: "assets/textures/buildings/cargo_hold_S/default.png"
+    visual_class: "freestanding_installation"
     tile_size: { x: 3, y: 1 }
     placement: "flat_ground"
     race: "acolyte_cult"
@@ -142,6 +143,7 @@ buildings:
     category: "Cargo"
     description: "Throwaway #1247 test fixture - not shipped content."
     sprite: "assets/textures/buildings/cargo_hold_S/default.png"
+    visual_class: "freestanding_installation"
     tile_size: { x: 1, y: 1 }
     placement: "flat_ground"
     race: "acolyte_cult"
@@ -152,6 +154,7 @@ buildings:
     category: "Cargo"
     description: "Throwaway #1247 test fixture - not shipped content."
     sprite: "assets/textures/buildings/cargo_hold_S/default.png"
+    visual_class: "freestanding_installation"
     tile_size: { x: 1, y: 1 }
     placement: "flat_ground"
     race: "acolyte_cult"
@@ -162,6 +165,7 @@ buildings:
     category: "Cargo"
     description: "Throwaway #1247 test fixture - not shipped content."
     sprite: "assets/textures/buildings/cargo_hold_S/default.png"
+    visual_class: "freestanding_installation"
     tile_size: { x: 1, y: 1 }
     placement: "flat_ground"
     race: "acolyte_cult"

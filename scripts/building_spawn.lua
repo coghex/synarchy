@@ -175,8 +175,9 @@ local function tickOne(bid, info, bindGen)
     if not params then return end
 
     -- Wait until the portal is done appearing — spawning during the
-    -- "appearing" anim would have the unit pop out of an animating
-    -- texture, which looks broken.
+    -- appearance anim would have the unit pop out of an animating
+    -- texture, which looks broken. Operability is the "built" test, so
+    -- this covers "constructing" and "appearing" alike (#2080).
     if building.getActivity(bid) ~= "built" then return end
 
     local s = ensureState(bid, params)
@@ -628,7 +629,7 @@ local function workerRate(n)
     return 9 + 3 * (math.log(n - 2) / math.log(2))
 end
 
--- Tick the construction progress for one Appearing building. Only
+-- Tick the construction progress for one Constructing building. Only
 -- fires if the def has bdBuildWork > 0 (legacy time-based defs like
 -- the portal are untouched). Counts acolytes physically adjacent
 -- with currentAction == "build_nearby", scales by R(n) * dt, and
@@ -636,7 +637,7 @@ end
 -- currentActivity check flips the building to Built once
 -- biBuildProgress ≥ bdBuildWork — no explicit "complete" needed.
 local function constructionTickOne(bid, dt)
-    if building.getActivity(bid) ~= "appearing" then return end
+    if building.getActivity(bid) ~= "constructing" then return end
     local required = building.getBuildRequired(bid)
     if not required or required <= 0 then return end
 

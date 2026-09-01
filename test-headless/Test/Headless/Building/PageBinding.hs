@@ -47,6 +47,8 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified HsLua as Lua
 
+import qualified Data.Map.Strict as Map
+import Building.Schema
 import Building.Types
     ( BuildingDef(..), BuildingId(..), BuildingInstance(..)
     , BuildingManager(..), emptyBuildingManager )
@@ -245,7 +247,7 @@ mkDef name starting = BuildingDef
     , bdDisplayName     = name
     , bdCategory        = "Test"
     , bdDescription     = ""
-    , bdTexture         = TextureHandle 0, bdIconTexture         = TextureHandle 0
+    , bdTextures         = legacyAssets (TextureHandle 0), bdIconTexture         = TextureHandle 0
     , bdTileW           = 1
     , bdTileH           = 1
     , bdPlacement       = "flat_ground"
@@ -257,7 +259,8 @@ mkDef name starting = BuildingDef
     , bdStorageCapacity = 0
     , bdOperations      = []
     , bdAnimations      = HM.empty
-    , bdStateAnims      = HM.empty
+    , bdRoleAnims      = Map.empty
+    , bdVisualClass     = FreestandingInstallation
     , bdPowerDrain      = 0
     , bdPowerNode       = Nothing
     }

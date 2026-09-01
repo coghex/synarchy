@@ -60,6 +60,7 @@ import Engine.Scene.Stats
 import Blood.Types
     ( BloodDecalSpec(..), BloodStore(..), BloodTextureId(..)
     , SeverityBucket(..), addDecal, bdlDecals, bstDecals )
+import Building.Schema
 import Building.Types
     ( BuildingDef(..), BuildingGhost(..), BuildingId(..), BuildingInstance(..)
     , BuildingManager(..), emptyBuildingManager )
@@ -352,13 +353,14 @@ footprintDef ∷ BuildingDef
 footprintDef = BuildingDef
     { bdName = "scene_stats_building", bdDisplayName = "Scene Stats Hall"
     , bdCategory = "Storage", bdDescription = ""
-    , bdTexture = TextureHandle 0, bdIconTexture = TextureHandle 0
+    , bdTextures = legacyAssets (TextureHandle 0), bdIconTexture = TextureHandle 0
     , bdTileW = 2, bdTileH = 3, bdPlacement = "flat_ground"
     , bdIsStarting = False, bdRace = "acolyte"
     , bdSpriteAnchor = "diamond_bottom", bdBuildWork = 0
     , bdMaterials = HM.empty, bdStorageCapacity = 0
     , bdOperations = [], bdAnimations = HM.empty
-    , bdStateAnims = HM.empty, bdPowerDrain = 0
+    , bdRoleAnims = Map.empty
+    , bdVisualClass     = FreestandingInstallation, bdPowerDrain = 0
     , bdPowerNode = Nothing
     }
 

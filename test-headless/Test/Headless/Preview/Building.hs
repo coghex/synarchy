@@ -21,14 +21,17 @@ import Test.Hspec
 import Control.Exception (finally)
 import Control.Monad (filterM)
 import Data.List (isPrefixOf, sort)
+import qualified Data.ByteString.Char8 as BS
 import qualified Data.Text as T
 import qualified Data.Map.Strict as Map
+import qualified Data.Yaml as Yaml
 import System.Directory
     ( getTemporaryDirectory, createDirectoryIfMissing, removeDirectoryRecursive
     , createDirectoryLink, removeDirectoryLink, createFileLink
     , doesDirectoryExist )
 import System.FilePath ((</>))
 import System.Posix.Files (createNamedPipe, stdFileMode)
+import Building.Schema (legacyAssets)
 import Engine.Asset.YamlBuildings (BuildingYamlAnim(..))
 import Engine.Core.Types (PreviewBuilding(..), PreviewBuildingEntry(..))
 import Engine.Preview.Building
@@ -67,7 +70,7 @@ realEntries name = do
 anim ∷ Float → Bool → [Text] → BuildingYamlAnim
 anim fps loop framePaths = BuildingYamlAnim
     { byaFps = fps, byaLoop = loop
-    , byaFrames = Map.singleton "default" framePaths }
+    , byaFrames = legacyAssets framePaths }
 
 static ∷ Text → Text → PreviewBuildingEntry
 static lbl path = PreviewBuildingEntry
@@ -355,6 +358,56 @@ spec = do
                 fmap pbeFrames special `shouldBe`
                     Just [T.pack (item </> "special" </> "frame_001.png")]
 
+    describe "preview metadata reads BOTH declaration forms (#2080)" $ do
+        let decodeMeta bytes = case Yaml.decodeEither' bytes of
+                Right f | [d] ← bamfBuildings f → Just (bamdSprite d)
+                _ → Nothing
+
+        it "reads the legacy singular `sprite`" $
+            decodeMeta (BS.unlines
+                [ "buildings:"
+                , "  - name: \"x\""
+                , "    sprite: \"assets/textures/buildings/x/default.png\""
+                ]) `shouldBe`
+                    Just (Just "assets/textures/buildings/x/default.png")
+
+        it "reads the canonical `sprites.south`" $
+            -- Without this the ladder's sprite rule would silently stop
+            -- working for every building an art slice migrates: the
+            -- viewer would fall through to default.png, or to whatever
+            -- happens to sort first.
+            decodeMeta (BS.unlines
+                [ "buildings:"
+                , "  - name: \"x\""
+                , "    sprites:"
+                , "      south: \"assets/textures/buildings/x/s.png\""
+                , "      west: \"assets/textures/buildings/x/w.png\""
+                , "      north: \"assets/textures/buildings/x/n.png\""
+                , "      east: \"assets/textures/buildings/x/e.png\""
+                ]) `shouldBe` Just (Just "assets/textures/buildings/x/s.png")
+
+        it "yields no sprite, rather than failing, for neither form" $
+            decodeMeta (BS.unlines
+                [ "buildings:"
+                , "  - name: \"x\""
+                ]) `shouldBe` Just Nothing
+
+        it "tolerates a malformed `sprites` block instead of failing the \
+           \whole preview" $ do
+            -- The viewer must never lose a building's animation list
+            -- over an unrelated schema question in its static block.
+            decodeMeta (BS.unlines
+                [ "buildings:"
+                , "  - name: \"x\""
+                , "    sprites: \"not-a-block.png\""
+                ]) `shouldBe` Just Nothing
+            decodeMeta (BS.unlines
+                [ "buildings:"
+                , "  - name: \"x\""
+                , "    sprites:"
+                , "      west: \"w.png\""
+                ]) `shouldBe` Just Nothing
+
     describe "defaultBuildingEntry (the selection ladder)" $ do
         it "prefers state_animations.built, resolved through the animation's \
            \OWN frame paths" $ do
@@ -375,7 +428,7 @@ spec = do
                     { bpmAnims  = Map.singleton "x-construct"
                                     (anim 4 False
                                         ["assets/textures/buildings/x/construct/frame_001.png"])
-                    , bpmStates = Map.singleton "appearing" "x-construct"
+                    , bpmStates = Map.singleton "construction" "x-construct"
                     , bpmSprite = Just sprite
                     }
                 entries = [ animated "construct"

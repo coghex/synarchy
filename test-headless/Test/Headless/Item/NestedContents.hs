@@ -24,6 +24,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
 import Data.IORef (newIORef, readIORef, writeIORef, modifyIORef')
+import Building.Schema
 import Building.Knowledge (ContainerKnowledge, ckRecords, crRevealedAt)
 import Building.Knowledge.Live (ContainerObserver(..), revealContainer)
 import Engine.Core.ReadOnlyRef (toReadOnlyRef)
@@ -127,13 +128,14 @@ cargoDef ∷ BuildingDef
 cargoDef = BuildingDef
     { bdName = "cargo_hold_S", bdDisplayName = "Cargo Hold"
     , bdCategory = "Storage", bdDescription = ""
-    , bdTexture = TextureHandle 0, bdIconTexture = TextureHandle 0
+    , bdTextures = legacyAssets (TextureHandle 0), bdIconTexture = TextureHandle 0
     , bdTileW = 1, bdTileH = 1, bdPlacement = "flat_ground"
     , bdIsStarting = False, bdRace = "acolyte"
     , bdSpriteAnchor = "diamond_bottom", bdBuildWork = 0
     , bdMaterials = HM.empty, bdStorageCapacity = 100
     , bdOperations = [], bdAnimations = HM.empty
-    , bdStateAnims = HM.empty, bdPowerDrain = 0, bdPowerNode = Nothing
+    , bdRoleAnims = Map.empty
+    , bdVisualClass     = FreestandingInstallation, bdPowerDrain = 0, bdPowerNode = Nothing
     }
 
 mkBuilding ∷ [ItemInstance] → BuildingInstance
