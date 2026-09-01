@@ -1,9 +1,9 @@
 {
   "$comment": "Save-compatibility manifest (issue #766, save-overhaul C4). Tracks every save-format baseline this build is declared to keep loadable through explicit migrations, plus the tracked fixtures proving it. Never hand-edit a fixture's sha256 after it has been recorded here -- see tools/save_compat_audit.py (--add-baseline registers a fixture's checksum/summary together).",
   "envelopeFramingVersion": 1,
-  "frozenDtoFingerprint": "c89ef3ce67c6aa9f45808d3fc81eeac7164afbf4dbd110138b31725b03e844ed",
+  "frozenDtoFingerprint": "cc865aad51c0e1aae01037b25ce7ec47caeb98fc605e8d1518bcf81a708b287b",
   "frozenDtoFingerprintOf": "src/World/Save/Compat/SessionV90.hs, plus every leaf DTO its frozen types embed, transitively resolved wherever actually defined (World.Save.Component.Page/.Entities/.Session/.WorldGen)",
-  "frozenDtoFingerprintComment": "sha256 over every frozen `data ... deriving (...)` block's field list (whitespace-normalized) in SessionV90.hs, PLUS (round-16 review) every leaf DTO type those blocks embed (WorldGenParamsDTO and its whole nested worldgen config/state tree, WorldEditDTO, GroundItemsDTO/ItemInstanceDTO, BuildingInstanceDTO, UnitInstanceDTO, etc.), transitively resolved wherever each is actually defined -- SessionV90.hs's own blocks alone said nothing about a field reordered on one of those EMBEDDED types, even though the real B1 wire bytes for it would silently change. See tools/save_compat_audit.py's frozen_dto_fingerprint()/_transitive_dto_blocks(). Changes only when a field is added/removed/reordered anywhere in this transitive closure, never on a comment-only edit. Recompute with: python3 -c \"import sys; sys.path.insert(0,'tools'); from save_compat_audit import frozen_dto_fingerprint; print(frozen_dto_fingerprint())\". Last updated deliberately by issue #1092: WorldPageSaveV90.wp90Identity was repointed from WorldIdentityDTO to the newly-frozen WorldIdentityDTOv1, which carries the IDENTICAL two fields (name, optional gloss) the old type did -- a rename of the frozen shape, not a field added/removed/reordered, so every tracked v90 fixture's bytes are unchanged (the unsuffixed name now belongs to the current world-pages v3 identity, which additionally carries language provenance). Same pattern #911 used when it froze WorldGenParamsDTOv1. Last updated deliberately by issue #1233: BuildingSnapshotV90.bsn90Instances, UnitSnapshotV90.usn90Instances and WorldPageSaveV90.wp90GroundItems were repointed from BuildingInstanceDTO/UnitInstanceDTO/GroundItemsDTO to the newly-frozen BuildingInstanceDTOv1/UnitInstanceDTOv1/GroundItemsDTOv1, which carry the IDENTICAL fields those types carried before #1233 appended ItemInstance's external bulk and optional internal storage capacities -- a rename of the frozen shapes, not a field added/removed/reordered within them, so every tracked v90 fixture's bytes are unchanged (the unsuffixed names now belong to the current buildings v2 / units v2 / world-activity v3 shapes, which additionally carry those physical values). Exactly the #1092 pattern one row up. Last updated deliberately by issue #1217: WorldPageSaveV90.wp90UnitSimStates was repointed from UnitSimStateDTO to the newly-frozen UnitSimStateDTOv1, which carries the IDENTICAL fields that type carried before #1217 added the per-request hazard policy to its embedded move target -- a rename of the frozen shape, not a field added/removed/reordered within it, so every tracked v90 fixture's bytes are unchanged (the unsuffixed name now belongs to the current unit-sim v3 shape, whose MoveTargetDTO additionally carries MoveHazardPolicy). Exactly the #1092 / #1233 pattern above.",
+  "frozenDtoFingerprintComment": "sha256 over every frozen `data ... deriving (...)` block's field list (whitespace-normalized) in SessionV90.hs, PLUS (round-16 review) every leaf DTO type those blocks embed (WorldGenParamsDTO and its whole nested worldgen config/state tree, WorldEditDTO, GroundItemsDTO/ItemInstanceDTO, BuildingInstanceDTO, UnitInstanceDTO, etc.), transitively resolved wherever each is actually defined -- SessionV90.hs's own blocks alone said nothing about a field reordered on one of those EMBEDDED types, even though the real B1 wire bytes for it would silently change. See tools/save_compat_audit.py's frozen_dto_fingerprint()/_transitive_dto_blocks(). Changes only when a field is added/removed/reordered anywhere in this transitive closure, never on a comment-only edit. Recompute with: python3 -c \"import sys; sys.path.insert(0,'tools'); from save_compat_audit import frozen_dto_fingerprint; print(frozen_dto_fingerprint())\". Last updated deliberately by issue #1092: WorldPageSaveV90.wp90Identity was repointed from WorldIdentityDTO to the newly-frozen WorldIdentityDTOv1, which carries the IDENTICAL two fields (name, optional gloss) the old type did -- a rename of the frozen shape, not a field added/removed/reordered, so every tracked v90 fixture's bytes are unchanged (the unsuffixed name now belongs to the current world-pages v3 identity, which additionally carries language provenance). Same pattern #911 used when it froze WorldGenParamsDTOv1. Last updated deliberately by issue #1233: BuildingSnapshotV90.bsn90Instances, UnitSnapshotV90.usn90Instances and WorldPageSaveV90.wp90GroundItems were repointed from BuildingInstanceDTO/UnitInstanceDTO/GroundItemsDTO to the newly-frozen BuildingInstanceDTOv1/UnitInstanceDTOv1/GroundItemsDTOv1, which carry the IDENTICAL fields those types carried before #1233 appended ItemInstance's external bulk and optional internal storage capacities -- a rename of the frozen shapes, not a field added/removed/reordered within them, so every tracked v90 fixture's bytes are unchanged (the unsuffixed names now belong to the current buildings v2 / units v2 / world-activity v3 shapes, which additionally carry those physical values). Exactly the #1092 pattern one row up. Last updated deliberately by issue #1217: WorldPageSaveV90.wp90UnitSimStates was repointed from UnitSimStateDTO to the newly-frozen UnitSimStateDTOv1, which carries the IDENTICAL fields that type carried before #1217 added the per-request hazard policy to its embedded move target -- a rename of the frozen shape, not a field added/removed/reordered within it, so every tracked v90 fixture's bytes are unchanged (the unsuffixed name now belongs to the current unit-sim v3 shape, whose MoveTargetDTO additionally carries MoveHazardPolicy). Exactly the #1092 / #1233 pattern above. Last updated deliberately by issue #1854: three of WorldPageSaveV90's fields were repointed at newly-frozen shapes that carry the IDENTICAL layout they carried before #1854 re-keyed the live types -- wp90FloraHarvests from the live FloraHarvests alias (now HashMap FloraInstanceId Float) to FloraHarvestsDTOv1 (the tile-keyed HashMap (Int,Int) Float those payloads were written with), wp90ChopDesignations from ChopDesignationDTO (which gained the designated plant's own tile) to ChopDesignationDTOv1 (the bare surface z), and wp90Edits from WorldEditDTO to WorldEditDTOv1 (the eleven-constructor sum, before WePlaceFloraWithIdD was appended). The v90 wire BYTES are unchanged in every case -- each is a rename of the frozen shape, not a field added/removed/reordered within it, exactly the #1092 / #1233 pattern two rows up. The fingerprint moves because it hashes the frozen types' field LISTS, and those field lists now name the frozen types rather than the live ones -- which is the whole point: before #1854 they followed a live alias, so re-keying it would silently have rewritten every shipped v1/v2/v3 and v90 payload's decoding.",
   "envelopeFramingFingerprint": "b1b43fcecce096bb902440b11f92de904b2c9762cdac02dfe2c6d9db1c3fa05f",
   "envelopeFramingFingerprintOf": "src/World/Save/Envelope/Codec.hs + the wire-relevant bindings in src/World/Save/Envelope/Types.hs (ComponentId/ComponentDescriptor/EnvelopeManifest/envelopeMagic/fnv1a64/encodeW32/decodeW32/encodeW64/decodeW64)",
   "envelopeFramingFingerprintComment": "round-15 review: envelopeFramingVersion alone is just an integer someone has to remember to bump -- this sha256 (whitespace-normalized, comment-insensitive, same technique as frozenDtoFingerprint) catches an ACTUAL byte-layout change (header/manifest/checksum framing) shipping with envelopeFramingVersion left untouched, which would otherwise be a new wire format with no format epoch. See tools/save_compat_audit.py's envelope_framing_fingerprint(). Issue #1416 added ONE narrow further exception on top of that comment/whitespace normalization: a locally declared LANGUAGE extension whose effective state Codec.hs ALREADY INHERITS from synarchy.cabal's `common lang` stanza is dropped before hashing, so adding or removing such a declaration -- PR #1001 deleted an already-inherited UnicodeSyntax -- no longer moves this value; that edit cannot change the module's effective extension set, its behavior, or the bytes it writes. Only the module HEADER's pragma run is normalized, and only as far as can be established WITHOUT modelling GHC's extension-implication graph. A leading INERT PREFIX drops declarations of either polarity while the state is provably still the inherited one (which is what makes a lone {-# LANGUAGE NoImplicitPrelude #-} a no-op); past it, every remaining declaration must be in POSITIVE form with no extension named twice. Such a header is a plain set of enables layered on a state that already contains each inherited extension's implied closure. The moment a header turns something off -- directly, or by re-enabling after a disable (NoTypeFamilies, TypeFamilyDependencies, where the second reinstates the TypeFamilies the first removed) -- it is kept verbatim instead, as is pragma-SHAPED ordinary source such as a string literal the codec itself writes. One case is knowingly given up to that boundary as a decided trade-off (owner, 2026-08-19): an inherited NEGATIVE re-declared PAST the prefix (Strict, NoImplicitPrelude) leaves the effective set unchanged and is still retained, because proving that needs the same implication table. The cost is one explicable fingerprint move; the other direction hides a real change. It is NOT a blanket exclusion of LANGUAGE pragmas, because a false negative here is the expensive direction: an extension the module does not inherit (its own Strict) and one whose local declaration REVERSES an inherited default (ImplicitPrelude against common lang's NoImplicitPrelude) are both effective and both still move it, and the inherited set is read live from the cabal stanza rather than hard-coded so it cannot drift into covering an extension that has since become effective. Nothing else is excluded -- imports, the module header and export list, OPTIONS_GHC and every other block pragma, and all the code itself still move this fingerprint. A moved fingerprint is not by itself proof the wire format changed, so it does not by itself call for an envelopeFramingVersion bump. Recompute with: python3 -c \"import sys; sys.path.insert(0,'tools'); from save_compat_audit import envelope_framing_fingerprint; print(envelope_framing_fingerprint())\"",
@@ -1781,6 +1781,108 @@
           "sizeBytes": 5049608,
           "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 64, 3), unit.spawn('acolyte', 0,0, 0, 'player'), settled 30.0s and held until `(function() local found=false; for _,l in ipairs(world.listPlacedLocations() or {}) do if l.id == 'ruin_small' then world.loadChunksInRegion(l.cx,l.cy,l.cx,l.cy); local e=l.encounter; if e and e.rolled_count > 0 and e.roster_complete and #e.occupants == e.rolled_count then found=true end end end; return found end)()`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
           "expectedCanonicalSummary": "test-headless/data/save-compat/r1-ruin-nomad-encounter.expected.json"
+        }
+      ]
+    },
+    {
+      "id": "s1-flora-instance-identity",
+      "description": "Stable per-flora-instance identity and exact mutable state (issue #1854): world-edits became v2 because every page now persists a planted-flora id allocator cursor beside its edit log, and each planted row crop records the FloraInstanceId it was allocated (a newly appended WePlaceFloraWithId constructor, never a sixth field on the historical one); world-activity became v4 because Chop designations and flora regrowth timers are keyed by FloraInstanceId instead of by tile, and the slice gained the two tile-keyed PENDING maps that hold a pre-identity entry until its chunk is resident. This fixture is written by the live v2/v4 codecs after a real session designated one paper_birch for felling, harvested a DIFFERENT paper_birch (starting that plant's own regrowth timer), and planted a tomato_plant row crop on tilled soil -- so both re-keyed maps and both new world-edits fields are exercised with populated, distinct-namespace data (a generated id in the Chop/harvest maps, a planted id in the edit log). The pre-#1854 v1 world-edits and v1/v2/v3 world-activity shapes remain tracked by the earlier baselines and migrate through the frozen WorldEditDTOv1 / PageActivityDTOv3 trees.",
+      "declaredAt": "2026-09-01",
+      "declaredByIssue": 1854,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "World.Save.Component.Page.migrateWorldEditsV1 (world-edits v1 -> v2, with applyWorldEdits assigning the planted ids and the allocator cursor) and migrateWorldActivityV3 / migrateWorldActivityV2 (world-activity v3 -> v4 and v1/v2 -> v3 -> v4, deferring the tile-keyed Chop and harvest state into v4's PENDING maps); the fixture itself is the identity path for the current v2/v4 shapes with populated per-instance state",
+      "components": [
+        {
+          "id": "metadata",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "core-session",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "texture-palette",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-pages",
+          "version": 8,
+          "required": true
+        },
+        {
+          "id": "world-edits",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "world-activity",
+          "version": 4,
+          "required": true
+        },
+        {
+          "id": "buildings",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "units",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "unit-sim",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "craft-bills",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "power-nodes",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "container-knowledge",
+          "version": 2,
+          "required": false
+        },
+        {
+          "id": "transfer-orders",
+          "version": 1,
+          "required": false
+        },
+        {
+          "id": "lua.unit_ai",
+          "version": 7,
+          "required": true
+        },
+        {
+          "id": "lua.building_spawn",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "lua.tutorial_progress",
+          "version": 1,
+          "required": false
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "s1-flora-instance-identity-session",
+          "path": "test-headless/data/save-compat/s1-flora-instance-identity.bin",
+          "kind": "complete-session",
+          "sha256": "426a61ea5293f9b9defd3974fb61f84f925b5e40a58a830cd8653f29b7620a89",
+          "sizeBytes": 5252501,
+          "provenance": "Generated through the real production save path: a headless engine booted in this worktree, the shipped data/{substances,infections,items,equipment,materials,vegetation,flora,units,buildings}/*.yaml loaded through their engine.load*Yaml verbs (the startup_loader's own order), world.init('flora_identity_page', 42, 64, 3), world.show, world.loadChunksInRegion(-11,-11,-4,-4); then world.findHarvestableFlora(...,'wood') located two distinct paper_birch instances, chop.designate marked the first, world.harvestFloraInstance(gx, gy, iid, 'wood') harvested the second (starting only ITS regrowth timer), and world.setVegAt(...77) + world.plantRowCropAt(...,'tomato_plant') planted a row crop on tilled soil; finally engine.saveWorld -- the same production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/s1-flora-instance-identity.expected.json"
         }
       ]
     }

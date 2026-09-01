@@ -24,6 +24,7 @@ import Data.List (sortOn)
 import qualified Data.HashMap.Strict as HM
 import World.Chunk.Types (ChunkCoord(..), chunkSize)
 import World.Fluid.Types (FluidType(..))
+import World.Flora.Identity (FloraInstanceId)
 import World.Flora.Types (FloraId)
 import World.Material.Id (MaterialId(..))
 
@@ -97,6 +98,25 @@ data WorldEdit
                                            --   world.plantRowCropAt survives
                                            --   chunk eviction + save/load like
                                            --   every other edit.
+                                           --
+                                           --   LEGACY since #1854, and
+                                           --   DECODE-ONLY: it records no
+                                           --   'World.Flora.Identity.FloraInstanceId',
+                                           --   so nothing emits it any more —
+                                           --   'WePlaceFloraWithId' below took
+                                           --   its place. It stays because the
+                                           --   sum is positionally serialized
+                                           --   and append-only
+                                           --   (tools\/enum_append_only_audit.py):
+                                           --   deleting it, or growing its
+                                           --   payload in place, would
+                                           --   reinterpret tag 8 in every
+                                           --   shipped @world-edits@ v1 log.
+                                           --   'World.Save.Component.Page.applyWorldEdits'
+                                           --   rewrites each one into the
+                                           --   identity-bearing form as the
+                                           --   page is assembled, so no live
+                                           --   session ever holds one.
     | WeSetFluidSnapshot !Int !Int !FluidType !Int
                                            -- ^ Exact fluid state emitted by
                                            --   the simulation at save time.
@@ -104,6 +124,35 @@ data WorldEdit
                                            -- ^ Exact fluid state emitted by
                                            --   the simulation at save time:
                                            --   this column settled dry.
+    | WePlaceFloraWithId !Int !Int !FloraId !Int !Float !FloraInstanceId
+                                           -- ^ #1854: 'WePlaceFlora' plus the
+                                           --   plant's stable
+                                           --   'World.Flora.Identity.FloraInstanceId',
+                                           --   allocated ONCE from the page's
+                                           --   persisted planted-flora cursor
+                                           --   at planting time and replayed
+                                           --   verbatim thereafter — so the
+                                           --   same physical crop keeps one
+                                           --   identity through every chunk
+                                           --   eviction and every save/load,
+                                           --   and a re-plant after a load can
+                                           --   never reuse it.
+                                           --
+                                           --   The id is a plain durable
+                                           --   value, NOT a checked typed
+                                           --   reference: nothing in the save's
+                                           --   object graph is its target, and
+                                           --   the invariant that guards it is
+                                           --   the page's allocator cursor
+                                           --   ('World.Save.Component.Page.validateWorldEdits').
+                                           --
+                                           --   A NEW constructor rather than a
+                                           --   sixth field on 'WePlaceFlora',
+                                           --   because this sum is positionally
+                                           --   serialized: appending at the END
+                                           --   is the only change that leaves
+                                           --   every shipped log's existing
+                                           --   tags meaning what they meant.
     deriving (Show, Eq, Generic, Serialize)
 
 -- | All edits in a world, keyed by the chunk that contains them.
@@ -139,6 +188,8 @@ shiftWorldEdit dgx dgy edit = case edit of
     WeClearStructure gx gy s      → WeClearStructure (gx + dgx) (gy + dgy) s
     WeSetVeg gx gy z v            → WeSetVeg (gx + dgx) (gy + dgy) z v
     WePlaceFlora gx gy fid d w    → WePlaceFlora (gx + dgx) (gy + dgy) fid d w
+    WePlaceFloraWithId gx gy fid d w i →
+        WePlaceFloraWithId (gx + dgx) (gy + dgy) fid d w i
     WeSetFluidSnapshot gx gy ft z →
         WeSetFluidSnapshot (gx + dgx) (gy + dgy) ft z
     WeClearFluidSnapshot gx gy    → WeClearFluidSnapshot (gx + dgx) (gy + dgy)

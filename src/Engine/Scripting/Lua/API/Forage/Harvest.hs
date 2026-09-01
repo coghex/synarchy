@@ -6,6 +6,7 @@
 --   counterparts and .Crop for planting.
 module Engine.Scripting.Lua.API.Forage.Harvest
     ( worldHarvestFloraFn
+    , worldHarvestFloraInstanceFn
     ) where
 
 import UPrelude
@@ -113,45 +114,112 @@ worldHarvestFloraFn env = do
                                 bumpQuadCacheGen ws
                                 pure (Just spawned)
                             Nothing | isJust mPlot → pure Nothing
-                            Nothing → do
-                              insts ← floraAt (toWorldSimCapability env) ws gx gy
-                              harvests ← readIORef (wsFloraHarvestsRef ws)
-                              let live = HM.lookupDefault 0 (gx, gy) harvests
-                                  -- #332: only the BARE (forage) call
-                                  -- checks the growth window; a tagged
-                                  -- call is a designation flow (chop
-                                  -- "wood") and takes the plant in any
-                                  -- growth state.
-                                  windowOk i sp = case tagFilter of
-                                      Just _  → True
-                                      Nothing → harvestOpen sp doy
-                                                    (floraGrowth sp absDay i)
-                                  mFh = listToMaybe
-                                      [ fh2 | (i, sp) ← insts
-                                           , Just fh2 ← [fsHarvest sp]
-                                           , maybe True (`elem` fhTags fh2) tagFilter
-                                           , windowOk i sp ]
-                              case mFh of
-                                  Just fh | live ≤ 0 → do
-                                      spawned ← spawnYields env ws gx gy (fhYield fh)
-                                      atomicModifyIORef' (wsFloraHarvestsRef ws) $
-                                          \hs → (HM.insert (gx, gy) (fhRegrowth fh) hs, ())
-                                      bumpQuadCacheGen ws
-                                      pure (Just spawned)
-                                  _ → pure Nothing
-            case mSpawned of
-                Nothing → Lua.pushnil
-                Just spawned → do
-                    Lua.newtable
-                    forM_ (zip [1 ∷ Int ..] spawned) $ \(i, (name, gid)) → do
-                        Lua.newtable
-                        Lua.pushstring (TE.encodeUtf8 name)
-                        Lua.setfield (-2) "id"
-                        Lua.pushinteger (fromIntegral gid)
-                        Lua.setfield (-2) "gid"
-                        Lua.rawseti (-2) (fromIntegral i)
+                            Nothing → harvestWildFlora env ws gx gy
+                                          tagFilter Nothing doy absDay
+            pushHarvestResult mSpawned
             return 1
         _ → Lua.pushnil >> return 1
+
+-- | world.harvestFloraInstance(gx, gy, instanceId [, tag])
+--   → array of {id, gid} | nil
+--
+--   The EXACT-INSTANCE harvest (#1854 requirement 10). Same result
+--   shape and the same yields as world.harvestFlora, but it names ONE
+--   plant: the chop AI fells the tree it claimed, never the berry bush
+--   beside it, and only that tree's own regrowth timer starts. The tile
+--   is still passed so the lookup stays a single seam-aware tile read
+--   rather than a scan of every resident chunk.
+--
+--   Deliberately ADDITIVE: world.harvestFlora keeps its coordinate
+--   contract and result shape for every existing forage caller (needs,
+--   farm-harvest), which is what stops this from being a silent API
+--   break.
+--
+--   nil when the tile does not hold that instance, when the instance is
+--   not a (matching) harvestable species, or when its own timer is
+--   live — the same nil-on-failure signalling the rest of the family
+--   uses.
+worldHarvestFloraInstanceFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldHarvestFloraInstanceFn env = do
+    mGx ← Lua.tointeger 1
+    mGy ← Lua.tointeger 2
+    mIid ← Lua.tointeger 3
+    mTag ← Lua.tostring 4
+    case (mGx, mGy, mIid) of
+        (Just gx', Just gy', Just iid') → do
+            let rawGX = fromIntegral gx'
+                rawGY = fromIntegral gy'
+                iid = FloraInstanceId (fromIntegral iid')
+                tagFilter = TE.decodeUtf8Lenient <$> mTag
+            mSpawned ← Lua.liftIO $ do
+                mWs ← activeWorldStateFrom
+                          (wsWorldManagerRef (toWorldSimCapability env))
+                case mWs of
+                    Nothing → pure Nothing
+                    Just ws → do
+                        worldSize ← pageWrapWorldSize ws
+                        let (gx, gy) = canonicalTile worldSize rawGX rawGY
+                        (doy, absDay) ← growthClock ws
+                        harvestWildFlora env ws gx gy tagFilter (Just iid)
+                            doy absDay
+            pushHarvestResult mSpawned
+            return 1
+        _ → Lua.pushnil >> return 1
+
+-- | The wild-flora harvest both verbs above share.
+--
+--   #1854: the regrowth timer is read and written per INSTANCE, so the
+--   plant taken is the only one whose state moves. A bare (untagged)
+--   call keeps its historical coordinate behaviour exactly — first
+--   matching harvestable species on the tile, in the chunk's own stored
+--   order, gated on the #332 growth window — with one deliberate
+--   improvement that falls straight out of per-instance keying: a
+--   co-tenant with a live timer no longer suppresses the whole tile, it
+--   is simply skipped.
+harvestWildFlora
+    ∷ EngineEnv → WorldState → Int → Int → Maybe Text
+    → Maybe FloraInstanceId → Int → Int → IO (Maybe [(Text, Int)])
+harvestWildFlora env ws gx gy tagFilter mWanted doy absDay = do
+    insts ← floraAt (toWorldSimCapability env) ws gx gy
+    harvests ← readIORef (wsFloraHarvestsRef ws)
+    let -- #332: only the BARE (forage) call checks the growth window; a
+        -- tagged call is a designation flow (chop "wood") and takes the
+        -- plant in any growth state.
+        windowOk i sp = case tagFilter of
+            Just _  → True
+            Nothing → harvestOpen sp doy (floraGrowth sp absDay i)
+        picked = listToMaybe
+            [ (i, fh)
+            | (i, sp) ← insts
+            , maybe True (≡ fiInstanceId i) mWanted
+            , Just fh ← [fsHarvest sp]
+            , maybe True (`elem` fhTags fh) tagFilter
+            , windowOk i sp
+            , HM.lookupDefault 0 (fiInstanceId i) harvests ≤ 0
+            ]
+    case picked of
+        Nothing → pure Nothing
+        Just (i, fh) → do
+            spawned ← spawnYields env ws gx gy (fhYield fh)
+            atomicModifyIORef' (wsFloraHarvestsRef ws) $ \hs →
+                (HM.insert (fiInstanceId i) (fhRegrowth fh) hs, ())
+            bumpQuadCacheGen ws
+            pure (Just spawned)
+
+-- | The one spelling of both verbs' Lua return value, so the exact
+--   path can never drift from the coordinate path's shape.
+pushHarvestResult
+    ∷ Maybe [(Text, Int)] → Lua.LuaE Lua.Exception ()
+pushHarvestResult Nothing = Lua.pushnil
+pushHarvestResult (Just spawned) = do
+    Lua.newtable
+    forM_ (zip [1 ∷ Int ..] spawned) $ \(i, (name, gid)) → do
+        Lua.newtable
+        Lua.pushstring (TE.encodeUtf8 name)
+        Lua.setfield (-2) "id"
+        Lua.pushinteger (fromIntegral gid)
+        Lua.setfield (-2) "gid"
+        Lua.rawseti (-2) (fromIntegral i)
 
 -- | Roll and spawn one harvest's yields as ground items scattered a
 --   little around the tile center. Unknown item names are skipped (the

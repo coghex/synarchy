@@ -3,12 +3,15 @@
 -- Action: chop_designation (#97)
 --
 -- Player-directed tree felling: claim the nearest chop-designated
--- tree, walk to it, and swing until it falls — world.harvestFlora
--- then spawns the wood logs as ground items and starts the (long)
--- regrowth timer, and the designation is removed. Structure mirrors
--- dig_designation: module-local claims keyed by page + tile so two
--- acolytes never fell the same tree, expiring on timeout, on claimant
--- death, or when a load replaces the session (#1329);
+-- tree, walk to it, and swing until it falls —
+-- world.harvestFloraInstance then spawns the wood logs as ground items
+-- and starts that tree's (long) regrowth timer, and its designation is
+-- removed. Structure mirrors dig_designation: module-local claims keyed
+-- by page + FLORA INSTANCE since #1854 (two wood-tagged trees can share
+-- one tile, and a tile key would let one acolyte's claim block the
+-- other's tree) so two acolytes never fell the same tree, expiring on
+-- timeout, on claimant death, or when a load replaces the session
+-- (#1329);
 -- finite lock-in so dire needs still preempt; walking → equipping →
 -- chopping phases with the same anim-override discipline. Felling
 -- progress lives HERE (s.chopProgress), not in the designation — an
@@ -28,7 +31,35 @@ local M = {}
 
 local chopClaims = claimsLib.track({})  -- page key → { uid, at = gameTime }
 
-local chopKey = claimsLib.key   -- (wid, x, y)
+-- (wid, floraInstanceId) since #1854 -- see the header.
+local chopKey = claimsLib.instanceKey
+
+-- This plant's own regrowth timer, or nil when the tile no longer holds
+-- it (chunk evicted, or the plant is gone). #1854 made the timer
+-- per-instance, so a berry bush picked on the same tile no longer reads
+-- as "this tree is a regrowing stump".
+local function instanceRegrowth(x, y, iid)
+    for _, e in ipairs(world.getFloraGrowthAt(x, y) or {}) do
+        if e.instanceId == iid then return e.regrowthRemaining or 0 end
+    end
+    return nil
+end
+
+-- The job's target instance. `iid` is DELIBERATELY not persisted
+-- (stripped in unit_ai_save.lua, on the constructJob.build precedent):
+-- a durable FloraInstanceId carried as a bare number is a reference
+-- kind unit_ai_save_refs.lua does not declare and the integrity graph
+-- could not check. The designation authority is durable, so a job
+-- restored from a save re-resolves its target from the tile it saved,
+-- and the whole re-key stays inside lua.unit_ai's existing schema.
+local function jobInstance(wid, s)
+    local job = s.chopJob
+    if not job then return nil end
+    if job.iid then return job.iid end
+    local d = chop.getDesignationAt(wid, job.x, job.y)
+    if d then job.iid = d.instanceId end
+    return job.iid
+end
 
 local function chopClaimedByOther(key, uid, now, timeout)
     local c = chopClaims[key]
@@ -57,8 +88,8 @@ local function bestChopSpeed(uid, params)
 end
 
 local function releaseChopJob(wid, s, uid)
-    if s.chopJob then
-        local key = chopKey(wid, s.chopJob.x, s.chopJob.y)
+    if s.chopJob and s.chopJob.iid then
+        local key = chopKey(wid, s.chopJob.iid)
         local c = chopClaims[key]
         if c and c.uid == uid then chopClaims[key] = nil end
     end
@@ -99,29 +130,35 @@ local function chopUtility(uid, s, params)
     local wid = world.getActiveWorldId()
     if not wid then return -math.huge end
 
-    -- Active job: finite lock-in, released the moment the designation
-    -- disappears (this check runs BEFORE execute each tick).
+    -- Active job: finite lock-in, released the moment THIS TREE's
+    -- designation disappears (this check runs BEFORE execute each
+    -- tick). #1854: asked per instance, so a second designated tree on
+    -- the same tile no longer keeps a unit locked onto a job whose own
+    -- target the player cancelled.
     if s.chopJob then
-        local d = chop.getDesignationAt(wid, s.chopJob.x, s.chopJob.y)
-        if d then return params.chop_lock_utility end
+        local iid = jobInstance(wid, s)
+        if iid and chop.getDesignationForInstance(wid, iid) then
+            return params.chop_lock_utility
+        end
         chopComplete(wid, uid, s)
     end
 
     local info = unit.getInfo(uid)
     if not info then return -math.huge end
-    local gx, gy, dist =
+    -- #1854: the fourth return is the winning PLANT's stable id.
+    local gx, gy, dist, iid =
         chop.nearestDesignation(wid, info.gridX, info.gridY)
     if not gx then return -math.huge end
     if dist > params.chop_scan_range then return -math.huge end
 
     local now = engine.gameTime()
-    if chopClaimedByOther(chopKey(wid, gx, gy), uid, now,
+    if chopClaimedByOther(chopKey(wid, iid), uid, now,
                           params.chop_claim_timeout) then
         return -math.huge
     end
 
     -- Stash the scored candidate so execute doesn't re-scan.
-    s.chopCandidate = { x = gx, y = gy }
+    s.chopCandidate = { x = gx, y = gy, iid = iid }
 
     local distFactor = math.max(0, 1 - dist / params.chop_scan_range)
     return params.chop_base_utility * distFactor
@@ -139,23 +176,25 @@ local function chopExecute(uid, s, params)
     -- Claim a fresh job and head for the tree.
     if not s.chopJob then
         local cand = s.chopCandidate
-        if not cand then return end
-        local key = chopKey(wid, cand.x, cand.y)
+        -- A candidate with no instance id addresses no plant (#1854):
+        -- nothing to claim, nothing to fell.
+        if not cand or not cand.iid then return end
+        local key = chopKey(wid, cand.iid)
         if chopClaimedByOther(key, uid, now, params.chop_claim_timeout) then
             return
         end
-        if not chop.getDesignationAt(wid, cand.x, cand.y) then return end
+        if not chop.getDesignationForInstance(wid, cand.iid) then return end
         -- A just-felled tree's designation removal is a queued world
         -- command; the regrowth-timer check keeps us from re-claiming
-        -- the tile in that window (a regrowing stump is not choppable).
-        -- NOT fl.harvestable: that flag is the bare-forage signal,
+        -- THIS TREE in that window (a regrowing stump is not choppable).
+        -- NOT the harvestable flag: that is the bare-forage signal,
         -- gated on the #332 growth window — a designated sprout or
         -- standing-dead tree must stay choppable.
-        local fl = world.getFloraAt(cand.x, cand.y)
-        if fl and (fl.regrowthRemaining or 0) > 0 then return end
+        local regrowth = instanceRegrowth(cand.x, cand.y, cand.iid)
+        if regrowth and regrowth > 0 then return end
         chopClaims[key] = { uid = uid, at = now }
         s.chopCandidate = nil
-        s.chopJob = { x = cand.x, y = cand.y }
+        s.chopJob = { x = cand.x, y = cand.y, iid = cand.iid }
         s.chopProgress = 0
         s.chopEquipped = false
         s.chopPhase = "walking"
@@ -164,8 +203,15 @@ local function chopExecute(uid, s, params)
     end
 
     local job = s.chopJob
+    local iid = jobInstance(wid, s)
+    -- A job restored from a save whose tile no longer resolves to a
+    -- designated plant has nothing left to fell.
+    if not iid then
+        chopComplete(wid, uid, s)
+        return
+    end
     -- Keep the claim fresh while we hold the job.
-    chopClaims[chopKey(wid, job.x, job.y)] = { uid = uid, at = now }
+    chopClaims[chopKey(wid, iid)] = { uid = uid, at = now }
 
     if s.chopPhase == "walking" then
         local utx = math.floor(info.gridX)
@@ -203,7 +249,7 @@ local function chopExecute(uid, s, params)
     end
 
     if s.chopPhase == "chopping" then
-        if not chop.getDesignationAt(wid, job.x, job.y) then
+        if not chop.getDesignationForInstance(wid, iid) then
             -- Player cancelled (or raced) out from under us.
             chopComplete(wid, uid, s)
             return
@@ -223,12 +269,15 @@ local function chopExecute(uid, s, params)
                        + params.chop_rate * speed * strength
                        * (0.5 + wcSkill / 100.0) * dt
         if s.chopProgress >= 1.0 then
-            -- Felled. The "wood" tag scopes the harvest so a shared
-            -- tile can't trade its berry bush for the tree; the yield
-            -- spawns as ground items and the regrowth timer starts. A
-            -- nil result (species died / raced) still completes.
-            world.harvestFlora(job.x, job.y, "wood")
-            chop.cancelDesignation(job.x, job.y)
+            -- Felled. #1854: the EXACT instance is harvested and its
+            -- own designation cancelled, so a second designated tree on
+            -- the same tile keeps both its designation and its
+            -- untouched regrowth state. The "wood" tag still scopes the
+            -- harvest so a raced species change can't trade the tree
+            -- for a berry bush. A nil result (plant gone / raced) still
+            -- completes.
+            world.harvestFloraInstance(job.x, job.y, iid, "wood")
+            chop.cancelDesignation(job.x, job.y, iid)
             grantWorkXP(uid, "woodcutting", params.chop_xp_per_fell or 0)
             chopComplete(wid, uid, s)
         end

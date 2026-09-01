@@ -12,6 +12,7 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector.Unboxed.Mutable as VUM
 import World.Types
+import World.Generate.Coordinates (canonicalTile)
 import World.Vegetation (isBarrenMaterial)
 import World.Weather.Types (ClimateState(..))
 import World.Weather.Lookup (lookupLocalClimate, LocalClimate(..))
@@ -20,13 +21,20 @@ import Control.Monad.Primitive (PrimMonad, PrimState)
 
 -- * Chunk Flora Computation
 
+-- | Place this chunk's flora. @pageKey@ is the owning page's
+--   'World.Page.Types.WorldPageId' text: since #1854 every placed
+--   instance carries a stable 'World.Flora.Identity.FloraInstanceId'
+--   derived from its page-qualified canonical placement provenance, so
+--   the id must be page-scoped like the designation and regrowth maps
+--   that key on it. Passed as 'Text' so this pure placement pass keeps
+--   no dependency on the page module.
 computeChunkFlora
-    ∷ Word64 → Int → ChunkCoord
+    ∷ Text → Word64 → Int → ChunkCoord
     → VU.Vector Int → VU.Vector Word8 → VU.Vector Word8
     → V.Vector (Maybe FluidCell)
     → ClimateState → FloraCatalog
     → FloraChunkData
-computeChunkFlora seed worldSize coord surfMap surfMats surfSlopes
+computeChunkFlora pageKey seed worldSize coord surfMap surfMats surfSlopes
                   fluidMap climate catalog =
     let ChunkCoord cx cy = coord
         chunkArea = chunkSize * chunkSize
@@ -56,7 +64,8 @@ computeChunkFlora seed worldSize coord surfMap surfMats surfSlopes
                     if occ ≢ 0 ∨ hasFluid ∨ isBarrenMaterial matId ∨ surfZ ≡ minBound
                     then go rest acc
                     else do
-                        let newInsts = placeTileFlora seed gx gy lx ly surfZ
+                        let newInsts = placeTileFlora pageKey worldSize seed
+                                          gx gy lx ly surfZ
                                           matId slopeId temp precip humidity surfZ
                                           wgSpecies catalog -- surfZ passed as altitude
                         case newInsts of
@@ -92,13 +101,21 @@ shuffledIndices seed cx cy n =
 
 -- * Per-Tile Placement
 
+--   #1854: the placement ROLLS still salt off @i@, this species'
+--   position in the whole 'worldGenSpecies' list — changing that would
+--   change which plants exist in every shipped world. The stable
+--   IDENTITY deliberately does NOT: it is derived from the species'
+--   own YAML @name@ and its own per-tile ordinal @j@ (see
+--   'World.Flora.Identity.generatedFloraInstanceId'), so adding or
+--   reordering an unrelated species cannot rename a plant that is
+--   still there.
 placeTileFlora
-    ∷ Word64 → Int → Int → Int → Int → Int
+    ∷ Text → Int → Word64 → Int → Int → Int → Int → Int
     → Word8 → Word8 → Float → Float → Float → Int
     → [(FloraId, FloraWorldGen)]
     → FloraCatalog
     → [FloraInstance]
-placeTileFlora seed gx gy lx ly surfZ matId slopeId
+placeTileFlora pageKey worldSize seed gx gy lx ly surfZ matId slopeId
                temp precip humidity altitude wgSpecies catalog =
     concatMap (\(i, (fid, wg)) →
         let h = floraHash seed gx gy (fromIntegral i + 100)
@@ -111,8 +128,16 @@ placeTileFlora seed gx gy lx ly surfZ matId slopeId
                     baseW = fwFootprint wg
                     count = instanceCount cat h
                     maxAge = speciesMaxAge fid catalog
+                    -- The species' own stable name, never its
+                    -- registration-order FloraId. A species missing
+                    -- from the catalog cannot be placed at all (its
+                    -- worldgen entry came from the same catalog), but
+                    -- the empty fallback keeps this total.
+                    spName = maybe "" fsName (lookupSpecies fid catalog)
+                    (cgx, cgy) = canonicalTile worldSize gx gy
                 in [ mkInstance cat fid lx ly surfZ seed gx gy
                          (i * 10 + j) j count baseW maxAge fitness
+                         (generatedFloraInstanceId pageKey cgx cgy spName j)
                    | j ← [0 .. count - 1]
                    ]
            else []
@@ -174,8 +199,10 @@ instanceCount cat h
 --   using the same offU/offV sub-tile fields every other category
 --   jitters — @j@ is this instance's 0-based position among @count@.
 mkInstance ∷ Text → FloraId → Int → Int → Int → Word64 → Int → Int
-           → Int → Int → Int → Float → Float → Float → FloraInstance
-mkInstance cat fid lx ly surfZ seed gx gy i j count baseWidth maxAge health =
+           → Int → Int → Int → Float → Float → Float → FloraInstanceId
+           → FloraInstance
+mkInstance cat fid lx ly surfZ seed gx gy i j count baseWidth maxAge health
+           instanceId =
     let h = floraHash seed gx gy (fromIntegral i + 1)
         rawU = fromIntegral ((h `shiftR` 0)  ⌃ 0xFF) / 255.0 - 0.5
         rawV = fromIntegral ((h `shiftR` 8)  ⌃ 0xFF) / 255.0 - 0.5
@@ -207,6 +234,12 @@ mkInstance cat fid lx ly surfZ seed gx gy i j count baseWidth maxAge health =
         , fiHealth    = max 0.0 (min 1.0 health)
         , fiVariant   = variant
         , fiBaseWidth = baseWidth
+        , fiInstanceId = instanceId
+          -- Freshly generated chunk data carries no designation: the
+          -- durable identity-keyed authority is hydrated onto it as the
+          -- chunk is admitted to residency (#1854 requirement 15,
+          -- "World.Flora.Designation").
+        , fiChopDesignated = False
         }
 
 -- | Evenly space @count@ row-crop instances along the U axis, spanning

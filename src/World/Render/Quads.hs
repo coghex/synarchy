@@ -289,17 +289,24 @@ renderWorldQuadsScanned env worldState zoomAlpha snap = do
                           actualZ = findTopSolid col
                           inst' = inst { fiZ = actualZ }
                           (gx, gy) = chunkToGlobal coord tileX tileY
-                          -- Harvested tile (#94): a HARVESTABLE species on
-                          -- a tile with a live regrowth timer draws its
-                          -- depleted texture (fruit stripped) — or nothing
-                          -- at all when the species has no depleted art
-                          -- (handle 0 falls out through the existing
-                          -- filter below). Decorative co-tenants on the
-                          -- same tile are unaffected.
+                          -- Harvested plant (#94): a HARVESTABLE species
+                          -- with a live regrowth timer draws its depleted
+                          -- texture (fruit stripped) — or nothing at all
+                          -- when the species has no depleted art (handle
+                          -- 0 falls out through the existing filter
+                          -- below).
+                          --
+                          -- #1854: the timer is looked up by this
+                          -- INSTANCE's own id, not by its tile. Under the
+                          -- old tile key every harvestable co-tenant drew
+                          -- depleted the moment any one of them was
+                          -- picked; now picking the berry bush leaves the
+                          -- oak beside it alone. Decorative co-tenants
+                          -- were already unaffected and still are.
                           mHarvest = lookupSpecies (fiSpecies inst) floraCat
                                        ⌦ fsHarvest
                           harvested = isJust mHarvest
-                                    ∧ HM.member (gx, gy) harvests
+                                    ∧ HM.member (fiInstanceId inst) harvests
                           texHandle = case (harvested, mHarvest) of
                               (True, Just fh) → fhHarvestedTexture fh
                               _ → resolveFloraTexture floraCat daysPerYear

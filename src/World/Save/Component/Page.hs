@@ -83,8 +83,12 @@
 --   as-is rather than mirrored: the payload-free append-only enums
 --   ('ZoomMapMode', 'ConstructStatus'), and the durable coordinate/id/
 --   content references ('ChunkCoord', 'FluidType', 'MaterialId',
---   'FloraId'), plus a bare 'Float' regrowth timer ('FloraHarvests',
---   which has no record at all to freeze). The DTO field order is chosen
+--   'FloraId', and — since #1854 — the opaque 'FloraInstanceId' the
+--   Chop/harvest maps are keyed by). A regrowth timer is a bare 'Float'
+--   with no record at all to freeze, but its MAP is not a leaf: #1854
+--   re-keyed the live 'FloraHarvests' alias, so every frozen slice names
+--   'FloraHarvestsDTOv1' — the tile-keyed shape those payloads were
+--   written with — explicitly. The DTO field order is chosen
 --   so the derived cereal layout is byte-identical to the previous direct
 --   embedding — the frozen tracked fixture stays valid.
 module World.Save.Component.Page
@@ -107,7 +111,10 @@ module World.Save.Component.Page
     , WorldPagesDTOv6(..)
     , PageCoreDTOv7(..)
     , WorldPagesDTOv7(..)
+    , PageEditsDTOv1(..)
+    , WorldEditsDTOv1(..)
     , WorldPages(..)
+    , migrateWorldEditsV1
     , migrateWorldPagesV1
     , migrateWorldPagesV2
     , migrateWorldPagesV3
@@ -120,6 +127,8 @@ module World.Save.Component.Page
     , PageActivityDTO(..)
     , WorldActivityDTO(..)
     , PageActivityDTOv2(..)
+    , PageActivityDTOv3(..)
+    , WorldActivityDTOv3(..)
     , WorldActivityDTOv2(..)
     , migrateWorldActivityV2
       -- * Frozen leaf DTOs (requirement 4)
@@ -139,11 +148,14 @@ module World.Save.Component.Page
     , LanguageProvenanceDTO(..)
     , toWorldIdentityDTOv2
     , WorldEditDTO(..)
+    , WorldEditDTOv1(..)
     , MineDesignationDTO(..)
     , StructurePieceDTO(..)
     , ConstructTargetDTO(..)
     , ConstructDesignationDTO(..)
     , ChopDesignationDTO(..)
+    , ChopDesignationDTOv1(..)
+    , FloraHarvestsDTOv1
     , TillDesignationDTO(..)
     , PlantDesignationDTO(..)
     , CropPlotDTO(..)
@@ -217,7 +229,7 @@ import Location.Instance
     ( locationInstanceAllocatorErrors, locationInstanceBoundsErrors )
 import World.Generate.Types (WorldGenParams(..))
 import World.Generate.Coordinates (canonicalTile)
-import World.Chunk.Types (ChunkCoord)
+import World.Chunk.Types (ChunkCoord(..), wrapChunkCoordU)
 import World.Page.Types (WorldPageId, WorldIdentity(..))
 import Language.Generated.Types
     ( LanguageProvenance(..), LangSeed(..), GeneratorVersion(..) )
@@ -231,10 +243,16 @@ import World.Construct.Types
     ( ConstructDesignation(..), ConstructTarget(..), StructurePiece(..)
     , ConstructStatus, ConstructDesignations )
 import World.Chop.Types (ChopDesignation(..), ChopDesignations)
+import World.Flora.Identity
+    ( FloraInstanceId, unFloraInstanceId
+    , isFloraInstanceIdNone, isPlantedFloraInstanceId
+    , firstPlantedFloraCursor, nextPlantedFloraCursor
+    , plantedFloraCursorAbove )
 import World.Till.Types (TillDesignation(..), TillDesignations)
 import World.Plant.Types (PlantDesignation(..), PlantDesignations)
 import World.Spoil.Types (SpoilPile(..), SpoilPiles, emptySpoilPiles)
-import World.Flora.Harvest (FloraHarvests, emptyFloraHarvests)
+import World.Flora.Harvest (emptyFloraHarvests,
+                            emptyPendingFloraHarvests)
 import World.Flora.CropPlot (CropPlot(..), CropPlots, emptyCropPlots)
 import Item.Ground (GroundItem(..), GroundItems(..), emptyGroundItems)
 import Item.Types (ItemInstance(..), ItemStorage(..))
@@ -371,7 +389,59 @@ data WorldEditDTO
     | WePlaceFloraD !Int !Int !FloraId !Int !Float
     | WeSetFluidSnapshotD !Int !Int !FluidType !Int
     | WeClearFluidSnapshotD !Int !Int
+      -- #1854: appended at the END, never grown in place. This sum is
+      -- positionally serialized, so a sixth field on @WePlaceFloraD@
+      -- would have reinterpreted tag 8 in every shipped v1 log; a new
+      -- trailing constructor leaves all eleven older tags meaning exactly
+      -- what they meant (tools/enum_append_only_audit.py).
+    | WePlaceFloraWithIdD !Int !Int !FloraId !Int !Float !FloraInstanceId
     deriving (Show, Eq, Generic, Serialize)
+
+-- | The FROZEN pre-#1854 edit sum, preserved verbatim for decode-only
+--   backward compatibility (@world-edits@ v1, and the v90 compatibility
+--   tree). #1854 appended a 'FloraInstanceId' to @WePlaceFloraD@'s
+--   PAYLOAD — which moves no constructor tag but changes that
+--   constructor's bytes, so a shipped v1 log must decode through this
+--   copy of the old shape rather than the live one.
+--
+--   Its constructor ORDER is a wire contract of its own and is never
+--   touched; a new live constructor is added to 'WorldEditDTO' above,
+--   which makes 'migrateWorldEditDTOv1' non-exhaustive in the safe
+--   direction (a compile error here, never silent drift on disk).
+data WorldEditDTOv1
+    = WeDeleteTileDv1 !Int !Int
+    | WeSetFluidTileDv1 !Int !Int !FluidType
+    | WeAddTileDv1 !Int !Int !MaterialId
+    | WeSetSlopeDv1 !Int !Int !Int !Word8
+    | WeSetCellDv1 !Int !Int !Int !MaterialId
+    | WeSetStructureDv1 !Int !Int !Word8 !Int !Int !Int
+    | WeClearStructureDv1 !Int !Int !Word8
+    | WeSetVegDv1 !Int !Int !Int !Word8
+    | WePlaceFloraDv1 !Int !Int !FloraId !Int !Float
+    | WeSetFluidSnapshotDv1 !Int !Int !FluidType !Int
+    | WeClearFluidSnapshotDv1 !Int !Int
+    deriving (Show, Eq, Generic, Serialize)
+
+-- | v1 → current. Every constructor crosses unchanged except the
+--   planted-flora one, which crosses into the id-LESS @WePlaceFloraD@
+--   it has always been: a v1 log records no ids, and there is nothing in
+--   its bytes to recover one from. 'applyWorldEdits' rewrites each into
+--   the identity-bearing constructor once the page's own world size is
+--   in hand (see its note) — the same "repair lives in ONE place, at
+--   apply time" rule #1175's canonical-frame repair follows.
+migrateWorldEditDTOv1 ∷ WorldEditDTOv1 → WorldEditDTO
+migrateWorldEditDTOv1 e = case e of
+    WeDeleteTileDv1 a b            → WeDeleteTileD a b
+    WeSetFluidTileDv1 a b f        → WeSetFluidTileD a b f
+    WeAddTileDv1 a b m             → WeAddTileD a b m
+    WeSetSlopeDv1 a b c w          → WeSetSlopeD a b c w
+    WeSetCellDv1 a b c m           → WeSetCellD a b c m
+    WeSetStructureDv1 a b w c d f  → WeSetStructureD a b w c d f
+    WeClearStructureDv1 a b w      → WeClearStructureD a b w
+    WeSetVegDv1 a b c w            → WeSetVegD a b c w
+    WePlaceFloraDv1 a b fl d fx    → WePlaceFloraD a b fl d fx
+    WeSetFluidSnapshotDv1 a b f z  → WeSetFluidSnapshotD a b f z
+    WeClearFluidSnapshotDv1 a b    → WeClearFluidSnapshotD a b
 
 toWorldEditDTO ∷ WorldEdit → WorldEditDTO
 toWorldEditDTO (WeDeleteTile a b)              = WeDeleteTileD a b
@@ -382,7 +452,9 @@ toWorldEditDTO (WeSetCell a b c m)             = WeSetCellD a b c m
 toWorldEditDTO (WeSetStructure a b w c d e)    = WeSetStructureD a b w c d e
 toWorldEditDTO (WeClearStructure a b w)        = WeClearStructureD a b w
 toWorldEditDTO (WeSetVeg a b c w)              = WeSetVegD a b c w
-toWorldEditDTO (WePlaceFlora a b fl d fx)      = WePlaceFloraD a b fl d fx
+toWorldEditDTO (WePlaceFlora a b fl d fx)     = WePlaceFloraD a b fl d fx
+toWorldEditDTO (WePlaceFloraWithId a b fl d fx i) =
+    WePlaceFloraWithIdD a b fl d fx i
 toWorldEditDTO (WeSetFluidSnapshot a b f z)    = WeSetFluidSnapshotD a b f z
 toWorldEditDTO (WeClearFluidSnapshot a b)      = WeClearFluidSnapshotD a b
 
@@ -395,7 +467,9 @@ fromWorldEditDTO (WeSetCellD a b c m)          = WeSetCell a b c m
 fromWorldEditDTO (WeSetStructureD a b w c d e) = WeSetStructure a b w c d e
 fromWorldEditDTO (WeClearStructureD a b w)     = WeClearStructure a b w
 fromWorldEditDTO (WeSetVegD a b c w)           = WeSetVeg a b c w
-fromWorldEditDTO (WePlaceFloraD a b fl d fx)   = WePlaceFlora a b fl d fx
+fromWorldEditDTO (WePlaceFloraD a b fl d fx)  = WePlaceFlora a b fl d fx
+fromWorldEditDTO (WePlaceFloraWithIdD a b fl d fx i) =
+    WePlaceFloraWithId a b fl d fx i
 fromWorldEditDTO (WeSetFluidSnapshotD a b f z) = WeSetFluidSnapshot a b f z
 fromWorldEditDTO (WeClearFluidSnapshotD a b)   = WeClearFluidSnapshot a b
 
@@ -470,17 +544,55 @@ fromConstructDesignationDTO d = ConstructDesignation
     , cdMaterialsPaid = cdiMaterialsPaid d
     }
 
--- | Frozen mirror of 'ChopDesignation'.
-newtype ChopDesignationDTO = ChopDesignationDTO { chiZ ∷ Int }
+-- | The FROZEN pre-#1854 chop designation: a bare surface z, because
+--   the map that held it was keyed by TILE. Referenced by the frozen
+--   @world-activity@ v1/v2/v3 slices and by
+--   "World.Save.Compat.SessionV90"'s v90 page save, and still the wire
+--   shape of the PENDING legacy entries v4 carries (they are exactly
+--   these entries, waiting for an instance to attach to). Never
+--   edited.
+newtype ChopDesignationDTOv1 = ChopDesignationDTOv1 { chiZ ∷ Int }
     deriving stock (Generic)
     deriving newtype (Show, Eq)
     deriving anyclass (Serialize)
 
+-- | Frozen mirror of the CURRENT 'ChopDesignation' (#1854): the same
+--   surface z, plus the canonical tile the designated plant stands on.
+--   The map is keyed by 'FloraInstanceId' now, so the tile has to
+--   travel with the record — a marker and a nearest-designation scan
+--   have nowhere else to read it from.
+data ChopDesignationDTO = ChopDesignationDTO
+    { chiZ2  ∷ !Int
+    , chiGX2 ∷ !Int
+    , chiGY2 ∷ !Int
+    } deriving (Show, Eq, Generic, Serialize)
+
 toChopDesignationDTO ∷ ChopDesignation → ChopDesignationDTO
-toChopDesignationDTO = ChopDesignationDTO . chZ
+toChopDesignationDTO cd = ChopDesignationDTO (chZ cd) (chGX cd) (chGY cd)
 
 fromChopDesignationDTO ∷ ChopDesignationDTO → ChopDesignation
-fromChopDesignationDTO = ChopDesignation . chiZ
+fromChopDesignationDTO d = ChopDesignation (chiZ2 d) (chiGX2 d) (chiGY2 d)
+
+-- | A pre-#1854 tile-keyed designation, kept in its own tile-keyed
+--   PENDING map until the chunk that resolves it arrives.
+toPendingChopDesignationDTO ∷ ChopDesignation → ChopDesignationDTOv1
+toPendingChopDesignationDTO = ChopDesignationDTOv1 . chZ
+
+-- | The reverse. The tile comes from the map KEY, so it is written back
+--   into the record here — a pending entry is a real 'ChopDesignation'
+--   that simply has no instance yet.
+fromPendingChopDesignationDTO
+    ∷ (Int, Int) → ChopDesignationDTOv1 → ChopDesignation
+fromPendingChopDesignationDTO (gx, gy) d = ChopDesignation (chiZ d) gx gy
+
+-- | The FROZEN pre-#1854 regrowth-timer map: TILE → remaining
+--   game-seconds. Spelled out here rather than named through the live
+--   'World.Flora.Harvest.FloraHarvests' alias, which #1854 re-pointed at
+--   'FloraInstanceId': a frozen DTO that referred through the live alias
+--   would have silently rewritten every shipped v1/v2/v3 (and v90)
+--   payload's decoding the moment that alias changed. It is also the
+--   wire shape of v4's own PENDING legacy timers.
+type FloraHarvestsDTOv1 = HM.HashMap (Int, Int) Float
 
 -- | Frozen mirror of 'TillDesignation'.
 newtype TillDesignationDTO = TillDesignationDTO { tliZ ∷ Int }
@@ -768,9 +880,9 @@ fromConstructDTO ∷ HM.HashMap (Int, Int) ConstructDesignationDTO
                  → ConstructDesignations
 fromConstructDTO = HM.map fromConstructDesignationDTO
 
-toChopDTO ∷ ChopDesignations → HM.HashMap (Int, Int) ChopDesignationDTO
+toChopDTO ∷ ChopDesignations → HM.HashMap FloraInstanceId ChopDesignationDTO
 toChopDTO = HM.map toChopDesignationDTO
-fromChopDTO ∷ HM.HashMap (Int, Int) ChopDesignationDTO → ChopDesignations
+fromChopDTO ∷ HM.HashMap FloraInstanceId ChopDesignationDTO → ChopDesignations
 fromChopDTO = HM.map fromChopDesignationDTO
 
 toTillDTO ∷ TillDesignations → HM.HashMap (Int, Int) TillDesignationDTO
@@ -1335,6 +1447,9 @@ blankPageSnapshot pid params =
         , pgsUnitSimStates = HM.empty
         , pgsFloraHarvests = emptyFloraHarvests
         , pgsChopDesignations = HM.empty
+        , pgsPendingChopMigration = HM.empty
+        , pgsPendingFloraHarvests = emptyPendingFloraHarvests
+        , pgsPlantedFloraCursor = firstPlantedFloraCursor
         , pgsCraftBills   = emptyCraftBills
         , pgsPowerNodes   = emptyPowerNodes
           -- #1087: the FIRST of the two defaults genuinely reached in a
@@ -1363,32 +1478,144 @@ blankPageSnapshot pid params =
 data PageEditsDTO = PageEditsDTO
     { pedPageId ∷ !WorldPageId
     , pedEdits  ∷ !(HM.HashMap ChunkCoord [WorldEditDTO])
+    , pedPlantedFloraCursor ∷ !Word64
+      -- ^ #1854: this page's planted-flora id allocator cursor, saved
+      --   beside the very edits whose ids it accounts for so the two
+      --   can never be restored out of step.
+    } deriving (Show, Generic, Serialize)
+
+-- | The FROZEN @world-edits@ v1 page slice: the page id and its edit
+--   log, with no allocator cursor and with every entry in the frozen
+--   'WorldEditDTOv1' shape.
+data PageEditsDTOv1 = PageEditsDTOv1
+    { ped1PageId ∷ !WorldPageId
+    , ped1Edits  ∷ !(HM.HashMap ChunkCoord [WorldEditDTOv1])
     } deriving (Show, Generic, Serialize)
 
 newtype WorldEditsDTO = WorldEditsDTO { wedPages ∷ [PageEditsDTO] }
     deriving stock (Generic)
     deriving newtype (Show, Serialize)
 
+-- | The FROZEN @world-edits@ v1 component payload.
+newtype WorldEditsDTOv1 = WorldEditsDTOv1 { wed1Pages ∷ [PageEditsDTOv1] }
+    deriving stock (Generic)
+    deriving newtype (Show, Serialize)
+
+-- | v1 → v2 (#1854): every edit crosses through
+--   'migrateWorldEditDTOv1', and the cursor starts at the fresh-page
+--   floor. Both the ids and the real cursor are established by
+--   'applyWorldEdits', which is the only place that knows the page's
+--   world size — see its note.
+migrateWorldEditsV1 ∷ WorldEditsDTOv1 → WorldEditsDTO
+migrateWorldEditsV1 (WorldEditsDTOv1 slices) = WorldEditsDTO
+    [ PageEditsDTO
+        { pedPageId = ped1PageId s
+        , pedEdits  = HM.map (map migrateWorldEditDTOv1) (ped1Edits s)
+        , pedPlantedFloraCursor = firstPlantedFloraCursor
+        }
+    | s ← slices ]
+
+-- | Component-local invariant (#1854 requirement 5): a page's
+--   planted-flora allocator cursor must be strictly above every planted
+--   'FloraInstanceId' its own edit log carries, or planting after a load
+--   would reissue an id that is already standing in the world. Modelled
+--   on 'validateWorldActivity''s ground-item allocator clause.
+--
+--   GENERATED ids are deliberately not checked against it: they come
+--   from a disjoint namespace ("World.Flora.Identity") that this
+--   allocator does not own and can never collide with.
+validateWorldEdits ∷ WorldEditsDTO → [ComponentError]
+validateWorldEdits (WorldEditsDTO slices) =
+    [ ComponentError worldEditsComponentId 2 ValidatePhase
+        ("page '" <> tshow (pedPageId s) <> "': planted flora id "
+         <> tshow (unFloraInstanceId iid) <> " is not below the page's \
+            \planted-flora allocator ("
+         <> tshow (pedPlantedFloraCursor s) <> ")")
+    | s     ← slices
+    , edits ← HM.elems (pedEdits s)
+    , WePlaceFloraWithIdD _ _ _ _ _ iid ← edits
+    , isPlantedFloraInstanceId iid
+    , plantedFloraCursorAbove [iid] > pedPlantedFloraCursor s
+    ]
+
 worldEditsCodec ∷ ComponentCodec WorldEditsDTO
 worldEditsCodec = componentCodec ComponentSpec
     { csComponent     = worldEditsComponentId
-    , csVersion       = 1
+    , csVersion       = 2
     , csRequired      = True
     , csDeps          = [worldPagesComponentId]
     , csEncode        = \snap → WorldEditsDTO
         [ PageEditsDTO (pgsPageId p) (toEditsDTO (pgsEdits p))
+                       (pgsPlantedFloraCursor p)
         | p ← orderedPages snap ]
     , csDecode        = id
-    , csOlderVersions = []
-    , csValidate      = const []
+    , csOlderVersions = [ atVersion 1 migrateWorldEditsV1 ]
+    , csValidate      = validateWorldEdits
     }
 
+-- | #1854: a v1 slice records no planted-flora ids, and the LEGACY
+--   'WePlaceFlora' constructor that carries none is decode-only, so the
+--   rewrite into the identity-bearing form happens HERE — the one place
+--   that has both the edit log and the page's own world size, exactly as
+--   'applyWorldActivity' owns #1175's canonical-frame repair for every
+--   accepted version rather than splitting it between a migration and an
+--   apply step.
+--
+--   It runs for EVERY accepted version, which is what makes it total: a
+--   v2 slice's own ids and cursor are authoritative and nothing moves
+--   (the rewrite touches only id-less entries, and the cursor only
+--   grows), while a v1 slice gets both. Assignment is deterministic and
+--   repeatable — chunk keys visited in ascending CANONICAL
+--   chunk-coordinate order, never 'Data.HashMap.Strict' iteration order,
+--   and each chunk's log in its own stored oldest-first order — so
+--   migrating the same save twice produces the same ids.
 applyWorldEdits
     ∷ Word32 → WorldEditsDTO → HM.HashMap WorldPageId PageSnapshot
     → Either [ComponentError] (HM.HashMap WorldPageId PageSnapshot)
 applyWorldEdits ver (WorldEditsDTO slices) =
-    applyPageSlices worldEditsComponentId ver pedPageId
-        (\s p → p { pgsEdits = fromEditsDTO (pedEdits s) }) slices
+    applyPageSlices worldEditsComponentId ver pedPageId writeEdits slices
+  where
+    writeEdits s p =
+        let decoded   = fromEditsDTO (pedEdits s)
+            worldSize = wgpWorldSize (pgsGenParams p)
+            -- A v1 payload has no cursor field at all; its migration
+            -- supplies the fresh-page floor, which is where assignment
+            -- must start.
+            seed = if ver ≥ 2 then pedPlantedFloraCursor s
+                              else firstPlantedFloraCursor
+            (edits, cursor) = assignPlantedIds worldSize seed decoded
+        in p { pgsEdits = edits, pgsPlantedFloraCursor = cursor }
+
+-- | Rewrite every id-less 'WePlaceFlora' into 'WePlaceFloraWithId',
+--   allocating from @seed@ upward, and return the log beside a cursor
+--   that sits strictly above every planted id it now carries.
+assignPlantedIds ∷ Int → Word64 → WorldEdits → (WorldEdits, Word64)
+assignPlantedIds worldSize seed edits =
+    let ordered = L.sortOn (canonicalChunkKey worldSize . fst)
+                           (HM.toList edits)
+        (rebuilt, cursor) = L.foldl' perChunk ([], max firstPlantedFloraCursor seed)
+                                     ordered
+        allocated = [ iid | (_, es) ← rebuilt, WePlaceFloraWithId _ _ _ _ _ iid ← es ]
+    in ( HM.fromList (reverse rebuilt)
+       , max cursor (plantedFloraCursorAbove allocated) )
+  where
+    perChunk (acc, cursor) (coord, es) =
+        let (es', cursor') = L.foldl' perEdit ([], cursor) es
+        in ((coord, reverse es') : acc, cursor')
+    perEdit (acc, cursor) e = case e of
+        WePlaceFlora gx gy fid day w →
+            let (iid, cursor') = nextPlantedFloraCursor cursor
+            in (WePlaceFloraWithId gx gy fid day w iid : acc, cursor')
+        WePlaceFloraWithId _ _ _ _ _ iid
+            | isFloraInstanceIdNone iid →
+                let (iid', cursor') = nextPlantedFloraCursor cursor
+                in (reId e iid' : acc, cursor')
+        _ → (e : acc, cursor)
+    reId (WePlaceFloraWithId gx gy fid day w _) iid =
+        WePlaceFloraWithId gx gy fid day w iid
+    reId e _ = e
+    canonicalChunkKey ws coord =
+        let ChunkCoord cx cy = wrapChunkCoordU ws coord in (cx, cy)
 
 -- world-activity ----------------------------------------------------
 
@@ -1396,16 +1623,58 @@ data PageActivityDTO = PageActivityDTO
     { padPageId        ∷ !WorldPageId
     , padMine          ∷ !(HM.HashMap (Int, Int) MineDesignationDTO)
     , padConstruct     ∷ !(HM.HashMap (Int, Int) ConstructDesignationDTO)
-    , padChop          ∷ !(HM.HashMap (Int, Int) ChopDesignationDTO)
+    , padChop          ∷ !(HM.HashMap FloraInstanceId ChopDesignationDTO)
+      -- ^ #1854: keyed by the designated PLANT, not by its tile.
     , padTill          ∷ !(HM.HashMap (Int, Int) TillDesignationDTO)
     , padPlant         ∷ !(HM.HashMap (Int, Int) PlantDesignationDTO)
-    , padFloraHarvests ∷ !FloraHarvests
+    , padFloraHarvests ∷ !(HM.HashMap FloraInstanceId Float)
+      -- ^ #1854: likewise keyed by the harvested plant. Spelled out
+      --   rather than named through 'World.Flora.Harvest.FloraHarvests'
+      --   for symmetry with the frozen slices below, which must NOT
+      --   follow that alias anywhere.
     , padCropPlots     ∷ !(HM.HashMap (Int, Int) CropPlotDTO)
+      -- ^ Crop plots stay TILE-keyed and are untouched by #1854: a plot
+      --   is one-per-tile by construction and never coexists with wild
+      --   'FloraInstance's on the same tile (tilled soil excludes
+      --   natural flora placement), so it has no co-tenancy to
+      --   disambiguate.
     , padGroundItems   ∷ !GroundItemsDTO
     , padSpoilPiles    ∷ !(HM.HashMap (Int, Int) SpoilPileDTO)
+    , padPendingChop   ∷ !(HM.HashMap (Int, Int) ChopDesignationDTOv1)
+      -- ^ #1854: pre-identity designations whose chunk was not resident
+      --   when the save was read, so no instance could be resolved.
+      --   Carried in v4 (rather than dropped) so a second save/load
+      --   cannot silently discard a designation the player made. Never
+      --   authoritative — see "World.Chop.Types".
+    , padPendingHarvests ∷ !FloraHarvestsDTOv1
+      -- ^ #1854: pre-identity regrowth timers on the same terms.
     } deriving (Show, Generic, Serialize)
 
 newtype WorldActivityDTO = WorldActivityDTO { wadPages ∷ [PageActivityDTO] }
+    deriving stock (Generic)
+    deriving newtype (Show, Serialize)
+
+-- | The FROZEN pre-#1854 activity slice (@world-activity@ v3): the same
+--   fields the current slice carries, but with Chop designations and
+--   regrowth timers still keyed by TILE and with no pending-migration
+--   maps. Its harvest field names 'FloraHarvestsDTOv1' explicitly
+--   rather than following the live 'FloraHarvests' alias #1854
+--   re-pointed.
+data PageActivityDTOv3 = PageActivityDTOv3
+    { pad3PageId        ∷ !WorldPageId
+    , pad3Mine          ∷ !(HM.HashMap (Int, Int) MineDesignationDTO)
+    , pad3Construct     ∷ !(HM.HashMap (Int, Int) ConstructDesignationDTO)
+    , pad3Chop          ∷ !(HM.HashMap (Int, Int) ChopDesignationDTOv1)
+    , pad3Till          ∷ !(HM.HashMap (Int, Int) TillDesignationDTO)
+    , pad3Plant         ∷ !(HM.HashMap (Int, Int) PlantDesignationDTO)
+    , pad3FloraHarvests ∷ !FloraHarvestsDTOv1
+    , pad3CropPlots     ∷ !(HM.HashMap (Int, Int) CropPlotDTO)
+    , pad3GroundItems   ∷ !GroundItemsDTO
+    , pad3SpoilPiles    ∷ !(HM.HashMap (Int, Int) SpoilPileDTO)
+    } deriving (Show, Generic, Serialize)
+
+newtype WorldActivityDTOv3 =
+    WorldActivityDTOv3 { wad3Pages ∷ [PageActivityDTOv3] }
     deriving stock (Generic)
     deriving newtype (Show, Serialize)
 
@@ -1419,10 +1688,10 @@ data PageActivityDTOv2 = PageActivityDTOv2
     { pad2PageId        ∷ !WorldPageId
     , pad2Mine          ∷ !(HM.HashMap (Int, Int) MineDesignationDTO)
     , pad2Construct     ∷ !(HM.HashMap (Int, Int) ConstructDesignationDTO)
-    , pad2Chop          ∷ !(HM.HashMap (Int, Int) ChopDesignationDTO)
+    , pad2Chop          ∷ !(HM.HashMap (Int, Int) ChopDesignationDTOv1)
     , pad2Till          ∷ !(HM.HashMap (Int, Int) TillDesignationDTO)
     , pad2Plant         ∷ !(HM.HashMap (Int, Int) PlantDesignationDTO)
-    , pad2FloraHarvests ∷ !FloraHarvests
+    , pad2FloraHarvests ∷ !FloraHarvestsDTOv1
     , pad2CropPlots     ∷ !(HM.HashMap (Int, Int) CropPlotDTO)
     , pad2GroundItems   ∷ !GroundItemsDTOv1
     , pad2SpoilPiles    ∷ !(HM.HashMap (Int, Int) SpoilPileDTO)
@@ -1433,18 +1702,47 @@ newtype WorldActivityDTOv2 =
     deriving stock (Generic)
     deriving newtype (Show, Serialize)
 
-migratePageActivityV2 ∷ PageActivityDTOv2 → PageActivityDTO
-migratePageActivityV2 s = PageActivityDTO
-    { padPageId        = pad2PageId s
-    , padMine          = pad2Mine s
-    , padConstruct     = pad2Construct s
-    , padChop          = pad2Chop s
-    , padTill          = pad2Till s
-    , padPlant         = pad2Plant s
-    , padFloraHarvests = pad2FloraHarvests s
-    , padCropPlots     = pad2CropPlots s
-    , padGroundItems   = migrateGroundItemsDTOv1 (pad2GroundItems s)
-    , padSpoilPiles    = pad2SpoilPiles s
+migratePageActivityV2 ∷ PageActivityDTOv2 → PageActivityDTOv3
+migratePageActivityV2 s = PageActivityDTOv3
+    { pad3PageId        = pad2PageId s
+    , pad3Mine          = pad2Mine s
+    , pad3Construct     = pad2Construct s
+    , pad3Chop          = pad2Chop s
+    , pad3Till          = pad2Till s
+    , pad3Plant         = pad2Plant s
+    , pad3FloraHarvests = pad2FloraHarvests s
+    , pad3CropPlots     = pad2CropPlots s
+    , pad3GroundItems   = migrateGroundItemsDTOv1 (pad2GroundItems s)
+    , pad3SpoilPiles    = pad2SpoilPiles s
+    }
+
+-- | v3 → v4 (#1854). The two re-keyed maps CANNOT be translated here:
+--   resolving a tile to the plant that stands on it needs that chunk's
+--   flora, which a pure component migration has no access to. Both
+--   therefore land in the PENDING maps verbatim, and
+--   "World.Flora.Designation" drains each entry the moment its chunk is
+--   admitted to residency — expanding one legacy tile timer onto every
+--   harvestable co-tenant (the observable behaviour the tile-keyed map
+--   had), and resolving one legacy designation to the single plant the
+--   old wood-tagged harvest would have felled. The live maps therefore
+--   start EMPTY, which is honest: nothing is known per-instance yet.
+--
+--   Every other field crosses unchanged, crop plots included — they are
+--   tile-keyed by construction and #1854 does not touch them.
+migratePageActivityV3 ∷ PageActivityDTOv3 → PageActivityDTO
+migratePageActivityV3 s = PageActivityDTO
+    { padPageId          = pad3PageId s
+    , padMine            = pad3Mine s
+    , padConstruct       = pad3Construct s
+    , padChop            = HM.empty
+    , padTill            = pad3Till s
+    , padPlant           = pad3Plant s
+    , padFloraHarvests   = HM.empty
+    , padCropPlots       = pad3CropPlots s
+    , padGroundItems     = pad3GroundItems s
+    , padSpoilPiles      = pad3SpoilPiles s
+    , padPendingChop     = pad3Chop s
+    , padPendingHarvests = pad3FloraHarvests s
     }
 
 -- | v1/v2 → v3: every designation map crosses unchanged and each ground
@@ -1455,7 +1753,13 @@ migratePageActivityV2 s = PageActivityDTO
 --   migration and an apply step.
 migrateWorldActivityV2 ∷ WorldActivityDTOv2 → WorldActivityDTO
 migrateWorldActivityV2 (WorldActivityDTOv2 slices) =
-    WorldActivityDTO (map migratePageActivityV2 slices)
+    WorldActivityDTO (map (migratePageActivityV3 . migratePageActivityV2)
+                          slices)
+
+-- | v3 → v4: see 'migratePageActivityV3'.
+migrateWorldActivityV3 ∷ WorldActivityDTOv3 → WorldActivityDTO
+migrateWorldActivityV3 (WorldActivityDTOv3 slices) =
+    WorldActivityDTO (map migratePageActivityV3 slices)
 
 -- | Component-local invariant (#760, mirrors
 --   @worldPagesCodec@'s @validatePages@ precedent above): every ground
@@ -1517,16 +1821,24 @@ validateWorldActivity (WorldActivityDTO slices) = concat
 --   PROMISE), so both decode through the one frozen 'WorldActivityDTOv2'
 --   layout and both take 'applyWorldActivity''s re-keying — a v2 payload
 --   is already canonical, so for it that step is the identity.
+--   v4 (#1854) is the second SHAPE change: Chop designations and
+--   regrowth timers are keyed by 'FloraInstanceId' instead of by tile,
+--   and the slice gained the two tile-keyed PENDING maps that hold a
+--   legacy entry until its chunk arrives. v3's own layout is frozen as
+--   'PageActivityDTOv3'; v1 and v2 keep sharing 'PageActivityDTOv2' and
+--   now reach v4 through v3, so there is exactly one translation of the
+--   old tile keys rather than two copies of it.
 worldActivityCodec ∷ ComponentCodec WorldActivityDTO
 worldActivityCodec = componentCodec ComponentSpec
     { csComponent     = worldActivityComponentId
-    , csVersion       = 3
+    , csVersion       = 4
     , csRequired      = True
     , csDeps          = [worldPagesComponentId]
     , csEncode        = \snap →
         WorldActivityDTO (map toActivity (orderedPages snap))
     , csDecode        = id
-    , csOlderVersions = [ atVersion 2 migrateWorldActivityV2
+    , csOlderVersions = [ atVersion 3 migrateWorldActivityV3
+                        , atVersion 2 migrateWorldActivityV2
                         , atVersion 1 migrateWorldActivityV2 ]
     , csValidate      = validateWorldActivity
     }
@@ -1542,6 +1854,9 @@ worldActivityCodec = componentCodec ComponentSpec
         , padCropPlots     = toCropDTO (pgsCropPlots p)
         , padGroundItems   = toGroundItemsDTO (pgsGroundItems p)
         , padSpoilPiles    = toSpoilDTO (pgsSpoilPiles p)
+        , padPendingChop   =
+            HM.map toPendingChopDesignationDTO (pgsPendingChopMigration p)
+        , padPendingHarvests = pgsPendingFloraHarvests p
         }
 
 -- | #1175: a v1 slice's designation keys carry no canonical-frame
@@ -1562,6 +1877,9 @@ applyWorldActivity
 applyWorldActivity ver (WorldActivityDTO slices) =
     applyPageSlices worldActivityComponentId ver padPageId writeActivity slices
   where
+    canonDesignationTile ws cd =
+        let (cgx, cgy) = canonicalTile ws (chGX cd) (chGY cd)
+        in cd { chGX = cgx, chGY = cgy }
     writeActivity s p =
         let ws = wgpWorldSize (pgsGenParams p)
             canon ∷ HM.HashMap (Int, Int) v → HM.HashMap (Int, Int) v
@@ -1571,11 +1889,26 @@ applyWorldActivity ver (WorldActivityDTO slices) =
         in p
             { pgsMineDesignations      = canon (fromMineDTO (padMine s))
             , pgsConstructDesignations = canon (fromConstructDTO (padConstruct s))
-            , pgsChopDesignations      = canon (fromChopDTO (padChop s))
+              -- #1854: keyed by instance identity, so there is no key to
+              -- canonicalise — but the TILE each designation carries is
+              -- still a coordinate, and #1175's frame promise has to hold
+              -- for it exactly as it did for the old key.
+            , pgsChopDesignations      =
+                HM.map (canonDesignationTile ws) (fromChopDTO (padChop s))
             , pgsTillDesignations      = canon (fromTillDTO (padTill s))
             , pgsPlantDesignations     = canon (fromPlantDTO (padPlant s))
             , pgsFloraHarvests         = padFloraHarvests s
             , pgsCropPlots             = fromCropDTO (padCropPlots s)
             , pgsGroundItems           = fromGroundItemsDTO (padGroundItems s)
             , pgsSpoilPiles            = fromSpoilDTO (padSpoilPiles s)
+              -- The two PENDING maps are the last tile-keyed shapes, so
+              -- they take the same v1 canonical-frame repair every other
+              -- tile key does — a pre-#1175 alias here would otherwise
+              -- never match the chunk that could resolve it.
+            , pgsPendingChopMigration  = HM.fromList
+                [ let tile = canonicalTile ws gx gy
+                  in (tile, fromPendingChopDesignationDTO tile cd)
+                | ((gx, gy), cd) ← L.sortOn fst
+                                     (HM.toList (padPendingChop s)) ]
+            , pgsPendingFloraHarvests  = canon (padPendingHarvests s)
             }

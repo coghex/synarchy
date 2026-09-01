@@ -107,6 +107,24 @@ local function snapshotUnitState(s)
         jobCopy.build = nil
         copy.constructJob = jobCopy
     end
+    -- chopJob.iid (#1854) is stripped on exactly the constructJob.build
+    -- pattern above, and for the same class of reason: it is a durable
+    -- FloraInstanceId, and persisting it as a bare number would carry a
+    -- reference kind unit_ai_save_refs.lua does not declare and the
+    -- integrity graph could not check -- the same hazard the
+    -- TransientOrderFields note records for TransferOrderId. The chop
+    -- DESIGNATION is the durable authority and is persisted engine-side
+    -- (world-activity), so unit_ai_chop.lua's jobInstance() re-resolves
+    -- the target from the job's own saved tile on the first tick after
+    -- a load. The job itself (tile, phase, progress) still persists
+    -- exactly as before, so lua.unit_ai's schema is untouched by the
+    -- #1854 re-key -- no version bump, no new reference kind.
+    if copy.chopJob and copy.chopJob.iid ~= nil then
+        local jobCopy = {}
+        for jk, jv in pairs(copy.chopJob) do jobCopy[jk] = jv end
+        jobCopy.iid = nil
+        copy.chopJob = jobCopy
+    end
     return copy
 end
 

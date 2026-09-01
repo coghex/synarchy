@@ -75,13 +75,13 @@ import Craft.Bills (CraftBills(..), CraftBill(..), BillId(..))
 import Unit.Transfer.Orders (TransferOrders)
 import Building.Knowledge (ContainerKnowledge(..), ContainerRecord(..))
 import Power.Types (PowerNodes)
-import World.Chop.Types (ChopDesignations)
+import World.Chop.Types (ChopDesignations, PendingChopDesignations)
 import World.Till.Types (TillDesignations)
 import World.Plant.Types (PlantDesignations)
 import World.Spoil.Types (SpoilPiles, SpoilPile(..))
 import World.Material (MaterialId(..), MaterialRegistry, isKnownMaterial)
 import World.Plate.Types (TectonicPlate(..))
-import World.Flora.Harvest (FloraHarvests)
+import World.Flora.Harvest (FloraHarvests, PendingFloraHarvests)
 import World.Flora.CropPlot (CropPlots, CropPlot(..))
 import World.Flora.Types (FloraId(..), FloraCatalog, lookupSpecies)
 import World.Chunk.Types (ChunkCoord(..))
@@ -294,16 +294,31 @@ data WorldPageSave = WorldPageSave
         --   *Until timers) for this page's units. Restored into utsRef on
         --   EngineEnv.
     , wpsFloraHarvests ∷ !FloraHarvests
-        -- ^ Harvested flora tiles (#94): tile → regrowth game-seconds
-        --   remaining. Like designations, restored straight into
-        --   wsFloraHarvestsRef — render and queries need no chunk
-        --   loading first. Appended for save v66 (positional Generic
-        --   Serialize — field order is load-bearing).
+        -- ^ Harvested flora (#94): flora INSTANCE id → regrowth
+        --   game-seconds remaining. #1854 re-keyed this off the tile so
+        --   one plant's timer stops depleting its co-tenants. Like
+        --   designations, restored straight into wsFloraHarvestsRef —
+        --   render and queries need no chunk loading first.
     , wpsChopDesignations ∷ !ChopDesignations
-        -- ^ Chop designations (#97): tile → surface z. Like the other
+        -- ^ Chop designations (#97): flora INSTANCE id → surface z plus
+        --   the plant's canonical tile (#1854). Like the other
         --   designation layers, restored straight into
         --   wsChopDesignationsRef; markers re-render from the stored z.
-        --   Appended for save v67.
+    , wpsPendingChopMigration ∷ !PendingChopDesignations
+        -- ^ #1854: pre-identity tile-keyed chop designations that could
+        --   not be resolved to an instance at load time because their
+        --   chunk was not resident. Persisted (rather than dropped) so
+        --   a second save/load cannot silently discard a designation the
+        --   player made; drained by "World.Flora.Designation" as each
+        --   chunk arrives, and never consulted by a runtime query.
+    , wpsPendingFloraHarvests ∷ !PendingFloraHarvests
+        -- ^ #1854: pre-identity tile-keyed regrowth timers, on the same
+        --   deferred-never-authoritative terms.
+    , wpsPlantedFloraCursor ∷ !Word64
+        -- ^ #1854: this page's planted-flora id allocator cursor. Kept
+        --   strictly above every planted FloraInstanceId the page's
+        --   edit log carries, so planting after a load can never reissue
+        --   a live id. Persisted in @world-edits@ v2 beside those edits.
     , wpsCraftBills ∷ !CraftBills
         -- ^ Craft-bill queue (#329): standing per-station craft orders
         --   incl. claim + cycle progress. Station references are
@@ -1179,8 +1194,14 @@ missingFloraReferences catalog pages = concatMap pageRefs pages
         [ MissingFloraRef "crop plot" pid coord (unFloraId (cpSpecies cp))
         | (coord, cp) ← HM.toList (wpsCropPlots w)
         , unresolved (cpSpecies cp) ]
+    -- #1854 added a second planting constructor carrying the plant's own
+    -- FloraInstanceId. That id is a plain durable value, not a reference
+    -- kind this check knows how to resolve, so both forms contribute the
+    -- SPECIES id and nothing else — exactly as before it existed.
     editFloraRef (WePlaceFlora gx gy fid _day _grow) = [(gx, gy, fid)]
-    editFloraRef _                                    = []
+    editFloraRef (WePlaceFloraWithId gx gy fid _day _grow _iid) =
+        [(gx, gy, fid)]
+    editFloraRef _                                   = []
     unresolved fid = maybe True (const False) (lookupSpecies fid catalog)
 
 -- Location-overlay-id validation (issue #763) ------------------------
