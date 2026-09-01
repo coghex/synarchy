@@ -54,6 +54,13 @@ import Data.Maybe (mapMaybe)
 import World.State.Types (WorldState(..), LoadPhase(..), emptyWorldState)
 import World.Tile.Types (WorldTileData(..), emptyWorldTileData, lookupChunk)
 import World.Generate.Arena (generateFlatChunk)
+import World.Edit.Apply (replayEdits)
+import World.Fluid.Types (FluidType(..))
+import World.Flora.Types (FloraId(..))
+import World.Material.Id (MaterialId(..))
+import World.Edit.Types
+    ( WorldEdit(..), appendEdit, canonicalizeWorldEdits, emptyWorldEdits
+    , shiftWorldEdit )
 import Test.Headless.Harness
     (getWorldState, sendWorldCommand, waitForWorldInit)
 
@@ -125,6 +132,26 @@ seedTileData ∷ ChunkCoord → WorldTileData
 seedTileData coord = emptyWorldTileData
     { wtdChunks = HM.singleton canonical (generateFlatChunk canonical) }
   where canonical = canonicalChunkCoord (sizedParams seamWorldSize) coord
+
+-- | The global tile coords an edit carries, for the shift table below.
+editCoords ∷ WorldEdit → (Int, Int)
+editCoords edit = case edit of
+    WeDeleteTile gx gy           → (gx, gy)
+    WeSetFluidTile gx gy _       → (gx, gy)
+    WeAddTile gx gy _            → (gx, gy)
+    WeSetSlope gx gy _ _         → (gx, gy)
+    WeSetCell gx gy _ _          → (gx, gy)
+    WeSetStructure gx gy _ _ _ _ → (gx, gy)
+    WeClearStructure gx gy _     → (gx, gy)
+    WeSetVeg gx gy _ _           → (gx, gy)
+    WePlaceFlora gx gy _ _ _     → (gx, gy)
+    WeSetFluidSnapshot gx gy _ _ → (gx, gy)
+    WeClearFluidSnapshot gx gy   → (gx, gy)
+
+-- | Is this the delete edit the ordering check looks for?
+isDeleteEdit ∷ WorldEdit → Bool
+isDeleteEdit (WeDeleteTile _ _) = True
+isDeleteEdit _                  = False
 
 -- | The four-valued residency of a coord on a page.
 stateOf ∷ WorldGenParams → WorldPageId → ChunkCoord → ChunkOwner → ChunkState
@@ -882,38 +909,6 @@ spec = describe "canonical chunk identity" $ do
         drainedLoadPhase boxFallback 1 (LoadPhase2 2 26)
             `shouldBe` LoadPhase2 1 26
 
-    it "replays a seam save's own frame, then labels the chunk canonically" $ \_ → do
-        -- A session saved past the seam wrote its centre under a
-        -- non-canonical ALIAS, and everything in its replay log is keyed
-        -- to that alias — appendFluidSnapshot keys every settled-fluid
-        -- snapshot by the chunk's own lcCoord, and applyEdit refuses an
-        -- edit whose coords do not belong to the chunk it is handed. So
-        -- the restore replays in the SAVED frame and relabels afterwards.
-        --
-        -- The relabel is sound because the u-wrap moves WHOLE chunks: the
-        -- shift is a multiple of chunkSize, so a column's local index is
-        -- identical on both sides and only the label changes.
-        let params = sizedParams seamWorldSize
-            ChunkCoord ax ay = aliasCoord
-            ChunkCoord kx ky = canonCoord
-        canonicalChunkCoord params aliasCoord `shouldBe` canonCoord
-        ((kx - ax) * chunkSize) `mod` chunkSize `shouldBe` 0
-        ((ky - ay) * chunkSize) `mod` chunkSize `shouldBe` 0
-
-        -- An edit written in the SAVED frame belongs to the alias chunk
-        -- and not to its canonical twin, which is exactly why replay has
-        -- to happen before the relabel.
-        let aliasGX = ax * chunkSize + 6
-            aliasGY = ay * chunkSize + 2
-            canonGX = kx * chunkSize + 6
-            canonGY = ky * chunkSize + 2
-        fst (globalToChunk aliasGX aliasGY) `shouldBe` aliasCoord
-        fst (globalToChunk canonGX canonGY) `shouldBe` canonCoord
-        -- ...and both name the same column of their own chunk, which is
-        -- what makes relabelling a payload-preserving operation.
-        snd (globalToChunk aliasGX aliasGY)
-            `shouldBe` snd (globalToChunk canonGX canonGY)
-
     it "publishes a relabelled seed under the canonical key" $ \_ → do
         -- Whatever frame it was generated in, the chunk reaches the owner
         -- and the tile map under ONE key, so a later request for either
@@ -976,3 +971,80 @@ spec = describe "canonical chunk identity" $ do
             phase ← readIORef (wsLoadPhaseRef ws)
             queue ← readIORef (wsInitQueueRef ws)
             when (phase ≡ LoadDone) $ queue `shouldBe` []
+
+    it "normalizes a seam save's edit log into the canonical frame" $ \_ → do
+        -- A save written by the old restore path holds entries keyed to
+        -- a seam ALIAS — every settled-fluid snapshot included, since
+        -- appendFluidSnapshot keys by the chunk's own lcCoord — and
+        -- applyEdit refuses an edit whose coords do not belong to the
+        -- chunk it is handed. Normalizing the log ONCE at load is what
+        -- keeps them replaying for the life of the session: the restored
+        -- centre is only the first of many loads, and the streaming
+        -- loader regenerates that chunk canonically every time it is
+        -- evicted and comes back.
+        let params = sizedParams seamWorldSize
+            canon = canonicalChunkCoord params
+            ChunkCoord ax ay = aliasCoord
+            aliasGX = ax * chunkSize + 6
+            aliasGY = ay * chunkSize + 2
+            saved = appendEdit aliasCoord (WeDeleteTile aliasGX aliasGY)
+                        (appendEdit aliasCoord
+                            (WeSetFluidSnapshot aliasGX aliasGY River 3)
+                            emptyWorldEdits)
+        canon aliasCoord `shouldBe` canonCoord
+        fst (globalToChunk aliasGX aliasGY) `shouldBe` aliasCoord
+
+        let normalized = canonicalizeWorldEdits canon saved
+        HM.member aliasCoord normalized `shouldBe` False
+        -- The COORDINATES moved with the key, so the entries now belong
+        -- to the canonical chunk...
+        [ fst (globalToChunk gx gy)
+            | WeDeleteTile gx gy ← HM.lookupDefault [] canonCoord normalized ]
+            `shouldBe` [canonCoord]
+        -- ...addressing the same column, because a u-wrap displaces a
+        -- chunk by a whole number of chunks.
+        [ snd (globalToChunk gx gy)
+            | WeDeleteTile gx gy ← HM.lookupDefault [] canonCoord normalized ]
+            `shouldBe` [snd (globalToChunk aliasGX aliasGY)]
+        -- Order is preserved: snapshot first, delete second, as saved.
+        map isDeleteEdit (HM.lookupDefault [] canonCoord normalized)
+            `shouldBe` [False, True]
+
+        -- The regression itself: a freshly generated canonical chunk —
+        -- exactly what the streaming loader produces on every reload —
+        -- now replays them, and would not have before.
+        let fresh = generateFlatChunk canonCoord
+        lcTiles (replayEdits normalized fresh) `shouldNotBe` lcTiles fresh
+        lcTiles (replayEdits saved fresh) `shouldBe` lcTiles fresh
+
+        -- An already-canonical log is returned UNCHANGED, so an ordinary
+        -- save is not rebuilt, reordered, or otherwise touched.
+        let plain = appendEdit canonCoord (WeDeleteTile 3 67) emptyWorldEdits
+        canonicalizeWorldEdits canon plain `shouldBe` plain
+        canonicalizeWorldEdits (canonicalChunkCoord (sizedParams wideWorldSize))
+                               saved `shouldBe` saved
+
+    it "shifts every edit constructor by the same whole-chunk offset" $ \_ → do
+        -- The shift is uniform: each constructor carries its global tile
+        -- coords as its first two fields and nothing else positional
+        -- depends on them. Written out per constructor so a new one is a
+        -- compile error rather than an edit that silently stops moving.
+        let d = chunkSize
+            every =
+                [ WeDeleteTile 1 2
+                , WeSetFluidTile 1 2 River
+                , WeAddTile 1 2 (MaterialId 4)
+                , WeSetSlope 1 2 3 7
+                , WeSetCell 1 2 3 (MaterialId 4)
+                , WeSetStructure 1 2 5 6 7 8
+                , WeClearStructure 1 2 5
+                , WeSetVeg 1 2 3 9
+                , WePlaceFlora 1 2 (FloraId 3) 4 1.5
+                , WeSetFluidSnapshot 1 2 River 3
+                , WeClearFluidSnapshot 1 2
+                ]
+        map (editCoords . shiftWorldEdit d (2 * d)) every
+            `shouldBe` replicate (length every) (1 + d, 2 + 2 * d)
+        -- A zero shift is the identity, which is what an already
+        -- canonical key gets.
+        map (shiftWorldEdit 0 0) every `shouldBe` every

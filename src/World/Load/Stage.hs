@@ -54,6 +54,7 @@ import World.ZoomMap.Cache (buildZoomCacheWithPixels)
 import World.ZoomMap.ColorPalette (ZoomColorPalette, buildColorPalette)
 import World.ZoomMap.ChunkTexture (buildZoomAtlas, ZoomAtlasData(..))
 import World.Edit.Apply (replayEdits)
+import World.Edit.Types (canonicalizeWorldEdits)
 import World.Mine.Apply (applyDigSlopes)
 import World.Construct.Apply (applyConstructSlopes)
 import Building.Types (BuildingManager(..), BuildingId(..), BuildingDef)
@@ -249,7 +250,20 @@ stagePage logger registry palette catalog buildingDefs unitDefs
     writeIORef (wsMapModeRef worldState) (wpsMapMode wps)
     -- A loaded world always starts on the default tool (#103).
     writeIORef (wsToolModeRef worldState) DefaultTool
-    writeIORef (wsEditsRef worldState) (wpsEdits wps)
+    -- Normalized into this page's canonical chunk identity (#2001). A
+    -- save written by the old restore path holds entries keyed to a
+    -- seam ALIAS — including every settled-fluid snapshot, which
+    -- appendFluidSnapshot keys by the chunk's own lcCoord — and
+    -- applyEdit refuses an edit whose coords do not belong to the chunk
+    -- it is handed. Normalizing ONCE here is what keeps them replaying
+    -- for the life of the session: the initial centre is only the first
+    -- of many loads, and the streaming loader regenerates that chunk
+    -- canonically every time it is evicted and comes back.
+    --
+    -- Identity for every save whose keys are already canonical, which is
+    -- every page away from the seam.
+    writeIORef (wsEditsRef worldState)
+        (canonicalizeWorldEdits (canonicalChunkCoord params) (wpsEdits wps))
     writeIORef (wsMineDesignationsRef worldState) (wpsMineDesignations wps)
     writeIORef (wsConstructDesignationsRef worldState)
         (wpsConstructDesignations wps)
@@ -388,45 +402,34 @@ stagePage logger registry palette catalog buildingDefs unitDefs
             else pure (Nothing, Nothing)
 
           when isActive $ writeIORef phaseRef (LoadPhase1 3 totalSteps)
-          -- The SAVED camera chunk, and the canonical key it belongs
-          -- under. 'cameraChunkCoord' does no wrapping, so a session
-          -- saved past the seam names a non-canonical ALIAS — and the
-          -- two frames are needed for different things (#2001).
+          -- The saved camera chunk, canonicalised. 'cameraChunkCoord'
+          -- does no wrapping, so a session saved past the seam names a
+          -- non-canonical ALIAS — and this centre is generated and
+          -- inserted under whatever coord it is given, where every
+          -- canonicalising reader would miss it.
           --
-          -- The chunk is GENERATED and REPLAYED in the saved frame,
-          -- because an existing save's replay log is keyed by the coord
-          -- its chunks carried when the entries were written:
-          -- 'World.Thread.Command.Save.WriteWorld.appendFluidSnapshot'
-          -- keys every settled-fluid snapshot by the chunk's own
-          -- 'lcCoord', and 'World.Edit.Apply.applyEdit' refuses an edit
-          -- whose coords do not belong to the chunk it is handed
-          -- (@edgeBelongsTo@). Generating canonically would silently skip
-          -- every one of those entries.
-          --
-          -- It is then RELABELLED to the canonical key before anything
-          -- else sees it. That is sound because the u-wrap moves WHOLE
-          -- chunks: the shift is a multiple of 'chunkSize', so every
-          -- local column index is identical on both sides and the
-          -- payload needs no rewriting — only the label does.
-          let savedCentre = cameraChunkCoord (wpsCameraFacing wps)
-                                             (wpsCameraX wps)
-                                             (wpsCameraY wps)
-              centerCoord = canonicalChunkCoord params savedCentre
+          -- Its saved replay entries reach it because the edit log was
+          -- normalized into this same frame above, once, rather than
+          -- replayed in the saved frame here: this centre is only the
+          -- first of many loads of that chunk, and the streaming loader
+          -- regenerates it canonically every time it is evicted and
+          -- comes back.
+          let centerCoord = canonicalChunkCoord params $
+                  cameraChunkCoord (wpsCameraFacing wps)
+                                   (wpsCameraX wps)
+                                   (wpsCameraY wps)
           -- Claimed before generation, exactly as fresh world init does.
-          -- The claim is on the CANONICAL key ('chunkKeyFor' canonicalises
-          -- whatever it is given), which is the key the payload is
-          -- published under below, so the owner and the tile map agree.
           centreClaims ← claimChunkGeneration worldState pid params
-                                              [savedCentre]
+                                              [centerCoord]
           let (ct, cs, cterrain, cf, cice, cflora, cwt, cmagma) =
-                  generateChunk registry catalog params savedCentre
+                  generateChunk registry catalog params centerCoord
               seededSurf = VU.imap (\idx surfZ →
                   case cf V.! idx of
                       Just fc → max surfZ (fcSurface fc)
                       Nothing → surfZ
                   ) cs
               centerChunkRaw = LoadedChunk
-                  { lcCoord             = savedCentre
+                  { lcCoord             = centerCoord
                   , lcTiles             = ct
                   , lcSurfaceMap        = seededSurf
                   , lcTerrainSurfaceMap = cterrain
@@ -441,28 +444,8 @@ stagePage logger registry palette catalog buildingDefs unitDefs
           edits   ← readIORef (wsEditsRef worldState)
           desigs  ← readIORef (wsMineDesignationsRef worldState)
           cdesigs ← readIORef (wsConstructDesignationsRef worldState)
-          -- Edits replay in the SAVED frame, then the chunk takes its
-          -- canonical label, then the designations apply — because the
-          -- two logs are keyed in different frames. A save's edit log can
-          -- hold alias-keyed entries (above), while designations are
-          -- keyed by the canonical tile coords the pick head produces
-          -- (#1175). Each 'replayEdits' pass filters to the frame its
-          -- chunk is currently labelled in, so on a seam page the two
-          -- passes apply disjoint sets and neither log is skipped.
-          --
-          -- Away from the seam the two coords are EQUAL, so a second pass
-          -- would re-apply the very entries the first one did — a
-          -- WeDeleteTile digging twice. Hence the guard: the ordinary
-          -- restore runs exactly the single pass it always ran.
-          let replayed
-                | centerCoord ≡ savedCentre = replayEdits edits centerChunkRaw
-                | otherwise =
-                    replayEdits edits
-                        ((replayEdits edits centerChunkRaw)
-                            { lcCoord = centerCoord })
-              centerChunk = applyConstructSlopes cdesigs
-                  (applyDigSlopes desigs
-                      (replayed { lcCoord = centerCoord }))
+          let centerChunk = applyConstructSlopes cdesigs
+                  (applyDigSlopes desigs (replayEdits edits centerChunkRaw))
           -- The restored centre is new residency (#2001), claimed and
           -- admitted exactly as a fresh world's centre is — under the
           -- CANONICAL key, which is where every reader looks for it.
