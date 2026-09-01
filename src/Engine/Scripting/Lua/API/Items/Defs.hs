@@ -39,7 +39,7 @@ import Engine.Core.State (EngineEnv)
 import Engine.Core.Capability.Core (CoreCapability)
 import Engine.Core.Capability.ContentRegistries
     (ContentRegistriesCapability(..))
-import Engine.Core.Log (LogCategory(..), LoggerState, logInfo, logWarn)
+import Engine.Core.Log (LogCategory(..), LoggerState, logDebug, logWarn)
 import Engine.Core.Log.Monad (getLoggerFor)
 import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaToEngineMsg)
 import Engine.Scripting.Lua.API.YamlTextures (loadAndRegisterWithPool,
@@ -98,7 +98,7 @@ loadItemYamlFn core regs env backendState = do
                 total ← registerItemDefs env logger
                             (lbsAssetPool backendState) lteq
                             (crItemManagerRef regs) filePath defs
-                logInfo logger CatAsset $
+                logDebug logger CatAsset $
                     "loadItemYaml: loaded " <> tshow total
                     <> " item definitions from " <> T.pack filePath
                 return total

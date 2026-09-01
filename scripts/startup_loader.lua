@@ -20,13 +20,99 @@ local function addItem(label, fn)
     startupLoader.items[#startupLoader.items + 1] = {label = label, fn = fn}
 end
 
+-----------------------------------------------------------
+-- Per-family load aggregates (#1930)
+--
+-- The engine's `engine.load*Yaml` bindings each keep their per-file
+-- success detail at CatAsset DEBUG. This module is the owner of the
+-- one INFO line per registry family: it sums what those calls actually
+-- returned and reports the total once, after that family's queued
+-- files have run.
+-----------------------------------------------------------
+
+-- The stable identifier each YAML registry family reports under, keyed
+-- by its DIRECTORY rather than passed as a fourth argument to
+-- addYamlDir/addYamlTree. Those two call shapes are parsed verbatim by
+-- `tools/save_compat_migration_probe.py`, which derives production's
+-- registry bootstrap from `queueNormalProfile`'s source; keeping them
+-- at exactly three arguments is what keeps that check working.
+--
+-- A directory absent from this table still aggregates — under its own
+-- path — so a family added later reports something honest rather than
+-- silently reporting nothing.
+local yamlFamilies = {
+    ["data/materials"]   = "material",
+    ["data/vegetation"]  = "vegetation",
+    ["data/flora"]       = "flora",
+    ["data/substances"]  = "substance",
+    ["data/infections"]  = "infection",
+    ["data/recipes"]     = "recipe",
+    ["data/items"]       = "item",
+    ["data/equipment"]   = "equipment",
+    ["data/buildings"]   = "building",
+    ["data/units"]       = "unit",
+    ["data/loot_tables"] = "loot_table",
+    ["data/locations"]   = "location",
+}
+
+-- One binding's return value as a count.
+--
+-- `engine.load*Yaml` pushes a Lua NUMBER, which under Lua 5.4 is a
+-- FLOAT: concatenating it directly would render 39 as "39.0". Floored
+-- here so the aggregate reads as the integer it is, and a nil/garbage
+-- return contributes 0 rather than raising inside the queue.
+local function asCount(value)
+    local n = tonumber(value)
+    if not n then return 0 end
+    return math.floor(n)
+end
+
+-- THE spelling of the aggregate line, exposed so a test or probe reads
+-- it from here instead of restating it.
+--
+-- Deliberately says only "loaded N", never "N definitions": the value
+-- summed is whatever that family's binding returns to Lua, and that is
+-- not one quantity across the twelve — materials and vegetation return
+-- a TEXTURE total, flora a texture total too, loot tables 0 or 1 per
+-- file, and the rest a definition count. `files` distinguishes a family
+-- whose directory held nothing from one whose files all returned zero.
+function startupLoader.aggregateMessage(family, total, files)
+    return string.format("Startup assets: %s loaded %d from %d file(s)",
+                         family, math.floor(total), math.floor(files))
+end
+
+-- Enqueue one family: each of `paths` in the order given, then exactly
+-- one aggregate.
+--
+-- The aggregate is its own queue entry rather than a tail-call off the
+-- last file, because requirement 4 wants one even when the family
+-- discovered NO files at all. That lengthens the queue (and so the
+-- loading screen's progress denominator) by one per family, which #1930
+-- explicitly permits; per-file invocation count, per-file order and
+-- family order are untouched.
+local function addYamlFamily(dir, label, loaderFn, paths)
+    local family = yamlFamilies[dir] or dir
+    local total, seen = 0, 0
+    for _, path in ipairs(paths) do
+        addItem(label, function()
+            total = total + asCount(loaderFn(path))
+            seen  = seen + 1
+        end)
+    end
+    addItem(label, function()
+        engine.logInfo(startupLoader.aggregateMessage(family, total, seen))
+    end)
+end
+
 local function addYamlDir(dir, label, loaderFn)
     local files = engine.listFiles(dir, ".yaml")
-    if not files then return end
-    for _, fname in ipairs(files) do
-        local path = dir .. "/" .. fname
-        addItem(label, function() loaderFn(path) end)
+    local paths = {}
+    if files then
+        for _, fname in ipairs(files) do
+            paths[#paths + 1] = dir .. "/" .. fname
+        end
     end
+    addYamlFamily(dir, label, loaderFn, paths)
 end
 
 -- Order two `/`-separated relative paths by the UTF-8 BYTES of the
@@ -69,11 +155,13 @@ end
 -- worldgen placement.
 local function addYamlTree(dir, label, loaderFn)
     local rels = engine.listFilesRecursive(dir, ".yaml")
-    if not rels then return end
-    for _, rel in ipairs(startupLoader.canonicalFileOrder(rels)) do
-        local path = dir .. "/" .. rel
-        addItem(label, function() loaderFn(path) end)
+    local paths = {}
+    if rels then
+        for _, rel in ipairs(startupLoader.canonicalFileOrder(rels)) do
+            paths[#paths + 1] = dir .. "/" .. rel
+        end
     end
+    addYamlFamily(dir, label, loaderFn, paths)
 end
 
 local function addTextureList(label, paths)

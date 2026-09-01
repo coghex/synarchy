@@ -28,7 +28,7 @@ import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.Capability.Core (CoreCapability)
 import Engine.Core.Capability.ContentRegistries
     (ContentRegistriesCapability(..))
-import Engine.Core.Log (LogCategory(..), logInfo)
+import Engine.Core.Log (LogCategory(..), logDebug)
 import Engine.Core.Log.Monad (getLoggerFor)
 import Engine.Asset.YamlRecipes
 import Craft.Types
@@ -68,7 +68,7 @@ loadRecipeYamlFn core regs = do
                                                  (rmDefs m) }, ())
                     return (acc + 1)
                     ) (0 ∷ Int) defs
-                logInfo logger CatAsset $
+                logDebug logger CatAsset $
                     "loadRecipeYaml: loaded " <> tshow total
                     <> " recipes from " <> T.pack filePath
                 return total
@@ -98,6 +98,13 @@ pushIngredient i = do
 --   craft.get and repair.get (Engine.Scripting.Lua.API.Repair) so both
 --   accessors report the identical shape. powerDraw (#590) is always
 --   present (0 = never power-gated), unlike the other optional fields.
+--
+--   `work` is operative for CRAFT recipes only (#1965): only the craft
+--   AI burns it down (scripts/unit_ai_craft.lua, #329). A repair-tagged
+--   entry reaching this table through repair.get carries it because the
+--   shape is shared, not because a repair spends it — a repair visit is
+--   one synchronous repair.repairAt call, so the shipped repair recipes
+--   report 0 rather than advertising elapsed effort.
 pushRecipe ∷ RecipeDef → Lua.LuaE Lua.Exception ()
 pushRecipe d = do
     Lua.newtable

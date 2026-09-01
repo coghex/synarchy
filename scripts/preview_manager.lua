@@ -81,6 +81,18 @@ local page = nil
 local mode = nil
 local readyState = "loading"  -- "loading" | "ready" | "empty"
 
+-- Preview-only held-arrow repeat (#2026). GLFW's OS-generated Repeating
+-- transitions are intentionally suppressed by the shared input thread, so
+-- this developer tool owns a deterministic cadence independent of the host
+-- keyboard settings: move immediately, pause briefly, then move quickly.
+-- `navigateKey` is assigned beside the public key callbacks below and is
+-- forward-declared so update() can drive the held key on its wall clock.
+local REPEAT_DELAY = 0.20
+local REPEAT_INTERVAL = 0.04
+local repeatKey = nil
+local repeatNextAt = nil
+local navigateKey = nil
+
 -- Thumbnail edge (unscaled) for the units list's per-row frame-zero/
 -- south icons — scripts/ui/list.lua applies the uiscale itself.
 local UNIT_THUMB_SIZE = 24
@@ -846,11 +858,30 @@ function previewManager.onAssetFailed(assetType, handle, path, reason, reported)
     end
 end
 
--- Playback is driven off a WALL clock (engine.realTime), not an
--- accumulated dt: the tick rate only controls smoothness, never which
--- frame is correct, so a slow or bursty tick can't desynchronize the
--- direction row from the enlarged sprite.
+-- Playback and held-key repeat are driven off a WALL clock
+-- (engine.realTime), not an accumulated dt: the tick rate only controls
+-- smoothness, never which frame is correct. Read that clock lazily so an
+-- idle list/item update keeps its existing engine-state-free contract.
 function previewManager.update(dt)
+    local now = nil
+
+    -- One repeat at most per rendered update. Resetting from `now` avoids a
+    -- burst of catch-up selections after a debugger pause or slow texture
+    -- upload while keeping the live cadence fast at ordinary frame rates.
+    if repeatKey and repeatNextAt then
+        now = engine.realTime()
+        if now >= repeatNextAt then
+            if navigateKey(repeatKey) then
+                repeatNextAt = now + REPEAT_INTERVAL
+            else
+                -- A list boundary is terminal for this hold. Directions wrap,
+                -- so their repeat continues until the matching key-up.
+                repeatKey = nil
+                repeatNextAt = nil
+            end
+        end
+    end
+
     -- #1907: the wheel-capturing surface is created lazily (it reuses a
     -- handle this session already asked for, so no session ever loads a
     -- texture just for it), and in unit mode its region is a sub-rect
@@ -865,10 +896,12 @@ function previewManager.update(dt)
     -- every mode.
     local view = nil
     if animViewId then
-        unitAnimationView.update(animViewId, engine.realTime())
+        now = now or engine.realTime()
+        unitAnimationView.update(animViewId, now)
         view = unitAnimationView.dump(animViewId)
     elseif buildingViewId then
-        buildingAssetView.update(buildingViewId, engine.realTime())
+        now = now or engine.realTime()
+        buildingAssetView.update(buildingViewId, now)
         view = buildingAssetView.dump(buildingViewId)
     else
         return
@@ -925,6 +958,8 @@ function previewManager.shutdown()
     zoomSurfaceTexture = nil
     previewTargetCache = nil
     currentHandle = nil
+    repeatKey = nil
+    repeatNextAt = nil
 end
 
 -----------------------------------------------------------
@@ -946,6 +981,53 @@ end
 function previewManager.onScrollDown(elemHandle)
     if not browserId then return false end
     return assetBrowser.handleCallback("onScrollDown", elemHandle)
+end
+
+-- Every browser mode shares the adjacent-entry path. Left/Right reach only
+-- the unit direction row; focused-item mode has neither owner and therefore
+-- ignores all four arrows.
+navigateKey = function(key)
+    if key == "Up" then
+        return browserId and assetBrowser.selectAdjacent(browserId, -1) or false
+    elseif key == "Down" then
+        return browserId and assetBrowser.selectAdjacent(browserId, 1) or false
+    elseif key == "Left" then
+        return mode == "unit" and animViewId
+            and unitAnimationView.selectAdjacentDirection(animViewId, -1) or false
+    elseif key == "Right" then
+        return mode == "unit" and animViewId
+            and unitAnimationView.selectAdjacentDirection(animViewId, 1) or false
+    end
+    return false
+end
+
+-- Preview-only keyboard navigation (#2026). The initial press moves at once;
+-- update() supplies the fast held-key cadence above because the engine
+-- deliberately withholds platform-specific Repeating transitions from Lua.
+function previewManager.onKeyDown(key)
+    if key == "Escape" then
+        repeatKey = nil
+        repeatNextAt = nil
+        engine.quit()
+        return true
+    end
+
+    local handled = navigateKey(key)
+    if handled then
+        repeatKey = key
+        repeatNextAt = engine.realTime() + REPEAT_DELAY
+    elseif repeatKey == key then
+        repeatKey = nil
+        repeatNextAt = nil
+    end
+    return handled
+end
+
+function previewManager.onKeyUp(key)
+    if repeatKey ~= key then return false end
+    repeatKey = nil
+    repeatNextAt = nil
+    return true
 end
 
 -- Requirement 5-7. The engine has already decided WHICH surface owns

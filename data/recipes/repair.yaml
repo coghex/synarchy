@@ -19,6 +19,18 @@
 # always restores the axis fully to 100, whether the item arrived
 # lightly worn or fully broken (condition 0) — a metered/partial
 # restore is a possible future refinement, not settled here.
+#
+# A repair visit is ONE SYNCHRONOUS ACTION and carries no operative
+# work value (#1965): once the acolyte is adjacent to the station,
+# scripts/unit_ai_repair.lua calls repair.repairAt on the next action
+# tick without consulting elapsed time, skill or `work`, and
+# Engine.Scripting.Lua.API.Repair restores the axis atomically. So
+# both recipes below state `work: 0` — the engine's encoding for "no
+# operative effort" — rather than advertising effort the repair path
+# cannot spend. That is the SETTLED model for EQUIPMENT repair (PR
+# #482 chose full restoration per visit), not an omission; only
+# ordinary craft recipes burn `work` down. BUILDING repair, if it is
+# ever built, is a separate decision and is expected to be timed.
 recipes:
   - id: repair_condition
     name: "Reforge (restore condition)"
@@ -27,7 +39,7 @@ recipes:
     inputs:
       - item: lignite_chunk
         count: 1
-    work: 15
+    work: 0
     outputs: []
   - id: repair_sharpness
     name: "Hone edge (restore sharpness)"
@@ -36,5 +48,5 @@ recipes:
     inputs:
       - item: whetstone
         count: 1
-    work: 10
+    work: 0
     outputs: []

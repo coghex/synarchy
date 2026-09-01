@@ -20,7 +20,8 @@ import shutil
 import subprocess
 import tempfile
 
-from engine import ACTION_KINDS
+from engine import (ACTION_KINDS, SCROLL_DY_MAX, SCROLL_DY_MIN,
+                    SCROLL_DY_NOTCH)
 
 # These are fixed, audited profiles rather than arbitrary model overrides.  A
 # run selects one complete profile, so it cannot silently drift to a costly
@@ -45,6 +46,34 @@ DEFAULT_DECISION_TIMEOUT = 90.0
 CLAUDE_SCREENSHOT_READ_RULE = "Read(./screenshot.png)"
 
 
+# The player-facing wheel sentence (#1980), rendered from the SAME
+# constants translate_action enforces so the published contract and the
+# enforced one cannot drift. The polarity wording is the CAMERA's, taken
+# from Engine.Loop.Camera's own sign convention: a player who reads
+# "negative = away/up" reasons about the gesture and gets the opposite of
+# what the game does. Keep the canonical clause "negative dy zooms in"
+# intact and unique — run.py --selftest parses this rendered text and
+# checks it against the checked-in Haskell.
+SCROLL_MULTI_NOTCH = -4.0
+SCROLL_ACTION_LINE = (
+    '- scroll: {"do":"scroll","dy":N} — the mouse wheel, measured in '
+    f'notches: one notch is {SCROLL_DY_NOTCH:g}, and dy must be between '
+    f'{SCROLL_DY_MIN:g} and {SCROLL_DY_MAX:g} (fractions are fine). '
+    'Negative dy zooms in, closer to the ground; positive dy zooms out. '
+    f'Ask for several notches at once (e.g. "dy":{SCROLL_MULTI_NOTCH:g}) '
+    'to travel further in one go — the wheel moves further per notch the '
+    'further out you already are. Optional "x","y" to aim the pointer '
+    'first.'
+)
+SCROLL_SCHEMA_DESCRIPTION = (
+    f'Vertical wheel delta in notches: one notch is {SCROLL_DY_NOTCH:g}, '
+    f'between {SCROLL_DY_MIN:g} and {SCROLL_DY_MAX:g} inclusive. Negative '
+    'dy zooms in, closer to the ground; positive dy zooms out. A value '
+    'outside that range is clamped to the nearest bound and the turn '
+    'records it.'
+)
+
+
 class DecisionTimeout(RuntimeError):
     """The bounded provider call used all time available for this turn."""
 
@@ -66,7 +95,15 @@ TURN_SCHEMA = {
                 "x2": {"type": ["number", "null"]},
                 "y2": {"type": ["number", "null"]},
                 "dx": {"type": ["number", "null"]},
-                "dy": {"type": ["number", "null"]},
+                # The bound is PUBLISHED here and ENFORCED in
+                # translate_action, not declared as minimum/maximum
+                # keywords: a scripted agent and a lenient provider
+                # fallback both reach the translation boundary without
+                # any schema having validated them, so the schema
+                # keyword would be the weaker half of a guarantee the
+                # boundary has to make anyway.
+                "dy": {"type": ["number", "null"],
+                       "description": SCROLL_SCHEMA_DESCRIPTION},
                 "button": {"type": ["string", "null"]},
                 "mods": {"type": ["array", "null"],
                          "items": {"type": "string"}},
@@ -120,7 +157,7 @@ coordinates — aim by eye at what you see; there are no coordinate \
 aids, so being slightly off is normal:
 - click: {{"do":"click","x":N,"y":N}} (optional "button":"left|right|middle", "mods":["shift"])
 - drag: {{"do":"drag","x1":N,"y1":N,"x2":N,"y2":N}}
-- scroll: {{"do":"scroll","dy":N}} (negative = away/up; optional "x","y" to aim first)
+{scroll_action}
 - key: {{"do":"key","name":"Space"}} (names like the manual uses: W A S D, Q, E, L, Enter, Escape, Backspace, Tab, Up/Down/Left/Right, Home)
 - hold: {{"do":"hold","name":"W"}} (hold a key for a moment, e.g. to pan)
 - type: {{"do":"type","text":"..."}} (types into a focused text box)
@@ -147,7 +184,8 @@ def build_system_prompt(persona: dict, manual: str, fb_size) -> str:
     return SYSTEM_TEMPLATE.format(
         name=persona["name"], temperament=persona["temperament"].strip(),
         tendencies=tendencies, prose=prose, goal=persona["goal"].strip(),
-        manual=manual.strip(), width=fb_size[0], height=fb_size[1])
+        manual=manual.strip(), width=fb_size[0], height=fb_size[1],
+        scroll_action=SCROLL_ACTION_LINE)
 
 
 # The two ways a reply can be unusable before its action is even read.
