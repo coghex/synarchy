@@ -48,6 +48,7 @@ exactly why the detail could move out of the always-loaded file.
 - [Location and river naming (#1101/#1102)](#location-and-river-naming-11011102)
 - [Name etymology: internals (#1104)](#name-etymology-internals-1104)
 - [Location instances (#911)](#location-instances-911)
+- [Guaranteed significant contents and compound clearance (#917)](#guaranteed-significant-contents-and-compound-clearance-917)
 - [Location discovery, map icons, and per-unit knowledge (#780/#781/#915)](#location-discovery-map-icons-and-per-unit-knowledge-780781915)
 
 **Gameplay systems**
@@ -1410,13 +1411,17 @@ unreachable but must NOT be deleted (the enum is positionally serialized
 and append-only). #916's ruin encounters are the first runtime owner of
 `active` and `cleared`: first autonomous aggression activates an encounter
 (without revealing an unknown location), while first sight exposes an already
-activated ruin as `active`; a zero-occupant or death-cleared ruin is exposed as
-`cleared`.
+activated ruin as `active`. Since #917 `cleared` is no longer the
+encounter's to grant on its own — see §Guaranteed significant contents
+below: it is the conjunction of every condition the location authors,
+and `leCleared` records ENCOUNTER completion alone.
 
 A generated `ruin_small` also stores its one-time uniform 0–3 occupant
 roll. Once content spawning completes, its exact nomad roster is durable:
 each entry carries the unit id, distinct home tile, and guard-policy state. A zero
-roll starts cleared but remains undiscovered until sight. A positive roster
+roll starts with its ENCOUNTER half complete, and (since #917) still
+waits on the location's significant items before it can clear at all;
+either way it remains undiscovered until sight. A positive roster
 clears only when every originally assigned unit is exactly dead; collapsed,
 crawling, absent, or disengaged occupants keep it uncleared. Missing ids
 remain in the roster, while an occupant resolved on another page is a hard
@@ -1446,6 +1451,113 @@ per-chunk flags still decode PENDING and resolve against the registry at the
 load path's content-validation stage (`resolveLegacyLocations`).
 
 ---
+
+## Guaranteed significant contents and compound clearance (#917)
+
+Enforced by hspec `--match "Location significant contents"` (pure) and
+`--match "compound clearance with significant contents"` (the real
+discovery tick and the real ground boundary), plus
+`tools/location_content_probe.py` and `tools/expedition_loop_probe.py`.
+CLAUDE.md keeps the headline rules; this is the mechanism.
+
+**The predicate.** A location clears when EVERY condition it actually
+authors is satisfied, and it authors at most two: an encounter (#916)
+and a set of guaranteed significant items. `locationClearanceSatisfied`
+is the conjunction over the conditions present —
+`locationEncounterCondition` and `locationSignificantCondition` each
+answer `Maybe Bool`, `Nothing` meaning "not authored". A location
+authoring ONE clears on that one. A location authoring NEITHER never
+clears: the empty conjunction is deliberately `False`, not the vacuous
+`True`, which is what keeps every pre-#917 location — and every
+historical save's — behaving exactly as it did.
+
+**Where the two halves live, and why they are separate.**
+`markLocationEncounterCleared` records encounter completion and nothing
+else: no lifecycle move, no event. So `leCleared` may be true while the
+location is uncleared, which is the whole point — a ruin with its nomads
+down and its reward still on the floor is not finished with.
+`resolveLocationClearance` is the SINGLE writer of the cleared
+transition and of the one player-facing notice, and it is called from
+both places a condition can land: the clearance pass in
+`World.Thread.Discovery` (which polls, because the item latch is set on
+the Lua thread and has no edge of its own) and the discovery edge (for a
+location completed while it was still unknown). Whichever conjunct lands
+last promotes exactly once.
+
+**The notice is on the INSTANCE.** `liClearEventEmitted` generalizes
+#916's per-encounter `leClearEventEmitted` so a location authoring
+significant items and no encounter has one too. It starts SPENT exactly
+when the instance is born already clearance-satisfied — a zero-roll
+encounter owing no items, i.e. #916's own `rolled == 0` rule — because
+nobody cleared such a place and discovering it must not say otherwise.
+A hidden completion stays private: `resolveLocationClearance` requires
+`isDiscoveredLifecycle`, so it defers until sight and then fires once.
+
+**Authoring.** `significant: true` is legal ONLY on a fixed
+`kind: item` content entry; `Engine.Asset.YamlLocations` rejects it on
+any other kind, which is what keeps a `loot_table` draw out of the
+predicate whatever it rolls. `data/locations/ruin_small.yaml` authors
+one `processing_unit` — appended AFTER the existing contents, because
+#948 keys each incidental draw on the entry's positional index, so
+reordering those lines would silently change what every
+already-generated ruin rolls. It is deliberately not `radio` (D-6).
+
+**Cardinality is fixed at PLACEMENT.** `significantItemsFromDef` builds
+the whole obligation list when the instance is created, one slot per
+authored item per `count`, with no item bound yet. That is what stops an
+empty collection reading as satisfied before `scripts/locations.lua` has
+spawned anything, and what makes an unspawned or failed-to-spawn item
+keep the condition incomplete rather than silently vanish.
+
+**Provenance is the PHYSICAL item.** `lsiInstanceId` holds
+`Item.Types.iiInstanceId`, never a page-local ground id: the physical id
+survives pickup, transfer, storage and drop, while `spawnGroundItem`
+hands out a NEW ground id every time an item is dropped or a failed
+pickup is rolled back. `registerLocationSignificantSpawn` is WRITE-ONCE
+per slot — a retried content spawn cannot repoint an obligation and
+orphan the item it first named, and the refusal is exactly the edge a
+resuming spawn uses to tell "still owed" from "already done".
+
+**The latch.** `taken` is set by
+`Engine.Scripting.Lua.API.Items.Ground.pickupGroundOnPage`, the
+authoritative ground→inventory boundary, on the first SUCCESSFUL insert
+— never on the rollback — by ANY unit of ANY faction. Nothing anywhere
+writes it back to false: dropping, transferring, losing, consuming or
+destroying the item afterwards changes nothing, because the location was
+looted and that does not become untrue.
+
+**Spawning.** `scripts/locations.lua`'s `spawnSignificantContent` fills
+only the slots still empty, registering each item the instant it spawns,
+and the ordinary content loop skips significant entries (they have their
+own pass, exactly like the ranged roster). If ANY obligation cannot be
+filled the whole spawn returns WITHOUT marking `contents_spawned`, so
+the next chunk load retries — warning and skipping would burn the
+location's exactly-once content lifecycle on a location that could then
+never be cleared. A hand-stamped location has no `LocationInstanceId`,
+so it owes nothing and its incidental contents are unaffected.
+
+**Persistence.** `world-pages` v9. `migrateWorldPagesV8` preserves every
+stored value, lifts the encounter's clearance-notice flag onto the
+instance, and adds NO obligations — reading them off today's YAML would
+owe a materialized world an item it never spawned, permanently blocking
+a clearance the pre-#917 build had already granted. The v1
+reconstruction discards both for the same reason.
+`Location.Instance.locationSignificantItemErrors` rejects a duplicated
+slot and same-page duplicate ownership at component decode;
+`World.Save.Integrity.significantProvenanceErrors` hard-fails an UNTAKEN
+obligation whose item resolves on another page or in an
+inventory/storage (it cannot be held without having been picked up) and
+one physical id owed by two obligations, while
+`significantDanglingWarnings` reports an absent item and tolerates it,
+leaving the obligation untaken. Once taken there is no rule at all.
+
+**Queries.** `world.listPlacedLocations` / `world.getLocationInstance`
+expose `significant` (always an array; `{slot, item, taken}` plus
+`item_instance_id` once bound — OMITTED before that, which is how
+"not spawned yet" is expressed) beside `authors_clearance`,
+`clearance_satisfied` and `clear_event_emitted`. The predicate is
+REPORTED rather than left for callers to re-derive, because a second
+implementation is what would drift.
 
 ## Location discovery, map icons, and per-unit knowledge (#780/#781/#915)
 

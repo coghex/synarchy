@@ -315,6 +315,66 @@ spec = describe "Location spatial bounds" $ do
             -- constant index.
             bad `shouldNotSatisfy` rejectedNamingFields "t" ["content entry 2"]
 
+        -- #917: `significant` marks a GUARANTEED item the owning
+        -- location's clearance predicate waits on. It is legal on a
+        -- fixed `kind: item` entry and on NOTHING else — a loot-table
+        -- draw carrying it would make what a location owes depend on
+        -- what it rolled, and a unit or building could never be picked
+        -- up to discharge the obligation. Rejected HERE rather than at
+        -- spawn time, where warning and skipping would still burn the
+        -- location's exactly-once content lifecycle and leave it
+        -- permanently unclearable.
+        it "rejects `significant` on a loot_table entry" $
+            decodeDef
+                "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] },\
+                \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
+                \  contents: [ { kind: loot_table, id: ruin_common,\
+                \                significant: true } ] }"
+                `shouldSatisfy`
+                    rejectedNamingFields "t"
+                        [ "content entry 1", "'ruin_common'", "'significant'"
+                        , "only for item content", "'loot_table'" ]
+
+        it "rejects `significant` on a unit entry, naming its position" $
+            decodeDef
+                "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] },\
+                \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
+                \  contents: [ { kind: item, id: canteen },\
+                \              { kind: unit, id: raider, significant: true } ] }"
+                `shouldSatisfy`
+                    rejectedNamingFields "t"
+                        [ "content entry 2", "'raider'", "'significant'"
+                        , "'unit'" ]
+
+        it "rejects `significant` on a building entry" $
+            decodeDef
+                "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] },\
+                \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
+                \  contents: [ { kind: building, id: shed,\
+                \                significant: true } ] }"
+                `shouldSatisfy`
+                    rejectedNamingFields "t"
+                        ["content entry 1", "'significant'", "'building'"]
+
+        it "accepts `significant` on an item entry and defaults it to \
+           \false everywhere else -- an entry is incidental unless it \
+           \says otherwise" $
+            fmap (map (\c → (lycId c, lycSignificant c)) . lydContents)
+                (decodeDef
+                    "{ id: t, builder: b,\
+                    \  naming: { heads: [KEEP], modifiers: [ASH] },\
+                    \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
+                    \  contents: [ { kind: loot_table, id: ruin_common },\
+                    \              { kind: item, id: canteen },\
+                    \              { kind: item, id: processing_unit,\
+                    \                significant: true },\
+                    \              { kind: item, id: radio,\
+                    \                significant: false } ] }")
+                `shouldBe` Right [ ("ruin_common", False)
+                                 , ("canteen", False)
+                                 , ("processing_unit", True)
+                                 , ("radio", False) ]
+
         it "accepts positive multiplicities and retains the authored \
            \values exactly" $
             fmap (map (\c → (lycId c, lycCount c, lycRolls c)) . lydContents)
@@ -441,6 +501,20 @@ spec = describe "Location spatial bounds" $ do
                                 [("nomad_primitive",
                                   Just (LocationYamlCountRange 0 3),
                                   Just "death_only")]
+                        -- #917 requirement 6: the shipped ruin authors
+                        -- EXACTLY ONE guaranteed significant item, so a
+                        -- zero-nomad ruin stays uncleared until it is
+                        -- taken. Pinned by def name, because the reward
+                        -- must stay distinct from `radio` (D-6).
+                        [ lycId c | c ← lydContents def, lycSignificant c ]
+                            `shouldBe` ["processing_unit"]
+                        -- …and the two incidental `ruin_common` rolls
+                        -- keep authored index 1 (#948 keys each draw on
+                        -- the entry's POSITION, so the significant
+                        -- entry is appended, never inserted).
+                        take 1 [ (lycKind c, lycId c, lycRolls c)
+                               | c ← lydContents def ]
+                            `shouldBe` [("loot_table", "ruin_common", 2)]
                     defs → expectationFailure
                         ("expected exactly one location def, got "
                             <> show (length defs))

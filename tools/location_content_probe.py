@@ -557,10 +557,22 @@ DENSE_LOCATION_YAML = (
 DANGLING_ID = 99999
 
 #: Ground items one ruin_small spawns: its `ruin_common` loot_table
-#: entry's 2 rolls, and nothing else. #921 removed the two fixed-position
-#: items that used to make this 4 — the count is now purely the roll
-#: count in data/locations/ruin_small.yaml.
-GROUND_PER_RUIN = 2
+#: entry's 2 rolls (#921 removed the two fixed-position items that used
+#: to make this 4), plus #917's ONE guaranteed significant item. Both
+#: halves come from data/locations/ruin_small.yaml, and they are counted
+#: separately below because they behave completely differently: the loot
+#: rolls are incidental and touch nothing, while the significant item
+#: carries durable provenance and gates the ruin's cleared state.
+LOOT_ROLLS_PER_RUIN = 2
+SIGNIFICANT_PER_RUIN = 1
+GROUND_PER_RUIN = LOOT_ROLLS_PER_RUIN + SIGNIFICANT_PER_RUIN
+
+#: The item data/locations/ruin_small.yaml authors as its guaranteed
+#: significant content (#917). Deliberately NOT `radio` (D-6 in
+#: docs/expedition_gameplay_loop.md reserves that for unit
+#: communication) and deliberately absent from the `ruin_common` table,
+#: so a ground `processing_unit` can only ever be the significant one.
+SIGNIFICANT_ITEM = "processing_unit"
 
 
 def load_yaml_dir(port: int, directory: str, loader: str) -> None:
@@ -763,7 +775,13 @@ def loot_by_instance(port: int, page: str) -> dict[int, list[str]]:
     math.random-driven by design — this issue pins the selected
     item-definition sequence, which the hspec fixed vectors cover
     directly. Keyed by the stable instance id so the comparison is
-    immune to placement/query ORDER."""
+    immune to placement/query ORDER.
+
+    #917's guaranteed significant item is EXCLUDED. It is not loot: it
+    is authored, identical for every ruin, and its presence or absence
+    says nothing about the loot table's draw — including it would let a
+    lost roll hide behind a constant. It is checked on its own terms by
+    significant_state below."""
     items = ground_items(port)
     out: dict[int, list[str]] = {}
     for e in placed(port, page):
@@ -772,9 +790,51 @@ def loot_by_instance(port: int, page: str) -> dict[int, list[str]]:
             continue
         out[e["instance_id"]] = sorted(
             it.get("defName", "?") for it in items
-            if b["min_x"] <= it.get("x", 1e9) <= b["max_x"]
+            if it.get("defName") != SIGNIFICANT_ITEM
+            and b["min_x"] <= it.get("x", 1e9) <= b["max_x"]
             and b["min_y"] <= it.get("y", 1e9) <= b["max_y"])
     return out
+
+
+def significant_state(port: int, page: str) -> dict[int, list[dict]]:
+    """#917's guaranteed significant obligations per placed instance, in
+    slot order — the durable state the clearance predicate reads.
+
+    Each entry is the query's own row: `slot`, `item` (the authored def
+    name), `taken`, and `item_instance_id` once the content spawn has
+    bound one. Reported straight from world.listPlacedLocations rather
+    than re-derived from ground items, because the whole point of the
+    provenance is that it survives the item LEAVING the ground."""
+    return {int(e["instance_id"]): sorted(e.get("significant") or [],
+                                          key=lambda r: r.get("slot", 0))
+            for e in placed(port, page) if "instance_id" in e}
+
+
+def clearance_state(port: int, page: str) -> dict[int, tuple]:
+    """(lifecycle, authors_clearance, clearance_satisfied,
+    clear_event_emitted) per placed instance — the four values #917's
+    compound predicate is decided from, read through the engine's own
+    reported fields rather than recomputed here, so the probe cannot
+    quietly disagree with the engine about what it is asserting."""
+    return {int(e["instance_id"]): (e.get("lifecycle"),
+                                    bool(e.get("authors_clearance")),
+                                    bool(e.get("clearance_satisfied")),
+                                    bool(e.get("clear_event_emitted")))
+            for e in placed(port, page) if "instance_id" in e}
+
+
+def ground_id_of_instance(port: int, item_instance_id: int) -> int | None:
+    """The page-local ground id currently holding physical item
+    @item_instance_id@, or None when it is not on the ground.
+
+    Resolved fresh every call ON PURPOSE: a ground id is not durable —
+    a drop or a rolled-back pickup re-spawns the same physical item
+    under a NEW one — which is exactly why #917 keys provenance on the
+    instance id instead."""
+    for g in ground_items(port):
+        if int(g.get("instanceId", -1)) == item_instance_id:
+            return int(g["id"])
+    return None
 
 
 def stamp_ruins(port: int, ruins: list[dict], reverse: bool = False) -> None:
@@ -1062,9 +1122,9 @@ def run(args, art: RunArtifacts, token: str) -> int:
 
             # Content spawning has its own settle time — poll briefly
             # for the expected ground-item count.
-            # Each ruin (#91, #921, #916): 2 loot-table ground items and
-            # its one persisted uniform 0..3 nomad roll; no fixed items or
-            # buildings.
+            # Each ruin (#91, #921, #916, #917): 2 loot-table ground
+            # items, ONE guaranteed significant item, and its persisted
+            # uniform 0..3 nomad roll; no buildings.
             want_ground = GROUND_PER_RUIN * len(ruins)
             want_nomads = sum(int((e.get("encounter") or {}).get(
                 "rolled_count", 0)) for e in ruins)
@@ -1084,8 +1144,9 @@ def run(args, art: RunArtifacts, token: str) -> int:
 
             if counts1["ground_total"] == want_ground:
                 print(f"PASS: {want_ground} ground item(s) spawned "
-                      f"({GROUND_PER_RUIN} loot_table roll(s) per ruin, "
-                      f"no guaranteed item)")
+                      f"({LOOT_ROLLS_PER_RUIN} loot_table roll(s) plus "
+                      f"{SIGNIFICANT_PER_RUIN} guaranteed significant item "
+                      f"per ruin)")
             else:
                 failures.append(
                     f"expected {want_ground} ground item(s), got "
@@ -1140,22 +1201,175 @@ def run(args, art: RunArtifacts, token: str) -> int:
                     "nomad action inventory bypasses encounter acquisition: "
                     f"{action_policy!r}")
 
-            # #921: the ruin guarantees NOTHING specific. `radio` and
-            # `canteen_steel_2l` (spawn-only starting equipment) were the
-            # two entries removed, and they are absent from ruin_common
-            # too — so no ruin content on this page may be either. This
-            # is the direct inverse of the assertion that used to REQUIRE
-            # one of each per ruin; it fails if they are reinstated as
-            # fixed entries or quietly added to the loot table.
+            # #921/#917: the ruin's INCIDENTAL half still guarantees
+            # nothing specific. `radio` and `canteen_steel_2l`
+            # (spawn-only starting equipment) were the two entries #921
+            # removed, and they are absent from ruin_common too — so no
+            # ruin content on this page may be either. #917 added a
+            # guaranteed item deliberately distinct from `radio` (D-6 in
+            # docs/expedition_gameplay_loop.md reserves it for unit
+            # communication), so this assertion is unchanged by it and
+            # still fails if either is reinstated as a fixed entry or
+            # quietly added to the loot table.
             spawn_only = {d: counts1["ground_by_name"][d]
                           for d in ("radio", "canteen_steel_2l")
                           if counts1["ground_by_name"].get(d)}
             if not spawn_only:
                 print("PASS: no spawn-only equipment (radio, canteen_steel_2l) "
-                      "in ruin content — nothing is guaranteed")
+                      "in ruin content — the guaranteed item is neither")
             else:
                 failures.append(
                     f"spawn-only equipment appeared in ruin content: {spawn_only}")
+
+            # ---- #917: guaranteed significant contents and the
+            #      COMPOUND clearance predicate. Everything here reads
+            #      the engine's own reported fields
+            #      (world.listPlacedLocations' `significant` array and
+            #      its three clearance flags) rather than recomputing
+            #      the predicate probe-side, so a divergence between
+            #      what the engine decided and what this asserts is
+            #      impossible to hide.
+            sig1 = significant_state(args.port, "wa")
+            print(f"  significant obligations: {sig1}")
+
+            # Every placed ruin owes EXACTLY one, bound to a real
+            # physical item id, and none is taken yet. The bound id is
+            # the proof the content spawn registered provenance rather
+            # than merely dropping an item on the floor.
+            sig_errors = []
+            for ruin in ruins:
+                iid = int(ruin["instance_id"])
+                rows = sig1.get(iid) or []
+                if (len(rows) != SIGNIFICANT_PER_RUIN
+                        or any(r.get("item") != SIGNIFICANT_ITEM for r in rows)
+                        or any(r.get("item_instance_id") is None for r in rows)
+                        or any(r.get("taken") for r in rows)):
+                    sig_errors.append((iid, rows))
+            if not sig_errors:
+                print(f"PASS: every ruin owes exactly {SIGNIFICANT_PER_RUIN} "
+                      f"guaranteed '{SIGNIFICANT_ITEM}', each bound to its own "
+                      f"spawned item instance and none taken")
+            else:
+                failures.append(
+                    f"significant obligation mismatch: {sig_errors}")
+
+            # One physical identity per obligation, across the page.
+            # Two obligations naming one item would let a single pickup
+            # clear a location whose own item was never taken — the
+            # session-wide rule World.Save.Integrity enforces at the
+            # save boundary, checked here on the live session.
+            bound_ids = [r.get("item_instance_id") for rows in sig1.values()
+                         for r in rows if r.get("item_instance_id") is not None]
+            if len(bound_ids) == len(set(bound_ids)):
+                print(f"PASS: each obligation names a DISTINCT physical item "
+                      f"({len(bound_ids)} bound)")
+            else:
+                failures.append(
+                    f"one physical item is owed by several obligations: "
+                    f"{bound_ids}")
+
+            # A ruin with a live nomad roster is NOT cleared however its
+            # item is handled, and a zero-roll ruin is not cleared
+            # either while its item is untaken — requirement 5's
+            # conjunction, read straight off the engine.
+            clr1 = clearance_state(args.port, "wa")
+            unsatisfied = [iid for iid, (_, authors, satisfied, _)
+                           in clr1.items() if authors and satisfied]
+            if not unsatisfied:
+                print("PASS: no ruin's clearance predicate is satisfied while "
+                      "its guaranteed item is still on the floor — including "
+                      "any zero-nomad roll, whose encounter half is already "
+                      "complete")
+            else:
+                failures.append(
+                    f"clearance satisfied with an untaken guaranteed item: "
+                    f"{[(i, clr1[i]) for i in unsatisfied]}")
+
+            # (Requirement 4 — that incidental salvage participates in
+            # nothing — is proved at two cheaper tiers instead: the pure
+            # "Location significant contents" spec and the IO-level
+            # "compound clearance with significant contents" one both
+            # pick up an unowned item through the real boundary and
+            # assert nothing moves. Repeating it HERE would need a
+            # player-faction looter standing in a ruin, which would
+            # discover it and invalidate the sight-based discovery
+            # checks this same phase runs below.)
+
+            # A NON-PLAYER faction's pickup latches the same durable
+            # state (requirement 3): the ruin was looted whoever did it.
+            # Deliberately a hostile unit, and deliberately a ruin with
+            # a LIVE roster where one exists, so the latch is observed
+            # without the location clearing — the two halves stay
+            # independent.
+            occupied = next(
+                (r for r in ruins
+                 if int((r.get("encounter") or {}).get("rolled_count", 0)) > 0),
+                None)
+            target = occupied or (ruins[0] if ruins else None)
+            if target is None:
+                failures.append("no ruin to test the taken latch against")
+            else:
+                tiid = int(target["instance_id"])
+                rows = sig1.get(tiid) or []
+                phys = rows[0].get("item_instance_id") if rows else None
+                gid = (ground_id_of_instance(args.port, phys)
+                       if phys is not None else None)
+                if gid is None:
+                    failures.append(
+                        f"ruin {tiid}'s guaranteed item is not on the ground: "
+                        f"phys={phys}")
+                else:
+                    thief = spawn_unit(args.port, "nomad_primitive",
+                                       int(target["gx"]), int(target["gy"]),
+                                       "hostile", "wa")
+                    took = send(
+                        args.port,
+                        f"return item.pickupGround({thief}, {gid}) "
+                        f"and 'yes' or 'no'").strip('"')
+                    time.sleep(1.5)
+                    sig2 = significant_state(args.port, "wa")
+                    clr2 = clearance_state(args.port, "wa")
+                    latched = all(r.get("taken") for r in sig2.get(tiid, []))
+                    others_untouched = all(
+                        sig2.get(i) == sig1.get(i)
+                        for i in sig1 if i != tiid)
+                    if took == "yes" and latched and others_untouched:
+                        print(f"PASS: a hostile unit's pickup latched ruin "
+                              f"{tiid}'s guaranteed item as taken, and no "
+                              f"other ruin's obligations moved")
+                    else:
+                        failures.append(
+                            f"non-player pickup did not latch as expected: "
+                            f"took={took!r} sig={sig2}")
+                    # …and with a live roster the location is STILL not
+                    # cleared: the encounter half is outstanding.
+                    if occupied is not None:
+                        if not clr2.get(tiid, (None, False, False, False))[2]:
+                            print(f"PASS: ruin {tiid} stays uncleared with its "
+                                  f"item taken but its roster alive — both "
+                                  f"halves are required")
+                        else:
+                            failures.append(
+                                f"ruin {tiid} cleared on the item alone while "
+                                f"its roster is alive: {clr2.get(tiid)}")
+                    # A second pickup attempt cannot reset the latch:
+                    # the item is now in an inventory, so there is no
+                    # ground id to take, and the durable state is
+                    # unchanged either way.
+                    if significant_state(args.port, "wa") != sig2:
+                        failures.append(
+                            "the taken latch moved after the pickup settled")
+                    else:
+                        print("PASS: the taken latch is stable once set")
+
+            # The pickup above moved one ground item into a unit, so the
+            # spawn census phase 2 compares against has to be re-taken
+            # here. Phase 2's claim is that a RELOAD respawns nothing —
+            # a delta across the reload — not that the original numbers
+            # are any particular value, and those were already asserted
+            # above against want_ground/want_nomads.
+            counts1 = spawn_counts(args.port)
+            print(f"  census after the significant pickup: {counts1}")
 
             # #948 baseline: which loot each STABLE ruin instance owns.
             # Captured before the synthetic discovery units below (they

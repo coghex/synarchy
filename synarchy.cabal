@@ -1370,6 +1370,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.Faction
                    Test.Headless.Lua.Faction
                    Test.Headless.Location.Instance
+                   Test.Headless.Location.SignificantContents
                    Test.Headless.Location.Naming
                    Test.Headless.River.Naming
                    Test.Headless.Location.LootDeterminism

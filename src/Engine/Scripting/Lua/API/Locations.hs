@@ -160,6 +160,7 @@ loadLocationYamlFn core regs env backendState = do
         , lconRolls    = lycRolls c
         , lconCountRange = (\r → (lycrMin r, lycrMax r)) ⊚ lycCountRange c
         , lconClearance = lycClearance c
+        , lconSignificant = lycSignificant c
         }
     toBounds b = RelBounds
         { rbMinX = lybMinX b, rbMinY = lybMinY b
@@ -251,6 +252,13 @@ locationListDefsFn regs = do
             forM_ (lconClearance c) $ \policy → do
                 Lua.pushstring (TE.encodeUtf8 policy)
                 Lua.setfield (-2) "clearance"
+            -- #917: always present, never omitted — a content entry is
+            -- either a guaranteed significant item the location's
+            -- clearance predicate waits on, or it is not, and
+            -- scripts/locations.lua reads this to decide which spawn
+            -- path an entry takes.
+            Lua.pushboolean (lconSignificant c)
+            Lua.setfield (-2) "significant"
             case lconPosition c of
                 Just (px, py) → do
                     Lua.newtable

@@ -81,7 +81,7 @@ import Language.Generated.Types
 import Location.Bounds (AbsBounds(..))
 import Location.Instance
     ( LocationInstance(..), LocationInstances(..), LocationInstanceId(..)
-    , LocationLifecycle(..) )
+    , LocationLifecycle(..), LocationSignificantItem(..) )
 import World.Render.Zoom.Types (ZoomMapMode(..))
 import World.Tool.Types (ToolMode(..))
 import Engine.Graphics.Camera (CameraFacing(..))
@@ -447,6 +447,23 @@ richLocationInstances = LocationInstances
             , liLifecycle       = LifecycleDiscovered
             , liContentsSpawned = True
             , liEncounter       = Nothing
+            -- #917: two obligations in DIFFERENT states, so a round
+            -- trip that collapsed the list, dropped the optional
+            -- physical id, or lost one latch cannot pass — slot 1
+            -- spawned and taken, slot 2 spawned and still lying there.
+            , liSignificant =
+                [ LocationSignificantItem
+                    { lsiSlot        = 1
+                    , lsiItemDefName = "processing_unit"
+                    , lsiInstanceId  = Just 8801
+                    , lsiTaken       = True }
+                , LocationSignificantItem
+                    { lsiSlot        = 2
+                    , lsiItemDefName = "processing_unit"
+                    , lsiInstanceId  = Just 8802
+                    , lsiTaken       = False }
+                ]
+            , liClearEventEmitted = False
             })
         , (LocationInstanceId 2, LocationInstance
             { liId              = LocationInstanceId 2
@@ -460,6 +477,17 @@ richLocationInstances = LocationInstances
             , liLifecycle       = LifecycleUnknown
             , liContentsSpawned = False
             , liEncounter       = Nothing
+            -- The other side of the split: an obligation whose item has
+            -- not been spawned yet, so its physical id is ABSENT — the
+            -- state that must survive as absence rather than as a zero.
+            , liSignificant =
+                [ LocationSignificantItem
+                    { lsiSlot        = 1
+                    , lsiItemDefName = "processing_unit"
+                    , lsiInstanceId  = Nothing
+                    , lsiTaken       = False }
+                ]
+            , liClearEventEmitted = False
             })
         ]
     , lisPendingLegacy = Nothing

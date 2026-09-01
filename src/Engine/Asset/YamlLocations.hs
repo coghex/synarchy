@@ -68,6 +68,13 @@ data LocationYamlContent = LocationYamlContent
     , lycRolls    ∷ !Int
     , lycCountRange ∷ !(Maybe LocationYamlCountRange)
     , lycClearance ∷ !(Maybe Text)
+    , lycSignificant ∷ !Bool
+      -- ^ #917: mark this entry a GUARANTEED SIGNIFICANT item — one the
+      --   owning location's clearance predicate waits on. Legal ONLY on
+      --   @kind: item@; 'LocationYamlDef''s 'FromJSON' instance rejects
+      --   it anywhere else, which is what keeps a @loot_table@ draw out
+      --   of the predicate no matter what it rolls. Defaults to
+      --   'False', so an entry is incidental unless it says otherwise.
     } deriving (Show, Eq, Generic)
 
 instance FromJSON LocationYamlContent where
@@ -80,6 +87,7 @@ instance FromJSON LocationYamlContent where
         ⊛ v .:? "rolls"    .!= 1
         ⊛ v .:? "count_range"
         ⊛ v .:? "clearance"
+        ⊛ v .:? "significant" .!= False
 
 -- | The authoritative spatial contract (#777): an inclusive,
 --   axis-aligned tile box relative to the location's anchor. Required
@@ -391,6 +399,22 @@ instance FromJSON LocationYamlDef where
                             <> " ('" <> lycId c <> "'): unsupported encounter "
                             <> "clearance policy '" <> policy
                             <> "' (supported: death_only)"))
+            -- #917: the significant flag is a property of a FIXED item
+            -- entry and of nothing else. A loot-table draw is a draw —
+            -- letting it carry the flag would make what a location owes
+            -- depend on what it rolled, which is exactly what
+            -- requirement 4 forbids — and a unit or building is not an
+            -- item anyone can pick up, so an obligation naming one
+            -- could never be discharged. Rejected HERE rather than at
+            -- spawn time, where warning and skipping would still burn
+            -- the location's exactly-once content lifecycle and leave
+            -- it permanently unclearable.
+            when (lycSignificant c ∧ lycKind c ≢ "item") $
+                fail (T.unpack ("location '" <> lid
+                    <> "': content entry " <> tshow entryIx
+                    <> " ('" <> lycId c <> "'): 'significant' is "
+                    <> "supported only for item content, not '"
+                    <> lycKind c <> "'"))
             when (isNothing (lycCountRange c) ∧ isJust (lycClearance c)) $
                 fail (T.unpack ("location '" <> lid
                     <> "': content entry " <> tshow entryIx

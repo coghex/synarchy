@@ -61,8 +61,15 @@ module Location.Instance
       -- * Encounters
     , LocationEncounterOccupant(..)
     , LocationEncounter(..)
-    , encounterDiscoveryLifecycle
     , encounterOccupant
+      -- * Guaranteed significant contents (#917)
+    , LocationSignificantItem(..)
+    , significantItemsFromDef
+    , locationEncounterCondition
+    , locationSignificantCondition
+    , locationAuthorsClearance
+    , locationClearanceSatisfied
+    , locationDiscoveryLifecycle
       -- * Records
     , LocationInstance(..)
     , LocationInstances(..)
@@ -93,13 +100,16 @@ module Location.Instance
     , adjustLocationEncounterOccupant
     , setLocationEncounterEpisodeState
     , markLocationEncounterCleared
-    , markLocationEncounterClearEventEmitted
+    , registerLocationSignificantSpawn
+    , latchLocationSignificantTaken
+    , resolveLocationClearance
       -- * v1 chunk-set migration
     , pendingLegacyFlags
     , resolveLegacyLocationInstances
       -- * Validation
     , locationInstanceAllocatorErrors
     , locationInstanceBoundsErrors
+    , locationSignificantItemErrors
     ) where
 
 import UPrelude
@@ -107,6 +117,7 @@ import GHC.Generics (Generic)
 import Control.DeepSeq (NFData)
 import Data.Hashable (Hashable)
 import Data.List (find, sortOn)
+import qualified Data.Text as T
 import Data.Serialize (Serialize)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
@@ -149,7 +160,7 @@ firstLocationInstanceId = 1
 --   @CLAUDE.md@). Inserting or reordering a constructor silently
 --   corrupts saves.
 --
---   #916's ruin encounters now promote visible occupied locations to
+--   #916's ruin encounters promote visible occupied locations to
 --   'LifecycleActive' and death-cleared (including zero-roll) locations to
 --   'LifecycleCleared'. Reward and retrieval remain later lifecycle work.
 --
@@ -246,17 +257,135 @@ data LocationEncounter = LocationEncounter
     , leAggressionAnnounced ∷ !Bool
     , leDisengageAnnounced  ∷ !Bool
     , leCleared            ∷ !Bool
-    , leClearEventEmitted  ∷ !Bool
+      -- ^ ENCOUNTER completion only (#917): every assigned occupant is
+      --   dead (or the roll was zero). Deliberately NOT the location's
+      --   cleared state — a ruin whose nomads are down but whose
+      --   guaranteed significant item is still lying there has
+      --   @leCleared@ true and is not cleared. The compound predicate
+      --   ('locationClearanceSatisfied') owns that, and the one
+      --   player-facing feedback latch lives on the INSTANCE
+      --   ('liClearEventEmitted') so a location authoring significant
+      --   items and no encounter has one too.
     } deriving (Show, Eq, Generic, NFData, Serialize)
 
+-- * Guaranteed significant contents (#917) ---------------------------
+
+-- | One GUARANTEED SIGNIFICANT item a placed location owes (#917) — the
+--   second half of the expedition completion predicate
+--   (@docs\/expedition_gameplay_loop.md@ D-17): a location clears only
+--   when its authored encounter condition is satisfied AND every
+--   significant item it spawned has been taken.
+--
+--   /Cardinality is fixed at PLACEMENT, not at spawn./ The whole list
+--   is built by 'significantItemsFromDef' when the instance is created,
+--   with 'lsiInstanceId' still 'Nothing' — so the obligation exists
+--   before @scripts\/locations.lua@ has spawned anything, and a
+--   never-spawned (or failed-to-spawn) item keeps the loot condition
+--   INCOMPLETE instead of an empty collection reading as satisfied.
+--
+--   /Provenance is the PHYSICAL item identity./ 'lsiInstanceId' holds
+--   'Item.Types.iiInstanceId', not a page-local ground-item id: the
+--   physical id is preserved verbatim through pickup, transfer, storage
+--   and drop, while 'Item.Ground.spawnGroundItem' hands out a NEW
+--   ground id every time an item is dropped or a failed pickup is
+--   rolled back. Keying on the ground id would lose the item the first
+--   time anyone put it down.
+--
+--   /'lsiTaken' is a LATCH./ It is set once, by the authoritative
+--   ground→inventory boundary
+--   ('Engine.Scripting.Lua.API.Items.Ground.pickupGroundOnPage'), the
+--   first time ANY unit of ANY faction successfully picks the item up —
+--   a pickup that returns false never latches. Dropping, transferring,
+--   losing, consuming or destroying the item afterwards never clears
+--   it: the location was looted, and that does not become untrue.
+data LocationSignificantItem = LocationSignificantItem
+    { lsiSlot        ∷ !Int
+      -- ^ Stable per-instance obligation slot, 1-based in authored
+      --   order — the entry's positional index in
+      --   'Location.Types.ldContents' first, then its ordinal within
+      --   that entry's 'Location.Types.lconCount'. The address
+      --   @scripts\/locations.lua@ registers a spawn against, so a
+      --   resumed spawn fills exactly the slots still empty.
+    , lsiItemDefName ∷ !Text
+      -- ^ the authored 'Location.Types.lconId' this slot must spawn
+    , lsiInstanceId  ∷ !(Maybe Word64)
+      -- ^ the spawned item's 'Item.Types.iiInstanceId'; 'Nothing' until
+      --   the content spawn registers one
+    , lsiTaken       ∷ !Bool
+    } deriving (Show, Eq, Generic, NFData, Serialize)
+
+-- | The obligations a definition's authored contents impose on ONE
+--   placed instance, in authored order (see 'lsiSlot').
+--
+--   Only fixed @kind: item@ entries flagged 'Location.Types.lconSignificant'
+--   contribute — the YAML boundary
+--   ('Engine.Asset.YamlLocations') already refuses the flag on any
+--   other kind, so a @loot_table@ draw can never become an obligation
+--   whatever it rolls (requirement 4).
+significantItemsFromDef ∷ LocationDef → [LocationSignificantItem]
+significantItemsFromDef def =
+    [ LocationSignificantItem
+        { lsiSlot        = slot
+        , lsiItemDefName = lconId c
+        , lsiInstanceId  = Nothing
+        , lsiTaken       = False
+        }
+    | (slot, c) ← zip [1 ..]
+        [ c
+        | c ← ldContents def
+        , lconSignificant c
+        , lconKind c ≡ "item"
+        , _ ← [1 .. lconCount c] ]
+    ]
+
+-- | The ENCOUNTER half of the clearance predicate: 'Nothing' when the
+--   instance authors no encounter at all, @Just satisfied@ otherwise.
+locationEncounterCondition ∷ LocationInstance → Maybe Bool
+locationEncounterCondition = fmap leCleared ∘ liEncounter
+
+-- | The SIGNIFICANT-ITEM half: 'Nothing' when the instance owes none,
+--   @Just satisfied@ otherwise. An obligation that was never spawned
+--   ('lsiInstanceId' 'Nothing') is simply not taken, so it keeps this
+--   incomplete exactly as an untaken spawned one does.
+locationSignificantCondition ∷ LocationInstance → Maybe Bool
+locationSignificantCondition inst
+    | null (liSignificant inst) = Nothing
+    | otherwise                 = Just (all lsiTaken (liSignificant inst))
+
+-- | Does this instance author ANY clearance condition? A location with
+--   neither an encounter nor a significant item authors none, and must
+--   never clear through an empty conjunction — it keeps whatever
+--   lifecycle discovery gives it, exactly as it did before #917.
+locationAuthorsClearance ∷ LocationInstance → Bool
+locationAuthorsClearance inst = not (null (conditionsOf inst))
+
+-- | The compound clearance predicate (#917 requirement 5): the
+--   CONJUNCTION of the conditions actually authored for this location.
+--   A location authoring only one of the two clears on that one; a
+--   location authoring neither never clears (an empty conjunction is
+--   'False' here, deliberately not the vacuous 'True').
+locationClearanceSatisfied ∷ LocationInstance → Bool
+locationClearanceSatisfied inst = case conditionsOf inst of
+    []         → False
+    conditions → and conditions
+
+conditionsOf ∷ LocationInstance → [Bool]
+conditionsOf inst = catMaybes
+    [ locationEncounterCondition inst
+    , locationSignificantCondition inst
+    ]
+
 -- | The first visible lifecycle for an instance. Discovery is still the
---   single edge that emits @location_discovery@; an encounter outcome only
---   chooses where that edge lands.
-encounterDiscoveryLifecycle ∷ LocationInstance → LocationLifecycle
-encounterDiscoveryLifecycle inst = case liEncounter inst of
-    Just e | leCleared e   → LifecycleCleared
-           | leActivated e → LifecycleActive
-    _                      → LifecycleDiscovered
+--   single edge that emits @location_discovery@; the location's own
+--   state only chooses where that edge lands — so a ruin whose nomads
+--   were already dead AND whose significant items were already taken
+--   is discovered straight into 'LifecycleCleared', while one with
+--   either half outstanding is not.
+locationDiscoveryLifecycle ∷ LocationInstance → LocationLifecycle
+locationDiscoveryLifecycle inst
+    | locationClearanceSatisfied inst = LifecycleCleared
+    | maybe False leActivated (liEncounter inst) = LifecycleActive
+    | otherwise = LifecycleDiscovered
 
 -- | Find one assigned occupant without dropping dangling membership.
 encounterOccupant ∷ UnitId → LocationEncounter → Maybe LocationEncounterOccupant
@@ -308,6 +437,23 @@ data LocationInstance = LocationInstance
       -- ^ Optional placed-location encounter (#916), rolled once when the
       --   overlay instance is built. Independent from discovery and the
       --   generic content-spawn flag; historical saves decode with absence.
+    , liSignificant     ∷ ![LocationSignificantItem]
+      -- ^ The GUARANTEED SIGNIFICANT items this instance owes (#917),
+      --   fixed at PLACEMENT from the definition's authored contents
+      --   ('significantItemsFromDef') so the expected cardinality is
+      --   durable before anything spawns. Empty for a definition that
+      --   authors none, and empty for every historical instance —
+      --   no migration infers obligations from today's YAML.
+    , liClearEventEmitted ∷ !Bool
+      -- ^ Has this location's ONE player-facing clearance notice been
+      --   spent? Generalized from #916's per-encounter
+      --   @leClearEventEmitted@ (#917) so a location that authors
+      --   significant items and NO encounter has a latch too. Set only
+      --   by 'resolveLocationClearance', which is the single writer of
+      --   the cleared transition, so the notice fires exactly once
+      --   however the last condition was satisfied — including the
+      --   deferred case, where the location completed while still
+      --   unknown and the notice waits for sight.
     } deriving (Show, Eq, Generic, NFData, Serialize)
 
 -- | A page's placed-location table plus its own id allocator.
@@ -455,7 +601,14 @@ newLocationInstanceWithSeed seed namer iid coord def = do
     (anchor, box) ← locationInstanceGeometry coord def
     let (name, gloss, ety) = nameLocationInstance namer def
                                  (unLocationInstanceId iid)
-    pure LocationInstance
+    -- The clearance notice starts SPENT exactly when the instance is
+    -- born already satisfied — a zero-roll encounter with no
+    -- significant items, which is #916's own @leClearEventEmitted =
+    -- rolled == 0@ rule generalized. Nobody cleared such a place, so
+    -- discovering it must not announce a clearance; a location with any
+    -- outstanding condition starts unspent and earns its one notice
+    -- when the last condition falls.
+    pure $ withInitialClearFeedback LocationInstance
         { liId              = iid
         , liDefId           = ldId def
         , liChunk           = coord
@@ -467,7 +620,16 @@ newLocationInstanceWithSeed seed namer iid coord def = do
         , liLifecycle       = LifecycleUnknown
         , liContentsSpawned = False
         , liEncounter       = encounterFromDef seed iid def
+        , liSignificant     = significantItemsFromDef def
+        , liClearEventEmitted = False
         }
+
+-- | Seat a freshly built instance's one-shot clearance notice: spent
+--   when the instance is already clearance-satisfied at birth, unspent
+--   otherwise. See 'newLocationInstanceWithSeed'.
+withInitialClearFeedback ∷ LocationInstance → LocationInstance
+withInitialClearFeedback inst =
+    inst { liClearEventEmitted = locationClearanceSatisfied inst }
 
 -- | At most one ranged unit-content entry is accepted by the YAML boundary.
 --   Its inclusive range is rolled by a stateless avalanche hash over the
@@ -495,7 +657,6 @@ encounterFromDef seed iid def = case
                 , leAggressionAnnounced = False
                 , leDisengageAnnounced  = False
                 , leCleared            = rolled ≡ 0
-                , leClearEventEmitted  = rolled ≡ 0
                 }
 
 -- * Queries ----------------------------------------------------------
@@ -687,38 +848,114 @@ setLocationEncounterEpisodeState iid active aggressionAnnounced
                     }
                 }
 
--- | Record death-only clearance. Returns 'Nothing' when the instance is
---   absent/already clear; callers use that edge to emit exactly one clear
---   event. Discovery is promoted only if it has already happened.
+-- | Record death-only ENCOUNTER completion, and nothing else (#917).
+--   'Nothing' when the instance is absent, authors no encounter, or has
+--   already completed it.
+--
+--   Since #917 this deliberately does NOT touch the lifecycle or the
+--   clearance notice. Completing the roster is one CONJUNCT of the
+--   location's clearance predicate, not the clearance itself: a ruin
+--   whose guaranteed significant item is still on the floor stays
+--   uncleared with @leCleared@ true. 'resolveLocationClearance' is the
+--   single writer of the cleared transition and of
+--   'liClearEventEmitted', so whichever conjunct lands last promotes
+--   the location exactly once.
 markLocationEncounterCleared
     ∷ LocationInstanceId → LocationInstances → Maybe LocationInstances
 markLocationEncounterCleared iid lis = do
     inst ← lookupLocationInstance iid lis
     e ← liEncounter inst
     guard (not (leCleared e))
-    let visible = isDiscoveredLifecycle (liLifecycle inst)
-        nextLifecycle = if visible
-            then LifecycleCleared else liLifecycle inst
     pure $ adjustLocationInstance iid (\i → i
-        { liLifecycle = nextLifecycle
-        , liEncounter = Just e
+        { liEncounter = Just e
             { leCleared = True
             , leEpisodeActive = False
-            , leClearEventEmitted = visible
             }
         }) lis
 
--- | Consume deferred clear feedback when a positive encounter was defeated
---   before discovery. The outcome stays private until ordinary sight reveals
---   the location; zero-roll encounters initialize with this edge consumed.
-markLocationEncounterClearEventEmitted
-    ∷ LocationInstanceId → LocationInstances → Maybe LocationInstances
-markLocationEncounterClearEventEmitted iid lis = do
+-- | Bind one spawned significant item to its obligation slot (#917):
+--   the item's physical 'Item.Types.iiInstanceId', recorded by the
+--   content spawn as soon as the spawn succeeds.
+--
+--   WRITE-ONCE per slot, and refused rather than overwritten: a slot
+--   that already names an item keeps it, so a retried or duplicated
+--   content spawn cannot repoint an obligation at a second physical
+--   item and orphan the first. 'Nothing' when the instance or the slot
+--   is unknown, or the slot is already bound — which is exactly the
+--   edge a resuming spawn uses to tell "still owed" from "already
+--   done".
+registerLocationSignificantSpawn
+    ∷ LocationInstanceId → Int → Word64 → LocationInstances
+    → Maybe LocationInstances
+registerLocationSignificantSpawn iid slot itemId lis = do
     inst ← lookupLocationInstance iid lis
-    e ← liEncounter inst
-    guard (leRolledCount e > 0 ∧ leCleared e ∧ not (leClearEventEmitted e))
+    entry ← find ((≡ slot) . lsiSlot) (liSignificant inst)
+    guard (isNothing (lsiInstanceId entry))
     pure $ adjustLocationInstance iid (\i → i
-        { liEncounter = Just e { leClearEventEmitted = True } }) lis
+        { liSignificant =
+            [ if lsiSlot e ≡ slot then e { lsiInstanceId = Just itemId } else e
+            | e ← liSignificant i ]
+        }) lis
+
+-- | Latch @taken@ on whichever obligation of ANY instance on this page
+--   owns @itemId@ (#917 requirement 3), the first time that physical
+--   item is successfully picked up — by any unit, of any faction.
+--
+--   'Nothing' when no obligation on the page names the item, or the one
+--   that does is already latched, so the caller pays nothing for an
+--   ordinary pickup of ordinary salvage. Idempotent by construction:
+--   once true it is never written again, and nothing anywhere clears
+--   it.
+latchLocationSignificantTaken
+    ∷ Word64 → LocationInstances → Maybe LocationInstances
+latchLocationSignificantTaken itemId lis =
+    case [ liId inst
+         | inst ← instancesToList lis
+         , entry ← liSignificant inst
+         , lsiInstanceId entry ≡ Just itemId
+         , not (lsiTaken entry) ] of
+        []      → Nothing
+        (iid:_) → Just $ adjustLocationInstance iid (\i → i
+            { liSignificant =
+                [ if lsiInstanceId e ≡ Just itemId then e { lsiTaken = True }
+                                                   else e
+                | e ← liSignificant i ]
+            }) lis
+
+-- | The ONE compound-clearance transition (#917 requirement 7). Applies
+--   the predicate to one instance and, when it holds and the location
+--   is already VISIBLE, promotes it to 'LifecycleCleared' and spends
+--   its one clearance notice.
+--
+--   'Just' means — and means only — that the caller now owes exactly
+--   one player-facing clearance event. 'Nothing' means nothing changed:
+--   the instance is unknown, authors no clearance condition at all
+--   (which must never clear through an empty conjunction), has a
+--   condition still outstanding, has already spent its notice, or is
+--   still undiscovered — in which case the completion stays PRIVATE and
+--   this is retried on the discovery edge, which is what makes a
+--   location completed before it was ever seen announce itself once,
+--   when it is seen, instead of leaking.
+--
+--   The promotion goes through 'promoteLifecycle', so an instance
+--   already at or beyond 'LifecycleCleared' keeps its state while still
+--   spending the notice — the single call site for both the clearance
+--   tick and the discovery edge, where discovery has already landed the
+--   instance on 'LifecycleCleared' itself.
+resolveLocationClearance
+    ∷ LocationInstanceId → LocationInstances → Maybe LocationInstances
+resolveLocationClearance iid lis = do
+    inst ← lookupLocationInstance iid lis
+    guard (locationAuthorsClearance inst)
+    guard (not (liClearEventEmitted inst))
+    guard (locationClearanceSatisfied inst)
+    guard (isDiscoveredLifecycle (liLifecycle inst))
+    let lifecycle = fromMaybe (liLifecycle inst)
+            (promoteLifecycle (liLifecycle inst) LifecycleCleared)
+    pure $ adjustLocationInstance iid (\i → i
+        { liLifecycle         = lifecycle
+        , liClearEventEmitted = True
+        }) lis
 
 -- * v1 chunk-set migration -------------------------------------------
 
@@ -785,6 +1022,14 @@ resolveLegacyLocationInstances registry overlay lis =
         , liContentsSpawned =
             HS.member (liChunk inst) (llcContentsSpawned flags)
         , liEncounter = Nothing
+        -- Same historical boundary, same reason (#917): the rebuild
+        -- necessarily consults TODAY's definitions to recover the table,
+        -- so a significant item authored since would otherwise appear
+        -- as an obligation this world never spawned — an eternally
+        -- unclearable location invented at load. A pre-#911 payload owes
+        -- none, and its notice is unspent because it never cleared.
+        , liSignificant = []
+        , liClearEventEmitted = False
         }
 
 -- * Validation -------------------------------------------------------
@@ -897,3 +1142,47 @@ locationInstanceBoundsErrors lis =
         ⧺
         [ ("y", "minY " <> tshow (abMinY b), "maxY " <> tshow (abMaxY b))
         | abMinY b > abMaxY b ]
+
+-- | Component-local invariants for a decoded table's SIGNIFICANT
+--   obligations (#917), mirroring the two checks above: an
+--   obligation-shaped payload that no engine path can produce is
+--   rejected at decode rather than published as gameplay authority.
+--
+--   Two rules, both about the obligation SET rather than about whether
+--   any particular item still exists (which is
+--   "World.Save.Integrity" 's reference question, tolerant of absence
+--   by design):
+--
+--   * slots are unique within one instance — they are the address a
+--     resuming content spawn registers against, so two slots sharing a
+--     number would let one spawn satisfy both, or repoint the wrong
+--     one;
+--   * one physical item identity is owned by at most ONE obligation
+--     across the whole page. A single 'Item.Types.iiInstanceId' bound
+--     to two obligations would let one pickup latch both, clearing a
+--     location whose own item was never taken.
+--
+--   Entries are addressed by their instance's id and slot, and each
+--   violation is reported once, in a deterministic order.
+locationSignificantItemErrors ∷ LocationInstances → [Text]
+locationSignificantItemErrors lis =
+    [ "location instance #" <> tshow (unLocationInstanceId (liId inst))
+        <> " declares significant slot " <> tshow slot <> " more than once"
+    | inst ← instancesToList lis
+    , (slot, n) ← sortOn fst (HM.toList (HM.fromListWith (+)
+        [ (lsiSlot e, 1 ∷ Int) | e ← liSignificant inst ]))
+    , n > 1
+    ]
+    ⧺
+    [ "significant item instance " <> tshow itemId
+        <> " is owned by more than one location obligation: "
+        <> T.intercalate ", " owners
+    | (itemId, owners) ← sortOn fst (HM.toList (HM.fromListWith (flip (⧺))
+        [ ( iid
+          , [ "#" <> tshow (unLocationInstanceId (liId inst))
+                  <> " slot " <> tshow (lsiSlot e) ] )
+        | inst ← instancesToList lis
+        , e ← liSignificant inst
+        , Just iid ← [lsiInstanceId e] ]))
+    , length owners > 1
+    ]

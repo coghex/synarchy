@@ -1011,7 +1011,7 @@ spec = do
         it "declares a stable id and current version of 1" $ do
             ccId coreSessionCodec `shouldBe` coreSessionComponentId
             ccVersion coreSessionCodec `shouldBe` 1
-            ccVersion worldPagesCodec `shouldBe` 8
+            ccVersion worldPagesCodec `shouldBe` 9
 
         it "rejects a NEWER unsupported version, naming the phase" $
             case ccDecode worldPagesCodec 999 (ccEncode worldPagesCodec richSnapshot) of
@@ -1171,7 +1171,9 @@ spec = do
                             , liEtymology       = Nothing
                             , liLifecycle       = LifecycleUnknown
                             , liContentsSpawned = False
-                            , liEncounter       = Nothing }
+                            , liEncounter       = Nothing
+                            , liSignificant     = []
+                            , liClearEventEmitted = False }
                     , lisPendingLegacy = Nothing } }
             -- One box per carrier, all inverted on x, so a failure names
             -- which version leaked rather than which coordinate did.
@@ -1373,7 +1375,7 @@ spec = do
 
         -- unit-sim gained a third version with #1217's per-request hazard
         -- policy; it is the reader that exercises the rendering between
-        -- the two- and seven-version cases either side of it.
+        -- the two- and nine-version cases either side of it.
         it "reports an unsupported version identically for a THREE-version \
            \reader" $
             decodeErrorOf unitSimCodec 0 BS.empty
@@ -1381,13 +1383,13 @@ spec = do
                     DecodePhase
                     "unsupported schema version (reader supports v1, v2, v3)")
 
-        it "reports an unsupported version identically for an EIGHT-version \
+        it "reports an unsupported version identically for a NINE-version \
            \reader" $
-            decodeErrorOf worldPagesCodec 9 BS.empty
-                `shouldBe` Just (ComponentError worldPagesComponentId 9
+            decodeErrorOf worldPagesCodec 10 BS.empty
+                `shouldBe` Just (ComponentError worldPagesComponentId 10
                     DecodePhase
                     "unsupported schema version \
-                    \(reader supports v1, v2, v3, v4, v5, v6, v7, v8)")
+                    \(reader supports v1, v2, v3, v4, v5, v6, v7, v8, v9)")
 
         it "reports a malformed payload identically -- same component, \
            \supplied version, DecodePhase, and cereal-derived message -- at \

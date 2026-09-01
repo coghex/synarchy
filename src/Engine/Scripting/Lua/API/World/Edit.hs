@@ -11,6 +11,7 @@ module Engine.Scripting.Lua.API.World.Edit
     , worldMarkLocationContentsSpawnedFn
     , worldMarkLocationContentsSpawnedByIdFn
     , worldRegisterLocationEncounterOccupantsFn
+    , worldRegisterLocationSignificantSpawnFn
     , worldSetLocationEncounterOccupantStateFn
     , worldSetLocationEncounterEpisodeStateFn
     , worldSetLocationLifecycleFn
@@ -157,6 +158,45 @@ worldRegisterLocationEncounterOccupantsFn wsc = do
         value ← Lua.tonumber (-1)
         Lua.pop 1
         pure ((\(Lua.Number v) → realToFrac v) ⊚ value)
+
+-- | world.registerLocationSignificantSpawn(instanceId, slot,
+--   itemInstanceId [, pageId]) → bool (#917). Binds one guaranteed
+--   significant item, just spawned by @scripts\/locations.lua@, to the
+--   obligation slot the placed instance was created owing.
+--
+--   @itemInstanceId@ is the item's PHYSICAL identity — @item.spawnGround@'s
+--   SECOND return value, not its ground id — because the taken latch has
+--   to follow the item through pickup, transfer and drop, and a ground
+--   id does not survive any of them.
+--
+--   Returns whether the request was ACCEPTED for queueing (a positive
+--   slot, a positive item id, and a resolvable page). The world thread
+--   then applies it only if the slot exists and is still unbound, so a
+--   retried content spawn re-registering a slot it already filled
+--   changes nothing. Poll @world.getLocationInstance@'s @significant@
+--   array for the settled binding.
+worldRegisterLocationSignificantSpawnFn
+    ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldRegisterLocationSignificantSpawnFn wsc = do
+    idArg   ← Lua.tointeger 1
+    slotArg ← Lua.tointeger 2
+    itemArg ← Lua.tointeger 3
+    pageArg ← Lua.tostring 4
+    queued ← case (idArg, slotArg, itemArg) of
+        (Just rawId, Just slot, Just itemId)
+            | rawId ≥ 0 ∧ slot > 0 ∧ itemId > 0 → Lua.liftIO $ do
+                mPid ← targetPage wsc pageArg
+                case mPid of
+                    Nothing → pure False
+                    Just pid → do
+                        Q.writeQueue (wsWorldQueue wsc) $
+                            WorldRegisterLocationSignificantSpawn pid
+                                (LocationInstanceId (fromIntegral rawId))
+                                (fromIntegral slot) (fromIntegral itemId)
+                        pure True
+        _ → pure False
+    Lua.pushboolean queued
+    return 1
 
 -- | world.setLocationEncounterOccupantState(instanceId, uid, engaged,
 --   returning [, pageId]) → bool.

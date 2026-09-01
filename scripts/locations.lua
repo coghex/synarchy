@@ -404,13 +404,17 @@ end
 -- Content spawning (#90)
 -----------------------------------------------------------
 -- Each LocationDef.contents entry (see data/locations/*.yaml):
---   { kind, id, count, count_range, clearance, rolls,
+--   { kind, id, count, count_range, clearance, rolls, significant,
 --     position = {x,y} | nil, faction | nil }
 -- `position` is a fixed offset from the anchor; when absent the entry
 -- scatters randomly within the location's footprint instead (a fresh
 -- roll per instance). `count` is how many to place ("loot_table" uses
 -- `rolls` instead — how many times to roll the table). `faction` is
--- unit-only and defaults to "hostile".
+-- unit-only and defaults to "hostile". `significant` (#917) is
+-- item-only — the YAML boundary refuses it on any other kind — and
+-- marks a GUARANTEED item the location's clearance predicate waits on;
+-- such an entry is spawned by spawnSignificantContent against the
+-- instance's own persisted obligations, never by dispatchContent.
 --
 -- Called once per chunk load by scripts/location_stamper.lua,
 -- regardless of whether the geometry was (re)built this call — gated
@@ -544,6 +548,83 @@ local function spawnItemContent(def, entry, gx, gy, worldId)
     end
 end
 
+-- Spawn the guaranteed SIGNIFICANT items one placed instance still owes
+-- (#917), resuming rather than repeating.
+--
+-- The obligations themselves were created with the instance, at
+-- PLACEMENT — this only fills them in. Each is addressed by its stable
+-- slot, and a slot that already names an item is skipped, so an
+-- interrupted spawn that got half way through resumes at the next empty
+-- slot instead of spawning a second copy of what it already made. That
+-- is the same resume discipline spawnEncounterUnitContent uses for a
+-- ranged roster, and for the same reason: contents_spawned is only
+-- marked once EVERY obligation is filled.
+--
+-- Returns false when any obligation could not be filled — an unknown
+-- item id, or a registration the engine refused. The caller then leaves
+-- contents_spawned unmarked and returns, so the next chunk load retries.
+-- Warning and skipping instead would burn the location's exactly-once
+-- content lifecycle on a location that could then never be cleared,
+-- which is precisely what a guaranteed item must not allow.
+local function spawnSignificantContent(def, gx, gy, worldId, placed)
+    -- No placed instance means no owner: a hand-stamped debug ruin (the
+    -- console, the overlay, a probe) has no LocationInstanceId, so
+    -- there is nothing to bind provenance to and nothing that could
+    -- ever be cleared. Its incidental contents still spawn; it simply
+    -- owes nothing. Same rule the ranged encounter follows above.
+    if not placed then return true end
+    local owed = placed.significant or {}
+    if #owed == 0 then return true end
+
+    -- The OBLIGATION is the authority, not today's YAML. Each one
+    -- already carries the item def name it was created with (#911's
+    -- read-the-stored-values rule), so a definition edited since
+    -- placement can neither change what a materialized world owes nor
+    -- block its contents from spawning at all.
+    --
+    -- The authored entries are consulted for ONE thing: a fixed
+    -- `position`. They are rebuilt in the same order the engine derived
+    -- the slots from (Location.Instance's significantItemsFromDef —
+    -- authored contents order, then each entry's own count), so slot N
+    -- here is slot N there. A slot with no matching authored entry
+    -- simply scatters within the def's bounds, exactly as an entry with
+    -- no `position` does.
+    local authored = {}
+    for _, entry in ipairs(def.contents or {}) do
+        if entry.significant and entry.kind == "item" then
+            for _ = 1, (entry.count or 1) do
+                authored[#authored + 1] = entry
+            end
+        end
+    end
+
+    for _, obligation in ipairs(owed) do
+        if not obligation.item_instance_id then
+            local slot = obligation.slot
+            local ox, oy = contentOffset(def, authored[slot] or {})
+            local gid, itemInstanceId =
+                item.spawnGround(obligation.item, gx + ox, gy + oy,
+                                 nil, worldId)
+            if not gid or not itemInstanceId then
+                engine.logWarn("locations: significant item content '" ..
+                    tostring(obligation.item) .. "' failed to spawn")
+                return false
+            end
+            -- Registered IMMEDIATELY, one item at a time, so an
+            -- interruption leaves a bound prefix a retry can resume
+            -- past rather than an orphaned item with no provenance.
+            if not world.registerLocationSignificantSpawn(
+                    placed.instance_id, slot, itemInstanceId, worldId) then
+                engine.logWarn("locations: could not register significant " ..
+                    "item '" .. tostring(obligation.item) .. "' for slot " ..
+                    tostring(slot))
+                return false
+            end
+        end
+    end
+    return true
+end
+
 -- `rollCtx` is the stable per-entry roll context built by
 -- locations.spawnContents (#948): { seed, instance, index }. Each roll
 -- adds its own 1-based roll number, so the entry's rolls are
@@ -578,6 +659,15 @@ local function spawnBuildingContent(def, entry, gx, gy, worldId)
                 tostring(entry.id) .. "' failed to spawn (unknown id or unplaceable)")
         end
     end
+end
+
+-- An entry the significant pass owns (#917). Both the encounter roster
+-- and the significant items are spawned by their own passes, against
+-- persisted per-instance obligations, so the ordinary content loop must
+-- skip them or they would spawn twice.
+local function isOwnedByDedicatedPass(entry)
+    return (entry.kind == "unit" and entry.count_range ~= nil)
+        or (entry.significant and entry.kind == "item")
 end
 
 local function dispatchContent(def, entry, gx, gy, worldId, rollCtx)
@@ -668,8 +758,17 @@ function locations.spawnContents(id, gx, gy, worldId)
             end
         end
         if not encounterReady then return end
+        -- #917: the guaranteed significant items come next, before any
+        -- incidental content. Like the roster above they belong to a
+        -- persisted obligation and must all be filled before the
+        -- one-time marker below is written — an unfilled one returns
+        -- here, leaving the whole spawn to be retried, rather than
+        -- burning the marker on a location that could then never clear.
+        if not spawnSignificantContent(def, gx, gy, worldId, placed) then
+            return
+        end
         for index, entry in ipairs(def.contents or {}) do
-            if not (entry.kind == "unit" and entry.count_range) then
+            if not isOwnedByDedicatedPass(entry) then
                 rollCtx.index = index
                 dispatchContent(def, entry, gx, gy, worldId, rollCtx)
             end

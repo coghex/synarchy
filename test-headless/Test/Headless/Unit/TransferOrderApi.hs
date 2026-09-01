@@ -774,7 +774,12 @@ spec = describe "Unit transfer Lua API (orders, #1247)" $ do
             let entities = PageEntities
                     { peUnits     = HS.singleton acolyteUid
                     , peBuildings = HS.empty
-                    , peItems     = HS.singleton 101 }
+                    , peItems     = HS.singleton 101
+                    -- Not on the ground: this fixture's ration is in
+                    -- the acolyte's inventory. Only #917's significant
+                    -- provenance reads this set, and no order carries
+                    -- one, so it is empty here.
+                    , peGroundItems = HS.empty }
             before ← pageOrders env pageA
             -- Four: the acting unit, both endpoints, and the one entry.
             length (transferOrderRefs pageA before) `shouldBe` 4

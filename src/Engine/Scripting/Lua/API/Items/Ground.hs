@@ -44,6 +44,7 @@ import World.Cursor.Types (CursorState(..))
 import World.Types (WorldManager(..), WorldState(..), WorldPageId(..)
                    , WorldGenParams(..), wmWorlds)
 import World.Weather.Ambient (ambientTempAt)
+import Location.Instance (latchLocationSignificantTaken)
 
 -- | Resolve which world page a ground-item op targets: a named page
 --   (any in wmWorlds, even hidden / non-active) when a page-id is
@@ -61,6 +62,12 @@ resolveItemPage env Nothing = activeWorldStateFrom (wsWorldManagerRef (toWorldSi
 --   Spawns an item into the world at float tile coords. Optional
 --   props table: fill, quality, condition and temp (°C — spawns the
 --   item hot/cold; omitted = at ambient, #344).
+--
+--   Returns TWO values on success (#917): the page-local ground id, and
+--   the spawned item's own 'Item.Types.iiInstanceId' — the physical
+--   identity that survives pickup, transfer, storage and drop, which is
+--   what durable provenance must be keyed on. A failure still answers a
+--   single @nil@.
 --   Resting height derives from terrain at render time, so items on
 --   slopes sit on the incline and items over dug tiles drop with
 --   the terrain. An explicit pageId (slot 5) pins the spawn to that
@@ -163,7 +170,16 @@ itemSpawnGroundFn env = do
                                     spawnGroundItem inst (realToFrac x)
                                                          (realToFrac y)
                             Lua.pushinteger (fromIntegral gid)
-                            return 1
+                            -- #917: the PHYSICAL identity, as a second
+                            -- return value. A caller that binds one
+                            -- result is unaffected; a caller that must
+                            -- record durable provenance for the item it
+                            -- just created needs the id that survives
+                            -- pickup, transfer and drop, which the
+                            -- page-local ground id does not.
+                            Lua.pushinteger
+                                (fromIntegral (iiInstanceId inst))
+                            return 2
                 _ → Lua.pushnil >> return 1
         _ → Lua.pushnil >> return 1
 
@@ -511,4 +527,43 @@ pickupGroundOnPage env ws uid gid = do
                   then cs { selectedGroundItem = Nothing }
                   else cs
                 , () )
+            -- #917: this is THE authoritative ground→inventory
+            -- boundary, and it is where a location's guaranteed
+            -- significant item is latched as taken — only on a
+            -- successful insert, never on the rollback above, and
+            -- keyed on the item's physical 'iiInstanceId' rather than
+            -- @gid@, which the rollback would already have changed.
+            --
+            -- Deliberately faction-blind and command-blind: requirement
+            -- 3 says the first successful pickup by ANY unit latches
+            -- it, so a nomad looting the ruin counts exactly as an
+            -- acolyte does. Nothing here can ever clear the latch,
+            -- because nothing here writes @False@.
+            --
+            -- Scoped to @ws@, the page the item was taken from, like
+            -- every other write in this function: provenance is
+            -- @(page, instance)@, so consulting another page's table
+            -- could latch an obligation this pickup has nothing to do
+            -- with.
+            --
+            -- Written DIRECTLY rather than queued to the world thread,
+            -- unlike @world.markLocationContentsSpawned@ and its
+            -- siblings, and deliberately: queueing would open a window
+            -- in which the item has already left the ground but its
+            -- obligation is not yet latched. Every write in this
+            -- function is already a direct 'atomicModifyIORef'' on this
+            -- thread, and "World.Thread.Discovery" mutates the very
+            -- same ref the very same way, so the latch lands in the
+            -- same synchronous step as the removal it records.
+            when inserted $
+                atomicModifyIORef' (wsGenParamsRef ws) $ \mP →
+                    ( case mP of
+                        Just p → case latchLocationSignificantTaken
+                                        (iiInstanceId (giInst gi))
+                                        (wgpLocationInstances p) of
+                            Just instances' →
+                                Just p { wgpLocationInstances = instances' }
+                            Nothing → mP
+                        Nothing → mP
+                    , () )
             pure inserted

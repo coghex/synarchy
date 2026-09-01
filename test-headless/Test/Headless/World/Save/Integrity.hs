@@ -49,13 +49,13 @@ import Location.Bounds (AbsBounds(..))
 import Location.Instance
     ( LocationEncounter(..), LocationEncounterOccupant(..)
     , LocationInstance(..), LocationInstances(..), LocationInstanceId(..)
-    , LocationLifecycle(..) )
+    , LocationLifecycle(..), LocationSignificantItem(..) )
 import World.Chunk.Types (ChunkCoord(..))
 import World.Page.Types (WorldPageId(..))
 import World.Render.Zoom.Types (ZoomMapMode(..))
 import Engine.Graphics.Camera (CameraFacing(..))
 import Structure.Palette (emptyTexPalette)
-import Item.Ground (emptyGroundItems)
+import Item.Ground (emptyGroundItems, spawnGroundItem)
 import World.Spoil.Types (emptySpoilPiles)
 import World.Flora.Harvest (emptyFloraHarvests)
 import World.Flora.CropPlot (emptyCropPlots)
@@ -254,13 +254,57 @@ pageWithEncounter pid uid = (minimalPage pid)
                     , leAggressionAnnounced = True
                     , leDisengageAnnounced = False
                     , leCleared = False
-                    , leClearEventEmitted = False
                     }
+                , liSignificant = []
+                , liClearEventEmitted = False
                 }
             , lisPendingLegacy = Nothing
             }
         }
     }
+
+-- | #917 fixtures: a page whose single placed location owes @entry@,
+--   and the two ways its item can be present.
+pageOwing ∷ WorldPageId → LocationSignificantItem → PageSnapshot
+pageOwing pid entry = (minimalPage pid)
+    { pgsGenParams = defaultWorldGenParams
+        { wgpLocationInstances = LocationInstances
+            { lisNextId = 2
+            , lisById = HM.singleton (LocationInstanceId 1) LocationInstance
+                { liId = LocationInstanceId 1
+                , liDefId = "ruin_small"
+                , liChunk = ChunkCoord 0 0
+                , liAnchor = (8, 8)
+                , liBounds = AbsBounds 6 6 10 10
+                , liDisplayName = "Small Ruin"
+                , liGloss = Nothing
+                , liEtymology = Nothing
+                , liLifecycle = LifecycleDiscovered
+                , liContentsSpawned = True
+                , liEncounter = Nothing
+                , liSignificant = [entry]
+                , liClearEventEmitted = False
+                }
+            , lisPendingLegacy = Nothing
+            }
+        }
+    }
+
+owedItem ∷ Int → Word64 → Bool → LocationSignificantItem
+owedItem slot itemId taken =
+    LocationSignificantItem slot "processing_unit" (Just itemId) taken
+
+groundItemInstance ∷ Word64 → ItemInstance
+groundItemInstance iid = ItemInstance
+    { iiDefName = "processing_unit", iiCurrentFill = 0, iiQuality = 100
+    , iiCondition = 100, iiWeight = 0.4, iiSharpness = 100, iiContents = []
+    , iiInstanceId = iid, iiTemp = Nothing, iiBulk = Just 0.4
+    , iiStorage = Nothing }
+
+withGroundItem ∷ Word64 → PageSnapshot → PageSnapshot
+withGroundItem iid page = page
+    { pgsGroundItems = fst (spawnGroundItem (groundItemInstance iid) 8 8
+                                (pgsGroundItems page)) }
 
 buildSnap ∷ WorldPageId → [PageSnapshot] → SessionSnapshot
 buildSnap active pages = buildSessionSnapshot (minimalGlobals active) pages
@@ -515,7 +559,7 @@ spec = do
             sessionIntegrityWarnings snap `shouldBe` []
 
         it "hard-fails a roster UID that resolves only on another page, \
-           \naming the world-pages v8 occupant path" $ do
+           \naming the world-pages v9 occupant path" $ do
             let uid = UnitId 5
                 p1 = pageWithEncounter page1 uid
                 p2 = (minimalPage page2)
@@ -526,7 +570,7 @@ spec = do
                 [e] → do
                     ieCode e `shouldBe` "wrong-page"
                     ieComponent e `shouldBe` worldPagesComponentId
-                    ieVersion e `shouldBe` 8
+                    ieVersion e `shouldBe` 9
                     ieRefKind e `shouldBe` RefUnit
                     iePath e `shouldSatisfy` T.isInfixOf
                         "locations[1].encounter.occupants[0].unit"
@@ -546,6 +590,117 @@ spec = do
                         "roster membership is retained"
                 other → expectationFailure
                     ("expected one encounter dangling warning, got " <> show other)
+
+    -- #917: a guaranteed significant item puts ONE durable reference
+    -- into the graph — the physical item the obligation names — and it
+    -- splits three ways rather than two, because the rule itself
+    -- changes at the taken latch. While UNTAKEN the item must be on the
+    -- owning page's GROUND: anywhere else is a contradiction (it cannot
+    -- be held without having been picked up) and hard-fails, while
+    -- absent-everywhere is a tolerated diagnostic that leaves the
+    -- obligation untaken. Once TAKEN there is no rule at all, because
+    -- post-pickup loss and destruction are explicitly allowed.
+    describe "integrity graph — guaranteed significant contents (#917)" $ do
+        it "accepts an untaken obligation whose item is lying on the \
+           \owning page's own ground" $ do
+            let snap = buildSnap page1
+                    [ withGroundItem 7001
+                        (pageOwing page1 (owedItem 1 7001 False)) ]
+            sessionIntegrityErrors snap `shouldBe` []
+            sessionIntegrityWarnings snap `shouldBe` []
+
+        it "hard-fails an untaken obligation whose item resolves only on \
+           \ANOTHER page, naming the world-pages v9 significant path" $ do
+            let p1 = pageOwing page1 (owedItem 1 7002 False)
+                p2 = withGroundItem 7002 (minimalPage page2)
+                snap = buildSnap page1 [p1, p2]
+            case sessionIntegrityErrors snap of
+                [e] → do
+                    ieCode e `shouldBe` "wrong-scope-reference"
+                    ieComponent e `shouldBe` worldPagesComponentId
+                    ieVersion e `shouldBe` 9
+                    ieRefKind e `shouldBe` RefItemInstance
+                    ieRefValue e `shouldBe` "7002"
+                    iePath e `shouldSatisfy` T.isInfixOf
+                        "locations[1].significant[1].item"
+                other → expectationFailure
+                    ("expected one wrong-page significant finding, got "
+                        <> show other)
+
+        it "hard-fails an untaken obligation whose item is already in a \
+           \unit's inventory ON the owning page — it cannot be held \
+           \without having been picked up" $ do
+            let held = minimalUnit { uisInventory = [groundItemInstance 7003] }
+                p1 = (pageOwing page1 (owedItem 1 7003 False))
+                    { pgsUnits = UnitSnapshot
+                        (HM.singleton (UnitId 5) held) 100 }
+                snap = buildSnap page1 [p1]
+            case sessionIntegrityErrors snap of
+                [e] → do
+                    ieCode e `shouldBe` "wrong-scope-reference"
+                    ieActual e `shouldSatisfy` T.isInfixOf
+                        "held in an inventory or storage"
+                other → expectationFailure
+                    ("expected one held-while-untaken finding, got "
+                        <> show other)
+
+        it "tolerates an untaken obligation whose item is absent from the \
+           \whole session, reporting it while leaving the obligation \
+           \untaken" $ do
+            let snap = buildSnap page1 [pageOwing page1 (owedItem 1 7004 False)]
+            sessionIntegrityErrors snap `shouldBe` []
+            case sessionIntegrityWarnings snap of
+                [d] → do
+                    ieCode d `shouldBe` "dangling-reference"
+                    ieComponent d `shouldBe` worldPagesComponentId
+                    ieRefValue d `shouldBe` "7004"
+                    ieMessage d `shouldSatisfy` T.isInfixOf
+                        "the obligation stays untaken"
+                other → expectationFailure
+                    ("expected one dangling significant warning, got "
+                        <> show other)
+
+        it "imposes NO rule once the obligation is taken: the item may sit \
+           \in an inventory, on another page, or nowhere at all" $ do
+            let held = minimalUnit { uisInventory = [groundItemInstance 7005] }
+                p1 = (pageOwing page1 (owedItem 1 7005 True))
+                    { pgsUnits = UnitSnapshot
+                        (HM.singleton (UnitId 5) held) 100 }
+                snap = buildSnap page1 [p1]
+            sessionIntegrityErrors snap `shouldBe` []
+            sessionIntegrityWarnings snap `shouldBe` []
+            -- …and destroyed entirely is equally fine.
+            let gone = buildSnap page1
+                    [pageOwing page1 (owedItem 1 7006 True)]
+            sessionIntegrityErrors gone `shouldBe` []
+            sessionIntegrityWarnings gone `shouldBe` []
+
+        it "ignores an obligation that has not been spawned yet — an \
+           \unbound slot references nothing and reports nothing" $ do
+            let snap = buildSnap page1
+                    [pageOwing page1 (LocationSignificantItem 1
+                        "processing_unit" Nothing False)]
+            sessionIntegrityErrors snap `shouldBe` []
+            sessionIntegrityWarnings snap `shouldBe` []
+
+        it "hard-fails one physical item owed by TWO locations, across \
+           \pages — item ids are one global allocator, so that can \
+           \never be two real items" $ do
+            let p1 = withGroundItem 7007
+                        (pageOwing page1 (owedItem 1 7007 True))
+                p2 = pageOwing page2 (owedItem 1 7007 True)
+                snap = buildSnap page1 [p1, p2]
+            case L.filter ((≡ "duplicate-identity") ∘ ieCode)
+                    (sessionIntegrityErrors snap) of
+                [e] → do
+                    ieComponent e `shouldBe` worldPagesComponentId
+                    ieRefKind e `shouldBe` RefItemInstance
+                    ieRefValue e `shouldBe` "7007"
+                    ieMessage e `shouldSatisfy` T.isInfixOf
+                        "owed by more than one location"
+                other → expectationFailure
+                    ("expected one duplicate-ownership finding, got "
+                        <> show other)
 
     -- #1246: a transfer order puts FOUR durable references into the
     -- graph -- the acting unit, both endpoints, and every requested item

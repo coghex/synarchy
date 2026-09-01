@@ -71,7 +71,7 @@ import World.Chunk.Types (ChunkCoord(..))
 import Location.Instance
     ( LocationEncounter(..), LocationEncounterOccupant(..)
     , LocationInstance(..), LocationInstances(..), LocationInstanceId(..)
-    , LocationLifecycle(..), instancesToList )
+    , LocationLifecycle(..), LocationSignificantItem(..), instancesToList )
 import World.Save.Snapshot
     (SessionSnapshot(..), PageSnapshot(..), LiveCameraSnapshot(..))
 import World.Save.Component.Page
@@ -86,17 +86,21 @@ import World.Save.Component.Page
     , PageCoreDTOv5(..), WorldPagesDTOv5(..)
     , PageCoreDTOv6(..), WorldPagesDTOv6(..)
     , PageCoreDTOv7(..), WorldPagesDTOv7(..)
+    , PageCoreDTOv8(..), WorldPagesDTOv8(..)
     , WorldGenParamsDTOv5(..), toWorldGenParamsDTOv5
     , toWorldGenParamsDTOv6
+    , WorldGenParamsDTOv7(..), toWorldGenParamsDTOv7
     , WorldPages(..), WorldIdentityDTO(..), WorldIdentityDTOv1(..)
     , WorldIdentityDTOv2(..)
     , LanguageProvenanceDTO(..), toEtymologySourceDTO, basePageSnapshots
     , migrateWorldPagesV1, migrateWorldPagesV2, migrateWorldPagesV3
     , migrateWorldPagesV4, migrateWorldPagesV5, migrateWorldPagesV6
-    , migrateWorldPagesV7 )
+    , migrateWorldPagesV7, migrateWorldPagesV8 )
 import World.Save.Component.WorldGen
     ( LocationInstanceDTOv3(..), LocationInstancesDTOv3(..)
-    , toLocationInstancesDTOv3, toRiverNamesDTO )
+    , LocationInstanceDTOv5(..), LocationInstancesDTOv5(..)
+    , LocationEncounterDTOv1(..)
+    , toLocationInstancesDTOv3, toLocationInstancesDTOv5, toRiverNamesDTO )
 import Language.Etymology.Source (EtymologySource(..))
 import Language.Etymology
     (EtymologyResult(..), Etymology(..), decomposeName, etyTokenText)
@@ -881,6 +885,66 @@ spec = do
                     map liEncounter insts `shouldBe` [Nothing]
                     map (lisNextId ∘ wgpLocationInstances ∘ pgsGenParams)
                         (HM.elems (wpBase pages)) `shouldBe` [7]
+
+        it "a frozen pre-#917 v8 page preserves every stored location \
+           \field, lifts each encounter's clearance notice onto the \
+           \instance, and gains NO significant obligations" $ do
+            let dto = WorldPagesDTOv8 [legacyPageCoreV8]
+            case S.decode (S.encode dto) ∷ Either String WorldPagesDTOv8 of
+                Left err → expectationFailure err
+                Right dto' → do
+                    let pages = migrateWorldPagesV8 dto'
+                        insts = L.sortOn liId (instancesOf pages "legacy_page")
+                        expected = liEncounter
+                            =≪ listToMaybe (HM.elems
+                                    (lisById defeatedInstances))
+                    map liId insts `shouldBe`
+                        [LocationInstanceId 4, LocationInstanceId 5]
+                    -- Every stored location field rides across…
+                    map liDefId insts `shouldBe` ["ruin_small", "ruin_small"]
+                    map liDisplayName insts
+                        `shouldBe` ["Vashenkoro", "Vashenkoro"]
+                    map liGloss insts
+                        `shouldBe` [Just "Ashen Keep", Just "Ashen Keep"]
+                    map liEtymology insts
+                        `shouldBe` [Just keepSource, Just keepSource]
+                    map liContentsSpawned insts `shouldBe` [True, True]
+                    map liLifecycle insts
+                        `shouldBe` [LifecycleCleared, LifecycleUnknown]
+                    -- …and so does the encounter, minus exactly the one
+                    -- field #917 moved: every other value is identical
+                    -- on both instances.
+                    map liEncounter insts `shouldBe` [expected, expected]
+                    -- The notice lands on the INSTANCE, per instance —
+                    -- so the announced one does not announce again, and
+                    -- the deferred one has not lost its pending notice.
+                    map liClearEventEmitted insts `shouldBe` [True, False]
+                    -- And nothing invents an obligation from today's
+                    -- YAML: a materialized world owes no item it never
+                    -- spawned, which is what would otherwise make an
+                    -- already-cleared location permanently unclearable.
+                    map liSignificant insts `shouldBe` [[], []]
+                    map (lisNextId ∘ wgpLocationInstances ∘ pgsGenParams)
+                        (HM.elems (wpBase pages)) `shouldBe` [7]
+
+        it "the CURRENT v9 page core round-trips a location's significant \
+           \obligations -- taken and untaken, each bound to its own \
+           \physical item identity -- plus the instance-level clearance \
+           \notice, so the v8 absences above are a real decode outcome \
+           \and not fields nothing ever writes" $ do
+            let dto = WorldPagesDTO [currentPageCoreSignificant]
+            case S.decode (S.encode dto) ∷ Either String WorldPagesDTO of
+                Left err → expectationFailure err
+                Right dto' → do
+                    let insts = instancesOf (basePageSnapshots dto')
+                                    "legacy_page"
+                    map liSignificant insts `shouldBe`
+                        [ [ LocationSignificantItem 1 "processing_unit"
+                                (Just 6101) True
+                          , LocationSignificantItem 2 "processing_unit"
+                                (Just 6102) False
+                          ] ]
+                    map liClearEventEmitted insts `shouldBe` [True]
 
         it "a frozen v5 page core comes back with NO etymology source on \
            \its page identity, its location, or its river, while every \
@@ -1706,6 +1770,8 @@ legacyNamedInstances = LocationInstances
         , liLifecycle       = LifecycleDiscovered
         , liContentsSpawned = True
         , liEncounter       = Nothing
+        , liSignificant     = []
+        , liClearEventEmitted = False
         }
     , lisPendingLegacy = Nothing
     }
@@ -1790,6 +1856,8 @@ richInstances = LocationInstances
         , liLifecycle       = LifecycleCleared
         , liContentsSpawned = True
         , liEncounter       = Nothing
+        , liSignificant     = []
+        , liClearEventEmitted = False
         }
     , lisPendingLegacy = Nothing
     }
@@ -1813,10 +1881,89 @@ encounterInstances = richInstances
             , leAggressionAnnounced = True
             , leDisengageAnnounced = False
             , leCleared = False
-            , leClearEventEmitted = False
             }
         }) (lisById richInstances)
     }
+
+-- | The pre-#917 shape a v8 payload really holds: #916's encounter,
+--   with its clearance-notice flag still nested inside it. Two
+--   instances, one announced and one not, so the migration cannot pass
+--   by mapping both to the same value.
+--
+--   Built through 'toLocationInstancesDTOv5', which is the frozen
+--   encoder — that is the only way to produce genuine v8 bytes now that
+--   the live record has no such field.
+legacyV8Instances ∷ LocationInstancesDTOv5
+legacyV8Instances = LocationInstancesDTOv5
+    { lisd5NextId = 7
+    , lisd5ById   = HM.fromList
+        [ (LocationInstanceId 4, v8Encoded True  LifecycleCleared)
+        , (LocationInstanceId 5, v8Encoded False LifecycleUnknown)
+        ]
+    }
+  where
+    -- @announced@ is the v8 @leClearEventEmitted@ this fixture is about.
+    v8Encoded announced lifecycle =
+        let base = case HM.elems (lisd5ById
+                        (toLocationInstancesDTOv5 defeatedInstances)) of
+                       (one:_) → one
+                       [] → error "v8 fixture has no instance"
+        in base { lid5Id        = if announced then LocationInstanceId 4
+                                               else LocationInstanceId 5
+                , lid5Lifecycle = lifecycle
+                , lid5Encounter =
+                    (\e → e { led1ClearEventEmitted = announced })
+                        <$> lid5Encounter base
+                }
+
+-- | 'richInstances' with a DEFEATED death-only encounter — the state a
+--   deferred clearance notice can actually be owed from.
+defeatedInstances ∷ LocationInstances
+defeatedInstances = encounterInstances
+    { lisById = HM.map (\inst → inst
+        { liEncounter = (\e → e { leCleared = True
+                                , leEpisodeActive = False }) <$> liEncounter inst
+        }) (lisById encounterInstances)
+    }
+
+-- | The immediate pre-#917 current shape: identical page data over the
+--   frozen location DTO that has no significant obligations and keeps
+--   the clearance notice inside its encounter.
+legacyPageCoreV8 ∷ PageCoreDTOv8
+legacyPageCoreV8 = PageCoreDTOv8
+    { pc8PageId = WorldPageId "legacy_page"
+    , pc8GenParams = (toWorldGenParamsDTOv7 defaultWorldGenParams)
+        { gp7LocationInstances = legacyV8Instances }
+    , pc8CameraX = 1, pc8CameraY = 2
+    , pc8TimeHour = 12, pc8TimeMinute = 30
+    , pc8DateYear = 1, pc8DateMonth = 2, pc8DateDay = 3
+    , pc8MapMode = ZMDefault
+    , pc8Identity = Just (WorldIdentityDTO "Legacy World"
+        (Just "an old gloss")
+        (Just (LanguageProvenanceDTO 0xABCDEF0123456789 1))
+        (Just (toEtymologySourceDTO keepSource)))
+    }
+
+-- | #917: a CURRENT-shape page whose location owes two significant
+--   items in DIFFERENT states — one taken, one spawned and still
+--   untaken — plus a spent clearance notice. Without this the v8
+--   migration's "no obligations" assertion would only be proving that a
+--   field nothing writes comes back empty.
+significantInstances ∷ LocationInstances
+significantInstances = richInstances
+    { lisById = HM.map (\inst → inst
+        { liSignificant =
+            [ LocationSignificantItem 1 "processing_unit" (Just 6101) True
+            , LocationSignificantItem 2 "processing_unit" (Just 6102) False
+            ]
+        , liClearEventEmitted = True
+        }) (lisById richInstances)
+    }
+
+currentPageCoreSignificant ∷ PageCoreDTO
+currentPageCoreSignificant = currentPageCore
+    { pcGenParams = toWorldGenParamsDTO defaultWorldGenParams
+        { wgpLocationInstances = significantInstances } }
 
 -- | 'richInstances' encoded into the FROZEN v6 wire shape carrying a
 --   NONZERO discovery margin (#1230 requirement 11). The margin is
