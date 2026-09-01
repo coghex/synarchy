@@ -83,11 +83,13 @@ def load_baseline(path: Path) -> dict[str, BaselineEntry]:
                     f"{BASELINE_REL}: `{qualified}` has a `carriers` entry "
                     f"without both `carrier` and `via`")
             recorded.append((str(item["carrier"]), str(item["via"])))
+        on_wire = entry.get("onSaveWire")
         out[qualified] = BaselineEntry(
             constructors=ctors,
             components=tuple(str(c) for c in entry.get("components", [])),
             carriers=tuple(recorded),
-            source=str(entry.get("source", "")))
+            source=str(entry.get("source", "")),
+            on_save_wire=on_wire if isinstance(on_wire, bool) else None)
     if not out:
         raise AuditError(
             f"{BASELINE_REL}: declares no types — a vacuous baseline would "

@@ -35,6 +35,8 @@ import World.Save.Snapshot
 import World.Save.Types
 import World.Generate.Types (WorldGenParams(..))
 import World.Page.Types (WorldIdentity(..))
+import World.Page.GeneratedId (GeneratedWorldId)
+import qualified Data.List as L
 import World.Tool.Types (ToolMode(..))
 
 -- | Everything about a save that is request/storage metadata, not
@@ -87,8 +89,36 @@ snapshotSaveMetadata req snap = SaveMetadata
     , smWorldName  = mActive ⌦ (\p → wiName ⊚ pgsIdentity p)
     , smWorldGloss = mActive ⌦ (\p → pgsIdentity p ⌦ wiGloss)
     , smAutosave   = srmAutosave req
+    -- #2021: EVERY page's id, not just the active one. Reference-aware
+    -- cleanup has to keep a generated foundation any live page still
+    -- descends from, and a save holds every page that was live
+    -- ('snapPages'), so an active-page-only copy would let a
+    -- multi-page save's other foundations look unreferenced.
+    --
+    -- Derived from the SAME 'pgsGeneratedId' values the authoritative
+    -- @world-pages@ component encodes — one value, written twice —
+    -- which is what makes 'World.Save.Component.metadataErrors' a
+    -- consistency CHECK rather than a reconciliation between two
+    -- independent computations.
+    , smGeneratedWorldIds = generatedWorldIds snap
     }
   where mActive = resolvedActivePage snap
+
+-- | Every generated-world id in the session, ascending and duplicate
+--   free. Sorted rather than left in 'HM.elems' order so identical
+--   sessions encode identically (the component contract's canonical
+--   ordering requirement), and deduplicated so the list is a SET: a
+--   collision between two pages is a corruption 'validatePages'
+--   rejects, not something this listing copy should report twice.
+--
+--   A page with no id contributes nothing, which happens only for a
+--   snapshot decoded from a pre-v9 payload — those are never re-encoded
+--   without first passing through load staging, which gives every page
+--   one.
+generatedWorldIds ∷ SessionSnapshot → [GeneratedWorldId]
+generatedWorldIds snap = L.sort (L.nub ids)
+  where ids = [ gid | p ← HM.elems (snapPages snap)
+                    , Just gid ← [pgsGeneratedId p] ]
 
 snapshotToSaveData ∷ SaveRequestMeta → SessionSnapshot → SaveData
 snapshotToSaveData req snap = SaveData
@@ -170,6 +200,7 @@ pageToWorldPageSave cam nextBid nextUid page = WorldPageSave
     , wpsCropPlots    = pgsCropPlots page
     , wpsPlantDesignations = pgsPlantDesignations page
     , wpsIdentity     = pgsIdentity page
+    , wpsGeneratedId  = pgsGeneratedId page
     }
   where
     isOwner = lcsOwnerPage cam ≡ Just (pgsPageId page)

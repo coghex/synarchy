@@ -187,3 +187,8 @@ class BaselineEntry:
     components: tuple[str, ...] = ()
     carriers: tuple[tuple[str, str], ...] = ()   # (label, via-path)
     source: str = ""
+    # The captured `onSaveWire` flag, or None when the entry never
+    # recorded one (a hand-added entry). `relocations()` needs the
+    # captured value rather than a guess, because "was on the wire, now
+    # is not" is exactly the change it must refuse to absorb.
+    on_save_wire: bool | None = None

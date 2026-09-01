@@ -116,6 +116,25 @@ constructor would be invisible. `--update-baseline` performs exactly
 that ratchet, and refuses to write anything when any incompatible change
 is also present, so it can never double as a "make it pass" button.
 
+A pure MODULE MOVE — the same type name, the same constructors slot for
+slot, declared in a different module — is the one other change that
+ratchets. It is recognised as a RELOCATION rather than reported as the
+deletion it superficially resembles, because nothing on the wire
+changed: the type is still guarded, still reached through the same
+codec, and every tag still means what it meant. Only the baseline's
+ownership metadata (the qualified key and `source`) goes stale, so it
+fails until `--update-baseline` records the new owner. `relocations()`
+states every clause of that recognition and why each one is narrow; the
+short version is that a rename, an ambiguous pairing, a constructor
+change alongside the move, a change to the type's save-wire attribution,
+and a genuine deletion are all still INCOMPATIBLE, and the self-test
+proves each of them. The attribution clause is the one that is not
+obvious: attribution is walked by bare TYPE NAME, so without it a
+persisted enum could be deleted from its DTO and an unrelated off-wire
+enum of the same name introduced elsewhere, and the ratchet would
+rewrite the entry to `onSaveWire: false` — erasing the component
+attribution that a later deletion's diagnostic reads back.
+
 === Which gate owns what
 
 This audit is the exhaustive authoritative gate for BOTH halves of a
@@ -157,7 +176,8 @@ above it (issue #2057):
   `_scan`      the repository walk that DECIDES the guarded set
   `_carrier`   `compute_wire_carriers` — diagnostic attribution only
   `_baseline`  loading and deterministic rendering of the baseline file
-  `_report`    both-directions comparison and the migration guidance
+  `_report`    both-directions comparison, `relocations()`, and the
+               migration guidance
   `_commands`  `run_repository_audit` / `run_update_baseline`
   `_selftest`  the synthetic mutation suite, loaded ONLY by `--self-test`
                and imported by no production module

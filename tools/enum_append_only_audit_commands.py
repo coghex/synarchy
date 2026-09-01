@@ -39,7 +39,7 @@ def run_repository_audit(root: Path = REPO_ROOT) -> int:
     except AuditError as err:
         print(f"enum_append_only_audit.py: {err}")
         return 1
-    return report(compare(scan.guarded, baseline), carriers,
+    return report(compare(scan.guarded, baseline, carriers), carriers,
                   len(scan.guarded), stale)
 
 
@@ -57,7 +57,7 @@ def run_update_baseline(root: Path = REPO_ROOT) -> int:
     except AuditError as err:
         print(f"enum_append_only_audit.py: {err}")
         return 1
-    findings = compare(scan.guarded, existing)
+    findings = compare(scan.guarded, existing, carriers)
     incompatible = [f for f in findings if not f.compatible]
     if incompatible:
         print(f"refusing to update {BASELINE_REL}: {len(incompatible)} "

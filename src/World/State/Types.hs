@@ -34,6 +34,7 @@ import qualified Data.Vector as V
 import Engine.Graphics.Camera (CameraFacing(..))
 import World.Cursor.Types (CursorState(..), emptyCursorState)
 import World.Page.Types (WorldPageId(..), WorldIdentity(..))
+import World.Page.GeneratedId (GeneratedWorldId, newGeneratedWorldId)
 import World.Chunk.Types (ChunkCoord(..))
 import World.Chunk.Residency (ChunkOwner, emptyChunkOwner, newChunkGeneration)
 import World.Tile.Types (WorldTileData(..), emptyWorldTileData)
@@ -422,6 +423,28 @@ data WorldState = WorldState
       --   ('WorldInit') or save-load restore ('wpsIdentity') — and
       --   never mutated afterward (no rename API in this phase).
       --   Persisted per page in saves (wpsIdentity, v82).
+    , wsGeneratedIdRef ∷ IORef GeneratedWorldId
+      -- ^ #2021: this page's opaque 'GeneratedWorldId' — which
+      --   GENERATED FOUNDATION the page descends from, distinct from
+      --   every identifier beside it: the routing 'WorldPageId' (which a
+      --   later session may reuse for a different world), the
+      --   player-facing 'wsIdentityRef' (which is display text a player
+      --   chooses), the save-slot name, and the file path.
+      --
+      --   Non-optional, because 'emptyWorldState' mints one: every live
+      --   page carries exactly one id from the instant it exists, so no
+      --   creation path — 'WorldInit', arena init, or load staging — can
+      --   forget to assign one, and no consumer has an absent case to
+      --   handle. Staging OVERWRITES it with the saved id when the save
+      --   carries one (@world-pages@ v9); a page restored from a
+      --   pre-v9 save simply keeps the fresh id minted here, which is
+      --   requirement 7's "assigned a fresh id during transactional load
+      --   staging, not derived from anything in the legacy save".
+      --
+      --   Persisted per page in @world-pages@ v9 (authoritative) and
+      --   copied into the @"metadata"@ component at v3 so a
+      --   @listSaves@-depth read can obtain it without decoding any
+      --   gameplay component.
     }
 
 emptyWorldState ∷ IO WorldState
@@ -479,6 +502,12 @@ emptyWorldState = do
     wsBloodStoreRef ← newIORef (emptyBloodStore defaultBloodTextureCap)
     wsBloodTextureHandlesRef ← newIORef HM.empty
     wsIdentityRef ← newIORef Nothing
+    -- #2021: minted here rather than at any individual creation site, so
+    -- "every persistable generated page carries exactly one id" holds by
+    -- construction across WorldInit, arena init and load staging alike.
+    -- Staging replaces it when the save carries one.
+    freshGeneratedId ← newGeneratedWorldId
+    wsGeneratedIdRef ← newIORef freshGeneratedId
     return $ WorldState tilesRef cameraRef texturesRef genParamsRef
                         timeRef dateRef timeScaleRef resumeScaleRef
                         zoomCacheRef
@@ -505,7 +534,7 @@ emptyWorldState = do
                         wsTillDesignationsRef
                         wsCropPlotsRef wsPlantDesignationsRef
                         wsBloodStoreRef wsBloodTextureHandlesRef
-                        wsIdentityRef
+                        wsIdentityRef wsGeneratedIdRef
 
 -- | The world size (in chunks) that decides this page's u-wrap — the
 --   single input every canonical-tile-frame helper needs (#1175).

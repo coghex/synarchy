@@ -42,6 +42,7 @@ _STRATEGY_RE = re.compile(r"[ \t\r\n]*(stock|anyclass|newtype|via)"
 _VIA_RE = re.compile(r"(?<![A-Za-z0-9_'])via(?![A-Za-z0-9_'])")
 _WHERE_RE = re.compile(r"(?<![A-Za-z0-9_'])where(?![A-Za-z0-9_'])")
 
+
 # A constructor name, a record selector, and the field-signature
 # marker in either of its two spellings.
 _CTOR_NAME_RE = re.compile(r"[ \t\r\n]*([A-Z][A-Za-z0-9_']*)")

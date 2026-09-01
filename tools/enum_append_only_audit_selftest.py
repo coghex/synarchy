@@ -467,6 +467,148 @@ def _self_test() -> list[str]:
                 "Unit.Sim.Types.Ghost", "recorded no save-wire carrier",
                 "cannot be re-derived")
 
+    # 3c. A pure MODULE MOVE is the one baseline-only outcome that is
+    #     NOT a byte-reinterpreting change (issue #2098's owner split of
+    #     the worldgen DTO graph is the motivating case). It ratchets
+    #     like an append; everything that merely resembles it does not.
+    def relocated(module: str, *alternatives: str) -> dict[str, str]:
+        """The clean tree with `Pose` declared in `module` instead."""
+        tree = {k: v for k, v in _clean_tree().items()
+                if k != "src/Unit/Sim/Types.hs"}
+        rel = "src/" + module.replace(".", "/") + ".hs"
+        tree[rel] = _pose(*(alternatives or
+                            ("Standing", "Crouching", "Crawling"))).replace(
+            "module Unit.Sim.Types where", f"module {module} where")
+        return tree
+
+    move = relocated("Unit.Sim.Pose")
+    code, move_out = _run(move)
+    if code == 0:
+        failures.append("relocation: must still fail until the baseline "
+                        "records the new owner")
+    if "INCOMPATIBLE" in move_out:
+        failures.append(f"relocation: misreported as a byte-reinterpreting "
+                        f"change:\n{move_out}")
+    for needle in ("Unit.Sim.Pose.Pose", "RELOCATED from Unit.Sim.Types.Pose",
+                   "last recorded in src/Unit/Sim/Types.hs",
+                   "Standing/0, Crouching/0, Crawling/0",
+                   "no saved byte changed meaning", "--update-baseline"):
+        if needle not in move_out:
+            failures.append(f"relocation: output did not mention {needle!r}:"
+                            f"\n{move_out}")
+    # The old key must NOT also be reported as a deletion — one move is
+    # one fact, and a duplicate report is what would push a maintainer
+    # back toward hand-editing the baseline.
+    if "baseline only" in move_out:
+        failures.append(f"relocation: also reported as a baseline-only "
+                        f"deletion:\n{move_out}")
+    # It ratchets through the supported writer, and the ratcheted tree
+    # then passes with the ownership metadata pointing at the new owner.
+    code, moved_out = _run(move, update=True)
+    if code != 0:
+        failures.append(f"relocation: --update-baseline refused a pure "
+                        f"module move:\n{moved_out}")
+    moved_baseline = moved_out.split("<<baseline>>\n", 1)[1]
+    for needle in ('"Unit.Sim.Pose.Pose"', '"src/Unit/Sim/Pose.hs"'):
+        if needle not in moved_baseline:
+            failures.append(f"relocation ratchet: baseline missing {needle!r}:"
+                            f"\n{moved_baseline}")
+    if '"Unit.Sim.Types.Pose"' in moved_baseline:
+        failures.append(f"relocation ratchet: baseline kept the stale "
+                        f"qualified key:\n{moved_baseline}")
+    expect_clean("relocation ratcheted",
+                 dict(move, **{BASELINE_REL: moved_baseline}))
+
+    # The mutation Codex's round-1 review caught: attribution is walked
+    # by bare TYPE NAME, so a persisted enum DELETED from its DTO plus an
+    # unrelated OFF-wire enum of the same name and constructors
+    # elsewhere pairs on every other clause. Absorbing that as a
+    # relocation would ratchet the entry to `onSaveWire: false` with no
+    # components, erasing the attribution a later deletion's diagnostic
+    # reads back — so the attribution must match too.
+    lookalike = {k: v for k, v in _clean_tree().items()
+                 if k != "src/Unit/Sim/Types.hs"}
+    lookalike["src/World/Save/Component/Entities.hs"] = (
+        _ENTITIES_HS.replace("usdPose ∷ !Pose", "usdSeq ∷ !Int")
+                    .replace("uidPose ∷ !Pose", "uidSeq ∷ !Int"))
+    lookalike["src/Extra/Types.hs"] = _pose(
+        "Standing", "Crouching", "Crawling").replace(
+            "module Unit.Sim.Types where", "module Extra.Types where")
+    code, lookalike_out = _run(lookalike)
+    if code == 0:
+        failures.append("off-wire lookalike: expected a failure")
+    for needle in ("INCOMPATIBLE", "Unit.Sim.Types.Pose", "baseline only"):
+        if needle not in lookalike_out:
+            failures.append(f"off-wire lookalike: output did not mention "
+                            f"{needle!r}:\n{lookalike_out}")
+    if "RELOCATED" in lookalike_out:
+        failures.append(f"off-wire lookalike: absorbed as a relocation, "
+                        f"which erases the recorded attribution:"
+                        f"\n{lookalike_out}")
+    # ...and the ratchet must not write it either, which is the step that
+    # would actually destroy the captured components.
+    code, lookalike_update = _run(lookalike, update=True)
+    if code == 0:
+        failures.append(f"off-wire lookalike: --update-baseline erased the "
+                        f"recorded attribution:\n{lookalike_update}")
+    if "refusing to update" not in lookalike_update:
+        failures.append(f"off-wire lookalike: --update-baseline did not "
+                        f"refuse loudly:\n{lookalike_update}")
+    # The narrower half of the same rule: a move that keeps the type on
+    # the wire but changes WHICH components carry it is not a relocation
+    # either.
+    fewer = relocated("Unit.Sim.Pose")
+    fewer["src/World/Save/Component/Entities.hs"] = _ENTITIES_HS.replace(
+        "uidPose ∷ !Pose", "uidSeq ∷ !Int")
+    code, fewer_out = _run(fewer)
+    if code == 0:
+        failures.append("narrowed attribution: expected a failure")
+    if "RELOCATED" in fewer_out:
+        failures.append(f"narrowed attribution: a move that dropped the "
+                        f'"units" carrier was absorbed as a relocation:'
+                        f"\n{fewer_out}")
+    if "INCOMPATIBLE" not in fewer_out:
+        failures.append(f"narrowed attribution: not reported as "
+                        f"incompatible:\n{fewer_out}")
+
+    # The mutation that must NOT be absorbed: a move that also changes a
+    # constructor is still the silent reinterpretation this audit exists
+    # to catch.
+    expect_fail("relocation with a reorder",
+                relocated("Unit.Sim.Pose", "Crouching", "Standing", "Crawling"),
+                "INCOMPATIBLE", "Unit.Sim.Types.Pose", "baseline only")
+    expect_fail("relocation with an append",
+                relocated("Unit.Sim.Pose",
+                          "Standing", "Crouching", "Crawling", "Sleeping"),
+                "INCOMPATIBLE", "Unit.Sim.Types.Pose", "baseline only")
+    # ...nor an AMBIGUOUS pairing: two unmatched live types answering to
+    # the same bare name are not evidence of which one moved.
+    ambiguous = relocated("Unit.Sim.Pose")
+    ambiguous["src/Unit/Sim/Stance.hs"] = _pose(
+        "Standing", "Crouching", "Crawling").replace(
+            "module Unit.Sim.Types where", "module Unit.Sim.Stance where")
+    expect_fail("relocation with an ambiguous destination", ambiguous,
+                "INCOMPATIBLE", "Unit.Sim.Types.Pose", "baseline only")
+    # A genuine DELETION still fails AND still cannot be ratcheted away.
+    # The `deleted`/`renamed` guidance cases above prove the report; this
+    # proves `--update-baseline` remains unable to erase the evidence,
+    # which is the whole reason a relocation had to be recognised
+    # explicitly rather than by relaxing the baseline-only rule.
+    for label, tree in (
+            ("deleted", {k: v for k, v in _clean_tree().items()
+                         if k != "src/Unit/Sim/Types.hs"}),
+            ("renamed", dict(_clean_tree(), **{
+                "src/Unit/Sim/Types.hs": _pose(
+                    "Standing", "Crouching", "Crawling").replace(
+                        "data Pose", "data Posture")}))):
+        code, out = _run(tree, update=True)
+        if code == 0:
+            failures.append(f"{label}: --update-baseline wrote over a "
+                            f"non-append:\n{out}")
+        if "refusing to update" not in out:
+            failures.append(f"{label}: --update-baseline did not refuse "
+                            f"loudly:\n{out}")
+
     # 4. Requirement 6: an append is classified as ALLOWED, distinctly
     #    from a failure, and still requires the baseline to ratchet.
     appended = with_pose("Standing", "Crouching", "Crawling", "Sleeping")
@@ -582,15 +724,27 @@ def _self_test() -> list[str]:
                 "Unit.Sim.Types.UnitActivity", "baseline only",
                 "no longer qualifies")
 
-    # 9. ...on MODULE-QUALIFIED identities: the same type name in another
-    #    module is a different type, not a match.
+    # 9. ...on MODULE-QUALIFIED identities: the same type name in
+    #    another module is never silently accepted as a match. Where the
+    #    constructors are IDENTICAL it is recognised as a relocation and
+    #    must ratchet under the NEW key (case 3c); where they are not,
+    #    it stays two unrelated facts — a live type with no baseline
+    #    entry, and a baseline entry with no live type.
     moved = _clean_tree()
     del moved["src/Unit/Sim/Types.hs"]
     moved["src/Unit/Pose.hs"] = _pose(
-        "Standing", "Crouching", "Crawling").replace(
+        "Standing", "Crawling", "Crouching").replace(
             "module Unit.Sim.Types", "module Unit.Pose")
     expect_fail("same type name in another module", moved,
                 "Unit.Pose.Pose", "Unit.Sim.Types.Pose", "baseline only")
+    # Neither key is ever assumed to stand for the other: the relocated
+    # tree records the NEW qualified key and drops the old one, rather
+    # than keeping the baseline pointed at a module that no longer
+    # declares the type.
+    relocated_baseline = _run(relocated("Unit.Pose"), update=True)[1]
+    if '"Unit.Sim.Types.Pose"' in relocated_baseline:
+        failures.append(f"module-qualified identity: a relocation kept the "
+                        f"old module's key:\n{relocated_baseline}")
 
     # 10. The guarded-set rule itself: each of the three conditions
     #     genuinely excludes, and none of them excludes too much.

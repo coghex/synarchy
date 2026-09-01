@@ -60,6 +60,7 @@ row slot timestamp = SaveListing
         , smWorldName  = Nothing
         , smWorldGloss = Nothing
         , smAutosave   = False
+        , smGeneratedWorldIds = []
         }
     }
 
