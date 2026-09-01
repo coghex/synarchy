@@ -327,6 +327,31 @@ function unitAnimationView.setDirection(id, direction)
     return true
 end
 
+-- Move through the direction row in its rendered order, wrapping at
+-- both ends (#2026). v.cells includes mirrored directions as first-class
+-- displayed cells, so this visits exactly what the owner can see rather
+-- than only authored source directions. Route through setDirection just
+-- like a cell click: the animation clock and zoom multiplier stay put.
+function unitAnimationView.selectAdjacentDirection(id, step)
+    local v = views[id]
+    if not v or (step ~= -1 and step ~= 1) or #v.cells == 0
+        or not v.direction then
+        return false
+    end
+
+    local current = nil
+    for i, c in ipairs(v.cells) do
+        if c.direction == v.direction then
+            current = i
+            break
+        end
+    end
+    if not current then return false end
+
+    local target = ((current - 1 + step) % #v.cells) + 1
+    return unitAnimationView.setDirection(id, v.cells[target].direction)
+end
+
 function unitAnimationView.setPanel(id, panel)
     local v = views[id]
     if not v then return end
