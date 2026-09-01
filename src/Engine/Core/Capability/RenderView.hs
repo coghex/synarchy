@@ -22,7 +22,7 @@
 --
 --   == What is deliberately absent
 --
---   Beyond @engineStateRef@, the 21-field @render-gpu-asset@ set's
+--   Beyond @engineStateRef@, the 22-field @render-gpu-asset@ set's
 --   remaining @MainRender@-only fields are omitted because no
 --   non-@MainRender@ consumer reads them (SS5's Readers\/Writers
 --   cells): @windowStateRef@, @brightnessRef@, @samplerCacheRef@,
