@@ -19,11 +19,15 @@ import qualified Data.HashMap.Strict as HM
 -- effective severity — 'Unit.Types.Wound.woundEffSeverity', which is
 -- max (woundSeverity × (1 − heal)) woundNecrosis — so pain/impairment/
 -- residual bleed all ease with it, down to the necrosis floor that
--- healing cannot cross. At full heal the wound is removed, leaving a
--- scar if it was severe. UNIFORM rate across wound kinds (the user's
--- call) — only severed is excluded (a lost limb can't regrow).
--- Constitution scales it gently (the existing healCon), and clot gates
--- it (an open wound barely mends). The base rate is deliberately slow.
+-- healing cannot cross. Cleanup is driven by that effective severity,
+-- not by this bar: the wound is removed once it falls below
+-- woundCleanupThreshold, leaving a scar if it was severe — so a wound
+-- carrying dead tissue can reach full heal and still not be removed,
+-- because the floor holds it above the threshold. UNIFORM rate across
+-- wound kinds (the user's call) — only severed is excluded (a lost limb
+-- can't regrow). Constitution scales it gently (the existing healCon),
+-- and clot gates it (an open wound barely mends). The base rate is
+-- deliberately slow.
 healBaseRate ∷ Float
 healBaseRate = 0.0016
 -- Calibration (clotted, constitution 1.0, and a NON-NECROTIC wound — with
