@@ -221,6 +221,7 @@ import qualified Test.Headless.World.Render.SolarAttribution as SolarAttribution
 import qualified Test.Headless.World.Render.DesignationFaceMap as DesignationFaceMap
 import qualified Test.Headless.World.DesignationSeam as DesignationSeam
 import qualified Test.Headless.World.Chop.Selection as ChopSelection
+import qualified Test.Headless.World.Chop.Authority as ChopAuthority
 import qualified Test.Headless.World.FloraIdentity as FloraIdentity
 import qualified Test.Headless.World.CropPlant as CropPlant
 import qualified Test.Headless.World.StructureStage as StructureStage
@@ -800,6 +801,7 @@ main = hspec $ do
     describe "World.Render.DesignationFaceMap" DesignationFaceMap.spec
     describe "World.DesignationSeam" DesignationSeam.spec
     ChopSelection.spec
+    ChopAuthority.spec
     LuaChopGesture.spec
     describe "World.DesignationSeam (engine)" DesignationSeam.engineSpec
     FloraIdentity.spec

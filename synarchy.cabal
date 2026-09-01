@@ -1223,6 +1223,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.ChunkQueueFrame
                    Test.Headless.World.DesignationSeam
                    Test.Headless.World.Chop.Selection
+                   Test.Headless.World.Chop.Authority
                    Test.Headless.Lua.ChopGesture
                    Test.Headless.World.CropPlant
                    Test.Headless.World.StructureStage
