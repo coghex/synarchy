@@ -2487,9 +2487,9 @@ attestations, and the repair commit and verification evidence when the route
 has them. A route with no batches states those halves as `null` rather than
 dropping the keys, so a consumer reads one shape. `deflake_outcome.py` and
 `deflake_issue.py` below are its two consumers, and they read the same
-envelope through the same entry gate: `deflake_outcome.RouteOwnership` is the
-only part that differs, so every rule the two share is checked once rather
-than forked.
+envelope through the same entry gate — `deflake_handoff.py`, which owns that
+gate for both of them: `deflake_handoff.RouteOwnership` is the only part that
+differs, so every rule the two share is checked once rather than forked.
 
 The gate is `tools/test_deflake_diagnosis.py`, engine-free and document-only.
 It is deliberately NOT wired into `make ci` or GitHub CI — #1437's approved
@@ -2520,13 +2520,44 @@ engine-booting measurement: a diagnosis consumes twenty ten-run batches' worth
 of wall clock and is supplemental manual pull-request evidence, never a merge
 gate.
 
+### `deflake_handoff.py` — the handoff contract both consumers read (#2097)
+
+The `deflake-outcome-handoff/v1` envelope, and every rule the two consumers
+below share. No CLI: it records nothing, publishes nothing, and imports
+neither consumer, so the two workflows cannot come to disagree about what the
+envelope means and neither is the other's prerequisite.
+
+It owns the schema and the measurement-role vocabulary (`handoff`,
+`baseline`, `verification`), `RouteOwnership` and what each of #1437's endings
+IS, the `HandoffError` / `NonSuccess` classifications, the `Measurement` and
+`Handoff` representations, every producer-record, identity, manifest,
+invocation, path, worktree, descriptor, artifact and producer-binding rule,
+`require_reproduced` — #1437's two-part reproduction qualification, which
+every route past the `cannot-reproduce` fork rests on — and the `utc_now` /
+`reuse_stored_timestamp` pair a durable record is stamped and replayed with.
+
+`require_diagnosis_outcome` and `require_handoff` take `owned` EXPLICITLY: a
+shared contract that defaulted to one consumer's routes would answer for that
+consumer whenever a caller forgot to say which routes it owns. Each consumer
+keeps its own `OWNED` instance and supplies it. `deflake_outcome.py` also
+re-exports the contract's names — the same class objects, so an `except`
+written against either module's `HandoffError` matches a refusal raised
+through the other — for callers that have not moved to the contract yet.
+
+Its gate is `python3 tools/test_deflake_diagnosis.py`, the same deterministic
+run both consumers are covered by.
+
 ### `deflake_outcome.py` — the non-success outcomes of a de-flake attempt (#1439)
 
 Consumes one `deflake-outcome-handoff/v1` for one exact registered probe and
 one de-flake attempt, decides whether the evidence supports a STABLE
 non-success outcome, and appends that outcome durably to the probe's census
 row. It reuses `probe_census.update`'s locked read-modify-write and adds no
-second state store, no second write path and no second lock.
+second state store, no second write path and no second lock. Reading the
+envelope is `deflake_handoff.py`'s above; what is here is #1439's own — which
+route becomes which stable outcome and on what evidence, the records and
+recommendations they produce, the census append, the no-pull-request boundary,
+and this CLI.
 
 ```bash
 python3 tools/deflake_outcome.py --handoff <document.json>
@@ -2856,7 +2887,8 @@ to the probe-adjustment or fix-PR path. The issue may exist remotely; the next
 invocation reconciles the key, finds it, and records it once.
 
 The census record is deliberately the same shape `deflake_outcome.py` writes
-plus an `issue` block (number, URL, publication key, origin) — one `outcomes`
+— that record is #1439's own, not the shared contract's — plus an `issue`
+block (number, URL, publication key, origin) — one `outcomes`
 collection holds every ending of a de-flake attempt, and the schema pairs the
 two halves: `production-defect` REQUIRES `issue` and the three stable outcomes
 forbid it.
