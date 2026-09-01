@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict #-}
 module Engine.Scripting.Lua.API.World.Lifecycle
     ( worldInitFn
+    , worldCheckMapImagePlanFn
     , worldGetIdentityFn
     , worldGetLanguageProvenanceFn
     , worldSuggestNameFn
@@ -53,11 +54,21 @@ import Language.Suggest
     , suggestErrorText, worldLanguageSeed )
 import World.Generate.Config
     (minimumWorldSize, normalizePlateCount, normalizeWorldSize)
+import World.Map.ImagePlan (mapImageRefusalText)
+import Engine.Map.ImageAdmission (admitWorldZoomAtlas)
 import World.Plate (defaultPlatesFor)
 
 -- | world.init(pageId, seed, worldSizeInChunks, plateCount
 --             [, displayName[, gloss[, languageSeed[, languageVersion
 --             [, nameExpr]]]]])
+--
+--   Returns @true@ when the world was accepted and queued, or
+--   @false, message@ when it was REFUSED (#2020). A refusal is decided
+--   synchronously, before anything is enqueued: no @WorldInit@ command,
+--   no page registration, no worker generation, and whatever world is
+--   currently live is left exactly as it was. Existing callers that
+--   ignore the return values are unaffected — Lua discards extra
+--   results.
 --   The optional trailing arguments (#707) give the page a player-facing
 --   identity: a display name plus an optional English gloss. They are
 --   display TEXT (spaces/punctuation welcome, no save-name rules); each
@@ -104,7 +115,7 @@ worldInitFn env = do
     langVerArg ← Lua.tointeger 8
     exprArg   ← Lua.tostring 9
 
-    case pageIdArg of
+    refusal ← case pageIdArg of
         Just pageIdBS → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 seed   = maybe 42 fromIntegral seedArg
@@ -160,12 +171,71 @@ worldInitFn env = do
                     <> " (worldSize minimum/multiple "
                     <> tshow minimumWorldSize
                     <> ", plateCount min 1)."
-            -- As with initArena: a re-init replaces the page's state.
-            enqueueSelectionChange env
-                (WorldInit pageId seed size plates identity)
-        Nothing → pure ()
+            -- #2020: admission is SYNCHRONOUS and happens here, before
+            -- anything is enqueued. A refusal registers no page, starts
+            -- no worker generation, and leaves whatever world is
+            -- currently live completely untouched — the caller gets the
+            -- diagnostic as a second return value and decides what to
+            -- do. This is deliberately not a new asynchronous
+            -- world-generation failure phase.
+            admitted ← admitWorldZoomAtlas env size
+            case admitted of
+                Left refusal → do
+                    logger ← readIORef (ccLoggerRef (toCoreCapability env))
+                    let msg = mapImageRefusalText refusal
+                    logWarn logger CatWorld $ "world.init refused: " <> msg
+                    pure (Just msg)
+                Right _plan → do
+                    -- As with initArena: a re-init replaces the page's
+                    -- state.
+                    enqueueSelectionChange env
+                        (WorldInit pageId seed size plates identity)
+                    pure Nothing
+        Nothing → pure $ Just "world.init requires a page id"
 
-    return 0
+    case refusal of
+        Nothing → do
+            Lua.pushboolean True
+            return 1
+        Just msg → do
+            Lua.pushboolean False
+            Lua.pushstring (TE.encodeUtf8 msg)
+            return 2
+
+-- | @world.checkMapImagePlan(worldSize)@ — the SIDE-EFFECT-FREE half of
+--   'worldInitFn''s admission (#2020).
+--
+--   Create World cannot use @world.init@'s return value as its
+--   pre-check: @scripts\/create_world\/generation.lua@ destroys the
+--   current world before it ever reaches @worldView.startGeneration()@,
+--   and @scripts\/world_view.lua@ may DEFER the actual @world.init@ call
+--   until textures finish loading — so by the time a refusal could be
+--   returned, the world the player still has is already gone. This verb
+--   answers the same question ahead of that, through the SAME planner
+--   and the same ceiling, so the two cannot disagree about what is
+--   admissible or about how the refusal reads.
+--
+--   Normalizes its argument exactly as @world.init@ does, so the size it
+--   answers about is the size that would actually be generated.
+--
+--   Returns @true@, or @false, message@.
+worldCheckMapImagePlanFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldCheckMapImagePlanFn env = do
+    sizeArg ← Lua.tointeger 1
+    result ← Lua.liftIO $ case sizeArg of
+        Nothing → pure $ Just "world.checkMapImagePlan requires a world size"
+        Just raw → do
+            admitted ← admitWorldZoomAtlas env
+                           (normalizeWorldSize (fromIntegral raw))
+            pure $ either (Just . mapImageRefusalText) (const Nothing) admitted
+    case result of
+        Nothing → do
+            Lua.pushboolean True
+            return 1
+        Just msg → do
+            Lua.pushboolean False
+            Lua.pushstring (TE.encodeUtf8 msg)
+            return 2
 
 -- | Parse @world.init@'s optional language-provenance arguments (#1101).
 --   'Nothing' — with a warning naming what was wrong — for a seed that

@@ -47,7 +47,7 @@ sameContainer projected live
 
 spec ∷ SpecWith EngineEnv
 spec = do
-  describe "toRenderCapability (all 21 render-gpu-asset fields)" $ do
+  describe "toRenderCapability (all 22 render-gpu-asset fields)" $ do
     let aliases name project field =
           it (name <> " aliases the live EngineEnv container") $ \env →
             sameContainer (project (toRenderCapability env)) (field env)
@@ -70,11 +70,17 @@ spec = do
     aliases "rcTextureSystemRef"       rcTextureSystemRef       textureSystemRef
     aliases "rcSamplerCacheRef"        rcSamplerCacheRef        samplerCacheRef
     aliases "rcTextureSizeRef"         rcTextureSizeRef         textureSizeRef
+    -- Added by #2020: MainRender's Vulkan init is this field's only
+    -- writer, and every worker reads it through the view below. A
+    -- projection that copied it would leave those readers looking at a
+    -- container Vulkan init never touches — i.e. a permanently absent
+    -- device limit, which a GPU-capable mode turns into a refusal.
+    aliases "rcMaxImageDimensionRef"   rcMaxImageDimensionRef   maxImageDimensionRef
     aliases "rcDefaultFaceMapSlotRef"  rcDefaultFaceMapSlotRef  defaultFaceMapSlotRef
     aliases "rcCameraRef"              rcCameraRef              cameraRef
     aliases "rcUiCameraRef"            rcUiCameraRef            uiCameraRef
     -- The one non-IORef field in the set — an STM queue, and the
-    -- easiest of the 21 to omit from a hand-written check.
+    -- easiest of the 22 to omit from a hand-written check.
     aliases "rcScreenshotRequestQueue" rcScreenshotRequestQueue screenshotRequestQueue
     aliases "rcNextObjectIdRef"        rcNextObjectIdRef        nextObjectIdRef
 
@@ -102,7 +108,7 @@ spec = do
       (windowSizeRef env == windowPosRef env) `shouldBe` False
       (framebufferSizeRef env == windowPosRef env) `shouldBe` False
 
-  describe "toRenderViewCapability (the 15 worker-visible fields)" $ do
+  describe "toRenderViewCapability (the 16 worker-visible fields)" $ do
     let aliases name project field =
           it (name <> " aliases the live EngineEnv container") $ \env →
             sameContainer (project (toRenderViewCapability env)) (field env)
@@ -125,6 +131,10 @@ spec = do
     aliases "rvFontCacheRef"           rvFontCacheRef           fontCacheRef
     aliases "rvTextureSystemRef"       rvTextureSystemRef       textureSystemRef
     aliases "rvTextureSizeRef"         rvTextureSizeRef         textureSizeRef
+    -- Added to the view by #2020: the WorldThread and LuaThread readers
+    -- of the device's maxImageDimension2D reach it through here rather
+    -- than through main-render-private GraphicsState.
+    aliases "rvMaxImageDimensionRef"   rvMaxImageDimensionRef   maxImageDimensionRef
     aliases "rvCameraRef"              rvCameraRef              cameraRef
     aliases "rvScreenshotRequestQueue" rvScreenshotRequestQueue screenshotRequestQueue
 
@@ -137,6 +147,12 @@ spec = do
           view = toRenderViewCapability env
       sameContainer (rvTextureSystemRef view) (rcTextureSystemRef full)
       sameContainer (rvTextureSizeRef view) (rcTextureSizeRef full)
+      -- #2020's cross-thread carrier is the sharpest case of this rule:
+      -- MainRender writes it through the full record during Vulkan init
+      -- and workers read it through the view, so the two landing on
+      -- different containers would silently mean "no device limit was
+      -- ever published" on every worker.
+      sameContainer (rvMaxImageDimensionRef view) (rcMaxImageDimensionRef full)
       sameContainer (rvCameraRef view) (rcCameraRef full)
       sameContainer (rvWindowPosRef view) (rcWindowPosRef full)
       sameContainer (rvAssetPoolRef view) (rcAssetPoolRef full)
