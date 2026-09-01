@@ -47,7 +47,7 @@ simply happens somewhere the clock is not already running.
 
 The module imports exactly one other `tools/` module,
 `probe_resource_lock`, which imports nothing from `tools/` at all:
-`run_probes.py` imports this one for the preflight, `probelib.py`
+`probe_runner_resources` imports this one for the preflight, `probelib.py`
 imports it for `boot`, and the four probes with their own private
 launchers import it too — anything reaching back into THOSE would close
 an import cycle.

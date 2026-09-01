@@ -210,8 +210,8 @@ def unregistered_selectable_probe_keys(
 
     Pure and parameterized so a test can feed it a deliberately stale
     pairing without touching either real list. `main` calls this with
-    the real `SELECTABLE_CROSS_REFERENCED_PROBE_KEYS` and `run_probes`'s
-    real `PROBES` registry before anything boots — a key renamed or
+    the real `SELECTABLE_CROSS_REFERENCED_PROBE_KEYS` and
+    `probe_runner_registry`'s real `PROBES` before anything boots — a key renamed or
     removed there would otherwise be silently dropped by
     `run_probes.py --exact` and reported as "all passed" (the false-
     green this check exists to prevent), rather than caught here up

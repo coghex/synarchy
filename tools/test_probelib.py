@@ -1364,7 +1364,8 @@ def test_the_runner_path_prepares_nothing() -> None:
 def test_the_build_resource_is_named_once() -> None:
     print("\n-- the direct path and the runner name the same resource")
     expect(probe_runner_resources.BUILD_RESOURCE is probe_engine.BUILD_RESOURCE,
-           f"run_probes reads the name from probe_engine, so the two "
+           f"probe_runner_resources reads the name from probe_engine, "
+           f"so the two "
            f"cannot drift (got {probe_runner_resources.BUILD_RESOURCE!r} / "
            f"{probe_engine.BUILD_RESOURCE!r})")
     expect(probe_engine.BUILD_RESOURCE

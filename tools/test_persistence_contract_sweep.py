@@ -3,7 +3,7 @@
 (issue #1321) and its durable phase records (issue #1768).
 
 `SELECTABLE_CROSS_REFERENCED_PROBE_KEYS` is a hand-maintained copy of a
-subset of `tools/run_probes.py`'s `PROBES` registry. Nothing previously
+subset of `probe_runner_registry.PROBES`. Nothing previously
 checked the two agree: a key renamed or removed in `PROBES` would leave
 `persistence_contract_sweep.py --cross-probe-keys ...` handing a dead key
 to `run_probes.py --exact`, which silently drops it, after which the
@@ -21,7 +21,7 @@ current state happens to be fine.
 
 The #1768 half is the same shape: `SWEEP_PHASE_IDENTITIES` and
 `announce_phase` are the sweep's declared phase contract, and every
-record they emit has to be recognizable to `tools/run_probes.py`'s
+record they emit has to be recognizable to `probe_runner_diagnostics`'s
 timeout attribution -- the consumer at the other end of the pipe. These
 tests hold both halves against each other without booting anything.
 
@@ -155,7 +155,7 @@ def test_an_undeclared_phase_is_refused_rather_than_emitted() -> None:
 
 
 def test_every_declared_phase_emits_a_record_the_runner_recognizes() -> None:
-    print("\n-- each phase record parses back through run_probes.py's own "
+    print("\n-- each phase record parses back through the diagnostics "
           "reader, with the right kind and identity")
     for identity in SWEEP_PHASE_IDENTITIES:
         emitter = CapturedEmitter()

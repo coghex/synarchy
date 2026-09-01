@@ -647,6 +647,11 @@ HARNESS_MODULES = (
     "tools/probe_engine.py",
     "tools/probelib.py",
     "tools/run_probes.py",
+    "tools/probe_runner_registry.py",
+    "tools/probe_runner_diagnostics.py",
+    "tools/probe_runner_resources.py",
+    "tools/probe_runner_lifecycle.py",
+    "tools/probe_runner_scheduler.py",
     "tools/deflake.py",
     "tools/deflake_diagnosis.py",
 )
@@ -2427,7 +2432,8 @@ def resource_hold_problems(section, *, what: str, probe: str) -> list:
         if sorted(declared) != expected:
             raise HandoffError(
                 f"{what}.resource_hold.{field} is {sorted(declared)} where "
-                f"`run_probes` declares {expected} for {probe!r}; the "
+                f"`probe_runner_resources` declares {expected} for {probe!r}; "
+                f"the "
                 f"interests are the probe's own, not this batch's to choose")
     if record.get("covers_configuration_install") is not True:
         raise HandoffError(

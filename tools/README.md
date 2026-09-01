@@ -406,8 +406,8 @@ relevant to what you changed.
 
 Each probe is self-contained (own `main()`, own engine boot/teardown, own
 default port chosen to avoid the user's GUI on 8008) and prints PASS/FAIL
-plus `sys.exit(0 or 1)`. Every probe registered in `run_probes.py` (the
-table below) takes `--port` to avoid colliding with another running
+plus `sys.exit(0 or 1)`. Every probe registered in
+`probe_runner_registry.PROBES` (the table below) takes `--port` to avoid colliding with another running
 instance, defaulting to its own historical fixed port when unset (#723).
 
 "Boot" below is `arena` (flat synthetic terrain via
@@ -598,9 +598,9 @@ pipe the runner drains only when the child exits, and the child is a plain
 `python3` with no `-u` — so ordinary `print` output sits in the child's own
 block buffer and is LOST when a hung probe is SIGKILLed at `--timeout`. A
 long probe that wants a phase to survive that emits a *progress record*
-instead: one flushed line in the single convention `run_probes.py` defines
-(`PROGRESS_MARKER`, `ProgressEmitter`, `parse_progress`) and its failure
-presentation reads back.
+instead: one flushed line in the single convention
+`probe_runner_diagnostics` defines (`PROGRESS_MARKER`, `ProgressEmitter`,
+`parse_progress`) and the runner's failure presentation reads back.
 
 ```
 #probe-progress# 19:25:04 +0.0s   | phase | engine A                            | build the scenario, save 'gen1'
@@ -786,8 +786,8 @@ each other, nor a probe reading the binary they may be relinking — the
 same scheduling mechanism `repo-config` already used, with no new one
 invented.
 
-**Shared repository resources (#1322, #1444, #1570).** `run_probes`
-declares two tables: `IMPLICIT_SHARED_RESOURCES`, which EVERY registered
+**Shared repository resources (#1322, #1444, #1570).**
+`probe_runner_resources` declares two tables: `IMPLICIT_SHARED_RESOURCES`, which EVERY registered
 probe holds in a shared interest (`repo-config`, the checkout's tracked
 `config/` tree, and `cabal-build`, its `dist-newstyle`), and
 `EXCLUSIVE_RESOURCES`, which names the few probes that need one to
@@ -2216,7 +2216,8 @@ equal. That apparatus is a CLOSED inventory of eleven paths
 (`HARNESS_MODULES`), pinned exactly by the self-test rather than spot-checked:
 `probe_flake`, `probe_protocol`, `probe_census`, `probe_claim`,
 `probe_resource_lock`, `probe_select`, `probe_engine`, `probelib`,
-`run_probes`, `deflake` and `deflake_diagnosis`, each of which owns probe
+`run_probes`, its five `probe_runner_*` owners, `deflake` and
+`deflake_diagnosis`, each of which owns probe
 selection, launch, port or resource leasing, protocol reconciliation,
 measurement timing and construction, result recording or census intake, or
 diagnosis semantics.
@@ -3248,7 +3249,12 @@ tools/
 ├── lua_module_budget.py    (Lua module split line-budget guard)
 ├── action_outcome_coverage.py (F4 action-outcome verb instrumentation self-audit; --verify-tier1 is the CI gate)
 ├── language_report.py      (generated-language native-name report/check, #710/#1094/#1095/#1096)
-├── run_probes.py           (opt-in aggregate behavior-probe runner)
+├── run_probes.py           (opt-in aggregate behavior-probe runner — the command)
+├── probe_runner_registry.py    (its probe registry, selection, port spans, per-key timeouts)
+├── probe_runner_diagnostics.py (its durable progress/failure record protocols)
+├── probe_runner_resources.py   (its resource conflict model, cross-process holds, engine preflight)
+├── probe_runner_lifecycle.py   (its one-probe launch and process-group teardown)
+├── probe_runner_scheduler.py   (its sequential/--jobs orchestration, retries, summary)
 ├── gameplay_scenarios.py   (manual first-expedition scenarios, #925 — outside CI)
 ├── screenshot_check.py     (GUI-attached debug.captureScreenshot check — see above)
 ├── video_window_check.py   (GUI-attached video/window settings check, #891 — see above)

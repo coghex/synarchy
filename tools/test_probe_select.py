@@ -9,7 +9,7 @@ probe, opens a socket, invokes `gh`, resolves a docs worktree, or reads
 the real census file or the real claim lockfiles.
 
 THE FIXTURES ARE THE POINT. Not one case asserts against the live
-contents of `run_probes.PROBES`, `ci_probes.CI_ELIGIBLE` or
+contents of `probe_runner_registry.PROBES`, `ci_probes.CI_ELIGIBLE` or
 `ci_probes.MANUAL_ONLY_REASONS`. CLAUDE.md's CI-promotion procedure is
 exactly "move its key from MANUAL_ONLY_REASONS to CI_ELIGIBLE", and
 `ci_probes._self_test` already requires every newly registered probe to
@@ -677,7 +677,7 @@ def test_unregistered_in_flight_and_claim_keys_are_irrelevant() -> None:
 def test_ties_break_on_the_registered_key_not_registration_order() -> None:
     """The one fixture where registration order and key order disagree.
 
-    `run_probes.PROBES` registers `blood_gpu_lifecycle` before
+    `probe_runner_registry.PROBES` registers `blood_gpu_lifecycle` before
     `bleeding_trail` while `bleeding_trail` sorts first, so iterating the
     registry would pass a census-order-only test and still be wrong.
     Both keys are supplied as fixture strings; nothing reads the live
@@ -720,7 +720,7 @@ def test_the_registry_payload_and_census_columns_name_nothing() -> None:
     """Only the registered KEY decides anything.
 
     A registry value may be a script filename, the `(script, purpose)`
-    pair `run_probes.PROBES` carries, or nothing at all, and a census
+    pair `probe_runner_registry.PROBES` carries, or nothing at all, and a census
     row's own `script` and `classification` columns may disagree with
     the live registry — none of it may move a selection. Display
     purposes are not even an input: the registry is consulted for its

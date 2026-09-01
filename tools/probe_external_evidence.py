@@ -35,7 +35,8 @@ strictly a reader:
 **This reader itself makes no scheduling decision.** A `$test` run
 appearing, disappearing, passing, failing or recording observations
 changes no census sample and no statistic here: this module imports
-`run_probes` only to validate a probe key, and imports `probe_census`
+`probe_runner_registry` only to validate a probe key, and imports
+`probe_census`
 not at all. One interpreted `$test` run is CONTEXT, not a measurement in
 the lab's statistics, and that stays true however the read is used.
 

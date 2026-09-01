@@ -60,7 +60,7 @@ outcome:
 
 Canonical identity
 ------------------
-`tools/run_probes.py`'s `PROBES` key is the canonical identity, and an
+`probe_runner_registry.PROBES`'s key is the canonical identity, and an
 unknown key is a controlled input error rather than a `clear`.
 
 Matching accepts case- and separator-normalized human forms derived from
