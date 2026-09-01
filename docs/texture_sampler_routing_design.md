@@ -59,14 +59,25 @@ follows one shared sampler that `setTextureFilter` repaints:
 - `scripts/settings/data.lua:477` — the setting is player-reachable and applied
   live through `engine.setTextureFilter`.
 
-The bleed risk is real rather than theoretical. `src/Engine/Loop/Camera.hs:252`
-integrates zoom as a float with velocity and friction, so scene art is sampled
-at arbitrary non-integer scale; pixel snap only removes a fractional *position*
-offset (`src/Engine/Graphics/Vulkan/ShaderCode.hs:105`) and does not make one
-texel equal one screen pixel. `tools/pack_atlas.py:130` packs cells edge to edge
-at exact integer boundaries and `docs/engine_contracts.md:592` records that cell
-UVs sit on exact cell edges with no inset, so a linear sample near a cell edge
-would read the neighbouring animation frame.
+The bleed risk was real rather than theoretical, and TSR-2 (#2076) has now
+removed it. `src/Engine/Loop/Camera.hs:252` integrates zoom as a float with
+velocity and friction, so scene art is sampled at arbitrary non-integer scale;
+pixel snap only removes a fractional *position* offset
+(`src/Engine/Graphics/Vulkan/ShaderCode.hs:105`) and does not make one texel
+equal one screen pixel. `pack_atlas.py` used to pack cells edge to edge at exact
+integer boundaries, so a linear sample near a cell edge would read the
+neighbouring animation frame.
+
+**As of TSR-2 it no longer can.** Every cell now occupies a
+`(cell_width + 2) x (cell_height + 2)` slot with the logical frame at offset
+`(1, 1)` and a one-texel gutter copying that cell's own edge texels outward,
+corners included (`pack_atlas.py`'s `extruded_slot`; index `schema_version` 2's
+required `cell_padding`). `atlasCellUV` strides by the slot and still addresses
+the inner cell exactly, so nearest-mode output is unchanged texel for texel and
+D-3's precondition is satisfied. The pins themselves are untouched: unit atlases
+are still uploaded `UploadPinnedNearest`, and the table above still describes
+today's sampler routing. That inversion is TSR-3's whole content, and it is now
+unblocked.
 
 The divergence has a traceable cause. Epic #1256 states that gameplay atlases
 "continue to honor the user-selectable global nearest/linear texture-filter
@@ -172,8 +183,10 @@ leaves the zoom atlas and preview thumbnail as they are.
 
 Extrusion padding, or a proven equivalent, lands first and the unpin depends on
 it. The half-texel UV inset is rejected because it breaks nearest-mode
-pixel-identity. Unpinning the current edge-adjacent sheets is not an acceptable
-intermediate state, so TSR-3 may not land before TSR-2.
+pixel-identity. Unpinning sheets whose cells are not isolated is not an
+acceptable intermediate state, so TSR-3 may not land before TSR-2. TSR-2 (#2076)
+has landed the one-texel gutter, so this precondition is met and TSR-3 is free
+to proceed.
 
 ### D-4. The caller declares a load's upload policy
 
@@ -194,7 +207,9 @@ this arc keeps; two texels would only buy headroom for mipmaps, which are
 explicitly out of scope. Growth is roughly +13% pixels on a 32px cell and +6% on
 a 64px cell. TSR-2 re-measures the resident total against the owner-confirmed
 384 MiB threshold and records the new baseline as part of the slice, rather than
-treating the movement as a breach.
+treating the movement as a breach. Measured on the shipped corpus (#2076): the
+whole roster moved from 115,723,968 to 121,620,320 bytes, +5.10%, projecting to
+231.97 MiB against the unchanged 384 MiB threshold.
 
 ### D-6. Headless proofs block; GPU confirmation is recorded, not blocking
 
@@ -279,6 +294,11 @@ architectural change with no bearing on this arc's goal.
 
 ### TSR-2. Add cell extrusion padding to the unit atlas compiler and runtime
 
+- **Status:** DELIVERED as [#2076]. One texel per side, index
+  `schema_version` 2 with a required `cell_padding`, `source_digest` domain tag
+  at `v2`, all 131 tracked atlases regenerated, nearest-mode output verified
+  pixel-identical, and the resident baseline re-recorded at 121,620,320 bytes
+  against the unchanged threshold. TSR-3's precondition is met.
 - **Outcome:** Compiled atlases carry isolated cells; nothing about sampling
   policy changes yet.
 - **Scope:** `pack_atlas.py` layout, index format version, both per-animation

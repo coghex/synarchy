@@ -14,8 +14,11 @@
 --       meaningful across PNG encoders while still pinning every pixel.
 --     * 'sourceDigest' — over everything one animation was COMPILED
 --       FROM: its identity, its mirroring/timing declarations, its cell
---       geometry, and for each direction in atlas order its declared
---       frame paths and their decoded pixels.
+--       geometry INCLUDING the extrusion gutter, and for each direction
+--       in atlas order its declared frame paths and their decoded
+--       pixels. The domain tag carries @v2@ for that gutter (#2076), so
+--       no digest recorded before it can collide with one taken over
+--       the same art at the padded stride.
 --
 --   Reproducing @source_digest@ means reproducing one awkward thing:
 --   the compiler writes @fps@ as Python's @repr()@ of the narrowed
@@ -47,7 +50,7 @@ import Numeric (floatToDigits, showHex)
 --   colliding value from different inputs.
 atlasDigestTag, sourceDigestTag ∷ BS.ByteString
 atlasDigestTag  = "synarchy-atlas-content-v1"
-sourceDigestTag = "synarchy-atlas-source-v1"
+sourceDigestTag = "synarchy-atlas-source-v2"
 
 -- | The compiler's @content_digest@.
 atlasContentDigest ∷ Int → Int → BS.ByteString → Text
@@ -74,15 +77,20 @@ data SourceDirectionInput = SourceDirectionInput
 
 -- | Everything one animation was compiled from.
 data SourceAnimInput = SourceAnimInput
-    { saiUnit       ∷ !Text
-    , saiName       ∷ !Text
-    , saiFlip       ∷ !Bool
-    , saiLoop       ∷ !Bool
-    , saiFps        ∷ !Float
-    , saiCellWidth  ∷ !Int
-    , saiCellHeight ∷ !Int
-    , saiColumns    ∷ !Int
-    , saiDirections ∷ ![SourceDirectionInput]
+    { saiUnit        ∷ !Text
+    , saiName        ∷ !Text
+    , saiFlip        ∷ !Bool
+    , saiLoop        ∷ !Bool
+    , saiFps         ∷ !Float
+    , saiCellWidth   ∷ !Int
+    , saiCellHeight  ∷ !Int
+    , saiCellPadding ∷ !Int
+      -- ^ The extrusion gutter per side (#2076). A digest input
+      --   because it changes the artifact every other input would
+      --   otherwise describe identically: the same frames at a
+      --   different gutter compile to a different sheet.
+    , saiColumns     ∷ !Int
+    , saiDirections  ∷ ![SourceDirectionInput]
       -- ^ MUST be in the compiler's atlas direction order, which is the
       --   engine's own 'Unit.Direction.Direction' order restricted to
       --   the authored directions — i.e. ascending by constructor, which
@@ -98,6 +106,7 @@ sourceDigest a = digestStream sourceDigestTag $
     , ("loop",            bit (saiLoop a))
     , ("fps",             TE.encodeUtf8 (pythonFloatRepr (saiFps a)))
     , ("cell",            dims (saiCellWidth a) (saiCellHeight a))
+    , ("cell_padding",    BC.pack (show (saiCellPadding a)))
     , ("columns",         BC.pack (show (saiColumns a)))
     , ("direction_count", BC.pack (show (length (saiDirections a))))
     ] <> concatMap direction (saiDirections a)
