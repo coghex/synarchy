@@ -363,23 +363,86 @@ paymentSpec = describe "payment" $ do
         designate sc ws tile tile floorPiece
         [aid] ← attemptsOf ws
         _ ← pay sc aid
+        beginPlacement sc (raw aid) `shouldReturn` "true"
+        writeIORef (wsTilesRef ws) (withFloorAt tile)
         declineToken ws 0
         completeWithWindow sc aid 0 1
         HM.size <$> readIORef (wsConstructDesignationsRef ws)
             `shouldReturn` 0
         groundNames ws `shouldReturn` ["steel_plate"]
 
-    it "completes normally when nothing in the window was declined" $
-        \sc → do
+    it "completes when the piece really landed" $ \sc → do
         ws ← resetScene sc
         designate sc ws tile tile floorPiece
         [aid] ← attemptsOf ws
         _ ← pay sc aid
+        beginPlacement sc (raw aid) `shouldReturn` "true"
+        writeIORef (wsTilesRef ws) (withFloorAt tile)
         completeWithWindow sc aid 0 1
         HM.size <$> readIORef (wsConstructDesignationsRef ws)
             `shouldReturn` 0
         -- The receipt was SPENT on a real piece, so nothing comes back.
         groundNames ws `shouldReturn` []
+
+    it "refuses to complete when NO piece is at the target slot" $
+        \sc → do
+        -- A window with no declines proves only that nothing was
+        -- retracted; the completion is bound to the committed overlay
+        -- itself. Without that, a caller could delete a paid designation
+        -- for a placement that never happened.
+        ws ← resetScene sc
+        designate sc ws tile tile floorPiece
+        [aid] ← attemptsOf ws
+        _ ← pay sc aid
+        beginPlacement sc (raw aid) `shouldReturn` "true"
+        completeWithWindow sc aid 0 1
+        HM.size <$> readIORef (wsConstructDesignationsRef ws)
+            `shouldReturn` 0
+        groundNames ws `shouldReturn` ["steel_plate"]
+
+    it "refuses an EMPTY commit window, which stages nothing" $ \sc → do
+        -- 'StructureCommitWindow t t' has no declines by construction,
+        -- and the public verb can supply one.
+        ws ← resetScene sc
+        designate sc ws tile tile floorPiece
+        [aid] ← attemptsOf ws
+        _ ← pay sc aid
+        beginPlacement sc (raw aid) `shouldReturn` "true"
+        writeIORef (wsTilesRef ws) (withFloorAt tile)
+        completeWithWindow sc aid 1 1
+        HM.size <$> readIORef (wsConstructDesignationsRef ws)
+            `shouldReturn` 0
+        groundNames ws `shouldReturn` ["steel_plate"]
+
+    it "lets the CLAIMANT abort a hand-off that staged nothing" $
+        \sc → do
+        -- Ordinary cancellation is refused while a designation is
+        -- placing; without an abort the claimant would be left holding a
+        -- paid, placing job with no completion coming.
+        ws ← resetScene sc
+        designate sc ws tile tile floorPiece
+        [aid] ← attemptsOf ws
+        _ ← pay sc aid
+        beginPlacement sc (raw aid) `shouldReturn` "true"
+        evalLua sc (T.concat
+            [ "local j = construction.abortPlacement('", pageText
+            , "', 5, 5, ", tshow (raw aid), "); "
+            , "local r = j and j.receipt and j.receipt[1]; "
+            , "return tostring(r and r.name)" ])
+            `shouldReturn` "steel_plate"
+        HM.size <$> readIORef (wsConstructDesignationsRef ws)
+            `shouldReturn` 0
+
+    it "refuses an abort for a job that never took the hand-off, or for \
+       \another attempt" $ \sc → do
+        ws ← resetScene sc
+        designate sc ws tile tile floorPiece
+        [aid] ← attemptsOf ws
+        abortPlacement sc (raw aid) `shouldReturn` "nil"
+        beginPlacement sc (raw aid) `shouldReturn` "true"
+        abortPlacement sc (raw aid + 1) `shouldReturn` "nil"
+        HM.size <$> readIORef (wsConstructDesignationsRef ws)
+            `shouldReturn` 1
 
     it "refuses to CANCEL a designation inside its placement hand-off" $
         \sc → do
@@ -607,6 +670,11 @@ drainWorldQueue env logger = go (200 ∷ Int)
         case m of
             Nothing → pure ()
             Just c  → handleWorldCommand env logger c ≫ go (n - 1)
+
+abortPlacement ∷ Scene → Word64 → IO Text
+abortPlacement sc n = evalLua sc $ T.concat
+    [ "return tostring(construction.abortPlacement('", pageText
+    , "', 5, 5, ", tshow n, "))" ]
 
 beginPlacement ∷ Scene → Word64 → IO Text
 beginPlacement sc n = evalLua sc $ T.concat

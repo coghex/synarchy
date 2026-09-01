@@ -239,11 +239,14 @@ function M.finishPlacement(wid, job, uid)
         construction.setJobStatus(wid, job.x, job.y, "complete", job.attempt,
                                   fromTok, toTok)
     else
-        -- Placement failed outright for this attempt. Cancelling through
-        -- the atomic pop is what refunds its receipt EXACTLY once:
-        -- whichever caller's delete wins is handed the receipt, and
-        -- every other caller is handed nothing.
-        local removed = construction.cancelDesignationForRefund(
+        -- Placement failed outright: nothing was staged, so this claimant
+        -- ABORTS the hand-off it took rather than cancelling. An ordinary
+        -- cancel is refused while a designation is `placing` (it would
+        -- refund a receipt while a queued placement still lands), and
+        -- this is the one caller that knows there is no such placement.
+        -- Still an atomic exact-attempt pop, so the receipt is refunded
+        -- exactly once.
+        local removed = construction.abortPlacement(
             wid, job.x, job.y, job.attempt)
         if removed then M.refundStructureMaterials(removed) end
         reportFailure(uid,

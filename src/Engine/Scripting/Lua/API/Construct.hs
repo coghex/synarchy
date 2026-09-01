@@ -17,6 +17,7 @@ module Engine.Scripting.Lua.API.Construct
     , constructSetJobStatusFn
     , constructAddJobProgressFn
     , constructBeginPlacementFn
+    , constructAbortPlacementFn
     , constructResolvePlanFn
     , constructSetDesignateTextureFn
     , constructSetLineModeFn
@@ -52,7 +53,8 @@ import World.Generate.Coordinates
 import World.Command.Types (WorldCommand(..))
 import World.Construct.Types
 import World.Thread.Command.Cursor.Construct
-    (beginConstructPlacement, popConstructDesignation)
+    ( abortConstructPlacement, beginConstructPlacement
+    , popConstructDesignation )
 
 -- | construction.setAnchor(pageId, gx, gy) — first-click anchor.
 constructSetAnchorFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
@@ -470,6 +472,46 @@ constructAddJobProgressFn wsc = do
                         (realToFrac delta) attempt
         _ → pure ()
     return 0
+
+-- | @construction.abortPlacement(pageId, gx, gy, attempt) → job | nil@ —
+--   give up a placement hand-off this claimant took but could not use
+--   (#1844), returning the removed designation so its receipt can be
+--   refunded.
+--
+--   The mirror of @beginPlacement@, and the only way out of the hand-off
+--   other than completing it. Ordinary cancellation is refused while a
+--   designation is @placing@ — it would refund a receipt while the
+--   claimant's queued placement still lands — but the claimant is the
+--   OWNER of that window, and it alone can know that its
+--   @structure.place@ staged nothing at all (the target chunk having
+--   evicted between the final resolver check and the placement).
+--
+--   Restricted to a @placing@ designation with a matching attempt, so it
+--   is not a second general cancel: a job that never took the hand-off,
+--   and a successor at the same tile, are untouched.
+constructAbortPlacementFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+constructAbortPlacementFn wsc = do
+    pageIdArg ← Lua.tostring 1
+    gxArg ← Lua.tonumber 2
+    gyArg ← Lua.tonumber 3
+    attArg ← readAttemptArg 4
+    case (pageIdArg, gxArg, gyArg, attArg) of
+        (Just pageIdBS, Just gxN, Just gyN, Just attempt) → do
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
+                gxN' = round gxN ∷ Int
+                gyN' = round gyN ∷ Int
+            mgr ← Lua.liftIO $ readIORef (wsWorldManagerRef wsc)
+            case lookup pageId (wmWorlds mgr) of
+                Nothing → Lua.pushnil ≫ return 1
+                Just ws → do
+                    worldSize ← Lua.liftIO $ pageWrapWorldSize ws
+                    let (gx, gy) = canonicalTile worldSize gxN' gyN'
+                    mCd ← Lua.liftIO $
+                        abortConstructPlacement ws (gxN', gyN') attempt
+                    case mCd of
+                        Just cd → pushJobTable gx gy cd ≫ return 1
+                        Nothing → Lua.pushnil ≫ return 1
+        _ → Lua.pushnil ≫ return 1
 
 -- | @construction.resolvePlan(pageId, gx, gy, attempt) → outcome | nil@
 --   — re-run the shared structure-plan resolver for ONE exact attempt

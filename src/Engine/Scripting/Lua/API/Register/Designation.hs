@@ -64,6 +64,7 @@ registerDesignationAPI env = do
   registerLuaFunction "addJobProgress"     (constructAddJobProgressFn (toWorldSimCapability env))
   registerLuaFunction "payMaterials"       (constructPayMaterialsFn env)
   registerLuaFunction "beginPlacement"     (constructBeginPlacementFn (toWorldSimCapability env))
+  registerLuaFunction "abortPlacement"     (constructAbortPlacementFn (toWorldSimCapability env))
   registerLuaFunction "resolvePlan"        (constructResolvePlanFn env)
   registerLuaFunction "setDesignateTexture" (constructSetDesignateTextureFn (toWorldSimCapability env))
   registerLuaFunction "setLineMode"        (constructSetLineModeFn (toWorldSimCapability env))

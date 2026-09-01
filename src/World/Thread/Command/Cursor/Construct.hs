@@ -30,6 +30,7 @@ module World.Thread.Command.Cursor.Construct
     , handleWorldSetConstructLineModeCommand
     , popConstructDesignation
     , beginConstructPlacement
+    , abortConstructPlacement
     ) where
 
 import UPrelude
@@ -57,7 +58,9 @@ import World.Construct.Types ( ConstructTarget(..), ConstructStatus(..)
                              , constructTargetCategory )
 import World.Plant.Validate (revalidatePlantDesignations)
 import World.Construct.Apply (applyConstructSlopeToChunk)
-import Structure.Types (StructureCommitWindow, takeDeclinedInWindow)
+import Structure.Types
+    (StructureCommitWindow(..), takeDeclinedInWindow)
+import World.Construct.Art (structurePresentAt)
 import World.Construct.Revalidate
     ( clearConstructDesignationSlope, constructRefundDeps
     , notifyConstructCompleted, notifyConstructInvalidated
@@ -361,6 +364,36 @@ beginConstructPlacement worldState (rawGX, rawGY) attempt = do
                 (HM.insert key (cd { cdStatus = CsPlacing }) m, True)
             _ → (m, False)
 
+-- | ABORT one exact attempt's placement hand-off, returning the removed
+--   designation (#1844).
+--
+--   The mirror of 'beginConstructPlacement', and the ONE way a
+--   'CsPlacing' designation comes off the map other than its completion.
+--   A cancellation is refused during the hand-off because it would
+--   refund a receipt while the claimant's queued placement still lands —
+--   but the CLAIMANT is not a racer, it is the owner of the window, and
+--   it is the only caller that can know it staged nothing at all (its
+--   own 'structure.place' returned false, the target chunk having
+--   evicted between the final resolver check and the placement). Without
+--   this it would be left holding a paid, placing designation with no
+--   completion coming.
+--
+--   Restricted to 'CsPlacing' AND the exact attempt, so it cannot stand
+--   in for the ordinary cancel: a job that never took the hand-off, or a
+--   successor at the same tile, is untouched.
+abortConstructPlacement ∷ WorldState → (Int, Int) → ConstructAttemptId
+                        → IO (Maybe ConstructDesignation)
+abortConstructPlacement worldState (rawGX, rawGY) attempt = do
+    worldSize ← pageWrapWorldSize worldState
+    let key = canonicalTile worldSize rawGX rawGY
+    mCd ← atomicModifyIORef' (wsConstructDesignationsRef worldState) $ \m →
+        case HM.lookup key m of
+            Just cd | cdAttempt cd ≡ attempt, cdStatus cd ≡ CsPlacing →
+                (HM.delete key m, Just cd)
+            _ → (m, Nothing)
+    forM_ mCd $ clearConstructDesignationSlope worldState key
+    pure mCd
+
 -- | Build AI hook (#96): set a designation's status. Complete removes it
 --   (and resets the corner-progress display back to flat ground — the
 --   placed piece takes over from there).
@@ -420,7 +453,26 @@ handleWorldSetConstructStatusCommand env _logger pageId gx gy st attempt
                               let r = resolveStructurePlan pw
                                           (PlanForCommit attempt)
                                           (cdZ cd) piece key
-                              pure (prOutcome r ≢ PlanValid)
+                                  -- The piece has to BE there. A window
+                                  -- with no declines proves only that
+                                  -- nothing was retracted, and an EMPTY
+                                  -- span (which the public verb can
+                                  -- supply) proves nothing at all — so
+                                  -- the completion is bound to the
+                                  -- committed overlay itself: the target
+                                  -- slot the plan resolved must now hold
+                                  -- a piece, and the window must actually
+                                  -- span an attempt.
+                                  landed = maybe False
+                                      (\slot → structurePresentAt
+                                          (pwWorldSize pw) (pwTiles pw)
+                                          (pwStage pw) slot (fst key) (snd key))
+                                      (prSlot r)
+                                  staged = maybe False
+                                      (\(StructureCommitWindow lo hi) → lo < hi)
+                                      mWindow
+                              pure (prOutcome r ≢ PlanValid
+                                      ∨ not landed ∨ not staged)
                         _ → pure False
                 _ → pure False
             let unbuilt = declined ∨ invalid
