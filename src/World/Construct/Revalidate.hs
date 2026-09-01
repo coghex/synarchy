@@ -227,17 +227,24 @@ pruneConstructDesignations pw scope designations =
                | (k, cd) ← candidates
                , CtStructure piece ← [cdTarget cd]
                  -- Requirement 18: a designation inside its final
-                 -- placement hand-off is the CLAIMANT's, not ours. Its
-                 -- own accepted read-your-writes placement is visible
-                 -- here the instant it is staged, and an occupancy check
-                 -- would read the worker's success as an external
-                 -- conflict — cancelling the job and refunding materials
-                 -- that were correctly spent. The window is one Lua
-                 -- callback wide (beginPlacement → place → complete), so
-                 -- skipping it defers nothing meaningfully.
-               , cdStatus cd ≢ CsPlacing
-               , let r = resolveStructurePlan pw (PlanForAttempt (cdAttempt cd))
-                             (cdZ cd) piece k
+                 -- placement hand-off has its own accepted
+                 -- read-your-writes placement visible here the instant
+                 -- it is staged, and a plain occupancy check would read
+                 -- the worker's success as an external conflict —
+                 -- cancelling the job and refunding materials that were
+                 -- correctly spent.
+                 --
+                 -- So the exemption is exactly that ONE check, not the
+                 -- whole resolution: 'PlanForCommit' relaxes slot
+                 -- occupancy and nothing else. The hand-off window is
+                 -- short but real, and the world thread can drain a
+                 -- terrain, fluid or catalogue mutation inside it — a
+                 -- site whose surface has drifted or whose pack has gone
+                 -- must still be cancelled rather than completed.
+               , let op = if cdStatus cd ≡ CsPlacing
+                            then PlanForCommit (cdAttempt cd)
+                            else PlanForAttempt (cdAttempt cd)
+               , let r = resolveStructurePlan pw op (cdZ cd) piece k
                , prOutcome r ≡ PlanVisibleInvalid
                    ∨ prOutcome r ≡ PlanMissingArt ]
     in ( foldl' (\m (k, _, _) → HM.delete k m) designations lost, lost )

@@ -137,6 +137,17 @@ data PlanOp
       -- ^ Revalidation and the worker's own re-checks on behalf of one
       --   attempt: that exact attempt is itself, and anything else at
       --   the tile is a conflict.
+    | PlanForCommit !ConstructAttemptId
+      -- ^ 'PlanForAttempt' for an attempt that is INSIDE its placement
+      --   hand-off: the piece in its target slot is the caller's OWN,
+      --   staged moments ago, so slot occupancy alone is not a refusal.
+      --
+      --   Everything else still is. That is the whole difference between
+      --   this and skipping the check: the hand-off window is short but
+      --   real, and the world thread can drain a terrain, fluid or
+      --   catalogue mutation inside it — a site whose surface has
+      --   drifted or whose pack has gone must not be completed just
+      --   because the worker got there first.
     deriving (Show, Eq)
 
 -- | Which structure slot a descriptor targets, mirroring
@@ -224,7 +235,7 @@ resolveStructurePlan pw op requiredZ piece tile@(gx, gy) =
                     | spKind piece ≡ "post" ∧ isNothing floorZ →
                         at slot surfaceZ Nothing PlanVisibleInvalid
                             "no floor under the post"
-                    | present slot →
+                    | present slot ∧ not committing →
                         at slot surfaceZ (finalZ surfaceZ) PlanVisibleInvalid
                             "the target slot is already occupied"
                     | conflictingDesignation →
@@ -288,9 +299,16 @@ resolveStructurePlan pw op requiredZ piece tile@(gx, gy) =
     -- a kind is buildable.
     mBuild = packKindBuild (pwCatalog pw) (spPack piece) (spKind piece)
 
+    -- The caller is mid-hand-off, so the piece in its target slot is its
+    -- own. Only that one check relaxes.
+    committing = case op of
+        PlanForCommit _ → True
+        _               → False
+
     conflictingDesignation =
         case HM.lookup (canonicalTile worldSize gx gy) (pwDesignations pw) of
             Nothing → False
             Just cd → case op of
-                PlanForPlacement  → True
+                PlanForPlacement   → True
                 PlanForAttempt aid → cdAttempt cd ≢ aid
+                PlanForCommit aid  → cdAttempt cd ≢ aid

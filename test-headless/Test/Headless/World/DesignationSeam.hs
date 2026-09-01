@@ -718,8 +718,13 @@ engineSpec = beforeAll setup $ do
       -- 'Test.Headless.Construct.AttemptIdentity's subject, and what
       -- this example is pinning is that the popped job reports the
       -- receipt through the tile's alias.
+      -- …and back out of the hand-off, because a PLACING designation is
+      -- deliberately not poppable (#1844: cancelling one would refund a
+      -- receipt while the queued placement still lands). What the refund
+      -- pop below is pinning is its ALIAS tolerance, not that race.
       atomicModifyIORef' (wsConstructDesignationsRef ws) $ \m →
-          ( HM.adjust (\cd → cd { cdPayment =
+          ( HM.adjust (\cd → cd { cdStatus = CsClaimed
+                               , cdPayment =
                 CpPaid (mkMaterialReceipt [("wiring", 1)]) }) anchorTile m
           , () )
       cd ← designationAt ws anchorTile

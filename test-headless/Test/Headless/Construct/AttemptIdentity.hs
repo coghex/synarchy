@@ -381,6 +381,49 @@ paymentSpec = describe "payment" $ do
         -- The receipt was SPENT on a real piece, so nothing comes back.
         groundNames ws `shouldReturn` []
 
+    it "refuses to CANCEL a designation inside its placement hand-off" $
+        \sc → do
+        -- The claimant has by then staged its piece and queued the world
+        -- command that commits it. Popping here would refund the receipt
+        -- while that command still lands, leaving the player with both
+        -- the structure and its materials back — so cancellation simply
+        -- loses the race, and the completion settles the attempt either
+        -- way.
+        ws ← resetScene sc
+        designate sc ws tile tile floorPiece
+        [aid] ← attemptsOf ws
+        _ ← pay sc aid
+        beginPlacement sc (raw aid) `shouldReturn` "true"
+        evalLua sc (T.concat
+            [ "return tostring(construction.cancelDesignationForRefund('"
+            , pageText, "', 5, 5, ", tshow (raw aid), "))" ])
+            `shouldReturn` "nil"
+        HM.size <$> readIORef (wsConstructDesignationsRef ws)
+            `shouldReturn` 1
+        groundNames ws `shouldReturn` []
+        -- The player's coordinate-only erase loses it too: what matters
+        -- is the hand-off, not which form named it.
+        cancel sc ws tile Nothing
+        HM.size <$> readIORef (wsConstructDesignationsRef ws)
+            `shouldReturn` 1
+
+    it "still CANCELS a completion whose site drifted during the \
+       \hand-off" $ \sc → do
+        -- The hand-off exempts the worker's OWN staged piece from the
+        -- occupancy check and nothing else. A terrain, fluid or
+        -- catalogue mutation the world thread drains inside that window
+        -- must still cancel and refund rather than complete.
+        ws ← resetScene sc
+        designate sc ws tile tile floorPiece
+        [aid] ← attemptsOf ws
+        _ ← pay sc aid
+        beginPlacement sc (raw aid) `shouldReturn` "true"
+        writeIORef (wsTilesRef ws) (surfaceAt (zSlice + 1))
+        completeWithWindow sc aid 0 1
+        HM.size <$> readIORef (wsConstructDesignationsRef ws)
+            `shouldReturn` 0
+        groundNames ws `shouldReturn` ["steel_plate"]
+
     it "refuses a STRUCTURE completion that offers no commit window" $
         \sc → do
         -- Without a window there is nothing to check, so deleting would
@@ -604,7 +647,10 @@ newBareLuaBackend env = do
     pure ls
 
 flatTiles ∷ WorldTileData
-flatTiles =
+flatTiles = surfaceAt zSlice
+
+surfaceAt ∷ Int → WorldTileData
+surfaceAt z =
     let coord = ChunkCoord 0 0
         area  = chunkSize * chunkSize
         col   = ColumnTiles
@@ -616,8 +662,8 @@ flatTiles =
         lc = LoadedChunk
                { lcCoord = coord
                , lcTiles = V.replicate area col
-               , lcSurfaceMap = VU.replicate area zSlice
-               , lcTerrainSurfaceMap = VU.replicate area zSlice
+               , lcSurfaceMap = VU.replicate area z
+               , lcTerrainSurfaceMap = VU.replicate area z
                , lcFluidMap = V.replicate area Nothing
                , lcIceMap = emptyIceMap, lcFlora = emptyFloraChunkData
                , lcSideDeco = VU.empty, lcWaterTableMap = VU.empty

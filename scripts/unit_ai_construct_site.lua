@@ -169,13 +169,21 @@ end
 -- when the clock runs out. Any scanning acolyte runs this.
 function M.sweepClaims(constructClaims, constructKey, wid, jobs, now, timeout)
     for _, job in ipairs(jobs) do
-        if job.status == "claimed" then
+        -- "placing" is swept exactly like "claimed" (#1844). The
+        -- hand-off is one Lua callback wide, so a job still in it a
+        -- timeout later is a claimant that died or errored mid-placement
+        -- -- and the engine refuses to CANCEL a placing designation, so
+        -- without this the tile would be stranded for good.
+        if job.status == "claimed" or job.status == "placing" then
             local key = constructKey(wid, job.x, job.y)
             local c = constructClaims[key]
             if not c then
                 -- Orphan (loaded save / script reload): adopt with an
                 -- anonymous timer so it frees up if nobody owns it.
-                constructClaims[key] = { uid = nil, at = now }
+                -- Adopted with the attempt it is a claim ON, so a later
+                -- invalidation for a DIFFERENT attempt cannot erase it.
+                constructClaims[key] = { uid = nil, at = now,
+                                         attempt = job.attempt }
             elseif (c.uid and not unit.exists(c.uid))
                    or (now - c.at > timeout) then
                 constructClaims[key] = nil
@@ -242,6 +250,46 @@ function M.finishPlacement(wid, job, uid)
             "Construction site changed — materials returned to the ground")
     end
     return placed
+end
+
+-- Externally interrupt a live claimant on (wid,gx,gy) — e.g. a
+-- cancelled paid job (#799): s.constructJob is a LOCAL copy that keeps
+-- ticking regardless of the engine-side designation, and
+-- constructUtility only notices on that unit's own next decision tick
+-- — too late to stop it placing the piece. This clears the claim
+-- immediately instead. `wid` is the CANCELLED job's own page.
+--
+-- #1844 also reaches it from the WORLD side, through unit_ai.lua's
+-- onConstructInvalidated broadcast: an invalidated designation whose
+-- claim registry entry survived would keep the tile reserved until the
+-- claimant's next decision tick or its claim timeout, blocking a
+-- successor designated there immediately.
+function M.abandonClaim(constructClaims, constructKey, wid, gx, gy, attempt)
+    local key = constructKey(wid, gx, gy)
+    local c = constructClaims[key]
+    -- #1844: the registry entry is removed only when it belongs to the
+    -- ATTEMPT being abandoned. A delayed invalidation for a retired
+    -- attempt arriving after someone has claimed a SUCCESSOR at the same
+    -- tile must not erase the successor's claim -- the tile would then
+    -- look unclaimed to the next scanner while the successor's own
+    -- `claimed` status was still queued, and the stale-claim sweep would
+    -- read it as an orphan. The claim carries its attempt for exactly
+    -- this comparison; an entry that predates one (an adopted orphan) is
+    -- matched by coordinate as before.
+    local mine = c ~= nil
+        and (attempt == nil or c.attempt == nil or c.attempt == attempt)
+    if mine then constructClaims[key] = nil end
+    if not (c and c.uid) then return end
+    local s = require("scripts.unit_ai").getState(c.uid)
+    local job = s and s.constructJob
+    -- The same rule for the claimant's own job copy: a worker that has
+    -- since claimed a successor at this tile keeps it, because the
+    -- coordinate alone can no longer tell the two apart.
+    if job and job.x == gx and job.y == gy
+       and (attempt == nil or job.attempt == attempt) then
+        s.constructJob = nil
+        s.constructCandidate = nil
+    end
 end
 
 return M

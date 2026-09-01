@@ -50,6 +50,7 @@ import World.Construct.Extent (structureDragExtent)
 import World.Construct.Plan
     ( PlanOp(..), PlanOutcome(..), PlanResult(..), PlanWorld(..)
     , planOutcomeName, planSurfaceZAt, resolveStructurePlan )
+import World.Construct.Revalidate (constructPlanWorld)
 import World.Construct.Types ( ConstructTarget(..), ConstructStatus(..)
                              , ConstructDesignation(..)
                              , newConstructDesignation
@@ -296,6 +297,20 @@ handleWorldCancelConstructCommand env _logger pageId gx gy mAttempt = do
 --   looks, and is still exact because the pop returns the one attempt it
 --   removed.
 --
+--   A designation inside its placement HAND-OFF ('CsPlacing') is not
+--   poppable at all, whatever attempt is named. The claimant has by then
+--   staged its piece and queued the world command that commits it;
+--   removing the designation here would refund the receipt while that
+--   command still lands, leaving the player with both the structure and
+--   its materials back. Cancellation simply loses that race — the window
+--   is one Lua callback wide, and the completion that follows settles
+--   the attempt either way (committing it, or cancelling and refunding
+--   it when the placement was declined or its site drifted).
+--
+--   A hand-off cannot strand the tile: 'World.Construct.Reconcile'
+--   demotes a restored 'CsPlacing' to pending, and the AI's own
+--   stale-claim sweep releases one whose claimant stopped refreshing.
+--
 --   #1175: the tile is canonicalised HERE, once, so every caller accepts
 --   any u-alias and resolves the one stored key.
 popConstructDesignation ∷ WorldState → (Int, Int)
@@ -306,7 +321,8 @@ popConstructDesignation worldState (rawGX, rawGY) mAttempt = do
     let key = canonicalTile worldSize rawGX rawGY
     mCd ← atomicModifyIORef' (wsConstructDesignationsRef worldState) $ \m →
         case HM.lookup key m of
-            Just cd | maybe True (≡ cdAttempt cd) mAttempt →
+            Just cd | maybe True (≡ cdAttempt cd) mAttempt
+                    , cdStatus cd ≢ CsPlacing →
                 (HM.delete key m, Just cd)
             _ → (m, Nothing)
     forM_ mCd $ clearConstructDesignationSlope worldState key
@@ -376,6 +392,32 @@ handleWorldSetConstructStatusCommand env _logger pageId gx gy st attempt
                     atomicModifyIORef' (wsStructureStageRef worldState)
                                        (takeDeclinedInWindow window)
                 _ → pure False
+            -- …and the placement's own SITE is re-resolved one last
+            -- time. Requirement 18's hand-off state exempts a placing
+            -- designation from the occupancy check — the piece in its
+            -- slot is the worker's own — but nothing else, and the world
+            -- thread can have drained a terrain, fluid or catalogue
+            -- mutation between @beginPlacement@ and this command. A site
+            -- whose surface has drifted or whose pack has gone must be
+            -- cancelled and refunded here rather than completed, or the
+            -- structure lands on ground the plan no longer describes.
+            -- 'PlanForCommit' is that exemption, and only that one.
+            invalid ← case st of
+                CsComplete → do
+                    designations ← readIORef
+                        (wsConstructDesignationsRef worldState)
+                    case HM.lookup key designations of
+                        Just cd
+                          | cdAttempt cd ≡ attempt
+                          , CtStructure piece ← cdTarget cd → do
+                              pw ← constructPlanWorld env worldState
+                              let r = resolveStructurePlan pw
+                                          (PlanForCommit attempt)
+                                          (cdZ cd) piece key
+                              pure (prOutcome r ≢ PlanValid)
+                        _ → pure False
+                _ → pure False
+            let unbuilt = declined ∨ invalid
             mCd ← atomicModifyIORef' (wsConstructDesignationsRef worldState) $
                 \m → case HM.lookup key m of
                     Just cd | cdAttempt cd ≡ attempt → case st of
@@ -397,11 +439,14 @@ handleWorldSetConstructStatusCommand env _logger pageId gx gy st attempt
                     _ → (m, Nothing)
             forM_ mCd $ \cd → do
                 clearConstructDesignationSlope worldState key cd
-                if declined
-                    -- The placement was declined after all: this is a
-                    -- CANCELLATION wearing a completion's clothes, so the
-                    -- receipt goes back to the ground exactly as any other
-                    -- cancellation's would, and the claimant is detached.
+                if unbuilt
+                    -- The placement was declined, or its site stopped
+                    -- being buildable while the completion was in
+                    -- flight: either way nothing was really built, so
+                    -- this is a CANCELLATION wearing a completion's
+                    -- clothes. The receipt goes back to the ground
+                    -- exactly as any other cancellation's would, and the
+                    -- claimant is detached.
                     then do
                         deps ← constructRefundDeps env
                         refundConstructDesignation deps worldState key cd

@@ -189,6 +189,34 @@ spec = describe "unit AI reconciliation boundary (#1589)" $ do
         , "  good[1].constructJob.attempt == 4, 'an exact v8 job survives')"
         ]
 
+    it "abandons only the invalidated attempt's CLAIM, never a \
+       \successor's (#1844)" $ runsOk $ lns
+        [ prelude
+        , "package.loaded['scripts.unit_ai'].getState = function() return nil end"
+        , "local construct = require('scripts.unit_ai_construct')"
+        , "local claims = require('scripts.unit_ai_claims')"
+        -- The registry is module-private, so drive it the way the AI
+        -- does: a claim recorded for attempt B, then a DELAYED
+        -- invalidation for the retired attempt A at the same tile.
+        , "local site = require('scripts.unit_ai_construct_site')"
+        , "local reg, key = {}, claims.key"
+        , "reg[key('P', 4, 4)] = { uid = 1, at = 0, attempt = 9 }"
+        , "site.abandonClaim(reg, key, 'P', 4, 4, 3)"
+        , "assert(reg[key('P', 4, 4)] ~= nil,"
+        , "  'a stale invalidation must not erase the successor claim')"
+        -- …and the successor's OWN invalidation does clear it.
+        , "site.abandonClaim(reg, key, 'P', 4, 4, 9)"
+        , "assert(reg[key('P', 4, 4)] == nil,"
+        , "  'the matching attempt clears its own claim')"
+        -- An adopted orphan carries no attempt and is still matched by
+        -- coordinate, exactly as it was before the attempt existed.
+        , "reg[key('P', 5, 5)] = { uid = nil, at = 0 }"
+        , "site.abandonClaim(reg, key, 'P', 5, 5, 3)"
+        , "assert(reg[key('P', 5, 5)] == nil,"
+        , "  'an attempt-less adopted orphan still clears')"
+        , "assert(construct ~= nil)"
+        ]
+
     it "clears a stale reference from EVERY family the schema declares \
        \-- craftJob, repairJob, pickupOrder, a ground forageTarget, \
        \forageLoot and harvestLoot included, none of which the pre-#1589 \

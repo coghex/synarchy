@@ -51,10 +51,13 @@ local site = require("scripts.unit_ai_construct_site")
 local M = {}
 
 -- Re-exported so callers keep ONE entry point for the construction
--- module: scripts/build_tool.lua's cancel path refunds through this.
+-- module: scripts/build_tool.lua's cancel path refunds through this,
+-- and detaches the claimant through the wrapper below. The claim
+-- registry itself stays module-private, so the public verb takes only
+-- what a caller can know.
 M.refundStructureMaterials = site.refundStructureMaterials
 
-local constructClaims = claimsLib.track({})  -- page key → { uid, at }
+local constructClaims = claimsLib.track({})  -- key → { uid, at, attempt }
 local constructKey    = claimsLib.key        -- (wid, x, y)
 
 local function constructClaimedByOther(key, uid, now, timeout)
@@ -87,41 +90,19 @@ local function releaseConstructJob(wid, s, uid, toPending)
     s.constructCandidate = nil
 end
 
--- Externally interrupt a live claimant on (wid,gx,gy) — e.g. a
--- cancelled paid job (#799): s.constructJob is a LOCAL copy that keeps
--- ticking regardless of the engine-side designation, and
--- constructUtility only notices on that unit's own next decision tick
--- — too late to stop it placing the piece. This clears the claim
--- immediately instead. `wid` is the CANCELLED job's own page.
---
--- #1844 also reaches it from the WORLD side, through unit_ai.lua's
--- onConstructInvalidated broadcast: an invalidated designation whose
--- claim registry entry survived would keep the tile reserved until the
--- claimant's next decision tick or its claim timeout, blocking a
--- successor designated there immediately.
-local function abandonClaim(wid, gx, gy, attempt)
-    local key = constructKey(wid, gx, gy)
-    local c = constructClaims[key]
-    constructClaims[key] = nil
-    if not (c and c.uid) then return end
-    local s = require("scripts.unit_ai").getState(c.uid)
-    local job = s and s.constructJob
-    -- #1844: when the caller names the cancelled ATTEMPT, only that
-    -- claimant is detached. A worker that has since claimed a successor
-    -- at the same tile keeps its own job: the coordinate alone can no
-    -- longer tell the two apart.
-    if job and job.x == gx and job.y == gy
-       and (attempt == nil or job.attempt == attempt) then
-        s.constructJob = nil
-        s.constructCandidate = nil
-    end
-end
-M.abandonClaim = abandonClaim
 
 -- Work XP owed to a claimant whose placement is queued but not yet
 -- confirmed (#1844), keyed the way claims are. One entry per tile: a job
 -- reaches it once, and both engine answers consume it.
 local pendingXp = {}
+
+-- Detach whoever was working one exact attempt (scripts/build_tool.lua's
+-- player cancel, and the engine broadcast below). The registry is
+-- private to this module, so the public form takes only the tile and the
+-- attempt.
+function M.abandonClaim(wid, gx, gy, attempt)
+    site.abandonClaim(constructClaims, constructKey, wid, gx, gy, attempt)
+end
 
 -- The engine ACCEPTED that attempt's placement: the piece really landed,
 -- so the work is paid for now rather than optimistically at queue time.
@@ -147,7 +128,7 @@ if unitAi then
         -- A withdrawn attempt is never paid for: `false` discards the
         -- claim rather than granting it.
         settlePendingXp(pageId, gx, gy, attempt, false)
-        abandonClaim(pageId, gx, gy, attempt)
+        M.abandonClaim(pageId, gx, gy, attempt)
     end
 
     -- The other half: the world thread accepted this attempt's queued
@@ -259,7 +240,8 @@ local function constructExecute(uid, s, params)
             s.constructCandidate = nil
             return
         end
-        constructClaims[key] = { uid = uid, at = now }
+        constructClaims[key] = { uid = uid, at = now,
+                                 attempt = cand.attempt }
         construction.setJobStatus(wid, cand.x, cand.y, "claimed",
                                   cand.attempt)
         s.constructCandidate = nil
@@ -303,7 +285,8 @@ local function constructExecute(uid, s, params)
         s.constructJob = nil
         return
     end
-    constructClaims[key] = { uid = uid, at = now }   -- keep the claim fresh
+    -- Keep the claim fresh, carrying the attempt it is a claim ON.
+    constructClaims[key] = { uid = uid, at = now, attempt = job.attempt }
 
     -- Building blueprint: walk up and stake it, then hand off to the
     -- delivery + build_nearby machinery.
