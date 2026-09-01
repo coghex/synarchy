@@ -18,6 +18,8 @@ module Engine.Scripting.Lua.API.UI
   , module Engine.Scripting.Lua.API.UI.Tooltip
     -- * Popup placement
   , module Engine.Scripting.Lua.API.UI.Placement
+    -- * Presentation boundary (#2056)
+  , module Engine.Scripting.Lua.API.UI.Presentation
   ) where
 
 import Engine.Scripting.Lua.API.UI.Page
@@ -28,3 +30,4 @@ import Engine.Scripting.Lua.API.UI.TextInput
 import Engine.Scripting.Lua.API.UI.Property
 import Engine.Scripting.Lua.API.UI.Tooltip
 import Engine.Scripting.Lua.API.UI.Placement
+import Engine.Scripting.Lua.API.UI.Presentation

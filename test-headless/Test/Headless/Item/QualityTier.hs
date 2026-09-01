@@ -37,7 +37,7 @@ import Engine.Asset.Handle (TextureHandle(..))
 blankDef ∷ [QualityTier] → ItemDef
 blankDef tiers = ItemDef
     { idName = "test_item", idDisplayName = "Test Item"
-    , idTexture = TextureHandle 0, idWeight = 0, idWeightSpec = Nothing
+    , idTexture = TextureHandle 0, idIconTexture = TextureHandle 0, idWeight = 0, idWeightSpec = Nothing
     , idBulk = 1.0, idStorage = Nothing
     , idKind = "misc", idCategory = "Misc", idMake = "", idMaterial = ""
     , idQualitySpec = Just (0, 100)

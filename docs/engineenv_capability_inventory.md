@@ -193,6 +193,19 @@ here:
   exact same `IORef`/`TVar`/`Queue` handle (or immutable value)
   `EngineEnv` already carries — the projection aliases live state, it
   does not snapshot or duplicate it.
+* **Every binding must be readable, and grouping is free** (#2059).
+  `tools/engine_env_capability_audit.py` derives the whole
+  capability-accessor ownership map behind §5's write map and §6.5's
+  residue from these projections, so a binding it cannot pair with an
+  `EngineEnv` accessor takes that selector out of enforcement. It
+  therefore canonicalizes each right-hand side structurally: semantically
+  inert grouping — `(accessor env)`, `(accessor) env`, and the same
+  freedom inside the wrapped form below — reads exactly as the ungrouped
+  spelling, so no legal respelling can quietly drop a field. Anything
+  else is a *hard audit failure* naming the module, projection and
+  field, never a silent omission: an unread binding is an unenforced
+  field. Widening what the audit reads and restating this bullet are one
+  change, made together.
 * **An abstract wrapper narrows AUTHORITY, and must still alias**
   (#1896). A view may present a field through an abstract wrapper
   around the *same live handle* — today exactly one exists,
@@ -673,7 +686,7 @@ field documentation restates the reader/writer/lifecycle facts below.
 
 | Field | Lifecycle | Readers | Writers | Sync | Init | Shutdown | Notes |
 |---|---|---|---|---|---|---|---|
-| `uiManagerRef` | session-replaced | `MainRender` (`UI.Render`), `InputThread` (`Input.Thread.Keyboard:109`'s `validateFocus`, read on every keyboard dispatch), `LuaThread` (`API.UI.TextInput:48`'s `UI.getText`, `API.UI.Hierarchy:105`'s `UI.findElementAt`, and every other direct `UI.*` query) | `LuaThread` (every `UI.*` API module — `API.UI.Focus/Property/Tooltip/Hierarchy`, `API.Config`), `WorldThread` (load publish `World.Load.Publish:286`), `InputThread` (`Input.Thread.Keyboard:109,250`, atomic focus/control-focus validation on every keyboard dispatch — round 4 review notes this races the Lua thread's own concurrent element mutations, hence the atomic transition rather than a separate read/write pair), `MainRender` (`UI.Tooltip.State:64`'s `updateTooltipState`, the per-frame tooltip tick called from `Engine.Loop.Frame`, `atomicModifyIORef'`) | `IORef UIPageManager`, multi-writer via `atomicModifyIORef'` | `emptyUIPageManager` (`src/Engine/Core/Init.hs:196`) | None | Entire UI tree is rebuilt by Lua on load, per `docs/persistence_state_inventory.md`. |
+| `uiManagerRef` | session-replaced | `MainRender` (`UI.Render`), `InputThread` (`Input.Thread.Keyboard:109`'s `validateFocus`, read on every keyboard dispatch), `LuaThread` (`API.UI.TextInput:48`'s `UI.getText`, `API.UI.Hierarchy:105`'s `UI.findElementAt`, and every other direct `UI.*` query) | `LuaThread` (every `UI.*` API module — `API.UI.Focus/Property/Tooltip/Hierarchy/Presentation`, `API.Config`), `WorldThread` (load publish `World.Load.Publish:286`), `InputThread` (`Input.Thread.Keyboard:109,250`, atomic focus/control-focus validation on every keyboard dispatch — round 4 review notes this races the Lua thread's own concurrent element mutations, hence the atomic transition rather than a separate read/write pair), `MainRender` (`UI.Tooltip.State:64`'s `updateTooltipState`, the per-frame tooltip tick called from `Engine.Loop.Frame`, `atomicModifyIORef'`; and since #2056 `UI.Render`'s own `renderUIPages`, which after rendering a snapshot writes back that SNAPSHOT's armed presentation token — the one field on this record the render thread mutates, and deliberately an `atomicModifyIORef'` at the render site rather than through a helper, so §5's writing-module map records it) | `IORef UIPageManager`, multi-writer via `atomicModifyIORef'` | `emptyUIPageManager` (`src/Engine/Core/Init.hs:196`) | None | Entire UI tree is rebuilt by Lua on load, per `docs/persistence_state_inventory.md`. |
 | `focusManagerRef` | session-replaced | `InputThread` (read-only — `Thread.Keyboard:106`/`Thread.Char:119`, one plain `readIORef` per dispatch feeding `getInputMode`, which routes the keystroke to the debug console or lets it fall through), `LuaThread` (`API.ShellFocus:57`'s `getFocusIdFn`) | `LuaThread` (`API.ShellFocus:31,44,51` — `engine.registerFocusable`/`requestFocus`/`releaseFocus`, each an `atomicModifyIORef'`), `WorldThread` (load publish, `src/World/Load/Publish.hs:285`) | `IORef FocusManager` | `createFocusManager` (`src/Engine/Core/Init.hs:204`) | None | Shell/console TEXT focus (`UI.ShellFocus`), NOT either game-UI focus system. The `InputThread` never writes it: #745's Tab/Shift+Tab control-focus traversal transitions `uiManagerRef`, not this ref. |
 | `hudActivePageRef` | session-replaced | `WorldThread` (`Thread.Cursor` — HUD refresh-on-active-world-change, #129) | `WorldThread` (also load publish, `World.Load.Publish:283`, resynced from `wmVisible`) | `IORef (Maybe WorldPageId)` | `Nothing` (`src/Engine/Core/Init.hs:198`) | None | — |
 | `textBuffersRef` | boot-process | `LuaThread` (only; `API.Text`, direct queries) | `MainRender` (only; `Engine.Scripting.Lua.Message.Scene`, dispatched via `processLuaMessages` — never the Lua thread itself) | `IORef (Map ObjectId Text)` | `Map.empty` (`src/Engine/Core/Init.hs:202`) | None | The SCENE-OBJECT text cache `engine.getText` answers from, keyed by `ObjectId` — not editable-widget state, which is `uiManagerRef`'s `UI.TextBuffer` and a different mechanism entirely. Reset `None` is correct because entries are retired with their scene nodes rather than at a session boundary (#1961): `Engine.Scripting.Lua.Message.Scene` is the map's only writer and only remover, and it maintains one invariant — an entry exists exactly when the scene graph holds a node at that id whose `nodeText` is set, and equals it. The condition is a node BEARING TEXT, not a `TextObject`: `modifySceneNode` does not check `nodeType`, so `engine.setText` against a sprite's id sets and caches that sprite's text, which is preserved behaviour. All four transitions go through its `cacheSceneText`/`forgetSceneText` pair: a text spawn, a `setText` whose `modifySceneNode` actually landed, a destroy, and — easily missed — a SPRITE spawned over a node that bore text, which `addNode`'s `Map.insert` replaces. |
@@ -1604,7 +1617,7 @@ scope by §1: field-by-field inventories of `EngineState`,
   mention them. `Test.Headless.Capability.Input` covers projection
   aliasing for both records — including that the two same-typed
   `TVar Int` barrier fields resolve to their correct, distinct live
-  containers, and that repeated projection mints nothing fresh.
+  containers.
 - **Cross-capability surface (all of it).** These reads/writes cross
   out of `input-lua-transport` and are legitimate; per E1 a narrowed
   module takes its own capability record **plus strictly narrower
@@ -1731,11 +1744,11 @@ change, no behaviour change.
   `world-sim-render-handoff` set shrunk 54 → 4, checked in both
   directions against the live scan and against §6.2), plus
   projection-aliasing coverage in `Test.Headless.Capability.WorldSim` —
-  all nine fields asserted to be the same live container as
-  `EngineEnv`'s, plus stability across repeated projection (E5a
-  re-projects inline at most call sites) and explicit
-  same-shape-swap checks on `worldQueue`/`simQueue` and
-  `enginePausedRef`/`gameTimeRef`.
+  nine of the record's current eleven fields asserted to be the same
+  live container as `EngineEnv`'s (`wsPlayerIntentGenRef` and
+  `wsEnginePauseGenRef`, added after E5a, carry no alias assertion
+  yet), plus explicit same-shape-swap checks on `worldQueue`/`simQueue`
+  and `enginePausedRef`/`gameTimeRef`.
 
 **What landed in E5b (#894):**
 `Engine.Core.Capability.RenderHandoff` exports `RenderHandoffCapability`
@@ -1788,12 +1801,12 @@ through a projected field instead of an `EngineEnv` one.
   `world-sim-render-handoff` set shrunk 4 → 0, checked in both
   directions against the live scan and against §6.2), plus
   projection-aliasing coverage in
-  `Test.Headless.Capability.RenderHandoff` — all seven fields asserted
-  to be the same live container as `EngineEnv`'s, plus stability across
-  repeated projection (several call sites re-project inline) and
-  explicit non-swap checks on the two single-slot upload handoffs and
-  on the palette/handle-table pair. The behaviour this refactor must
-  not disturb keeps its own pre-existing gates:
+  `Test.Headless.Capability.RenderHandoff` — nine of the record's
+  current ten fields asserted to be the same live container as
+  `EngineEnv`'s (`rhSceneStatsRef`, added by #1921, carries no alias
+  assertion yet), plus explicit non-swap checks on the two single-slot
+  upload handoffs and on the palette/handle-table pair. The behaviour
+  this refactor must not disturb keeps its own pre-existing gates:
   `Test.Headless.Lua.PreviewGeneration` for the delivery-time preview
   staleness policy and `Test.Headless.Blood.Teardown` for live-ref
   draining, exactly-once cleanup and teardown/FIFO overlap.
@@ -1912,9 +1925,8 @@ call sequence over the same containers.
   directions against the live scan and against §6.2), plus
   projection-aliasing coverage in `Test.Headless.Capability.UnitCombat`
   — all ten fields asserted to be the same live container as
-  `EngineEnv`'s, stability across repeated projection (E6a re-projects
-  inline at most call sites), and explicit non-transposition checks on
-  the three identically-typed `IORef (Seq CombatEvent)` streams
+  `EngineEnv`'s, and explicit non-transposition checks on the three
+  identically-typed `IORef (Seq CombatEvent)` streams
   (`combatEventsRef`/`injuryEventsRef`/`thoughtEventsRef`), on the
   `unitQueue`/`combatQueue` producer-consumer pair, and on the
   `unitManagerRef`/`utsRef` pair a load publish swaps together.
@@ -1975,10 +1987,9 @@ same containers.
   directions against the live scan and against §6.2), plus
   projection-aliasing coverage in `Test.Headless.Capability.Building`
   — all three fields asserted to be the same live container as
-  `EngineEnv`'s, and stability across repeated projection (E6b
-  re-projects inline at most call sites). There is no transposition
-  example, unlike E6a's three identically-typed `IORef (Seq
-  CombatEvent)` streams: the three building fields have three distinct
+  `EngineEnv`'s. There is no transposition example, unlike E6a's three
+  identically-typed `IORef (Seq CombatEvent)` streams: the three
+  building fields have three distinct
   types, so a swapped binding cannot typecheck, leaving copying as the
   only failure mode the aliasing examples already catch.
 
@@ -2179,9 +2190,7 @@ containers.
   `ui-hud-events` set shrunk 13 → 2, checked in both directions
   against the live scan and against §6.2), plus projection-aliasing
   coverage in `Test.Headless.Capability.Ui` — all four fields asserted
-  to be the same live container as `EngineEnv`'s, stability across
-  repeated projection (E7a re-projects inline at most call sites,
-  several times within a single input event), and an explicit check
+  to be the same live container as `EngineEnv`'s, and an explicit check
   that the two focus-carrying refs are not transposed.
 - **Deferred to E7b (#898) — named individually, nothing silently
   dropped:** `Engine.PlayerEvent.Emit` and
@@ -2252,9 +2261,8 @@ sequence over the same containers.
   in `Test.Headless.Capability.Events` — the three ref-shaped fields
   asserted to be the same live container as `EngineEnv`'s,
   `notificationOrder` asserted by value (it has no identity),
-  stability across repeated projection (E7b re-projects inline on
-  every emit), and an explicit check that the two event `TVar` fields
-  are each pinned to their own named counterpart. That last one was
+  and an explicit check that the two event `TVar` fields are each
+  pinned to their own named counterpart. That last one was
   written when both were `TVar (Seq PlayerEvent)` and a transposition
   the compiler could not catch; #1714 gave the log ring its own
   `TVar EventStore`, so the swap is now a type error and the check

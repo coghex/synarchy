@@ -435,7 +435,7 @@ installProbeDefs ∷ EngineEnv → IO ()
 installProbeDefs env = do
     ds ← mapM decodeOrFail [discreteYaml, bulkYaml]
     writeIORef (itemManagerRef env) ∘ ItemManager $ HM.fromList
-        [ (iydName d, itemDefFromYaml "probe.yaml" (TextureHandle 0) d)
+        [ (iydName d, itemDefFromYaml "probe.yaml" (TextureHandle 0) (TextureHandle 0) d)
         | d ← ds ]
   where
     decodeOrFail src = case decodeDef src of

@@ -78,7 +78,7 @@ crafterUid = UnitId 1
 --   point of the fixture.
 itemDef ∷ Text → Text → ItemDef
 itemDef name category = ItemDef
-    { idName = name, idDisplayName = name, idTexture = TextureHandle 0
+    { idName = name, idDisplayName = name, idTexture = TextureHandle 0, idIconTexture = TextureHandle 0
     , idWeight = 10.0, idWeightSpec = Nothing, idBulk = 5.0
     , idStorage = Nothing, idKind = "misc"
     , idCategory = category, idMake = "", idMaterial = ""

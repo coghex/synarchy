@@ -81,6 +81,12 @@ data BuildingDef = BuildingDef
     , bdCategory    ∷ !Text               -- ^ build-menu tab key ("Starting", "Cargo", ...)
     , bdDescription ∷ !Text               -- ^ build-menu tooltip hint body
     , bdTexture     ∷ !TextureHandle      -- ^ static fallback
+    , bdIconTexture ∷ !TextureHandle
+      -- ^ The SAME sprite uploaded under the UI policy (#2075), for the
+      --   build menu's `iconTex`. A second handle on a second slot,
+      --   because a slot's sampler is fixed by the policy that uploaded
+      --   it and this art is drawn both in the world and in a panel.
+      --   Never used by 'Building.Render'.
     , bdTileW       ∷ !Int                -- ^ footprint width in tiles
     , bdTileH       ∷ !Int                -- ^ footprint height in tiles
     , bdPlacement   ∷ !Text               -- ^ "flat_ground" / future kinds

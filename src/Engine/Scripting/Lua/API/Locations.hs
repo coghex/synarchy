@@ -28,6 +28,7 @@ import Engine.Core.Capability.ContentRegistries
 import Engine.Core.Log (LogCategory(..), logDebug, logWarn)
 import Engine.Core.Log.Monad (getLoggerFor)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
+import Engine.Graphics.Vulkan.Texture.Policy (UploadSampler(..))
 import Engine.Scripting.Lua.API.YamlTextures
     (isTextureNameRegistered, loadAndRegister, resolveTexturePath)
 import Engine.Asset.YamlLocations
@@ -107,7 +108,7 @@ loadLocationYamlFn core regs env backendState = do
                             "Location unknown map icon"
                             missingLocationIconTexture
                             locationUnknownIconPath
-                        void $ loadAndRegister env backendState lteq
+                        void $ loadAndRegister env backendState lteq UploadGlobalSampler
                             locationUnknownIconTextureName unknownResolved
                     total ← foldM (\acc d → do
                         -- Register + queue the def's own zoom-map TYPE
@@ -120,7 +121,7 @@ loadLocationYamlFn core regs env backendState = do
                             resolved ← resolveTexturePath env
                                 "Location map icon" missingLocationIconTexture
                                 (T.unpack iconPath)
-                            void $ loadAndRegister env backendState lteq
+                            void $ loadAndRegister env backendState lteq UploadGlobalSampler
                                 (locationIconTextureName (lydId d)) resolved
                         atomicModifyIORef' (crLocationDefsRef regs) $ \reg →
                             (registerLocation (toDef d) reg, ())

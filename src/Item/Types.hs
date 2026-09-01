@@ -207,7 +207,14 @@ data ItemFood = ItemFood
 data ItemDef = ItemDef
     { idName        ∷ !Text             -- ^ unique key, e.g. "canteen_steel_2l"
     , idDisplayName ∷ !Text             -- ^ shown in UI
-    , idTexture     ∷ !TextureHandle    -- ^ inventory sprite (UI use)
+    , idTexture     ∷ !TextureHandle
+      -- ^ The sprite as SCENE art: what 'World.Render.GroundItemQuads'
+      --   draws for a dropped item, following the player's filter.
+    , idIconTexture ∷ !TextureHandle
+      -- ^ The same sprite uploaded under the UI policy (#2075), for the
+      --   inventory / equipment / container panels. A second handle on a
+      --   second slot, because a slot's sampler is fixed by the policy
+      --   that uploaded it and this art is drawn in both places.
     , idWeight      ∷ !Float            -- ^ empty weight in kg (the
                                         --   mean, when a spec exists)
     , idWeightSpec  ∷ !(Maybe (Float, Float))

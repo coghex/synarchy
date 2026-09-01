@@ -280,7 +280,7 @@ end
 local function ensureWhitePixel()
     if not craftingPanel._whitePixelTex then
         craftingPanel._whitePixelTex =
-            engine.loadTexture("assets/textures/utility/white.png")
+            engine.loadTexture("assets/textures/utility/white.png", "ui")
     end
     return craftingPanel._whitePixelTex
 end

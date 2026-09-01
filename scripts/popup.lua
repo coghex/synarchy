@@ -931,10 +931,10 @@ function popup.bootstrap(boxTex, btnTex, font, w, h)
     -- renderPopup branch is gated on both being truthy, so a missing
     -- asset just means the icon is skipped.
     if not popup.texPopupEnabled then
-        popup.texPopupEnabled = engine.loadTexture(POPUP_TEX_ENABLED)
+        popup.texPopupEnabled = engine.loadTexture(POPUP_TEX_ENABLED, "ui")
     end
     if not popup.texPopupDisabled then
-        popup.texPopupDisabled = engine.loadTexture(POPUP_TEX_DISABLED)
+        popup.texPopupDisabled = engine.loadTexture(POPUP_TEX_DISABLED, "ui")
     end
     if popup.pageId == nil then
         popup.pageId = UI.newPage("popups", "modal")
