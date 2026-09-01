@@ -4,6 +4,7 @@ module World.State.Types
     , BloodTextureHandles
     , emptyWorldState
     , pageWrapWorldSize
+    , pageSimTopology
     , bumpQuadCacheGen
     , WorldManager(..)
     , emptyWorldManager
@@ -42,6 +43,7 @@ import World.ZoomMap.Types (ZoomChunkEntry(..))
 import World.Render.Zoom.Types (ZoomQuadCache(..), BakedZoomEntry(..), ZoomMapMode(..), ZoomAtlasInfo(..))
 import World.Tool.Types (ToolMode(..))
 import World.Generate.Types (WorldGenParams(..))
+import Sim.Topology (SimTopology(..), simTopologyForParams)
 import World.Time.Types (WorldTime(..), WorldDate(..), defaultWorldTime, defaultWorldDate)
 import World.Edit.Types (WorldEdit, WorldEdits, emptyWorldEdits)
 import Structure.Types (StructureStage, emptyStructureStage)
@@ -460,6 +462,19 @@ emptyWorldState = do
 --   passes do would wrap STORAGE keys the loader never wrapped.
 pageWrapWorldSize ∷ WorldState → IO Int
 pageWrapWorldSize ws = maybe 0 wgpWorldSize <$> readIORef (wsGenParamsRef ws)
+
+-- | This page's seam topology as the fluid simulation needs it (#2044),
+--   which every 'Sim.Command.Types.SimCommand' that seeds or activates a
+--   world carries.
+--
+--   'Sim.Topology.SimFlatTopology' when the page has no gen params yet,
+--   for exactly 'pageWrapWorldSize'\'s reason: nothing has been
+--   generated, so no chunk key has been wrapped either. Unlike that
+--   helper this one also recognises an ARENA, whose 'wgpWorldSize' is a
+--   sentinel rather than an extent.
+pageSimTopology ∷ WorldState → IO SimTopology
+pageSimTopology ws =
+    maybe SimFlatTopology simTopologyForParams <$> readIORef (wsGenParamsRef ws)
 
 -- | Invalidate a world's cached render quads in a thread-safe way.
 --   Bumps the generation counter atomically rather than nulling

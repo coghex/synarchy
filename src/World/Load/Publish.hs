@@ -254,9 +254,13 @@ publishStagedSession env logger requestId staged = do
     -- work only ever touches a live queue from here, at publish, never
     -- during staging).
     forM_ (ssPages staged) $ \p → do
+        -- Every seed carries the page's own seam topology (#2044); it is
+        -- read from the staged page's gen params, which staging has
+        -- already populated.
+        topo ← pageSimTopology (spWorldState p)
         forM_ (spSimSeeds p) $ \(coord, fluidMap, terrainMap) →
             Q.writeQueue (simQueue env)
-                (SimChunkLoaded (spPageId p) coord fluidMap terrainMap)
+                (SimChunkLoaded (spPageId p) topo coord fluidMap terrainMap)
         forM_ (spLocationStamps p) $ \(lid, gx, gy) →
             Q.writeQueue (luaQueue env)
                 (LuaStampLocation (unWorldPageId (spPageId p)) lid gx gy)
