@@ -13,6 +13,8 @@ module World.Save.Types
     , BuildingInstanceSnapshot(..)
     , toBuildingSnapshot
     , fromBuildingSnapshot
+    , toBuildingInstanceSnapshot
+    , fromBuildingInstanceSnapshot
     , UnitSnapshot(..)
     , UnitInstanceSnapshot(..)
     , toUnitSnapshot
@@ -91,7 +93,7 @@ import Infection.Types (InfectionManager, lookupInfection)
 import Item.Ground (GroundItems(..), GroundItem(..))
 import Engine.Graphics.Camera (CameraFacing(..))
 import Building.Types (BuildingId(..), BuildingInstance(..), BuildingDef(..)
-                      , BuildingManager(..), buildingsOnPage)
+                      , BuildingManager(..), buildingsOnPage, bdSouthTexture)
 import Unit.Types (UnitId(..), UnitInstance(..), UnitDef(..), UnitManager(..)
                   , StatModifier(..), Wound(..), Scar(..), unitsOnPage)
 import Unit.Direction (Direction(..))
@@ -622,7 +624,7 @@ fromBuildingInstanceSnapshot ∷ WorldPageId → BuildingDef
 fromBuildingInstanceSnapshot page def s = BuildingInstance
     { biDefName        = bisDefName s
     , biPage           = page             -- runtime world scoping (#76)
-    , biTexture        = bdTexture def    -- re-resolved
+    , biTexture        = bdSouthTexture def  -- re-resolved
     , biAnchorX        = bisAnchorX s
     , biAnchorY        = bisAnchorY s
     , biGridZ          = bisGridZ s

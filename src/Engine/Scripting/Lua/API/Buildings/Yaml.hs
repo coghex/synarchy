@@ -21,8 +21,9 @@ import Engine.Scripting.Lua.API.YamlTextures (loadAndRegister, resolveTexturePat
 import Engine.Graphics.Vulkan.Texture.Policy (UploadSampler(..))
 import Engine.Asset.YamlBuildings (BuildingYamlDef(..), BuildingYamlAnim(..),
                                    BuildingYamlTileSize(..), loadBuildingYaml)
+import Engine.Graphics.Camera (CameraFacing(..))
+import Building.Schema
 import Building.Types
-import Unit.Direction (Direction(..))
 
 -- * YAML loading
 
@@ -44,42 +45,74 @@ loadBuildingYamlFn env backendState = do
 
                 total ← foldM (\acc def → do
                     let name      = bydName def
-                        spritePath = T.unpack (bydSprite def)
+                        spritesDecl = bydSprites def
+                        southSprite = T.unpack (facingAsset FaceSouth spritesDecl)
                         unknownBuilding = "assets/textures/buildings/unknown_building.png"
+                        -- Requirement 9: the registry name carries the
+                        -- facing (and, for a frame, its index), so two
+                        -- views of one building can never claim the
+                        -- same key and overwrite each other.
+                        spriteName f = "building_" <> name <> "_" <> facingKey f
+                        frameName animName f i =
+                            "building_" <> name <> "_" <> animName
+                                        <> "_" <> facingKey f <> "_" <> tshow i
+                        loadSprite f = do
+                            resolved ← resolveTexturePath env "Building sprite"
+                                unknownBuilding
+                                (T.unpack (facingAsset f spritesDecl))
+                            loadAndRegister env backendState lteq
+                                UploadGlobalSampler (spriteName f) resolved
 
-                    resolvedSprite ← resolveTexturePath env "Building sprite"
-                                          unknownBuilding spritePath
-                    -- Dual-use (#2075): Building.Render draws this in
-                    -- the world, and building.listDefs hands the same
-                    -- art to the build menu as `iconTex`. Loaded under
-                    -- BOTH policies so the world quad follows the
-                    -- player's filter while the menu icon stays
-                    -- nearest; the def carries both handles.
-                    handle ← loadAndRegister env backendState lteq
-                                 UploadGlobalSampler
-                                 ("building_" <> name) resolvedSprite
+                    -- Four independently addressable static handles. A
+                    -- CANONICAL declaration loads each view's own path;
+                    -- the legacy compatibility branch loads its single
+                    -- path ONCE and exposes that one handle through all
+                    -- four views, so an unmigrated definition costs
+                    -- exactly the uploads it always did and nothing can
+                    -- be overwritten (there is only one asset).
+                    spriteViews ← case faSource spritesDecl of
+                        AssetLegacy → do
+                            h ← loadSprite FaceSouth
+                            return (FacingSet h h h h)
+                        AssetCanonical →
+                            FacingSet ⊚ loadSprite FaceSouth
+                                      ⊛ loadSprite FaceWest
+                                      ⊛ loadSprite FaceNorth
+                                      ⊛ loadSprite FaceEast
+
+                    -- Dual-use (#2075): Building.Render draws the south
+                    -- view in the world, and building.listDefs hands
+                    -- the same art to the build menu as `iconTex`.
+                    -- Loaded under BOTH policies so the world quad
+                    -- follows the player's filter while the menu icon
+                    -- stays nearest; the def carries both handles.
+                    resolvedIcon ← resolveTexturePath env "Building sprite"
+                                       unknownBuilding southSprite
                     iconHandle ← loadAndRegister env backendState lteq
                                  UploadPinnedNearest
-                                 ("building_" <> name <> "_ui") resolvedSprite
+                                 ("building_" <> name <> "_ui") resolvedIcon
 
-                    -- Build animations: frame textures are loaded via
-                    -- the same loader. We only key by the single
-                    -- direction "default" (mapped to DirS internally).
+                    -- Build animations: one ordered frame list per
+                    -- camera facing, loaded through the same loader.
                     animMap ← foldM (\accA (animName, animDef) → do
-                        frameMap ← foldM (\accF (_dirKey, framePaths) → do
-                            handles ← mapM (\(i, p) → do
-                                resolved ← resolveTexturePath env "Building animation frame"
-                                               unknownBuilding (T.unpack p)
+                        let framesDecl = byaFrames animDef
+                            loadFrames f = V.fromList ⊚ mapM (\(i, p) → do
+                                resolved ← resolveTexturePath env
+                                    "Building animation frame"
+                                    unknownBuilding (T.unpack p)
                                 loadAndRegister env backendState lteq
                                     UploadGlobalSampler
-                                    ("building_" <> name
-                                     <> "_" <> animName
-                                     <> "_" <> tshow i)
-                                    resolved
-                                ) (zip [(0 ∷ Int)..] framePaths)
-                            return (Map.insert DirS
-                                      (V.fromList handles) accF)
-                            ) Map.empty (Map.toList (byaFrames animDef))
+                                    (frameName animName f i) resolved
+                                ) (zip [(0 ∷ Int)..] (facingAsset f framesDecl))
+                        frameViews ← case faSource framesDecl of
+                            AssetLegacy → do
+                                fs ← loadFrames FaceSouth
+                                return (FacingSet fs fs fs fs)
+                            AssetCanonical →
+                                FacingSet ⊚ loadFrames FaceSouth
+                                          ⊛ loadFrames FaceWest
+                                          ⊛ loadFrames FaceNorth
+                                          ⊛ loadFrames FaceEast
                         -- Buildings keep the per-frame representation
                         -- (D-8): the atlas compiler covers unit
                         -- animations only, nothing here reads a
@@ -89,11 +122,10 @@ loadBuildingYamlFn env backendState = do
                         let anim = BuildingAnimation
                                 { banFps    = byaFps animDef
                                 , banLoop   = byaLoop animDef
-                                , banFrames = frameMap }
+                                , banFrames = FacingAssets
+                                    (faSource framesDecl) frameViews }
                         return (HM.insert animName anim accA)
                         ) HM.empty (Map.toList (bydAnimations def))
-
-                    let stateAnims = HM.fromList (Map.toList (bydStateAnims def))
 
                     -- Default display_name to the raw name if YAML
                     -- didn't supply one — keeps older defs renderable
@@ -106,7 +138,8 @@ loadBuildingYamlFn env backendState = do
                             , bdDisplayName     = displayName
                             , bdCategory        = bydCategory def
                             , bdDescription     = bydDescription def
-                            , bdTexture         = handle
+                            , bdTextures        = FacingAssets
+                                  (faSource spritesDecl) spriteViews
                             , bdIconTexture     = iconHandle
                             , bdTileW           = bytsX (bydTileSize def)
                             , bdTileH           = bytsY (bydTileSize def)
@@ -119,7 +152,8 @@ loadBuildingYamlFn env backendState = do
                             , bdStorageCapacity = bydStorageCapacity def
                             , bdOperations      = bydOperations def
                             , bdAnimations      = animMap
-                            , bdStateAnims      = stateAnims
+                            , bdRoleAnims       = bydRoleAnims def
+                            , bdVisualClass     = bydVisualClass def
                             , bdPowerDrain      = bydPowerDrain def
                             , bdPowerNode       = bydPowerNode def
                             }

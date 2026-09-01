@@ -28,6 +28,7 @@ import qualified Data.Text as T
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Data.IORef (newIORef, readIORef, writeIORef)
+import Building.Schema
 import Building.Types
     ( BuildingDef(..), BuildingId(..), BuildingManager(..)
     , emptyBuildingManager )
@@ -157,13 +158,14 @@ panelBuildingDef ∷ BuildingDef
 panelBuildingDef = BuildingDef
     { bdName = "solar_panel", bdDisplayName = "Solar Panel"
     , bdCategory = "Power", bdDescription = ""
-    , bdTexture = TextureHandle 0, bdIconTexture = TextureHandle 0
+    , bdTextures = legacyAssets (TextureHandle 0), bdIconTexture = TextureHandle 0
     , bdTileW = 1, bdTileH = 1, bdPlacement = "flat_ground"
     , bdIsStarting = False, bdRace = "acolyte"
     , bdSpriteAnchor = "diamond_bottom", bdBuildWork = 0
     , bdMaterials = HM.empty, bdStorageCapacity = 0
     , bdOperations = [], bdAnimations = HM.empty
-    , bdStateAnims = HM.empty, bdPowerDrain = 0
+    , bdRoleAnims = Map.empty
+    , bdVisualClass     = FreestandingInstallation, bdPowerDrain = 0
     , bdPowerNode = Just (PowerNodeSource 400)
     }
 

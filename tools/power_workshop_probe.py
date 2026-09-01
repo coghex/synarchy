@@ -155,6 +155,7 @@ buildings:
     category: "Production"
     description: "Throwaway #590 test fixture — not shipped content."
     sprite: "assets/textures/buildings/workbench/default.png"
+    visual_class: "indoor_fixture"
     tile_size: {{ x: 1, y: 1 }}
     placement: "flat_ground"
     race: "acolyte_cult"
