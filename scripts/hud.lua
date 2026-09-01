@@ -569,7 +569,8 @@ function hud.createUI()
             -- Route to the mine tool so a pending anchor cancels.
             local mineTool = require("scripts.mine_tool")
             mineTool.onToolMode(itemName)
-            -- Route to the chop tool so a pending anchor cancels.
+            -- Route to the chop tool so an armed press-drag box
+            -- disarms (#1856 — there is no anchor left to cancel).
             local chopTool = require("scripts.chop_tool")
             chopTool.onToolMode(itemName)
             -- Route to the till tool so a pending anchor cancels.

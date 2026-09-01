@@ -12,9 +12,12 @@ worldgen; the arena has no flora), then checks:
      (the foraging AI's food search) does NOT return the tree tile —
      wood yields are inedible, so the #97 tag split must keep hungry
      units from felling oaks for dinner.
-  2. Designation: chop.designate commits a rectangle down to the tree
-     tiles (chop.getDesignationAt / getDesignationCount);
-     chop.cancelDesignation removes one.
+  2. Designation: chop.designateInstances commits an exact set of
+     plant identities (chop.getDesignationAt / getDesignationCount);
+     chop.cancelDesignation removes one. #1856 made the PLAYER's
+     gesture a screen-space press-drag, which needs a camera this
+     probe has not got — the exact-ID authority underneath it is
+     the same one the gesture reaches, and is what is proved here.
   3. Save/load: designations survive save → loadSave with their z
      (WorldPageSave wpsChopDesignations, v67).
   4. AI: an acolyte with an axe autonomously claims the designated
@@ -91,6 +94,31 @@ def count_logs_near(port, gx, gy, radius=4):
                and abs(g.get("y", 1e9) - gy) <= radius)
 
 
+
+# #1856 retired the tile-rectangle `chop.designate`: the player's gesture
+# is a screen-space press-drag, so designation crosses the queue as an
+# EXACT list of plant identities. A headless probe has no camera to
+# project through, so it builds that list the way any exact-ID caller
+# does — `world.getFloraAt` reports each tile's plant id — and hands it
+# to the same authority the gesture reaches. This is deliberately not a
+# tile-keyed runtime path: the ids are what is designated, and the tile
+# walk is only how this probe chooses them.
+_COLLECT_IDS = (
+    "local ids = {} "
+    "for x = {x1}, {x2} do for y = {y1}, {y2} do "
+    "  local f = world.getFloraAt(x, y) "
+    "  if f and f.instanceId then ids[#ids+1] = f.instanceId end "
+    "end end "
+)
+
+
+def designate_rect(port, page, x1, y1, x2, y2, send_fn):
+    """Designate every plant the given tile span holds, by exact id."""
+    send_fn(port,
+            _COLLECT_IDS.format(x1=x1, y1=y1, x2=x2, y2=y2)
+            + f"return chop.designateInstances('{page}', ids)")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=9177)
@@ -146,8 +174,7 @@ def _run(port, proc, args, passed):
               f"the tree tile: {bare}")
 
         # --- 2. Designate / query / cancel ---
-        send(port, f"chop.designate('probe',{tx-1},{ty-1},{tx+1},{ty+1}); "
-                   f"return 'ok'")
+        designate_rect(port, "probe", tx - 1, ty - 1, tx + 1, ty + 1, send)
         time.sleep(0.5)
         n = send_json(port, "return chop.getDesignationCount('probe')")
         d = send_json(port, f"return chop.getDesignationAt('probe',{tx},{ty})")
@@ -166,8 +193,7 @@ def _run(port, proc, args, passed):
               f"it: {d2}")
 
         # Re-designate for the save + AI phases.
-        send(port, f"chop.designate('probe',{tx},{ty},{tx},{ty}); "
-                   f"return 'ok'")
+        designate_rect(port, "probe", tx, ty, tx, ty, send)
         time.sleep(0.5)
 
         # --- 3. Save/load round-trip ---

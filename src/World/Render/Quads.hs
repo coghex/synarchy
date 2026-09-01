@@ -16,7 +16,7 @@ import Control.Parallel.Strategies (parListChunk, rdeepseq, using)
 import Engine.Core.State (EngineEnv)
 import Engine.Core.Capability.RenderView
   (RenderViewCapability(..), toRenderViewCapability)
-import Engine.Asset.Handle (TextureHandle(..), toInt)
+import Engine.Asset.Handle (toInt)
 import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (CameraFacing)
 import World.Types
@@ -32,6 +32,8 @@ import World.Render.ViewBounds (viewBoundsAt, expandViewBounds, isTileVisible)
 import World.Render.Camera (quadCacheMargins)
 import World.Render.ChunkCulling (isChunkRelevantForSlice, isChunkVisibleWrapped)
 import World.Render.FloraQuads (floraToQuad)
+import World.Render.FloraDraws
+    (FloraDraw(..), chunkFloraDraws)
 import World.Render.ChunkLookup (canonicalChunkLookup)
 import World.Render.QuadContext (QuadContext(..), WorldX(..), WorldY(..)
                                 , WorldZ(..), ZSlice(..), EffectiveDepth(..))
@@ -277,44 +279,20 @@ renderWorldQuadsScanned env worldState zoomAlpha snap = do
                                 ) acc [zLo .. zHi]
                     ) [] tileMap
                 -- Flora sprites
+                --
+                -- #1856: which instances there are, their live
+                -- terrain-derived z and the texture each is drawing all
+                -- come from the shared resolver the Chop selection
+                -- oracle reads, so a picker can never consider a plant
+                -- this pass skipped.
                 floraData = lcFlora lc
                 !floraQuads =
-                    [ bump gx gy fq
-                    | inst ← fcdInstances floraData
-                    , let tileX = fromIntegral (fiTileX inst)
-                          tileY = fromIntegral (fiTileY inst)
-                          idx   = columnIndex tileX tileY
-                          col   = tileMap V.! idx
-                          -- Find the actual topmost solid tile in the column
-                          actualZ = findTopSolid col
-                          inst' = inst { fiZ = actualZ }
-                          (gx, gy) = chunkToGlobal coord tileX tileY
-                          -- Harvested plant (#94): a HARVESTABLE species
-                          -- with a live regrowth timer draws its depleted
-                          -- texture (fruit stripped) — or nothing at all
-                          -- when the species has no depleted art (handle
-                          -- 0 falls out through the existing filter
-                          -- below).
-                          --
-                          -- #1854: the timer is looked up by this
-                          -- INSTANCE's own id, not by its tile. Under the
-                          -- old tile key every harvestable co-tenant drew
-                          -- depleted the moment any one of them was
-                          -- picked; now picking the berry bush leaves the
-                          -- oak beside it alone. Decorative co-tenants
-                          -- were already unaffected and still are.
-                          mHarvest = lookupSpecies (fiSpecies inst) floraCat
-                                       ⌦ fsHarvest
-                          harvested = isJust mHarvest
-                                    ∧ HM.member (fiInstanceId inst) harvests
-                          texHandle = case (harvested, mHarvest) of
-                              (True, Just fh) → fhHarvestedTexture fh
-                              _ → resolveFloraTexture floraCat daysPerYear
-                                      absDay inst'
-                    , actualZ > minBound  -- skip empty columns
-                    , texHandle ≢ TextureHandle 0
+                    [ bump (fdGX fd) (fdGY fd) fq
+                    | fd ← chunkFloraDraws floraCat daysPerYear absDay
+                               harvests coord lc { lcFlora = floraData }
                     , Just fq ← [floraToQuad lookupSlot textures facing
-                                     gx gy inst' texHandle zSlice effectiveDepth
+                                     (fdGX fd) (fdGY fd) (fdInstance fd)
+                                     (fdTexture fd) zSlice effectiveDepth
                                      zoomAlpha wrapOff texSizes]
                     ]
                 -- Water side-face quads: fill elevation gaps where water
@@ -580,15 +558,3 @@ structureFrontWallClear facing worldSize zSlice effDepth structLookup gx gy =
          [] → Nothing
          ks → Just (maximum ks)
 
--- | Find the topmost Z that has a non-zero material in a column.
---   This is the actual rendered surface — no trusting surface maps.
-findTopSolid ∷ ColumnTiles → Int
-findTopSolid col =
-    let mats = ctMats col
-        len = VU.length mats
-    in go (len - 1)
-  where
-    go i
-        | i < 0 = minBound
-        | ctMats col VU.! i ≢ 0 = ctStartZ col + i
-        | otherwise = go (i - 1)
