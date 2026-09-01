@@ -462,7 +462,16 @@ local function constructExecute(uid, s, params)
             -- onConstructCompleted broadcast says that; a declined
             -- placement sends onConstructInvalidated instead, and the
             -- claim recorded below is what either one settles.
-            if site.finishPlacement(wid, job, uid) then
+            local outcome = site.finishPlacement(wid, job, uid)
+            if outcome == "deferred" then
+                -- The site's chunk is simply not resident, which is
+                -- never a refusal here or anywhere else in this arc: the
+                -- designation stands, so hand the tile back to the scan
+                -- pool rather than leaving it claimed by nobody.
+                releaseConstructJob(wid, s, uid, true)
+                return
+            end
+            if outcome == "placed" then
                 pendingXp[constructKey(wid, job.x, job.y)] =
                     { attempt = job.attempt, uid = uid,
                       amount = params.construct_xp_per_piece or 0 }

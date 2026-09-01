@@ -21,7 +21,9 @@ module Engine.Scripting.Lua.API.Construct
     , constructResolvePlanFn
     , constructSetDesignateTextureFn
     , constructSetLineModeFn
+    , AttemptArg(..)
     , readAttemptArg
+    , requiredAttempt
     ) where
 
 import UPrelude
@@ -177,34 +179,75 @@ constructCancelDesignationFn wsc = do
     gxArg ← Lua.tonumber 1
     gyArg ← Lua.tonumber 2
     attArg ← readAttemptArg 3
-    case (gxArg, gyArg) of
-        (Just gx, Just gy) → do
+    -- A SUPPLIED but malformed attempt enqueues nothing: falling
+    -- through to the coordinate-only form would let it remove and refund
+    -- a successor at the tile.
+    case (gxArg, gyArg, cancelAttempt attArg) of
+        (Just gx, Just gy, Just mAttempt) → do
             mPage ← Lua.liftIO $ activeWorldPageFrom (wsWorldManagerRef wsc)
             case mPage of
                 Just (pageId, _) → Lua.liftIO $
                     Q.writeQueue (wsWorldQueue wsc) $
-                        WorldCancelConstruct pageId (round gx) (round gy) attArg
+                        WorldCancelConstruct pageId (round gx) (round gy)
+                            mAttempt
                 Nothing → pure ()
         _ → pure ()
     return 0
 
--- | Read an OPTIONAL attempt id from a stack slot.
+-- | What a caller put in an attempt-id slot.
 --
---   A missing or nil slot is 'Nothing' — the unguarded, "whatever is
---   here" form. A present value must be a real integer: 'Lua.tointeger'
---   alone would coerce the numeric STRING @"47"@ into 47, and an
---   attempt id arriving as a string is a caller bug, not a value.
---   Non-positive is 'Nothing' too, since ids start at 1 and 0 is the
---   Lua-side "no attempt" sentinel.
-readAttemptArg ∷ Lua.StackIndex
-               → Lua.LuaE Lua.Exception (Maybe ConstructAttemptId)
+--   THREE answers, not two. The cancellation verbs have a legitimate
+--   coordinate-only form — the player's right-click erases whatever is
+--   at a tile — so "omitted" has to mean something. But a supplied value
+--   that is not an identity must not collapse into it: a malformed or
+--   stale attempt reaching the unguarded path would let it remove and
+--   refund a SUCCESSOR, which is the exact confusion attempt identity
+--   exists to prevent. So it is refused instead.
+data AttemptArg
+    = AttemptOmitted
+      -- ^ Nothing was supplied (or an explicit nil). Only the
+      --   cancellation verbs accept this, as the player's erase.
+    | AttemptInvalid
+      -- ^ Something was supplied and it is not an attempt id. Every
+      --   verb refuses it, the cancellations included.
+    | AttemptGiven !ConstructAttemptId
+    deriving (Show, Eq)
+
+-- | Read an attempt-id slot.
+--
+--   A present value must be a real, POSITIVE integer: 'Lua.tointeger'
+--   alone would coerce a numeric STRING into a number, and an attempt id
+--   arriving as a string is a caller bug rather than a value. Ids start
+--   at 1, so 0 — the Lua-side "no attempt" sentinel — and every negative
+--   are INVALID rather than absent.
+readAttemptArg ∷ Lua.StackIndex → Lua.LuaE Lua.Exception AttemptArg
 readAttemptArg ix = do
     ty ← Lua.ltype ix
-    if ty ≢ Lua.TypeNumber then pure Nothing else do
-        mN ← Lua.tointeger ix
-        pure $ case mN of
-            Just n | n > 0 → Just (ConstructAttemptId (fromIntegral n))
-            _              → Nothing
+    case ty of
+        Lua.TypeNone   → pure AttemptOmitted
+        Lua.TypeNil    → pure AttemptOmitted
+        Lua.TypeNumber → do
+            mN ← Lua.tointeger ix
+            pure $ case mN of
+                Just n | n > 0 →
+                    AttemptGiven (ConstructAttemptId (fromIntegral n))
+                _ → AttemptInvalid
+        _ → pure AttemptInvalid
+
+-- | The exact attempt a REQUIRED slot names, or 'Nothing' for anything
+--   else — where the identity is mandatory an omitted slot is as
+--   unusable as a malformed one.
+requiredAttempt ∷ AttemptArg → Maybe ConstructAttemptId
+requiredAttempt (AttemptGiven a) = Just a
+requiredAttempt _                = Nothing
+
+-- | How a CANCELLATION reads one: an omitted slot is the player's
+--   coordinate-only erase, a valid one narrows to that exact attempt,
+--   and a malformed one is refused outright (the outer 'Nothing').
+cancelAttempt ∷ AttemptArg → Maybe (Maybe ConstructAttemptId)
+cancelAttempt AttemptOmitted   = Just Nothing
+cancelAttempt (AttemptGiven a) = Just (Just a)
+cancelAttempt AttemptInvalid   = Nothing
 
 -- | construction.getPendingJobs(cx1, cy1, cx2, cy2) → array of jobs in
 --   the chunk region on the active world. Each job:
@@ -321,8 +364,8 @@ constructCancelDesignationForRefundFn wsc = do
     gxArg ← Lua.tonumber 2
     gyArg ← Lua.tonumber 3
     attArg ← readAttemptArg 4
-    case (pageIdArg, gxArg, gyArg) of
-        (Just pageIdBS, Just gxN, Just gyN) → do
+    case (pageIdArg, gxArg, gyArg, cancelAttempt attArg) of
+        (Just pageIdBS, Just gxN, Just gyN, Just mAttempt) → do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 gxN' = round gxN ∷ Int
                 gyN' = round gyN ∷ Int
@@ -336,7 +379,7 @@ constructCancelDesignationForRefundFn wsc = do
                     worldSize ← Lua.liftIO $ pageWrapWorldSize ws
                     let (gx, gy) = canonicalTile worldSize gxN' gyN'
                     mCd ← Lua.liftIO $
-                        popConstructDesignation ws (gxN', gyN') attArg
+                        popConstructDesignation ws (gxN', gyN') mAttempt
                     case mCd of
                         Just cd → pushJobTable gx gy cd >> return 1
                         Nothing → Lua.pushnil >> return 1
@@ -438,7 +481,7 @@ constructSetJobStatusFn wsc = do
     -- worker reporting on the job it observed, so an attempt-less call
     -- is a caller bug and enqueuing it would let a stale completion
     -- delete a successor at the tile.
-    case (pageIdArg, gxArg, gyArg, statusArg, attArg) of
+    case (pageIdArg, gxArg, gyArg, statusArg, requiredAttempt attArg) of
         (Just pageIdBS, Just gx, Just gy, Just statusBS, Just attempt) →
             case textToConstructStatus (TE.decodeUtf8Lenient statusBS) of
                 Just st → Lua.liftIO $ do
@@ -463,7 +506,7 @@ constructAddJobProgressFn wsc = do
     deltaArg ← Lua.tonumber 4
     attArg ← readAttemptArg 5
     -- #1844: no attempt, no command — see setJobStatus above.
-    case (pageIdArg, gxArg, gyArg, deltaArg, attArg) of
+    case (pageIdArg, gxArg, gyArg, deltaArg, requiredAttempt attArg) of
         (Just pageIdBS, Just gx, Just gy, Just delta, Just attempt) →
             Lua.liftIO $ do
                 let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
@@ -495,7 +538,7 @@ constructAbortPlacementFn wsc = do
     gxArg ← Lua.tonumber 2
     gyArg ← Lua.tonumber 3
     attArg ← readAttemptArg 4
-    case (pageIdArg, gxArg, gyArg, attArg) of
+    case (pageIdArg, gxArg, gyArg, requiredAttempt attArg) of
         (Just pageIdBS, Just gxN, Just gyN, Just attempt) → do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                 gxN' = round gxN ∷ Int
@@ -540,7 +583,7 @@ constructResolvePlanFn env = do
     gyArg ← Lua.tonumber 3
     attArg ← readAttemptArg 4
     let wsc = toWorldSimCapability env
-    mOutcome ← case (pageIdArg, gxArg, gyArg, attArg) of
+    mOutcome ← case (pageIdArg, gxArg, gyArg, requiredAttempt attArg) of
         (Just pageIdBS, Just gxN, Just gyN, Just attempt) → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
             mgr ← readIORef (wsWorldManagerRef wsc)
@@ -597,7 +640,7 @@ constructBeginPlacementFn wsc = do
     gxArg ← Lua.tonumber 2
     gyArg ← Lua.tonumber 3
     attArg ← readAttemptArg 4
-    ok ← case (pageIdArg, gxArg, gyArg, attArg) of
+    ok ← case (pageIdArg, gxArg, gyArg, requiredAttempt attArg) of
         (Just pageIdBS, Just gx, Just gy, Just attempt) → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
             mgr ← readIORef (wsWorldManagerRef wsc)

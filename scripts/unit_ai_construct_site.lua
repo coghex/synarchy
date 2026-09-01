@@ -208,13 +208,20 @@ function M.finishPlacement(wid, job, uid)
     -- hand-off: a site that has gone invalid is cancelled, and its
     -- receipt refunded, rather than built.
     local finalPlan = M.planOutcome(wid, job)
+    -- …except that unloaded terrain is NOT a refusal, here or anywhere
+    -- else in this arc. A chunk evicting between the building-phase
+    -- check and this one says nothing about the site; cancelling on it
+    -- would delete a valid paid job over a condition that resolves
+    -- itself. The job is DEFERRED instead: the designation stands, and
+    -- the caller hands the tile back to the scan pool.
+    if finalPlan == "unresolved-terrain" then return "deferred" end
     if finalPlan and finalPlan ~= "valid" then
         local removed = construction.cancelDesignationForRefund(
             wid, job.x, job.y, job.attempt)
         if removed then M.refundStructureMaterials(removed) end
         reportFailure(uid,
             "Construction site changed — materials returned to the ground")
-        return false
+        return "gone"
     end
     -- Requirement 18: take the exact-attempt hand-off BEFORE placing
     -- anything. The piece becomes visible to every structure query the
@@ -223,7 +230,7 @@ function M.finishPlacement(wid, job, uid)
     -- cancel the job and refund materials that were correctly spent. A
     -- false answer means the attempt is gone: place nothing.
     if not construction.beginPlacement(wid, job.x, job.y, job.attempt) then
-        return false
+        return "gone"
     end
     -- structure.place returning true means STAGED AND QUEUED, not
     -- committed -- the world thread still declines a queued placement
@@ -252,7 +259,7 @@ function M.finishPlacement(wid, job, uid)
         reportFailure(uid,
             "Construction site changed — materials returned to the ground")
     end
-    return placed
+    return placed and "placed" or "gone"
 end
 
 -- Externally interrupt a live claimant on (wid,gx,gy) — e.g. a

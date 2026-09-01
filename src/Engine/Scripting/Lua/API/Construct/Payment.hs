@@ -20,7 +20,7 @@ import Engine.Core.Capability.UnitCombat
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import Engine.Core.State (EngineEnv)
-import Engine.Scripting.Lua.API.Construct (readAttemptArg)
+import Engine.Scripting.Lua.API.Construct (readAttemptArg, requiredAttempt)
 import Engine.Scripting.Lua.API.Units.Inventory (insertAt, popFirstByNameIx)
 import Item.Types (ItemInstance)
 import Structure.ArtCatalog (BuildCost(..), packKindBuild)
@@ -84,7 +84,7 @@ constructPayMaterialsFn env = do
     attArg ← readAttemptArg 4
     uidArg ← Lua.tointeger 5
     let wsc = toWorldSimCapability env
-    paid ← case (pageIdArg, gxArg, gyArg, attArg, uidArg) of
+    paid ← case (pageIdArg, gxArg, gyArg, requiredAttempt attArg, uidArg) of
         (Just pageIdBS, Just gxN, Just gyN, Just attempt, Just uidN) →
             Lua.liftIO $ do
                 let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)

@@ -433,6 +433,30 @@ paymentSpec = describe "payment" $ do
         HM.size <$> readIORef (wsConstructDesignationsRef ws)
             `shouldReturn` 0
 
+    it "refuses a cancellation whose attempt is MALFORMED, rather than \
+       \reading it as the player's erase" $ \sc → do
+        -- The coordinate-only form is real (the player's right-click
+        -- erases whatever is at a tile), so a supplied-but-invalid
+        -- attempt must not collapse into it: it would remove and refund
+        -- a SUCCESSOR, which is the confusion the identity exists to
+        -- prevent.
+        ws ← resetScene sc
+        designate sc ws tile tile floorPiece
+        forM_ ["0", "-3", "'47'", "1.5"] $ \bad → do
+            _ ← evalLua sc (T.concat
+                [ "return tostring(construction.cancelDesignationForRefund('"
+                , pageText, "', 5, 5, ", bad, "))" ])
+                `shouldReturn` "nil"
+            HM.size <$> readIORef (wsConstructDesignationsRef ws)
+                `shouldReturn` 1
+        -- …while the OMITTED form still erases, as it always did.
+        _ ← evalLua sc (T.concat
+            [ "return tostring(construction.cancelDesignationForRefund('"
+            , pageText, "', 5, 5) ~= nil)" ])
+            `shouldReturn` "true"
+        HM.size <$> readIORef (wsConstructDesignationsRef ws)
+            `shouldReturn` 0
+
     it "refuses an abort for a job that never took the hand-off, or for \
        \another attempt" $ \sc → do
         ws ← resetScene sc
