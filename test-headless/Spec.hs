@@ -103,6 +103,7 @@ import qualified Test.Headless.Combat.Severing as CombatSevering
 import qualified Test.Headless.Combat.Wounds as CombatWounds
 import qualified Test.Headless.Magma.Shape as MagmaShape
 import qualified Test.Headless.Sim.Seam as SimSeam
+import qualified Test.Headless.Sim.Conservation as SimConservation
 import qualified Test.Headless.Input.KeyNames as InputKeyNames
 import qualified Test.Headless.Input.Bindings as InputBindings
 import qualified Test.Headless.Input.State as InputState
@@ -657,6 +658,7 @@ main = hspec $ do
     describe "Combat.Wounds" CombatWounds.spec
     describe "World.Magma.Shape" MagmaShape.spec
     describe "Sim.Fluid.Seam" SimSeam.spec
+    describe "Sim.Fluid.Conservation" SimConservation.spec
     describe "Input.KeyNames" InputKeyNames.spec
     describe "Input.Bindings" InputBindings.spec
     describe "Input.Inject" InputInject.spec
