@@ -2431,6 +2431,11 @@ CAPABILITY_WRITER_MODULES: dict[str, frozenset[str]] = {
         "Engine.Scripting.Lua.Message.Texture",
         "World.Render.BloodQuads",
     }),
+    # #2020: published once, from the single Vulkan-init funnel both
+    # the windowed and the offscreen device-creation paths pass through.
+    "maxImageDimensionRef": frozenset({
+        "Engine.Graphics.Vulkan.Init",
+    }),
     "bloodDisposeQueue": frozenset(),
     "defaultFaceMapSlotRef": frozenset({"Engine.Graphics.Vulkan.Init"}),
     "floraCatalogRef": frozenset(),

@@ -15,7 +15,7 @@ import Data.IORef (readIORef, atomicModifyIORef', writeIORef)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Asset.Manager (generateTextureHandle)
 import Engine.Core.Log (LogCategory(..))
-import Engine.Core.Log.Monad (logInfoM, logWarnM)
+import Engine.Core.Log.Monad (logInfoM, logWarnM, logErrorM)
 import Engine.Core.Monad
 import Engine.Core.State (EngineState(..), TransientTexture(..)
   , GraphicsState(..), luaQueue, worldPreviewRef, zoomAtlasDataRef )
@@ -37,6 +37,9 @@ import Engine.Graphics.Vulkan.Texture.Publish
   (UploadSampler(..), TransientPublish(..), GpuCleanupStep(..)
   , classifyTransientRegistration, failedUploadCleanup)
 import Engine.Graphics.Types (DevQueues(..))
+import Engine.Graphics.Font.Load (maxAtlasDimension)
+import World.Map.ImagePlan (mapImageRefusalText)
+import Engine.Map.ImageAdmission (withValidatedZoomAtlasUpload)
 import Engine.Scripting.Lua.Types
 import World.ZoomMap.Types (zoomTileSize)
 import World.Render.Zoom.Types (ZoomAtlasInfo(..))
@@ -228,119 +231,136 @@ handleZoomAtlasUpload = do
                  , deviceQueues gs
                  , mBindless ) of
                 (Just dev, Just pdev, Just cmdPool, Just queues, Just bindless) → do
-                    poolRef ← asks (rcAssetPoolRef . toRenderCapability)
-                    pool ← liftIO $ readIORef poolRef
-                    texHandle ← liftIO $ generateTextureHandle pool
+                    -- #2020: upload is the LAST trust boundary before the
+                    -- driver, so it validates independently of whatever the
+                    -- producer believed. The ceiling is the device's OWN,
+                    -- queried here through the same 'maxAtlasDimension' the
+                    -- font atlas already uses — not the value the world
+                    -- thread was handed at boot — and the expected byte
+                    -- count is re-derived from the very dimensions about to
+                    -- reach Vulkan, through the SAME pure planner, never an
+                    -- ad-hoc @w * h * 4@ at this call site. Both refuse
+                    -- before 'createVulkanImage'' or 'createVulkanBuffer'.
+                    deviceLimit ← maxAtlasDimension gs
+                    withValidatedZoomAtlasUpload
+                     deviceLimit w h (BS.length rgbaData)
+                     (\refusal → logErrorM CatWorld $
+                        "Zoom atlas upload refused: "
+                        <> mapImageRefusalText refusal)
+                     $ \_plan → do
+                      poolRef ← asks (rcAssetPoolRef . toRenderCapability)
+                      pool ← liftIO $ readIORef poolRef
+                      texHandle ← liftIO $ generateTextureHandle pool
 
-                    let width  = fromIntegral w ∷ Word32
-                        height = fromIntegral h ∷ Word32
-                        bufSize = fromIntegral (BS.length rgbaData)
-                        queue  = dqGraphicsQueue queues
+                      let width  = fromIntegral w ∷ Word32
+                          height = fromIntegral h ∷ Word32
+                          bufSize = fromIntegral (BS.length rgbaData)
+                          queue  = dqGraphicsQueue queues
 
-                    -- Prime variants: explicit cleanups, NOT exit-time
-                    -- allocResource — this texture is replaced on every
-                    -- world init/load and must be destroyable then.
-                    (image, cleanImage) ← createVulkanImage' dev pdev
-                        (width, height)
-                        FORMAT_R8G8B8A8_UNORM
-                        IMAGE_TILING_OPTIMAL
-                        (IMAGE_USAGE_TRANSFER_DST_BIT ⌄ IMAGE_USAGE_SAMPLED_BIT)
-                        MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+                      -- Prime variants: explicit cleanups, NOT exit-time
+                      -- allocResource — this texture is replaced on every
+                      -- world init/load and must be destroyable then.
+                      (image, cleanImage) ← createVulkanImage' dev pdev
+                          (width, height)
+                          FORMAT_R8G8B8A8_UNORM
+                          IMAGE_TILING_OPTIMAL
+                          (IMAGE_USAGE_TRANSFER_DST_BIT ⌄ IMAGE_USAGE_SAMPLED_BIT)
+                          MEMORY_PROPERTY_DEVICE_LOCAL_BIT
 
-                    locally $ do
-                        (stagingMem, stagingBuf) ← createVulkanBuffer dev pdev bufSize
-                            BUFFER_USAGE_TRANSFER_SRC_BIT
-                            (MEMORY_PROPERTY_HOST_VISIBLE_BIT
-                             ⌄ MEMORY_PROPERTY_HOST_COHERENT_BIT)
+                      locally $ do
+                          (stagingMem, stagingBuf) ← createVulkanBuffer dev pdev bufSize
+                              BUFFER_USAGE_TRANSFER_SRC_BIT
+                              (MEMORY_PROPERTY_HOST_VISIBLE_BIT
+                               ⌄ MEMORY_PROPERTY_HOST_COHERENT_BIT)
 
-                        stagingPtr ← mapMemory dev stagingMem 0 bufSize zero
-                        liftIO $ BS.useAsCStringLen rgbaData $ \(srcPtr, len) →
-                            copyBytes (castPtr stagingPtr) srcPtr len
-                        unmapMemory dev stagingMem
+                          stagingPtr ← mapMemory dev stagingMem 0 bufSize zero
+                          liftIO $ BS.useAsCStringLen rgbaData $ \(srcPtr, len) →
+                              copyBytes (castPtr stagingPtr) srcPtr len
+                          unmapMemory dev stagingMem
 
-                        runCommandsOnce dev cmdPool queue $ \cmdBuf → do
-                            transitionImageLayout image FORMAT_R8G8B8A8_UNORM
-                                Undef_TransDst 1 cmdBuf
-                            copyBufferToImage cmdBuf stagingBuf image width height
-                            transitionImageLayout image FORMAT_R8G8B8A8_UNORM
-                                TransDst_ShaderRO 1 cmdBuf
+                          runCommandsOnce dev cmdPool queue $ \cmdBuf → do
+                              transitionImageLayout image FORMAT_R8G8B8A8_UNORM
+                                  Undef_TransDst 1 cmdBuf
+                              copyBufferToImage cmdBuf stagingBuf image width height
+                              transitionImageLayout image FORMAT_R8G8B8A8_UNORM
+                                  TransDst_ShaderRO 1 cmdBuf
 
-                    -- Create image view and sampler (LINEAR for smooth zoom)
-                    (imageView, cleanView) ← createVulkanImageView' dev image
-                        FORMAT_R8G8B8A8_UNORM IMAGE_ASPECT_COLOR_BIT
+                      -- Create image view and sampler (LINEAR for smooth zoom)
+                      (imageView, cleanView) ← createVulkanImageView' dev image
+                          FORMAT_R8G8B8A8_UNORM IMAGE_ASPECT_COLOR_BIT
 
-                    -- Zoom atlas registers with LINEAR for smooth scaling
-                    -- (shares the cached linear sampler). A live filter
-                    -- toggle repaints all slots to the global sampler
-                    -- until the next regen — same as pre-cache behaviour.
-                    let cacheRef = rcSamplerCacheRef (toRenderCapability env)
-                    sampler ← liftIO $ acquireSampler dev cacheRef SamplerTextureLinear
-                    let cleanSampler = releaseSampler dev cacheRef SamplerTextureLinear
+                      -- Zoom atlas registers with LINEAR for smooth scaling
+                      -- (shares the cached linear sampler). A live filter
+                      -- toggle repaints all slots to the global sampler
+                      -- until the next regen — same as pre-cache behaviour.
+                      let cacheRef = rcSamplerCacheRef (toRenderCapability env)
+                      sampler ← liftIO $ acquireSampler dev cacheRef SamplerTextureLinear
+                      let cleanSampler = releaseSampler dev cacheRef SamplerTextureLinear
 
-                    (mbBindlessHandle, newBindless) ← registerPinnedTexture dev
-                        texHandle "zoom atlas" imageView sampler bindless
-                    let cleanupAll = cleanView >> cleanImage >> cleanSampler
-                    case classifyTransientRegistration texHandle "zoom atlas"
-                             mbBindlessHandle of
-                      -- #1690: the registration refused, so nothing can
-                      -- sample this image. Disposing the PREVIOUS
-                      -- generation for it would destroy a texture that
-                      -- is still being drawn and leave this surface
-                      -- resolving to the undefined texture, so keep the
-                      -- old generation and hand this upload's own GPU
-                      -- objects back instead. Nothing is published.
-                      -- 'registerTextureImpl' already logged the reason
-                      -- (#1696); this says what was done about it.
-                      TransientRetain reason → do
-                          logWarnM CatWorld $ "Zoom atlas not published, keeping \
-                              \the previous generation: " <> reason
-                          forM_ (failedUploadCleanup UploadPinnedNearest) $ \case
-                              CleanupImageView     → liftIO cleanView
-                              CleanupImage         → liftIO cleanImage
-                              ReleasePinnedSampler → liftIO cleanSampler
-                      TransientReplace _ → do
-                        let rc = toRenderCapability env
-                        liftIO $ writeIORef (rcTextureSystemRef rc) (Just newBindless)
+                      (mbBindlessHandle, newBindless) ← registerPinnedTexture dev
+                          texHandle "zoom atlas" imageView sampler bindless
+                      let cleanupAll = cleanView >> cleanImage >> cleanSampler
+                      case classifyTransientRegistration texHandle "zoom atlas"
+                               mbBindlessHandle of
+                        -- #1690: the registration refused, so nothing can
+                        -- sample this image. Disposing the PREVIOUS
+                        -- generation for it would destroy a texture that
+                        -- is still being drawn and leave this surface
+                        -- resolving to the undefined texture, so keep the
+                        -- old generation and hand this upload's own GPU
+                        -- objects back instead. Nothing is published.
+                        -- 'registerTextureImpl' already logged the reason
+                        -- (#1696); this says what was done about it.
+                        TransientRetain reason → do
+                            logWarnM CatWorld $ "Zoom atlas not published, keeping \
+                                \the previous generation: " <> reason
+                            forM_ (failedUploadCleanup UploadPinnedNearest) $ \case
+                                CleanupImageView     → liftIO cleanView
+                                CleanupImage         → liftIO cleanImage
+                                ReleasePinnedSampler → liftIO cleanSampler
+                        TransientReplace _ → do
+                          let rc = toRenderCapability env
+                          liftIO $ writeIORef (rcTextureSystemRef rc) (Just newBindless)
 
-                        -- Dispose the previous atlas generation (slot
-                        -- recycled, GPU objects destroyed) and record this
-                        -- one. View before image: the view references it.
-                        forM_ (zoomAtlasTexture gs) (disposeTransientTexture dev)
-                        modifyGraphicsState $ \gs' → gs'
-                                { zoomAtlasTexture =
-                                    Just (TransientTexture texHandle cleanupAll) }
+                          -- Dispose the previous atlas generation (slot
+                          -- recycled, GPU objects destroyed) and record this
+                          -- one. View before image: the view references it.
+                          forM_ (zoomAtlasTexture gs) (disposeTransientTexture dev)
+                          modifyGraphicsState $ \gs' → gs'
+                                  { zoomAtlasTexture =
+                                      Just (TransientTexture texHandle cleanupAll) }
 
-                        let chunksPerRow = w `div` zoomTileSize
-                            atlasInfo = ZoomAtlasInfo
-                                { zaiTexture     = texHandle
-                                , zaiWidth       = w
-                                , zaiHeight      = h
-                                , zaiChunksPerRow = chunksPerRow
-                                }
+                          let chunksPerRow = w `div` zoomTileSize
+                              atlasInfo = ZoomAtlasInfo
+                                  { zaiTexture     = texHandle
+                                  , zaiWidth       = w
+                                  , zaiHeight      = h
+                                  , zaiChunksPerRow = chunksPerRow
+                                  }
 
-                        -- Issue #763: this upload is
-                        -- async and can take multiple frames (staging
-                        -- buffer + Vulkan copy above), so re-reading
-                        -- 'worldManagerRef' HERE to find "every current
-                        -- world" would race a load publish that swaps it
-                        -- in the meantime — a peek-then-act check on
-                        -- 'zoomAtlasDataRef' narrows that window but can't
-                        -- close it: any such attempt is itself
-                        -- non-atomic. Writing to 'targetStates'
-                        -- — the EXACT 'WorldState's captured back when this
-                        -- atlas was enqueued (see 'EngineEnv.zoomAtlasDataRef'
-                        -- and 'World.Load.Publish'/'World.Thread.Command.Init')
-                        -- — needs no live ref re-read at all, so there is no
-                        -- window left to race: whichever session enqueued
-                        -- this atlas is exactly who receives it, regardless
-                        -- of what 'worldManagerRef' holds by the time the
-                        -- upload finishes.
-                        forM_ targetStates $ \ws →
-                            liftIO $ writeIORef (wsZoomAtlasRef ws) (Just atlasInfo)
+                          -- Issue #763: this upload is
+                          -- async and can take multiple frames (staging
+                          -- buffer + Vulkan copy above), so re-reading
+                          -- 'worldManagerRef' HERE to find "every current
+                          -- world" would race a load publish that swaps it
+                          -- in the meantime — a peek-then-act check on
+                          -- 'zoomAtlasDataRef' narrows that window but can't
+                          -- close it: any such attempt is itself
+                          -- non-atomic. Writing to 'targetStates'
+                          -- — the EXACT 'WorldState's captured back when this
+                          -- atlas was enqueued (see 'EngineEnv.zoomAtlasDataRef'
+                          -- and 'World.Load.Publish'/'World.Thread.Command.Init')
+                          -- — needs no live ref re-read at all, so there is no
+                          -- window left to race: whichever session enqueued
+                          -- this atlas is exactly who receives it, regardless
+                          -- of what 'worldManagerRef' holds by the time the
+                          -- upload finishes.
+                          forM_ targetStates $ \ws →
+                              liftIO $ writeIORef (wsZoomAtlasRef ws) (Just atlasInfo)
 
-                        logInfoM CatWorld $ "Zoom atlas uploaded: handle="
-                            <> tshow texHandle <> ", chunksPerRow="
-                            <> tshow chunksPerRow
+                          logInfoM CatWorld $ "Zoom atlas uploaded: handle="
+                              <> tshow texHandle <> ", chunksPerRow="
+                              <> tshow chunksPerRow
 
                 _ → logWarnM CatWorld
                         "Cannot upload zoom atlas: Vulkan not ready"

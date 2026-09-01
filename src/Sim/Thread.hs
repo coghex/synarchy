@@ -23,7 +23,6 @@ import Engine.Core.State (EngineEnv, EngineLifecycle(..), saveBarrierRef)
 import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent, captureLocked)
 import Engine.Core.Log (logDebug, logError, LogCategory(..), LoggerState)
 import qualified Engine.Core.Queue as Q
-import World.Chunk.Types (ChunkCoord(..), chunkSize)
 import World.Page.Types (WorldPageId(..))
 import World.Fluid.Types (FluidCell(..), renderedSurfaceZ)
 import World.Command.Types (WorldCommand(..), FluidWriteback(..)
@@ -31,23 +30,9 @@ import World.Command.Types (WorldCommand(..), FluidWriteback(..)
 import Sim.Command.Types (SimCommand(..))
 import Sim.State.Types (SimState(..), SimWorldState(..), SimChunkState(..)
                        , emptySimState, emptySimWorldState)
-import Sim.Fluid.Types (fluidCellToActive, activeToFluidCell)
+import Sim.Fluid.Types (activeToFluidCell)
 import Sim.Fluid.Active (simulateActiveTick)
-
--- | Settle-tick countdown for a freshly generated/loaded chunk. Newly
---   generated fluid starts further from equilibrium than a
---   previously-settled chunk being nudged awake, so it gets a longer
---   countdown than 'reactivateSettleTicks'.
-newChunkSettleTicks ∷ Int
-newChunkSettleTicks = 64
-
--- | Settle-tick countdown for a chunk that was already settled and is
---   being re-agitated: a world reactivation, a tile edit, or an edit
---   that lands before the chunk has ever loaded. Shorter than
---   'newChunkSettleTicks' since it's re-equilibrating, not settling
---   from scratch.
-reactivateSettleTicks ∷ Int
-reactivateSettleTicks = 24
+import Sim.Chunk (applyChunkEdit, loadedChunkState, reactivateSettleTicks)
 
 -- | Hard cap on synchronous settle iterations for 'SimFastSettleAll'
 --   (the dump path) — a safety net against runaway settling, not
@@ -164,12 +149,15 @@ handleSimCommand ∷ EngineEnv → LoggerState → IORef SimState → SimCommand
 handleSimCommand env logger simStateRef cmd = do
     ss ← readIORef simStateRef
     case cmd of
-        SimActivateWorld pid → do
+        SimActivateWorld pid topo → do
             -- Re-trigger settle so this world's existing chunks get
-            -- simulated now that writeback is possible.
+            -- simulated now that writeback is possible. Activation is
+            -- what lets this world tick at all, so it is also where the
+            -- page's seam topology lands (#2044).
             writeIORef simStateRef $
                 modifyWorld pid (\sws → sws
                     { swsActive = True
+                    , swsTopology = topo
                     , swsChunks = HM.map (\scs → scs { scsSettleTicks = reactivateSettleTicks })
                                          (swsChunks sws)
                     }) ss
@@ -191,77 +179,30 @@ handleSimCommand env logger simStateRef cmd = do
                 ss { ssWorlds = HM.delete pid (ssWorlds ss) }
             logDebug logger CatWorld $ "Sim: world dropped " <> tshow pid
 
-        SimChunkLoaded pid coord fluidMap terrainMap → do
-            let sz = chunkSize * chunkSize
-                scs = SimChunkState
-                    { scsFluid       = fluidMap
-                    , scsTerrain     = terrainMap
-                    , scsSettleTicks = newChunkSettleTicks
-                    , scsActive      = False
-                    , scsActiveFluid = V.replicate sz Nothing
-                    , scsEquilTicks  = 0
-                    , scsSideDeco    = VU.replicate sz 0
-                    -- A freshly loaded chunk starts at the page's own
-                    -- baseline generation: 'World.Thread.ChunkLoading'
-                    -- deletes an evicted chunk's entry, so the world side
-                    -- reads 0 for it too (#1596).
-                    , scsEditGen     = 0
-                    }
+        SimChunkLoaded pid topo coord fluidMap terrainMap → do
             writeIORef simStateRef $
-                modifyWorld pid (\sws →
-                    sws { swsChunks = HM.insert coord scs (swsChunks sws) }) ss
+                modifyWorld pid (\sws → sws
+                    { swsTopology = topo
+                    , swsChunks   = HM.insert coord
+                                        (loadedChunkState fluidMap terrainMap)
+                                        (swsChunks sws)
+                    }) ss
 
         SimChunkUnloaded pid coord → do
             writeIORef simStateRef $
                 modifyWorld pid (\sws →
                     sws { swsChunks = HM.delete coord (swsChunks sws) }) ss
 
-        SimChunkEdited pid coord editGen fluidMap terrainMap → do
-            let sws = HM.lookupDefault emptySimWorldState pid (ssWorlds ss)
-                sz  = chunkSize * chunkSize
-                -- Re-seed from the authoritative post-edit tiles. Build on
-                -- the existing sim chunk if present, else create one (an
-                -- edit can land before the sim has loaded that chunk).
-                --
-                -- Both branches adopt the carried generation: it is what
-                -- makes the writebacks this chunk produces from here on
-                -- acceptable to the world thread again (#1596), including
-                -- for an edit that lands before the chunk has ever loaded.
-                base = case HM.lookup coord (swsChunks sws) of
-                    Just scs → scs { scsFluid       = fluidMap
-                                   , scsTerrain     = terrainMap
-                                   , scsSettleTicks = reactivateSettleTicks
-                                   , scsEditGen     = editGen
-                                   }
-                    Nothing  → SimChunkState
-                        { scsFluid       = fluidMap
-                        , scsTerrain     = terrainMap
-                        , scsSettleTicks = reactivateSettleTicks
-                        , scsActive      = False
-                        , scsActiveFluid = V.replicate sz Nothing
-                        , scsEquilTicks  = 0
-                        , scsSideDeco    = VU.replicate sz 0
-                        , scsEditGen     = editGen
-                        }
-                -- Force a fresh activation so the volume grid is rebuilt
-                -- from the NEW fluid: activateChunk no-ops on an already-
-                -- active chunk, so clear the flag first. Without this the
-                -- edited chunk kept the new snapshot but never flowed (#60).
-                activated = activateChunk (base { scsActive = False })
-                -- Activate the 4 cardinal neighbours too so dammed water can
-                -- spill across the chunk seam (reconcileSeams needs both
-                -- sides active). HM.adjust is a no-op for unloaded
-                -- neighbours; activateChunk is idempotent for active ones.
-                ChunkCoord cx cy = coord
-                nbrCoords = [ ChunkCoord (cx + 1) cy, ChunkCoord (cx - 1) cy
-                            , ChunkCoord cx (cy + 1), ChunkCoord cx (cy - 1) ]
-                withSelf = HM.insert coord activated (swsChunks sws)
-                withNbrs = foldl' (\m nc → HM.adjust activateChunk nc m)
-                                  withSelf nbrCoords
+        SimChunkEdited pid topo coord editGen fluidMap terrainMap →
+            -- Re-seed the edited chunk from the authoritative post-edit
+            -- tiles and wake it plus its four physically adjacent
+            -- neighbours. The topology travels with the message, so
+            -- 'applyChunkEdit' resolves those neighbours through the
+            -- page's own seam frame (#2044).
             writeIORef simStateRef $
-                ss { ssWorlds = HM.insert pid
-                                  (sws { swsChunks = withNbrs })
-                                  (ssWorlds ss) }
+                modifyWorld pid
+                    (applyChunkEdit coord editGen fluidMap terrainMap
+                        . (\sws → sws { swsTopology = topo })) ss
 
         SimSetTickRate rate →
             writeIORef simStateRef $ ss { ssTickRate = rate }
@@ -331,23 +272,6 @@ settleNewChunks sws
                     else scs
                 ) (swsChunks sws)
         in sws { swsChunks = decremented }
-
--- | Activate a passive chunk for volume-based simulation.
-activateChunk ∷ SimChunkState → SimChunkState
-activateChunk scs
-    | scsActive scs = scs  -- already active
-    | otherwise =
-        let terrV = scsTerrain scs
-            fluidV = scsFluid scs
-            activeFluid = V.imap (\idx mfc →
-                case mfc of
-                    Nothing → Nothing
-                    Just fc → fluidCellToActive (terrV VU.! idx) fc
-                ) fluidV
-        in scs { scsActive      = True
-               , scsActiveFluid = activeFluid
-               , scsEquilTicks  = 0
-               }
 
 -- | Emit one world's dirty chunks' fluid results to the WORLD thread (the
 --   sole writer of 'wsTilesRef') as a 'WorldApplyFluids' batch tagged with

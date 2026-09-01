@@ -356,6 +356,10 @@ initializeEngineWith logBackend = do
   textureSystemRef ← newIORef Nothing
   samplerCacheRef ← newIORef emptySamplerCache
   texSizeRef ← newIORef HM.empty
+  -- #2020: no device exists yet at engine-init time, so the map-image
+  -- ceiling starts absent. Vulkan init publishes it; a GPU-free boot
+  -- mode leaves it absent on purpose.
+  maxImgDimRef ← newIORef Nothing
   defaultFaceMapSlotRef ← newIORef 0
   floraCatRef ← newIORef emptyFloraCatalog
   materialRegistryRef ← newIORef emptyMaterialRegistry
@@ -470,6 +474,7 @@ initializeEngineWith logBackend = do
         , textureSystemRef   = textureSystemRef
         , samplerCacheRef    = samplerCacheRef
         , textureSizeRef     = texSizeRef
+        , maxImageDimensionRef = maxImgDimRef
         , bloodDisposeQueue  = bloodDisposeQueue
         , defaultFaceMapSlotRef = defaultFaceMapSlotRef
         , floraCatalogRef    = floraCatRef
