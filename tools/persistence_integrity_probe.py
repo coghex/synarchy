@@ -262,7 +262,7 @@ def main() -> int:
             bid = int(float(bid_raw))
         except (TypeError, ValueError):
             sys.exit(f"FAIL (setup): building.spawn returned {bid_raw!r}")
-        # The AI only targets a site that is still APPEARING with build
+        # The AI only targets a site that is still CONSTRUCTING with build
         # work outstanding; assert that rather than assuming it, so a
         # def change that made this instant-built fails loudly here
         # instead of making the whole scenario vacuous.

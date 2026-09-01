@@ -87,7 +87,7 @@ prelude = lns
     , "                 page = pg, inv = inv or {}, contents = {} }"
     , "  return UNITS[uid]"
     , "end"
-    , "-- A BUILT store, or an APPEARING build site, at (x, 0) on page pg."
+    , "-- A BUILT store, or a CONSTRUCTING build site, at (x, 0) on page pg."
     , "function buildingRow(kind, bid, x, pg, extra)"
     , "  local b = { bid = bid, x = x, y = 0, page = pg, storage = {},"
     , "              need = {}, delivered = {} }"

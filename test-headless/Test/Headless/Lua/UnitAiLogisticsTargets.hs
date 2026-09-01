@@ -173,7 +173,7 @@ spec = describe "cached logistics target clears" $ do
                 [ prelude
                 , newState
                 , "s.buildTarget = STALE"
-                -- A built (not appearing) building is still no build
+                -- A built (not constructing) building is still no build
                 -- site: resolution runs and finds nothing, exactly as
                 -- it does once the real site is destroyed.
                 , "place('store', 9, 3)"
@@ -235,7 +235,7 @@ spec = describe "cached logistics target clears" $ do
                 [ prelude
                 , newState
                 , "s.storeTarget = STALE"
-                -- An appearing (not built) building is no cargo.
+                -- A constructing (not built) building is no cargo.
                 , "place('build', 9, 3)"
                 , "local u = logistics.storeMaterialsUtility(1, s, PARAMS)"
                 , "assert(u == -math.huge, 'no cargo must score -inf, got ' .. tostring(u))"
@@ -297,7 +297,7 @@ spec = describe "cached logistics target clears" $ do
             runsOk $ lns
                 [ prelude
                 , newState
-                -- One appearing site resolves for build; nothing
+                -- One constructing site resolves for build; nothing
                 -- resolves for store. Only storeTarget may be touched.
                 , "place('build', 77, 5)"
                 , "s.storeTarget = STALE"
