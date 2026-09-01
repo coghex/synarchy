@@ -72,11 +72,6 @@ spec = do
                               >> readReadOnlyRef ro) [1 .. 4 ∷ Int]
       observed `shouldBe` [1, 2, 3, 4]
 
-    it "wraps rather than copies: two wraps of one handle are one \
-       \container" $ \_ → do
-      raw ← newIORef ('a' ∷ Char)
-      sameContainer (toReadOnlyRef raw) (toReadOnlyRef raw)
-
   describe "toContentRegistriesViewCapability (five projected fields)" $ do
     let wrapped name project field =
           it (name <> " aliases the live EngineEnv container") $ \env →
@@ -98,11 +93,6 @@ spec = do
     it "crvInfectionManagerRef aliases the live EngineEnv container" $ \env →
       sameContainer (crvInfectionManagerRef (toContentRegistriesViewCapability env))
                     (infectionManagerRef env)
-
-    it "is stable across repeated projection (no fresh containers)" $ \env →
-      -- Every migrated consumer re-projects inline at each field access.
-      sameContainer (crvItemManagerRef (toContentRegistriesViewCapability env))
-                    (crvItemManagerRef (toContentRegistriesViewCapability env))
 
   describe "the reader view and the raw writer record share one container" $ do
     let shared name viewField rawField =

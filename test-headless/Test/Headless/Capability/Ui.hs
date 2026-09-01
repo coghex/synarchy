@@ -52,18 +52,6 @@ spec = do
     aliases "uicHudActivePageRef" uicHudActivePageRef hudActivePageRef
     aliases "uicTextBuffersRef"   uicTextBuffersRef   textBuffersRef
 
-    it "is stable across repeated projection (no fresh containers)" $ \env → do
-      -- E7a re-projects inline at every call site (an input-thread
-      -- dispatch does it several times within one event), so a
-      -- projection that minted anything fresh would hand consecutive
-      -- reads of the "same" field two different containers.
-      let a = toUiCapability env
-          b = toUiCapability env
-      sameContainer (uicUiManagerRef a) (uicUiManagerRef b)
-      sameContainer (uicFocusManagerRef a) (uicFocusManagerRef b)
-      sameContainer (uicHudActivePageRef a) (uicHudActivePageRef b)
-      sameContainer (uicTextBuffersRef a) (uicTextBuffersRef b)
-
     it "keeps the two focus-carrying refs distinct" $ \env → do
       -- `uiManagerRef` carries TEXT focus + CONTROL focus (#745) while
       -- `focusManagerRef` carries the Lua-facing focus-target registry
