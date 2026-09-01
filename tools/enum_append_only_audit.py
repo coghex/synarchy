@@ -116,6 +116,19 @@ constructor would be invisible. `--update-baseline` performs exactly
 that ratchet, and refuses to write anything when any incompatible change
 is also present, so it can never double as a "make it pass" button.
 
+A pure MODULE MOVE — the same type name, the same constructors slot for
+slot, declared in a different module — is the one other change that
+ratchets. It is recognised as a RELOCATION rather than reported as the
+deletion it superficially resembles, because nothing on the wire
+changed: the type is still guarded, still reached through the same
+codec, and every tag still means what it meant. Only the baseline's
+ownership metadata (the qualified key and `source`) goes stale, so it
+fails until `--update-baseline` records the new owner. `relocations()`
+states every clause of that recognition and why each one is narrow; the
+short version is that a rename, an ambiguous pairing, a constructor
+change alongside the move, and a genuine deletion are all still
+INCOMPATIBLE, and the self-test proves each of them.
+
 === Which gate owns what
 
 This audit is the exhaustive authoritative gate for BOTH halves of a
@@ -1393,13 +1406,87 @@ def describe_incompatibility(baseline: list[Constructor],
     return lines
 
 
+def relocations(guarded: dict[str, GuardedType],
+                baseline: dict[str, BaselineEntry]) -> dict[str, str]:
+    """Baseline key → live key, for types whose OWNING MODULE moved and
+    whose wire contract did not.
+
+    A baseline entry with no live counterpart is normally the audit's
+    loudest failure, because a rename, a deletion, a lost `Serialize`
+    instance and a module move all look identical from the baseline's
+    side, and three of those four stop already-saved bytes decoding. A
+    module move does NOT: the type is still declared, still guarded,
+    still reached through the same codec, and its tags still mean
+    exactly what they meant — only the file that owns the declaration
+    changed. That is a real refactor (issue #2098 split the worldgen DTO
+    graph into owner modules), and it must be able to ratchet the
+    baseline's ownership metadata through `--update-baseline` rather
+    than being indistinguishable from a deletion.
+
+    So the recognition is deliberately narrow — every clause below is
+    load-bearing, and anything failing one stays INCOMPATIBLE:
+
+    - the live type's BARE NAME is unchanged (a rename is not a move);
+    - it lives at a DIFFERENT module-qualified key (this never touches a
+      type the baseline already matches);
+    - exactly ONE unmatched live type answers to that bare name, and it
+      answers to exactly ONE unmatched baseline entry — an ambiguous
+      pairing is not evidence of anything;
+    - its constructor list is IDENTICAL to the baseline's, slot for
+      slot. A move that also reorders, renames, appends to or re-pays a
+      constructor is still the byte-reinterpreting change the audit
+      exists to catch, and is reported as one.
+
+    A genuine DELETION therefore still fails: nothing answers to the
+    bare name, so no pairing is made."""
+    unmatched_live: dict[str, list[str]] = {}
+    for qualified, entry in guarded.items():
+        if qualified in baseline:
+            continue
+        unmatched_live.setdefault(entry.name, []).append(qualified)
+    unmatched_baseline: dict[str, list[str]] = {}
+    for qualified in baseline:
+        if qualified in guarded:
+            continue
+        unmatched_baseline.setdefault(qualified.rsplit(".", 1)[-1],
+                                      []).append(qualified)
+    moved: dict[str, str] = {}
+    for bare, sources in unmatched_baseline.items():
+        destinations = unmatched_live.get(bare, [])
+        if len(sources) != 1 or len(destinations) != 1:
+            continue
+        source, destination = sources[0], destinations[0]
+        if guarded[destination].constructors != baseline[source].constructors:
+            continue
+        moved[source] = destination
+    return moved
+
+
 def compare(guarded: dict[str, GuardedType],
             baseline: dict[str, BaselineEntry]) -> list[Finding]:
     """Cross-check the discovered set against the baseline BOTH ways."""
     findings: list[Finding] = []
+    moved = relocations(guarded, baseline)
+    arrived = {destination: source for source, destination in moved.items()}
     for qualified in sorted(guarded):
         if qualified not in baseline:
             entry = guarded[qualified]
+            if qualified in arrived:
+                source = arrived[qualified]
+                recorded = baseline[source]
+                where = (f" (last recorded in {recorded.source})"
+                         if recorded.source else "")
+                findings.append(Finding(qualified, True, [
+                    f"{qualified} ({entry.where()})",
+                    f"    RELOCATED from {source}{where} with its "
+                    f"{len(entry.constructors)} constructor(s) unchanged "
+                    f"({', '.join(c.render() for c in entry.constructors)})"
+                    f" — the declaration moved between modules and no "
+                    f"saved byte changed meaning.",
+                    f"    Only the baseline's ownership metadata (its "
+                    f"qualified key and `source`) is stale.",
+                ]))
+                continue
             findings.append(Finding(qualified, True, [
                 f"{qualified} ({entry.where()})",
                 f"    newly qualifies for the guarded set with "
@@ -1412,16 +1499,18 @@ def compare(guarded: dict[str, GuardedType],
         if finding is not None:
             findings.append(finding)
     for qualified in sorted(baseline):
-        if qualified in guarded:
+        if qualified in guarded or qualified in moved:
             continue
         recorded = baseline[qualified]
         where = f" — last seen in {recorded.source}" if recorded.source else ""
         findings.append(Finding(qualified, False, [
             f"{qualified} (baseline only{where})",
             "    has a baseline entry but no longer qualifies for the "
-            "guarded set — it was renamed, moved to another module, lost "
-            "its `Generic`-derived `Serialize` instance, stopped being a "
-            "sum, or was deleted.",
+            "guarded set — it was renamed, lost its `Generic`-derived "
+            "`Serialize` instance, stopped being a sum, or was deleted. "
+            "(A pure module MOVE that keeps the name and every "
+            "constructor is recognised as a relocation instead; this is "
+            "not one.)",
             f"    Every one of those changes what already-saved bytes mean: "
             f"the {len(recorded.constructors)} tag(s) it defined "
             f"({', '.join(c.render() for c in recorded.constructors)}) no "
@@ -2076,6 +2165,96 @@ def _self_test() -> list[str]:
                 "Unit.Sim.Types.Ghost", "recorded no save-wire carrier",
                 "cannot be re-derived")
 
+    # 3c. A pure MODULE MOVE is the one baseline-only outcome that is
+    #     NOT a byte-reinterpreting change (issue #2098's owner split of
+    #     the worldgen DTO graph is the motivating case). It ratchets
+    #     like an append; everything that merely resembles it does not.
+    def relocated(module: str, *alternatives: str) -> dict[str, str]:
+        """The clean tree with `Pose` declared in `module` instead."""
+        tree = {k: v for k, v in _clean_tree().items()
+                if k != "src/Unit/Sim/Types.hs"}
+        rel = "src/" + module.replace(".", "/") + ".hs"
+        tree[rel] = _pose(*(alternatives or
+                            ("Standing", "Crouching", "Crawling"))).replace(
+            "module Unit.Sim.Types where", f"module {module} where")
+        return tree
+
+    move = relocated("Unit.Sim.Pose")
+    code, move_out = _run(move)
+    if code == 0:
+        failures.append("relocation: must still fail until the baseline "
+                        "records the new owner")
+    if "INCOMPATIBLE" in move_out:
+        failures.append(f"relocation: misreported as a byte-reinterpreting "
+                        f"change:\n{move_out}")
+    for needle in ("Unit.Sim.Pose.Pose", "RELOCATED from Unit.Sim.Types.Pose",
+                   "last recorded in src/Unit/Sim/Types.hs",
+                   "Standing/0, Crouching/0, Crawling/0",
+                   "no saved byte changed meaning", "--update-baseline"):
+        if needle not in move_out:
+            failures.append(f"relocation: output did not mention {needle!r}:"
+                            f"\n{move_out}")
+    # The old key must NOT also be reported as a deletion — one move is
+    # one fact, and a duplicate report is what would push a maintainer
+    # back toward hand-editing the baseline.
+    if "baseline only" in move_out:
+        failures.append(f"relocation: also reported as a baseline-only "
+                        f"deletion:\n{move_out}")
+    # It ratchets through the supported writer, and the ratcheted tree
+    # then passes with the ownership metadata pointing at the new owner.
+    code, moved_out = _run(move, update=True)
+    if code != 0:
+        failures.append(f"relocation: --update-baseline refused a pure "
+                        f"module move:\n{moved_out}")
+    moved_baseline = moved_out.split("<<baseline>>\n", 1)[1]
+    for needle in ('"Unit.Sim.Pose.Pose"', '"src/Unit/Sim/Pose.hs"'):
+        if needle not in moved_baseline:
+            failures.append(f"relocation ratchet: baseline missing {needle!r}:"
+                            f"\n{moved_baseline}")
+    if '"Unit.Sim.Types.Pose"' in moved_baseline:
+        failures.append(f"relocation ratchet: baseline kept the stale "
+                        f"qualified key:\n{moved_baseline}")
+    expect_clean("relocation ratcheted",
+                 dict(move, **{BASELINE_REL: moved_baseline}))
+
+    # The mutation that must NOT be absorbed: a move that also changes a
+    # constructor is still the silent reinterpretation this audit exists
+    # to catch.
+    expect_fail("relocation with a reorder",
+                relocated("Unit.Sim.Pose", "Crouching", "Standing", "Crawling"),
+                "INCOMPATIBLE", "Unit.Sim.Types.Pose", "baseline only")
+    expect_fail("relocation with an append",
+                relocated("Unit.Sim.Pose",
+                          "Standing", "Crouching", "Crawling", "Sleeping"),
+                "INCOMPATIBLE", "Unit.Sim.Types.Pose", "baseline only")
+    # ...nor an AMBIGUOUS pairing: two unmatched live types answering to
+    # the same bare name are not evidence of which one moved.
+    ambiguous = relocated("Unit.Sim.Pose")
+    ambiguous["src/Unit/Sim/Stance.hs"] = _pose(
+        "Standing", "Crouching", "Crawling").replace(
+            "module Unit.Sim.Types where", "module Unit.Sim.Stance where")
+    expect_fail("relocation with an ambiguous destination", ambiguous,
+                "INCOMPATIBLE", "Unit.Sim.Types.Pose", "baseline only")
+    # A genuine DELETION still fails AND still cannot be ratcheted away.
+    # The `deleted`/`renamed` guidance cases above prove the report; this
+    # proves `--update-baseline` remains unable to erase the evidence,
+    # which is the whole reason a relocation had to be recognised
+    # explicitly rather than by relaxing the baseline-only rule.
+    for label, tree in (
+            ("deleted", {k: v for k, v in _clean_tree().items()
+                         if k != "src/Unit/Sim/Types.hs"}),
+            ("renamed", dict(_clean_tree(), **{
+                "src/Unit/Sim/Types.hs": _pose(
+                    "Standing", "Crouching", "Crawling").replace(
+                        "data Pose", "data Posture")}))):
+        code, out = _run(tree, update=True)
+        if code == 0:
+            failures.append(f"{label}: --update-baseline wrote over a "
+                            f"non-append:\n{out}")
+        if "refusing to update" not in out:
+            failures.append(f"{label}: --update-baseline did not refuse "
+                            f"loudly:\n{out}")
+
     # 4. Requirement 6: an append is classified as ALLOWED, distinctly
     #    from a failure, and still requires the baseline to ratchet.
     appended = with_pose("Standing", "Crouching", "Crawling", "Sleeping")
@@ -2191,15 +2370,27 @@ def _self_test() -> list[str]:
                 "Unit.Sim.Types.UnitActivity", "baseline only",
                 "no longer qualifies")
 
-    # 9. ...on MODULE-QUALIFIED identities: the same type name in another
-    #    module is a different type, not a match.
+    # 9. ...on MODULE-QUALIFIED identities: the same type name in
+    #    another module is never silently accepted as a match. Where the
+    #    constructors are IDENTICAL it is recognised as a relocation and
+    #    must ratchet under the NEW key (case 3c); where they are not,
+    #    it stays two unrelated facts — a live type with no baseline
+    #    entry, and a baseline entry with no live type.
     moved = _clean_tree()
     del moved["src/Unit/Sim/Types.hs"]
     moved["src/Unit/Pose.hs"] = _pose(
-        "Standing", "Crouching", "Crawling").replace(
+        "Standing", "Crawling", "Crouching").replace(
             "module Unit.Sim.Types", "module Unit.Pose")
     expect_fail("same type name in another module", moved,
                 "Unit.Pose.Pose", "Unit.Sim.Types.Pose", "baseline only")
+    # Neither key is ever assumed to stand for the other: the relocated
+    # tree records the NEW qualified key and drops the old one, rather
+    # than keeping the baseline pointed at a module that no longer
+    # declares the type.
+    relocated_baseline = _run(relocated("Unit.Pose"), update=True)[1]
+    if '"Unit.Sim.Types.Pose"' in relocated_baseline:
+        failures.append(f"module-qualified identity: a relocation kept the "
+                        f"old module's key:\n{relocated_baseline}")
 
     # 10. The guarded-set rule itself: each of the three conditions
     #     genuinely excludes, and none of them excludes too much.
