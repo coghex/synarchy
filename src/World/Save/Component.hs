@@ -49,6 +49,7 @@ import World.Save.Snapshot
     , validateSessionSnapshot, structureEditPaletteErrors )
 import World.Generate.Types (WorldGenParams(..))
 import World.Page.Types (WorldIdentity(..), WorldPageId(..))
+import World.Page.GeneratedId (renderGeneratedWorldId)
 import Structure.Palette (emptyTexPalette)
 import Engine.Graphics.Camera (CameraFacing(..))
 import World.Save.Component.Types
@@ -368,8 +369,13 @@ capComponentErrors errs =
 -- | Requirement 12: the manifest metadata must agree with the
 --   authoritative gameplay components. A mismatch invalidates the save
 --   for full load (listing may still read metadata alone).
+--
+--   Every check but one compares the ACTIVE page, because that is the
+--   only page the listing fields describe. #2021's generated-world ids
+--   are the exception: 'smGeneratedWorldIds' is the complete inventory
+--   for the WHOLE save, so it is checked against every page.
 metadataErrors ∷ SaveMetadata → SessionSnapshot → [ComponentError]
-metadataErrors meta snap =
+metadataErrors meta snap = generatedWorldIdErrors meta snap ⧺
     case activePage of
         Nothing → []  -- unreachable: validateSessionSnapshot already required it
         Just p  ->
@@ -392,3 +398,51 @@ metadataErrors meta snap =
                           ("manifest " <> label <> " (" <> tshow a
                            <> ") disagrees with gameplay (" <> tshow b
                            <> ")") ]
+
+-- | #2021 requirement 6: the @"metadata"@ component's copy of the
+--   generated-world ids must agree with the AUTHORITATIVE per-page
+--   values in @world-pages@. A save whose two copies disagree is a
+--   detectable inconsistency, refused for full load — never silently
+--   resolved by preferring one side, which would let a cheap
+--   metadata-only read report an inventory the real pages contradict.
+--
+--   The comparison is over the COMPLETE page set, as sets, so all four
+--   ways a copy can be wrong fail here: an id MISSING from the metadata
+--   list, an EXTRA id naming no page, a DUPLICATE, and a SUBSTITUTED id
+--   (which reads as one missing plus one extra).
+--
+--   A wholly pre-#2021 save is the one legitimate all-absent shape: no
+--   page carries an id and the metadata list is empty. That is the
+--   state every @world-pages@ v1–v8 payload migrates into, and load
+--   staging is what fills it. It is accepted here and NOWHERE ELSE — a
+--   save where only SOME pages carry an id is rejected, since no writer
+--   and no migration can produce that.
+generatedWorldIdErrors ∷ SaveMetadata → SessionSnapshot → [ComponentError]
+generatedWorldIdErrors meta snap
+    | legacyShaped = []
+    | not (null pagesWithoutId) =
+        [ mismatch ("page " <> tshow pid <> " carries no generated-world id \
+                    \while the save declares " <> tshow (length metaIds)
+                    <> " of them")
+        | pid ← L.sort pagesWithoutId ]
+    | L.sort metaIds ≢ L.sort pageIds =
+        [ mismatch ("manifest generated-world ids ("
+                    <> renderIds metaIds
+                    <> ") disagree with gameplay (" <> renderIds pageIds
+                    <> ")") ]
+    | otherwise = []
+  where
+    pages          = HM.elems (snapPages snap)
+    metaIds        = smGeneratedWorldIds meta
+    pageIds        = [ gid | p ← pages, Just gid ← [pgsGeneratedId p] ]
+    pagesWithoutId = [ pgsPageId p | p ← pages, isNothing (pgsGeneratedId p) ]
+    legacyShaped   = null metaIds ∧ null pageIds
+    renderIds ids  = "[" <> T.intercalate ", "
+                              (map renderGeneratedWorldId (L.sort ids)) <> "]"
+    -- The same version the sibling checks above report, so one
+    -- function never attributes two different versions to one
+    -- component. AssemblePhase is what actually locates these:
+    -- they are cross-component invariants, checked after every
+    -- accepted metadata version has already migrated into the
+    -- one canonical 'SaveMetadata'.
+    mismatch = ComponentError (ComponentId "metadata") 1 AssemblePhase

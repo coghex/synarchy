@@ -84,6 +84,7 @@ import qualified Test.Headless.World.Save.Integrity as SaveIntegrity
 import qualified Test.Headless.World.Save.Storage as SaveStorage
 import qualified Test.Headless.World.Save.Contract as SaveContract
 import qualified Test.Headless.World.Identity as WorldIdentity
+import qualified Test.Headless.World.GeneratedIdentity as GeneratedIdentity
 import qualified Test.Headless.World.MapImagePlan as MapImagePlan
 import qualified Test.Headless.World.MapImageAdmission as MapImageAdmission
 import qualified Test.Headless.World.TransferOrders as WorldTransferOrders
@@ -418,6 +419,12 @@ main = hspec $ do
     -- of re-restoring the shared worlds.
     aroundAll withHeadlessEngine $
         describe "World identity (#707)" WorldIdentity.spec
+    -- #2021 (WML-3). The pure half needs no engine. The boundary half
+    -- gets its OWN engine for the same reason "World identity" does: it
+    -- creates private w8 pages and saves EVERY live page, which the
+    -- shared-worlds engine above must not gain.
+    GeneratedIdentity.pureSpec
+    aroundAll withHeadlessEngine GeneratedIdentity.spec
     -- #2020 (WML-2). The pure half needs no engine at all. The
     -- boundary half gets its OWN engine: it creates a private w8 page
     -- and saves it, which the shared-worlds engine above must not gain,
