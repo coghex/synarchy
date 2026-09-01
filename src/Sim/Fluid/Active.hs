@@ -328,6 +328,17 @@ phaseLateral mv terrainV changedRef = do
                     lx = idx `mod` chunkSize
                     ly = idx `div` chunkSize
                     nbrs = cardinalNeighbors lx ly
+                -- Every request below is sized from the FROZEN snapshot but
+                -- paid out of the LIVE grid, so the cumulative spend has to
+                -- be tracked and each payment capped by what the source has
+                -- left — the same shape 'phaseGravity' and 'phaseWaterfall'
+                -- already use. Without the cap a low-volume cell with
+                -- several thirstier neighbours pays out more than it holds
+                -- and its 'Word16' volume wraps to ~65535, manufacturing
+                -- fluid (#2042). The rate ('diff div 4') and the
+                -- minimum-one-unit progress rule are untouched for every
+                -- transfer the source can actually afford.
+                spentRef ← newSTRef (0 ∷ Int)
                 forM_ nbrs $ \(nx, ny) →
                     when (nx ≥ 0 ∧ nx < chunkSize ∧ ny ≥ 0 ∧ ny < chunkSize) $ do
                         let nIdx = ny * chunkSize + nx
@@ -340,31 +351,51 @@ phaseLateral mv terrainV changedRef = do
                                         diff   = srcVol - dstVol
                                     -- Only transfer from higher side to avoid double-counting
                                     when (diff > 1) $ do
-                                        let transfer = max 1 (diff `div` 4)
+                                        spent ← readSTRef spentRef
+                                        let transfer = min (max 1 (diff `div` 4))
+                                                           (srcVol - spent)
+                                        when (transfer > 0) $ do
+                                            curSrc ← MV.read mv idx
+                                            curDst ← MV.read mv nIdx
+                                            case (curSrc, curDst) of
+                                                (Just s, Just d) → do
+                                                    writeSTRef spentRef (spent + transfer)
+                                                    MV.write mv idx (Just s
+                                                        { afcVolume = afcVolume s - fromIntegral transfer })
+                                                    MV.write mv nIdx (Just d
+                                                        { afcVolume = afcVolume d + fromIntegral transfer })
+                                                    writeSTRef changedRef True
+                                                _ → pure ()
+                                Nothing | srcVol > volumePerLevel → do
+                                    spent ← readSTRef spentRef
+                                    let transfer = min (max 1 (srcVol `div` 4))
+                                                       (srcVol - spent)
+                                    when (transfer > 0) $ do
                                         curSrc ← MV.read mv idx
-                                        curDst ← MV.read mv nIdx
-                                        case (curSrc, curDst) of
-                                            (Just s, Just d) → do
+                                        case curSrc of
+                                            Just s → do
+                                                writeSTRef spentRef (spent + transfer)
                                                 MV.write mv idx (Just s
                                                     { afcVolume = afcVolume s - fromIntegral transfer })
-                                                MV.write mv nIdx (Just d
-                                                    { afcVolume = afcVolume d + fromIntegral transfer })
+                                                -- Read the LIVE destination: an
+                                                -- earlier source this same phase
+                                                -- may already have spilled into
+                                                -- this snapshot-empty cell, and
+                                                -- overwriting it would destroy
+                                                -- that fluid (#2042).
+                                                curDst ← MV.read mv nIdx
+                                                case curDst of
+                                                    Nothing →
+                                                        MV.write mv nIdx (Just ActiveFluidCell
+                                                            { afcType = afcType afc
+                                                            , afcVolume = fromIntegral transfer
+                                                            , afcFlowDir = 0
+                                                            })
+                                                    Just d →
+                                                        MV.write mv nIdx (Just d
+                                                            { afcVolume = afcVolume d + fromIntegral transfer })
                                                 writeSTRef changedRef True
-                                            _ → pure ()
-                                Nothing | srcVol > volumePerLevel → do
-                                    let transfer = max 1 (srcVol `div` 4)
-                                    curSrc ← MV.read mv idx
-                                    case curSrc of
-                                        Just s → do
-                                            MV.write mv idx (Just s
-                                                { afcVolume = afcVolume s - fromIntegral transfer })
-                                            MV.write mv nIdx (Just ActiveFluidCell
-                                                { afcType = afcType afc
-                                                , afcVolume = fromIntegral transfer
-                                                , afcFlowDir = 0
-                                                })
-                                            writeSTRef changedRef True
-                                        Nothing → pure ()
+                                            Nothing → pure ()
                                 _ → pure ()
 
 -- * Phase C: Waterfall detection

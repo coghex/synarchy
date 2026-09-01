@@ -24,7 +24,7 @@ import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.Capability.Core (CoreCapability)
 import Engine.Core.Capability.ContentRegistries
     (ContentRegistriesCapability(..))
-import Engine.Core.Log (LogCategory(..), logInfo)
+import Engine.Core.Log (LogCategory(..), logDebug)
 import Engine.Core.Log.Monad (getLoggerFor)
 import Engine.Asset.YamlInfection
 import Infection.Types
@@ -70,7 +70,7 @@ loadInfectionYamlFn core regs = do
                                                    (infmDefs m) }, ())
                     return (acc + 1)
                     ) (0 ∷ Int) defs
-                logInfo logger CatAsset $
+                logDebug logger CatAsset $
                     "loadInfectionYaml: loaded " <> tshow total
                     <> " infections from " <> T.pack filePath
                 return total
