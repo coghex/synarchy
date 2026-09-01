@@ -24,6 +24,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as Map
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
+import Control.Exception (Exception, throw, try)
 import Data.IORef (writeIORef, readIORef)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
@@ -245,8 +246,15 @@ eventsOnPage ∷ EngineEnv → Text → IO [PlayerEvent]
 eventsOnPage env page =
     filter ((≡ Just page) . peSourcePage) ∘ map seEvent ⊚ readEventLog env
 
-encounterParams ∷ [LocationEncounterOccupant] → WorldGenParams
-encounterParams occupants = pageParams
+-- | The base page's sole instance carrying an encounter and sitting at
+--   @lifecycle@. 'LifecycleUnknown' is where 'buildLocationInstances'
+--   leaves it, and is what every pre-existing case here uses. The
+--   cost-guard cases below start from 'LifecycleDiscovered' instead:
+--   that is the state #1990 is about — a page with nothing left to
+--   promote but an encounter still awaiting clearance.
+encounterParamsAt
+    ∷ LocationLifecycle → [LocationEncounterOccupant] → WorldGenParams
+encounterParamsAt lifecycle occupants = pageParams
     { wgpLocationInstances = base
         { lisById = HM.singleton (liId inst) inst
         }
@@ -268,23 +276,70 @@ encounterParams occupants = pageParams
         , leCleared = null occupants
         , leClearEventEmitted = null occupants
         }
-    inst = original { liEncounter = Just encounter }
+    inst = original { liEncounter = Just encounter
+                    , liLifecycle = lifecycle }
 
 occupantAt ∷ UnitId → (Float, Float) → LocationEncounterOccupant
 occupantAt uid home = LocationEncounterOccupant uid home False False
 
 newEncounterPage
     ∷ EngineEnv → WorldPageId → [LocationEncounterOccupant] → IO WorldState
-newEncounterPage env pageId occupants = do
+newEncounterPage env pageId = newEncounterPageAt env pageId LifecycleUnknown
+
+newEncounterPageAt
+    ∷ EngineEnv → WorldPageId → LocationLifecycle
+    → [LocationEncounterOccupant] → IO WorldState
+newEncounterPageAt env pageId lifecycle occupants = do
     ws ← emptyWorldState
-    writeIORef (wsGenParamsRef ws) $ Just (encounterParams occupants)
+    writeIORef (wsGenParamsRef ws) $
+        Just (encounterParamsAt lifecycle occupants)
     writeIORef (worldManagerRef env) $ emptyWorldManager
         { wmWorlds = [(pageId, ws)]
         , wmVisible = [pageId] }
     pure ws
 
+-- * #1990 cost-guard tripwire
+
+-- | The tripwire the clearance-cost guard is asserted with. Forcing a
+--   value of this type raises, and 'Unit.LineOfSight.visibleTilesOnPage'
+--   opens by binding @wsTilesRef@ and @wsTimeRef@ under that module's
+--   @{-\# LANGUAGE Strict \#-}@, so those binds force to WHNF.
+--   'tickLocationDiscovery' reads neither ref itself, so a raise means
+--   the tick rasterized a unit's line of sight and nothing else — which
+--   is what lets these cases assert the guard without measuring elapsed
+--   time (the one mechanism a timing assertion could never make
+--   deterministic).
+data SightRasterized = SightRasterized deriving (Show)
+
+instance Exception SightRasterized
+
+-- | Arm the tripwire on a page. Written without an intermediate @let@
+--   on purpose: this module is @Strict@, so naming the 'throw' would
+--   raise here instead of inside the tick.
+poisonSight ∷ WorldState → IO ()
+poisonSight ws = do
+    writeIORef (wsTilesRef ws) (throw SightRasterized)
+    writeIORef (wsTimeRef ws) (throw SightRasterized)
+
+-- | Tick an armed page and report whether sight was rasterized.
+sightRasterized ∷ EngineEnv → WorldPageId → WorldState → IO Bool
+sightRasterized env pageId ws = do
+    outcome ← (try (tickLocationDiscovery env pageId ws)
+                  ∷ IO (Either SightRasterized ()))
+    pure $ case outcome of
+        Left SightRasterized → True
+        Right ()             → False
+
+tickWithoutSight ∷ EngineEnv → WorldPageId → WorldState → Expectation
+tickWithoutSight env pageId ws =
+    sightRasterized env pageId ws `shouldReturn` False
+
+tickWithSight ∷ EngineEnv → WorldPageId → WorldState → Expectation
+tickWithSight env pageId ws =
+    sightRasterized env pageId ws `shouldReturn` True
+
 spec ∷ Spec
-spec = beforeAll initEnv $
+spec = beforeAll initEnv $ do
     describe "Location discovery (#780) — tickLocationDiscovery" $ do
 
         it "a player-faction unit standing ON the location marks it \
@@ -725,3 +780,221 @@ spec = beforeAll initEnv $
             lifecyclesOf mpAfter `shouldBe` Just [LifecycleDiscovered]
             evsAfter ← eventsFor env 401
             map peCategory evsAfter `shouldBe` ["location_discovery"]
+
+    -- #1990: an uncleared encounter admits its page to the tick body
+    -- (#916/PR #1900 widened the guard so clearance keeps being polled),
+    -- but on a page where every location is already discovered that is
+    -- clearance work, not discovery work. These cases pin that the
+    -- expensive half — per-unit line-of-sight rasterization — is not run
+    -- for it, and pin it through the 'SightRasterized' tripwire above
+    -- rather than through elapsed time, so a reintroduced sight call
+    -- fails deterministically.
+    --
+    -- Each example uses its own 'WorldPageId': the suite shares one
+    -- 'EngineEnv' and one accumulating player-event log, so assertions
+    -- here go through 'eventsOnPage'.
+    describe "Location discovery clearance cost guard" $ do
+
+        it "DOES rasterize sight on a page that still has something to \
+           \discover — the control that proves the tripwire fires" $ \env → do
+            -- Without this the four cases below could all pass vacuously.
+            let pageId = WorldPageId "cost_guard_control"
+                uid = UnitId 741
+            ws ← newEncounterPageAt env pageId LifecycleUnknown
+                [occupantAt uid (7, 8)]
+            poisonSight ws
+            writeIORef (unitManagerRef env) $ emptyUnitManager
+                { umInstances = HM.fromList
+                    [ (UnitId 740, testUnit pageId FactionPlayer 8 8)
+                    , (uid, testUnit pageId FactionHostile 7 8) ] }
+            tickWithSight env pageId ws
+
+        it "an already-discovered page with an uncleared encounter \
+           \performs no sight evaluation while its occupants are alive" $
+           \env → do
+            let pageId = WorldPageId "cost_guard_alive"
+                uidA = UnitId 751
+                uidB = UnitId 752
+            ws ← newEncounterPageAt env pageId LifecycleDiscovered
+                [occupantAt uidA (7, 8), occupantAt uidB (9, 8)]
+            poisonSight ws
+            writeIORef (unitManagerRef env) $ emptyUnitManager
+                { umInstances = HM.fromList
+                    [ (UnitId 750, testUnit pageId FactionPlayer 8 8)
+                    , (uidA, testUnit pageId FactionHostile 7 8)
+                    , (uidB, testUnit pageId FactionHostile 9 8) ] }
+
+            tickWithoutSight env pageId ws
+            tickWithoutSight env pageId ws
+            readIORef (wsGenParamsRef ws) >>= (\p →
+                lifecyclesOf p `shouldBe` Just [LifecycleDiscovered])
+            eventsOnPage env "cost_guard_alive" `shouldReturn` []
+
+        it "still detects the qualifying final death, emits clearance \
+           \exactly once, and keeps skipping sight afterwards — all \
+           \without one sight evaluation" $ \env → do
+            let pageId = WorldPageId "cost_guard_death"
+                uidA = UnitId 761
+                uidB = UnitId 762
+            ws ← newEncounterPageAt env pageId LifecycleDiscovered
+                [occupantAt uidA (7, 8), occupantAt uidB (9, 8)]
+            poisonSight ws
+            let publish a b = writeIORef (unitManagerRef env) $
+                    emptyUnitManager { umInstances = HM.fromList
+                        [ (UnitId 760, testUnit pageId FactionPlayer 8 8)
+                        , (uidA, a), (uidB, b) ] }
+                nomad page pose gx = (testUnit page FactionHostile gx 8)
+                    { uiPose = pose }
+
+            -- The last qualifying death is the clearing edge, and the
+            -- tick sees it with no sight input at all.
+            publish (nomad pageId "dead" 7) (nomad pageId "standing" 9)
+            tickWithoutSight env pageId ws
+            readIORef (wsGenParamsRef ws) >>= (\p →
+                lifecyclesOf p `shouldBe` Just [LifecycleDiscovered])
+            eventsOnPage env "cost_guard_death" `shouldReturn` []
+
+            publish (nomad pageId "dead" 7) (nomad pageId "dead" 9)
+            tickWithoutSight env pageId ws
+            readIORef (wsGenParamsRef ws) >>= (\p →
+                lifecyclesOf p `shouldBe` Just [LifecycleCleared])
+            evs ← eventsOnPage env "cost_guard_death"
+            map peCategory evs `shouldBe` ["location_clearance"]
+            map peCoords evs `shouldBe` [Just (8, 8)]
+
+            -- Cleared: 'pendingClearance' is now False and nothing is
+            -- promotable, so the whole-page early-out fires and the tick
+            -- never reaches the unit manager, let alone sight.
+            tickWithoutSight env pageId ws
+            tickWithoutSight env pageId ws
+            after ← eventsOnPage env "cost_guard_death"
+            map peCategory after `shouldBe` ["location_clearance"]
+
+        it "keeps the collapsed, crawling, wrong-page and missing \
+           \occupant rules on the clearance-only path" $ \env → do
+            let pageId = WorldPageId "cost_guard_roster"
+                elsewhere = WorldPageId "cost_guard_roster_elsewhere"
+                uidA = UnitId 771
+                uidB = UnitId 772
+            ws ← newEncounterPageAt env pageId LifecycleDiscovered
+                [occupantAt uidA (7, 8), occupantAt uidB (9, 8)]
+            poisonSight ws
+            let publishBoth a b = writeIORef (unitManagerRef env) $
+                    emptyUnitManager { umInstances = HM.fromList
+                        [ (UnitId 770, testUnit pageId FactionPlayer 8 8)
+                        , (uidA, a), (uidB, b) ] }
+                publishOne a = writeIORef (unitManagerRef env) $
+                    emptyUnitManager { umInstances = HM.fromList
+                        [ (UnitId 770, testUnit pageId FactionPlayer 8 8)
+                        , (uidA, a) ] }
+                nomad page pose gx = (testUnit page FactionHostile gx 8)
+                    { uiPose = pose }
+                deadA = nomad pageId "dead" 7
+                stillUncleared = readIORef (wsGenParamsRef ws) >>= (\p →
+                    lifecyclesOf p `shouldBe` Just [LifecycleDiscovered])
+
+            -- Collapsed is not death.
+            publishBoth deadA (nomad pageId "collapsed" 9)
+            tickWithoutSight env pageId ws
+            stillUncleared
+            -- Neither is crawling.
+            publishBoth deadA (nomad pageId "crawling" 9)
+            tickWithoutSight env pageId ws
+            stillUncleared
+            -- Nor is a corpse that is on some other page.
+            publishBoth deadA (nomad elsewhere "dead" 9)
+            tickWithoutSight env pageId ws
+            stillUncleared
+            -- Nor is an assigned UID the manager no longer knows.
+            publishOne deadA
+            tickWithoutSight env pageId ws
+            stillUncleared
+            eventsOnPage env "cost_guard_roster" `shouldReturn` []
+
+            -- The whole roster dead on-page is still the one thing that
+            -- clears, and it clears here too.
+            publishBoth deadA (nomad pageId "dead" 9)
+            tickWithoutSight env pageId ws
+            readIORef (wsGenParamsRef ws) >>= (\p →
+                lifecyclesOf p `shouldBe` Just [LifecycleCleared])
+            evs ← eventsOnPage env "cost_guard_roster"
+            map peCategory evs `shouldBe` ["location_clearance"]
+
+        it "runs the clearance-only path on a HIDDEN page and while \
+           \paused, attributing the event to that page with no pannable \
+           \coords and still evaluating no sight" $ \env → do
+            let pageActive = WorldPageId "cost_guard_active"
+                pageHidden = WorldPageId "cost_guard_hidden"
+                uid = UnitId 781
+            wsActive ← emptyWorldState
+            writeIORef (wsGenParamsRef wsActive) $ Just pageParams
+            wsHidden ← emptyWorldState
+            writeIORef (wsGenParamsRef wsHidden) $ Just
+                (encounterParamsAt LifecycleDiscovered [occupantAt uid (7, 8)])
+            writeIORef (worldManagerRef env) $ emptyWorldManager
+                { wmWorlds = [(pageActive, wsActive), (pageHidden, wsHidden)]
+                , wmVisible = [pageActive] }
+            poisonSight wsHidden
+            writeIORef (unitManagerRef env) $ emptyUnitManager
+                { umInstances = HM.fromList
+                    [ (UnitId 780, testUnit pageHidden FactionPlayer 8 8)
+                    , (uid, (testUnit pageHidden FactionHostile 7 8)
+                        { uiPose = "dead" }) ] }
+
+            -- The tick reads no pause flag; clearance must land anyway.
+            writeIORef (enginePausedRef env) True
+            tickWithoutSight env pageHidden wsHidden
+            writeIORef (enginePausedRef env) False
+
+            readIORef (wsGenParamsRef wsHidden) >>= (\p →
+                lifecyclesOf p `shouldBe` Just [LifecycleCleared])
+            evs ← eventsOnPage env "cost_guard_hidden"
+            map peCategory evs `shouldBe` ["location_clearance"]
+            map peCoords evs `shouldBe` [Nothing]
+            map peSourcePage evs `shouldBe` [Just "cost_guard_hidden"]
+
+        it "still rasterizes sight for a roster defeated BEFORE \
+           \discovery, so the deferred clearance event is never \
+           \stranded" $ \env → do
+            -- 'markLocationEncounterCleared' only arms the deferred emit
+            -- for an instance defeated while still un-discovered — which
+            -- is exactly a still-promotable page, so the cost guard must
+            -- NOT skip sight here. Armed page first, then the real one.
+            let armed = WorldPageId "cost_guard_predeath_armed"
+                uidArmed = UnitId 791
+            wsArmed ← newEncounterPageAt env armed LifecycleUnknown
+                [occupantAt uidArmed (7, 8)]
+            poisonSight wsArmed
+            writeIORef (unitManagerRef env) $ emptyUnitManager
+                { umInstances = HM.fromList
+                    [ (UnitId 790, testUnit armed FactionPlayer 8 8)
+                    , (uidArmed, (testUnit armed FactionHostile 7 8)
+                        { uiPose = "dead" }) ] }
+            tickWithSight env armed wsArmed
+
+            let pageId = WorldPageId "cost_guard_predeath"
+                uid = UnitId 793
+            ws ← newEncounterPageAt env pageId LifecycleUnknown
+                [occupantAt uid (7, 8)]
+            writeIORef (unitManagerRef env) $ emptyUnitManager
+                { umInstances = HM.singleton uid
+                    ((testUnit pageId FactionHostile 7 8)
+                        { uiPose = "dead" }) }
+            -- Defeated with nobody watching: private, no event.
+            tickLocationDiscovery env pageId ws
+            readIORef (wsGenParamsRef ws) >>= (\p →
+                lifecyclesOf p `shouldBe` Just [LifecycleUnknown])
+            eventsOnPage env "cost_guard_predeath" `shouldReturn` []
+
+            writeIORef (unitManagerRef env) $ emptyUnitManager
+                { umInstances = HM.fromList
+                    [ (uid, (testUnit pageId FactionHostile 7 8)
+                        { uiPose = "dead" })
+                    , (UnitId 792, testUnit pageId FactionPlayer 8 8) ] }
+            tickLocationDiscovery env pageId ws
+            tickLocationDiscovery env pageId ws
+            readIORef (wsGenParamsRef ws) >>= (\p →
+                lifecyclesOf p `shouldBe` Just [LifecycleCleared])
+            evs ← eventsOnPage env "cost_guard_predeath"
+            map peCategory evs `shouldBe`
+                ["location_discovery", "location_clearance"]

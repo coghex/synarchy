@@ -1117,6 +1117,7 @@ test-suite synarchy-test-headless
                    Test.Headless.WorldGen.BorderProbe
                    Test.Headless.WorldGen.WrapSeam
                    Test.Headless.WorldGen.CoastBreach
+                   Test.Headless.WorldGen.Breakthrough
                    Test.Headless.WorldGen.BedDepth
                    Test.Headless.WorldGen.FluidSurfaceFold
                    Test.Headless.Unit.Pathing.Cost
@@ -1338,6 +1339,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Location.Stamping
                    Test.Headless.Tutorial.Definitions
                    Test.Headless.Building.Knowledge
+                   Test.Headless.Building.MachineShopConstruction
                    Test.Headless.Item.NestedContents
                    Test.Headless.Building.PageBinding
                    Test.Headless.Building.PortalSpawnBinding
