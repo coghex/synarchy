@@ -43,7 +43,7 @@
 --     (construction.setAnchor / construction.designate "structure"),
 --     mirroring the old construct_tool. No building ghost — the engine
 --     renders the anchor→hover rectangle preview keyed off the same
---     BuildTool ToolMode (World/Render/Quads.hs). Stays armed.
+--     BuildTool ToolMode (World/Render/CursorQuads.hs). Stays armed.
 -- Right-click cancels a pending structure rectangle, or (nothing
 -- pending) erases the designation under the cursor — except the
 -- starting-building path, where right-click just exits placement (no
@@ -225,7 +225,7 @@ end
 -- designates, wire is a PATH tool: the two-click commit snaps to a
 -- straight 1-wide line along whichever axis has the larger extent from
 -- the anchor (snapWirePath), and construction.setLineMode makes the
--- live anchor→hover ghost preview the SAME line (World/Render/Quads.hs)
+-- live anchor→hover ghost preview the SAME line (World/Render/CursorQuads.hs)
 -- instead of a filled rectangle — see isWirePath/enterPlacement/
 -- handleMouseDown below. The connection-aware render (scripts/wire.lua)
 -- then picks each tile's autotile variant from its neighbours, so the
@@ -715,11 +715,19 @@ end
 -- Snap a path endpoint to whichever axis has the larger extent from the
 -- anchor, so a diagonal drag commits as a straight 1-wide line rather
 -- than the filled rectangle every other structure piece designates.
--- MUST match the engine's line-mode preview exactly (the dx/dy compare
--- in World/Render/Quads.hs constructPreviewQuads) so what previews is
--- what commits. Exported (not local) so tools/wire_probe.py can verify
--- the snap directly instead of only the lower-level construction.*
--- calls it feeds.
+--
+-- #1844 moved the AUTHORITY for this into the engine: preview and commit
+-- both go through World.Construct.Extent.structureDragExtent, which
+-- picks the axis from the RAW localized delta before clamping (the old
+-- preview picked it AFTER, so near the 64-cell boundary the two could
+-- choose differently). This stays because the local occupancy scan below
+-- needs the same endpoint the commit will use, and because
+-- tools/wire_probe.py verifies the snap directly rather than only the
+-- construction.* calls it feeds. It is the same rule the engine applies,
+-- and applying it twice is the identity: one axis delta is already zero.
+--
+-- The CLAMP is deliberately not duplicated here — that is the engine's,
+-- and a second copy of a bound is exactly what drifted before.
 function buildTool.snapWirePath(ax, ay, x, y)
     local dx, dy = x - ax, y - ay
     if math.abs(dx) >= math.abs(dy) then return x, ay
@@ -811,7 +819,7 @@ end
 -- Per-tick: drive the ghost preview while in placement mode. Only the
 -- building targets have a ghost — a structure rectangle previews via
 -- the engine's anchor→hover render (constructAnchor, keyed off this
--- tool's ToolMode, see World/Render/Quads.hs), driven entirely by the
+-- tool's ToolMode, see World/Render/CursorQuads.hs), driven entirely by the
 -- setAnchor/designate calls in handleMouseDown below.
 -----------------------------------------------------------
 function buildTool.update(dt)
@@ -1210,13 +1218,22 @@ function buildTool.handleMouseDown(button, x, y)
                     -- vanish — return them to the ground. Buildings never
                     -- consume through this path (a separate delivered-
                     -- material system), so job.category filters them out.
+                    -- #1844: the refund comes from the popped job's own
+                    -- RECEIPT, so it is exactly what was spent for THIS
+                    -- attempt rather than whatever the pack costs now,
+                    -- and only the caller whose atomic delete won is
+                    -- handed one — which is what makes it happen once.
                     if removed and removed.paid then
                         constructAi.refundStructureMaterials(removed)
                     end
                     -- Interrupt any live claimant so it can't keep
                     -- ticking progress on its own cached copy of the
-                    -- now-cancelled job and still place the piece.
-                    constructAi.abandonClaim(wid, gx, gy)
+                    -- now-cancelled job and still place the piece. Named
+                    -- by ATTEMPT (#1844): a worker that has since claimed
+                    -- a successor at this tile must keep its own job.
+                    if removed then
+                        constructAi.abandonClaim(wid, gx, gy, removed.attempt)
+                    end
                 end
             end
         end

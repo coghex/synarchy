@@ -42,6 +42,8 @@ import Engine.Core.State (EngineEnv(..))
 import Structure.Types (emptyChunkStructures)
 import World.Chunk.Types
     (ChunkCoord(..), ColumnTiles(..), LoadedChunk(..), chunkSize)
+import World.Construct.Attempt (firstConstructAttemptId)
+import World.Construct.Receipt (ConstructPayment(..), mkMaterialReceipt)
 import World.Construct.Types
     ( ConstructDesignation(..), ConstructStatus(..), ConstructTarget(..)
     , StructurePiece(..), newConstructDesignation )
@@ -54,6 +56,7 @@ import World.State.Types
 import World.Thread.Command.Cursor
     ( handleWorldCancelConstructCommand, handleWorldDesignateConstructCommand )
 import World.Tile.Types (WorldTileData(..))
+import Test.Headless.Construct.Fixture (registerFixturePacks)
 
 -- * Fixture geometry — one loaded chunk at the origin, flat at 'zSlice'.
 
@@ -85,7 +88,8 @@ holdBuilding   = CtBuilding "cargo_hold_S"
 paidClaimedJob ∷ ConstructTarget → ConstructDesignation
 paidClaimedJob tgt = ConstructDesignation
     { cdZ = zSlice, cdTarget = tgt, cdStatus = CsClaimed
-    , cdProgress = 0.4, cdMaterialsPaid = True }
+    , cdProgress = 0.4, cdAttempt = firstConstructAttemptId
+    , cdPayment = CpPaid (mkMaterialReceipt [("steel_plate", 1)]) }
 
 spec ∷ Spec
 spec = beforeAll initializeEngineHeadless $ do
@@ -128,7 +132,8 @@ spec = beforeAll initializeEngineHeadless $ do
         \(EngineInitResult env) → do
       forM_ [CsPending, CsClaimed, CsComplete] $ \st → do
         ws ← resetPage env
-        let job = (newConstructDesignation zSlice floorPiece) { cdStatus = st }
+        let job = (newConstructDesignation zSlice floorPiece
+                       firstConstructAttemptId) { cdStatus = st }
         writeIORef (wsConstructDesignationsRef ws) (HM.singleton tile job)
         designate env ws tile tile wallPiece
         HM.lookup tile <$> readIORef (wsConstructDesignationsRef ws)
@@ -142,7 +147,7 @@ spec = beforeAll initializeEngineHeadless $ do
       logger ← readIORef (loggerRef env)
       designate env ws tile tile floorPiece
       handleWorldCancelConstructCommand env logger fixturePage
-          (fst tile) (snd tile)
+          (fst tile) (snd tile) Nothing
       designate env ws tile tile wallPiece
       targetAt ws tile `shouldReturn` Just wallPiece
 
@@ -254,6 +259,10 @@ designateOutcomes = filter ((≡ "construction.designate") . aoKind)
 --   with no placed structures and an empty designation map.
 resetPage ∷ EngineEnv → IO WorldState
 resetPage env = do
+    -- #1844: commit resolves every structure candidate against the
+    -- registered art/build catalogue, so the pack this fixture
+    -- designates from has to exist the way it does at boot.
+    registerFixturePacks env
     ws ← emptyWorldState
     writeIORef (wsGenParamsRef ws)
         (Just defaultWorldGenParams { wgpWorldSize = worldSize })

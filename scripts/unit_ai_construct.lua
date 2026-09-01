@@ -12,7 +12,12 @@
 --     1.0 place the piece via scripts/structures.lua, job complete.
 --
 -- Claims: one worker per PAGE + tile via a module-local registry
--- (constructClaims, same shape and same #1329 page key as digClaims);
+-- (constructClaims, same shape and same #1329 page key as digClaims).
+-- Since #1844 a job ALSO carries the exact designation ATTEMPT it
+-- claimed, and every lifecycle call names it: a coordinate alone can no
+-- longer tell one attempt from a successor designated at the same tile,
+-- so a delayed status/progress/payment/completion from a job that has
+-- gone is a no-op rather than a silent mutation of someone else's.
 -- the engine-side "claimed" status is the durable/observable layer —
 -- getPendingJobs carries it, and the sweep below releases a dead or
 -- expired claimant back to "pending". Claims from a save/Lua reload
@@ -42,8 +47,13 @@ local fetchWantsFromMule   = fetch.fetchWantsFromMule
 local mv = require("scripts.movement_speed")
 local roles = require("scripts.unit_roles")
 local claimsLib = require("scripts.unit_ai_claims")
+local site = require("scripts.unit_ai_construct_site")
 
 local M = {}
+
+-- Re-exported so callers keep ONE entry point for the construction
+-- module: scripts/build_tool.lua's cancel path refunds through this.
+M.refundStructureMaterials = site.refundStructureMaterials
 
 local constructClaims = claimsLib.track({})  -- page key → { uid, at }
 local constructKey    = claimsLib.key        -- (wid, x, y)
@@ -58,21 +68,6 @@ local function constructClaimedByOther(key, uid, now, timeout)
     return true
 end
 
--- Structure-pack build costs, lazily loaded from the pack YAML's build:
--- block (keyed by piece KIND — wall edges share one entry). false = no
--- build block (debug/stamp-only pack): its designations are skipped.
-local packBuildCache = {}
-local function packBuildInfo(pack, kind)
-    local p = packBuildCache[pack]
-    if p == nil then
-        local y = engine.loadYaml("data/structure_packs/" .. pack .. ".yaml")
-        p = (y and y.build) or false
-        packBuildCache[pack] = p
-    end
-    if not p then return nil end
-    return p[kind]
-end
-
 -- Release the unit's hold on its job. toPending flips engine-side status
 -- back so another worker can take the tile; omitted = already gone.
 local function releaseConstructJob(wid, s, uid, toPending)
@@ -82,7 +77,11 @@ local function releaseConstructJob(wid, s, uid, toPending)
         local c = constructClaims[key]
         if c and c.uid == uid then constructClaims[key] = nil end
         if toPending then
-            construction.setJobStatus(wid, job.x, job.y, "pending")
+            -- #1844: every lifecycle call names the exact attempt this
+            -- unit observed, so releasing a job that has already been
+            -- cancelled and replaced cannot reset the SUCCESSOR's status.
+            construction.setJobStatus(wid, job.x, job.y, "pending",
+                                      job.attempt)
         end
     end
     s.constructJob = nil
@@ -95,13 +94,19 @@ end
 -- constructUtility only notices on that unit's own next decision tick
 -- — too late to stop it placing the piece. This clears the claim
 -- immediately instead. `wid` is the CANCELLED job's own page.
-local function abandonClaim(wid, gx, gy)
+local function abandonClaim(wid, gx, gy, attempt)
     local key = constructKey(wid, gx, gy)
     local c = constructClaims[key]
     constructClaims[key] = nil
     if not (c and c.uid) then return end
     local s = require("scripts.unit_ai").getState(c.uid)
-    if s and s.constructJob and s.constructJob.x == gx and s.constructJob.y == gy then
+    local job = s and s.constructJob
+    -- #1844: when the caller names the cancelled ATTEMPT, only that
+    -- claimant is detached. A worker that has since claimed a successor
+    -- at the same tile keeps its own job: the coordinate alone can no
+    -- longer tell the two apart.
+    if job and job.x == gx and job.y == gy
+       and (attempt == nil or job.attempt == attempt) then
         s.constructJob = nil
         s.constructCandidate = nil
     end
@@ -124,7 +129,8 @@ local function sweepConstructClaims(wid, jobs, now, timeout)
             elseif (c.uid and not unit.exists(c.uid))
                    or (now - c.at > timeout) then
                 constructClaims[key] = nil
-                construction.setJobStatus(wid, job.x, job.y, "pending")
+                construction.setJobStatus(wid, job.x, job.y, "pending",
+                                          job.attempt)
             end
         end
     end
@@ -176,7 +182,7 @@ local function findConstructJob(uid, fromX, fromY, params)
             if job.category == "building" then
                 viable = true
             else
-                build = packBuildInfo(job.pack, job.kind)
+                build = site.packBuildInfo(job.pack, job.kind)
                 -- A durably-paid job (#799) needs no sourceability check.
                 if build
                    and (job.kind ~= "post"
@@ -210,7 +216,13 @@ local function constructUtility(uid, s, params)
     if s.constructJob then
         local job = construction.getDesignationAt(wid, s.constructJob.x,
                                                   s.constructJob.y)
-        if job then return params.construct_lock_utility end
+        -- #1844: the tile carrying A designation is no longer proof it
+        -- carries OURS. A cancelled job replaced by a successor at the
+        -- same tile must drop here, or this unit would keep pouring work
+        -- into someone else's attempt.
+        if job and job.attempt == s.constructJob.attempt then
+            return params.construct_lock_utility
+        end
         releaseConstructJob(wid, s, uid)
     end
 
@@ -224,75 +236,6 @@ local function constructUtility(uid, s, params)
     return params.construct_base_utility * distFactor
          * roles.weight(s, "construct_job")
 end
-
--- Stand position: nearest neighbouring tile's centre — beside the job
--- tile, never on it (a wall materialising around the builder is wrong).
-local function constructStandPos(job, px, py)
-    local bestX, bestY, bestD = nil, nil, math.huge
-    for _, o in ipairs({ {1, 0}, {-1, 0}, {0, 1}, {0, -1} }) do
-        local nx = job.x + o[1] + 0.5
-        local ny = job.y + o[2] + 0.5
-        local d = (nx - px) ^ 2 + (ny - py) ^ 2
-        if d < bestD then bestX, bestY, bestD = nx, ny, d end
-    end
-    return bestX, bestY
-end
-
--- The structure.hasAt slot this job places into — mirrors
--- placeStructurePiece's kind/edge → slot derivation (#805) so the
--- pre-payment occupancy check below targets the EXACT slot.
-local function jobSlot(job)
-    if job.kind == "floor" then return "floor"
-    elseif job.kind == "ceiling" then return "ceiling"
-    elseif job.kind == "wall" then return "wall_" .. (job.edge or "ne")
-    elseif job.kind == "post" then return "post_" .. (job.edge or "n")
-    elseif job.kind == "wire" then return "wire"
-    end
-    return nil
-end
-
--- Place via the structures module. Every kind can fail mid-job (its
--- target chunk unloads, not just a post's vanished floor, #799) — log
--- rather than strand the job; false lets the caller apply the refund.
-local function placeStructurePiece(job)
-    local structures = require("scripts.structures")
-    local ok
-    if job.kind == "floor" then
-        ok = structures.floor(job.x, job.y)
-    elseif job.kind == "ceiling" then
-        ok = structures.ceiling(job.x, job.y)
-    elseif job.kind == "wall" then
-        ok = structures.wall(job.x, job.y, job.edge or "ne")
-    elseif job.kind == "post" then
-        -- No corner in the designation (the tool's hover pick does);
-        -- default "n" until the tool grows a corner picker.
-        ok = structures.post(job.x, job.y, job.edge or "n")
-    elseif job.kind == "wire" then
-        ok = require("scripts.wire").place(job.x, job.y)
-    else
-        ok = false
-    end
-    if not ok then
-        engine.logWarn("construct: " .. tostring(job.kind) .. " at " .. job.x
-            .. "," .. job.y .. " failed to place mid-job — skipping placement")
-    end
-    return ok
-end
-
--- Refund a structure job's ALREADY-PAID materials to the ground (#799):
--- the FULL pack cost, not this call's own (possibly empty, if resumed)
--- job.need delta — 'paid' means the full amount already left inventory.
-local function refundStructureMaterials(job)
-    if job.category ~= "structure" then return end
-    local build = job.build or packBuildInfo(job.pack, job.kind)
-    if not build then return end
-    for matType, need in pairs(build.materials or {}) do
-        for _ = 1, need do
-            item.spawnGround(matType, job.x + 0.5, job.y + 0.5)
-        end
-    end
-end
-M.refundStructureMaterials = refundStructureMaterials
 
 local function constructExecute(uid, s, params)
     local wid = world.getActiveWorldId()
@@ -313,7 +256,8 @@ local function constructExecute(uid, s, params)
             return
         end
         constructClaims[key] = { uid = uid, at = now }
-        construction.setJobStatus(wid, cand.x, cand.y, "claimed")
+        construction.setJobStatus(wid, cand.x, cand.y, "claimed",
+                                  cand.attempt)
         s.constructCandidate = nil
         cand.phase = "fetch"
         -- Fetch shortfalls, planned once at claim time (inventory →
@@ -368,13 +312,14 @@ local function constructExecute(uid, s, params)
         unit.stop(uid)
         local bid = building.spawn(job.building, job.x, job.y)
         if bid then
-            construction.setJobStatus(wid, job.x, job.y, "complete")
+            construction.setJobStatus(wid, job.x, job.y, "complete",
+                                      job.attempt)
             releaseConstructJob(wid, s, uid)
         else
             -- Placement invalid (terrain changed, overlap) — retrying
             -- can't succeed, so cancel the blueprint and say so.
             reportFailure(uid, "Can't build here — blueprint cancelled")
-            construction.cancelDesignation(job.x, job.y)
+            construction.cancelDesignation(job.x, job.y, job.attempt)
             releaseConstructJob(wid, s, uid)
         end
         return
@@ -403,17 +348,19 @@ local function constructExecute(uid, s, params)
     -- Phase 2: stand beside the tile. Materials are consumed once, on
     -- arrival — the moment construction starts.
     if job.phase == "walking" then
-        local sx, sy = constructStandPos(job, info.gridX, info.gridY)
+        local sx, sy = site.constructStandPos(job, info.gridX, info.gridY)
         if distance(info.gridX, info.gridY, sx, sy)
            <= params.construct_arrival_tiles then
             unit.stop(uid)
             if not job.consumed then
-                -- Revalidate the requested slot immediately before the
-                -- irreversible material payment (#805): another worker's
-                -- piece can fill it between claim and arrival (a
-                -- re-designation cannot, since #1595). Cancel rather than
-                -- pay and overwrite — no material lost, no stuck job.
-                local slot = jobSlot(job)
+                -- Re-resolve the site immediately before the
+                -- irreversible material payment (#805, #1844): another
+                -- worker's piece can fill the slot between claim and
+                -- arrival, terrain can move under it, and the pack's art
+                -- or build metadata can go away. Cancel rather than pay
+                -- into a site that cannot be finished; nothing has left
+                -- the inventory yet, so nothing is lost.
+                local slot = site.jobSlot(job)
                 if slot and structure.hasAt(job.x, job.y, slot) then
                     reportFailure(uid,
                         "Construction site is already built")
@@ -422,25 +369,47 @@ local function constructExecute(uid, s, params)
                         where = { x = job.x, y = job.y },
                         reason = "requested structure slot filled before material payment",
                     }
-                    construction.cancelDesignation(job.x, job.y)
+                    construction.cancelDesignation(job.x, job.y, job.attempt)
                     releaseConstructJob(wid, s, uid)
                     return
                 end
-                for matType, need in pairs(job.need) do
-                    for _ = 1, need do
-                        if not unit.removeItem(uid, matType) then
-                            reportFailure(uid,
-                                "Construction materials went missing")
-                            releaseConstructJob(wid, s, uid, true)
-                            return
-                        end
-                    end
+                -- The designation as it is RIGHT NOW, not as it was at
+                -- scan time. This is also the exact-attempt check: a
+                -- successor at the same tile is a different job and this
+                -- unit has no claim on it.
+                local live = construction.getDesignationAt(wid, job.x, job.y)
+                if not live or live.attempt ~= job.attempt then
+                    releaseConstructJob(wid, s, uid)
+                    return
                 end
-                job.consumed = true
-                -- Durably mark paid (#799): a no-op re-affirmation when
-                -- already paid, else what a replacement (or this unit
-                -- post-save/load) sees as "already spent".
-                construction.setMaterialsPaid(wid, job.x, job.y, true)
+                if live.paid then
+                    -- A predecessor already paid for THIS attempt (it
+                    -- died, or this is a resumed job after a save/load).
+                    -- Receipt presence is the paid state, so there is
+                    -- nothing to charge and nothing to record.
+                    job.consumed = true
+                elseif construction.payMaterials(wid, job.x, job.y,
+                                                 job.attempt, uid) then
+                    -- ONE lossless step (#1844): the engine removed the
+                    -- exact material instances AND wrote the durable
+                    -- receipt, or it removed nothing at all. The old
+                    -- shape (remove here, then setMaterialsPaid) left a
+                    -- window in which a cancellation refunded nothing
+                    -- for a cost the inventory had already lost, and
+                    -- that window is wider now that a WORLD-thread
+                    -- invalidator can cancel too. The cost comes from
+                    -- the registered catalogue rather than from
+                    -- job.need, so a receipt can only ever record what
+                    -- the engine really took.
+                    job.consumed = true
+                else
+                    -- This unit cannot cover the cost, or the attempt
+                    -- went away between the read above and the charge.
+                    -- Either way: not this unit, not now. Release the
+                    -- tile to pending so someone who can, does.
+                    releaseConstructJob(wid, s, uid, true)
+                    return
+                end
             end
             job.phase = "building"
             s.lastConstructAt = now
@@ -464,18 +433,38 @@ local function constructExecute(uid, s, params)
             local delta = params.construct_rate * (0.5 + conSkill / 100.0)
                         * elapsed / job.work
             job.progress = (job.progress or 0) + delta
-            construction.addJobProgress(wid, job.x, job.y, delta)
+            construction.addJobProgress(wid, job.x, job.y, delta,
+                                       job.attempt)
         end
         if (job.progress or 0) >= 1.0 then
-            if not placeStructurePiece(job) then
-                -- #799: already spent — return to the ground, not the void.
-                refundStructureMaterials(job)
+            -- #1844 requirement 18: take the exact-attempt placement
+            -- hand-off BEFORE placing anything. The piece becomes
+            -- visible to every structure query the moment it is staged,
+            -- so without this the world-side invalidator could read this
+            -- worker's own success as an external conflict, cancel the
+            -- job and refund materials that were correctly spent. A
+            -- false answer means the attempt is gone: place nothing.
+            if not construction.beginPlacement(wid, job.x, job.y,
+                                               job.attempt) then
+                releaseConstructJob(wid, s, uid)
+                return
+            end
+            if site.placeStructurePiece(job) then
+                construction.setJobStatus(wid, job.x, job.y, "complete",
+                                          job.attempt)
+                grantWorkXP(uid, "construction",
+                            params.construct_xp_per_piece or 0)
+            else
+                -- Placement failed for this attempt. Cancelling through
+                -- the atomic pop is what refunds its receipt EXACTLY
+                -- once: whichever caller's delete wins is handed the
+                -- receipt, and every other caller is handed nothing.
+                local removed = construction.cancelDesignationForRefund(
+                    wid, job.x, job.y, job.attempt)
+                if removed then site.refundStructureMaterials(removed) end
                 reportFailure(uid,
                     "Construction site changed — materials returned to the ground")
             end
-            construction.setJobStatus(wid, job.x, job.y, "complete")
-            grantWorkXP(uid, "construction",
-                        params.construct_xp_per_piece or 0)
             releaseConstructJob(wid, s, uid)
         end
         return

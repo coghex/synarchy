@@ -82,6 +82,8 @@ import World.Thread.Command.Edit (handleWorldDeleteTileCommand
                                  , handleWorldAddTileCommand
                                  , handleWorldPlantRowCropAtCommand)
 import World.Plant.Validate (revalidatePlantDesignations)
+import World.Construct.Revalidate
+    (ConstructScope(..), revalidateConstructDesignations)
 import World.Thread.Command.Location
     (handleWorldMarkLocationContentsSpawnedCommand
     ,handleWorldRegisterLocationEncounterOccupantsCommand
@@ -159,12 +161,12 @@ handleWorldCommand env logger
     (WorldDesignateConstruct pageId gx1 gy1 gx2 gy2 tgt mBindGen)
   = handleWorldDesignateConstructCommand env logger pageId gx1 gy1 gx2 gy2 tgt
                                          mBindGen
-handleWorldCommand env logger (WorldCancelConstruct pageId gx gy)
-  = handleWorldCancelConstructCommand env logger pageId gx gy
-handleWorldCommand env logger (WorldSetConstructStatus pageId gx gy st)
-  = handleWorldSetConstructStatusCommand env logger pageId gx gy st
-handleWorldCommand env logger (WorldAddConstructProgress pageId gx gy delta)
-  = handleWorldAddConstructProgressCommand env logger pageId gx gy delta
+handleWorldCommand env logger (WorldCancelConstruct pageId gx gy att)
+  = handleWorldCancelConstructCommand env logger pageId gx gy att
+handleWorldCommand env logger (WorldSetConstructStatus pageId gx gy st att)
+  = handleWorldSetConstructStatusCommand env logger pageId gx gy st att
+handleWorldCommand env logger (WorldAddConstructProgress pageId gx gy delta att)
+  = handleWorldAddConstructProgressCommand env logger pageId gx gy delta att
 handleWorldCommand env logger (WorldSetConstructDesignateTexture pageId cat texHandle)
   = handleWorldSetConstructDesignateTextureCommand env logger pageId cat texHandle
 handleWorldCommand env logger (WorldSetConstructLineMode pageId enabled)
@@ -227,11 +229,11 @@ handleWorldCommand env logger (WorldSetSlope pageId gx gy z bits)
 handleWorldCommand env logger (WorldSetCell pageId gx gy z mat)
   = handleWorldSetCellCommand env logger pageId gx gy z mat
 handleWorldCommand env logger (WorldSetStructure pageId gx gy slotTag texId faceId z tok)
-  = handleWorldSetStructureCommand (toWorldSimCapability env) logger pageId gx gy slotTag texId faceId z tok
+  = handleWorldSetStructureCommand env logger pageId gx gy slotTag texId faceId z tok
 handleWorldCommand env logger (WorldClearStructure pageId gx gy slotTag)
-  = handleWorldClearStructureCommand (toWorldSimCapability env) logger pageId gx gy slotTag
+  = handleWorldClearStructureCommand env logger pageId gx gy slotTag
 handleWorldCommand env logger (WorldClearAllStructures pageId)
-  = handleWorldClearAllStructuresCommand (toWorldSimCapability env) logger pageId
+  = handleWorldClearAllStructuresCommand env logger pageId
 handleWorldCommand env logger (WorldDestroy pageId)
   = handleWorldDestroyCommand env logger pageId
 handleWorldCommand env logger WorldDestroyAll
@@ -299,6 +301,10 @@ handleApplyFluidsCommand env logger (FluidWritebackBatch pageId writebacks mAck)
                     -- vegetation edit anywhere. Omitting this path would
                     -- let admission and continuous validation disagree.
                     _ ← revalidatePlantDesignations logger ws
+                    -- #1844: for the same reason, and scoped to the
+                    -- chunk the writeback replaced rather than the page.
+                    _ ← revalidateConstructDesignations env logger ws
+                            (ConstructChunks (map fwCoord fresh))
                     pure ()
     forM_ mAck (`putMVar` ())
 

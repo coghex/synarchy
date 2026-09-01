@@ -27,6 +27,8 @@ import World.Edit.Apply (applyEdit)
 import World.Material.Id (MaterialId(..))
 import World.Thread.Command.Edit.Sync (syncEditToSim)
 import World.Plant.Validate (revalidatePlantDesignations)
+import World.Construct.Revalidate
+    (ConstructScope(..), revalidateConstructDesignations)
 
 -- | Dig the top of the column at (gx, gy) down by 1 Z.
 --   Records the edit in the world's edit log so it survives chunk
@@ -83,6 +85,11 @@ handleWorldDeleteTileCommand env logger pageId gx gy = do
                         -- #1858: this edit can move the resolved
                         -- surface, so re-run the tilled-soil check.
                         _ ← revalidatePlantDesignations logger ws
+                        -- #1844: and the structure-plan check, scoped to
+                        -- the one tile whose inputs changed — never a
+                        -- whole-page rescan on every tile edit.
+                        _ ← revalidateConstructDesignations env logger ws
+                                (ConstructKeys [(gx, gy)])
                         -- Re-snap any idle unit standing on this tile to
                         -- the new surface (otherwise it floats mid-air
                         -- over the hole — stationary units never
@@ -144,6 +151,11 @@ handleWorldAddTileCommand env logger pageId gx gy mat = do
                         -- #1858: this edit can move the resolved
                         -- surface, so re-run the tilled-soil check.
                         _ ← revalidatePlantDesignations logger ws
+                        -- #1844: and the structure-plan check, scoped to
+                        -- the one tile whose inputs changed — never a
+                        -- whole-page rescan on every tile edit.
+                        _ ← revalidateConstructDesignations env logger ws
+                                (ConstructKeys [(gx, gy)])
                         -- Units standing on the tile ride up.
                         Q.writeQueue (unitQueue env)
                             (UnitReGround pageId gx gy)
@@ -249,6 +261,11 @@ handleWorldSetCellCommand env logger pageId gx gy z mat = do
                         -- #1858: this edit can move the resolved
                         -- surface, so re-run the tilled-soil check.
                         _ ← revalidatePlantDesignations logger ws
+                        -- #1844: and the structure-plan check, scoped to
+                        -- the one tile whose inputs changed — never a
+                        -- whole-page rescan on every tile edit.
+                        _ ← revalidateConstructDesignations env logger ws
+                                (ConstructKeys [(gx, gy)])
                         -- A surface-changing cell write (e.g. a staircase
                         -- mouth) leaves units floating; re-ground them.
                         Q.writeQueue (unitQueue env)

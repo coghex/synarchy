@@ -27,7 +27,7 @@ module Test.Headless.World.DesignationSeam (spec, engineSpec) where
 
 import UPrelude
 import Test.Hspec
-import Data.IORef (IORef, readIORef, writeIORef, newIORef)
+import Data.IORef (IORef, atomicModifyIORef', readIORef, writeIORef, newIORef)
 import Data.List (sort)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
@@ -50,9 +50,13 @@ import Structure.Types
 import World.Chop.Types (newChopDesignation)
 import World.Chunk.Types
     (ChunkCoord(..), ColumnTiles(..), LoadedChunk(..), chunkSize, columnIndex)
+import Test.Headless.Construct.Fixture (registerFixturePacks)
+import World.Construct.Attempt
+    (ConstructAttemptId(..), firstConstructAttemptId)
+import World.Construct.Receipt (ConstructPayment(..), mkMaterialReceipt)
 import World.Construct.Types
     ( ConstructDesignation(..), ConstructStatus(..), ConstructTarget(..)
-    , StructurePiece(..) )
+    , StructurePiece(..), constructDesignationPaid )
 import World.Flora.CropPlot (newCropPlot)
 import World.Flora.Types
     ( FloraCatalog(..), FloraChunkData(..), FloraHarvest(..), FloraId(..)
@@ -422,6 +426,7 @@ emptyActivity pid = PageActivityDTO
     , padFloraHarvests = HM.empty, padCropPlots = HM.empty
     , padGroundItems = GroundItemsDTO 0 HM.empty
     , padSpoilPiles = HM.empty
+    , padConstructNextAttempt = firstConstructAttemptId
     }
 
 -- * Engine-backed
@@ -683,16 +688,40 @@ engineSpec = beforeAll setup $ do
           , "return j and (j.x .. ',' .. j.y) or 'nil'" ])
         `shouldReturn` tshow cgx <> "," <> tshow cgy
       handleWorldSetConstructStatusCommand env logger fixturePage
-          agx agy CsClaimed
+          agx agy CsClaimed Nothing
       cdStatus <$> designationAt ws anchorTile `shouldReturn` CsClaimed
       _ ← evalDebug ls (T.concat
           [ "construction.addJobProgress('", pageText, "', "
           , tshow agx, ", ", tshow agy, ", 0.5); return 'ok'" ])
-      _ ← evalDebug ls (T.concat
-          [ "construction.setMaterialsPaid('", pageText, "', "
-          , tshow agx, ", ", tshow agy, ", true); return 'ok'" ])
+      -- #1844: the two NEW coordinate verbs are alias-tolerant like
+      -- every other one here. `beginPlacement` is a compare-and-set on
+      -- the exact attempt, so it also proves the alias resolved to the
+      -- SAME designation the canonical read above found — a different
+      -- one would carry a different attempt and refuse.
+      attempt ← cdAttempt <$> designationAt ws anchorTile
+      let ConstructAttemptId attemptN = attempt
+      evalDebug ls (T.concat
+          [ "return tostring(construction.beginPlacement('", pageText, "', "
+          , tshow agx, ", ", tshow agy, ", ", tshow attemptN, "))" ])
+        `shouldReturn` "true"
+      cdStatus <$> designationAt ws anchorTile `shouldReturn` CsPlacing
+      -- …and refuses an attempt that is not the one standing there.
+      evalDebug ls (T.concat
+          [ "return tostring(construction.beginPlacement('", pageText, "', "
+          , tshow agx, ", ", tshow agy, ", ", tshow (attemptN + 1), "))" ])
+        `shouldReturn` "false"
+      -- The durable PAYMENT record the refund pop below reads. Written
+      -- here directly rather than through construction.payMaterials: the
+      -- verb's own losslessness is
+      -- 'Test.Headless.Construct.AttemptIdentity's subject, and what
+      -- this example is pinning is that the popped job reports the
+      -- receipt through the tile's alias.
+      atomicModifyIORef' (wsConstructDesignationsRef ws) $ \m →
+          ( HM.adjust (\cd → cd { cdPayment =
+                CpPaid (mkMaterialReceipt [("wiring", 1)]) }) anchorTile m
+          , () )
       cd ← designationAt ws anchorTile
-      cdMaterialsPaid cd `shouldBe` True
+      constructDesignationPaid cd `shouldBe` True
 
       -- A worker's scan box is a RAW chunk region around itself, so at
       -- the seam it names the alias of the stored key.
@@ -712,15 +741,17 @@ engineSpec = beforeAll setup $ do
       evalDebug ls (T.concat
           [ "local j = construction.cancelDesignationForRefund('"
           , pageText, "', ", tshow agx, ", ", tshow agy, "); "
-          , "return j and (j.x .. ',' .. j.y .. ',' .. tostring(j.paid)) "
-          , "or 'nil'" ])
-        `shouldReturn` tshow cgx <> "," <> tshow cgy <> ",true"
+          , "local r = j and j.receipt and j.receipt[1]; "
+          , "return j and (j.x .. ',' .. j.y .. ',' .. tostring(j.paid) "
+          , "     .. ',' .. tostring(r and r.name) "
+          , "     .. ',' .. tostring(r and r.count)) or 'nil'" ])
+        `shouldReturn` tshow cgx <> "," <> tshow cgy <> ",true,wiring,1"
       HM.size <$> readIORef (wsConstructDesignationsRef ws) `shouldReturn` 0
 
       handleWorldDesignateConstructCommand env logger fixturePage
           cgx cgy cgx cgy wirePiece Nothing
       handleWorldCancelConstructCommand env logger fixturePage
-          (fst alias) (snd alias)
+          (fst alias) (snd alias) Nothing
       HM.size <$> readIORef (wsConstructDesignationsRef ws) `shouldReturn` 0
 
   describe "a job across the seam is reachable AND measurable" $
@@ -939,6 +970,10 @@ resetPage env = resetPageSized env worldSize
 resetPageSized ∷ EngineEnv → Int → Word8 → (ChunkCoord → FloraChunkData)
                → IO WorldState
 resetPageSized env size veg flora = do
+    -- #1844: structure commits resolve against the registered art/build
+    -- catalogue, so this fixture registers the packs its descriptors
+    -- name exactly as boot does.
+    registerFixturePacks env
     ws ← emptyWorldState
     writeIORef (wsGenParamsRef ws)
         (Just defaultWorldGenParams { wgpWorldSize = size })

@@ -143,6 +143,10 @@ module World.Save.Component.Page
     , StructurePieceDTO(..)
     , ConstructTargetDTO(..)
     , ConstructDesignationDTO(..)
+    , ConstructDesignationDTOv1(..)
+    , toConstructDTO
+    , fromConstructDTO
+    , migrateConstructDesignations
     , ChopDesignationDTO(..)
     , TillDesignationDTO(..)
     , PlantDesignationDTO(..)
@@ -230,6 +234,10 @@ import World.Mine.Types (MineDesignation(..), MineDesignations)
 import World.Construct.Types
     ( ConstructDesignation(..), ConstructTarget(..), StructurePiece(..)
     , ConstructStatus, ConstructDesignations )
+import World.Construct.Attempt
+    ( ConstructAttemptId, advanceConstructAttemptsPast
+    , firstConstructAttemptId, takeConstructAttempts )
+import World.Construct.Receipt (ConstructPayment(..))
 import World.Chop.Types (ChopDesignation(..), ChopDesignations)
 import World.Till.Types (TillDesignation(..), TillDesignations)
 import World.Plant.Types (PlantDesignation(..), PlantDesignations)
@@ -441,34 +449,92 @@ fromConstructTargetDTO ∷ ConstructTargetDTO → ConstructTarget
 fromConstructTargetDTO (CtStructureD p) = CtStructure (fromStructurePieceDTO p)
 fromConstructTargetDTO (CtBuildingD n)  = CtBuilding n
 
+-- | The FROZEN pre-#1844 designation mirror — @world-activity@ v1, v2
+--   AND v3 all encode this five-field shape.
+--
+--   Kept verbatim rather than extended in place (requirement 22): its
+--   bytes are what every shipped save holds, and a sixth field appended
+--   to the live encoding must not change how those are read.
+data ConstructDesignationDTOv1 = ConstructDesignationDTOv1
+    { cdi1Z             ∷ !Int
+    , cdi1Target        ∷ !ConstructTargetDTO
+    , cdi1Status        ∷ !ConstructStatus
+    , cdi1Progress      ∷ !Float
+    , cdi1MaterialsPaid ∷ !Bool
+    } deriving (Show, Eq, Generic, Serialize)
+
 -- | Frozen mirror of 'ConstructDesignation'. 'ConstructStatus' is a
 --   payload-free append-only enum, reused as a leaf (see the module
---   haddock) exactly like 'Pose'/'Direction' in Entities.
+--   haddock) exactly like 'Pose'/'Direction' in Entities;
+--   'ConstructPayment' is the same arrangement, and 'ConstructAttemptId'
+--   is a newtype over 'Word64'.
 data ConstructDesignationDTO = ConstructDesignationDTO
-    { cdiZ             ∷ !Int
-    , cdiTarget        ∷ !ConstructTargetDTO
-    , cdiStatus        ∷ !ConstructStatus
-    , cdiProgress      ∷ !Float
-    , cdiMaterialsPaid ∷ !Bool
+    { cdiZ        ∷ !Int
+    , cdiTarget   ∷ !ConstructTargetDTO
+    , cdiStatus   ∷ !ConstructStatus
+    , cdiProgress ∷ !Float
+    , cdiAttempt  ∷ !ConstructAttemptId
+    , cdiPayment  ∷ !ConstructPayment
     } deriving (Show, Eq, Generic, Serialize)
 
 toConstructDesignationDTO ∷ ConstructDesignation → ConstructDesignationDTO
 toConstructDesignationDTO c = ConstructDesignationDTO
-    { cdiZ             = cdZ c
-    , cdiTarget        = toConstructTargetDTO (cdTarget c)
-    , cdiStatus        = cdStatus c
-    , cdiProgress      = cdProgress c
-    , cdiMaterialsPaid = cdMaterialsPaid c
+    { cdiZ        = cdZ c
+    , cdiTarget   = toConstructTargetDTO (cdTarget c)
+    , cdiStatus   = cdStatus c
+    , cdiProgress = cdProgress c
+    , cdiAttempt  = cdAttempt c
+    , cdiPayment  = cdPayment c
     }
 
 fromConstructDesignationDTO ∷ ConstructDesignationDTO → ConstructDesignation
 fromConstructDesignationDTO d = ConstructDesignation
-    { cdZ             = cdiZ d
-    , cdTarget        = fromConstructTargetDTO (cdiTarget d)
-    , cdStatus        = cdiStatus d
-    , cdProgress      = cdiProgress d
-    , cdMaterialsPaid = cdiMaterialsPaid d
+    { cdZ        = cdiZ d
+    , cdTarget   = fromConstructTargetDTO (cdiTarget d)
+    , cdStatus   = cdiStatus d
+    , cdProgress = cdiProgress d
+    , cdAttempt  = cdiAttempt d
+    , cdPayment  = cdiPayment d
     }
+
+-- | Legacy designations → current shape, for ONE page (requirement 12).
+--
+--   A pre-#1844 payload records no attempt identity at all, so one is
+--   assigned to every entry here, and the rules are chosen so the result
+--   is the same on every machine and every run:
+--
+--     * Ids go out in ASCENDING TILE-KEY order, starting at
+--       'firstConstructAttemptId'. Hash order would make a migrated save
+--       differ run to run, and re-saving it would then produce different
+--       bytes for the same input.
+--     * The page's allocator lands one past the highest id issued, so no
+--       later designation can collide with a migrated one.
+--     * @cdMaterialsPaid = False@ becomes 'CpUnpaid' — nothing was
+--       removed, so there is nothing to record. @True@ becomes
+--       'CpLegacyPaid': materials really did leave someone's inventory,
+--       but WHICH is unrecoverable from the payload, so the receipt is
+--       reconstructed from the currently registered build metadata
+--       during load STAGING — or the load is rejected there, because
+--       inventing a refund and losing the materials are both wrong.
+migrateConstructDesignations
+    ∷ HM.HashMap (Int, Int) ConstructDesignationDTOv1
+    → (HM.HashMap (Int, Int) ConstructDesignationDTO, ConstructAttemptId)
+migrateConstructDesignations legacy =
+    let entries = L.sortOn fst (HM.toList legacy)
+        (ids, next) = takeConstructAttempts (length entries)
+                                            firstConstructAttemptId
+    in ( HM.fromList
+            [ (k, ConstructDesignationDTO
+                    { cdiZ        = cdi1Z d
+                    , cdiTarget   = cdi1Target d
+                    , cdiStatus   = cdi1Status d
+                    , cdiProgress = cdi1Progress d
+                    , cdiAttempt  = aid
+                    , cdiPayment  = if cdi1MaterialsPaid d
+                                      then CpLegacyPaid else CpUnpaid
+                    })
+            | ((k, d), aid) ← zip entries ids ]
+       , next )
 
 -- | Frozen mirror of 'ChopDesignation'.
 newtype ChopDesignationDTO = ChopDesignationDTO { chiZ ∷ Int }
@@ -1328,6 +1394,7 @@ blankPageSnapshot pid params =
         , pgsEdits        = emptyWorldEdits
         , pgsMineDesignations      = HM.empty
         , pgsConstructDesignations = HM.empty
+        , pgsConstructNextAttempt = firstConstructAttemptId
         , pgsGroundItems  = emptyGroundItems
         , pgsSpoilPiles   = emptySpoilPiles
         , pgsBuildings    = BuildingSnapshot { bsnInstances = HM.empty, bsnNextId = 0 }
@@ -1403,9 +1470,35 @@ data PageActivityDTO = PageActivityDTO
     , padCropPlots     ∷ !(HM.HashMap (Int, Int) CropPlotDTO)
     , padGroundItems   ∷ !GroundItemsDTO
     , padSpoilPiles    ∷ !(HM.HashMap (Int, Int) SpoilPileDTO)
+    , padConstructNextAttempt ∷ !ConstructAttemptId
+      -- ^ #1844: the page's construction ATTEMPT allocator, beside the
+      --   designations it hands ids to.
     } deriving (Show, Generic, Serialize)
 
 newtype WorldActivityDTO = WorldActivityDTO { wadPages ∷ [PageActivityDTO] }
+    deriving stock (Generic)
+    deriving newtype (Show, Serialize)
+
+-- | The FROZEN pre-#1844 activity slice (@world-activity@ v3).
+--   Identical to the current slice except that its designations carry no
+--   attempt identity or receipt and it has no allocator — which is
+--   exactly why it exists (requirement 22: version the frozen DTO and
+--   its owning component rather than changing the encoding in place).
+data PageActivityDTOv3 = PageActivityDTOv3
+    { pad3PageId        ∷ !WorldPageId
+    , pad3Mine          ∷ !(HM.HashMap (Int, Int) MineDesignationDTO)
+    , pad3Construct     ∷ !(HM.HashMap (Int, Int) ConstructDesignationDTOv1)
+    , pad3Chop          ∷ !(HM.HashMap (Int, Int) ChopDesignationDTO)
+    , pad3Till          ∷ !(HM.HashMap (Int, Int) TillDesignationDTO)
+    , pad3Plant         ∷ !(HM.HashMap (Int, Int) PlantDesignationDTO)
+    , pad3FloraHarvests ∷ !FloraHarvests
+    , pad3CropPlots     ∷ !(HM.HashMap (Int, Int) CropPlotDTO)
+    , pad3GroundItems   ∷ !GroundItemsDTO
+    , pad3SpoilPiles    ∷ !(HM.HashMap (Int, Int) SpoilPileDTO)
+    } deriving (Show, Generic, Serialize)
+
+newtype WorldActivityDTOv3 =
+    WorldActivityDTOv3 { wad3Pages ∷ [PageActivityDTOv3] }
     deriving stock (Generic)
     deriving newtype (Show, Serialize)
 
@@ -1418,7 +1511,7 @@ newtype WorldActivityDTO = WorldActivityDTO { wadPages ∷ [PageActivityDTO] }
 data PageActivityDTOv2 = PageActivityDTOv2
     { pad2PageId        ∷ !WorldPageId
     , pad2Mine          ∷ !(HM.HashMap (Int, Int) MineDesignationDTO)
-    , pad2Construct     ∷ !(HM.HashMap (Int, Int) ConstructDesignationDTO)
+    , pad2Construct     ∷ !(HM.HashMap (Int, Int) ConstructDesignationDTOv1)
     , pad2Chop          ∷ !(HM.HashMap (Int, Int) ChopDesignationDTO)
     , pad2Till          ∷ !(HM.HashMap (Int, Int) TillDesignationDTO)
     , pad2Plant         ∷ !(HM.HashMap (Int, Int) PlantDesignationDTO)
@@ -1434,18 +1527,47 @@ newtype WorldActivityDTOv2 =
     deriving newtype (Show, Serialize)
 
 migratePageActivityV2 ∷ PageActivityDTOv2 → PageActivityDTO
-migratePageActivityV2 s = PageActivityDTO
-    { padPageId        = pad2PageId s
-    , padMine          = pad2Mine s
-    , padConstruct     = pad2Construct s
-    , padChop          = pad2Chop s
-    , padTill          = pad2Till s
-    , padPlant         = pad2Plant s
-    , padFloraHarvests = pad2FloraHarvests s
-    , padCropPlots     = pad2CropPlots s
-    , padGroundItems   = migrateGroundItemsDTOv1 (pad2GroundItems s)
-    , padSpoilPiles    = pad2SpoilPiles s
-    }
+migratePageActivityV2 s =
+    let (construct, next) = migrateConstructDesignations (pad2Construct s)
+    in PageActivityDTO
+        { padPageId        = pad2PageId s
+        , padMine          = pad2Mine s
+        , padConstruct     = construct
+        , padChop          = pad2Chop s
+        , padTill          = pad2Till s
+        , padPlant         = pad2Plant s
+        , padFloraHarvests = pad2FloraHarvests s
+        , padCropPlots     = pad2CropPlots s
+        , padGroundItems   = migrateGroundItemsDTOv1 (pad2GroundItems s)
+        , padSpoilPiles    = pad2SpoilPiles s
+        , padConstructNextAttempt = next
+        }
+
+-- | v3 → v4 (#1844): every other map crosses unchanged; the
+--   designations gain attempt identities and a payment record, and the
+--   page gains the allocator that issued them. See
+--   'migrateConstructDesignations' for why the assignment is
+--   deterministic.
+migratePageActivityV3 ∷ PageActivityDTOv3 → PageActivityDTO
+migratePageActivityV3 s =
+    let (construct, next) = migrateConstructDesignations (pad3Construct s)
+    in PageActivityDTO
+        { padPageId        = pad3PageId s
+        , padMine          = pad3Mine s
+        , padConstruct     = construct
+        , padChop          = pad3Chop s
+        , padTill          = pad3Till s
+        , padPlant         = pad3Plant s
+        , padFloraHarvests = pad3FloraHarvests s
+        , padCropPlots     = pad3CropPlots s
+        , padGroundItems   = pad3GroundItems s
+        , padSpoilPiles    = pad3SpoilPiles s
+        , padConstructNextAttempt = next
+        }
+
+migrateWorldActivityV3 ∷ WorldActivityDTOv3 → WorldActivityDTO
+migrateWorldActivityV3 (WorldActivityDTOv3 slices) =
+    WorldActivityDTO (map migratePageActivityV3 slices)
 
 -- | v1/v2 → v3: every designation map crosses unchanged and each ground
 --   item's physical values decode absent (see 'migrateItemInstanceDTOv1'
@@ -1520,13 +1642,14 @@ validateWorldActivity (WorldActivityDTO slices) = concat
 worldActivityCodec ∷ ComponentCodec WorldActivityDTO
 worldActivityCodec = componentCodec ComponentSpec
     { csComponent     = worldActivityComponentId
-    , csVersion       = 3
+    , csVersion       = 4
     , csRequired      = True
     , csDeps          = [worldPagesComponentId]
     , csEncode        = \snap →
         WorldActivityDTO (map toActivity (orderedPages snap))
     , csDecode        = id
-    , csOlderVersions = [ atVersion 2 migrateWorldActivityV2
+    , csOlderVersions = [ atVersion 3 migrateWorldActivityV3
+                        , atVersion 2 migrateWorldActivityV2
                         , atVersion 1 migrateWorldActivityV2 ]
     , csValidate      = validateWorldActivity
     }
@@ -1542,6 +1665,7 @@ worldActivityCodec = componentCodec ComponentSpec
         , padCropPlots     = toCropDTO (pgsCropPlots p)
         , padGroundItems   = toGroundItemsDTO (pgsGroundItems p)
         , padSpoilPiles    = toSpoilDTO (pgsSpoilPiles p)
+        , padConstructNextAttempt = pgsConstructNextAttempt p
         }
 
 -- | #1175: a v1 slice's designation keys carry no canonical-frame
@@ -1571,6 +1695,14 @@ applyWorldActivity ver (WorldActivityDTO slices) =
         in p
             { pgsMineDesignations      = canon (fromMineDTO (padMine s))
             , pgsConstructDesignations = canon (fromConstructDTO (padConstruct s))
+            -- The allocator is raised past every id the page actually
+            -- carries, so a payload whose cursor sits below one of its
+            -- own designations (a hand-edited or truncated save) cannot
+            -- reissue that id. Identity for a well-formed payload.
+            , pgsConstructNextAttempt =
+                advanceConstructAttemptsPast
+                    (map cdiAttempt (HM.elems (padConstruct s)))
+                    (padConstructNextAttempt s)
             , pgsChopDesignations      = canon (fromChopDTO (padChop s))
             , pgsTillDesignations      = canon (fromTillDTO (padTill s))
             , pgsPlantDesignations     = canon (fromPlantDTO (padPlant s))

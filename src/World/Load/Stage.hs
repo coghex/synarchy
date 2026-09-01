@@ -61,6 +61,12 @@ import World.Edit.Apply (replayEdits)
 import World.Edit.Types (canonicalizeWorldEdits)
 import World.Mine.Apply (applyDigSlopes)
 import World.Construct.Apply (applyConstructSlopes)
+import World.Construct.Reconcile
+    (ConstructReconcileError(..), reconcileStagedConstructDesignations)
+import World.Construct.Revalidate (ConstructRefundDeps, constructRefundDeps)
+import Structure.ArtCatalog (StructureArtCatalog)
+import Engine.Core.Capability.RenderHandoff
+    (RenderHandoffCapability(..), toRenderHandoffCapability)
 import Building.Types (BuildingManager(..), BuildingId(..), BuildingDef)
 import Building.Knowledge (prunedContainerIds, retainContainers)
 import World.Save.Integrity
@@ -135,6 +141,15 @@ stageSession env logger saveData registry = case sdWorlds saveData of
         catalog ← readIORef (floraCatalogRef env)
         buildingDefs ← bmDefs <$> readIORef (buildingManagerRef env)
         unitDefs     ← umDefs <$> readIORef (unitManagerRef env)
+        -- #1844: the registered structure art/build catalogue and the
+        -- item-minting dependencies a self-clear's refund needs, read
+        -- ONCE here and passed down as values. 'stagePage' deliberately
+        -- never touches a live env ref (see this module's haddock), and
+        -- the catalogue is session-independent content exactly like the
+        -- building and unit defs above.
+        artCatalog ← readIORef (rhStructureArtCatalogRef
+                                  (toRenderHandoffCapability env))
+        refundDeps ← constructRefundDeps env
 
         let activeWps    = fromMaybe firstWps (activeWorldPage saveData)
             activeWpsId  = wpsPageId activeWps
@@ -172,7 +187,8 @@ stageSession env logger saveData registry = case sdWorlds saveData of
          [] → do
           results ← forM orderedPages $
             stagePage logger registry palette catalog
-                      buildingDefs unitDefs mapCeiling activeWpsId
+                      buildingDefs unitDefs artCatalog refundDeps
+                      mapCeiling activeWpsId
 
           let buildingOrphans = concatMap psrBuildingOrphans results
               unitOrphans     = concatMap psrUnitOrphans results
@@ -267,9 +283,10 @@ stageSession env logger saveData registry = case sdWorlds saveData of
 stagePage
     ∷ LoggerState → MaterialRegistry → ZoomColorPalette
     → FloraCatalog → HM.HashMap Text BuildingDef → HM.HashMap Text UnitDef
+    → StructureArtCatalog → ConstructRefundDeps
     → MapImageCeiling → WorldPageId → WorldPageSave → IO PageStageResult
 stagePage logger registry palette catalog buildingDefs unitDefs
-          mapCeiling activeWpsId wps = do
+          artCatalog refundDeps mapCeiling activeWpsId wps = do
     let pid      = wpsPageId wps
         isActive = pid ≡ activeWpsId
         params    = wpsGenParams wps
@@ -313,7 +330,23 @@ stagePage logger registry palette catalog buildingDefs unitDefs
     writeIORef (wsMineDesignationsRef worldState) (wpsMineDesignations wps)
     writeIORef (wsConstructDesignationsRef worldState)
         (wpsConstructDesignations wps)
+    writeIORef (wsConstructAttemptRef worldState)
+        (wpsConstructNextAttempt wps)
     writeIORef (wsGroundItemsRef worldState) (wpsGroundItems wps)
+    -- #1844: reconcile the saved structure designations against the
+    -- CURRENTLY registered content before anything is visible. It runs
+    -- here — after the designations and this page's own ground items are
+    -- in place, and BEFORE any chunk is generated — for two reasons: a
+    -- self-clear's refund must land in the staged page's ground items
+    -- (a live-session verb would deposit it into the session being
+    -- replaced), and a job cleared now never has its progress slope
+    -- stamped by the 'applyConstructSlopes' pass below at all.
+    --
+    -- Terrain-dependent reconciliation is deliberately NOT this
+    -- boundary's job: a load publishes with almost nothing resident, so
+    -- it belongs to the chunk-publication hook.
+    mConstructErr ← reconcileStagedConstructDesignations
+                        refundDeps artCatalog logger worldState
     writeIORef (wsSpoilRef worldState) (wpsSpoilPiles wps)
     writeIORef (wsFloraHarvestsRef worldState) (wpsFloraHarvests wps)
     writeIORef (wsChopDesignationsRef worldState) (wpsChopDesignations wps)
@@ -600,5 +633,11 @@ stagePage logger registry palette catalog buildingDefs unitDefs
         , psrCamera          = mCamera
         , psrZoomAtlas       = mZoomAtlas
         , psrPreview         = mPreview
-        , psrStageError      = mStageErr
+          -- Either failure aborts the whole transaction; the construct
+          -- reconciliation's is reported first because it names a
+          -- concrete designation and a concrete missing definition,
+          -- which is the more actionable of the two.
+        , psrStageError      = case mConstructErr of
+            Left (ConstructReconcileError t) → Just (StageError t)
+            Right () → mStageErr
         }

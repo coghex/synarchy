@@ -151,6 +151,7 @@ pageToWorldPageSave cam nextBid nextUid page = WorldPageSave
     , wpsEdits        = pgsEdits page
     , wpsMineDesignations      = pgsMineDesignations page
     , wpsConstructDesignations = pgsConstructDesignations page
+    , wpsConstructNextAttempt = pgsConstructNextAttempt page
     , wpsGroundItems  = pgsGroundItems page
     , wpsSpoilPiles   = pgsSpoilPiles page
     , wpsBuildings    = (pgsBuildings page) { bsnNextId = nextBid }

@@ -96,6 +96,8 @@ import World.Edit.Types (emptyWorldEdits, WorldEdit(..))
 import World.Chunk.Types (ChunkCoord(..))
 import World.Material.Id (MaterialId(..))
 import World.Mine.Types (MineDesignation(..))
+import World.Construct.Attempt (ConstructAttemptId(..), firstConstructAttemptId)
+import World.Construct.Receipt (ConstructPayment(..), mkMaterialReceipt)
 import World.Construct.Types
     (ConstructDesignation(..), ConstructTarget(..), ConstructStatus(..))
 import World.Chop.Types (ChopDesignation(..))
@@ -356,7 +358,10 @@ richPage = PageSnapshot
     , pgsEdits        = HM.singleton (ChunkCoord 0 0) [WeDeleteTile 1 2]
     , pgsMineDesignations      = HM.singleton (1, 2) (MineDesignation 0 (0.9, 0.8, 0.7, 0.6) 0.3)
     , pgsConstructDesignations = HM.singleton (3, 4)
-        (ConstructDesignation 0 (CtBuilding "cargo_hold_S") CsClaimed 0.5 True)
+        (ConstructDesignation 0 (CtBuilding "cargo_hold_S") CsClaimed 0.5
+            (ConstructAttemptId 7)
+            (CpPaid (mkMaterialReceipt [("steel_plate", 2), ("wood_log", 1)])))
+    , pgsConstructNextAttempt = ConstructAttemptId 8
     , pgsGroundItems  = GroundItems 2 (HM.singleton 1 (GroundItem (richItem 900) 5.5 6.5))
     , pgsSpoilPiles   = HM.singleton (5, 6) (SpoilPile (MaterialId 3) (1.0, 1.0, 1.0, 1.0))
     , pgsBuildings    = BuildingSnapshot
@@ -479,6 +484,7 @@ minimalPage2 = PageSnapshot
     , pgsEdits        = emptyWorldEdits
     , pgsMineDesignations      = HM.empty
     , pgsConstructDesignations = HM.empty
+    , pgsConstructNextAttempt = firstConstructAttemptId
     , pgsGroundItems  = GroundItems 0 HM.empty
     , pgsSpoilPiles   = emptySpoilPiles
       -- bsnNextId mirrors the session-global building allocator

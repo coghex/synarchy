@@ -1,0 +1,119 @@
+-- Unit AI construction SITE mechanics (#1844 split from
+-- scripts/unit_ai_construct.lua, which the #538 500-line budget caps).
+--
+-- Everything here answers a question about the job's TILE rather than
+-- about the worker: what it costs, where to stand, which structure slot
+-- it fills, how the piece is finally placed, and what a cancellation
+-- returns to the ground. The orchestration -- claims, utility, the phase
+-- machine -- stays in unit_ai_construct.lua.
+
+local M = {}
+
+-- Structure-pack build costs. The REGISTERED catalogue (#1842/#1844) is
+-- the authority: it is what construction.payMaterials actually charges
+-- and what a refund receipt records, so planning a fetch against
+-- anything else would plan for a cost the engine will not take. The pack
+-- YAML stays a fallback for the headless fixtures that load this module
+-- against a bare Lua backend with no structure.* namespace.
+--
+-- Cached per (pack, kind), not per pack, because the engine answers per
+-- kind. `false` means "no build metadata": those designations are
+-- skipped, exactly as a pack with no build: block always was.
+local packBuildCache = {}
+function M.packBuildInfo(pack, kind)
+    local key = tostring(pack) .. "/" .. tostring(kind)
+    local c = packBuildCache[key]
+    if c ~= nil then
+        if c == false then return nil end
+        return c
+    end
+    local info = nil
+    if structure and structure.packBuildCost then
+        info = structure.packBuildCost(pack, kind)
+    else
+        local y = engine.loadYaml("data/structure_packs/" .. pack .. ".yaml")
+        local bl = y and y.build
+        info = bl and bl[kind] or nil
+    end
+    packBuildCache[key] = info or false
+    return info
+end
+
+-- Stand position: nearest neighbouring tile's centre — beside the job
+-- tile, never on it (a wall materialising around the builder is wrong).
+function M.constructStandPos(job, px, py)
+    local bestX, bestY, bestD = nil, nil, math.huge
+    for _, o in ipairs({ {1, 0}, {-1, 0}, {0, 1}, {0, -1} }) do
+        local nx = job.x + o[1] + 0.5
+        local ny = job.y + o[2] + 0.5
+        local d = (nx - px) ^ 2 + (ny - py) ^ 2
+        if d < bestD then bestX, bestY, bestD = nx, ny, d end
+    end
+    return bestX, bestY
+end
+
+-- The structure.hasAt slot this job places into — mirrors
+-- placeStructurePiece's kind/edge → slot derivation (#805) so the
+-- pre-payment occupancy check below targets the EXACT slot.
+function M.jobSlot(job)
+    if job.kind == "floor" then return "floor"
+    elseif job.kind == "ceiling" then return "ceiling"
+    elseif job.kind == "wall" then return "wall_" .. (job.edge or "ne")
+    elseif job.kind == "post" then return "post_" .. (job.edge or "n")
+    elseif job.kind == "wire" then return "wire"
+    end
+    return nil
+end
+
+-- Place via the structures module. Every kind can fail mid-job (its
+-- target chunk unloads, not just a post's vanished floor, #799) — log
+-- rather than strand the job; false lets the caller apply the refund.
+function M.placeStructurePiece(job)
+    local structures = require("scripts.structures")
+    local ok
+    if job.kind == "floor" then
+        ok = structures.floor(job.x, job.y)
+    elseif job.kind == "ceiling" then
+        ok = structures.ceiling(job.x, job.y)
+    elseif job.kind == "wall" then
+        ok = structures.wall(job.x, job.y, job.edge or "ne")
+    elseif job.kind == "post" then
+        -- No corner in the designation (the tool's hover pick does);
+        -- default "n" until the tool grows a corner picker.
+        ok = structures.post(job.x, job.y, job.edge or "n")
+    elseif job.kind == "wire" then
+        ok = require("scripts.wire").place(job.x, job.y)
+    else
+        ok = false
+    end
+    if not ok then
+        engine.logWarn("construct: " .. tostring(job.kind) .. " at " .. job.x
+            .. "," .. job.y .. " failed to place mid-job — skipping placement")
+    end
+    return ok
+end
+
+-- Refund a cancelled structure job's ALREADY-PAID materials to the
+-- ground from its durable RECEIPT, and from nothing else (#1844).
+--
+-- #799 refunded the CURRENT pack cost instead, which cannot reproduce
+-- what was actually spent once a pack's build: costs change or the pack
+-- goes away: the job would be refunded the new cost, or nothing at all.
+-- The receipt records the exact multiset that left an inventory for THIS
+-- attempt, so it is the only thing consulted here. Its presence is also
+-- the paid state, so a job with no receipt refunds nothing by
+-- construction rather than by a second flag agreeing with a first.
+--
+-- `job` is a POPPED designation table (construction.
+-- cancelDesignationForRefund), which is what makes the refund happen
+-- exactly once: only the caller whose atomic delete won is handed one.
+function M.refundStructureMaterials(job)
+    if job.category ~= "structure" then return end
+    for _, entry in ipairs(job.receipt or {}) do
+        for _ = 1, (entry.count or 0) do
+            item.spawnGround(entry.name, job.x + 0.5, job.y + 0.5)
+        end
+    end
+end
+
+return M

@@ -69,6 +69,7 @@ import World.Render.Zoom.Types (ZoomMapMode(..))
 import World.Tool.Types (ToolMode(..))
 import World.Edit.Types (WorldEdits, WorldEdit(..))
 import World.Mine.Types (MineDesignations)
+import World.Construct.Attempt (ConstructAttemptId)
 import World.Construct.Types
     (ConstructDesignations, ConstructDesignation(..), ConstructTarget(..))
 import Craft.Bills (CraftBills(..), CraftBill(..), BillId(..))
@@ -267,6 +268,8 @@ data WorldPageSave = WorldPageSave
         --   straight into wsMineDesignationsRef; markers re-render from
         --   the stored z, so no chunk loading is required first.
     , wpsConstructDesignations ∷ !ConstructDesignations
+    , wpsConstructNextAttempt ∷ !ConstructAttemptId
+      -- ^ #1844: this page's construction ATTEMPT allocator.
         -- ^ Construction designations (#95): build target + status +
         --   progress per tile. Like mine designations, ghosts re-render
         --   from the stored z, so restoration needs no chunk loading.

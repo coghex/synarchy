@@ -422,10 +422,11 @@ spec = describe "position hold after a completed move order" $ do
                 [ savePrelude
                 -- The hold landed at v6 (#1216); the component has
                 -- moved on since (v7, #1737's ground-sourced repair
-                -- provenance). What this gate owns is that the CURRENT
+                -- provenance; v8, #1844's construct-job attempt
+                -- identity). What this gate owns is that the CURRENT
                 -- version still round-trips a hold, so it pins the
                 -- current number rather than the one #1216 shipped.
-                , "assert(spec.version == 7, 'the component is at v7: '"
+                , "assert(spec.version == 8, 'the component is at v8: '"
                 , "  .. tostring(spec.version))"
                 , "aiState[1] = { currentAction = 'hold_position',"
                 , "  holdAnchor = { x = 12, y = -3, stalledFor = 4.5,"

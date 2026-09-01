@@ -22,6 +22,7 @@
 module Engine.Scripting.Lua.API.StructureArt
     ( structureRegisterPackArtFn
     , structurePackKindBuildableFn
+    , structurePackBuildCostFn
     , structureResolvePieceArtFn
     , structureWireShapeFn
     , structureWireNeighborsFn
@@ -184,12 +185,17 @@ structureRegisterPackArtFn env = do
     -- warning that says `pack '<unnamed>'` for a named payload fails the
     -- requirement it exists to satisfy.
     readKind ∷ Text → Int
-             → Lua.LuaE Lua.Exception (Either ArtFault (PieceKind, Bool))
+             → Lua.LuaE Lua.Exception
+                   (Either ArtFault (PieceKind, Bool, Maybe BuildCost))
     readKind pack i = do
         mKind ← fieldString (-1) "kind"
         bTy   ← Lua.getfield (-1) "buildable"
         b     ← Lua.toboolean (-1)
         Lua.pop 1
+        wTy   ← Lua.getfield (-1) "build_work"
+        mWork ← Lua.tonumber (-1)
+        Lua.pop 1
+        eMats ← readMaterials pack i
         pure $ case mKind ⌦ pieceKindFromText of
             Nothing → Left $ fault pack Nothing
                 ("declared kinds " <> tshow i)
@@ -201,7 +207,56 @@ structureRegisterPackArtFn env = do
                 | bTy ≢ Lua.TypeBoolean → Left $ fault pack (Just kind)
                     ("buildable (declared kinds " <> tshow i <> ")")
                     "the entry has no `buildable` boolean"
-                | otherwise → Right (kind, b)
+                -- #1844: the COST is optional and is read only when the
+                -- payload states one. It is a separate answer from
+                -- `buildable`, which keeps its own mandatory meaning: a
+                -- registration that omits the numbers is not malformed,
+                -- it is one the engine cannot charge a job against.
+                | otherwise → case (wTy, mWork, eMats) of
+                    (Lua.TypeNumber, Just (Lua.Number w), Right mats)
+                        | not (null mats) →
+                            Right (kind, b, Just (mkBuildCost (realToFrac w)
+                                                              mats))
+                    _ → Right (kind, b, Nothing)
+
+    -- `materials` is a NAME → COUNT map, so it is walked with `next`
+    -- rather than as an array. A non-string key, a non-integer count and
+    -- a non-positive count are each a REFUSAL of the cost: every one of
+    -- them would silently change what a job costs, and the cost is what
+    -- a receipt promises was removed. An absent table is not a refusal —
+    -- it is a registration that states no cost at all.
+    readMaterials ∷ Text → Int
+                  → Lua.LuaE Lua.Exception (Either ArtFault [(Text, Int)])
+    readMaterials pack i = do
+        ty ← Lua.getfield (-1) "materials"
+        r ← if ty ≢ Lua.TypeTable
+              then pure (Right [])
+              else do
+                  Lua.pushnil
+                  go []
+        Lua.pop 1
+        pure r
+      where
+        matFault = fault pack Nothing
+            ("materials (declared kinds " <> tshow i <> ")")
+        go acc = do
+            more ← Lua.next (-2)
+            if not more then pure (Right (reverse acc)) else do
+                mName ← Lua.tostring (-2)
+                nTy   ← Lua.ltype (-1)
+                mN    ← Lua.tointeger (-1)
+                Lua.pop 1
+                case (mName, nTy, mN) of
+                    (Just nameBS, Lua.TypeNumber, Just n)
+                        | n > 0 → go ((TE.decodeUtf8Lenient nameBS,
+                                       fromIntegral n) : acc)
+                    _ → do
+                        -- Abandon the traversal cleanly: the key is
+                        -- still on the stack and must come off.
+                        Lua.pop 1
+                        pure ∘ Left $ matFault
+                            "a material entry is not a positive integer \
+                            \count keyed by an item def name"
 
     readArt ∷ Text → Int
             → Lua.LuaE Lua.Exception (Either ArtFault (ArtKey, PieceArt))
@@ -275,6 +330,42 @@ structurePackKindBuildableFn env = do
         _ → pure False
     Lua.pushboolean ok
     return 1
+
+-- | @structure.packBuildCost(pack, kind) →
+--   { build_work = , materials = { \<item\> = \<count\> } } | nil@ — the
+--   REGISTERED build cost of that pack's kind (#1844).
+--
+--   The engine's own authority for what a structure job costs: it is
+--   what @construction.payMaterials@ charges and what a legacy paid
+--   designation's receipt is reconstructed from at load. Exposed so the
+--   build AI plans its material fetch against the SAME numbers rather
+--   than re-reading the pack YAML into a second, drifting copy.
+--
+--   nil for an unregistered pack, an undeclared kind, or a kind whose
+--   @build:@ entry is incomplete — deliberately independent of whether
+--   the kind's ART resolves.
+structurePackBuildCostFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+structurePackBuildCostFn env = do
+    mPack ← argString 1
+    mKind ← argString 2
+    mCost ← case (mPack, mKind) of
+        (Just p, Just k) → do
+            cat ← Lua.liftIO $ readIORef (rhStructureArtCatalogRef
+                                            (toRenderHandoffCapability env))
+            pure (packKindBuild cat p k)
+        _ → pure Nothing
+    case mCost of
+        Nothing → Lua.pushnil ≫ return 1
+        Just cost → do
+            Lua.newtable
+            Lua.pushnumber (Lua.Number (realToFrac (bcWork cost)))
+            Lua.setfield (-2) "build_work"
+            Lua.newtable
+            forM_ (bcMaterials cost) $ \(name, n) → do
+                Lua.pushinteger (fromIntegral n)
+                Lua.setfield (-2) (Lua.Name (TE.encodeUtf8 name))
+            Lua.setfield (-2) "materials"
+            return 1
 
 -- | @structure.resolvePieceArt(pack, kind, edge, gx, gy[, page]) →
 --   { texture=, texHandle=, facemap=, faceHandle= } | nil@ — the exact

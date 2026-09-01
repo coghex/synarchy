@@ -169,6 +169,8 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                                 mineDesigs ← readIORef (wsMineDesignationsRef ws)
                                 constructDesigs ← readIORef
                                     (wsConstructDesignationsRef ws)
+                                constructNext ← readIORef
+                                    (wsConstructAttemptRef ws)
                                 groundItems ← readIORef (wsGroundItemsRef ws)
                                 spoilPiles ← readIORef (wsSpoilRef ws)
                                 floraHarvests ← readIORef (wsFloraHarvestsRef ws)
@@ -207,6 +209,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                                     , pgsEdits      = persistedEdits
                                     , pgsMineDesignations = mineDesigs
                                     , pgsConstructDesignations = constructDesigs
+                                    , pgsConstructNextAttempt = constructNext
                                     , pgsGroundItems = groundItems
                                     , pgsSpoilPiles  = spoilPiles
                                     , pgsBuildings   = buildings

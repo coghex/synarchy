@@ -454,8 +454,16 @@ def phase_occupied(port: int) -> None:
     raceOutcomes = send_json(port, "return debug.drainActionOutcomes()")
     if not isinstance(raceOutcomes, list):
         raceOutcomes = []
+    # #1844: the world-side invalidator now cancels the job the instant
+    # its slot is filled, rather than waiting for a worker to arrive and
+    # notice — so the observable record can come from EITHER path. Both
+    # are player-visible outcomes at this tile; which one wins is a
+    # timing detail, and demanding a particular one would pin the race
+    # rather than the observability this check is about.
     raceMatches = [o for o in raceOutcomes
-                   if isinstance(o, dict) and o.get("kind") == "construction.designate"
+                   if isinstance(o, dict)
+                   and o.get("kind") in ("construction.designate",
+                                         "construction.invalidate")
                    and (o.get("where") or {}).get("x") == 8
                    and (o.get("where") or {}).get("y") == 36]
     check("mid-job cancellation reports an observable non-accepted outcome",
@@ -825,23 +833,48 @@ def phase_cancel_refund(port: int) -> None:
     check("wire.place returns false for an unloaded-chunk target",
           send(port, "return require('scripts.wire').place(503, 500)") == "false")
 
-    # --- (f) the exact race a review round found: setMaterialsPaid
-    # immediately followed by cancelDesignationForRefund must observe
-    # paid=true, not a stale queued write that hasn't landed yet.
-    # construction.setMaterialsPaid is now a SYNCHRONOUS direct write
-    # (not queued), so this can never race the atomic cancel pop.
+    # --- (f) the exact race a review round found: a payment
+    # immediately followed by cancelDesignationForRefund must observe it,
+    # not a stale queued write that hasn't landed yet. Payment is a
+    # SYNCHRONOUS direct write, so this can never race the atomic cancel
+    # pop.
+    #
+    # #1844 replaced the boolean setMaterialsPaid with
+    # construction.payMaterials, which charges ONE exact attempt out of
+    # ONE unit's inventory and records the durable RECEIPT in the same
+    # step. So this now proves more than it did: the popped job reports
+    # not just THAT it was paid but exactly WHAT was removed, and the
+    # payer's inventory really lost it.
     px6, py6 = 1600, 700
     ux6, uy6 = pick_tile(port, px6, py6)
+    payer = spawn_acolyte(port, ux6 + 2, uy6)
+    send(port, f"unit.addItem({payer}, 'steel_plate'); return 'ok'")
     send(port, f"construction.designate('{w}', {ux6}, {uy6}, {ux6}, {uy6}, "
                "'structure', 'dungeon_1', 'floor'); return 'ok'")
     time.sleep(0.5)
-    send(port, f"construction.setMaterialsPaid('{w}', {ux6}, {uy6}, true); "
-               "return 'ok'")
+    job6 = send_json(port,
+        f"return construction.getDesignationAt('{w}', {ux6}, {uy6})")
+    check("the designation carries an attempt identity",
+          isinstance(job6, dict) and isinstance(job6.get("attempt"), (int, float)))
+    attempt6 = job6.get("attempt") if isinstance(job6, dict) else 0
+    paid6 = send(port, f"return tostring(construction.payMaterials('{w}', "
+                       f"{ux6}, {uy6}, {attempt6}, {payer}))")
+    check("payMaterials charges the exact attempt", paid6.strip('"') == "true")
+    check("a second payment for the same attempt removes nothing",
+          send(port, f"return tostring(construction.payMaterials('{w}', "
+                     f"{ux6}, {uy6}, {attempt6}, {payer}))").strip('"')
+          == "false")
     popped = send_json(port,
         f"return construction.cancelDesignationForRefund('{w}', {ux6}, {uy6})")
-    check("setMaterialsPaid immediately followed by a cancel pop "
+    check("a payment immediately followed by a cancel pop "
           "observes paid=true, not a stale queued write",
           isinstance(popped, dict) and popped.get("paid") is True)
+    receipt = popped.get("receipt") if isinstance(popped, dict) else None
+    check("the popped job carries the exact receipt that was charged",
+          isinstance(receipt, list) and len(receipt) == 1
+          and receipt[0].get("name") == "steel_plate"
+          and receipt[0].get("count") == 1)
+    destroy_unit(port, payer)
 
     send(port, "local bt = require('scripts.build_tool'); "
                "bt.exitPlacement(); return 'ok'")

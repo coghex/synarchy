@@ -138,6 +138,20 @@ local function buildableKind(pack, kind)
     return (b ~= nil) and (b.build_work ~= nil) and (b.materials ~= nil)
 end
 
+-- One kind's registration entry: whether it is buildable, and -- when it
+-- is -- the exact cost (#1844). The engine pays for and refunds
+-- structure jobs from the REGISTERED cost, so a kind that has one states
+-- it here; a receipt is only lossless if what it records is what was
+-- really charged.
+local function kindEntry(pack, kind)
+    if not buildableKind(pack, kind) then
+        return { kind = kind, buildable = false }
+    end
+    local b = pack.build[kind]
+    return { kind = kind, buildable = true,
+             build_work = b.build_work, materials = b.materials }
+end
+
 -- Declare this pack's per-kind art for UNPLACED pieces (#1842), so the
 -- construction render pass — which cannot call into Lua — can resolve
 -- what a designation would be BUILT with. DEFAULT art only: a structure
@@ -159,14 +173,14 @@ local function registerPackArtCatalog(h)
     registeredArt = true
     local kinds, art = {}, {}
     for _, k in ipairs(PIECE_KINDS) do
-        kinds[#kinds + 1] = { kind = k, buildable = buildableKind(pack, k) }
+        kinds[#kinds + 1] = kindEntry(pack, k)
         local p = h[k]
         if p and p.texPath and p.facePath then
             art[#art + 1] = { kind = k, texture = p.texPath, texHandle = p.tex,
                               facemap = p.facePath, faceHandle = p.face }
         end
     end
-    kinds[#kinds + 1] = { kind = "wall", buildable = buildableKind(pack, "wall") }
+    kinds[#kinds + 1] = kindEntry(pack, "wall")
     for _, e in ipairs(WALL_DIRS) do
         local w = h.walls[e]
         for _, c in ipairs(WALL_CAPS) do

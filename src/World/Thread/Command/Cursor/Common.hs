@@ -18,16 +18,26 @@ import Engine.ActionOutcome (ActionOutcome(..), pushActionOutcome)
 import World.Types (WorldPageId(..))
 import World.Generate.Coordinates (localizeTileToAnchor)
 
--- | Cap on the designation rectangle's side length. Guards against a
---   misclick across the map turning into a 100k-tile designation.
+-- | Cap on the designation rectangle's side length for MINE, TILL and
+--   CHOP. Guards against a misclick across the map turning into a
+--   100k-tile designation. (Structure planning has its own, tighter cap:
+--   'World.Construct.Extent.maxStructureDragSide'.)
 maxDesignateSide ∷ Int
 maxDesignateSide = 128
 
 -- | The rectangle a two-click drag actually drew, in the ANCHOR's local
 --   alias frame (#1175 — see "World.Render.HitTest"'s frame contract).
 --
---   Shared by every rectangle tool so they cannot disagree about what a
---   seam-crossing drag means. The second endpoint is re-expressed
+--   Shared by MINE, TILL and CHOP so they cannot disagree about what a
+--   seam-crossing drag means. STRUCTURE planning is deliberately not one
+--   of them since #1844: it has its own 64-cell, anchor-preserving
+--   helper ('World.Construct.Extent.structureDragExtent'), because
+--   clamping from the LOW-coordinate end — which is what this one does —
+--   can clamp the anchor itself out of a long negative drag, and the
+--   preview it has to agree with never did that. The three tools here
+--   keep this 128-cell behaviour unchanged.
+--
+--   The second endpoint is re-expressed
 --   relative to the anchor BEFORE the @min@/@max@ and the
 --   'maxDesignateSide' clamp: both picks come back canonical, and two
 --   physically adjacent tiles across the seam sit a whole world apart in

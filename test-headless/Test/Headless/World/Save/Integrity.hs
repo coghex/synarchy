@@ -75,6 +75,7 @@ import Building.Types (BuildingId(..))
 import Unit.Types (UnitId(..))
 import Unit.Direction (Direction(..))
 import Building.Knowledge (emptyContainerKnowledge)
+import World.Construct.Attempt (firstConstructAttemptId)
 
 page1, page2 ∷ WorldPageId
 page1 = WorldPageId "page1"
@@ -95,6 +96,7 @@ minimalPage pid = PageSnapshot
     , pgsEdits        = emptyWorldEdits
     , pgsMineDesignations      = HM.empty
     , pgsConstructDesignations = HM.empty
+    , pgsConstructNextAttempt = firstConstructAttemptId
     , pgsGroundItems  = emptyGroundItems
     , pgsSpoilPiles   = emptySpoilPiles
     , pgsBuildings    = BuildingSnapshot { bsnInstances = HM.empty, bsnNextId = 100 }

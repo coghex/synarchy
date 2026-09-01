@@ -2370,16 +2370,27 @@ spec = do
             , "    { id = 'unit_ai', version = 1, payload = codec.encode(state) },"
             , "  })"
             , "end"
+            -- #1844 requirement 20: a structurally valid structure job
+            -- whose pack or kind no longer resolves must REACH load
+            -- staging, where the engine self-clears the matching
+            -- designation and refunds its persisted receipt exactly
+            -- once. Rejecting here would abort a whole load for a
+            -- situation that is now resolved losslessly, which is why
+            -- the two assertions below are the reverse of what they
+            -- were. The narrow rejections either side of them are
+            -- deliberately unchanged.
             , "local badPack = prepareWith({ [1] = { constructJob = {"
             , "  category = 'structure', pack = 'ghost_pack', kind = 'wall',"
             , "  need = {} } } })"
-            , "assert(not badPack.ok,"
-            , "  'a constructJob referencing a removed structure pack must reject the load')"
+            , "assert(badPack.ok,"
+            , "  'a removed structure pack must reach load reconciliation: '"
+            , "  .. table.concat(badPack.errors or {}, '; '))"
             , "local badKind = prepareWith({ [1] = { constructJob = {"
             , "  category = 'structure', pack = 'known_pack', kind = 'ghost_kind',"
             , "  need = {} } } })"
-            , "assert(not badKind.ok,"
-            , "  'a constructJob referencing a removed pack kind must reject the load')"
+            , "assert(badKind.ok,"
+            , "  'a removed pack kind must reach load reconciliation: '"
+            , "  .. table.concat(badKind.errors or {}, '; '))"
             , "local badConstructItem = prepareWith({ [1] = { constructJob = {"
             , "  category = 'structure', pack = 'known_pack', kind = 'wall',"
             , "  need = {}, fromGround = { unobtainium = 1 } } } })"

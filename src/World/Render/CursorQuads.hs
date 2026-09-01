@@ -29,6 +29,7 @@ import World.Construct.Types (ConstructDesignation(..), ConstructTarget(..)
 import World.Chop.Types (ChopDesignation(..))
 import World.Till.Types (TillDesignation(..))
 import World.Plant.Types (PlantDesignation(..))
+import World.Construct.Extent (structureDragExtent)
 import World.Render.ViewBounds (computeViewBounds)
 import World.Render.ChunkCulling (isChunkVisibleWrapped)
 import World.Render.HitTest (pickWorldTile)
@@ -408,20 +409,18 @@ renderWorldCursorQuadsScanned env worldState tileAlpha = do
     let constructPreview = case (constructAnchor cs', hoverResult, worldCursorTexture cs') of
             (Just (ax, ay), Just (hxRaw, hyRaw, _, _, _), Just tex)
                 | Just anchorZ ← surfaceZAt ax ay →
-                let (hx, hy) = localizeHover ax ay hxRaw hyRaw
-                    hx' = clampSide ax hx
-                    hy' = clampSide ay hy
-                    dx = hx' - ax
-                    dy = hy' - ay
-                    tiles
-                        | constructLineMode cs' =
-                            if abs dx ≥ abs dy
-                            then [ (gx, ay) | gx ← [min ax hx' .. max ax hx'] ]
-                            else [ (ax, gy) | gy ← [min ay hy' .. max ay hy'] ]
-                        | otherwise =
-                            [ (gx, gy)
-                            | gx ← [min ax hx' .. max ax hx']
-                            , gy ← [min ay hy' .. max ay hy'] ]
+                -- #1844: ONE bounded-drag helper, shared with the
+                -- commit. The endpoint arrives canonical, and the helper
+                -- localizes it into the anchor's frame itself — which is
+                -- also the frame each quad's screen position is computed
+                -- in, so nothing here re-localizes it first. It clamps
+                -- OUTWARD to 64 cells per axis INCLUDING the anchor, and
+                -- for a wire path it picks the dominant axis from the
+                -- RAW localized delta before clamping. Preview and
+                -- commit therefore cannot disagree about which tiles a
+                -- drag names.
+                let tiles = structureDragExtent worldSize
+                                (constructLineMode cs') (ax, ay) (hxRaw, hyRaw)
                 -- (#1921) 'tiles' IS the candidate set here — line mode
                 -- and rectangle mode enumerate different shapes — so
                 -- the count comes from the very list the quads are

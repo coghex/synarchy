@@ -5,8 +5,10 @@
 -- and does every content-definition id it durably names still exist?
 --
 -- Requireable and testable on its own (Test.Headless.Lua.SaveModules),
--- which is why it deliberately does NOT require unit_ai_construct.lua
--- for the structure-pack lookup below -- see packHasBuildEntry.
+-- which is why it never requires unit_ai_construct.lua: that module (via
+-- unit_ai_core.lua) expects scripts.unit_ai to already be self-registered
+-- in package.loaded, a bootstrap order only unit_ai.lua's own require
+-- chain guarantees.
 
 local refsMod = require("scripts.unit_ai_save_refs")
 
@@ -28,23 +30,24 @@ local function buildBuildingDefSet()
     return set
 end
 
--- Self-contained mirror of unit_ai_construct.lua's packBuildInfo lookup
--- (issue #761 round-5 review): does a pack/kind still resolve to a real
--- structure-pack build entry? Deliberately NOT a require of
--- unit_ai_construct.lua itself -- that module (via unit_ai_core.lua)
--- expects scripts.unit_ai to already be self-registered in
--- package.loaded, a bootstrap order only unit_ai.lua's own require
--- chain guarantees, which this standalone validator (requireable and
--- tested on its own, see Test.Headless.Lua.SaveModules) cannot assume.
--- Uncached (unlike the original): prepareLoad runs once per load, not
--- per tick, so there's no hot-path cost to justify the cache's
--- complexity here.
-local function packHasBuildEntry(pack, kind)
-    if type(pack) ~= "string" or type(kind) ~= "string" then return false end
-    local y = engine.loadYaml("data/structure_packs/" .. pack .. ".yaml")
-    local build = y and y.build
-    return build ~= nil and build[kind] ~= nil
-end
+-- #1844: a structure constructJob whose pack/kind no longer resolves is
+-- NO LONGER a load rejection.
+--
+-- It used to be: this validator mirrored unit_ai_construct.lua's
+-- packBuildInfo lookup and refused the whole save when the entry was
+-- gone. That answer predates the engine having anywhere to put such a
+-- job. Load staging now reconciles saved structure designations against
+-- the registered catalogue and atomically self-clears the ones whose art
+-- or build metadata has disappeared, refunding their persisted receipt
+-- exactly once (World.Construct.Reconcile) -- and it must be allowed to
+-- reach that path. Rejecting here would abort the entire load for a
+-- situation the engine can now resolve losslessly.
+--
+-- What is REJECTED is unchanged and deliberately narrow: a malformed
+-- payload, a building-category job naming a missing building def, and
+-- any material/item id that no longer exists -- including this job's own
+-- sourcing maps, checked below. Those are the cases where nothing
+-- downstream can make the reference whole again.
 
 -- craftJob/repairJob (issue #761 round-4 review) durably persist
 -- content-definition ids (a recipe id, item def names for the crafted
@@ -109,12 +112,13 @@ local function validateJobContentRefs(uid, s, itemDefs, buildingDefs, errs)
                 .. tostring(job.building) .. "'"
         end
     elseif s.constructJob then
+        -- #1844: the pack/kind is NOT checked here (see the note at the
+        -- top of this file) -- a job whose structure pack has gone is
+        -- reconciled and self-cleared during load staging, and refusing
+        -- it here would abort a load the engine can complete losslessly.
+        -- The item ids it durably names are still checked, because a
+        -- dangling one there reaches live execution.
         local job = s.constructJob
-        if not packHasBuildEntry(job.pack, job.kind) then
-            errs[#errs + 1] = "unit_ai: unit " .. tostring(uid)
-                .. " constructJob references unknown structure pack/kind '"
-                .. tostring(job.pack) .. "/" .. tostring(job.kind) .. "'"
-        end
         checkItemKeys(job.need, "constructJob.need")
         checkItemKeys(job.fromGround, "constructJob.fromGround")
         checkItemKeys(job.fromMule, "constructJob.fromMule")

@@ -21,6 +21,7 @@ import Unit.Types (UnitId)
 import World.Page.Types (WorldPageId(..), WorldIdentity(..))
 import World.Render.Zoom.Types (ZoomMapMode(..))
 import World.Tool.Types (ToolMode(..))
+import World.Construct.Attempt (ConstructAttemptId)
 import World.Construct.Types (ConstructTarget(..), ConstructStatus(..))
 import World.Save.Payload (LuaComponentSpec, LuaRefEdge)
 import World.Save.Types (SaveData(..), AutosaveRequest(..))
@@ -154,14 +155,24 @@ data WorldCommand
         --   surface z; tiles in unloaded chunks are skipped. Per-z-level
         --   like mine designation. Building targets only mark the anchor
         --   tile (a building is one footprint, not a rectangle of them).
-    | WorldCancelConstruct WorldPageId Int Int
+    | WorldCancelConstruct WorldPageId Int Int (Maybe ConstructAttemptId)
         -- ^ Remove the construction designation at (gx, gy), if any
         --   (cancel mode / right-click on an existing blueprint).
+        --
+        --   #1844: 'Just' removes ONLY that exact attempt, so a delayed
+        --   cancellation from a job that has already gone cannot remove
+        --   a successor designated at the same tile. 'Nothing' is the
+        --   player's coordinate-only erase — "remove whatever is here",
+        --   which has no attempt to name until it looks.
     | WorldSetConstructStatus WorldPageId Int Int ConstructStatus
+                              (Maybe ConstructAttemptId)
         -- ^ Build AI (#96): mark a designation Claimed / Complete. A
         --   Complete designation is removed (the structure/building it
         --   represents now exists).
+        --
+        --   #1844: attempt-guarded exactly as 'WorldCancelConstruct' is.
     | WorldAddConstructProgress WorldPageId Int Int Float
+                                (Maybe ConstructAttemptId)
         -- ^ Build AI (#96): add build progress to the designation at
         --   (gx, gy). Deltas are pre-normalised to the job's total
         --   work (1.0 = done) and the sum is clamped to [0, 1]; the

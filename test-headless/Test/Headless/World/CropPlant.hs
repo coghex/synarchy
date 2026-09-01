@@ -82,6 +82,7 @@ import World.Thread.Command.Edit.Dig (handleWorldDigTileCommand)
 import World.Thread.Command.Edit (handleWorldSetVegCommand)
 import World.Types
 import World.Vegetation (vegMediumGrass, vegTilledSoil)
+import Test.Headless.Construct.Fixture (registerFixturePacks)
 
 -- * Fixture geometry
 --
@@ -646,7 +647,7 @@ engineSpec = beforeAll setup $ do
       HM.keys <$> readIORef (wsConstructDesignationsRef ws)
           `shouldReturn` [plantTile]
       handleWorldAddConstructProgressCommand env logger fixturePage
-          (fst plantTile) (snd plantTile) 0.5
+          (fst plantTile) (snd plantTile) 0.5 Nothing
       HM.keys <$> readIORef (wsPlantDesignationsRef ws) `shouldReturn` []
 
     it "keeps — and does not draw — a designation whose chunk is gone" $
@@ -750,6 +751,11 @@ engineSpec = beforeAll setup $ do
 --   ground cover, this world size, and empty designation maps.
 resetPage ∷ EngineEnv → Word8 → IO WorldState
 resetPage env veg = do
+    -- #1844: a structure designation is admitted only against the
+    -- registered art/build catalogue, so the one example here that
+    -- commits one needs the packs registered the way boot registers
+    -- them. Idempotent, and inert for every other example.
+    registerFixturePacks env
     ws ← emptyWorldState
     writeIORef (wsGenParamsRef ws)
         (Just defaultWorldGenParams { wgpWorldSize = worldSize })
