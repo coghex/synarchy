@@ -34,13 +34,19 @@ classifier here would be a second opinion nobody asked for.
 One entry gate, two consumers
 -----------------------------
 The envelope is `deflake-outcome-handoff/v1` — the SAME document
-`tools/deflake_outcome.py` (#1439) reads — and it is validated by that
-module's own `require_handoff`, parameterized by `OWNED` below. Every
-rule the two siblings share is therefore checked once: the producer
-record, the measurement binding, the whole ordered descriptor, the
-worktree boundary, the rebuilt artifact list, the exit contract, the
-aggregate reconciliation. Only the owned-route table differs, and it is
-data rather than a fork of the gate.
+`tools/deflake_outcome.py` (#1439) reads — and it is validated by
+`tools/deflake_handoff.py`, the contract BOTH consumers depend on,
+through its `require_handoff` parameterized by `OWNED` below. Every rule
+the two siblings share is therefore checked once: the producer record,
+the measurement binding, the whole ordered descriptor, the worktree
+boundary, the rebuilt artifact list, the exit contract, the aggregate
+reconciliation. Only the owned-route table differs, and it is data
+rather than a fork of the gate.
+
+The contract is a third module rather than one sibling reading the
+other. Neither of epic #1426's consumers is the other's prerequisite, so
+a shared rule owned by #1439 would be a rule #1438 could not rely on;
+this module imports the contract and never `deflake_outcome`.
 
 `require_reproduced` is called for the same reason. #1437 asks it of
 every route past the `cannot-reproduce` fork, `production-defect` is one
@@ -183,7 +189,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import deflake_diagnosis  # noqa: E402
-import deflake_outcome  # noqa: E402
+import deflake_handoff  # noqa: E402
 import probe_census  # noqa: E402
 import probe_flake  # noqa: E402
 import probe_protocol  # noqa: E402
@@ -193,15 +199,15 @@ import probe_runner_registry  # noqa: E402
 # owners rather than restated. A second spelling of one identifier is
 # how a census row stops being greppable against the diagnosis that
 # produced it.
-HANDOFF_SCHEMA = deflake_outcome.HANDOFF_SCHEMA
+HANDOFF_SCHEMA = deflake_handoff.HANDOFF_SCHEMA
 ROUTE = deflake_diagnosis.ROUTE_PRODUCTION_DEFECT
 OUTCOME_PRODUCTION_DEFECT = ROUTE
 OWNER_ISSUE = deflake_diagnosis.ROUTE_OWNER[ROUTE]
 
-ROLE_HANDOFF = deflake_outcome.ROLE_HANDOFF
-ROLE_BASELINE = deflake_outcome.ROLE_BASELINE
-ROLE_VERIFICATION = deflake_outcome.ROLE_VERIFICATION
-ROLES = deflake_outcome.ROLES
+ROLE_HANDOFF = deflake_handoff.ROLE_HANDOFF
+ROLE_BASELINE = deflake_handoff.ROLE_BASELINE
+ROLE_VERIFICATION = deflake_handoff.ROLE_VERIFICATION
+ROLES = deflake_handoff.ROLES
 
 # Which of #1437's routes this workflow owns, and the roles the route's
 # evidence rests on. `production-defect` is reached PAST the
@@ -209,7 +215,7 @@ ROLES = deflake_outcome.ROLES
 # and #1437 refuses it a verification section outright, because that
 # route opens no pull request and changes no probe, so a verification
 # would mean a repair was attempted and the route is mislabelled.
-OWNED = deflake_outcome.RouteOwnership(
+OWNED = deflake_handoff.RouteOwnership(
     issue=OWNER_ISSUE,
     outcomes=(OUTCOME_PRODUCTION_DEFECT,),
     roles={ROUTE: {"designated": ROLE_BASELINE,
@@ -293,8 +299,8 @@ EXIT_NON_SUCCESS = 3
 # module that validates the handoff is the module that names why it was
 # refused, and a caller catching one type should catch it whichever
 # sibling it called.
-HandoffError = deflake_outcome.HandoffError
-NonSuccess = deflake_outcome.NonSuccess
+HandoffError = deflake_handoff.HandoffError
+NonSuccess = deflake_handoff.NonSuccess
 
 
 class PublicationFailed(NonSuccess):
@@ -336,7 +342,7 @@ def forbidden_pull_request(record) -> None:
 def require_defect_diagnosis(document) -> dict:
     """#1437's `diagnosis` block, held to what the issue body renders.
 
-    `deflake_outcome.require_diagnosis_outcome` deliberately validates
+    `deflake_handoff.require_diagnosis_outcome` deliberately validates
     only the fields its own classification rests on, and the diagnosis
     prose is not one of them — #1439 records a summary the CALLER
     supplies. This route is different: the filed issue has to identify
@@ -411,7 +417,7 @@ def require_origin(value) -> str:
 
 def require_handoff(document, *, worktrees=(), primary=None):
     """One `deflake-outcome-handoff/v1` on this workflow's own route."""
-    return deflake_outcome.require_handoff(
+    return deflake_handoff.require_handoff(
         document, worktrees=worktrees, primary=primary, owned=OWNED)
 
 
@@ -784,7 +790,7 @@ def require_supported(handoff) -> None:
             "a filed production defect rests on complete, trustworthy "
             "measurements, and this attempt's are not that: "
             + "; ".join(problems))
-    deflake_outcome.require_reproduced(
+    deflake_handoff.require_reproduced(
         handoff, handoff.measurement(ROLE_BASELINE))
 
 
@@ -1188,7 +1194,7 @@ def require_reconciled_issue(value, key: str) -> dict:
 # The durable record
 # ==========================================================================
 def utc_now() -> str:
-    return deflake_outcome.utc_now()
+    return deflake_handoff.utc_now()
 
 
 def outcome_record(handoff, *, now: str, issue: dict) -> dict:
@@ -1286,7 +1292,7 @@ def reuse_stored_publication(candidate: dict, stored: dict) -> dict:
     conflict — and two genuinely different outcomes still cannot be made
     to agree, because nothing else is copied across.
     """
-    candidate = deflake_outcome.reuse_stored_timestamp(candidate, stored)
+    candidate = deflake_handoff.reuse_stored_timestamp(candidate, stored)
     issue = stored.get("issue")
     if isinstance(issue, dict):
         candidate = dict(candidate, issue=copy.deepcopy(issue))

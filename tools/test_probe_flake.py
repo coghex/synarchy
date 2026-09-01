@@ -56,35 +56,33 @@ import probe_engine  # type: ignore  # noqa: E402
 import probe_runner_lifecycle  # type: ignore  # noqa: E402
 import probe_runner_registry  # type: ignore  # noqa: E402
 
-FAILURES: list[str] = []
+import selftestlib  # noqa: E402
+from selftestlib import FAILURES, expect  # noqa: E402
+
 SKIPS: list[str] = []
 
 
-def expect(cond: bool, msg: str) -> None:
-    if not cond:
-        FAILURES.append(msg)
-        print(f"  FAIL: {msg}")
-    else:
-        print(f"  OK:   {msg}")
-
-
 def expect_raises(exc, fn, msg: str, substring: str | None = None) -> None:
+    # The conditions, the registered text and the printed detail are all
+    # unchanged; only the reporting goes through the shared helper, so
+    # this counts as one assertion and stays quiet when it holds (#1922).
     try:
         fn()
     except exc as error:
         if substring is not None and substring not in str(error):
-            FAILURES.append(f"{msg} (raised {exc.__name__} but not about "
-                            f"{substring!r}: {error})")
-            print(f"  FAIL: {msg} — wrong message: {error}")
+            selftestlib.record_fail(
+                f"{msg} (raised {exc.__name__} but not about "
+                f"{substring!r}: {error})",
+                f"{msg} — wrong message: {error}")
             return
-        print(f"  OK:   {msg}")
+        selftestlib.record_pass(msg)
         return
     except Exception as error:  # noqa: BLE001 - a wrong exception is a failure
-        FAILURES.append(f"{msg} (raised {type(error).__name__}: {error})")
-        print(f"  FAIL: {msg} — raised {type(error).__name__}: {error}")
+        selftestlib.record_fail(
+            f"{msg} (raised {type(error).__name__}: {error})",
+            f"{msg} — raised {type(error).__name__}: {error}")
         return
-    FAILURES.append(f"{msg} (nothing raised)")
-    print(f"  FAIL: {msg} — nothing raised")
+    selftestlib.record_fail(f"{msg} (nothing raised)", f"{msg} — nothing raised")
 
 
 def skip(msg: str) -> None:
@@ -3505,6 +3503,7 @@ def test_run_one_defaults() -> None:
 
 # ==========================================================================
 def main() -> int:
+    selftestlib.parse_verbose()
     for test in (test_descriptor, test_event_stream, test_trusted_prefix,
                  test_forbidden_markers,
                  test_eligibility, test_descriptor_mismatch_rejection,
@@ -3538,9 +3537,8 @@ def main() -> int:
         print(f"\n{len(FAILURES)} FAILED:")
         for message in FAILURES:
             print(f"  - {message}")
-        return 1
-    print("probe_flake self-test: all cases pass")
-    return 0
+        return selftestlib.concluded(1)
+    return selftestlib.concluded(0, "probe_flake self-test: all cases pass")
 
 
 if __name__ == "__main__":

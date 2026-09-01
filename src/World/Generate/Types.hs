@@ -151,7 +151,7 @@ data WorldGenParams = WorldGenParams
 --   pending). Field order matches the data declaration.
 --
 --   NB this instance is NOT the save path — @world.synworld@ goes
---   through the frozen 'World.Save.Component.WorldGen.WorldGenParamsDTO'
+--   through the frozen 'World.Save.Component.WorldGenCurrent.WorldGenParamsDTO'
 --   and its own per-component versioning. This is the plain structural
 --   encoding the params carry as an ordinary 'Serialize' value.
 instance Serialize WorldGenParams where
