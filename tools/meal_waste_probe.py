@@ -66,6 +66,11 @@ Six checks:
 Exit 0 = every check passed.
 
 Usage: python3 tools/meal_waste_probe.py [--port 9192]
+
+This probe implements the shared `probe-result/v1` contract: `--describe`
+prints its ordered stable checks without booting an engine, and a harnessed
+run writes structured events while a standalone run keeps its human-readable
+per-check output.
 """
 from __future__ import annotations
 
@@ -73,9 +78,29 @@ import argparse
 import glob
 import sys
 
+import probe_protocol
 from probelib import boot, init_arena, quit_engine, send, send_json
 
 LOG = "/tmp/meal_waste_engine.log"
+LOG_NAME = "meal_waste_engine.log"
+PROBE_KEY = "meal_waste"
+
+CHECKS = [
+    ("withholds_marginal_ration",
+     "a marginal third ration stays unopened with no feed or salt side effects"),
+    ("bulk_finishes_meal",
+     "bulk food finishes the meal past a withheld discrete ration"),
+    ("first_item_exempt",
+     "the first item is exempt before later marginal items are withheld"),
+    ("starving_eats_rations",
+     "a near-starving unit still eats the available rations"),
+    ("feed_bound_preserved",
+     "the ten-feed bound survives and bulk food is never withheld"),
+    ("entry_gates_unchanged",
+     "eat and forage entry conditions remain unchanged"),
+]
+
+DESCRIPTOR = probe_protocol.build_descriptor(PROBE_KEY, CHECKS)
 
 # This probe's console default. Its one-line Lua batches drive whole
 # meal cycles, so they get longer than probelib.send_json's 10 s -- the
@@ -218,18 +243,35 @@ def meal(port: int, uid: int, give: str, set_hunger: str):
     return report
 
 
-def check(passed: bool, label: str, detail: str, report=None) -> bool:
-    print(f"  [{'PASS' if passed else 'FAIL'}] {label}: {detail}")
+def check(rep: probe_protocol.Reporter, check_id: str, passed: bool,
+          label: str, detail: str, report=None) -> bool:
+    event_detail = {"summary": detail}
+    if report is not None:
+        event_detail["report"] = report
+    rep.check(check_id, passed, f"{label}: {detail}", event_detail)
     if not passed and report is not None:
-        print(f"         raw: {report}")
+        rep.note(f"         raw: {report}")
     return passed
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--port", type=int, default=9192)
+    ap.add_argument("--describe", action="store_true",
+                    help="print the probe-result/v1 check declaration and "
+                         "exit without booting an engine")
     args = ap.parse_args()
-    port = args.port
+    if args.describe:
+        print(DESCRIPTOR.to_json())
+        return 0
+    rep = probe_protocol.reporter_from_env(DESCRIPTOR)
+    try:
+        return _run(args.port, rep)
+    finally:
+        rep.close()
+
+
+def _run(port: int, rep: probe_protocol.Reporter) -> int:
     ok = True
 
     half_ration = THRESHOLD * RATION_KCAL
@@ -240,12 +282,13 @@ def main() -> int:
 
     three_rations = f"for _=1,3 do unit.addItem(uid,'{RATION}') end;"
 
-    proc = boot(port, LOG)
+    proc = boot(port, log=rep.engine_log_path(LOG_NAME, LOG),
+                args=rep.engine_args())
     try:
         bootstrap(port)
         init_arena(port)
-        print(f"\nration={RATION_KCAL:.0f} kcal; a discrete item opens only "
-              f"while room >= {half_ration:.0f} kcal\n")
+        rep.note(f"\nration={RATION_KCAL:.0f} kcal; a discrete item opens only "
+                 f"while room >= {half_ration:.0f} kcal\n")
 
         # --- 1. Withhold the mostly-wasted third ration ---
         # Start so that exactly MARGIN kcal of room remain after two
@@ -259,7 +302,8 @@ def main() -> int:
                and r1["salted"] == 2 and r1["rations"] == 1
                and abs(r1["hunger"] - (r1["maxHunger"] - MARGIN))
                    < HUNGER_SLACK)
-        ok &= check(ok1, "3 rations: the marginal one stays unopened",
+        ok &= check(rep, "withholds_marginal_ration", ok1,
+                    "3 rations: the marginal one stays unopened",
                     f"feed calls={r1['calls']} (fed={r1['fed']}, rule says "
                     f"{want1}) salt={r1['salted']} "
                     f"rations_left={r1['rations']} "
@@ -277,7 +321,8 @@ def main() -> int:
         ok2 = (r2["fed"] == 3 and r2["salted"] == 3 and r2["rations"] == 1
                and r2["sacks"] == 1 and drawn > 0
                and r2["hunger"] >= r2["maxHunger"] * MEAL_TARGET)
-        ok &= check(ok2, "a part-full sack finishes the withheld meal",
+        ok &= check(rep, "bulk_finishes_meal", ok2,
+                    "a part-full sack finishes the withheld meal",
                     f"fed={r2['fed']} salt={r2['salted']} "
                     f"rations_left={r2['rations']} sacks={r2['sacks']} "
                     f"sack_drawn={drawn:.1f} kcal "
@@ -292,7 +337,8 @@ def main() -> int:
         ok3 = (want3 == 1 and r3["fed"] == 1 and r3["salted"] == 1
                and r3["rations"] == 2
                and r3["hunger"] >= r3["maxHunger"] * MEAL_TARGET)
-        ok &= check(ok3, "first item exempt, marginal items withheld after",
+        ok &= check(rep, "first_item_exempt", ok3,
+                    "first item exempt, marginal items withheld after",
                     f"start room={TIGHT_START_ROOM:.0f} (< {half_ration:.0f}) "
                     f"fed={r3['fed']} (rule says {want3}) "
                     f"rations_left={r3['rations']} "
@@ -307,7 +353,8 @@ def main() -> int:
         want4 = expected_feeds(r4["maxHunger"], r4["startHunger"], 3)
         ok4 = (want4 >= 2 and r4["fed"] == want4
                and r4["rations"] == 3 - want4 and r4["salted"] == want4)
-        ok &= check(ok4, "near-starving unit still eats its rations",
+        ok &= check(rep, "starving_eats_rations", ok4,
+                    "near-starving unit still eats its rations",
                     f"fed={r4['fed']} (rule says {want4}) "
                     f"rations_left={r4['rations']} "
                     f"hunger={r4['hunger']:.1f}/{r4['maxHunger']:.1f}", r4)
@@ -319,7 +366,8 @@ def main() -> int:
                   "unit.setStat(uid,'hunger',0);")
         ok5 = (r5["fed"] == MEAL_BOUND and r5["salted"] == MEAL_BOUND
                and r5["sacks"] == 2)
-        ok &= check(ok5, "10-feed meal bound intact, bulk never withheld",
+        ok &= check(rep, "feed_bound_preserved", ok5,
+                    "10-feed meal bound intact, bulk never withheld",
                     f"fed={r5['fed']} salt={r5['salted']} "
                     f"sacks_left={r5['sacks']} (of 12)", r5)
 
@@ -345,13 +393,14 @@ def main() -> int:
                and gates.get("forageBlocked") is True
                and isinstance(gates.get("eat"), (int, float))
                and abs(gates["eat"] - gates["expected"]) < 1e-6)
-        ok &= check(ok6, "eat/forage entry gates unchanged",
+        ok &= check(rep, "entry_gates_unchanged", ok6,
+                    "eat/forage entry gates unchanged",
                     f"eatUtility={gates.get('eat')} "
                     f"(formula {gates.get('expected')}) "
                     f"forage_blocked_by_carried_food="
                     f"{gates.get('forageBlocked')}", gates)
 
-        print("\n" + ("ALL MEAL-WASTE CHECKS PASSED" if ok else "SOME FAILED"))
+        rep.note("\n" + ("ALL MEAL-WASTE CHECKS PASSED" if ok else "SOME FAILED"))
         return 0 if ok else 1
     finally:
         quit_engine(port, proc)
