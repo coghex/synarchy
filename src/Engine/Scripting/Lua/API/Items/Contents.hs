@@ -91,7 +91,8 @@ pushGroupedContents itemMgr contents = do
             disp = maybe dname idDisplayName mDef
             cat  = maybe "Misc" idCategory mDef
             knd  = maybe "" idKind mDef
-            tex  = maybe (-1) (\d → let TextureHandle t = idTexture d in t) mDef
+            -- The UI-policy handle (#2075): a container row's icon.
+            tex  = maybe (-1) (\d → let TextureHandle t = idIconTexture d in t) mDef
         Lua.newtable
         pushText "defName" dname
         pushText "displayName" disp

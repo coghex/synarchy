@@ -34,12 +34,12 @@ local assetsLoaded = false
 function dropdown.init()
     if assetsLoaded then return end
     
-    texArrowNormal = engine.loadTexture("assets/textures/ui/dropdown.png")
-    texArrowClicked = engine.loadTexture("assets/textures/ui/dropdownclicked.png")
+    texArrowNormal = engine.loadTexture("assets/textures/ui/dropdown.png", "ui")
+    texArrowClicked = engine.loadTexture("assets/textures/ui/dropdownclicked.png", "ui")
     optionTexSet = boxTextures.load("assets/textures/ui/textbox", "textbox")
     displayTexSetNormal = optionTexSet
     displayTexSetFocused = boxTextures.load("assets/textures/ui/textboxselected", "textbox")
-    highlightTex = engine.loadTexture("assets/textures/ui/highlight.png")
+    highlightTex = engine.loadTexture("assets/textures/ui/highlight.png", "ui")
     
     scrollbar.init()
     

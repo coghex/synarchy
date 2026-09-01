@@ -351,7 +351,7 @@ footprintDef ∷ BuildingDef
 footprintDef = BuildingDef
     { bdName = "scene_stats_building", bdDisplayName = "Scene Stats Hall"
     , bdCategory = "Storage", bdDescription = ""
-    , bdTexture = TextureHandle 0
+    , bdTexture = TextureHandle 0, bdIconTexture = TextureHandle 0
     , bdTileW = 2, bdTileH = 3, bdPlacement = "flat_ground"
     , bdIsStarting = False, bdRace = "acolyte"
     , bdSpriteAnchor = "diamond_bottom", bdBuildWork = 0

@@ -195,9 +195,10 @@ local pendingPath = nil
 -- IMMEDIATELY (uploads are async, and both UI.newSprite and
 -- UI.setSpriteTexture tolerate a not-yet-resolved handle — the same
 -- thing scripts/ui/list.lua's own init() does with highlight.png), one
--- engine.loadTexture per distinct path. There is no dedup at the
--- engine.loadTexture layer, so this cache IS the dedup: without it a
--- 60 Hz playback tick would allocate a fresh handle every frame.
+-- engine.loadTexture per distinct path. engine.loadTexture allocates a
+-- fresh HANDLE per call even when it resolves to a cached slot, so this
+-- cache IS the dedup: without it a 60 Hz playback tick would allocate a
+-- new handle every frame.
 --
 -- Unlike list/item mode's requestTexture below, this never touches
 -- pendingHandle/readyState: unit and building modes have many textures

@@ -99,7 +99,7 @@ holderUid = UnitId 1
 
 bareDef ∷ Text → Text → ItemDef
 bareDef name kind = ItemDef
-    { idName = name, idDisplayName = name, idTexture = TextureHandle 0
+    { idName = name, idDisplayName = name, idTexture = TextureHandle 0, idIconTexture = TextureHandle 0
     , idWeight = 0.5, idWeightSpec = Nothing, idBulk = 1.0
     , idStorage = Nothing, idKind = kind
     , idCategory = "Misc", idMake = "", idMaterial = ""

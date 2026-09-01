@@ -673,7 +673,9 @@ unitGetInventoryFn env = do
                                                 "scalesWithCondition"
                                             Lua.rawseti (-2) (fromIntegral j)
                                     Lua.setfield (-2) "buffs"
-                                let TextureHandle tex = idTexture d
+                                -- UI-policy handle (#2075): an
+                                -- inventory row's icon.
+                                let TextureHandle tex = idIconTexture d
                                 Lua.pushinteger (fromIntegral tex)
                                 Lua.setfield (-2) "iconTex"
                             Nothing → do

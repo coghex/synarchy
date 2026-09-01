@@ -42,6 +42,7 @@ import Engine.Core.Capability.ContentRegistries
 import Engine.Core.Log (LogCategory(..), LoggerState, logDebug, logWarn)
 import Engine.Core.Log.Monad (getLoggerFor)
 import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaToEngineMsg)
+import Engine.Graphics.Vulkan.Texture.Policy (UploadSampler(..))
 import Engine.Scripting.Lua.API.YamlTextures (loadAndRegisterWithPool,
                                               isTextureNameRegistered,
                                               resolveTexturePath)
@@ -67,6 +68,13 @@ brokenEquipmentTexture = "assets/textures/ui/placeholders/broken_equipment.png"
 
 brokenEquipmentTexName ∷ Text
 brokenEquipmentTexName = "broken_equipment"
+
+-- | The same badge under the UI upload policy (#2075), for the overlay
+--   @scripts\/ui\/broken_overlay.lua@ draws over an inventory icon. A
+--   separate NAME because a texture-name registry entry resolves to one
+--   handle, and the two policies are two handles on two slots.
+brokenEquipmentUiTexName ∷ Text
+brokenEquipmentUiTexName = "broken_equipment_ui"
 
 resolveSpritePath ∷ EngineEnv → FilePath → IO FilePath
 resolveSpritePath env = resolveTexturePath env "Item sprite" missingEquipmentTexture
@@ -142,9 +150,15 @@ registerItemDefs env logger poolRef lteq managerRef filePath defs = do
     -- sprites). The ground-item renderer fetches it by name from the
     -- texture-name registry.
     alreadyRegistered ← isTextureNameRegistered env brokenEquipmentTexName
-    unless alreadyRegistered $
-        void $ loadAndRegisterWithPool env poolRef lteq
+    unless alreadyRegistered $ do
+        void $ loadAndRegisterWithPool env poolRef lteq UploadGlobalSampler
                    brokenEquipmentTexName brokenEquipmentTexture
+        -- Dual-use (#2075): the ground-item renderer draws the badge in
+        -- the world, and scripts/ui/broken_overlay.lua draws it over an
+        -- inventory icon. Two slots, one per policy, each reachable by
+        -- its own registered name.
+        void $ loadAndRegisterWithPool env poolRef lteq UploadPinnedNearest
+                   brokenEquipmentUiTexName brokenEquipmentTexture
 
     foldM (\acc def → do
         -- Load the sprite texture so it's ready for any future
@@ -152,9 +166,18 @@ registerItemDefs env logger poolRef lteq managerRef filePath defs = do
         -- systems can fetch it.
         let regName = "item_" <> iydName def
         spritePath ← resolveSpritePath env (T.unpack (iydSprite def))
-        handle ← loadAndRegisterWithPool env poolRef lteq regName spritePath
+        -- An item sprite is genuinely dual-use (#2075): the ground-item
+        -- renderer draws it in the world at world scale, and the
+        -- inventory / equipment / container panels draw it as a UI
+        -- icon. So it is loaded under BOTH policies -- two slots for one
+        -- file, D-4's accepted cost -- and the def carries both handles
+        -- so each consumer reads the one with its own sampler.
+        handle ← loadAndRegisterWithPool env poolRef lteq UploadGlobalSampler
+                     regName spritePath
+        iconHandle ← loadAndRegisterWithPool env poolRef lteq UploadPinnedNearest
+                         (regName <> "_ui") spritePath
 
-        let itemDef = itemDefFromYaml filePath handle def
+        let itemDef = itemDefFromYaml filePath handle iconHandle def
         replaced ← atomicModifyIORef' managerRef $ \im →
             ( ItemManager { imDefs = HM.insert (idName itemDef) itemDef
                                                (imDefs im) }
@@ -182,13 +205,18 @@ contentEntry c = ItemContentEntry
 -- | The authored YAML definition, as the registry holds it. Pure: the
 --   only things it cannot derive are the already-loaded sprite handle
 --   and the file the definition came from, both passed in.
-itemDefFromYaml ∷ FilePath → TextureHandle → ItemYamlDef → ItemDef
-itemDefFromYaml filePath handle def = ItemDef
+-- | Build an 'ItemDef' from its YAML, given the sprite's two handles:
+--   the SCENE one the ground renderer draws and the UI one the panels
+--   draw (#2075). A caller with no GPU may pass the same handle twice.
+itemDefFromYaml ∷ FilePath → TextureHandle → TextureHandle → ItemYamlDef
+                → ItemDef
+itemDefFromYaml filePath handle iconHandle def = ItemDef
     { idName        = iydName def
     , idDisplayName = if T.null (iydDisplayName def)
                       then iydName def
                       else iydDisplayName def
     , idTexture     = handle
+    , idIconTexture = iconHandle
     , idWeight      = wMean
     , idWeightSpec  = wSpec
     , idBulk        = iydBulk def

@@ -35,7 +35,7 @@ fixtureDef name w h = BuildingDef
     , bdDisplayName     = name
     , bdCategory        = "Test"
     , bdDescription     = ""
-    , bdTexture         = TextureHandle 0
+    , bdTexture         = TextureHandle 0, bdIconTexture         = TextureHandle 0
     , bdTileW           = w
     , bdTileH           = h
     , bdPlacement       = "flat_ground"

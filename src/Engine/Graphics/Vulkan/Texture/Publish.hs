@@ -68,24 +68,8 @@ import Engine.Graphics.Vulkan.Texture.Handle
   (BindlessTextureHandle(..), HandleAddressing(..)
   , TextureRegistrationFailure(..), checkRegistrableHandle
   , registrationFailureMessage)
+import Engine.Graphics.Vulkan.Texture.Policy (UploadSampler(..))
 import Engine.Graphics.Vulkan.Texture.Slot (TextureSlot(..))
-
--- | Which sampler a freshly uploaded slot is registered with.
---
---   The two policies are mutually exclusive per batch, which is why
---   'Engine.Scripting.Lua.Message' bursts atlas requests separately
---   from ordinary ones.
-data UploadSampler
-    = UploadGlobalSampler
-      -- ^ Follow the shared global sampler: the slot is repainted by a
-      --   runtime 'setTextureFilter' toggle. Every ordinary texture.
-    | UploadPinnedNearest
-      -- ^ Pinned to NEAREST regardless of the global filter (D-6).
-      --   Compiled unit-animation atlases (#1259): a filter toggle must
-      --   not start bilinearly resampling unit art, and on a sheet it
-      --   would additionally bleed neighbouring cells across every
-      --   frame edge.
-    deriving (Show, Eq)
 
 -- | The TERMINAL outcome of one texture request. Every request reaches
 --   exactly one of these, so nothing waiting on a request stalls.
@@ -234,19 +218,21 @@ publishFailureReason = \case
 
 -- | Fold a batch's per-request outcomes into one of the pool's maps —
 --   @apTextureAtlases@ keyed by 'Engine.Asset.Base.AssetId', and
---   @apAssetPaths@ keyed by path.
+--   @apAssetPaths@ keyed by
+--   'Engine.Graphics.Vulkan.Texture.Policy.TextureCacheKey' (path AND
+--   'UploadSampler' policy since #2075; path alone before it).
 --
 --   Only a 'PublishRegistered' request contributes an entry. A
 --   'PublishFailed' one contributes NOTHING, which is three separate
 --   prohibitions and not just the obvious one: it must not insert its
 --   own entry, must not overwrite an existing entry, and must not DELETE
---   one. That last is load-bearing for @apAssetPaths@, whose key is the
---   path alone while a slot's sampler is fixed by whichever policy first
---   uploaded it: a same-path entry belonging to the OPPOSITE
---   'UploadSampler' policy is valid, is what makes this request a fresh
---   upload rather than a cache hit, and must survive this request's
---   failure intact so the policy that owns it keeps working and this one
---   can retry later.
+--   one. That last is load-bearing for @apAssetPaths@ in both eras. The
+--   policy in the key now keeps the OTHER policy's same-path entry at a
+--   different key entirely, so a failure cannot reach it by accident —
+--   but a failed retry of a path this SAME policy already has a live
+--   canonical for still shares its key exactly, and evicting that would
+--   turn one failed re-request into the loss of a slot that is
+--   registered, sampled and working.
 publishRegisteredEntries
   ∷ Ord k ⇒ [(k, α, TexturePublish)] → Map.Map k α → Map.Map k α
 publishRegisteredEntries results entries0 = foldl' step entries0 results

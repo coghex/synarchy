@@ -332,13 +332,13 @@ function createWorldMenu.init(panelTex, btnTex, font, width, height)
     createWorldMenu.loadDefaults()
 
     createWorldMenu.worldPreviewTexture =
-        engine.loadTexture("assets/textures/ui/world_preview_pending.png")
+        engine.loadTexture("assets/textures/ui/world_preview_pending.png", "ui")
     createWorldMenu.barTextures = {
-        trackLeft   = engine.loadTexture("assets/textures/ui/bar/bar_left.png"),
-        trackCenter = engine.loadTexture("assets/textures/ui/bar/bar_center.png"),
-        trackRight  = engine.loadTexture("assets/textures/ui/bar/bar_right.png"),
-        fillLeft    = engine.loadTexture("assets/textures/ui/bar/bar_fill_left.png"),
-        fillCenter  = engine.loadTexture("assets/textures/ui/bar/bar_fill_center.png"),
+        trackLeft   = engine.loadTexture("assets/textures/ui/bar/bar_left.png", "ui"),
+        trackCenter = engine.loadTexture("assets/textures/ui/bar/bar_center.png", "ui"),
+        trackRight  = engine.loadTexture("assets/textures/ui/bar/bar_right.png", "ui"),
+        fillLeft    = engine.loadTexture("assets/textures/ui/bar/bar_fill_left.png", "ui"),
+        fillCenter  = engine.loadTexture("assets/textures/ui/bar/bar_fill_center.png", "ui"),
     }
 
     -- #1978: init is the first construction, so there is no prior player
