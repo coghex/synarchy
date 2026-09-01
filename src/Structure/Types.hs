@@ -16,11 +16,14 @@ module Structure.Types
     , ChunkStructures
     , emptyChunkStructures
     , StructureStageToken(..)
+    , StructureCommitWindow(..)
     , StagedStructurePiece(..)
     , StructureStage(..)
     , emptyStructureStage
     , stageStructurePlacement
     , dropStagedAttempt
+    , recordDeclinedAttempt
+    , takeDeclinedInWindow
     , clearStagedKey
     , clearStagedAll
     , stagedPieces
@@ -30,6 +33,7 @@ import UPrelude
 import Control.DeepSeq (NFData(..))
 import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM
+import qualified Data.Set as S
 import Engine.Asset.Handle (TextureHandle)
 
 -- | Where a piece sits within a tile.
@@ -108,6 +112,24 @@ emptyChunkStructures = HM.empty
 newtype StructureStageToken = StructureStageToken Word64
     deriving (Show, Eq, Ord)
 
+-- | The half-open span of placement attempts ONE stamp invocation made
+--   on ONE page (#2051): @scwFrom@ is the page's next-token watermark
+--   read immediately before the builder ran, @scwTo@ the watermark read
+--   immediately after it returned.
+--
+--   That span names the invocation's attempts EXACTLY, and cheaply.
+--   Tokens come from the target page's own monotonic counter
+--   ('ssNextToken'), and every @structure.place@ that takes one runs on
+--   the single Lua thread inside the synchronous builder call, so no
+--   other attempt on that page can be allocated between the two reads.
+--   A placement rejected BEFORE staging (unparseable slot, omitted
+--   paths, unresolvable page, unloaded target) never takes a token at
+--   all, so the span holds the ACCEPTED attempts and nothing else.
+data StructureCommitWindow = StructureCommitWindow
+    { scwFrom ∷ !StructureStageToken   -- ^ first token of the invocation
+    , scwTo   ∷ !StructureStageToken   -- ^ one past its last token
+    } deriving (Show, Eq)
+
 -- | One staged placement: the piece the builder reads back, tagged with
 --   the attempt that staged it.
 data StagedStructurePiece = StagedStructurePiece
@@ -128,10 +150,25 @@ data StructureStage = StructureStage
       --   match a later placement.
     , ssEntries   ∷ !(HM.HashMap (Int, Int, Word8) StagedStructurePiece)
       -- ^ Staged pieces, keyed exactly like 'ChunkStructures'.
+    , ssDeclined  ∷ !(S.Set StructureStageToken)
+      -- ^ Attempts whose commit the WORLD thread declined (#2051) — the
+      --   target chunk evicted between @structure.place@'s residency
+      --   check and the world thread's own, so no piece reached
+      --   'ChunkStructures' and no edit reached the log.
+      --
+      --   This is the only record of that outcome: 'ssEntries' cannot
+      --   carry it, because a decline RETRACTS the staged entry (#1674),
+      --   and the overlay cannot carry it either, because a byte-identical
+      --   placement by another attempt is indistinguishable there.
+      --   'takeDeclinedInWindow' both reads and prunes it, so it holds
+      --   only declines no completion decision has consumed yet: one
+      --   'Word64' per eviction race since the last stamp on this page
+      --   reached the world thread, and every one of them already logged
+      --   a warning on its way in.
     } deriving (Show, Eq)
 
 emptyStructureStage ∷ StructureStage
-emptyStructureStage = StructureStage (StructureStageToken 0) HM.empty
+emptyStructureStage = StructureStage (StructureStageToken 0) HM.empty S.empty
 
 -- | Stage one placement attempt, returning the token that names it. The
 --   caller puts that token on the queued command so the world thread can
@@ -155,13 +192,42 @@ dropStagedAttempt key tok st = case HM.lookup key (ssEntries st) of
         st { ssEntries = HM.delete key (ssEntries st) }
     _ → st
 
+-- | Record that the world thread DECLINED the commit of exactly this
+--   attempt (#2051). Called from the same atomic update that retracts
+--   the attempt's staged entry, so the two can never disagree.
+recordDeclinedAttempt ∷ StructureStageToken → StructureStage → StructureStage
+recordDeclinedAttempt tok st = st { ssDeclined = S.insert tok (ssDeclined st) }
+
+-- | Answer one stamp invocation's completion question and retire the
+--   declines it just consumed: @True@ iff any attempt in the half-open
+--   window was declined.
+--
+--   Pruning is by WATERMARK, not by the window alone — every recorded
+--   token below @scwTo@ is dropped, including ones outside the window.
+--   Tokens are handed out in queue order on one thread, so a token below
+--   this invocation's end belongs to an attempt whose own completion
+--   decision (if it has one) was queued, and therefore dispatched,
+--   earlier. Dropping them keeps the set bounded, and dropping THIS
+--   window's own declines is what lets the next load's retry be judged
+--   on its own attempts rather than inheriting this one's verdict.
+takeDeclinedInWindow ∷ StructureCommitWindow → StructureStage
+                     → (StructureStage, Bool)
+takeDeclinedInWindow (StructureCommitWindow lo hi) st =
+    let (consumed, kept) = S.spanAntitone (< hi) (ssDeclined st)
+        inWindow         = S.dropWhileAntitone (< lo) consumed
+    in (st { ssDeclined = kept }, not (S.null inWindow))
+
 -- | Remove whatever is staged at one key, whichever attempt staged it
 --   ('structure.clear' — the player asked for the tile to be empty).
 clearStagedKey ∷ (Int, Int, Word8) → StructureStage → StructureStage
 clearStagedKey key st = st { ssEntries = HM.delete key (ssEntries st) }
 
 -- | Remove every staged entry ('structure.clearAll'), keeping the token
---   counter where it is.
+--   counter where it is — and keeping the recorded declines (#2051).
+--   A wipe is the strongest possible reason to withhold an in-flight
+--   stamp's completion marker: it removed the very pieces that stamp
+--   was placing, so an attempt already known to have failed must not
+--   become invisible because the overlay was cleared underneath it.
 clearStagedAll ∷ StructureStage → StructureStage
 clearStagedAll st = st { ssEntries = HM.empty }
 

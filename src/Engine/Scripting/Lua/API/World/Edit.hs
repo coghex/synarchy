@@ -29,6 +29,8 @@ import Engine.Core.State (activeWorldPageFrom)
 import Location.Instance
     ( LocationInstance(..), LocationInstanceId(..)
     , instancesInChunk, lifecycleFromName )
+import Structure.Types
+    (StructureCommitWindow(..), StructureStageToken(..))
 import World.Generate.Coordinates (globalToChunk)
 import World.Types hiding (activeWorldPage)
 import World.Material (MaterialId(..), materialIdByName)
@@ -241,15 +243,36 @@ worldSetLocationLifecycleFn wsc = do
             return 1
         _ → Lua.pushboolean False >> return 1
 
--- | world.markLocationStamped(gx, gy [, pageId]) — one-time geometry-stamp
---   flag (#424). An explicit pageId targets that live page (even hidden);
---   omitted defaults to the active world. No-op (queues nothing) when
---   neither resolves to a live page.
+-- | world.markLocationStamped(gx, gy [, pageId [, fromToken, toToken]])
+--   — one-time geometry-stamp flag (#424). An explicit pageId targets
+--   that live page (even hidden); omitted defaults to the active world.
+--   No-op (queues nothing) when neither resolves to a live page.
+--
+--   @fromToken@/@toToken@ are a pair of @structure.stageWatermark@ reads
+--   taken either side of the builder run this marker is completing
+--   (#2051). They name the placement attempts that run ACCEPTED, so the
+--   world thread can withhold the marker when one of them was later
+--   declined — @structure.place@ returning true means staged and queued,
+--   not committed. Supplying only one of the two, or a pair that is not
+--   a forward range, carries NO window: the pair is an all-or-nothing
+--   claim, and a half-stated one must not silently read as "nothing to
+--   check" when the caller believed it had asked for the check. An
+--   EMPTY range (@fromToken == toToken@) is a real, well-formed window
+--   — a builder that accepted no placements has nothing that can have
+--   been declined — so it is carried, not discarded.
 worldMarkLocationStampedFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
 worldMarkLocationStampedFn wsc = do
     gxArg   ← Lua.tointeger 1
     gyArg   ← Lua.tointeger 2
     pageArg ← Lua.tostring 3
+    fromArg ← Lua.tointeger 4
+    toArg   ← Lua.tointeger 5
+    let mWindow = case (fromArg, toArg) of
+            (Just lo, Just hi) | lo ≥ 0, hi ≥ lo →
+                Just (StructureCommitWindow
+                        (StructureStageToken (fromIntegral lo))
+                        (StructureStageToken (fromIntegral hi)))
+            _ → Nothing
     case (gxArg, gyArg) of
         (Just gx, Just gy) → do
             Lua.liftIO $ do
@@ -259,7 +282,7 @@ worldMarkLocationStampedFn wsc = do
                 case mPid of
                     Just pid → Q.writeQueue (wsWorldQueue wsc) $
                         WorldMarkLocationStamped pid
-                            (fromIntegral gx) (fromIntegral gy)
+                            (fromIntegral gx) (fromIntegral gy) mWindow
                     Nothing  → pure ()
             return 0
         _ → return 0

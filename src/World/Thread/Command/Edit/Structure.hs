@@ -20,7 +20,8 @@ import World.Generate.Coordinates (globalToChunk)
 import World.Edit.Types (WorldEdit(..), appendEdit)
 import World.Edit.Apply (applyEdit)
 import Structure.Types
-    (StructureStageToken, dropStagedAttempt, emptyChunkStructures)
+    ( StructureStageToken, dropStagedAttempt, recordDeclinedAttempt
+    , emptyChunkStructures )
 
 -- | Place a structure piece (floor/wall/post/ceiling) at (gx,gy,slot-tag) via
 --   the WeSetStructure edit path: live-apply to the loaded chunk's structure
@@ -41,6 +42,14 @@ import Structure.Types
 --   placement staged at the same tile and slot (even a byte-identical one)
 --   survives its predecessor's decline. A commit that SUCCEEDS leaves the
 --   stage alone: it agrees with the overlay there.
+--
+--   __The decline is also RECORDED (#2051).__ Retracting the stage undoes
+--   this attempt, but it leaves no trace that the attempt ever failed —
+--   and the caller has by then been told @structure.place@ returned true,
+--   which is what a location stamp was reading as "materialized". So the
+--   attempt's token joins 'ssDeclined' in the same atomic update, where
+--   'World.Thread.Command.Location.handleWorldMarkLocationStampedCommand'
+--   consults it before writing a durable completion marker.
 handleWorldSetStructureCommand ∷ WorldSimCapability → LoggerState → WorldPageId
     → Int → Int → Word8 → Int → Int → Int → StructureStageToken → IO ()
 handleWorldSetStructureCommand wsc logger pageId gx gy slotTag texId faceId z tok = do
@@ -56,7 +65,9 @@ handleWorldSetStructureCommand wsc logger pageId gx gy slotTag texId faceId z to
             case lookupChunk coord td of
                 Nothing → do
                     atomicModifyIORef' (wsStructureStageRef ws) $ \st →
-                        (dropStagedAttempt (gx, gy, slotTag) tok st, ())
+                        ( recordDeclinedAttempt tok
+                            (dropStagedAttempt (gx, gy, slotTag) tok st)
+                        , () )
                     logWarn logger CatWorld $
                         "Chunk not loaded for set structure at "
                           <> tshow gx <> "," <> tshow gy

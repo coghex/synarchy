@@ -254,8 +254,9 @@ handleWorldCommand env _ (WorldSetLocationEncounterEpisodeState pageId iid
       disengageAnnounced
 handleWorldCommand env _ (WorldSetLocationLifecycle pageId iid lifecycle)
   = handleWorldSetLocationLifecycleCommand (toWorldSimCapability env) pageId iid lifecycle
-handleWorldCommand env _ (WorldMarkLocationStamped pageId gx gy)
-  = handleWorldMarkLocationStampedCommand (toWorldSimCapability env) pageId gx gy
+handleWorldCommand env logger (WorldMarkLocationStamped pageId gx gy mWindow)
+  = handleWorldMarkLocationStampedCommand (toWorldSimCapability env) logger
+      pageId gx gy mWindow
 
 -- | Sim → World: apply the sim's fluid writebacks to the ORIGINATING
 --   world's tile data, resolved by the batch's page id — not every

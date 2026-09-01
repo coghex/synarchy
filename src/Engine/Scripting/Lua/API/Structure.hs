@@ -16,6 +16,7 @@
 --   so a placement can't leak across worlds (see 'wsStructureStageRef').
 module Engine.Scripting.Lua.API.Structure
     ( structurePlaceFn
+    , structureStageWatermarkFn
     , structureClearFn
     , structureClearAllFn
     , structureCountFn
@@ -193,6 +194,37 @@ structurePlaceFn env = do
                     Lua.pushboolean placed
                     return 1
         _ → Lua.pushboolean False >> return 1
+
+-- | structure.stageWatermark([pageId]) → integer — the token the NEXT
+--   @structure.place@ on that page will take. Returns nil when the page
+--   does not resolve.
+--
+--   Reading it either side of a synchronous run of placements yields
+--   that run's 'StructureCommitWindow' (#2051): the half-open span of
+--   the attempts it ACCEPTED, which
+--   'World.Command.Types.WorldMarkLocationStamped' carries so the world
+--   thread can withhold a completion marker when one of them was later
+--   declined. Tokens come from the page's own counter and are handed out
+--   only here on the Lua thread, so nothing can slip into that span.
+--
+--   The counter is a 'Word64' and Lua integers are signed 64-bit; a
+--   session would have to stage 2^63 placements on one page for the
+--   conversion to matter, which that counter cannot reach.
+structureStageWatermarkFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+structureStageWatermarkFn env = do
+    pageA ← Lua.tostring 1
+    mNext ← Lua.liftIO $ do
+        mPage ← resolveStructurePage env (TE.decodeUtf8Lenient <$> pageA)
+        case mPage of
+            Nothing      → pure Nothing
+            Just (_, ws) → do
+                st ← readIORef (wsStructureStageRef ws)
+                let StructureStageToken n = ssNextToken st
+                pure (Just n)
+    case mNext of
+        Nothing → Lua.pushnil
+        Just n  → Lua.pushinteger (fromIntegral n)
+    return 1
 
 -- | structure.clear(gx, gy, slot) → bool — remove one piece from the
 --   authoritative overlay via the WeClearStructure edit path (so it stays
