@@ -56,9 +56,10 @@ import World.Construct.Types ( ConstructTarget(..), ConstructStatus(..)
                              , constructTargetCategory )
 import World.Plant.Validate (revalidatePlantDesignations)
 import World.Construct.Apply (applyConstructSlopeToChunk)
+import Structure.Types (StructureCommitWindow, takeDeclinedInWindow)
 import World.Construct.Revalidate
     ( clearConstructDesignationSlope, constructRefundDeps
-    , refundConstructDesignation )
+    , notifyConstructInvalidated, refundConstructDesignation )
 import World.Thread.Command.Cursor.Common
     (recordDesignationOutcome, recordMissingWorldOutcome)
 
@@ -265,6 +266,13 @@ handleWorldCancelConstructCommand env _logger pageId gx gy mAttempt = do
                 worldSize ← pageWrapWorldSize worldState
                 refundConstructDesignation deps worldState
                     (canonicalTile worldSize gx gy) cd
+                -- …and detach the claimant, exactly as a world-side
+                -- invalidation does. Without it this documented
+                -- cancellation API leaves the old claim holding the
+                -- tile until a decision tick or a timeout, blocking a
+                -- successor designated there immediately — which is the
+                -- very thing the exact-attempt contract promises.
+                notifyConstructInvalidated env worldState gx gy cd
         Nothing → pure ()
 
 -- | Atomically remove a construction designation and reset its
@@ -339,14 +347,34 @@ beginConstructPlacement worldState (rawGX, rawGY) attempt = do
 --   worker cannot delete the successor designation a player just made at
 --   the same tile — and there is no attempt-less form that could.
 handleWorldSetConstructStatusCommand ∷ EngineEnv → LoggerState → WorldPageId
-    → Int → Int → ConstructStatus → ConstructAttemptId → IO ()
-handleWorldSetConstructStatusCommand env _logger pageId gx gy st attempt = do
+    → Int → Int → ConstructStatus → ConstructAttemptId
+    → Maybe StructureCommitWindow → IO ()
+handleWorldSetConstructStatusCommand env _logger pageId gx gy st attempt
+                                     mWindow = do
     mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
         Just worldState → do
             -- #1175: a build-AI job coord is a point op like any other.
             worldSize ← pageWrapWorldSize worldState
             let key = canonicalTile worldSize gx gy
+            -- #1844: @structure.place@ returning true means STAGED AND
+            -- QUEUED, not committed — the world thread declines the
+            -- queued placement when the target chunk evicted in between,
+            -- retracting the staged entry and recording the token. A
+            -- completion that carries the placement's own commit window
+            -- is therefore CONDITIONAL: if anything in that span was
+            -- declined, nothing was really built, and deleting the
+            -- designation would leave a paid attempt with neither a
+            -- structure nor its materials. Same protocol
+            -- 'handleWorldMarkLocationStampedCommand' uses for the same
+            -- hazard (#2051). No window means no claim to check, which
+            -- is every non-completion and every caller that placed
+            -- nothing.
+            declined ← case (st, mWindow) of
+                (CsComplete, Just window) →
+                    atomicModifyIORef' (wsStructureStageRef worldState)
+                                       (takeDeclinedInWindow window)
+                _ → pure False
             mCd ← atomicModifyIORef' (wsConstructDesignationsRef worldState) $
                 \m → case HM.lookup key m of
                     Just cd | cdAttempt cd ≡ attempt → case st of
@@ -354,7 +382,16 @@ handleWorldSetConstructStatusCommand env _logger pageId gx gy st attempt = do
                         _          → ( HM.insert key (cd { cdStatus = st }) m
                                      , Nothing )
                     _ → (m, Nothing)
-            forM_ mCd $ clearConstructDesignationSlope worldState key
+            forM_ mCd $ \cd → do
+                clearConstructDesignationSlope worldState key cd
+                -- The placement was declined after all: this is a
+                -- CANCELLATION wearing a completion's clothes, so the
+                -- receipt goes back to the ground exactly as any other
+                -- cancellation's would, and the claimant is detached.
+                when declined $ do
+                    deps ← constructRefundDeps env
+                    refundConstructDesignation deps worldState key cd
+                    notifyConstructInvalidated env worldState gx gy cd
         Nothing → pure ()
 
 -- | Build AI hook (#96): pour progress into a designation. Deltas are

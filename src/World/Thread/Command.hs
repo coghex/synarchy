@@ -167,8 +167,8 @@ handleWorldCommand env logger WorldRevalidateConstructAll = do
       void $ revalidateConstructDesignations env logger ws ConstructWholePage
 handleWorldCommand env logger (WorldCancelConstruct pageId gx gy att)
   = handleWorldCancelConstructCommand env logger pageId gx gy att
-handleWorldCommand env logger (WorldSetConstructStatus pageId gx gy st att)
-  = handleWorldSetConstructStatusCommand env logger pageId gx gy st att
+handleWorldCommand env logger (WorldSetConstructStatus pageId gx gy st att win)
+  = handleWorldSetConstructStatusCommand env logger pageId gx gy st att win
 handleWorldCommand env logger (WorldAddConstructProgress pageId gx gy delta att)
   = handleWorldAddConstructProgressCommand env logger pageId gx gy delta att
 handleWorldCommand env logger (WorldSetConstructDesignateTexture pageId cat texHandle)

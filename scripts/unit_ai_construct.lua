@@ -434,46 +434,16 @@ local function constructExecute(uid, s, params)
                                        job.attempt)
         end
         if (job.progress or 0) >= 1.0 then
-            -- #1844 requirement 18: take the exact-attempt placement
-            -- hand-off BEFORE placing anything. The piece becomes
-            -- visible to every structure query the moment it is staged,
-            -- so without this the world-side invalidator could read this
-            -- worker's own success as an external conflict, cancel the
-            -- job and refund materials that were correctly spent. A
-            -- false answer means the attempt is gone: place nothing.
-            -- The third of requirement 10's three re-checks. Runs
-            -- BEFORE the hand-off, so a site that has gone invalid is
-            -- cancelled (and its receipt refunded) rather than built.
-            local finalPlan = site.planOutcome(wid, job)
-            if finalPlan and finalPlan ~= "valid" then
-                local removed = construction.cancelDesignationForRefund(
-                    wid, job.x, job.y, job.attempt)
-                if removed then site.refundStructureMaterials(removed) end
-                reportFailure(uid,
-                    "Construction site changed — materials returned to the ground")
-                releaseConstructJob(wid, s, uid)
-                return
-            end
-            if not construction.beginPlacement(wid, job.x, job.y,
-                                               job.attempt) then
-                releaseConstructJob(wid, s, uid)
-                return
-            end
-            if site.placeStructurePiece(job) then
-                construction.setJobStatus(wid, job.x, job.y, "complete",
-                                          job.attempt)
+            -- The final-placement hand-off is the job TILE's business --
+            -- requirement 10's last re-check, requirement 18's
+            -- exact-attempt claim on it, the commit window, the piece and
+            -- the refund -- and this module is at its #538 line budget,
+            -- so it lives in the site module. Either way the job is over
+            -- and released below; XP is granted only for a piece really
+            -- placed, which is what the true return means.
+            if site.finishPlacement(wid, job, uid) then
                 grantWorkXP(uid, "construction",
                             params.construct_xp_per_piece or 0)
-            else
-                -- Placement failed for this attempt. Cancelling through
-                -- the atomic pop is what refunds its receipt EXACTLY
-                -- once: whichever caller's delete wins is handed the
-                -- receipt, and every other caller is handed nothing.
-                local removed = construction.cancelDesignationForRefund(
-                    wid, job.x, job.y, job.attempt)
-                if removed then site.refundStructureMaterials(removed) end
-                reportFailure(uid,
-                    "Construction site changed — materials returned to the ground")
             end
             releaseConstructJob(wid, s, uid)
         end

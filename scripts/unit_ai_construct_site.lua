@@ -186,4 +186,62 @@ function M.sweepClaims(constructClaims, constructKey, wid, jobs, now, timeout)
     end
 end
 
+-- Finish one job: requirement 10's third re-check, requirement 18's
+-- exact-attempt placement hand-off, the placement itself, and the
+-- completion-or-refund that follows it (#1844).
+--
+-- Returns true when the piece was placed — the caller grants the XP on
+-- that, since XP is for work PERFORMED — and false when the attempt was
+-- gone or the site had stopped being buildable. EITHER WAY the job is
+-- over and the caller releases it.
+function M.finishPlacement(wid, job, uid)
+    local reportFailure = require("scripts.unit_ai_core").reportFailure
+    -- The third of requirement 10's three re-checks, BEFORE the
+    -- hand-off: a site that has gone invalid is cancelled, and its
+    -- receipt refunded, rather than built.
+    local finalPlan = M.planOutcome(wid, job)
+    if finalPlan and finalPlan ~= "valid" then
+        local removed = construction.cancelDesignationForRefund(
+            wid, job.x, job.y, job.attempt)
+        if removed then M.refundStructureMaterials(removed) end
+        reportFailure(uid,
+            "Construction site changed — materials returned to the ground")
+        return false
+    end
+    -- Requirement 18: take the exact-attempt hand-off BEFORE placing
+    -- anything. The piece becomes visible to every structure query the
+    -- moment it is staged, so without this the world-side invalidator
+    -- could read this worker's own success as an external conflict,
+    -- cancel the job and refund materials that were correctly spent. A
+    -- false answer means the attempt is gone: place nothing.
+    if not construction.beginPlacement(wid, job.x, job.y, job.attempt) then
+        return false
+    end
+    -- structure.place returning true means STAGED AND QUEUED, not
+    -- committed -- the world thread still declines a queued placement
+    -- whose target chunk evicted in between. The page's stage watermark
+    -- read either side of the run gives that placement's COMMIT WINDOW,
+    -- which the completion carries so the world thread can withhold it
+    -- (and refund the receipt) when the placement never landed. Exactly
+    -- what scripts/locations.lua does for its own stamp (#2051).
+    local fromTok = structure.stageWatermark and structure.stageWatermark(wid)
+    local placed = M.placeStructurePiece(job)
+    local toTok = structure.stageWatermark and structure.stageWatermark(wid)
+    if placed then
+        construction.setJobStatus(wid, job.x, job.y, "complete", job.attempt,
+                                  fromTok, toTok)
+    else
+        -- Placement failed outright for this attempt. Cancelling through
+        -- the atomic pop is what refunds its receipt EXACTLY once:
+        -- whichever caller's delete wins is handed the receipt, and
+        -- every other caller is handed nothing.
+        local removed = construction.cancelDesignationForRefund(
+            wid, job.x, job.y, job.attempt)
+        if removed then M.refundStructureMaterials(removed) end
+        reportFailure(uid,
+            "Construction site changed — materials returned to the ground")
+    end
+    return placed
+end
+
 return M

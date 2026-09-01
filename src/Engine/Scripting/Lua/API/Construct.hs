@@ -40,6 +40,7 @@ import World.Construct.Plan
     , resolveStructurePlan )
 import Engine.Asset.Handle (TextureHandle(..))
 import World.Construct.Attempt (ConstructAttemptId(..))
+import Structure.Types (StructureCommitWindow(..), StructureStageToken(..))
 import World.Construct.Receipt (receiptEntries)
 import World.Types
     (WorldManager(..), WorldState(..), pageWrapWorldSize, selectionMovedSince)
@@ -389,7 +390,8 @@ constructNearestDesignationFn wsc = do
                 Nothing → Lua.pushnil >> return 1
         _ → Lua.pushnil >> return 1
 
--- | construction.setJobStatus(pageId, gx, gy, status, attempt) — build
+-- | construction.setJobStatus(pageId, gx, gy, status, attempt
+--   [, fromToken, toToken]) — build
 --   AI marks a job "claimed" / "complete" (complete removes the
 --   designation). Unknown status strings are ignored.
 --
@@ -398,6 +400,16 @@ constructNearestDesignationFn wsc = do
 --   unlike cancellation there is no honest coordinate-only form of a
 --   status transition — it is always some worker reporting on the job it
 --   observed. A call without one enqueues nothing at all.
+--
+--   A COMPLETION may additionally carry the
+--   'Structure.Types.StructureCommitWindow' of the placement it is
+--   completing — @structure.stageWatermark@ read either side of the
+--   placement run. @structure.place@ returning true means STAGED AND
+--   QUEUED, not committed, so a completion without that window can
+--   delete a paid designation for a placement the world thread went on
+--   to decline. Given one, the world thread completes only if nothing in
+--   the span was declined, and otherwise cancels the same attempt and
+--   refunds its receipt.
 constructSetJobStatusFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
 constructSetJobStatusFn wsc = do
     pageIdArg ← Lua.tostring 1
@@ -405,6 +417,21 @@ constructSetJobStatusFn wsc = do
     gyArg ← Lua.tonumber 3
     statusArg ← Lua.tostring 4
     attArg ← readAttemptArg 5
+    fromArg ← Lua.tointeger 6
+    toArg   ← Lua.tointeger 7
+    -- #1844: the placement's own commit window, read exactly as
+    -- world.markLocationStamped reads its own (#2051). Supplying only
+    -- one of the pair, or a pair that is not a forward range, carries NO
+    -- window — a half-stated all-or-nothing claim must not silently read
+    -- as "nothing to check" when the caller believed it had asked for
+    -- the check. An EMPTY range is a real window: a completion that
+    -- staged nothing has nothing that can have been declined.
+    let mWindow = case (fromArg, toArg) of
+            (Just lo, Just hi) | lo ≥ 0, hi ≥ lo →
+                Just (StructureCommitWindow
+                        (StructureStageToken (fromIntegral lo))
+                        (StructureStageToken (fromIntegral hi)))
+            _ → Nothing
     -- #1844: no attempt, no command. A status transition is always a
     -- worker reporting on the job it observed, so an attempt-less call
     -- is a caller bug and enqueuing it would let a stale completion
@@ -416,7 +443,7 @@ constructSetJobStatusFn wsc = do
                     let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                     Q.writeQueue (wsWorldQueue wsc) $
                         WorldSetConstructStatus pageId (round gx) (round gy)
-                            st attempt
+                            st attempt mWindow
                 Nothing → pure ()
         _ → pure ()
     return 0

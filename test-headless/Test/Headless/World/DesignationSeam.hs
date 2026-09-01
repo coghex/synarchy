@@ -689,7 +689,7 @@ engineSpec = beforeAll setup $ do
         `shouldReturn` tshow cgx <> "," <> tshow cgy
       claimAttempt ← cdAttempt <$> designationAt ws anchorTile
       handleWorldSetConstructStatusCommand env logger fixturePage
-          agx agy CsClaimed claimAttempt
+          agx agy CsClaimed claimAttempt Nothing
       cdStatus <$> designationAt ws anchorTile `shouldReturn` CsClaimed
       _ ← evalDebug ls (T.concat
           [ "construction.addJobProgress('", pageText, "', "

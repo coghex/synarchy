@@ -166,6 +166,7 @@ data WorldCommand
         --   which has no attempt to name until it looks.
     | WorldSetConstructStatus WorldPageId Int Int ConstructStatus
                               ConstructAttemptId
+                              (Maybe StructureCommitWindow)
         -- ^ Build AI (#96): mark a designation Claimed / Complete. A
         --   Complete designation is removed (the structure/building it
         --   represents now exists).
@@ -177,6 +178,17 @@ data WorldCommand
         --   the job it observed, and an attempt-less completion that
         --   matched anything would delete a successor at that tile.
         --   Making it unrepresentable is cheaper than checking for it.
+        --
+        --   #1844: a COMPLETION may additionally carry the
+        --   'StructureCommitWindow' of the placement it is completing —
+        --   @structure.place@ returning true means STAGED AND QUEUED,
+        --   not committed, and the world thread can still decline the
+        --   queued placement when the target chunk has evicted. Given a
+        --   window, the handler completes only if nothing in it was
+        --   declined; otherwise it cancels that same attempt and refunds
+        --   its receipt, because the alternative is a paid job with
+        --   neither a structure nor its materials. Exactly the protocol
+        --   'WorldMarkLocationStamped' uses for the same hazard (#2051).
     | WorldAddConstructProgress WorldPageId Int Int Float
                                 ConstructAttemptId
         -- ^ #1844: required for the same reason — an attempt-less pour

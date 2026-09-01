@@ -21,7 +21,7 @@ module Test.Headless.Construct.AttemptIdentity (spec) where
 
 import UPrelude
 import Test.Hspec
-import Data.IORef (readIORef, writeIORef)
+import Data.IORef (atomicModifyIORef', readIORef, writeIORef)
 import Data.List (sort)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
@@ -50,8 +50,13 @@ import World.Save.Component.Page
     , StructurePieceDTO(..), fromConstructDTO, migrateConstructDesignations
     , toConstructDTO )
 import Item.Types (ItemInstance(..))
+import qualified Engine.Core.Queue as Q
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import Structure.Types
-    (StructureSlot(..), StructurePieceData(..), emptyChunkStructures)
+    ( StructureSlot(..), StructurePieceData(..), StructureStageToken(..)
+    , emptyChunkStructures, recordDeclinedAttempt )
+import World.Thread.Command (handleWorldCommand)
 import Unit.Types (UnitId(..), UnitInstance(..), UnitManager(..)
                   , emptyUnitManager)
 import World.Chunk.Types
@@ -183,11 +188,11 @@ guardSpec = describe "a delayed operation from a removed attempt" $ do
         let logger = scLogger sc
             env = scEnv sc
         handleWorldSetConstructStatusCommand env logger fixturePage
-            (fst tile) (snd tile) CsClaimed old
+            (fst tile) (snd tile) CsClaimed old Nothing
         handleWorldAddConstructProgressCommand env logger fixturePage
             (fst tile) (snd tile) 0.75 old
         handleWorldSetConstructStatusCommand env logger fixturePage
-            (fst tile) (snd tile) CsComplete old
+            (fst tile) (snd tile) CsComplete old Nothing
         cancel sc ws tile (Just old)
         _ ← evalLua sc (T.concat
                 [ "return tostring(construction.payMaterials('", pageText
@@ -203,7 +208,7 @@ guardSpec = describe "a delayed operation from a removed attempt" $ do
         designate sc ws tile tile floorPiece
         [aid] ← attemptsOf ws
         handleWorldSetConstructStatusCommand (scEnv sc) (scLogger sc)
-            fixturePage (fst tile) (snd tile) CsClaimed aid
+            fixturePage (fst tile) (snd tile) CsClaimed aid Nothing
         cdStatus <$> designationAt ws `shouldReturn` CsClaimed
 
     it "takes the placement hand-off only for the exact attempt" $
@@ -345,6 +350,37 @@ paymentSpec = describe "payment" $ do
             , "return tostring(j)" ])
             `shouldReturn` "nil"
 
+    it "withholds a completion whose staged placement was DECLINED, and \
+       \refunds it instead" $ \sc → do
+        -- structure.place returning true means STAGED AND QUEUED, not
+        -- committed: the world thread declines a queued placement whose
+        -- target chunk evicted in between, retracting the staged entry
+        -- and recording its token. A completion carrying that placement's
+        -- commit window must therefore not simply delete a PAID
+        -- designation, or the attempt ends with neither a structure nor
+        -- its materials.
+        ws ← resetScene sc
+        designate sc ws tile tile floorPiece
+        [aid] ← attemptsOf ws
+        _ ← pay sc aid
+        declineToken ws 0
+        completeWithWindow sc aid 0 1
+        HM.size <$> readIORef (wsConstructDesignationsRef ws)
+            `shouldReturn` 0
+        groundNames ws `shouldReturn` ["steel_plate"]
+
+    it "completes normally when nothing in the window was declined" $
+        \sc → do
+        ws ← resetScene sc
+        designate sc ws tile tile floorPiece
+        [aid] ← attemptsOf ws
+        _ ← pay sc aid
+        completeWithWindow sc aid 0 1
+        HM.size <$> readIORef (wsConstructDesignationsRef ws)
+            `shouldReturn` 0
+        -- The receipt was SPENT on a real piece, so nothing comes back.
+        groundNames ws `shouldReturn` []
+
     it "grandfathers a paid job across a build-cost change" $ \sc → do
         -- Requirement 17: the receipt is never regenerated. Re-reading
         -- the pack is exactly what could not reproduce what was spent.
@@ -468,6 +504,33 @@ withFloorAt (gx, gy) = flatTiles
     addIt lc = lc { lcStructures = HM.insert key piece (lcStructures lc) }
     key = (gx, gy, fromIntegral (fromEnum SFloor) ∷ Word8)
     piece = StructurePieceData 1 2 (zSlice + 1)
+
+-- | Record one staged attempt as DECLINED, which is exactly what the
+--   world thread does when a queued placement's target chunk has
+--   evicted.
+declineToken ∷ WorldState → Word64 → IO ()
+declineToken ws n =
+    atomicModifyIORef' (wsStructureStageRef ws) $ \st →
+        (recordDeclinedAttempt (StructureStageToken n) st, ())
+
+completeWithWindow ∷ Scene → ConstructAttemptId → Word64 → Word64 → IO ()
+completeWithWindow sc aid lo hi = do
+    _ ← evalLua sc $ T.concat
+        [ "construction.setJobStatus('", pageText, "', 5, 5, 'complete', "
+        , tshow (raw aid), ", ", tshow lo, ", ", tshow hi, "); return 'ok'" ]
+    -- The verb queues; drain the world thread so the assertion reads the
+    -- settled state rather than a command still in flight.
+    drainWorldQueue (scEnv sc) (scLogger sc)
+
+drainWorldQueue ∷ EngineEnv → LoggerState → IO ()
+drainWorldQueue env logger = go (200 ∷ Int)
+  where
+    go 0 = pure ()
+    go n = do
+        m ← Q.tryReadQueue (wsWorldQueue (toWorldSimCapability env))
+        case m of
+            Nothing → pure ()
+            Just c  → handleWorldCommand env logger c ≫ go (n - 1)
 
 beginPlacement ∷ Scene → Word64 → IO Text
 beginPlacement sc n = evalLua sc $ T.concat

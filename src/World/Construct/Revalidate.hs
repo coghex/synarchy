@@ -41,6 +41,7 @@ module World.Construct.Revalidate
     , revalidateConstructDesignations
     , revalidateStagedConstructDesignations
     , clearConstructDesignationSlope
+    , notifyConstructInvalidated
     , refundConstructDesignation
     , spawnReceiptItems
     ) where
