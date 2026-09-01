@@ -1117,6 +1117,7 @@ test-suite synarchy-test-headless
                    Test.Headless.WorldGen.BorderProbe
                    Test.Headless.WorldGen.WrapSeam
                    Test.Headless.WorldGen.CoastBreach
+                   Test.Headless.WorldGen.Breakthrough
                    Test.Headless.WorldGen.BedDepth
                    Test.Headless.WorldGen.FluidSurfaceFold
                    Test.Headless.Unit.Pathing.Cost
@@ -1153,7 +1154,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Item.Condition
                    Test.Headless.Item.SteelHelmet
                    Test.Headless.Item.RepairFinite
-        Test.Headless.Item.BulkStorage
+                   Test.Headless.Item.BulkStorage
                    Test.Headless.Item.FoodNutrition
                    Test.Headless.Item.Discovery
                    Test.Headless.Asset.TextureFallback
@@ -1168,6 +1169,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Preview.UnitAnimation
                    Test.Headless.Preview.Building
                    Test.Headless.Preview.Zoom
+                   Test.Headless.Preview.KeyboardNavigation
                    Test.Headless.World.Save.Sanitize
                    Test.Headless.World.Save.Serialize
                    Test.Headless.World.Save.Envelope
@@ -1282,9 +1284,9 @@ test-suite synarchy-test-headless
                    Test.Headless.UI.TransferContextMenu
                    Test.Headless.UI.ItemList
                    Test.Headless.UI.ContainerWindowStack
-        Test.Headless.UI.TransferGestures
-        Test.Headless.UI.ConsumableGesture
-        Test.Headless.UI.TransferSession
+                   Test.Headless.UI.TransferGestures
+                   Test.Headless.UI.ConsumableGesture
+                   Test.Headless.UI.TransferSession
                    Test.Headless.World.Calendar
                    Test.Headless.World.Climate
                    Test.Headless.World.TimeLocal

@@ -8,7 +8,9 @@
 --   Station kind names a work-station OPERATION ("smelt", "forge",
 --   "assemble") — buildings advertise the operations they offer via
 --   bdOperations (#326) and craft.executeAt matches the two; the
---   AI/bill layer (#329) reads rdWork.
+--   AI/bill layer (#329) reads rdWork for CRAFT recipes only (#1965) —
+--   a repair-tagged recipe completes in one synchronous visit and
+--   spends no work at all.
 --
 --   Field prefix `rd` / `ri` to avoid colliding with other record
 --   namespaces.
@@ -61,9 +63,17 @@ data RecipeDef = RecipeDef
                                               --   craft.executeAt (#326)
     , rdInputs    ∷ ![RecipeIngredient]       -- ^ consumed materials
     , rdFuel      ∷ !(Maybe RecipeIngredient) -- ^ consumed fuel, if any
-    , rdWork      ∷ !Float                    -- ^ effort to complete; the
-                                              --   craft AI (#329) will burn
-                                              --   this down, scaled by skill
+    , rdWork      ∷ !Float                    -- ^ effort to complete a CRAFT;
+                                              --   the craft AI (#329) will
+                                              --   burn this down, scaled by
+                                              --   skill, and treats <= 0 as
+                                              --   immediate completion.
+                                              --   Operative for craft recipes
+                                              --   ONLY (#1965): the repair
+                                              --   path never reads it — a
+                                              --   rdRepairAxis recipe is one
+                                              --   synchronous visit, so its
+                                              --   shipped value is 0.
     , rdOutputs   ∷ ![RecipeIngredient]       -- ^ produced items
     , rdKnowledge ∷ !(Maybe Text)             -- ^ knowledge the crafter must
                                               --   KNOW (present in
