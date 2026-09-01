@@ -1196,9 +1196,9 @@ is rejected BY NAME before execution, without running the probe at all —
 heuristically parsing free-form stdout is the guesswork a reliability harness
 must not do, and invoking a legacy probe to find out would boot a real engine.
 `blood_impact`, `circadian`, `concussion_revive`, `disarm`, `lua_strict_msg`,
-`position_hold`, `remote_warning_page_guard`, `role`, `state_of_mind`,
-`text_encoding` and `thermo_altitude` are the migrated probes today; later
-changes normally migrate one at a time.
+`meal_waste`, `position_hold`, `remote_warning_page_guard`, `role`,
+`state_of_mind`, `text_encoding` and `thermo_altitude` are the migrated probes
+today; later changes normally migrate one at a time.
 
 A migrated probe prints its ordered, stable check declaration with
 `--describe` (no engine) and, when the harness supplies an event path, writes
