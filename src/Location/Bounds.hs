@@ -56,7 +56,7 @@ import World.Plate (worldWidthTiles)
 --   deliberately so (#1668): 'Location.Instance.locationInstanceBoundsErrors',
 --   run by "World.Save.Component.Page" 's @validatePages@. A persisted
 --   location instance's box is rebuilt by
---   'World.Save.Component.WorldGen.fromAbsBoundsDTO' from four
+--   'World.Save.Component.WorldGenNaming.fromAbsBoundsDTO' from four
 --   unrestricted wire 'Int's — the one 'AbsBounds' construction site
 --   entirely outside the loader gate above — so the save boundary must
 --   state the rule itself. That is not a duplicate that drifted from

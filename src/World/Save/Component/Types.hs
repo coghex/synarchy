@@ -72,6 +72,22 @@
 --   items), and "World.Save.Component.Entities" (unit-sim / craft-bills /
 --   power-nodes, plus the frozen building/unit instance DTOs and their
 --   nested item / stat-modifier / wound / scar records).
+--
+--   "World.Save.Component.WorldGen" is a FAÇADE, not a declaration site
+--   (#2098). It declares nothing and re-exports one worldgen DTO graph
+--   from four owner modules, each holding a family that evolves on its
+--   own schedule, in dependency order:
+--   "World.Save.Component.WorldGenClimate" (the generation and climate
+--   leaves), "World.Save.Component.WorldGenNaming" (generated names,
+--   etymology, bounds, encounters, and every location and river-name
+--   shape, current and historical),
+--   "World.Save.Component.WorldGenCurrent" (the currently written
+--   'WorldGenParamsDTO') and "World.Save.Component.WorldGenHistory"
+--   (every decode-only @WorldGenParamsDTOv1@ … @WorldGenParamsDTOv6@).
+--   Downstream modules import the façade; the owners exist so a wire
+--   fact has one home, not so consumers have to choose one. This
+--   paragraph names them; the RULE they implement is still stated here
+--   and nowhere else.
 module World.Save.Component.Types
     ( ComponentPhase(..)
     , ComponentError(..)

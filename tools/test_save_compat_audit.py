@@ -1596,6 +1596,96 @@ def test_haskell_component_source_paths_discovers_new_files_automatically() -> N
            f"a Component/ directory, got {sca.HASKELL_COMPONENT_SOURCE_PATHS}")
 
 
+def test_haskell_component_source_paths_is_the_whole_directory() -> None:
+    print("issue #2098: HASKELL_COMPONENT_SOURCE_PATHS must equal the "
+          "Component/ directory listing exactly -- the >= 4 check above "
+          "cannot notice an owner DROPPED from discovery, and a dropped "
+          "owner silently leaves its DTOs out of the B1 fingerprint")
+    # _transitive_dto_blocks() `continue`s past a leaf it cannot resolve
+    # rather than raising, so an owner module missing from the search
+    # paths costs the fingerprint its declarations with no error at all.
+    # Pinning the set to the real directory is what makes that
+    # unrepresentable: the worldgen DTO graph's owners
+    # (WorldGenClimate/WorldGenNaming/WorldGenCurrent/WorldGenHistory)
+    # joined discovery by being placed in this directory, and any future
+    # owner does too.
+    directory = sca.REPO_ROOT / "src" / "World" / "Save" / "Component"
+    expected = sorted(directory.glob("*.hs"))
+    expect(expected, f"expected {directory} to contain component sources")
+    expect(sca.HASKELL_COMPONENT_SOURCE_PATHS == expected,
+           f"discovery does not match the directory listing.\n"
+           f"  missing from discovery: "
+           f"{sorted(set(expected) - set(sca.HASKELL_COMPONENT_SOURCE_PATHS))}\n"
+           f"  discovered but absent from the directory: "
+           f"{sorted(set(sca.HASKELL_COMPONENT_SOURCE_PATHS) - set(expected))}")
+    # Every worldgen DTO owner is reached, by name, so a rename that
+    # moved one out of this directory fails here rather than quietly
+    # shrinking the fingerprint's input.
+    discovered = {p.name for p in sca.HASKELL_COMPONENT_SOURCE_PATHS}
+    for owner in ("WorldGen.hs", "WorldGenClimate.hs", "WorldGenNaming.hs",
+                  "WorldGenCurrent.hs", "WorldGenHistory.hs"):
+        expect(owner in discovered,
+               f"worldgen DTO owner {owner} is not in discovery: "
+               f"{sorted(discovered)}")
+
+
+def directory_owner(name: str, paths: list) -> Path:
+    """The single discovered path whose file name is `name`."""
+    matches = [p for p in paths if p.name == name]
+    expect(len(matches) == 1,
+           f"expected exactly one discovered {name}, got {matches}")
+    return matches[0]
+
+
+def test_dropping_one_owner_from_discovery_changes_the_fingerprint() -> None:
+    print("issue #2098 requirement 8: mutation-removing any single "
+          "discovered owner from HASKELL_COMPONENT_SOURCE_PATHS must move "
+          "the frozen B1 DTO fingerprint or fail -- proving discovery is "
+          "load-bearing rather than incidentally complete")
+    baseline = sca.frozen_dto_fingerprint()
+    old_paths = sca.HASKELL_COMPONENT_SOURCE_PATHS
+    # Only the owners the B1 closure actually reaches can move the hash;
+    # the mutation is meaningful for those, and the directory-equality
+    # test above is what covers the rest.
+    reached = []
+    try:
+        for dropped in old_paths:
+            sca.HASKELL_COMPONENT_SOURCE_PATHS = [
+                p for p in old_paths if p != dropped]
+            if sca.frozen_dto_fingerprint() != baseline:
+                reached.append(dropped.name)
+    finally:
+        sca.HASKELL_COMPONENT_SOURCE_PATHS = old_paths
+    expect(sca.frozen_dto_fingerprint() == baseline,
+           "the fingerprint did not return to its unmutated value")
+    # SessionV90 seeds the worldgen half of the B1 closure through ONE
+    # field, `wp90GenParams ∷ !WorldGenParamsDTOv1`, so the closure
+    # reaches the historical owner that now declares that shape and the
+    # climate leaves it embeds. Dropping either must move the hash.
+    for owner in ("WorldGenHistory.hs", "WorldGenClimate.hs"):
+        expect(owner in reached,
+               f"dropping {owner} left the B1 fingerprint unchanged, so its "
+               f"DTOs are not actually contributing: moved by {reached}")
+    # The naming owner is deliberately NOT asserted above: world-pages v1
+    # predates the location instance table (it stored three chunk-keyed
+    # sets), so no naming DTO is reachable from today's B1 seed at all --
+    # that was already true of the pre-split module and is not something
+    # this split changed. Its discovery is still load-bearing, and the
+    # audit's OWN leaf resolver is what proves it: a location DTO
+    # resolves through the globbed paths, and stops resolving the moment
+    # the naming owner is dropped from them. `_transitive_dto_blocks`
+    # `continue`s past an unresolvable leaf silently, so this is exactly
+    # the failure mode a missing owner would produce.
+    naming = directory_owner("WorldGenNaming.hs", old_paths)
+    for dto in ("LocationInstanceDTOv1", "RiverNameDTO", "NameExprDTO"):
+        expect(sca._find_type_definition(dto, old_paths) is not None,
+               f"{dto} does not resolve through the discovered owners")
+        expect(sca._find_type_definition(
+                   dto, [p for p in old_paths if p != naming]) is None,
+               f"{dto} still resolved with the naming owner dropped from "
+               f"discovery -- this mutation proves nothing")
+
+
 def _malformed_older_versions_source(current: int, older: str) -> str:
     """One synthetic ComponentSpec whose only interesting field is its
     csOlderVersions declaration."""
@@ -2114,6 +2204,8 @@ ALL_TESTS = [
     test_discover_component_specs_accepts_a_well_formed_multi_version_table,
     test_hand_rolled_component_codec_is_no_longer_silently_discovered,
     test_haskell_component_source_paths_discovers_new_files_automatically,
+    test_haskell_component_source_paths_is_the_whole_directory,
+    test_dropping_one_owner_from_discovery_changes_the_fingerprint,
     test_discover_lua_save_modules_finds_the_real_two_modules,
     test_detects_unknown_component_id_in_baseline,
     test_detects_removed_input_version,
