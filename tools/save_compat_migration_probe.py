@@ -58,8 +58,27 @@ player's saves, see make_isolated_root):
      unchanged, still begins paused.
   7. Unpause (via scripts.pause, the paired
      engine.setPaused+world.setTimeScale contract every other save/load
-     probe already uses) ONLY to confirm the default time scale --
-     never comparing any subsequent random gameplay outcome.
+     probe already uses) to confirm the default time scale -- never
+     comparing any subsequent random gameplay outcome -- and, for a
+     fixture that declares them, to run its live-tick checks (below).
+
+Additionally (issue #2055), a fixture may declare "liveTickChecks" in
+its OWN expectedCanonicalSummary -- a list of {"unitId"} entries -- and
+each named unit must then complete one real thought tick in the
+UNPAUSED reloaded session of step 7. Every other assertion this probe
+makes is evaluated while the session is PAUSED: the declared
+luaStateChecks run at both load boundaries, and the second resave
+follows the second one immediately. A migrated row can therefore carry
+every correct persisted VALUE and still be unable to execute, which is
+exactly the regression this phase exists for -- a sparse legacy unit_ai
+row carried no `nextActionAt`, survived decode, canonical comparison,
+resave, restart and reload, and then errored on `engine.gameTime() <
+s.nextActionAt` the first time the AI tried to think. What is asserted
+is deliberately outcome-independent (a registered action name, and
+nextActionAt advanced past its immediate-decision default), and any Lua
+`update` error logged during that unpaused window fails the fixture --
+the pcall isolation keeps the engine running and only warns, so nothing
+else here would notice.
 
 Additionally (round-4 review), a fixture may declare "luaStateChecks" in
 its OWN expectedCanonicalSummary -- a list of {"expr", "expected"} pairs
@@ -96,11 +115,12 @@ Usage:
 --self-test boots no engine at all: it verifies the registry bootstrap
 plan below and the startup-loader parser that keeps it honest, which is
 what a reviewer can run in a second instead of grepping this file for
-loader names, plus both branches of the load-prerequisite stop above
-(driven through injected doubles, so a rejection and an
-accepted-but-unpublished load are provable without an engine). A normal
-run performs the bootstrap-plan verification first, before placing a
-fixture or booting anything.
+loader names, the live-tick phase's Lua-error marker against the engine
+sources it is assembled from, plus both branches of the
+load-prerequisite stop above (driven through injected doubles, so a
+rejection and an accepted-but-unpublished load are provable without an
+engine). A normal run performs the bootstrap-plan and marker
+verifications first, before placing a fixture or booting anything.
 
 Exit 0 = every check above passed, for every declared complete-session
 fixture.
@@ -119,7 +139,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from probelib import boot, quit_engine, send, wait_load_published
+from probelib import boot, quit_engine, send, send_json, wait_load_published
 from save_compat_audit import dump_canonical_summary
 
 REPO = Path(__file__).resolve().parent.parent
@@ -133,7 +153,8 @@ MANIFEST_PATH = REPO / "docs" / "save_compat" / "manifest.json"
 # apples to oranges, not catching an actual migration bug. Also strips
 # the two keys that aren't part of the dump schema at all.
 _DUMP_COMPARE_EXCLUDED_KEYS = frozenset(
-    {"$comment", "luaStateChecks", "isMigratedLegacyBaseline", "luaComponentCount"})
+    {"$comment", "luaStateChecks", "liveTickChecks",
+     "isMigratedLegacyBaseline", "luaComponentCount"})
 
 
 STARTUP_LOADER_PATH = REPO / "scripts" / "startup_loader.lua"
@@ -460,6 +481,21 @@ def declared_complete_session_fixtures() -> list[dict]:
                 # equivalence check alone cannot catch either) fails
                 # here for real, inside a genuine running engine.
                 "lua_state_checks": summary.get("luaStateChecks", []),
+                # Issue #2055: the checks above run at both load
+                # boundaries, but BOTH of those are evaluated while the
+                # session is still paused -- and the second one is
+                # followed immediately by the second resave. A migrated
+                # row's values can therefore all be right and the unit
+                # still be unable to TICK, which is precisely the
+                # regression this fixture reproduced: a sparse legacy
+                # unit_ai row survived decode, comparison, resave,
+                # restart and reload and then errored on its first live
+                # thought tick. So a fixture may additionally declare
+                # "liveTickChecks" -- a list of {"unitId"} entries -- to
+                # opt into a POST-UNPAUSE phase that watches those units
+                # actually complete a decision cycle in a running,
+                # unpaused engine. See run_live_tick_checks.
+                "live_tick_checks": summary.get("liveTickChecks", []),
             })
     if not out:
         sys.exit("FAIL: docs/save_compat/manifest.json declares no "
@@ -654,6 +690,169 @@ def dump_and_compare(chk: Checks, tmp_dir: str, file_path: str,
            + (f" -- MISMATCH at {diff}" if diff else ""))
 
 
+#: The engine's own wording when a Lua callback raises under the pcall
+#: isolation in Engine.Scripting.Lua.Script.callModuleFunctionReportingError
+#: -- the exact text a failed per-tick `update` produces.
+#:
+#: A literal match against a log is only as good as the literal, and this
+#: one is assembled in Haskell from two separate places, so a silent
+#: mismatch would turn this probe's Lua-error scan into a check that can
+#: never fire. `verify_lua_error_marker` (run by --self-test AND at the
+#: top of every real run, beside the bootstrap-plan check) asserts BOTH
+#: halves still exist in the engine sources, so a rename there is a loud,
+#: engine-free failure here instead.
+LUA_UPDATE_ERROR_MARKER = "Lua error in update()"
+
+#: The two engine sources `LUA_UPDATE_ERROR_MARKER` is composed from, and
+#: the fragment each must still contain: the format string that words the
+#: warning, and the scheduler call that names `update` as the callback.
+LUA_ERROR_MARKER_SOURCES: list[tuple[str, str]] = [
+    ("src/Engine/Scripting/Lua/Script.hs",
+     '"Lua error in " <> funcName <> "(): "'),
+    ("src/Engine/Scripting/Lua/Thread.hs",
+     'callModuleFunction ls (scriptModuleRef script) "update"'),
+]
+
+
+def verify_lua_error_marker() -> list[str]:
+    """Both halves of `LUA_UPDATE_ERROR_MARKER` still exist in the engine.
+
+    Returns a list of problems (empty when the marker is still what the
+    engine emits). Reads source text only -- no build, no engine, no GPU.
+    """
+    problems: list[str] = []
+    for rel, fragment in LUA_ERROR_MARKER_SOURCES:
+        path = REPO / rel
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as error:
+            problems.append(f"could not read {rel} ({error})")
+            continue
+        if fragment not in text:
+            problems.append(
+                f"{rel} no longer contains {fragment!r} -- "
+                f"LUA_UPDATE_ERROR_MARKER ({LUA_UPDATE_ERROR_MARKER!r}) is "
+                f"assembled from it, so the post-unpause Lua-error scan "
+                f"would silently match nothing; re-derive the marker from "
+                f"the engine's current wording")
+    return problems
+
+#: How long a declared live-tick unit gets to complete one decision
+#: cycle after the session is unpaused. The AI's own cadence is ~1s
+#: (thought_interval, scripts/unit_ai_tunables.lua) and the script ticks
+#: at 0.1s, so this is two orders of magnitude of headroom -- generous
+#: on purpose, because the assertion this guards is "did it tick at
+#: all", and a tight bound would turn a slow CI host into a false
+#: regression.
+LIVE_TICK_TIMEOUT_SEC = 30.0
+
+
+def run_live_tick_checks(chk: Checks, port: int, checks: list[dict],
+                         log_path: str, log_offset: int) -> None:
+    """Watch each declared unit complete one live thought tick in the
+    UNPAUSED, freshly-reloaded session (issue #2055).
+
+    Every other assertion this probe makes is evaluated while the
+    session is paused: `run_lua_state_checks` runs at both load
+    boundaries, and the second resave follows the second one
+    immediately. That is exactly how a migrated row whose every
+    persisted VALUE is correct can still be unable to run -- a sparse
+    legacy unit_ai row carried no `nextActionAt`, and the first live
+    tick's `engine.gameTime() < s.nextActionAt` errored on the nil,
+    after the fixture had already passed every check here.
+
+    What is asserted is deliberately outcome-INDEPENDENT, because the
+    AI's choice is a real utility contest over live physiology and a
+    jittered clock:
+
+      * the unit's `currentAction` is a name its OWN species actually
+        registered (scripts/unit_ai_actions.lua's inventory, which is
+        recorded by the one function that builds every action list), and
+      * `nextActionAt` has advanced past the immediate-decision default
+        of 0, which only `scheduleNext` at the END of the decision block
+        can do.
+
+    Which action it picked, and where it walked, are never compared.
+
+    A timeout fails, and so does ANY Lua `update` error the engine
+    logged after `log_offset` -- the byte position the caller recorded
+    before unpausing, so a pre-existing warning from earlier in this
+    same run can neither mask nor manufacture a failure here.
+    """
+    if not checks:
+        return
+    deadline = time.time() + LIVE_TICK_TIMEOUT_SEC
+    pending = {int(check["unitId"]) for check in checks}
+    observed: dict[int, dict] = {}
+    while pending and time.time() < deadline:
+        for uid in sorted(pending):
+            state = _live_tick_state(port, uid)
+            observed[uid] = state
+            if state.get("ticked"):
+                pending.discard(uid)
+        if pending:
+            time.sleep(0.5)
+
+    for check in checks:
+        uid = int(check["unitId"])
+        state = observed.get(uid, {})
+        chk.ok(uid not in pending,
+               f"after unpausing the reloaded session: unit {uid} "
+               f"completed a live thought tick within "
+               f"{LIVE_TICK_TIMEOUT_SEC:.0f}s -- currentAction is a "
+               f"registered action and nextActionAt advanced past the "
+               f"immediate-decision default (observed {state!r})")
+
+    # A tick that RAN but raised is still a failure, and it is the shape
+    # the pre-#2055 regression actually took: the pcall isolation keeps
+    # the engine alive and only warns, so nothing above would notice.
+    appended = ""
+    try:
+        with open(log_path, "r", errors="replace") as handle:
+            handle.seek(log_offset)
+            appended = handle.read()
+    except OSError as error:
+        chk.ok(False, f"could not re-read {log_path} to scan for Lua "
+                      f"update errors after unpausing: {error}")
+        return
+    offending = [line for line in appended.splitlines()
+                 if LUA_UPDATE_ERROR_MARKER in line]
+    chk.ok(not offending,
+           "no Lua update() error was logged after unpausing the "
+           "reloaded session"
+           + (f" -- got {len(offending)}, first: {offending[0].strip()!r}"
+              if offending else ""))
+
+
+def _live_tick_state(port: int, uid: int) -> dict:
+    """One unit's live decision state, read through the debug console.
+
+    Single-line by necessity (the console takes one Lua line), and
+    deliberately derived from production's own sources: `aiState` is the
+    table the AI ticks, and the registered-action set comes from
+    scripts/unit_ai_actions.lua's inventory keyed by the unit's REAL
+    defName, never a hard-coded action list here.
+    """
+    expr = (
+        "local ua=require('scripts.unit_ai'); local s=ua.aiState[%d]; "
+        "if not s then return { row=false } end; "
+        "local info=unit.getInfo(%d); "
+        "local acts=require('scripts.unit_ai_actions')"
+        ".byDef[info and info.defName or ''] or {}; "
+        "local n=s.nextActionAt; "
+        "return { row=true, action=tostring(s.currentAction), "
+        "registered=(acts[s.currentAction]==true), "
+        "nextActionAt=(n or -1), "
+        "ticked=((acts[s.currentAction]==true) and n ~= nil and n > 0) }"
+    ) % (uid, uid)
+    state = send_json(port, "return (function() " + expr + " end)()")
+    # send_json hands back TEXT for anything that isn't valid JSON (and
+    # None for an empty reply), so a console hiccup reads as "not ticked
+    # yet" and the polling loop keeps trying until the deadline, rather
+    # than crashing this phase on a transport problem.
+    return state if isinstance(state, dict) else {"unparsed": state}
+
+
 def run_one_fixture(chk: Checks, port: int, fixture: dict) -> None:
     fixture_bytes = fixture["path"].read_bytes()
     active_page = fixture["active_page"]
@@ -679,6 +878,7 @@ def run_one_fixture(chk: Checks, port: int, fixture: dict) -> None:
         procA = boot_probe(root, port, logA)
         bootstrap_defs(port)
         lua_checks = len(fixture["lua_state_checks"])
+        live_checks = len(fixture["live_tick_checks"])
         # Everything below this boundary needs a session that actually
         # published; a failure here stops THIS fixture and nothing else
         # (issue #1486).
@@ -700,8 +900,8 @@ def run_one_fixture(chk: Checks, port: int, fixture: dict) -> None:
                     "declared canonical summary",
                     "engine B's whole fresh-process reload of that resave: "
                     "its structural checks, its declared Lua-state checks, "
-                    "the second resave and dump comparison, and the default "
-                    "time-scale check")):
+                    "the second resave and dump comparison, the default "
+                    "time-scale check, and its declared live-tick checks")):
             return
 
         active = send(port, "return world.getActiveWorldId()").strip('"')
@@ -770,7 +970,9 @@ def run_one_fixture(chk: Checks, port: int, fixture: dict) -> None:
                     f"check(s) after the resave/restart/reload round trip",
                     "the second resave from engine B's reloaded state, and "
                     "its real-dumped Haskell state comparison",
-                    "the default time-scale check after unpausing")):
+                    "the default time-scale check after unpausing",
+                    f"this fixture's {live_checks} declared live-tick "
+                    f"check(s) in the unpaused reloaded session")):
             return
 
         active_b = send(port, "return world.getActiveWorldId()").strip('"')
@@ -804,8 +1006,20 @@ def run_one_fixture(chk: Checks, port: int, fixture: dict) -> None:
                               fixture["expected_summary"],
                               "after the resave/restart/reload round trip")
 
-        # Unpause ONLY to confirm the default time scale -- never
-        # comparing any subsequent random gameplay outcome.
+        # Unpause. Historically this was ONLY to confirm the default
+        # time scale; since #2055 it is also the one moment this probe
+        # has a RUNNING migrated session, which is where a fixture's
+        # declared live-tick checks are evaluated. Neither compares any
+        # random gameplay outcome.
+        #
+        # The log offset is taken BEFORE unpausing, so the Lua-error
+        # scan below sees exactly what this unpaused window produced --
+        # a warning from earlier in the same run can neither mask a real
+        # failure nor manufacture one.
+        try:
+            log_offset = os.path.getsize(logB)
+        except OSError:
+            log_offset = 0
         send(port, "require('scripts.pause').set(false); return 'ok'",
              expect_result=False)
         time.sleep(0.5)
@@ -813,6 +1027,9 @@ def run_one_fixture(chk: Checks, port: int, fixture: dict) -> None:
         chk.ok(ts.strip() in ("1", "1.0"),
                f"unpausing the reloaded session uses the default time "
                f"scale (got {ts})")
+
+        run_live_tick_checks(chk, port, fixture["live_tick_checks"],
+                             logB, log_offset)
 
     finally:
         if procA is not None:
@@ -957,6 +1174,13 @@ def self_test() -> int:
           "locations, and enumerates files for every family"
           + ("" if not problems else ": " + "; ".join(problems)))
 
+    print("\n=== the Lua update-error marker (#2055) ===")
+    marker_problems = verify_lua_error_marker()
+    check(not marker_problems,
+          f"LUA_UPDATE_ERROR_MARKER ({LUA_UPDATE_ERROR_MARKER!r}) is still "
+          f"assembled from wording that exists in the engine sources"
+          + ("" if not marker_problems else ": " + "; ".join(marker_problems)))
+
     print("\n=== the load-prerequisite stop (#1486) ===")
 
     proceeded, markers, lines, waiter_calls, chk = _run_prerequisite_branch(
@@ -1049,6 +1273,17 @@ def main() -> int:
         return 1
     print(f"registry bootstrap: {len(BOOTSTRAP_LOADERS)} families "
           f"mirroring startup_loader.queueNormalProfile, locations last")
+
+    # Same rule, same moment, for the other thing this probe reads out of
+    # production rather than restating: a live-tick fixture's Lua-error
+    # scan is worthless if the engine's wording has moved (#2055).
+    marker_problems = verify_lua_error_marker()
+    if marker_problems:
+        print("FAIL: the Lua update-error marker no longer matches the "
+              "engine, so a failing live tick could pass unnoticed:")
+        for problem in marker_problems:
+            print(f"  - {problem}")
+        return 1
 
     fixtures = declared_complete_session_fixtures()
     chk = Checks()
