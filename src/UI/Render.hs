@@ -11,7 +11,7 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Vector as V
 import qualified Data.Vector.Storable as VS
 import Data.List (sortOn)
-import Data.IORef (readIORef)
+import Data.IORef (atomicModifyIORef', readIORef)
 import Engine.Asset.Handle (TextureHandle(..), toInt)
 import Engine.Core.Monad
 import Engine.Core.Log (LogCategory(..))
@@ -31,6 +31,7 @@ import UI.Types
 import UI.Clipping (ClipRect, effectiveClip, clipQuadUV, boxTileRects, BoxTile(..))
 import UI.InteractiveBounds (elementOverflow)
 import UI.Manager (getVisiblePages, getElementAbsolutePosition, getBoxTextureSet)
+import UI.Manager.Presentation (snapshotArmedToken, witnessPresentation)
 import World.Grid (uiLayerThreshold)
 
 -- | Base layer offset for UI (world uses the layers below it). Derived
@@ -99,11 +100,27 @@ mergeLayeredTextItems = Map.map mergeInLayer
            | (font, insts) ← grouped
            ]
 
--- | Render all visible UI pages
+-- | Render all visible UI pages.
+--
+--   #2056: this is also the one place the PRESENTATION BOUNDARY is
+--   crossed. The 'readIORef' below is the snapshot the whole frame's UI
+--   is built from, so the token it carries stands for every element and
+--   page-visibility mutation Lua had made by then; once the pages have
+--   been turned into batches, that token — and only that token — is
+--   published back through 'witnessPresentation'. See
+--   "UI.Manager.Presentation" for why the value must come from the
+--   snapshot rather than be re-read at publication time.
+--
+--   Publication is deliberately at the END and inside the rendering
+--   branch: a frame that bailed out for want of a bindless texture
+--   system put nothing in front of anyone and must witness nothing.
+--   For the same reason a GPU-less @--headless@ engine, which never
+--   calls this function at all, never advances the witness.
 renderUIPages ∷ EngineM σ (V.Vector RenderBatch, Map.Map LayerId (V.Vector RenderItem))
 renderUIPages = do
     env ← ask
     mgr ← liftIO $ readIORef (uicUiManagerRef (toUiCapability env))
+    let presentedToken = snapshotArmedToken mgr
     
     maybeBindless ← liftIO $ readIORef (rcTextureSystemRef (toRenderCapability env))
 
@@ -124,7 +141,13 @@ renderUIPages = do
                 allLayered = foldr (Map.unionWith (<>)) Map.empty (map snd results)
                 -- Merge text batches that share a font within each layer
                 mergedLayered = mergeLayeredTextItems allLayered
-            
+
+            -- #2056: the snapshot has now been rendered to completion,
+            -- so whatever it was carrying really did reach the frame.
+            liftIO $ atomicModifyIORef'
+                (uicUiManagerRef (toUiCapability env))
+                (\m → (witnessPresentation presentedToken m, ()))
+
             pure (allBatches, mergedLayered)
 
 -- | Render a single page

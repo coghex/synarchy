@@ -10,13 +10,13 @@ import Data.IORef (readIORef, writeIORef, IORef)
 import qualified Data.Vector as V
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Graphics.Camera (CameraFacing(..))
-import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..), mkVertexWorld
-                                           , packUV)
+import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..), WorldUV
+                                           , mkVertexWorld, mkWorldUV)
 import World.Types
 import World.Render.Zoom.Types (BakedZoomEntry(..), ZoomAtlasInfo(..))
 import World.Grid (gridToWorld, applyFacing, unapplyFacing)
 
--- | Per-corner packed world (u,v) for a baked chunk quad's four
+-- | Per-corner world (u,v) for a baked chunk quad's four
 --   RECTANGLE corners (drawX,drawY)/(drawX+w,drawY)/(drawX+w,drawY+h)/
 --   (drawX,drawY+h) — #483. The quad is a screen-space bounding box
 --   around an iso diamond, so its rectangle corners don't line up 1:1
@@ -31,7 +31,7 @@ import World.Grid (gridToWorld, applyFacing, unapplyFacing)
 --   vertex shader's linear interpolation across the quad a genuinely
 --   smooth, facing-independent longitude gradient (not stepped per
 --   chunk), matching what the zoom map's #483 payoff calls for.
-zoomQuadWorldUVs ∷ CameraFacing → Int → Int → (Word32, Word32, Word32, Word32)
+zoomQuadWorldUVs ∷ CameraFacing → Int → Int → (WorldUV, WorldUV, WorldUV, WorldUV)
 zoomQuadWorldUVs facing baseGX baseGY =
     let corner gx gy = (gx - gy, gx + gy)
         corners = [ corner baseGX baseGY
@@ -43,11 +43,11 @@ zoomQuadWorldUVs facing baseGX baseGY =
         maxUs = maximum (map fst screens)
         minVs = minimum (map snd screens)
         maxVs = maximum (map snd screens)
-        toPacked us vs = uncurry packUV (unapplyFacing facing us vs)
-    in ( toPacked minUs minVs   -- (drawX, drawY)
-       , toPacked maxUs minVs   -- (drawX + w, drawY)
-       , toPacked maxUs maxVs   -- (drawX + w, drawY + h)
-       , toPacked minUs maxVs   -- (drawX, drawY + h)
+        toCorner us vs = uncurry mkWorldUV (unapplyFacing facing us vs)
+    in ( toCorner minUs minVs   -- (drawX, drawY)
+       , toCorner maxUs minVs   -- (drawX + w, drawY)
+       , toCorner maxUs maxVs   -- (drawX + w, drawY + h)
+       , toCorner minUs maxVs   -- (drawX, drawY + h)
        )
 
 bakeEntries ∷ CameraFacing → V.Vector ZoomChunkEntry

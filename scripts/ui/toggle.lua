@@ -31,7 +31,7 @@ local HIGHLIGHT_COLOR = {0.3, 0.5, 0.8, 0.8}
 -----------------------------------------------------------
 
 function toggle.init()
-    texHighlight = engine.loadTexture("assets/textures/ui/highlight.png")
+    texHighlight = engine.loadTexture("assets/textures/ui/highlight.png", "ui")
     engine.logDebug("Toggle module initialized")
 end
 

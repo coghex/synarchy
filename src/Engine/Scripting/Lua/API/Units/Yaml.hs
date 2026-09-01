@@ -24,6 +24,7 @@ import Engine.Core.Log (LogCategory(..), logDebug, logWarn, logError)
 import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaToEngineMsg)
 import Engine.Asset.Types (AssetPool)
 import qualified Engine.Core.Queue as Q
+import Engine.Graphics.Vulkan.Texture.Policy (UploadSampler(..))
 import Engine.Scripting.Lua.API.YamlTextures (loadAndRegisterWithPool
                                              , loadAndRegisterAtlasWithPool
                                              , resolveTexturePath)
@@ -118,16 +119,24 @@ registerUnitDefs env poolRef lteq resolveAtlases filePath defs = do
             resolvedSprite ← resolveTexturePath env "Unit sprite"
                                  (unknownUnitTexture DirS) spritePath
             handle ← loadAndRegisterWithPool env poolRef lteq
+                         UploadGlobalSampler
                          ("unit_" <> name) resolvedSprite
 
             -- Load the optional authored portrait (info panel).
             -- Nothing → the UI mirrors the live animation frame.
+            --
+            -- The one unit texture whose ONLY consumer is a UI panel,
+            -- so it declares the UI policy (#2075) and keeps nearest
+            -- across a filter toggle. The sprite and directional
+            -- sprites above and below are world-drawn and stay scene
+            -- art; the animation atlases are pinned already.
             portraitH ← case uydPortrait def of
                 Nothing → return Nothing
                 Just p  → do
                     resolvedP ← resolveTexturePath env "Unit portrait"
                                     (unknownUnitTexture DirS) (T.unpack p)
                     Just <$> loadAndRegisterWithPool env poolRef lteq
+                                 UploadPinnedNearest
                                  ("unit_" <> name <> "_portrait")
                                  resolvedP
 
@@ -152,6 +161,7 @@ registerUnitDefs env poolRef lteq resolveAtlases filePath defs = do
                         resolved ← resolveTexturePath env "Unit directional sprite"
                                        (unknownUnitTexture dir) (T.unpack texPath)
                         h ← loadAndRegisterWithPool env poolRef lteq
+                                UploadGlobalSampler
                                 ("unit_" <> name <> "_" <> dirKey)
                                 resolved
                         return (Map.insert dir h acc)

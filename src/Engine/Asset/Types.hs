@@ -11,13 +11,28 @@ import Vulkan.Core10
 import Engine.Asset.Base (AssetId, AssetStatus)
 import Engine.Asset.Handle
 import Engine.Graphics.Vulkan.Base (TextureInfo)
+import Engine.Graphics.Vulkan.Texture.Policy (TextureCacheKey(..))
 
 -- | Central registry of every loaded texture and font, plus the
 --   'IORef' counters used for atomic handle\/ID generation
 data AssetPool = AssetPool
   { apTextureAtlases    ∷ Map.Map AssetId TextureAtlas
   , apFonts             ∷ Map.Map AssetId Font
-  , apAssetPaths        ∷ Map.Map Text AssetId
+  , apAssetPaths        ∷ Map.Map TextureCacheKey AssetId
+    -- ^ The upload path's canonical-slot cache: one entry per
+    --   @(path, upload policy)@ pair (#2075).
+    --
+    --   The POLICY is half the key because a slot's sampler is fixed by
+    --   whichever upload registered it, so one entry per path cannot
+    --   describe a texture both the UI and the world draw. Reusing an
+    --   entry across that boundary hands the new handle the wrong
+    --   filtering in both directions, so the lookup is policy-scoped
+    --   and each policy keeps its own reusable canonical.
+    --
+    --   Not an enumeration of loaded FILES: @engine.getLoadedTexturePaths@
+    --   still reports one entry per distinct path
+    --   ('Engine.Scripting.Lua.API.Graphics'), which is what
+    --   @tools\/preview_probe.py@ checks against its allowlist.
   , apNextAssetId       ∷ IORef Int
   , apNextTextureHandle ∷ IORef Int
   , apNextFontHandle    ∷ IORef Int

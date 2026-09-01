@@ -134,6 +134,7 @@ import qualified Test.Headless.Graphics.Screenshot as GraphicsScreenshot
 import qualified Test.Headless.Graphics.SwapchainSelection as GraphicsSwapchainSelection
 import qualified Test.Headless.Graphics.UniformLayout as GraphicsUniformLayout
 import qualified Test.Headless.Graphics.VertexLayout as GraphicsVertexLayout
+import qualified Test.Headless.Graphics.WorldVertexCoords as GraphicsWorldVertexCoords
 import qualified Test.Headless.Graphics.FontFallback as GraphicsFontFallback
 import qualified Test.Headless.Graphics.FontRepertoire as GraphicsFontRepertoire
 import qualified Test.Headless.Construct.Corners as ConstructCorners
@@ -227,6 +228,7 @@ import qualified Test.Headless.World.Render.ZoomBakeUV as ZoomBakeUV
 import qualified Test.Headless.Render.ViewportGuard as ViewportGuard
 import qualified Test.Headless.Render.QuadVertices as QuadVertices
 import qualified Test.Headless.Graphics.BindlessRebind as BindlessRebind
+import qualified Test.Headless.Graphics.TextureSamplerPolicy as TextureSamplerPolicy
 import qualified Test.Headless.Graphics.BindlessRelease as BindlessRelease
 import qualified Test.Headless.Graphics.BindlessPublish as BindlessPublish
 import qualified Test.Headless.Lua.AssetFailure as LuaAssetFailure
@@ -330,6 +332,10 @@ main = hspec $ do
         describe "Border Probe" BorderProbe.spec
         Climate.spec
         describe "Asset.TextureFallback" TextureFallback.spec
+        -- Not worldgen -- the Lua half binds the real engine.loadTexture
+        -- to this env and reads what it queues, which is the only honest
+        -- proof of #2075's caller-declared classification.
+        describe "texture sampler policy" TextureSamplerPolicy.spec
         -- Not worldgen — needs the live EngineEnv's queues/refs to
         -- drive the #697 fence relay by hand (harness runs neither
         -- the input nor the Lua thread, so the queues are the test's).
@@ -692,6 +698,7 @@ main = hspec $ do
     GraphicsSwapchainSelection.spec
     describe "Graphics.UniformLayout" GraphicsUniformLayout.spec
     describe "Graphics.VertexLayout" GraphicsVertexLayout.spec
+    describe "world vertex coordinates" GraphicsWorldVertexCoords.spec
     describe "Graphics.FontFallback" GraphicsFontFallback.spec
     describe "Font SDF atlas repertoire" GraphicsFontRepertoire.spec
     describe "Construct.Corners" ConstructCorners.spec

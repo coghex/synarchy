@@ -46,10 +46,22 @@ asserts, end to end through the real pipeline:
 
 Run it from any screen (main menu is fine); the fixture cleans itself
 up afterwards. Exit code 0 = all checks passed.
+
+The end-to-end run above stays human-run. The one thing that does NOT
+need a window is the harness's own missed-click handling (#2052):
+
+  python3 tools/input_check.py --selftest   # or --self-test
+
+replays a missed click offline — no engine, no window, no network — and
+proves the dependent checks report a diagnostic instead of aborting the
+process, so the primary failure stays visible and the later sections and
+the summary still run.
 """
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import sys
 import time
 
@@ -58,12 +70,39 @@ from probelib import send, send_json
 
 PORT = 8008
 failures: list[str] = []
+#: Every check name reached, in order — the record that proves a run got
+#: past a failure instead of aborting on it (#2052's self-test asserts on
+#: it; the live run only ever appends).
+checks_run: list[str] = []
 
 
 def check(name: str, ok: bool, detail: str = "") -> None:
+    checks_run.append(name)
     print(f"  [{'ok' if ok else 'FAIL'}] {name}" + (f" — {detail}" if detail else ""))
     if not ok:
         failures.append(name)
+
+
+def has_click_sample(name: str, st) -> bool:
+    """Whether the fixture's click callback populated ``shiftAtClick``.
+
+    The fixture initializes it to nil (input_check_fixture.lua:26) and
+    only assigns it inside ``onInputCheckClick``, and a nil Lua field is
+    OMITTED from the serialized state — so after a missed click the key
+    simply is not there. Indexing it directly used to raise a KeyError
+    that aborted the whole process, burying the primary click failure and
+    skipping every later section plus the summary (#2052).
+
+    Returns True when the dependent check can be evaluated; otherwise
+    reports it as failed, naming the absent field and the precondition
+    that never ran, and lets the caller move on to the next section.
+    """
+    if isinstance(st, dict) and "shiftAtClick" in st:
+        return True
+    check(name, False,
+          "not evaluated: fixture state carries no shiftAtClick — the "
+          "click callback never ran, so the click above missed")
+    return False
 
 
 def lua(code: str, timeout: float = 10.0):
@@ -95,7 +134,14 @@ def main() -> int:
     ap.add_argument("--port", type=int, default=8008,
                     help="debug-console port of the RUNNING graphical "
                          "instance (default 8008)")
+    ap.add_argument("--selftest", "--self-test", action="store_true",
+                    help="offline self-test of this harness's missed-click "
+                         "handling (#2052) — no engine, window or network")
     args = ap.parse_args()
+    # Selected BEFORE the port is used for anything: the self-test must
+    # reach no engine, fixture, poll, window or socket.
+    if args.selftest:
+        return selftest()
     PORT = args.port
 
     print(f"input_check: attaching to port {PORT}")
@@ -153,16 +199,19 @@ def main() -> int:
         st = state()
         check("click at fb pixel fires the element's onClick",
               st["clicks"] == 1, f"clicks={st['clicks']}")
-        check("plain click holds no shift", st["shiftAtClick"] is False,
-              str(st["shiftAtClick"]))
+        if has_click_sample("plain click holds no shift", st):
+            check("plain click holds no shift", st["shiftAtClick"] is False,
+                  str(st["shiftAtClick"]))
 
         # 3. modifier click
         expect_ok("shift-click acks",
                   lua(f'return input.click({bx}, {by}, "left", {{"shift"}})'))
         st = state()
-        check("shift-click observed shift held in the callback",
-              st["clicks"] == 2 and st["shiftAtClick"] is True,
-              f"clicks={st['clicks']} shift={st['shiftAtClick']}")
+        if has_click_sample("shift-click observed shift held in the callback",
+                            st):
+            check("shift-click observed shift held in the callback",
+                  st["clicks"] == 2 and st["shiftAtClick"] is True,
+                  f"clicks={st['clicks']} shift={st['shiftAtClick']}")
         # The release rides the fence behind the click's callbacks
         # (#697); since #727 the click's own ack resolves that fence
         # synchronously, so this normally reads released immediately —
@@ -291,10 +340,99 @@ def main() -> int:
     alive = lua("return 1 + 1")
     check("instance still responsive afterwards", alive == 2, str(alive))
 
+    return summarize()
+
+
+def summarize() -> int:
+    """Final summary + exit status: 0 only when every check passed."""
     if failures:
         print(f"input_check: FAILED ({len(failures)}): {', '.join(failures)}")
         return 1
     print("input_check: all checks passed")
+    return 0
+
+
+def selftest() -> int:
+    """Offline proof (#2052) that a missed click no longer aborts the run.
+
+    Replays the sections-2-and-3 sequence a MISSED click really produces
+    — the callback never fired, so ``clicks`` is still 0 and the nil
+    ``shiftAtClick`` is absent from the serialized state — through the
+    very same ``check``/``has_click_sample``/``summarize`` path the live
+    run uses, then asserts the properties the KeyError used to destroy.
+
+    Touches no engine, window, socket or fixture. Exit 0 = the harness
+    behaves; 1 = this hardening regressed.
+    """
+    global failures, checks_run
+
+    print("input_check: offline self-test (no engine, window or network)")
+    missed = {                     # exactly what getState() returns after a miss
+        "clicks": 0,
+        "keysDown": [], "keysUp": [], "chars": "", "submits": 0,
+        "uiScrolls": 0, "gameScrolls": 0,
+        "mouseDowns": [], "mouseUps": [],
+    }
+    primary = "click at fb pixel fires the element's onClick"
+    plain = "plain click holds no shift"
+    shifted = "shift-click observed shift held in the callback"
+    sentinel = "instance still responsive afterwards"
+
+    check(primary, missed["clicks"] == 1, f"clicks={missed['clicks']}")
+    if has_click_sample(plain, missed):
+        check(plain, missed["shiftAtClick"] is False,
+              str(missed["shiftAtClick"]))
+    if has_click_sample(shifted, missed):
+        check(shifted,
+              missed["clicks"] == 2 and missed["shiftAtClick"] is True,
+              f"clicks={missed['clicks']} shift={missed['shiftAtClick']}")
+    # Stands in for sections 3-8 and the post-teardown responsiveness
+    # check: the run must still get here.
+    check(sentinel, True)
+
+    ran, failed = list(checks_run), list(failures)
+    # Capture the summary rather than just its status: asserting the
+    # status alone would still pass against a summarize() that printed
+    # nothing, and "the failure summary is printed" is the requirement.
+    buffered = io.StringIO()
+    with contextlib.redirect_stdout(buffered):
+        status = summarize()
+    summary = buffered.getvalue()
+    print(summary, end="")         # captured, then shown as the live run shows it
+    failures, checks_run = [], []
+
+    problems: list[str] = []
+
+    def want(ok: bool, why: str) -> None:
+        print(f"  [{'ok' if ok else 'FAIL'}] {why}")
+        if not ok:
+            problems.append(why)
+
+    want(primary in failed and plain in failed
+         and failed.index(primary) < failed.index(plain),
+         "the missed click is reported before the dependent diagnostic")
+    want(plain in failed and shifted in failed,
+         "neither dependent check is reported as a pass")
+    want(ran.count(plain) == 1 and ran.count(shifted) == 1,
+         "each dependent check reports exactly once")
+    want(sentinel in ran and ran.index(sentinel) > ran.index(shifted),
+         "a later check still executes after the missing field")
+    want(status != 0, "the run's exit status stays non-zero")
+    want(f"input_check: FAILED ({len(failed)})" in summary
+         and all(name in summary for name in failed),
+         "the failure summary is printed, naming every failed check")
+
+    # The guard must not weaken the assertions when the field IS there.
+    populated = dict(missed, clicks=1, shiftAtClick=False)
+    want(has_click_sample(plain, populated) is True,
+         "a populated shiftAtClick evaluates the real assertion")
+    failures, checks_run = [], []
+
+    if problems:
+        print(f"input_check --selftest: FAILED ({len(problems)}): "
+              f"{', '.join(problems)}")
+        return 1
+    print("input_check --selftest: all checks passed")
     return 0
 
 

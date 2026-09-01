@@ -15,7 +15,7 @@ import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..))
 import Engine.Graphics.Viewport (viewportDegenerate)
 import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..), mkVertexWorld
-                                           , packWorldUV)
+                                           , tileWorldUV)
 import World.Types
 import World.Grid (gridToWorld, worldToGrid, zoomMapLayer)
 
@@ -162,7 +162,7 @@ emitCursorQuad facing baseGX baseGY tex lookupSlot defFmSlot alpha sortKey =
         -- cursor highlight box, not lit terrain; a representative value
         -- keeps its brightness roughly in step with the chunk beneath
         -- it rather than defaulting to the meridian's time of day.
-        wuv   = packWorldUV baseGX baseGY
+        wuv   = tileWorldUV baseGX baseGY
     in V.singleton $ SortableQuad
         { sqSortKey = sortKey
         , sqV0 = mkVertexWorld wuv (Vec2 drawX drawY)             (Vec2 0 0) color slot defFmSlot

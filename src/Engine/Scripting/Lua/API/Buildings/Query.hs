@@ -285,7 +285,9 @@ buildingListDefsFn env = do
         Lua.setfield (-2) "category"
         Lua.pushstring (TE.encodeUtf8 (bdDescription d))
         Lua.setfield (-2) "description"
-        let TextureHandle texInt = bdTexture d
+        -- The UI-policy handle (#2075): this is the build menu's icon,
+        -- drawn by scripts/build_tool.lua, not the world quad.
+        let TextureHandle texInt = bdIconTexture d
         Lua.pushinteger (fromIntegral texInt)
         Lua.setfield (-2) "iconTex"
         Lua.pushboolean (bdIsStarting d)

@@ -608,19 +608,77 @@ run that would otherwise have drawn the stale art.
 
 ### The policy-aware upload cache
 
-Atlas slots are registered PINNED to the nearest sampler with one mip
-level (D-6), so a runtime `setTextureFilter` toggle cannot start
-bilinearly resampling unit art — which on a sheet would additionally
-bleed neighbouring cells across every frame edge.
+Every texture upload declares an `UploadSampler` policy
+(`Engine.Graphics.Vulkan.Texture.Policy`), and the slot it creates is
+registered with the sampler that policy names. `UploadPinnedNearest`
+slots keep NEAREST for the session; `UploadGlobalSampler` slots are
+repainted by a runtime `setTextureFilter` toggle.
 
-The upload path's path cache is therefore **policy-aware**: `apAssetPaths`
-is keyed by path alone, while a slot's sampler was fixed by whichever
-policy first uploaded it. A cache hit is taken only when the canonical
-texture's pinned-ness matches the request (`cacheEntryReusable` against
-`btsPinned`), and otherwise re-uploads into its own slot. Both directions
-matter — an atlas inheriting an ordinary slot would stop being nearest,
-and an ordinary texture inheriting a pinned one would be stuck on a
-filter it never asked for.
+Two unrelated populations are pinned. Atlas slots are pinned with one mip
+level (D-6), so a filter toggle cannot start bilinearly resampling unit
+art — which on a sheet would additionally bleed neighbouring cells across
+every frame edge. UI chrome and the icons the UI/HUD layers draw are
+pinned by #2075, because the player's filter setting is a SCENE-art
+setting and selecting linear used to blur the HUD.
+
+**The policy is declared by the CALLER and never derived from a path**
+(D-4). No directory rule survives the tree as it stands:
+`assets/textures/icons/location/*` are drawn on the world's zoom map
+while the rest of `icons/` is toolbar chrome;
+`assets/textures/ui/hud/utility/{zoom,world}_*` and the six
+`*_designate` markers are loaded in `hud.init` beside real chrome but
+handed to `world.set*CursorTexture` / `<tool>.setDesignateTexture` and
+drawn in the world; and `assets/textures/utility/white.png` is drawn by
+both layers.
+
+In Lua the declaration is `engine.loadTexture(path, "ui"|"scene")`.
+OMITTING the argument selects `"scene"`, so every pre-#2075 call site is
+unchanged. That is the ONLY shape that selects the default: an argument
+that is PRESENT but names no policy — a typo, an explicit `nil`, or any
+non-string value — is REFUSED with a warning and a `nil` handle, and
+queues no load. An explicit `nil` is refused with the rest because it is
+almost always a pass-through helper that lost its value, and accepting it
+would file the texture as scene art on the strength of a bug
+(`scripts/startup_loader.lua`'s preload helpers therefore *require*
+their policy argument rather than defaulting it).
+
+Haskell-side YAML art declares the same way: `loadAndRegisterWithPool`
+takes an `UploadSampler` per call site. Most of it is world-drawn and
+passes `UploadGlobalSampler`; the families whose only consumer is a UI
+panel — a unit's authored `portrait:`, an equipment silhouette — pass
+`UploadPinnedNearest`; and **genuinely dual-use art is loaded twice, once
+per policy**, because one slot cannot carry two samplers:
+
+| art | scene handle | UI handle |
+|---|---|---|
+| item `sprite:` | `idTexture` (ground-item quads) | `idIconTexture` (inventory / equipment / container rows) |
+| building `sprite:` | `bdTexture` (`Building.Render`) | `bdIconTexture` (`building.listDefs`'s `iconTex`) |
+| broken-equipment badge | texture name `broken_equipment` | texture name `broken_equipment_ui` |
+
+Unit atlases keep their own `LuaLoadAtlasTextureRequest` and stay
+pinned.
+
+**The path cache is keyed by `(path, policy)`,** not by path:
+`apAssetPaths` is a `Map TextureCacheKey AssetId`. Each policy therefore
+owns one reusable canonical slot per path, so a scene→UI→scene→UI
+sequence for one file allocates exactly TWO slots and every later request
+of either policy is a cache hit aliasing its own. That is the accepted
+cost of D-4 for a genuinely dual-use texture. `cacheEntryReusable`
+against `btsPinned` remains as the GPU-side consistency check that a
+canonical really was registered the way its key claims — it is no longer
+what separates the policies. `engine.getLoadedTexturePaths()` collapses
+the policy back out and still reports one entry per distinct FILE, which
+is what `tools/preview_probe.py` checks against its allowlist.
+
+**One burst carries one policy.** `Engine.Scripting.Lua.Message` extends
+a run of ordinary loads only while the declared policy stays the same,
+because the batch registers every slot in it with one sampler and its
+within-batch same-path dedup folds later requests into an earlier
+request's slot. Adjacent runs of different policies are simply
+consecutive batches. A PRELOAD must declare the same policy its eventual
+consumer declares (`scripts/startup_loader.lua` splits `hudUiPaths` from
+`hudScenePaths` for exactly this reason), or it uploads a slot nobody
+samples and the consumer uploads the real one anyway.
 
 Cell UVs sit on the LOGICAL cell's own exact edges — one texel inside its
 padded slot (#2076) — with no half-texel inset: unit art is nearest and
@@ -929,10 +987,12 @@ single file for the requested item: the units viewer's
 `data/buildings/<name>.yaml`.
 
 `tools/preview_probe.py` verifies this against
-`engine.getLoadedTexturePaths()` — `Engine.Asset`'s `apAssetPaths`,
-populated by `engine.loadTexture`'s own Haskell handler regardless of Lua
-caller, so it is the engine's own authoritative loaded-texture record,
-not previewManager's self-reported bookkeeping.
+`engine.getLoadedTexturePaths()` — the distinct paths of `Engine.Asset`'s
+`apAssetPaths`, populated by `engine.loadTexture`'s own Haskell handler
+regardless of Lua caller, so it is the engine's own authoritative
+loaded-texture record, not previewManager's self-reported bookkeeping.
+The cache is keyed by `(path, policy)` since #2075; this API reports each
+FILE once, so a dual-use texture holding two slots still appears once.
 
 ---
 

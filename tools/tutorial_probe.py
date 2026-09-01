@@ -60,15 +60,21 @@ What it proves (issue #922 requirements 2 and 3):
      `phase_pre_latched_reveal`), the already-latched branch must become
      observable in the checklist rather than latching and hiding in the
      same instant.
-  9. (#1941, the same boot) That suppression is a LOAN, not a second
-     hide rule. The gameplay HUD is booted for real and the checklist
-     opened for real: a visible HUD over a COLLAPSED panel still
-     presents nothing, opening it renders the whole branch, and the
-     update tick that reports the presentation retires it -- after
-     which the ordinary #958 hide rule empties the checklist while the
-     supplies are still carried and every latch is intact. Removing the
-     supplies then brings the RETIRED branch back (requirement 3, now
-     under the ordinary rule rather than a suppression).
+  9. (#1941/#2056, the same boot) That suppression is a LOAN, not a
+     second hide rule. The gameplay HUD is booted for real and the
+     checklist opened for real: a visible HUD over a COLLAPSED panel
+     still presents nothing, and opening it renders the whole branch.
+     What this GPU-less probe then proves is #2056's negative half --
+     an open panel on a visible HUD retires NOTHING while no frame is
+     drawn, because acknowledgement is gated on a completed renderer
+     snapshot and `--headless` has no renderer. The transition is then
+     made explicitly, through #958's own acknowledgePresented, and the
+     ordinary hide rule empties the checklist while the supplies are
+     still carried and every latch is intact. Removing the supplies
+     brings the RETIRED branch back (requirement 3, now under the
+     ordinary rule rather than a suppression). The positive proof --
+     that the rows really do reach a rendered frame -- belongs to
+     tools/tutorial_hud_probe.py, which runs `--offscreen`.
  10. (#1941, a FOURTH boot) A save taken with that branch finished and
      retired reloads in a fresh process without returning any
      already-retired ancestor to the active checklist -- across the
@@ -892,12 +898,12 @@ def open_checklist(port: int) -> list[str]:
     """Open the panel and report the rows THAT BUILD laid out, in ONE
     console chunk.
 
-    The two halves cannot be separate commands: the retirement they
-    exist to observe takes exactly one update tick, so a second
-    round-trip to read the rows would usually arrive after the panel had
-    already been rebuilt empty and would report a race, not a defect.
-    One chunk runs to completion on the Lua thread, so this is the build
-    itself talking.
+    Since #2056 the retirement can no longer overtake a second
+    round-trip on this engine -- headless draws no frame, so nothing is
+    acknowledged until this probe says so explicitly. The single chunk
+    is kept anyway: it is the build itself talking, which is what the
+    #996 assertion below wants to hear, and it stays correct on an
+    engine that does render.
     """
     raw = send(port,
                "local th = package.loaded['scripts.tutorial_hud']; "
@@ -1317,15 +1323,29 @@ def phase_pre_latched_reveal(port: int, uid: int, sx: int, sy: int,
 
 def phase_pre_latched_presentation(port: int, uid: int) -> None:
     """#1941: the #996 suppression is a LOAN, and this is where it is
-    repaid.
+    repaid -- as far as a GPU-LESS probe honestly can.
 
-    Nothing before this point in the leg can present anything -- the
-    gameplay HUD has never been shown, so the checklist page is not
-    painted. Booting the REAL hud and opening the REAL panel is what
-    puts the pre-latched branch in front of the player; the update tick
-    that follows reports it presented, the suppression retires, and the
-    ordinary #958 hide rule empties the checklist -- with the supplies
-    still carried and every durable latch untouched.
+    #2056 split this phase in two, because this probe boots
+    `--headless` (probelib.boot's default) and
+    src/Engine/Loop/Headless.hs draws no frame at all. Acknowledgement
+    is now gated on a completed RENDERER snapshot having held the rows,
+    so on this engine it can never fire on its own -- and must not, or
+    the gate would be certifying a presentation nobody could have seen.
+
+    What this phase owns is therefore the MODEL INTEGRATION: the real
+    hud, the real panel, the real viewport, the real retirement rule,
+    and -- the strongest thing headless can say -- the proof that
+    nothing retires while no frame is drawn. The presentation PROOF
+    itself, that the rows really reach a frame, belongs to
+    tools/tutorial_hud_probe.py, which runs `--offscreen` with a live
+    renderer and measures pixels.
+
+    The transition between the two halves is made EXPLICITLY, by
+    calling #958's own acknowledgePresented with the ids the panel laid
+    out. That is a test-only stand-in for the renderer, spelled out
+    rather than waited for, so this phase's later checks (retirement,
+    durable latches, the reversal leg that follows) still run against
+    the shipped rule.
     """
     show_gameplay_hud(port)
     visible = hud_visible(port)
@@ -1349,10 +1369,45 @@ def phase_pre_latched_presentation(port: int, uid: int) -> None:
           OBJ_EXPEDITION in shown and SUB_WATER in shown and SUB_FOOD in shown,
           str(shown))
 
+    # #2056's headless half, and the reason this probe can no longer
+    # simply wait: an open panel on a visible HUD is NOT presentation on
+    # an engine that draws no frame. Give the update tick a long, honest
+    # window to acknowledge anyway -- it must not.
+    time.sleep(3.0)
+    p = progress(port)
+    check("a GPU-less engine never fabricates presentation: the branch "
+          "is still waiting after seconds of ticks on a visible, OPEN "
+          "panel, because no frame has been drawn (#2056)",
+          OBJ_EXPEDITION in p.active_row_ids, str(p.active_row_ids))
+    check("and the rows are still laid out, waiting to be seen",
+          OBJ_EXPEDITION in checklist_rows(port), str(checklist_rows(port)))
+    presented = send(port,
+                     "local th = package.loaded['scripts.tutorial_hud']; "
+                     "if not th then return 'no-module' end; "
+                     "return tostring(th.isPresented())", timeout=15.0)
+    check("and the surface says so itself -- its viewport has not been "
+          "presented", presented.strip().strip('"') == "false", presented)
+
+    # The explicit model transition. This stands in for the renderer
+    # this engine does not have; tools/tutorial_hud_probe.py is where
+    # the real thing is proven.
+    acked = send(port,
+                 "local tp = require('scripts.tutorial_progress'); "
+                 "local th = package.loaded['scripts.tutorial_hud']; "
+                 "if not th then return 'no-module' end; "
+                 "local ids = th.dump().rowIds; "
+                 "if #ids == 0 then return 'no-rows' end; "
+                 "tp.acknowledgePresented(ids); "
+                 "return table.concat(ids, ',')", timeout=15.0)
+    check("the test-only presentation stand-in reports the laid-out "
+          "branch to #958",
+          OBJ_EXPEDITION in acked and SUB_WATER in acked
+          and SUB_FOOD in acked, acked)
+
     p = settle(port, lambda s: OBJ_EXPEDITION not in s.active_row_ids,
                seconds=20.0)
-    check("having been presented, the branch retires from the active "
-          "checklist", OBJ_EXPEDITION not in p.active_row_ids,
+    check("having been reported presented, the branch retires from the "
+          "active checklist", OBJ_EXPEDITION not in p.active_row_ids,
           str(p.active_row_ids))
     check("its subobjective rows retire with it",
           SUB_WATER not in p.active_row_ids

@@ -35,6 +35,8 @@ import qualified Codec.Picture as JP
 import Engine.Asset.Base (AssetId)
 import Engine.Asset.Handle
 import Engine.Asset.Manager
+import Engine.Asset.TextureCache
+  (BatchClassification(..), classifyBatchRequests)
 import Engine.Asset.Types
 import Engine.Core.Error.Exception (ExceptionType(..), GraphicsError(..))
 import Engine.Core.Log (LogCategory(..))
@@ -60,6 +62,7 @@ import Engine.Graphics.Vulkan.Texture.Bindless (registerPinnedTexture
                                                , registerTexture
                                                , writeHandleSlotEntry)
 import Engine.Graphics.Vulkan.Texture.Handle (BindlessTextureHandle(..))
+import Engine.Graphics.Vulkan.Texture.Policy (TextureCacheKey(..))
 import Engine.Graphics.Vulkan.Texture.Publish
   (UploadSampler(..), TexturePublish(..), GpuCleanupStep(..)
   , UnregistrableRequest(..), classifyRequestHandle
@@ -111,9 +114,9 @@ invalidateAllWorldRenderCaches env = do
 --   would then read a handle resolving to the undefined texture.
 --
 --   Nothing a success writes is written: no @apTextureAtlases@ entry, no
---   @apAssetPaths@ entry (so the path is NOT poisoned and a later
---   request re-uploads instead of taking a lying cache hit), and no
---   texture size entry.
+--   @apAssetPaths@ entry (so the failing request's own
+--   @(path, policy)@ key is NOT poisoned and a later request re-uploads
+--   instead of taking a lying cache hit), and no texture size entry.
 --
 --   Deliberately silent: the reason is always
 --   'registrationFailureMessage' or a message its caller has already
@@ -271,14 +274,21 @@ prepareTextureUpload pool dev pdev (handle, path) = do
 --   upload policy?
 --
 --   Only when the canonical texture's pinned-ness matches what the
---   policy asks for. The path cache ('apAssetPaths') is keyed by path
---   alone, but a slot's sampler was fixed by whichever policy first
---   uploaded it, so reuse across that boundary hands the new handle the
---   wrong filtering in BOTH directions: an atlas inheriting an ordinary
---   slot follows global filter toggles and stops being nearest (#1259,
---   D-6), and an ordinary texture inheriting a pinned slot is stuck on
---   a filter it never asked for. @btsPinned@ is already the
---   authoritative record, so answering this stores nothing new.
+--   policy asks for. Reuse across that boundary hands the new handle
+--   the wrong filtering in BOTH directions: an atlas inheriting an
+--   ordinary slot follows global filter toggles and stops being nearest
+--   (#1259, D-6), and a pinned UI texture inheriting an ordinary slot
+--   starts blurring the moment the player picks linear (#2075).
+--
+--   Since #2075 the path cache is itself policy-scoped — 'apAssetPaths'
+--   is keyed by 'TextureCacheKey', so a lookup can only find an entry
+--   this policy owns — which makes this a consistency check on the GPU
+--   side of that bookkeeping rather than the thing that separates the
+--   two policies. It stays because @btsPinned@ is the authoritative
+--   record of what a slot was actually registered with, and answering
+--   it stores nothing new: a cache entry whose canonical slot disagrees
+--   with its own key is corruption, and falling through to a fresh
+--   upload is the safe reading of it.
 cacheEntryReusable
     ∷ UploadSampler
     → Map.Map TextureHandle Sampler   -- ^ @btsPinned@
@@ -291,8 +301,12 @@ cacheEntryReusable policy pinned canonical =
         UploadGlobalSampler → False
         UploadPinnedNearest → True
 
-handleLoadTextureBatch ∷ [(TextureHandle, FilePath)] → EngineM σ ()
-handleLoadTextureBatch = handleLoadTextureBatchWith UploadGlobalSampler
+-- | Upload a burst of ordinary image-file loads under the ONE sampler
+--   policy its requests declared (#2075). 'Engine.Scripting.Lua.Message'
+--   is what guarantees the burst is uniform.
+handleLoadTextureBatch
+    ∷ UploadSampler → [(TextureHandle, FilePath)] → EngineM σ ()
+handleLoadTextureBatch = handleLoadTextureBatchWith
 
 -- | Upload compiled unit-animation atlases (#1259) — ONE image, one
 --   handle, and one bindless slot per animation (D-2/D-10), pinned to
@@ -344,59 +358,36 @@ handleLoadTextureBatchWith samplerPolicy incoming = do
 
     mCacheBindless ← liftIO $ readIORef (rcTextureSystemRef (toRenderCapability env))
 
-    -- The path cache is not policy-aware on its own: 'apAssetPaths' is
-    -- keyed by path alone, while a slot's SAMPLER was fixed by whichever
-    -- policy first uploaded it. Reusing across a policy boundary would
-    -- silently give the new handle the wrong filtering — an atlas
-    -- reusing a slot some ordinary load already created would follow
-    -- global filter toggles and stop being nearest (#1259, D-6), and an
-    -- ordinary texture reusing a pinned slot would be stuck on it. So a
-    -- cache hit is only taken when the canonical texture's pinned-ness
-    -- MATCHES what this batch asks for; otherwise the request falls
-    -- through to a fresh upload with its own slot. 'btsPinned' is
-    -- already the authoritative record of that, so nothing new is
-    -- stored to answer it.
+    -- The path cache is POLICY-SCOPED (#2075): 'apAssetPaths' is keyed
+    -- by 'TextureCacheKey', so this batch's lookups can only ever find
+    -- an entry uploaded under its own policy, and the OTHER policy's
+    -- entry for the same file sits untouched at a different key. That
+    -- is what gives each policy one stable, reusable canonical slot per
+    -- path — a scene→UI→scene→UI sequence allocates exactly two slots,
+    -- with every request after the first of each policy a cache hit.
+    --
+    -- 'reusable' then re-checks the GPU-side record ('btsPinned') that
+    -- the canonical really was registered the way its key claims. It
+    -- should never disagree; if it does, this falls through to a fresh
+    -- upload with its own slot rather than handing the request a
+    -- sampler it did not ask for.
     let reusable atlas = case mCacheBindless of
             Nothing  → False
             Just bts → cacheEntryReusable samplerPolicy (btsPinned bts)
                            (taTextureHandle atlas)
 
-    let (cachedReqs, freshReqs, aliasReqs, _) =
-            foldl'
-                (\(cached, fresh, aliases, seen) (handle, path) →
-                    let key = T.pack path
-                        asFresh = (cached, (handle, path) : fresh,
-                                   aliases, Map.insert key handle seen)
-                    in case Map.lookup key (apAssetPaths pool) of
-                        Just assetId →
-                            case Map.lookup assetId (apTextureAtlases pool) of
-                                Just atlas
-                                    | reusable atlas →
-                                        ((handle, assetId, atlas) : cached,
-                                         fresh, aliases, seen)
-                                    -- A same-path entry under the other
-                                    -- policy: re-upload rather than
-                                    -- inherit its sampler. Within-batch
-                                    -- aliasing below still dedupes,
-                                    -- because one batch carries one
-                                    -- policy.
-                                    | otherwise → case Map.lookup key seen of
-                                        Just canonical →
-                                            (cached, fresh,
-                                             (handle, path, canonical) : aliases, seen)
-                                        Nothing → asFresh
-                                Nothing → asFresh
-                        Nothing →
-                            case Map.lookup key seen of
-                                Just canonical →
-                                    (cached, fresh,
-                                     (handle, path, canonical) : aliases, seen)
-                                Nothing → asFresh
-                )
-                ([], [], [], Map.empty)
-                requests
+    -- The classification itself is pure and lives in
+    -- 'Engine.Asset.TextureCache', so the cache-hit / fresh / in-batch
+    -- alias split is provable headlessly; only the GPU work either side
+    -- of it needs a device. Its lists come back in BATCH ORDER.
+    let BatchClassification
+            { bcCached = cachedReqs
+            , bcFresh = freshReqs
+            , bcAliases = aliasReqs
+            } = classifyBatchRequests samplerPolicy reusable
+                    (apAssetPaths pool) (apTextureAtlases pool) requests
 
-    forM_ (reverse cachedReqs) $ \(handle, assetId, atlas) →
+    forM_ cachedReqs $ \(handle, assetId, atlas) →
         duplicateCachedTextureHandle env handle assetId atlas
 
     let invalidateRenderCaches = liftIO $ invalidateAllWorldRenderCaches env
@@ -406,7 +397,7 @@ handleLoadTextureBatchWith samplerPolicy incoming = do
         mBindless ← liftIO $ readIORef (rcTextureSystemRef (toRenderCapability env))
         case (vulkanDevice gs, vulkanPDevice gs, vulkanCmdPool gs, deviceQueues gs, mBindless) of
             (Just dev, Just pdev, Just cmdPool, Just queues, Just bindless0) → do
-                preps ← mapM (prepareTextureUpload pool dev pdev) (reverse freshReqs)
+                preps ← mapM (prepareTextureUpload pool dev pdev) freshReqs
                 let queue = dqGraphicsQueue queues
 
                 locally $ do
@@ -552,7 +543,8 @@ handleLoadTextureBatchWith samplerPolicy incoming = do
                 let batchResults = reverse results
                 liftIO $ atomicModifyIORef' poolRef $ \p →
                     ( p { apAssetPaths = publishRegisteredEntries
-                            [ (path, assetId, outcome)
+                            [ (TextureCacheKey path samplerPolicy
+                              , assetId, outcome)
                             | (_, path, assetId, outcome, _) ← batchResults
                             ]
                             (apAssetPaths p)
@@ -568,7 +560,7 @@ handleLoadTextureBatchWith samplerPolicy incoming = do
                 -- alias's own handle was judged at the entry point
                 -- above, so nothing refused ever became an alias and no
                 -- request is told about an id it does not name (#1699).
-                forM_ (reverse aliasReqs) $ \(handle, path, canonical) →
+                forM_ aliasReqs $ \(handle, path, canonical) →
                     case aliasPublish (T.pack path)
                              (Map.lookup canonical canonicalResults) of
                         Right (assetId, atlas) →
@@ -592,15 +584,16 @@ handleLoadTextureBatchWith samplerPolicy incoming = do
             -- that never renders.
             _ → logWarnM CatTexture "Cannot batch-load textures: Vulkan not ready"
 
-handleLoadTexture ∷ TextureHandle → FilePath → EngineM σ ()
-handleLoadTexture handle path = do
+handleLoadTexture ∷ TextureHandle → FilePath → UploadSampler → EngineM σ ()
+handleLoadTexture handle path samplerPolicy = do
     logDebugM CatLua $ "Loading texture from Lua: " <> T.pack path
-                    <> " (handle: " <> tshow handle <> ")"
+                    <> " (handle: " <> tshow handle
+                    <> ", policy: " <> tshow samplerPolicy <> ")"
     -- No "loaded successfully" line here: this returns once the batch
     -- has been PROCESSED, which since #1690 can equally mean the request
     -- terminally failed. 'publishTextureFailure' and the LuaAssetLoaded
     -- queue message are the outcome-bearing reports.
-    handleLoadTextureBatch [(handle, path)]
+    handleLoadTextureBatch samplerPolicy [(handle, path)]
     logDebugM CatLua $ "Texture load request processed: " <> T.pack path
 
 handleLoadFont ∷ FontHandle → FilePath → Int → EngineM σ ()

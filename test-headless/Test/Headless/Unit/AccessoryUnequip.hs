@@ -42,7 +42,7 @@ import World.Page.Types (WorldPageId(..))
 --   case requirement 2 turns on.
 accDef ∷ Text → Text → [ItemBuff] → ItemDef
 accDef name disp buffs = ItemDef
-    { idName = name, idDisplayName = disp, idTexture = TextureHandle 0
+    { idName = name, idDisplayName = disp, idTexture = TextureHandle 0, idIconTexture = TextureHandle 0
     , idWeight = 0.2, idWeightSpec = Nothing, idBulk = 0.8
     , idStorage = Nothing, idKind = "accessory"
     , idCategory = "Misc", idMake = "", idMaterial = ""
