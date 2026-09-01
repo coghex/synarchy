@@ -53,6 +53,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import sys
 import time
 
@@ -61,7 +62,8 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.dirname(HERE))
 
 import launch as launch_mod  # noqa: E402
-from engine import EngineCrash, FakeEngine, PlaytestEngine, translate_action  # noqa: E402
+from engine import (ActionError, EngineCrash, FakeEngine,  # noqa: E402
+                    PlaytestEngine, translate_action)
 from personas import load_persona  # noqa: E402
 from trace import SessionTrace, load_meta, load_replay, load_turns  # noqa: E402
 from usage import (compact_tokens, default_artifacts_root, default_usage_log,
@@ -333,12 +335,25 @@ def run_session(eng: PlaytestEngine, player, trace: SessionTrace, *,
             run_tokens += turn_tokens
 
         # 4. translate + inject
+        #
+        # Two shapes of harness remark land in the SAME `[harness: ...]`
+        # note, because the player reads that note back as its own memory
+        # next turn and should not have to learn two vocabularies: a
+        # raised ActionError means the request was refused and nothing was
+        # injected, while a collected note means the request was honoured
+        # in an adjusted form the note describes (#1980). Either way the
+        # requested action itself stays in the record verbatim.
+        harness_notes: list[str] = []
         try:
-            calls, post_calls = translate_action(action, fb_size)
+            calls, post_calls = translate_action(action, fb_size,
+                                                 notes=harness_notes)
         except Exception as e:  # unusable action: record it, inject nothing
             decision["note"] = (decision.get("note", "")
                                 + f" [harness: {e}]").strip()
             calls, post_calls = [], []
+        for harness_note in harness_notes:
+            decision["note"] = (decision.get("note", "")
+                                + f" [harness: {harness_note}]").strip()
 
         # Everything from the first injected call to the last post-step
         # call runs under one record-in-finally (#698): however the
@@ -662,6 +677,9 @@ def selftest() -> int:
     import socket
     import subprocess
     import tempfile
+
+    import engine as engine_mod
+
     failures = []
 
     def check(name, ok, detail=""):
@@ -1457,6 +1475,258 @@ def selftest() -> int:
         check("strict-schema null placeholders stay out of trace actions",
               normalized_nulls["action"] == {"do": "wait"},
               str(normalized_nulls["action"]))
+
+        # --- the wheel contract (#1980) ---------------------------------
+        # Two independent halves, both offline: the contract the player is
+        # HANDED must agree with the engine's own sign convention, and the
+        # contract the harness ENFORCES must not forward a delta the
+        # published range excludes.
+        camera_hs = os.path.join(launch_mod.REPO_ROOT, "src", "Engine",
+                                 "Loop", "Camera.hs")
+        camera_src = ""
+        try:
+            with open(camera_hs, encoding="utf-8") as f:
+                camera_src = f.read()
+        except OSError as e:
+            check("Engine.Loop.Camera is readable for the polarity check",
+                  False, str(e))
+        # Derive which dy sign moves the camera toward the ground from the
+        # checked-in Haskell rather than restating a Python constant. The
+        # impulse is `zoomScrollScale * zoom * dy` with camZoom the viewport
+        # half-height, and zoomMin is annotated as the CLOSEST zoom — so a
+        # negative dy zooms in exactly when the scale is positive. Each
+        # premise is matched explicitly, so a change to the formula, the
+        # scale's sign, or which bound is closest fails this check loudly
+        # instead of being derived past.
+        impulse_ok = bool(re.search(
+            r"scrollZoomImpulse\s+zoom\s+dy\s*=\s*zoomScrollScale\s*\*"
+            r"\s*zoom\s*\*\s*dy", camera_src))
+        scale_m = re.search(r"^zoomScrollScale\s*=\s*(-?[\d.]+)",
+                            camera_src, re.M)
+        min_m = re.search(r"^zoomMin\s*=\s*(-?[\d.]+)\s*--\s*closest zoom",
+                          camera_src, re.M)
+        max_m = re.search(r"^zoomMax\s*=\s*(-?[\d.]+)", camera_src, re.M)
+        camera_premises = bool(impulse_ok and scale_m and min_m and max_m)
+        check("Engine.Loop.Camera still states the premises the playtest "
+              "wheel polarity is derived from",
+              camera_premises,
+              f"impulse={impulse_ok} scale={bool(scale_m)} "
+              f"min={bool(min_m)} max={bool(max_m)}")
+        engine_zoom_in_sign = None
+        if camera_premises:
+            scale = float(scale_m.group(1))
+            zmin, zmax = float(min_m.group(1)), float(max_m.group(1))
+            # zoom is a positive half-height, so sign(impulse) = sign(scale)
+            # * sign(dy); a negative impulse walks camZoom toward the
+            # smaller bound, which the source annotates as the closest one.
+            if scale > 0 and zmin < zmax:
+                engine_zoom_in_sign = -1
+            elif scale < 0 and zmin < zmax:
+                engine_zoom_in_sign = 1
+        prompt = agent_mod.build_system_prompt(
+            {"name": "n", "temperament": "t", "tendencies": ["x"],
+             "goal": "g"}, "manual", (1280, 720))
+        stated = re.findall(r"(?i)\b(negative|positive) dy zooms in", prompt)
+        check("the player contract states the wheel polarity exactly once",
+              len(stated) == 1, str(stated))
+        stated_sign = ({"negative": -1, "positive": 1}[stated[0].lower()]
+                       if len(stated) == 1 else None)
+        check("the player contract's zoom-in sign matches "
+              "Engine.Loop.Camera's own convention",
+              stated_sign is not None
+              and stated_sign == engine_zoom_in_sign,
+              f"contract={stated_sign} engine={engine_zoom_in_sign}")
+        stated_range = re.search(
+            r"dy must be between (-?[\d.]+) and (-?[\d.]+)", prompt)
+        check("the player contract publishes the enforced dy range",
+              bool(stated_range)
+              and float(stated_range.group(1)) == engine_mod.SCROLL_DY_MIN
+              and float(stated_range.group(2)) == engine_mod.SCROLL_DY_MAX,
+              stated_range.group(0) if stated_range else "absent")
+        check("the player contract names one ordinary wheel notch",
+              f"one notch is {engine_mod.SCROLL_DY_NOTCH:g}" in prompt)
+        schema_dy = agent_mod.TURN_SCHEMA["properties"]["action"][
+            "properties"]["dy"]
+        schema_range = re.search(r"between (-?[\d.]+) and (-?[\d.]+)",
+                                 schema_dy.get("description", ""))
+        check("the structured schema publishes the same dy range",
+              bool(schema_range)
+              and float(schema_range.group(1)) == engine_mod.SCROLL_DY_MIN
+              and float(schema_range.group(2)) == engine_mod.SCROLL_DY_MAX,
+              schema_dy.get("description", "")[:60])
+
+        def scroll_calls(act):
+            collected: list[str] = []
+            calls, post = translate_action(act, (1280, 720),
+                                           notes=collected)
+            return calls, post, collected
+
+        def scroll_dy_of(calls):
+            vals = [float(m.group(1)) for m in
+                    (re.search(
+                        r"input\.scroll\([^,]+,\s*"
+                        r"(-?[\d.]+(?:[eE][-+]?\d+)?)\)", c)
+                     for c in calls) if m]
+            return vals
+
+        notch, _, notch_notes = scroll_calls(
+            {"do": "scroll", "dy": -engine_mod.SCROLL_DY_NOTCH})
+        check("one ordinary notch is forwarded verbatim, unremarked",
+              scroll_dy_of(notch) == [-engine_mod.SCROLL_DY_NOTCH]
+              and notch_notes == [] and len(notch) == 1,
+              str(notch))
+        multi, _, multi_notes = scroll_calls({"do": "scroll", "dy": -4})
+        check("a bounded multi-notch correction is one unremarked call",
+              scroll_dy_of(multi) == [-4.0] and multi_notes == []
+              and len(multi) == 1, str(multi))
+        for edge in (engine_mod.SCROLL_DY_MIN, engine_mod.SCROLL_DY_MAX):
+            edge_calls, _, edge_notes = scroll_calls(
+                {"do": "scroll", "dy": edge})
+            check(f"dy at the inclusive range edge {edge:g} is not clamped",
+                  scroll_dy_of(edge_calls) == [edge] and edge_notes == [],
+                  str(edge_calls) + str(edge_notes))
+        # Requirement 4's headline is deliberately written against
+        # translate_action's historical two-argument call, so it states a
+        # property of the translation boundary itself rather than of this
+        # revision's note plumbing: the same call forwarded dy=600 to the
+        # engine verbatim before this contract existed.
+        legacy_big, _ = translate_action({"do": "scroll", "dy": 600},
+                                         (1280, 720))
+        check("an oversized dy never reaches the engine verbatim",
+              scroll_dy_of(legacy_big) == [engine_mod.SCROLL_DY_MAX]
+              and len(legacy_big) == 1, str(legacy_big))
+        big, _, big_notes = scroll_calls({"do": "scroll", "dy": 600})
+        check("the turn records that the oversized dy was clamped, with "
+              "both the requested and the effective value",
+              len(big_notes) == 1 and "clamped" in big_notes[0]
+              and "600" in big_notes[0]
+              and f"{engine_mod.SCROLL_DY_MAX:g}" in big_notes[0],
+              str(big_notes))
+        for bad in (float("nan"), float("inf"), float("-inf")):
+            rejected = None
+            try:
+                scroll_calls({"do": "scroll", "dy": bad})
+            except ActionError as e:
+                rejected = str(e)
+            check(f"a non-finite dy ({bad}) is rejected, not forwarded",
+                  rejected is not None and "rejected" in rejected,
+                  str(rejected))
+        # An in-range fraction must survive serialization: at any fixed
+        # decimal width a small real gesture becomes a literal 0.0, and a
+        # value just inside a bound rounds onto it while the turn records
+        # no clamp — both of them the accepted no-op this contract exists
+        # to stop.
+        for fraction in (0.00001, -0.00001, 9.99999, -9.99999, 0.25):
+            fcalls, _, fnotes = scroll_calls({"do": "scroll", "dy": fraction})
+            check(f"an in-range fraction {fraction!r} is serialized "
+                  "losslessly and unremarked",
+                  scroll_dy_of(fcalls) == [fraction] and fnotes == [],
+                  str(fcalls) + str(fnotes))
+        # The translation boundary is the one that has to hold, so it
+        # types dy itself instead of trusting the schema: a numeric string
+        # and a bool are exactly what a lenient provider fallback and a
+        # scripted agent produce, and float() would have accepted both.
+        for bogus in ("5", "-1", True, False, [], {}, complex(1, 0)):
+            typed = None
+            try:
+                scroll_calls({"do": "scroll", "dy": bogus})
+            except ActionError as e:
+                typed = str(e)
+            check(f"a non-numeric dy ({bogus!r}) is rejected, not coerced",
+                  typed is not None and "rejected" in typed, str(typed))
+        # A float just outside a bound must be recorded as the value it
+        # actually was. A fixed significant-figure format collapses it
+        # onto the bound, producing a note that reads "dy 10 ... clamped
+        # to 10" and loses what caused the clamp.
+        for near in (10.0000001, -10.0000001,
+                     math.nextafter(engine_mod.SCROLL_DY_MAX, math.inf),
+                     math.nextafter(engine_mod.SCROLL_DY_MIN, -math.inf)):
+            ncalls, _, nnotes = scroll_calls({"do": "scroll", "dy": near})
+            bound = (engine_mod.SCROLL_DY_MAX if near > 0
+                     else engine_mod.SCROLL_DY_MIN)
+            check(f"a float just outside the bound ({near!r}) clamps and "
+                  "records the value that caused it",
+                  scroll_dy_of(ncalls) == [bound] and len(nnotes) == 1
+                  and repr(near) in nnotes[0]
+                  and float(re.search(r"scroll dy (\S+) is outside",
+                                      nnotes[0]).group(1)) == near,
+                  str(ncalls) + str(nnotes))
+        # A schema-valid integer can be arbitrary precision and sit
+        # entirely outside float range. It is still FINITE, so the
+        # contract clamps it; converting first would raise OverflowError
+        # and reject it instead.
+        for huge, bound in ((10 ** 400, engine_mod.SCROLL_DY_MAX),
+                            (-(10 ** 400), engine_mod.SCROLL_DY_MIN)):
+            hcalls2, _, hnotes2 = scroll_calls({"do": "scroll", "dy": huge})
+            check("an integer too large to be a float is clamped, not "
+                  f"rejected (sign {'+' if huge > 0 else '-'})",
+                  scroll_dy_of(hcalls2) == [bound] and len(hcalls2) == 1
+                  and len(hnotes2) == 1 and "clamped" in hnotes2[0]
+                  and f"({len(str(huge))} digits)" in hnotes2[0],
+                  str(hcalls2) + str(hnotes2))
+        # A clamp note must describe a scroll the engine actually
+        # received. When a companion field fails to translate the turn
+        # injects nothing, so claiming a clamp would put a false entry in
+        # the trace and in the player's own memory.
+        for companion in ({"dx": "invalid"}, {"x": "a", "y": 1}):
+            bad_notes: list[str] = []
+            raised = None
+            try:
+                translate_action({"do": "scroll", "dy": 600, **companion},
+                                 (1280, 720), notes=bad_notes)
+            except Exception as e:
+                raised = e
+            check("a scroll that fails to translate records no clamp "
+                  f"note ({sorted(companion)})",
+                  raised is not None and bad_notes == [],
+                  f"{type(raised).__name__ if raised else None} {bad_notes}")
+        absent, _, absent_notes = scroll_calls({"do": "scroll", "dx": 2})
+        check("an absent dy still defaults to a zero vertical delta",
+              scroll_dy_of(absent) == [0.0] and absent_notes == [],
+              str(absent))
+        aimed, _, _ = scroll_calls(
+            {"do": "scroll", "dy": -2, "x": 640, "y": 360})
+        check("cursor-aimed scrolling still pre-moves, then scrolls once",
+              len(aimed) == 2 and aimed[0].startswith("return input.moveMouse")
+              and "input.scroll" in aimed[1]
+              and scroll_dy_of(aimed) == [-2.0], str(aimed))
+        for horizontal in (3, 600, -7.5):
+            hcalls, _, hnotes = scroll_calls(
+                {"do": "scroll", "dx": horizontal, "dy": 0})
+            check(f"horizontal dx {horizontal:g} keeps its verbatim "
+                  "forwarding",
+                  len(hcalls) == 1
+                  and f"input.scroll({float(horizontal):.1f}," in hcalls[0]
+                  and hnotes == [], str(hcalls))
+        check("every scroll action generates exactly one input.scroll call",
+              all(sum("input.scroll" in c for c in cs) == 1
+                  for cs in (notch, multi, big, legacy_big, aimed)))
+
+        # The clamp reaches the trace through the real recording path:
+        # requested action retained, clamp recorded in the note, and only
+        # the bounded call in injected/replay.
+        cdir = os.path.join(tmp, "scroll-clamp")
+        ctrace2 = SessionTrace(cdir, {"mode": "selftest-scroll-clamp"})
+        run_session(FakeEngine(),
+                    agent_mod.ScriptedAgent([{"do": "scroll", "dy": 600}]),
+                    ctrace2, turns=1, dt=0.0, max_seconds=None,
+                    memory_turns=4, stuck_k=99, settle=0.0)
+        ctrace2.finish("turn_budget_exhausted")
+        cturn = load_turns(cdir)[0]
+        creplay = load_replay(cdir)[0]
+        check("the clamped turn retains the action the player requested",
+              cturn["player"]["action"] == {"do": "scroll", "dy": 600},
+              str(cturn["player"]["action"]))
+        check("the clamped turn's note says a clamp happened",
+              "clamped" in cturn["player"]["note"],
+              cturn["player"]["note"])
+        check("only the bounded call lands in injected and replay data",
+              cturn["injected"] == creplay["pre"]
+              and len(cturn["injected"]) == 1
+              and scroll_dy_of(cturn["injected"]) == [
+                  engine_mod.SCROLL_DY_MAX]
+              and "600" not in cturn["injected"][0],
+              str(cturn["injected"]))
         usage = agent_mod._parse_codex_usage(
             '{"type":"thread.started"}\n'
             '{"type":"turn.completed","usage":{"input_tokens":123,'
