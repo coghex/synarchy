@@ -17,6 +17,7 @@ import qualified Test.Headless.WorldGen.ZoomParity as ZoomParity
 import qualified Test.Headless.WorldGen.BorderProbe as BorderProbe
 import qualified Test.Headless.WorldGen.WrapSeam as WrapSeam
 import qualified Test.Headless.WorldGen.CoastBreach as CoastBreach
+import qualified Test.Headless.WorldGen.Breakthrough as Breakthrough
 import qualified Test.Headless.WorldGen.BedDepth as BedDepth
 import qualified Test.Headless.WorldGen.FluidSurfaceFold as FluidSurfaceFold
 import qualified Test.Headless.Unit.Pathing.Cost as PathingCost
@@ -543,6 +544,7 @@ main = hspec $ do
     describe "Wrap Seam" WrapSeam.spec
     describe "Arena base seeding (#1718)" ArenaSeed.pureSpec
     describe "WorldGen.CoastBreach" CoastBreach.spec
+    describe "WorldGen.Breakthrough" Breakthrough.spec
     describe "WorldGen.BedDepth" BedDepth.spec
     describe "WorldGen.FluidSurfaceFold" FluidSurfaceFold.spec
     describe "Asset.Types" AssetTypes.spec

@@ -34,14 +34,31 @@ destroyThreshold: no cascade, no extra unbandaged bleeders. Bandaging
 the single wound (bandage=0.0, same convention as collapse_crawl_probe's
 leg fractures) then zeroes even that one wound's bleed.
 
+This probe implements the shared `probe-result/v1` contract: `--describe`
+prints its ordered stable checks without booting an engine, and a harnessed
+run writes structured events while a standalone run keeps human-readable
+per-check output.
+
 Usage: python3 tools/disarm_probe.py [--port 9193]
+       python3 tools/disarm_probe.py --describe
 Exit 0 = pass.
 """
 from __future__ import annotations
 import argparse, glob, sys, time
+import probe_protocol
 from probelib import quit_engine, boot, send
 
 LOG = "/tmp/disarm_probe_engine.log"
+LOG_NAME = "disarm_probe_engine.log"
+PROBE_KEY = "disarm"
+
+CHECKS = [
+    ("initial_drop", "a dagger is dropped from the newly severed hand"),
+    ("repeat_drop",
+     "a re-equipped dagger is dropped again from the still-severed hand"),
+]
+
+DESCRIPTOR = probe_protocol.build_descriptor(PROBE_KEY, CHECKS)
 
 
 def bootstrap(port: int) -> None:
@@ -75,14 +92,27 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                   formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", type=int, default=9193)
+    ap.add_argument("--describe", action="store_true",
+                    help="print the probe-result/v1 check declaration and "
+                         "exit without booting an engine")
     args = ap.parse_args()
-    port = args.port
+    if args.describe:
+        print(DESCRIPTOR.to_json())
+        return 0
+    rep = probe_protocol.reporter_from_env(DESCRIPTOR)
+    try:
+        return _run(args.port, rep)
+    finally:
+        rep.close()
 
-    proc = boot(port, log=LOG)
+
+def _run(port, rep) -> int:
+    proc = boot(port, log=rep.engine_log_path(LOG_NAME, LOG),
+                args=rep.engine_args())
     try:
         bootstrap(port)
         uid = int(float(send(port, "return unit.spawn('acolyte', 0, 0)")))
-        print(f"spawned acolyte #{uid}")
+        rep.note(f"spawned acolyte #{uid}")
         time.sleep(1.0)
 
         def arm():
@@ -112,7 +142,7 @@ def main() -> int:
             return False
 
         base_ground = ground_daggers()
-        print(f"ground daggers (baseline): {base_ground}")
+        rep.note(f"ground daggers (baseline): {base_ground}")
 
         # Phase 1: equip a dagger, sever the hand, expect the first drop.
         # severity 0.99 (not 1.0) stays under Combat.Wounds' destroyThreshold
@@ -123,13 +153,21 @@ def main() -> int:
         # severity as disabling for kind "severed", so this is still the
         # same disabling condition the mechanism looks for.
         eq1 = arm()
-        print(f"phase1: equip()={eq1}, right_hand = {held_right(port, uid)}")
+        held_after_first_equip = held_right(port, uid)
+        rep.note(f"phase1: equip()={eq1}, right_hand = {held_after_first_equip}")
         send(port, f"return unit.injure({uid}, 'r_hand', 'severed', 0.99, 0.0)")
-        print("phase1: severed r_hand")
-        p1 = wait_empty()
+        rep.note("phase1: severed r_hand")
+        first_empty = wait_empty()
         g1 = ground_daggers()
-        print(f"  first drop: right_hand empty={p1}, ground daggers={g1}")
-        p1 = p1 and g1 == base_ground + 1
+        rep.note(f"  first drop: right_hand empty={first_empty}, ground daggers={g1}")
+        p1 = first_empty and g1 == base_ground + 1
+        first_detail = {
+            "equip_result": eq1,
+            "held_after_equip": held_after_first_equip,
+            "right_hand_empty": first_empty,
+            "baseline_ground_daggers": base_ground,
+            "ground_daggers": g1,
+        }
 
         # Phase 2: re-equip into the SAME still-severed hand. equip() must
         # succeed (the engine doesn't block equipping a maimed hand), and
@@ -137,20 +175,50 @@ def main() -> int:
         # old one-shot guard, equip()==true but the dagger stays held and
         # the ground count never increments a second time.
         eq2 = arm()
-        print(f"phase2: equip()={eq2}")
+        rep.note(f"phase2: equip()={eq2}")
         if eq2 != "true":
-            print("INCONCLUSIVE: re-equip into severed hand was rejected "
-                  f"(equip returned {eq2}); can't exercise the re-drop path",
-                  file=sys.stderr)
+            inconclusive = ("INCONCLUSIVE: re-equip into severed hand was "
+                            f"rejected (equip returned {eq2}); can't exercise "
+                            "the re-drop path")
+            # Preserve the historical exit 3 while retaining the first
+            # completed observation. The unexercised second check remains
+            # MISSING in protocol mode rather than masquerading as a failure.
+            rep.check(
+                "initial_drop", p1,
+                ("first drop left the hand empty and added one ground dagger"
+                 if p1 else
+                 "first drop did not leave the expected hand/ground state"),
+                first_detail)
+            if rep.protocol_mode:
+                rep.skip(
+                    "repeat drop was not exercised because re-equipping the "
+                    "severed hand was rejected",
+                    {"equip_result": eq2})
+            else:
+                print(inconclusive, file=sys.stderr)
             return 3
-        p2 = wait_empty()
+        second_empty = wait_empty()
         g2 = ground_daggers()
-        print(f"  re-drop: right_hand empty={p2}, ground daggers={g2}")
-        p2 = p2 and g2 == base_ground + 2
+        rep.note(f"  re-drop: right_hand empty={second_empty}, ground daggers={g2}")
+        p2 = second_empty and g2 == base_ground + 2
 
-        print("\n--- result ---")
-        print(f"  first drop : {'PASS' if p1 else 'FAIL'}")
-        print(f"  re-drop    : {'PASS' if p2 else 'FAIL'}  (issue #193)")
+        rep.note("\n--- result ---")
+        rep.check(
+            "initial_drop", p1,
+            ("first drop left the hand empty and added one ground dagger"
+             if p1 else
+             "first drop did not leave the expected hand/ground state"),
+            first_detail)
+        rep.check(
+            "repeat_drop", p2,
+            ("re-drop left the hand empty and added a second ground dagger "
+             "(issue #193)" if p2 else
+             "re-drop did not leave the expected hand/ground state "
+             "(issue #193)"),
+            {"equip_result": eq2,
+             "right_hand_empty": second_empty,
+             "baseline_ground_daggers": base_ground,
+             "ground_daggers": g2})
         return 0 if (p1 and p2) else 1
     finally:
         quit_engine(port, proc)
