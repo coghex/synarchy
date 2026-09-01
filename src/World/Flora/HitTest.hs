@@ -60,7 +60,7 @@ import Engine.Core.Capability.RenderView
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import Engine.Core.State (EngineEnv)
-import Engine.Asset.Handle (TextureHandle)
+import Engine.Asset.Handle (TextureHandle, toInt)
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..))
 import Engine.Graphics.Viewport (viewportDegenerate)
 import World.Chop.Types (ChopDesignations)
@@ -72,7 +72,7 @@ import World.Generate (viewDepth)
 import World.Render.ChunkCulling (isChunkVisibleWrapped)
 import World.Render.FloraDraws (FloraDraw(..), chunkFloraDraws)
 import World.Render.FloraProjection
-    (FloraGeom(..), floraGeom, floraTexSize, floraVisibleInSlice)
+    (FloraGeom(..), floraGeom, floraVisibleInSlice)
 import World.Render.SpriteDepth
     (FrontWallLift, frameFrontWallLift, liftSpriteSortKey)
 import World.Render.ViewBounds (ViewBounds, computeViewBounds)
@@ -194,7 +194,7 @@ floraSelectCandidates view mode =
     , floraVisibleInSlice (fhvZSlice view) (fhvEffDepth view) inst
     , eligible view mode inst
     , let base = floraGeom (fhvFacing view) (fdGX fd) (fdGY fd) inst
-                     (floraTexSize (fhvTexSizes view) (fdTexture fd))
+                     (fdTexture fd) (fhvTexSizes view)
                      (fhvZSlice view) wrapOff
           -- The FINAL painter depth, front-wall lift included (#418).
           geom = base { fgSortKey = liftSpriteSortKey (fhvFrontWall view)
@@ -226,22 +226,24 @@ eligible view SelectDesignated inst =
 --   \"Topmost\" is the candidate the renderer draws LAST, and it is
 --   decided by the renderer's OWN comparison —
 --   'Engine.Scene.Types.Batch.quadPainterOrder', reconstructed here
---   from the same geometry the quad carries. That order is
---   @(sqSortKey, v0.x, v0.y, v2.x, v2.y)@:
+--   from the same values the quad carries. That order is
+--   @(sqSortKey, v0.x, v0.y, v2.x, v2.y, texture)@:
 --
 --     * the FINAL painter depth, structure front-wall lift included
 --       ('World.Render.SpriteDepth'), so a lifted tree ranks exactly
 --       where it was painted; and
---     * the quad's own rect, which breaks the depth ties @sqSortKey@
---       alone leaves — two wood-tagged co-tenants on one tile at one z
---       with equal 'fiOffV' really do share a key, and the scene sorter
---       is an unstable introsort, so before #1856 they were drawn in an
---       order nothing could agree with.
+--     * the quad's own rect and texture, which break the depth ties
+--       @sqSortKey@ alone leaves — two wood-tagged co-tenants on one
+--       tile at one z with equal 'fiOffV' really do share a key, and
+--       the scene sorter is an unstable introsort, so before #1856 they
+--       were drawn in an order nothing could agree with.
 --
---   Two candidates still equal after all five occupy exactly the same
---   rect at exactly the same depth, so no pointer can distinguish them
---   either; the stable instance id is the deterministic backstop there,
---   shared with the marker so the two never disagree.
+--   Two candidates still equal after all six RENDER IDENTICALLY (see
+--   'quadPainterOrder'): same depth, same rect, same texture, hence the
+--   same bytes whichever the sorter placed last. The stable instance id
+--   is the deterministic backstop there — a choice between two
+--   candidates the frame itself cannot tell apart — and it is shared
+--   with the marker so the two never disagree.
 pickFloraAt
     ∷ FloraHitView → FloraSelectMode → Float → Float → Maybe FloraPick
 pickFloraAt view mode pixX pixY
@@ -318,14 +320,15 @@ worldToWindow view wx wy =
 -- | 'Engine.Scene.Types.Batch.quadPainterOrder' for a flora sprite,
 --   reconstructed from its projected geometry. 'World.Render.FloraQuads'
 --   emits @sqV0@ at the quad's top-left and @sqV2@ at its bottom-right,
---   so these are the same five numbers the sorter compares — pinned by
+--   so these are the same six values the sorter compares — pinned by
 --   a spec that sorts REAL quads through the real sorter and checks the
 --   picker agrees with what came out last.
-floraPainterOrder ∷ FloraGeom → (Float, Float, Float, Float, Float)
+floraPainterOrder ∷ FloraGeom → (Float, Float, Float, Float, Float, Int)
 floraPainterOrder g =
     ( fgSortKey g
     , fgDrawX g, fgDrawY g
-    , fgDrawX g + fgQuadW g, fgDrawY g + fgQuadH g )
+    , fgDrawX g + fgQuadW g, fgDrawY g + fgQuadH g
+    , toInt (fgTexture g) )
 
 viewExtent ∷ FloraHitView → (Float, Float)
 viewExtent view =

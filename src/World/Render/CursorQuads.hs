@@ -224,8 +224,7 @@ renderWorldCursorQuadsScanned env worldState tileAlpha = do
                     , HM.member (fiInstanceId inst) chopDesigns
                     , floraVisibleInSlice zSlice effectiveDepth inst
                     , let base = floraGeom facing (fdGX fd) (fdGY fd) inst
-                                     (floraTexSize texSizes (fdTexture fd))
-                                     zSlice wrapOff
+                                     (fdTexture fd) texSizes zSlice wrapOff
                           geom = base { fgSortKey =
                               liftSpriteSortKey spriteLift (lcCoord lc)
                                   (fdGX fd) (fdGY fd) (fgSortKey base) }

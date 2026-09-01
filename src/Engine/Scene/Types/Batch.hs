@@ -33,7 +33,7 @@ import qualified Data.Map as Map
 import qualified Data.Set as Set
 import Data.Ord (comparing)
 import Engine.Scene.Base (ObjectId, LayerId)
-import Engine.Asset.Handle (TextureHandle(..), FontHandle)
+import Engine.Asset.Handle (TextureHandle(..), FontHandle, toInt)
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..))
 import Engine.Graphics.Solar (SolarPageTable, emptySolarPageTable)
 import Engine.Graphics.Font.Data (GlyphInstance)
@@ -134,19 +134,28 @@ stampSolarPage slot = V.map (setQuadSolarPage slot)
 --   ('World.Flora.HitTest'), and the designation marker anchored to
 --   whatever it picked — then had no order to share.
 --
---   Extending the comparison to the quad's own rect makes it total on
---   everything such a consumer can also see, and costs no new field on
---   a record built in fifty places. Two quads still equal here occupy
---   exactly the same rect at exactly the same depth, so no picker can
---   tell them apart either.
+--   Extending the comparison to the quad's own rect AND its texture
+--   makes it total on everything that can change a rendered frame, and
+--   costs no new field on a record built in fifty places.
+--
+--   __Two quads still equal here render identically.__ Same depth, same
+--   rect, same texture — and every remaining field follows from those:
+--   the atlas slot is the texture handle, the UVs are the fixed unit
+--   square each quad builder emits, and a tint depends on the depth and
+--   the frame's alpha, which are shared. So whichever of them the
+--   unstable sort happens to place last, the output bytes are the same,
+--   and no consumer — a picker included — can observe the difference.
+--   That is what makes it safe for 'World.Flora.HitTest' to fall back
+--   to the stable instance id there: it is choosing between two
+--   candidates the frame cannot tell apart.
 --
 --   This only REFINES ties: every ordering that was already determined
 --   by 'sqSortKey' is unchanged.
-quadPainterOrder ∷ SortableQuad → (Float, Float, Float, Float, Float)
+quadPainterOrder ∷ SortableQuad → (Float, Float, Float, Float, Float, Int)
 quadPainterOrder q =
     let Vec2 x0 y0 = pos (sqV0 q)
         Vec2 x2 y2 = pos (sqV2 q)
-    in (sqSortKey q, x0, y0, x2, y2)
+    in (sqSortKey q, x0, y0, x2, y2, toInt (sqTexture q))
 
 -- | Group quads by layer and depth-sort each layer's run.
 sortQuadsByLayer ∷ V.Vector SortableQuad → Map.Map LayerId (V.Vector SortableQuad)

@@ -59,6 +59,13 @@ data FloraGeom = FloraGeom
     , fgAnchorX ∷ !Float  -- ^ ground-contact x (quad's horizontal centre)
     , fgAnchorY ∷ !Float  -- ^ ground-contact y (trunk base centre)
     , fgSortKey ∷ !Float  -- ^ painter depth, identical to 'SortableQuad'
+    , fgTexture ∷ !TextureHandle
+      -- ^ The frame the sprite is DRAWING — the growth stage or the
+      --   depleted swap 'World.Render.FloraDraws' resolved, never the
+      --   species' base art. Carried here because it is part of the
+      --   scene's painter order
+      --   ('Engine.Scene.Types.Batch.quadPainterOrder'), which a picker
+      --   has to reconstruct in full.
     } deriving (Show, Eq)
 
 -- | The instance's texture pixel dimensions, defaulting to one tile
@@ -143,12 +150,14 @@ floraGeom
     ∷ CameraFacing
     → Int → Int
     → FloraInstance
-    → (Float, Float)
+    → TextureHandle
+    → HM.HashMap TextureHandle (Int, Int)
     → Int
     → (Float, Float)
     → FloraGeom
-floraGeom facing gx gy inst texSize zSlice wrapOff =
-    let (drawX, drawY, quadW, quadH) =
+floraGeom facing gx gy inst tex texSizes zSlice wrapOff =
+    let texSize = floraTexSize texSizes tex
+        (drawX, drawY, quadW, quadH) =
             floraQuadRect facing gx gy inst texSize zSlice wrapOff
         (ax, ay) = floraAnchor facing gx gy inst zSlice wrapOff
     in FloraGeom
@@ -159,6 +168,7 @@ floraGeom facing gx gy inst texSize zSlice wrapOff =
         , fgAnchorX = ax
         , fgAnchorY = ay
         , fgSortKey = floraSortKey facing gx gy inst zSlice
+        , fgTexture = tex
         }
 
 -- | The renderer's own z-slice cull ('floraToQuad' returns Nothing

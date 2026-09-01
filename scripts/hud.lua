@@ -1190,9 +1190,12 @@ function hud.update(dt)
     -- non-gameplay menu. The pushed position is not inert: the render pass
     -- re-hit-tests it into the shared cursor state every frame
     -- (src/World/Render/CursorQuads.hs), which also drives the
-    -- anchor→hover preview rectangle of an armed mine/construction/chop/
-    -- till designation — so without this gate, sweeping the pointer across
+    -- anchor→hover preview rectangle of an armed mine/construction/till
+    -- designation — so without this gate, sweeping the pointer across
     -- the modal drags the world's highlight and preview underneath it.
+    -- (Chop is NOT in that list since #1856: its gesture is a
+    -- screen-space press-drag whose box is a UI overlay, so it has no
+    -- anchor and no world-space preview to drag.)
     -- isGameplayInputActive() is false for those overlays, and it is the
     -- same predicate the click path above and game.onKeyDown/onMouseDown
     -- use. Nothing is cleared here: the last accepted hover simply stops

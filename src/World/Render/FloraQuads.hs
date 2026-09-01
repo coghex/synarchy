@@ -12,7 +12,7 @@ import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..), mkVertexWorld
                                            , tileWorldUV, noFaceMapVertexId)
 import World.Grid (worldLayer)
 import World.Render.FloraProjection
-    (FloraGeom(..), floraGeom, floraTexSize, floraVisibleInSlice)
+    (FloraGeom(..), floraGeom, floraVisibleInSlice)
 import World.Types
 
 -- | One flora instance's world quad.
@@ -45,8 +45,7 @@ floraToQuad lookupSlot _textures facing
         -- from the ONE shared projection boundary, so the selection
         -- oracle and the designation marker cannot drift from what is
         -- painted here.
-        let geom = floraGeom facing gx gy inst
-                       (floraTexSize texSizes texHandle) zSlice wrapOff
+        let geom = floraGeom facing gx gy inst texHandle texSizes zSlice wrapOff
             drawX = fgDrawX geom
             drawY = fgDrawY geom
             quadW = fgQuadW geom

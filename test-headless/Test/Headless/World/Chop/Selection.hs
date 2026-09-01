@@ -23,6 +23,7 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Data.List (sort, nub)
 import Data.Maybe (mapMaybe)
+import Control.Arrow ((&&&))
 import qualified Codec.Picture as JP
 import qualified Data.ByteString as BS
 import Engine.Asset.Handle (TextureHandle(..), toInt)
@@ -48,7 +49,7 @@ import World.Render.Textures.Types (defaultWorldTextures)
 import World.Render.TileQuads (worldCursorToQuad)
 import qualified Data.Map as Map
 import Engine.Scene.Types (SortableQuad(..))
-import Engine.Scene.Types.Batch (sortQuadsByLayer)
+import Engine.Scene.Types.Batch (sortQuadsByLayer, quadPainterOrder)
 import World.Render.FloraQuads (floraToQuad)
 import Engine.Graphics.Vulkan.Types.Vertex
     (Vec2(..), Vertex, pos, faceMapId, noFaceMapVertexId)
@@ -74,19 +75,27 @@ zoom = 20.0
 
 -- | Handles: one tree texture and one shorter shrub texture, so the
 --   quad-size half of the projection is actually exercised.
-treeTex, shrubTex ∷ TextureHandle
-treeTex  = TextureHandle 11
-shrubTex = TextureHandle 12
+treeTex, treeTallTex, shrubTex ∷ TextureHandle
+treeTex     = TextureHandle 11
+shrubTex    = TextureHandle 12
+-- | A different HANDLE at the SAME pixel size as 'treeTex', so a
+--   fixture can tie two sprites' whole geometry and leave the texture
+--   as the only separator.
+treeTallTex = TextureHandle 13
 
 -- | 96x128 trees and 96x64 shrubs — the shrub is exactly one tile, the
 --   tree twice as tall, as real flora art is.
 texSizes ∷ HM.HashMap TextureHandle (Int, Int)
-texSizes = HM.fromList [(treeTex, (96, 128)), (shrubTex, (96, 64))]
+texSizes = HM.fromList
+    [(treeTex, (96, 128)), (treeTallTex, (96, 128)), (shrubTex, (96, 64))]
 
-woodId, shrubId, mossId ∷ FloraId
-woodId  = FloraId 1
-shrubId = FloraId 2
-mossId  = FloraId 3
+woodId, woodTallId, shrubId, mossId ∷ FloraId
+woodId     = FloraId 1
+shrubId    = FloraId 2
+mossId     = FloraId 3
+-- | A SECOND choppable species, so a fixture can stack two Chop
+--   candidates at one spot and have only their texture tell them apart.
+woodTallId = FloraId 4
 
 -- | @oak@ is the choppable species: harvestable, tagged @wood@.
 --   @thicket@ is harvestable but tagged @fruit@ — a berry bush, never a
@@ -97,6 +106,9 @@ catalog =
     $ insertSpecies shrubId
         (newFloraSpecies "thicket" shrubTex)
             { fsHarvest = Just (harvest ["fruit"]) }
+    $ insertSpecies woodTallId
+        (newFloraSpecies "elm" treeTallTex)
+            { fsHarvest = Just (harvest ["wood"]) }
     $ insertSpecies woodId
         (newFloraSpecies "oak" treeTex)
             { fsHarvest = Just (harvest ["wood"]) }
@@ -625,6 +637,81 @@ spec = describe "Chop selection" $ do
                 (pickFloraAt view (SelectChoppable "wood") midX (snd px - 4))
                 `shouldBe` lastInstance
 
+        it "separates an EXACT-rectangle tie by texture, in the render key" $ do
+            -- Two DIFFERENT species stacked at exactly the same tile,
+            -- z and sub-tile offsets: identical depth AND identical
+            -- rect, so only the texture is left to order them — and it
+            -- has to be in the RENDER key, not just the picker's, or a
+            -- click would disagree with whichever the sorter drew last.
+            --
+            -- The shrub is given the wood tag here so both are Chop
+            -- candidates; what is under test is ordering, not
+            -- eligibility.
+            let oak   = plantAt 1 woodId  (8, 8)
+                other = plantAt 2 woodTallId (8, 8)
+                tiles = tilesOf [chunkWith flatChunk flat [oak, other]]
+                view = viewOf FaceNorth (camOn FaceNorth (8, 8)) tiles HM.empty
+                cands = floraSelectCandidates view (SelectChoppable "wood")
+                (tgx, tgy) = chunkToGlobal flatChunk 8 8
+                quadFor inst tex = floraToQuad (fromIntegral . toInt)
+                    defaultWorldTextures FaceNorth tgx tgy
+                    (inst { fiZ = zSlice }) tex zSlice effDepth 1.0 (0, 0)
+                    texSizes
+                quads = V.fromList (mapMaybe id
+                    [quadFor oak treeTex, quadFor other treeTallTex])
+            V.length quads `shouldBe` 2
+            -- The fixture really is an exact depth AND rect tie.
+            nub (map sqSortKey (V.toList quads)) `shouldSatisfy` \ks →
+                length ks ≡ 1
+            nub (map (rectOf . sqV0 &&& rectOf . sqV2) (V.toList quads))
+                `shouldSatisfy` \rs → length rs ≡ 1
+            -- Only the texture separates them, and it does.
+            nub (map sqTexture (V.toList quads)) `shouldSatisfy` \ts →
+                length ts ≡ 2
+            -- The load-bearing assertion: the RENDER key must separate
+            -- them. Without this the sort below is comparing EQ and its
+            -- output is arbitrary, so \"the picker matched what came out
+            -- last\" could pass on a coin flip.
+            case V.toList quads of
+                [qa, qb] → quadPainterOrder qa `shouldNotBe` quadPainterOrder qb
+                _ → expectationFailure "expected exactly two quads"
+            let sorted = Map.foldr (\v acc → V.toList v ⧺ acc) []
+                             (sortQuadsByLayer quads)
+                drawnLast = last sorted
+                lastInstance = listToMaybe
+                    [ fpInstanceId pk
+                    | (pk, g) ← cands
+                    , fgTexture g ≡ sqTexture drawnLast ]
+            Just px ← pure (anchorPixel view (instanceId 1))
+            fmap fpInstanceId
+                (pickFloraAt view (SelectChoppable "wood") (fst px) (snd px))
+                `shouldBe` lastInstance
+
+        it "leaves a fully identical pair rendering identically either way" $ do
+            -- The one case the render key still ties on: same depth,
+            -- same rect, SAME texture. Every remaining vertex field
+            -- follows from those, so the frame is byte-identical
+            -- whichever the unstable sort drew last — which is exactly
+            -- what makes the picker's instance-id backstop unobservable
+            -- rather than a disagreement.
+            let a = plantAt 1 woodId (8, 8)
+                b = plantAt 2 woodId (8, 8)
+                (tgx, tgy) = chunkToGlobal flatChunk 8 8
+                quadFor inst = floraToQuad (fromIntegral . toInt)
+                    defaultWorldTextures FaceNorth tgx tgy
+                    (inst { fiZ = zSlice }) treeTex zSlice effDepth 1.0 (0, 0)
+                    texSizes
+            case (quadFor a, quadFor b) of
+                (Just qa, Just qb) → do
+                    quadPainterOrder qa `shouldBe` quadPainterOrder qb
+                    -- Identical in every rendered field, not merely in
+                    -- the ordering key.
+                    map ($ qa) [sqV0, sqV1, sqV2, sqV3]
+                        `shouldBe` map ($ qb) [sqV0, sqV1, sqV2, sqV3]
+                    sqTexture qa `shouldBe` sqTexture qb
+                    sqLayer qa `shouldBe` sqLayer qb
+                _ → expectationFailure "expected two drawable quads"
+
         it "resolves an EXACT depth tie deterministically, by identity" $ do
             -- Two co-tenants on one tile at one z with equal fiOffV
             -- carry the SAME key, and the scene sorter
@@ -792,3 +879,7 @@ visibleAlphas img = sort . nub $
 -- | The south-east wall slot's tag, as 'ChunkStructures' keys it.
 seTag ∷ Word8
 seTag = fromIntegral (fromEnum SWallSE)
+
+-- | A vertex's position, for comparing two quads' rects.
+rectOf ∷ Vertex → (Float, Float)
+rectOf v = case pos v of Vec2 x y → (x, y)
