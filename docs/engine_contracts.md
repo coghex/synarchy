@@ -656,6 +656,14 @@ per policy**, because one slot cannot carry two samplers:
 | building `sprite:` | `bdTexture` (`Building.Render`) | `bdIconTexture` (`building.listDefs`'s `iconTex`) |
 | broken-equipment badge | texture name `broken_equipment` | texture name `broken_equipment_ui` |
 
+**Known live-frame exception:** when a unit has no authored `portrait:`,
+the unit-info panel mirrors its current animation through
+`unit.getFrameSample`, reusing the atlas handle and cell sub-rect. That UI
+fallback therefore follows the player-selected sampler and appears linearly
+filtered when the scene setting is linear; it is not a pinned UI copy. This
+preserves #1259/#2085's one image, handle, and slot per animation. Supplying
+an authored `portrait:` selects the pinned UI path above.
+
 Unit atlases keep their own `LuaLoadAtlasTextureRequest` to preserve the
 one-image-per-animation boundary, but its handler selects the global policy.
 

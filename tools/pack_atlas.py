@@ -1561,9 +1561,10 @@ def plan_animation(
                            f"{declared_path}: zero-sized image")
                 return None
             # Every frame of ONE animation shares a cell. A mismatch is
-            # an error rather than an implicit rescale or crop: D-6
-            # keeps unit art nearest-neighbour, so resampling here would
-            # change how it looks on screen.
+            # an error rather than an implicit rescale or crop: D-6 keeps
+            # nearest mode pixel-identical to the source and makes linear
+            # filtering a runtime sampler choice, so the compiler must not
+            # alter the authored texels for either mode.
             if cell is None:
                 cell = (frame.width, frame.height)
                 cell_source = declared_path
