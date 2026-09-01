@@ -2,7 +2,6 @@
 module World.Thread.Command.Location
     ( handleWorldMarkLocationContentsSpawnedCommand
     , handleWorldRegisterLocationEncounterOccupantsCommand
-    , handleWorldRegisterLocationSignificantSpawnCommand
     , handleWorldSetLocationEncounterOccupantStateCommand
     , handleWorldSetLocationEncounterEpisodeStateCommand
     , handleWorldSetLocationLifecycleCommand
@@ -20,7 +19,6 @@ import Location.Instance
     ( LocationEncounterOccupant(..), LocationInstanceId, LocationLifecycle
     , adjustLocationEncounterOccupant
     , markLocationContentsSpawned, registerLocationEncounterOccupants
-    , registerLocationSignificantSpawn
     , setLocationEncounterEpisodeState, setLocationLifecycle )
 import Unit.Types (UnitId)
 import World.Types
@@ -57,22 +55,6 @@ handleWorldRegisterLocationEncounterOccupantsCommand wsc pageId iid occupants =
     withPageParams wsc pageId $ \params → params
         { wgpLocationInstances = registerLocationEncounterOccupants iid occupants
             (wgpLocationInstances params) }
-
--- | Bind one spawned guaranteed significant item to its obligation
---   slot (#917) — see
---   'World.Command.Types.WorldRegisterLocationSignificantSpawn'. An
---   unknown instance id, an unknown slot, and a slot already bound are
---   all no-ops: 'registerLocationSignificantSpawn' is write-once, so a
---   retried content spawn cannot repoint an obligation.
-handleWorldRegisterLocationSignificantSpawnCommand
-    ∷ WorldSimCapability → WorldPageId → LocationInstanceId → Int → Word64
-    → IO ()
-handleWorldRegisterLocationSignificantSpawnCommand wsc pageId iid slot itemId =
-    withPageParams wsc pageId $ \params →
-        case registerLocationSignificantSpawn iid slot itemId
-                 (wgpLocationInstances params) of
-            Just instances' → params { wgpLocationInstances = instances' }
-            Nothing         → params
 
 handleWorldSetLocationEncounterOccupantStateCommand
     ∷ WorldSimCapability → WorldPageId → LocationInstanceId → UnitId

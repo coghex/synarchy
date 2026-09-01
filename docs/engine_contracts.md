@@ -1546,7 +1546,21 @@ orphan the item it first named, and the refusal is exactly the edge a
 resuming spawn uses to tell "still owed" from "already done".
 
 Lua hands that verb the GROUND id `item.spawnGround` returned, and the
-verb resolves it to the physical id synchronously before queueing.
+verb resolves it to the physical id AND commits the binding
+SYNCHRONOUSLY, on the calling thread — unlike every sibling location
+editor, which queues to the world thread. That is load-bearing rather
+than a shortcut: every ground pickup runs on that same thread
+(`pickupGroundOnPage` is reached only from `item.pickupGround`) and its
+latch matches on the obligation's BOUND id, so a queued binding would
+leave a window in which the item is already pickable with its slot
+unbound. A pickup landing there latches nothing, the binding then names
+an item already in an inventory, no second ground pickup can happen,
+`contents_spawned` blocks a respawn, and the location is permanently
+unclearable — with a save `significantProvenanceErrors` would then
+refuse, an untaken obligation resolving inside an inventory. Committing
+on the calling thread puts the spawn, the binding and any pickup in one
+serial order, so the window does not exist.
+
 `item.spawnGround` answers exactly ONE value and must keep doing so: the
 debug console serializes every return value tab-separated, so a second
 one would turn `return item.spawnGround(...)` — which several probes

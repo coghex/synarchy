@@ -45,7 +45,12 @@ import Location.Instance
     , setLocationEncounterEpisodeState )
 import Location.Bounds (RelBounds(..))
 import Test.Headless.Location.Fixture (expectGeometry)
+import qualified HsLua as Lua
+import qualified Data.Text.Encoding as TE
+import Engine.Core.Capability.WorldSim (toWorldSimCapability)
 import Engine.Scripting.Lua.API.Items.Ground (pickupGroundOnPage)
+import Engine.Scripting.Lua.API.World.Edit
+    (worldRegisterLocationSignificantSpawnFn)
 import Item.Ground (GroundItems(..), spawnGroundItem)
 import Item.Types (ItemInstance(..))
 import Unit.Direction (Direction(..))
@@ -1094,9 +1099,84 @@ takenFlags ws = do
          , inst ← instancesToList (wgpLocationInstances p)
          , e ← liSignificant inst ]
 
+-- | Call @world.registerLocationSignificantSpawn(instanceId, slot,
+--   groundId, pageId)@ through the real Lua binding and answer what it
+--   handed back — the only way to observe whether the binding is
+--   applied by the time the verb RETURNS, which is the property that
+--   closes the pickup race.
+registerSpawn
+    ∷ EngineEnv → WorldPageId → Int → Int → Int → IO Bool
+registerSpawn env (WorldPageId page) iid slot gid = Lua.run $ do
+    Lua.openlibs
+    Lua.pushinteger (fromIntegral iid)
+    Lua.pushinteger (fromIntegral slot)
+    Lua.pushinteger (fromIntegral gid)
+    Lua.pushstring (TE.encodeUtf8 page)
+    _ ← worldRegisterLocationSignificantSpawnFn (toWorldSimCapability env)
+    Lua.toboolean Lua.top
+
+boundIds ∷ WorldState → IO [Maybe Word64]
+boundIds ws = do
+    mp ← readIORef (wsGenParamsRef ws)
+    pure [ lsiInstanceId e
+         | p ← maybeToList mp
+         , inst ← instancesToList (wgpLocationInstances p)
+         , e ← liSignificant inst ]
+
 significantSpec ∷ SpecWith EngineEnv
 significantSpec =
     describe "compound clearance with significant contents (#917)" $ do
+
+        -- The binding is applied by the real Lua verb, ON THIS THREAD,
+        -- before it returns — not queued to the world thread. Every
+        -- ground pickup runs on this same thread, so a queued binding
+        -- would leave a window in which the item is already pickable
+        -- with its slot unbound: a pickup there latches nothing, the
+        -- binding then names an item already in an inventory, no second
+        -- ground pickup is possible, `contents_spawned` blocks a
+        -- respawn, and the location can never clear.
+        it "binds provenance SYNCHRONOUSLY, so a pickup issued the very \
+           \next instant cannot slip between the spawn and the binding" $
+           \env → do
+            let pageId = WorldPageId "sig_bind_race"
+            ws ← newSignificantPage env pageId LifecycleDiscovered Nothing
+                     [ (owed 1 0) { lsiInstanceId = Nothing } ]
+            gid ← dropOnGround ws 5061
+            writeIORef (unitManagerRef env) $ emptyUnitManager
+                { umInstances = HM.singleton (UnitId 809)
+                    (testUnit pageId FactionPlayer 8 8) }
+
+            -- No world thread runs in this suite at all, so a QUEUED
+            -- binding would still be unapplied here — which is exactly
+            -- the state the racing pickup below would find.
+            boundIds ws `shouldReturn` [Nothing]
+            registerSpawn env pageId 1 1 gid `shouldReturn` True
+            boundIds ws `shouldReturn` [Just 5061]
+
+            -- …and because it landed first, the pickup latches.
+            pickupGroundOnPage env ws (UnitId 809) gid `shouldReturn` True
+            takenFlags ws `shouldReturn` [True]
+            tickLocationDiscovery env pageId ws
+            readIORef (wsGenParamsRef ws) >>= (\p →
+                lifecyclesOf p `shouldBe` Just [LifecycleCleared])
+
+        it "refuses a ground id that names nothing, an unknown slot, and \
+           \a slot already bound — so a retried spawn cannot repoint an \
+           \obligation" $ \env → do
+            let pageId = WorldPageId "sig_bind_refusals"
+            ws ← newSignificantPage env pageId LifecycleDiscovered Nothing
+                     [ (owed 1 0) { lsiInstanceId = Nothing } ]
+            gid ← dropOnGround ws 5071
+            registerSpawn env pageId 1 1 9999 `shouldReturn` False
+            registerSpawn env pageId 1 7 gid  `shouldReturn` False
+            registerSpawn env pageId 99 1 gid `shouldReturn` False
+            boundIds ws `shouldReturn` [Nothing]
+            registerSpawn env pageId 1 1 gid `shouldReturn` True
+            -- Write-once: a second registration of the same slot is
+            -- refused and the first binding stands.
+            other ← dropOnGround ws 5072
+            registerSpawn env pageId 1 1 other `shouldReturn` False
+            boundIds ws `shouldReturn` [Just 5071]
 
         it "holds a location with a completed encounter uncleared while \
            \its guaranteed item is still on the floor, then clears it \

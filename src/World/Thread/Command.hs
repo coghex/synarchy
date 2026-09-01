@@ -87,7 +87,6 @@ import World.Construct.Revalidate
 import World.Thread.Command.Location
     (handleWorldMarkLocationContentsSpawnedCommand
     ,handleWorldRegisterLocationEncounterOccupantsCommand
-    ,handleWorldRegisterLocationSignificantSpawnCommand
     ,handleWorldSetLocationEncounterOccupantStateCommand
     ,handleWorldSetLocationEncounterEpisodeStateCommand
     ,handleWorldSetLocationLifecycleCommand
@@ -250,9 +249,6 @@ handleWorldCommand env _ (WorldMarkLocationContentsSpawned pageId iid)
 handleWorldCommand env _ (WorldRegisterLocationEncounterOccupants pageId iid occupants)
   = handleWorldRegisterLocationEncounterOccupantsCommand
       (toWorldSimCapability env) pageId iid occupants
-handleWorldCommand env _ (WorldRegisterLocationSignificantSpawn pageId iid slot itemId)
-  = handleWorldRegisterLocationSignificantSpawnCommand
-      (toWorldSimCapability env) pageId iid slot itemId
 handleWorldCommand env _ (WorldSetLocationEncounterOccupantState pageId iid uid
         engaged returning)
   = handleWorldSetLocationEncounterOccupantStateCommand

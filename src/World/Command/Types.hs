@@ -434,24 +434,6 @@ data WorldCommand
         --   placed location's ranged encounter. The world queue orders this
         --   before the matching contents-spawn marker, and the instance
         --   mutation is idempotent once the complete roster is installed.
-    | WorldRegisterLocationSignificantSpawn
-        !WorldPageId !LocationInstanceId !Int !Word64
-        -- ^ worldId, location instance id, obligation SLOT, and the
-        --   spawned item's physical 'Item.Types.iiInstanceId' (#917).
-        --   Binds one guaranteed significant item to the obligation the
-        --   instance was placed owing. WRITE-ONCE per slot on the world
-        --   thread: a slot already bound keeps its item, so a retried
-        --   content spawn cannot repoint an obligation and orphan the
-        --   item it first named.
-        --
-        --   The PHYSICAL instance id is carried, not the page-local
-        --   ground id, because it is what survives the pickup, transfer
-        --   and drop the taken latch has to see through. Lua names the
-        --   ground id it just got from @item.spawnGround@;
-        --   'Engine.Scripting.Lua.API.World.Edit' resolves it before
-        --   queueing, so this command already carries the durable
-        --   identity rather than one this thread would have to look up
-        --   later against a ground table that may have moved on.
     | WorldSetLocationEncounterOccupantState
         !WorldPageId !LocationInstanceId !UnitId !Bool !Bool
         -- ^ worldId, location instance id, occupant id, engaged, returning.

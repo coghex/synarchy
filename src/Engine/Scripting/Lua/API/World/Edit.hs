@@ -22,14 +22,15 @@ import UPrelude
 import qualified HsLua as Lua
 import Data.ByteString (ByteString)
 import qualified Data.Text.Encoding as TE
-import Data.IORef (readIORef)
+import Data.IORef (readIORef, atomicModifyIORef')
 import qualified Engine.Core.Queue as Q
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..))
 import Engine.Core.State (activeWorldPageFrom)
 import Location.Instance
     ( LocationInstance(..), LocationInstanceId(..)
-    , instancesInChunk, lifecycleFromName )
+    , instancesInChunk, lifecycleFromName
+    , registerLocationSignificantSpawn )
 import Structure.Types
     (StructureCommitWindow(..), StructureStageToken(..))
 import World.Generate.Coordinates (globalToChunk)
@@ -178,13 +179,32 @@ worldRegisterLocationEncounterOccupantsFn wsc = do
 --   binding names the item the caller actually just spawned, not
 --   whatever occupies that ground id by the time the command runs.
 --
---   Returns whether the request was ACCEPTED for queueing: a
---   non-negative instance id, a positive slot, a resolvable page, and a
---   ground id that really names an item on it. The world thread then
---   applies it only if the slot exists and is still unbound, so a
---   retried content spawn re-registering a slot it already filled
---   changes nothing. Poll @world.getLocationInstance@'s @significant@
---   array for the settled binding.
+--   Applied SYNCHRONOUSLY, on this thread, rather than queued to the
+--   world thread like its sibling location editors — and that is the
+--   whole point rather than a shortcut. Every ground pickup runs on
+--   this same thread
+--   ('Engine.Scripting.Lua.API.Items.Ground.pickupGroundOnPage' is
+--   reached only from @item.pickupGround@), and the latch it applies
+--   matches on the obligation's BOUND id. A queued binding therefore
+--   leaves a window in which the item is already lying on the ground,
+--   pickable, with its slot still unbound: a pickup landing there
+--   latches nothing, the queued command then binds an item that is
+--   already in somebody's inventory, no second ground pickup can ever
+--   happen, @contents_spawned@ blocks a respawn, and the location is
+--   permanently unclearable — with a save that
+--   'World.Save.Integrity.significantProvenanceErrors' would then
+--   refuse outright, an untaken obligation resolving inside an
+--   inventory. Committing here puts the spawn, the binding and any
+--   pickup in one serial order on one thread, so that window does not
+--   exist.
+--
+--   Returns whether the binding was APPLIED: a non-negative instance
+--   id, a positive slot, a resolvable page, a ground id that really
+--   names an item on it, and a slot that exists and is still unbound.
+--   'Location.Instance.registerLocationSignificantSpawn' is write-once,
+--   so a retried content spawn re-registering a slot it already filled
+--   answers false and changes nothing — which is exactly the edge the
+--   resuming spawn in @scripts\/locations.lua@ reads.
 worldRegisterLocationSignificantSpawnFn
     ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
 worldRegisterLocationSignificantSpawnFn wsc = do
@@ -207,15 +227,24 @@ worldRegisterLocationSignificantSpawnFn wsc = do
                                 case HM.lookup (fromIntegral gid)
                                          (gisItems gis) of
                                     Nothing → pure False
-                                    Just gi → do
-                                        Q.writeQueue (wsWorldQueue wsc) $
-                                            WorldRegisterLocationSignificantSpawn
-                                                pid
-                                                (LocationInstanceId
-                                                    (fromIntegral rawId))
-                                                (fromIntegral slot)
-                                                (iiInstanceId (giInst gi))
-                                        pure True
+                                    Just gi →
+                                        atomicModifyIORef'
+                                            (wsGenParamsRef ws) $ \mP →
+                                          case mP of
+                                            Nothing → (mP, False)
+                                            Just p → case
+                                                registerLocationSignificantSpawn
+                                                    (LocationInstanceId
+                                                        (fromIntegral rawId))
+                                                    (fromIntegral slot)
+                                                    (iiInstanceId (giInst gi))
+                                                    (wgpLocationInstances p) of
+                                                Just instances' →
+                                                    ( Just p
+                                                        { wgpLocationInstances =
+                                                            instances' }
+                                                    , True )
+                                                Nothing → (mP, False)
         _ → pure False
     Lua.pushboolean queued
     return 1
