@@ -207,7 +207,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ci_probes  # noqa: E402
 import probe_flake  # noqa: E402
 import probe_protocol  # noqa: E402
-import run_probes  # noqa: E402
+import probe_engine  # noqa: E402
+import probe_runner_registry  # noqa: E402
 
 CENSUS_SCHEMA = "probe-census/v5"
 OUTCOME_SCHEMA = "probe-census/v4"
@@ -947,7 +948,7 @@ def build_manifest() -> dict:
                 "protocol": probe_flake.protocol_status(key),
                 "census": empty_census(),
             }
-            for key, script, _purpose in run_probes.PROBES
+            for key, script, _purpose in probe_runner_registry.PROBES
         ],
     }
 
@@ -980,7 +981,7 @@ def validate_manifest(manifest) -> list[str]:
 
     Inventory drift only: a missing, duplicate or extra entry, and any
     row whose script, classification or protocol status disagrees with
-    `run_probes.PROBES`, `tools/ci_probes.py` and
+    `probe_runner_registry.PROBES`, `tools/ci_probes.py` and
     `probe_flake.PROTOCOL_PROBES`. Each row's `census` field is
     deliberately never inspected here: record SHAPE is the declared
     schema's, which `--validate` applies separately, and the two answer
@@ -1000,7 +1001,7 @@ def validate_manifest(manifest) -> list[str]:
         return problems + ["manifest `probes` must be a list"]
 
     expected = {key: (script, classification(key), probe_flake.protocol_status(key))
-                for key, script, _purpose in run_probes.PROBES}
+                for key, script, _purpose in probe_runner_registry.PROBES}
     seen: set[str] = set()
     for position, entry in enumerate(entries):
         if not isinstance(entry, dict):
@@ -1016,7 +1017,7 @@ def validate_manifest(manifest) -> list[str]:
         seen.add(key)
         if key not in expected:
             problems.append(
-                f"extra entry {key!r}: not registered in run_probes.PROBES")
+                f"extra entry {key!r}: not registered in probe_runner_registry.PROBES")
             continue
         script, expected_class, expected_protocol = expected[key]
         if entry.get("script") != script:
@@ -1130,7 +1131,7 @@ def policy_record_problems(census, live_classification, where,
 
 
 def _registered_keys() -> set:
-    return {key for key, _script, _purpose in run_probes.PROBES}
+    return {key for key, _script, _purpose in probe_runner_registry.PROBES}
 
 
 def policy_invariants(document) -> list[str]:
@@ -1361,12 +1362,12 @@ def reconcile_inventory(document: dict) -> dict:
     It never deletes a row and never rewrites a census record beyond
     #1430's single policy initialization: a record whose
     `acceptable_failures` is still null gets the default. A probe that
-    left `run_probes.PROBES` keeps its measurements and is reported by
+    left `probe_runner_registry.PROBES` keeps its measurements and is reported by
     `validate_manifest` as an extra entry, which is a decision for a
     person.
     """
     result = migrate_document(document)
-    live = {key: script for key, script, _purpose in run_probes.PROBES}
+    live = {key: script for key, script, _purpose in probe_runner_registry.PROBES}
     entries = [dict(entry) for entry in result["probes"]]
     present = {entry.get("key") for entry in entries}
     for entry in entries:
@@ -1396,7 +1397,7 @@ def reconcile_inventory(document: dict) -> dict:
             census = _deep_copy(entry["census"])
             _archive_current(census, key)
             entry["census"] = census
-    for key, script, _purpose in run_probes.PROBES:
+    for key, script, _purpose in probe_runner_registry.PROBES:
         if key in present:
             continue
         entries.append({
@@ -2717,7 +2718,7 @@ def resolve_docs_worktree(repo_root: str | None = None) -> Path:
     recreate the directory and publish the census outside any worktree
     at all — silently, in a place nobody will ever land from.
     """
-    root = repo_root or run_probes.REPO_ROOT
+    root = repo_root or probe_engine.REPO_ROOT
     try:
         done = subprocess.run(["git", "worktree", "list", "--porcelain"],
                               cwd=root, text=True, capture_output=True,
@@ -3920,8 +3921,8 @@ def main(argv: list[str] | None = None) -> int:
         for problem in problems:
             print(f"probe_census: {problem}", file=sys.stderr)
         return 1
-    print(f"{path}: {len(run_probes.PROBES)} probes, inventory agrees with "
-          f"run_probes.PROBES and tools/ci_probes.py")
+    print(f"{path}: {len(probe_runner_registry.PROBES)} probes, inventory agrees with "
+          f"probe_runner_registry.PROBES and tools/ci_probes.py")
     return 0
 
 

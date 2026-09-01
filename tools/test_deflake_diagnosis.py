@@ -55,7 +55,8 @@ import probe_census  # type: ignore
 import deflake  # type: ignore
 import probe_flake  # type: ignore
 import probe_protocol  # type: ignore
-import run_probes  # type: ignore
+import probe_runner_registry  # type: ignore
+import probe_runner_resources  # type: ignore
 
 TOOL = str(Path(__file__).resolve().parent / "deflake_diagnosis.py")
 
@@ -379,15 +380,16 @@ def resource_hold(*, probe: str = PROBE, held: bool = True,
                   covers: bool = True, detail=None) -> dict:
     """The batch's cross-process hold on the probe's DECLARED interests.
 
-    Taken from `run_probes` rather than spelled out, because they are the
+    Taken from `probe_runner_resources` rather than spelled out, because
+    they are the
     probe's own and a fixture that listed them would drift from the
     registry it is supposed to be reproducing.
     """
     record = {
         "held": held,
-        "exclusive": (sorted(run_probes.exclusive_resources(probe))
+        "exclusive": (sorted(probe_runner_resources.exclusive_resources(probe))
                       if exclusive is None else list(exclusive)),
-        "shared": (sorted(run_probes.shared_resources(probe))
+        "shared": (sorted(probe_runner_resources.shared_resources(probe))
                    if shared is None else list(shared)),
         "covers_configuration_install": covers,
     }
@@ -520,7 +522,7 @@ def test_an_unregistered_probe_is_refused() -> None:
 
 def test_a_probe_with_no_descriptor_is_refused() -> None:
     """A legacy probe has no per-check evidence to diagnose."""
-    legacy = next(key for key, _script, _purpose in run_probes.PROBES
+    legacy = next(key for key, _script, _purpose in probe_runner_registry.PROBES
                   if key not in probe_flake.PROTOCOL_PROBES)
     document = handoff_document(probe=legacy)
     document["result"]["probe"] = legacy
@@ -2061,6 +2063,11 @@ def test_a_repair_may_not_change_the_measurement_apparatus() -> None:
         "tools/probe_engine.py",
         "tools/probelib.py",
         "tools/run_probes.py",
+        "tools/probe_runner_registry.py",
+        "tools/probe_runner_diagnostics.py",
+        "tools/probe_runner_resources.py",
+        "tools/probe_runner_lifecycle.py",
+        "tools/probe_runner_scheduler.py",
         "tools/deflake.py",
         "tools/deflake_diagnosis.py",
     ), f"the measurement apparatus is exactly this inventory: "
@@ -6563,7 +6570,7 @@ def test_a_malformed_outcome_handoff_is_rejected_without_recording() -> None:
         ("a handoff naming an unregistered probe",
          lambda: broken(lambda d: d["diagnosis_outcome"].__setitem__(
              "probe", "not_a_probe")),
-         "not registered in tools/run_probes.py"),
+         "not registered in probe_runner_registry.PROBES"),
         ("a handoff with no measurement at all",
          lambda: broken(lambda d: d.__setitem__("measurements", [])),
          "at least one measurement"),

@@ -58,7 +58,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import probe_census  # noqa: E402
 import probe_external_evidence as evidence  # noqa: E402
 import probe_inflight as inflight  # noqa: E402
-import run_probes  # noqa: E402
+import probe_engine  # noqa: E402
+import probe_runner_registry  # noqa: E402
 
 FAILURES: list[str] = []
 PASSED = 0
@@ -1572,7 +1573,7 @@ def test_an_unknown_probe_key_is_rejected() -> None:
     except inflight.InflightRejected as exc:
         check("definitely_not_a_probe" in str(exc),
               "the rejection names the offending key", str(exc))
-        check("run_probes.PROBES" in str(exc),
+        check("probe_runner_registry.PROBES" in str(exc),
               "and the authoritative registry", str(exc))
 
     try:
@@ -1601,7 +1602,7 @@ def test_an_unknown_probe_key_is_rejected() -> None:
     document = inflight.evaluate_probe_inflight(
         "injury_log", now=NOW, target_repository=REPOSITORY,
         github=FakeGitHub(), state_root=Path("/nonexistent-state-root"),
-        docs_root=None, repo_root=run_probes.REPO_ROOT,
+        docs_root=None, repo_root=probe_engine.REPO_ROOT,
         identity_index=inflight.build_identity_index())
     check(document["result"] in (inflight.RESULT_CLEAR,
                                  inflight.RESULT_IN_FLIGHT,
@@ -1614,7 +1615,7 @@ def test_the_shipped_cli() -> None:
 
     `main` takes no injection points, so this drives it exactly as a
     caller would: against a real scratch git repository whose `origin`
-    names a GitHub repository, with `run_probes.REPO_ROOT` pointed at it
+    names a GitHub repository, with `probe_engine.REPO_ROOT` pointed at it
     and only the default transport substituted.
     """
     with tempfile.TemporaryDirectory() as tmp:
@@ -1629,9 +1630,9 @@ def test_the_shipped_cli() -> None:
                        capture_output=True)
         api = FakeGitHub()
 
-        saved_root = run_probes.REPO_ROOT
+        saved_root = probe_engine.REPO_ROOT
         saved_transport = inflight.default_github_transport
-        run_probes.REPO_ROOT = str(repo)
+        probe_engine.REPO_ROOT = str(repo)
         inflight.default_github_transport = lambda: api
         try:
             buffer = io.StringIO()
@@ -1675,7 +1676,7 @@ def test_the_shipped_cli() -> None:
             check("definitely_not_a_probe" in errors.getvalue(),
                   "naming the key on stderr", errors.getvalue())
         finally:
-            run_probes.REPO_ROOT = saved_root
+            probe_engine.REPO_ROOT = saved_root
             inflight.default_github_transport = saved_transport
 
 

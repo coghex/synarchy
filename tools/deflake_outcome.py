@@ -269,7 +269,7 @@ import deflake_diagnosis  # noqa: E402
 import probe_census  # noqa: E402
 import probe_flake  # noqa: E402
 import probe_protocol  # noqa: E402
-import run_probes  # noqa: E402
+import probe_runner_registry  # noqa: E402
 
 HANDOFF_SCHEMA = "deflake-outcome-handoff/v1"
 # The producer record this consumes, named from the producer rather than
@@ -973,7 +973,7 @@ class Handoff:
 
 
 def _registered_probes() -> set:
-    return {key for key, _script, _purpose in run_probes.PROBES}
+    return {key for key, _script, _purpose in probe_runner_registry.PROBES}
 
 
 def require_diagnosis_outcome(document, *, worktrees=(),
@@ -1035,7 +1035,7 @@ def require_diagnosis_outcome(document, *, worktrees=(),
     if probe not in _registered_probes():
         raise HandoffError(
             f"the diagnosis outcome names the probe {probe!r}, which is not "
-            f"registered in tools/run_probes.py")
+            f"registered in probe_runner_registry.PROBES")
     # Required rather than defaulted to empty. `targets` drives the
     # MISSING half of the acceptance gate, so a record that lost it
     # would quietly weaken the `no-confident-fix` and

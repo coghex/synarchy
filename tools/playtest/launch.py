@@ -36,7 +36,7 @@ watchdog, never a playtest timer, and tripping it is reported as a
 setup failure, never as ``time_budget_exhausted``.
 
 A pre-ready failure reaps the WHOLE spawned process group (the engine is
-its own session leader, so `run_probes.reap_group` addresses it even
+its own session leader, so `probe_runner_lifecycle.reap_group` addresses it even
 when the immediate child is already gone) and waits for the listener
 port to actually release, so the next attempt does not fail as an
 unrelated "exited before READY" (#1190/#1323).
@@ -59,7 +59,7 @@ for _path in (HERE, TOOLS):
 from engine import (CONSOLE_READ_TIMEOUT, EngineCrash,  # noqa: E402
                     SCREENSHOT_TIMEOUT)
 from probelib import GUI_PORT  # noqa: E402
-from run_probes import _DeferSigint, reap_group  # noqa: E402
+from probe_runner_lifecycle import _DeferSigint, reap_group  # noqa: E402
 
 # The pre-ready budget. NOT probelib's 180 s probe READY default (which
 # is exactly what killed the cold-worktree run in #1539) and never
@@ -153,7 +153,7 @@ def _run_setup_command(cmd: list[str], repo_root: str, deadline: float, clock,
     killing the immediate child leaves compilation running (and, on a
     Ctrl-C, running unattended after the harness is gone). Spawning into
     a new session makes the child's pid its process-group id, which is
-    what lets `run_probes.reap_group` address every descendant (#1323).
+    what lets `probe_runner_lifecycle.reap_group` address every descendant (#1323).
     The BaseException arm is what covers Ctrl-C: the build blocks inside
     `communicate`, so the interruption lands here rather than anywhere a
     later teardown could see it.
@@ -601,7 +601,7 @@ def teardown_setup(eng, *, port_timeout: float = PORT_RELEASE_TIMEOUT) -> bool:
 
     `probelib.boot`'s failure path kills only the process it spawned; the
     engine below it survives holding the listener. This reaps the whole
-    spawned process group (`run_probes.reap_group`, #1323) and does not
+    spawned process group (`probe_runner_lifecycle.reap_group`, #1323) and does not
     return until the port is observed released — or the wait runs out,
     which it reports rather than hiding.
     """

@@ -9,7 +9,7 @@ clock — the as-of time is injected, so an age case is the same age case
 on every machine and at every hour.
 
 The real `tools/probe_census_page.py` is imported and driven, with
-`run_probes.PROBES`, `ci_probes.CI_ELIGIBLE` and
+`probe_runner_registry.PROBES`, `ci_probes.CI_ELIGIBLE` and
 `probe_flake.PROTOCOL_PROBES` pointed at a synthetic registry, so this
 exercises the shipped code paths rather than a copy.
 
@@ -50,7 +50,8 @@ import ci_probes  # type: ignore  # noqa: E402
 import probe_census  # type: ignore  # noqa: E402
 import probe_census_page as page  # type: ignore  # noqa: E402
 import probe_flake  # type: ignore  # noqa: E402
-import run_probes  # type: ignore  # noqa: E402
+import probe_engine  # type: ignore  # noqa: E402
+import probe_runner_registry  # type: ignore  # noqa: E402
 
 FAILURES: list[str] = []
 
@@ -114,9 +115,9 @@ def registry(probes=None, ci_eligible=("beta",), protocol=None, reasons=None):
     it as a source: leaving the shipped mapping in place would make the
     CLI cases look for a reason record for `alpha`.
     """
-    saved = (run_probes.PROBES, ci_probes.CI_ELIGIBLE,
+    saved = (probe_runner_registry.PROBES, ci_probes.CI_ELIGIBLE,
              probe_flake.PROTOCOL_PROBES, ci_probes.MANUAL_ONLY_REASONS)
-    run_probes.PROBES = list(SYNTHETIC if probes is None else probes)
+    probe_runner_registry.PROBES = list(SYNTHETIC if probes is None else probes)
     ci_probes.CI_ELIGIBLE = set(ci_eligible)
     probe_flake.PROTOCOL_PROBES = dict(PROTOCOL if protocol is None
                                        else protocol)
@@ -125,7 +126,7 @@ def registry(probes=None, ci_eligible=("beta",), protocol=None, reasons=None):
     try:
         yield
     finally:
-        (run_probes.PROBES, ci_probes.CI_ELIGIBLE,
+        (probe_runner_registry.PROBES, ci_probes.CI_ELIGIBLE,
          probe_flake.PROTOCOL_PROBES,
          ci_probes.MANUAL_ONLY_REASONS) = saved
 
@@ -645,12 +646,12 @@ def cli_repo():
         docs = root / "docs-wt"
         git("worktree", "add", "-q", "-b", probe_census.DOCS_BRANCH,
             str(docs), "master")
-        saved = run_probes.REPO_ROOT
-        run_probes.REPO_ROOT = str(main)
+        saved = probe_engine.REPO_ROOT
+        probe_engine.REPO_ROOT = str(main)
         try:
             yield docs
         finally:
-            run_probes.REPO_ROOT = saved
+            probe_engine.REPO_ROOT = saved
 
 
 def run(*argv) -> tuple[int, str]:
@@ -727,7 +728,7 @@ def test_cli() -> None:
         # No docs worktree at all is the actionable exit 2, not a silent
         # write into the primary checkout.
         subprocess.run(["git", "worktree", "remove", "--force", str(docs)],
-                       cwd=run_probes.REPO_ROOT, check=True,
+                       cwd=probe_engine.REPO_ROOT, check=True,
                        capture_output=True, text=True)
         expect(run("--generate")[0] == 2,
                "a missing docs worktree exits 2")

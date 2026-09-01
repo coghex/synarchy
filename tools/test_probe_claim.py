@@ -9,7 +9,7 @@ scratch repositories with real linked worktrees) and this same
 interpreter (for the cases that need genuinely separate processes).
 
 The real `tools/probe_claim.py` and `tools/probe_census.py` are imported
-and driven, with `run_probes.PROBES` and the other live registries
+and driven, with `probe_runner_registry.PROBES` and the other live registries
 pointed at a synthetic set, so this exercises the shipped code paths
 rather than a copy.
 
@@ -44,7 +44,8 @@ import probe_census  # type: ignore  # noqa: E402
 import probe_claim  # type: ignore  # noqa: E402
 import probe_flake  # type: ignore  # noqa: E402
 import probe_protocol  # type: ignore  # noqa: E402
-import run_probes  # type: ignore  # noqa: E402
+import probe_engine  # type: ignore  # noqa: E402
+import probe_runner_registry  # type: ignore  # noqa: E402
 
 FAILURES: list[str] = []
 
@@ -90,17 +91,17 @@ def expect_raises(kind, call, msg: str, *fragments: str) -> None:
 @contextmanager
 def registry(probes=None, ci_eligible=(), protocol=None):
     """The live registries, pointed at a synthetic set for one case."""
-    saved = (run_probes.PROBES, ci_probes.CI_ELIGIBLE,
+    saved = (probe_runner_registry.PROBES, ci_probes.CI_ELIGIBLE,
              probe_flake.PROTOCOL_PROBES)
-    run_probes.PROBES = list(SYNTHETIC if probes is None else probes)
+    probe_runner_registry.PROBES = list(SYNTHETIC if probes is None else probes)
     ci_probes.CI_ELIGIBLE = set(ci_eligible)
     probe_flake.PROTOCOL_PROBES = dict(
-        {key: probe_protocol.PROTOCOL_VERSION for key, _s, _p in run_probes.PROBES}
+        {key: probe_protocol.PROTOCOL_VERSION for key, _s, _p in probe_runner_registry.PROBES}
         if protocol is None else protocol)
     try:
         yield
     finally:
-        (run_probes.PROBES, ci_probes.CI_ELIGIBLE,
+        (probe_runner_registry.PROBES, ci_probes.CI_ELIGIBLE,
          probe_flake.PROTOCOL_PROBES) = saved
 
 
@@ -143,12 +144,12 @@ def scratch_repo():
         run("git", "commit", "-q", "--allow-empty", "-m", "root")
         run("git", "worktree", "add", "-q", str(other_wt), "-b", "feature")
         run("git", "worktree", "add", "-q", str(docs_wt), "-b", "docs-wip")
-        saved = run_probes.REPO_ROOT
-        run_probes.REPO_ROOT = str(main_wt)
+        saved = probe_engine.REPO_ROOT
+        probe_engine.REPO_ROOT = str(main_wt)
         try:
             yield main_wt, other_wt, docs_wt / probe_census.MANIFEST_RELPATH
         finally:
-            run_probes.REPO_ROOT = saved
+            probe_engine.REPO_ROOT = saved
 
 
 def seeded_census(path: Path) -> Path:
@@ -202,8 +203,9 @@ def fake_measurement(probe="alpha", runs=2, *, harness_error=False,
 CONTENDER = f"""
 import json, os, sys, time
 sys.path.insert(0, {TOOLS!r})
-import run_probes
-run_probes.PROBES = [(k, k + '_probe.py', k) for k in ('alpha', 'beta', 'gamma')]
+import probe_runner_registry
+probe_runner_registry.PROBES = [(k, k + '_probe.py', k)
+                                for k in ('alpha', 'beta', 'gamma')]
 import probe_claim
 
 root, probe, barrier, lease = sys.argv[1], sys.argv[2], sys.argv[3], float(sys.argv[4])
@@ -237,8 +239,9 @@ if hold > 0:
 LOCK_HOLDER = f"""
 import os, sys, time
 sys.path.insert(0, {TOOLS!r})
-import run_probes
-run_probes.PROBES = [(k, k + '_probe.py', k) for k in ('alpha', 'beta', 'gamma')]
+import probe_runner_registry
+probe_runner_registry.PROBES = [(k, k + '_probe.py', k)
+                                for k in ('alpha', 'beta', 'gamma')]
 import probe_claim
 from pathlib import Path
 
@@ -1050,8 +1053,8 @@ def test_orchestration_claim_audit_failure() -> None:
 
         # The same, with the docs worktree itself unreachable.
         with claim_root() as root, scratch() as elsewhere:
-            saved = run_probes.REPO_ROOT
-            run_probes.REPO_ROOT = str(elsewhere)
+            saved = probe_engine.REPO_ROOT
+            probe_engine.REPO_ROOT = str(elsewhere)
             try:
                 expect_raises(
                     (probe_claim.ClaimAuditFailed, probe_census.DocsWorktreeMissing,
@@ -1062,7 +1065,7 @@ def test_orchestration_claim_audit_failure() -> None:
                         repo_root=str(elsewhere)),
                     "an unreachable docs-wip census refuses the measurement too")
             finally:
-                run_probes.REPO_ROOT = saved
+                probe_engine.REPO_ROOT = saved
             expect(probe_claim.read_claim("alpha", root=root) is None,
                    "...leaving no claim behind")
 
@@ -1123,7 +1126,7 @@ def test_orchestration_refuses_a_lease_that_cannot_survive_a_run() -> None:
                        f"...and a {lease}s lease claimed nothing")
             expect(not ran, "no refused lease ever executed the probe")
             expect(probe_claim.MIN_ORCHESTRATION_LEASE_SECONDS
-                   >= 2 * run_probes.DEFAULT_TIMEOUT
+                   >= 2 * probe_runner_registry.DEFAULT_TIMEOUT
                    and probe_claim.LEASE_SECONDS
                    >= probe_claim.MIN_ORCHESTRATION_LEASE_SECONDS,
                    "the floor covers a full-timeout run and the default "
@@ -1788,8 +1791,8 @@ def test_probe_flake_needs_no_docs_worktree() -> None:
     """
     print("\n-- probe_flake stays usable with no docs worktree --")
     with registry(), scratch() as elsewhere:
-        saved = run_probes.REPO_ROOT
-        run_probes.REPO_ROOT = str(elsewhere)
+        saved = probe_engine.REPO_ROOT
+        probe_engine.REPO_ROOT = str(elsewhere)
         try:
             expect_raises(probe_census.DocsWorktreeMissing,
                           lambda: probe_census.manifest_path(),
@@ -1807,7 +1810,7 @@ def test_probe_flake_needs_no_docs_worktree() -> None:
             expect("probe_census" not in probe_flake.__dict__,
                    "probe_flake does not import the census at all")
         finally:
-            run_probes.REPO_ROOT = saved
+            probe_engine.REPO_ROOT = saved
 
 
 def test_cli() -> None:

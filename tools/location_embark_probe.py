@@ -102,7 +102,7 @@ from offscreen_probe import (
     click_at_seed, zoom_fade_end, set_zoom, center_on,
 )
 from portal_ghost_probe import center_on_tile, in_world_view
-from run_probes import FailureEmitter   # noqa: E402 - durable failure records (#1982)
+from probe_runner_diagnostics import FailureEmitter   # noqa: E402 - durable failure records (#1982)
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
