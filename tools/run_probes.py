@@ -11,21 +11,20 @@ single PASS/FAIL summary.
 Probes each own their engine (boot + teardown). By default they run one at
 a time; `--jobs N` runs up to N CONCURRENTLY, each an independent engine on
 its own RESERVED PORT SPAN (#531, #1571) — a probe that binds more than one
-port declares how many in `PROBE_PORT_SPANS` below, and the allocator lays
-the spans end to end so no two concurrent probes overlap. Probes canNOT
-share a single engine — 8 neutralise the global `unit_ai.update`, 37 load
-defs engine-wide, many reuse the same world/page names, and 16 restart the
-engine, so there is no clean per-scenario isolation on one long-lived
-engine; running independent engines in parallel gets the speed without that
-problem. Separate processes and
-separate ports are ALL that isolates — every probe still drives the same
-checkout — so shared repository-relative resources are scheduled
-reader/writer (#1322, #1444): every probe holds the resources named in
+port declares how many in `probe_runner_registry.PROBE_PORT_SPANS`, and the
+allocator lays the spans end to end so no two concurrent probes overlap.
+Probes canNOT share a single engine — 8 neutralise the global
+`unit_ai.update`, 37 load defs engine-wide, many reuse the same world/page
+names, and 16 restart the engine, so there is no clean per-scenario
+isolation on one long-lived engine; running independent engines in parallel
+gets the speed without that problem. Separate processes and separate ports
+are ALL that isolates — every probe still drives the same checkout — so
+shared repository-relative resources are scheduled reader/writer (#1322,
+#1444): every probe holds the resources named in
 `probe_runner_resources.IMPLICIT_SHARED_RESOURCES` in a SHARED interest,
-and the few probes that need one to themselves declare it in that
-module's `EXCLUSIVE_RESOURCES`, which
-holds such a probe back until nothing else is running and holds every other
-probe back until it has finished.
+and the few probes that need one to themselves declare it in that module's
+`EXCLUSIVE_RESOURCES`, which holds such a probe back until nothing else is
+running and holds every other probe back until it has finished.
 
 The build directory is one of those resources (#1570). Probes used to
 launch their engine as `cabal run exe:synarchy`, so a `--jobs N` sweep put
@@ -33,9 +32,10 @@ N concurrent Cabal processes on one `dist-newstyle` and an otherwise
 healthy probe died on the inplace package database before its engine
 started. This runner therefore resolves the executable ONCE — one
 freshness build plus one `cabal list-bin`, in
-`probe_runner_resources.engine_preflight`, after selection is validated and before any probe is spawned — and hands
-every probe that absolute path through the environment, so no probe
-process invokes Cabal while another is running. That preflight is itself
+`probe_runner_resources.engine_preflight`, after selection is validated
+and before any probe is spawned — and hands every probe that absolute path
+through the environment, so no probe process invokes Cabal while another
+is running. That preflight is itself
 a Cabal writer, so it runs inside an EXCLUSIVE `cabal-build` hold: two
 aggregate runs cannot build at once, and neither can a build and another
 runner's `cabal repl` probe. The few probes that

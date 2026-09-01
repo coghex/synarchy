@@ -330,8 +330,9 @@ def run_one(script: str, port: int | None, timeout: float,
                  if k not in probe_protocol.PROTOCOL_ENV_VARS
                  and k not in resources.RUNNER_ENV_VARS}
     child_env.update(protocol_env)
-    # The engine every probe launches (#1570), resolved once by `main`'s
-    # preflight. Stripped-then-set for the same reason the protocol
+    # The engine every probe launches (#1570), resolved once by
+    # `tools/run_probes.py`'s preflight, and read from the resource owner's
+    # single cell. Stripped-then-set for the same reason the protocol
     # variables are: an operator's stale export must not decide which
     # binary a sweep runs. A caller that resolved nothing leaves the child
     # to prepare its own executable (#1913) — still one probe at a time

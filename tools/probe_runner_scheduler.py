@@ -14,7 +14,8 @@ and lifecycle owners. Nothing here parses arguments or exits a process —
 constructs these dependencies before handing them here.
 
 `run_with_retry` lives HERE and only here: an attempt is a lifecycle
-`run_one` INSIDE a resource hold, so the retry loop is the first thing
+`lifecycle.run_one` INSIDE a resource hold, so the retry loop is the first
+thing
 that needs both owners at once, which is exactly what this owner is
 permitted to consume.
 """
@@ -37,7 +38,8 @@ def run_with_retry(script, port, timeout, retries, announce=None, groups=None,
     Returns (status, elapsed, out, attempts). `announce(kind, attempt,
     retries)` is an optional callback for live progress before each retry.
     A retry never starts before the previous attempt's group is reaped —
-    `run_one` does that before it returns — so it can never be handed a
+    `lifecycle.run_one` does that before it returns — so it can never be
+    handed a
     port a leaked engine still holds.
 
     `key` and `namespace` bring EVERY attempt, the first and each retry
@@ -68,7 +70,8 @@ def present_failure(out: str, tail: int, indent: str = "    ") -> None:
     """The ONE failure presentation both scheduling paths print (#1768, #1982).
 
     The two attributions first, then the ordinary tail as context. Both
-    are drawn from the COMPLETE capture `run_one` holds, so a phase record
+    are drawn from the COMPLETE capture `lifecycle.run_one` holds, so a
+    phase record
     or a failed check that more than `--tail` lines followed is still
     named; nothing else of the capture is printed. The failure records are
     then withheld from the tail, so every recorded failure appears exactly
@@ -245,7 +248,8 @@ def run_parallel(chosen, results, *, jobs, parallel_base, parallel_ports,
                     running, return_when=concurrent.futures.FIRST_COMPLETED)
                 for fut in done_futs:
                     # Released on EVERY outcome — PASS, FAIL and TIMEOUT
-                    # alike — and only once `run_one` has returned, which is
+                    # alike — and only once `lifecycle.run_one` has
+                    # returned, which is
                     # after it reaped the probe's whole process group. A
                     # probe waiting on these resources therefore never starts
                     # while the previous holder's engine is still up. Both

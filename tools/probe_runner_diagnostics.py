@@ -25,7 +25,8 @@ from typing import NamedTuple
 # ── Durable progress records (#1768) ──────────────────────────────────
 #
 # A probe's stdout is a PIPE this runner drains only when the child ends
-# (`run_one` below), and the child is launched as a plain `python3` with
+# (`probe_runner_lifecycle.run_one`), and the child is launched as a plain
+# `python3` with
 # no `-u`, so an ordinary `print` sits in the child's own block buffer
 # until it fills. When a slow probe is SIGKILLed at `--timeout`, that
 # buffer dies with it and the artifact the operator reads names no phase
@@ -144,7 +145,8 @@ class ProgressEmitter:
 def progress_attribution(out: str) -> list[str]:
     """Attribution lines for a failing probe's DEFAULT presentation.
 
-    Reads the complete captured output — which `run_one` holds in full —
+    Reads the complete captured output — which
+    `probe_runner_lifecycle.run_one` holds in full —
     and returns only a short summary: the latest phase the child entered,
     and every nested attempt it started without finishing. The ordinary
     `--tail` context is printed beside this, unchanged; the complete
@@ -189,7 +191,8 @@ def progress_attribution(out: str) -> list[str]:
 # thing lost is different.
 #
 # A probe writes its per-check verdicts to stdout and its terminal
-# `FAIL:` summary to stderr. `run_one` merges the two with
+# `FAIL:` summary to stderr. `probe_runner_lifecycle.run_one` merges the
+# two with
 # `stderr=subprocess.STDOUT`, and Python block-buffers a piped stdout
 # while leaving stderr unbuffered — so the `FAIL:` lines OVERTAKE the
 # stdout still sitting in the child's buffer and land near the TOP of
@@ -292,7 +295,8 @@ def failure_records(out: str) -> list[FailureRecord]:
 def failure_attribution(out: str) -> list[str]:
     """The failed-check block of a failing probe's DEFAULT presentation.
 
-    Read from the COMPLETE capture `run_one` holds, so a record that more
+    Read from the COMPLETE capture `probe_runner_lifecycle.run_one` holds,
+    so a record that more
     than `--tail` lines followed is still named, and every recorded
     failure is named exactly once — the records themselves are removed
     from the tail printed beside this block (`without_failure_records`),

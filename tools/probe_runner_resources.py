@@ -220,13 +220,14 @@ def resource_hold(key: str, namespace, *, announce=None):
     """Hold `key`'s cross-process interests around ONE probe execution.
 
     Entered immediately before the probe process is launched and left only
-    once `run_one` has returned, which is after it has reaped the probe's
+    once `probe_runner_lifecycle.run_one` has returned, which is after it
+    has reaped the probe's
     whole process group — so a foreign holder never starts while this
     probe's engine is still up, exactly as the in-process ledger already
     guarantees within a sweep.
 
     Waiting happens HERE, in front of the launch, so it is never charged to
-    the probe: `run_one` starts its own clock after this returns, so a
+    the probe: `probe_runner_lifecycle.run_one` starts its own clock after this returns, so a
     probe's reported `elapsed` and its `--timeout` cover execution alone and
     a queued probe can never be reported as a TIMEOUT.
 
@@ -277,7 +278,8 @@ ENV_HELD_EXCLUSIVE = "SYNARCHY_PROBE_HELD_EXCLUSIVE"
 ENV_HELD_NAMESPACE = "SYNARCHY_PROBE_HELD_NAMESPACE"
 
 #: Every variable THIS runner owns in a probe's environment, so
-#: `run_one` can strip the lot from what it inherited before
+#: `probe_runner_lifecycle.run_one` can strip the lot from what it
+#: inherited before
 #: supplying its own — the same rule `probe_protocol` states for its
 #: own four. A nested runner re-derives each of them, so nothing is
 #: lost by dropping a value the parent set.
@@ -331,7 +333,8 @@ def cross_process_interests(key: str, namespace: str | None,
 #
 # Overridable only so `tools/test_run_probes.py` can drive the preflight
 # with a deterministic subprocess double instead of a real toolchain.
-# Production leaves it None and `main` fills it in.
+# Production leaves it None and `tools/run_probes.py`'s preflight fills it
+# in.
 ENGINE_EXECUTABLE: str | None = None
 
 #: The subprocess entry point `engine_preflight` resolves through. Tests
@@ -384,7 +387,8 @@ def engine_preflight(namespace=None, environ=None, *, announce=None) -> str:
     builds nothing. Otherwise it runs one freshness build plus one `cabal
     list-bin`, INSIDE `preflight_hold` so no other runner or GHCi consumer
     is in the build directory at the same time. Raises
-    `EngineExecutableError`, which `main` reports as a nonzero exit before
+    `EngineExecutableError`, which `tools/run_probes.py` reports as a
+    nonzero exit before
     a probe is spawned, a retry allocated, or any probe assertion
     attributed to it.
     """

@@ -365,7 +365,8 @@ PROBES = [
 # allocator, the GUI-port refusal, or `tools/probe_flake.py`'s lease
 # scanner knows any probe by name. `tools/test_run_probes.py` validates
 # every row against the live registry, the way it already does for
-# `EXCLUSIVE_RESOURCES`, so a renamed or retired probe cannot leave a
+# `probe_runner_resources.EXCLUSIVE_RESOURCES`, so a renamed or retired
+# probe cannot leave a
 # stale declaration behind.
 DEFAULT_PORT_SPAN = 1
 
