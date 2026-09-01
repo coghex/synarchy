@@ -50,7 +50,7 @@ mkUnitDef mods = UnitDef
 mkItemDef ∷ Text → [ItemBuff] → ItemDef
 mkItemDef name buffs = ItemDef
     { idName = name, idDisplayName = name
-    , idTexture = TextureHandle 0, idWeight = 0, idWeightSpec = Nothing
+    , idTexture = TextureHandle 0, idIconTexture = TextureHandle 0, idWeight = 0, idWeightSpec = Nothing
     , idBulk = 1.0, idStorage = Nothing
     , idKind = "misc", idCategory = "Misc", idMake = "", idMaterial = ""
     , idQualitySpec = Nothing

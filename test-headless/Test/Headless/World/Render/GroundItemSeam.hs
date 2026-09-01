@@ -98,7 +98,7 @@ tilesAt coord = WorldTileData
 bareItemDef ∷ ItemDef
 bareItemDef = ItemDef
     { idName = "probe_rock", idDisplayName = "probe_rock"
-    , idTexture = TextureHandle 0
+    , idTexture = TextureHandle 0, idIconTexture = TextureHandle 0
     , idWeight = 1.0, idWeightSpec = Nothing, idBulk = 1.0
     , idStorage = Nothing, idKind = "misc"
     , idCategory = "Misc", idMake = "", idMaterial = ""

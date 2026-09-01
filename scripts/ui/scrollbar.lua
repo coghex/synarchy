@@ -36,11 +36,11 @@ local TAB_CALLBACK = "onScrollTabGrab"
 function scrollbar.init()
     if assetsLoaded then return end
     
-    texScrollUp = engine.loadTexture("assets/textures/ui/scrollup.png")
-    texScrollDown = engine.loadTexture("assets/textures/ui/scrolldown.png")
-    texScrollBar = engine.loadTexture("assets/textures/ui/scrollbar.png")
-    texScrollBarTop = engine.loadTexture("assets/textures/ui/scrollbartop.png")
-    texScrollBarBottom = engine.loadTexture("assets/textures/ui/scrollbarbottom.png")
+    texScrollUp = engine.loadTexture("assets/textures/ui/scrollup.png", "ui")
+    texScrollDown = engine.loadTexture("assets/textures/ui/scrolldown.png", "ui")
+    texScrollBar = engine.loadTexture("assets/textures/ui/scrollbar.png", "ui")
+    texScrollBarTop = engine.loadTexture("assets/textures/ui/scrollbartop.png", "ui")
+    texScrollBarBottom = engine.loadTexture("assets/textures/ui/scrollbarbottom.png", "ui")
     texScrollTabSet = boxTextures.load("assets/textures/ui/scrolltab", "scrolltab")
     
     assetsLoaded = true

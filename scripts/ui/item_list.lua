@@ -69,7 +69,7 @@ local whitePixelTex = nil
 
 function itemList.init()
     if not whitePixelTex then
-        whitePixelTex = engine.loadTexture("assets/textures/utility/white.png")
+        whitePixelTex = engine.loadTexture("assets/textures/utility/white.png", "ui")
     end
     engine.logDebug("ItemList module initialized")
 end

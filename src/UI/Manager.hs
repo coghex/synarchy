@@ -95,6 +95,12 @@ module UI.Manager
   , registerBoxTextures
   , getBoxTextureSet
   , setBoxTextures
+    -- * Presentation boundary (#2056)
+  , armPresentation
+  , snapshotArmedToken
+  , witnessPresentation
+  , presentationWitnessed
+  , isPresented
   ) where
 
 import UI.Manager.Page
@@ -105,3 +111,4 @@ import UI.Manager.Property
 import UI.Manager.Query
 import UI.Manager.Text
 import UI.Manager.BoxTexture
+import UI.Manager.Presentation

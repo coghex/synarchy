@@ -18,6 +18,7 @@ import Engine.Core.State (EngineEnv, loggerRef)
 import Engine.Core.Log (LogCategory(..), logDebug)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Engine.Scripting.Lua.API.YamlTextures (loadAndRegister, resolveTexturePath)
+import Engine.Graphics.Vulkan.Texture.Policy (UploadSampler(..))
 import Engine.Asset.YamlBuildings (BuildingYamlDef(..), BuildingYamlAnim(..),
                                    BuildingYamlTileSize(..), loadBuildingYaml)
 import Building.Types
@@ -48,8 +49,18 @@ loadBuildingYamlFn env backendState = do
 
                     resolvedSprite ← resolveTexturePath env "Building sprite"
                                           unknownBuilding spritePath
+                    -- Dual-use (#2075): Building.Render draws this in
+                    -- the world, and building.listDefs hands the same
+                    -- art to the build menu as `iconTex`. Loaded under
+                    -- BOTH policies so the world quad follows the
+                    -- player's filter while the menu icon stays
+                    -- nearest; the def carries both handles.
                     handle ← loadAndRegister env backendState lteq
+                                 UploadGlobalSampler
                                  ("building_" <> name) resolvedSprite
+                    iconHandle ← loadAndRegister env backendState lteq
+                                 UploadPinnedNearest
+                                 ("building_" <> name <> "_ui") resolvedSprite
 
                     -- Build animations: frame textures are loaded via
                     -- the same loader. We only key by the single
@@ -60,6 +71,7 @@ loadBuildingYamlFn env backendState = do
                                 resolved ← resolveTexturePath env "Building animation frame"
                                                unknownBuilding (T.unpack p)
                                 loadAndRegister env backendState lteq
+                                    UploadGlobalSampler
                                     ("building_" <> name
                                      <> "_" <> animName
                                      <> "_" <> tshow i)
@@ -95,6 +107,7 @@ loadBuildingYamlFn env backendState = do
                             , bdCategory        = bydCategory def
                             , bdDescription     = bydDescription def
                             , bdTexture         = handle
+                            , bdIconTexture     = iconHandle
                             , bdTileW           = bytsX (bydTileSize def)
                             , bdTileH           = bytsY (bydTileSize def)
                             , bdPlacement       = bydPlacement def
