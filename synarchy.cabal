@@ -634,6 +634,8 @@ library
                      Combat.Wounds.Sever
                      Combat.Wounds.Tick
                      Sim.State.Types
+                     Sim.Topology
+                     Sim.Chunk
                      Sim.Fluid.Types
                      Sim.Fluid.Active
                      World.Base

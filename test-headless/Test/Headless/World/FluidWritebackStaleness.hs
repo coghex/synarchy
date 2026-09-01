@@ -401,7 +401,7 @@ chunkAt ws coord = do
 editGenFromSimQueue ∷ EngineEnv → WorldPageId → ChunkCoord → IO Word64
 editGenFromSimQueue env pageId coord = do
     cmds ← Q.flushQueue (simQueue env)
-    let gens = [ g | SimChunkEdited p c g _ _ ← cmds
+    let gens = [ g | SimChunkEdited p _ c g _ _ ← cmds
                    , p ≡ pageId, c ≡ coord ]
     case gens of
         [] → expectationFailure

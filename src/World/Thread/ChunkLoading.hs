@@ -39,6 +39,7 @@ import World.Mine.Apply (applyDigSlopesTd)
 import World.Construct.Apply (applyConstructSlopesTd)
 import World.Plant.Validate (revalidatePlantDesignations)
 import Sim.Command.Types (SimCommand(..))
+import Sim.Topology (simTopologyForParams)
 
 -- | Maximum chunks to generate per world loop iteration.
 --   parMap uses all available cores, so larger batches
@@ -148,7 +149,9 @@ updateChunkLoading env logger = do
                                 -- fluid + terrain (player edits matter).
                                 forM_ newChunks' $ \lc →
                                     Q.writeQueue (wsSimQueue (toWorldSimCapability env)) $
-                                        SimChunkLoaded pageId (lcCoord lc)
+                                        SimChunkLoaded pageId
+                                            (simTopologyForParams params)
+                                            (lcCoord lc)
                                             (lcFluidMap lc)
                                             (lcTerrainSurfaceMap lc)
                                 -- Stamp any placed locations on the loaded
@@ -351,7 +354,9 @@ drainInitQueues env logger = do
                         -- settle and never be simulated. (post-replay)
                         forM_ newChunks' $ \lc →
                             Q.writeQueue (wsSimQueue (toWorldSimCapability env)) $
-                                SimChunkLoaded pageId (lcCoord lc)
+                                SimChunkLoaded pageId
+                                    (simTopologyForParams params)
+                                    (lcCoord lc)
                                     (lcFluidMap lc)
                                     (lcTerrainSurfaceMap lc)
                         -- Stamp any placed locations on the loaded chunks (#89).
