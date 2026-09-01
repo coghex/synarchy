@@ -30,6 +30,7 @@ module World.Render.BloodQuads
     ( uploadBloodTextures
     , disposeQueuedBloodTextures
     , renderBloodDecalQuads
+    , renderBloodDecalQuadsScanned
     , bloodTextureSource
     ) where
 
@@ -282,10 +283,24 @@ rotateAround cx cy angle x y =
 
 renderBloodDecalQuads ∷ EngineEnv → WorldPageId → WorldState → Float
                       → IO (V.Vector SortableQuad)
-renderBloodDecalQuads env pageId worldState tileAlpha = do
+renderBloodDecalQuads env pageId worldState tileAlpha =
+    snd ⊚ renderBloodDecalQuadsScanned env pageId worldState tileAlpha
+
+-- | 'renderBloodDecalQuads' with the scene-assembly telemetry (#1921)
+--   this pass contributes: the STORED decal records examined while
+--   deriving this page's render records, paired with the quads it
+--   produced.
+--
+--   'Blood.Render.bloodRenderRecords' walks the whole stored decal map
+--   and filters it by page, so the count is that map's size — taken
+--   before the texture, viewport and Z rejections 'quadForM' applies —
+--   and zero when the empty-store early return above fires.
+renderBloodDecalQuadsScanned ∷ EngineEnv → WorldPageId → WorldState → Float
+                             → IO (Int, V.Vector SortableQuad)
+renderBloodDecalQuadsScanned env pageId worldState tileAlpha = do
     store ← readIORef (wsBloodStoreRef worldState)
     if HM.null (bdlDecals (bstDecals store))
-      then return V.empty
+      then return (0, V.empty)
       else do
         now      ← readIORef (wsGameTimeRef (toWorldSimCapability env))
         let rv = toRenderViewCapability env
@@ -392,4 +407,5 @@ renderBloodDecalQuads env pageId worldState tileAlpha = do
                         , sqLayer = worldLayer
                         }
 
-        return $ V.fromList (mapMaybe quadForM recs)
+        return ( HM.size (bdlDecals (bstDecals store))
+               , V.fromList (mapMaybe quadForM recs) )

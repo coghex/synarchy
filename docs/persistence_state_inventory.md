@@ -81,6 +81,7 @@ the affected fields as unclassified.
 | `zoomAtlasDataRef` | global | Exclude | — | pending GPU upload payload | none yet |
 | `screenshotRequestQueue` | global | Exclude | — | debug-only transport queue; see contract §3 | none yet |
 | `worldQuadsRef` | global | Rebuild | loaded chunk data | render cache | none yet |
+| `sceneStatsRef` | global | Exclude | — | transient scene-assembly telemetry (#1921): per-category scanned/emitted/elapsed measurements for the last completed `updateWorldTiles` pass, cleared by world teardown and rebuilt by the next pass | none yet |
 | `textureSystemRef` | global | Exclude | — | GPU bindless texture system | none yet |
 | `samplerCacheRef` | global | Exclude | — | GPU sampler cache | none yet |
 | `textureSizeRef` | global | Exclude | — | GPU texture dimension cache | none yet |

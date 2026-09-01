@@ -17,6 +17,7 @@ import qualified Test.Headless.WorldGen.ZoomParity as ZoomParity
 import qualified Test.Headless.WorldGen.BorderProbe as BorderProbe
 import qualified Test.Headless.WorldGen.WrapSeam as WrapSeam
 import qualified Test.Headless.WorldGen.CoastBreach as CoastBreach
+import qualified Test.Headless.WorldGen.Breakthrough as Breakthrough
 import qualified Test.Headless.WorldGen.BedDepth as BedDepth
 import qualified Test.Headless.WorldGen.FluidSurfaceFold as FluidSurfaceFold
 import qualified Test.Headless.Unit.Pathing.Cost as PathingCost
@@ -204,6 +205,7 @@ import qualified Test.Headless.World.Render.GroundItemSeam as GroundItemSeam
 import qualified Test.Headless.World.Render.StructureSeam as StructureSeam
 import qualified Test.Headless.World.Render.PickSeam as PickSeam
 import qualified Test.Headless.World.Render.QuadSnapshot as QuadSnapshot
+import qualified Test.Headless.World.Render.SceneStats as SceneStats
 import qualified Test.Headless.World.Render.SolarAttribution as SolarAttribution
 import qualified Test.Headless.World.Render.DesignationFaceMap as DesignationFaceMap
 import qualified Test.Headless.World.DesignationSeam as DesignationSeam
@@ -246,6 +248,8 @@ import qualified Test.Headless.Building.PageBinding as BuildingPageBinding
 import qualified Test.Headless.Building.PortalSpawnBinding as BuildingPortalSpawnBinding
 import qualified Test.Headless.Building.Placement as BuildingPlacement
 import qualified Test.Headless.Building.RemoteWarning as BuildingRemoteWarning
+import qualified Test.Headless.Building.MachineShopConstruction
+    as MachineShopConstruction
 import qualified Test.Headless.Building.WorkbenchConstruction
     as WorkbenchConstruction
 import qualified Test.Headless.Save.AutosaveGuards as AutosaveGuards
@@ -539,6 +543,7 @@ main = hspec $ do
     describe "Wrap Seam" WrapSeam.spec
     describe "Arena base seeding (#1718)" ArenaSeed.pureSpec
     describe "WorldGen.CoastBreach" CoastBreach.spec
+    describe "WorldGen.Breakthrough" Breakthrough.spec
     describe "WorldGen.BedDepth" BedDepth.spec
     describe "WorldGen.FluidSurfaceFold" FluidSurfaceFold.spec
     describe "Asset.Types" AssetTypes.spec
@@ -551,6 +556,7 @@ main = hspec $ do
     describe "Preview.UnitAnimation" PreviewUnitAnimation.spec
     describe "Preview.Building" PreviewBuilding.spec
     describe "Preview.Zoom" PreviewZoom.spec
+    describe "Machine Shop construction animation" MachineShopConstruction.spec
     describe "Workbench construction animation" WorkbenchConstruction.spec
     describe "Bindless texture filter rebinding" BindlessRebind.spec
     describe "Bindless texture release" BindlessRelease.spec
@@ -750,6 +756,10 @@ main = hspec $ do
     -- camera can be rewritten between capture and build the way the
     -- main thread's pan integration does under the world thread.
     describe "World.Render.QuadSnapshot" QuadSnapshot.spec
+
+    -- #1921: same shape again — its own headless engine and one
+    -- synthetic page, driven through the real 'updateWorldTiles'.
+    SceneStats.spec
 
     -- #1869: same shape as the line above and for the same reason —
     -- its own headless engine, two synthetic pages, no worker threads.

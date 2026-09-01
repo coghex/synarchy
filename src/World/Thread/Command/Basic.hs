@@ -17,6 +17,7 @@ import Engine.Core.Capability.UnitCombat
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import Engine.Scene.Types (emptyLayeredQuads)
+import Engine.Scene.Stats (clearSceneStats)
 import qualified Engine.Core.Queue as Q
 import Sim.Command.Types (SimCommand(..))
 import Unit.Command.Types (UnitCommand(..))
@@ -73,8 +74,13 @@ handleWorldDestroyCommand env logger pageId = do
                   , wmWorlds  = filter ((≢ pageId) . fst) (wmWorlds mgr')
                   }), ())
 
-    -- Clear world quads so renderer stops drawing the old world
+    -- Clear world quads so renderer stops drawing the old world, and
+    -- the scene-assembly telemetry measured while building them (#1921)
+    -- in the same breath — the two describe one lifecycle, so a query
+    -- after this teardown must not answer with the destroyed world's
+    -- numbers. The next completed pass republishes at sequence 1.
     writeIORef (rhWorldQuadsRef handoff) emptyLayeredQuads
+    clearSceneStats (rhSceneStatsRef handoff)
 
     logInfo logger CatWorld $ "World destroyed: " <> unWorldPageId pageId
 
@@ -107,6 +113,7 @@ handleWorldDestroyAllCommand env logger = do
                then bumpSelectionGen else id)
             m' { wmWorlds = [], wmVisible = [] }, ())
     writeIORef (rhWorldQuadsRef handoff) emptyLayeredQuads
+    clearSceneStats (rhSceneStatsRef handoff)
     -- Reset the entity managers via the UNIT/BUILDING queues, not directly:
     -- those threads keep draining their queues through the teardown, so
     -- clearing the managers here would race any in-flight spawns and let

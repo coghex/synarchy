@@ -4,8 +4,10 @@ Single source of truth so the single-seed regression test
 (``test_river_pour.py``) and the multi-seed stress test
 (``test_river_stress.py``) agree on what counts as a failure.
 
-Each value is the MAXIMUM allowed count for that metric (inclusive):
-a run passes when its observed count is ``<= threshold``.
+Each value is the MAXIMUM allowed value for that metric (inclusive): a
+run passes when its observed value is ``<= threshold``. Three of the four
+observed values are counts of offending tiles; the coastal one is a
+LENGTH, so read its comment below before comparing anything against it.
 
 Both tools expose ``--max-*`` CLI flags backed by these defaults, so an
 individual run can still be tightened or loosened without editing code.
@@ -23,5 +25,13 @@ MAX_DRY_GAPS = 20
 # riverMask=true tiles that ended up with no fluid placed.
 MAX_MASK_DRY = 30
 
-# Consecutive river tiles running alongside ocean at high elevation.
+# Longest run of river tiles running alongside ocean at high elevation:
+# the tile count of the LARGEST cardinally connected component of such
+# tiles, or 0 when there are none.
+#
+# This one is a LENGTH, not a count of offending runs — one over-long run
+# fails on its own, however few runs the world holds, and any number of
+# runs passes as long as every one of them is short enough. Both tools
+# compared the run COUNT against this value until #1952, which let a
+# single unbounded coastal run pass.
 MAX_COASTAL_PARALLEL = 5

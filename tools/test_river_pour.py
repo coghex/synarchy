@@ -10,7 +10,8 @@ Checks:
   3. Mask consistency:  mask=true tiles should have fluid
   4. Monotonic descent: river surfaces should not increase downstream
   5. Cross-chunk seams: edge tiles should match neighbor within 2
-  6. Coastal parallels: rivers running alongside ocean at high elevation
+  6. Coastal parallels: longest run of river tiles alongside ocean at
+                        high elevation (a LENGTH, not a count of runs)
 
 Usage:
     python3 tools/test_river_pour.py [path]
@@ -198,9 +199,15 @@ def check_chunk_seams(grid):
 
 # ── Check 6: Coastal parallels ──────────────────────────────────
 def check_coastal_parallels(grid):
-    """Find runs of river tiles at elevation > seaLevel+5 that are
-    adjacent to ocean (including underground) for > 5 consecutive tiles.
-    These are rivers running parallel to the coast."""
+    """Every run of river tiles at elevation > seaLevel+5 that are
+    adjacent to ocean (including underground). These are rivers running
+    parallel to the coast.
+
+    A "run" is one cardinally connected component of such tiles, and its
+    ``size`` is that run's LENGTH in tiles. EVERY component is returned,
+    however short: the pass/fail decision belongs to the configurable
+    ``river_thresholds.MAX_COASTAL_PARALLEL`` alone, so no minimum length
+    is applied here (#1952). Longest run first."""
     SEA_LEVEL = 0
     # Find all river tiles adjacent to any ocean tile
     coastal_river = set()
@@ -232,13 +239,24 @@ def check_coastal_parallels(grid):
                 if (nx, ny) in coastal_river and (nx, ny) not in visited:
                     visited.add((nx, ny))
                     queue.append((nx, ny))
-        if len(component) > 5:
-            runs.append({
-                "size": len(component),
-                "sample": component[0],
-                "terrainZ": grid[component[0]]["terrainZ"],
-            })
+        runs.append({
+            "size": len(component),
+            "sample": min(component),
+            "terrainZ": grid[min(component)]["terrainZ"],
+        })
+    # Longest first, ties broken by position, so the FAIL detail leads
+    # with the worst offender and the ordering does not depend on set
+    # iteration order.
+    runs.sort(key=lambda r: (-r["size"], r["sample"]))
     return runs
+
+
+def longest_coastal_parallel(runs):
+    """The observed coastal value: the longest run's tile count, 0 if none.
+
+    This is the quantity ``river_thresholds.MAX_COASTAL_PARALLEL`` bounds.
+    """
+    return max((r["size"] for r in runs), default=0)
 
 # ── Summary ─────────────────────────────────────────────────────
 def summarize(results, total_river, total_body, args):
@@ -250,17 +268,25 @@ def summarize(results, total_river, total_body, args):
 
     failures = []
 
-    for name, items, threshold, show_count in [
-        ("Visible drops",    results["drops"],    args.max_visible_drops, 10),
-        ("Dry gaps",         results["gaps"],     args.max_dry_gaps,      10),
-        ("Mask consistency", results["mask_dry"], args.max_mask_dry,      5),
-        ("Coastal parallels", results["coastal"], args.max_coastal_parallel, 5),
+    # `value` is the quantity the threshold beside it bounds. For the
+    # first three that is the number of offending tiles; for the coastal
+    # metric it is the longest run's LENGTH, which is why it is not
+    # len(items) and why its printed line names its unit (#1952).
+    coastal_runs = results["coastal"]
+    for name, value, items, threshold, show_count, unit in [
+        ("Visible drops",    len(results["drops"]),    results["drops"],
+         args.max_visible_drops, 10, ""),
+        ("Dry gaps",         len(results["gaps"]),     results["gaps"],
+         args.max_dry_gaps,      10, ""),
+        ("Mask consistency", len(results["mask_dry"]), results["mask_dry"],
+         args.max_mask_dry,       5, ""),
+        ("Longest coastal parallel", longest_coastal_parallel(coastal_runs),
+         coastal_runs, args.max_coastal_parallel, 5, " tiles"),
     ]:
-        count = len(items)
-        status = "PASS" if count <= threshold else "FAIL"
+        status = "PASS" if value <= threshold else "FAIL"
         if status == "FAIL":
-            failures.append(f"{name}: {count} > {threshold}")
-        print(f"\n  {status}  {name}: {count} (max {threshold})")
+            failures.append(f"{name}: {value}{unit} > {threshold}")
+        print(f"\n  {status}  {name}: {value}{unit} (max {threshold})")
         if items and (args.verbose or status == "FAIL"):
             for item in items[:show_count]:
                 print(f"         {item}")

@@ -38,6 +38,7 @@ import Engine.Input.Bindings
 import qualified Graphics.UI.GLFW as GLFW
 import Engine.Scene.Base
 import Engine.Scene.Types
+import Engine.Scene.Stats (SceneStats)
 import qualified Vulkan.Core10 as Vk
 import Vulkan.Extensions.VK_KHR_surface (SurfaceKHR)
 import UI.Types (UIPageManager)
@@ -241,6 +242,16 @@ data EngineEnv = EngineEnv
     -- ^ World quads split static (pre-sorted per layer at quad-cache
     --   rebuild) / dynamic (per-tick), written by the world thread,
     --   merged + drawn by the frame loop (#446).
+  , sceneStatsRef       ∷ IORef (Maybe SceneStats)
+    -- ^ Scene-assembly telemetry (#1921): the per-category scanned /
+    --   emitted / elapsed-nanosecond measurements the world thread
+    --   publishes at the end of every completed 'updateWorldTiles'
+    --   pass, beside the 'worldQuadsRef' those quads land in. Read by
+    --   the Lua thread (@debug.getSceneStats()@). 'Nothing' means no
+    --   completed pass since the last world teardown, which clears it
+    --   at the same two sites that clear 'worldQuadsRef' — so the two
+    --   can never disagree about whether a world lifecycle ended.
+    --   Transient session telemetry: never serialized.
   , textureSystemRef    ∷ IORef (Maybe BindlessTextureSystem)
   , samplerCacheRef     ∷ IORef SamplerCache
     -- ^ Deduplicated, refcounted Vulkan samplers keyed by 'SamplerKind'.

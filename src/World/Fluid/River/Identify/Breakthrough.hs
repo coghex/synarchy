@@ -7,6 +7,7 @@
 --   that module's header comment for the full pipeline overview.
 module World.Fluid.River.Identify.Breakthrough
     ( addBreakthroughs
+    , dijkstraBreakthrough
     ) where
 
 import UPrelude
@@ -65,11 +66,39 @@ dijkstraBreakthrough
     → Maybe ([Int], Int)
 dijkstraBreakthrough worldTiles startIdx terrain worldOcean = runST $ do
     let nTiles = worldTiles * worldTiles
-    bestCost ← VUM.replicate nTiles (maxBound ∷ Int)
-    parent   ← VUM.replicate nTiles (-1       ∷ Int)
-    dist     ← VUM.replicate nTiles (maxBound ∷ Int)
-    VUM.write bestCost startIdx 0
-    VUM.write dist     startIdx 0
+        scratchDiameter = 2 * breakthroughRange + 1
+        -- The queue and parents retain global tile ids, preserving their
+        -- exact ordering and reconstructed path. Only the mutable scratch
+        -- addressing is local: no expanded tile can be more than
+        -- breakthroughRange steps from the start. Tiny synthetic worlds
+        -- keep global addressing because a wrapped search can cover their
+        -- entire width within the range.
+        useGlobalScratch = worldTiles ≤ 2 * breakthroughRange
+        scratchTiles
+            | useGlobalScratch = nTiles
+            | otherwise = scratchDiameter * scratchDiameter
+        startX = startIdx `mod` worldTiles
+        startY = startIdx `div` worldTiles
+        scratchIndex i
+            | useGlobalScratch = i
+            | otherwise =
+                let x = i `mod` worldTiles
+                    y = i `div` worldTiles
+                    rawDx = x - startX
+                    halfWorld = worldTiles `div` 2
+                    dx
+                        | rawDx > halfWorld = rawDx - worldTiles
+                        | rawDx < negate halfWorld = rawDx + worldTiles
+                        | otherwise = rawDx
+                    dy = y - startY
+                in (dy + breakthroughRange) * scratchDiameter
+                    + dx + breakthroughRange
+        startScratch = scratchIndex startIdx
+    bestCost ← VUM.replicate scratchTiles (maxBound ∷ Int)
+    parent   ← VUM.replicate scratchTiles (-1       ∷ Int)
+    dist     ← VUM.replicate scratchTiles (maxBound ∷ Int)
+    VUM.write bestCost startScratch 0
+    VUM.write dist     startScratch 0
     foundRef ← newSTRef Nothing
     let neighbours i =
             let bx = i `mod` worldTiles
@@ -97,7 +126,7 @@ dijkstraBreakthrough worldTiles startIdx terrain worldOcean = runST $ do
                           else IM.insert c rest pqAfter
                 if i < 0 then loop pq1
                 else do
-                  bc ← VUM.read bestCost i
+                  bc ← VUM.read bestCost (scratchIndex i)
                   if c > bc
                     then loop pq1
                     else do
@@ -108,7 +137,7 @@ dijkstraBreakthrough worldTiles startIdx terrain worldOcean = runST $ do
                           if worldOcean VU.! i
                             then writeSTRef foundRef (Just (i, c))
                             else do
-                              d ← VUM.read dist i
+                              d ← VUM.read dist (scratchIndex i)
                               if d ≥ breakthroughRange
                                 then loop pq1
                                 else do
@@ -129,12 +158,13 @@ dijkstraBreakthrough worldTiles startIdx terrain worldOcean = runST $ do
                          if newCost > breakthroughMaxCarve
                             then pure pq
                             else do
-                              bcN ← VUM.read bestCost nIdx
+                              let nScratch = scratchIndex nIdx
+                              bcN ← VUM.read bestCost nScratch
                               if newCost < bcN
                                 then do
-                                    VUM.write bestCost nIdx newCost
-                                    VUM.write parent   nIdx i
-                                    VUM.write dist     nIdx (d + 1)
+                                    VUM.write bestCost nScratch newCost
+                                    VUM.write parent   nScratch i
+                                    VUM.write dist     nScratch (d + 1)
                                     pure (IM.insertWith (++) newCost
                                               [nIdx] pq)
                                 else pure pq
@@ -144,7 +174,7 @@ dijkstraBreakthrough worldTiles startIdx terrain worldOcean = runST $ do
         Nothing → pure Nothing
         Just (endIdx, c) → do
             let rebuild cur acc = do
-                    p ← VUM.read parent cur
+                    p ← VUM.read parent (scratchIndex cur)
                     if p < 0 then pure (cur : acc)
                     else rebuild p (cur : acc)
             path ← rebuild endIdx []

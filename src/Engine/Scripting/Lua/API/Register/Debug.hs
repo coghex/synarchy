@@ -12,6 +12,7 @@ import Engine.Scripting.Lua.API.ActionOutcome
 import Engine.Scripting.Lua.API.LoadGate
     (armLoadStageGateFn, releaseLoadStageGateFn, getLoadStageGateFn)
 import Engine.Scripting.Lua.API.QueueStats (getQueueStatsFn)
+import Engine.Scripting.Lua.API.SceneStats (getSceneStatsFn)
 import qualified HsLua as Lua
 
 -- | Populate the @debug@ global with engine debug verbs
@@ -41,6 +42,10 @@ registerDebugAPI env = do
   -- answerable on a bare headless boot, so a backlog can be observed
   -- from the moment the console comes up.
   registerLuaFunction "getQueueStats" (getQueueStatsFn env)
+  -- #1921: World.Render scene-assembly telemetry. Read-only, and
+  -- published by the world thread, which runs headless — so it answers
+  -- in --headless and --offscreen alike.
+  registerLuaFunction "getSceneStats" (getSceneStatsFn env)
 
   if isTbl
     then Lua.pop 1
