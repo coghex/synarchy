@@ -72,7 +72,9 @@
 --   - 'SpoilPile'           → 'SpoilPileDTO'
 --
 --   'WorldGenParamsDTO' and its full nested worldgen config/state tree
---   live in "World.Save.Component.WorldGen" (imported + re-exported here);
+--   are reached through the "World.Save.Component.WorldGen" façade
+--   (imported + re-exported here), which since #2098 re-exports them from
+--   four owner modules rather than declaring them itself;
 --   'ItemInstanceDTO' is defined below beside 'GroundItemDTO'.
 --
 --   A field/constructor added, dropped, or reordered on any of those
@@ -1512,7 +1514,7 @@ migrateWorldPagesV5 (WorldPagesDTOv5 ps) = WorldPages
 -- | The v4 migration (#1102): decode the frozen v4 page cores into the
 --   same base 'PageSnapshot' map. The ONLY difference is the per-page
 --   river-name table, which comes back EMPTY
---   ('World.Save.Component.WorldGen.fromWorldGenParamsDTOv3'): a save
+--   ('World.Save.Component.WorldGenHistory.fromWorldGenParamsDTOv3'): a save
 --   written before #1102 named no rivers, and a name is never inferred
 --   after the fact for a page whose language it was not rendered from
 --   (#1102 requirements 5 and 6). Its rivers still carry ids, which are
@@ -1547,7 +1549,7 @@ migrateWorldPagesV4 (WorldPagesDTOv4 ps) = WorldPages
 --   EXACTLY — a location named before this landing keeps that name
 --   forever (#1101 requirements 4 and 7), and is not renamed into the
 --   world's language on upgrade — while each gains no gloss
---   ('World.Save.Component.WorldGen.fromLocationInstanceDTOv1'). The
+--   ('World.Save.Component.WorldGenNaming.fromLocationInstanceDTOv1'). The
 --   page's own identity, provenance included, rides across untouched:
 --   #1101 changed no world-identity field.
 migrateWorldPagesV3 ∷ WorldPagesDTOv3 → WorldPages

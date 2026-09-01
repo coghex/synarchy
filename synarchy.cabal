@@ -854,6 +854,10 @@ library
                      World.Save.Envelope
                      World.Save.Component.Types
                      World.Save.Component.WorldGen
+                     World.Save.Component.WorldGenClimate
+                     World.Save.Component.WorldGenNaming
+                     World.Save.Component.WorldGenCurrent
+                     World.Save.Component.WorldGenHistory
                      World.Save.Component.Session
                      World.Save.Component.Page
                      World.Save.Component.Entities
