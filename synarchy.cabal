@@ -1164,6 +1164,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Asset.UnitInventory
                    Test.Headless.Asset.MaterialMoveCost
                    Test.Headless.Asset.YamlList
+                   Test.Headless.Startup.AssetLogging
                    Test.Headless.Preview.Discovery
                    Test.Headless.Preview.UnitAnimation
                    Test.Headless.Preview.Building

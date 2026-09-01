@@ -25,7 +25,7 @@ import Engine.Core.State (EngineEnv, loggerRef
    )
 import Engine.Core.Capability.RenderView
   (RenderViewCapability(..), toRenderViewCapability)
-import Engine.Core.Log (LogCategory(..), logInfo, logWarn)
+import Engine.Core.Log (LogCategory(..), logDebug, logWarn)
 import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaToEngineMsg(..))
 import Engine.Asset.Handle (TextureHandle(..), AssetState(..))
 import Engine.Asset.Types (AssetPool)
@@ -121,7 +121,7 @@ loadMaterialYamlFn env backendState = do
                             ) reg defs
                     in (reg', ())
 
-                logInfo logger CatAsset $
+                logDebug logger CatAsset $
                     "loadMaterialYaml: loaded " <> tshow total
                     <> " textures from " <> T.pack filePath
                 return total
@@ -164,7 +164,7 @@ loadVegetationYamlFn env backendState = do
                     return (acc + varCount)
                     ) (0 ∷ Int) defs
 
-                logInfo logger CatAsset $
+                logDebug logger CatAsset $
                     "loadVegetationYaml: loaded " <> tshow total
                     <> " textures from " <> T.pack filePath
                 return total
@@ -251,7 +251,7 @@ loadFloraYamlFn env backendState = do
                     return (acc + texCount)
                     ) (0 ∷ Int) defs
 
-                logInfo logger CatAsset $
+                logDebug logger CatAsset $
                     "loadFloraYaml: loaded " <> tshow (length defs)
                     <> " species (" <> tshow total
                     <> " textures) from " <> T.pack filePath

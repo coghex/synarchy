@@ -66,6 +66,7 @@ import qualified Test.Headless.Asset.FloraRegrowthSchema as FloraRegrowthSchema
 import qualified Test.Headless.Asset.UnitInventory as AssetUnitInventory
 import qualified Test.Headless.Asset.Types as AssetTypes
 import qualified Test.Headless.Asset.YamlList as AssetYamlList
+import qualified Test.Headless.Startup.AssetLogging as StartupAssetLogging
 import qualified Test.Headless.Asset.MaterialMoveCost as AssetMaterialMoveCost
 import qualified Test.Headless.Preview.Discovery as PreviewDiscovery
 import qualified Test.Headless.Unit.Atlas as UnitAtlas
@@ -552,6 +553,7 @@ main = hspec $ do
     describe "Asset.FloraRegrowthSchema" FloraRegrowthSchema.spec
     describe "Asset.UnitInventory" AssetUnitInventory.spec
     describe "Asset.YamlList" AssetYamlList.spec
+    StartupAssetLogging.spec
     describe "material move_cost validation" AssetMaterialMoveCost.spec
     describe "Preview.Discovery" PreviewDiscovery.spec
     describe "Preview.UnitAnimation" PreviewUnitAnimation.spec
