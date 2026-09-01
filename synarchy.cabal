@@ -1264,6 +1264,13 @@ test-suite synarchy-test-headless
                    Test.Headless.Power.Network
                    Test.Headless.Language.Semantic
                    Test.Headless.Language.Generated
+                   Test.Headless.Language.Generated.Support
+                   Test.Headless.Language.Generated.Core
+                   Test.Headless.Language.Generated.Onset
+                   Test.Headless.Language.Generated.Boundary
+                   Test.Headless.Language.Generated.Bound
+                   Test.Headless.Language.Generated.Golden
+                   Test.Headless.Language.Generated.Orthography
                    Test.Headless.Language.Suggest
                    Test.Headless.Language.Etymology
                    Test.Headless.Language.EtymologyPageScope
