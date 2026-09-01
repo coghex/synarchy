@@ -49,15 +49,8 @@ from persistence_contract_sweep import (  # type: ignore
 import probe_runner_diagnostics  # type: ignore
 from probe_runner_registry import PROBES  # type: ignore
 
-FAILURES: list[str] = []
-
-
-def expect(cond: bool, msg: str) -> None:
-    if not cond:
-        FAILURES.append(msg)
-        print(f"  FAIL: {msg}")
-    else:
-        print(f"  OK:   {msg}")
+import selftest  # noqa: E402
+from selftest import FAILURES, expect  # noqa: E402
 
 
 def test_todays_selectable_keys_are_all_registered() -> None:
@@ -95,8 +88,6 @@ def test_empty_selectable_list_has_nothing_stale() -> None:
     print("\n-- an empty selectable list trivially has no stale entries")
     stale = unregistered_selectable_probe_keys([], {"chop", "till"})
     expect(stale == [], f"expected no stale keys, got {stale!r}")
-
-
 
 
 # --------------------------------------------------------------------------
@@ -195,6 +186,7 @@ def test_the_latest_sweep_phase_survives_a_long_tail() -> None:
 
 
 def main() -> int:
+    selftest.parse_verbose()
     test_todays_selectable_keys_are_all_registered()
     test_a_key_the_registry_drops_is_caught()
     test_every_stale_key_is_named_at_once()
@@ -207,10 +199,10 @@ def main() -> int:
         print(f"\n{len(FAILURES)} test(s) failed:")
         for failure in FAILURES:
             print(f"  {failure}")
-        return 1
-    print("\nAll persistence_contract_sweep registry-drift and "
-          "phase-record tests passed")
-    return 0
+        return selftest.concluded(1)
+    return selftest.concluded(
+        0, "\nAll persistence_contract_sweep registry-drift and "
+        "phase-record tests passed")
 
 
 if __name__ == "__main__":

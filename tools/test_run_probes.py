@@ -81,20 +81,14 @@ import probe_runner_resources  # type: ignore
 import probe_runner_scheduler  # type: ignore
 import run_probes  # type: ignore
 
+import selftest  # noqa: E402
+from selftest import FAILURES, expect  # noqa: E402
+
 TOOLS_DIR = str(Path(__file__).resolve().parent)
-FAILURES: list[str] = []
 
 # Short enough to keep the suite quick, long enough that a correct
 # SIGTERM-then-poll escalation is genuinely exercised rather than skipped.
 TEST_GRACE = 1.5
-
-
-def expect(cond: bool, msg: str) -> None:
-    if not cond:
-        FAILURES.append(msg)
-        print(f"  FAIL: {msg}")
-    else:
-        print(f"  OK:   {msg}")
 
 
 # --------------------------------------------------------------------------
@@ -3361,7 +3355,6 @@ def test_group_running_ignores_a_zombie_only_group() -> None:
         live.wait()
 
 
-
 # --------------------------------------------------------------------------
 # Durable progress records and timeout attribution (#1768)
 #
@@ -4534,8 +4527,8 @@ def test_the_readme_states_no_registry_total() -> None:
                f"(fired {sorted(fired)})")
 
 
-
 def main() -> int:
+    selftest.parse_verbose()
     test_the_synthetic_fixtures_are_valid_python()
     test_liveness_check_does_not_count_a_zombie_as_running()
     test_group_running_ignores_a_zombie_only_group()
@@ -4613,9 +4606,8 @@ def main() -> int:
         print(f"\n{len(FAILURES)} test(s) failed:")
         for failure in FAILURES:
             print(f"  {failure}")
-        return 1
-    print("\nAll run_probes teardown tests passed")
-    return 0
+        return selftest.concluded(1)
+    return selftest.concluded(0, "\nAll run_probes teardown tests passed")
 
 
 if __name__ == "__main__":

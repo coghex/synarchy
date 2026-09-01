@@ -56,16 +56,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import probe_resource_lock as lock  # type: ignore
 
+import selftest  # noqa: E402
+from selftest import FAILURES, expect  # noqa: E402
+
 TOOLS_DIR = str(Path(__file__).resolve().parent)
-FAILURES: list[str] = []
-
-
-def expect(cond: bool, msg: str) -> None:
-    if not cond:
-        FAILURES.append(msg)
-        print(f"  FAIL: {msg}")
-    else:
-        print(f"  OK:   {msg}")
 
 
 # --------------------------------------------------------------------------
@@ -654,6 +648,7 @@ def test_holders_is_best_effort_and_says_so() -> None:
 
 
 def main() -> int:
+    selftest.parse_verbose()
     test_two_shared_holders_coexist()
     test_a_shared_holder_blocks_an_exclusive_acquirer()
     test_an_exclusive_holder_blocks_a_shared_acquirer()
@@ -676,9 +671,8 @@ def main() -> int:
         print(f"\n{len(FAILURES)} test(s) failed:")
         for failure in FAILURES:
             print(f"  {failure}")
-        return 1
-    print("\nAll probe resource lock tests passed")
-    return 0
+        return selftest.concluded(1)
+    return selftest.concluded(0, "\nAll probe resource lock tests passed")
 
 
 if __name__ == "__main__":

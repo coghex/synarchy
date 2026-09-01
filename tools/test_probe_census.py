@@ -51,16 +51,12 @@ import probe_protocol  # type: ignore  # noqa: E402
 import probe_engine  # type: ignore  # noqa: E402
 import probe_runner_registry  # type: ignore  # noqa: E402
 
-FAILURES: list[str] = []
+import selftest  # noqa: E402
+from selftest import FAILURES, expect  # noqa: E402
+
 
 COMMIT_A = "a" * 40
 COMMIT_B = "b" * 40
-
-
-def expect(cond: bool, msg: str) -> None:
-    if not cond:
-        FAILURES.append(msg)
-    print(f"  {'ok  ' if cond else 'FAIL'} {msg}")
 
 
 def expect_refusal_kind(kind, call, msg: str) -> None:
@@ -3893,7 +3889,6 @@ def test_summary_cli() -> None:
                "--summary --probe on an unknown key refuses")
 
 
-
 # ==========================================================================
 # CI-promotion candidates (#1441)
 # ==========================================================================
@@ -4668,6 +4663,7 @@ def test_deferral_gate() -> None:
 
 
 def main() -> int:
+    selftest.parse_verbose()
     for test in (test_record_shape, test_migration, test_seed_and_noop,
                  test_reconciliation, test_ingest_accepted,
                  test_ci_eligible_takes_no_measurement,
@@ -4706,9 +4702,8 @@ def main() -> int:
         print(f"{len(FAILURES)} FAILED:")
         for message in FAILURES:
             print(f"  - {message}")
-        return 1
-    print("probe_census self-test: all cases pass")
-    return 0
+        return selftest.concluded(1)
+    return selftest.concluded(0, "probe_census self-test: all cases pass")
 
 
 if __name__ == "__main__":

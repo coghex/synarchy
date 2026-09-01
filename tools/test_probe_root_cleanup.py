@@ -79,6 +79,9 @@ import subprocess
 import sys
 import tempfile
 
+import selftest
+from selftest import FAILURES, expect
+
 TOOLS = os.path.dirname(os.path.abspath(__file__))
 
 PROBES = (
@@ -99,7 +102,6 @@ CONFIG_COPY_PROBES = PROBES + ("item_instance_probe",)
 # might print.
 TOKEN = "synthetic-staging-fault-1791"
 
-FAILURES: list[str] = []
 
 # The driver runs INSIDE the probe's own process, one statement away
 # from the shipped `if __name__ == "__main__": sys.exit(main())`, so the
@@ -213,14 +215,6 @@ elif config["fault"] == "rmtree-raises":
 sys.argv = [config["module"] + ".py"]
 sys.exit(probe.main())
 '''
-
-
-def expect(cond: bool, msg: str) -> None:
-    if not cond:
-        FAILURES.append(msg)
-        print(f"  FAIL: {msg}")
-    else:
-        print(f"  OK:   {msg}")
 
 
 # The source `config/` a read-only fixture stages, and the modes it
@@ -602,6 +596,7 @@ def test_cleanup_decides_the_item_instance_exit_status() -> None:
 
 
 def main() -> int:
+    selftest.parse_verbose()
     for module in PROBES:
         test_a_staging_failure_removes_the_invocation_base(module)
         test_removal_that_cannot_finish_is_still_non_zero(module)
@@ -613,10 +608,10 @@ def main() -> int:
         print(f"\n{len(FAILURES)} check(s) failed:")
         for failure in FAILURES:
             print(f"  {failure}")
-        return 1
-    print(f"\nAll isolated-root cleanup tests passed for "
-          f"{len(CONFIG_COPY_PROBES)} probes")
-    return 0
+        return selftest.concluded(1)
+    return selftest.concluded(
+        0, f"\nAll isolated-root cleanup tests passed for "
+        f"{len(CONFIG_COPY_PROBES)} probes")
 
 
 if __name__ == "__main__":

@@ -36,17 +36,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lua_duplicate_function_audit import main  # type: ignore
 
-FAILURES: list[str] = []
+import selftest  # noqa: E402
+from selftest import FAILURES, expect  # noqa: E402
+
 
 CLEAN_SUMMARY = "No duplicate exported function definitions"
-
-
-def expect(cond: bool, msg: str) -> None:
-    if not cond:
-        FAILURES.append(msg)
-        print(f"  FAIL: {msg}")
-    else:
-        print(f"  OK:   {msg}")
 
 
 def _write(root: Path, rel: str, body: str) -> None:
@@ -615,14 +609,14 @@ TESTS = [
 
 
 def main_() -> int:
+    selftest.parse_verbose()
     for test in TESTS:
         print(f"{test.__name__}:")
         test()
     if FAILURES:
         print(f"\n{len(FAILURES)} test failure(s)")
-        return 1
-    print(f"\nAll {len(TESTS)} tests passed")
-    return 0
+        return selftest.concluded(1)
+    return selftest.concluded(0, f"\nAll {len(TESTS)} tests passed")
 
 
 if __name__ == "__main__":

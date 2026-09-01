@@ -82,6 +82,9 @@ sys.path.insert(0, str(TOOLS))
 import probelib  # type: ignore  # noqa: E402
 import flora_growth_probe as probe  # type: ignore  # noqa: E402
 
+import selftest  # noqa: E402
+from selftest import FAILURES, expect  # noqa: E402
+
 # The three process-global names the probe used before #1682. Nothing it
 # writes may resolve to one of them again.
 LEGACY_PATHS = (
@@ -101,16 +104,6 @@ FIXTURE_DIGESTS = {
     "PROBE_CLOVER_YAML":
         "ded30e02c64e921f3fb198c70741f2b2b555802fcc206f32f4a86d9465e5a308",
 }
-
-FAILURES: list[str] = []
-
-
-def expect(cond: bool, msg: str) -> None:
-    if not cond:
-        FAILURES.append(msg)
-        print(f"  FAIL: {msg}")
-    else:
-        print(f"  OK:   {msg}")
 
 
 @contextlib.contextmanager
@@ -933,6 +926,7 @@ def test_a_rejected_fixture_still_stops_the_probe_at_setup() -> None:
 
 
 def main() -> int:
+    selftest.parse_verbose()
     test_two_invocations_share_no_path()
     test_no_artifact_keeps_a_legacy_fixed_tmp_name()
     test_release_never_touches_what_the_run_did_not_create()
@@ -961,9 +955,9 @@ def main() -> int:
         print(f"\n{len(FAILURES)} check(s) failed:")
         for failure in FAILURES:
             print(f"  {failure}")
-        return 1
-    print("\nAll flora_growth_probe artifact-ownership tests passed")
-    return 0
+        return selftest.concluded(1)
+    return selftest.concluded(
+        0, "\nAll flora_growth_probe artifact-ownership tests passed")
 
 
 if __name__ == "__main__":

@@ -35,15 +35,8 @@ from persistence_inventory_audit import (  # type: ignore
     find_typed_reference_fields, find_lua_reference_kinds,
 )
 
-FAILURES: list[str] = []
-
-
-def expect(cond: bool, msg: str) -> None:
-    if not cond:
-        FAILURES.append(msg)
-        print(f"  FAIL: {msg}")
-    else:
-        print(f"  OK:   {msg}")
+import selftest  # noqa: E402
+from selftest import FAILURES, expect  # noqa: E402
 
 
 # ----- Fixtures --------------------------------------------------------
@@ -3425,6 +3418,7 @@ def test_derive_registered_ids_excludes_defined_but_unregistered_and_audit_flags
 # ----- Runner --------------------------------------------------------------
 
 def main() -> int:
+    selftest.parse_verbose()
     tests = [
         test_extract_fields_from_brace_block,
         test_extract_fields_stray_brace_in_comment_is_harmless,
@@ -3604,10 +3598,9 @@ def main() -> int:
         print(f"\n{len(FAILURES)} test failure(s):")
         for f in FAILURES:
             print(f"  {f}")
-        return 1
+        return selftest.concluded(1)
 
-    print(f"\nAll {len(tests)} test groups passed")
-    return 0
+    return selftest.concluded(0, f"\nAll {len(tests)} test groups passed")
 
 
 if __name__ == "__main__":

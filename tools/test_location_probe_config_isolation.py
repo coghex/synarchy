@@ -68,6 +68,9 @@ import location_overlay_probe as overlay  # type: ignore  # noqa: E402
 import location_stamp_idempotent_probe as stamp  # type: ignore  # noqa: E402
 import portal_ghost_probe as portal  # type: ignore  # noqa: E402
 
+import selftest  # noqa: E402
+from selftest import FAILURES, expect  # noqa: E402
+
 #: Every DISTINCT root builder in scope. `portal_ghost_probe` is
 #: deliberately absent: it does not define one, and the test below pins
 #: that it still shares this list's first entry.
@@ -86,16 +89,6 @@ CONTENT_FAMILIES = ("scripts", "assets", "data")
 #: A name no checkout carries, so the real-checkout test below can tell
 #: an entry IT created apart from anything that was already there.
 SENTINEL = "probe_config_isolation_selftest.local.yaml"
-
-FAILURES: list[str] = []
-
-
-def expect(cond: bool, msg: str) -> None:
-    if not cond:
-        FAILURES.append(msg)
-        print(f"  FAIL: {msg}")
-    else:
-        print(f"  OK:   {msg}")
 
 
 # ---------------------------------------------------------------------
@@ -497,6 +490,7 @@ def test_no_builder_symlinks_config_any_more() -> None:
 
 
 def main() -> int:
+    selftest.parse_verbose()
     test_config_is_a_private_copy_and_not_an_alias()
     test_the_developers_local_overrides_are_absent()
     test_the_content_families_are_still_shared_symlinks()
@@ -513,9 +507,9 @@ def main() -> int:
         print(f"\n{len(FAILURES)} test(s) failed:")
         for failure in FAILURES:
             print(f"  {failure}")
-        return 1
-    print("\nAll location probe config-isolation tests passed")
-    return 0
+        return selftest.concluded(1)
+    return selftest.concluded(
+        0, "\nAll location probe config-isolation tests passed")
 
 
 if __name__ == "__main__":

@@ -65,8 +65,10 @@ import probe_select  # type: ignore
 import probe_runner_lifecycle  # type: ignore
 import probe_runner_resources  # type: ignore
 
+import selftest  # noqa: E402
+from selftest import FAILURES, expect  # noqa: E402
+
 TOOLS_DIR = str(Path(__file__).resolve().parent)
-FAILURES: list[str] = []
 
 # Two REGISTERED, manual-only, protocol-compatible probe keys. Real keys
 # rather than invented ones because the recorder validates against the
@@ -78,14 +80,6 @@ OTHER = "role"
 COMMIT = "a" * 40
 OTHER_COMMIT = "b" * 40
 NOW = datetime.datetime(2026, 8, 21, 12, 0, tzinfo=datetime.timezone.utc)
-
-
-def expect(cond: bool, msg: str) -> None:
-    if not cond:
-        FAILURES.append(msg)
-        print(f"  FAIL: {msg}")
-    else:
-        print(f"  OK:   {msg}")
 
 
 # --------------------------------------------------------------------------
@@ -2040,6 +2034,7 @@ def test_the_real_preparation_runs_outside_the_real_hold() -> None:
 
 
 def main() -> int:
+    selftest.parse_verbose()
     test_the_harness_is_told_ten_runs_and_four_capabilities()
     test_pass_fail_and_timeout_are_all_valid_observations()
     test_no_qualifying_probe_is_a_successful_no_work_outcome()
@@ -2096,9 +2091,8 @@ def main() -> int:
         print(f"\n{len(FAILURES)} test(s) failed:")
         for failure in FAILURES:
             print(f"  {failure}")
-        return 1
-    print("\nAll deflake orchestration tests passed")
-    return 0
+        return selftest.concluded(1)
+    return selftest.concluded(0, "\nAll deflake orchestration tests passed")
 
 
 if __name__ == "__main__":

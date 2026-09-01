@@ -22,6 +22,9 @@ from world_determinism import (  # type: ignore
     canonical_dump, hash_dump, diff_dumps, field_diff_summary,
 )
 
+import selftest  # noqa: E402
+from selftest import FAILURES, expect  # noqa: E402
+
 
 # ----- Helpers -------------------------------------------------------------
 
@@ -33,17 +36,6 @@ def tile(x: int, y: int, **fields: Any) -> dict[str, Any]:
 
 def grid(w: int, h: int) -> list[dict[str, Any]]:
     return [tile(x, y, terrainZ=x + y) for y in range(h) for x in range(w)]
-
-
-FAILURES: list[str] = []
-
-
-def expect(cond: bool, msg: str) -> None:
-    if not cond:
-        FAILURES.append(msg)
-        print(f"  FAIL: {msg}")
-    else:
-        print(f"  OK:   {msg}")
 
 
 # ----- Tests ---------------------------------------------------------------
@@ -102,6 +94,7 @@ def test_canonical_form_is_stable() -> None:
 
 
 def main() -> int:
+    selftest.parse_verbose()
     tests = [
         test_array_order_is_ignored,
         test_key_order_is_ignored,
@@ -117,10 +110,9 @@ def main() -> int:
         print(f"\n{len(FAILURES)} test failure(s):")
         for f in FAILURES:
             print(f"  {f}")
-        return 1
+        return selftest.concluded(1)
 
-    print(f"\nAll {len(tests)} test groups passed")
-    return 0
+    return selftest.concluded(0, f"\nAll {len(tests)} test groups passed")
 
 
 if __name__ == "__main__":

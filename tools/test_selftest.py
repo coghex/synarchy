@@ -1,0 +1,305 @@
+#!/usr/bin/env python3
+"""Self-test for tools/selftest.py, the shared assertion helper (#1922).
+
+Two halves, and both are load-bearing.
+
+**Behaviour**, proved by running generated fixture scripts in fresh
+interpreters: quiet by default, per-assertion detail under either
+verbose spelling, a failure that always prints and always registers, an
+assertion tally that counts pass and fail alike, and the vacuity guard
+that refuses a run which executed no assertion at all. A fixture is a
+real process, so each observes an invocation's own count from zero --
+the property `selftest.concluded` depends on and the property an
+in-process check could accidentally satisfy by sharing this script's
+state.
+
+**Conversion**, proved statically over every ``tools/test_*.py`` that
+imports the module: it defines no local assertion helper, it routes both
+verdicts through `selftest.concluded`, and it offers the verbose flag.
+Plus the tree-wide search requirement 1 states -- the narrating body
+survives in the shared module and nowhere else.
+
+The static half is deliberately not "run all thirty and diff": CI
+already runs most of them, several take minutes, and one drives
+``cabal repl``. What CI cannot notice is a script that quietly stopped
+importing the shared helper, which is what these checks are for.
+
+Usage:
+  python3 tools/test_selftest.py [-v]
+Exit codes: 0 = all tests passed, 1 = one or more failed.
+"""
+from __future__ import annotations
+
+import ast
+import re
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+import selftest
+from selftest import FAILURES, expect
+
+TOOLS = Path(__file__).resolve().parent
+
+#: A converted script is one that imports the shared helper. Deriving
+#: the roster instead of freezing it means a newly converted script
+#: joins these checks the day it lands.
+CONVERTED = sorted(
+    path for path in TOOLS.glob("test_*.py")
+    if path.name != Path(__file__).name
+    and re.search(r"^from selftest import ", path.read_text(encoding="utf-8"),
+                  re.M))
+
+#: #1922 converted thirty scripts. A roster that shrinks below that is a
+#: script that stopped importing the helper, which is exactly the
+#: regression the static half exists to catch -- and, like every check
+#: here, one an emptied glob would otherwise report as green.
+MINIMUM_CONVERTED = 30
+
+#: The two narrating bodies #1922 removed. Requirement 1: a tree-wide
+#: search finds them only in the shared module.
+NARRATION = re.compile(r'print\(f"  (OK:|\{.ok  .)')
+
+FIXTURE = '''\
+import sys
+sys.path.insert(0, {tools!r})
+import selftest
+from selftest import FAILURES, expect
+
+def main() -> int:
+    selftest.parse_verbose()
+{body}
+    if FAILURES:
+        print(f"{{len(FAILURES)}} failed:")
+        for message in FAILURES:
+            print(f"  {{message}}")
+        return selftest.concluded(1)
+    return selftest.concluded(0, "fixture passed")
+
+raise SystemExit(main())
+'''
+
+
+def run_fixture(body: str, *argv: str) -> subprocess.CompletedProcess:
+    """One fixture script, in its own interpreter, with its own state."""
+    with tempfile.TemporaryDirectory() as tmp:
+        script = Path(tmp) / "fixture.py"
+        script.write_text(
+            FIXTURE.format(tools=str(TOOLS),
+                           body="\n".join(f"    {line}" for line in body)),
+            encoding="utf-8")
+        return subprocess.run([sys.executable, str(script), *argv],
+                              capture_output=True, text=True)
+
+
+TWO_PASSES = ['expect(1 == 1, "one holds")', 'expect(2 == 2, "two holds")']
+
+
+# ----- Behaviour -----------------------------------------------------------
+
+def test_a_passing_run_narrates_nothing() -> None:
+    result = run_fixture(TWO_PASSES)
+    expect(result.returncode == 0,
+           f"a passing fixture exits 0 (got {result.returncode}: "
+           f"{result.stderr.strip()})")
+    expect("OK:" not in result.stdout,
+           f"and prints no per-assertion success line ({result.stdout!r})")
+    expect("fixture passed" in result.stdout,
+           "while still printing its own summary")
+
+
+def test_the_summary_carries_the_tally() -> None:
+    result = run_fixture(TWO_PASSES)
+    expect("fixture passed (2 assertions executed)" in result.stdout,
+           f"the tally rides on the script's own summary line "
+           f"({result.stdout!r})")
+
+
+def test_one_assertion_is_singular() -> None:
+    result = run_fixture(['expect(True, "the only one")'])
+    expect("(1 assertion executed)" in result.stdout,
+           f"a single assertion is not pluralized ({result.stdout!r})")
+
+
+def test_both_verbose_spellings_restore_the_detail() -> None:
+    for flag in ("-v", "--verbose"):
+        result = run_fixture(TWO_PASSES, flag)
+        expect(result.returncode == 0,
+               f"{flag} still exits 0 (got {result.returncode})")
+        expect(result.stdout.count("  OK:   ") == 2,
+               f"{flag} narrates every passing assertion ({result.stdout!r})")
+        expect("one holds" in result.stdout and "two holds" in result.stdout,
+               f"{flag} narrates each assertion's own message")
+
+
+def test_an_unrelated_argument_is_left_alone() -> None:
+    # These scripts took no options and ignored whatever they were
+    # handed; adding the flag must not turn that into a usage error.
+    result = run_fixture(TWO_PASSES, "--not-a-flag-this-script-knows")
+    expect(result.returncode == 0,
+           f"an unknown argument is still ignored (got {result.returncode}: "
+           f"{result.stderr.strip()})")
+    expect("OK:" not in result.stdout,
+           "and does not accidentally enable narration")
+
+
+def test_a_failure_prints_without_the_flag() -> None:
+    result = run_fixture(['expect(False, "this one does not hold")'])
+    expect(result.returncode == 1,
+           f"a failing fixture exits 1 (got {result.returncode})")
+    expect("  FAIL: this one does not hold" in result.stdout,
+           f"the failure prints in the default quiet mode ({result.stdout!r})")
+    expect("1 failed:" in result.stdout,
+           "and registers, so the script's own reporting sees it")
+    expect("fixture passed" not in result.stdout,
+           "and the passing summary is not printed")
+
+
+def test_a_failure_is_counted_like_a_pass() -> None:
+    result = run_fixture(['expect(True, "holds")', 'expect(False, "does not")'])
+    expect("(2 assertions executed)" in result.stdout,
+           f"the tally counts both outcomes ({result.stdout!r})")
+
+
+def test_the_failing_verdict_still_states_its_tally() -> None:
+    result = run_fixture(['expect(False, "does not hold")'])
+    expect("(1 assertion executed)" in result.stdout,
+           f"a failing run reports what it ran too ({result.stdout!r})")
+
+
+def test_a_run_that_asserts_nothing_is_a_failure() -> None:
+    # The whole point of the guard: with the narration gone, an emptied
+    # case registry has no other tell.
+    result = run_fixture(['pass'])
+    expect(result.returncode == 1,
+           f"a fixture with no assertion exits nonzero (got "
+           f"{result.returncode})")
+    expect("no assertion executed" in result.stderr,
+           f"and says why, on stderr ({result.stderr!r})")
+    expect("fixture passed" not in result.stdout,
+           f"and never claims to have passed ({result.stdout!r})")
+
+
+def test_record_fail_can_show_more_than_it_registers() -> None:
+    # `expect_raises` registers a summary and prints the exception it
+    # actually saw; both halves have to survive.
+    result = run_fixture(
+        ['selftest.record_fail("registered text", "shown detail")'])
+    expect("  FAIL: shown detail" in result.stdout,
+           f"the shown text is what prints ({result.stdout!r})")
+    expect("  registered text" in result.stdout,
+           "while the registered text is what the failure list carries")
+    expect(result.returncode == 1, "and the run fails")
+
+
+def test_record_pass_obeys_the_same_default() -> None:
+    result = run_fixture(['selftest.record_pass("a bare pass")'])
+    expect("a bare pass" not in result.stdout,
+           f"record_pass is quiet by default ({result.stdout!r})")
+    verbose = run_fixture(['selftest.record_pass("a bare pass")'], "-v")
+    expect("  OK:   a bare pass" in verbose.stdout,
+           f"and narrates under --verbose ({verbose.stdout!r})")
+
+
+def test_each_invocation_counts_from_zero() -> None:
+    one = run_fixture(['expect(True, "a")'])
+    three = run_fixture(['expect(True, "a")', 'expect(True, "b")',
+                         'expect(True, "c")'])
+    expect("(1 assertion executed)" in one.stdout
+           and "(3 assertions executed)" in three.stdout,
+           f"two invocations count independently ({one.stdout!r} / "
+           f"{three.stdout!r})")
+
+
+# ----- Conversion ----------------------------------------------------------
+
+def test_the_roster_is_not_truncated() -> None:
+    expect(len(CONVERTED) >= MINIMUM_CONVERTED,
+           f"at least {MINIMUM_CONVERTED} self-tests import the shared helper "
+           f"(found {len(CONVERTED)}: "
+           f"{sorted(p.name for p in CONVERTED)})")
+
+
+def test_no_converted_script_keeps_a_local_helper() -> None:
+    for path in CONVERTED:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        local = [node.name for node in tree.body
+                 if isinstance(node, ast.FunctionDef) and node.name == "expect"]
+        expect(not local,
+               f"{path.name} defines no local expect (found {local})")
+
+
+def test_no_converted_script_registers_a_failure_behind_the_count() -> None:
+    # A direct `FAILURES.append` would report a failure the tally never
+    # saw, which is the one way a converted script can still miscount.
+    for path in CONVERTED:
+        text = path.read_text(encoding="utf-8")
+        expect("FAILURES.append" not in text,
+               f"{path.name} registers failures through the helper, not by "
+               f"appending to FAILURES directly")
+
+
+def test_every_converted_script_routes_both_verdicts() -> None:
+    for path in CONVERTED:
+        text = path.read_text(encoding="utf-8")
+        expect("return selftest.concluded(1)" in text,
+               f"{path.name}'s failing verdict goes through concluded()")
+        expect(re.search(r"return selftest\.concluded\(\s*0", text) is not None,
+               f"{path.name}'s passing verdict goes through concluded()")
+
+
+def test_every_converted_script_offers_the_flag() -> None:
+    for path in CONVERTED:
+        text = path.read_text(encoding="utf-8")
+        expect("selftest.parse_verbose()" in text
+               or "selftest.add_verbose_option(" in text,
+               f"{path.name} accepts -v/--verbose")
+
+
+def test_the_narrating_body_survives_only_in_the_module() -> None:
+    narrating = sorted(
+        path.name for path in TOOLS.glob("*.py")
+        if NARRATION.search(path.read_text(encoding="utf-8")))
+    expect(narrating == ["selftest.py"],
+           f"only the shared module narrates a passing assertion "
+           f"(found {narrating})")
+
+
+TESTS = [
+    test_a_passing_run_narrates_nothing,
+    test_the_summary_carries_the_tally,
+    test_one_assertion_is_singular,
+    test_both_verbose_spellings_restore_the_detail,
+    test_an_unrelated_argument_is_left_alone,
+    test_a_failure_prints_without_the_flag,
+    test_a_failure_is_counted_like_a_pass,
+    test_the_failing_verdict_still_states_its_tally,
+    test_a_run_that_asserts_nothing_is_a_failure,
+    test_record_fail_can_show_more_than_it_registers,
+    test_record_pass_obeys_the_same_default,
+    test_each_invocation_counts_from_zero,
+    test_the_roster_is_not_truncated,
+    test_no_converted_script_keeps_a_local_helper,
+    test_no_converted_script_registers_a_failure_behind_the_count,
+    test_every_converted_script_routes_both_verdicts,
+    test_every_converted_script_offers_the_flag,
+    test_the_narrating_body_survives_only_in_the_module,
+]
+
+
+def main() -> int:
+    selftest.parse_verbose()
+    for test in TESTS:
+        print(f"{test.__name__}:")
+        test()
+    if FAILURES:
+        print(f"\n{len(FAILURES)} test(s) failed:")
+        for failure in FAILURES:
+            print(f"  {failure}")
+        return selftest.concluded(1)
+    return selftest.concluded(0, f"\nAll {len(TESTS)} selftest tests passed")
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

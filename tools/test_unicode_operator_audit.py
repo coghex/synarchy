@@ -27,21 +27,14 @@ from unicode_operator_audit import (  # type: ignore
     WHOLE_FILE_EXEMPT,
 )
 
+import selftest  # noqa: E402
+from selftest import FAILURES, expect  # noqa: E402
+
 # The ASCII tokens and the noncanonical Unicode ones are found by two
 # different code paths, so the shared comment/string/detection fixtures
 # below run over BOTH -- a `≠` that only the dedicated tests exercised
 # would leave the generic exclusions unproven for it.
 ALL_TOKENS = FORBIDDEN_TOKENS | NONCANONICAL_TOKENS
-
-FAILURES: list[str] = []
-
-
-def expect(cond: bool, msg: str) -> None:
-    if not cond:
-        FAILURES.append(msg)
-        print(f"  FAIL: {msg}")
-    else:
-        print(f"  OK:   {msg}")
 
 
 ORDINARY_FILE = "src/Some/Ordinary/Module.hs"
@@ -491,6 +484,7 @@ def test_ascii_and_noncanonical_violations_report_in_source_order():
 
 
 def main() -> int:
+    selftest.parse_verbose()
     for fn in [
         test_each_forbidden_operator_detected_as_real_code,
         test_replacement_table_is_self_consistent,
@@ -531,9 +525,8 @@ def main() -> int:
         fn()
     if FAILURES:
         print(f"\n{len(FAILURES)} failure(s)")
-        return 1
-    print("\nall tests passed")
-    return 0
+        return selftest.concluded(1)
+    return selftest.concluded(0, "\nall tests passed")
 
 
 if __name__ == "__main__":

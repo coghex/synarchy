@@ -46,15 +46,8 @@ sys.path.insert(0, str(TOOLS))
 import offscreen_probe  # type: ignore  # noqa: E402
 import preview_probe  # type: ignore  # noqa: E402
 
-FAILURES: list[str] = []
-
-
-def expect(cond: bool, msg: str) -> None:
-    if not cond:
-        FAILURES.append(msg)
-        print(f"  FAIL: {msg}")
-    else:
-        print(f"  OK:   {msg}")
+import selftest  # noqa: E402
+from selftest import FAILURES, expect  # noqa: E402
 
 
 @contextlib.contextmanager
@@ -287,6 +280,7 @@ def test_a_failed_offscreen_boot_is_still_reported() -> None:
 
 
 def main() -> int:
+    selftest.parse_verbose()
     test_a_repeated_phase_still_gets_its_own_log()
     test_every_launch_of_a_full_run_keeps_its_own_capture()
     test_the_report_names_every_log_against_its_phase()
@@ -299,9 +293,8 @@ def main() -> int:
         print(f"\n{len(FAILURES)} test(s) failed:")
         for failure in FAILURES:
             print(f"  {failure}")
-        return 1
-    print("\nAll per-boot engine log tests passed")
-    return 0
+        return selftest.concluded(1)
+    return selftest.concluded(0, "\nAll per-boot engine log tests passed")
 
 
 if __name__ == "__main__":

@@ -53,18 +53,14 @@ import probe_flake  # type: ignore  # noqa: E402
 import probe_engine  # type: ignore  # noqa: E402
 import probe_runner_registry  # type: ignore  # noqa: E402
 
-FAILURES: list[str] = []
+import selftest  # noqa: E402
+from selftest import FAILURES, expect  # noqa: E402
+
 
 COMMIT_A = "a" * 40
 COMMIT_B = "b" * 40
 NOW = datetime.datetime(2026, 8, 21, 12, 0, 0, tzinfo=datetime.timezone.utc)
 DAY = probe_census.SECONDS_PER_DAY
-
-
-def expect(cond: bool, msg: str) -> None:
-    if not cond:
-        FAILURES.append(msg)
-    print(f"  {'ok  ' if cond else 'FAIL'} {msg}")
 
 
 def expect_refusal(call, msg: str, *fragments: str) -> None:
@@ -736,6 +732,7 @@ def test_cli() -> None:
 
 # ==========================================================================
 def main() -> int:
+    selftest.parse_verbose()
     for test in (test_filtering, test_states_and_cells, test_reason_categories,
                  test_promotion, test_row_set_findings, test_cell_findings,
                  test_source_gate, test_parse_refusals, test_cli):
@@ -745,9 +742,8 @@ def main() -> int:
         print(f"{len(FAILURES)} FAILED:")
         for message in FAILURES:
             print(f"  - {message}")
-        return 1
-    print("probe_census_page self-test: all cases pass")
-    return 0
+        return selftest.concluded(1)
+    return selftest.concluded(0, "probe_census_page self-test: all cases pass")
 
 
 if __name__ == "__main__":

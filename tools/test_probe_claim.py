@@ -47,7 +47,9 @@ import probe_protocol  # type: ignore  # noqa: E402
 import probe_engine  # type: ignore  # noqa: E402
 import probe_runner_registry  # type: ignore  # noqa: E402
 
-FAILURES: list[str] = []
+import selftest  # noqa: E402
+from selftest import FAILURES, expect  # noqa: E402
+
 
 TOOLS = str(Path(__file__).resolve().parent)
 COMMIT_A = "a" * 40
@@ -58,12 +60,6 @@ SYNTHETIC = [
     ("beta", "beta_probe.py", "the second synthetic probe"),
     ("gamma", "gamma_probe.py", "the third synthetic probe"),
 ]
-
-
-def expect(cond: bool, msg: str) -> None:
-    if not cond:
-        FAILURES.append(msg)
-    print(f"  {'ok  ' if cond else 'FAIL'} {msg}")
 
 
 def skip(msg: str) -> None:
@@ -1859,6 +1855,7 @@ def test_cli() -> None:
 
 # ==========================================================================
 def main() -> int:
+    selftest.parse_verbose()
     for test in (test_namespace, test_exclusive_acquisition,
                  test_independent_process_contention,
                  test_expiry_and_reclaim, test_concurrent_stale_reclaimers,
@@ -1890,9 +1887,8 @@ def main() -> int:
         print(f"{len(FAILURES)} FAILED:")
         for message in FAILURES:
             print(f"  - {message}")
-        return 1
-    print("probe_claim self-test: all cases pass")
-    return 0
+        return selftest.concluded(1)
+    return selftest.concluded(0, "probe_claim self-test: all cases pass")
 
 
 if __name__ == "__main__":

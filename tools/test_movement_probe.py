@@ -44,15 +44,8 @@ TOOLS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TOOLS))
 import movement_probe as probe  # type: ignore  # noqa: E402
 
-FAILURES: list[str] = []
-
-
-def expect(cond: bool, msg: str) -> None:
-    if not cond:
-        FAILURES.append(msg)
-        print(f"  FAIL: {msg}")
-    else:
-        print(f"  OK:   {msg}")
+import selftest  # noqa: E402
+from selftest import FAILURES, expect  # noqa: E402
 
 
 @contextlib.contextmanager
@@ -382,6 +375,7 @@ def test_an_unreadable_source_fails_the_guard_too() -> None:
 
 
 def main() -> int:
+    selftest.parse_verbose()
     test_the_shipped_inventory_is_complete_and_sorted()
     test_list_prints_the_inventory_without_booting()
     test_list_is_honoured_for_every_mode()
@@ -401,9 +395,9 @@ def main() -> int:
         print(f"\n{len(FAILURES)} test(s) failed:")
         for failure in FAILURES:
             print(f"  {failure}")
-        return 1
-    print("\nAll movement_probe course-listing tests passed")
-    return 0
+        return selftest.concluded(1)
+    return selftest.concluded(
+        0, "\nAll movement_probe course-listing tests passed")
 
 
 if __name__ == "__main__":
