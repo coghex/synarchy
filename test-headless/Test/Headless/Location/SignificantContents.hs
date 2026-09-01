@@ -446,6 +446,39 @@ spec = describe "Location significant contents (#917)" $ do
                 "processing_unit" 777 lis
                 `shouldBe` Nothing
 
+        it "refuses an item already owed by another obligation, so one \
+           \pickup can never discharge two required items" $ do
+            let bound = fromMaybe (error "expected a binding")
+                    (registerLocationSignificantSpawn iid 1 "processing_unit"
+                        777 (tableFor 0 twoSignificantDef))
+            -- Slot 2 is a DIFFERENT obligation of the SAME definition,
+            -- so nothing but this rule stands between one ground item
+            -- and both slots.
+            registerLocationSignificantSpawn iid 2 "processing_unit" 777 bound
+                `shouldBe` Nothing
+            map lsiInstanceId (liSignificant (instOf bound))
+                `shouldBe` [Just 777, Nothing]
+            -- …and the location consequently cannot be cleared by that
+            -- one item: picking it up latches slot 1 alone.
+            let taken = takeItem 777 bound
+            map lsiTaken (liSignificant (instOf taken))
+                `shouldBe` [True, False]
+            locationClearanceSatisfied (instOf taken) `shouldBe` False
+
+        it "refuses an item already owed by an obligation of ANOTHER \
+           \instance — ids come from one global allocator, so a second \
+           \claim can never be a second real item" $ do
+            let base = spawnAll (tableFor 0 twoSignificantDef)
+                other = LocationInstanceId 2
+                withSecond = base
+                    { lisNextId = 3
+                    , lisById = HM.insert other
+                        ((instOf base) { liId = other })
+                        (lisById base) }
+            -- itemIdFor 1 is already bound on instance 1.
+            registerLocationSignificantSpawn other 1 "processing_unit"
+                (itemIdFor 1) withSecond `shouldBe` Nothing
+
         it "refuses an item that is not the definition the slot names — \
            \an obligation says WHAT is owed, so any ground item must \
            \not satisfy it" $ do

@@ -910,10 +910,21 @@ markLocationEncounterCleared iid lis = do
 --   where it spawned. The obligation names WHAT is owed, so the
 --   binding has to prove the item it is offered is that thing.
 --
+--   The item must also be owed by NOTHING else yet. Binding one
+--   physical item to two obligations would let a single pickup
+--   discharge both — 'latchLocationSignificantTaken' latches every
+--   entry naming that id — so one item could satisfy two required
+--   significant items and clear a location whose other item was never
+--   recovered. The decode and save validators reject that state, but
+--   only once it is already on disk; refusing it HERE is what stops
+--   live gameplay reaching it at all, since this is a public Lua verb
+--   and not only the content spawn's private path.
+--
 --   'Nothing' when the instance or the slot is unknown, the slot is
---   already bound, or the item is the wrong definition. The
---   already-bound case is exactly the edge a resuming spawn uses to
---   tell "still owed" from "already done"; the others are refusals.
+--   already bound, the item is the wrong definition, or the item is
+--   already owed elsewhere. The already-bound case is exactly the edge
+--   a resuming spawn uses to tell "still owed" from "already done";
+--   the others are refusals.
 registerLocationSignificantSpawn
     ∷ LocationInstanceId → Int → Text → Word64 → LocationInstances
     → Maybe LocationInstances
@@ -922,11 +933,20 @@ registerLocationSignificantSpawn iid slot defName itemId lis = do
     entry ← find ((≡ slot) . lsiSlot) (liSignificant inst)
     guard (isNothing (lsiInstanceId entry))
     guard (lsiItemDefName entry ≡ defName)
+    guard (not (itemAlreadyOwed itemId lis))
     pure $ adjustLocationInstance iid (\i → i
         { liSignificant =
             [ if lsiSlot e ≡ slot then e { lsiInstanceId = Just itemId } else e
             | e ← liSignificant i ]
         }) lis
+
+-- | Is this physical item already named by some obligation on the
+--   page? Ids come from one global allocator, so a second claim on one
+--   id can never be a second real item.
+itemAlreadyOwed ∷ Word64 → LocationInstances → Bool
+itemAlreadyOwed itemId lis = or
+    [ lsiInstanceId e ≡ Just itemId
+    | inst ← HM.elems (lisById lis), e ← liSignificant inst ]
 
 -- | Latch @taken@ on whichever obligation of ANY instance on this page
 --   owns @itemId@ (#917 requirement 3), the first time that physical

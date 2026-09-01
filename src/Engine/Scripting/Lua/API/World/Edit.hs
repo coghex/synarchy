@@ -204,7 +204,9 @@ worldRegisterLocationEncounterOccupantsFn wsc = do
 --   whose authored item definition is the one that ground item actually
 --   IS — an obligation names WHAT is owed, so binding a ration to a
 --   @processing_unit@ slot would otherwise let picking the ration up
---   clear the location with the guaranteed item still on the floor.
+--   clear the location with the guaranteed item still on the floor —
+--   and whose item is owed by no other obligation, since one item bound
+--   twice would let a single pickup discharge two required items.
 --   'Location.Instance.registerLocationSignificantSpawn' is write-once,
 --   so a retried content spawn re-registering a slot it already filled
 --   answers false and changes nothing — which is exactly the edge the

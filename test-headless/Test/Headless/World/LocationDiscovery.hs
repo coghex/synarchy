@@ -1179,6 +1179,33 @@ significantSpec =
             poisonSight ws
             sightRasterized env pageId ws `shouldReturn` False
 
+        it "refuses to bind one ground item to a SECOND obligation, so a \
+           \single pickup can never discharge two required items" $
+           \env → do
+            -- The verb is public Lua, not only the content spawn's own
+            -- path, so this is the boundary that has to hold: the
+            -- decode and save validators reject the duplicate state,
+            -- but only once it is already on disk.
+            let pageId = WorldPageId "sig_dup_binding"
+            ws ← newSignificantPage env pageId LifecycleDiscovered Nothing
+                     [ (owed 1 0) { lsiInstanceId = Nothing }
+                     , (owed 2 0) { lsiSlot = 2, lsiInstanceId = Nothing } ]
+            gid ← dropOnGround ws 5091
+            registerSpawn env pageId 1 1 gid `shouldReturn` True
+            registerSpawn env pageId 1 2 gid `shouldReturn` False
+            boundIds ws `shouldReturn` [Just 5091, Nothing]
+
+            -- Picking it up therefore latches slot 1 only, and the
+            -- location stays uncleared with slot 2 outstanding.
+            writeIORef (unitManagerRef env) $ emptyUnitManager
+                { umInstances = HM.singleton (UnitId 811)
+                    (testUnit pageId FactionPlayer 8 8) }
+            pickupGroundOnPage env ws (UnitId 811) gid `shouldReturn` True
+            takenFlags ws `shouldReturn` [True, False]
+            tickLocationDiscovery env pageId ws
+            readIORef (wsGenParamsRef ws) >>= (\p →
+                lifecyclesOf p `shouldBe` Just [LifecycleDiscovered])
+
         it "refuses a ground id that names nothing, an unknown slot, and \
            \a slot already bound — so a retried spawn cannot repoint an \
            \obligation" $ \env → do

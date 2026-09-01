@@ -1554,11 +1554,16 @@ pickup is rolled back. `registerLocationSignificantSpawn` is WRITE-ONCE
 per slot — a retried content spawn cannot repoint an obligation and
 orphan the item it first named, and the refusal is exactly the edge a
 resuming spawn uses to tell "still owed" from "already done". It also
-refuses an item that is not the DEFINITION the slot names: an
+refuses an item that is not the DEFINITION the slot names — an
 obligation says what is owed, so binding a ration to a
 `processing_unit` slot would otherwise let picking the ration up latch
 the slot and clear the location with the guaranteed item still on the
-floor. `significantProvenanceErrors` holds the same line at the save
+floor — and an item ALREADY owed by any obligation on the page, because
+`latchLocationSignificantTaken` latches every entry naming that id, so
+one physical item bound twice would let a single pickup discharge two
+required items. Both refusals live at the registration boundary rather
+than only in the validators: the verb is public Lua, and the decode and
+save rules reject the duplicate state only once it is already on disk. `significantProvenanceErrors` holds the same line at the save
 boundary, for an untaken obligation whose item is on the right ground
 but is the wrong thing.
 
