@@ -80,6 +80,7 @@ PROTOCOL_PROBES: dict[str, str] = {
     "concussion_revive": probe_protocol.PROTOCOL_VERSION,
     "disarm": probe_protocol.PROTOCOL_VERSION,
     "lua_strict_msg": probe_protocol.PROTOCOL_VERSION,
+    "meal_waste": probe_protocol.PROTOCOL_VERSION,
     "position_hold": probe_protocol.PROTOCOL_VERSION,
     "remote_warning_page_guard": probe_protocol.PROTOCOL_VERSION,
     "role": probe_protocol.PROTOCOL_VERSION,
