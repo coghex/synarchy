@@ -29,11 +29,21 @@ in-game HUD, then:
      module's own callback. The oracle is the engine's own F4
      action-outcome record (`debug.drainActionOutcomes`), which reports
      the route it actually took.
-  6. (#996) A branch that latches — and whose subobjectives check —
-     before it is ever revealed still renders, in authored order with
-     its normal completed marker, instead of an empty checklist. Same
-     `setTree` injection point as check 4, shaped like the real
-     first_session tree so a composite branch exists to latch early.
+  6. (#996/#1941/#2056) A branch that latches — and whose subobjectives
+     check — before it is ever revealed still renders, in authored
+     order with its normal completed marker, instead of an empty
+     checklist. Same `setTree` injection point as check 4, shaped like
+     the real first_session tree so a composite branch exists to latch
+     early. Since #2056 this check also carries the arc's only PIXEL
+     proof of presentation: the sticky composite's own ink is
+     attributed in a real frame — its text element is hidden and
+     re-shown and the columns that change ARE its marker and label, the
+     #1581 oracle's technique — before the branch retires and the panel
+     reaches its empty completed state. The captures and the boundary
+     crossing happen inside one Lua chunk, so no update tick can
+     interleave and the measured frames provably precede the empty
+     state. `tools/tutorial_probe.py` owns the GPU-less half (nothing
+     retires while no frame is drawn) and cannot own this one.
   7. (#1419) The toggle caption's RENDERED GLYPH PIXELS fall inside the
      toggle box and inside the framebuffer, measured separately for the
      collapsed "> Objectives" and the open "v Objectives". Nothing in
@@ -638,30 +648,85 @@ def inject_shipped_shape(port: int) -> None:
          "return 'ok'", timeout=15.0)
 
 
-def open_and_read_build(port: int) -> list[dict]:
-    """Open the panel and report the rows THAT BUILD laid out, in ONE
-    console chunk.
+def open_and_capture_build(port: int, with_path: str, without_path: str,
+                           again_path: str, warm_path: str) -> dict:
+    """Open the panel and, WITHOUT ever yielding the Lua thread, capture
+    the sticky rows in a real rendered frame.
 
-    The two halves cannot be separate commands since #1941: the
-    retirement they exist to observe takes exactly one update tick, so a
-    second round-trip would usually arrive after the panel had been
-    rebuilt empty and would report a race rather than a defect. One
-    chunk runs to completion on the Lua thread, so this is the build
-    itself talking. Only the fields this phase asserts on are carried
-    out, because the whole dump is not JSON-safe to rebuild by hand."""
-    got = send_json(port,
-                    "local th = require('scripts.tutorial_hud'); "
-                    "th.setOpen(true); "
-                    "local out = {}; "
-                    "for i, r in ipairs(th.dump().rows) do "
-                    "out[i] = { id = r.id, marker = r.marker, "
-                    "depth = r.depth } end; "
-                    "return out", timeout=15.0)
-    return got if isinstance(got, list) else []
+    ONE console chunk, for two independent reasons:
+
+      * scripts/tutorial_hud.lua's update tick runs on this same thread,
+        so while this chunk is running nothing can acknowledge or retire
+        anything. The frames captured below are therefore guaranteed to
+        predate the empty completed state, which is exactly what
+        requirement 5 asks to be shown.
+      * the rows and the frames have to be the SAME observation. A
+        second round-trip would report a state the captures might not
+        share.
+
+    The captures are ordered by #2056's own boundary rather than by
+    hope. `debug.captureScreenshot` blocks until a frame's fence
+    signals, but the request is dequeued AFTER that frame's UI snapshot
+    was taken, so the very first capture after a UI mutation can still
+    show the frame before it. The loop therefore captures throwaway
+    frames until `UI.isPresented` says a completed snapshot really held
+    the current viewport, and only then captures the frame that is
+    measured. The same handshake is re-run after the row's text element
+    is hidden, so `without` is provably a frame that lacks exactly that
+    ink rather than one that had not caught up yet.
+
+    Returns the row list, the measured row's text handle, and the two
+    boundary observations the caller asserts on.
+    """
+    lua = (
+        "local th = require('scripts.tutorial_hud'); "
+        "th.setOpen(true); "
+        "local rows = {}; "
+        "local handle = nil; "
+        "local d0 = th.dump(); "
+        "for i, r in ipairs(d0.rows) do "
+        "  rows[i] = { id = r.id, marker = r.marker, depth = r.depth, "
+        "              x = r.x, y = r.y, w = r.w, h = r.h }; "
+        "  if i == 1 then handle = r.textHandle end end; "
+        # Wait for the OPEN panel to be provably on a rendered frame.
+        "local function settleFrames(pred) "
+        "  for _ = 1, 8 do "
+        "    if pred() then return true end; "
+        "    debug.captureScreenshot('" + warm_path + "') end; "
+        "  return pred() end; "
+        "local shownPresented = settleFrames(function() "
+        "  return th.isPresented() end); "
+        "local a = debug.captureScreenshot('" + with_path + "'); "
+        # Hide exactly the sticky row's own text, re-settle, capture.
+        "local hidPresented = false; "
+        "local b, c = nil, nil; "
+        "if handle ~= nil then "
+        "  UI.setVisible(handle, false); "
+        "  local t = UI.armPresentation(); "
+        "  hidPresented = settleFrames(function() "
+        "    return UI.isPresented(t) end); "
+        "  b = debug.captureScreenshot('" + without_path + "'); "
+        "  UI.setVisible(handle, true); "
+        "  local t2 = UI.armPresentation(); "
+        "  settleFrames(function() return UI.isPresented(t2) end); "
+        "  c = debug.captureScreenshot('" + again_path + "') end; "
+        "local d = th.dump(); "
+        "return { rows = rows, handle = handle, "
+        "         panelX = d0.panelX, panelW = d0.panelW, "
+        "         shownPresented = shownPresented, "
+        "         hidPresented = hidPresented, "
+        "         stillOpen = d.open, rowCount = #d.rows, "
+        "         rebuildCount = d.rebuildCount, "
+        "         shots = (a ~= nil and a.path ~= nil) "
+        "                 and (b ~= nil and b.path ~= nil) "
+        "                 and (c ~= nil and c.path ~= nil) }")
+    got = send_json(port, lua, timeout=180.0)
+    return got if isinstance(got, dict) else {}
 
 
-def already_latched_phase(port: int, shots: str) -> None:
-    """#996 then #1941, in the order a player meets them.
+def already_latched_phase(port: int, w: int, h: int, shots: str) -> None:
+    """#996 then #1941, in the order a player meets them — and since
+    #2056, with the presentation actually PROVEN rather than assumed.
 
     #996: latch the composite and check both of its subobjectives BEFORE
     that branch is ever revealed (the shipped acolyte spawn kit does
@@ -675,6 +740,16 @@ def already_latched_phase(port: int, shots: str) -> None:
     rule then empties the checklist. The reveal happens with the panel
     CLOSED on purpose -- a collapsed panel lays out no rows, so nothing
     can be presented before the open below.
+
+    #2056: the old version of this phase only asserted that the
+    `already_latched.png` screenshot REQUEST answered, so an empty-panel
+    capture passed it. This one attributes pixels to the sticky rows the
+    same way the #1581 row oracle does: capture the open panel, hide the
+    sticky composite's own text element, capture again, and the columns
+    that changed ARE its marker and label ink. Both captures happen
+    inside one Lua chunk that also crosses #2056's boundary explicitly,
+    so they provably precede the empty completed state rather than
+    racing it.
     """
     inject_shipped_shape(port)
     send(port,
@@ -694,24 +769,78 @@ def already_latched_phase(port: int, shots: str) -> None:
     check("and a collapsed panel has presented nothing",
           (d.get("rows") or []) == [], str(d.get("rowIds")))
 
-    built = open_and_read_build(port)
+    with_path = os.path.join(shots, "already_latched.png")
+    without_path = os.path.join(shots, "already_latched_row_hidden.png")
+    again_path = os.path.join(shots, "already_latched_again.png")
+    warm_path = os.path.join(shots, "already_latched_warm.png")
+    built = open_and_capture_build(port, with_path, without_path,
+                                   again_path, warm_path)
+    rows = built.get("rows") or []
     check("the already-latched prepare branch renders in authored order, "
           "instead of an empty checklist (#996)",
-          [r.get("id") for r in built] == branch,
-          str([r.get("id") for r in built]))
+          [r.get("id") for r in rows] == branch,
+          str([r.get("id") for r in rows]))
     check("the composite renders its normal completed marker, and both "
           "subobjectives render checked",
-          [r.get("marker") for r in built] == ["[x]", "(x)", "(x)"],
+          [r.get("marker") for r in rows] == ["[x]", "(x)", "(x)"],
+          str(rows))
+    # The whole capture ran without a single update tick, so this is
+    # the state the frames below were taken in.
+    check("the panel was still OPEN and still holding all three rows "
+          "throughout the capture",
+          built.get("stillOpen") is True and built.get("rowCount") == 3,
           str(built))
-    shot = os.path.join(shots, "already_latched.png")
-    check("the already-latched checklist screenshot answers",
-          screenshot(port, shot))
 
-    # #1941: having been shown, it retires -- and because this is the
-    # shipped session's TERMINAL branch, the checklist reaches the empty
-    # completed state it could never reach while the suppression was
-    # permanent. The panel stays OPEN throughout: this is an emptied
-    # list, not a closed one.
+    # #2056's positive half: the boundary really was crossed, twice.
+    check("a completed renderer snapshot held the open panel before the "
+          "measured frame was captured (#2056)",
+          built.get("shownPresented") is True, str(built.get("shownPresented")))
+    check("and again after the sticky row's text was hidden, so the two "
+          "frames differ by that ink and nothing else",
+          built.get("hidPresented") is True, str(built.get("hidPresented")))
+    if not check("all three measurement screenshots answered",
+                 built.get("shots") is True, str(built.get("shots"))):
+        return
+
+    # Requirement 5: attribute the captured pixels to the STICKY row.
+    handle = built.get("handle")
+    if not check("the sticky composite has a live text element to "
+                 "attribute pixels to", bool(handle), str(built)):
+        return
+    # The row rect and the panel bounds come from the CAPTURE ITSELF,
+    # never from a later round-trip: the branch retires within a tick of
+    # the chunk returning, so by the time a second dump answers the rows
+    # are gone -- which is the retirement working, not a missing row.
+    if not check("the sticky composite's geometry came out of the "
+                 "capture", isinstance(rows[0].get("y"), (int, float))
+                 and isinstance(built.get("panelX"), (int, float)),
+                 str(built)):
+        return
+    band = _row_band(rows[0], w, h)
+    drift = _differing_columns(with_path, again_path, band)
+    check("the frame held still across the measurement -- nothing but "
+          "the hidden row differs between the two rendered captures",
+          not drift, f"{len(drift)} column(s) drifted")
+    cols = _differing_columns(with_path, without_path, band)
+    px, pw = int(built["panelX"]), int(built["panelW"])
+    check("the already-latched checklist screenshot contains the STICKY "
+          "row's own ink -- its marker and label, not merely a non-empty "
+          "panel rect (#2056 requirement 5)", bool(cols),
+          f"no pixels changed when {branch[0]!r}'s text was hidden, "
+          f"band {band}")
+    if cols:
+        lo, hi = min(cols), max(cols)
+        print(f"       sticky row {branch[0]!r} glyph columns "
+              f"x={lo} -> x={hi}; panel x={px} w={pw}")
+        check("and that ink falls inside the checklist panel",
+              lo >= px and hi < px + pw,
+              f"glyph columns {lo}..{hi} vs panel [{px}, {px + pw})")
+
+    # #1941: having been shown -- and now provably shown -- it retires.
+    # Because this is the shipped session's TERMINAL branch, the
+    # checklist reaches the empty completed state it could never reach
+    # while the suppression was permanent. The panel stays OPEN
+    # throughout: this is an emptied list, not a closed one.
     retired = poll_dump(port,
                         lambda x: x.get("open") is True
                         and (x.get("rows") or []) == []
@@ -722,6 +851,13 @@ def already_latched_phase(port: int, shots: str) -> None:
     shot = os.path.join(shots, "retired_empty.png")
     check("the retired, empty checklist screenshot answers",
           screenshot(port, shot))
+    # The empty state is a DIFFERENT frame from the one that carried the
+    # rows -- the pixels the sticky row occupied are gone.
+    if os.path.exists(shot) and os.path.exists(with_path):
+        gone = _differing_columns(with_path, shot, band)
+        check("and the sticky row's band really did change between the "
+              "presented frame and the empty one", bool(gone),
+              "the two frames are identical inside the row band")
 
 
 def restore_shipped_tree(port: int, completed: list[str]) -> str:
@@ -977,7 +1113,7 @@ def main() -> int:
 
         print("== 7. a branch already latched before its first reveal "
               "renders instead of an empty checklist (#996) ==")
-        already_latched_phase(args.port, shots)
+        already_latched_phase(args.port, w, h, shots)
 
         print("== 8. the SHIPPED rows' rendered glyph bounds (#1581) ==")
         shipped_rows_phase(args.port, w, h, shots)
