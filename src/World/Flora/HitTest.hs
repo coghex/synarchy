@@ -47,6 +47,7 @@ module World.Flora.HitTest
     , pickFloraAt
     , pickFloraInRect
     , floraSelectCandidates
+    , floraPainterOrder
     ) where
 
 import UPrelude
@@ -222,20 +223,25 @@ eligible view SelectDesignated inst =
 --   \"Under the pointer\" is the inclusive bounds of the currently
 --   rendered sprite quad, the AABB precedent 'Unit.HitTest' sets.
 --
---   \"Topmost\" is the largest FINAL painter depth — the same
---   'fgSortKey' the renderer sorts on, structure front-wall lift
---   included ('World.Render.SpriteDepth'), so a lifted tree ranks here
---   exactly where it was painted.
+--   \"Topmost\" is the candidate the renderer draws LAST, and it is
+--   decided by the renderer's OWN comparison —
+--   'Engine.Scene.Types.Batch.quadPainterOrder', reconstructed here
+--   from the same geometry the quad carries. That order is
+--   @(sqSortKey, v0.x, v0.y, v2.x, v2.y)@:
 --
---   __At exactly equal depth the renderer has no order to agree with.__
---   'Engine.Scene.Types.Batch.sortQuadsByLayer' sorts on @sqSortKey@
---   alone with an UNSTABLE sort, so two sprites at one key are drawn in
---   an unspecified order — and two wood-tagged co-tenants on one tile
---   at one z with equal 'fiOffV' really do tie. This is not papered
---   over with a claim of parity: the picker falls back to the stable
---   instance id, which makes ITS answer reproducible run to run and
---   consistent with the marker, and is as correct as any other choice
---   where the renderer itself has none.
+--     * the FINAL painter depth, structure front-wall lift included
+--       ('World.Render.SpriteDepth'), so a lifted tree ranks exactly
+--       where it was painted; and
+--     * the quad's own rect, which breaks the depth ties @sqSortKey@
+--       alone leaves — two wood-tagged co-tenants on one tile at one z
+--       with equal 'fiOffV' really do share a key, and the scene sorter
+--       is an unstable introsort, so before #1856 they were drawn in an
+--       order nothing could agree with.
+--
+--   Two candidates still equal after all five occupy exactly the same
+--   rect at exactly the same depth, so no pointer can distinguish them
+--   either; the stable instance id is the deterministic backstop there,
+--   shared with the marker so the two never disagree.
 pickFloraAt
     ∷ FloraHitView → FloraSelectMode → Float → Float → Maybe FloraPick
 pickFloraAt view mode pixX pixY
@@ -247,17 +253,15 @@ pickFloraAt view mode pixX pixY
   where
     (worldX, worldY) = windowToWorld view pixX pixY
     hits =
-        [ (pick, fgSortKey geom, fpInstanceId pick)
+        [ (pick, floraPainterOrder geom, fpInstanceId pick)
         | (pick, geom) ← floraSelectCandidates view mode
         , worldX ≥ fgDrawX geom
         , worldX ≤ fgDrawX geom + fgQuadW geom
         , worldY ≥ fgDrawY geom
         , worldY ≤ fgDrawY geom + fgQuadH geom
         ]
-    -- Descending final painter depth — the sorter's own ordering — and
-    -- then descending id, the deterministic backstop for the tie the
-    -- sorter leaves undefined (see the note above).
-    rank (_, key, iid) = (Down key, Down iid)
+    -- Descending renderer order, then descending id (see above).
+    rank (_, order, iid) = (Down order, Down iid)
     fst3 (a, _, _) = a
 
 -- | Every eligible tree whose rendered ground-contact anchor lies
@@ -310,6 +314,18 @@ worldToWindow view wx wy =
         normX = ((wx - fhvCamX view) / vw + 1.0) / 2.0
         normY = ((wy - fhvCamY view) / vh + 1.0) / 2.0
     in (normX * fromIntegral (fhvWinW view), normY * fromIntegral (fhvWinH view))
+
+-- | 'Engine.Scene.Types.Batch.quadPainterOrder' for a flora sprite,
+--   reconstructed from its projected geometry. 'World.Render.FloraQuads'
+--   emits @sqV0@ at the quad's top-left and @sqV2@ at its bottom-right,
+--   so these are the same five numbers the sorter compares — pinned by
+--   a spec that sorts REAL quads through the real sorter and checks the
+--   picker agrees with what came out last.
+floraPainterOrder ∷ FloraGeom → (Float, Float, Float, Float, Float)
+floraPainterOrder g =
+    ( fgSortKey g
+    , fgDrawX g, fgDrawY g
+    , fgDrawX g + fgQuadW g, fgDrawY g + fgQuadH g )
 
 viewExtent ∷ FloraHitView → (Float, Float)
 viewExtent view =

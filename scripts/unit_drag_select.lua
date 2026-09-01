@@ -702,6 +702,15 @@ end
 -- if already "dragging") rather than silently dropping it, since
 -- dragSelect.onMouseUp will never get a chance to.
 function dragSelect.cancel()
+    -- #1856: disarm BOTH tool boxes FIRST. The branches below resolve
+    -- each button's pending click and then clear it, so disarming
+    -- afterwards would arrive to find nothing left to restamp and the
+    -- press-time "accepted" default already published — a cancelled
+    -- below-threshold Chop press recorded as an accepted click that
+    -- designated nothing. Disarming here restamps it as the noop it is
+    -- BEFORE the branch reads it, and takes the rect down with it.
+    dragSelect.disarmToolBox(1)
+    dragSelect.disarmToolBox(2)
     if dragSelect.state ~= "idle" then
         if dragSelect.state == "dragging" then
             recordDragOutcomeFb("noop", dragSelect.startFbX, dragSelect.startFbY,
@@ -715,11 +724,6 @@ function dragSelect.cancel()
         dragSelect.boxSelectArmed = false
         dragSelect.state = "idle"
     end
-    -- #1856: an armed tool box is abandoned by a view transition
-    -- exactly as a box selection is — no designation lands, and the
-    -- tool is left with nothing half-committed. Through disarmToolBox
-    -- so the rect it owned comes down with it.
-    dragSelect.disarmToolBox(1)
     -- Right-button (#730 review round 4): same resolve-don't-lose
     -- contract as the left-button case above.
     if dragSelect.rightState ~= "idle" then
@@ -735,7 +739,6 @@ function dragSelect.cancel()
         dragSelect.rightPendingClick = nil
         dragSelect.rightState = "idle"
     end
-    dragSelect.disarmToolBox(2)
 end
 
 function dragSelect.shutdown()

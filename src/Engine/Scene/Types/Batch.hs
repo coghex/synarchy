@@ -15,6 +15,7 @@ module Engine.Scene.Types.Batch
   , batchFromSortedQuads
   , sortQuadsByLayer
   , mergeSortedQuads
+  , quadPainterOrder
   , LayeredQuads(..)
   , emptyLayeredQuads
   , setQuadSolarPage
@@ -33,7 +34,7 @@ import qualified Data.Set as Set
 import Data.Ord (comparing)
 import Engine.Scene.Base (ObjectId, LayerId)
 import Engine.Asset.Handle (TextureHandle(..), FontHandle)
-import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..))
+import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..))
 import Engine.Graphics.Solar (SolarPageTable, emptySolarPageTable)
 import Engine.Graphics.Font.Data (GlyphInstance)
 import qualified Vulkan.Core10 as Vk
@@ -122,10 +123,35 @@ setQuadSolarPage slot q = q
 stampSolarPage ∷ Word32 → V.Vector SortableQuad → V.Vector SortableQuad
 stampSolarPage slot = V.map (setQuadSolarPage slot)
 
+-- | The scene's painter order (#1856).
+--
+--   'sqSortKey' alone is not a total order: two sprites can legitimately
+--   share a depth — two wood-tagged trees on one tile at one z with
+--   equal sub-tile V offsets do — and the sort below is an UNSTABLE
+--   introsort, so equal keys were drawn in an order nothing could
+--   predict or agree with. Any consumer that has to reproduce \"which
+--   sprite is on top\" — Chop's screen-space selection oracle
+--   ('World.Flora.HitTest'), and the designation marker anchored to
+--   whatever it picked — then had no order to share.
+--
+--   Extending the comparison to the quad's own rect makes it total on
+--   everything such a consumer can also see, and costs no new field on
+--   a record built in fifty places. Two quads still equal here occupy
+--   exactly the same rect at exactly the same depth, so no picker can
+--   tell them apart either.
+--
+--   This only REFINES ties: every ordering that was already determined
+--   by 'sqSortKey' is unchanged.
+quadPainterOrder ∷ SortableQuad → (Float, Float, Float, Float, Float)
+quadPainterOrder q =
+    let Vec2 x0 y0 = pos (sqV0 q)
+        Vec2 x2 y2 = pos (sqV2 q)
+    in (sqSortKey q, x0, y0, x2, y2)
+
 -- | Group quads by layer and depth-sort each layer's run.
 sortQuadsByLayer ∷ V.Vector SortableQuad → Map.Map LayerId (V.Vector SortableQuad)
 sortQuadsByLayer quads =
-    Map.map (V.modify (VA.sortBy (comparing sqSortKey)) ∘ V.fromList) $
+    Map.map (V.modify (VA.sortBy (comparing quadPainterOrder)) ∘ V.fromList) $
         V.foldl' (\acc q → Map.insertWith (⧺) (sqLayer q) [q] acc)
                  Map.empty quads
 
@@ -147,7 +173,7 @@ mergeSortedQuads xs ys
               | otherwise = do
                   let qx = xs V.! i
                       qy = ys V.! j
-                  if sqSortKey qx ≤ sqSortKey qy
+                  if quadPainterOrder qx ≤ quadPainterOrder qy
                     then do VM.write mv (i + j) qx
                             go (i + 1) j
                     else do VM.write mv (i + j) qy
@@ -158,7 +184,8 @@ mergeSortedQuads xs ys
 -- | Sort quads by painter's algorithm and merge into a single RenderBatch.
 mergeQuadsToBatch ∷ LayerId → V.Vector SortableQuad → RenderBatch
 mergeQuadsToBatch layer quads =
-    batchFromSortedQuads layer (V.modify (VA.sortBy (comparing sqSortKey)) quads)
+    batchFromSortedQuads layer
+        (V.modify (VA.sortBy (comparing quadPainterOrder)) quads)
 
 -- | Expand ALREADY depth-sorted quads into a RenderBatch. The frame
 --   loop calls this with 'mergeSortedQuads' output so the per-frame

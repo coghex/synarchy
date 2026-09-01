@@ -42,6 +42,7 @@ prelude =
     , "  getFramebufferSize = function() return __fb[1], __fb[2] end,"
     , "  getMousePosition = function() return __mouse[1], __mouse[2] end,"
     , "  logInfo = function() end, logDebug = function() end,"
+    , "  logError = function() end, logWarn = function() end,"
     , "  isKeyDown = function() return false end }"
     , "debug.recordOutcome = function(rec) __records[#__records+1] = rec end"
     , "local function note(name)"
@@ -352,6 +353,39 @@ spec = describe "Chop gesture" $ do
                 , "assert(rec.kind == 'input.click', rec.kind)"
                 , "assert(rec.outcome == 'noop', tostring(rec.outcome))"
                 , "assert(#__calls == 0, 'a cancelled click designated')"
+                ]
+
+        it "records a cancelled below-threshold gesture as a noop through the REAL teardown registry" $
+            -- The registry sweeps unit_drag_select BEFORE chop_tool
+            -- (scripts/ui/view_teardown.lua), so the generic cancel is
+            -- what resolves the press — and it used to publish the
+            -- press-time "accepted" default before anything could
+            -- restamp it. Every other hook's require fails in this bare
+            -- VM and is pcall-swallowed by the registry, exactly as it
+            -- swallows a real hook failure.
+            runCase
+                [ "ds.handleMouseDown(1, 10, 10)"
+                , "ct.handleMouseDown(1, 10, 10)"
+                , "ds.deferClick(1, 'chop_tool', nil, 10, 10, nil)"
+                , "require('scripts.ui.view_teardown').run('zoomBand', {})"
+                , "local rec = only()"
+                , "assert(rec.kind == 'input.click', rec.kind)"
+                , "assert(rec.outcome == 'noop', tostring(rec.outcome))"
+                , "assert(#__calls == 0, 'a torn-down gesture designated')"
+                , "assert(not boxVisible(), 'the teardown left a box painted')"
+                ]
+
+        it "does the same for a HELD past-threshold gesture through the registry" $
+            runCase
+                [ "ds.handleMouseDown(1, 10, 10)"
+                , "ct.handleMouseDown(1, 10, 10)"
+                , "ds.deferClick(1, 'chop_tool', nil, 10, 10, nil)"
+                , "__mouse = {200, 200}; ds.update(0.03)"
+                , "assert(boxVisible(), 'the drag never drew its box')"
+                , "require('scripts.ui.view_teardown').run('zoomBand', {})"
+                , "assert(not boxVisible(), 'the teardown left a box painted')"
+                , "assert(#__calls == 0, 'a torn-down drag designated')"
+                , "assert(only().outcome == 'noop')"
                 ]
 
         it "leaves an ordinary completed box with nothing painted" $

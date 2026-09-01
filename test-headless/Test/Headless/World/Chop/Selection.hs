@@ -22,6 +22,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Data.List (sort, nub)
+import Data.Maybe (mapMaybe)
 import qualified Codec.Picture as JP
 import qualified Data.ByteString as BS
 import Engine.Asset.Handle (TextureHandle(..), toInt)
@@ -45,7 +46,10 @@ import World.Render.SpriteDepth
     , structureFrontWallClear)
 import World.Render.Textures.Types (defaultWorldTextures)
 import World.Render.TileQuads (worldCursorToQuad)
+import qualified Data.Map as Map
 import Engine.Scene.Types (SortableQuad(..))
+import Engine.Scene.Types.Batch (sortQuadsByLayer)
+import World.Render.FloraQuads (floraToQuad)
 import Engine.Graphics.Vulkan.Types.Vertex
     (Vec2(..), Vertex, pos, faceMapId, noFaceMapVertexId)
 import World.Render.ViewBounds (computeViewBounds)
@@ -577,6 +581,49 @@ spec = describe "Chop selection" $ do
             keyIn (viewOfWith FaceSouth (camOn FaceSouth (8, 8)) tiles HM.empty)
                 `shouldBe` keyIn (viewOf FaceSouth (camOn FaceSouth (8, 8))
                                       tiles HM.empty)
+
+        it "agrees with what the REAL sorter drew last, at an equal depth" $ do
+            -- The whole claim, tested end to end rather than asserted:
+            -- build the two co-tenants' quads through the production
+            -- 'floraToQuad', push them through the production
+            -- 'sortQuadsByLayer', and check the picker names the one
+            -- that came out LAST. Their 'sqSortKey's are equal (same
+            -- tile, same z, same fiOffV), so before #1856's total order
+            -- this compared an unstable sort's arbitrary output against
+            -- an invented rule.
+            let a = (plantAt 1 woodId (8, 8)) { fiOffU = -0.4, fiOffV = 0 }
+                b = (plantAt 2 woodId (8, 8)) { fiOffU =  0.4, fiOffV = 0 }
+                tiles = tilesOf [chunkWith flatChunk flat [a, b]]
+                view = viewOf FaceNorth (camOn FaceNorth (8, 8)) tiles HM.empty
+                cands = floraSelectCandidates view (SelectChoppable "wood")
+                (tgx, tgy) = chunkToGlobal flatChunk 8 8
+                quadFor inst = floraToQuad (fromIntegral . toInt)
+                    defaultWorldTextures FaceNorth tgx tgy
+                    (inst { fiZ = zSlice }) treeTex zSlice effDepth 1.0 (0, 0)
+                    texSizes
+                quads = V.fromList (mapMaybe quadFor [a, b])
+            V.length quads `shouldBe` 2
+            -- The fixture must really tie, or the sort key alone would
+            -- have separated them and this proves nothing.
+            nub (map sqSortKey (V.toList quads)) `shouldSatisfy` \ks →
+                length ks ≡ 1
+            let sorted = Map.foldr (\v acc → V.toList v ⧺ acc) []
+                             (sortQuadsByLayer quads)
+                drawnLast = last sorted
+                -- Which instance that quad belongs to, by its top-left
+                -- corner — the very number the shared order compares.
+                lastInstance = listToMaybe
+                    [ fpInstanceId pk
+                    | (pk, g) ← cands
+                    , let Vec2 qx _ = pos (sqV0 drawnLast)
+                    , abs (fgDrawX g - qx) < 0.0001 ]
+            Just px ← pure (anchorPixel view (instanceId 1))
+            Just pw ← pure (anchorPixel view (instanceId 2))
+            -- A point inside BOTH quads: midway between the anchors.
+            let midX = (fst px + fst pw) / 2
+            fmap fpInstanceId
+                (pickFloraAt view (SelectChoppable "wood") midX (snd px - 4))
+                `shouldBe` lastInstance
 
         it "resolves an EXACT depth tie deterministically, by identity" $ do
             -- Two co-tenants on one tile at one z with equal fiOffV
