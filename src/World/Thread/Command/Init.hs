@@ -27,7 +27,7 @@ import Engine.Core.Capability.RenderView
     (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
-import Engine.Core.Log (logInfo, logDebug, logWarn, LogCategory(..), LoggerState)
+import Engine.Core.Log (logInfo, logDebug, logWarn, logError, LogCategory(..), LoggerState)
 import Engine.Graphics.Solar (maxSolarPages)
 import Engine.Graphics.Camera (Camera2D(..))
 import Engine.Scripting.Lua.Types (LuaMsg(..))
@@ -58,6 +58,8 @@ import World.Render (surfaceHeadroom)
 import World.ZoomMap.Cache (buildZoomCacheWithPixels)
 import World.ZoomMap.ColorPalette (buildColorPalette)
 import World.ZoomMap.ChunkTexture (buildZoomAtlas, ZoomAtlasData(..))
+import World.Map.ImagePlan (mapImageRefusalText)
+import Engine.Map.ImageAdmission (admitWorldZoomAtlas)
 import World.Weather (initEarlyClimate, formatWeather)
 import World.Weather.Types (ClimateState(..))
 import World.Generate.Config (WorldGenConfig(..)
@@ -306,42 +308,76 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     palette ← buildColorPalette logger "data/materials" "data/vegetation"
     _ ← evaluate (force palette)
 
-    sendGenLog env "Building zoom cache with per-chunk textures..."
-    let (zoomCache, chunkPixels) =
-            buildZoomCacheWithPixels params registry palette
-                                     (Just borderedCache)
-    _ ← evaluate (force zoomCache)
-    _ ← evaluate (force chunkPixels)
-    writeIORef (wsZoomCacheRef worldState) zoomCache
+    -- #2020: the map image this page's zoom map needs is admitted
+    -- BEFORE 'buildZoomCacheWithPixels' generates and forces a single
+    -- 4096-byte chunk block, and before anything allocates the
+    -- contiguous atlas. Validating at the atlas step instead would
+    -- still have paid for the whole pixel corpus first.
+    --
+    -- Reaching a refusal here is not the player-facing path: 'world.init'
+    -- runs this SAME admission synchronously and enqueues no 'WorldInit'
+    -- when it refuses (requirement 6), so the fresh-world case is
+    -- already settled before the worker sees it. This is the backstop
+    -- for a caller that reached the queue another way, and it is
+    -- deliberately NOT fatal — 'World.Thread' treats an uncaught worker
+    -- exception as fatal, and 'scripts/create_world/generation.lua'
+    -- recognizes only RUNNING and DONE, so throwing here would trade an
+    -- oversized image for a dead engine or a permanently spinning
+    -- progress bar. The page comes up with no zoom map, loudly.
+    mZoomPlan ← admitWorldZoomAtlas env worldSize
+    case mZoomPlan of
+      Left refusal → do
+        let msg = "Zoom map skipped: " <> mapImageRefusalText refusal
+        logError logger CatWorld msg
+        sendGenLog env msg
+        writeIORef (wsZoomCacheRef worldState) V.empty
+        writeIORef (wsZoomAtlasRef worldState) Nothing
+        writeIORef phaseRef (LoadPhase1 5 totalSteps)
+      Right zoomPlan → do
+        sendGenLog env "Building zoom cache with per-chunk textures..."
+        let (zoomCache, chunkPixels) =
+                buildZoomCacheWithPixels params registry palette
+                                         (Just borderedCache)
+        _ ← evaluate (force zoomCache)
+        _ ← evaluate (force chunkPixels)
+        writeIORef (wsZoomCacheRef worldState) zoomCache
 
-    sendGenLog env "Assembling zoom texture atlas..."
-    let atlas = buildZoomAtlas (V.length zoomCache) chunkPixels
-    _ ← evaluate (force atlas)
-    -- Issue #763: pair the atlas with the EXACT
-    -- WorldState it belongs to (this init's own page), mirroring
-    -- World.Load.Publish's identical fix -- see EngineEnv.zoomAtlasDataRef.
-    writeIORef (rhZoomAtlasDataRef handoff) $
-        Just (zadWidth atlas, zadHeight atlas, zadPixelData atlas, [worldState])
-    -- Store atlas metadata (chunksPerRow) for UV computation during baking
-    writeIORef (wsZoomAtlasRef worldState) Nothing  -- will be filled after GPU upload
-    -- Store chunksPerRow for later use
-    logInfo logger CatWorld $ "Zoom atlas: "
-        <> tshow (zadWidth atlas) <> "×"
-        <> tshow (zadHeight atlas) <> " ("
-        <> tshow (V.length zoomCache) <> " chunks)"
-    
-    -- Step 5: Preview
-    writeIORef phaseRef (LoadPhase1 5 totalSteps)
-    sendGenLog env "Rendering world preview..."
-    let preview = buildPreviewFromPixels params zoomCache chunkPixels
-    _ ← evaluate (force preview)
-    -- Stamp with a fresh generation (see
-    -- Engine.Core.State.worldPreviewGenerationRef / World.Load.Publish).
-    previewGen ← atomicModifyIORef' (rhWorldPreviewGenerationRef handoff)
-                    (\g → (g + 1, g + 1))
-    writeIORef (rhWorldPreviewRef handoff) $
-        Just (piWidth preview, piHeight preview, piData preview, previewGen)
-    sendGenLog env "World preview ready."
+        sendGenLog env "Assembling zoom texture atlas..."
+        case buildZoomAtlas zoomPlan (V.length zoomCache) chunkPixels of
+          Left refusal → do
+            let msg = "Zoom atlas skipped: " <> mapImageRefusalText refusal
+            logError logger CatWorld msg
+            sendGenLog env msg
+            writeIORef (wsZoomAtlasRef worldState) Nothing
+          Right atlas → do
+            _ ← evaluate (force atlas)
+            -- Issue #763: pair the atlas with the EXACT
+            -- WorldState it belongs to (this init's own page), mirroring
+            -- World.Load.Publish's identical fix -- see
+            -- EngineEnv.zoomAtlasDataRef.
+            writeIORef (rhZoomAtlasDataRef handoff) $
+                Just ( zadWidth atlas, zadHeight atlas
+                     , zadPixelData atlas, [worldState] )
+            -- Store atlas metadata (chunksPerRow) for UV computation
+            -- during baking
+            writeIORef (wsZoomAtlasRef worldState) Nothing  -- filled after GPU upload
+            logInfo logger CatWorld $ "Zoom atlas: "
+                <> tshow (zadWidth atlas) <> "×"
+                <> tshow (zadHeight atlas) <> " ("
+                <> tshow (V.length zoomCache) <> " chunks)"
+
+        -- Step 5: Preview
+        writeIORef phaseRef (LoadPhase1 5 totalSteps)
+        sendGenLog env "Rendering world preview..."
+        let preview = buildPreviewFromPixels params zoomCache chunkPixels
+        _ ← evaluate (force preview)
+        -- Stamp with a fresh generation (see
+        -- Engine.Core.State.worldPreviewGenerationRef / World.Load.Publish).
+        previewGen ← atomicModifyIORef' (rhWorldPreviewGenerationRef handoff)
+                        (\g → (g + 1, g + 1))
+        writeIORef (rhWorldPreviewRef handoff) $
+            Just (piWidth preview, piHeight preview, piData preview, previewGen)
+        sendGenLog env "World preview ready."
     
     -- Step 6: Center chunk
     writeIORef phaseRef (LoadPhase1 6 totalSteps)

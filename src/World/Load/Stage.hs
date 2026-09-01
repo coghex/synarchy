@@ -35,7 +35,7 @@ import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Control.DeepSeq (force)
 import Control.Exception (evaluate)
 import Engine.Core.State (EngineEnv(..))
-import Engine.Core.Log (logInfo, logWarn, LogCategory(..), LoggerState)
+import Engine.Core.Log (logInfo, logWarn, logError, LogCategory(..), LoggerState)
 import Engine.Graphics.Camera (Camera2D(..))
 import World.Types
 import World.Load.Types (StagedPage(..), StagedSession(..))
@@ -51,6 +51,10 @@ import World.Render (surfaceHeadroom)
 import World.ZoomMap.Cache (buildZoomCacheWithPixels)
 import World.ZoomMap.ColorPalette (ZoomColorPalette, buildColorPalette)
 import World.ZoomMap.ChunkTexture (buildZoomAtlas, ZoomAtlasData(..))
+import World.Map.ImagePlan
+    ( MapImageCeiling, MapImageFormat(..)
+    , MapImageSource(..), admitMapImage, mapImageRefusalText )
+import Engine.Map.ImageAdmission (readMapImageCeiling)
 import World.Edit.Apply (replayEdits)
 import World.Mine.Apply (applyDigSlopes)
 import World.Construct.Apply (applyConstructSlopes)
@@ -93,6 +97,13 @@ data PageStageResult = PageStageResult
     , psrCamera      ∷ !(Maybe Camera2D)
     , psrZoomAtlas   ∷ !(Maybe (Int, Int, BS.ByteString))
     , psrPreview     ∷ !(Maybe (Int, Int, BS.ByteString))
+    , psrStageError  ∷ !(Maybe StageError)
+      -- ^ #2020: a map-image validation failure this page hit AFTER its
+      --   plan was admitted — a chunk-block count or block size that
+      --   disagrees with the plan 'buildZoomAtlas' was handed. Staging
+      --   collects it rather than throwing, and 'stageSession' turns it
+      --   into a whole-transaction 'StageError', so a load either
+      --   publishes a complete session or publishes nothing.
     }
 
 -- | Stage the complete replacement session from a decoded, already
@@ -127,84 +138,119 @@ stageSession env logger saveData registry = case sdWorlds saveData of
             orderedPages = filter ((≢ activeWpsId) . wpsPageId) (sdWorlds saveData)
                              ⧺ [activeWps]
 
-        results ← forM orderedPages $
+        -- #2020: admit EVERY non-arena page's map image before any page
+        -- is staged. 'stagePage' calls 'buildZoomCacheWithPixels' for
+        -- every such page — active or not — and that call generates and
+        -- forces the page's whole 4096-byte-per-chunk pixel corpus, so
+        -- the check has to run out here, ahead of the loop, not inside
+        -- it. The device ceiling applies uniformly: an inactive page
+        -- whose atlas could never be created fails the load even though
+        -- this load would not have uploaded it, because it becomes the
+        -- active page the moment the player switches to it.
+        --
+        -- A refusal fails the whole transaction through
+        -- 'World.Load.Stage''s existing 'StageError' path, so
+        -- "World.Load.Publish" never runs and the current session stays
+        -- exactly as it was.
+        mapCeiling ← readMapImageCeiling env
+        let planRefusals =
+                [ (wpsPageId wps, refusal)
+                | wps ← orderedPages
+                , not (isArenaParams (wpsGenParams wps))
+                , Left refusal ←
+                    [ admitMapImage mapCeiling MapImageRGBA8
+                        (ZoomAtlasSource
+                            (wgpWorldSize (wpsGenParams wps))) ]
+                ]
+        case planRefusals of
+         ((refusedPid, refusal) : _) → pure $ Left $ StageError $
+            "cannot stage page " <> unWorldPageId refusedPid <> ": "
+            <> mapImageRefusalText refusal
+         [] → do
+          results ← forM orderedPages $
             stagePage logger registry palette catalog
-                      buildingDefs unitDefs activeWpsId
+                      buildingDefs unitDefs mapCeiling activeWpsId
 
-        let buildingOrphans = concatMap psrBuildingOrphans results
-            unitOrphans     = concatMap psrUnitOrphans results
-            -- Once per DISTINCT tag across the whole load transaction,
-            -- however many units or pages carried it (#912). Those units
-            -- are already loaded as the inert fallback — this is a
-            -- diagnostic, never a load failure.
-            unknownFactions = L.sort $ HS.toList $ HS.fromList $
-                                concatMap psrUnitUnknownFactions results
-        forM_ unknownFactions $ \tag →
-            logWarn logger CatWorld $
-                "Save load: unrecognized unit faction tag '" <> tag
-                <> "' — those units load as '"
-                <> factionTag fallbackFaction <> "'"
-        if not (null buildingOrphans) ∨ not (null unitOrphans)
-          then pure $ Left $ StageError $
-                 "internal error: staging produced "
-                 <> tshow (length buildingOrphans)
-                 <> " orphaned building(s) / "
-                 <> tshow (length unitOrphans)
-                 <> " orphaned unit(s) after content validation already "
-                 <> "passed — aborting rather than silently dropping them"
-          else do
-            let mergedBuildings = HM.unions (map (bmInstances . psrBuildings) results)
-                mergedUnits     = HM.unions (map (umInstances . psrUnits) results)
-                mergedSimStates = HM.unions (map psrUnitSimStates results)
-                -- Every page's snapshot carries the SAME canonical
-                -- session-wide allocator (issue #758's adapter — see
-                -- 'World.Save.Snapshot.Adapter.pageToWorldPageSave')
-                -- so any page's value is representative.
-                nextBid = maybe 0 (bmNextId . psrBuildings) (listToMaybe results)
-                nextUid = maybe 0 (umNextId . psrUnits) (listToMaybe results)
-                finalBuildings = BuildingManager
-                    { bmDefs = buildingDefs, bmInstances = mergedBuildings
-                    , bmNextId = nextBid, bmSelected = Nothing }
-                finalUnits = UnitManager
-                    { umDefs = unitDefs, umInstances = mergedUnits
-                    , umSelected = mempty, umNextId = nextUid }
-                mCamera    = listToMaybe [ c | Just c ← map psrCamera results ]
-                -- #1670: keep the atlas paired with the id of the page
-                -- whose own zoom cache produced it. Only one staged
-                -- page builds atlas pixels (the active one, below),
-                -- but every non-arena page builds its own cache, so
-                -- publish must know WHICH page this belongs to rather
-                -- than handing it to all of them.
-                mZoomAtlas = listToMaybe
-                    [ (spPageId (psrPage r), w, h, bytes)
-                    | r ← results, Just (w, h, bytes) ← [psrZoomAtlas r] ]
-                mPreview   = listToMaybe [ p | Just p ← map psrPreview results ]
-            pure $ case mCamera of
-                -- Every staged session resolves exactly one active page
-                -- (the fallback above), which always stages a camera —
-                -- 'Nothing' here would mean 'orderedPages''s active-last
-                -- ordering broke, an internal invariant violation rather
-                -- than a real load failure. Reject cleanly instead of
-                -- fabricating a camera value.
-                Nothing → Left $ StageError
-                    "internal error: no page staged as the active page"
-                Just camera → Right StagedSession
-                    { ssPages         = map psrPage results
-                    , ssActivePage    = activeWpsId
-                    , ssVisiblePages  = sdVisiblePages saveData
-                    , ssBuildings     = finalBuildings
-                    , ssUnits         = finalUnits
-                    , ssUnitSimStates = mergedSimStates
-                    , ssGameTime      = sdGameTime saveData
-                    , ssTexPalette    = sdTexPalette saveData
-                    , ssNextItemId    = sdNextItemInstanceId saveData
-                    , ssCamera        = camera
-                    , ssZoomAtlas     = mZoomAtlas
-                    , ssPreview       = mPreview
-                    , ssReconcile     = loadReconcileContextFrom
-                                          (knownEntitiesFromSaveData saveData)
-                    , ssMaterialRegistry = registry
-                    }
+          let buildingOrphans = concatMap psrBuildingOrphans results
+              unitOrphans     = concatMap psrUnitOrphans results
+              -- Once per DISTINCT tag across the whole load transaction,
+              -- however many units or pages carried it (#912). Those units
+              -- are already loaded as the inert fallback — this is a
+              -- diagnostic, never a load failure.
+              unknownFactions = L.sort $ HS.toList $ HS.fromList $
+                                  concatMap psrUnitUnknownFactions results
+          forM_ unknownFactions $ \tag →
+              logWarn logger CatWorld $
+                  "Save load: unrecognized unit faction tag '" <> tag
+                  <> "' — those units load as '"
+                  <> factionTag fallbackFaction <> "'"
+          -- #2020: a post-admission map-image failure (a chunk-block
+          -- count or size that disagrees with the accepted plan) fails
+          -- the whole transaction here, before anything is published.
+          case [ e | Just e ← map psrStageError results ] of
+           (stageErr : _) → pure $ Left stageErr
+           [] →
+            if not (null buildingOrphans) ∨ not (null unitOrphans)
+            then pure $ Left $ StageError $
+                   "internal error: staging produced "
+                   <> tshow (length buildingOrphans)
+                   <> " orphaned building(s) / "
+                   <> tshow (length unitOrphans)
+                   <> " orphaned unit(s) after content validation already "
+                   <> "passed — aborting rather than silently dropping them"
+            else do
+              let mergedBuildings = HM.unions (map (bmInstances . psrBuildings) results)
+                  mergedUnits     = HM.unions (map (umInstances . psrUnits) results)
+                  mergedSimStates = HM.unions (map psrUnitSimStates results)
+                  -- Every page's snapshot carries the SAME canonical
+                  -- session-wide allocator (issue #758's adapter — see
+                  -- 'World.Save.Snapshot.Adapter.pageToWorldPageSave')
+                  -- so any page's value is representative.
+                  nextBid = maybe 0 (bmNextId . psrBuildings) (listToMaybe results)
+                  nextUid = maybe 0 (umNextId . psrUnits) (listToMaybe results)
+                  finalBuildings = BuildingManager
+                      { bmDefs = buildingDefs, bmInstances = mergedBuildings
+                      , bmNextId = nextBid, bmSelected = Nothing }
+                  finalUnits = UnitManager
+                      { umDefs = unitDefs, umInstances = mergedUnits
+                      , umSelected = mempty, umNextId = nextUid }
+                  mCamera    = listToMaybe [ c | Just c ← map psrCamera results ]
+                  -- #1670: keep the atlas paired with the id of the page
+                  -- whose own zoom cache produced it. Only one staged
+                  -- page builds atlas pixels (the active one, below),
+                  -- but every non-arena page builds its own cache, so
+                  -- publish must know WHICH page this belongs to rather
+                  -- than handing it to all of them.
+                  mZoomAtlas = listToMaybe
+                      [ (spPageId (psrPage r), w, h, bytes)
+                      | r ← results, Just (w, h, bytes) ← [psrZoomAtlas r] ]
+                  mPreview   = listToMaybe [ p | Just p ← map psrPreview results ]
+              pure $ case mCamera of
+                  -- Every staged session resolves exactly one active page
+                  -- (the fallback above), which always stages a camera —
+                  -- 'Nothing' here would mean 'orderedPages''s active-last
+                  -- ordering broke, an internal invariant violation rather
+                  -- than a real load failure. Reject cleanly instead of
+                  -- fabricating a camera value.
+                  Nothing → Left $ StageError
+                      "internal error: no page staged as the active page"
+                  Just camera → Right StagedSession
+                      { ssPages         = map psrPage results
+                      , ssActivePage    = activeWpsId
+                      , ssVisiblePages  = sdVisiblePages saveData
+                      , ssBuildings     = finalBuildings
+                      , ssUnits         = finalUnits
+                      , ssUnitSimStates = mergedSimStates
+                      , ssGameTime      = sdGameTime saveData
+                      , ssTexPalette    = sdTexPalette saveData
+                      , ssNextItemId    = sdNextItemInstanceId saveData
+                      , ssCamera        = camera
+                      , ssZoomAtlas     = mZoomAtlas
+                      , ssPreview       = mPreview
+                      , ssReconcile     = loadReconcileContextFrom
+                                            (knownEntitiesFromSaveData saveData)
+                      , ssMaterialRegistry = registry
+                      }
 
 -- | Stage one saved page: gen params + mutable game state (own fresh
 --   IORefs), zoom cache + center chunk + queued remainder (or the arena
@@ -218,9 +264,9 @@ stageSession env logger saveData registry = case sdWorlds saveData of
 stagePage
     ∷ LoggerState → MaterialRegistry → ZoomColorPalette
     → FloraCatalog → HM.HashMap Text BuildingDef → HM.HashMap Text UnitDef
-    → WorldPageId → WorldPageSave → IO PageStageResult
+    → MapImageCeiling → WorldPageId → WorldPageSave → IO PageStageResult
 stagePage logger registry palette catalog buildingDefs unitDefs
-          activeWpsId wps = do
+          mapCeiling activeWpsId wps = do
     let pid      = wpsPageId wps
         isActive = pid ≡ activeWpsId
         params    = wpsGenParams wps
@@ -316,7 +362,7 @@ stagePage logger registry palette catalog buildingDefs unitDefs
     writeIORef (wsContainerKnowledgeRef worldState)
         (retainContainers liveBuildings (wpsContainerKnowledge wps))
 
-    (simSeeds, locStamps, mCamera, mZoomAtlas, mPreview) ←
+    (simSeeds, locStamps, mCamera, mZoomAtlas, mPreview, mStageErr) ←
       if isArenaParams params
         then do
           when isActive $ writeIORef phaseRef (LoadPhase1 2 totalSteps)
@@ -357,7 +403,7 @@ stagePage logger registry palette catalog buildingDefs unitDefs
                   , camZTracking    = True
                   }
             else pure Nothing
-          pure (seeds, [], mCam, Nothing, Nothing)
+          pure (seeds, [], mCam, Nothing, Nothing, Nothing)
         else do
           when isActive $ writeIORef phaseRef (LoadPhase1 2 totalSteps)
           let (zoomCache, chunkPixels) =
@@ -365,16 +411,34 @@ stagePage logger registry palette catalog buildingDefs unitDefs
           _ ← evaluate (force zoomCache)
           writeIORef (wsZoomCacheRef worldState) zoomCache
           writeIORef (wsZoomAtlasRef worldState) Nothing
-          (mZoomAtlasVal, mPreviewVal) ← if isActive
+          (mZoomAtlasVal, mPreviewVal, mAtlasErr) ← if isActive
             then do
               _ ← evaluate (force chunkPixels)
-              let atlas = buildZoomAtlas (V.length zoomCache) chunkPixels
-              _ ← evaluate (force atlas)
-              let preview = buildPreviewFromPixels params zoomCache chunkPixels
-              _ ← evaluate (force preview)
-              pure ( Just (zadWidth atlas, zadHeight atlas, zadPixelData atlas)
-                   , Just (piWidth preview, piHeight preview, piData preview) )
-            else pure (Nothing, Nothing)
+              -- #2020: the SAME pure admission 'stageSession' already ran
+              -- for this page, re-derived from the same worldSize through
+              -- the same function — it cannot disagree, and it is what
+              -- makes the plan (not this module) the allocation
+              -- authority. 'buildZoomAtlas' then verifies the cache
+              -- count, the block count and every block's size against it
+              -- before allocating or copying.
+              let eAtlas = do
+                      plan ← admitMapImage mapCeiling MapImageRGBA8
+                                 (ZoomAtlasSource worldSize)
+                      buildZoomAtlas plan (V.length zoomCache) chunkPixels
+              case eAtlas of
+                Left refusal → do
+                  let msg = "cannot stage page " <> unWorldPageId pid
+                            <> ": " <> mapImageRefusalText refusal
+                  logError logger CatWorld ("Save load: " <> msg)
+                  pure (Nothing, Nothing, Just (StageError msg))
+                Right atlas → do
+                  _ ← evaluate (force atlas)
+                  let preview = buildPreviewFromPixels params zoomCache chunkPixels
+                  _ ← evaluate (force preview)
+                  pure ( Just (zadWidth atlas, zadHeight atlas, zadPixelData atlas)
+                       , Just (piWidth preview, piHeight preview, piData preview)
+                       , Nothing )
+            else pure (Nothing, Nothing, Nothing)
 
           when isActive $ writeIORef phaseRef (LoadPhase1 3 totalSteps)
           let centerCoord =
@@ -451,7 +515,7 @@ stagePage logger registry palette catalog buildingDefs unitDefs
                   , camZTracking    = True
                   }
             else pure Nothing
-          pure (seeds, stamps, mCam, mZoomAtlasVal, mPreviewVal)
+          pure (seeds, stamps, mCam, mZoomAtlasVal, mPreviewVal, mAtlasErr)
 
     -- #1858: the third publication boundary, and the one a save has to
     -- pass through. Designations restore VERBATIM above — the record
@@ -487,4 +551,5 @@ stagePage logger registry palette catalog buildingDefs unitDefs
         , psrCamera          = mCamera
         , psrZoomAtlas       = mZoomAtlas
         , psrPreview         = mPreview
+        , psrStageError      = mStageErr
         }

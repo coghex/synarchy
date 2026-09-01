@@ -1180,13 +1180,14 @@ def test_audit_against_the_real_repo():
            f"the real EngineEnv + the real inventory doc should have zero "
            f"violations, got: {violations}")
     live_fields = extract_record_fields(real_source, ENGINE_ENV_PATTERN)
-    expect(len(live_fields) == 89,
-           f"expected 89 live EngineEnv fields (issue #876's own count of 81, "
+    expect(len(live_fields) == 90,
+           f"expected 90 live EngineEnv fields (issue #876's own count of 81, "
            f"plus #907's `windowPosRef`, #957's `tutorialRegistryRef`, "
            f"#913's `playerIntentGenRef`, #1693's "
            f"`framebufferMinimizeGenRef`, #1730's `enginePauseGenRef`, "
            f"#1712's `structureWallCatalogRef`, #1842's "
-           f"`structureArtCatalogRef` and #1921's `sceneStatsRef`), "
+           f"`structureArtCatalogRef`, #1921's `sceneStatsRef` and "
+           f"#2020's `maxImageDimensionRef`), "
            f"got {len(live_fields)}")
 
 

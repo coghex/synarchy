@@ -72,6 +72,7 @@ import Engine.Core.State
   , framebufferSizeRef, fpsRef, brightnessRef, pixelSnapRef
   , textureFilterRef, assetPoolRef, textureNameRegistryRef, fontCacheRef
   , textureSystemRef, samplerCacheRef, textureSizeRef
+  , maxImageDimensionRef
   , defaultFaceMapSlotRef, cameraRef, uiCameraRef, screenshotRequestQueue
   , nextObjectIdRef
   )
@@ -109,6 +110,10 @@ data RenderCapability = RenderCapability
   , rcTextureSystemRef        ∷ IORef (Maybe BindlessTextureSystem)
   , rcSamplerCacheRef         ∷ IORef SamplerCache
   , rcTextureSizeRef          ∷ IORef (HM.HashMap TextureHandle (Int, Int))
+  , rcMaxImageDimensionRef    ∷ IORef (Maybe Int)
+    -- ^ The device's real @maxImageDimension2D@, written here once
+    --   Vulkan has a physical device (#2020). @MainRender@ is the only
+    --   writer; every reader takes the worker-safe view instead.
   , rcDefaultFaceMapSlotRef   ∷ IORef Word32
   , rcCameraRef               ∷ IORef Camera2D
   , rcUiCameraRef             ∷ IORef UICamera
@@ -136,6 +141,7 @@ toRenderCapability env = RenderCapability
   , rcTextureSystemRef       = textureSystemRef env
   , rcSamplerCacheRef        = samplerCacheRef env
   , rcTextureSizeRef         = textureSizeRef env
+  , rcMaxImageDimensionRef   = maxImageDimensionRef env
   , rcDefaultFaceMapSlotRef  = defaultFaceMapSlotRef env
   , rcCameraRef              = cameraRef env
   , rcUiCameraRef            = uiCameraRef env
