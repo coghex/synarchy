@@ -288,7 +288,7 @@ revalidateConstructDesignations env logger ws scope = do
             -- this tile until the claim timed out; naming the attempt is
             -- what keeps a worker that has since claimed a successor
             -- untouched.
-            notifyConstructInvalidated env ws gx gy cd
+            notifyConstructInvalidated env ws key cd
             -- …and, when materials really came back, a PLAYER-facing
             -- line. The F4 ring is a debug oracle; a designation the
             -- world withdrew after its cost was already spent is
@@ -336,9 +336,11 @@ revalidateStagedConstructDesignations deps cat logger ws scope = do
         pure [ k | (k, _, _) ← removed ]
 
 -- | Tell the Lua build AI that one exact attempt is gone.
+--   Canonical coordinate, for the reason 'notifyConstructCompleted'
+--   states.
 notifyConstructInvalidated
-    ∷ EngineEnv → WorldState → Int → Int → ConstructDesignation → IO ()
-notifyConstructInvalidated env ws gx gy cd =
+    ∷ EngineEnv → WorldState → (Int, Int) → ConstructDesignation → IO ()
+notifyConstructInvalidated env ws (gx, gy) cd =
     forConstructPage env ws $ \pid → do
         let ConstructAttemptId aid = cdAttempt cd
         Q.writeQueue (luaQueue env)
@@ -365,9 +367,14 @@ forConstructPage env ws act = do
 --   whether the queued command committed. So the reward for the work —
 --   the construction XP — waits for this, and a declined placement
 --   sends 'notifyConstructInvalidated' instead.
+--   The coordinate is the CANONICAL stored key, never a caller's alias:
+--   the Lua claim registry is keyed by the coords the AI reads back from
+--   @construction.getPendingJobs@, which reports canonical ones. A
+--   broadcast naming an alias would look up a key that does not exist
+--   and leave the real claim standing (#1175).
 notifyConstructCompleted
-    ∷ EngineEnv → WorldState → Int → Int → ConstructDesignation → IO ()
-notifyConstructCompleted env ws gx gy cd =
+    ∷ EngineEnv → WorldState → (Int, Int) → ConstructDesignation → IO ()
+notifyConstructCompleted env ws (gx, gy) cd =
     forConstructPage env ws $ \pid → do
         let ConstructAttemptId aid = cdAttempt cd
         Q.writeQueue (luaQueue env)

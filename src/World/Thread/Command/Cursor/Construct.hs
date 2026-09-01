@@ -266,15 +266,21 @@ handleWorldCancelConstructCommand env _logger pageId gx gy mAttempt = do
             forM_ mCd $ \cd → do
                 deps ← constructRefundDeps env
                 worldSize ← pageWrapWorldSize worldState
-                refundConstructDesignation deps worldState
-                    (canonicalTile worldSize gx gy) cd
+                -- #1175: the CANONICAL key throughout — the refund's
+                -- position and the broadcast's coordinate alike. The Lua
+                -- claim registry is keyed by the coords the AI reads
+                -- back, which are canonical, so an alias-named cancel
+                -- that broadcast its alias would leave the real claim
+                -- standing and block a successor.
+                let ckey = canonicalTile worldSize gx gy
+                refundConstructDesignation deps worldState ckey cd
                 -- …and detach the claimant, exactly as a world-side
                 -- invalidation does. Without it this documented
                 -- cancellation API leaves the old claim holding the
                 -- tile until a decision tick or a timeout, blocking a
                 -- successor designated there immediately — which is the
                 -- very thing the exact-attempt contract promises.
-                notifyConstructInvalidated env worldState gx gy cd
+                notifyConstructInvalidated env worldState ckey cd
         Nothing → pure ()
 
 -- | Atomically remove a construction designation and reset its
@@ -450,13 +456,13 @@ handleWorldSetConstructStatusCommand env _logger pageId gx gy st attempt
                     then do
                         deps ← constructRefundDeps env
                         refundConstructDesignation deps worldState key cd
-                        notifyConstructInvalidated env worldState gx gy cd
+                        notifyConstructInvalidated env worldState key cd
                     -- …and a CONFIRMED completion says so, which is what
                     -- lets the claimant grant its work XP only for a
                     -- piece that really landed (#1844). Structures only:
                     -- a building's own stake path reports synchronously.
                     else when (st ≡ CsComplete) $
-                        notifyConstructCompleted env worldState gx gy cd
+                        notifyConstructCompleted env worldState key cd
         Nothing → pure ()
 
 -- | Build AI hook (#96): pour progress into a designation. Deltas are

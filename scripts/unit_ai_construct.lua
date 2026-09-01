@@ -133,8 +133,16 @@ if unitAi then
 
     -- The other half: the world thread accepted this attempt's queued
     -- placement, so the piece really landed and the work is paid for.
+    --
+    -- The claim is released here too, and for the same reason the
+    -- invalidation releases one: a scanner passing during the hand-off
+    -- sees a `placing` job and the stale-claim sweep ADOPTS it with an
+    -- anonymous entry. The claimant's own release cannot clear that one
+    -- -- it is not its uid -- so without this it would sit on the tile
+    -- until its timeout, refusing a successor designated there.
     function unitAi.onConstructCompleted(pageId, gx, gy, attempt)
         settlePendingXp(pageId, gx, gy, attempt, true)
+        M.abandonClaim(pageId, gx, gy, attempt)
     end
 end
 

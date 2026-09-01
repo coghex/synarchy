@@ -65,6 +65,13 @@ fixturePage = WorldPageId "construct_plan_invalidation"
 tile ∷ (Int, Int)
 tile = (5, 5)
 
+-- | The same physical tile named through its u-alias. Identity away
+--   from the seam, so the canonical-broadcast example below still
+--   exercises the canonicalisation rather than a coincidence.
+aliasTile ∷ (Int, Int)
+aliasTile = (fst tile + worldSize * chunkSize `div` 2
+            , snd tile - worldSize * chunkSize `div` 2)
+
 floorPiece, postPiece, ghostPiece, artOnlyPiece ∷ ConstructTarget
 floorPiece   = CtStructure (StructurePiece fixturePackName "floor" Nothing)
 postPiece    = CtStructure (StructurePiece fixturePackName "post" Nothing)
@@ -270,6 +277,23 @@ spec = beforeAll initializeEngineHeadless $
       [ (p, x, y, a) | LuaConstructInvalidated p x y a ← msgs ]
           `shouldBe` [(unWorldPageId fixturePage, fst tile, snd tile
                       , attemptRaw)]
+
+    it "names the CANONICAL key in the broadcast, whatever alias the \
+       \cancellation used" $ \(EngineInitResult env) → do
+      -- The Lua claim registry is keyed by the coords the AI reads back
+      -- from getPendingJobs, which are canonical. A cancellation named
+      -- through a seam alias that broadcast its alias would look up a
+      -- key that does not exist, leaving the real claim standing and
+      -- blocking a successor (#1175).
+      (ws, logger) ← scene env flatTiles
+      seedDesignation ws floorPiece CpUnpaid
+      _ ← drainLuaQueue env
+      handleWorldCancelConstructCommand env logger fixturePage
+          (fst aliasTile) (snd aliasTile) Nothing
+      HM.size <$> readIORef (wsConstructDesignationsRef ws) `shouldReturn` 0
+      msgs ← drainLuaQueue env
+      [ (x, y) | LuaConstructInvalidated _ x y _ ← msgs ]
+          `shouldBe` [tile]
 
     it "mints a STAGED refund from the staged allocator, never the live \
        \one" $ \(EngineInitResult env) → do

@@ -214,6 +214,14 @@ spec = describe "unit AI reconciliation boundary (#1589)" $ do
         , "site.abandonClaim(reg, key, 'P', 5, 5, 3)"
         , "assert(reg[key('P', 5, 5)] == nil,"
         , "  'an attempt-less adopted orphan still clears')"
+        -- A COMPLETION releases the claim too, and for the same reason
+        -- an invalidation does: a scanner passing during the hand-off
+        -- makes the sweep adopt an anonymous entry the claimant's own
+        -- release cannot clear, which would then refuse a successor.
+        , "reg[key('P', 6, 6)] = { uid = nil, at = 0, attempt = 9 }"
+        , "site.abandonClaim(reg, key, 'P', 6, 6, 9)"
+        , "assert(reg[key('P', 6, 6)] == nil,"
+        , "  'a completed attempt releases its adopted claim')"
         , "assert(construct ~= nil)"
         ]
 
