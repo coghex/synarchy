@@ -195,9 +195,10 @@ def observe_initial_content(args, state: ScenarioState,
             f"spawn-only equipment appeared in ruin content: {spawn_only}")
 
     # #948 baseline: which loot each STABLE ruin instance owns.
-    # Captured before the synthetic discovery units below (they
-    # are units, not ground items) so phases 1b/1c compare a
-    # pure content-spawn result.
+    # Captured before the discovery owner runs on this same page and
+    # spawns its synthetic units (which are units, not ground items),
+    # so the two loot-stability processes compare a pure content-spawn
+    # result.
     loot1 = loot_by_instance(args.port, "wa")
     print(f"  loot by instance: {loot1}")
     if len(loot1) == len(ruins) and all(loot1.values()):

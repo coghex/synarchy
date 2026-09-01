@@ -163,8 +163,9 @@ class RunArtifacts:
     six: one could overwrite a fixture between another's write and the
     engine-side read of it, and both interleaved into one truncated
     log. That last one is not merely untidy here, because the log is
-    ASSERTED against -- the integrity-diagnostic read in phase 2 and
-    the warning read in phase 3 -- so a foreign truncation could turn a
+    ASSERTED against -- the knowledge owner's integrity-diagnostic
+    read on the reloaded session, and the dispatch owner's
+    unknown-content warnings -- so a foreign truncation could turn a
     passing phase into a failure or a failure into a pass.
 
     Nothing this process did not create is ever named, so a file of the
@@ -240,7 +241,7 @@ def abandon_engine(proc) -> None:
     """Make sure an engine this run launched is dead, without talking to
     the port. A no-op on a handle that has already exited.
 
-    Every phase below already shuts its own engine down through
+    The facade already shuts each process's engine down through
     `quit_engine` in a `finally`. This is the backstop for the windows
     that reach past one: `probelib.boot` hands the process over the
     moment it exists (`on_launch`) and only decides about READY up to

@@ -122,9 +122,9 @@ from location_content.engine_queries import (gen_world, load_defs,
                                              wait_floor)
 # Re-exported, NOT wrapped: `tools/test_location_content_probe.py` asserts
 # object IDENTITY against `tools/portal_ghost_probe.py`'s imports and pins
-# `save_and_wait`'s exact signature, and
-# `tools/test_location_probe_config_isolation.py` registers THIS module as a
-# root builder. A delegating wrapper would break both.
+# `save_and_wait`'s exact signature, so a delegating wrapper would break
+# both. `REPO` is here for the same reason -- that companion resolves the
+# repository through this module -- and is unused by the code below.
 from location_content.invocation import (FAILURE, REPO, ROOT_PREFIX,
                                          RunArtifacts, ScenarioState,
                                          _PhaseAborted, abandon_engine,
@@ -134,14 +134,15 @@ from location_content.invocation import (FAILURE, REPO, ROOT_PREFIX,
 
 #: The nine names `tools/portal_ghost_probe.py`,
 #: `tools/portal_location_probe.py` and `tools/location_embark_probe.py`
-#: import from here, plus this file's own entry points. Listed so the
-#: compatibility surface is a declaration rather than an accident of
-#: which imports happen to be above.
+#: import from here (#2095 requirement 9), plus `REPO` -- which the
+#: companion self-test reads -- and this file's own entry points. Listed
+#: so the compatibility surface is a declaration rather than an accident
+#: of which imports happen to be above it.
 __all__ = [
     "load_defs", "gen_world", "placed_ready", "wait_floor",
     "make_isolated_root", "remove_isolated_root", "save_and_wait",
     "ruin_geometry", "spawn_counts",
-    "main", "run",
+    "REPO", "main", "run",
 ]
 
 

@@ -146,8 +146,9 @@ def observe_initial_discovery(args, state: ScenarioState,
     refreshes the spawn counts, because the units it spawns persist like
     any other and the no-respawn comparison must account for them.
     """
-    # ---- Discovery (#780): stamping + content-spawning above did
-    #      NOT discover the ruin; a hostile unit standing on it
+    # ---- Discovery (#780): the stamping and content-spawning the
+    #      content owner just observed on this page did NOT discover
+    #      the ruin; a hostile unit standing on it
     #      doesn't either; a player-faction unit that SEES it
     #      does (#1230 — standing on the anchor is the strongest
     #      case, since a unit's own tile is always in its visible
@@ -216,7 +217,8 @@ def observe_initial_discovery(args, state: ScenarioState,
     # ---- Per-unit location knowledge (#915): the EXPERIENTIAL
     #      layer beside the player-wide CARTOGRAPHIC state above.
     #      The unit AI stack owns that memory, so load it here —
-    #      after every check above, and with the sim PAUSED so
+    #      after every check this process has made, and with the
+    #      sim PAUSED so
     #      the AI's own decisions (wander, forage, water-seeking)
     #      can never move a unit or pick up one of the ground
     #      items phase 2 re-counts. Pausing is not a workaround
@@ -333,10 +335,11 @@ def observe_initial_discovery(args, state: ScenarioState,
                     f"#915 could not stage the dangling-memory case: "
                     f"want {sorted(want)}, got {sorted(staged)}")
 
-    # Deliberately still PAUSED through the save below: a load
-    # comes up paused anyway (#763), so this keeps phase 1 and
-    # phase 2 in the same sim state, and keeps the AI from moving
-    # units or picking up the ground items phase 2 re-counts.
+    # Deliberately still PAUSED when this returns, and through the
+    # save the facade then takes: a load comes up paused anyway
+    # (#763), so this keeps the initial and reloaded sessions in the
+    # same sim state, and keeps the AI from moving units or picking up
+    # the ground items the reloaded session re-counts.
 
     # The synthetic units above are now part of 'wa' — refresh
     # counts1 so phase 2's "reload does not respawn contents"
@@ -417,8 +420,9 @@ def check_memory_survived(args, art, state: ScenarioState,
                 f"expected exactly one dangling diagnostic naming "
                 f"{want_bits}, got {diags}")
 
-        # …and the load SUCCEEDED anyway (already asserted via
-        # wait_load_published above), with the real
+        # …and the load SUCCEEDED anyway (the facade already asserted
+        # that through wait_load_published before calling any owner
+        # here), with the real
         # apply/onSaveLoaded reconcile dropping ONLY the
         # unresolvable entry — its resolving siblings intact.
         if state.dangling_uid >= 0:
