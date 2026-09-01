@@ -1,9 +1,13 @@
 -- | Chop designation tool (#97). Mirrors the mine/construct designation
 --   tools' anchor→rectangle commit, but the commit filters to FLORA:
---   only tiles holding a currently-harvestable species carrying the
---   requested harvest tag ("wood") are designated. No per-z-level
---   filter — forests span slopes, and the designation z is only the
---   marker's render height. The chop AI (scripts/unit_ai.lua) is the
+--   only currently-harvestable PLANTS carrying the requested harvest tag
+--   ("wood") are designated. No per-z-level filter — forests span
+--   slopes, and the designation z is only the marker's render height.
+--
+--   #1854: one designation per matching PLANT, not per tile. A sweep
+--   over a tile holding two wood-tagged trees marks both, each
+--   addressable on its own, and each one's regrowth skip is read against
+--   its own timer. The chop AI (scripts/unit_ai.lua) is the
 --   consumer. Split out of "World.Thread.Command.Cursor" (issue #564).
 module World.Thread.Command.Cursor.Chop
     ( handleWorldSetChopAnchorCommand
@@ -25,7 +29,8 @@ import qualified Data.Vector.Unboxed as VU
 import World.Types
 import World.Generate (chunkToGlobal, globalToChunk)
 import World.Generate.Coordinates (canonicalTile)
-import World.Chop.Types (newChopDesignation)
+import World.Flora.Designation
+    (designateChopInstances, cancelChopAtTile, cancelChopForInstance)
 import World.Thread.Command.Cursor.Common
     (designateRect, recordDesignationOutcome, recordMissingWorldOutcome)
 
@@ -82,8 +87,15 @@ handleWorldDesignateChopCommand env logger pageId gx1 gy1 gx2 gy2 tag = do
                 -- stays in the rectangle's own frame (so the bounds test
                 -- means what it says) and is canonicalised again for the
                 -- harvest read and the stored key. Identity inland.
+                --
+                -- #1854: one entry per matching PLANT, not per tile. Two
+                -- wood-tagged trees sharing a tile are two designations
+                -- now, each addressable on its own — and the regrowth
+                -- skip is read against that plant's own timer, so a
+                -- regrowing stump beside a standing tree no longer
+                -- suppresses the tree.
                 entries =
-                    [ (canonicalTile worldSize tgx tgy, newChopDesignation z)
+                    [ (fiInstanceId i, tgx, tgy, z)
                     | cx ← [cx0 .. cx1], cy ← [cy0 .. cy1]
                     , let rawCoord = ChunkCoord cx cy
                     , Just lc ← [lookupChunk (wrapChunkCoordU worldSize rawCoord)
@@ -96,12 +108,13 @@ handleWorldDesignateChopCommand env logger pageId gx1 gy1 gx2 gy2 tag = do
                           ly = fromIntegral (fiTileY i)
                           (tgx, tgy) = chunkToGlobal rawCoord lx ly
                     , tgx ≥ xLo, tgx ≤ xHi, tgy ≥ yLo, tgy ≤ yHi
-                    , HM.lookupDefault 0 (canonicalTile worldSize tgx tgy)
-                                         harvests ≤ 0
+                    , HM.lookupDefault 0 (fiInstanceId i) harvests ≤ 0
                     , let z = lcSurfaceMap lc VU.! columnIndex lx ly
                     ]
-            atomicModifyIORef' (wsChopDesignationsRef worldState) $ \m →
-                (foldl' (\acc (k, v) → HM.insert k v acc) m entries, ())
+            -- The ONE owning write (#1854 requirement 8): the durable
+            -- map and every loaded instance's fiChopDesignated mirror
+            -- move together, so they cannot drift.
+            designateChopInstances worldState entries
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
                 (cs { chopAnchor = Nothing }, ())
             logDebug logger CatWorld $
@@ -121,15 +134,20 @@ handleWorldDesignateChopCommand env logger pageId gx1 gy1 gx2 gy2 tag = do
                 xLo yLo ((xHi - xLo + 1) * (yHi - yLo + 1)) (length entries)
 
 handleWorldCancelChopCommand ∷ EngineEnv → LoggerState → WorldPageId
-    → Int → Int → IO ()
-handleWorldCancelChopCommand env _logger pageId gx gy = do
+    → Int → Int → Maybe FloraInstanceId → IO ()
+handleWorldCancelChopCommand env _logger pageId gx gy mIid = do
     mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     case lookup pageId (wmWorlds mgr) of
-        Just worldState → do
-            -- #1175: cancellation accepts any alias of the stored key.
-            worldSize ← pageWrapWorldSize worldState
-            atomicModifyIORef' (wsChopDesignationsRef worldState) $ \m →
-                (HM.delete (canonicalTile worldSize gx gy) m, ())
+        Just worldState → case mIid of
+            -- #1854: the felling acolyte cancels EXACTLY the plant it
+            -- claimed, so a second designated tree on the same tile
+            -- stays designated for whoever claims it next.
+            Just iid → cancelChopForInstance worldState iid
+            -- The player's cancel gesture still points at a TILE, so it
+            -- clears every designation standing there — including a
+            -- pending legacy entry that has not resolved yet, which
+            -- would otherwise come back the moment its chunk loaded.
+            Nothing → cancelChopAtTile worldState gx gy
         Nothing → pure ()
 
 handleWorldSetChopDesignateTextureCommand ∷ EngineEnv → LoggerState

@@ -48,7 +48,11 @@ import Infection.Types (InfectionManager, InfectionDef(..)
 
 -- ----- Infection -----
 -- A per-wound `woundInfection` (0..1) bar that grows on an OPEN, undressed
--- wound after a grace period, ∝ effective severity × kind. DETERMINISTIC:
+-- wound after a grace period, ∝ the ACUTE severity term × kind. That term
+-- is `woundSeverity × (1 − woundHeal)` on the wound as the tick found it —
+-- NOT the authoritative effective severity ('woundEffSeverity'), which
+-- also carries the woundNecrosis floor. Growth is scaled by live tissue,
+-- and necrosis is precisely the tissue that has died. DETERMINISTIC:
 -- a wound marked `woundClean` (antiseptic-disinfected during treatment)
 -- never grows it — that's the PREVENTION half of the medical loop.
 -- ANTIBIOTICS are the CURE (drive it back down). An infected wound barely
@@ -120,7 +124,9 @@ necrosisLethalVital = 0.85   -- vital part this rotted → death by gangrene
 
 woundHealFloor ∷ Float
 woundHealFloor = -0.5   -- how far a festering wound can worsen past inflicted
-                        -- (effSev = sev0 × (1 − heal), so heal = −0.5 → 1.5×)
+                        -- (the acute term is sev0 × (1 − heal), so heal =
+                        -- −0.5 → 1.5×; 'woundEffSeverity' then takes the
+                        -- larger of that and the woundNecrosis floor)
 
 -- | Per-kind susceptibility to infection (multiplies the growth rate).
 --   Deep/dirty wounds (punctures, open stumps) fester worst; a closed

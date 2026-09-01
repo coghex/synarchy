@@ -531,8 +531,8 @@ unchanged 384 MiB threshold.
 
 Gate entry points worth knowing by name: `registerUnitDefs` is what
 `loadUnitYamlFn` delegates to, the on-disk fixture tree is driven through
-`loadUnitAtlasIndexIn`, and the pinned-nearest survival of a global filter
-toggle is checked through `planFilterRebind`.
+`loadUnitAtlasIndexIn`, and the atlas slot's adoption of each global filter
+value is checked through `planFilterRebind`.
 
 Enforced by hspec `--match "Unit.Atlas"` and
 `--match "the real unit registration boundary"`.
@@ -614,12 +614,13 @@ registered with the sampler that policy names. `UploadPinnedNearest`
 slots keep NEAREST for the session; `UploadGlobalSampler` slots are
 repainted by a runtime `setTextureFilter` toggle.
 
-Two unrelated populations are pinned. Atlas slots are pinned with one mip
-level (D-6), so a filter toggle cannot start bilinearly resampling unit
-art — which on a sheet would additionally bleed neighbouring cells across
-every frame edge. UI chrome and the icons the UI/HUD layers draw are
-pinned by #2075, because the player's filter setting is a SCENE-art
-setting and selecting linear used to blur the HUD.
+Gameplay unit atlases use `UploadGlobalSampler` with one mip level (#2085),
+so they follow the player's scene-art setting without introducing mipmap
+sampling. Their one-texel extrusion rings (#2076) isolate every logical cell
+under linear filtering. UI chrome and the icons the UI/HUD layers draw are
+pinned by #2075, because the player's filter setting is a SCENE-art setting
+and selecting linear used to blur the HUD. The world preview and zoom atlas
+remain separately pinned to nearest and linear respectively.
 
 **The policy is declared by the CALLER and never derived from a path**
 (D-4). No directory rule survives the tree as it stands:
@@ -655,8 +656,16 @@ per policy**, because one slot cannot carry two samplers:
 | building `sprite:` | `bdTexture` (`Building.Render`) | `bdIconTexture` (`building.listDefs`'s `iconTex`) |
 | broken-equipment badge | texture name `broken_equipment` | texture name `broken_equipment_ui` |
 
-Unit atlases keep their own `LuaLoadAtlasTextureRequest` and stay
-pinned.
+**Known live-frame exception:** when a unit has no authored `portrait:`,
+the unit-info panel mirrors its current animation through
+`unit.getFrameSample`, reusing the atlas handle and cell sub-rect. That UI
+fallback therefore follows the player-selected sampler and appears linearly
+filtered when the scene setting is linear; it is not a pinned UI copy. This
+preserves #1259/#2085's one image, handle, and slot per animation. Supplying
+an authored `portrait:` selects the pinned UI path above.
+
+Unit atlases keep their own `LuaLoadAtlasTextureRequest` to preserve the
+one-image-per-animation boundary, but its handler selects the global policy.
 
 **The path cache is keyed by `(path, policy)`,** not by path:
 `apAssetPaths` is a `Map TextureCacheKey AssetId`. Each policy therefore
@@ -681,13 +690,12 @@ consumer declares (`scripts/startup_loader.lua` splits `hudUiPaths` from
 samples and the consumer uploads the real one anyway.
 
 Cell UVs sit on the LOGICAL cell's own exact edges — one texel inside its
-padded slot (#2076) — with no half-texel inset: unit art is nearest and
-pixel-snapped, so a fragment centre lands inside its cell, and an inset
-would shift the sampled texels and break pixel-identity with what the
-per-frame path drew. Isolation under a linear filter comes from the
-extrusion gutter instead, which moves no sampled texel at all — epic
-#2072's D-3, and the reason TSR-3 depends on TSR-2 rather than on an
-inset.
+padded slot (#2076) — with no half-texel inset. In nearest mode a fragment
+centre lands on exactly the source texel the retired per-frame path drew;
+an inset would shift those samples and break pixel identity. In linear mode
+the surrounding footprint reaches only the cell's own extrusion gutter, so
+isolation moves no logical texel at all — epic #2072's D-3, and the reason
+TSR-3 depends on TSR-2 rather than on an inset.
 
 ---
 

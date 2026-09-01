@@ -48,7 +48,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import probe_external_evidence as evidence  # noqa: E402
-import run_probes  # noqa: E402
+import probe_runner_registry  # noqa: E402
 
 FAILURES: list[str] = []
 PASSED = 0
@@ -299,8 +299,8 @@ def test_identity_mapping() -> None:
                 "transfer_order's registered script")
 
     keys = evidence.probe_keys()
-    check_equal(keys, [k for k, _s, _p in run_probes.PROBES],
-                "probe_keys mirrors run_probes.PROBES order")
+    check_equal(keys, [k for k, _s, _p in probe_runner_registry.PROBES],
+                "probe_keys mirrors probe_runner_registry.PROBES order")
     ids = [evidence.test_id_for_probe(k) for k in keys]
     check_equal(len(set(ids)), len(ids), "every registered key maps to a distinct id")
     check(all(i.startswith("probe:") and "_" not in i for i in ids),
@@ -647,7 +647,7 @@ def test_unknown_key_is_rejected() -> None:
         except evidence.EvidenceRejected as exc:
             check("definitely_not_a_probe" in str(exc),
                   "the rejection names the offending key", str(exc))
-            check("run_probes.PROBES" in str(exc),
+            check("probe_runner_registry.PROBES" in str(exc),
                   "the rejection names the authoritative registry", str(exc))
 
         code = evidence.main(["--probe", "definitely_not_a_probe"])

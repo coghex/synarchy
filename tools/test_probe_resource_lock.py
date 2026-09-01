@@ -5,7 +5,7 @@ Deterministic, engine-free and GPU-free: no probe is ever run, no
 Vulkan, no worldgen, no census and no docs worktree. What IS real here
 is the concurrency — every mutual-exclusion case starts a separate
 INTERPRETER, because the whole point of this module is coordination the
-in-process `run_probes.ResourceLedger` cannot provide, and a test that
+in-process `probe_runner_resources.ResourceLedger` cannot provide, and a test that
 proved it with threads would be testing something else. One case
 SIGKILLs a holder, because "a dead holder owns nothing" is the property
 that makes waiting for a resource safe rather than a wedge.
@@ -606,7 +606,7 @@ def test_an_exclusive_declaration_wins_over_a_shared_one() -> None:
     print("\n-- a name given in both interests is held EXCLUSIVELY, once")
     scratch = Scratch()
     try:
-        # `run_probes.shared_resources` already subtracts an exclusively
+        # `probe_runner_resources.shared_resources` already subtracts an exclusively
         # declared resource, so this should not arise -- but taking both
         # interests on one name would mean locking one file twice from
         # one process, which flock refuses against our own description.

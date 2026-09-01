@@ -26,6 +26,8 @@
 module Test.Headless.World.DesignationSeam (spec, engineSpec) where
 
 import UPrelude
+import World.Flora.Identity
+    (FloraInstanceId, generatedFloraInstanceId)
 import Test.Hspec
 import Data.IORef (IORef, readIORef, writeIORef, newIORef)
 import Data.List (sort)
@@ -47,7 +49,7 @@ import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Structure.Types
     (StructurePieceData(..), StructureSlot(..), emptyChunkStructures)
-import World.Chop.Types (newChopDesignation)
+import World.Chop.Types (newChopDesignation, chopDesignationTile)
 import World.Chunk.Types
     (ChunkCoord(..), ColumnTiles(..), LoadedChunk(..), chunkSize, columnIndex)
 import World.Construct.Types
@@ -63,7 +65,8 @@ import World.Cursor.Types (CursorState(..), emptyCursorState)
 import World.Fluid.Types (emptyIceMap)
 import World.Grid (gridToWorld, tileHeight)
 import World.Generate.Coordinates
-    ( canonicalTile, canonicalTileFrame, chunkInSeamRegion, globalToChunk
+    ( canonicalTile, canonicalTileFrame, chunkInSeamRegion, chunkToGlobal
+    , globalToChunk
     , localizeTileToAnchor, seamTileDist2, tileAliasStep )
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import World.Page.Types (WorldPageId(..))
@@ -203,16 +206,36 @@ probeTreeId = FloraId 1
 -- | A wood-tagged tree on every tile of both seam chunks, so chop's
 --   commit has an eligible target wherever the rectangle lands.
 treesEverywhere ∷ ChunkCoord → FloraChunkData
-treesEverywhere _ = emptyFloraChunkData
+treesEverywhere coord = emptyFloraChunkData
     { fcdInstances =
         [ FloraInstance
             { fiSpecies = probeTreeId
             , fiTileX = fromIntegral lx, fiTileY = fromIntegral ly
             , fiOffU = 0, fiOffV = 0, fiZ = zSlice
             , fiAge = 1, fiHealth = 1, fiVariant = 0, fiBaseWidth = 8
+            , fiInstanceId = fixtureFloraId coord lx ly "probe_tree"
+            , fiChopDesignated = False
             }
         | lx ← [0 .. chunkSize - 1 ∷ Int], ly ← [0 .. chunkSize - 1 ∷ Int] ]
     }
+
+-- | 'fixtureFloraId' for a CANONICAL global tile — what a test that
+--   pins per-instance state (a regrowth timer, a designation) needs, now
+--   that neither is keyed by tile any more (#1854).
+fixtureTileFloraId ∷ (Int, Int) → FloraId → FloraInstanceId
+fixtureTileFloraId (gx, gy) fid =
+    let (coord, (lx, ly)) = globalToChunk gx gy
+    in fixtureFloraId coord lx ly (tshow (unFloraId fid))
+
+-- | The id a real generated plant on this chunk's (lx, ly) would carry
+--   (#1854): derived through the PRODUCTION function, from the tile's
+--   CANONICAL coords, so a fixture instance addressed through a seam
+--   alias resolves to the same identity the engine would have given it.
+fixtureFloraId ∷ ChunkCoord → Int → Int → Text → FloraInstanceId
+fixtureFloraId coord lx ly name =
+    let (gx, gy)   = chunkToGlobal coord lx ly
+        (cgx, cgy) = canonicalTile worldSize gx gy
+    in generatedFloraInstanceId (unWorldPageId fixturePage) cgx cgy name 0
 
 woodCatalog ∷ FloraCatalog
 woodCatalog =
@@ -232,6 +255,8 @@ floraAtTiles spots coord = emptyFloraChunkData
             , fiTileX = fromIntegral lx, fiTileY = fromIntegral ly
             , fiOffU = 0, fiOffV = 0, fiZ = zSlice
             , fiAge = 1, fiHealth = 1, fiVariant = 0, fiBaseWidth = 8
+            , fiInstanceId = fixtureFloraId coord lx ly (tshow (unFloraId fid))
+            , fiChopDesignated = False
             }
         | (tile, fid) ← spots
         , let (home, (lx, ly)) = globalToChunk (fst tile) (snd tile)
@@ -422,6 +447,7 @@ emptyActivity pid = PageActivityDTO
     , padFloraHarvests = HM.empty, padCropPlots = HM.empty
     , padGroundItems = GroundItemsDTO 0 HM.empty
     , padSpoilPiles = HM.empty
+    , padPendingChop = HM.empty, padPendingHarvests = HM.empty
     }
 
 -- * Engine-backed
@@ -478,7 +504,9 @@ engineSpec = beforeAll setup $ do
       handleWorldDesignateChopCommand env logger fixturePage
           (fst anchorTile) (snd anchorTile)
           (fst farTilePicked) (snd farTilePicked) "wood"
-      keysOf (wsChopDesignationsRef ws) `shouldReturn` drawnKeys
+      -- #1854: the map is keyed by PLANT now, so the frame contract is
+      -- checked on the canonical TILE each designation records.
+      designatedTiles ws `shouldReturn` drawnKeys
 
   describe "Till is restricted to level ground" $ do
 
@@ -618,15 +646,24 @@ engineSpec = beforeAll setup $ do
       ws ← resetPage env 0 noFlora
       logger ← readIORef (loggerRef env)
       let alias = aliasOf anchorTile
+          -- The id a real generated tree on the anchor tile would
+          -- carry, so the designation the test plants is addressable
+          -- exactly as the engine's own would be (#1854).
+          (anchorChunk, (anchorLX, anchorLY)) =
+              globalToChunk (fst anchorTile) (snd anchorTile)
+          iid = fixtureFloraId anchorChunk anchorLX anchorLY "probe_tree"
       writeIORef (wsChopDesignationsRef ws)
-          (HM.fromList [(anchorTile, newChopDesignation zSlice)])
+          (HM.fromList [(iid, newChopDesignation zSlice
+                                  (fst anchorTile) (snd anchorTile))])
       evalDebug ls (T.concat
           [ "local d = chop.getDesignationAt('", pageText, "', "
           , tshow (fst alias), ", ", tshow (snd alias), "); "
           , "return d and tostring(d.z) or 'nil'" ])
         `shouldReturn` tshow zSlice
+      -- The tile-granularity player cancel (no instance argument)
+      -- clears every designation standing there (#1854).
       handleWorldCancelChopCommand env logger fixturePage
-          (fst alias) (snd alias)
+          (fst alias) (snd alias) Nothing
       HM.size <$> readIORef (wsChopDesignationsRef ws) `shouldReturn` 0
 
     it "plant" $ \(env, ls) → do
@@ -856,7 +893,8 @@ engineSpec = beforeAll setup $ do
       ws ← forageWorld env worldSize 0 (floraAtTiles
               [ (seamCandidate,   berrySpecies)
               , (planarCandidate, berrySpecies) ])
-      writeIORef (wsFloraHarvestsRef ws) (HM.singleton seamCandidate 123)
+      writeIORef (wsFloraHarvestsRef ws) (HM.singleton
+          (fixtureTileFloraId seamCandidate berrySpecies) 123)
       findFlora ls forageOrigin forageRadius Nothing
         `shouldReturn` expectedFind planarCandidate "probe_berry" "16.12"
 
@@ -889,7 +927,8 @@ engineSpec = beforeAll setup $ do
     it "world.getFloraAt" $ \(env, ls) → do
       ws ← forageWorld env worldSize 0
               (floraAtTiles [(seamCandidate, berrySpecies)])
-      writeIORef (wsFloraHarvestsRef ws) (HM.singleton seamCandidate 123)
+      writeIORef (wsFloraHarvestsRef ws) (HM.singleton
+          (fixtureTileFloraId seamCandidate berrySpecies) 123)
       forM_ [seamCandidate, farTileLocal] $ \(gx, gy) →
         evalDebug ls (T.concat
             [ "local f = world.getFloraAt(", tshow gx, ", ", tshow gy, "); "
@@ -900,7 +939,8 @@ engineSpec = beforeAll setup $ do
     it "world.getFloraGrowthAt" $ \(env, ls) → do
       ws ← forageWorld env worldSize 0
               (floraAtTiles [(seamCandidate, berrySpecies)])
-      writeIORef (wsFloraHarvestsRef ws) (HM.singleton seamCandidate 123)
+      writeIORef (wsFloraHarvestsRef ws) (HM.singleton
+          (fixtureTileFloraId seamCandidate berrySpecies) 123)
       forM_ [seamCandidate, farTileLocal] $ \(gx, gy) →
         evalDebug ls (T.concat
             [ "local g = world.getFloraGrowthAt(", tshow gx, ", ", tshow gy
@@ -1008,6 +1048,13 @@ pageState env = do
 
 keysOf ∷ IORef (HM.HashMap (Int, Int) v) → IO [(Int, Int)]
 keysOf ref = sort . HM.keys <$> readIORef ref
+
+-- | #1854: chop designations are keyed by PLANT, so the seam-frame
+--   contract they must hold is on the canonical TILE each one records.
+designatedTiles ∷ WorldState → IO [(Int, Int)]
+designatedTiles ws =
+    sort . map chopDesignationTile . HM.elems
+        <$> readIORef (wsChopDesignationsRef ws)
 
 -- | How many quads the live cursor pass draws for a pending drag whose
 --   anchor is 'anchorTile' and whose CURSOR sits over the far side of

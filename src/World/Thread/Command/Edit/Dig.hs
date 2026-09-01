@@ -42,6 +42,7 @@ import World.Spoil.Types (SpoilPile(..), spoilCapacity, depositSpoil
 import World.Thread.Command.Edit.Terrain (handleWorldDeleteTileCommand)
 import World.Thread.Command.Edit.Sync (syncEditToSim)
 import World.Plant.Validate (revalidatePlantDesignations)
+import World.Flora.Designation (replaceChunkForgettingFlora)
 
 -- | Apply dig progress to the designated tile at (gx, gy).
 --
@@ -218,8 +219,11 @@ handleWorldDigTileCommand env rngRef unitQ logger pageId rawGX rawGY rawUX rawUY
                                 Nothing → pure ()
                                 Just lc → do
                                     let lc' = applyDigSlopeToChunk (gx, gy) md' lc
-                                    atomicModifyIORef' (wsTilesRef ws) $ \w →
-                                        (insertChunk lc' w, ())
+                                    -- #1854 requirement 16: an edit that takes the tile's
+                                    -- rooted flora with it must take that plant's
+                                    -- designation and regrowth timer too, or an orphan
+                                    -- entry outlives the plant it addressed.
+                                    replaceChunkForgettingFlora ws lc lc'
                                     bumpQuadCacheGen ws
                                     writeIORef (wsZoomQuadCacheRef ws) Nothing
                                     writeIORef (wsBgQuadCacheRef ws)   Nothing
@@ -322,8 +326,11 @@ promoteFullSpoilTiles env unitQ logger pageId ws startV = do
                     Nothing → pure ()
                     Just lc → do
                         let lc' = applyEdit edit lc
-                        atomicModifyIORef' (wsTilesRef ws) $ \w →
-                            (insertChunk lc' w, ())
+                        -- #1854 requirement 16: an edit that takes the tile's
+                        -- rooted flora with it must take that plant's
+                        -- designation and regrowth timer too, or an orphan
+                        -- entry outlives the plant it addressed.
+                        replaceChunkForgettingFlora ws lc lc'
                         atomicModifyIORef' (wsEditsRef ws) $ \es →
                             (appendEdit coord edit es, ())
                         atomicModifyIORef' (wsSpoilRef ws) $ \sp →

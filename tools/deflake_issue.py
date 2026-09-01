@@ -187,7 +187,7 @@ import deflake_outcome  # noqa: E402
 import probe_census  # noqa: E402
 import probe_flake  # noqa: E402
 import probe_protocol  # noqa: E402
-import run_probes  # noqa: E402
+import probe_runner_registry  # noqa: E402
 
 # The envelope, the route and the outcome are all named from their
 # owners rather than restated. A second spelling of one identifier is
@@ -822,7 +822,7 @@ def probe_script(probe: str) -> str:
     Most probes are `tools/<key>_probe.py` and some are not, and the
     filed issue names the one that was actually measured.
     """
-    for key, script, _purpose in run_probes.PROBES:
+    for key, script, _purpose in probe_runner_registry.PROBES:
         if key == probe:
             return script
     return f"{probe}_probe.py"

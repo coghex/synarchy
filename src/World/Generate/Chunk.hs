@@ -52,11 +52,11 @@ import World.Generate.Chunk.Zoom (generateZoomTerrain)
 --   both go through here so the field mapping can't drift between
 --   call sites. Side decorations start empty (the loading pipeline
 --   computes them later; irrelevant for transient consumers).
-generateLoadedChunk ∷ MaterialRegistry → FloraCatalog → WorldGenParams
-                    → ChunkCoord → LoadedChunk
-generateLoadedChunk registry catalog params coord =
+generateLoadedChunk ∷ MaterialRegistry → FloraCatalog → WorldPageId
+                    → WorldGenParams → ChunkCoord → LoadedChunk
+generateLoadedChunk registry catalog pageId params coord =
     let (chunkTiles, surfMap, tMap, fluidMap, iceMap, flora, wtMap, magma) =
-            generateChunk registry catalog params coord
+            generateChunk registry catalog pageId params coord
     in LoadedChunk
         { lcCoord      = coord
         , lcTiles      = chunkTiles
@@ -81,11 +81,17 @@ generateLoadedChunk registry catalog params coord =
 --
 --   The border is expanded to chunkBorder tiles so erosion at
 --   chunk edges has valid neighbor data.
-generateChunk ∷ MaterialRegistry → FloraCatalog → WorldGenParams
+--   @pageId@ names the owning page: since #1854 every placed flora
+--   instance carries a page-qualified stable identity, so generation
+--   has to know which page it is generating for. Nothing else in the
+--   pipeline reads it, and the result is still pure and deterministic
+--   in it.
+generateChunk ∷ MaterialRegistry → FloraCatalog → WorldPageId
+  → WorldGenParams
   → ChunkCoord → (Chunk, VU.Vector Int, VU.Vector Int
                  , V.Vector (Maybe FluidCell), IceMap, FloraChunkData
                  , VU.Vector Int, Maybe MagmaOverlay)
-generateChunk registry catalog params coord =
+generateChunk registry catalog pageId params coord =
     let seed = wgpSeed params
         worldSize = wgpWorldSize params
         timeline = wgpGeoTimeline params
@@ -444,7 +450,7 @@ generateChunk registry catalog params coord =
                 Nothing → v
             ) baseVegIds
         -- Flora sprites (trees, shrubs, wildflowers)
-        floraData = computeChunkFlora seed worldSize coord
+        floraData = computeChunkFlora (unWorldPageId pageId) seed worldSize coord
                         terrainSurfaceMap surfaceMats surfaceSlopes
                         fluidMap (wgpClimateState params) catalog
 

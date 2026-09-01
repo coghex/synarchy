@@ -25,7 +25,8 @@ import Engine.Core.Log (logDebug, LogCategory(..))
 import qualified Engine.Core.Queue as Q
 import Unit.Types (UnitId(..), UnitInstance(..), UnitDef(..)
                   , UnitManager(..), BodyPart(..), Wound(..)
-                  , Scar(..), bloodMassRatio, TrailState(..))
+                  , Scar(..), bloodMassRatio, TrailState(..)
+                  , woundEffSeverity)
 import Unit.Command.Types (UnitCommand(..))
 import qualified System.Random as Random
 import World.State.Types (WorldManager(..), WorldState(..))
@@ -242,10 +243,23 @@ tickOneUnit gt def dt infMgr mClim gen0 inst testMode
                                        * bandBoost * clotAccel * dt)
                         -- Advance INFECTION first (deterministic): an open,
                         -- un-disinfected wound accumulates infection after a
-                        -- grace period, ∝ current effective severity × kind ×
+                        -- grace period, ∝ the ACUTE severity term × kind ×
                         -- the local CLIMATE and the chosen infection's
                         -- aggressiveness. A clean wound never grows it.
-                        curEff     = sev0 * (1 - woundHeal w)
+                        --
+                        -- `acuteSev` is NOT this wound's effective severity —
+                        -- that is 'woundEffSeverity', computed below on the
+                        -- freshly advanced wound. TWO things separate them,
+                        -- both deliberate: this reads `woundHeal w`, the value
+                        -- the tick STARTED with rather than the `newHeal` it
+                        -- ends with, and it omits the necrosis floor entirely.
+                        -- Neither number bounds the other in general. Infection
+                        -- grows in LIVE tissue, and dead tissue is what
+                        -- necrosis measures, so feeding the floor into the
+                        -- growth multiplier would be a balance change: whether
+                        -- it should is an open question this binding does not
+                        -- decide, and changing it needs its own issue.
+                        acuteSev   = sev0 * (1 - woundHeal w)
                         infAge     = gt - woundAt w
                         kindInfF   = kindInfectFactor (woundKind w)
                         eligible   = not (woundClean w)
@@ -273,7 +287,7 @@ tickOneUnit gt def dt infMgr mClim gen0 inst testMode
                         selfAccel  = 1 + selfAccelGain * woundInfection w
                         infGrow    = if eligible
                                      then effBaseRate * kindInfF
-                                          * (0.3 + curEff) * climateFactor
+                                          * (0.3 + acuteSev) * climateFactor
                                           * aggr * infectab * selfAccel
                                           * (1 - immResist) * feverSuppress
                                      else 0
@@ -323,13 +337,27 @@ tickOneUnit gt def dt infMgr mClim gen0 inst testMode
                             else 0
                         newHeal    = max woundHealFloor
                                          (min 1 (woundHeal w + healAdv - worsen))
-                        -- Effective severity drops as the wound heals —
-                        -- the single source of "this wound matters less now"
-                        -- (and rises above sev0 when a festering wound's
-                        -- woundHeal goes negative). Necrosis (dead tissue) is a
-                        -- permanent floor: a rotting wound is at least as bad as
-                        -- the fraction of tissue that has died.
-                        effSev     = max (sev0 * (1 - newHeal)) newNec
+                        -- The wound as it stands AFTER this tick's clot,
+                        -- infection, necrosis and heal advances. Built before
+                        -- the bleed so the effective severity below can be
+                        -- read straight off it; `woundSeverity` is untouched
+                        -- (it is static for the wound's lifetime), so this
+                        -- carries exactly the fresh values the tick just
+                        -- computed.
+                        w'         = w { woundClot = newClot
+                                      , woundHeal = newHeal
+                                      , woundInfection = newInf
+                                      , woundInfectionType = infType
+                                      , woundNecrosis = newNec }
+                        -- Effective severity, from the ONE definition
+                        -- ('Unit.Types.Wound.woundEffSeverity') — applied to
+                        -- the freshly advanced wound so this tick's own bleed
+                        -- and cleanup use the same number every downstream
+                        -- consumer will read from `w'` afterwards. It drops as
+                        -- the wound heals (and rises above sev0 when a
+                        -- festering wound's woundHeal goes negative), with
+                        -- necrosis as a permanent floor.
+                        effSev     = woundEffSeverity w'
                         bleedRate  =
                               (effSev * effSev)
                             * kindBleedFactor (woundKind w)
@@ -338,11 +366,6 @@ tickOneUnit gt def dt infMgr mClim gen0 inst testMode
                             * (1 - newClot)      -- clotting
                             * bleedScale
                             / bleedCon
-                        w'         = w { woundClot = newClot
-                                      , woundHeal = newHeal
-                                      , woundInfection = newInf
-                                      , woundInfectionType = infType
-                                      , woundNecrosis = newNec }
                         healedOut  = effSev < woundCleanupThreshold
                         (wp', wr') = if bleedRate > wr
                                      then (woundPart w, bleedRate)

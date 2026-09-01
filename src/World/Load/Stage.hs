@@ -41,6 +41,7 @@ import World.Types
 import World.Load.Types (StagedPage(..), StagedSession(..))
 import Structure.Types (emptyChunkStructures)
 import World.Generate (generateChunk, cameraChunkCoord)
+import World.Flora.Designation (admitChunkFlora)
 import World.Generate.Arena (generateArenaChunks, arenaGenForSeed)
 import World.Plant.Validate (revalidatePlantDesignations)
 import World.Grid (worldToGrid)
@@ -317,6 +318,16 @@ stagePage logger registry palette catalog buildingDefs unitDefs
     writeIORef (wsSpoilRef worldState) (wpsSpoilPiles wps)
     writeIORef (wsFloraHarvestsRef worldState) (wpsFloraHarvests wps)
     writeIORef (wsChopDesignationsRef worldState) (wpsChopDesignations wps)
+    -- #1854: deferred legacy migration state restores beside the real
+    -- maps, so a session that saves before every chunk has been visited
+    -- cannot lose a designation or a regrowth timer it never got to
+    -- resolve. "World.Flora.Designation" drains these as chunks arrive.
+    writeIORef (wsPendingChopMigrationRef worldState)
+        (wpsPendingChopMigration wps)
+    writeIORef (wsPendingFloraHarvestsRef worldState)
+        (wpsPendingFloraHarvests wps)
+    writeIORef (wsPlantedFloraCursorRef worldState)
+        (wpsPlantedFloraCursor wps)
     writeIORef (wsTillDesignationsRef worldState) (wpsTillDesignations wps)
     writeIORef (wsCropPlotsRef worldState) (wpsCropPlots wps)
     writeIORef (wsPlantDesignationsRef worldState) (wpsPlantDesignations wps)
@@ -486,7 +497,7 @@ stagePage logger registry palette catalog buildingDefs unitDefs
           centreClaims ← claimChunkGeneration worldState pid params
                                               [centerCoord]
           let (ct, cs, cterrain, cf, cice, cflora, cwt, cmagma) =
-                  generateChunk registry catalog params centerCoord
+                  generateChunk registry catalog pid params centerCoord
               seededSurf = VU.imap (\idx surfZ →
                   case cf V.! idx of
                       Just fc → max surfZ (fcSurface fc)
@@ -508,7 +519,13 @@ stagePage logger registry palette catalog buildingDefs unitDefs
           edits   ← readIORef (wsEditsRef worldState)
           desigs  ← readIORef (wsMineDesignationsRef worldState)
           cdesigs ← readIORef (wsConstructDesignationsRef worldState)
-          let centerChunk = applyConstructSlopes cdesigs
+          -- #1854 requirement 15: the restored centre is the FIRST
+          -- resident chunk of the loaded session, so its pending legacy
+          -- migration is drained and its designation mirrors hydrated
+          -- before anything can read it — the same admission every
+          -- streamed chunk takes.
+          centerChunk ← admitChunkFlora worldState catalog logger $
+              applyConstructSlopes cdesigs
                   (applyDigSlopes desigs (replayEdits edits centerChunkRaw))
           -- The restored centre is new residency (#2001), claimed and
           -- admitted exactly as a fresh world's centre is — under the
