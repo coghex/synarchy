@@ -97,6 +97,11 @@ registerUIAPI env = do
   registerLuaFunction "toggleTooltipLock" (uiToggleTooltipLockFn env)
   registerLuaFunction "isTooltipLocked"   (uiIsTooltipLockedFn env)
 
+  -- #2056: the presentation boundary. Two verbs, no more — see
+  -- Engine.Scripting.Lua.API.UI.Presentation.
+  registerLuaFunction "armPresentation" (uiArmPresentationFn env)
+  registerLuaFunction "isPresented"     (uiIsPresentedFn env)
+
   registerLuaFunction "placePopup"      (uiPlacePopupFn env)
   registerLuaFunction "fitVisibleRows"  (uiFitVisibleRowsFn env)
 

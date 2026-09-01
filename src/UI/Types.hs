@@ -25,6 +25,9 @@ module UI.Types
   , TooltipStyle(..)
   , TooltipState(..)
   , defaultTooltipStyle
+    -- * Presentation witness (#2056)
+  , PresentationWitness(..)
+  , emptyPresentationWitness
     -- * Manager
   , UIPageManager(..)
   , emptyUIPageManager
@@ -502,7 +505,49 @@ data UIPageManager = UIPageManager
     --   hovered) changed visibility during an ordinary press-drag-out-
     --   return-inside gesture. Defaults to @0@; the exact numeric
     --   value carries no meaning beyond "changed since press".
+  , upmPresentation ∷ PresentationWitness
+    -- ^ #2056: the handshake that lets a Lua surface prove its own
+    --   content reached a COMPLETED renderer snapshot. It lives inside
+    --   the manager, and not beside it, precisely so the proof is
+    --   structural: 'UI.Render.renderUIPages' reads pages and
+    --   'pwArmed' out of ONE 'readIORef', so a snapshot carrying a
+    --   given armed token necessarily carries every page/element
+    --   mutation that preceded the arm. See "UI.Manager.Presentation".
   } deriving (Show)
+
+-- | #2056: the two halves of the presentation boundary, carried
+--   inside 'UIPageManager'.
+--
+--   A Lua surface that must not act on its own content until the
+--   RENDERER has actually had that content in hand mints a token with
+--   'UI.Manager.Presentation.armPresentation' once its elements are
+--   built and its page is showing. The renderer publishes back the
+--   greatest token that was already armed in the snapshot it rendered.
+--   The surface may then act as soon as
+--   'UI.Manager.Presentation.isPresented' holds for its own token.
+--
+--   Both counters are monotonic and purely transient: nothing here is
+--   persisted, and 'emptyUIPageManager' starts both at zero, which
+--   reads as "nothing has been armed and nothing has been witnessed" —
+--   the conservative answer, never a false presentation.
+data PresentationWitness = PresentationWitness
+  { pwArmed ∷ Word64
+    -- ^ Tokens minted so far. The NEXT token is @pwArmed + 1@, so a
+    --   token is only ever compared against evidence that postdates
+    --   the mutations it was minted for.
+  , pwWitnessed ∷ Word64
+    -- ^ The greatest armed token proven to have been inside a snapshot
+    --   the renderer went on to render completely. Advanced only by
+    --   'UI.Manager.Presentation.witnessPresentation', and only ever
+    --   upward: an in-flight snapshot that predates a later arm can
+    --   never pull this back down and authorise the newer content.
+  } deriving (Eq, Show)
+
+emptyPresentationWitness ∷ PresentationWitness
+emptyPresentationWitness = PresentationWitness
+  { pwArmed     = 0
+  , pwWitnessed = 0
+  }
 
 -- | #1694: the deepest parent chain this UI tree
 --   supports, in EDGES from a page root.
@@ -538,4 +583,5 @@ emptyUIPageManager = UIPageManager
   , upmControlFocus = Nothing
   , upmTooltip     = emptyTooltipState
   , upmPageEpoch   = 0
+  , upmPresentation = emptyPresentationWitness
   }
