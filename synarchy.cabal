@@ -251,6 +251,7 @@ library
                      Engine.Graphics.Font.Upload
                      Engine.Graphics.Font.Util
                      Engine.Graphics.Font.STB
+                     Engine.Map.ImageAdmission
                      Engine.Input.Bindings
                      Engine.Input.Callback
                      Engine.Input.Inject
@@ -897,6 +898,7 @@ library
                      World.Fluid.River.Identify.ChunkIndex
                      World.Fluid.Lava
                      World.Magma.Overlay
+                     World.Map.ImagePlan
                      World.Magma.Types
                      World.Magma.Field
                      World.Magma.Shape
@@ -1191,6 +1193,8 @@ test-suite synarchy-test-headless
                    Test.Headless.Save.Snapshot
                    Test.Headless.World.ArenaSeed
                    Test.Headless.World.Identity
+                   Test.Headless.World.MapImagePlan
+                   Test.Headless.World.MapImageAdmission
                    Test.Headless.World.CursorInfo
                    Test.Headless.World.CursorTextureDispatch
                    Test.Headless.World.SelectTileZ
