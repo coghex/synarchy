@@ -72,6 +72,7 @@ import World.Thread.Time (tickWorldTime)
 import World.Tile.Types (WorldTileData(..), emptyWorldTileData)
 import World.Time.Types (WorldTime(..), worldTimeToSunAngle)
 import World.ZoomMap.Types (ZoomChunkEntry(..))
+import Test.Headless.Harness.GeneratedIds (fixtureGeneratedWorldIdForPage)
 
 -- * The two pages
 
@@ -576,6 +577,8 @@ restoreSpec = describe "a restored multi-page session" $
                     , pcDateDay    = 1
                     , pcMapMode    = ZMDefault
                     , pcIdentity   = Nothing
+                    , pcGeneratedId =
+                        Just (fixtureGeneratedWorldIdForPage pageId)
                     }
                 paramsFor n = defaultWorldGenParams { wgpWorldSize = n }
                 written = WorldPagesDTO

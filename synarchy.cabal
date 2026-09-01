@@ -831,6 +831,7 @@ library
                      World.Hydrology.Glacier.Evolution
                      World.Hydrology.Glacier.Spawn
                      World.Ocean.Types
+                     World.Page.GeneratedId
                      World.Page.Types
                      World.Plate
                      World.Plate.Types
@@ -865,6 +866,7 @@ library
                      World.Save.Component
                      World.Save.Autosave
                      World.Save.Compat.MetadataV1
+                     World.Save.Compat.MetadataV2
                      World.Save.Compat.SessionV90
                      World.Save.Payload
                      World.Save.Reference
@@ -1126,6 +1128,7 @@ test-suite synarchy-test-headless
                    App.ResourceRoot
                    Test.Headless.UPrelude
                    Test.Headless.Harness
+                   Test.Headless.Harness.GeneratedIds
                    Test.Headless.Harness.Isolation
                    Test.Headless.Harness.WorkerHealth
                    Test.Headless.WorldGen
@@ -1211,6 +1214,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Load.Status
                    Test.Headless.Save.Snapshot
                    Test.Headless.World.ArenaSeed
+                   Test.Headless.World.GeneratedIdentity
                    Test.Headless.World.Identity
                    Test.Headless.World.MapImagePlan
                    Test.Headless.World.MapImageAdmission
