@@ -86,8 +86,9 @@ idleFields =
     [ ("name", str "idle")
     , ("storage_format", str "png")
     , ("atlas_path", str "assets/textures/units/acolyte/atlas/idle.png")
-    , ("atlas_width", "128"), ("atlas_height", "240")
-    , ("cell_width", "32"), ("cell_height", "48")
+    -- Padded strides (#2076): 4 columns of (32+2) and 5 rows of (48+2).
+    , ("atlas_width", "136"), ("atlas_height", "250")
+    , ("cell_width", "32"), ("cell_height", "48"), ("cell_padding", "1")
     , ("columns", "4"), ("rows", "5")
     , ("flip", "true"), ("fps", "8"), ("loop", "true")
     , ("directions", arr
@@ -105,8 +106,8 @@ swingFields =
     [ ("name", str "swing")
     , ("storage_format", str "png")
     , ("atlas_path", str "assets/textures/units/acolyte/atlas/swing.png")
-    , ("atlas_width", "192"), ("atlas_height", "384")
-    , ("cell_width", "32"), ("cell_height", "48")
+    , ("atlas_width", "204"), ("atlas_height", "400")
+    , ("cell_width", "32"), ("cell_height", "48"), ("cell_padding", "1")
     , ("columns", "6"), ("rows", "8")
     , ("flip", "false"), ("fps", "12"), ("loop", "false")
     , ("directions", arr
@@ -123,9 +124,9 @@ swingFields =
 
 indexWith ∷ [Field] → [[Field]] → BL.ByteString
 indexWith top anims = BLC.pack ∘ T.unpack ∘ obj $
-    ([ ("schema_version", "1")
+    ([ ("schema_version", "2")
      , ("generator", str "tools/pack_atlas.py")
-     , ("tool_version", "1")
+     , ("tool_version", "2")
      , ("digest_algorithm", str "sha256")
      , ("unit", str "acolyte")
      , ("direction_order", arr (map str
@@ -152,9 +153,9 @@ dropField k = filter ((≢ k) ∘ fst)
 indexWithout ∷ Text → BL.ByteString
 indexWithout field =
     BLC.pack ∘ T.unpack ∘ obj ∘ dropField field $
-        [ ("schema_version", "1")
+        [ ("schema_version", "2")
         , ("generator", str "tools/pack_atlas.py")
-        , ("tool_version", "1")
+        , ("tool_version", "2")
         , ("digest_algorithm", str "sha256")
         , ("unit", str "acolyte")
         , ("direction_order", arr (map str
@@ -187,22 +188,61 @@ shouldReject r needle =
 
 -- * Consumer fixtures
 
--- | A 4x2 RGBA8 sheet holding two 2x2 cells side by side on one row.
---   Every texel is distinct, so a wrong sub-rect resolves to visibly
---   different bytes rather than coincidentally matching.
+-- | An 8x4 RGBA8 sheet holding two 2x2 cells side by side on one row at
+--   the #2076 padded stride: each cell sits at the centre of its own
+--   4x4 slot, surrounded by a one-texel gutter that copies the cell's
+--   own edge texels outward.
+--
+--   The two cells hold DIFFERENT art, so the gutter between them is
+--   what a linear tap near either cell's inner edge would otherwise
+--   cross — which is exactly what the isolation gate below measures.
 fixtureW, fixtureH, fixtureCellW, fixtureCellH ∷ Int
-fixtureW = 4
-fixtureH = 2
 fixtureCellW = 2
 fixtureCellH = 2
+fixtureW = fixtureCols * fixtureSlotW
+fixtureH = fixtureRows * fixtureSlotH
+
+fixtureCellPad, fixtureSlotW, fixtureSlotH, fixtureCols, fixtureRows ∷ Int
+fixtureCellPad = 1
+fixtureSlotW = fixtureCellW + 2 * fixtureCellPad
+fixtureSlotH = fixtureCellH + 2 * fixtureCellPad
+fixtureCols = 2
+fixtureRows = 1
+
+-- | Compose a padded, extruded sheet from a per-slot source frame —
+--   @tools\/pack_atlas.py@'s own @compose_atlas@ layout, so a fixture
+--   sheet here is what the compiler would really emit rather than an
+--   approximation of it.
+--
+--   A slot with no frame ('Nothing') stays fully transparent, gutter
+--   included: that is the rectangularization padding D-5 leaves
+--   unaddressable.
+extrudedSheet
+    ∷ Int → Int → Int                    -- ^ cell width, cell height, padding
+    → Int → Int                          -- ^ columns, rows
+    → (Int → Int → Maybe BS.ByteString)  -- ^ row, column → that cell's RGBA8
+    → BS.ByteString
+extrudedSheet cw ch pad cols rows cellAt = BS.pack
+    [ b | y ← [0 .. rows * sh - 1], x ← [0 .. cols * sw - 1], b ← texel x y ]
+  where
+    sw = cw + 2 * pad
+    sh = ch + 2 * pad
+    texel x y =
+        let (col, lx) = x `divMod` sw
+            (row, ly) = y `divMod` sh
+            -- Clamping BOTH axes into the cell IS the extrusion rule:
+            -- an edge texel for a side, and the single corner texel for
+            -- a corner square.
+            cx = max 0 (min (cw - 1) (lx - pad))
+            cy = max 0 (min (ch - 1) (ly - pad))
+        in case cellAt row col of
+            Nothing → [0, 0, 0, 0]
+            Just px → let o = (cy * cw + cx) * 4
+                      in [ BS.index px (o + i) | i ← [0 .. 3] ]
 
 fixturePixels ∷ BS.ByteString
-fixturePixels = BS.pack
-    [ b | y ← [0 .. fixtureH - 1], x ← [0 .. fixtureW - 1]
-        , b ← [ fromIntegral (x * 16 + y)
-              , fromIntegral (255 - (x * 16 + y))
-              , fromIntegral ((x * 7 + y * 13) `mod` 256)
-              , 255 ] ]
+fixturePixels = extrudedSheet fixtureCellW fixtureCellH fixtureCellPad
+    fixtureCols fixtureRows (\_ col → Just (legacyFramePixels col))
 
 -- | Read one RGBA texel out of a sheet.
 texelAt ∷ Int → Int → BS.ByteString → Int → Int → [Word8]
@@ -237,14 +277,15 @@ sampleFrame w h px (u0, v0, u1, v1) flipX fw fh =
     clampI lo hi = max lo ∘ min hi
 
 -- | The atlas metadata describing the fixture sheet as two 2x2 cells on
---   one row (DirS, two frames).
+--   one row (DirS, two frames), at the #2076 padded stride.
 fixtureAtlas ∷ AtlasAnimation
 fixtureAtlas = AtlasAnimation
     { aaName = "clip", aaFormat = AtlasFormatPng
     , aaPath = "assets/textures/units/acolyte/atlas/clip.png"
     , aaAtlasWidth = fixtureW, aaAtlasHeight = fixtureH
     , aaCellWidth = fixtureCellW, aaCellHeight = fixtureCellH
-    , aaColumns = 2, aaRows = 1
+    , aaCellPadding = fixtureCellPad
+    , aaColumns = fixtureCols, aaRows = fixtureRows
     , aaFlip = False, aaFps = 8, aaLoop = True
     , aaDirections = Map.singleton DirS (AtlasDirectionRow DirS 0 2)
     , aaSourceDigest = "src", aaAtlasDigest = "atlas"
@@ -253,12 +294,30 @@ fixtureAtlas = AtlasAnimation
 fixtureStorage ∷ AnimStorage
 fixtureStorage = StorageAtlas (ResidentAtlas fixtureAtlas (TextureHandle 900))
 
--- | The same two frames as standalone 2x2 legacy images.
+-- | The fixture's frame-1 cell in UV, and the row's V span — derived
+--   from the geometry rather than written out, so a stride change moves
+--   the expectations with the layout instead of leaving stale literals.
+frame1U0, frame1U1, cellV0, cellV1 ∷ Float
+frame1U0 = fromIntegral (fixtureSlotW + fixtureCellPad)
+             / fromIntegral fixtureW
+frame1U1 = fromIntegral (fixtureSlotW + fixtureCellPad + fixtureCellW)
+             / fromIntegral fixtureW
+cellV0 = fromIntegral fixtureCellPad / fromIntegral fixtureH
+cellV1 = fromIntegral (fixtureCellPad + fixtureCellH) / fromIntegral fixtureH
+
+-- | The two SOURCE frames, as standalone 2x2 images — now the fixture's
+--   primary art, with the sheet composed FROM them by 'extrudedSheet'
+--   rather than sliced out of it. Every texel is distinct within a
+--   frame and the two frames disagree everywhere, so a wrong sub-rect
+--   resolves to visibly different bytes rather than coincidentally
+--   matching.
 legacyFramePixels ∷ Int → BS.ByteString
 legacyFramePixels col = BS.pack
     [ b | y ← [0 .. fixtureCellH - 1], x ← [0 .. fixtureCellW - 1]
-        , b ← concat [ texelAt fixtureW fixtureH fixturePixels
-                           (col * fixtureCellW + x) y ] ]
+        , b ← [ fromIntegral (col * 96 + x * 16 + y * 4 + 1)
+              , fromIntegral (255 - (col * 96 + x * 16 + y * 4))
+              , fromIntegral ((x * 7 + y * 13 + col * 41) `mod` 256)
+              , 255 ] ]
 
 -- * A unit instance the render / hit-test consumers can be run on
 
@@ -410,18 +469,34 @@ frameImage anim d i =
 orderedRows ∷ [(Direction, Int)] → [(Direction, Int)]
 orderedRows ds = [ (d, n) | d ← [minBound .. maxBound], Just n ← [lookup d ds] ]
 
--- | The atlas for one animation: cells at exact integer offsets, every
---   unused cell fully transparent.
+-- | The extrusion gutter the compiler compiles with, per side (#2076).
+fixturePad ∷ Int
+fixturePad = 1
+
+-- | One cell's PHYSICAL slot size in this fixture: the cell plus its
+--   gutter on both sides.
+fixtureSlot ∷ Int
+fixtureSlot = fixtureCell + 2 * fixturePad
+
+-- | The atlas for one animation, laid out exactly as
+--   @tools\/pack_atlas.py@ does it: each cell at
+--   @(c * slot + pad, r * slot + pad)@, its one-texel gutter holding a
+--   copy of that cell's own edge texels (corners included, which is
+--   what clamping BOTH axes gives), and every unused SLOT fully
+--   transparent, gutter and all.
 atlasImage ∷ Text → [(Direction, Int)] → JP.Image JP.PixelRGBA8
 atlasImage anim ds =
-    JP.generateImage px (cols * fixtureCell) (rows * fixtureCell)
+    JP.generateImage px (cols * fixtureSlot) (rows * fixtureSlot)
   where
     ordered = orderedRows ds
     rows = length ordered
     cols = maximum (1 : map snd ordered)
+    clampCell = max 0 ∘ min (fixtureCell - 1)
     px x y =
-        let (r, yy) = y `divMod` fixtureCell
-            (c, xx) = x `divMod` fixtureCell
+        let (r, ly) = y `divMod` fixtureSlot
+            (c, lx) = x `divMod` fixtureSlot
+            xx = clampCell (lx - fixturePad)
+            yy = clampCell (ly - fixturePad)
         in case drop r ordered of
             ((d, n) : _) | c < n → framePixel anim d c xx yy
             _ → JP.PixelRGBA8 0 0 0 0
@@ -435,9 +510,9 @@ fixtureYaml = Map.fromList
 -- | The index the compiler would emit for this tree, digests included.
 fixtureIndex ∷ BL.ByteString
 fixtureIndex = BLC.pack ∘ T.unpack ∘ obj $
-    [ ("schema_version", "1")
+    [ ("schema_version", "2")
     , ("generator", str "tools/pack_atlas.py")
-    , ("tool_version", "1")
+    , ("tool_version", "2")
     , ("digest_algorithm", str "sha256")
     , ("unit", str fixtureUnit)
     , ("direction_order", arr (map (str ∘ T.pack ∘ dirToken)
@@ -455,10 +530,11 @@ fixtureIndex = BLC.pack ∘ T.unpack ∘ obj $
             , ("storage_format", str "png")
             , ("atlas_path", str (T.pack (unitAtlasDir fixtureUnit
                                           </> T.unpack name ⧺ ".png")))
-            , ("atlas_width", tshow (cols * fixtureCell))
-            , ("atlas_height", tshow (rows * fixtureCell))
+            , ("atlas_width", tshow (cols * fixtureSlot))
+            , ("atlas_height", tshow (rows * fixtureSlot))
             , ("cell_width", tshow fixtureCell)
             , ("cell_height", tshow fixtureCell)
+            , ("cell_padding", tshow fixturePad)
             , ("columns", tshow cols), ("rows", tshow rows)
             , ("flip", if flipV then "true" else "false")
             , ("fps", tshow fps), ("loop", if loop then "true" else "false")
@@ -483,6 +559,7 @@ fixtureSourceDigest name flipV fps loop ds = sourceDigest SourceAnimInput
     { saiUnit = fixtureUnit, saiName = name
     , saiFlip = flipV, saiLoop = loop, saiFps = fps
     , saiCellWidth = fixtureCell, saiCellHeight = fixtureCell
+    , saiCellPadding = fixturePad
     , saiColumns = maximum (1 : map snd ordered)
     , saiDirections =
         [ SourceDirectionInput (indexDirectionToken d) r
@@ -680,8 +757,37 @@ spec = do
             parse (BL.take 60 goodIndex) `shouldReject` "not valid JSON"
 
         it "rejects an unsupported schema_version" $
-            parse (indexWith [("schema_version", "2")] [idleFields])
-                `shouldReject` "unsupported index schema_version 2"
+            parse (indexWith [("schema_version", "3")] [idleFields])
+                `shouldReject` "unsupported index schema_version 3"
+
+        -- #2076's format bump, tested against a document that really is
+        -- the previous schema — edge-adjacent dimensions and no
+        -- `cell_padding` at all — not merely a v2 one with the number
+        -- changed. The VERSION must be the reported cause: the field
+        -- v1 legitimately lacks is exactly what a decode-then-check
+        -- order would blame instead, which would send a reader looking
+        -- for a corrupt index rather than an outdated one.
+        it "rejects a genuine schema-v1 index on its VERSION, not its fields" $ do
+            let v1 = indexWith
+                    [("schema_version", "1"), ("tool_version", "1")]
+                    [ dropField "cell_padding"
+                        (setField "atlas_width" "128"
+                            (setField "atlas_height" "240" idleFields)) ]
+                msg = rejection (parse v1)
+            msg `shouldSatisfy` T.isInfixOf "unsupported index schema_version 1"
+            msg `shouldSatisfy` T.isInfixOf "pack_atlas.py --compile"
+            msg `shouldSatisfy` (not ∘ T.isInfixOf "cell_padding")
+            msg `shouldSatisfy` (not ∘ T.isInfixOf "malformed")
+
+        it "rejects an index that omits the required cell_padding" $
+            parse (indexWith [] [dropField "cell_padding" idleFields])
+                `shouldReject` "malformed"
+
+        it "rejects a cell_padding this build does not implement" $ do
+            parse (indexWith [] [setField "cell_padding" "0" idleFields])
+                `shouldReject` "cell_padding 0 is not this build's one supported"
+            parse (indexWith [] [setField "cell_padding" "2" idleFields])
+                `shouldReject` "cell_padding 2 is not this build's one supported"
 
         it "rejects an unsupported digest_algorithm" $
             parse (indexWith [("digest_algorithm", str "md5")] [idleFields])
@@ -723,6 +829,18 @@ spec = do
             parse (indexWith [] [setField "columns" "5" idleFields])
                 `shouldReject` "exceeds atlas_width"
             parse (indexWith [] [setField "rows" "6" idleFields])
+                `shouldReject` "exceeds atlas_height"
+
+        -- Containment strides by the padded SLOT, not the logical cell.
+        -- A sheet sized for four edge-adjacent 32-wide cells (128) is
+        -- one texel short of holding four padded ones (136), and the
+        -- shortfall is entirely gutter — so a check that measured cells
+        -- alone would accept a sheet whose last column's extrusion runs
+        -- off the right edge.
+        it "measures containment by the padded slot, not the bare cell" $ do
+            parse (indexWith [] [setField "atlas_width" "128" idleFields])
+                `shouldReject` "exceeds atlas_width"
+            parse (indexWith [] [setField "atlas_height" "240" idleFields])
                 `shouldReject` "exceeds atlas_height"
 
         it "rejects a non-positive or non-finite fps" $ do
@@ -836,9 +954,9 @@ spec = do
             atlasContentDigest 2 1 (BS.pack [0 .. 7]) `shouldBe`
                 "725b97fc0e24ce6ac14542dbef5e3fc34cf1c69a50d74246cfb12e62b3b0ab28"
 
-        it "reproduces pack_atlas.py's digest for the 4x2 fixture" $
+        it "reproduces pack_atlas.py's digest for the 8x4 padded fixture" $
             atlasContentDigest fixtureW fixtureH fixturePixels `shouldBe`
-                "cffb62ffd8c8c770709b2e0a405625b55c0bc9855e25f13f4d67a4e27153d6cb"
+                "da72fdace1058b0551ee0ac0f58e2af6f5de0989f16b7495228976a5be1b3384"
 
         -- The length prefixes exist so no two field sequences can
         -- collide; moving a byte across the width/height boundary must
@@ -856,13 +974,13 @@ spec = do
                 `shouldBe` Right ()
 
         it "rejects a decoded image whose dimensions differ" $
-            validateAtlasImage "acolyte" anim (DecodedImage 8 2 (BS.replicate 64 0))
-                `shouldReject` "but the index declares 4x2"
+            validateAtlasImage "acolyte" anim (DecodedImage 4 2 (BS.replicate 32 0))
+                `shouldReject` "but the index declares 8x4"
 
         it "rejects a buffer that is not RGBA8 of that size" $
             validateAtlasImage "acolyte" anim
                 (DecodedImage fixtureW fixtureH (BS.take 8 fixturePixels))
-                `shouldReject` "expected 32 RGBA8 bytes"
+                `shouldReject` "expected 128 RGBA8 bytes"
 
         it "rejects tampered pixels" $
             let tampered = BS.pack (0xFF : drop 1 (BS.unpack fixturePixels))
@@ -872,7 +990,7 @@ spec = do
 
         it "names the unit, the animation and the ATLAS file, not the index" $ do
             let msg = rejection (validateAtlasImage "acolyte" anim
-                          (DecodedImage 8 2 (BS.replicate 64 0)))
+                          (DecodedImage 4 2 (BS.replicate 32 0)))
             msg `shouldSatisfy` T.isInfixOf "acolyte"
             msg `shouldSatisfy` T.isInfixOf "clip"
             msg `shouldSatisfy` T.isInfixOf "clip.png"
@@ -1037,15 +1155,20 @@ spec = do
             -- A two-row sheet: row 1 holds different art, so a cell
             -- reader that ignored the row would match the wrong frame.
             let twoRow = fixtureAtlas
-                    { aaAtlasHeight = 4, aaRows = 2
+                    { aaAtlasHeight = 2 * fixtureSlotH, aaRows = 2
                     , aaDirections = Map.fromList
                         [ (DirS, AtlasDirectionRow DirS 0 2)
                         , (DirN, AtlasDirectionRow DirN 1 2) ] }
-                sheet = DecodedImage 4 4 (BS.pack
-                    [ fromIntegral ((x * 16 + y * 3 + c) `mod` 256)
-                    | y ← [0 .. 3 ∷ Int], x ← [0 .. 3 ∷ Int], c ← [0 .. 3 ∷ Int] ])
-                cellOf row col = BS.concat (atlasCellRows twoRow sheet row col)
-                frame row col = DecodedImage 2 2 (cellOf row col)
+                art row col = BS.pack
+                    [ fromIntegral ((x * 37 + y * 11 + row * 83 + col * 53 + c * 7)
+                                        `mod` 256)
+                    | y ← [0 .. fixtureCellH - 1], x ← [0 .. fixtureCellW - 1]
+                    , c ← [0 .. 3 ∷ Int] ]
+                sheet = DecodedImage (2 * fixtureSlotW) (2 * fixtureSlotH)
+                    (extrudedSheet fixtureCellW fixtureCellH fixtureCellPad 2 2
+                        (\r c → Just (art r c)))
+                frame row col = DecodedImage fixtureCellW fixtureCellH
+                                    (art row col)
                 v row col = validateSourceFrame "acolyte" twoRow sheet
                                 DirS row col "f.png" (frame row col)
             v 0 0 `shouldBe` Right ()
@@ -1076,8 +1199,11 @@ spec = do
                      (testInstance { uiCurrentAnim = "clip" })
                      (Just atlasDef) of
                 Just q → quadUVs q `shouldBe`
-                    -- Frame 1 of a two-column sheet: u 0.5..1, v 0..1.
-                    [(0.5, 0), (1, 0), (1, 1), (0.5, 1)]
+                    -- Frame 1 of a two-column PADDED sheet: the logical
+                    -- cell is x 5..7 of 8 and y 1..3 of 4, so the gutter
+                    -- lies outside the quad on every side.
+                    [ (frame1U0, cellV0), (frame1U1, cellV0)
+                    , (frame1U1, cellV1), (frame1U0, cellV1) ]
                 Nothing → expectationFailure "expected a quad"
 
         it "a legacy frame still spans its whole image, byte for byte" $
@@ -1089,9 +1215,10 @@ spec = do
             let mirrored = atlasSample { fsFlipX = True }
             -- The renderer's assignment, restated: left vertices take
             -- the sub-rect's right edge. Mirroring across the sheet
-            -- (1-u) would give 0.5 and 0 — a DIFFERENT cell's texels.
+            -- (1-u) would give 0.375 and 0.125 — the OTHER cell, and at
+            -- the padded stride not even a cell boundary.
             let (u0, _, u1, _) = fsUV mirrored
-            (u1, u0) `shouldBe` (1, 0.5)
+            (u1, u0) `shouldBe` (frame1U1, frame1U0)
 
     describe "Unit.Atlas — the hit rect uses cell geometry too" $ do
         it "click and box selection share ONE rect helper" $
@@ -1152,6 +1279,164 @@ spec = do
                 `shouldNotBe`
                 sampleFrame fixtureW fixtureH fixturePixels (fsUV atlasSample)
                             False fixtureCellW fixtureCellH
+
+    -- #2076: the whole point of the gutter. A LINEAR sample taken
+    -- anywhere inside a logical cell reaches at most one texel past its
+    -- edge, so every texel within one texel of the cell boundary must
+    -- hold that cell's own edge colour rather than the neighbour's.
+    --
+    -- The fixture is a 3x2 grid of DELIBERATELY distinct cells with one
+    -- rectangularization slot, so every adjacency this has to survive
+    -- is present at once: horizontal and vertical neighbours, all four
+    -- sides and all four corners, cells on the sheet's own edge, and an
+    -- authored cell beside an unreachable transparent slot.
+    describe "Unit.Atlas — a cell's extrusion ring isolates it under linear" $ do
+        let cols = 3
+            rows = 2
+            -- (row, col) -> art, with (1, 2) left as rectangularization
+            -- padding: DirN authors two frames in a three-column sheet.
+            authored r c = r * cols + c < cols * rows - 1
+            art r c = BS.pack
+                [ fromIntegral ((r * 91 + c * 37 + x * 19 + y * 7 + ch * 61)
+                                    `mod` 251 + 4)
+                | y ← [0 .. fixtureCellH - 1], x ← [0 .. fixtureCellW - 1]
+                , ch ← [0 .. 3 ∷ Int] ]
+            cellAt r c = if authored r c then Just (art r c) else Nothing
+            sheetW = cols * fixtureSlotW
+            sheetH = rows * fixtureSlotH
+            pixels = extrudedSheet fixtureCellW fixtureCellH fixtureCellPad
+                         cols rows cellAt
+            sheet = DecodedImage sheetW sheetH pixels
+            anim = fixtureAtlas
+                { aaAtlasWidth = sheetW, aaAtlasHeight = sheetH
+                , aaColumns = cols, aaRows = rows
+                , aaDirections = Map.fromList
+                    [ (DirS, AtlasDirectionRow DirS 0 cols)
+                    , (DirN, AtlasDirectionRow DirN 1 (cols - 1)) ] }
+            texel x y = [ BS.index pixels ((y * sheetW + x) * 4 + i)
+                        | i ← [0 .. 3] ]
+            -- The cell's own texel a coordinate extrudes FROM: clamp
+            -- into the cell on both axes.
+            ownTexel r c lx ly =
+                let px = art r c
+                    cx = max 0 (min (fixtureCellW - 1) lx)
+                    cy = max 0 (min (fixtureCellH - 1) ly)
+                    o  = (cy * fixtureCellW + cx) * 4
+                in [ BS.index px (o + i) | i ← [0 .. 3] ]
+
+        it "every texel a linear tap can reach belongs to its own cell" $
+            forM_ [ (r, c) | r ← [0 .. rows - 1], c ← [0 .. cols - 1]
+                           , authored r c ] $ \(r, c) →
+                -- The reachable neighbourhood is the cell expanded by
+                -- one texel on every side: exactly the slot.
+                forM_ [ (lx, ly)
+                      | ly ← [negate fixtureCellPad
+                                  .. fixtureCellH + fixtureCellPad - 1]
+                      , lx ← [negate fixtureCellPad
+                                  .. fixtureCellW + fixtureCellPad - 1] ]
+                    $ \(lx, ly) → do
+                        let x = c * fixtureSlotW + fixtureCellPad + lx
+                            y = r * fixtureSlotH + fixtureCellPad + ly
+                        ((r, c, lx, ly), texel x y)
+                            `shouldBe` ((r, c, lx, ly), ownTexel r c lx ly)
+
+        -- Stated as a NEGATIVE too, so the check above cannot pass by
+        -- every cell coincidentally agreeing: each authored cell's ring
+        -- must genuinely differ from the neighbour it shields against.
+        it "a neighbouring cell's art really is different" $ do
+            -- Horizontal: (0,0) beside (0,1).
+            art 0 0 `shouldNotBe` art 0 1
+            -- Vertical: (0,0) above (1,0).
+            art 0 0 `shouldNotBe` art 1 0
+            -- Diagonal, which is what the corner squares shield.
+            art 0 0 `shouldNotBe` art 1 1
+
+        it "an authored cell beside a transparent padding slot is unaffected" $ do
+            -- (1, 2) is the rectangularization slot; (1, 1) is its
+            -- authored left neighbour and (0, 2) its authored neighbour
+            -- above. Neither may pick up transparency in its own ring.
+            let slotTexels = [ texel (2 * fixtureSlotW + i) (fixtureSlotH + j)
+                             | j ← [0 .. fixtureSlotH - 1]
+                             , i ← [0 .. fixtureSlotW - 1] ]
+            -- The unaddressable slot IS fully transparent, gutter and
+            -- all — the sheet is rectangular for free.
+            all (≡ [0, 0, 0, 0]) slotTexels `shouldBe` True
+            -- And its authored neighbours' rings hold their own art,
+            -- which the per-cell sweep above has already established
+            -- pointwise; restated here on the specific right/bottom
+            -- edges that touch the transparent slot.
+            forM_ [0 .. fixtureCellH - 1] $ \ly →
+                texel (fixtureSlotW + fixtureCellPad + fixtureCellW)
+                      (fixtureSlotH + fixtureCellPad + ly)
+                    `shouldBe` ownTexel 1 1 fixtureCellW ly
+            forM_ [0 .. fixtureCellW - 1] $ \lx →
+                texel (2 * fixtureSlotW + fixtureCellPad + lx)
+                      (fixtureCellPad + fixtureCellH)
+                    `shouldBe` ownTexel 0 2 lx fixtureCellH
+
+        -- Sheet-edge cells have no neighbour to bleed from, but they
+        -- still need the ring: without it a linear tap at the outer
+        -- edge would clamp or wrap to whatever the sampler decides.
+        it "cells on the sheet's own edge carry a full ring too" $ do
+            let corner = texel 0 0
+            corner `shouldBe` ownTexel 0 0 (negate 1) (negate 1)
+            texel (sheetW - 1) 0
+                `shouldBe` ownTexel 0 (cols - 1) fixtureCellW (negate 1)
+
+        -- The runtime's own freshness check must ACCEPT this layout and
+        -- REJECT a sheet whose ring was not built from the frame — the
+        -- half a cell-only comparison cannot see, and the half that
+        -- would silently reintroduce bleeding.
+        it "validateSourceFrame accepts the ring and rejects a wrong one" $ do
+            forM_ [ (DirS, 0, c) | c ← [0 .. cols - 1] ]
+                $ \(d, r, c) →
+                    validateSourceFrame "acolyte" anim sheet d r c "f.png"
+                        (DecodedImage fixtureCellW fixtureCellH (art r c))
+                        `shouldBe` Right ()
+            -- Rebuild the sheet with cell (0,1)'s gutter taken from its
+            -- NEIGHBOUR instead of itself — the exact defect the ring
+            -- exists to prevent — leaving every logical cell untouched.
+            let bledPixels = BS.pack
+                    [ b
+                    | y ← [0 .. sheetH - 1], x ← [0 .. sheetW - 1]
+                    , let (c, lx) = x `divMod` fixtureSlotW
+                          (r, ly) = y `divMod` fixtureSlotH
+                          inCell = lx ≥ fixtureCellPad
+                                 ∧ lx < fixtureCellPad + fixtureCellW
+                                 ∧ ly ≥ fixtureCellPad
+                                 ∧ ly < fixtureCellPad + fixtureCellH
+                          src = if (r, c) ≡ (0, 1) ∧ not inCell
+                                    then art 0 0 else art r c
+                          cx = max 0 (min (fixtureCellW - 1)
+                                          (lx - fixtureCellPad))
+                          cy = max 0 (min (fixtureCellH - 1)
+                                          (ly - fixtureCellPad))
+                          o = (cy * fixtureCellW + cx) * 4
+                    , b ← if authored r c
+                              then [ BS.index src (o + i) | i ← [0 .. 3] ]
+                              else [0, 0, 0, 0] ]
+                bled = DecodedImage sheetW sheetH bledPixels
+            -- The LOGICAL cell is still exactly right...
+            BS.concat (atlasCellRows anim bled 0 1)
+                `shouldBe` BS.concat (atlasCellRows anim sheet 0 1)
+            -- ...and the frame is still rejected, on the ring.
+            validateSourceFrame "acolyte" anim bled DirS 0 1 "f.png"
+                (DecodedImage fixtureCellW fixtureCellH (art 0 1))
+                `shouldReject` "extrusion ring"
+
+        -- Requirement 5, restated where it can be measured: the UV rect
+        -- that addresses this cell resolves under NEAREST to the cell's
+        -- own texels and nothing else, mirrored or not.
+        it "NEAREST sampling of the cell's UV reads only the cell" $
+            forM_ [ (r, c) | r ← [0 .. rows - 1], c ← [0 .. cols - 1]
+                           , authored r c ] $ \(r, c) →
+                forM_ [False, True] $ \flipX →
+                    sampleFrame sheetW sheetH pixels
+                        (atlasCellUV anim r c) flipX
+                        fixtureCellW fixtureCellH
+                        `shouldBe`
+                    sampleFrame fixtureCellW fixtureCellH (art r c)
+                        wholeImageUV flipX fixtureCellW fixtureCellH
 
     -- The UI half of the #887 flip×clip ordering, now that a sprite can
     -- be a sub-rect: a clip may only HIDE part of a mirrored atlas cell,
@@ -1505,7 +1790,7 @@ spec = do
         -- CROSS-LANGUAGE agreement rather than self-consistency.
         it "reproduces pack_atlas.py's digest for a known animation" $
             sourceDigest referenceSourceAnim `shouldBe`
-                "deec36be0a6efa397dda89db29535223f9c26df2ffd81dba6fcd9056a8d07a02"
+                "1725088fbf27358e330387c4c9d2a20eb5ed77d7a99ada1dbfe7653b11309753"
 
         -- Every field is IN the stream, and the length prefixes make it
         -- injective: perturbing any one input must change the digest.
@@ -1519,6 +1804,7 @@ spec = do
                     , ("fps",       referenceSourceAnim { saiFps = 8 })
                     , ("cell w",    referenceSourceAnim { saiCellWidth = 3 })
                     , ("cell h",    referenceSourceAnim { saiCellHeight = 3 })
+                    , ("cell pad",  referenceSourceAnim { saiCellPadding = 2 })
                     , ("columns",   referenceSourceAnim { saiColumns = 4 })
                     , ("dir set",   referenceSourceAnim
                           { saiDirections = take 1 (saiDirections referenceSourceAnim) })
@@ -1544,12 +1830,14 @@ spec = do
 
 -- | The animation @tools/pack_atlas.py@'s `source_digest` was run on to
 --   produce the reference value above: two directions, unequal frame
---   counts, 2x2 cells, fps 12 narrowed through 32-bit.
+--   counts, 2x2 cells at the one-texel gutter, fps 12 narrowed through
+--   32-bit.
 referenceSourceAnim ∷ SourceAnimInput
 referenceSourceAnim = SourceAnimInput
     { saiUnit = "fixture_unit", saiName = "step"
     , saiFlip = False, saiLoop = False, saiFps = 12
-    , saiCellWidth = 2, saiCellHeight = 2, saiColumns = 3
+    , saiCellWidth = 2, saiCellHeight = 2, saiCellPadding = 1
+    , saiColumns = 3
     , saiDirections =
         [ SourceDirectionInput "south" 0
             [ refFrame "a/south/frame_000.png" 0

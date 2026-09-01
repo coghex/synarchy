@@ -1,7 +1,7 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "generator": "tools/pack_atlas.py",
-  "tool_version": 1,
+  "tool_version": 2,
   "digest_algorithm": "sha256",
   "unit": "unknown_unit",
   "direction_order": [
@@ -19,10 +19,11 @@
       "name": "idle",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/unknown_unit/atlas/idle.png",
-      "atlas_width": 368,
-      "atlas_height": 736,
+      "atlas_width": 376,
+      "atlas_height": 752,
       "cell_width": 92,
       "cell_height": 92,
+      "cell_padding": 1,
       "columns": 4,
       "rows": 8,
       "flip": false,
@@ -70,17 +71,18 @@
           "frame_count": 4
         }
       ],
-      "source_digest": "189c3621c49cef94113388389d0aa77729212ff14c80bc1ab9910af1c7cd72a4",
-      "atlas_digest": "3e7f797c6324ab5bf09856b0498a16cfd68cdca3a3eb7f4088262a5ef57dc2b0"
+      "source_digest": "0fe48fb3fcc71058fc626f90893294649c803c3e1c186428588c729cdd6415e2",
+      "atlas_digest": "f2b396416899d88a1b96ee40f81a2e9198094431b73da376af263b64befcbc96"
     },
     {
       "name": "walk",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/unknown_unit/atlas/walk.png",
-      "atlas_width": 552,
-      "atlas_height": 736,
+      "atlas_width": 564,
+      "atlas_height": 752,
       "cell_width": 92,
       "cell_height": 92,
+      "cell_padding": 1,
       "columns": 6,
       "rows": 8,
       "flip": false,
@@ -128,8 +130,8 @@
           "frame_count": 6
         }
       ],
-      "source_digest": "199e313efdcecbe48f4b8bd735439a5e41bb1db58f292a7adb573c5f076055e8",
-      "atlas_digest": "57012f1eb3e78e2336e082c344cf95fb5f2d36763649a5eb55ed0a18890af743"
+      "source_digest": "54f62d9cc20adf3449264c8e90ac86344cfe340e7014833a5beb8dd58233672e",
+      "atlas_digest": "b1bcef32baf303eb32757a61a46a0f455140b50c1c8541c6a2812f30ce17ebd6"
     }
   ]
 }

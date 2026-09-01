@@ -106,6 +106,14 @@ data AtlasAnimation = AtlasAnimation
     , aaAtlasHeight  ∷ !Int
     , aaCellWidth    ∷ !Int
     , aaCellHeight   ∷ !Int
+    , aaCellPadding  ∷ !Int
+      -- ^ The extrusion gutter, in texels per side (#2076). Every cell
+      --   occupies a @(cellWidth + 2*p) x (cellHeight + 2*p)@ SLOT
+      --   whose border is a copy of that cell's own edge texels, so a
+      --   bilinear tap inside the logical cell cannot reach a
+      --   neighbouring frame. Read from the index rather than assumed:
+      --   'Unit.Atlas.Index' validates it as exactly the one layout
+      --   this build supports, and 'atlasCellUV' strides by it.
     , aaColumns      ∷ !Int
     , aaRows         ∷ !Int
     , aaFlip         ∷ !Bool
@@ -230,13 +238,22 @@ storageSampleAt (StorageAtlas res) dir idx flipX =
 -- | The normalized UV sub-rect of one atlas cell: @atlasCellUV anim row
 --   column@.
 --
---   Exact integer cell geometry, divided into normalized UV at the CELL
---   EDGES. Deliberately no half-texel inset: unit art is
---   nearest-neighbour (D-6) and drawn pixel-snapped, so a fragment
---   centre maps to texel @column*cellW + i@ and lands inside the cell;
---   an inset would SHIFT the sampled texels and break the
---   pixel-identity #1259 requirement 7 asks for against the source
---   frame, which spans 0..1 of its own image.
+--   Exact integer cell geometry, divided into normalized UV at the
+--   LOGICAL CELL's own edges. Since #2076 each cell sits at the middle
+--   of a @(cellW + 2p) x (cellH + 2p)@ slot, its 'aaCellPadding'
+--   gutter holding a copy of its own edge texels, so the origin is
+--   @column * slotW + p@ rather than @column * cellW@ and the
+--   neighbouring frame is two texels away instead of adjacent.
+--
+--   Still deliberately no half-texel inset. The endpoints are the true
+--   cell edges, which is what keeps NEAREST sampling pixel-identical:
+--   unit art is nearest-neighbour (D-6) and drawn pixel-snapped, so a
+--   fragment centre maps to texel @column*slotW + p + i@ and lands
+--   inside the cell exactly as it did at the old stride. An inset would
+--   SHIFT the sampled texels and break the pixel-identity #1259
+--   requirement 7 asks for against the source frame, which spans 0..1
+--   of its own image; the gutter buys linear-filter isolation
+--   (epic #2072 D-3) WITHOUT moving a single sampled texel.
 --
 --   Exported rather than inlined into 'storageSampleAt' because the
 --   @--preview units\/\<name\>@ viewer resolves its cells before any
@@ -251,10 +268,13 @@ atlasCellUV anim row column = (u0, v0, u1, v1)
     atlasH = fromIntegral (aaAtlasHeight anim) ∷ Float
     cellW  = aaCellWidth anim
     cellH  = aaCellHeight anim
-    u0 = fromIntegral (column * cellW) / atlasW
-    u1 = fromIntegral ((column + 1) * cellW) / atlasW
-    v0 = fromIntegral (row * cellH) / atlasH
-    v1 = fromIntegral ((row + 1) * cellH) / atlasH
+    pad    = aaCellPadding anim
+    x0     = column * (cellW + 2 * pad) + pad
+    y0     = row * (cellH + 2 * pad) + pad
+    u0 = fromIntegral x0 / atlasW
+    u1 = fromIntegral (x0 + cellW) / atlasW
+    v0 = fromIntegral y0 / atlasH
+    v1 = fromIntegral (y0 + cellH) / atlasH
 
 -- | The pixel dimensions a consumer must use to SIZE this frame.
 --

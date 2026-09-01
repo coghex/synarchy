@@ -53,6 +53,8 @@ module Unit.Atlas.Index
     , validateSourceFrame
     , validateSourceDigest
     , atlasCellRows
+    , atlasSlotRows
+    , expectedSlotRows
     , indexDirectionToken
     , module Unit.Atlas.Digest
     ) where
@@ -76,8 +78,26 @@ import Unit.Direction (Direction(..))
 --   anything else is rejected: the format is the contract, and reading
 --   an unknown one by guessing which fields still mean what is exactly
 --   the silent-corruption failure requirement 5 forbids.
+--
+--   v2 (#2076) added the REQUIRED per-animation @cell_padding@. A v1
+--   document describes cells packed at exact cell edges, so reading one
+--   under v2's padded stride would sample the wrong texels — which is
+--   why the version is checked against the RAW document before it is
+--   decoded ('parseAtlasIndex'): a v1 index must be rejected for being
+--   v1, not for missing a field v1 never had.
 atlasIndexSchemaVersion ∷ Int
-atlasIndexSchemaVersion = 1
+atlasIndexSchemaVersion = 2
+
+-- | The extrusion gutter, in texels per side, this build supports —
+--   @tools\/pack_atlas.py@'s @CELL_PADDING@ (#2076).
+--
+--   Exactly one value is supported, and an index declaring any other is
+--   rejected rather than strided by. Widening the gutter moves the
+--   stride, every cell UV, and every recorded digest at once, so it is
+--   a schema change with its own version, never a number the runtime
+--   reads and adapts to.
+supportedCellPadding ∷ Int
+supportedCellPadding = 1
 
 -- | The digest algorithm this build can verify.
 supportedDigestAlgorithm ∷ Text
@@ -169,15 +189,31 @@ parseAtlasIndex
 parseAtlasIndex unit path raw = do
     value ← mapLeft (fail' ∘ ("index is not valid JSON: " <>) ∘ T.pack)
                   (A.eitherDecode' raw)
+    -- Version FIRST, off the raw document, before the full decode.
+    -- On an unsupported schema nothing else is known to mean what this
+    -- build thinks it means, so reporting a field error from it would
+    -- be misleading — and since #2076 it would be actively wrong: a
+    -- genuine v1 index legitimately lacks `cell_padding`, and decoding
+    -- it first would blame that missing field rather than the version
+    -- that explains it. Reading only `schema_version` here is what
+    -- keeps the version the reported cause.
+    declared ← mapLeft (fail' ∘ ("index is malformed: " <>) ∘ T.pack)
+                (A.parseEither parseSchemaVersion value)
+    when (declared ≢ atlasIndexSchemaVersion) $
+        Left (fail' $ "unsupported index schema_version "
+                <> tshow declared <> " (this build reads "
+                <> tshow atlasIndexSchemaVersion
+                <> "); re-run tools/pack_atlas.py --compile")
     doc ← mapLeft (fail' ∘ ("index is malformed: " <>) ∘ T.pack)
                 (A.parseEither parseIndexDocument value)
-    -- Version first: on an unsupported schema nothing else in the
-    -- document is known to mean what this build thinks it means, so
-    -- reporting a field error from it would be misleading.
-    when (idSchemaVersion doc ≢ atlasIndexSchemaVersion) $
-        Left (fail' $ "unsupported index schema_version "
-                <> tshow (idSchemaVersion doc) <> " (this build reads "
-                <> tshow atlasIndexSchemaVersion <> ")")
+    -- The peek above and the full decode read the same key, so this
+    -- cannot fire; stating it keeps the decoded field the one the rest
+    -- of the document is validated under rather than a value nothing
+    -- consults.
+    when (idSchemaVersion doc ≢ declared) $
+        Left (fail' $ "index declares schema_version "
+                <> tshow (idSchemaVersion doc)
+                <> " where its own document says " <> tshow declared)
     when (idDigestAlgorithm doc ≢ supportedDigestAlgorithm) $
         Left (fail' $ "unsupported digest_algorithm '"
                 <> idDigestAlgorithm doc <> "' (this build verifies '"
@@ -267,17 +303,32 @@ validateAnimation unit path raw = do
                , ("rows", rawRows raw) ]
     forM_ dims $ \(label, v) →
         when (v ≤ 0) $ bad (label <> " must be positive, got " <> tshow v)
-    -- Every reachable cell lies inside the atlas. Containment rather
-    -- than equality: the compiler emits an exactly-covered sheet
-    -- today, and a future storage format is free to pad the image, but
-    -- no addressable cell may ever fall outside it.
-    when (rawColumns raw * rawCellWidth raw > rawAtlasWidth raw) $
-        bad ("columns x cell_width ("
-             <> tshow (rawColumns raw * rawCellWidth raw)
+    -- The extrusion gutter (#2076). Exactly one layout is supported,
+    -- and it is REQUIRED rather than defaulted: a document that could
+    -- omit it would be strided as if it were unpadded, which reads
+    -- every cell but the first from the wrong texels. Checked before
+    -- the containment below, which strides by it.
+    when (rawCellPadding raw ≢ supportedCellPadding) $
+        bad ("cell_padding " <> tshow (rawCellPadding raw)
+             <> " is not this build's one supported extrusion gutter of "
+             <> tshow supportedCellPadding <> " texel(s) per side")
+    -- Every reachable SLOT lies inside the atlas — the padded slot, not
+    -- the logical cell, because the gutter is real image area a cell
+    -- one texel from the sheet edge would otherwise be read past.
+    -- Containment rather than equality: the compiler emits an
+    -- exactly-covered sheet today, and a future storage format is free
+    -- to pad the image further, but no addressable slot may ever fall
+    -- outside it.
+    let padded = rawCellPadding raw * 2
+        slotW  = rawCellWidth raw + padded
+        slotH  = rawCellHeight raw + padded
+    when (rawColumns raw * slotW > rawAtlasWidth raw) $
+        bad ("columns x (cell_width + 2*cell_padding) ("
+             <> tshow (rawColumns raw * slotW)
              <> ") exceeds atlas_width " <> tshow (rawAtlasWidth raw))
-    when (rawRows raw * rawCellHeight raw > rawAtlasHeight raw) $
-        bad ("rows x cell_height ("
-             <> tshow (rawRows raw * rawCellHeight raw)
+    when (rawRows raw * slotH > rawAtlasHeight raw) $
+        bad ("rows x (cell_height + 2*cell_padding) ("
+             <> tshow (rawRows raw * slotH)
              <> ") exceeds atlas_height " <> tshow (rawAtlasHeight raw))
     -- Playback metadata. `fps` divides elapsed time in the frozen
     -- `pickFrame` arithmetic (D-3), so a non-finite or non-positive
@@ -303,6 +354,7 @@ validateAnimation unit path raw = do
         , aaAtlasHeight  = rawAtlasHeight raw
         , aaCellWidth    = rawCellWidth raw
         , aaCellHeight   = rawCellHeight raw
+        , aaCellPadding  = rawCellPadding raw
         , aaColumns      = rawColumns raw
         , aaRows         = rawRows raw
         , aaFlip         = rawFlip raw
@@ -539,17 +591,66 @@ validateAtlasImage unit anim (DecodedImage w h pixels)
     actual = atlasContentDigest w h pixels
     bad = Left ∘ animError unit (aaPath anim) (aaName anim)
 
--- | The RGBA8 rows of one atlas cell, top to bottom.
+-- | The RGBA8 rows of one atlas cell's LOGICAL area, top to bottom.
+--
+--   Strides by the padded slot and starts at the cell's inner origin
+--   (#2076), so this addresses exactly what 'atlasCellUV' addresses:
+--   the extrusion gutter around the cell is NOT part of what a frame
+--   must match. 'atlasSlotRows' is the one that includes it.
 --
 --   Slices, not copies: 'BS.take' \/ 'BS.drop' on a strict ByteString
 --   are O(1), so walking a whole sheet's cells allocates nothing beyond
 --   the row headers.
 atlasCellRows ∷ AtlasAnimation → DecodedImage → Int → Int → [BS.ByteString]
 atlasCellRows anim (DecodedImage w _ pixels) row col =
-    [ BS.take (cw * 4) (BS.drop ((y * w + col * cw) * 4) pixels)
+    [ BS.take (cw * 4) (BS.drop ((y * w + x0) * 4) pixels)
     | let cw = aaCellWidth anim
           ch = aaCellHeight anim
-    , y ← [row * ch .. row * ch + ch - 1] ]
+          p  = aaCellPadding anim
+          x0 = col * (cw + 2 * p) + p
+          y0 = row * (ch + 2 * p) + p
+    , y ← [y0 .. y0 + ch - 1] ]
+
+-- | The RGBA8 rows of one cell's PHYSICAL slot — the logical cell plus
+--   its extrusion gutter on every side — top to bottom.
+--
+--   This is what the ring check compares against: the gutter is
+--   generated, so it is verified rather than assumed, exactly as the
+--   cell's own pixels are.
+atlasSlotRows ∷ AtlasAnimation → DecodedImage → Int → Int → [BS.ByteString]
+atlasSlotRows anim (DecodedImage w _ pixels) row col =
+    [ BS.take (sw * 4) (BS.drop ((y * w + x0) * 4) pixels)
+    | let p  = aaCellPadding anim
+          sw = aaCellWidth anim + 2 * p
+          sh = aaCellHeight anim + 2 * p
+          x0 = col * sw
+          y0 = row * sh
+    , y ← [y0 .. y0 + sh - 1] ]
+
+-- | The slot a source frame MUST compile to: the frame at offset
+--   @(p, p)@, its border filled by copying the frame's own outermost
+--   texels outward — edges from the adjacent edge row or column, each
+--   corner from the single corner texel it touches, duplicated across
+--   the whole corner square.
+--
+--   This is @tools\/pack_atlas.py@'s @extruded_slot@, reproduced so the
+--   runtime can VERIFY the gutter instead of trusting it. Nothing here
+--   blends or resamples: every byte is a copy of a real frame texel,
+--   which is what leaves nearest-mode sampling untouched.
+expectedSlotRows ∷ Int → DecodedImage → [BS.ByteString]
+expectedSlotRows p (DecodedImage fw fh pixels) = top <> middle <> bottom
+  where
+    rowBytes = fw * 4
+    extrude r =
+        let l = BS.take 4 r
+            t = BS.drop (rowBytes - 4) r
+        in BS.concat (replicate p l <> [r] <> replicate p t)
+    middle = [ extrude (BS.take rowBytes (BS.drop (y * rowBytes) pixels))
+             | y ← [0 .. fh - 1] ]
+    top    = replicate p (headDef middle)
+    bottom = replicate p (lastDef middle)
+    headDef xs = case xs of { (x:_) → x ; [] → BS.empty }
+    lastDef xs = case reverse xs of { (x:_) → x ; [] → BS.empty }
 
 -- | The PIXEL half of source freshness: the atlas cell that must hold
 --   this source frame really does hold it, decoded sample for decoded
@@ -558,6 +659,13 @@ atlasCellRows anim (DecodedImage w _ pixels) row col =
 --   A DIRECT verification of the compiler's own promise: "every atlas
 --   cell is a byte-for-byte copy of its source frame's canonical
 --   decoded RGBA8 samples".
+--
+--   Since #2076 it verifies the cell's EXTRUSION RING too, corners
+--   included: the gutter is compiler-generated from this same frame, so
+--   an artifact whose ring does not reproduce is exactly as stale as
+--   one whose cell does not — and a wrong ring is what would let a
+--   linear tap read a neighbour, which is the whole reason the gutter
+--   exists.
 --
 --   'validateSourceDigest' covers this too — the frame's pixels are
 --   among the inputs it digests — so this is not the freshness
@@ -591,6 +699,18 @@ validateSourceFrame unit anim atlas dir row col path frame
         bad $ "source frame " <> T.pack path <> " (" <> renderDir dir
               <> " frame " <> tshow col
               <> ") does not match the pixels its atlas cell holds"
+              <> staleHint
+    -- The gutter is GENERATED, so it is verified rather than assumed
+    -- (#2076). Comparing the whole slot subsumes the cell check above
+    -- and adds the ring, corners included; the cell check still runs
+    -- first because it is the sharper diagnostic — "the art moved"
+    -- rather than "the compiled slot is not what this frame produces".
+    | atlasSlotRows anim atlas row col
+          ≢ expectedSlotRows (aaCellPadding anim) frame =
+        bad $ "source frame " <> T.pack path <> " (" <> renderDir dir
+              <> " frame " <> tshow col
+              <> ") does not carry the one-texel extrusion ring its "
+              <> "atlas slot must hold"
               <> staleHint
     | otherwise = Right ()
   where
@@ -645,6 +765,7 @@ data RawAnimation = RawAnimation
     , rawAtlasHeight   ∷ !Int
     , rawCellWidth     ∷ !Int
     , rawCellHeight    ∷ !Int
+    , rawCellPadding   ∷ !Int
     , rawColumns       ∷ !Int
     , rawRows          ∷ !Int
     , rawFlip          ∷ !Bool
@@ -671,6 +792,15 @@ data IndexDocument = IndexDocument
 --   dimension, a digest, the generator, the tool version, the direction
 --   order, or the animation list fails here rather than defaulting into
 --   something samplable.
+-- | @schema_version@ ALONE, off the raw document.
+--
+--   Deliberately reads nothing else: it runs before the full decode so
+--   that an index from another schema is rejected for its version
+--   rather than for whichever field that schema happened not to carry.
+parseSchemaVersion ∷ A.Value → A.Parser Int
+parseSchemaVersion =
+    A.withObject "atlas index" (\o → o A..: "schema_version")
+
 parseIndexDocument ∷ A.Value → A.Parser IndexDocument
 parseIndexDocument = A.withObject "atlas index" $ \o → IndexDocument
     <$> o A..: "schema_version"
@@ -690,6 +820,7 @@ parseRawAnimation = A.withObject "atlas index animation" $ \o → RawAnimation
     <*> o A..: "atlas_height"
     <*> o A..: "cell_width"
     <*> o A..: "cell_height"
+    <*> o A..: "cell_padding"
     <*> o A..: "columns"
     <*> o A..: "rows"
     <*> o A..: "flip"

@@ -1,7 +1,7 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "generator": "tools/pack_atlas.py",
-  "tool_version": 1,
+  "tool_version": 2,
   "digest_algorithm": "sha256",
   "unit": "nomad_primitive",
   "direction_order": [
@@ -19,10 +19,11 @@
       "name": "attack_heavy_unarmed",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/nomad_primitive/atlas/attack_heavy_unarmed.png",
-      "atlas_width": 576,
-      "atlas_height": 320,
+      "atlas_width": 594,
+      "atlas_height": 330,
       "cell_width": 64,
       "cell_height": 64,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 5,
       "flip": true,
@@ -55,17 +56,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "c72a1b3203a94db446349b9a34f3bbe28205f7f4a96472bc26dd3fb49428008f",
-      "atlas_digest": "464e1e631cf3b02e5b990e97c5e5bced9159517750ea6ff22d0d547fdf2f0358"
+      "source_digest": "81f4c2e20cfd532e1429163683668d02636a6e6997917a24acdd4df341e520c4",
+      "atlas_digest": "df29040f248f7c6dfb8d9bf820b7e9e664749ab72b7cb3c90d395681391cee62"
     },
     {
       "name": "attack_quick_unarmed",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/nomad_primitive/atlas/attack_quick_unarmed.png",
-      "atlas_width": 320,
-      "atlas_height": 320,
+      "atlas_width": 330,
+      "atlas_height": 330,
       "cell_width": 64,
       "cell_height": 64,
+      "cell_padding": 1,
       "columns": 5,
       "rows": 5,
       "flip": true,
@@ -98,17 +100,18 @@
           "frame_count": 5
         }
       ],
-      "source_digest": "585fd3b8d05deb08ebc0e45504abf4a596f2e2223cf6d87496839c5a9e86820d",
-      "atlas_digest": "f4cdcea3adca5e856896c267e738877b4890db3648cd5d224c1bbfc0f92b5aa8"
+      "source_digest": "677ecf9b12d68d085c02278b1f821bf9125370af335255ad773ee1460061462b",
+      "atlas_digest": "87ebdb385701553eeccdefc630858306470a4d7d1c603e26ffe6bdf95909e3b9"
     },
     {
       "name": "collapse",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/nomad_primitive/atlas/collapse.png",
-      "atlas_width": 612,
-      "atlas_height": 340,
+      "atlas_width": 630,
+      "atlas_height": 350,
       "cell_width": 68,
       "cell_height": 68,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 5,
       "flip": true,
@@ -141,17 +144,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "d810655978a64a76e203cee4522bd9f74a41e4080e01a4f00b02b3ef29ccbf82",
-      "atlas_digest": "3da343598dbca462e81a2365e10b8b09422fa5eca8846cd68a783529ae01da06"
+      "source_digest": "e3f80b397bf1df71d2c2d32f02f22990e06a1018f393199dc8200849b3d56ae4",
+      "atlas_digest": "c25923510e65d76c3adbb0880724d3721d42ff1e8a4de51a80450d71c02d0848"
     },
     {
       "name": "combat_hit_react_unarmed",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/nomad_primitive/atlas/combat_hit_react_unarmed.png",
-      "atlas_width": 320,
-      "atlas_height": 320,
+      "atlas_width": 330,
+      "atlas_height": 330,
       "cell_width": 64,
       "cell_height": 64,
+      "cell_padding": 1,
       "columns": 5,
       "rows": 5,
       "flip": true,
@@ -184,17 +188,18 @@
           "frame_count": 5
         }
       ],
-      "source_digest": "3f765428d009c86f209f0ea552bfb4764b9e1ee897220fdd7c067ee0717a1e7a",
-      "atlas_digest": "1559638892333fdf650eeba356524a582575d06e2d511ee68fcb76649eb43e11"
+      "source_digest": "4fd03f66a953b1097a706ae5f9cd5bb4264682d9bcc4278f64f96e7605a5b3a1",
+      "atlas_digest": "ed6924790f03f5d9c1ee39f79417f7030ca0e63704ac14b96bf63f529b1b2f12"
     },
     {
       "name": "combat_idle_unarmed",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/nomad_primitive/atlas/combat_idle_unarmed.png",
-      "atlas_width": 576,
-      "atlas_height": 320,
+      "atlas_width": 594,
+      "atlas_height": 330,
       "cell_width": 64,
       "cell_height": 64,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 5,
       "flip": true,
@@ -227,17 +232,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "eac62a02dadd5058f2bac9c6669870663a257226f6d07ed3311f2c3c1bd8c40e",
-      "atlas_digest": "6864901afec7ff0cf20ffb999f1c143814938f6c7b99ae09e676d762f579e94e"
+      "source_digest": "45da381a8bb9a60fc38cc0f9b9b75f3645b0a951e22f58e24d6e83adb8e48442",
+      "atlas_digest": "91bb32d4149bd224aec7b77af98e716e81a4c2af9be01da3e6f0c50fd020ea04"
     },
     {
       "name": "crawling",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/nomad_primitive/atlas/crawling.png",
-      "atlas_width": 612,
-      "atlas_height": 340,
+      "atlas_width": 630,
+      "atlas_height": 350,
       "cell_width": 68,
       "cell_height": 68,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 5,
       "flip": true,
@@ -270,17 +276,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "ea8132a9d9bcc41dbea5badb762ab6068e0447bba8efee815fbc4b86e1402eea",
-      "atlas_digest": "24aad34b53138a64b8803003064e20ba6c91d4a056d6fd6323dda2975dd4d76d"
+      "source_digest": "d5d7443b937d9c0c21c8b278fe50b6eefb3d84d5d627b4002cafa767db48c6bc",
+      "atlas_digest": "6a75b36458788bd23ddca816b1b6c8bc3bf50504f98fb323e1f242bea082166b"
     },
     {
       "name": "crawling_idle",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/nomad_primitive/atlas/crawling_idle.png",
-      "atlas_width": 68,
-      "atlas_height": 340,
+      "atlas_width": 70,
+      "atlas_height": 350,
       "cell_width": 68,
       "cell_height": 68,
+      "cell_padding": 1,
       "columns": 1,
       "rows": 5,
       "flip": true,
@@ -313,17 +320,18 @@
           "frame_count": 1
         }
       ],
-      "source_digest": "a56a65673270c9a457b15f9928fc1997d861829a31fd4213ab32e157ec539ee1",
-      "atlas_digest": "d2ee8866c09419981cc8a2cc025e05b3efd8e4213724a48ddcc1cbac7d4c6eb6"
+      "source_digest": "6563f57631075563112ddc7ff01f41785158eb68b1dacd321946a95db00ee111",
+      "atlas_digest": "cb2e35307a7ecb3463fc68068e1f94af4a67ddf71dcc51b853ebb65befa04702"
     },
     {
       "name": "death",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/nomad_primitive/atlas/death.png",
-      "atlas_width": 648,
-      "atlas_height": 340,
+      "atlas_width": 666,
+      "atlas_height": 350,
       "cell_width": 72,
       "cell_height": 68,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 5,
       "flip": true,
@@ -356,17 +364,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "023e6e623202d88b3b9107183f9e953dbe307160bac7d2e38fd77749ea9c156c",
-      "atlas_digest": "b638c1a3ce49a95d8d2823e3ff094bc47b648c966fd166a787ceb0759d9bb9de"
+      "source_digest": "e5509a94819b6a7d0957ff2e1a339e0b888a9f17f3906e4ce8a2d2fa3a5afffd",
+      "atlas_digest": "df62ef1e945f4947c44a8e68e8c0277b15313f403b91567304788634334d3a64"
     },
     {
       "name": "idle",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/nomad_primitive/atlas/idle.png",
-      "atlas_width": 512,
-      "atlas_height": 320,
+      "atlas_width": 528,
+      "atlas_height": 330,
       "cell_width": 64,
       "cell_height": 64,
+      "cell_padding": 1,
       "columns": 8,
       "rows": 5,
       "flip": true,
@@ -399,17 +408,18 @@
           "frame_count": 8
         }
       ],
-      "source_digest": "c07de1628803fd33451e5f61eae5ca9690b5d817eb6a945ac30fda52263b4123",
-      "atlas_digest": "b64ff80d65c1f935c061318791d06adaad933f58ed6dfdc0cd2d46edeb84ac1e"
+      "source_digest": "feadfc590a043cea44831f4195f31bf2a96b5fb4f06ea6e7b6b1ff75ed88011d",
+      "atlas_digest": "ccc9775b55bf4e1665b35e0f1819e9aa64e1b46d7bc6fae7394a43066ebec39d"
     },
     {
       "name": "injured_attack_heavy_unarmed",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/nomad_primitive/atlas/injured_attack_heavy_unarmed.png",
-      "atlas_width": 576,
-      "atlas_height": 320,
+      "atlas_width": 594,
+      "atlas_height": 330,
       "cell_width": 64,
       "cell_height": 64,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 5,
       "flip": true,
@@ -442,17 +452,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "4039ef480173383107b0e09b4eb20656ecf0c480cee652a963adf18100a69f96",
-      "atlas_digest": "c29eb08ccccea46d1ad07bb0eccdf7555d4ef8d2ddfcb446b4aa55bb497ad46d"
+      "source_digest": "f08f4359dff51e765c739a04acd1ab4b8aeca06bd451f2d15286d2d6a4322f26",
+      "atlas_digest": "9c15f0cb8ad901143ee537ac4a0a51e55248a801aa9c5a7dc156890ed7dbb5d9"
     },
     {
       "name": "injured_attack_quick_unarmed",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/nomad_primitive/atlas/injured_attack_quick_unarmed.png",
-      "atlas_width": 320,
-      "atlas_height": 320,
+      "atlas_width": 330,
+      "atlas_height": 330,
       "cell_width": 64,
       "cell_height": 64,
+      "cell_padding": 1,
       "columns": 5,
       "rows": 5,
       "flip": true,
@@ -485,17 +496,18 @@
           "frame_count": 5
         }
       ],
-      "source_digest": "f80325f91e6134f67a596c4bbe3587597b5c04afee7bcc50a38390fd4cecbac5",
-      "atlas_digest": "c2541272834716a724fe552443225d980bf09e5f970cb561d34e157667f0aceb"
+      "source_digest": "e286a611d82a61593eb821af4f84bdf22b18bb29bfa55bb074ace49082540456",
+      "atlas_digest": "19315d15f188cc3d2335ec75944519befea20ae64ebeb9bfd77bf1f35f0a9aec"
     },
     {
       "name": "injured_combat_hit_react_unarmed",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/nomad_primitive/atlas/injured_combat_hit_react_unarmed.png",
-      "atlas_width": 320,
-      "atlas_height": 320,
+      "atlas_width": 330,
+      "atlas_height": 330,
       "cell_width": 64,
       "cell_height": 64,
+      "cell_padding": 1,
       "columns": 5,
       "rows": 5,
       "flip": true,
@@ -528,17 +540,18 @@
           "frame_count": 5
         }
       ],
-      "source_digest": "e934b69bf734fefb2765851d246768f1fc66365f47a9dd5635ea1f6f1557ae32",
-      "atlas_digest": "e4e92ad0ad528de95824f0dd181135c4d076d3d69923fcfed303cb4836a58431"
+      "source_digest": "abde33c98c51074db8278912d9a1a8beddc652e806085bbc6a48bbe7b1b11400",
+      "atlas_digest": "47d5657c7f5931ddaec86e6ae990fd1becb488aebbd3a21b43b669d42c0fc094"
     },
     {
       "name": "injured_combat_idle_unarmed",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/nomad_primitive/atlas/injured_combat_idle_unarmed.png",
-      "atlas_width": 576,
-      "atlas_height": 320,
+      "atlas_width": 594,
+      "atlas_height": 330,
       "cell_width": 64,
       "cell_height": 64,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 5,
       "flip": true,
@@ -571,17 +584,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "1814d801545404325b4b72eb57aff2baa2d811665e8f344f427ca04eaa82dfe5",
-      "atlas_digest": "50be82b4e7d7234c41f6dadc415e3ac3aaa0cd6dba5394d6c6ae677220225f29"
+      "source_digest": "2e0dd0d95dd6bc7b049c2d2b9908efee7ed2d64bc9806240f9c1560bcdc27fd0",
+      "atlas_digest": "e52847c6880c844eb1b5723e0fe4505bf3dac4f9da3977c6229a69397ccbfa35"
     },
     {
       "name": "run",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/nomad_primitive/atlas/run.png",
-      "atlas_width": 512,
-      "atlas_height": 320,
+      "atlas_width": 528,
+      "atlas_height": 330,
       "cell_width": 64,
       "cell_height": 64,
+      "cell_padding": 1,
       "columns": 8,
       "rows": 5,
       "flip": true,
@@ -614,17 +628,18 @@
           "frame_count": 8
         }
       ],
-      "source_digest": "d6fcbe25d1068946525e91d479ef4b6f76fb6f644288b0fa6b8211dc154c64a7",
-      "atlas_digest": "00b4eb7f28e02acfda9481ab831010daec5620e577fbf8769a346c983c0dd0c9"
+      "source_digest": "d5216b9ebe600c37b10d0caba87281137ade5dda087a6a138505d7fff1abdd3a",
+      "atlas_digest": "cd20677d711fc4183de41dd70ce01169c39c892da4cc012898ecc84568dd41e8"
     },
     {
       "name": "walk",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/nomad_primitive/atlas/walk.png",
-      "atlas_width": 512,
-      "atlas_height": 320,
+      "atlas_width": 528,
+      "atlas_height": 330,
       "cell_width": 64,
       "cell_height": 64,
+      "cell_padding": 1,
       "columns": 8,
       "rows": 5,
       "flip": true,
@@ -657,8 +672,8 @@
           "frame_count": 8
         }
       ],
-      "source_digest": "53da42da8024a829eb5eee18fbec9b18cfe09abc462a9630f11cbf07026cfc73",
-      "atlas_digest": "d94b60c112442d7e24bf517504fe54d787fcc4235c0744ffa66f4cc1ec359d71"
+      "source_digest": "05da80d986f67123fa397632db6fc62470d8b9c7f3128247aa65e3450fe30575",
+      "atlas_digest": "a4fae5aed43d3040eed91df0ee23e45c13439532dca954230edb615be7520339"
     }
   ]
 }

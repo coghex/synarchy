@@ -25,7 +25,7 @@
   "resident_bytes": {
     "threshold": 402653184,
     "unit": "bytes",
-    "measure": "decoded RGBA8 resident bytes: atlas_width * atlas_height * 4, summed over every animation an index declares",
+    "measure": "decoded RGBA8 resident bytes: atlas_width * atlas_height * 4, summed over every animation an index declares. Since #2076 those dimensions include the one-texel extrusion gutter around every cell, because the whole padded sheet is what is uploaded and resident.",
     "aggregation_scope": "the whole tracked roster — every unit declared under data/units/ that ships a compiled index. scripts/startup_loader.lua feeds every data/units/*.yaml to the unit loader at boot, so every tracked unit's atlases are resident in every session regardless of what spawns.",
     "projection": {
       "roster_growth_factor": 2.0,
@@ -33,7 +33,7 @@
     },
     "comparison_rule": "measured_resident_bytes * projection.roster_growth_factor > threshold activates deferred TEX-5. The breach is a WARNING, so a plain --validate-only still reports it while `--strict` (what CI and `make ci` run) fails on it, forcing the resume-or-raise decision rather than letting the trigger pass silently.",
     "distinct_from": "D-12's separate guardrail, which caps TRACKED derived artifact BYTES ON DISK at two times their source frames. That one is about repository size; this one is about resident GPU/decoded memory, and the two are measured independently.",
-    "derivation": "Measured at 106,531,968 bytes (101.60 MiB) across 7 units / 116 animations at aabf94ef (#1261). Projected 203.19 MiB at the recorded growth factor, leaving 181 MiB of headroom under the threshold — about four more bear_brown-scale trees (44.56 MiB each). Chosen so the trigger fires on a real content-plan expansion rather than on the next single large quadruped, while still landing well below the point where unit art alone would dominate a modest GPU's texture memory.",
+    "derivation": "Re-measured at 121,620,320 bytes (115.99 MiB) across 8 units / 131 animations at 1ce9955c (#2076), which added the one-texel extrusion gutter around every atlas cell: the same art costs 5.10% more resident than the 115,723,968 bytes (110.36 MiB) it did at the edge-adjacent stride. Projected 231.97 MiB at the recorded growth factor, leaving 152 MiB of headroom under the unchanged threshold — about three more bear_brown-scale quadrupeds (46.52 MiB each). The threshold is untouched by that re-measurement: it is owner-confirmed policy on the date below, and the gutter re-records a measurement rather than buying room for one. Its original basis stands — measured at 106,531,968 bytes (101.60 MiB) across 7 units / 116 animations at aabf94ef (#1261), chosen so the trigger fires on a real content-plan expansion rather than on the next single large quadruped, while still landing well below the point where unit art alone would dominate a modest GPU's texture memory.",
     "confirmed_by": "project owner (coghex)",
     "confirmed_on": "2026-08-16"
   }

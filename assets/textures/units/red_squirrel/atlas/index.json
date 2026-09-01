@@ -1,7 +1,7 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "generator": "tools/pack_atlas.py",
-  "tool_version": 1,
+  "tool_version": 2,
   "digest_algorithm": "sha256",
   "unit": "red_squirrel",
   "direction_order": [
@@ -19,10 +19,11 @@
       "name": "alert_idle",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/red_squirrel/atlas/alert_idle.png",
-      "atlas_width": 216,
-      "atlas_height": 180,
+      "atlas_width": 228,
+      "atlas_height": 190,
       "cell_width": 36,
       "cell_height": 36,
+      "cell_padding": 1,
       "columns": 6,
       "rows": 5,
       "flip": true,
@@ -55,17 +56,18 @@
           "frame_count": 6
         }
       ],
-      "source_digest": "7e219948ac7e812711d03d681dba644d7d269cabec936a97fc9809d568a6cd74",
-      "atlas_digest": "618da47cb85727f5e91f83eadeba8a48a500342f9a7094cf506df5d0514ba90e"
+      "source_digest": "be7e8b7541dbe9642418493e99b8d61079df89d0bdc48f66adba3beff6c62c75",
+      "atlas_digest": "21094b7edd1b4e3cbc2a8a7e524d0c33b314e650921a93010b55fd1f04167a18"
     },
     {
       "name": "attack_quick",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/red_squirrel/atlas/attack_quick.png",
-      "atlas_width": 216,
-      "atlas_height": 180,
+      "atlas_width": 228,
+      "atlas_height": 190,
       "cell_width": 36,
       "cell_height": 36,
+      "cell_padding": 1,
       "columns": 6,
       "rows": 5,
       "flip": true,
@@ -98,17 +100,18 @@
           "frame_count": 6
         }
       ],
-      "source_digest": "cdce7df9376e105c8f6b640394873411bc0d264ebeb6d867767cd3e58d198e9c",
-      "atlas_digest": "4e7237eba4f2a4676208dc776173268abb57d0678bd67a70bc62acb949072a4c"
+      "source_digest": "8fcfdea06c6c126d9f5419ee976573f7752e4e2ab62dc5a573a8d2fe3c385221",
+      "atlas_digest": "4e5753c913ccbdb3829273ad94b87046b0adab49afae6b6d787e6075aa1a6a2c"
     },
     {
       "name": "climbing",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/red_squirrel/atlas/climbing.png",
-      "atlas_width": 180,
-      "atlas_height": 180,
+      "atlas_width": 190,
+      "atlas_height": 190,
       "cell_width": 36,
       "cell_height": 36,
+      "cell_padding": 1,
       "columns": 5,
       "rows": 5,
       "flip": true,
@@ -141,17 +144,18 @@
           "frame_count": 5
         }
       ],
-      "source_digest": "d4add66aee08f5ce84652012f1a03af1f3f6bf98afa5c8c4e7f9d6889d39b5f5",
-      "atlas_digest": "eea5ae016d161d9a0d12776b08be894a78b26c9fd74f62807ccd16307b5e79e0"
+      "source_digest": "f78b8ce71c74019a43f0ea563609a637276502afcb78aa6a6df4d50be206384d",
+      "atlas_digest": "cb59fc73b226dd1410248a57497e34be9b887591c0e10647c325e96650d9d996"
     },
     {
       "name": "combat_idle",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/red_squirrel/atlas/combat_idle.png",
-      "atlas_width": 216,
-      "atlas_height": 180,
+      "atlas_width": 228,
+      "atlas_height": 190,
       "cell_width": 36,
       "cell_height": 36,
+      "cell_padding": 1,
       "columns": 6,
       "rows": 5,
       "flip": true,
@@ -184,17 +188,18 @@
           "frame_count": 6
         }
       ],
-      "source_digest": "5932f0627ee56f2fa186dbdc6e3f4c5d337b8a761f227d82f4a9fc9886bc7694",
-      "atlas_digest": "c787f636a452a3a9e0e2b8d1be4be8027e66a179f6ff0b1ee6dc991a84b701a4"
+      "source_digest": "12839813d5233d76b2c8a256cbe6dd1419399f816bc49c861b1f8435f24b0400",
+      "atlas_digest": "e276c3561f8a48ac589017939b805681a5e008f3d2e4eeeec4880676056e6f81"
     },
     {
       "name": "death",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/red_squirrel/atlas/death.png",
-      "atlas_width": 324,
-      "atlas_height": 180,
+      "atlas_width": 342,
+      "atlas_height": 190,
       "cell_width": 36,
       "cell_height": 36,
+      "cell_padding": 1,
       "columns": 9,
       "rows": 5,
       "flip": true,
@@ -227,17 +232,18 @@
           "frame_count": 9
         }
       ],
-      "source_digest": "40146471ed4e8fecc7ef8e72aae503b8defbfc706034bd7708e4efe1d58e3b88",
-      "atlas_digest": "0b6e6d257c8069ebf15a7180c8241f0cd9c9ed905c0df9850f9d6bb8f75b487e"
+      "source_digest": "5622d87dfa0282a07adb95118389cf26658abb9a37d54c8a9b7ec2a2f39b80a4",
+      "atlas_digest": "0a8391661d4e03af4bc8c993c09d4db0cd8be20e601f883b76023f6e305c9d02"
     },
     {
       "name": "drink",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/red_squirrel/atlas/drink.png",
-      "atlas_width": 216,
-      "atlas_height": 180,
+      "atlas_width": 228,
+      "atlas_height": 190,
       "cell_width": 36,
       "cell_height": 36,
+      "cell_padding": 1,
       "columns": 6,
       "rows": 5,
       "flip": true,
@@ -270,17 +276,18 @@
           "frame_count": 6
         }
       ],
-      "source_digest": "b51e47aa1122cb70248942bbe3002fdfe567762f80f0ef450347a9d5143d280c",
-      "atlas_digest": "e679c6c64086a2f0eb01099a7672a7a44cc03fcaf7f3e27f63fe311842b4906a"
+      "source_digest": "6eb21c32279753cf5413db8f77bc5b2e6a9283468014177507768e6181adc3a2",
+      "atlas_digest": "a083024c44c436d33da14ae5734547b27cdbfec2475df1d341c230d1da700a38"
     },
     {
       "name": "idle",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/red_squirrel/atlas/idle.png",
-      "atlas_width": 288,
-      "atlas_height": 180,
+      "atlas_width": 304,
+      "atlas_height": 190,
       "cell_width": 36,
       "cell_height": 36,
+      "cell_padding": 1,
       "columns": 8,
       "rows": 5,
       "flip": true,
@@ -313,17 +320,18 @@
           "frame_count": 8
         }
       ],
-      "source_digest": "b9827c441ba035e2563edcc3c37053a21c18f6aab822041846ec0050a70c8f9c",
-      "atlas_digest": "c84df457e8fee74e5761cff70ba99dbb033b8b233232002f75156b222c2da971"
+      "source_digest": "094e0003f5a5626e2382c6c4dd80a98792ecc4bf3b7a4babf2b326508e41f864",
+      "atlas_digest": "497e7f6783f2d994a489eb4c3acab9e8eecafc0cc91e24a725e09c208a6501ef"
     },
     {
       "name": "run",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/red_squirrel/atlas/run.png",
-      "atlas_width": 144,
-      "atlas_height": 180,
+      "atlas_width": 152,
+      "atlas_height": 190,
       "cell_width": 36,
       "cell_height": 36,
+      "cell_padding": 1,
       "columns": 4,
       "rows": 5,
       "flip": true,
@@ -356,17 +364,18 @@
           "frame_count": 4
         }
       ],
-      "source_digest": "95c97e05bb854cee654dc1cdc01910286b5ad13c6ec69e0f1b1644e3ca71a49b",
-      "atlas_digest": "c10cd38c50f7c6e09804350ef2ab74f50c1bcf72ded93aa085dd2eb236acfe19"
+      "source_digest": "ec936dbb0c503c0b40d548cdfbedb9f20d3b91e82118dfc839a185c3c6635a34",
+      "atlas_digest": "843f75dd2295fe29f047764920ed380575eccd20e4302ccd61a8c9957d1f5fcd"
     },
     {
       "name": "walk",
       "storage_format": "png",
       "atlas_path": "assets/textures/units/red_squirrel/atlas/walk.png",
-      "atlas_width": 144,
-      "atlas_height": 180,
+      "atlas_width": 152,
+      "atlas_height": 190,
       "cell_width": 36,
       "cell_height": 36,
+      "cell_padding": 1,
       "columns": 4,
       "rows": 5,
       "flip": true,
@@ -399,8 +408,8 @@
           "frame_count": 4
         }
       ],
-      "source_digest": "ac1d2d44bfdf73c1d8e042544554dc6961f5d76ca21329f4fbfa471fa9ee1f80",
-      "atlas_digest": "052a427ff5f80d64066d348cf7a74a84c27eb48b7b090610e877bb4b299ebeb7"
+      "source_digest": "72c4c2feaedfda2e424377d8a77e03f9b15083f12b34214994a883c934a7982b",
+      "atlas_digest": "8ca3a17154e8a511d2e09bd20f57de2176938103422f1612dcad4a18b5abcc9a"
     }
   ]
 }
