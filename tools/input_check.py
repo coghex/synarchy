@@ -60,6 +60,8 @@ the summary still run.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import sys
 import time
 
@@ -389,7 +391,14 @@ def selftest() -> int:
     check(sentinel, True)
 
     ran, failed = list(checks_run), list(failures)
-    status = summarize()           # prints the failure summary it asserts on
+    # Capture the summary rather than just its status: asserting the
+    # status alone would still pass against a summarize() that printed
+    # nothing, and "the failure summary is printed" is the requirement.
+    buffered = io.StringIO()
+    with contextlib.redirect_stdout(buffered):
+        status = summarize()
+    summary = buffered.getvalue()
+    print(summary, end="")         # captured, then shown as the live run shows it
     failures, checks_run = [], []
 
     problems: list[str] = []
@@ -409,6 +418,9 @@ def selftest() -> int:
     want(sentinel in ran and ran.index(sentinel) > ran.index(shifted),
          "a later check still executes after the missing field")
     want(status != 0, "the run's exit status stays non-zero")
+    want(f"input_check: FAILED ({len(failed)})" in summary
+         and all(name in summary for name in failed),
+         "the failure summary is printed, naming every failed check")
 
     # The guard must not weaken the assertions when the field IS there.
     populated = dict(missed, clicks=1, shiftAtClick=False)
