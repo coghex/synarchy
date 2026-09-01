@@ -21,7 +21,9 @@ import Test.Hspec
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
-import Data.List (sort)
+import Data.List (sort, nub)
+import qualified Codec.Picture as JP
+import qualified Data.ByteString as BS
 import Engine.Asset.Handle (TextureHandle(..), toInt)
 import Engine.Graphics.Camera (CameraFacing(..), Camera2D(..), defaultCamera)
 import Structure.Types (emptyChunkStructures)
@@ -582,6 +584,18 @@ spec = describe "Chop selection" $ do
                         (x0, x1) = xSpan q
                     (x1 - x0) `shouldSatisfy` (< fgQuadW g)
 
+        it "is one flat DESIGNED alpha, like every other marker" $ do
+            -- The translucency is a chosen value baked into the file,
+            -- not a render-time tint: this project bakes all colour
+            -- into textures, and 'floraMarkerQuad' passes a plain white
+            -- tint carrying only the whole-layer zoom fade. 150 is the
+            -- designation family's solid-marker alpha, the value the
+            -- retired full-tile chop overlay carried.
+            icon ← readRGBA
+                "assets/textures/ui/hud/utility/chop_designate_tree.png"
+            imageSize icon `shouldBe` (44, 44)
+            visibleAlphas icon `shouldBe` [150]
+
         it "vanishes with the tree: a felled plant leaves nothing to draw" $ do
             -- The marker pass is driven by the LIVE instance, so a
             -- chunk that no longer holds the plant produces no draw and
@@ -609,3 +623,23 @@ faceMapOf = faceMapId
 -- | The tile the fixture's single oak stands on, in global coords.
 fpGXOf, fpGYOf ∷ Int
 (fpGXOf, fpGYOf) = chunkToGlobal flatChunk 8 8
+
+-- | The marker PNG, decoded to RGBA8.
+readRGBA ∷ FilePath → IO (JP.Image JP.PixelRGBA8)
+readRGBA path = do
+    bytes ← BS.readFile path
+    case JP.decodePng bytes of
+        Left err  → fail (path ⧺ ": " ⧺ err)
+        Right dyn → pure (JP.convertRGBA8 dyn)
+
+imageSize ∷ JP.Image JP.PixelRGBA8 → (Int, Int)
+imageSize img = (JP.imageWidth img, JP.imageHeight img)
+
+-- | Every distinct alpha among the pixels that are visible at all.
+visibleAlphas ∷ JP.Image JP.PixelRGBA8 → [Word8]
+visibleAlphas img = sort . nub $
+    [ a
+    | y ← [0 .. JP.imageHeight img - 1]
+    , x ← [0 .. JP.imageWidth img - 1]
+    , let JP.PixelRGBA8 _ _ _ a = JP.pixelAt img x y
+    , a > 0 ]

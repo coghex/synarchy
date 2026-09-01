@@ -151,9 +151,13 @@ function hud.init(boxTexSet, menuFont, width, height)
     -- planned structure reads differently from a planned building.
     hud.texConstructStructure  = engine.loadTexture("assets/textures/ui/hud/utility/construct_designate_structure.png")
     hud.texConstructBuilding   = engine.loadTexture("assets/textures/ui/hud/utility/construct_designate_building.png")
-    -- Chop-designation marker (#97): green so a tree marked for felling
-    -- reads differently from a dig / build designation.
-    hud.texChopDesignate       = engine.loadTexture("assets/textures/ui/hud/utility/chop_designate.png")
+    -- Chop-designation marker (#97, re-anchored by #1856): a 44x44
+    -- felling-axe icon drawn once per designated TREE, centred on that
+    -- tree's rendered ground contact — not the 96x64 full-tile ground
+    -- overlay it replaced, which could not tell two wood-tagged
+    -- co-tenants on one tile apart. Its alpha (150) is a designed
+    -- value, baked into the file like every other designation marker's.
+    hud.texChopDesignate       = engine.loadTexture("assets/textures/ui/hud/utility/chop_designate_tree.png")
     -- Till-designation marker (#333): brown so a field marked for
     -- tilling reads differently from every other designation layer.
     hud.texTillDesignate       = engine.loadTexture("assets/textures/ui/hud/utility/till_designate.png")
