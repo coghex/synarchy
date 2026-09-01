@@ -17,6 +17,7 @@ module Engine.Scripting.Lua.API.Locations
 
 import UPrelude
 import qualified Data.Text as T
+import qualified Data.HashMap.Strict as HM
 import qualified Data.Text.Encoding as TE
 import qualified HsLua as Lua
 import Control.Monad (foldM)
@@ -39,6 +40,7 @@ import Location.Anchor (locationAnchorText)
 import Location.Naming (locationNamingErrors)
 import Location.Types
 import Location.Bounds (RelBounds(..))
+import Item.Types (ItemManager(..))
 
 -- | Fallback texture substituted when a location def's declared
 --   @map_icon@ path doesn't exist on disk (#781) — the same generic
@@ -86,11 +88,31 @@ loadLocationYamlFn core regs env backendState = do
                                      <> catalogueErrorText err ]
                         Right cat → concatMap (locationNamingErrors cat . toDef)
                                               defs
-                case namingErrs of
+                -- #917: a GUARANTEED significant item must resolve
+                -- against the live item registry, and it is checked
+                -- HERE, beside the naming scheme, for the same
+                -- all-or-nothing reason. Unlike an incidental content
+                -- id — which may legitimately warn and be skipped at
+                -- spawn time (#90) — an unresolved significant id is
+                -- unrecoverable: the obligation is created at
+                -- placement, `item.spawnGround` then fails on every
+                -- chunk load, and the location can never satisfy its
+                -- own clearance predicate. Rejecting the file is the
+                -- only outcome that does not materialize a permanently
+                -- unclearable world.
+                --
+                -- Locations load AFTER items (see the header comment on
+                -- data/locations/*.yaml), so the registry this reads is
+                -- the complete one.
+                itemErrs ← if null defs then pure [] else do
+                    im ← readIORef (crItemManagerRef regs)
+                    pure (significantItemErrors (HM.keysSet (imDefs im)) defs)
+                case namingErrs ⧺ itemErrs of
                   (_:_) → do
-                    forM_ namingErrs $ \e → logWarn logger CatAsset $
-                        "loadLocationYaml: rejected " <> T.pack filePath
-                        <> ": " <> e
+                    forM_ (namingErrs ⧺ itemErrs) $ \e →
+                        logWarn logger CatAsset $
+                            "loadLocationYaml: rejected " <> T.pack filePath
+                            <> ": " <> e
                     return (0 ∷ Int)
                   [] → do
                     let (lteq, _) = lbsMsgQueues backendState

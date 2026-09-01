@@ -11,6 +11,12 @@
 # `kind`, by contrast, is checked HERE at load: the vocabulary is closed
 # to unit / item / loot_table / building (#1708), and anything else
 # fails this whole file's load rather than registering and warning later.
+#
+# ONE content id is checked at load too: a `significant: true` item
+# (#917). It must already be in the item registry — hence "after items"
+# above being load-bearing rather than incidental — because an
+# obligation that can never spawn leaves the location permanently
+# unclearable, which a spawn-time warning could not recover from.
 locations:
   - id: ruin_small
     label: "Small Ruin"

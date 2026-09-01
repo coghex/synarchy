@@ -1496,7 +1496,24 @@ A hidden completion stays private: `resolveLocationClearance` requires
 **Authoring.** `significant: true` is legal ONLY on a fixed
 `kind: item` content entry; `Engine.Asset.YamlLocations` rejects it on
 any other kind, which is what keeps a `loot_table` draw out of the
-predicate whatever it rolls. `data/locations/ruin_small.yaml` authors
+predicate whatever it rolls. Its item id must also RESOLVE against the
+live item registry, checked by
+`Engine.Asset.YamlLocations.significantItemErrors` and enforced by the
+API loader, which rejects the whole file — the same all-or-nothing
+outcome a bad naming scheme earns. That is deliberately stricter than an
+ordinary content id, which may warn and be skipped at spawn time (#90):
+an incidental entry that spawns nothing costs the location some salvage,
+while a significant one that spawns nothing costs it its clearance
+forever, because the obligation is created at placement and
+`item.spawnGround` then fails on every chunk load.
+
+That makes an ORDERING requirement load-bearing: items must be
+registered before `engine.loadLocationYaml` runs, or the shipped ruin is
+rejected and no location registers at all.
+`scripts/startup_loader.lua` already does this in both profiles and
+`data/locations/*.yaml`'s own header states it; anything else that loads
+location YAML directly — a probe, a fixture harness — owes the same
+order. `data/locations/ruin_small.yaml` authors
 one `processing_unit` — appended AFTER the existing contents, because
 #948 keys each incidental draw on the entry's positional index, so
 reordering those lines would silently change what every
@@ -1517,6 +1534,15 @@ pickup is rolled back. `registerLocationSignificantSpawn` is WRITE-ONCE
 per slot — a retried content spawn cannot repoint an obligation and
 orphan the item it first named, and the refusal is exactly the edge a
 resuming spawn uses to tell "still owed" from "already done".
+
+**A latch alone is not enough.** `significantRecovered` counts an
+obligation as discharged only when it names a spawned item AND that item
+was taken. No engine path can produce the other shape —
+`latchLocationSignificantTaken` matches on a bound id — but it is
+precisely the shape the session provenance rules below cannot see, since
+there is no id for them to resolve, so a corrupt payload would otherwise
+clear a location with nothing ever spawned.
+`locationSignificantItemErrors` rejects it at decode as well.
 
 **The latch.** `taken` is set by
 `Engine.Scripting.Lua.API.Items.Ground.pickupGroundOnPage`, the
@@ -1543,7 +1569,8 @@ owe a materialized world an item it never spawned, permanently blocking
 a clearance the pre-#917 build had already granted. The v1
 reconstruction discards both for the same reason.
 `Location.Instance.locationSignificantItemErrors` rejects a duplicated
-slot and same-page duplicate ownership at component decode;
+slot, an obligation marked taken that names no item, and same-page
+duplicate ownership at component decode;
 `World.Save.Integrity.significantProvenanceErrors` hard-fails an UNTAKEN
 obligation whose item resolves on another page or in an
 inventory/storage (it cannot be held without having been picked up) and

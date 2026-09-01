@@ -270,6 +270,25 @@ spec = describe "Location significant contents (#917)" $ do
             locationSignificantCondition (instOf both) `shouldBe` Just True
             resolveLocationClearance iid both `shouldSatisfy` isJust
 
+        it "refuses to count an obligation that is marked taken but \
+           \names no item — the one shape that could otherwise clear a \
+           \location with nothing ever spawned" $ do
+            -- No engine path produces this:
+            -- 'latchLocationSignificantTaken' matches on a bound id, so
+            -- an unbound obligation is unreachable. It is exactly the
+            -- shape the session provenance rules cannot see either —
+            -- there is no id for them to resolve — which is why the
+            -- predicate itself has to refuse it.
+            let forged = adjustLocationInstance iid
+                    (\i → i { liSignificant =
+                        [ e { lsiTaken = True, lsiInstanceId = Nothing }
+                        | e ← liSignificant i ] })
+                    (discover (tableFor 0 significantOnlyDef))
+            map lsiTaken (liSignificant (instOf forged)) `shouldBe` [True]
+            locationSignificantCondition (instOf forged) `shouldBe` Just False
+            locationClearanceSatisfied (instOf forged) `shouldBe` False
+            resolveLocationClearance iid forged `shouldBe` Nothing
+
         it "keeps an UNSPAWNED obligation incomplete, so an empty \
            \collection can never read as satisfied" $ do
             -- No spawnAll: the obligation exists with no item bound.
@@ -438,6 +457,16 @@ spec = describe "Location significant contents (#917)" $ do
                 `shouldBe` [ "location instance #1 declares significant \
                              \slot 1 more than once" ]
 
+        it "rejects an obligation marked taken that names no item" $ do
+            let broken = adjustLocationInstance iid
+                    (\i → i { liSignificant =
+                        [ (head' (liSignificant i))
+                            { lsiTaken = True, lsiInstanceId = Nothing } ] })
+                    (tableFor 0 significantOnlyDef)
+            locationSignificantItemErrors broken
+                `shouldBe` [ "location instance #1 significant slot 1 is \
+                             \marked taken but names no item instance" ]
+
         it "rejects one physical item owned by two obligations" $ do
             let broken = adjustLocationInstance iid
                     (\i → i { liSignificant =
@@ -455,3 +484,9 @@ spec = describe "Location significant contents (#917)" $ do
 --   fixture happened to draw.
 alwaysZeroEncounterDef ∷ LocationDef
 alwaysZeroEncounterDef = mkDef "encounter_only_zero" [ encounterContent 0 0 ]
+
+-- | The first element of a fixture list, failing loudly rather than
+--   partially. Every use here is over a list this module built itself.
+head' ∷ [α] → α
+head' (x:_) = x
+head' []    = error "significant-contents fixture list is empty"

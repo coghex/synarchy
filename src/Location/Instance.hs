@@ -67,6 +67,7 @@ module Location.Instance
     , significantItemsFromDef
     , locationEncounterCondition
     , locationSignificantCondition
+    , significantRecovered
     , locationAuthorsClearance
     , locationClearanceSatisfied
     , locationDiscoveryLifecycle
@@ -344,13 +345,32 @@ locationEncounterCondition ∷ LocationInstance → Maybe Bool
 locationEncounterCondition = fmap leCleared ∘ liEncounter
 
 -- | The SIGNIFICANT-ITEM half: 'Nothing' when the instance owes none,
---   @Just satisfied@ otherwise. An obligation that was never spawned
---   ('lsiInstanceId' 'Nothing') is simply not taken, so it keeps this
---   incomplete exactly as an untaken spawned one does.
+--   @Just satisfied@ otherwise.
 locationSignificantCondition ∷ LocationInstance → Maybe Bool
 locationSignificantCondition inst
     | null (liSignificant inst) = Nothing
-    | otherwise                 = Just (all lsiTaken (liSignificant inst))
+    | otherwise = Just (all significantRecovered (liSignificant inst))
+
+-- | Has ONE obligation actually been discharged? A real item must have
+--   been spawned for it AND that item taken — both halves, never the
+--   latch alone.
+--
+--   Requiring the bound id is not redundant with the latch. No engine
+--   path can set 'lsiTaken' without one ('latchLocationSignificantTaken'
+--   matches on the id, so an unbound obligation is unreachable), but a
+--   'lsiTaken' payload carrying no id would otherwise satisfy clearance
+--   with no item ever spawned and nothing ever picked up — and the
+--   session provenance rules cannot catch it either, because there is
+--   no id for them to resolve. The predicate refuses the shape here,
+--   and 'locationSignificantItemErrors' rejects it at decode; this side
+--   exists so a payload that somehow reached a live table still cannot
+--   clear a location for free.
+--
+--   An obligation that was never spawned is therefore incomplete for
+--   BOTH reasons, which is what requirement 4 wants: an unspawned,
+--   failed-to-spawn or missing item keeps the loot condition open.
+significantRecovered ∷ LocationSignificantItem → Bool
+significantRecovered e = isJust (lsiInstanceId e) ∧ lsiTaken e
 
 -- | Does this instance author ANY clearance condition? A location with
 --   neither an encounter nor a significant item authors none, and must
@@ -1157,6 +1177,14 @@ locationInstanceBoundsErrors lis =
 --     resuming content spawn registers against, so two slots sharing a
 --     number would let one spawn satisfy both, or repoint the wrong
 --     one;
+--   * an obligation marked TAKEN must name the item that was taken.
+--     No engine path can produce the other shape
+--     ('latchLocationSignificantTaken' matches on a bound id), and it
+--     is exactly the shape the session-wide provenance rules cannot
+--     see — there is no id for them to resolve — so a corrupt or
+--     hand-crafted payload could otherwise clear a location with
+--     nothing ever spawned. 'significantRecovered' refuses to count it
+--     either way; this rejects it before it is published at all;
 --   * one physical item identity is owned by at most ONE obligation
 --     across the whole page. A single 'Item.Types.iiInstanceId' bound
 --     to two obligations would let one pickup latch both, clearing a
@@ -1172,6 +1200,15 @@ locationSignificantItemErrors lis =
     , (slot, n) ← sortOn fst (HM.toList (HM.fromListWith (+)
         [ (lsiSlot e, 1 ∷ Int) | e ← liSignificant inst ]))
     , n > 1
+    ]
+    ⧺
+    [ "location instance #" <> tshow (unLocationInstanceId (liId inst))
+        <> " significant slot " <> tshow (lsiSlot e)
+        <> " is marked taken but names no item instance"
+    | inst ← instancesToList lis
+    , e ← sortOn lsiSlot (liSignificant inst)
+    , lsiTaken e
+    , isNothing (lsiInstanceId e)
     ]
     ⧺
     [ "significant item instance " <> tshow itemId

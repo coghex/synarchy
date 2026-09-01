@@ -1318,14 +1318,36 @@ def seed_departure_deficit(port: int, uids) -> bool:
 # [travel] / [extract]
 # --------------------------------------------------------------------------
 def loot_in(port: int, ruin: dict) -> list:
-    """The ground items lying inside one ruin's own absolute bounds
-    (#777). ruin_small declares min_spacing 5 chunks, so no two ruin
-    footprints can overlap and the attribution is unambiguous."""
+    """The INCIDENTAL ground items lying inside one ruin's own absolute
+    bounds (#777) — its `ruin_common` rolls, and nothing else.
+    ruin_small declares min_spacing 5 chunks, so no two ruin footprints
+    can overlap and the attribution is unambiguous.
+
+    #917's guaranteed significant item is EXCLUDED, by the physical ids
+    the instance's own `significant` rows report rather than by def
+    name, so the exclusion follows provenance rather than a guess about
+    what the reward happens to be. Two things depend on it:
+
+      * the count below is a real check on the loot table. Folding the
+        guaranteed item in would let a missing incidental roll hide
+        behind a constant.
+      * `choose_target` must never pick it. It skips Materials and food
+        so the carrier's own AI cannot move the target mid-return — but
+        it FALLS BACK to the first entry when both rolls are excluded,
+        and `processing_unit` sorts first among this ruin's contents.
+        Extracting it there would latch it and clear the ruin long
+        before the extract stage asserts it is still untaken."""
     b = ruin.get("bounds") or {}
     if not b:
         return []
+    # Read LIVE: `ruin` is the placement-time row from `pick_site`, taken
+    # before any content spawned, so its obligations carry no ids yet.
+    reserved = {r.get("item_instance_id")
+                for r in significant_rows(port, int(ruin["instance_id"]))
+                if r.get("item_instance_id") is not None}
     inside = [g for g in ground_items(port)
-              if b["min_x"] <= g.get("x", 1e9) <= b["max_x"]
+              if g.get("instanceId") not in reserved
+              and b["min_x"] <= g.get("x", 1e9) <= b["max_x"]
               and b["min_y"] <= g.get("y", 1e9) <= b["max_y"]]
     return sorted(inside, key=lambda g: (g.get("defName", ""), g.get("id", 0)))
 
@@ -1539,11 +1561,18 @@ def main() -> int:
             deposit_spot, foot = adjacent_tile(port, storage_bid)
 
             loot = loot_in(port, ruin)
-            chk.ok(len(loot) >= 2,
-                   f"the ruin spawned its own loot-table contents: "
+            # EXACTLY the two `ruin_common` rolls
+            # (data/locations/ruin_small.yaml). Exact, not a floor:
+            # `loot_in` now excludes #917's guaranteed item by its own
+            # physical id, so a third entry here would mean an
+            # unaccounted-for ground item and a missing one would mean a
+            # lost roll — neither of which a `>=` could see.
+            chk.ok(len(loot) == 2,
+                   f"the ruin spawned its own two loot-table rolls: "
                    f"{[g['defName'] for g in loot]} "
-                   f"({len(loot)} ground items inside its bounds)")
-            if len(loot) < 2:
+                   f"({len(loot)} incidental ground items inside its bounds, "
+                   f"the guaranteed item excluded)")
+            if len(loot) != 2:
                 return 2
             target = choose_target(port, loot)
             fingerprint.update(loot=sorted(g["defName"] for g in loot),

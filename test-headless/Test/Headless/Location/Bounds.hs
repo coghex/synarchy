@@ -17,17 +17,22 @@ import Control.Exception (finally)
 import Data.IORef (IORef, newIORef, readIORef, modifyIORef')
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.Text as T
+import qualified Data.HashSet as HS
 import qualified Data.Yaml as Yaml
 import System.Directory
-    (getTemporaryDirectory, createDirectoryIfMissing, removeDirectoryRecursive)
+    ( getTemporaryDirectory, createDirectoryIfMissing, removeDirectoryRecursive
+    , listDirectory )
 import System.FilePath ((</>))
+import Data.List (sort)
+import Data.Foldable (toList)
+import qualified Data.Aeson.KeyMap as KeyMap
 import Engine.Core.Log
     ( initLogger, defaultLogConfig, LogConfig(..), LogBackend(..)
     , LogCategory(..), LogLevel(..), LogEntry(..), LoggerState )
 import Engine.Asset.YamlLocations
     ( LocationYamlBounds(..), LocationYamlContent(..), LocationYamlCountRange(..)
     , LocationYamlDef(..), LocationYamlFile(..), authoredLocationCoordinateLimit
-    , loadLocationYaml )
+    , loadLocationYaml, significantItemErrors )
 import Location.Bounds
 
 decodeBounds ∷ BS.ByteString → Either String LocationYamlBounds
@@ -61,6 +66,36 @@ rejectedNamingFields lid fields =
 
 decodeFile ∷ BS.ByteString → Either String LocationYamlFile
 decodeFile = either (Left . show) Right . Yaml.decodeEither'
+
+-- | One decoded definition as a single-element list, for the checks
+--   that take the whole file's defs. Fails the example loudly rather
+--   than silently reporting no errors over an empty list — which is
+--   what a fixture that stopped parsing would otherwise look like.
+decodedDefs ∷ BS.ByteString → [LocationYamlDef]
+decodedDefs raw = case decodeDef raw of
+    Right d  → [d]
+    Left err → error ("Bounds fixture failed to decode: " <> err)
+
+-- | Every item def name the shipped @data/items@ tree registers, read
+--   the way the engine reads it: one file at a time, off disk. Used to
+--   prove the shipped ruin's guaranteed item is a real item rather
+--   than a name that merely looks plausible.
+shippedItemNames ∷ IO (HS.HashSet Text)
+shippedItemNames = do
+    files ← listDirectory "data/items"
+    fmap (HS.fromList . concat) $ forM (sort files) $ \f → do
+        raw ← Yaml.decodeFileEither ("data/items" </> f)
+        case raw ∷ Either Yaml.ParseException Yaml.Value of
+            Left err → error ("data/items/" <> f <> ": " <> show err)
+            Right v  → pure (itemNamesOf v)
+  where
+    itemNamesOf v = case v of
+        Yaml.Object o → case KeyMap.lookup "items" o of
+            Just (Yaml.Array xs) →
+                [ n | Yaml.Object e ← toList xs
+                    , Just (Yaml.String n) ← [KeyMap.lookup "name" e] ]
+            _ → []
+        _ → []
 
 spec ∷ Spec
 spec = describe "Location spatial bounds" $ do
@@ -658,6 +693,53 @@ spec = describe "Location spatial bounds" $ do
                     other → expectationFailure
                         ("expected exactly one captured log entry, got "
                             <> show (length other))
+
+        -- #917: a guaranteed significant item that resolves against no
+        -- registered def is a HARDER failure than an ordinary content
+        -- id, which may warn and be skipped at spawn time (#90). The
+        -- obligation is created at PLACEMENT, so an item that can never
+        -- spawn leaves the location permanently unclearable — which is
+        -- why 'Engine.Scripting.Lua.API.Locations' rejects the whole
+        -- file on any result here, exactly as it does for a bad naming
+        -- scheme.
+        it "significantItemErrors names every unresolved guaranteed item \
+           \and ignores every incidental id, resolved or not" $ do
+            let registered = HS.fromList ["processing_unit", "rations"]
+                defs = decodedDefs
+                    "{ id: a, builder: b,\
+                    \  naming: { heads: [KEEP], modifiers: [ASH] },\
+                    \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
+                    \  contents: [ { kind: item, id: processing_unit,\
+                    \                significant: true },\
+                    \              { kind: item, id: no_such_item },\
+                    \              { kind: loot_table, id: no_such_table },\
+                    \              { kind: item, id: ghost_core,\
+                    \                significant: true } ] }"
+            significantItemErrors registered defs
+                `shouldBe` [ "location 'a': guaranteed significant content \
+                             \'ghost_core' names no registered item \
+                             \definition" ]
+
+        it "significantItemErrors accepts a file whose every guaranteed \
+           \item resolves, and an empty registry rejects one" $ do
+            let defs = decodedDefs
+                    "{ id: a, builder: b,\
+                    \  naming: { heads: [KEEP], modifiers: [ASH] },\
+                    \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
+                    \  contents: [ { kind: item, id: processing_unit,\
+                    \                significant: true } ] }"
+            significantItemErrors (HS.singleton "processing_unit") defs
+                `shouldBe` []
+            length (significantItemErrors HS.empty defs) `shouldBe` 1
+
+        it "the shipped ruin_small.yaml's guaranteed item resolves \
+           \against the shipped item definitions" $ do
+            result ← Yaml.decodeFileEither "data/locations/ruin_small.yaml"
+            names ← shippedItemNames
+            case result of
+                Left err → expectationFailure (show (err ∷ Yaml.ParseException))
+                Right lf → significantItemErrors names (lyfLocations lf)
+                    `shouldBe` []
 
         it "a file whose defs are all in-domain still loads normally" $ do
             let contents = unlines

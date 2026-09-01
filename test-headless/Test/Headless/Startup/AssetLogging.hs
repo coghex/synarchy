@@ -354,6 +354,22 @@ shippedFile verb = case verb of
     "loadLocationYaml"   → "data/locations/ruin_small.yaml"
     _                    → ""
 
+-- | Other bindings a family's shipped file must be loaded AFTER, as
+--   @(verb, path)@ pairs called first.
+--
+--   Only locations have one, and it is a REAL production ordering, not
+--   a test convenience: since #917 a location's guaranteed significant
+--   content must resolve against the item registry, so
+--   @engine.loadLocationYaml@ rejects the whole file when the item it
+--   names is unregistered. @scripts/startup_loader.lua@ already loads
+--   items before locations (and @data/locations/*.yaml@'s own header
+--   says so); this establishes the same order for a case that
+--   otherwise calls one binding in isolation.
+shippedPrereqs ∷ Text → [(Text, Text)]
+shippedPrereqs verb = case verb of
+    "loadLocationYaml" → [("loadItemYaml", "data/items/processing_unit.yaml")]
+    _                  → []
+
 -----------------------------------------------------------------------
 -- Fixture files for the warning cases
 -----------------------------------------------------------------------
@@ -491,6 +507,8 @@ spec = describe "Startup asset logging" $ do
             it (T.unpack (famVerb f) ⧺ " logs its full path and the count \
                 \it returned at Debug, and nothing at Info") $ \b → do
                 let path = shippedFile (famVerb f)
+                forM_ (shippedPrereqs (famVerb f)) $ \(verb, dep) →
+                    void (callBinding b verb dep)
                 (n, entries) ← callBinding b (famVerb f) path
                 n `shouldSatisfy` (> 0)
                 mentioning (famVerb f) LevelInfo entries `shouldBe` []

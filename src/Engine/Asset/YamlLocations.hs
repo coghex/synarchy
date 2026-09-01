@@ -9,11 +9,13 @@ module Engine.Asset.YamlLocations
     , LocationYamlDef(..)
     , LocationYamlFile(..)
     , loadLocationYaml
+    , significantItemErrors
     ) where
 
 import UPrelude
 import GHC.Generics (Generic)
 import qualified Data.Text as T
+import qualified Data.HashSet as HS
 import Data.Aeson (FromJSON(..), (.:), (.:?), (.!=), withObject, Value(..), Object)
 import Data.Aeson.Types (parseEither, Parser)
 import qualified Data.Aeson.Key as Key
@@ -464,3 +466,36 @@ instance FromJSON LocationYamlFile where
 loadLocationYaml ∷ LoggerState → FilePath → IO [LocationYamlDef]
 loadLocationYaml logger =
     loadYamlList logger "location" "location definitions" lyfLocations
+
+-- | Every GUARANTEED SIGNIFICANT content entry (#917) naming an item id
+--   that is not in @registered@, one message per offending entry.
+--
+--   Pure and registry-parameterised for the same reason
+--   'Location.Naming.locationNamingErrors' is: the check belongs beside
+--   the authored shape it constrains, while the registry it resolves
+--   against is only available in the API loader
+--   ("Engine.Scripting.Lua.API.Locations"), which calls this and
+--   rejects the whole file on any result.
+--
+--   This is deliberately STRICTER than an ordinary content id, which
+--   may warn and be skipped at spawn time (#90). An incidental entry
+--   that spawns nothing costs the location some salvage; a significant
+--   one that spawns nothing costs it its clearance FOREVER — the
+--   obligation is created at placement, @item.spawnGround@ then fails
+--   on every chunk load, and the compound predicate can never be
+--   satisfied. Rejecting the file is the only outcome that does not
+--   materialize a permanently unclearable world.
+--
+--   Only the ITEM id is resolved. The KIND restriction is a structural
+--   rule the definition parser above already enforces, so anything
+--   reaching here is a @kind: item@ entry.
+significantItemErrors ∷ HS.HashSet Text → [LocationYamlDef] → [Text]
+significantItemErrors registered defs =
+    [ "location '" <> lydId d
+        <> "': guaranteed significant content '" <> lycId c
+        <> "' names no registered item definition"
+    | d ← defs
+    , c ← lydContents d
+    , lycSignificant c
+    , not (HS.member (lycId c) registered)
+    ]

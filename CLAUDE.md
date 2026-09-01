@@ -988,10 +988,14 @@ before touching each area:
   cleared transition and of the one instance-level notice latch
   (`liClearEventEmitted`, generalized out of the encounter so a
   significant-only location has one too). `significant: true` is legal
-  only on a fixed `kind: item` content entry, so a `loot_table` draw can
-  never decide what a location owes; obligations are created at
-  PLACEMENT with the expected cardinality, and an unspawned one keeps
-  the condition incomplete. Provenance is the item's physical
+  only on a fixed `kind: item` content entry AND its id must resolve
+  against the item registry — the loader rejects the whole file
+  otherwise, because an obligation that can never spawn is a
+  permanently unclearable location, not a skippable warning. A
+  `loot_table` draw can never decide what a location owes; obligations
+  are created at PLACEMENT with the expected cardinality, and an
+  unspawned one — or one marked taken that names no item — keeps the
+  condition incomplete. Provenance is the item's physical
   `iiInstanceId`, never a ground id, and `taken` latches once at
   `pickupGroundOnPage` — the first SUCCESSFUL pickup by any unit of any
   faction — and nothing anywhere clears it. Full contract:
