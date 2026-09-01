@@ -25,7 +25,7 @@ import Engine.Graphics.Camera (CameraFacing(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..)
                                           , QuadUV(..), QuadPayload(..)
                                           , quadVertices, rectCorners
-                                          , renderFlagSelected, packWorldUV
+                                          , renderFlagSelected, tileWorldUV
                                           , noFaceMapVertexId)
 import World.Grid (tileWidth, tileHeight, tileSideHeight
                   , tileHalfWidth, tileHalfDiamondHeight
@@ -311,7 +311,7 @@ unitToQuad lookupSlot defFmSlot facing zSlice effDepth tileAlpha isSel inst mDef
             actualSlot = lookupSlot texHandle
             tint = Vec4 1.0 1.0 1.0 tileAlpha
             flags = if isSel then renderFlagSelected else 0
-            wuv = uncurry packWorldUV baseTile
+            wuv = uncurry tileWorldUV baseTile
 
             -- The frame's own UV sub-rect. A T-pose sample is the
             -- whole image, so (su0,sv0,su1,sv1) = (0,0,1,1) and the

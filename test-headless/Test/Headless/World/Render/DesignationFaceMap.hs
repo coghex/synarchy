@@ -14,7 +14,7 @@ import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Graphics.Camera (CameraFacing(..))
 import Engine.Graphics.Vulkan.Types.Vertex
     ( Vec2(..), Vec4(..), Vertex, faceMapId, mkVertexWorld, noFaceMapVertexId
-    , packWorldUV )
+    , tileWorldUV )
 import Engine.Scene.Base (LayerId)
 import Engine.Scene.Types (SortableQuad(..))
 import World.Grid
@@ -90,7 +90,7 @@ expectedOrdinaryQuad =
                 + fromIntegral relativeZ * 0.001 + 0.0004
         tint = Vec4 1.0 1.0 1.0 0.7
         atlas = fromIntegral (lookupSlot cursorTexture)
-        wuv = packWorldUV gx gy
+        wuv = tileWorldUV gx gy
         vertex position uv = mkVertexWorld wuv position uv tint atlas isoFaceMapId
     in SortableQuad
         { sqSortKey = sortKey

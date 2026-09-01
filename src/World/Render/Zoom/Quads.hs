@@ -3,6 +3,7 @@
 module World.Render.Zoom.Quads
     ( generateZoomMapQuads
     , generateZoomMapQuadsScanned
+    , emitQuad
     ) where
 
 import UPrelude
@@ -41,7 +42,7 @@ import World.Render.Zoom.Icons (locationIconTargetPixels, iconWorldSize
 -- * Generate Zoom Map Quads
 
 -- | The zoom map is longitude-lit like every other world quad — its
---   bake stamps packed world coordinates through 'mkVertexWorld' and it
+--   bake stamps world coordinates through 'mkVertexWorld' and it
 --   draws through the same bindless pipeline — so its terrain quads,
 --   its location icons and its cursor all take their OWN page's solar
 --   slot (#1869). The stamp lands on the finished per-page run, so a
@@ -202,6 +203,15 @@ makeMapQuads params mapMode baked facing vb camX camY alpha layer =
 
 -- * Emit a Single Quad
 
+-- | Translate one baked entry into the quad that is actually drawn:
+--   shift its four corners to the wrapped screen position and recolour
+--   them for the active map mode.
+--
+--   Exported for "Test.Headless.Graphics.WorldVertexCoords" — this is
+--   the one place a world vertex is taken apart and rebuilt
+--   POSITIONALLY, so it is where a widened @worldUV@ (#2019) could be
+--   dropped or transposed without any other caller noticing. Nothing in
+--   production calls it from outside this module.
 emitQuad ∷ BakedZoomEntry → Vec4 → Float → Float → LayerId → SortableQuad
 emitQuad entry (Vec4 cr cg cb alpha) dx dy layer =
     let !baseX = bzeDrawX entry

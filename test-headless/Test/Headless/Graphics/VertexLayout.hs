@@ -1,5 +1,6 @@
 {-# LANGUAGE OverloadedRecordDot #-}
--- | The world vertex's binary layout (#983, pinned by #1869).
+-- | The world vertex's binary layout (#983, pinned by #1869, widened
+--   by #2019).
 --
 --   @Engine.Graphics.Vulkan.Vertex@ states the pipeline's stride and
 --   attribute offsets as literals, and its own Haddock records that
@@ -20,6 +21,7 @@
 module Test.Headless.Graphics.VertexLayout (spec) where
 
 import UPrelude
+import Data.Int (Int32)
 import Test.Hspec
 import qualified Data.Vector as V
 import Foreign.Marshal.Alloc (allocaBytes)
@@ -33,18 +35,18 @@ import Vulkan.Core10
 import Engine.Graphics.Vulkan.Vertex
     (getVertexBindingDescription, getVertexAttributeDescriptions)
 import Engine.Graphics.Vulkan.Types.Vertex
-    ( Vertex(..), Vec2(..), Vec4(..)
+    ( Vertex(..), Vec2(..), Vec4(..), WorldUV(..)
     , vertexPositionOffset, vertexTexCoordOffset, vertexColorOffset
     , vertexAtlasIdOffset, vertexFaceMapIdOffset, vertexRenderFlagsOffset
     , vertexWorldUVOffset, vertexSolarPageOffset, vertexTotalSize )
 
 -- | Every attribute's offset, in @location@ order. Literals.
 expectedOffsets ∷ [Int]
-expectedOffsets = [0, 8, 16, 32, 36, 40, 44, 48]
+expectedOffsets = [0, 8, 16, 32, 36, 40, 44, 52]
 
 -- | The stride the pipeline declares, and what @sizeOf Vertex@ must be.
 expectedStride ∷ Int
-expectedStride = 52
+expectedStride = 56
 
 -- | Every attribute's format, in @location@ order. Literals.
 expectedFormats ∷ [Format]
@@ -55,7 +57,7 @@ expectedFormats =
     , FORMAT_R32_SFLOAT           -- atlas id
     , FORMAT_R32_SFLOAT           -- face-map id
     , FORMAT_R32_UINT             -- render flags
-    , FORMAT_R32_UINT             -- packed world (u,v)
+    , FORMAT_R32G32_SINT          -- signed world (u,v), #2019
     , FORMAT_R32_UINT             -- solar page slot
     ]
 
@@ -69,7 +71,7 @@ sampleVertex = Vertex
     , atlasId     = 9.5
     , faceMapId   = 10.5
     , renderFlags = 0xDEADBEEF
-    , worldUV     = 0x1234CDEF
+    , worldUV     = WorldUV 0x1234CDEF (-0x5678ABCD)
     , solarPage   = 7
     }
 
@@ -101,20 +103,24 @@ spec = do
             back `shouldBe` sampleVertex
 
         it "writes each field at its own literal offset" $ do
-            (v0, v1, c, a, f, rf, wuv, sp) ← withScratch $ \p → do
+            (v0, v1, c, a, f, rf, wu, wv, sp) ← withScratch $ \p → do
                 poke p sampleVertex
-                (,,,,,,,) ⊚ (peekByteOff p 0  ∷ IO Vec2)
-                          <*> (peekByteOff p 8  ∷ IO Vec2)
-                          <*> (peekByteOff p 16 ∷ IO Vec4)
-                          <*> (peekByteOff p 32 ∷ IO Float)
-                          <*> (peekByteOff p 36 ∷ IO Float)
-                          <*> (peekByteOff p 40 ∷ IO Word32)
-                          <*> (peekByteOff p 44 ∷ IO Word32)
-                          <*> (peekByteOff p 48 ∷ IO Word32)
+                -- The two world components are read as INDEPENDENT
+                -- signed 32-bit values at 44 and 48 — the shape
+                -- FORMAT_R32G32_SINT names — rather than as one word.
+                (,,,,,,,,) ⊚ (peekByteOff p 0  ∷ IO Vec2)
+                           <*> (peekByteOff p 8  ∷ IO Vec2)
+                           <*> (peekByteOff p 16 ∷ IO Vec4)
+                           <*> (peekByteOff p 32 ∷ IO Float)
+                           <*> (peekByteOff p 36 ∷ IO Float)
+                           <*> (peekByteOff p 40 ∷ IO Word32)
+                           <*> (peekByteOff p 44 ∷ IO Int32)
+                           <*> (peekByteOff p 48 ∷ IO Int32)
+                           <*> (peekByteOff p 52 ∷ IO Word32)
             (v0, v1) `shouldBe` (Vec2 1.5 2.5, Vec2 3.5 4.5)
             c `shouldBe` Vec4 5.5 6.5 7.5 8.5
             (a, f) `shouldBe` (9.5, 10.5)
-            (rf, wuv, sp) `shouldBe` (0xDEADBEEF, 0x1234CDEF, 7)
+            (rf, wu, wv, sp) `shouldBe` (0xDEADBEEF, 0x1234CDEF, -0x5678ABCD, 7)
 
         it "leaves no unwritten byte inside the stride" $ do
             bytes ← withScratch $ \p → do

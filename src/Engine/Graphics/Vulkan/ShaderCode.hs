@@ -83,7 +83,7 @@ bindlessVertexShaderCode = $(compileShaderQ Nothing "vert" Nothing [glsl|
     layout(location = 3) in float inTexIndex;
     layout(location = 4) in float inFaceMapIndex;
     layout(location = 5) in uint inRenderFlags;
-    layout(location = 6) in uint inWorldUV;
+    layout(location = 6) in ivec2 inWorldUV;
     layout(location = 7) in uint inSolarPage;
 
     ${uboGlslBlock}
@@ -118,11 +118,16 @@ bindlessVertexShaderCode = $(compileShaderQ Nothing "vert" Nothing [glsl|
         fragBrightness = ubo.brightness;
         fragFaceMapIndex = int(inFaceMapIndex);
 
-        // Longitude-local day/night (#483): decode the tile's packed
-        // world u (low 16 bits, sign-restored) and offset the global
-        // sun angle by its fraction of a full trip around the world
-        // cylinder (u = gx - gy). Raw world coords, NOT screen-space —
-        // rotating the camera must not re-light the world.
+        // Longitude-local day/night (#483): take the tile's world u
+        // and offset the global sun angle by its fraction of a full
+        // trip around the world cylinder (u = gx - gy). Raw world
+        // coords, NOT screen-space — rotating the camera must not
+        // re-light the world.
+        //
+        // #2019 widened inWorldUV to an ivec2 of whole signed 32-bit
+        // components, so there is nothing left to unpack: .x IS u,
+        // exactly as the producer computed it, at any world size. .y
+        // carries v, which no consumer reads yet (design D-9).
         //
         // Deliberately NOT wrapped (no fract()) before interpolation:
         // a quad whose corners straddle the wrap point (e.g. u values
@@ -134,8 +139,7 @@ bindlessVertexShaderCode = $(compileShaderQ Nothing "vert" Nothing [glsl|
         // (this fragment shader's sin/cos and computeAmbientLight) is
         // built from sin()/cos(), which are exactly periodic for any
         // real input — so no fract() is needed anywhere in the pipeline.
-        int rawU = int(inWorldUV & 0xFFFFu);
-        if (rawU >= 32768) rawU -= 65536;
+        int rawU = inWorldUV.x;
         // Per-page attribution (#1869): several world pages can be
         // visible at once, each advancing on its own clock and
         // generated at its own size. inSolarPage names which one owns

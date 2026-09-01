@@ -19,7 +19,7 @@ import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (CameraFacing(..))
 import Engine.Graphics.Vulkan.Types.Vertex
-    ( Vec2(..), Vec4(..), mkVertexWorld, noFaceMapVertexId, packWorldUV )
+    ( Vec2(..), Vec4(..), mkVertexWorld, noFaceMapVertexId, tileWorldUV )
 import World.Material (matOcean, matLava, matIce, unMaterialId)
 import World.Vegetation (getVegTexture)
 import World.Grid (gridToScreen, tileWidth, tileHeight, tileSideHeight, worldLayer, applyFacing)
@@ -93,7 +93,7 @@ tileToQuad ctx wx wy wz tile mFluid chunkHasFluid =
                 in (r, g, b, tileAlpha)
 
         tint = Vec4 tintR tintG tintB finalAlpha
-        wuv = packWorldUV worldX worldY
+        wuv = tileWorldUV worldX worldY
 
         v0 = mkVertexWorld wuv (Vec2 drawX drawY)                              (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
         v1 = mkVertexWorld wuv (Vec2 (drawX + tileWidth) drawY)                (Vec2 1 0) tint (fromIntegral actualSlot) fmSlot
@@ -138,7 +138,7 @@ blankTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ zSl
         b = 1.0 * (1.0 - hazeT) + 0.95 * hazeT
 
         tint = Vec4 r g b tileAlpha
-        wuv = packWorldUV worldX worldY
+        wuv = tileWorldUV worldX worldY
         v0 = mkVertexWorld wuv (Vec2 drawX drawY)                              (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
         v1 = mkVertexWorld wuv (Vec2 (drawX + tileWidth) drawY)                (Vec2 1 0) tint (fromIntegral actualSlot) fmSlot
         v2 = mkVertexWorld wuv (Vec2 (drawX + tileWidth) (drawY + tileHeight)) (Vec2 1 1) tint (fromIntegral actualSlot) fmSlot
@@ -181,7 +181,7 @@ oceanTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY fluidZ zSl
 
         finalAlpha = tileAlpha
         tint = Vec4 0.7 0.8 1.0 finalAlpha
-        wuv = packWorldUV worldX worldY
+        wuv = tileWorldUV worldX worldY
 
         v0 = mkVertexWorld wuv (Vec2 drawX drawY)                              (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
         v1 = mkVertexWorld wuv (Vec2 (drawX + tileWidth) drawY)                (Vec2 1 0) tint (fromIntegral actualSlot) fmSlot
@@ -227,7 +227,7 @@ iceTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY iceZ zSlice 
         finalAlpha = tileAlpha
         -- No tinting — all color baked in texture
         tint = Vec4 1.0 1.0 1.0 finalAlpha
-        wuv = packWorldUV worldX worldY
+        wuv = tileWorldUV worldX worldY
 
         v0 = mkVertexWorld wuv (Vec2 drawX drawY)                              (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
         v1 = mkVertexWorld wuv (Vec2 (drawX + tileWidth) drawY)                (Vec2 1 0) tint (fromIntegral actualSlot) fmSlot
@@ -267,7 +267,7 @@ lavaTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY fluidZ zSli
         fmSlot = lookupFmSlot (wtIsoFaceMap textures)
         finalAlpha = tileAlpha
         tint = Vec4 1.0 0.6 0.2 finalAlpha
-        wuv = packWorldUV worldX worldY
+        wuv = tileWorldUV worldX worldY
         v0 = mkVertexWorld wuv (Vec2 drawX drawY)                              (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
         v1 = mkVertexWorld wuv (Vec2 (drawX + tileWidth) drawY)                (Vec2 1 0) tint (fromIntegral actualSlot) fmSlot
         v2 = mkVertexWorld wuv (Vec2 (drawX + tileWidth) (drawY + tileHeight)) (Vec2 1 1) tint (fromIntegral actualSlot) fmSlot
@@ -317,7 +317,7 @@ freshwaterTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY
             Lake  → Vec4 0.5 0.8 0.9 finalAlpha
             River → Vec4 0.6 0.85 0.95 finalAlpha
             _     → Vec4 0.7 0.8 1.0 finalAlpha
-        wuv = packWorldUV worldX worldY
+        wuv = tileWorldUV worldX worldY
 
         v0 = mkVertexWorld wuv (Vec2 drawX drawY)
                      (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
@@ -397,7 +397,7 @@ worldCursorToQuadWithFaceMap lookupSlot fmSlot facing
         actualSlot = lookupSlot cursorTex
 
         tint = Vec4 1.0 1.0 1.0 (tileAlpha * 0.7)
-        wuv = packWorldUV gx gy
+        wuv = tileWorldUV gx gy
 
         v0 = mkVertexWorld wuv (Vec2 drawX drawY)
                      (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
@@ -445,7 +445,7 @@ worldCursorBgToQuad lookupSlot lookupFmSlot textures facing
         fmSlot = lookupFmSlot (wtIsoFaceMap textures)
 
         tint = Vec4 1.0 1.0 1.0 (tileAlpha * 0.7)
-        wuv = packWorldUV gx gy
+        wuv = tileWorldUV gx gy
 
         v0 = mkVertexWorld wuv (Vec2 drawX drawY)
                      (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
@@ -526,7 +526,7 @@ vegQuadWithTexture lookupSlot lookupFmSlot textures facing
         b = 1.0 * (1.0 - hazeT) + 0.95 * hazeT
 
         tint = Vec4 r g b tileAlpha
-        wuv = packWorldUV worldX worldY
+        wuv = tileWorldUV worldX worldY
 
         v0 = mkVertexWorld wuv (Vec2 drawX drawY)
                      (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
