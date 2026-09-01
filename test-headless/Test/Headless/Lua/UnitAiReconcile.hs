@@ -139,6 +139,56 @@ prelude = lns
 
 spec ∷ Spec
 spec = describe "unit AI reconciliation boundary (#1589)" $ do
+    it "settles every restored constructJob against the PUBLISHED \
+       \session's designations (#1844): a pre-v8 job adopts the attempt \
+       \of the designation really standing at its tile, a v8 job has its \
+       \own verified, and anything that does not match exactly is \
+       \dropped" $ runsOk $ lns
+        [ prelude
+        -- One live designation per tile. (10,10) is what the fixture's
+        -- jobs claim to be; (11,11) is a DIFFERENT job the player made
+        -- at that tile while the save sat on disk; (12,12) carries
+        -- nothing at all — a designation load staging self-cleared.
+        , "construction = { getDesignationAt = function(_w, x, y)"
+        , "  if x == 10 then return { x = 10, y = 10, attempt = 4,"
+        , "    category = 'structure', pack = 'dungeon_1', kind = 'floor' } end"
+        , "  if x == 11 then return { x = 11, y = 11, attempt = 9,"
+        , "    category = 'structure', pack = 'wire', kind = 'wire' } end"
+        , "  return nil end }"
+        , "local function job(t) return { [1] = { constructJob = t } } end"
+        -- A pre-v8 job: no attempt, and the designation is the same job.
+        , "local legacy = job{ x = 10, y = 10, category = 'structure',"
+        , "  pack = 'dungeon_1', kind = 'floor' }"
+        , "R.reconcile(legacy, {1}, {}, CTX)"
+        , "assert(legacy[1].constructJob ~= nil, 'a matching legacy job stays')"
+        , "assert(legacy[1].constructJob.attempt == 4,"
+        , "  'it adopts the live designation\\'s attempt')"
+        -- A pre-v8 job whose tile now carries someone else's designation.
+        , "local wrong = job{ x = 11, y = 11, category = 'structure',"
+        , "  pack = 'dungeon_1', kind = 'floor' }"
+        , "R.reconcile(wrong, {1}, {}, CTX)"
+        , "assert(wrong[1].constructJob == nil,"
+        , "  'a legacy job must not adopt a DIFFERENT job at its tile')"
+        -- A v8 job whose designation load staging self-cleared.
+        , "local gone = job{ x = 12, y = 12, attempt = 4,"
+        , "  category = 'structure', pack = 'dungeon_1', kind = 'floor' }"
+        , "R.reconcile(gone, {1}, {}, CTX)"
+        , "assert(gone[1].constructJob == nil,"
+        , "  'a v8 job over a self-cleared designation must be dropped')"
+        -- A v8 job whose attempt was replaced by a successor.
+        , "local stale = job{ x = 10, y = 10, attempt = 3,"
+        , "  category = 'structure', pack = 'dungeon_1', kind = 'floor' }"
+        , "R.reconcile(stale, {1}, {}, CTX)"
+        , "assert(stale[1].constructJob == nil,"
+        , "  'a v8 job naming a retired attempt must be dropped')"
+        -- …and one that still names exactly what is there.
+        , "local good = job{ x = 10, y = 10, attempt = 4,"
+        , "  category = 'structure', pack = 'dungeon_1', kind = 'floor' }"
+        , "R.reconcile(good, {1}, {}, CTX)"
+        , "assert(good[1].constructJob ~= nil and"
+        , "  good[1].constructJob.attempt == 4, 'an exact v8 job survives')"
+        ]
+
     it "clears a stale reference from EVERY family the schema declares \
        \-- craftJob, repairJob, pickupOrder, a ground forageTarget, \
        \forageLoot and harvestLoot included, none of which the pre-#1589 \

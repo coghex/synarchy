@@ -251,6 +251,35 @@ guardSpec = describe "a delayed operation from a removed attempt" $ do
         [aid] ← attemptsOf ws
         resolvePlan sc (raw aid) `shouldReturn` "nil"
 
+    it "registers an EMPTY materials table as a cost of nothing, not as \
+       \no cost at all" $ \sc → do
+        -- A pack's own buildability rule asks only that the `materials`
+        -- field EXIST, and a receipt of no materials is a valid paid
+        -- state. Collapsing the empty table into "no cost" would make a
+        -- zero-material kind permanently resolver-invalid and
+        -- impossible to build — while a genuinely ABSENT table must
+        -- still register nothing.
+        _ ← resetScene sc
+        _ ← evalLua sc (T.concat
+            [ "return tostring(structure.registerPackArt{ pack='freebie', "
+            , "kinds={{kind='floor', buildable=true, build_work=1.0, "
+            , "materials={}}}, art={{kind='floor', texture='a.png', "
+            , "texHandle=41, facemap='f.png', faceHandle=42}} })" ])
+        evalLua sc (T.concat
+            [ "local c = structure.packBuildCost('freebie', 'floor'); "
+            , "if not c then return 'nil' end; local n = 0; "
+            , "for _ in pairs(c.materials) do n = n + 1 end; "
+            , "return tostring(c.build_work) .. '/' .. n" ])
+            `shouldReturn` "1.0/0"
+        _ ← evalLua sc (T.concat
+            [ "return tostring(structure.registerPackArt{ pack='costless', "
+            , "kinds={{kind='floor', buildable=true, build_work=1.0}}, "
+            , "art={{kind='floor', texture='a.png', texHandle=41, "
+            , "facemap='f.png', faceHandle=42}} })" ])
+        evalLua sc (T.concat
+            [ "return tostring(structure.packBuildCost('costless', 'floor'))" ])
+            `shouldReturn` "nil"
+
 -- * Payment and the receipt
 
 paymentSpec ∷ SpecWith Scene

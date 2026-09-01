@@ -212,11 +212,18 @@ structureRegisterPackArtFn env = do
                 -- `buildable`, which keeps its own mandatory meaning: a
                 -- registration that omits the numbers is not malformed,
                 -- it is one the engine cannot charge a job against.
+                --
+                -- An EMPTY `materials` table is a real, authored cost of
+                -- nothing — the pack YAML's own buildability rule asks
+                -- only that the field EXIST, and a receipt of no
+                -- materials is a valid paid state. So the absent case
+                -- ('Nothing') and the empty one ('Just []') are kept
+                -- apart here rather than both collapsing to "no cost",
+                -- which would make a zero-material kind permanently
+                -- resolver-invalid and impossible to build.
                 | otherwise → case (wTy, mWork, eMats) of
-                    (Lua.TypeNumber, Just (Lua.Number w), Right mats)
-                        | not (null mats) →
-                            Right (kind, b, Just (mkBuildCost (realToFrac w)
-                                                              mats))
+                    (Lua.TypeNumber, Just (Lua.Number w), Right (Just mats)) →
+                        Right (kind, b, Just (mkBuildCost (realToFrac w) mats))
                     _ → Right (kind, b, Nothing)
 
     -- `materials` is a NAME → COUNT map, so it is walked with `next`
@@ -226,11 +233,15 @@ structureRegisterPackArtFn env = do
     -- a receipt promises was removed. An absent table is not a refusal —
     -- it is a registration that states no cost at all.
     readMaterials ∷ Text → Int
-                  → Lua.LuaE Lua.Exception (Either ArtFault [(Text, Int)])
+                  → Lua.LuaE Lua.Exception
+                        (Either ArtFault (Maybe [(Text, Int)]))
     readMaterials pack i = do
         ty ← Lua.getfield (-1) "materials"
         r ← if ty ≢ Lua.TypeTable
-              then pure (Right [])
+              -- No table at all: the payload states no cost. Distinct
+              -- from a PRESENT but empty one, which is a cost of
+              -- nothing (see 'readKind').
+              then pure (Right Nothing)
               else do
                   Lua.pushnil
                   go []
@@ -241,7 +252,7 @@ structureRegisterPackArtFn env = do
             ("materials (declared kinds " <> tshow i <> ")")
         go acc = do
             more ← Lua.next (-2)
-            if not more then pure (Right (reverse acc)) else do
+            if not more then pure (Right (Just (reverse acc))) else do
                 mName ← Lua.tostring (-2)
                 nTy   ← Lua.ltype (-1)
                 mN    ← Lua.tointeger (-1)

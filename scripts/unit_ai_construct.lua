@@ -112,31 +112,6 @@ local function abandonClaim(wid, gx, gy, attempt)
 end
 M.abandonClaim = abandonClaim
 
--- Stale-claim sweep over the scanned job list: a "claimed" job whose
--- claimant died is released immediately; one unrefreshed past the
--- timeout (stuck worker, adopted orphan from a save/reload) releases
--- when the clock runs out. Any scanning acolyte runs this.
-local function sweepConstructClaims(wid, jobs, now, timeout)
-    for _, job in ipairs(jobs) do
-        if job.status == "claimed" then
-            local key = constructKey(wid, job.x, job.y)
-            local c = constructClaims[key]
-            if not c then
-                -- Orphan (loaded save / script reload): adopt with an
-                -- anonymous timer so it frees up if nobody owns it.
-                constructClaims[key] = { uid = nil, at = now }
-            elseif (c.uid and not unit.exists(c.uid))
-                   or (now - c.at > timeout) then
-                constructClaims[key] = nil
-                construction.setJobStatus(wid, job.x, job.y, "pending",
-                                          job.attempt)
-            end
-        end
-    end
-end
-
-
-
 -- Nearest viable pending job within construct_scan_range, or nil. Also
 -- runs the stale-claim sweep (the scan already paid for the job list).
 -- Buildings are always viable (staking needs no materials); structure
@@ -151,7 +126,8 @@ local function findConstructJob(uid, fromX, fromY, params)
                                              ccx + r, ccy + r)
     if not jobs or #jobs == 0 then return nil end
     local now = engine.gameTime()
-    sweepConstructClaims(wid, jobs, now, params.construct_claim_timeout)
+    site.sweepClaims(constructClaims, constructKey, wid, jobs, now,
+                     params.construct_claim_timeout)
 
     local best, bestD = nil, params.construct_scan_range
     for _, job in ipairs(jobs) do

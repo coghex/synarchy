@@ -232,6 +232,53 @@ end
 -- id reuse to inherit), then the NESTED-REF SCRUB and the per-page
 -- location-memory scrub on every surviving row. `aiState` is emptied
 -- and refilled IN PLACE -- every module holds the same table.
+-- Settle one restored unit's constructJob against the PUBLISHED
+-- session's designations (#1844). Returns true when the job was dropped.
+--
+-- This runs here, in the post-publication broadcast, and not in the
+-- component's own apply(): Lua components are applied while
+-- worldManagerRef still names the OUTGOING session, so a designation
+-- query there would answer about the world being replaced — adopting an
+-- attempt from it, or dropping a job whose real designation exists only
+-- in the staged one.
+--
+-- Both directions matter, so both are checked here:
+--
+--   * A pre-v8 job carries no attempt at all. It ADOPTS the attempt of
+--     the designation standing at its page and tile, but only when that
+--     designation is the same JOB — same category, and same pack/kind or
+--     building def. A designation the player made there while the save
+--     sat on disk is a different job, and steering a restored worker
+--     onto it is exactly the confusion attempt identity exists to
+--     prevent.
+--   * A v8 job carries one, and it is VERIFIED. Load staging
+--     self-clears designations whose art or build metadata has gone, so
+--     a job naming one of those would otherwise stay live over nothing.
+--
+-- Anything that does not match exactly clears the job and nothing else.
+-- It costs one re-scan on that unit's next tick.
+function M.settleConstructJob(uid, s)
+    local job = s.constructJob
+    if not job then return false end
+    if not (construction and construction.getDesignationAt) then
+        return false
+    end
+    local wid = require("scripts.unit_ai_page").ofUnit(uid)
+    local live = wid and construction.getDesignationAt(wid, job.x, job.y)
+    local matches = live and live.category == job.category
+        and (job.category ~= "structure"
+             or (live.pack == job.pack and live.kind == job.kind))
+        and (job.category ~= "building" or live.building == job.building)
+        and (job.attempt == nil or live.attempt == job.attempt)
+    if matches then
+        job.attempt = live.attempt
+        return false
+    end
+    s.constructJob = nil
+    s.constructCandidate = nil
+    return true
+end
+
 function M.reconcile(aiState, survUnitIds, survBuildingIds, raw, hooks)
     hooks = hooks or M.DROP_HOOKS
     local survUnitSet, survBuildingSet = {}, {}
@@ -264,9 +311,14 @@ function M.reconcile(aiState, survUnitIds, survBuildingIds, raw, hooks)
     for k, v in pairs(rebuilt) do aiState[k] = v; kept = kept + 1 end
 
     local ctx = M.buildContext(survUnitSet, survBuildingSet, raw)
-    local scrubbed, forgotten = 0, 0
+    local scrubbed, forgotten, jobsDropped = 0, 0, 0
     for uid, s in pairs(aiState) do
         scrubbed = scrubbed + M.scrubStaleRefs(uid, s, ctx, hooks)
+        -- #1844: a restored constructJob has to name a designation that
+        -- is REALLY THERE, and name it exactly.
+        if M.settleConstructJob(uid, s) then
+            jobsDropped = jobsDropped + 1
+        end
         -- #915: a location memory is scrubbed against the RESTORED
         -- session's own instance tables, not against the unit/building
         -- survivor sets -- its target is a (page, instance id) pair
@@ -276,7 +328,8 @@ function M.reconcile(aiState, survUnitIds, survBuildingIds, raw, hooks)
     end
     engine.logInfo("Unit AI: reconciled AI state after load ("
         .. kept .. " kept, " .. scrubbed .. " stale ref(s) scrubbed, "
-        .. forgotten .. " stale location memory/memories dropped)")
+        .. forgotten .. " stale location memory/memories dropped, "
+        .. jobsDropped .. " construct job(s) dropped)")
 end
 
 return M

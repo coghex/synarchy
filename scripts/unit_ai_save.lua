@@ -113,50 +113,6 @@ local function snapshotUnitState(s)
     return copy
 end
 
--- v1-v7 -> v8 (#1844): give a legacy constructJob the ATTEMPT identity
--- it was saved without, or drop it.
---
--- A pre-#1844 payload identified its construction job by page and tile
--- alone. Those are still enough to FIND the designation this load
--- restored at that tile -- the engine's own v3->v4 migration assigned
--- every legacy designation an id deterministically -- so the job is
--- matched against it and adopts its attempt. That is an adoption, not a
--- guess: the match is required to agree on the target as well as the
--- coordinate.
---
--- Anything else clears the job and NOTHING else. It is deliberately not
--- enough that a designation merely exists at the tile: a save can be
--- loaded into a session where the player has since made a different
--- designation there, and steering a restored worker onto that successor
--- is exactly the confusion attempt identity exists to prevent. A cleared
--- job costs one re-scan on the unit's next tick.
---
--- Runs for every load, not just old ones: a v8 job already carries its
--- attempt, so the guard below skips it and this is the identity.
-local function adoptLegacyConstructAttempts(aiState)
-    if not (construction and construction.getDesignationAt) then return end
-    local pageOf = require("scripts.unit_ai_page").ofUnit
-    for uid, s in pairs(aiState) do
-        local job = s.constructJob
-        if job and job.attempt == nil then
-            local wid = pageOf(uid)
-            local live = wid
-                and construction.getDesignationAt(wid, job.x, job.y)
-            local matches = live and live.category == job.category
-                and (job.category ~= "structure"
-                     or (live.pack == job.pack and live.kind == job.kind))
-                and (job.category ~= "building"
-                     or live.building == job.building)
-            if matches then
-                job.attempt = live.attempt
-            else
-                s.constructJob = nil
-                s.constructCandidate = nil
-            end
-        end
-    end
-end
-
 -- Register the "unit_ai" persistent save component. `aiState` is
 -- scripts.unit_ai_core's shared per-unit state table, applied into IN
 -- PLACE (issue #900) -- the orchestrator singleton itself is no longer
@@ -244,10 +200,15 @@ function M.register(aiState)
         -- job that came back naming only its TILE would happily pour
         -- work into, and complete, a successor designation a player made
         -- there while the save sat on disk. A v1-v7 payload predates the
-        -- field, so its jobs are ADOPTED at apply time against the
-        -- staged designation actually standing at that page and tile
-        -- (adoptLegacyConstructAttempts below), or dropped -- never
-        -- guessed, and never left attempt-less.
+        -- field, so its jobs are settled at the POST-PUBLICATION
+        -- reconcile boundary (unit_ai_reconcile.lua's
+        -- settleConstructJob): a legacy job adopts the attempt of the
+        -- designation really standing at its page and tile, a v8 job has
+        -- its own verified against it, and anything that does not match
+        -- exactly is dropped -- never guessed, never left attempt-less.
+        -- Not at apply() time: Lua components are applied while the
+        -- OUTGOING session is still current, so a designation query
+        -- there answers about the world being replaced.
         version = 8,
         inputVersions = { 1, 2, 3, 4, 5, 6, 7, 8 },
         required = true,
@@ -331,9 +292,10 @@ function M.register(aiState)
             -- is the only thing those bytes could have meant.
             --
             -- v7 -> v8 (#1844) cannot be done here at all, and that is
-            -- the point: adopting a legacy constructJob's attempt needs
-            -- the DESIGNATIONS this same load is restoring, which do not
-            -- exist yet at decode time. It happens in apply(), below.
+            -- the point: settling a constructJob's attempt needs the
+            -- PUBLISHED session's designations, which exist neither at
+            -- decode time nor at apply() time. It happens in
+            -- unit_ai_reconcile.lua, off the onSaveLoaded broadcast.
             if version == 1 then return refsMod.wrapAiState(data) end
             if version == 2 then return refsMod.addOwnerToAiState(data) end
             return data
@@ -358,7 +320,6 @@ function M.register(aiState)
         apply = function(data, entities)
             saveMods.applyEntityRows(aiState, refsMod.unwrapAiState(data),
                 entities, { kind = "unit", component = "unit_ai" })
-            adoptLegacyConstructAttempts(aiState)
         end,
     })
 

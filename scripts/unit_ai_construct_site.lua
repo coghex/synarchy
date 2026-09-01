@@ -163,4 +163,27 @@ function M.planOutcome(wid, job)
     return construction.resolvePlan(wid, job.x, job.y, job.attempt)
 end
 
+-- Stale-claim sweep over the scanned job list: a "claimed" job whose
+-- claimant died is released immediately; one unrefreshed past the
+-- timeout (stuck worker, adopted orphan from a save/reload) releases
+-- when the clock runs out. Any scanning acolyte runs this.
+function M.sweepClaims(constructClaims, constructKey, wid, jobs, now, timeout)
+    for _, job in ipairs(jobs) do
+        if job.status == "claimed" then
+            local key = constructKey(wid, job.x, job.y)
+            local c = constructClaims[key]
+            if not c then
+                -- Orphan (loaded save / script reload): adopt with an
+                -- anonymous timer so it frees up if nobody owns it.
+                constructClaims[key] = { uid = nil, at = now }
+            elseif (c.uid and not unit.exists(c.uid))
+                   or (now - c.at > timeout) then
+                constructClaims[key] = nil
+                construction.setJobStatus(wid, job.x, job.y, "pending",
+                                          job.attempt)
+            end
+        end
+    end
+end
+
 return M
