@@ -14,8 +14,8 @@
 --   The live texture upload path
 --   ('Engine.Scripting.Lua.Message.Texture') registers atlases through
 --   'Engine.Graphics.Vulkan.Texture.Bindless.registerTexture'
---   directly — or 'registerPinnedTexture', for a compiled
---   unit-animation atlas that must stay nearest (#1259) — and stores a
+--   directly so gameplay unit art follows the global sampler (#2085),
+--   and stores a
 --   cleanup closure on every atlas it loads ('taCleanup', freeing that
 --   atlas's image view, image, and device memory; no sampler, since a
 --   slot's sampler always comes from the shared refcounted cache rather

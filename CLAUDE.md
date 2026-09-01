@@ -1489,13 +1489,13 @@ manager transition — the render thread reads the manager concurrently,
 so separate setters leave a window pairing the new handle with the
 previous frame's rect.
 
-Atlas slots are registered PINNED to the nearest sampler with one mip
-level (D-6), so a runtime `setTextureFilter` toggle cannot start
-bilinearly resampling unit art; the upload path's path cache is
-therefore policy-aware, and cell UVs sit on the LOGICAL cell's own exact
-edges — one texel inside its padded slot — with no half-texel inset; the
-#2076 extrusion gutter is what buys linear isolation, moving no sampled
-texel. See `docs/engine_contracts.md` §Unit animation atlas runtime.
+Atlas slots follow the player-selected global nearest/linear sampler with
+one mip level (D-6); the preview browser's existing forced-global-nearest
+setting keeps preview presentation crisp. Cell UVs sit on the LOGICAL
+cell's own exact edges — one texel inside its padded slot — with no
+half-texel inset: nearest output stays pixel-identical, while #2076's
+extrusion gutter keeps every linear footprint inside that cell. See
+`docs/engine_contracts.md` §Unit animation atlas runtime.
 
 Gates: hspec `--match "pickFrame"` (the whole logical-choice matrix
 checked against an independently written `expectedChoice` table, so an

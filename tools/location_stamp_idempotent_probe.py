@@ -98,7 +98,7 @@ from pathlib import Path
 from probelib import (FixtureNotRegistered, capture_request_id, quit_engine,
                       boot, load_fixture_yaml, send, wait_load_published,
                       wait_save_complete)
-from run_probes import FailureEmitter   # durable failure records (#1982)
+from probe_runner_diagnostics import FailureEmitter   # durable failure records (#1982)
 
 LOG = "/tmp/location_stamp_idempotent_engine.log"
 #: The engine log the phase now running writes to. `report` reads a

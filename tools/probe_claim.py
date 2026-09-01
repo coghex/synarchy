@@ -38,7 +38,7 @@ instantly and still holds its claim until the lease runs out.
 
 Identity and namespace
 ----------------------
-Claims are keyed by the canonical `run_probes.PROBES` key and nothing
+Claims are keyed by the canonical `probe_runner_registry.PROBES` key and nothing
 else, so the two spellings of a probe cannot claim it twice. The
 namespace is `<git-common-dir>/probe-claims`, resolved from the
 REPOSITORY-common git directory: every linked worktree of one repository
@@ -214,7 +214,8 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import probe_census  # noqa: E402
 import probe_flake  # noqa: E402
-import run_probes  # noqa: E402
+import probe_engine  # noqa: E402
+import probe_runner_registry  # noqa: E402
 
 CLAIM_SCHEMA = "probe-claim/v1"
 
@@ -225,11 +226,11 @@ LOCK_SUFFIX = ".lock"
 STAGING_PREFIX = ".probe_claim."
 STAGING_SUFFIX = ".tmp"
 
-# One run's worst case is `run_probes.DEFAULT_TIMEOUT` (900 s). The lease
+# One run's worst case is `probe_runner_registry.DEFAULT_TIMEOUT` (900 s). The lease
 # only has to outlive ONE run, because the renewer refreshes it between
 # runs and on its own clock; the wide margin is what keeps a stalled
 # renewer thread from dropping a live claim.
-LEASE_SECONDS = 4.0 * run_probes.DEFAULT_TIMEOUT
+LEASE_SECONDS = 4.0 * probe_runner_registry.DEFAULT_TIMEOUT
 # The floor `run_claimed_measurement` and the CLI enforce. A lease that
 # can elapse while ONE supported run is still going is not a short
 # lease, it is a broken one: the probe becomes reclaimable mid-
@@ -237,7 +238,7 @@ LEASE_SECONDS = 4.0 * run_probes.DEFAULT_TIMEOUT
 # per-run timeout is the smallest value that cannot do that, and it is
 # refused rather than silently raised, because a caller asking for
 # thirty seconds has misunderstood what this lease is for.
-MIN_ORCHESTRATION_LEASE_SECONDS = 2.0 * run_probes.DEFAULT_TIMEOUT
+MIN_ORCHESTRATION_LEASE_SECONDS = 2.0 * probe_runner_registry.DEFAULT_TIMEOUT
 # Renew this often. Three refreshes per lease means two consecutive
 # missed renewals still leave the claim held. The lower clamp is a
 # guard against a zero interval, NOT a floor in seconds: a floor above
@@ -401,7 +402,7 @@ def repository_claim_root(repo_root: str | None = None) -> Path:
     The result is resolved to an absolute path against the checkout it
     was asked about, because git may answer with a relative one.
     """
-    root = Path(repo_root or run_probes.REPO_ROOT)
+    root = Path(repo_root or probe_engine.REPO_ROOT)
     try:
         done = subprocess.run(["git", "rev-parse", "--git-common-dir"],
                               cwd=str(root), text=True, capture_output=True,
@@ -446,7 +447,7 @@ def _ensure_root(root: Path) -> Path:
 
 
 def require_probe_key(probe) -> str:
-    """The canonical `run_probes.PROBES` key, or a controlled refusal.
+    """The canonical `probe_runner_registry.PROBES` key, or a controlled refusal.
 
     Claims are keyed by the canonical key and only by it, so the several
     human spellings of one probe cannot claim it twice. Validating
@@ -455,10 +456,10 @@ def require_probe_key(probe) -> str:
     """
     if not isinstance(probe, str) or not probe:
         raise ClaimError(f"a probe key must be a non-empty string, got {probe!r}")
-    known = {key for key, _script, _purpose in run_probes.PROBES}
+    known = {key for key, _script, _purpose in probe_runner_registry.PROBES}
     if probe not in known:
         raise ClaimError(
-            f"unknown probe {probe!r}: not registered in run_probes.PROBES. "
+            f"unknown probe {probe!r}: not registered in probe_runner_registry.PROBES. "
             f"`python3 tools/run_probes.py --list` names every probe.")
     return probe
 
@@ -575,7 +576,7 @@ def commit_sha(repo_root: str | None = None) -> str:
     repository root: several worktrees of one repository share the claim
     namespace, and each is at its own commit.
     """
-    root = str(Path(repo_root or run_probes.REPO_ROOT))
+    root = str(Path(repo_root or probe_engine.REPO_ROOT))
     try:
         done = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root,
                               text=True, capture_output=True, timeout=30)
@@ -1017,7 +1018,7 @@ def acquire(probe: str, *, root: Path | None = None,
                            lease_seconds=float(lease_seconds),
                            owner=_owner_description(),
                            worktree=str(Path(repo_root
-                                             or run_probes.REPO_ROOT)))
+                                             or probe_engine.REPO_ROOT)))
         document, mtime = _read_payload(path, key)
         if document is None and mtime is None:
             if _create_exclusive(path, payload):
@@ -1313,7 +1314,7 @@ def run_claimed_measurement(probe: str, runs: int, *,
         raise ClaimError(
             f"a claim lease of {lease_seconds!r} cannot survive one run of "
             f"{probe!r}: a single run may take the full "
-            f"{run_probes.DEFAULT_TIMEOUT:.0f}s timeout, so a lease under "
+            f"{probe_runner_registry.DEFAULT_TIMEOUT:.0f}s timeout, so a lease under "
             f"{MIN_ORCHESTRATION_LEASE_SECONDS:.0f}s would let another agent "
             f"reclaim this probe while it is still being measured. Raise "
             f"--lease-seconds to at least "
@@ -1450,7 +1451,7 @@ def _status_rows(root: Path) -> list[dict]:
     if not root.is_dir():
         return rows
     now = utc_now()
-    for key, _script, _purpose in run_probes.PROBES:
+    for key, _script, _purpose in probe_runner_registry.PROBES:
         path = claim_path(key, root)
         try:
             document, mtime = _read_payload(path, key)

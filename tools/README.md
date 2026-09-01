@@ -406,8 +406,8 @@ relevant to what you changed.
 
 Each probe is self-contained (own `main()`, own engine boot/teardown, own
 default port chosen to avoid the user's GUI on 8008) and prints PASS/FAIL
-plus `sys.exit(0 or 1)`. Every probe registered in `run_probes.py` (the
-table below) takes `--port` to avoid colliding with another running
+plus `sys.exit(0 or 1)`. Every probe registered in
+`probe_runner_registry.PROBES` (the table below) takes `--port` to avoid colliding with another running
 instance, defaulting to its own historical fixed port when unset (#723).
 
 "Boot" below is `arena` (flat synthetic terrain via
@@ -521,6 +521,24 @@ tools/ci_probes.py --status` prints the derived CI-eligible / manual-only
 drifted three times (#539, #721, #1584), so `tools/test_run_probes.py`
 fails if this section states one again.
 
+`run_probes.py` is the COMMAND and nothing else (#2074) — argument parsing,
+invocation validation, `--list`, dependency construction, scheduler dispatch
+and the process exit. The implementation sits in five importable owners
+beside it: `probe_runner_registry.py` (the probe list, selection, port spans,
+per-key timeout declarations), `probe_runner_diagnostics.py` (the durable
+progress and failure record protocols), `probe_runner_resources.py` (the
+reader/writer conflict model, the cross-process holds, the inherited ancestor
+holds, the engine preflight and its `ENGINE_EXECUTABLE` cell),
+`probe_runner_lifecycle.py` (launching one probe and reaping its whole process
+group) and `probe_runner_scheduler.py` (sequential and `--jobs` orchestration,
+retries, presentation, summary). Dependencies run one way — registry and
+diagnostics are leaves, resources and lifecycle build on them, the scheduler
+builds on all four. A facility has exactly one owner and `run_probes.py`
+re-exports none of them, so a tool or test reaching for `PROBES`, `run_one` or
+a record parser imports the owner and an assignment there reaches the
+implementation. Every operator and CI invocation stays `python3
+tools/run_probes.py`.
+
 ```bash
 # Run everything, sequentially (slow — low tens of minutes)
 python3 tools/run_probes.py
@@ -580,9 +598,9 @@ pipe the runner drains only when the child exits, and the child is a plain
 `python3` with no `-u` — so ordinary `print` output sits in the child's own
 block buffer and is LOST when a hung probe is SIGKILLed at `--timeout`. A
 long probe that wants a phase to survive that emits a *progress record*
-instead: one flushed line in the single convention `run_probes.py` defines
-(`PROGRESS_MARKER`, `ProgressEmitter`, `parse_progress`) and its failure
-presentation reads back.
+instead: one flushed line in the single convention
+`probe_runner_diagnostics` defines (`PROGRESS_MARKER`, `ProgressEmitter`,
+`parse_progress`) and the runner's failure presentation reads back.
 
 ```
 #probe-progress# 19:25:04 +0.0s   | phase | engine A                            | build the scenario, save 'gen1'
@@ -667,7 +685,8 @@ presentation it always had.
 **Timeouts are per probe.** Most registered probes use the ordinary 900-second
 default. A scenario whose complete expected workload structurally exceeds that
 class declares a validated key-specific default in
-`run_probes.PROBE_TIMEOUT_OVERRIDES`; the runner prints each probe's effective
+`probe_runner_registry.PROBE_TIMEOUT_OVERRIDES`; the runner prints each
+probe's effective
 budget when it starts or completes. `save_compat_migration` uses 3600 seconds
 because its manifest-wide two-process/two-real-codec-dump path has a measured
 clean runtime above 2300 seconds. Passing `--timeout SECONDS` explicitly
@@ -746,7 +765,8 @@ still diagnosed as the boot failure it is.
 the measurement takes its resource hold, never inside it. A measurement
 holds `cabal-build` (shared for an ordinary probe, exclusive for the
 three that drive Cabal themselves) across all ten runs, and
-`run_probes.run_one` strips the inherited runner variables on the way
+`probe_runner_lifecycle.run_one` strips the inherited runner variables
+on the way
 down — so a child left to prepare its own executable would take an
 exclusive interest underneath its own ancestor's hold and wait out its
 whole allowance for a holder blocked on it. Preparing first removes that
@@ -766,8 +786,8 @@ each other, nor a probe reading the binary they may be relinking — the
 same scheduling mechanism `repo-config` already used, with no new one
 invented.
 
-**Shared repository resources (#1322, #1444, #1570).** `run_probes`
-declares two tables: `IMPLICIT_SHARED_RESOURCES`, which EVERY registered
+**Shared repository resources (#1322, #1444, #1570).**
+`probe_runner_resources` declares two tables: `IMPLICIT_SHARED_RESOURCES`, which EVERY registered
 probe holds in a shared interest (`repo-config`, the checkout's tracked
 `config/` tree, and `cabal-build`, its `dist-newstyle`), and
 `EXCLUSIVE_RESOURCES`, which names the few probes that need one to
@@ -785,7 +805,8 @@ registered probes derive a second, concurrently live listener from it:
 `debug_console_boot_probe.py` boots its successful-bind and
 widget-module checks on `--port + 1`, and `offscreen_probe.py` starts a
 second offscreen engine on `--port + 1` while the first is still up. So a
-probe's port count is DATA — `run_probes.PROBE_PORT_SPANS` declares 2 for
+probe's port count is DATA — `probe_runner_registry.PROBE_PORT_SPANS`
+declares 2 for
 each of those two, and every other probe reserves its base alone. A
 declared count `N` reserves the contiguous span `base … base + N - 1`, and
 `--jobs` lays the selected probes' spans end to end so no two concurrent
@@ -1186,7 +1207,8 @@ hand it is unchanged: `python3 tools/role_probe.py --port N` still prints its
 `[PASS]`/`[FAIL]` lines and exits 0/1, and `run_probes.py --only role` behaves
 exactly as before.
 
-`run_probes.run_one` still owns process launch, output capture, elapsed
+`probe_runner_lifecycle.run_one` still owns process launch, output capture,
+elapsed
 timing, deferred SIGINT, timeout escalation and process-group cleanup; the
 harness reuses it through four keyword-only parameters (event path, artifact
 dir, engine-log dir, RTS capabilities) that default to today's behavior.
@@ -1656,7 +1678,7 @@ the state tree and rewrites `registry.json` with a fresh `updated_at`. Reading
 the JSON directly is the only way to honour the permission boundary — and the
 only way that works when the machine-local coordinator is not installed.
 
-A `run_probes.PROBES` key maps to TWO `$test` run ids by
+A `probe_runner_registry.PROBES` key maps to TWO `$test` run ids by
 underscores-to-hyphens: `probe:<hyphenated-key>` for an ordinary execution and
 `probe-flake:<hyphenated-key>` for a flakiness measurement, so `transfer_order`
 maps to both `probe:transfer-order` and `probe-flake:transfer-order`. Both name
@@ -1763,7 +1785,8 @@ single-successor — reclaiming a lapsed claim is unavoidably a read-then-write,
 and two unserialized reclaimers is the race where the second lands on top of
 the first's fresh claim.
 
-Claims are keyed by the canonical `run_probes.PROBES` key, so the several
+Claims are keyed by the canonical `probe_runner_registry.PROBES` key, so the
+several
 human spellings of one probe cannot claim it twice, and the namespace is the
 REPOSITORY-common git directory: every linked worktree of one repository
 resolves the same directory, and none of the three things that would split it
@@ -1936,7 +1959,8 @@ into `make ci` or GitHub CI.
 
 ### `probe_resource_lock.py` — cross-process shared/exclusive resources (#1436)
 
-`run_probes.ResourceLedger` is a reader/writer lock over the probes inside ONE
+`probe_runner_resources.ResourceLedger` is a reader/writer lock over the probes
+inside ONE
 runner process — its own docstring says so, and the scheduler owns it from a
 single thread. So it coordinates nobody else: a `/deflake` measurement and a
 `tools/run_probes.py` sweep are independent processes, both driving the same
@@ -1948,9 +1972,10 @@ against. This is the same model between processes.
 python3 tools/test_probe_resource_lock.py   # the deterministic self-test
 ```
 
-There is no CLI. `run_probes` and `tools/deflake.py` both import it, and both
-read the interests from `run_probes.shared_resources` /
-`exclusive_resources`, so there is one conflict model rather than two.
+There is no CLI. `probe_runner_resources` and `tools/deflake.py` both import
+it, and both read the interests from
+`probe_runner_resources.shared_resources` / `exclusive_resources`, so there is
+one conflict model rather than two.
 
 The lock IS an `flock` on one file per (namespace, resource): `LOCK_SH` for a
 shared interest, `LOCK_EX` for an exclusive one. Nothing counts holders or
@@ -1968,7 +1993,7 @@ resource to two processes. `_check_shared_dir` verifies sticky, root-or-us
 ownership and writability rather than assuming them, and repairs nothing.
 
 The namespace is the repository's COMMON git directory, hashed:
-`run_probes.REPO_ROOT` is derived from the tools file's own location, so every
+`probe_engine.REPO_ROOT` is derived from the tools file's own location, so every
 linked worktree resolves a different value and two worktrees of one repository
 would namespace separately while driving the same tracked tree. A checkout git
 cannot answer for is a controlled refusal, never a path-derived guess.
@@ -2187,14 +2212,15 @@ repository-relative paths before the `tools/` scope check is applied, since
 code — and a repair may not touch the measurement APPARATUS at all, because
 `measure`'s timeout and starting port are module constants and lengthening one
 would buy a calmer verification while both command records still compared
-equal. That apparatus is a CLOSED inventory of eleven paths
-(`HARNESS_MODULES`), pinned exactly by the self-test rather than spot-checked:
-`probe_flake`, `probe_protocol`, `probe_census`, `probe_claim`,
-`probe_resource_lock`, `probe_select`, `probe_engine`, `probelib`,
-`run_probes`, `deflake` and `deflake_diagnosis`, each of which owns probe
-selection, launch, port or resource leasing, protocol reconciliation,
-measurement timing and construction, result recording or census intake, or
-diagnosis semantics.
+equal. That apparatus is a CLOSED inventory (`HARNESS_MODULES`), pinned
+exactly by the self-test rather than spot-checked, and stated there rather
+than counted here — a hand-written total is the drift #1584 already cost
+this file once: `probe_flake`, `probe_protocol`, `probe_census`,
+`probe_claim`, `probe_resource_lock`, `probe_select`, `probe_engine`,
+`probelib`, `run_probes` and its five `probe_runner_*` owners, `deflake`
+and `deflake_diagnosis`, each of which owns probe selection, launch, port
+or resource leasing, protocol reconciliation, measurement timing and
+construction, result recording or census intake, or diagnosis semantics.
 
 **The producer's spelling is the contract, down to the argv FORM.**
 `deflake.build_handoff` writes `invocation.argv`, `cwd` and `timeout`, and a
@@ -3223,7 +3249,12 @@ tools/
 ├── lua_module_budget.py    (Lua module split line-budget guard)
 ├── action_outcome_coverage.py (F4 action-outcome verb instrumentation self-audit; --verify-tier1 is the CI gate)
 ├── language_report.py      (generated-language native-name report/check, #710/#1094/#1095/#1096)
-├── run_probes.py           (opt-in aggregate behavior-probe runner)
+├── run_probes.py           (opt-in aggregate behavior-probe runner — the command)
+├── probe_runner_registry.py    (its probe registry, selection, port spans, per-key timeouts)
+├── probe_runner_diagnostics.py (its durable progress/failure record protocols)
+├── probe_runner_resources.py   (its resource conflict model, cross-process holds, engine preflight)
+├── probe_runner_lifecycle.py   (its one-probe launch and process-group teardown)
+├── probe_runner_scheduler.py   (its sequential/--jobs orchestration, retries, summary)
 ├── gameplay_scenarios.py   (manual first-expedition scenarios, #925 — outside CI)
 ├── screenshot_check.py     (GUI-attached debug.captureScreenshot check — see above)
 ├── video_window_check.py   (GUI-attached video/window settings check, #891 — see above)

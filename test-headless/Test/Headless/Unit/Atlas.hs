@@ -28,7 +28,7 @@ import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Graphics.Camera (CameraFacing(..))
 import Control.Exception (finally)
 import Engine.Scripting.Lua.Message.Texture
-    (UploadSampler(..), cacheEntryReusable)
+    (UploadSampler(..), cacheEntryReusable, unitAtlasUploadSampler)
 import Engine.Graphics.Vulkan.Texture.Handle (BindlessTextureHandle(..))
 import Engine.Graphics.Vulkan.Texture.Rebind
     (FilterRebindPlan(..), SlotRebind(..), planFilterRebind)
@@ -1340,6 +1340,31 @@ spec = do
                         ((r, c, lx, ly), texel x y)
                             `shouldBe` ((r, c, lx, ly), ownTexel r c lx ly)
 
+        -- Vulkan linear filtering translates a normalized coordinate to
+        -- texel space with a -0.5 offset, then blends the surrounding 2x2
+        -- footprint. Across the CLOSED logical-cell UV interval, the lower
+        -- tap can therefore occupy each coordinate from one texel before
+        -- the cell through its final texel. These are every DISTINCT
+        -- footprint any interior or edge sample can produce; mirroring only
+        -- reverses their order and clipping can only select a subset.
+        it "every distinct bilinear footprint inside a cell uses only that cell" $
+            forM_ [ (r, c) | r ← [0 .. rows - 1], c ← [0 .. cols - 1]
+                           , authored r c ] $ \(r, c) → do
+                let left = c * fixtureSlotW + fixtureCellPad
+                    top  = r * fixtureSlotH + fixtureCellPad
+                forM_ [ (x0, y0)
+                      | y0 ← [top - 1 .. top + fixtureCellH - 1]
+                      , x0 ← [left - 1 .. left + fixtureCellW - 1] ]
+                    $ \(x0, y0) → do
+                        let actual =
+                                [ texel x y
+                                | y ← [y0, y0 + 1], x ← [x0, x0 + 1] ]
+                            expected =
+                                [ ownTexel r c (x - left) (y - top)
+                                | y ← [y0, y0 + 1], x ← [x0, x0 + 1] ]
+                        ((r, c, x0, y0), actual)
+                            `shouldBe` ((r, c, x0, y0), expected)
+
         -- Stated as a NEGATIVE too, so the check above cannot pass by
         -- every cell coincidentally agreeing: each authored cell's ring
         -- must genuinely differ from the neighbour it shields against.
@@ -1481,37 +1506,38 @@ spec = do
                 [b] → (uAt maximum b, uAt minimum b) `shouldBe` (1, 0)
                 other → expectationFailure ("expected one batch, got " ⧺ show (length other))
 
-    -- D-6: unit art is nearest-neighbour, and an atlas must STAY that
-    -- way when the player toggles the global texture filter — a sheet
-    -- resampled bilinearly would additionally bleed neighbouring cells
-    -- across every frame edge. The upload path registers atlas slots
-    -- through `registerPinnedTexture`, which is exactly "put the handle
-    -- in btsPinned"; `planFilterRebind` is the pure decision
-    -- `setTextureFilter` then makes, so this gates the outcome without a
-    -- device. (The single mip level is structural: the shared image
-    -- allocator creates one, and the atlas path reuses it unchanged.)
-    describe "Unit.Atlas — an atlas slot stays nearest across a filter toggle" $ do
+    -- #2085: gameplay unit art is scene art and follows either value of
+    -- the player's global sampler. The atlas must therefore stay OUT of
+    -- btsPinned; #2076's extrusion ring above is what makes the linear
+    -- case safe. A derived world-preview slot remains pinned, proving the
+    -- global toggle still distinguishes the two populations. (The single
+    -- mip level is structural: the shared image allocator creates one,
+    -- and the atlas path reuses it unchanged.)
+    describe "Unit.Atlas — an atlas slot follows the global filter" $ do
         let atlasHandle' = TextureHandle 900
-            ordinary     = TextureHandle 901
+            preview      = TextureHandle 901
             atlasView    = ImageView 0xA11A5
-            ordinaryView = ImageView 0x0DD
-            nearest      = Sampler 0x0E4E57
-            newGlobal    = Sampler 0x11EA4
+            previewView  = ImageView 0x0DD
+            previewNearest = Sampler 0x0E4E57
+            globalNearest  = Sampler 0x0EA2
+            globalLinear   = Sampler 0x11EA4
             handleMap = Map.fromList
                 [ (atlasHandle', BindlessTextureHandle (TextureSlot 1 0) atlasHandle')
-                , (ordinary,     BindlessTextureHandle (TextureSlot 2 0) ordinary) ]
+                , (preview,      BindlessTextureHandle (TextureSlot 2 0) preview) ]
             imageViews = Map.fromList
-                [ (atlasHandle', atlasView), (ordinary, ordinaryView) ]
-            plan = planFilterRebind handleMap imageViews
-                       (Map.singleton atlasHandle' nearest) newGlobal
+                [ (atlasHandle', atlasView), (preview, previewView) ]
+            pinned = Map.singleton preview previewNearest
+            plan newGlobal = planFilterRebind handleMap imageViews pinned newGlobal
 
-        it "repaints the ordinary slot but not the pinned atlas slot" $
-            frpRebinds plan `shouldBe`
-                [ SlotRebind 1 atlasView nearest
-                , SlotRebind 2 ordinaryView newGlobal ]
+        it "declares the global upload policy at the real atlas batch seam" $
+            unitAtlasUploadSampler `shouldBe` UploadGlobalSampler
 
-        it "leaves nothing unrecoverable" $
-            frpUnrecoverable plan `shouldBe` []
+        it "repaints the atlas under both global modes while preview stays pinned" $
+            forM_ [globalNearest, globalLinear] $ \newGlobal → do
+                frpRebinds (plan newGlobal) `shouldBe`
+                    [ SlotRebind 1 atlasView newGlobal
+                    , SlotRebind 2 previewView previewNearest ]
+                frpUnrecoverable (plan newGlobal) `shouldBe` []
 
     -- The loader end of the contract, against a REAL fixture tree: the
     -- pure checks above answer from values, these answer from files.
@@ -1669,10 +1695,10 @@ spec = do
     describe "Unit.Atlas — the texture cache will not reuse across policies" $ do
         let pinnedMap = Map.singleton (TextureHandle 7) (Sampler 0x0E4E57)
             reuse policy h' = cacheEntryReusable policy pinnedMap h'
-        it "an atlas request may reuse only an already-pinned entry" $ do
+        it "a pinned UI request may reuse only an already-pinned entry" $ do
             reuse UploadPinnedNearest (TextureHandle 7) `shouldBe` True
-            -- The regression: an atlas inheriting an ordinary slot would
-            -- follow global filter toggles and stop being nearest.
+            -- A UI request inheriting a scene slot would follow global
+            -- filter toggles and stop being nearest.
             reuse UploadPinnedNearest (TextureHandle 8) `shouldBe` False
         it "an ordinary request may reuse only an unpinned entry" $ do
             reuse UploadGlobalSampler (TextureHandle 8) `shouldBe` True

@@ -247,13 +247,14 @@ storageSampleAt (StorageAtlas res) dir idx flipX =
 --
 --   Still deliberately no half-texel inset. The endpoints are the true
 --   cell edges, which is what keeps NEAREST sampling pixel-identical:
---   unit art is nearest-neighbour (D-6) and drawn pixel-snapped, so a
---   fragment centre maps to texel @column*slotW + p + i@ and lands
---   inside the cell exactly as it did at the old stride. An inset would
---   SHIFT the sampled texels and break the pixel-identity #1259
---   requirement 7 asks for against the source frame, which spans 0..1
---   of its own image; the gutter buys linear-filter isolation
---   (epic #2072 D-3) WITHOUT moving a single sampled texel.
+--   in nearest mode unit art is drawn pixel-snapped, so a fragment
+--   centre maps to texel @column*slotW + p + i@ and lands inside the
+--   cell exactly as it did at the old stride. An inset would SHIFT the
+--   sampled texels and break the pixel-identity #1259 requirement 7
+--   asks for against the source frame, which spans 0..1 of its own
+--   image. In linear mode the surrounding footprint reaches only this
+--   cell's extrusion gutter, buying isolation (epic #2072 D-3 / D-6)
+--   WITHOUT moving the nearest-mode sample.
 --
 --   Exported rather than inlined into 'storageSampleAt' because the
 --   @--preview units\/\<name\>@ viewer resolves its cells before any

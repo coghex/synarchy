@@ -7,6 +7,7 @@
 module Engine.Scripting.Lua.Message.Texture
     ( handleLoadTextureBatch
     , handleLoadAtlasTextureBatch
+    , unitAtlasUploadSampler
     , UploadSampler(..)
     , cacheEntryReusable
     , handleLoadTexture
@@ -275,10 +276,10 @@ prepareTextureUpload pool dev pdev (handle, path) = do
 --
 --   Only when the canonical texture's pinned-ness matches what the
 --   policy asks for. Reuse across that boundary hands the new handle
---   the wrong filtering in BOTH directions: an atlas inheriting an
---   ordinary slot follows global filter toggles and stops being nearest
---   (#1259, D-6), and a pinned UI texture inheriting an ordinary slot
---   starts blurring the moment the player picks linear (#2075).
+--   the wrong filtering in BOTH directions: scene art inheriting a
+--   pinned slot ignores global filter toggles, and a pinned UI texture
+--   inheriting an ordinary slot starts blurring the moment the player
+--   picks linear (#2075).
 --
 --   Since #2075 the path cache is itself policy-scoped — 'apAssetPaths'
 --   is keyed by 'TextureCacheKey', so a lookup can only find an entry
@@ -308,12 +309,21 @@ handleLoadTextureBatch
     ∷ UploadSampler → [(TextureHandle, FilePath)] → EngineM σ ()
 handleLoadTextureBatch = handleLoadTextureBatchWith
 
--- | Upload compiled unit-animation atlases (#1259) — ONE image, one
---   handle, and one bindless slot per animation (D-2/D-10), pinned to
---   the nearest sampler. The image allocator already creates exactly
---   one mip level, so no mipmapped sampling of unit art is possible.
+-- | The policy compiled unit-animation atlases declare (#2085).
+--
+--   Gameplay units are scene art, so their atlas slots follow the
+--   player-selected global sampler. The preview browser already forces
+--   that global sampler to nearest for its session; keeping the policy
+--   here rather than at either consumer preserves one production path.
+unitAtlasUploadSampler ∷ UploadSampler
+unitAtlasUploadSampler = UploadGlobalSampler
+
+-- | Upload compiled unit-animation atlases (#1259/#2085) — ONE image,
+--   one handle, and one bindless slot per animation (D-2/D-10), following
+--   the player-selected global sampler. The image allocator still creates
+--   exactly one mip level, so no mipmapped sampling of unit art is possible.
 handleLoadAtlasTextureBatch ∷ [(TextureHandle, FilePath)] → EngineM σ ()
-handleLoadAtlasTextureBatch = handleLoadTextureBatchWith UploadPinnedNearest
+handleLoadAtlasTextureBatch = handleLoadTextureBatchWith unitAtlasUploadSampler
 
 handleLoadTextureBatchWith
     ∷ UploadSampler → [(TextureHandle, FilePath)] → EngineM σ ()

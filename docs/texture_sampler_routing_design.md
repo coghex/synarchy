@@ -1,11 +1,9 @@
 # Texture sampler routing design
 
-The engine ships a player-facing nearest/linear texture-filter setting, but the
-surfaces it reaches are close to the inverse of the intended contract: compiled
-unit-animation atlases are permanently pinned to nearest and ignore the player
-entirely, while UI chrome and icons follow the player and blur when linear is
-selected. This arc routes every texture surface to the sampler it should have,
-and does the cell-isolation work that makes the unit half safe.
+The engine ships a player-facing nearest/linear texture-filter setting. This arc
+routes every texture surface to the sampler it should have: gameplay unit
+atlases follow the player through isolated cells, UI chrome and icons stay
+pinned nearest, and derived world surfaces keep their explicit samplers.
 
 Design state: `ready for issue processing`
 
@@ -36,19 +34,18 @@ concrete precondition
 
 ## Current state and evidence
 
-Three families are pinned today via `registerPinnedTexture`, and everything else
-follows one shared sampler that `setTextureFilter` repaints:
+The completed routing separates scene art from pinned UI and derived surfaces:
 
 | Family | Sampler today | Follows the player? |
 |---|---|---|
-| Unit-animation atlases | pinned nearest | No |
+| Unit-animation atlases | shared global | Yes |
 | World preview thumbnail | pinned nearest | No |
 | Zoom (world map) atlas | pinned linear | No |
 | Font atlases | own fixed `SamplerFont` | No |
 | UI chrome, icons, tiles, buildings, flora, blood | shared global sampler | Yes |
 
-- `src/Engine/Scripting/Lua/Message/Texture.hs:302` — `handleLoadAtlasTextureBatch`
-  selects `UploadPinnedNearest` unconditionally for every compiled unit atlas.
+- `src/Engine/Scripting/Lua/Message/Texture.hs` — `handleLoadAtlasTextureBatch`
+  selects `UploadGlobalSampler` for every compiled gameplay unit atlas.
 - `src/Engine/Scripting/Lua/Message/WorldTexture.hs:133,280` — the world preview
   pins nearest and the zoom atlas pins linear.
 - `src/Engine/Graphics/Vulkan/Texture/Rebind.hs:74` — `planFilterRebind` keeps
@@ -74,10 +71,9 @@ neighbouring animation frame.
 corners included (`pack_atlas.py`'s `extruded_slot`; index `schema_version` 2's
 required `cell_padding`). `atlasCellUV` strides by the slot and still addresses
 the inner cell exactly, so nearest-mode output is unchanged texel for texel and
-D-3's precondition is satisfied. The pins themselves are untouched: unit atlases
-are still uploaded `UploadPinnedNearest`, and the table above still describes
-today's sampler routing. That inversion is TSR-3's whole content, and it is now
-unblocked.
+D-3's precondition is satisfied. TSR-3 routes those isolated atlases through
+`UploadGlobalSampler`, so the table above now describes the shipped sampler
+routing.
 
 The divergence has a traceable cause. Epic #1256 states that gameplay atlases
 "continue to honor the user-selectable global nearest/linear texture-filter
@@ -87,10 +83,11 @@ sampling, restated the *pre-epic* D-6 in its own body and requirement 7, so the
 correction never reached the child that would have implemented it. The epic
 closed with its acceptance criteria 5 and 12 unmet.
 
-Two comments describe behavior that no longer exists:
+Two comments described behavior that no longer existed:
 `src/Engine/Scripting/Lua/Message/WorldTexture.hs:125` and `:274` both claim a
 live filter toggle repaints those slots "to the global sampler until the next
-regen", which predates `btsPinned` being honored in the rebind plan.
+regen", which predates `btsPinned` being honored in the rebind plan. TSR-3
+corrects both comments to state that each derived slot retains its pin.
 
 ## Desired experience
 
@@ -262,9 +259,9 @@ architectural change with no bearing on this arc's goal.
 - Pure headless tests are the arc's blocking gate: sampler-policy selection per
   category, and texel-level proof that a cell's sampled footprint under linear
   never reaches a neighbouring cell's source texels.
-- The existing hspec group asserting an atlas slot stays nearest across a filter
-  toggle (`test-headless/Test/Headless/Unit/Atlas.hs:1199`) currently encodes
-  the opposite of the target contract and is inverted by TSR-3, not deleted.
+- The former hspec group asserting an atlas slot stayed nearest across a filter
+  toggle is inverted by TSR-3, not deleted: it now proves both global sampler
+  values reach the atlas while a derived preview slot remains pinned.
 - `tools/pack_atlas.py --validate-only --strict` must stay green with the new
   cell geometry, including the artifact-count and digest checks.
 - `pickFrame`'s logical-frame matrix must be unchanged, proving TSR-2 moved

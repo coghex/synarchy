@@ -146,15 +146,12 @@ data LuaToEngineMsg = LuaLog LuaLogLevel String
                       --   is exactly the pre-#2075 behavior.
                     | LuaLoadAtlasTextureRequest TextureHandle FilePath
                       -- ^ A compiled unit-animation atlas (#1259). Same
-                      --   upload as 'LuaLoadTextureRequest' but the slot
-                      --   is registered PINNED to the nearest sampler
-                      --   with one mip level, so unit art stays
-                      --   nearest-neighbour (D-6) across a runtime
-                      --   global filter toggle. Kept a constructor of
-                      --   its own rather than folded into the policy
-                      --   above: the atlas path also carries D-2's
-                      --   one-image-per-animation contract, and TSR-3
-                      --   moves its sampler without moving that.
+                      --   upload as a global-policy
+                      --   'LuaLoadTextureRequest', so gameplay unit art
+                      --   follows the player's nearest/linear setting
+                      --   (#2085). Kept a constructor of its own because
+                      --   the atlas path also carries D-2's
+                      --   one-image-per-animation contract.
                     | LuaLoadFontRequest FontHandle FilePath Int
                     | LuaSpawnTextRequest ObjectId Float Float FontHandle
                                                    Text Vec4 LayerId Float
