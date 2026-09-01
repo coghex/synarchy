@@ -118,6 +118,23 @@ local function abandonClaim(wid, gx, gy, attempt)
 end
 M.abandonClaim = abandonClaim
 
+-- Work XP owed to a claimant whose placement is queued but not yet
+-- confirmed (#1844), keyed the way claims are. One entry per tile: a job
+-- reaches it once, and both engine answers consume it.
+local pendingXp = {}
+
+-- The engine ACCEPTED that attempt's placement: the piece really landed,
+-- so the work is paid for now rather than optimistically at queue time.
+local function settlePendingXp(wid, gx, gy, attempt, grant)
+    local key = constructKey(wid, gx, gy)
+    local owed = pendingXp[key]
+    if not (owed and owed.attempt == attempt) then return end
+    pendingXp[key] = nil
+    if grant and owed.amount > 0 and unit.exists(owed.uid) then
+        grantWorkXP(owed.uid, "construction", owed.amount)
+    end
+end
+
 -- The world-side half of that, as an engine BROADCAST callback (#1844).
 -- Attached to the shared singleton rather than declared in
 -- unit_ai.lua, which is at its #538 line budget: broadcastToModules
@@ -127,7 +144,16 @@ M.abandonClaim = abandonClaim
 local unitAi = package.loaded["scripts.unit_ai"]
 if unitAi then
     function unitAi.onConstructInvalidated(pageId, gx, gy, attempt)
+        -- A withdrawn attempt is never paid for: `false` discards the
+        -- claim rather than granting it.
+        settlePendingXp(pageId, gx, gy, attempt, false)
         abandonClaim(pageId, gx, gy, attempt)
+    end
+
+    -- The other half: the world thread accepted this attempt's queued
+    -- placement, so the piece really landed and the work is paid for.
+    function unitAi.onConstructCompleted(pageId, gx, gy, attempt)
+        settlePendingXp(pageId, gx, gy, attempt, true)
     end
 end
 
@@ -434,16 +460,21 @@ local function constructExecute(uid, s, params)
                                        job.attempt)
         end
         if (job.progress or 0) >= 1.0 then
-            -- The final-placement hand-off is the job TILE's business --
-            -- requirement 10's last re-check, requirement 18's
-            -- exact-attempt claim on it, the commit window, the piece and
-            -- the refund -- and this module is at its #538 line budget,
-            -- so it lives in the site module. Either way the job is over
-            -- and released below; XP is granted only for a piece really
-            -- placed, which is what the true return means.
+            -- The hand-off is the job TILE's business (requirement 10's
+            -- last re-check, requirement 18's claim, the commit window,
+            -- the piece, the refund) and lives in the site module; this
+            -- one is at its #538 budget. Either way the job is over.
+            --
+            -- XP is NOT granted here: structure.place returns once the
+            -- piece is staged and QUEUED, so a true answer does not yet
+            -- mean the world thread accepted it. Only the engine's
+            -- onConstructCompleted broadcast says that; a declined
+            -- placement sends onConstructInvalidated instead, and the
+            -- claim recorded below is what either one settles.
             if site.finishPlacement(wid, job, uid) then
-                grantWorkXP(uid, "construction",
-                            params.construct_xp_per_piece or 0)
+                pendingXp[constructKey(wid, job.x, job.y)] =
+                    { attempt = job.attempt, uid = uid,
+                      amount = params.construct_xp_per_piece or 0 }
             end
             releaseConstructJob(wid, s, uid)
         end

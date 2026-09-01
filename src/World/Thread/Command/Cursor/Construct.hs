@@ -59,7 +59,8 @@ import World.Construct.Apply (applyConstructSlopeToChunk)
 import Structure.Types (StructureCommitWindow, takeDeclinedInWindow)
 import World.Construct.Revalidate
     ( clearConstructDesignationSlope, constructRefundDeps
-    , notifyConstructInvalidated, refundConstructDesignation )
+    , notifyConstructCompleted, notifyConstructInvalidated
+    , refundConstructDesignation )
 import World.Thread.Command.Cursor.Common
     (recordDesignationOutcome, recordMissingWorldOutcome)
 
@@ -378,20 +379,39 @@ handleWorldSetConstructStatusCommand env _logger pageId gx gy st attempt
             mCd ← atomicModifyIORef' (wsConstructDesignationsRef worldState) $
                 \m → case HM.lookup key m of
                     Just cd | cdAttempt cd ≡ attempt → case st of
-                        CsComplete → (HM.delete key m, Just cd)
-                        _          → ( HM.insert key (cd { cdStatus = st }) m
-                                     , Nothing )
+                        -- A STRUCTURE completion must PROVE its placement
+                        -- committed. Without a window there is nothing to
+                        -- check, and deleting on that would lose a paid
+                        -- designation's receipt for a piece that may never
+                        -- have landed — so a windowless structure
+                        -- completion does nothing at all. A BUILDING never
+                        -- goes through 'structure.place' (it stakes via
+                        -- 'building.spawn', which reports its own success
+                        -- synchronously), so it has no window to give and
+                        -- keeps the plain flow.
+                        CsComplete
+                          | CtStructure _ ← cdTarget cd
+                          , isNothing mWindow → (m, Nothing)
+                          | otherwise → (HM.delete key m, Just cd)
+                        _ → (HM.insert key (cd { cdStatus = st }) m, Nothing)
                     _ → (m, Nothing)
             forM_ mCd $ \cd → do
                 clearConstructDesignationSlope worldState key cd
-                -- The placement was declined after all: this is a
-                -- CANCELLATION wearing a completion's clothes, so the
-                -- receipt goes back to the ground exactly as any other
-                -- cancellation's would, and the claimant is detached.
-                when declined $ do
-                    deps ← constructRefundDeps env
-                    refundConstructDesignation deps worldState key cd
-                    notifyConstructInvalidated env worldState gx gy cd
+                if declined
+                    -- The placement was declined after all: this is a
+                    -- CANCELLATION wearing a completion's clothes, so the
+                    -- receipt goes back to the ground exactly as any other
+                    -- cancellation's would, and the claimant is detached.
+                    then do
+                        deps ← constructRefundDeps env
+                        refundConstructDesignation deps worldState key cd
+                        notifyConstructInvalidated env worldState gx gy cd
+                    -- …and a CONFIRMED completion says so, which is what
+                    -- lets the claimant grant its work XP only for a
+                    -- piece that really landed (#1844). Structures only:
+                    -- a building's own stake path reports synchronously.
+                    else when (st ≡ CsComplete) $
+                        notifyConstructCompleted env worldState gx gy cd
         Nothing → pure ()
 
 -- | Build AI hook (#96): pour progress into a designation. Deltas are

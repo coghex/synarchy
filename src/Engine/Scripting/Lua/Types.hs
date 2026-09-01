@@ -219,6 +219,15 @@ data LuaMsg = LuaTextureLoaded TextureHandle AssetId
               --   tick or its claim timeout. The attempt is what keeps a
               --   SUCCESSOR designated at the same tile untouched: a
               --   worker that has since claimed one keeps its own job.
+            | LuaConstructCompleted Text Int Int Word64
+              -- ^ #1844: the world thread ACCEPTED the placement one
+              --   construction attempt queued — (pageId, gx, gy, attempt
+              --   id). Broadcast as @onConstructCompleted@ so the
+              --   claimant grants its work XP for a piece that really
+              --   landed. @structure.place@ returns once the piece is
+              --   staged and queued, so Lua cannot tell on its own; a
+              --   DECLINED placement sends 'LuaConstructInvalidated'
+              --   instead, and neither is sent twice.
             | LuaOpenArena
             | LuaFocusLost Word32
             | LuaCharInput Word32 Char

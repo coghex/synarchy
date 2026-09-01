@@ -42,6 +42,7 @@ module World.Construct.Revalidate
     , revalidateStagedConstructDesignations
     , clearConstructDesignationSlope
     , notifyConstructInvalidated
+    , notifyConstructCompleted
     , refundConstructDesignation
     , spawnReceiptItems
     ) where
@@ -330,18 +331,40 @@ revalidateStagedConstructDesignations deps cat logger ws scope = do
 -- | Tell the Lua build AI that one exact attempt is gone.
 notifyConstructInvalidated
     ∷ EngineEnv → WorldState → Int → Int → ConstructDesignation → IO ()
-notifyConstructInvalidated env ws gx gy cd = do
-    mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
-    let ConstructAttemptId aid = cdAttempt cd
-    forM_ [ pid | (pid, ws') ← wmWorlds mgr, sameContainer ws' ] $ \pid →
+notifyConstructInvalidated env ws gx gy cd =
+    forConstructPage env ws $ \pid → do
+        let ConstructAttemptId aid = cdAttempt cd
         Q.writeQueue (luaQueue env)
             (LuaConstructInvalidated (unWorldPageId pid) gx gy aid)
-  where
-    -- The page this WorldState belongs to. Compared by the designation
-    -- ref's own identity rather than by any id the caller passes, so the
-    -- broadcast can never name a page the removal did not happen on.
-    sameContainer ws' = wsConstructDesignationsRef ws'
-                          ≡ wsConstructDesignationsRef ws
+
+-- | Run an action for the page this 'WorldState' belongs to.
+--
+--   The page is found by the designation ref's own IDENTITY rather than
+--   by an id the caller passes, so a broadcast can never name a page the
+--   removal did not happen on.
+forConstructPage
+    ∷ EngineEnv → WorldState → (WorldPageId → IO ()) → IO ()
+forConstructPage env ws act = do
+    mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
+    forM_ [ pid | (pid, ws') ← wmWorlds mgr
+                , wsConstructDesignationsRef ws'
+                    ≡ wsConstructDesignationsRef ws ] act
+
+-- | Tell the Lua build AI that one exact attempt really COMPLETED —
+--   that the placement it queued was accepted, not declined.
+--
+--   The claimant cannot know this itself: @structure.place@ returns once
+--   the piece is staged and queued, and only the world thread learns
+--   whether the queued command committed. So the reward for the work —
+--   the construction XP — waits for this, and a declined placement
+--   sends 'notifyConstructInvalidated' instead.
+notifyConstructCompleted
+    ∷ EngineEnv → WorldState → Int → Int → ConstructDesignation → IO ()
+notifyConstructCompleted env ws gx gy cd =
+    forConstructPage env ws $ \pid → do
+        let ConstructAttemptId aid = cdAttempt cd
+        Q.writeQueue (luaQueue env)
+            (LuaConstructCompleted (unWorldPageId pid) gx gy aid)
 
 -- | One removed designation, on the F4 action-outcome ring.
 recordConstructInvalidation ∷ EngineEnv → Int → Int → Text → IO ()

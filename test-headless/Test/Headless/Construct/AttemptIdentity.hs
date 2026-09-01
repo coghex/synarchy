@@ -381,6 +381,39 @@ paymentSpec = describe "payment" $ do
         -- The receipt was SPENT on a real piece, so nothing comes back.
         groundNames ws `shouldReturn` []
 
+    it "refuses a STRUCTURE completion that offers no commit window" $
+        \sc → do
+        -- Without a window there is nothing to check, so deleting would
+        -- lose a paid designation's receipt for a piece that may never
+        -- have landed. The public verb permits the windowless form (a
+        -- BUILDING has no window to give), so the handler is where the
+        -- distinction has to be made.
+        ws ← resetScene sc
+        designate sc ws tile tile floorPiece
+        [aid] ← attemptsOf ws
+        _ ← pay sc aid
+        _ ← evalLua sc (T.concat
+            [ "construction.setJobStatus('", pageText, "', 5, 5, "
+            , "'complete', ", tshow (raw aid), "); return 'ok'" ])
+        drainWorldQueue (scEnv sc) (scLogger sc)
+        HM.size <$> readIORef (wsConstructDesignationsRef ws)
+            `shouldReturn` 1
+        groundNames ws `shouldReturn` []
+
+    it "still completes a BUILDING with no window — it has none to give" $
+        \sc → do
+        -- A building stakes through building.spawn, which reports its own
+        -- success synchronously; there is no staged placement to confirm.
+        ws ← resetScene sc
+        designate sc ws tile tile (CtBuilding "cargo_hold_S")
+        [aid] ← attemptsOf ws
+        _ ← evalLua sc (T.concat
+            [ "construction.setJobStatus('", pageText, "', 5, 5, "
+            , "'complete', ", tshow (raw aid), "); return 'ok'" ])
+        drainWorldQueue (scEnv sc) (scLogger sc)
+        HM.size <$> readIORef (wsConstructDesignationsRef ws)
+            `shouldReturn` 0
+
     it "grandfathers a paid job across a build-cost change" $ \sc → do
         -- Requirement 17: the receipt is never regenerated. Re-reading
         -- the pack is exactly what could not reproduce what was spent.

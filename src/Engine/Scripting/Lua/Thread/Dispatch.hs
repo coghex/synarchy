@@ -181,6 +181,11 @@ processLuaMsg env ls stateRef msg = case msg of
         [ ScriptString pageId
         , ScriptNumber (fromIntegral gx), ScriptNumber (fromIntegral gy)
         , ScriptNumber (fromIntegral attempt) ]
+  LuaConstructCompleted pageId gx gy attempt →
+    broadcastToModules ls "onConstructCompleted"
+        [ ScriptString pageId
+        , ScriptNumber (fromIntegral gx), ScriptNumber (fromIntegral gy)
+        , ScriptNumber (fromIntegral attempt) ]
   LuaOpenArena →
     broadcastToModules ls "onOpenArena" []
   LuaDebugToggle → do
