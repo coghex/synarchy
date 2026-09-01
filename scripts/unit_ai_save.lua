@@ -18,6 +18,11 @@ local refsMod = require("scripts.unit_ai_save_refs")
 -- The payload validator is split out for the same reason and tested the
 -- same way (#1737): this file's own line budget.
 local validateUnitAiData = require("scripts.unit_ai_save_validate").validate
+-- The runtime defaults a restored row must carry to be tickable, and
+-- the one declaration scripts/unit_ai_core.lua's ensureState builds a
+-- FRESH row from (#2055). See that module for the enumeration and why
+-- each field is in it.
+local defaults = require("scripts.unit_ai_defaults")
 M.AI_UNIT_REF_FIELDS     = refsMod.AI_UNIT_REF_FIELDS
 M.AI_BUILDING_REF_FIELDS = refsMod.AI_BUILDING_REF_FIELDS
 
@@ -291,9 +296,37 @@ function M.register(aiState)
         -- OTHER module) never changes -- only the bytes on disk do. The
         -- table is mutated in place: consumers hold direct references to
         -- it and rebinding would orphan every one of them.
+        --
+        -- #2055: the retained rows are then normalized against the
+        -- fresh-row runtime defaults. applyEntityRows installs each
+        -- decoded row VERBATIM -- deliberately, since it knows nothing
+        -- about what any component's rows mean -- and an accepted
+        -- payload need not carry the transient fields the thought tick
+        -- reads before it has decided anything (this component's
+        -- validator accepts a free-form state row on purpose). Such a
+        -- row survived decode, resave, restart and reload and then
+        -- errored on its first live tick at `engine.gameTime() <
+        -- s.nextActionAt`; the tracked b3-lua-versioned-session-v1
+        -- fixture's v1 payload, `{[1] = {buildTarget = 1}}`, is exactly
+        -- one.
+        --
+        -- Placed HERE, after decode(), rather than in any migration
+        -- branch: every accepted inputVersion converges on this one
+        -- stage, so the fix is version-independent by construction and
+        -- a future version gets it without a new back-fill. It is also
+        -- unit-AI-specific by construction -- applyEntityRows' generic
+        -- semantics (absent-owner filtering, the tolerated-dangling
+        -- rule, the in-place clear) are untouched, and normalization
+        -- runs only over the rows it retained, filling missing values
+        -- and overwriting none.
         apply = function(data, entities)
             saveMods.applyEntityRows(aiState, refsMod.unwrapAiState(data),
                 entities, { kind = "unit", component = "unit_ai" })
+            local filled = defaults.normalizeAll(aiState)
+            if filled > 0 then
+                engine.logInfo("Unit AI: supplied runtime defaults for "
+                    .. filled .. " restored row(s) that omitted them")
+            end
         end,
     })
 

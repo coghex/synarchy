@@ -37,12 +37,24 @@ import World.Save.Component (componentKnownIds)
 import World.Save.Component.Types (metadataComponentId)
 import World.Save.Envelope.Types (ComponentId(..))
 
--- | A minimal @engine@ global -- the only thing these two modules call
---   outside of a real engine boot (@engine.logWarn@ from
---   @save_modules.snapshotAll@'s optional-component-omitted warning).
+-- | A minimal @engine@ global -- everything these modules, and the real
+--   registrations driven through them, call outside of a real engine
+--   boot: @engine.logWarn@ (from @save_modules.snapshotAll@'s
+--   optional-component-omitted warning and @applyEntityRows@' absent-owner
+--   drop), @engine.logInfo@, and @engine.gameTime@.
+--
+--   @gameTime@ arrived with issue #2055: @lua.unit_ai@'s @apply@ now
+--   normalizes each retained row against @scripts/unit_ai_defaults.lua@,
+--   and one of the three runtime defaults it supplies is
+--   @actionStartedAt = engine.gameTime()@. It reads a FROZEN @NOW@ rather
+--   than a real clock so a filled value is checkable by value, not merely
+--   by presence.
 engineStub ∷ Text
-engineStub =
-    "engine = { logWarn = function(...) end, logInfo = function(...) end }"
+engineStub = lns
+    [ "NOW = 1000.0"
+    , "engine = { logWarn = function(...) end, logInfo = function(...) end,"
+    , "  gameTime = function() return NOW end }"
+    ]
 
 -- | Run one self-contained Lua chunk in a fresh interpreter (stdlib +
 -- 'engineStub' loaded first). The chunk must signal failure via Lua's
@@ -290,6 +302,27 @@ unitAiReconcilePrelude =
     , "        unitPage = { [1] = 'A', [2] = 'B' },"
     , "        byPage = { craft_bill = { A = { [5] = true }, B = { [5] = true } },"
     , "                   ground_item = { A = { [7] = true }, B = {} } } }"
+    ]
+
+-- | Issue #2055's shared stubs: everything @scripts/unit_ai_defaults.lua@,
+--   the real @lua.unit_ai@ component and @scripts/unit_ai_core.lua@ reach
+--   outside a live engine boot.
+--
+--   The frozen @NOW@ these cases assert @actionStartedAt@ against comes
+--   from 'engineStub', which every chunk in this module already loads.
+unitAiDefaultsPrelude ∷ [Text]
+unitAiDefaultsPrelude =
+    [ "package.loaded['scripts.unit_ai'] = {}"
+    -- unit_ai_core requires unit_ai_hold, which requires this at module
+    -- scope; the same stub unitAiReconcilePrelude uses.
+    , "package.loaded['scripts.movement_speed'] = {"
+    , "  comfort = function() return 1.0 end, ordered = function() return 1.15 end,"
+    , "  sprint = function() return 2.0 end, meander = function() return 0.5 end }"
+    , "unit = { exists = function() return true end }"
+    , "item = { listDefs = function() return {} end }"
+    , "building = { listDefs = function() return {} end }"
+    , "craft = { get = function() return nil end }"
+    , "flora = { exists = function() return true end }"
     ]
 
 spec ∷ Spec
@@ -2845,6 +2878,204 @@ spec = do
             , "local errs = saveModules.registryStaticErrors()"
             , "assert(#errs == 0, 'the real registrations must resolve their "
               <> "own deps cleanly: ' .. table.concat(errs, '; '))"
+            ]
+
+
+    -- Issue #2055. A row restored from an accepted schema version need
+    -- not carry the transient runtime fields the thought tick reads
+    -- before it has decided anything: this component's validator
+    -- accepts a free-form state row on purpose, and
+    -- applyEntityRows installs each decoded row verbatim. Such a row
+    -- survived decode, canonical comparison, resave, restart and
+    -- reload and then errored on its first live tick.
+    --
+    -- The normalization these cases pin is a SINGLE stage that runs
+    -- after decode(), which is why they can cover every accepted
+    -- inputVersion by looping rather than by asserting version by
+    -- version that some migration branch back-filled correctly: every
+    -- branch converges here.
+    describe "unit_ai transient runtime defaults (issue #2055)" $ do
+        it "supplies every declared runtime default a restored row \
+           \omits, for EVERY accepted inputVersion -- the whole decode \
+           \ladder converges on one version-independent normalization \
+           \stage, so a payload from any accepted version comes out \
+           \tickable" $ runsOk $ lns $ unitAiDefaultsPrelude ⧺
+            [ "local unitAiSave = require('scripts.unit_ai_save')"
+            , "local refs = require('scripts.unit_ai_save_refs')"
+            , "local defaults = require('scripts.unit_ai_defaults')"
+            , "local saveModules = require('scripts.lib.save_modules')"
+            , "local codec = require('scripts.lib.data_codec')"
+            , "local live = {}"
+            , "unitAiSave.register(live)"
+            , "-- The accepted set comes off the registration itself, so a"
+            , "-- version added there is covered by this loop the moment it"
+            , "-- exists. The exact-set assertion below is the deliberate"
+            , "-- tripwire beside that: a new version also needs its WIRE"
+            , "-- shape taught to payloadFor, which no derived loop can"
+            , "-- infer, so adding one must be a conscious act here."
+            , "local accepted = saveModules.registry.unit_ai.inputVersions"
+            , "assert(table.concat(accepted, ',') == '1,2,3,4,5,6,7',"
+            , "  'expected inputVersions {1..7} (1-6 legacy, 7 current), got {'"
+            , "  .. table.concat(accepted, ',') .. '}')"
+            , "-- The tracked b3-lua-versioned-session-v1 fixture's own v1"
+            , "-- row, verbatim: sparse, one reference field, none of the"
+            , "-- runtime fields."
+            , "local function sparseRow() return { buildTarget = 1 } end"
+            , "-- Each version's WIRE shape, built with the component's own"
+            , "-- helpers rather than hand-rolled: v1 is bare, v2 is wrapped"
+            , "-- without __owner, v3+ carries __owner too."
+            , "local function payloadFor(version)"
+            , "  local rows = { [1] = sparseRow() }"
+            , "  if version == 1 then return codec.encode(rows) end"
+            , "  local wrapped = refs.wrapAiState(rows)"
+            , "  if version == 2 then wrapped[1].__owner = nil end"
+            , "  return codec.encode(wrapped)"
+            , "end"
+            , "for _, version in ipairs(accepted) do"
+            , "  for k in pairs(live) do live[k] = nil end"
+            , "  local prep = saveModules.prepareLoad({"
+            , "    { id = 'unit_ai', version = version,"
+            , "      payload = payloadFor(version) },"
+            , "  }, 1, false, { unit = { [1] = true }, building = {} })"
+            , "  assert(prep.ok, 'a sparse v' .. version .. ' payload must "
+              <> "still be accepted: ' .. table.concat(prep.errors or {}, '; '))"
+            , "  saveModules.applyAll()"
+            , "  assert(live[1] ~= nil, 'v' .. version .. ': the row must apply')"
+            , "  assert(live[1].buildTarget == 1, 'v' .. version .. ': the "
+              <> "row\\'s own field must survive unwrapped')"
+            , "  for _, f in ipairs(defaults.FIELDS) do"
+            , "    assert(live[1][f.name] ~= nil, 'v' .. version .. ': the "
+              <> "restored row must carry a ' .. f.name .. ' default')"
+            , "  end"
+            , "  assert(live[1].currentAction == 'idle', 'v' .. version"
+            , "    .. ': the fresh-row currentAction')"
+            , "  assert(live[1].nextActionAt == 0, 'v' .. version"
+            , "    .. ': 0 means decide on first sight, not wait out an "
+              <> "interval nobody scheduled')"
+            , "  assert(live[1].actionStartedAt == NOW, 'v' .. version"
+            , "    .. ': actionStartedAt is the moment the row went live')"
+            , "  assert(live[1].commandedTask == nil, 'v' .. version"
+            , "    .. ': nil IS commandedTask\\'s value -- defaulting it "
+              <> "would invent an order nobody issued')"
+            , "end"
+            ]
+
+        it "fills ONLY what a restored row is missing: every value the \
+           \payload actually carries survives, including a nextActionAt \
+           \in the past and a currentAction the action list no longer \
+           \knows -- a save's own scheduling is the save's to state" $
+            runsOk $ lns $ unitAiDefaultsPrelude ⧺
+            [ "local unitAiSave = require('scripts.unit_ai_save')"
+            , "local refs = require('scripts.unit_ai_save_refs')"
+            , "local saveModules = require('scripts.lib.save_modules')"
+            , "local codec = require('scripts.lib.data_codec')"
+            , "local live = {}"
+            , "unitAiSave.register(live)"
+            , "-- Unit 1 is complete, unit 2 has exactly one of the three."
+            , "local rows = {"
+            , "  [1] = { currentAction = 'retired_action',"
+            , "          actionStartedAt = 1.5, nextActionAt = 2.5 },"
+            , "  [2] = { nextActionAt = 7.5 },"
+            , "}"
+            , "local prep = saveModules.prepareLoad({"
+            , "  { id = 'unit_ai', version = 7,"
+            , "    payload = codec.encode(refs.wrapAiState(rows)) },"
+            , "}, 1, false, { unit = { [1] = true, [2] = true }, building = {} })"
+            , "assert(prep.ok, table.concat(prep.errors or {}, '; '))"
+            , "saveModules.applyAll()"
+            , "assert(live[1].currentAction == 'retired_action',"
+            , "  'a restored currentAction must never be reset to idle')"
+            , "assert(live[1].actionStartedAt == 1.5,"
+            , "  'a restored actionStartedAt must never be re-clocked')"
+            , "assert(live[1].nextActionAt == 2.5,"
+            , "  'a restored nextActionAt must never be reset to 0')"
+            , "assert(live[2].nextActionAt == 7.5,"
+            , "  'a partially sparse row keeps the value it does carry')"
+            , "assert(live[2].currentAction == 'idle' and"
+            , "       live[2].actionStartedAt == NOW,"
+            , "  'and gains only the ones it does not')"
+            ]
+
+        it "leaves applyEntityRows' generic semantics untouched: an \
+           \absent-owner row is still dropped with its one diagnostic \
+           \and is never normalized into existence, and the published \
+           \aiState is the SAME table object consumers already hold \
+           \(#900)" $ runsOk $ lns $ unitAiDefaultsPrelude ⧺
+            captureWarnings ⧺
+            [ "local unitAiSave = require('scripts.unit_ai_save')"
+            , "local refs = require('scripts.unit_ai_save_refs')"
+            , "local saveModules = require('scripts.lib.save_modules')"
+            , "local codec = require('scripts.lib.data_codec')"
+            , "local live = {}"
+            , "-- What a CONSUMER holds: the reference every other unit-AI"
+            , "-- module took when the singleton was created, captured"
+            , "-- BEFORE the load. If apply rebound aiState to a fresh"
+            , "-- table instead of mutating it, this reference would still"
+            , "-- point at the old one and would never see the restored"
+            , "-- rows -- which is the orphaning #900 exists to prevent,"
+            , "-- and is what makes the check below more than an identity"
+            , "-- comparison of one local against itself."
+            , "local consumerRef = live"
+            , "unitAiSave.register(live)"
+            , "local rows = { [1] = { buildTarget = 1 }, [9] = { buildTarget = 1 } }"
+            , "local prep = saveModules.prepareLoad({"
+            , "  { id = 'unit_ai', version = 7,"
+            , "    payload = codec.encode(refs.wrapAiState(rows)) },"
+            , "}, 1, false, { unit = { [1] = true }, building = {} })"
+            , "assert(prep.ok, 'an absent owner is tolerated-dangling: '"
+            , "  .. table.concat(prep.errors or {}, '; '))"
+            , "saveModules.applyAll()"
+            , "assert(live[1] ~= nil and live[1].nextActionAt == 0,"
+            , "  'the retained row applies AND is normalized')"
+            , "assert(live[9] == nil,"
+            , "  'a row whose unit is absent must stay dropped -- normalizing "
+              <> "the retained rows must not resurrect it')"
+            , "assert(#warnings == 1, 'exactly one drop diagnostic, got '"
+            , "  .. #warnings)"
+            , "assert(warnings[1]:find('9', 1, true) ~= nil,"
+            , "  'the diagnostic must name the dropped unit: ' .. warnings[1])"
+            , "assert(consumerRef[1] ~= nil and consumerRef[1].buildTarget == 1"
+            , "       and consumerRef[1].nextActionAt == 0,"
+            , "  'the reference a consumer took BEFORE the load must see the "
+              <> "restored, normalized rows -- aiState is mutated in place, "
+              <> "never rebound')"
+            , "assert(consumerRef[9] == nil,"
+            , "  'and must not see the dropped one either')"
+            ]
+
+        it "fills a restored row from the SAME declaration ensureState \
+           \builds a fresh one from, so the two installers cannot drift \
+           \-- the enumeration is one list, not two agreeing by \
+           \coincidence" $ runsOk $ lns $ unitAiDefaultsPrelude ⧺
+            [ "local defaults = require('scripts.unit_ai_defaults')"
+            , "local core = require('scripts.unit_ai_core')"
+            , "local fresh = core.ensureState(42)"
+            , "local normalized = defaults.normalize({})"
+            , "-- Same keys, same values: whatever ensureState produces for"
+            , "-- a unit the AI has never seen is exactly what a sparse"
+            , "-- restored row is brought up to."
+            , "for k, v in pairs(fresh) do"
+            , "  assert(normalized[k] == v,"
+            , "    'ensureState set ' .. k .. ' but normalize did not match')"
+            , "end"
+            , "for k, v in pairs(normalized) do"
+            , "  assert(fresh[k] == v,"
+            , "    'normalize set ' .. k .. ' but ensureState did not match')"
+            , "end"
+            , "-- And the declaration names exactly the fields a tick reads"
+            , "-- before it has decided anything (#2055 requirement 2)."
+            , "local named = {}"
+            , "for _, f in ipairs(defaults.FIELDS) do named[f.name] = true end"
+            , "assert(named.currentAction and named.actionStartedAt"
+            , "       and named.nextActionAt,"
+            , "  'the three fields the pre-decision tick path reads must all "
+              <> "be declared')"
+            , "assert(#defaults.FIELDS == 3,"
+            , "  'a field added to FIELDS needs its own justification here: '"
+            , "  .. 'the list is the fields a tick reads BEFORE deciding, '"
+            , "  .. 'not every field a row may carry')"
+            , "assert(named.commandedTask == nil,"
+            , "  'commandedTask must NOT be defaulted -- nil is its value')"
             ]
 
     describe "unit_ai post-load reconciliation (issue #1589)" $ do
