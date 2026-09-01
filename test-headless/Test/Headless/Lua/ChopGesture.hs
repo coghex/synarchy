@@ -59,13 +59,26 @@ prelude =
     , "unit, item, building, UI = {}, {}, {}, {}"
     , "package.loaded['scripts.hud'] = { worldId = 'w', currentView = 'zoomed_in' }"
     , "ds = require('scripts.unit_drag_select')"
-    , "ds.edgeIds = {}"
+    -- Real edge ids with a stub UI, so a case can read whether the
+    -- selection rect is actually still painted. `{}` (the pattern
+    -- Test.Headless.Lua.DragSelectDeferred uses) would make every
+    -- visibility question vacuously true.
+    , "__edges = { top = false, bottom = false, left = false, right = false }"
+    , "UI.setVisible = function(id, v) __edges[id] = v end"
+    , "UI.setPosition = function() end"
+    , "UI.setSize = function() end"
+    , "ds.edgeIds = { top = 'top', bottom = 'bottom',"
+    , "               left = 'left', right = 'right' }"
     , "ct = require('scripts.chop_tool')"
     , "ct.setup({ hud = package.loaded['scripts.hud'] })"
     -- The two helpers every case shares.
     , "function only()"
     , "  assert(#__records == 1, 'expected one record, got ' .. #__records)"
     , "  return __records[1]"
+    , "end"
+    , "function boxVisible()"
+    , "  return __edges.top or __edges.bottom"
+    , "      or __edges.left or __edges.right"
     , "end"
     , "function onlyCall()"
     , "  assert(#__calls == 1, 'expected one chop call, got ' .. #__calls)"
@@ -291,6 +304,61 @@ spec = describe "Chop gesture" $ do
                 , "__records = {}"
                 , "ds.onMouseUp(1, 200, 200, 'game')"
                 , "assert(#__calls == 0, 'a post-cancel release designated')"
+                ]
+
+        it "takes the visible rect down with a HELD drag's cancellation" $
+            -- The defect this pins: cancelling only the EFFECT left the
+            -- release to fall through to the generic unarmed-drag path,
+            -- which has no visual to release, so the box stayed painted
+            -- over the world after Escape or a tool switch.
+            runCase
+                [ "ds.handleMouseDown(1, 10, 10)"
+                , "ct.handleMouseDown(1, 10, 10)"
+                , "ds.deferClick(1, 'chop_tool', nil, 10, 10, nil)"
+                , "__mouse = {200, 200}; ds.update(0.03)"
+                , "assert(boxVisible(), 'the drag never drew its box')"
+                , "ct.onToolMode('tool_mine')"
+                , "assert(not boxVisible(), 'the box survived the tool switch')"
+                , "ds.onMouseUp(1, 200, 200, 'game')"
+                , "assert(not boxVisible(), 'the release re-showed the box')"
+                , "assert(#__calls == 0, 'a cancelled drag designated')"
+                ]
+
+        it "does the same for a held RIGHT drag" $
+            runCase
+                [ "ds.handleMouseDown(2, 10, 10)"
+                , "ct.handleMouseDown(2, 10, 10)"
+                , "ds.deferClick(2, 'chop_tool_erase', nil, 10, 10, nil)"
+                , "__mouse = {200, 200}; ds.update(0.03)"
+                , "assert(boxVisible(), 'the drag never drew its box')"
+                , "ct.cancel()"
+                , "assert(not boxVisible(), 'the box survived the cancel')"
+                , "ds.onMouseUp(2, 200, 200, 'game')"
+                , "assert(not boxVisible(), 'the release re-showed the box')"
+                , "assert(#__calls == 0, 'a cancelled drag erased')"
+                ]
+
+        it "records a cancelled below-threshold gesture as a noop" $
+            -- The press-time record defaults to \"accepted\"; a gesture
+            -- cancelled before release performed nothing, so publishing
+            -- that default would claim a chop click that never happened.
+            runCase
+                [ "ds.handleMouseDown(1, 10, 10)"
+                , "ct.handleMouseDown(1, 10, 10)"
+                , "ds.deferClick(1, 'chop_tool', nil, 10, 10, nil)"
+                , "ct.cancel()"
+                , "ds.onMouseUp(1, 11, 10, 'game')"
+                , "local rec = only()"
+                , "assert(rec.kind == 'input.click', rec.kind)"
+                , "assert(rec.outcome == 'noop', tostring(rec.outcome))"
+                , "assert(#__calls == 0, 'a cancelled click designated')"
+                ]
+
+        it "leaves an ordinary completed box with nothing painted" $
+            runCase
+                [ "gesture(1, 10, 10, 200, 200, true)"
+                , "assert(not boxVisible(), 'a finished box stayed painted')"
+                , "assert(onlyCall().name == 'designateInRect')"
                 ]
 
         it "a tool switch disarms both buttons" $

@@ -386,6 +386,32 @@ function dragSelect.armToolBox(button, effect)
     dragSelect.toolBox[button] = effect
 end
 
+-- Disarm a tool's box effect MID-GESTURE — Escape, a tool switch, a
+-- view transition, all of which can arrive while the button is still
+-- held. The gesture itself is still live, so this does not resolve it;
+-- what it must do is leave nothing behind that outlives the effect:
+--
+--   * the visible rect, which the EFFECT owned. Without this the
+--     release falls through to the generic unarmed-drag path, which has
+--     no visual to release, and the box stays painted on screen; and
+--   * the press's deferred click record, which still carries the
+--     press-time "accepted" default. A cancelled below-threshold
+--     gesture performs nothing, so recording an accepted chop click for
+--     it is a lie.
+--
+-- Idempotent, like every other teardown here.
+function dragSelect.disarmToolBox(button)
+    if dragSelect.toolBox[button] == nil then return end
+    dragSelect.toolBox[button] = nil
+    releaseVisual(button)
+    local pending = (button == 1) and dragSelect.pendingClick
+                                   or dragSelect.rightPendingClick
+    if pending then
+        pending.outcome = "noop"
+        pending.reason = "the tool gesture was cancelled before release"
+    end
+end
+
 -- F4 (#730) Layer A: a drag-select box's real outcome can only be
 -- known at release (hitTestInRect against the final rect). Kind-
 -- distinct from "input.click" ("input.drag") so a completed drag's
@@ -625,6 +651,7 @@ function dragSelect.onMouseUp(button, x, y, downRoute)
                     recordDeferredClick(dragSelect.pendingClick)
                 end
             end
+            releaseVisual(1)
             dragSelect.pendingClick   = nil
             dragSelect.boxSelectArmed = false
             dragSelect.state = "idle"
@@ -652,6 +679,7 @@ function dragSelect.onMouseUp(button, x, y, downRoute)
                     recordDeferredClick(dragSelect.rightPendingClick)
                 end
             end
+            releaseVisual(2)
             dragSelect.rightPendingClick = nil
             dragSelect.rightState = "idle"
         end
@@ -689,8 +717,9 @@ function dragSelect.cancel()
     end
     -- #1856: an armed tool box is abandoned by a view transition
     -- exactly as a box selection is — no designation lands, and the
-    -- tool is left with nothing half-committed.
-    dragSelect.toolBox[1] = nil
+    -- tool is left with nothing half-committed. Through disarmToolBox
+    -- so the rect it owned comes down with it.
+    dragSelect.disarmToolBox(1)
     -- Right-button (#730 review round 4): same resolve-don't-lose
     -- contract as the left-button case above.
     if dragSelect.rightState ~= "idle" then
@@ -706,7 +735,7 @@ function dragSelect.cancel()
         dragSelect.rightPendingClick = nil
         dragSelect.rightState = "idle"
     end
-    dragSelect.toolBox[2] = nil
+    dragSelect.disarmToolBox(2)
 end
 
 function dragSelect.shutdown()

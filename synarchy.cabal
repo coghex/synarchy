@@ -711,6 +711,7 @@ library
                      World.Render.FloraProjection
                      World.Render.FloraDraws
                      World.Render.FloraMarker
+                     World.Render.SpriteDepth
                      World.Render.GroundItemQuads
                      World.Render.SideDecoQuads
                      World.Render.Textures

@@ -26,7 +26,8 @@ import qualified Codec.Picture as JP
 import qualified Data.ByteString as BS
 import Engine.Asset.Handle (TextureHandle(..), toInt)
 import Engine.Graphics.Camera (CameraFacing(..), Camera2D(..), defaultCamera)
-import Structure.Types (emptyChunkStructures)
+import Structure.Types
+    (StructureSlot(..), StructurePieceData(..), emptyChunkStructures)
 import World.Chop.Types (ChopDesignations, newChopDesignation)
 import World.Chunk.Types
     (ChunkCoord(..), ColumnTiles(..), LoadedChunk(..), chunkSize, columnIndex)
@@ -39,6 +40,9 @@ import World.Grid (gridToWorld, tileHeight, tileWidth)
 import World.Render.FloraDraws (FloraDraw(..), chunkFloraDraws)
 import World.Render.FloraMarker (floraMarkerQuad)
 import World.Render.FloraProjection (FloraGeom(..))
+import World.Render.SpriteDepth
+    (frameFrontWallLift, liftSpriteSortKey, noFrontWallLift
+    , structureFrontWallClear)
 import World.Render.Textures.Types (defaultWorldTextures)
 import World.Render.TileQuads (worldCursorToQuad)
 import Engine.Scene.Types (SortableQuad(..))
@@ -162,7 +166,18 @@ columnOrderAgrees = and
 viewOf
     ∷ CameraFacing → (Float, Float) → WorldTileData → ChopDesignations
     → FloraHitView
-viewOf facing (camX, camY) tiles designated =
+viewOf facing camPos tiles designated =
+    (viewOfWith facing camPos tiles designated)
+        { fhvFrontWall = noFrontWallLift }
+
+-- | 'viewOf' keeping the REAL front-wall lift the production snapshot
+--   builds — what the structure-overlap case needs, and what
+--   'viewOf' deliberately neutralises so every other case pins the
+--   unlifted geometry.
+viewOfWith
+    ∷ CameraFacing → (Float, Float) → WorldTileData → ChopDesignations
+    → FloraHitView
+viewOfWith facing (camX, camY) tiles designated =
     let cam = defaultCamera { camPosition = (camX, camY)
                             , camZoom = zoom
                             , camFacing = facing
@@ -177,6 +192,8 @@ viewOf facing (camX, camY) tiles designated =
         , fhvHarvests = HM.empty, fhvDesignated = designated
         , fhvTexSizes = texSizes
         , fhvDaysPerYear = 360, fhvAbsDay = 100
+        , fhvFrontWall = frameFrontWallLift facing worldSize zSlice
+                             effDepth (wtdChunks tiles)
         }
 
 -- | World coordinate → the window pixel the oracle unprojects back to
@@ -507,6 +524,87 @@ spec = describe "Chop selection" $ do
                     fgQuadH g `shouldBe` tileHeight * 2
                 _ → expectationFailure "expected exactly one candidate"
 
+    describe "painter depth is the renderer's own" $ do
+
+        it "ranks a front-wall-lifted tree where the renderer painted it" $ do
+            -- #418: a sprite in front of a structure's front wall is
+            -- raised to draw over it. That lift is part of its FINAL
+            -- painter depth, so a picker reading the unlifted key would
+            -- rank a lifted tree behind a sprite the renderer painted
+            -- underneath it. The oracle shares the very function the
+            -- render pass applies.
+            let treeTile = (8, 8)
+                (tgx, tgy) = chunkToGlobal flatChunk (fst treeTile) (snd treeTile)
+                -- The geometry 'Test.Headless.World.Render.FrontWallLift'
+                -- pins as the interior baseline: a screen-front SE wall
+                -- two tiles west of the sprite, whose own anchor depth
+                -- ((wgx+1) + (wgy+1)) equals the sprite's, at the
+                -- sprite's z so it is inside the slice band.
+                wall = HM.fromList
+                    [ ((tgx - 2, tgy, seTag), StructurePieceData 0 0 zSlice) ]
+                oak = plantAt 1 woodId treeTile
+                lc = (chunkWith flatChunk flat [oak]) { lcStructures = wall }
+                tiles = tilesOf [lc]
+                view = viewOfWith FaceSouth (camOn FaceSouth treeTile)
+                           tiles HM.empty
+                plain = viewOf FaceSouth (camOn FaceSouth treeTile)
+                            tiles HM.empty
+                keyIn v = listToMaybe
+                    [ fgSortKey g
+                    | (pk, g) ← floraSelectCandidates v (SelectChoppable "wood")
+                    , fpInstanceId pk ≡ instanceId 1 ]
+            -- The fixture must actually trigger a lift, or this proves
+            -- nothing about sharing it.
+            structureFrontWallClear FaceSouth worldSize zSlice effDepth
+                (\cc → if cc ≡ flatChunk then Just wall else Nothing) tgx tgy
+                `shouldSatisfy` isJust
+            -- …and the oracle must report the LIFTED key, not the base.
+            keyIn view `shouldSatisfy` \k → k > keyIn plain
+            -- Which is exactly what the shared lift computes.
+            case (keyIn plain, keyIn view) of
+                (Just base, Just lifted) →
+                    lifted `shouldBe` liftSpriteSortKey
+                        (fhvFrontWall view) flatChunk tgx tgy base
+                _ → expectationFailure "the tree was not a candidate"
+
+        it "leaves a tree nowhere near a structure at its own key" $ do
+            let oak = plantAt 1 woodId (8, 8)
+                tiles = tilesOf [chunkWith flatChunk flat [oak]]
+                keyIn v = listToMaybe
+                    [ fgSortKey g
+                    | (pk, g) ← floraSelectCandidates v (SelectChoppable "wood")
+                    , fpInstanceId pk ≡ instanceId 1 ]
+            keyIn (viewOfWith FaceSouth (camOn FaceSouth (8, 8)) tiles HM.empty)
+                `shouldBe` keyIn (viewOf FaceSouth (camOn FaceSouth (8, 8))
+                                      tiles HM.empty)
+
+        it "resolves an EXACT depth tie deterministically, by identity" $ do
+            -- Two co-tenants on one tile at one z with equal fiOffV
+            -- carry the SAME key, and the scene sorter
+            -- (Engine.Scene.Types.Batch.sortQuadsByLayer) is unstable —
+            -- so the renderer has no order here for a picker to agree
+            -- with. What is pinned is that the picker's own answer is
+            -- reproducible and matches the documented rule.
+            let a = (plantAt 1 woodId (8, 8)) { fiOffU = 0.2, fiOffV = 0 }
+                b = (plantAt 2 woodId (8, 8)) { fiOffU = 0.2, fiOffV = 0 }
+                view = viewOf FaceNorth (camOn FaceNorth (8, 8))
+                           (tilesOf [chunkWith flatChunk flat [a, b]]) HM.empty
+                keys = [ (fpInstanceId pk, fgSortKey g)
+                       | (pk, g) ← floraSelectCandidates view
+                                       (SelectChoppable "wood") ]
+            -- The fixture really does tie.
+            nub (map snd keys) `shouldSatisfy` \ks → length ks ≡ 1
+            Just px ← pure (anchorPixel view (instanceId 1))
+            let winner = max (instanceId 1) (instanceId 2)
+            fmap fpInstanceId
+                (pickFloraAt view (SelectChoppable "wood") (fst px) (snd px))
+                `shouldBe` Just winner
+            -- Reproducible: the same view answers the same way however
+            -- the candidates happened to be enumerated.
+            fmap fpInstanceId
+                (pickFloraAt view (SelectChoppable "wood") (fst px) (snd px))
+                `shouldBe` Just winner
+
     describe "the committed marker" $ do
 
         let markerTex = TextureHandle 21
@@ -643,3 +741,7 @@ visibleAlphas img = sort . nub $
     , x ← [0 .. JP.imageWidth img - 1]
     , let JP.PixelRGBA8 _ _ _ a = JP.pixelAt img x y
     , a > 0 ]
+
+-- | The south-east wall slot's tag, as 'ChunkStructures' keys it.
+seTag ∷ Word8
+seTag = fromIntegral (fromEnum SWallSE)

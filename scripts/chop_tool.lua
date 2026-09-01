@@ -103,9 +103,13 @@ end
 -- unit_drag_select's own teardown resolves the gesture that carried it.
 function chopTool.cancel()
     local ok, dragSelect = pcall(require, "scripts.unit_drag_select")
-    if ok and dragSelect and dragSelect.toolBox then
-        dragSelect.toolBox[MOUSE_LEFT] = nil
-        dragSelect.toolBox[MOUSE_RIGHT] = nil
+    if ok and dragSelect and dragSelect.disarmToolBox then
+        -- Through disarmToolBox, not a bare toolBox clear: the effect
+        -- owns the visible rect and the press's deferred record, so
+        -- dropping only the effect leaves a box painted over the world
+        -- and a cancelled click recorded as accepted.
+        dragSelect.disarmToolBox(MOUSE_LEFT)
+        dragSelect.disarmToolBox(MOUSE_RIGHT)
     end
 end
 

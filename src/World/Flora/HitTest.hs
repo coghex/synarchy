@@ -72,6 +72,8 @@ import World.Render.ChunkCulling (isChunkVisibleWrapped)
 import World.Render.FloraDraws (FloraDraw(..), chunkFloraDraws)
 import World.Render.FloraProjection
     (FloraGeom(..), floraGeom, floraTexSize, floraVisibleInSlice)
+import World.Render.SpriteDepth
+    (FrontWallLift, frameFrontWallLift, liftSpriteSortKey)
 import World.Render.ViewBounds (ViewBounds, computeViewBounds)
 import World.Generate.Types (WorldGenParams(..))
 import World.State.Types (WorldState(..), pageWrapWorldSize)
@@ -122,6 +124,12 @@ data FloraHitView = FloraHitView
     , fhvTexSizes    ∷ !(HM.HashMap TextureHandle (Int, Int))
     , fhvDaysPerYear ∷ !Int
     , fhvAbsDay      ∷ !Int
+    , fhvFrontWall   ∷ FrontWallLift
+      -- ^ The frame's structure front-wall sprite lift, built by the
+      --   SAME 'frameFrontWallLift' the render pass builds it with.
+      --   Without it a tree lifted to clear a wall would be ranked at
+      --   its unlifted depth and the picker would disagree with what
+      --   was actually painted.
     }
 
 -- | Snapshot the live engine + page state the oracle needs.
@@ -163,6 +171,9 @@ floraHitView env worldState = do
         , fhvTexSizes    = texSizes
         , fhvDaysPerYear = calendarDaysPerYear calendar
         , fhvAbsDay      = worldAbsoluteDay calendar worldDate
+        , fhvFrontWall   = frameFrontWallLift (camFacing camera) worldSize
+                               (camZSlice camera) effDepth
+                               (wtdChunks tileData)
         }
 
 -- | Every eligible, currently VISIBLE plant paired with the geometry it
@@ -181,9 +192,12 @@ floraSelectCandidates view mode =
     , let inst = fdInstance fd
     , floraVisibleInSlice (fhvZSlice view) (fhvEffDepth view) inst
     , eligible view mode inst
-    , let geom = floraGeom (fhvFacing view) (fdGX fd) (fdGY fd) inst
+    , let base = floraGeom (fhvFacing view) (fdGX fd) (fdGY fd) inst
                      (floraTexSize (fhvTexSizes view) (fdTexture fd))
                      (fhvZSlice view) wrapOff
+          -- The FINAL painter depth, front-wall lift included (#418).
+          geom = base { fgSortKey = liftSpriteSortKey (fhvFrontWall view)
+                            (lcCoord lc) (fdGX fd) (fdGY fd) (fgSortKey base) }
           pick = FloraPick { fpInstanceId = fiInstanceId inst
                            , fpGX = fdGX fd
                            , fpGY = fdGY fd
@@ -207,9 +221,21 @@ eligible view SelectDesignated inst =
 --
 --   \"Under the pointer\" is the inclusive bounds of the currently
 --   rendered sprite quad, the AABB precedent 'Unit.HitTest' sets.
---   \"Topmost\" is the candidate the renderer draws LAST — the largest
---   painter depth — with ties broken on the stable instance id so two
---   co-tenants at one depth resolve the same way every run.
+--
+--   \"Topmost\" is the largest FINAL painter depth — the same
+--   'fgSortKey' the renderer sorts on, structure front-wall lift
+--   included ('World.Render.SpriteDepth'), so a lifted tree ranks here
+--   exactly where it was painted.
+--
+--   __At exactly equal depth the renderer has no order to agree with.__
+--   'Engine.Scene.Types.Batch.sortQuadsByLayer' sorts on @sqSortKey@
+--   alone with an UNSTABLE sort, so two sprites at one key are drawn in
+--   an unspecified order — and two wood-tagged co-tenants on one tile
+--   at one z with equal 'fiOffV' really do tie. This is not papered
+--   over with a claim of parity: the picker falls back to the stable
+--   instance id, which makes ITS answer reproducible run to run and
+--   consistent with the marker, and is as correct as any other choice
+--   where the renderer itself has none.
 pickFloraAt
     ∷ FloraHitView → FloraSelectMode → Float → Float → Maybe FloraPick
 pickFloraAt view mode pixX pixY
@@ -228,8 +254,9 @@ pickFloraAt view mode pixX pixY
         , worldY ≥ fgDrawY geom
         , worldY ≤ fgDrawY geom + fgQuadH geom
         ]
-    -- Descending painter depth, then descending id: the LAST-drawn
-    -- sprite wins, exactly as the scene sorter would paint it.
+    -- Descending final painter depth — the sorter's own ordering — and
+    -- then descending id, the deterministic backstop for the tie the
+    -- sorter leaves undefined (see the note above).
     rank (_, key, iid) = (Down key, Down iid)
     fst3 (a, _, _) = a
 

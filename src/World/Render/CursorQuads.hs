@@ -39,7 +39,8 @@ import World.Render.TileQuads
 import World.Render.FloraDraws (FloraDraw(..), chunkFloraDraws)
 import World.Render.FloraMarker (floraMarkerQuad)
 import World.Render.FloraProjection
-    (floraGeom, floraTexSize, floraVisibleInSlice)
+    (FloraGeom(..), floraGeom, floraTexSize, floraVisibleInSlice)
+import World.Render.SpriteDepth (frameFrontWallLift, liftSpriteSortKey)
 
 -- * World Cursor Quads (generated every frame, not cached)
 
@@ -200,6 +201,12 @@ renderWorldCursorQuadsScanned env worldState tileAlpha = do
     let calendar = maybe defaultCalendarConfig wgpCalender paramsM
         daysPerYear = calendarDaysPerYear calendar
         absDay = worldAbsoluteDay calendar worldDate
+        -- The same front-wall sprite lift the render pass and the
+        -- selection oracle build (#418/#1856): a tree lifted to clear a
+        -- wall carries its marker up with it, instead of leaving the
+        -- annotation sunk behind the trunk it belongs to.
+        spriteLift = frameFrontWallLift facing worldSize zSlice
+                         effectiveDepth (wtdChunks tileData)
         chopDesignQuads = case chopDesignTexture cs' of
             Nothing → V.empty
             Just tex
@@ -216,9 +223,12 @@ renderWorldCursorQuadsScanned env worldState tileAlpha = do
                     , let inst = fdInstance fd
                     , HM.member (fiInstanceId inst) chopDesigns
                     , floraVisibleInSlice zSlice effectiveDepth inst
-                    , let geom = floraGeom facing (fdGX fd) (fdGY fd) inst
+                    , let base = floraGeom facing (fdGX fd) (fdGY fd) inst
                                      (floraTexSize texSizes (fdTexture fd))
                                      zSlice wrapOff
+                          geom = base { fgSortKey =
+                              liftSpriteSortKey spriteLift (lcCoord lc)
+                                  (fdGX fd) (fdGY fd) (fgSortKey base) }
                     ]
 
     -- Till-designation markers (#333): world annotations like the chop
