@@ -3087,6 +3087,20 @@ a focused text field with Backspace/Enter editing, UI-vs-game scroll
 routing, and a full drag with `"game"` down/up route pairing. The
 fixture tears itself down afterwards.
 
+The end-to-end run stays human-run, but the harness's own missed-click
+handling (#2052) has an offline gate needing no engine, window or
+network:
+
+```bash
+python3 tools/input_check.py --selftest   # or --self-test
+```
+
+A missed click leaves the fixture's nil `shiftAtClick` out of the
+serialized state; the self-test replays exactly that state and asserts
+the dependent checks report a diagnostic naming the absent field
+instead of raising, so the primary click failure stays first, the later
+sections and the summary still run, and the status stays non-zero.
+
 ### `action_outcome_layer_a_check.py`
 
 The F4 (#646) Layer A gate: `Engine.Input.Thread`'s `ClickRoute`
