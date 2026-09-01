@@ -1,17 +1,11 @@
 #!/usr/bin/env python3
 """The one assertion helper the ``tools/test_*.py`` self-tests share (#1922).
 
-Named ``selftestlib`` after ``tools/probelib.py``, and deliberately not
-``selftest``: ``tools/playtest/selftest.py`` (#2040) already owns that
-module name, and several ``tools/playtest/`` modules put ``tools/``
-ahead of ``tools/playtest/`` on ``sys.path``, so a module named
-``selftest`` here shadows theirs.
-
-Twenty-nine of those scripts each carried a byte-identical copy of the
-same six-line ``expect``, and every copy printed a line for each
-**passing** assertion. ``make ci`` and CI run most of them, so that
-narration was a fixed per-run cost measured in thousands of lines:
-``tools/test_audit.py`` alone printed 226 ``OK:`` lines above a summary
+Thirty of those scripts each carried a copy of the same six-line
+``expect``, and every copy printed a line for each **passing**
+assertion. ``make ci`` and CI run most of them, so that narration was a
+fixed per-run cost measured in thousands of lines:
+``tools/test_audit.py`` alone printed 250 ``OK:`` lines above a summary
 that already said ``All 62 test groups passed``, and the
 probe-orchestration self-tests printed hundreds more each.
 
@@ -22,32 +16,43 @@ what is asserted changes -- the conditions, the messages, and each
 script's own exit status are exactly what they were.
 
 ``tools/probelib.py`` (#529) is the in-repo precedent for a shared
-``tools/`` module. Anything run as ``python3 tools/<name>.py`` has
-``tools/`` on ``sys.path`` already, so importing this needs no path
-manipulation.
+``tools/`` module, and the source of this one's name. ``selftest`` was
+the obvious name and is not available: ``tools/playtest/selftest.py``
+(#2040) owns it, and ``tools/playtest/engine.py``, ``critic.py`` and
+``personas.py`` each put ``tools/`` ahead of ``tools/playtest/`` on
+``sys.path``, so a ``tools/selftest.py`` shadows theirs. Anything run
+as ``python3 tools/<name>.py`` has ``tools/`` on ``sys.path`` already,
+so importing this needs no path manipulation.
 
 Converting a self-test is three edits::
 
-    import selftest
+    import selftestlib
     from selftestlib import FAILURES, expect   # replaces the local pair
 
     def main() -> int:
-        selftestlib.parse_verbose()               # or add_verbose_option()
+        selftestlib.parse_verbose()            # or add_verbose_option()
         ...
         if FAILURES:
             ...unchanged failure reporting...
             return selftestlib.concluded(1)
-        print("...unchanged passing summary...")
-        return selftestlib.concluded(0)
+        return selftestlib.concluded(0, "...unchanged passing summary...")
 
 ``FAILURES`` is deliberately this module's own list rather than a
 per-script one. ``from selftestlib import FAILURES`` binds the same
-list
-object, so every script's existing ``if FAILURES`` / ``len(FAILURES)``
-reporting keeps working untouched, and a helper defined here can append
-to it. Each invocation is its own process, so each starts from an empty
-list and a zero count; `reset` exists for this module's own tests, which
-are the only code that needs a second run inside one interpreter.
+list object, so every script's existing ``if FAILURES`` /
+``len(FAILURES)`` reporting keeps working untouched, and a helper
+defined here can append to it.
+
+**One consequence: this state is per-INTERPRETER, not per-invocation**,
+and a converted ``main`` is importable and callable more than once --
+two of them take an explicit ``argv`` precisely so they can be. So
+every entry point begins with `begin`, which forgets the previous run
+before counting this one. Without it a second ``main()`` in one process
+would add its assertions to its predecessor's, inherit its failures,
+and stay verbose because the FIRST run was passed ``-v``.
+`parse_verbose` calls `begin` for the scripts that take no other
+options; a script owning its own parser calls it directly with the
+parsed flag.
 
 **Silence needs a vacuity guard.** With the per-assertion lines gone, a
 self-test whose case registry was silently emptied would print its
@@ -65,12 +70,12 @@ __all__ = [
     "FAILURES",
     "add_verbose_option",
     "assertions",
+    "begin",
     "concluded",
     "expect",
     "parse_verbose",
     "record_fail",
     "record_pass",
-    "reset",
     "set_verbose",
     "verbose",
 ]
@@ -98,20 +103,38 @@ def verbose() -> bool:
     return _verbose
 
 
-def parse_verbose(argv: list[str] | None = None) -> list[str]:
-    """Consume ``-v``/``--verbose`` from ``argv``, returning what is left.
+def begin(verbose: bool = False) -> None:
+    """Start one invocation: forget the last one, set this one's verbosity.
 
-    Deliberately permissive. The self-tests that call this took no
+    Every converted entry point calls this before its first assertion,
+    which is what makes an invocation's assertion count, failure list
+    and verbosity its own rather than the interpreter's. Calling
+    ``main()`` twice in one process is supported -- `test_probe_claim`
+    and `test_save_compat_audit` both accept an explicit ``argv`` for
+    exactly that -- and without this the second call would report the
+    first's assertions and failures alongside its own.
+    """
+    global _assertions
+    _assertions = 0
+    FAILURES.clear()
+    set_verbose(verbose)
+
+
+def parse_verbose(argv: list[str] | None = None) -> list[str]:
+    """Begin an invocation, taking its verbosity from ``argv``.
+
+    Consumes ``-v``/``--verbose`` and returns what is left. Deliberately
+    permissive about the rest: the self-tests that call this took no
     options at all and ignored whatever they were handed, so rejecting
     an unrecognized argument here would be a CLI change rather than the
     presentation change this module exists for. A script that already
     parses its own arguments calls `add_verbose_option` instead, so its
-    parser keeps deciding what is and is not valid.
+    parser keeps deciding what is and is not valid -- and then calls
+    `begin` itself with the parsed flag.
     """
     args = list(sys.argv[1:] if argv is None else argv)
     kept = [a for a in args if a not in VERBOSE_FLAGS]
-    if len(kept) != len(args):
-        set_verbose(True)
+    begin(len(kept) != len(args))
     return kept
 
 
@@ -123,18 +146,6 @@ def add_verbose_option(parser) -> None:
 def assertions() -> int:
     """How many assertions this invocation has executed, pass or fail."""
     return _assertions
-
-
-def reset() -> None:
-    """Forget every assertion, failure and verbosity choice.
-
-    Only this module's own self-test needs it: an ordinary conversion is
-    one process per run, which starts reset by construction.
-    """
-    global _assertions
-    _assertions = 0
-    FAILURES.clear()
-    set_verbose(False)
 
 
 def record_pass(msg: str) -> None:

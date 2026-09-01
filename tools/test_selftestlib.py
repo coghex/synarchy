@@ -107,6 +107,39 @@ def run_fixture(body: str, *argv: str) -> subprocess.CompletedProcess:
 
 TWO_PASSES = ['expect(1 == 1, "one holds")', 'expect(2 == 2, "two holds")']
 
+#: Two in-process runs of a real converted self-test, the first verbose.
+#: `test_determinism` is the cheapest one that touches nothing outside
+#: itself: five pure cases, nine assertions, no subprocess and no disk.
+SEQUENTIAL = """\
+import contextlib, io, sys
+sys.path.insert(0, {tools!r})
+import selftestlib
+import test_determinism
+
+def run(argv):
+    sys.argv = ["test_determinism.py", *argv]
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        test_determinism.main()
+    return selftestlib.assertions(), len(selftestlib.FAILURES), \
+        out.getvalue().count("  OK:   ")
+
+first = run(["-v"])
+second = run([])
+print(f"counts {{first[0]}} then {{second[0]}}")
+print(f"failures {{first[1]}} then {{second[1]}}")
+print(f"narration {{first[2]}} then {{second[2]}}")
+"""
+
+
+def run_program(source: str, *argv: str) -> subprocess.CompletedProcess:
+    """A whole generated program, in its own interpreter."""
+    with tempfile.TemporaryDirectory() as tmp:
+        script = Path(tmp) / "program.py"
+        script.write_text(source.format(tools=str(TOOLS)), encoding="utf-8")
+        return subprocess.run([sys.executable, str(script), *argv],
+                              capture_output=True, text=True)
+
 
 # ----- Behaviour -----------------------------------------------------------
 
@@ -224,6 +257,28 @@ def test_each_invocation_counts_from_zero() -> None:
            f"{three.stdout!r})")
 
 
+def test_a_second_invocation_in_one_process_counts_only_itself() -> None:
+    # A converted `main` is importable and callable again, and two of
+    # them take an explicit argv precisely so it can be. Without
+    # `begin`, the second call reports the first's assertions too.
+    result = run_program(SEQUENTIAL)
+    expect(result.returncode == 0,
+           f"the sequential driver runs (got {result.returncode}: "
+           f"{result.stderr.strip()})")
+    expect("counts 9 then 9" in result.stdout,
+           f"a second main() in one process counts only its own "
+           f"assertions ({result.stdout!r})")
+    expect("failures 0 then 0" in result.stdout,
+           "and starts from an empty failure list rather than inheriting one")
+
+
+def test_verbosity_does_not_leak_into_the_next_invocation() -> None:
+    result = run_program(SEQUENTIAL)
+    expect("narration 9 then 0" in result.stdout,
+           f"a -v run does not leave the next quiet run narrating "
+           f"({result.stdout!r})")
+
+
 # ----- Conversion ----------------------------------------------------------
 
 def test_the_roster_is_not_truncated() -> None:
@@ -293,6 +348,8 @@ TESTS = [
     test_record_fail_can_show_more_than_it_registers,
     test_record_pass_obeys_the_same_default,
     test_each_invocation_counts_from_zero,
+    test_a_second_invocation_in_one_process_counts_only_itself,
+    test_verbosity_does_not_leak_into_the_next_invocation,
     test_the_roster_is_not_truncated,
     test_no_importer_keeps_a_local_helper,
     test_no_importer_registers_a_failure_behind_the_count,

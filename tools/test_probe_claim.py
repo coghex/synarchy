@@ -224,10 +224,10 @@ def main(argv: list[str] | None = None) -> int:
         help="run one contract owner's cases only.")
     # This module owns its own command line, so the shared verbosity
     # flag joins that parser rather than being consumed behind its
-    # back (#1922).
+    # back; `begin` then starts this invocation's own count (#1922).
     selftestlib.add_verbose_option(parser)
     args = parser.parse_args(argv)
-    selftestlib.set_verbose(args.verbose)
+    selftestlib.begin(args.verbose)
 
     try:
         cases = selected_cases(args.only)

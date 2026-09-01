@@ -2164,10 +2164,11 @@ def main(argv: list[str] | None = None) -> int:
              "member (#1360).")
     # This script already owns its command line, and CI drives it through
     # both selective forms, so the shared verbosity flag joins that parser
-    # rather than being consumed behind its back (#1922).
+    # rather than being consumed behind its back; `begin` then
+    # starts this invocation's own count (#1922).
     selftestlib.add_verbose_option(parser)
     args = parser.parse_args(argv)
-    selftestlib.set_verbose(args.verbose)
+    selftestlib.begin(args.verbose)
 
     # A member listed as expensive but absent from the run order would
     # silently vanish from BOTH selective forms, which is exactly the
