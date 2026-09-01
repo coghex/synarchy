@@ -34,7 +34,7 @@ local ringIds = nil -- {top, bottom, left, right} or nil
 
 function M.init()
     if texHighlight then return end
-    texHighlight = engine.loadTexture("assets/textures/ui/highlight.png")
+    texHighlight = engine.loadTexture("assets/textures/ui/highlight.png", "ui")
 end
 
 local function destroyRing()

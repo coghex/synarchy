@@ -151,9 +151,9 @@ function randbox.init()
 
     texSetNormal = boxTextures.load("assets/textures/ui/textbox", "textbox")
     texSetSelected = boxTextures.load("assets/textures/ui/textboxselected", "textbox")
-    texRandomNormal = engine.loadTexture("assets/textures/ui/randomize.png")
-    texRandomClicked = engine.loadTexture("assets/textures/ui/randomizeclicked.png")
-    texHighlight = engine.loadTexture("assets/textures/ui/highlight.png")
+    texRandomNormal = engine.loadTexture("assets/textures/ui/randomize.png", "ui")
+    texRandomClicked = engine.loadTexture("assets/textures/ui/randomizeclicked.png", "ui")
+    texHighlight = engine.loadTexture("assets/textures/ui/highlight.png", "ui")
 
     -- #1330: no RNG seeding here. This used to run
     -- `math.randomseed(os.time())`, which put a UI widget in charge of

@@ -31,6 +31,7 @@ import Engine.Asset.Handle (TextureHandle(..), AssetState(..))
 import Engine.Asset.Types (AssetPool)
 import Engine.Asset.Manager (generateTextureHandle, updateTextureState)
 import Engine.Asset.TextureNameRegistry (lookupTextureName, registerTextureName)
+import Engine.Graphics.Vulkan.Texture.Policy (UploadSampler(..))
 import Engine.Asset.YamlMaterials
     (MaterialDef(..), loadMaterialYaml, materialPropsFromDef)
 import Engine.Asset.YamlVegetation (VegetationDef(..), loadVegetationYaml)
@@ -192,8 +193,17 @@ loadAndRegisterWithPool env poolRef lteq name path = do
     updateTextureState handle (AssetLoading path [] 0.0) pool
     -- Register name → handle
     registerTextureName (rvTextureNameRegistryRef (toRenderViewCapability env)) name handle
-    -- Queue for actual GPU loading on the engine thread
-    Q.writeQueue lteq (LuaLoadTextureRequest handle path)
+    -- Queue for actual GPU loading on the engine thread.
+    --
+    -- Always SCENE art (#2075): every caller of this helper is a YAML
+    -- declaration of something drawn in the world — material and
+    -- vegetation tiles, facemaps, flora, buildings, items, and the
+    -- location map icons that live under @assets/textures/icons/@ but
+    -- are drawn on the zoom map. So these slots follow the player's
+    -- filter setting exactly as they did before the policy existed. The
+    -- UI/HUD declaration is made at the Lua @engine.loadTexture@ call
+    -- sites, which is the surface D-4 puts it on.
+    Q.writeQueue lteq (LuaLoadTextureRequest handle path UploadGlobalSampler)
     return handle
 
 -- | 'loadAndRegisterWithPool' for a compiled unit-animation atlas

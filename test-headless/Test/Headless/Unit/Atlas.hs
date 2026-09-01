@@ -1376,8 +1376,11 @@ spec = do
                     other → expectationFailure ("expected a rejection, got "
                                                 ⧺ showLoad other)
 
-    -- The path cache is keyed by path alone, so reuse across an upload
-    -- policy boundary would hand the new handle the wrong sampler.
+    -- Reuse across an upload-policy boundary would hand the new handle
+    -- the wrong sampler. Since #2075 the path cache is itself keyed by
+    -- (path, policy), so a lookup cannot cross that boundary; this
+    -- predicate is the GPU-side check that a canonical really was
+    -- registered the way its cache key claims.
     describe "Unit.Atlas — the texture cache will not reuse across policies" $ do
         let pinnedMap = Map.singleton (TextureHandle 7) (Sampler 0x0E4E57)
             reuse policy h' = cacheEntryReusable policy pinnedMap h'

@@ -19,6 +19,9 @@ import Engine.Asset.Handle (TextureHandle(..), AssetState(..))
 import Engine.Asset.Types (AssetPool(..))
 import Engine.Scene.Base (ObjectId(..), LayerId(..))
 import Engine.Graphics.Config (VideoConfig(..))
+import Engine.Graphics.Vulkan.Texture.Policy
+  (UploadSampler(..), TextureCacheKey(..), parseUploadPolicy
+  , uploadPolicyNames)
 import Engine.Core.State (EngineEnv, loggerRef)
 import Engine.Core.Capability.RenderView
   (RenderViewCapability(..), toRenderViewCapability)
@@ -26,6 +29,7 @@ import Engine.Core.Log (LogCategory(..), logWarn, logDebug)
 import qualified Engine.Core.Queue as Q
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as Map
+import qualified Data.List.NonEmpty as NE
 import qualified HsLua as Lua
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
@@ -38,11 +42,36 @@ getUIScaleFn env = do
     Lua.pushnumber (Lua.Number (realToFrac (vcUIScale vconfig)))
     return 1
 
+-- | engine.loadTexture(path[, policy]) → handle | nil
+--
+--   @policy@ (#2075, D-4) declares which sampler the slot this load
+--   creates is registered with: @"scene"@ follows the player's
+--   nearest\/linear video setting and is repainted live by
+--   @engine.setTextureFilter@; @"ui"@ is pinned to nearest for the
+--   session, which is what UI chrome and the icons the UI\/HUD layers
+--   draw want.
+--
+--   OMITTING it selects @"scene"@, so every pre-#2075 call site keeps
+--   exactly the behavior it had. That is the only way to select the
+--   default: a policy argument that is PRESENT but names no policy —
+--   a typo, or a value of any type other than a string — is REFUSED
+--   with a warning and a @nil@ handle, and queues no load at all.
+--   Classifying it as scene art instead would be the silent
+--   mis-categorisation this API exists to prevent, and would look
+--   correct right up until the player toggled the filter.
+--
+--   The policy cannot be inferred from the path and is never guessed
+--   from one: @assets\/textures\/icons\/location\/*@ are drawn on the
+--   world's zoom map while the rest of @icons\/@ is toolbar chrome,
+--   @assets\/textures\/ui\/hud\/utility\/world_*@ are the world cursor
+--   overlays, and @assets\/textures\/utility\/white.png@ is drawn by
+--   both layers.
 loadTextureFn ∷ LuaBackendState → Lua.LuaE Lua.Exception Lua.NumResults
 loadTextureFn backendState = do
   path ← Lua.tostring 1
-  case path of
-    Just pathBS → do
+  policy ← requestedUploadPolicy
+  case (path, policy) of
+    (Just pathBS, Just samplerPolicy) → do
       handle ← Lua.liftIO $ do
         let pathStr = TE.decodeUtf8Lenient pathBS
             (lteq, _) = lbsMsgQueues backendState
@@ -50,12 +79,57 @@ loadTextureFn backendState = do
         handle ← generateTextureHandle pool
         updateTextureState handle
           (AssetLoading (T.unpack pathStr) [] 0.0) pool
-        Q.writeQueue lteq (LuaLoadTextureRequest handle (T.unpack pathStr))
+        Q.writeQueue lteq
+          (LuaLoadTextureRequest handle (T.unpack pathStr) samplerPolicy)
         return handle
       let (TextureHandle n) = handle
       Lua.pushnumber (Lua.Number (fromIntegral n))
-    Nothing → Lua.pushnil
+    (Just pathBS, Nothing) → do
+      -- A named policy nothing recognises. Report the path AND the
+      -- offending token so the call site is findable, then refuse:
+      -- 'AssetLoading' is never written and nothing is queued, so no
+      -- handle exists for a caller to hold.
+      offending ← describePolicyArgument
+      Lua.liftIO $ do
+        logger ← readIORef (lbsLoggerRef backendState)
+        logWarn logger CatLua $
+          "engine.loadTexture: unknown upload policy " <> offending
+          <> " for " <> TE.decodeUtf8Lenient pathBS
+          <> " (expected one of "
+          <> T.intercalate ", " uploadPolicyNames
+          <> ", or omit the argument to follow the player's filter)"
+      Lua.pushnil
+    (Nothing, _) → Lua.pushnil
   return 1
+
+-- | The upload policy argument 2 asks for.
+--
+--   @Just@ wraps a decision; @Nothing@ is a REFUSAL, not a default.
+--   Absent (or explicitly @nil@) is the one shape that yields the
+--   backward-compatible 'UploadGlobalSampler'. A string is looked up in
+--   'parseUploadPolicy'; ANY other type is refused outright rather than
+--   coerced — @Lua.tostring@ would happily turn the number @2@ into
+--   @"2"@, and a coercion that can only ever fail the lookup adds
+--   nothing but a confusing diagnostic.
+requestedUploadPolicy ∷ Lua.LuaE Lua.Exception (Maybe UploadSampler)
+requestedUploadPolicy = Lua.ltype 2 ⌦ \case
+  Lua.TypeNone   → pure (Just UploadGlobalSampler)
+  Lua.TypeNil    → pure (Just UploadGlobalSampler)
+  Lua.TypeString → do
+    raw ← Lua.tostring 2
+    pure (parseUploadPolicy . TE.decodeUtf8Lenient =≪ raw)
+  _              → pure Nothing
+
+-- | Argument 2 as it should appear in the refusal above: the token
+--   itself when it is a string, otherwise the Lua type name, since a
+--   table or function has no useful rendering.
+describePolicyArgument ∷ Lua.LuaE Lua.Exception Text
+describePolicyArgument = Lua.ltype 2 ⌦ \case
+  Lua.TypeString → do
+    raw ← Lua.tostring 2
+    pure $ maybe "(unreadable)"
+        (\bs → "'" <> TE.decodeUtf8Lenient bs <> "'") raw
+  other → pure $ "of type " <> T.pack (show other)
 
 -- | engine.getTextureSize(handle) → {width=, height=} | nil
 --   The natural pixel dimensions of a texture 'engine.loadTexture'
@@ -94,10 +168,20 @@ getTextureSizeFn env = do
 --   reported bookkeeping (#886's preview-mode trimmed-loading proof:
 --   every entry here must resolve under the browsed category's root or
 --   be a documented chrome asset).
+--
+--   One entry per distinct FILE, never per cache entry. Since #2075 the
+--   cache is keyed by @(path, policy)@, so a genuinely dual-use texture
+--   — @utility\/white.png@, drawn by both the UI and the world — holds
+--   two entries and two slots. This API answers the question its
+--   consumers actually ask ("which files did this session load?"), so
+--   it collapses the policy out and reports that path once, in the
+--   ascending path order it always had.
 getLoadedTexturePathsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 getLoadedTexturePathsFn env = do
   let rv = toRenderViewCapability env
-  paths ← Lua.liftIO $ Map.keys . apAssetPaths ⊚ readIORef (rvAssetPoolRef rv)
+  paths ← Lua.liftIO $
+      map NE.head . NE.group . map tckPath . Map.keys . apAssetPaths
+        ⊚ readIORef (rvAssetPoolRef rv)
   Lua.newtable
   forM_ (zip [1 ∷ Int ..] paths) $ \(i, p) → do
     Lua.pushstring (TE.encodeUtf8 p)

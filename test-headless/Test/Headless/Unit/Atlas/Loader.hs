@@ -129,7 +129,7 @@ atlasRequests ∷ [LuaToEngineMsg] → [(TextureHandle, FilePath)]
 atlasRequests msgs = [ (h, p) | LuaLoadAtlasTextureRequest h p ← msgs ]
 
 plainRequests ∷ [LuaToEngineMsg] → [(TextureHandle, FilePath)]
-plainRequests msgs = [ (h, p) | LuaLoadTextureRequest h p ← msgs ]
+plainRequests msgs = [ (h, p) | LuaLoadTextureRequest h p _ ← msgs ]
 
 publishedDef ∷ EngineEnv → IO (Maybe UnitDef)
 publishedDef env = do

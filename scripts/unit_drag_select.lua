@@ -156,7 +156,7 @@ function dragSelect.init(scriptId)
     -- full alpha; the resulting strips are uniformly colored without
     -- any pattern from a stretched chrome texture.
     dragSelect.whiteTex = engine.loadTexture(
-        "assets/textures/utility/white.png")
+        "assets/textures/utility/white.png", "ui")
 
     dragSelect.page = UI.newPage("drag_select_overlay", "overlay")
     dragSelect.edgeIds = {}

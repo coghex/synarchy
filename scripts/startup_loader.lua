@@ -164,18 +164,23 @@ local function addYamlTree(dir, label, loaderFn)
     addYamlFamily(dir, label, loaderFn, paths)
 end
 
-local function addTextureList(label, paths)
+-- `policy` is engine.loadTexture's upload policy (#2075) and is passed
+-- through verbatim, nil included. A PRELOAD must declare the SAME policy
+-- its eventual consumer declares: the cache is keyed by (path, policy),
+-- so preloading under the wrong one uploads a slot nobody will ever
+-- sample and leaves the consumer to upload the real one anyway.
+local function addTextureList(label, paths, policy)
     for _, p in ipairs(paths) do
-        addItem(label, function() engine.loadTexture(p) end)
+        addItem(label, function() engine.loadTexture(p, policy) end)
     end
 end
 
-local function addTextureDir(dir, label)
+local function addTextureDir(dir, label, policy)
     local files = engine.listFiles(dir, ".png")
     if not files then return end
     for _, fname in ipairs(files) do
         local path = dir .. "/" .. fname
-        addItem(label, function() engine.loadTexture(path) end)
+        addItem(label, function() engine.loadTexture(path, policy) end)
     end
 end
 
@@ -230,9 +235,12 @@ local worldStructuralPaths = {
     "assets/textures/facemap/vegface_slope_nesw.png",
 }
 
--- HUD textures consumed by hud.init. Same cache-hit story as the
--- world structural paths above.
-local hudPaths = {
+-- HUD CHROME consumed by hud.init: toolbar buttons, map-mode buttons and
+-- the log toggles, all drawn by the UI layer. Same cache-hit story as
+-- the world structural paths above, and preloaded under the SAME "ui"
+-- policy hud.init declares (#2075) so these are genuine hits rather than
+-- a discarded second copy under the scene policy.
+local hudUiPaths = {
     "assets/textures/ui/hud/map_default.png",
     "assets/textures/ui/hud/map_default_selected.png",
     "assets/textures/ui/hud/map_temp.png",
@@ -257,16 +265,25 @@ local hudPaths = {
     "assets/textures/ui/hud/tool_mine_selected.png",
     "assets/textures/ui/hud/tool_build.png",
     "assets/textures/ui/hud/tool_build_selected.png",
+    "assets/textures/ui/hud/event_log.png",
+    "assets/textures/ui/hud/event_log_selected.png",
+    "assets/textures/ui/hud/combat_log.png",
+    "assets/textures/ui/hud/combat_log_selected.png",
+}
+
+-- The cursor overlays hud.init hands to world.setZoomCursor*Texture /
+-- world.setWorldCursor*Texture. They live under assets/textures/ui/ and
+-- are loaded in the same function as the chrome above, but they are
+-- drawn IN THE WORLD at world scale, so they are scene art and follow
+-- the player's filter setting (#2075). This is exactly why the policy is
+-- declared at the call site and never derived from the path.
+local hudScenePaths = {
     "assets/textures/ui/hud/utility/zoom_select.png",
     "assets/textures/ui/hud/utility/zoom_hover.png",
     "assets/textures/ui/hud/utility/world_select.png",
     "assets/textures/ui/hud/utility/world_select_bg.png",
     "assets/textures/ui/hud/utility/world_hover.png",
     "assets/textures/ui/hud/utility/world_hover_bg.png",
-    "assets/textures/ui/hud/event_log.png",
-    "assets/textures/ui/hud/event_log_selected.png",
-    "assets/textures/ui/hud/combat_log.png",
-    "assets/textures/ui/hud/combat_log_selected.png",
 }
 
 -----------------------------------------------------------
@@ -305,11 +322,16 @@ local function queueNormalProfile()
     -- Texture-only phases.
     -- Icons are organized into kind subfolders; addTextureDir is not
     -- recursive, so enqueue each subfolder.
+    -- These six families are unit_info_v2_panel_engine's row icons, drawn
+    -- by the UI layer -- NOT assets/textures/icons/location, which is
+    -- drawn on the zoom map and is loaded from the location YAML rather
+    -- than here.
     for _, sub in ipairs({ "stat", "skill", "status", "injury", "infection", "knowledge" }) do
-        addTextureDir("assets/textures/icons/" .. sub, "Loading icons...")
+        addTextureDir("assets/textures/icons/" .. sub, "Loading icons...", "ui")
     end
-    addTextureList("Loading HUD...",   hudPaths)
-    addTextureList("Loading world...", worldStructuralPaths)
+    addTextureList("Loading HUD...",   hudUiPaths,    "ui")
+    addTextureList("Loading HUD...",   hudScenePaths, "scene")
+    addTextureList("Loading world...", worldStructuralPaths, "scene")
 end
 
 local function queueArenaProfile()
