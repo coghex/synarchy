@@ -275,9 +275,51 @@ function M.register(aiState)
             -- fromGround/groundGid, and their ABSENCE already means
             -- "this repair target did not come off the ground", which
             -- is the only thing those bytes could have meant.
-            if version == 1 then return refsMod.wrapAiState(data) end
-            if version == 2 then return refsMod.addOwnerToAiState(data) end
-            return data
+            local migrated = data
+            if version == 1 then migrated = refsMod.wrapAiState(data)
+            elseif version == 2 then migrated = refsMod.addOwnerToAiState(data)
+            end
+            --
+            -- #2055: supply the transient runtime fields a thought tick
+            -- reads before it has decided anything, to any row that
+            -- omits them. An accepted payload need not carry them --
+            -- this component's validator accepts a free-form state row
+            -- on purpose -- and applyEntityRows installs each decoded
+            -- row VERBATIM, deliberately, since it knows nothing about
+            -- what any component's rows mean. Such a row survived
+            -- decode, canonical comparison, resave, restart and reload
+            -- and then errored on its first live tick at
+            -- `engine.gameTime() < s.nextActionAt`; the tracked
+            -- b3-lua-versioned-session-v1 fixture's v1 payload,
+            -- `{[1] = {buildTarget = 1}}`, is exactly one.
+            --
+            -- HERE, at decode's tail, for two reasons that both matter:
+            --
+            --   * It is where every accepted inputVersion's branch
+            --     joins, so the fix is version-independent by
+            --     construction and a future version gets it without a
+            --     new back-fill of its own.
+            --   * decode() runs on the FORWARD path only. apply() is
+            --     also the rollback entry point -- applyAll hands it
+            --     the OLD session's snapshot to unwind an abandoned
+            --     load, and that unwind must be verbatim -- so
+            --     normalizing there would edit pre-load state during a
+            --     load that is being abandoned. Nothing rolls back
+            --     through decode, so this boundary cannot.
+            --
+            -- Fills only what is missing and overwrites nothing, so a
+            -- row's own scheduling always wins. The fields are added to
+            -- the WIRE-shaped rows; they carry no reference, so the
+            -- schema walk, the tag validator and the typed-reference
+            -- graph are all untouched, and unwrapUnitState copies them
+            -- through to live state unchanged.
+            local filled = defaults.normalizeAll(migrated)
+            if filled > 0 then
+                engine.logInfo("Unit AI: decoded " .. filled
+                    .. " row(s) with no runtime defaults (v" .. version
+                    .. "); supplying them")
+            end
+            return migrated
         end,
         validate = validateUnitAiData,
         references = refsMod.references,
@@ -297,36 +339,16 @@ function M.register(aiState)
         -- table is mutated in place: consumers hold direct references to
         -- it and rebinding would orphan every one of them.
         --
-        -- #2055: the retained rows are then normalized against the
-        -- fresh-row runtime defaults. applyEntityRows installs each
-        -- decoded row VERBATIM -- deliberately, since it knows nothing
-        -- about what any component's rows mean -- and an accepted
-        -- payload need not carry the transient fields the thought tick
-        -- reads before it has decided anything (this component's
-        -- validator accepts a free-form state row on purpose). Such a
-        -- row survived decode, resave, restart and reload and then
-        -- errored on its first live tick at `engine.gameTime() <
-        -- s.nextActionAt`; the tracked b3-lua-versioned-session-v1
-        -- fixture's v1 payload, `{[1] = {buildTarget = 1}}`, is exactly
-        -- one.
-        --
-        -- Placed HERE, after decode(), rather than in any migration
-        -- branch: every accepted inputVersion converges on this one
-        -- stage, so the fix is version-independent by construction and
-        -- a future version gets it without a new back-fill. It is also
-        -- unit-AI-specific by construction -- applyEntityRows' generic
-        -- semantics (absent-owner filtering, the tolerated-dangling
-        -- rule, the in-place clear) are untouched, and normalization
-        -- runs only over the rows it retained, filling missing values
-        -- and overwriting none.
+        -- #2055's runtime-default normalization is deliberately NOT
+        -- here: apply() is also the ROLLBACK entry point (applyAll
+        -- hands it the OLD session's own snapshot, contextless, and
+        -- that unwind is required to be verbatim), so normalizing at
+        -- this boundary would edit pre-load state during a load that
+        -- is being abandoned. It runs at the end of decode() instead --
+        -- see there.
         apply = function(data, entities)
             saveMods.applyEntityRows(aiState, refsMod.unwrapAiState(data),
                 entities, { kind = "unit", component = "unit_ai" })
-            local filled = defaults.normalizeAll(aiState)
-            if filled > 0 then
-                engine.logInfo("Unit AI: supplied runtime defaults for "
-                    .. filled .. " restored row(s) that omitted them")
-            end
         end,
     })
 

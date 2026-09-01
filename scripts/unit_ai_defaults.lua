@@ -6,7 +6,7 @@
 --
 --   * ensureState (unit_ai_core.lua) builds the row for a unit the AI
 --     is seeing for the first time, and it set all three.
---   * the save-restore apply (unit_ai_save.lua) installs each decoded
+--   * the save-restore path (unit_ai_save.lua) installs each decoded
 --     row VERBATIM -- saveModules.applyEntityRows deliberately knows
 --     nothing about what any component's rows MEAN -- and it set none.
 --
@@ -24,10 +24,14 @@
 -- current-format resave of one -- can be sparse.
 --
 -- So the defaults are declared ONCE, here, and both paths normalize
--- against them. That is what makes the fix version-independent:
--- normalization runs after the whole decode ladder, so every accepted
--- inputVersion converges on this one stage rather than each migration
--- branch needing its own back-fill.
+-- against them. The restore side does it at the END OF decode(), which
+-- is both where every accepted inputVersion's branch joins -- making
+-- the fix version-independent rather than per-migration -- and a
+-- FORWARD-ONLY boundary. That second half is load-bearing: apply() is
+-- also applyAll's rollback entry point, and unwinding an abandoned
+-- load must restore the old session verbatim, so filling defaults
+-- there would edit pre-load state on a load that is being abandoned.
+-- Nothing rolls back through decode.
 --
 -- FILL ONLY, NEVER OVERWRITE. A restored row that carries a value
 -- keeps it, whatever it is -- including a `nextActionAt` in the past

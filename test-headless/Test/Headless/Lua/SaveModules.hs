@@ -2889,11 +2889,12 @@ spec = do
     -- survived decode, canonical comparison, resave, restart and
     -- reload and then errored on its first live tick.
     --
-    -- The normalization these cases pin is a SINGLE stage that runs
-    -- after decode(), which is why they can cover every accepted
-    -- inputVersion by looping rather than by asserting version by
-    -- version that some migration branch back-filled correctly: every
-    -- branch converges here.
+    -- The normalization these cases pin is a SINGLE stage at the END of
+    -- decode(), which is why they can cover every accepted inputVersion
+    -- by looping rather than by asserting version by version that some
+    -- migration branch back-filled correctly: every branch converges
+    -- there. decode() is also FORWARD-ONLY, which is what keeps a
+    -- rollback's verbatim unwind out of it -- the last case here.
     describe "unit_ai transient runtime defaults (issue #2055)" $ do
         it "supplies every declared runtime default a restored row \
            \omits, for EVERY accepted inputVersion -- the whole decode \
@@ -3041,6 +3042,52 @@ spec = do
               <> "never rebound')"
             , "assert(consumerRef[9] == nil,"
             , "  'and must not see the dropped one either')"
+            ]
+
+        it "leaves a SPARSE pre-load row untouched when an abandoned \
+           \load unwinds through it: apply() is also applyAll's rollback \
+           \entry point, and that unwind must restore the old session \
+           \VERBATIM -- so the defaults are supplied at decode(), which \
+           \nothing rolls back through" $ runsOk $ lns $
+            unitAiDefaultsPrelude ⧺
+            [ "local unitAiSave = require('scripts.unit_ai_save')"
+            , "local refs = require('scripts.unit_ai_save_refs')"
+            , "local saveModules = require('scripts.lib.save_modules')"
+            , "local codec = require('scripts.lib.data_codec')"
+            , "-- The PRE-LOAD live session carries a sparse row. (A real"
+            , "-- one cannot, now that both installers normalize -- but the"
+            , "-- rollback contract is 'verbatim', not 'verbatim for rows"
+            , "-- that happen to be complete', and it is the contract this"
+            , "-- pins.)"
+            , "local live = { [1] = { buildTarget = 1 } }"
+            , "unitAiSave.register(live)"
+            , "-- A reset hook that throws: it runs only AFTER every"
+            , "-- component has committed, so unit_ai's forward apply has"
+            , "-- definitely happened and is then unwound -- the exact"
+            , "-- ordering an apply-failure in a later component produces,"
+            , "-- without needing to force one."
+            , "saveModules.registerResetHook('boom', function()"
+            , "  error('reset hook failed') end)"
+            , "local prep = saveModules.prepareLoad({"
+            , "  { id = 'unit_ai', version = 7,"
+            , "    payload = codec.encode(refs.wrapAiState("
+            , "      { [9] = { buildTarget = 1 } })) },"
+            , "}, 1, false, { unit = { [9] = true }, building = {} })"
+            , "assert(prep.ok, table.concat(prep.errors or {}, '; '))"
+            , "local ok = pcall(saveModules.applyAll)"
+            , "assert(not ok, 'a throwing reset hook must fail the load')"
+            , "-- The unwind restored the OLD session. Its sparse row must"
+            , "-- come back exactly as it was."
+            , "assert(live[1] ~= nil, 'the pre-load row must be restored')"
+            , "assert(live[1].buildTarget == 1, 'restored verbatim')"
+            , "assert(live[9] == nil,"
+            , "  'the row from the abandoned load must be gone')"
+            , "for _, f in ipairs(require('scripts.unit_ai_defaults').FIELDS) do"
+            , "  assert(live[1][f.name] == nil,"
+            , "    'a rollback must not add ' .. f.name .. ' to a pre-load "
+              <> "row -- the unwind is VERBATIM, and the load it belongs to "
+              <> "was abandoned')"
+            , "end"
             ]
 
         it "fills a restored row from the SAME declaration ensureState \
