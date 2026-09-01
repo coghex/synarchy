@@ -63,11 +63,15 @@ resolveItemPage env Nothing = activeWorldStateFrom (wsWorldManagerRef (toWorldSi
 --   props table: fill, quality, condition and temp (°C — spawns the
 --   item hot/cold; omitted = at ambient, #344).
 --
---   Returns TWO values on success (#917): the page-local ground id, and
---   the spawned item's own 'Item.Types.iiInstanceId' — the physical
---   identity that survives pickup, transfer, storage and drop, which is
---   what durable provenance must be keyed on. A failure still answers a
---   single @nil@.
+--   Answers exactly ONE value, and must keep doing so: the debug
+--   console serializes every return value tab-separated, so a second
+--   one turns @return item.spawnGround(...)@ — which several probes
+--   parse as a bare number — into @"0\t14"@. A caller needing the
+--   spawned item's durable PHYSICAL identity resolves the ground id it
+--   gets back (@item.listGround@ reports @instanceId@ per row), or, for
+--   #917's location provenance, hands the ground id to
+--   @world.registerLocationSignificantSpawn@, which resolves it
+--   engine-side.
 --   Resting height derives from terrain at render time, so items on
 --   slopes sit on the incline and items over dug tiles drop with
 --   the terrain. An explicit pageId (slot 5) pins the spawn to that
@@ -170,16 +174,7 @@ itemSpawnGroundFn env = do
                                     spawnGroundItem inst (realToFrac x)
                                                          (realToFrac y)
                             Lua.pushinteger (fromIntegral gid)
-                            -- #917: the PHYSICAL identity, as a second
-                            -- return value. A caller that binds one
-                            -- result is unaffected; a caller that must
-                            -- record durable provenance for the item it
-                            -- just created needs the id that survives
-                            -- pickup, transfer and drop, which the
-                            -- page-local ground id does not.
-                            Lua.pushinteger
-                                (fromIntegral (iiInstanceId inst))
-                            return 2
+                            return 1
                 _ → Lua.pushnil >> return 1
         _ → Lua.pushnil >> return 1
 

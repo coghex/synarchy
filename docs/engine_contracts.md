@@ -1545,6 +1545,13 @@ per slot — a retried content spawn cannot repoint an obligation and
 orphan the item it first named, and the refusal is exactly the edge a
 resuming spawn uses to tell "still owed" from "already done".
 
+Lua hands that verb the GROUND id `item.spawnGround` returned, and the
+verb resolves it to the physical id synchronously before queueing.
+`item.spawnGround` answers exactly ONE value and must keep doing so: the
+debug console serializes every return value tab-separated, so a second
+one would turn `return item.spawnGround(...)` — which several probes
+parse as a bare number — into `"0\t14"`.
+
 **A latch alone is not enough.** `significantRecovered` counts an
 obligation as discharged only when it names a spawned item AND that item
 was taken. No engine path can produce the other shape —

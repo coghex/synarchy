@@ -602,10 +602,9 @@ local function spawnSignificantContent(def, gx, gy, worldId, placed)
         if not obligation.item_instance_id then
             local slot = obligation.slot
             local ox, oy = contentOffset(def, authored[slot] or {})
-            local gid, itemInstanceId =
-                item.spawnGround(obligation.item, gx + ox, gy + oy,
-                                 nil, worldId)
-            if not gid or not itemInstanceId then
+            local gid = item.spawnGround(obligation.item, gx + ox, gy + oy,
+                                         nil, worldId)
+            if not gid then
                 engine.logWarn("locations: significant item content '" ..
                     tostring(obligation.item) .. "' failed to spawn")
                 return false
@@ -613,8 +612,12 @@ local function spawnSignificantContent(def, gx, gy, worldId, placed)
             -- Registered IMMEDIATELY, one item at a time, so an
             -- interruption leaves a bound prefix a retry can resume
             -- past rather than an orphaned item with no provenance.
+            -- The GROUND id is what goes over the boundary — the verb
+            -- resolves it to the item's durable physical identity
+            -- engine-side, so item.spawnGround keeps its single-value
+            -- contract that the debug console's callers depend on.
             if not world.registerLocationSignificantSpawn(
-                    placed.instance_id, slot, itemInstanceId, worldId) then
+                    placed.instance_id, slot, gid, worldId) then
                 engine.logWarn("locations: could not register significant " ..
                     "item '" .. tostring(obligation.item) .. "' for slot " ..
                     tostring(slot))

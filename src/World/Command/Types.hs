@@ -442,10 +442,16 @@ data WorldCommand
         --   instance was placed owing. WRITE-ONCE per slot on the world
         --   thread: a slot already bound keeps its item, so a retried
         --   content spawn cannot repoint an obligation and orphan the
-        --   item it first named. The physical instance id is carried,
-        --   not the page-local ground id, because it is what survives
-        --   the pickup, transfer and drop the taken latch has to see
-        --   through.
+        --   item it first named.
+        --
+        --   The PHYSICAL instance id is carried, not the page-local
+        --   ground id, because it is what survives the pickup, transfer
+        --   and drop the taken latch has to see through. Lua names the
+        --   ground id it just got from @item.spawnGround@;
+        --   'Engine.Scripting.Lua.API.World.Edit' resolves it before
+        --   queueing, so this command already carries the durable
+        --   identity rather than one this thread would have to look up
+        --   later against a ground table that may have moved on.
     | WorldSetLocationEncounterOccupantState
         !WorldPageId !LocationInstanceId !UnitId !Bool !Bool
         -- ^ worldId, location instance id, occupant id, engaged, returning.

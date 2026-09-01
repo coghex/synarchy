@@ -35,6 +35,9 @@ import Structure.Types
 import World.Generate.Coordinates (globalToChunk)
 import World.Types hiding (activeWorldPage)
 import World.Material (MaterialId(..), materialIdByName)
+import qualified Data.HashMap.Strict as HM
+import Item.Ground (GroundItem(..), GroundItems(..))
+import Item.Types (ItemInstance(..))
 import Unit.Types (UnitId(..))
 
 -- | The live page this call targets: the named one when a pageId string
@@ -159,41 +162,60 @@ worldRegisterLocationEncounterOccupantsFn wsc = do
         Lua.pop 1
         pure ((\(Lua.Number v) → realToFrac v) ⊚ value)
 
--- | world.registerLocationSignificantSpawn(instanceId, slot,
---   itemInstanceId [, pageId]) → bool (#917). Binds one guaranteed
---   significant item, just spawned by @scripts\/locations.lua@, to the
---   obligation slot the placed instance was created owing.
+-- | world.registerLocationSignificantSpawn(instanceId, slot, groundId
+--   [, pageId]) → bool (#917). Binds one guaranteed significant item,
+--   just spawned by @scripts\/locations.lua@, to the obligation slot
+--   the placed instance was created owing.
 --
---   @itemInstanceId@ is the item's PHYSICAL identity — @item.spawnGround@'s
---   SECOND return value, not its ground id — because the taken latch has
---   to follow the item through pickup, transfer and drop, and a ground
---   id does not survive any of them.
+--   @groundId@ is exactly what @item.spawnGround@ hands back — that
+--   verb answers ONE value and must keep doing so (see its haddock) —
+--   and this resolves it to the item's PHYSICAL
+--   'Item.Types.iiInstanceId' HERE, synchronously on the calling
+--   thread, before anything is queued. The physical id is what the
+--   obligation stores, because the taken latch has to follow the item
+--   through pickup, transfer and drop and a ground id survives none of
+--   them; resolving it now rather than on the world thread means the
+--   binding names the item the caller actually just spawned, not
+--   whatever occupies that ground id by the time the command runs.
 --
---   Returns whether the request was ACCEPTED for queueing (a positive
---   slot, a positive item id, and a resolvable page). The world thread
---   then applies it only if the slot exists and is still unbound, so a
+--   Returns whether the request was ACCEPTED for queueing: a
+--   non-negative instance id, a positive slot, a resolvable page, and a
+--   ground id that really names an item on it. The world thread then
+--   applies it only if the slot exists and is still unbound, so a
 --   retried content spawn re-registering a slot it already filled
 --   changes nothing. Poll @world.getLocationInstance@'s @significant@
 --   array for the settled binding.
 worldRegisterLocationSignificantSpawnFn
     ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
 worldRegisterLocationSignificantSpawnFn wsc = do
-    idArg   ← Lua.tointeger 1
-    slotArg ← Lua.tointeger 2
-    itemArg ← Lua.tointeger 3
-    pageArg ← Lua.tostring 4
-    queued ← case (idArg, slotArg, itemArg) of
-        (Just rawId, Just slot, Just itemId)
-            | rawId ≥ 0 ∧ slot > 0 ∧ itemId > 0 → Lua.liftIO $ do
+    idArg    ← Lua.tointeger 1
+    slotArg  ← Lua.tointeger 2
+    groundArg ← Lua.tointeger 3
+    pageArg  ← Lua.tostring 4
+    queued ← case (idArg, slotArg, groundArg) of
+        (Just rawId, Just slot, Just gid)
+            | rawId ≥ 0 ∧ slot > 0 ∧ gid ≥ 0 → Lua.liftIO $ do
                 mPid ← targetPage wsc pageArg
                 case mPid of
                     Nothing → pure False
                     Just pid → do
-                        Q.writeQueue (wsWorldQueue wsc) $
-                            WorldRegisterLocationSignificantSpawn pid
-                                (LocationInstanceId (fromIntegral rawId))
-                                (fromIntegral slot) (fromIntegral itemId)
-                        pure True
+                        mgr ← readIORef (wsWorldManagerRef wsc)
+                        case lookup pid (wmWorlds mgr) of
+                            Nothing → pure False
+                            Just ws → do
+                                gis ← readIORef (wsGroundItemsRef ws)
+                                case HM.lookup (fromIntegral gid)
+                                         (gisItems gis) of
+                                    Nothing → pure False
+                                    Just gi → do
+                                        Q.writeQueue (wsWorldQueue wsc) $
+                                            WorldRegisterLocationSignificantSpawn
+                                                pid
+                                                (LocationInstanceId
+                                                    (fromIntegral rawId))
+                                                (fromIntegral slot)
+                                                (iiInstanceId (giInst gi))
+                                        pure True
         _ → pure False
     Lua.pushboolean queued
     return 1
