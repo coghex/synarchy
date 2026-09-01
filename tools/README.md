@@ -450,7 +450,7 @@ instance, defaulting to its own historical fixed port when unset (#723).
 | `injury_log_probe.py` | logging arc (general) | arena | Injury-log stream roundtrip: `injury.emit`/`drainEvents`, `unit.injure`, `emitEventForUnit` tagging. |
 | `item_instance_probe.py` | #67 | worldgen | Per-instance item identity. |
 | `item_temp_probe.py` | #344 | worldgen | Item temperature model. |
-| `location_content_probe.py` | #90, #91, #915, #1101, #1230 | worldgen + arena | Location content spawning + ruin probe; also the player-wide discovery layer (sight-based since #1230 — a location is revealed when a player-owned unit's night-aware visible tiles touch its stored bounds, so the negative cases are derived from the sight radius rather than a discovery halo, which no longer exists), the per-unit location-knowledge layer beside it, and (#1101) each placed location's name rendered in its world's own generated language — generated name + English gloss on a provenance-bearing world, the `ldLabel` fallback with no gloss on the same seed without one, both surviving save/load and reproduced by regenerating the same seed + language in a fresh process. |
+| `location_content_probe.py` | #90, #91, #915, #1101, #1230 | worldgen + arena | Location content spawning + ruin probe; also the player-wide discovery layer (sight-based since #1230 — a location is revealed when a player-owned unit's night-aware visible tiles touch its stored bounds, so the negative cases are derived from the sight radius rather than a discovery halo, which no longer exists), the per-unit location-knowledge layer beside it, and (#1101) each placed location's name rendered in its world's own generated language — generated name + English gloss on a provenance-bearing world, the `ldLabel` fallback with no gloss on the same seed without one, both surviving save/load and reproduced by regenerating the same seed + language in a fresh process. The file itself is the façade (CLI, artifact guard, the eight-process sequence, the helpers other probes import); the scenario owners — content/persistence, discovery/knowledge, content dispatch/rejection, naming — live under `tools/location_content/` beside the shared invocation infrastructure (#2095). |
 | `location_overlay_probe.py` | #89 | worldgen + arena | World-gen location-overlay placement. |
 | `location_stamp_idempotent_probe.py` | #424, #1575 | worldgen | Geometry-stamp idempotency survives clearing the anchor floor + save/restart/reload; a never-visited location still stamps on first load; and the 5x5 footprint under the tested room really materialized level, with no levelling edit the engine refused. |
 | `lua_orphan_prune_probe.py` | #195, #1589 | worldgen | Lua per-id AI state is pruned (not inherited by id reuse) after a save load, and a stale reference from EVERY declared `unit_ai` family — planted before the save — is cleared by the automatic post-load reconcile. |
@@ -1074,19 +1074,36 @@ that was never created says so rather than being called empty); a default
 failing run says its log went with the tree and points at the flag; and a
 cleanup that cannot finish makes an otherwise passing run non-zero,
 through #1620's own `remove_isolated_root` reporting. It also pins what
-the probe still proves after the move: all seven boots go through the one
-funnel that hands each this invocation's log and registers its process as
-it is launched; both log-reading ASSERTIONS read that same log; the five
-fixture bodies are pinned by `sha256`; their registration order and
-loaders are unchanged (placement and loot draws are order- and
-content-sensitive); `load_fixture_yaml` still guards every one of them
-(#1342); and `make_isolated_root`, `remove_isolated_root` and
-`save_and_wait` are still the shapes `portal_ghost_probe.py` imports.
+the probe still proves after the move: all seven boot CALL SITES go
+through the one funnel that hands each this invocation's log and
+registers its process as it is launched; both log-reading ASSERTIONS
+read that same log; the five fixture bodies are pinned by `sha256`;
+their registration order and loaders are unchanged (placement and loot
+draws are order- and content-sensitive); `load_fixture_yaml` still
+guards every one of them (#1342); and `make_isolated_root`,
+`remove_isolated_root` and `save_and_wait` are still the shapes
+`portal_ghost_probe.py` imports.
 
-The probe is manual-only and boots seven engines across several generated
-worlds, so without this companion the contract is only ever observed by a
-run nothing in CI can make. Engine-free, GPU-free, network-free, about a
-second; blocking CI step alongside `test_flora_growth_probe.py`.
+Since #2095 every structural check scans the COMPLETE reorganized
+surface — the façade plus every scenario owner under
+`tools/location_content/` — and asserts its own non-vacuity first,
+because an exclusion-style property ("no bare `boot`", "no raw fixture
+`send`", "every log read is this invocation's") is True over an empty
+node set and would otherwise report OK while inspecting nothing once the
+assertion bodies left `run`. It also pins the scenario split itself:
+only the façade boots; the regeneration call site is still a loop over
+the same and reversed visit orders, so the run still LAUNCHES eight
+processes from seven call sites; each fixture constant has exactly one
+definition, resolved wherever its owner keeps it; the façade offers one
+`run(args, art, token)`; every PASS diagnostic and recorded failure
+belongs to an owner rather than the façade; and no owner keeps
+cross-scenario state in a mutable module global.
+
+The probe is manual-only. It boots from seven call sites and launches
+eight engine processes across several generated worlds, so without this
+companion the contract is only ever observed by a run nothing in CI can
+make. Engine-free, GPU-free, network-free, about a second; blocking CI
+step alongside `test_flora_growth_probe.py`.
 
 ```bash
 python3 tools/test_location_content_probe.py
