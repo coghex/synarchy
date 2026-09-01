@@ -59,14 +59,17 @@ where it applies the animation, the direction, and the stage:
 | an animation with no `frames` at all | an animation with no frames is a typo, not a default |
 | an empty canonical frame list | every direction needs at least one frame |
 | unequal canonical frame counts | frame *i* must mean the same stage in every view |
-| one path claimed by two facings **at one stage** | each direction needs its own art |
+| one path claimed by two facings in `sprites` | a canonical block never aliases one view into another |
+| one path claimed by two facings **at one stage** of an animation | same rule, per stage |
 | a missing or unrecognized `visual_class` | see §4 |
 | an unknown `state_animations` key | see §3 |
 | legacy `appearing` beside the role it resolves to | see §3 |
 
-The stage-distinctness rule is per stage, deliberately: one path
-recurring at a LATER stage of the same clip is an ordinary repeated
-frame, not a collapsed declaration.
+The distinctness rules are CANONICAL-only — a legacy declaration
+reaching all four views is the compatibility branch's whole job — and
+the animation one is per stage, deliberately: one path recurring at a
+LATER stage of the same clip is an ordinary repeated frame, not a
+collapsed declaration.
 
 ## 3. Lifecycle roles
 
@@ -167,8 +170,11 @@ view copied at placement and re-resolved from `biDefName` at load.
   ghosted, designated and hit-test geometry follow the active camera.
 - **Destruction.** `destruction` decodes; nothing plays it. BDA-3.
 - **Preview direction/lifecycle controls.** The preview keeps decoding
-  both forms and enumerating every facing's frame paths for its
-  content-based directory association, and gains no UI. BDA-4.
+  both forms — its static hint reads canonical `sprites.south` and falls
+  back to legacy `sprite`, so an art slice's migration cannot silently
+  drop a building out of its default-selection ladder — and enumerates
+  every facing's frame paths for its content-based directory
+  association. It gains no UI. BDA-4.
 - **Art.** No texture is authored, generated, mirrored or approved here.
 - **The final audit.** Removing the legacy forms, and checking file
   decoding, dimensions and anchor consistency across the whole tree, is

@@ -140,6 +140,26 @@ rejectionSpec = do
         decodeYaml (buildingYaml [ "    tile_size: { x: 1, y: 1 }" ])
             `shouldFailWith` ["probe_hall", "sprites", "no sprite"]
 
+    it "rejects one path claimed by two facings in `sprites`" $
+        -- A canonical block repeating a path would be indistinguishable
+        -- from the legacy branch in the runtime views while claiming to
+        -- be real four-facing art, which is what makes `AssetLegacy`
+        -- worth recording at all.
+        decodeYaml (buildingYaml
+            [ "    sprites:"
+            , "      south: \"s.png\""
+            , "      west: \"s.png\""
+            , "      north: \"n.png\""
+            , "      east: \"e.png\""
+            ]) `shouldFailWith`
+                ["probe_hall", "sprites", "s.png", "south", "west"]
+
+    it "still accepts a legacy `sprite` reaching all four views" $ do
+        -- The alias rule is CANONICAL-only: the compatibility branch's
+        -- whole job is one path through four views.
+        def ← decodeOne (buildingYaml [ "    sprite: \"legacy.png\"" ])
+        toList (faViews (bydSprites def)) `shouldBe` replicate 4 "legacy.png"
+
     it "rejects an empty canonical frame list" $
         decodeYaml (asymmetricYaml
             [ "      walkabout:"

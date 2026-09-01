@@ -26,6 +26,8 @@
 --   that animation actually declares.
 module Engine.Preview.Building
   ( BuildingPreviewMeta(..)
+  , BuildingAnimMetaDef(..)
+  , BuildingAnimMetaFile(..)
   , emptyBuildingPreviewMeta
   , buildingsCategoryRoot
   , buildingDefaultFps
@@ -53,8 +55,12 @@ import System.Directory
 import System.Posix.Files (getSymbolicLinkStatus, isRegularFile)
 import System.FilePath
     ( (</>), (<.>), dropExtension, takeDirectory, takeFileName, pathSeparator )
+import qualified Data.Aeson as Aeson
+import qualified Data.Aeson.Key as Key
+import qualified Data.Aeson.KeyMap as KM
 import Data.Foldable (toList)
-import Building.Schema (faViews)
+import Building.Schema (faViews, facingKey)
+import Engine.Graphics.Camera (CameraFacing(..))
 import Engine.Asset.YamlBuildings (BuildingYamlAnim(..))
 import Engine.Core.Types (PreviewBuilding(..), PreviewBuildingEntry(..))
 import Engine.Preview.Discovery
@@ -117,9 +123,36 @@ data BuildingAnimMetaDef = BuildingAnimMetaDef
 instance FromJSON BuildingAnimMetaDef where
     parseJSON = withObject "BuildingAnimMetaDef" $ \v → BuildingAnimMetaDef
         ⊚ v .:  "name"
-        ⊛ v .:? "sprite"
+        ⊛ pure (metaSprite v)
         ⊛ v .:? "state_animations" .!= Map.empty
         ⊛ v .:? "animations"       .!= Map.empty
+
+-- | The SOUTH static, read from either declaration form (#2080): the
+--   canonical @sprites.south@, else the legacy singular @sprite@.
+--
+--   Reading only the legacy key would silently drop rule 2 of
+--   'defaultBuildingEntry'\'s ladder the moment an art slice migrates a
+--   building to four facings — the viewer would stop recognizing that
+--   building's own declared static and fall through to @default.png@ or
+--   an arbitrary first entry.
+--
+--   South because the viewer, like the game in this slice, shows one
+--   view and south is it; BDA-4 owns any direction control.
+--
+--   Deliberately total, matching the rest of this decoder's tolerance: a
+--   @sprites@ block that is not an object, or that names no @south@,
+--   yields 'Nothing' and lets the ladder move on rather than failing a
+--   preview over an unrelated schema question.
+metaSprite ∷ Aeson.Object → Maybe Text
+metaSprite v = canonicalSouth <|> legacy
+  where
+    canonicalSouth = case KM.lookup "sprites" v of
+        Just (Aeson.Object o) → asText =≪ KM.lookup southKey o
+        _                     → Nothing
+    legacy   = asText =≪ KM.lookup "sprite" v
+    southKey = Key.fromText (facingKey FaceSouth)
+    asText (Aeson.String t) = Just t
+    asText _                = Nothing
 
 newtype BuildingAnimMetaFile = BuildingAnimMetaFile
     { bamfBuildings ∷ [BuildingAnimMetaDef] }

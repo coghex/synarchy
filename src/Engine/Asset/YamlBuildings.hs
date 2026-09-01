@@ -202,14 +202,31 @@ defSprites name v = do
         (Just _, Just _) → failT $
             ctx <> " declares both the canonical `sprites` block and the "
                 <> "legacy `sprite` path; declare exactly one"
-        (Just obj, Nothing) →
-            canonicalAssets ⊚ facingBlock ctx "sprites" (const parseJSON) obj
+        (Just obj, Nothing) → do
+            views ← facingBlock ctx "sprites" (const parseJSON) obj
+            canonicalStatics ctx views
+            pure (canonicalAssets views)
         (Nothing, Just p) → pure (legacyAssets p)
         (Nothing, Nothing) → failT $
             ctx <> " declares no sprite: expected a `sprites` block with "
                 <> keyList facingKeyList
                 <> ", or the legacy `sprite` path"
   where ctx = "building " <> quoted name
+
+-- | A canonical static declaration never aliases one view into another:
+--   four facings, four paths. The legacy branch is the ONE place a path
+--   reaches all four views, which is what makes 'AssetLegacy' mean
+--   something — a canonical block repeating a path would be
+--   indistinguishable from it in the runtime views while claiming to be
+--   real four-facing art.
+canonicalStatics ∷ Text → FacingSet Text → Aeson.Parser ()
+canonicalStatics ctx views =
+    case repeatedPath [ (f, facingValue f views) | f ← canonicalFacings ] of
+        Nothing → pure ()
+        Just (a, b, path) → failT $
+            ctx <> ": `sprites` assigns " <> quoted path <> " to both `"
+                <> facingKey a <> "` and `" <> facingKey b
+                <> "`; each direction needs its own art"
 
 -- | An animation's frame lists: the canonical four-direction block, or
 --   the legacy @default@ list. Mixing the two is rejected.
