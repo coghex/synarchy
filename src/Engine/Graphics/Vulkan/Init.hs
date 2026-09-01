@@ -19,7 +19,7 @@ import Engine.Core.State (EngineState(..), GraphicsState(..)
 import Engine.Core.Capability.Render
   (RenderCapability(..), toRenderCapability)
 import Engine.Core.Log (LogCategory(..))
-import Engine.Core.Log.Monad (logDebugM, logDebugSM)
+import Engine.Core.Log.Monad (logDebugM, logDebugSM, logInfoM)
 import Engine.Graphics.Base
 import Engine.Graphics.Solar (SolarBase(..), emptySolarPageTable, solarUniformEntries)
 import Engine.Graphics.Config
@@ -168,6 +168,18 @@ initializeVulkanCommon physicalDevice device queues swapInfo fbSize = do
   env ← ask
   videoConfig ← liftIO $ readIORef (rcVideoConfigRef (toRenderCapability env))
   props ← liftIO $ getPhysicalDeviceProperties physicalDevice
+
+  -- #2020: publish the device's real maxImageDimension2D onto the one
+  -- record every thread can reach, the moment a device exists. The world
+  -- thread has to know whether a world's zoom atlas can be created
+  -- BEFORE it generates the pixels, and it cannot reach 'vulkanPDevice'
+  -- — that lives in the main-render-private 'GraphicsState'. Both Vulkan
+  -- entry points (windowed and offscreen) funnel through here, so
+  -- neither can forget to publish it.
+  let maxImageDim = fromIntegral (maxImageDimension2D (limits props)) ∷ Int
+  liftIO $ writeIORef (rcMaxImageDimensionRef (toRenderCapability env))
+                      (Just maxImageDim)
+  logInfoM CatVulkan $ "Device maxImageDimension2D: " <> tshow maxImageDim
 
   let msaaInt = vcMSAA videoConfig
       requestedSamples = msaaToSampleCount msaaInt

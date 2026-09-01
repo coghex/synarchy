@@ -51,6 +51,10 @@ syncEditToSim wsc pageId ws lc = do
     editGen ← atomicModifyIORef' (wsChunkEditGenRef ws) $ \gens →
         let g = HM.lookupDefault 0 coord gens + 1
         in (HM.insert coord g gens, g)
+    -- The page's seam topology rides along so the sim wakes the chunk
+    -- physically across the u seam, not a raw neighbour key the page
+    -- stores nothing under (#2044).
+    topo ← pageSimTopology ws
     Q.writeQueue (wsSimQueue wsc) $
-        SimChunkEdited pageId coord editGen
+        SimChunkEdited pageId topo coord editGen
             (lcFluidMap lc) (lcTerrainSurfaceMap lc)

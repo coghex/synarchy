@@ -12,7 +12,7 @@ import qualified Data.Vector.Unboxed as VU
 import Control.Concurrent.MVar (MVar)
 import Engine.Asset.Handle (TextureHandle(..))
 import Location.Instance (LocationInstanceId, LocationLifecycle)
-import Structure.Types (StructureStageToken(..))
+import Structure.Types (StructureStageToken(..), StructureCommitWindow(..))
 import World.Chunk.Types (ChunkCoord(..))
 import World.Material.Id (MaterialId(..))
 import World.Material (MaterialRegistry)
@@ -428,7 +428,9 @@ data WorldCommand
         --   forwards nothing at all, so the placement lands on neither
         --   the captured page nor the newly selected one.
     | WorldMarkLocationStamped WorldPageId Int Int
-        -- ^ worldId, gx, gy. One-time geometry-stamp flag (#424): marks the
+                               (Maybe StructureCommitWindow)
+        -- ^ worldId, gx, gy, and the span of placement attempts the stamp
+        --   invocation made. One-time geometry-stamp flag (#424): marks the
         --   chunk containing (gx, gy) as having had its placed location's
         --   builder COMPLETE — every placement it attempted succeeded
         --   (#1719), not merely that the builder ran — in
@@ -440,4 +442,16 @@ data WorldCommand
         --   "World.Thread.ChunkLoading" retries it. The world thread is the
         --   sole owner of WorldGenParams; Lua queues this rather than
         --   mutating wsGenParamsRef directly.
+        --
+        --   __The Lua-side answer is only half of it (#2051).__ Every
+        --   @structure.place@ returning true means the placement was
+        --   ACCEPTED — staged and queued — not that it committed; the
+        --   target chunk can still evict before the world thread's own
+        --   residency check, which declines the commit and appends no
+        --   edit. So the command carries the invocation's
+        --   'StructureCommitWindow', and the handler withholds the marker
+        --   when any attempt in it was declined. 'Nothing' means no window
+        --   was supplied (the console verb, and a caller that placed
+        --   through no window at all) and marks unconditionally, exactly
+        --   as this command always did.
     deriving (Show)

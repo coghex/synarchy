@@ -48,6 +48,18 @@
 -- the Lua staging overlay and the authoritative edit apply key a piece
 -- by canonical tile and slot, so re-issuing a piece that already
 -- succeeded replaces it rather than adding a second one.
+--
+-- Accepted is not committed (#2051): structure.place returns true as soon
+-- as the piece is staged and its WorldSetStructure queued, and the world
+-- thread checks residency AGAIN before committing. A chunk that evicts in
+-- that window is declined there — no overlay entry, no edit — long after
+-- `ok` above said the geometry materialized. So the marker is gated a
+-- second time, on the world thread: structure.stageWatermark is read
+-- either side of the builder run, and the pair rides
+-- world.markLocationStamped as the span of attempts this invocation
+-- accepted. The engine withholds the marker when any of them was
+-- declined, and this every-load dispatch retries the whole builder next
+-- load exactly as it does for a synchronous failure.
 
 local stamper = {}
 
@@ -62,9 +74,16 @@ function stamper.onStampLocation(pageId, locId, gx, gy)
     -- active world, so unrelated state there could suppress a valid stamp
     -- on a hidden secondary page.
     if not world.hasStampedLocation(gx, gy, pageId) then
+        -- Read before the builder and again after it: everything staged
+        -- on THIS page in between is exactly what this invocation
+        -- accepted. Both reads must land for the pair to mean anything,
+        -- so a nil from either (an unresolvable page) passes no window
+        -- rather than half of one.
+        local fromTok = structure.stageWatermark(pageId)
         local ok, failed = locations.stamp(locId, gx, gy, pageId)
+        local toTok = structure.stageWatermark(pageId)
         if ok then
-            world.markLocationStamped(gx, gy, pageId)
+            world.markLocationStamped(gx, gy, pageId, fromTok, toTok)
         elseif (failed or 0) > 0 then
             -- One aggregate warning per unsuccessful ATTEMPT (so a retry
             -- that fails again warns again), never one per piece. The
