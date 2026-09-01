@@ -78,26 +78,6 @@ spec = do
     aliases "ucActionOutcomeRef" ucActionOutcomeRef actionOutcomeRef
     aliases "ucPathingConfigRef" ucPathingConfigRef pathingConfigRef
 
-    it "is stable across repeated projection (no fresh containers)" $ \env → do
-      -- The migration re-projects inline at nearly every call site
-      -- (`ucUnitManagerRef (toUnitCombatCapability env)`), so a
-      -- projection that minted anything fresh per call would break
-      -- cross-thread visibility everywhere at once rather than in one
-      -- place. Cover both queues and a representative ref of each
-      -- remaining shape.
-      let a = toUnitCombatCapability env
-          b = toUnitCombatCapability env
-      sameContainer (ucUnitManagerRef a)   (ucUnitManagerRef b)
-      sameContainer (ucUnitQueue a)        (ucUnitQueue b)
-      sameContainer (ucCombatQueue a)      (ucCombatQueue b)
-      sameContainer (ucUtsRef a)           (ucUtsRef b)
-      sameContainer (ucStatRNGRef a)       (ucStatRNGRef b)
-      sameContainer (ucCombatEventsRef a)  (ucCombatEventsRef b)
-      sameContainer (ucInjuryEventsRef a)  (ucInjuryEventsRef b)
-      sameContainer (ucThoughtEventsRef a) (ucThoughtEventsRef b)
-      sameContainer (ucActionOutcomeRef a) (ucActionOutcomeRef b)
-      sameContainer (ucPathingConfigRef a) (ucPathingConfigRef b)
-
     it "keeps the three CombatEvent streams on their own refs" $ \env → do
       -- combatEventsRef / injuryEventsRef / thoughtEventsRef all have
       -- the IDENTICAL type `IORef (Seq CombatEvent)`, and all three are

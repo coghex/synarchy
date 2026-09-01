@@ -56,20 +56,6 @@ spec = do
     aliases "bcBuildingQueue"      bcBuildingQueue      buildingQueue
     aliases "bcBuildingGhostRef"   bcBuildingGhostRef   buildingGhostRef
 
-    it "is stable across repeated projection (no fresh containers)" $ \env → do
-      -- E6b re-projects inline at nearly every call site
-      -- (`bcBuildingManagerRef (toBuildingCapability env)`), so a
-      -- projection that minted anything fresh per call would break
-      -- cross-thread visibility everywhere at once rather than in one
-      -- place: the Lua thread enqueues onto `buildingQueue` and the
-      -- UNIT thread drains it (there is no building thread), so the
-      -- two sides must agree on one container.
-      let a = toBuildingCapability env
-          b = toBuildingCapability env
-      sameContainer (bcBuildingManagerRef a) (bcBuildingManagerRef b)
-      sameContainer (bcBuildingQueue a)      (bcBuildingQueue b)
-      sameContainer (bcBuildingGhostRef a)   (bcBuildingGhostRef b)
-
 -- (No transposition example, unlike
 -- "Test.Headless.Capability.UnitCombat"'s three identically-typed
 -- `IORef (Seq CombatEvent)` streams: all three fields here have

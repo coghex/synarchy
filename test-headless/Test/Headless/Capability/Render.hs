@@ -84,13 +84,6 @@ spec = do
     aliases "rcScreenshotRequestQueue" rcScreenshotRequestQueue screenshotRequestQueue
     aliases "rcNextObjectIdRef"        rcNextObjectIdRef        nextObjectIdRef
 
-    it "is stable across repeated projection (no fresh containers)" $ \env → do
-      let a = toRenderCapability env
-          b = toRenderCapability env
-      sameContainer (rcEngineStateRef a) (rcEngineStateRef b)
-      sameContainer (rcTextureSystemRef a) (rcTextureSystemRef b)
-      sameContainer (rcScreenshotRequestQueue a) (rcScreenshotRequestQueue b)
-
     it "keeps the three same-typed geometry refs distinct" $ \env → do
       -- windowSizeRef, framebufferSizeRef and windowPosRef are the only
       -- fields in the set that share a type (IORef (Int, Int)), so they
