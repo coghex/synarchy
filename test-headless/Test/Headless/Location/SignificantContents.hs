@@ -483,6 +483,23 @@ spec = describe "Location significant contents (#917)" $ do
                 `shouldBe` [ "location instance #1 declares significant \
                              \slot 0, below the first valid slot (1)" ]
 
+        it "rejects a contents-SPAWNED instance still owing an unbound \
+           \slot — unrecoverable, because spawnContents returns at its \
+           \one-time gate and never fills it" $ do
+            let broken = adjustLocationInstance iid
+                    (\i → i { liContentsSpawned = True })
+                    (tableFor 0 significantOnlyDef)
+            locationSignificantItemErrors broken
+                `shouldBe` [ "location instance #1 has spawned its contents \
+                             \but significant slot 1 names no item instance" ]
+
+        it "accepts a contents-spawned instance whose every slot IS \
+           \bound, which is the only order the spawn can write them in" $
+            locationSignificantItemErrors
+                (adjustLocationInstance iid (\i → i { liContentsSpawned = True })
+                    (spawnAll (tableFor 0 twoSignificantDef)))
+                `shouldBe` []
+
         it "rejects an obligation marked taken that names no item" $ do
             let broken = adjustLocationInstance iid
                     (\i → i { liSignificant =

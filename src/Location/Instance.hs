@@ -1196,6 +1196,17 @@ locationInstanceBoundsErrors lis =
 --     resuming content spawn registers against, so two slots sharing a
 --     number would let one spawn satisfy both, or repoint the wrong
 --     one;
+--   * an instance whose contents are SPAWNED has every obligation
+--     bound. The two are written together and in that order —
+--     @scripts\/locations.lua@ returns without marking unless every
+--     slot was filled, and the binding is synchronous while the marker
+--     is queued behind it — so the other shape is unreachable. It is
+--     also UNRECOVERABLE: @spawnContents@ returns at its
+--     @hasSpawnedLocationContents@ gate on every later chunk load, so
+--     nothing ever spawns or binds the missing item and the location
+--     can never clear. Neither the missing-definition check nor the
+--     provenance rules can see it — the first passes while the stored
+--     def still exists, and the second skips unbound slots by design;
 --   * an obligation marked TAKEN must name the item that was taken.
 --     No engine path can produce the other shape
 --     ('latchLocationSignificantTaken' matches on a bound id), and it
@@ -1227,6 +1238,15 @@ locationSignificantItemErrors lis =
     , (slot, n) ← sortOn fst (HM.toList (HM.fromListWith (+)
         [ (lsiSlot e, 1 ∷ Int) | e ← liSignificant inst ]))
     , n > 1
+    ]
+    ⧺
+    [ "location instance #" <> tshow (unLocationInstanceId (liId inst))
+        <> " has spawned its contents but significant slot "
+        <> tshow (lsiSlot e) <> " names no item instance"
+    | inst ← instancesToList lis
+    , liContentsSpawned inst
+    , e ← sortOn lsiSlot (liSignificant inst)
+    , isNothing (lsiInstanceId e)
     ]
     ⧺
     [ "location instance #" <> tshow (unLocationInstanceId (liId inst))

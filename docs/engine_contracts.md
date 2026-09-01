@@ -1619,8 +1619,12 @@ reconstruction discards both for the same reason.
 `Location.Instance.locationSignificantItemErrors` rejects a slot below
 1 (unbindable — the registration boundary refuses a non-positive slot,
 so the content spawn would orphan an item on every load for ever), a
-duplicated slot, an obligation marked taken that names no item, and
-same-page duplicate ownership at component decode;
+duplicated slot, a CONTENTS-SPAWNED instance still owing an unbound slot
+(unrecoverable — `spawnContents` returns at its one-time
+`hasSpawnedLocationContents` gate and never fills it, and neither the
+missing-definition check nor the provenance rules can see the shape), an
+obligation marked taken that names no item, and same-page duplicate
+ownership at component decode;
 `World.Save.Integrity.significantProvenanceErrors` hard-fails an UNTAKEN
 obligation whose item resolves on another page, in an inventory or
 storage (it cannot be held without having been picked up), or only
