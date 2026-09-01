@@ -33,7 +33,7 @@ import Engine.Core.State (EngineEnv)
 import Engine.Core.Capability.Core (CoreCapability)
 import Engine.Core.Capability.ContentRegistries
     (ContentRegistriesCapability(..))
-import Engine.Core.Log (LogCategory(..), logInfo)
+import Engine.Core.Log (LogCategory(..), logDebug)
 import Engine.Core.Log.Monad (getLoggerFor)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
@@ -108,7 +108,7 @@ loadEquipmentYamlFn core regs env backendState = do
                     return (acc + 1)
                     ) (0 ∷ Int) classes
 
-                logInfo logger CatAsset $
+                logDebug logger CatAsset $
                     "loadEquipmentYaml: loaded " <> tshow total
                     <> " equipment classes from " <> T.pack filePath
                 return total

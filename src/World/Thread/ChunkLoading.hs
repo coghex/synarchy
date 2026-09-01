@@ -26,7 +26,11 @@ import World.Types
 import World.Generate (generateLoadedChunk, cameraChunkCoord)
 import World.Generate.Arena (generateFlatChunk)
 import World.Generate.Constants (chunkLoadRadius)
-import World.Chunk.Queue (chunkQueueCanon)
+import World.Chunk.Admit
+    ( admitResidentChunks, claimChunkGeneration, claimedChunkCoord
+    , reconcileResidentChunks, releaseEvictedChunks )
+import World.Chunk.Queue (settleDrainedPhase)
+import World.Chunk.Residency (canonicalChunkCoord)
 import World.Grid (zoomFadeEnd)
 import World.Slope (recomputeNeighborSlopes
                     , slopeRecomputeAffected
@@ -72,22 +76,46 @@ updateChunkLoading env logger = do
                         Just params → do
                             tileData ← readIORef (wsTilesRef worldState)
                             let halfSize = wgpWorldSize params `div` 2
-                                -- Shared with the slope recompute's seam
-                                -- handling (World.Slope re-exports the
-                                -- canonical World.Chunk.Types.wrapChunkCoordU,
-                                -- also re-exported via World.Fluid.Internal for
-                                -- the fluid/magma/zoom paths) so insert-time
-                                -- and lookup-time wrapping can't diverge.
-                                wrapChunkU = wrapChunkCoordU (wgpWorldSize params)
+                                -- The ONE canonical identity (#2001).
+                                -- This used to be a bare
+                                -- 'wrapChunkCoordU (wgpWorldSize params)',
+                                -- which is the unguarded function applied
+                                -- to a field that is a SENTINEL on arena
+                                -- pages — so an arena coord past
+                                -- u = ±50000 would have been silently
+                                -- wrapped, and this loader disagreed with
+                                -- the init queue's identity for exactly
+                                -- the class of case #1723 was filed for.
+                                -- 'canonicalChunkCoord' carries both the
+                                -- arena-sentinel and the
+                                -- non-positive-world-size guard, and every
+                                -- other producer now measures through it
+                                -- too, so insert-time and lookup-time
+                                -- wrapping can't diverge.
+                                canon = canonicalChunkCoord params
                                 inBoundsV (ChunkCoord cx cy) =
                                     let v = cx + cy
                                         halfTiles = halfSize * chunkSize
                                     in abs (v * chunkSize) ≤ halfTiles
-                                validCoords = map wrapChunkU $ filter inBoundsV neededCoords
+                                validCoords = map canon $ filter inBoundsV neededCoords
                             let (_toPromote, toGenerate) = partitionChunks validCoords tileData
                             let toGenerateSorted = sortOn (\(ChunkCoord cx cy) →
                                     abs (cx - ccx) + abs (cy - ccy)) toGenerate
-                                batch = take maxChunksPerTick toGenerateSorted
+                                wanted = take maxChunksPerTick toGenerateSorted
+                            -- Claim the batch on the page's residency
+                            -- owner before generating any of it (#2001).
+                            -- A coord the init queue has already REQUESTED
+                            -- is claimed here rather than skipped — the
+                            -- camera and the queue name one physical
+                            -- chunk, and refusing would move generation
+                            -- out of the drain-then-camera order
+                            -- 'World.Thread.worldTick' runs. A coord
+                            -- something else already has in flight is
+                            -- refused and drops out of the batch, so a
+                            -- chunk is never generated twice.
+                            claims ← claimChunkGeneration worldState pageId
+                                                          params wanted
+                            let batch = map claimedChunkCoord claims
                             let isArena = isArenaParams params
                             when (not $ null batch) $ do
                                 let seed = wgpSeed params
@@ -104,45 +132,83 @@ updateChunkLoading env logger = do
                                 desigs ← readIORef (wsMineDesignationsRef worldState)
                                 cdesigs ← readIORef (wsConstructDesignationsRef worldState)
                                 let newChunks' = map (replayEdits edits) newChunks
-                                evicted ← atomicModifyIORef' (wsTilesRef worldState) $ \td →
-                                    let td' = foldl' (\acc lc → insertChunk lc acc) td newChunks'
-                                        (td'', evictedCoords) = evictDistantChunksWithReport
-                                                                  camChunk chunkLoadRadius td'
-                                        coords = map lcCoord newChunks'
-                                        -- Recompute slopes for the loaded
-                                        -- chunks AND the neighbours of any
-                                        -- just-evicted chunk, so a slope that
-                                        -- pointed across a now-unloaded border
-                                        -- (e.g. a waterfall lip) is dropped —
-                                        -- the surface reflects the currently
-                                        -- loaded set, not the load order.
-                                        changed = coords ⧺ evictedCoords
-                                        td''' = recomputeNeighborSlopes seed
-                                                  (wgpWorldSize params) registry
-                                                  changed td''
-                                        td3b   = patchEdgeStrata coords td'''
-                                        -- sealCrossChunkRivers removed: mask-based
-                                        -- river seeding produces consistent edges
-                                        -- (both chunks use the same segments).
-                                        -- The old seal's orphan removal was stripping
-                                        -- ~50% of mask-seeded river tiles.
-                                        td''''' = computeSideDecos seed coords td3b
-                                        -- Mid-dig slope overrides (must follow the
-                                        -- slope recompute, which would erase them).
-                                        -- Restore over EXACTLY the set the
-                                        -- recompute touched (incl. evicted-
-                                        -- neighbour and wrapped-seam-neighbour
-                                        -- chunks), or border dig masks there are
-                                        -- silently lost.
-                                        digCoords = slopeRecomputeAffected
-                                            (wgpWorldSize params) changed td''
-                                        td6 = applyDigSlopesTd desigs digCoords td'''''
-                                        -- Construction corner-progress
-                                        -- overrides (#96): same derived-
-                                        -- state contract as dig slopes.
-                                        td7 = applyConstructSlopesTd cdesigs
+                                -- Built against the snapshot read at the
+                                -- top of this page's iteration, and
+                                -- committed below. That is exact rather
+                                -- than optimistic: the world thread is
+                                -- the ONLY writer of wsTilesRef (this
+                                -- loader, the queue drain, and the
+                                -- command handlers all run on it), and
+                                -- nothing between that read and the
+                                -- write touches it — the reads in
+                                -- between are reads, and the claim above
+                                -- is on a different ref.
+                                --
+                                -- Splitting the transaction is what lets
+                                -- the OWNER move first (#2001). The Lua
+                                -- thread asks the owner whether a chunk
+                                -- is already known, so an owner update
+                                -- that LAGS the tile map opens a window
+                                -- where a request is told a chunk is
+                                -- resident whose payload has already
+                                -- been evicted: that request appends
+                                -- nothing, and the eviction then drops
+                                -- the entry, losing the demand outright.
+                                -- Leading instead is harmless in both
+                                -- directions — a request that sees the
+                                -- admission early is answered by a
+                                -- payload that lands microseconds later,
+                                -- and one that sees the eviction early
+                                -- is queued and regenerates a chunk that
+                                -- is about to be gone.
+                                let td' = foldl' (\acc lc → insertChunk lc acc)
+                                                 tileData newChunks'
+                                    (td'', evicted) = evictDistantChunksWithReport
+                                                        camChunk chunkLoadRadius td'
+                                    coords = map lcCoord newChunks'
+                                    -- Recompute slopes for the loaded
+                                    -- chunks AND the neighbours of any
+                                    -- just-evicted chunk, so a slope that
+                                    -- pointed across a now-unloaded border
+                                    -- (e.g. a waterfall lip) is dropped —
+                                    -- the surface reflects the currently
+                                    -- loaded set, not the load order.
+                                    changed = coords ⧺ evicted
+                                    td''' = recomputeNeighborSlopes seed
+                                              (wgpWorldSize params) registry
+                                              changed td''
+                                    td3b   = patchEdgeStrata coords td'''
+                                    -- sealCrossChunkRivers removed: mask-based
+                                    -- river seeding produces consistent edges
+                                    -- (both chunks use the same segments).
+                                    -- The old seal's orphan removal was stripping
+                                    -- ~50% of mask-seeded river tiles.
+                                    td''''' = computeSideDecos seed coords td3b
+                                    -- Mid-dig slope overrides (must follow the
+                                    -- slope recompute, which would erase them).
+                                    -- Restore over EXACTLY the set the
+                                    -- recompute touched (incl. evicted-
+                                    -- neighbour and wrapped-seam-neighbour
+                                    -- chunks), or border dig masks there are
+                                    -- silently lost.
+                                    digCoords = slopeRecomputeAffected
+                                        (wgpWorldSize params) changed td''
+                                    td6 = applyDigSlopesTd desigs digCoords td'''''
+                                    -- Construction corner-progress
+                                    -- overrides (#96): same derived-
+                                    -- state contract as dig slopes.
+                                    finalTd = applyConstructSlopesTd cdesigs
                                                 digCoords td6
-                                    in (td7, evictedCoords)
+                                -- THE admission boundary (#2001), then
+                                -- the eviction, then the payloads. A
+                                -- chunk admitted and immediately evicted
+                                -- ends absent — matching the tile map
+                                -- either way.
+                                admitResidentChunks worldState claims
+                                releaseEvictedChunks worldState pageId
+                                                     params evicted
+                                atomicModifyIORef' (wsTilesRef worldState) $ \_ →
+                                    (finalTd, ())
                                 -- Notify sim thread of loaded chunks. Use
                                 -- newChunks' so the sim sees post-replay
                                 -- fluid + terrain (player edits matter).
@@ -282,10 +348,10 @@ drainInitQueues env logger = do
                             -- (#1723), which is what keeps this queue's length an
                             -- honest count of remaining physical chunks; this
                             -- defence stays regardless, and has to canonicalise
-                            -- exactly the way they do — 'chunkQueueCanon', not a
+                            -- exactly the way they do — 'canonicalChunkCoord', not a
                             -- bare 'wrapChunkCoordU', so an arena's sentinel
                             -- wgpWorldSize is identity on both sides.
-                            batchCanon = nub (map (chunkQueueCanon params) batch)
+                            batchCanon = nub (map (canonicalChunkCoord params) batch)
                         -- Skip coords already in wsTilesRef. The camera-visible
                         -- loader (updateChunkLoading) loads chunks straight into
                         -- wsTilesRef without going through this queue, so a coord
@@ -299,7 +365,19 @@ drainInitQueues env logger = do
                         -- (already-loaded + freshly generated) is dropped from the
                         -- queue below.
                         td0 ← readIORef (wsTilesRef worldState)
-                        let (_alreadyLoaded, toGen) = partitionChunks batchCanon td0
+                        let (alreadyLoaded, notLoaded) =
+                                partitionChunks batchCanon td0
+                        -- Claim before generating (#2001), exactly as the
+                        -- camera loader above does. These keys are
+                        -- REQUESTED on the owner (every producer of this
+                        -- queue registers demand), so the claim converts
+                        -- that same demand to in-flight without adding an
+                        -- entry; a key the camera already has in flight is
+                        -- refused and left for the tile-map check on a
+                        -- later tick.
+                        claims ← claimChunkGeneration worldState pageId
+                                                      params notLoaded
+                        let toGen = map claimedChunkCoord claims
                         let seed = wgpSeed params
 
                         let newChunks = parMap rdeepseq
@@ -318,6 +396,22 @@ drainInitQueues env logger = do
                         -- Insert new chunks, then recompute slopes
                         -- for the new chunks + their existing neighbors,
                         -- then seal cross-chunk river boundaries.
+                        -- Owner first, tile map second, for the reason
+                        -- spelled out in updateChunkLoading above: the
+                        -- Lua thread reads the owner, so an owner update
+                        -- that lags the tile map can lose a request
+                        -- outright. Leading cannot — a request answered
+                        -- "already resident" here is answered by a
+                        -- payload committed on the very next line.
+                        admitResidentChunks worldState claims
+                        -- The half of the batch that was already loaded
+                        -- (the camera loader put it there) is reconciled
+                        -- to resident too, so the owner cannot keep a
+                        -- stale request for a chunk the page holds after
+                        -- its queue entry is dropped below.
+                        reconcileResidentChunks worldState pageId params
+                                                alreadyLoaded
+
                         atomicModifyIORef' (wsTilesRef worldState) $ \td →
                             let td' = foldl' (\acc lc → insertChunk lc acc) td newChunks'
                                 coords = map lcCoord newChunks'
@@ -363,17 +457,30 @@ drainInitQueues env logger = do
                         -- now that its terrain exists.
                         _ ← revalidatePlantDesignations logger worldState
 
-                        -- The batch is now in wsTilesRef AND the sim has been
-                        -- notified, so drop it from the init queue — by coord,
-                        -- which preserves any appends that arrived during
-                        -- generation. Done here, after the insert and before
-                        -- the progress read below, so a chunk is always in the
-                        -- queue OR loaded (never in neither) and
+                        -- The settled work is now in wsTilesRef AND the sim
+                        -- has been notified, so drop it from the init queue —
+                        -- by coord, which preserves any appends that arrived
+                        -- during generation. Done here, after the insert and
+                        -- before the progress read below, so a chunk is always
+                        -- in the queue OR loaded (never in neither) and
                         -- LoadDone/LoadPhase2 still see the right remaining
                         -- count.
-                        let batchSet = HS.fromList batch
+                        --
+                        -- Only the SETTLED half is dropped (#2001): a coord
+                        -- whose claim was refused above is still owed a
+                        -- chunk, and dropping it would leave the owner
+                        -- holding a request nothing is scheduled to meet.
+                        -- The refusal is always transient — the only other
+                        -- claimants are the camera loader and the cursor's
+                        -- ore survey, both of which run to completion on this
+                        -- same thread within their own tick — so keeping it
+                        -- retries next tick rather than spinning.
+                        let settled = HS.fromList
+                                (alreadyLoaded ⧺ map lcCoord newChunks')
+                            settledAlias c =
+                                HS.member (canonicalChunkCoord params c) settled
                         atomicModifyIORef' (wsInitQueueRef worldState) $ \q →
-                            (filter (\c → not (c `HS.member` batchSet)) q, ())
+                            (filter (not . settledAlias) q, ())
 
                         -- Force this batch's chunks (plus the neighbours the
                         -- slope / edge-strata / side-deco passes rebuilt) to
@@ -421,15 +528,20 @@ drainInitQueues env logger = do
                         -- initial load (a later loadChunksInRegion, so
                         -- the phase is no longer LoadPhase2) has no
                         -- recorded total to keep.
-                        phaseBefore ← readIORef (wsLoadPhaseRef worldState)
-                        let totalChunks = case phaseBefore of
-                                LoadPhase2 _ recorded → recorded
-                                _ → (2 * chunkLoadRadius + 1)
-                                      * (2 * chunkLoadRadius + 1)
-                        writeIORef (wsLoadPhaseRef worldState)
-                            (if null rest
-                             then LoadDone
-                             else LoadPhase2 (length rest) totalChunks)
+                        -- One atomic read-modify-write, because the Lua
+                        -- thread also writes this ref: it raises the
+                        -- total whenever it appends during LoadPhase2
+                        -- (World.Chunk.Queue.enqueueChunkRequest). The
+                        -- old read-compute-write dropped any increment
+                        -- that landed in between — permanently, since
+                        -- the total is the value later ticks carry
+                        -- forward. 'drainedLoadPhase' merges instead,
+                        -- and 'settleDrainedPhase' will not leave a
+                        -- LoadDone standing over a queue an append
+                        -- refilled after the count was taken.
+                        settleDrainedPhase worldState
+                            ((2 * chunkLoadRadius + 1)
+                                * (2 * chunkLoadRadius + 1))
 computeSideDecos ∷ Word64 → [ChunkCoord] → WorldTileData → WorldTileData
 computeSideDecos seed newCoords wtd =
     let chunks = wtdChunks wtd

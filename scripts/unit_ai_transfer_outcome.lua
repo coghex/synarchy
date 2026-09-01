@@ -42,6 +42,11 @@ local ensureState   = core.ensureState
 -- has one). Required rather than re-derived so a transfer warning and a
 -- pickup warning can never name the same thing two different ways.
 local pickup = require("scripts.unit_ai_pickup")
+-- The transfer order's action name, from its one owner (#2030), so the
+-- "is this unit mid-order?" test below cannot drift from the name the
+-- dispatch loop registers it under.
+local TRANSFER_ORDER_ACTION =
+    require("scripts.unit_ai_actions").TRANSFER_ORDER_ACTION
 local itemLabel = pickup.itemLabel
 local unitLabel = pickup.unitLabel
 
@@ -183,7 +188,7 @@ function unitAi.cancelTransferOrder(uid)
     local pending = pendingOrders(uid)
     if #pending == 0 then return false end
     local s = ensureState(uid)
-    if s.currentAction == "transfer_order" then unit.stop(uid) end
+    if s.currentAction == TRANSFER_ORDER_ACTION then unit.stop(uid) end
     local info = unit.getInfo(uid)
     for _, o in ipairs(pending) do
         -- Named BEFORE the cancel, while the endpoint is still whatever

@@ -9,6 +9,7 @@ module Test.Headless.Harness
   , withHeadlessWorkerCheck
   , installHudWorldPage
   , sharedWorld
+  , sharedWorldPageId
   , sendWorldCommand
   , waitForWorldInit
   , getWorldState
@@ -25,7 +26,7 @@ import Control.Concurrent.MVar (isEmptyMVar)
 import Control.Exception (bracket)
 import Control.Monad (filterM)
 import Data.List (intercalate)
-import Data.IORef (readIORef, writeIORef, modifyIORef', atomicModifyIORef')
+import Data.IORef (readIORef, writeIORef, modifyIORef')
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
 import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
@@ -34,6 +35,7 @@ import Engine.Core.Thread (ThreadState(..), shutdownThread)
 import Engine.Graphics.Camera (Camera2D(..))
 import Test.Hspec (expectationFailure)
 import qualified Engine.Core.Queue as Q
+import World.Chunk.Queue (enqueueChunkRequest)
 import World.Thread (startWorldThread)
 import World.Types
 
@@ -307,14 +309,20 @@ withHeadlessEngineNoWorld = bracket setup teardown
 --       just see more chunks.
 sharedWorld ∷ EngineEnv → Word64 → Int → Int → IO WorldState
 sharedWorld env seed size plateCount = do
-    let pid = WorldPageId $ T.pack $
-            "shared_" ⧺ show seed ⧺ "_" ⧺ show size ⧺ "_" ⧺ show plateCount
+    let pid = sharedWorldPageId seed size plateCount
     mWs ← getWorldState env pid
     case mWs of
         Just _ → waitForWorldInit env pid 300
         Nothing → do
             sendWorldCommand env (WorldInit pid seed size plateCount Nothing)
             waitForWorldInit env pid 300
+
+-- | The page id 'sharedWorld' registers a world under. Exposed because
+--   a chunk request is page-qualified (#2001), so a caller that queues
+--   extra chunks into a shared world has to name it.
+sharedWorldPageId ∷ Word64 → Int → Int → WorldPageId
+sharedWorldPageId seed size plateCount = WorldPageId $ T.pack $
+    "shared_" ⧺ show seed ⧺ "_" ⧺ show size ⧺ "_" ⧺ show plateCount
 
 -- | Send a command to the world thread
 sendWorldCommand ∷ EngineEnv → WorldCommand → IO ()
@@ -382,11 +390,10 @@ waitForChunksAt ws coord timeoutSecs = go 0
                   threadDelay 50000
                   go (n + 1)
 
--- | Queue chunk coords for generation by the world thread (the same
---   path Lua's @world.loadChunksInRegion@ uses). Pair with
+-- | Queue chunk coords for generation by the world thread — literally
+--   the call Lua's @world.loadChunksInRegion@ makes, so the harness
+--   registers demand on the page's residency owner exactly as production
+--   does (#2001) instead of appending behind its back. Pair with
 --   'waitForChunksAt' on the last coord to block until generated.
-queueChunks ∷ WorldState → [ChunkCoord] → IO ()
-queueChunks ws coords = do
-    td ← readIORef (wsTilesRef ws)
-    let needed = filter (\c → not (HM.member c (wtdChunks td))) coords
-    atomicModifyIORef' (wsInitQueueRef ws) $ \q → (q ⧺ needed, ())
+queueChunks ∷ WorldPageId → WorldState → [ChunkCoord] → IO ()
+queueChunks pid ws coords = void (enqueueChunkRequest pid ws coords)

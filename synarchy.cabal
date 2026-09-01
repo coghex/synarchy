@@ -642,6 +642,8 @@ library
                      World.Command.Types
                      World.Chunk.Types
                      World.Chunk.Queue
+                     World.Chunk.Residency
+                     World.Chunk.Admit
                      World.Cursor.Types
                      World.Edit.Types
                      World.Edit.Apply
@@ -1156,7 +1158,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Item.Condition
                    Test.Headless.Item.SteelHelmet
                    Test.Headless.Item.RepairFinite
-        Test.Headless.Item.BulkStorage
+                   Test.Headless.Item.BulkStorage
                    Test.Headless.Item.FoodNutrition
                    Test.Headless.Item.Discovery
                    Test.Headless.Asset.TextureFallback
@@ -1166,10 +1168,12 @@ test-suite synarchy-test-headless
                    Test.Headless.Asset.UnitInventory
                    Test.Headless.Asset.MaterialMoveCost
                    Test.Headless.Asset.YamlList
+                   Test.Headless.Startup.AssetLogging
                    Test.Headless.Preview.Discovery
                    Test.Headless.Preview.UnitAnimation
                    Test.Headless.Preview.Building
                    Test.Headless.Preview.Zoom
+                   Test.Headless.Preview.KeyboardNavigation
                    Test.Headless.World.Save.Sanitize
                    Test.Headless.World.Save.Serialize
                    Test.Headless.World.Save.Envelope
@@ -1196,6 +1200,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.SelectTileZ
                    Test.Headless.World.SelectChunk
                    Test.Headless.World.ActionOutcome
+                   Test.Headless.World.ChunkIdentity
                    Test.Headless.World.ChunkQueueFrame
                    Test.Headless.World.DesignationSeam
                    Test.Headless.World.CropPlant
@@ -1213,6 +1218,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Combat.Severing
                    Test.Headless.Combat.Wounds
                    Test.Headless.Magma.Shape
+                   Test.Headless.Sim.Conservation
                    Test.Headless.Sim.Seam
                    Test.Headless.Input.KeyNames
                    Test.Headless.Input.Bindings
@@ -1286,9 +1292,9 @@ test-suite synarchy-test-headless
                    Test.Headless.UI.TransferContextMenu
                    Test.Headless.UI.ItemList
                    Test.Headless.UI.ContainerWindowStack
-        Test.Headless.UI.TransferGestures
-        Test.Headless.UI.ConsumableGesture
-        Test.Headless.UI.TransferSession
+                   Test.Headless.UI.TransferGestures
+                   Test.Headless.UI.ConsumableGesture
+                   Test.Headless.UI.TransferSession
                    Test.Headless.World.Calendar
                    Test.Headless.World.Climate
                    Test.Headless.World.TimeLocal

@@ -25,41 +25,40 @@
 --
 --   Every producer now measures and dedups through the functions here,
 --   and the consumer canonicalises through the SAME
---   'chunkQueueCanon' — producers and consumer disagreeing on the
+--   'canonicalChunkCoord' — producers and consumer disagreeing on the
 --   identity would put the guarantee back where it started.
+--
+--   Since #2001 that identity is no longer this module's own. It lives
+--   in "World.Chunk.Residency" (re-exported here for the producers that
+--   already used it, under its new name), because the camera-driven
+--   loader turned out to be running a SECOND canonicalisation beside
+--   it — a bare 'World.Chunk.Types.wrapChunkCoordU' with neither guard —
+--   and \"is this chunk already known?\" is now a state the page's
+--   residency owner names outright rather than something
+--   'enqueueChunkRequest' reconstructs.
 module World.Chunk.Queue
-    ( chunkQueueCanon
+    ( canonicalChunkCoord
     , dedupChunkQueue
     , newChunkQueueEntries
     , initialChunkQueue
+    , seedInitialQueue
+    , drainedLoadPhase
+    , settleDrainedPhase
+    , reconcileQueuedPhase
     , enqueueChunkRequest
     ) where
 
 import UPrelude
-import Data.IORef (readIORef, atomicModifyIORef')
+import Control.Concurrent.MVar (withMVar)
+import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import qualified Data.HashSet as HS
-import World.Chunk.Types (ChunkCoord(..), wrapChunkCoordU)
+import World.Chunk.Admit (registerChunkDemand)
+import World.Chunk.Residency (canonicalChunkCoord)
+import World.Chunk.Types (ChunkCoord(..))
 import World.Generate.Constants (chunkLoadRadius)
-import World.Generate.Types (WorldGenParams(..), isArenaParams)
-import World.State.Types (WorldState(..))
-import World.Tile.Types (lookupChunk)
-
--- | The physical identity of a chunk coord on a page with these
---   generation params: the key the chunk is (or will be) stored under.
---
---   Identity on a NON-wrapping page, and the two of those are selected
---   separately. @worldSize ≤ 0@ has no seam at all. An arena's
---   'wgpWorldSize' is a sentinel 100000 rather than a real extent
---   ('World.Thread.Command.Init.handleWorldInitArenaCommand'), so it is
---   recognised by 'isArenaParams' and never handed to
---   'wrapChunkCoordU' — passing that sentinel through would leave an
---   arena coord past u = ±50000 silently wrapped.
-chunkQueueCanon ∷ WorldGenParams → ChunkCoord → ChunkCoord
-chunkQueueCanon params
-    | isArenaParams params = id
-    | worldSize ≤ 0        = id
-    | otherwise            = wrapChunkCoordU worldSize
-  where worldSize = wgpWorldSize params
+import World.Generate.Types (WorldGenParams(..))
+import World.Page.Types (WorldPageId(..))
+import World.State.Types (WorldState(..), LoadPhase(..))
 
 -- | Keep one entry per PHYSICAL chunk, preserving the FIRST occurrence
 --   and the input order.
@@ -83,7 +82,7 @@ dedupChunkQueue canon = go HS.empty
 --   asked about the CANONICAL key, so an alias of a loaded or pending
 --   chunk is recognised as the same work.
 newChunkQueueEntries
-    ∷ (ChunkCoord → ChunkCoord)   -- ^ 'chunkQueueCanon' for the page
+    ∷ (ChunkCoord → ChunkCoord)   -- ^ 'canonicalChunkCoord' for the page
     → (ChunkCoord → Bool)         -- ^ is this canonical key already loaded or queued?
     → [ChunkCoord]                -- ^ the requested coords, in order
     → [ChunkCoord]
@@ -104,7 +103,7 @@ newChunkQueueEntries canon alreadyHave =
 --   Shared by fresh world init and saved-page restore so the two seed
 --   the queue identically.
 initialChunkQueue
-    ∷ (ChunkCoord → ChunkCoord)   -- ^ 'chunkQueueCanon' for the page
+    ∷ (ChunkCoord → ChunkCoord)   -- ^ 'canonicalChunkCoord' for the page
     → ChunkCoord                  -- ^ the centre chunk, already loaded
     → ([ChunkCoord], Int)
 initialChunkQueue canon centre = (queue, length queue + 1)
@@ -124,46 +123,212 @@ initialChunkQueue canon centre = (queue, length queue + 1)
 --   fill — the two producers that APPEND rather than seed, and so must
 --   dedup against what the page already holds.
 --
+--   Since #2001 the dedup is ONE atomic transition on the page's
+--   residency owner ("World.Chunk.Admit"), not a reconstruction from two
+--   'IORef's. The owner already knows every canonical key that is
+--   resident, requested or in flight, so a coord naming another spelling
+--   of any of them is neither counted nor appended. That replaces the
+--   snapshot protocol this function used to carry (#43): it had to read
+--   'wsInitQueueRef' BEFORE 'wsTilesRef', because the world thread keeps
+--   a chunk queued for the whole of its generation and removes it only
+--   after inserting, so the opposite order left a window in which an
+--   in-flight chunk was visible in neither snapshot and got queued
+--   twice. With a single owner value there is no pair of snapshots to
+--   order, and \"in flight\" is a state the owner names outright rather
+--   than an inference from queue membership.
+--
+--   The append that follows is safe against the world thread: this queue
+--   has a single appending thread — the Lua thread in a live engine, the
+--   dump driver in dump mode (where no script issues region requests) —
+--   the drain removes a batch BY COORD so a concurrent append survives
+--   it, and the other two producers REPLACE the queue while setting the
+--   page up and never race this one.
+--
+--   The whole sequence runs under the page's queue lock
+--   ('World.State.Types.wsInitQueueLock'), because the request has to
+--   land on the queue AND be accounted for in 'LoadPhase2' as one step.
+--   Those are two 'IORef's, so without the lock the drain can settle the
+--   phase from a queue read taken before this append and publish a
+--   terminal 'LoadDone' over work it has just accepted.
+--
 --   A page with no generation params yet queues NOTHING and reports 0:
 --   its physical identity is unknown, so no alias could be recognised,
 --   and 'drainInitQueues' refuses to drain such a page anyway, which
 --   would leave the appended coords stuck in the queue inflating every
 --   remaining count that reads it.
-enqueueChunkRequest ∷ WorldState → [ChunkCoord] → IO Int
-enqueueChunkRequest ws coords = do
+enqueueChunkRequest ∷ WorldPageId → WorldState → [ChunkCoord] → IO Int
+enqueueChunkRequest pid ws coords = do
     mParams ← readIORef (wsGenParamsRef ws)
     case mParams of
         Nothing → pure 0
         Just params → do
-            -- Filter the requested coords against both the loaded tiles
-            -- and the pending/in-flight queue, race-free against the
-            -- world thread's load handoff. drainInitQueues
-            -- (World.Thread.ChunkLoading) keeps a chunk queued for the
-            -- whole of its generation, then inserts it into wsTilesRef
-            -- and only AFTER that removes it from this queue — both
-            -- writes via atomicModifyIORef'. So we must read in the
-            -- matching order: snapshot the queue FIRST (an
-            -- atomicModifyIORef' read, which acquires that release),
-            -- THEN read the tiles. A coord already gone from the queue
-            -- snapshot is then guaranteed visible in the tile snapshot,
-            -- so a chunk that is in flight or just-loaded is caught by
-            -- one snapshot or the other, never missed by both (no
-            -- duplicate queueing, no inflated count). Reading the tiles
-            -- first would reopen that window (#43).
-            let canon = chunkQueueCanon params
-            pending ← atomicModifyIORef' (wsInitQueueRef ws) $ \q → (q, q)
-            let queued = HS.fromList (map canon pending)
-            td ← readIORef (wsTilesRef ws)
-            let alreadyHave key = HS.member key queued
-                                ∨ isJust (lookupChunk key td)
-                needed = newChunkQueueEntries canon alreadyHave coords
-            -- `needed` is disjoint from the queue snapshot under the
-            -- canonical identity, and this queue has a single appending
-            -- thread — the Lua thread in a live engine, the dump driver
-            -- in dump mode (where no script issues region requests) —
-            -- so the append can't introduce a duplicate even if the
-            -- world thread removed (loaded) some coords in between. The
-            -- other two producers REPLACE the queue while setting the
-            -- page up and never race this one.
-            atomicModifyIORef' (wsInitQueueRef ws) $ \q →
+          withMVar (wsInitQueueLock ws) $ \_ → do
+            needed ← registerChunkDemand ws pid params coords
+            count ← atomicModifyIORef' (wsInitQueueRef ws) $ \q →
                 (q ⧺ needed, length needed)
+            -- Appending work does not complete any, so a request made
+            -- while the page is still in 'LoadPhase2' raises the TOTAL by
+            -- the same amount it raises the remaining count. Without
+            -- that, a large enough region outruns the total the initial
+            -- box recorded — 'drainInitQueues' carries that total
+            -- forward — and @world.getInitProgress@ reports
+            -- @total - remaining@ completed, so the pair surfaces as
+            -- NEGATIVE progress through the public API.
+            --
+            -- Only the remaining count is authoritative from the queue;
+            -- the world thread recomputes it every tick. The total is
+            -- what has to survive, which is why it is bumped here rather
+            -- than left for the drain to reconcile. Outside 'LoadPhase2'
+            -- there is no total to keep and the phase is untouched.
+            when (count > 0) $
+                atomicModifyIORef' (wsLoadPhaseRef ws) $ \ph → case ph of
+                    LoadPhase2 remaining total →
+                        (LoadPhase2 (remaining + count) (total + count), ())
+                    -- Appending over a FINISHED load re-opens the
+                    -- phase: the drain reached 'LoadDone' with an empty
+                    -- queue, so these chunks are the whole of the new
+                    -- load and none of it is done yet.
+                    LoadDone → (LoadPhase2 count count, ())
+                    other → (other, ())
+            -- Settle the phase against the queue before releasing the
+            -- lock, so a request the drain finished while this was
+            -- deciding does not leave the phase reopened over an empty
+            -- queue: 'drainInitQueues' returns immediately for an empty
+            -- queue, so nothing would settle it back and
+            -- @world.waitForInit@ would block for ever while
+            -- @world.waitForChunks@ reported nothing remaining.
+            reconcileQueuedPhaseLocked ws
+            pure count
+
+-- | Seed a page's init queue with its initial box and report the
+--   @('LoadPhase2' remaining, total)@ pair that describes it.
+--
+--   Shared by fresh world init and saved-page restore so the two cannot
+--   drift, and it is a REGISTER-then-APPEND, never a write. A page is
+--   registered in @wmWorlds@ — and given its generation params — before
+--   its box is queued, so a @world.loadChunksInRegion@ accepted in that
+--   window has already been counted and registered on the owner;
+--   replacing the queue would drop its coords while leaving them
+--   requested, deduplicating every later request for them.
+--
+--   The total is @remaining + 1@: the queue as it now stands, plus the
+--   synchronously generated centre, which is the one chunk already
+--   resident at this point. With no concurrent request that is exactly
+--   the box's own physical total ('initialChunkQueue'\'s second
+--   component), which is what 'LoadPhase2' has always progressed
+--   towards. Deriving it from the queue rather than from the box is what
+--   keeps a retained request from making @remaining@ exceed @total@ —
+--   @world.getInitProgress@ reports @total - remaining@ completed, so
+--   that would surface as NEGATIVE progress through the public API.
+seedInitialQueue ∷ WorldPageId → WorldState → WorldGenParams
+                 → [ChunkCoord] → IO (Int, Int)
+seedInitialQueue pid ws params boxCoords =
+    withMVar (wsInitQueueLock ws) $ \_ → do
+        needed ← registerChunkDemand ws pid params boxCoords
+        -- Append, then install the phase from the queue that append
+        -- produced. Both happen under the page's queue lock, so no
+        -- request can land between them and be left out of the pair.
+        remaining ← atomicModifyIORef' (wsInitQueueRef ws) $ \q →
+            let q' = q ⧺ needed in (q', length q')
+        let phase = (remaining, remaining + 1)
+        writeIORef (wsLoadPhaseRef ws) (uncurry LoadPhase2 phase)
+        pure phase
+
+
+-- | The 'LoadPhase' a drain tick installs, given the page's box-shaped
+--   fallback total, the number of chunks it observed still queued, and
+--   the phase currently recorded.
+--
+--   Pure, and applied through a single 'atomicModifyIORef'' so the drain
+--   cannot CLOBBER a concurrent total increment. The Lua thread raises
+--   the total whenever it appends during 'LoadPhase2'
+--   ('enqueueChunkRequest'), and the drain used to read the phase,
+--   compute from that snapshot, and write — losing any increment that
+--   landed in between, permanently, because the total is exactly the
+--   value later ticks carry forward. Reading the recorded total from the
+--   value being replaced is what makes the update a merge instead.
+--
+--   The remaining count is the DRAIN's own, not the recorded one: the
+--   queue is authoritative for it, and the recorded figure is the
+--   previous tick's, which is always the larger. A concurrent append
+--   therefore understates it for one tick and the next drain corrects
+--   it — whereas the total, which only ever grows, is preserved exactly.
+--
+--   The total is floored at the remaining count throughout.
+--   @world.getInitProgress@ reports @total - remaining@ completed, so a
+--   pair the other way round surfaces as NEGATIVE progress; a request
+--   accepted after 'LoadDone' re-enters this phase with no recorded
+--   total at all, and the box-shaped fallback can be smaller than what
+--   was just queued.
+drainedLoadPhase ∷ Int → Int → LoadPhase → LoadPhase
+drainedLoadPhase fallbackTotal remaining recorded
+    | remaining ≤ 0 = LoadDone
+    | otherwise     = LoadPhase2 remaining (max observedTotal remaining)
+  where
+    observedTotal = case recorded of
+        LoadPhase2 _ total → total
+        _                  → fallbackTotal
+
+-- | Install the phase a drain tick has produced.
+--
+--   Taken under the page's queue lock
+--   ('World.State.Types.wsInitQueueLock') so the queue read and the
+--   phase write are one step with respect to the other writer. Without
+--   it the Lua thread can append between the two, and this write then
+--   publishes 'LoadDone' over accepted work — which
+--   @world.getInitProgress@ and every waiter polling for the terminal
+--   phase read as a load that has not happened. That is the one
+--   conclusion which is wrong to show even briefly, and no ordering of
+--   two independent reads and writes prevents it.
+--
+--   Readers do not take the lock. They read one value and may see it a
+--   moment stale, which is inherent to any single read and is a
+--   different thing from the phase disagreeing with the queue it was
+--   derived from.
+settleDrainedPhase ∷ WorldState → Int → IO ()
+settleDrainedPhase ws fallbackTotal =
+    withMVar (wsInitQueueLock ws) $ \_ → do
+        rest ← readIORef (wsInitQueueRef ws)
+        atomicModifyIORef' (wsLoadPhaseRef ws) $ \ph →
+            (drainedLoadPhase fallbackTotal (length rest) ph, ())
+
+
+-- | Settle a page's phase against its queue: retire it to 'LoadDone'
+--   when the queue has emptied under it, and reopen it when work is
+--   present under a phase that says the load has finished.
+--
+--   The repair half of 'enqueueChunkRequest''s phase update: an append
+--   and the phase update that accounts for it are two steps, and the
+--   world thread can drain the appended work in between, so the update
+--   can reopen a load that has already finished. An empty queue means no
+--   pending work — the drain keeps a chunk enqueued for the whole of its
+--   generation and removes it only after inserting — so the phase is
+--   settled from the queue rather than from what the appender expected.
+--
+--   Deliberately NARROW. It only ever moves between 'LoadPhase2' and
+--   'LoadDone', and never touches 'LoadPhase1': a page still in setup has not queued its box yet
+--   ('seedInitialQueue' does that at the end), so its empty queue is not
+--   a finished load and forcing one would report a world ready before it
+--   has any chunks at all.
+--
+--   Takes the page's queue lock, for the same reason the two above do.
+reconcileQueuedPhase ∷ WorldState → IO ()
+reconcileQueuedPhase ws =
+    withMVar (wsInitQueueLock ws) $ \_ → reconcileQueuedPhaseLocked ws
+
+-- | 'reconcileQueuedPhase' for a caller that already holds the page's
+--   queue lock. The lock is not reentrant, so the two forms are separate
+--   rather than one function that takes it conditionally.
+reconcileQueuedPhaseLocked ∷ WorldState → IO ()
+reconcileQueuedPhaseLocked ws = do
+    pending ← readIORef (wsInitQueueRef ws)
+    let remaining = length pending
+    atomicModifyIORef' (wsLoadPhaseRef ws) $ \ph → case (ph, remaining) of
+        -- Nothing left: retire the phase.
+        (LoadPhase2 _ _, 0) → (LoadDone, ())
+        -- Work present under a phase that says otherwise: reopen it, so
+        -- the invariant holds from either side rather than only from the
+        -- one this happens to be called on. The load ENDED with an empty
+        -- queue, so whatever is on it now is the whole of a new one.
+        (LoadDone, _)       → (LoadPhase2 remaining remaining, ())
+        (other, _)          → (other, ())

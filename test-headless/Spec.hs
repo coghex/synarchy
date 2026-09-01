@@ -66,6 +66,7 @@ import qualified Test.Headless.Asset.FloraRegrowthSchema as FloraRegrowthSchema
 import qualified Test.Headless.Asset.UnitInventory as AssetUnitInventory
 import qualified Test.Headless.Asset.Types as AssetTypes
 import qualified Test.Headless.Asset.YamlList as AssetYamlList
+import qualified Test.Headless.Startup.AssetLogging as StartupAssetLogging
 import qualified Test.Headless.Asset.MaterialMoveCost as AssetMaterialMoveCost
 import qualified Test.Headless.Preview.Discovery as PreviewDiscovery
 import qualified Test.Headless.Unit.Atlas as UnitAtlas
@@ -73,6 +74,7 @@ import qualified Test.Headless.Unit.Atlas.Loader as UnitAtlasLoader
 import qualified Test.Headless.Preview.UnitAnimation as PreviewUnitAnimation
 import qualified Test.Headless.Preview.Building as PreviewBuilding
 import qualified Test.Headless.Preview.Zoom as PreviewZoom
+import qualified Test.Headless.Preview.KeyboardNavigation as PreviewKeyboardNavigation
 import qualified Test.Headless.World.Save.Sanitize as SaveSanitize
 import qualified Test.Headless.World.Save.Serialize as SaveSerialize
 import qualified Test.Headless.World.Save.Envelope as SaveEnvelope
@@ -90,6 +92,7 @@ import qualified Test.Headless.World.CursorInfo as CursorInfo
 import qualified Test.Headless.World.CursorTextureDispatch as CursorTextureDispatch
 import qualified Test.Headless.World.SelectTileZ as SelectTileZ
 import qualified Test.Headless.World.SelectChunk as SelectChunk
+import qualified Test.Headless.World.ChunkIdentity as ChunkIdentity
 import qualified Test.Headless.World.ChunkQueueFrame as ChunkQueueFrame
 import qualified Test.Headless.World.ActionOutcome as ActionOutcome
 import qualified Test.Headless.World.Spoil as Spoil
@@ -103,6 +106,7 @@ import qualified Test.Headless.Combat.Severing as CombatSevering
 import qualified Test.Headless.Combat.Wounds as CombatWounds
 import qualified Test.Headless.Magma.Shape as MagmaShape
 import qualified Test.Headless.Sim.Seam as SimSeam
+import qualified Test.Headless.Sim.Conservation as SimConservation
 import qualified Test.Headless.Input.KeyNames as InputKeyNames
 import qualified Test.Headless.Input.Bindings as InputBindings
 import qualified Test.Headless.Input.State as InputState
@@ -315,6 +319,7 @@ main = hspec $ do
         UITransferContextMenu.spec
         UIItemList.spec
         describe "World.ActionOutcome" ActionOutcome.spec
+        ChunkIdentity.spec
         ChunkQueueFrame.spec
         describe "Geology" Geology.spec
         describe "Chunk/Fast Parity" Parity.spec
@@ -559,12 +564,14 @@ main = hspec $ do
     describe "Asset.FloraRegrowthSchema" FloraRegrowthSchema.spec
     describe "Asset.UnitInventory" AssetUnitInventory.spec
     describe "Asset.YamlList" AssetYamlList.spec
+    StartupAssetLogging.spec
     describe "material move_cost validation" AssetMaterialMoveCost.spec
     describe "Preview.Discovery" PreviewDiscovery.spec
     describe "Preview.UnitAnimation" PreviewUnitAnimation.spec
     describe "Preview.Building" PreviewBuilding.spec
     describe "Preview.Zoom" PreviewZoom.spec
     describe "Machine Shop construction animation" MachineShopConstruction.spec
+    describe "Preview.KeyboardNavigation" PreviewKeyboardNavigation.spec
     describe "Workbench construction animation" WorkbenchConstruction.spec
     describe "Bindless texture filter rebinding" BindlessRebind.spec
     describe "Bindless texture release" BindlessRelease.spec
@@ -661,6 +668,7 @@ main = hspec $ do
     describe "Combat.Wounds" CombatWounds.spec
     describe "World.Magma.Shape" MagmaShape.spec
     describe "Sim.Fluid.Seam" SimSeam.spec
+    describe "Sim.Fluid.Conservation" SimConservation.spec
     describe "Input.KeyNames" InputKeyNames.spec
     describe "Input.Bindings" InputBindings.spec
     describe "Input.Inject" InputInject.spec

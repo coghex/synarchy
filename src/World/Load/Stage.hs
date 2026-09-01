@@ -31,7 +31,7 @@ import qualified Data.List as L
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Text as T
-import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
+import Data.IORef (readIORef, writeIORef)
 import Control.DeepSeq (force)
 import Control.Exception (evaluate)
 import Engine.Core.State (EngineEnv(..))
@@ -44,7 +44,9 @@ import World.Generate (generateChunk, cameraChunkCoord)
 import World.Generate.Arena (generateArenaChunks, arenaGenForSeed)
 import World.Plant.Validate (revalidatePlantDesignations)
 import World.Grid (worldToGrid)
-import World.Chunk.Queue (chunkQueueCanon, initialChunkQueue)
+import World.Chunk.Queue (initialChunkQueue, seedInitialQueue)
+import World.Chunk.Residency (canonicalChunkCoord)
+import World.Chunk.Admit (claimChunkGeneration, publishSeedChunks)
 import World.Plate (elevationAtGlobal)
 import World.Preview (buildPreviewFromPixels, PreviewImage(..))
 import World.Render (surfaceHeadroom)
@@ -56,6 +58,7 @@ import World.Map.ImagePlan
     , MapImageSource(..), admitMapImage, mapImageRefusalText )
 import Engine.Map.ImageAdmission (readMapImageCeiling)
 import World.Edit.Apply (replayEdits)
+import World.Edit.Types (canonicalizeWorldEdits)
 import World.Mine.Apply (applyDigSlopes)
 import World.Construct.Apply (applyConstructSlopes)
 import Building.Types (BuildingManager(..), BuildingId(..), BuildingDef)
@@ -293,7 +296,20 @@ stagePage logger registry palette catalog buildingDefs unitDefs
     writeIORef (wsMapModeRef worldState) (wpsMapMode wps)
     -- A loaded world always starts on the default tool (#103).
     writeIORef (wsToolModeRef worldState) DefaultTool
-    writeIORef (wsEditsRef worldState) (wpsEdits wps)
+    -- Normalized into this page's canonical chunk identity (#2001). A
+    -- save written by the old restore path holds entries keyed to a
+    -- seam ALIAS — including every settled-fluid snapshot, which
+    -- appendFluidSnapshot keys by the chunk's own lcCoord — and
+    -- applyEdit refuses an edit whose coords do not belong to the chunk
+    -- it is handed. Normalizing ONCE here is what keeps them replaying
+    -- for the life of the session: the initial centre is only the first
+    -- of many loads, and the streaming loader regenerates that chunk
+    -- canonically every time it is evicted and comes back.
+    --
+    -- Identity for every save whose keys are already canonical, which is
+    -- every page away from the seam.
+    writeIORef (wsEditsRef worldState)
+        (canonicalizeWorldEdits (canonicalChunkCoord params) (wpsEdits wps))
     writeIORef (wsMineDesignationsRef worldState) (wpsMineDesignations wps)
     writeIORef (wsConstructDesignationsRef worldState)
         (wpsConstructDesignations wps)
@@ -379,9 +395,18 @@ stagePage logger registry palette catalog buildingDefs unitDefs
                                 . applyDigSlopes desigs . replayEdits edits)
                                 (generateArenaChunks (arenaGenForSeed seed))
               chunkMap = HM.fromList [ (lcCoord c, c) | c ← arenaChunks ]
+          -- Claimed before the generation is forced, then admitted with
+          -- that same claim — the lifecycle and the owner-before-payloads
+          -- order a fresh arena uses (#2001). This staged WorldState is
+          -- not published until World.Load.Publish, so nothing can
+          -- observe either window here; sharing the one shape is what
+          -- keeps the two seed paths from drifting, not a defence this
+          -- one needs.
+          arenaClaims ← claimChunkGeneration worldState pid params
+                                             (map lcCoord arenaChunks)
           _ ← evaluate (force arenaChunks)
-          atomicModifyIORef' (wsTilesRef worldState) $ \_ →
-              (WorldTileData { wtdChunks = chunkMap, wtdMaxChunks = 100 }, ())
+          publishSeedChunks worldState arenaClaims
+              WorldTileData { wtdChunks = chunkMap, wtdMaxChunks = 100 }
           let seeds = [ (lcCoord c, lcFluidMap c, lcTerrainSurfaceMap c)
                       | c ← arenaChunks ]
           writeIORef (wsInitQueueRef worldState) []
@@ -441,11 +466,26 @@ stagePage logger registry palette catalog buildingDefs unitDefs
             else pure (Nothing, Nothing, Nothing)
 
           when isActive $ writeIORef phaseRef (LoadPhase1 3 totalSteps)
-          let centerCoord =
+          -- The saved camera chunk, canonicalised. 'cameraChunkCoord'
+          -- does no wrapping, so a session saved past the seam names a
+          -- non-canonical ALIAS — and this centre is generated and
+          -- inserted under whatever coord it is given, where every
+          -- canonicalising reader would miss it.
+          --
+          -- Its saved replay entries reach it because the edit log was
+          -- normalized into this same frame above, once, rather than
+          -- replayed in the saved frame here: this centre is only the
+          -- first of many loads of that chunk, and the streaming loader
+          -- regenerates it canonically every time it is evicted and
+          -- comes back.
+          let centerCoord = canonicalChunkCoord params $
                   cameraChunkCoord (wpsCameraFacing wps)
                                    (wpsCameraX wps)
                                    (wpsCameraY wps)
-              (ct, cs, cterrain, cf, cice, cflora, cwt, cmagma) =
+          -- Claimed before generation, exactly as fresh world init does.
+          centreClaims ← claimChunkGeneration worldState pid params
+                                              [centerCoord]
+          let (ct, cs, cterrain, cf, cice, cflora, cwt, cmagma) =
                   generateChunk registry catalog params centerCoord
               seededSurf = VU.imap (\idx surfZ →
                   case cf V.! idx of
@@ -470,9 +510,12 @@ stagePage logger registry palette catalog buildingDefs unitDefs
           cdesigs ← readIORef (wsConstructDesignationsRef worldState)
           let centerChunk = applyConstructSlopes cdesigs
                   (applyDigSlopes desigs (replayEdits edits centerChunkRaw))
-          atomicModifyIORef' (wsTilesRef worldState) $ \_ →
-              (WorldTileData { wtdChunks    = HM.singleton centerCoord centerChunk
-                             , wtdMaxChunks = 200 }, ())
+          -- The restored centre is new residency (#2001), claimed and
+          -- admitted exactly as a fresh world's centre is — under the
+          -- CANONICAL key, which is where every reader looks for it.
+          publishSeedChunks worldState centreClaims
+              WorldTileData { wtdChunks    = HM.singleton centerCoord centerChunk
+                            , wtdMaxChunks = 200 }
           let seeds = [ (centerCoord, lcFluidMap centerChunk
                         , lcTerrainSurfaceMap centerChunk) ]
               stamps = locationStampsFor params [centerChunk]
@@ -485,10 +528,16 @@ stagePage logger registry palette catalog buildingDefs unitDefs
           -- synchronously generated centre is excluded from the queue
           -- and counted once in the total.
           let (remainingCoords, totalInitialChunks) =
-                  initialChunkQueue (chunkQueueCanon params) centerCoord
+                  initialChunkQueue (canonicalChunkCoord params) centerCoord
           when isActive $ writeIORef phaseRef (LoadPhase1 4 totalSteps)
-          writeIORef (wsInitQueueRef worldState) remainingCoords
-          writeIORef phaseRef (LoadPhase2 (length remainingCoords) totalInitialChunks)
+          -- Register the restored box and append what still needs
+          -- scheduling (#2001), through the same call fresh world init
+          -- uses. This staged page is not published until
+          -- World.Load.Publish, so nothing can race the queue here —
+          -- sharing the one helper is what keeps the two seed paths from
+          -- drifting, not a defence this path needs.
+          -- Installs LoadPhase2 itself, as fresh world init does.
+          _ ← seedInitialQueue pid worldState params remainingCoords
 
           mCam ← if isActive
             then do

@@ -35,7 +35,9 @@ import World.Types
 import Structure.Types (emptyChunkStructures)
 import World.Generate (generateChunk)
 import World.Generate.Arena (generateArenaChunks, arenaGenForSeed)
-import World.Chunk.Queue (chunkQueueCanon, initialChunkQueue)
+import World.Chunk.Queue (initialChunkQueue, seedInitialQueue)
+import World.Chunk.Residency (canonicalChunkCoord)
+import World.Chunk.Admit (claimChunkGeneration, publishSeedChunks)
 import World.Geology (buildTimeline)
 import World.Geology.Log (formatPlatesSummary)
 import World.Plate (generatePlates, elevationAtGlobal)
@@ -300,6 +302,21 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
             sendGenLog env msg
         _ → pure ()
 
+    -- Claim the centre BEFORE the params become observable (#2001).
+    -- Publishing them is what makes world.loadChunksInRegion able to act
+    -- on this page at all, and the centre is not generated until step 6;
+    -- a request naming it in that span would otherwise register demand,
+    -- queue it, and count it for a chunk this page is committed to
+    -- producing itself — leaving an entry for an already resident chunk
+    -- on the queue and the phase pair overstating the work.
+    --
+    -- The claim needs the params VALUE, not the ref, so it can precede
+    -- the write; any request able to see this page therefore already
+    -- sees the centre in flight. It is carried to admission by
+    -- publishSeedChunks in step 6.
+    let centerCoord = ChunkCoord 0 0
+    centreClaims ← claimChunkGeneration worldState pageId params [centerCoord]
+
     writeIORef (wsGenParamsRef worldState) (Just params)
     
     -- Step 4: Zoom cache + texture atlas
@@ -386,13 +403,15 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     -- the seam, and this total is what LoadPhase2 progresses towards
     -- (#1723). The centre is generated synchronously just below and so
     -- is excluded from the queue but counted in the total.
-    let centerCoord = ChunkCoord 0 0
-        (remainingCoords, totalInitialChunks) =
-            initialChunkQueue (chunkQueueCanon params) centerCoord
+    let (remainingCoords, totalInitialChunks) =
+            initialChunkQueue (canonicalChunkCoord params) centerCoord
     sendGenLog env $ "Generating initial chunks ("
         <> tshow totalInitialChunks <> ")..."
     
     catalog ← readIORef (wsFloraCatalogRef worldSim)
+    -- The centre has been claimed since before the params were published,
+    -- so the owner has reported it in flight for this whole
+    -- initialization — including the generateChunk below.
     let (ct, cs, cterrain, cf, cice, cflora, cwt, cmagma) =
             generateChunk registry catalog params centerCoord
         seededSurf = VU.imap (\idx surfZ →
@@ -414,9 +433,12 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
             , lcStructures = emptyChunkStructures
             }
 
-    atomicModifyIORef' (wsTilesRef worldState) $ \_ →
-        (WorldTileData { wtdChunks = HM.singleton centerCoord centerChunk
-                       , wtdMaxChunks = 200 }, ())
+    -- The centre is new residency like any other chunk (#2001), so it
+    -- reaches the owner through the SAME admission boundary the camera
+    -- and init-queue batches use, carrying the claim taken above.
+    publishSeedChunks worldState centreClaims
+        WorldTileData { wtdChunks = HM.singleton centerCoord centerChunk
+                      , wtdMaxChunks = 200 }
 
     -- Stamp any placed location on the synchronously-generated centre
     -- chunk (#89). It is written straight to wsTilesRef and excluded from
@@ -425,10 +447,25 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
 
     -- Step 7: Queue remaining chunks
     writeIORef phaseRef (LoadPhase1 7 totalSteps)
-    writeIORef (wsInitQueueRef worldState) remainingCoords
-    
-    -- Now switch to Phase 2 tracking
-    writeIORef phaseRef (LoadPhase2 (length remainingCoords) totalInitialChunks)
+    -- Register the initial box as durable demand and APPEND exactly what
+    -- still needs scheduling (#2001) — never a wholesale write, because
+    -- this page was registered in wmWorlds near the top of this function
+    -- so Lua could watch the loading phase, and its generation params
+    -- went in before the expensive cache/preview work above. A
+    -- world.loadChunksInRegion accepted in that window has already been
+    -- counted and registered on the owner; overwriting the queue would
+    -- drop its coords while leaving them requested, deduplicating every
+    -- later request for them.
+    --
+    -- The phase total comes back from the same call, derived from the
+    -- queue rather than from this page's own box, so a retained request
+    -- cannot make remaining exceed total.
+    -- Phase 2 tracking is installed by that call, not here: any interval
+    -- between computing the pair and writing it is one a concurrent
+    -- region request can be lost in. drainInitQueues recomputes the
+    -- remaining count every tick from the same queue, so the two never
+    -- disagree afterwards.
+    _ ← seedInitialQueue pageId worldState params remainingCoords
     
     sendGenLog env "Calculating surface elevation..."
     let (surfaceElev, _mat) = elevationAtGlobal seed (wgpPlates params)
@@ -524,9 +561,16 @@ handleWorldInitArenaCommand env logger pageId = do
         allChunks = generateArenaChunks (arenaGenForSeed (wgpSeed arenaParams))
         chunkMap  = HM.fromList [ (lcCoord c, c) | c ← allChunks ]
 
-    -- Write tile data
-    atomicModifyIORef' (wsTilesRef worldState) $ \_ →
-        (WorldTileData { wtdChunks = chunkMap, wtdMaxChunks = 100 }, ())
+    -- Write tile data. Arena chunks are residency too (#2001): same
+    -- lifecycle, same owner-before-payloads order, and
+    -- 'canonicalChunkCoord' is the identity on an arena page, so the
+    -- sentinel wgpWorldSize never reaches 'wrapChunkCoordU'. Claiming
+    -- before the 'evaluate (force allChunks)' below covers this page's
+    -- own generation window; reading lcCoord forces only the list spine.
+    arenaClaims ← claimChunkGeneration worldState pageId arenaParams
+                                       (map lcCoord allChunks)
+    publishSeedChunks worldState arenaClaims
+        WorldTileData { wtdChunks = chunkMap, wtdMaxChunks = 100 }
 
     -- Force the arena chunks to NF so the LoadDone below is honest (same
     -- contract as the progressive loader). Tiny 5×5 arena, negligible cost.

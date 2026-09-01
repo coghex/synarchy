@@ -26,7 +26,10 @@ Checks:
      this probe; the first entry is auto-selected and its texture
      resolves to "ready"; clicking a DIFFERENT row (located from the
      dump's per-row interactive bounds — never hardcoded coordinates,
-     the offscreen_probe.py convention) changes the selection; scrolling
+     the offscreen_probe.py convention) changes the selection; a real
+     tapped Up/Down key changes the selection exactly once, while a held
+     arrow pauses briefly and then repeats quickly, minimally scrolling the
+     selected row into view until its matching key-up; scrolling
      over the list (input.moveMouse + input.scroll, located the same
      way) changes the reported scroll offset; a framebuffer GROW
      (engine.setResolution) reflows the panel bounds while preserving
@@ -43,7 +46,9 @@ Checks:
      fps/loop values for the selected clip are reported; the frame index
      advances over wall time; clicking a DIFFERENT list row (located
      from the dump, never hardcoded coordinates) changes the selected
-     animation and restarts the clip; clicking a mirrored direction cell
+     animation and restarts the clip; real Up/Down pairs select animations
+     and real Left/Right pairs wrap across the rendered direction cells;
+     clicking a mirrored direction cell
      (located the same way) enlarges it and reports its real source
      direction; a resize preserves the animation, direction, and scroll
      offset; a clip whose AUTHORED loop is false still reports
@@ -211,6 +216,41 @@ def check(name: str, ok: bool, detail: str = "") -> bool:
 def dump(port: int):
     got = send_json(port, 'return require("scripts.preview_manager").dump()')
     return got if isinstance(got, dict) else {}
+
+
+def press_preview_key(port: int, key: str, changed, seconds: float = 10.0) \
+        -> tuple[dict, dict]:
+    """Tap one real key-down/key-up pair and return two stable observations.
+
+    Release is enqueued immediately after the press, before any debug dump:
+    waiting to observe the intermediate state would itself hold the key past
+    the repeat delay and turn a tap oracle into an accidental long press.
+    """
+    quoted = json.dumps(key)
+    # One console request is essential: two TCP round trips can themselves
+    # exceed the 200 ms repeat delay and no longer describe a tap.
+    send(port, f"local d=input.keyDown({quoted}); "
+               f"local u=input.keyUp({quoted}); return d and u", timeout=10.0)
+    reached = poll_until(seconds, lambda: (
+        (lambda state: state if changed(state) else None)(dump(port))))
+    reached = reached or dump(port)
+    time.sleep(0.15)
+    return reached, dump(port)
+
+
+def hold_preview_key(port: int, key: str, changed, seconds: float = 10.0) \
+        -> tuple[dict, dict]:
+    """Hold through ``changed``, release, then return held/released states."""
+    quoted = json.dumps(key)
+    send(port, f"return input.keyDown({quoted})", timeout=10.0)
+    try:
+        held = poll_until(seconds, lambda: (
+            (lambda state: state if changed(state) else None)(dump(port))))
+        held = held or dump(port)
+    finally:
+        send(port, f"return input.keyUp({quoted})", timeout=10.0)
+    time.sleep(0.15)
+    return held, dump(port)
 
 
 def window_size(port: int) -> tuple[int, int]:
@@ -612,6 +652,113 @@ def check_simple_list_mode(port: int) -> bool:
                          selected)
         ok_ready = check("selection resolved to ready", d.get("state") == "ready", d.get("state"))
 
+        # #2026: drive the engine's public injected-input path, including
+        # matching key-up events. Tap once to prove immediate single-step
+        # behavior, then HOLD one key through the preview-local delay/cadence
+        # until it has crossed the initial viewport. That simultaneously
+        # proves fast repeat, release, and minimum scroll-into-view. Finish
+        # with one precise Up/Down pair at the scrolled position.
+        ok_keys = True
+        keyboard_end = d
+        visible = len(rows)
+        if len(expected) < 2 or visible < 1 or len(expected) <= visible:
+            ok_keys = check("Up/Down keyboard navigation has a scrollable fixture",
+                            False,
+                            f"entries={len(expected)} visible={visible}")
+        else:
+            down_state, released_state = press_preview_key(
+                port, "Down",
+                lambda state: (state.get("selected") or {}).get("label")
+                    == expected[1])
+            ok_one_step = check(
+                "Down key-down selects one adjacent row and key-up adds no step",
+                (down_state.get("selected") or {}).get("label") == expected[1]
+                and (released_state.get("selected") or {}).get("label")
+                    == expected[1],
+                f"down={down_state.get('selected')} "
+                f"up={released_state.get('selected')}")
+
+            # Put the selection two rows before the viewport edge with a real
+            # click. The hold's immediate step reaches the last visible row;
+            # only a DELAYED repeat can cross the edge and scroll. This stays
+            # fast even on a Retina framebuffer that fits 65 rows at once.
+            repeat_start_index = visible - 2
+            setup_row = next(
+                (row for row in rows
+                 if row.get("label") == expected[repeat_start_index]), None)
+            if setup_row:
+                b = setup_row.get("bounds") or {}
+                x = int(b.get("x", 0) + b.get("w", 0) / 2)
+                y = int(b.get("y", 0) + b.get("h", 0) / 2)
+                send(port, f"return input.click({x}, {y})", timeout=10.0)
+            setup_state = poll_until(
+                5.0, lambda: (lambda state: state
+                    if (state.get("selected") or {}).get("label")
+                        == expected[repeat_start_index] else None)(dump(port)))
+
+            # `target_index` is zero-based and deliberately names the first
+            # entry beyond the original visible row budget. poll_until's
+            # interval is slower than the 40 ms repeat cadence, so accept any
+            # observed index at or beyond it and derive the exact expected
+            # minimum offset from the index where key-up actually lands.
+            target_index = visible
+            index_by_label = {label: index for index, label in enumerate(expected)}
+            hold_started = time.monotonic()
+            _held, keyboard_end = hold_preview_key(
+                port, "Down",
+                lambda state: index_by_label.get(
+                    (state.get("selected") or {}).get("label"), -1)
+                    >= target_index)
+            hold_elapsed = time.monotonic() - hold_started
+            selected_index = index_by_label.get(
+                (keyboard_end.get("selected") or {}).get("label"), -1)
+            expected_offset = max(0, selected_index - visible + 1)
+            visible_rows = keyboard_end.get("rows") or []
+            time.sleep(0.15)
+            stopped_state = dump(port)
+            ok_min_scroll = check(
+                "held Down repeats quickly, stops on key-up, and scrolls only enough to expose its row",
+                setup_state is not None
+                and selected_index >= target_index
+                and hold_elapsed < 5.0
+                and keyboard_end.get("scrollOffset") == expected_offset
+                and [r.get("label") for r in visible_rows]
+                    == expected[expected_offset:expected_offset + visible]
+                and any(r.get("label") == expected[selected_index]
+                        and r.get("value") is True for r in visible_rows),
+                f"elapsed={hold_elapsed:.3f}s selected={keyboard_end.get('selected')} "
+                f"offset={keyboard_end.get('scrollOffset')} "
+                f"rows={[r.get('label') for r in visible_rows]}") \
+                and check(
+                    "held Down remains stopped after release",
+                    (stopped_state.get("selected") or {}).get("label")
+                        == expected[selected_index]
+                    and stopped_state.get("scrollOffset") == expected_offset,
+                    f"released={keyboard_end.get('selected')} "
+                    f"later={stopped_state.get('selected')}")
+
+            _up_held, after_up = press_preview_key(
+                port, "Up",
+                lambda state: (state.get("selected") or {}).get("label")
+                    == expected[selected_index - 1])
+            _down_held, keyboard_end = press_preview_key(
+                port, "Down",
+                lambda state: (state.get("selected") or {}).get("label")
+                    == expected[selected_index])
+            ok_both = check(
+                "Up and Down each traverse one row through the same selection path",
+                (after_up.get("selected") or {}).get("label")
+                    == expected[selected_index - 1]
+                and (keyboard_end.get("selected") or {}).get("label")
+                    == expected[selected_index],
+                f"up={after_up.get('selected')} "
+                f"down={keyboard_end.get('selected')}")
+            ok_keys = all([ok_one_step, ok_min_scroll, ok_both])
+
+        # Continue the older pointer checks from the live keyboard state.
+        rows = keyboard_end.get("rows") or rows
+        selected = keyboard_end.get("selected") or selected
+
         # Pick a different visible row than the current selection to click.
         other = next((r for r in rows if r.get("label") != selected.get("label")), None)
         if other is None:
@@ -637,7 +784,9 @@ def check_simple_list_mode(port: int) -> bool:
             cy = int(b0.get("y", 0) + b0.get("h", 0) / 2)
             before = dump(port).get("scrollOffset")
             send(port, f"return input.moveMouse({cx}, {cy})", timeout=10.0)
-            send(port, "return input.scroll(0, -3)", timeout=10.0)
+            max_offset = max(0, len(expected) - len(rows))
+            dy = 3 if before >= max_offset else -3
+            send(port, f"return input.scroll(0, {dy})", timeout=10.0)
             after = dump(port).get("scrollOffset")
             ok_scroll = check("scroll offset changes on wheel input",
                              after != before, f"before={before} after={after}")
@@ -741,7 +890,7 @@ def check_simple_list_mode(port: int) -> bool:
         ok_no_gameplay = check_no_gameplay_scripts_loaded(port)
 
         return all([ok_profile, ok_target, ok_filter, ok_mode, ok_count,
-                    ok_entries, ok_first, ok_ready,
+                    ok_entries, ok_first, ok_ready, ok_keys,
                     ok_click, ok_scroll, ok_resize_bounds, ok_resize_selection,
                     ok_resize_scroll, ok_grow_fit, ok_shrank, ok_shrink_rows,
                     ok_shrink_fit, ok_trimmed, ok_no_gameplay])
@@ -1113,6 +1262,75 @@ def check_units_mode(port: int) -> bool:
         ok_mirror = check("mirrored cells report their real source direction",
                           mirrored == MIRROR_SOURCE, mirrored)
 
+        # #2026: use actual engine input pairs for both navigation axes.
+        # Animation navigation goes through the browser's ordinary select
+        # callback (including async texture readiness); direction navigation
+        # walks the view's rendered cells, so mirrored/wrapped entries are
+        # covered without reselecting or restarting the animation.
+        idle_index = listed.index("idle") if "idle" in listed else -1
+        if idle_index < 0 or len(listed) < 2:
+            ok_key_animation = check("Up/Down animation navigation has a fixture",
+                                     False, f"animations={listed}")
+        else:
+            step = 1 if idle_index + 1 < len(listed) else -1
+            key = "Down" if step == 1 else "Up"
+            restore_key = "Up" if step == 1 else "Down"
+            adjacent = listed[idle_index + step]
+            held, released = press_preview_key(
+                port, key,
+                lambda state: (state.get("selected") or {}).get("label")
+                    == adjacent
+                    and (state.get("playback") or {}).get("animation")
+                    == adjacent
+                    and (state.get("playback") or {}).get("ready") is True,
+                seconds=15.0)
+            _restore_held, restored = press_preview_key(
+                port, restore_key,
+                lambda state: (state.get("selected") or {}).get("label") == "idle"
+                    and (state.get("playback") or {}).get("animation") == "idle"
+                    and (state.get("playback") or {}).get("ready") is True,
+                seconds=15.0)
+            ok_key_animation = check(
+                "Up/Down key pairs select adjacent animations exactly once",
+                (held.get("selected") or {}).get("label") == adjacent
+                and (released.get("selected") or {}).get("label") == adjacent
+                and (restored.get("selected") or {}).get("label") == "idle",
+                f"held={held.get('selected')} released={released.get('selected')} "
+                f"restored={restored.get('selected')}")
+
+        restored = poll_unit_ready(port)
+        restored_pb = restored.get("playback") or {}
+        restored_dirs = restored_pb.get("directions") or []
+        initial_zoom = (restored.get("zoom") or {}).get("multiplier")
+        if not restored_dirs or restored_pb.get("direction") != "south":
+            ok_key_direction = check("Left/Right direction navigation has a fixture",
+                                     False, restored_pb)
+        else:
+            left_want = restored_dirs[-1]
+            left_held, left_released = press_preview_key(
+                port, "Left",
+                lambda state: (state.get("playback") or {}).get("direction")
+                    == left_want.get("direction"))
+            _right_held, right_released = press_preview_key(
+                port, "Right",
+                lambda state: (state.get("playback") or {}).get("direction")
+                    == "south")
+            left_pb = left_held.get("playback") or {}
+            left_up_pb = left_released.get("playback") or {}
+            right_pb = right_released.get("playback") or {}
+            ok_key_direction = check(
+                "Left/Right key pairs wrap rendered directions without changing animation or zoom",
+                left_pb.get("direction") == left_want.get("direction")
+                and left_pb.get("sourceDirection") == left_want.get("source")
+                and left_up_pb.get("direction") == left_want.get("direction")
+                and right_pb.get("direction") == "south"
+                and left_pb.get("animation") == "idle"
+                and right_pb.get("animation") == "idle"
+                and (left_held.get("zoom") or {}).get("multiplier") == initial_zoom
+                and (right_released.get("zoom") or {}).get("multiplier") == initial_zoom,
+                f"left=({left_pb.get('direction')}, {left_pb.get('sourceDirection')}) "
+                f"right={right_pb.get('direction')} zoom={initial_zoom}")
+
         # Requirement 9: the frame index advances over WALL time. idle
         # runs at the YAML's fps, so a second is many frames — poll for
         # any change rather than asserting a specific index.
@@ -1251,7 +1469,8 @@ def check_units_mode(port: int) -> bool:
         ok_no_gameplay = check_no_gameplay_scripts_loaded(port)
 
         return all([ok_mode, ok_filter, ok_entries, ok_default, ok_meta,
-                    ok_dirs, ok_mirror, ok_advance, ok_select, ok_cell,
+                    ok_dirs, ok_mirror, ok_key_animation, ok_key_direction,
+                    ok_advance, ok_select, ok_cell,
                     ok_resize, ok_replay, ok_atlas, ok_trimmed,
                     ok_no_gameplay])
     finally:
