@@ -2817,16 +2817,54 @@ def _declaration_span(code: str, start: int) -> str:
     return "\n".join(span)
 
 
+# Every field-carrying constructor's block is read, not just the
+# first. A sum of records -- `data X = A { f ∷ … } | B { f ∷ …, g ∷ … }`,
+# or a GADT declaring one record constructor per line -- puts EVERY
+# constructor's selectors in one scope, so reading only the first block
+# left `g` unenumerated and therefore unchecked: the completeness gate
+# had nothing to say about it, and a projection binding it through
+# anything this audit cannot read took it out of the accessor map
+# silently, which is the exact failure mode #2059 exists to close.
+#
+# The shared field parser is CALLED per block rather than paraphrased,
+# so grouped declarations (`{ a, b ∷ Int }`) and split
+# name/signature lines keep behaving identically to every other record
+# this tree parses.
+_RECORD_BLOCK_HEAD = "data CapabilityRecordBlock = CapabilityRecordBlock "
+_RECORD_BLOCK_PATTERN = (
+    r"^data CapabilityRecordBlock = CapabilityRecordBlock\b")
+
+
+def _record_blocks(span: str) -> list[str]:
+    """Every top-level `{ ... }` block in one declaration's span, in
+    source order -- one per field-carrying constructor."""
+    blocks: list[str] = []
+    depth = 0
+    start = 0
+    for index, character in enumerate(span):
+        if character == "{":
+            if depth == 0:
+                start = index
+            depth += 1
+        elif character == "}" and depth > 0:
+            depth -= 1
+            if depth == 0:
+                blocks.append(span[start:index + 1])
+    return blocks
+
+
 def capability_record_fields(source_text: str, record: str) -> list[str]:
     """The field names `record`'s own declaration brings into scope,
     whichever legal syntax declares it -- `data X = X { ... }`,
-    `newtype X = X { ... }`, or the GADT
-    `data X where X ∷ { ... } → X`. All three put the same selectors
-    in scope, so all three must be read.
+    `newtype X = X { ... }`, the GADT `data X where X ∷ { ... } → X`,
+    or a SUM of record constructors. All of them put the same kind of
+    selector in scope, so all of them must be read; a name declared by
+    more than one constructor is one selector and is reported once, in
+    first-declaration order.
 
     Raises `ValueError` when the declaration is absent or carries no
-    record block, which the completeness audit reports rather than
-    treating as a record with no fields."""
+    record block at all, which the completeness audit reports rather
+    than treating as a record with no fields."""
     code = _strip_haskell_comments(source_text)
     declaration = _CAPABILITY_TYPE_DECL_RE.search(code)
     while declaration is not None and declaration.group("record") != record:
@@ -2834,14 +2872,18 @@ def capability_record_fields(source_text: str, record: str) -> list[str]:
     if declaration is None:
         raise ValueError(
             f"no `data` or `newtype` declaration of `{record}` was found")
-    try:
-        return extract_record_fields(
-            _declaration_span(code, declaration.start()),
-            _CAPABILITY_TYPE_DECL_PATTERN % re.escape(record))
-    except ValueError as error:
+    blocks = _record_blocks(_declaration_span(code, declaration.start()))
+    if not blocks:
         raise ValueError(
             f"`{record}`'s declaration carries no record block of its "
-            f"own") from error
+            f"own")
+    fields: list[str] = []
+    for block in blocks:
+        for field in extract_record_fields(_RECORD_BLOCK_HEAD + block,
+                                           _RECORD_BLOCK_PATTERN):
+            if field not in fields:
+                fields.append(field)
+    return fields
 
 
 def _capability_projection_re(record: str) -> re.Pattern[str]:

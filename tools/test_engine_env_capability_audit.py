@@ -2798,6 +2798,70 @@ data Unrelated = Unrelated
   }
 """
 
+# A SUM of record constructors. Every constructor's selectors live in
+# ONE scope, so `omFieldTwo` is as reachable as `omFieldOne` -- reading
+# only the first constructor's block left it unenumerated, and then the
+# completeness gate had nothing to say about however it was bound.
+_SUM_PROJECTION = """\
+module Engine.Core.Capability.Omega
+  ( OmegaCapability(..)
+  , toOmegaCapability
+  ) where
+
+import Engine.Core.State (EngineEnv, fieldOne, fieldTwo)
+
+data OmegaCapability
+  = OmegaFirst { omFieldOne ∷ IORef Int }
+  | OmegaSecond { omFieldOne ∷ IORef Int
+                , omFieldTwo ∷ IORef Text }
+
+toOmegaCapability ∷ EngineEnv → OmegaCapability
+toOmegaCapability env = OmegaSecond
+  { omFieldOne = fieldOne env
+  , omFieldTwo = fieldTwo env
+  }
+"""
+
+# The same declaration, with the second constructor's field bound
+# through a `where`-bound helper. The accessor map cannot see through
+# that either, so this is the shape in which the unenumerated field
+# went completely untracked: no binding, no map entry, no violation.
+_SUM_HIDDEN_PROJECTION = _SUM_PROJECTION.replace(
+    "  , omFieldTwo = fieldTwo env\n  }\n",
+    "  , omFieldTwo = hidden\n  }\n  where hidden = fieldTwo env\n")
+
+_SUM_CONSUMER = """\
+module Omega.Mod where
+
+import Data.IORef
+
+import Engine.Core.State (EngineEnv)
+import Engine.Core.Capability.Omega (OmegaCapability(..), toOmegaCapability)
+
+sneak ∷ EngineEnv → IO ()
+sneak env = writeIORef (omFieldTwo (toOmegaCapability env)) 1
+"""
+
+# A GADT declaring one record constructor per line -- the same sum,
+# spelled the other legal way.
+_GADT_SUM_PROJECTION = """\
+module Engine.Core.Capability.Psi
+  ( PsiCapability(..)
+  , toPsiCapability
+  ) where
+
+import Engine.Core.State (EngineEnv, fieldOne)
+
+data PsiCapability where
+  PsiA ∷ { psFieldOne ∷ IORef Int } → PsiCapability
+  PsiB ∷ { psFieldTwo ∷ IORef Text } → PsiCapability
+
+toPsiCapability ∷ EngineEnv → PsiCapability
+toPsiCapability env = PsiA
+  { psFieldOne = fieldOne env
+  }
+"""
+
 # The migrated reader: it CONSUMES the wrapped handle inline, exactly as
 # a `readIORef` consumer does, so it must not be counted as a pass-on.
 _WRAPPED_READER = """\
@@ -3014,6 +3078,9 @@ def _writer_sources(**modules: str) -> dict[str, str]:
         "kappaConsumer": "src/Kappa/Mod.hs",
         "lambda": "src/Engine/Core/Capability/Lambda.hs",
         "nu": "src/Engine/Core/Capability/Nu.hs",
+        "omega": "src/Engine/Core/Capability/Omega.hs",
+        "omegaConsumer": "src/Omega/Mod.hs",
+        "psi": "src/Engine/Core/Capability/Psi.hs",
     }
     for key, body in modules.items():
         sources[paths[key]] = body
@@ -4132,6 +4199,77 @@ def test_a_capability_record_is_found_whatever_syntax_declares_it():
            "and raise no completeness violation")
 
 
+def test_every_record_constructor_s_selectors_are_enumerated():
+    """A capability type may declare more than one record constructor,
+    and every constructor's selectors live in ONE scope -- so reading
+    only the first block left the rest unenumerated and therefore
+    unchecked.
+
+    That is #2059's own failure mode one level up: the completeness
+    gate had nothing to say about a field it never knew existed, so a
+    projection binding it through anything the canonicalizer cannot
+    read took the selector out of the accessor map silently, and an
+    undeclared write through it produced no violation at all. Both
+    directions are pinned here: the field must be ENFORCED when its
+    binding is readable, and must FAIL LOUDLY when it is not."""
+    expect(capability_record_fields(_SUM_PROJECTION, "OmegaCapability")
+           == ["omFieldOne", "omFieldTwo"],
+           f"every constructor's selectors must be enumerated, once each "
+           f"in first-declaration order, got: "
+           f"{capability_record_fields(_SUM_PROJECTION, 'OmegaCapability')}")
+    expect(capability_record_fields(_GADT_SUM_PROJECTION, "PsiCapability")
+           == ["psFieldOne", "psFieldTwo"],
+           f"and the same for a GADT declaring one record constructor "
+           f"per line, got: "
+           f"{capability_record_fields(_GADT_SUM_PROJECTION, 'PsiCapability')}")
+
+    # Readable binding: the later constructor's selector is enforced.
+    readable = _writer_sources(omega=_SUM_PROJECTION,
+                               omegaConsumer=_SUM_CONSUMER)
+    expect(capability_accessor_map(readable, _WRITER_FIELDS).get(
+               "omFieldTwo") == (
+        ("fieldTwo", "Engine.Core.Capability.Omega", "OmegaCapability"),),
+           "a later constructor's selector must canonicalize")
+    expect(audit_capability_projection_completeness(
+               readable, _WRITER_FIELDS) == [],
+           "and raise no completeness violation when its binding reads")
+    writes, _ = _scan(readable)
+    expect(writes["fieldTwo"] == {"Omega.Mod"},
+           f"and the write through it must be attributed, got: "
+           f"{sorted(writes['fieldTwo'])}")
+    declared = {"fieldOne": frozenset(), "fieldTwo": frozenset(),
+                "fieldThree": frozenset()}
+    rejected = audit_writer_modules(writes, _WRITER_FIELDS, declared=declared)
+    expect(len(rejected) == 1 and "Omega.Mod" in rejected[0],
+           f"and the undeclared write must be rejected, got: {rejected}")
+
+    # Unreadable binding: the selector leaves the map, so the gate must
+    # be the thing that stops -- otherwise the write below is untracked.
+    hidden = _writer_sources(omega=_SUM_HIDDEN_PROJECTION,
+                             omegaConsumer=_SUM_CONSUMER)
+    expect("omFieldTwo" not in capability_accessor_map(
+               hidden, _WRITER_FIELDS),
+           "a binding through a `where`-bound helper must not be guessed "
+           "at")
+    hidden_writes, _ = _scan(hidden)
+    expect(hidden_writes["fieldTwo"] == set(),
+           f"so the write through it is genuinely unattributed, got: "
+           f"{sorted(hidden_writes['fieldTwo'])} -- which is exactly why "
+           f"the completeness gate must fail")
+    violations = audit_capability_projection_completeness(
+        hidden, _WRITER_FIELDS)
+    expect(len(violations) == 1 and "omFieldTwo" in violations[0],
+           f"and the completeness gate must report `omFieldTwo` by name, "
+           f"got: {violations}")
+
+    # The unprojected constructor's field is reported the same way.
+    gadt_violations = audit_capability_projection_completeness(
+        _writer_sources(psi=_GADT_SUM_PROJECTION), _WRITER_FIELDS)
+    expect(len(gadt_violations) == 1 and "psFieldTwo" in gadt_violations[0],
+           f"a selector no binding covers must be reported by name, got: "
+           f"{gadt_violations}")
+
+
 def test_a_capability_type_with_no_record_block_fails_closed():
     """Recognizing a declaration by name is separated from reading its
     fields, so a `<Name>Capability` whose declaration carries no record
@@ -4543,6 +4681,7 @@ def main() -> int:
         test_projection_binding_expressions_keep_the_unreadable_ones,
         test_projection_completeness_against_the_real_repo,
         test_a_capability_record_is_found_whatever_syntax_declares_it,
+        test_every_record_constructor_s_selectors_are_enumerated,
         test_a_capability_type_with_no_record_block_fails_closed,
         test_a_read_only_ref_read_is_an_inline_use_not_a_pass_on,
         test_one_selector_may_belong_to_two_capabilities,
