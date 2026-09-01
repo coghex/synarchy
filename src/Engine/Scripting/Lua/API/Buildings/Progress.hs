@@ -237,8 +237,10 @@ buildingGetActivityFn env = do
                         Nothing  → pure Nothing
                         Just def → do
                             -- Game-clock matches biSpawnedAt, so the
-                            -- Appearing→Built transition freezes on
-                            -- pause and doesn't drift against POSIX.
+                            -- Appearing→Built transition of a zero-work
+                            -- def freezes on pause and doesn't drift
+                            -- against POSIX. (Constructing→Built is
+                            -- driven by progress, not by any clock.)
                             now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
                             pure $ Just
                                 (buildingActivityLabel

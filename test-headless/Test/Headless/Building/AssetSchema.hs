@@ -199,11 +199,64 @@ rejectionSpec = do
             ]) `shouldFailWith`
                 ["probe_hall", "walkabout", "default", "south", "both"]
 
+    it "names an unknown frame key even when it is the ONLY key" $
+        -- The lone-unknown-key block is the case that would otherwise
+        -- fall through to the generic "declares no direction" message
+        -- without ever telling the author which key was wrong.
+        decodeYaml (asymmetricYaml
+            [ "      walkabout:"
+            , "        frames:"
+            , "          up: [\"u0.png\"]"
+            ]) `shouldFailWith`
+                ["probe_hall", "walkabout", "up", "unknown", "south"]
+
+    it "names an unknown frame key beside the legacy `default` list" $
+        decodeYaml (asymmetricYaml
+            [ "      walkabout:"
+            , "        frames:"
+            , "          default: [\"d0.png\"]"
+            , "          up: [\"u0.png\"]"
+            ]) `shouldFailWith` ["probe_hall", "walkabout", "up", "unknown"]
+
+    it "rejects an empty `frames` block, naming no key it cannot name" $
+        decodeYaml (asymmetricYaml
+            [ "      walkabout:"
+            , "        frames: {}"
+            ]) `shouldFailWith`
+                ["probe_hall", "walkabout", "no direction"]
+
     it "rejects an animation with no `frames` at all" $
         decodeYaml (asymmetricYaml
             [ "      walkabout:"
             , "        fps: 4"
             ]) `shouldFailWith` ["probe_hall", "walkabout", "no `frames`"]
+
+    it "decodes all four lifecycle roles, independently" $ do
+        -- Including `destruction`, which nothing plays yet (BDA-3 owns
+        -- playback): it has to DECODE now or the art slices have
+        -- nowhere to declare it. Four distinct animation names, so a
+        -- decoder collapsing two roles onto one would lose a value
+        -- rather than merely reorder the map.
+        def ← decodeOne (buildingYaml
+            [ "    sprite: \"legacy.png\""
+            , "    build_work: 100.0"
+            , "    state_animations:"
+            , "      construction: raise"
+            , "      appearance: unfold"
+            , "      built: hum"
+            , "      destruction: crumble"
+            ])
+        bydRoleAnims def `shouldBe` Map.fromList
+            [ (RoleConstruction, "raise"), (RoleAppearance, "unfold")
+            , (RoleBuilt, "hum"), (RoleDestruction, "crumble") ]
+        -- The map's own key order is the role order, and the vocabulary
+        -- is closed to exactly these four.
+        map roleKey (Map.keys (bydRoleAnims def))
+            `shouldBe` ["construction", "appearance", "built", "destruction"]
+        roleKeyList `shouldBe`
+            ["construction", "appearance", "built", "destruction"]
+        map roleFromKey roleKeyList `shouldBe`
+            map Just [RoleConstruction, RoleAppearance, RoleBuilt, RoleDestruction]
 
     it "rejects an unknown lifecycle key" $
         decodeYaml (buildingYaml

@@ -136,7 +136,8 @@ renderBuildingQuadsScanned env solarSlotOf facing zSlice effDepth tileAlpha = do
         then return (scanned, V.empty)
         else do
             -- Game-clock matches biSpawnedAt's clock, so the
-            -- Appearing→Built transition derived from elapsed time
+            -- Appearing→Built transition a zero-work def derives
+            -- from elapsed time
             -- doesn't run while paused.
             now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
             texSizes ← readIORef (rvTextureSizeRef (toRenderViewCapability env))

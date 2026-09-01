@@ -74,7 +74,7 @@ def stage_knowledge(chk: Checks, port: int, ledger: ViewLedger, ids: dict,
         close_window(port)
     # Every observation this fixture exists for has now been made, and it
     # is the world's only construction site: `build_nearby` scans 30
-    # tiles for an Appearing building with work left, so leaving it
+    # tiles for a Constructing building with work left, so leaving it
     # standing would pull acolytes away from the very walks the rest of
     # this run measures — and would eventually finish it, which SEEDS a
     # knowledge record and destroys the state it was built to supply.

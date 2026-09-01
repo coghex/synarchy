@@ -180,8 +180,7 @@ facingBlock ctx blockKey parseView obj = do
                   , isNothing (facingFromKey (Key.toText k)) ]
     unless (null unknown) $ failT $
         ctx <> ": `" <> blockKey <> "` declares unknown direction key"
-            <> (if length unknown > 1 then "s " else " ")
-            <> T.intercalate ", " (map quoted unknown)
+            <> plural unknown <> keyList unknown
             <> "; the key set is exactly " <> keyList facingKeyList
     let view f = case KM.lookup (Key.fromText (facingKey f)) obj of
             Nothing → failT $
@@ -226,11 +225,20 @@ animFrames ctx v = do
     let keys = map Key.toText (KM.keys obj)
         directional = filter (isJust ∘ facingFromKey) keys
         hasLegacy = legacyFramesKey `elem` keys
+        unknown = [ k | k ← keys
+                  , isNothing (facingFromKey k), k ≢ legacyFramesKey ]
+    -- Named FIRST, so it holds in every branch below. A block holding
+    -- ONLY an unknown key would otherwise fall through to "declares no
+    -- direction" — true, but never telling the author which key is wrong.
+    unless (null unknown) $ failT $
+        ctx <> ": `frames` declares unknown direction key"
+            <> plural unknown <> keyList unknown
+            <> "; the key set is exactly " <> keyList facingKeyList
+            <> " (or the legacy `" <> legacyFramesKey <> "` list)"
     case (null directional, hasLegacy) of
         (False, True) → failT $
             ctx <> " declares both canonical direction key"
-                <> (if length directional > 1 then "s " else " ")
-                <> T.intercalate ", " (map quoted directional)
+                <> plural directional <> keyList directional
                 <> " and the legacy `" <> legacyFramesKey
                 <> "` list; declare exactly one form"
         (False, False) → do
@@ -238,12 +246,6 @@ animFrames ctx v = do
             canonicalFrames ctx views
             pure (canonicalAssets views)
         (True, True) → do
-            let extra = filter (≢ legacyFramesKey) keys
-            unless (null extra) $ failT $
-                ctx <> ": `frames` declares unrecognised key"
-                    <> (if length extra > 1 then "s " else " ")
-                    <> T.intercalate ", " (map quoted extra)
-                    <> " beside the legacy `" <> legacyFramesKey <> "` list"
             paths ← obj .: Key.fromText legacyFramesKey
             when (null paths) $ failT $
                 ctx <> ": the legacy `" <> legacyFramesKey
@@ -366,6 +368,10 @@ quoted t = "`" <> t <> "`"
 
 keyList ∷ [Text] → Text
 keyList = T.intercalate ", " ∘ map quoted
+
+-- | The pluralising space between "key"\/"keys" and the list itself.
+plural ∷ [a] → Text
+plural xs = if length xs > 1 then "s " else " "
 
 -- | Decode + validate the three optional power-node keys (#1148).
 --

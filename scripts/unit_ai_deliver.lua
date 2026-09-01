@@ -1,6 +1,6 @@
 -- Unit AI delivery to build sites (#538 split from unit_ai.lua).
 --
--- Fires when (a) an Appearing building within scan range still has
+-- Fires when (a) a Constructing building within scan range still has
 -- unmet material need and (b) this unit carries at least one of
 -- those materials. On first selection, the unit "claims" a delivery
 -- plan onto aiState[uid].deliveryClaim — a map {[type] = count} —
@@ -29,7 +29,7 @@ local fetchWantsFromMule   = fetch.fetchWantsFromMule
 -- do the same). deliverUtility calls both of these; without the bindings
 -- they resolved as undefined GLOBALS and raised out of the whole unit_ai
 -- update tick — killing EVERY unit's AI, not just delivery — the moment
--- an Appearing building with unmet material need came into scan range.
+-- a Constructing building with unmet material need came into scan range.
 local findTechnomule       = fetch.findTechnomule
 local groundCountOf        = fetch.groundCountOf
 

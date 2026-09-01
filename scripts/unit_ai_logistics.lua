@@ -175,7 +175,7 @@ end
 -----------------------------------------------------------
 -- Action: build_nearby
 --
--- Fires when an under-construction building (Appearing activity,
+-- Fires when an under-construction building (Constructing activity,
 -- bdBuildWork > 0) is within build_scan_range. Once adjacent
 -- (Chebyshev ≤ 1) the unit stands still; the construction tick in
 -- scripts/building_spawn.lua counts adjacent workers and applies

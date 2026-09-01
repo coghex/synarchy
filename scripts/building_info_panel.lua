@@ -112,8 +112,9 @@ function buildingInfoWatch.update(dt)
         end
     elseif cur then
         -- Same building still selected — refresh so activity/footprint
-        -- updates land in the panel (activity transitions Appearing →
-        -- Built as the appear anim finishes).
+        -- updates land in the panel (activity transitions
+        -- Constructing/Appearing → Built as the build completes or the
+        -- appearance anim finishes).
         if pushBuildingInfo(cur) then
             buildingInfoWatch.tilePushed = false
         else

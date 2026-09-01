@@ -292,10 +292,10 @@ def main() -> int:
             except ValueError:
                 return None
 
-        appearing = poll_until(20.0, site_is_a_build_target)
-        if not appearing:
+        constructing = poll_until(20.0, site_is_a_build_target)
+        if not constructing:
             sys.exit(f"FAIL (setup): building #{bid} is {site_state()!r}, "
-                      f"expected an appearing site with build work outstanding")
+                      f"expected a constructing site with build work outstanding")
         # Bind to a local first: getTerrainAt yields more than one value,
         # and only the first (surface z) is wanted here.
         bz = int(float(send(args.port,
