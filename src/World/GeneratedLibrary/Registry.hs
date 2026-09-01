@@ -29,6 +29,7 @@
 --   of evidence" deletion the spec forbids.
 module World.GeneratedLibrary.Registry
     ( RegistryRead(..)
+    , RegistryDurability(..)
     , readRegistryFile
     , writeRegistryFile
     , RootScan(..)
@@ -42,15 +43,16 @@ import qualified Data.ByteString as BS
 import qualified Data.List as L
 import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
-import Control.Exception (IOException, SomeException, throwIO, try)
+import Control.Exception (IOException, SomeException, onException, try)
 import System.Directory
     ( doesDirectoryExist, doesFileExist, listDirectory, renameDirectory
     , renameFile )
 import System.FilePath ((</>))
+import System.IO (openBinaryTempFile)
 import World.Page.GeneratedId (GeneratedWorldId)
 import World.Save.Storage.Durable
-    ( rejectSymlinkedPath, rejectSymlinkedManagedPath, writeBytesDurably
-    , syncDirectory, claimUniquePath )
+    ( rejectSymlinkedPath, rejectSymlinkedManagedPath, durableFlush
+    , syncDirectory, closeQuietly, removeIfExists )
 import World.GeneratedLibrary.Types
 import World.GeneratedLibrary.Layout
 import World.GeneratedLibrary.Entry
@@ -61,6 +63,12 @@ data RegistryRead
     = RegistryAbsent
     | RegistryTorn !Text
     | RegistryPresent !RegistryFile
+    deriving (Show, Eq)
+
+-- | Whether reconciliation proved that the on-disk registry now equals
+--   the authoritative final-directory inventory. Cleanup may discard a
+--   displaced recovery copy only in the durable case.
+data RegistryDurability = RegistryDurable | RegistryNotDurable
     deriving (Show, Eq)
 
 -- | Read the registry. Never throws: a symlinked, unreadable, truncated
@@ -80,25 +88,34 @@ readRegistryFile root = do
                     Right bytes → either RegistryTorn RegistryPresent
                                          (decodeRegistry bytes)
 
--- | Durably replace the registry: a uniquely named temporary in the
---   root, @fsync@, re-read and decode, atomic rename onto
+-- | Durably replace the registry: an exclusively created temporary in the
+--   root whose handle stays owned through write + @fsync@, re-read and
+--   decode, atomic rename onto
 --   'registryFileName', directory sync — the same primitives the save
---   transaction uses, in the same order.
+--   transaction uses, in the same order. An expected failure removes its
+--   own temporary; a process crash can leave the reserved name behind for
+--   cleanup to sweep under the library lock.
 writeRegistryFile ∷ FilePath → RegistryFile → IO (Either Text ())
 writeRegistryFile root reg = do
     let path  = root </> registryFileName
         bytes = encodeRegistry reg
     r ← try $ do
-        tmp ← claimUniquePath root "registry-synlib-tmp"
-        written ← writeBytesDurably tmp bytes
-        either (throwIO . snd) pure written
-        reread ← BS.readFile tmp
-        case decodeRegistry reread of
-            Right reg' | reg' ≡ reg → pure ()
-            Right _  → ioError (userError "re-read registry differs from the one written")
-            Left err → ioError (userError (T.unpack err))
-        renameFile tmp path
-        syncDirectory root
+        (tmp, h) ← openBinaryTempFile root registryTempTemplate
+        let cleanupTemp = do
+                closeQuietly h
+                _ ← removeIfExists tmp
+                pure ()
+        (do
+            BS.hPut h bytes
+            durableFlush h
+            reread ← BS.readFile tmp
+            case decodeRegistry reread of
+                Right reg' | reg' ≡ reg → pure ()
+                Right _  → ioError (userError "re-read registry differs from the one written")
+                Left err → ioError (userError (T.unpack err))
+            renameFile tmp path
+            syncDirectory root
+         ) `onException` cleanupTemp
     pure $ case r of
         Left (e ∷ SomeException) → Left ("registry write failed: " <> tshow e)
         Right ()                 → Right ()
@@ -113,6 +130,7 @@ data RootScan = RootScan
     , rtStaging    ∷ ![FilePath]
     , rtDisplaced  ∷ ![(Text, FilePath)]
     , rtTombstones ∷ ![FilePath]
+    , rtRegistryTemps ∷ ![FilePath]
     , rtUnfamiliar ∷ ![FilePath]
     } deriving (Show, Eq)
 
@@ -121,7 +139,7 @@ scanRoot root = do
     listed ← try (listDirectory root)
     pure $ case listed of
         Left (e ∷ IOException) → Left ("cannot list library root: " <> tshow e)
-        Right names → Right (L.foldl' place (RootScan [] [] [] [] []) (L.sort names))
+        Right names → Right (L.foldl' place (RootScan [] [] [] [] [] []) (L.sort names))
   where
     place scan name = case classifyLibraryName name of
         FinalEntryName tok             → scan { rtFinals = rtFinals scan ⧺ [(tok, root </> name)] }
@@ -129,6 +147,7 @@ scanRoot root = do
         TransientName DisplacedDir tok → scan { rtDisplaced = rtDisplaced scan ⧺ [(tok, root </> name)] }
         TransientName TombstoneDir _   → scan { rtTombstones = rtTombstones scan ⧺ [root </> name] }
         RegistryName                   → scan
+        RegistryTempName               → scan { rtRegistryTemps = rtRegistryTemps scan ⧺ [root </> name] }
         LockName                       → scan
         UnfamiliarName                 → scan { rtUnfamiliar = rtUnfamiliar scan ⧺ [root </> name] }
 
@@ -146,10 +165,14 @@ inventoryFromDirectory root = do
 
 -- | Reconcile the registry with the directory. Caller holds the lock.
 --   Returns the registry as now written, every final's judgement, and
---   what was done. A registry that already matched is not rewritten.
+--   what was done. A registry that already matched is not rewritten, but
+--   its directory is synced before cleanup is told recovery copies are
+--   discardable: a prior rename whose root sync failed can leave matching
+--   bytes visible without having crossed the durability boundary.
 reconcileUnlocked
     ∷ LibraryConfig
-    → IO (Either LibraryFailure (RegistryFile, [LibraryEntry], ReconcileReport))
+    → IO (Either LibraryFailure
+            (RegistryFile, [LibraryEntry], RegistryDurability, ReconcileReport))
 reconcileUnlocked cfg = do
     let root = lcRoot cfg
         failure phase path reason = Left (LibraryFailure phase Nothing (Just path) reason)
@@ -190,10 +213,20 @@ reconcileUnlocked cfg = do
                                                 | (tok, path) ← rtDisplaced scan
                                                 , tok `elem` [ leName e | e ← entries
                                                                         , not (isCommitted e) ] ]
-                            writeWarnings ←
-                                if not changed then pure [] else do
+                            (registryDurability, writeWarnings) ←
+                                if changed then do
                                     w ← writeRegistryFile root desired
-                                    pure (either (: []) (const []) w)
+                                    pure $ case w of
+                                        Left warning → (RegistryNotDurable, [warning])
+                                        Right ()     → (RegistryDurable, [])
+                                else do
+                                    synced ← try (syncDirectory root)
+                                    pure $ case synced of
+                                        Left (e ∷ SomeException) →
+                                            ( RegistryNotDurable
+                                            , [ "registry durability sync failed: "
+                                                <> tshow e ] )
+                                        Right () → (RegistryDurable, [])
                             let report = ReconcileReport
                                     { rcAdded      = added
                                     , rcDropped    = dropped
@@ -204,7 +237,7 @@ reconcileUnlocked cfg = do
                                     , rcRegistryRebuilt = rebuilt
                                     , rcWarnings   = recoveryWarnings ⧺ displacedLeft ⧺ writeWarnings
                                     }
-                            pure (Right (desired, entries, report))
+                            pure (Right (desired, entries, registryDurability, report))
   where
     isCommitted e = leStatus e ≡ EntryCommitted
     committedRows entries =

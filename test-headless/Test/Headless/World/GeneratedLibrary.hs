@@ -28,8 +28,9 @@ import qualified Data.Set as Set
 import qualified Data.Text as T
 import System.Directory
     ( getTemporaryDirectory, createDirectoryIfMissing, createDirectory
-    , createDirectoryLink, doesDirectoryExist, doesFileExist, listDirectory
-    , removeDirectoryRecursive, removeFile, removePathForcibly )
+    , createDirectoryLink, copyFile, doesDirectoryExist, doesFileExist
+    , doesPathExist, listDirectory, removeDirectoryRecursive, removeFile
+    , removePathForcibly )
 import System.FilePath ((</>))
 import System.IO (hClose, hGetLine)
 import System.Process
@@ -133,6 +134,12 @@ finalDir root gid = libraryRoot root </> entryDirectoryName gid
 
 registryPath ∷ FilePath → FilePath
 registryPath root = libraryRoot root </> registryFileName
+
+copyEntryDirectory ∷ FilePath → FilePath → IO ()
+copyEntryDirectory source target = do
+    createDirectory target
+    names ← listDirectory source
+    forM_ names $ \name → copyFile (source </> name) (target </> name)
 
 tokenOf ∷ GeneratedWorldId → Text
 tokenOf = renderGeneratedWorldId
@@ -334,6 +341,8 @@ layoutSpec = describe "layout" $ do
         classifyLibraryName (transientDirectoryName TombstoneDir gidC 0 0)
             `shouldBe` TransientName TombstoneDir (tokenOf gidC)
         classifyLibraryName registryFileName `shouldBe` RegistryName
+        classifyLibraryName (registryTempTemplate <> "12345")
+            `shouldBe` RegistryTempName
         classifyLibraryName lockFileName `shouldBe` LockName
 
     it "classifies every malformed, non-canonical, traversal-shaped or separator-bearing name as unfamiliar" $ do
@@ -690,6 +699,18 @@ referenceSpec = describe "references and cleanup" $ do
             names ← rootNames root
             names `shouldBe` L.sort [registryFileName, lockFileName]
 
+    it "a registry candidate left by a crash is recognized and swept under the lock" $
+        withScratch $ \root → do
+            lib ← openOK root
+            let temp = libraryRoot root </> (registryTempTemplate <> "12345")
+            BS.writeFile temp "interrupted registry"
+            classifyLibraryName (registryTempTemplate <> "12345")
+                `shouldBe` RegistryTempName
+            report ← cleanupOK lib
+            crTransientsRemoved report `shouldBe` [temp]
+            doesPathExist temp `shouldReturn` False
+            rootNames root `shouldReturn` L.sort [registryFileName, lockFileName]
+
     it "unfamiliar names in the root are reported and never touched" $
         withScratch $ \root → do
             lib ← openOK root
@@ -810,6 +831,35 @@ registrySpec = describe "registry" $ do
             doesDirectoryExist displaced `shouldReturn` True
             rcWarnings (crReconcile r2) `shouldSatisfy` (not . null)
 
+    it "retains a displaced recovery copy until registry repair is durable" $
+        withScratch $ \root → do
+            lib ← openOK root
+            _ ← publishOK lib gidA payload1
+            let displaced = libraryRoot root
+                    </> transientDirectoryName DisplacedDir gidA 31 1
+            copyEntryDirectory (finalDir root gidA) displaced
+            _ ← publishOK lib gidA payload2
+
+            -- A directory at the registry path makes the repair's final
+            -- rename fail after its temporary was written and validated.
+            removeFile (registryPath root)
+            createDirectory (registryPath root)
+            failedRepair ← withPinnedReferences lib [gidA] (cleanupOK lib)
+            crTransientsRemoved failedRepair `shouldBe` []
+            doesDirectoryExist displaced `shouldReturn` True
+            rcWarnings (crReconcile failedRepair)
+                `shouldSatisfy` any ("registry write failed" `T.isInfixOf`)
+            namesAfterFailure ← rootNames root
+            [ n | n ← namesAfterFailure
+                , classifyLibraryName n ≡ RegistryTempName ] `shouldBe` []
+
+            removeDirectoryRecursive (registryPath root)
+            (_, repaired) ← reconcileOK lib
+            rcWarnings repaired `shouldBe` []
+            swept ← withPinnedReferences lib [gidA] (cleanupOK lib)
+            crTransientsRemoved swept `shouldBe` [displaced]
+            doesDirectoryExist displaced `shouldReturn` False
+
 -- Containment ------------------------------------------------------------------------
 
 containmentSpec ∷ Spec
@@ -883,6 +933,50 @@ coordinationSpec = describe "coordination" $ do
             crTransientsRemoved report `shouldBe` []
             e ← committed lib gidA
             leDigest e `shouldBe` Just (digestOf payload1)
+
+    it "shares pins across handles opened on the same library root" $
+        withScratch $ \root → do
+            publishingLib ← openOK root
+            cleanupLib ← openOK root
+            _ ← publishOK publishingLib gidA payload1
+            report ← withPinnedReferences publishingLib [gidA] $ do
+                pinnedReferences cleanupLib `shouldReturn` Set.singleton gidA
+                cleanupOK cleanupLib
+            crRetainedPinned report `shouldBe` [gidA]
+            crRemoved report `shouldBe` []
+
+    it "does not let a pinned action start after cleanup has taken the process mutex" $
+        withScratch $ \root → do
+            lib ← openOK root
+            _ ← publishOK lib gidA payload1
+            let quick = (configFor root) { lcLockWaitMicros = 2_000_000 }
+            quickLib ← openLibrary quick ≫= orFail "openLibrary"
+            let lockPath = libraryRoot root </> lockFileName
+                script = unlines
+                    [ "import fcntl, sys"
+                    , "f = open(sys.argv[1], 'a+')"
+                    , "fcntl.lockf(f, fcntl.LOCK_EX)"
+                    , "print('locked', flush=True)"
+                    , "sys.stdin.readline()" ]
+            (Just hin, Just hout, _, ph) ← createProcess
+                (proc "python3" ["-c", script, lockPath])
+                    { std_in = CreatePipe, std_out = CreatePipe }
+            hGetLine hout `shouldReturn` "locked"
+            cleanup ← async (cleanupLibrary quickLib HS.empty)
+            threadDelay 100_000
+            poll cleanup `shouldSatisfyM` isNothing
+            pinned ← async (withPinnedReferences lib [gidA] (pure ()))
+            threadDelay 100_000
+            -- Cleanup owns the process mutex while waiting for the POSIX
+            -- lock, so the pin transition and its action cannot slip behind
+            -- cleanup's snapshot and run concurrently with deletion.
+            poll pinned `shouldSatisfyM` isNothing
+            hClose hin
+            _ ← waitForProcess ph
+            report ← wait cleanup ≫= orFail "cleanupLibrary"
+            crRemoved report `shouldBe` [gidA]
+            _ ← wait pinned
+            pure ()
 
     it "two same-id publishers leave one complete final entry and a registry matching the winner" $
         withScratch $ \root → do

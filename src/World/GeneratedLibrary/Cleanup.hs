@@ -12,11 +12,12 @@
 --      displaced entry whose final is absent, and bring the registry
 --      into agreement with the directory. Cleanup never judges from a
 --      registry it has not just verified.
---   2. Sweep abandoned transients: every staging directory, every
---      tombstone, and every displaced copy whose final IS a complete
---      entry. A displaced copy beside a final that is not complete is
---      retained and reported — it may be the only complete copy of
---      that entry.
+--   2. Sweep abandoned staging directories and registry temporaries.
+--      Tombstones, and displaced copies whose final IS a complete entry,
+--      are swept only when reconciliation proved the matching registry
+--      durable. A displaced copy beside a final that is not complete, or
+--      beside a registry that could not be repaired, is retained — it may
+--      be the only durable recovery copy of that entry.
 --   3. Scan references ("World.GeneratedLibrary.References"). If any
 --      slot was indeterminate, stop here: no final entry is removed
 --      this run ('crDeletionSuppressed'), and the report says which
@@ -39,10 +40,11 @@ import qualified Data.HashSet as HS
 import qualified Data.Set as Set
 import qualified Data.Text as T
 import Control.Exception (IOException, SomeException, try)
-import System.Directory (renameDirectory)
+import System.Directory (doesFileExist, doesPathExist, renameDirectory)
 import System.FilePath ((</>))
 import World.Page.GeneratedId (GeneratedWorldId)
-import World.Save.Storage.Durable (syncDirectory)
+import World.Save.Storage.Durable
+    (rejectSymlinkedPath, removeIfExists, syncDirectory)
 import World.GeneratedLibrary.Types
 import World.GeneratedLibrary.Layout
 import World.GeneratedLibrary.Registry
@@ -61,15 +63,24 @@ cleanupUnlocked cfg luaKnownNames pinned = do
     reconciled ← reconcileUnlocked cfg
     case reconciled of
         Left f → pure (Left f)
-        Right (registry, entries, rcReport) → do
+        Right (registry, entries, registryDurability, rcReport) → do
             scanned ← scanRoot root
             case scanned of
                 Left reason → pure (Left (LibraryFailure LibDirectoryList Nothing (Just root) reason))
                 Right scan → do
                     let committedToks = [ leName e | e ← entries, leStatus e ≡ EntryCommitted ]
-                        sweepable = rtStaging scan ⧺ rtTombstones scan
-                            ⧺ [ p | (tok, p) ← rtDisplaced scan, tok `elem` committedToks ]
-                    (sweptTransients, sweepWarnings) ← sweep sweepable
+                        durableRecoveryGarbage = case registryDurability of
+                            RegistryDurable → rtTombstones scan
+                                ⧺ [ p | (tok, p) ← rtDisplaced scan
+                                      , tok `elem` committedToks ]
+                            RegistryNotDurable → []
+                        directorySweepable = rtStaging scan ⧺ durableRecoveryGarbage
+                    (sweptDirectories, directoryWarnings) ←
+                        sweepDirectories directorySweepable
+                    (sweptRegistryTemps, registryTempWarnings) ←
+                        sweepRegistryTemps (rtRegistryTemps scan)
+                    let sweptTransients = sweptDirectories ⧺ sweptRegistryTemps
+                        sweepWarnings = directoryWarnings ⧺ registryTempWarnings
                     refs ← scanSaveReferences (lcSavesDirectory cfg) luaKnownNames
                     let referenced = rsReferenced refs
                         committed = [ (erId rec, root </> T.unpack (leName e))
@@ -102,12 +113,18 @@ cleanupUnlocked cfg luaKnownNames pinned = do
                             (removed, tombstones, detachWarnings) ← detachAll candidates
                             syncWarnings ← syncRoot
                             registryWarnings ←
-                                if null removed then pure [] else do
+                                if null removed ∨ not (null syncWarnings) then pure [] else do
                                     let remaining = filter ((`notElem` removed) . rrId) (rfRows registry)
                                     w ← writeRegistryFile root (RegistryFile remaining)
                                     pure (either (: []) (const []) w)
-                            (_, deleteWarnings) ← sweep tombstones
-                            finalSync ← syncRoot
+                            (_, deleteWarnings) ←
+                                if null syncWarnings ∧ null registryWarnings
+                                    then sweepDirectories tombstones
+                                    else pure ([], [])
+                            finalSync ←
+                                if null syncWarnings ∧ null registryWarnings
+                                    then syncRoot
+                                    else pure []
                             pure (Right base
                                 { crRemoved           = removed
                                 , crWarnings          = sweepWarnings ⧺ detachWarnings
@@ -125,10 +142,30 @@ cleanupUnlocked cfg luaKnownNames pinned = do
 
     -- Remove each path, keeping the ones that went and the reasons for
     -- the ones that did not.
-    sweep paths = do
+    sweepDirectories paths = do
         results ← mapM (\p → (,) p ⊚ removeTransientDirectory p) paths
         pure ( [ p | (p, []) ← results ]
              , concat [ w | (_, w) ← results ] )
+
+    -- Registry candidates are files, not entry directories. Refuse a
+    -- symlink or an unexpected directory even when its name has the owned
+    -- shape; only a regular file can be a crashed registry write.
+    sweepRegistryTemps paths = do
+        results ← mapM (\p → (,) p ⊚ removeRegistryTemp p) paths
+        pure ( [ p | (p, []) ← results ]
+             , concat [ w | (_, w) ← results ] )
+    removeRegistryTemp path = do
+        linkSafe ← rejectSymlinkedPath path
+        case linkSafe of
+            Left reason → pure [ "not removing " <> T.pack path <> ": " <> reason ]
+            Right () → do
+                exists ← doesPathExist path
+                isFile ← doesFileExist path
+                if not exists then pure []
+                else if not isFile
+                    then pure [ "not removing " <> T.pack path
+                                <> ": registry temporary is not a regular file" ]
+                    else removeIfExists path
 
     -- Detach each candidate to a tombstone. A rename that fails leaves
     -- the final in place, retained; it is reported, never forced.

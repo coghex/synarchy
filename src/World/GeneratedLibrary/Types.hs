@@ -335,7 +335,8 @@ data CleanupReport = CleanupReport
         --   was removed this run, whatever the scan otherwise said.
     , crTransientsRemoved  ∷ ![FilePath]
         -- ^ ABANDONED staging, displaced and tombstone directories
-        --   swept — leftovers of earlier operations, never this run's
-        --   own tombstones, which 'crRemoved' accounts for.
+        --   plus registry candidate files swept — leftovers of earlier
+        --   operations, never this run's own tombstones, which
+        --   'crRemoved' accounts for.
     , crWarnings           ∷ ![Text]
     } deriving (Show, Eq)

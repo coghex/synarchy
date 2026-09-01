@@ -41,9 +41,13 @@
 --   entry. 'withPinnedReferences' is the in-process answer: a
 --   process-owned operation pins the ids it is about to depend on, and
 --   cleanup retains a pinned id exactly as it retains a referenced one.
---   Pins are per process by design — the product runs one engine per
---   resource root — and the integration slices are responsible for
---   pinning every live page's id around any cleanup they schedule.
+--   Pins are shared by every handle opened on one root in this process,
+--   and pin transitions use the same process mutex cleanup acquires before
+--   taking its filesystem lock. That makes "pin then start the operation"
+--   atomic with respect to cleanup: whichever begins first wins the mutex,
+--   and cleanup can never act from a pin snapshot that was already stale
+--   when its protected work began. The integration slices are responsible
+--   for pinning every live page's id around any cleanup they schedule.
 module World.GeneratedLibrary
     ( -- * Opening
       Library
@@ -93,9 +97,12 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import Control.Concurrent.STM
     (TVar, newTVarIO, readTVarIO, atomically, modifyTVar')
+import Control.Concurrent.MVar (MVar, modifyMVar, newMVar)
 import Control.Exception (IOException, bracket_, try)
-import System.Directory (createDirectoryIfMissing, doesDirectoryExist)
+import System.Directory
+    (createDirectoryIfMissing, doesDirectoryExist, makeAbsolute)
 import System.FilePath ((</>))
+import System.IO.Unsafe (unsafePerformIO)
 import World.Page.GeneratedId (GeneratedWorldId)
 import World.Save.Storage.Durable (rejectSymlinkedManagedPath)
 import World.GeneratedLibrary.Types
@@ -107,13 +114,15 @@ import World.GeneratedLibrary.Registry
 import World.GeneratedLibrary.References
 import World.GeneratedLibrary.Cleanup
 
--- | An opened library: its configuration plus the process-owned pin
---   set. Two handles on one root behave as one library — every
---   mutation is serialised by the shared lock — except that pins are
---   per handle.
+type PinCounts = Map.Map GeneratedWorldId Int
+
+-- | An opened library: its configuration plus the process-owned pin set
+--   SHARED by every handle opened on the same absolute root. Mutations are
+--   serialised by the library lock; pin transitions are serialised by that
+--   lock's process mutex.
 data Library = Library
     { libraryConfig ∷ !LibraryConfig
-    , libraryPins   ∷ !(TVar (Map.Map GeneratedWorldId Int))
+    , libraryPins   ∷ !(TVar PinCounts)
     }
 
 -- | Open (creating if absent) the library at 'lcRoot'. Refuses a root,
@@ -131,7 +140,7 @@ openLibrary cfg = do
                 Left (e ∷ IOException) →
                     pure (Left (LibraryFailure LibRootCreate Nothing (Just root) (tshow e)))
                 Right () → do
-                    pins ← newTVarIO Map.empty
+                    pins ← sharedPinsForRoot root
                     pure (Right (Library cfg pins))
 
 -- Publication ------------------------------------------------------------------
@@ -209,7 +218,7 @@ reconcileLibrary ∷ Library → IO (Either LibraryFailure ([LibraryEntry], Reco
 reconcileLibrary lib =
     withLibraryLock (libraryConfig lib) $ do
         r ← reconcileUnlocked (libraryConfig lib)
-        pure ((\(_, entries, report) → (entries, report)) ⊚ r)
+        pure ((\(_, entries, _, report) → (entries, report)) ⊚ r)
 
 -- | The reference census on its own, without the lock — for callers
 --   that want to know what a cleanup WOULD find.
@@ -221,20 +230,28 @@ scanReferences lib = scanSaveReferences (lcSavesDirectory (libraryConfig lib))
 --   component registry, exactly as 'World.Save.Serialize.listSaves'
 --   receives it.
 cleanupLibrary ∷ Library → HS.HashSet Text → IO (Either LibraryFailure CleanupReport)
-cleanupLibrary lib luaKnownNames = do
-    pins ← pinnedReferences lib
-    withLibraryLock (libraryConfig lib) (cleanupUnlocked (libraryConfig lib) luaKnownNames pins)
+cleanupLibrary lib luaKnownNames =
+    withLibraryLock (libraryConfig lib) $ do
+        -- Read INSIDE the process mutex held by 'withLibraryLock'. Pin
+        -- transitions take the same mutex, so this snapshot cannot already
+        -- be stale when cleanup starts acting on it.
+        pins ← pinnedReferences lib
+        cleanupUnlocked (libraryConfig lib) luaKnownNames pins
 
 -- Liveness ----------------------------------------------------------------------------
 
--- | Hold @gids@ live for the duration of @action@: a cleanup on this
---   handle retains them whether or not any save references them yet.
---   Nested and overlapping pins compose (a count per id), and the pin
---   is released on every exit path.
+-- | Hold @gids@ live for the duration of @action@: a cleanup through ANY
+--   handle on the same root retains them whether or not any save references
+--   them yet. Acquisition and release take the library's process mutex, so
+--   an action cannot start behind a cleanup that already owns the mutex, and
+--   a cleanup that starts behind this pin must observe it. Nested and
+--   overlapping pins compose (a count per id), and the pin is released on
+--   every exit path.
 withPinnedReferences ∷ Library → [GeneratedWorldId] → IO a → IO a
 withPinnedReferences lib gids =
-    bracket_ (adjust 1) (adjust (-1))
+    bracket_ (transition 1) (transition (-1))
   where
+    transition delta = withLibraryProcessMutex (adjust delta)
     adjust delta = atomically $ modifyTVar' (libraryPins lib) $ \pins →
         foldr (Map.alter (bump delta)) pins gids
     bump delta current =
@@ -243,3 +260,20 @@ withPinnedReferences lib gids =
 
 pinnedReferences ∷ Library → IO (Set.Set GeneratedWorldId)
 pinnedReferences lib = Map.keysSet ⊚ readTVarIO (libraryPins lib)
+
+-- | Process-wide per-root pin stores. Opening the same root twice must not
+--   create two liveness views: cleanup through either handle protects an
+--   operation using the other. The table is intentionally process-lifetime;
+--   a root has no close operation, and retaining an empty TVar is harmless.
+sharedPinStores ∷ MVar (Map.Map FilePath (TVar PinCounts))
+sharedPinStores = unsafePerformIO (newMVar Map.empty)
+{-# NOINLINE sharedPinStores #-}
+
+sharedPinsForRoot ∷ FilePath → IO (TVar PinCounts)
+sharedPinsForRoot root = do
+    key ← makeAbsolute root
+    modifyMVar sharedPinStores $ \stores → case Map.lookup key stores of
+        Just pins → pure (stores, pins)
+        Nothing → do
+            pins ← newTVarIO Map.empty
+            pure (Map.insert key pins stores, pins)

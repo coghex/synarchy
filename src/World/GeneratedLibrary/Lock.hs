@@ -25,7 +25,8 @@
 --     take the same record lock again, and closing ANY descriptor on
 --     the file drops the process's lock. The 'MVar' serialises the
 --     process's own threads so at most one descriptor is ever open on
---     the lock file at a time.
+--     the lock file at a time. Pin transitions take this same mutex, so
+--     cleanup cannot begin from a stale in-process liveness snapshot.
 --
 --   The wait is BOUNDED ('lcLockWaitMicros'): a lock held by a wedged
 --   or foreign process produces a structured 'LibLock' failure rather
@@ -33,6 +34,7 @@
 --   real second process holding the lock.
 module World.GeneratedLibrary.Lock
     ( withLibraryLock
+    , withLibraryProcessMutex
     ) where
 
 import UPrelude
@@ -56,7 +58,7 @@ import World.GeneratedLibrary.Layout (lockFileName)
 --   cannot be opened or the wait bound expires; an exception the action
 --   itself raises propagates after the lock is released.
 withLibraryLock ∷ LibraryConfig → IO (Either LibraryFailure a) → IO (Either LibraryFailure a)
-withLibraryLock cfg action = withMVar processLibraryLock $ \() → do
+withLibraryLock cfg action = withLibraryProcessMutex $ do
     let lockPath = lcRoot cfg </> lockFileName
         failure phase reason = Left (LibraryFailure phase Nothing (Just lockPath) reason)
     -- A symlinked lock file would be opened THROUGH, locking (and
@@ -89,6 +91,16 @@ withLibraryLock cfg action = withMVar processLibraryLock $ \() → do
                                      <> T.pack (show e) <> ")"))
                     else threadDelay pollMicros ≫ acquire fd deadline
     pollMicros = 20_000
+
+-- | Serialise a short in-process state transition with every mutating
+--   library operation, without taking the cross-process file lock. Pin
+--   acquisition and release use this boundary: if a cleanup already owns
+--   the mutex the pinned action cannot begin until cleanup finishes; if the
+--   pin wins first, cleanup cannot snapshot the shared pin set until the pin
+--   is visible. The action passed here must not itself call
+--   'withLibraryLock' (the mutex is deliberately non-reentrant).
+withLibraryProcessMutex ∷ IO a → IO a
+withLibraryProcessMutex action = withMVar processLibraryLock (const action)
 
 -- | Serialises this process's own lock holders — see the module header
 --   for why a record lock alone cannot. Module-level state under

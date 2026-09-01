@@ -19,6 +19,8 @@
 --   >                                by cleanup, awaiting deletion
 --   > registry.synlib                the registry (an index, never the
 --   >                                authority)
+--   > registry-synlib-tmp<suffix>    an exclusively created registry
+--   >                                candidate; a crash leftover is swept
 --   > library.lock                   the cross-process lock file
 --
 --   where @\<token\>@ is exactly the 32 lowercase hexadecimal characters
@@ -44,6 +46,7 @@ module World.GeneratedLibrary.Layout
     ( -- * Reserved file names
       entryRecordFileName
     , registryFileName
+    , registryTempTemplate
     , lockFileName
       -- * Root-level name grammar
     , LibraryName(..)
@@ -74,6 +77,7 @@ import qualified Data.Serialize as S
 import qualified Data.Text as T
 import Data.Char (isControl, isDigit, isHexDigit, isLower)
 import World.Page.GeneratedId (GeneratedWorldId, renderGeneratedWorldId)
+import World.Save.Storage.Durable (isTransientName)
 import World.GeneratedLibrary.Types
 
 -- Reserved file names -----------------------------------------------------
@@ -86,6 +90,12 @@ entryRecordFileName = "entry.record"
 
 registryFileName ∷ FilePath
 registryFileName = "registry.synlib"
+
+-- | Prefix passed to 'System.IO.openBinaryTempFile' for an exclusively
+--   created registry candidate. Its numeric-suffixed products are reserved
+--   library-owned crash leftovers and cleanup may sweep them under the lock.
+registryTempTemplate ∷ String
+registryTempTemplate = "registry-synlib-tmp"
 
 lockFileName ∷ FilePath
 lockFileName = "library.lock"
@@ -105,13 +115,14 @@ renderTransientKind DisplacedDir = "displaced"
 renderTransientKind TombstoneDir = "tombstone"
 
 -- | What one name in the library root means. The token carried by the
---   first four constructors is the directory's OWN name (or the id
---   portion of a transient's), already proven to have the canonical
---   shape — it is still only text, and is never turned into an id.
+--   entry constructors is the directory's OWN name (or the id portion of
+--   a transient's), already proven to have the canonical shape — it is
+--   still only text, and is never turned into an id.
 data LibraryName
     = FinalEntryName !Text
     | TransientName !TransientKind !Text
     | RegistryName
+    | RegistryTempName
     | LockName
     | UnfamiliarName
     deriving (Show, Eq)
@@ -128,6 +139,7 @@ isEntryToken s = length s ≡ 32 ∧ all hexLower s
 classifyLibraryName ∷ FilePath → LibraryName
 classifyLibraryName name
     | name ≡ registryFileName = RegistryName
+    | isTransientName registryTempTemplate name = RegistryTempName
     | name ≡ lockFileName     = LockName
     | isEntryToken name       = FinalEntryName (T.pack name)
     | otherwise = case L.break (≡ '.') name of
