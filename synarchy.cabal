@@ -1214,6 +1214,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Combat.Severing
                    Test.Headless.Combat.Wounds
                    Test.Headless.Magma.Shape
+                   Test.Headless.Sim.Conservation
                    Test.Headless.Sim.Seam
                    Test.Headless.Input.KeyNames
                    Test.Headless.Input.Bindings
