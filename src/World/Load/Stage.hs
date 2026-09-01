@@ -52,6 +52,9 @@ import World.Plate (elevationAtGlobal)
 import World.Preview (buildPreviewFromPixels, PreviewImage(..))
 import World.Render (surfaceHeadroom)
 import World.ZoomMap.Cache (buildZoomCacheWithPixels)
+import World.ZoomMap.Artifact
+    ( ZoomArtifact(..), buildZoomArtifactKey, loadZoomArtifact
+    , publishZoomArtifact )
 import World.ZoomMap.ColorPalette (ZoomColorPalette, buildColorPalette)
 import World.ZoomMap.ChunkTexture (buildZoomAtlas, ZoomAtlasData(..))
 import World.Map.ImagePlan
@@ -442,8 +445,44 @@ stagePage logger registry palette catalog buildingDefs unitDefs
           pure (seeds, [], mCam, Nothing, Nothing, Nothing)
         else do
           when isActive $ writeIORef phaseRef (LoadPhase1 2 totalSteps)
-          let (zoomCache, chunkPixels) =
-                  buildZoomCacheWithPixels params registry palette Nothing
+          (zoomCache, chunkPixels) ← if not isActive
+            then pure $ buildZoomCacheWithPixels params registry palette Nothing
+            else do
+              keyResult ← buildZoomArtifactKey params
+              case keyResult of
+                Left reason → do
+                  logWarn logger CatWorld $
+                      "Zoom artifact cache: unavailable (" <> reason
+                      <> "); rebuilding"
+                  pure $ buildZoomCacheWithPixels params registry palette Nothing
+                Right key → do
+                  cached ← loadZoomArtifact key
+                  case cached of
+                    Right artifact → do
+                      _ ← evaluate $ force
+                          (zaEntries artifact, zaPixels artifact)
+                      logInfo logger CatWorld $
+                          "Zoom artifact cache: hit ("
+                          <> tshow (zaBytes artifact) <> " bytes)"
+                      pure (zaEntries artifact, zaPixels artifact)
+                    Left reason → do
+                      logInfo logger CatWorld $
+                          "Zoom artifact cache: miss (" <> reason
+                          <> "); rebuilding"
+                      let built@(builtEntries, builtPixels) =
+                              buildZoomCacheWithPixels params registry palette Nothing
+                      _ ← evaluate $ force (builtEntries, builtPixels)
+                      published ← publishZoomArtifact key builtEntries builtPixels
+                      case published of
+                        Left publishReason →
+                          logWarn logger CatWorld $
+                              "Zoom artifact cache: publish skipped ("
+                              <> publishReason <> ")"
+                        Right bytes →
+                          logInfo logger CatWorld $
+                              "Zoom artifact cache: published "
+                              <> tshow bytes <> " bytes"
+                      pure built
           _ ← evaluate (force zoomCache)
           writeIORef (wsZoomCacheRef worldState) zoomCache
           writeIORef (wsZoomAtlasRef worldState) Nothing

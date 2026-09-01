@@ -59,6 +59,7 @@ import Location.Overlay.Types (emptyLocationOverlay)
 import World.Preview (buildPreviewFromPixels, PreviewImage(..))
 import World.Render (surfaceHeadroom)
 import World.ZoomMap.Cache (buildZoomCacheWithPixels)
+import World.ZoomMap.Artifact (buildZoomArtifactKey, publishZoomArtifact)
 import World.ZoomMap.ColorPalette (buildColorPalette)
 import World.ZoomMap.ChunkTexture (buildZoomAtlas, ZoomAtlasData(..))
 import World.Map.ImagePlan (mapImageRefusalText)
@@ -359,6 +360,21 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
         _ ← evaluate (force zoomCache)
         _ ← evaluate (force chunkPixels)
         writeIORef (wsZoomCacheRef worldState) zoomCache
+
+        -- A fresh world already paid for these exact pixels.  Publishing
+        -- them is best-effort and gives a later matching save load the
+        -- fast path without retaining a second in-memory representation.
+        artifactKey ← buildZoomArtifactKey params
+        case artifactKey of
+          Left reason → logWarn logger CatWorld $
+              "Zoom artifact cache: publish skipped (" <> reason <> ")"
+          Right key → do
+            published ← publishZoomArtifact key zoomCache chunkPixels
+            case published of
+              Left reason → logWarn logger CatWorld $
+                  "Zoom artifact cache: publish skipped (" <> reason <> ")"
+              Right bytes → logInfo logger CatWorld $
+                  "Zoom artifact cache: published " <> tshow bytes <> " bytes"
 
         sendGenLog env "Assembling zoom texture atlas..."
         case buildZoomAtlas zoomPlan (V.length zoomCache) chunkPixels of
