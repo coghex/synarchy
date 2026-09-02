@@ -37,7 +37,8 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 
 import Engine.ActionOutcome (ActionOutcome(..))
-import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
+import Engine.Core.Init (EngineInitResult(..))
+import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 import Engine.Core.State (EngineEnv(..))
 import Structure.Types (emptyChunkStructures)
 import World.Chunk.Types
@@ -92,7 +93,7 @@ paidClaimedJob tgt = ConstructDesignation
     , cdPayment = CpPaid (mkMaterialReceipt [("steel_plate", 1)]) }
 
 spec ∷ Spec
-spec = beforeAll initializeEngineHeadless $ do
+spec = beforeAll initializeEngineHeadlessQuiet $ do
 
   describe "a tile that already carries a job refuses a second one" $ do
 

@@ -53,7 +53,8 @@ import Building.Types
     ( BuildingDef(..), BuildingId(..), BuildingInstance(..)
     , BuildingManager(..), emptyBuildingManager )
 import Engine.Asset.Handle (TextureHandle(..))
-import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
+import Engine.Core.Init (EngineInitResult(..))
+import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Thread (ThreadControl(..))
 import Engine.Core.Capability.WorldSim (toWorldSimCapability)
@@ -462,7 +463,7 @@ spec = describe "Portal spawn page binding (#1686)" $ aroundAll setup $ do
     -- because the engine booted inside it — @scripts/@ is symlinked
     -- there, so the real building_spawn Lua still loads.
     setup act = withIsolatedResourceRoot $ do
-        EngineInitResult env ← initializeEngineHeadless
+        EngineInitResult env ← initializeEngineHeadlessQuiet
         ls ← newBareLuaBackend env
         installPageSwitch env ls
         _ ← rememberRealVerbs ls

@@ -22,7 +22,7 @@
 --       that ends on the same page id, which no page-id comparison can
 --       see.
 --
---   The engine here is this module's own ('initializeEngineHeadless',
+--   The engine here is this module's own ('initializeEngineHeadlessQuiet',
 --   like 'Test.Headless.World.DesignationSeam'\'s engine-backed half):
 --   it runs NO worker threads, so a queued 'BuildingSpawn' or
 --   'WorldDesignateConstruct' stays in its queue and "nothing was
@@ -59,7 +59,8 @@ import Engine.Core.Capability.Building (toBuildingCapability)
 import Engine.Core.Capability.ContentRegistriesView
     (toContentRegistriesViewCapability)
 import Engine.Core.Capability.WorldSim (toWorldSimCapability)
-import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
+import Engine.Core.Init (EngineInitResult(..))
+import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Thread (ThreadControl(..))
 import qualified Engine.Core.Queue as Q
@@ -629,7 +630,7 @@ spec = describe "Build placement page binding (#1602)" $ aroundAll setup $ do
     -- @scripts/@ is symlinked there, so the real build-tool Lua still
     -- loads.
     setup act = withIsolatedResourceRoot $ do
-        EngineInitResult env ← initializeEngineHeadless
+        EngineInitResult env ← initializeEngineHeadlessQuiet
         ls ← newBareLuaBackend env
         installPageSwitch env ls
         _ ← rememberRealVerbs ls

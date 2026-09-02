@@ -23,7 +23,7 @@
 --   Every example here drives the REAL @structure.place@ through the real
 --   Lua API — never by interning by hand, which would be the test
 --   asserting its own writes. The engine is this module's own
---   'initializeEngineHeadless' (the 'Test.Headless.World.StructureStage'
+--   'initializeEngineHeadlessQuiet' (the 'Test.Headless.World.StructureStage'
 --   shape): it runs NO worker threads, so a queued command stays in the
 --   queue and "nothing was queued" is an assertion on the queue itself.
 --   Both pages are in-memory 'emptyWorldState' pages carrying synthetic
@@ -51,7 +51,8 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 
 import Engine.Asset.Handle (TextureHandle(..))
-import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
+import Engine.Core.Init (EngineInitResult(..))
+import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Thread (ThreadControl(..))
 import qualified Engine.Core.Queue as Q
@@ -395,7 +396,7 @@ spec = describe "A rejected structure placement interns nothing (#1675)"
     -- Isolation wraps the boot (#1357): engine init is itself a config
     -- writer, so a scratch root established afterwards is too late.
     setup act = withIsolatedResourceRoot $ do
-        EngineInitResult env ← initializeEngineHeadless
+        EngineInitResult env ← initializeEngineHeadlessQuiet
         ls ← newBareLuaBackend env
         act (env, ls)
 

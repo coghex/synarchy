@@ -26,7 +26,8 @@ import UPrelude
 import Test.Hspec
 import Data.IORef (writeIORef)
 import qualified Data.HashMap.Strict as HM
-import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
+import Engine.Core.Init (EngineInitResult(..))
+import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 import Engine.Core.State
     (EngineEnv(..), itemManagerRef)
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..), defaultCamera)
@@ -355,5 +356,5 @@ engineSpec = beforeAll initEnv $
             hit `shouldBe` Just gid
   where
     initEnv = do
-        EngineInitResult env ← initializeEngineHeadless
+        EngineInitResult env ← initializeEngineHeadlessQuiet
         pure env

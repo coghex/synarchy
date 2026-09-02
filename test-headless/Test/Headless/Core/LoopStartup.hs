@@ -16,7 +16,8 @@ import UPrelude
 import Test.Hspec
 import Control.Concurrent (forkIO, threadDelay)
 import Data.IORef (newIORef, readIORef, writeIORef, modifyIORef')
-import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
+import Engine.Core.Init (EngineInitResult(..))
+import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 import Engine.Core.Monad (runEngineM, EngineM')
 import qualified Engine.Core.Queue as Q
 import Engine.Core.State
@@ -36,7 +37,7 @@ runningLine = "Engine running"
 spec ∷ Spec
 spec = describe "shared main-loop startup handshake (#1022)" $ do
   it "flushes a non-empty input queue, reports it, and transitions to running" $ do
-    EngineInitResult env ← initializeEngineHeadless
+    EngineInitResult env ← initializeEngineHeadlessQuiet
     capturedRef ← newIORef []
     testLogger ← initLogger defaultLogConfig
       { lcBackend = LogToCallback (\e → modifyIORef' capturedRef (e :))
@@ -77,7 +78,7 @@ spec = describe "shared main-loop startup handshake (#1022)" $ do
         , (EngineStopped, "an engine that already stopped")
         ] $ \(advanced, label) →
     it ("preserves " ⧺ label ⧺ " instead of overwriting it with running") $ do
-      EngineInitResult env ← initializeEngineHeadless
+      EngineInitResult env ← initializeEngineHeadlessQuiet
       writeIORef (lifecycleRef env) advanced
 
       let action ∷ EngineM' ()
@@ -89,7 +90,7 @@ spec = describe "shared main-loop startup handshake (#1022)" $ do
   it "still promotes a genuinely starting engine, and is idempotent for one already running" $ do
     forM_ [(EngineStarting, EngineRunning), (EngineRunning, EngineRunning)] $
       \(before, after) → do
-        EngineInitResult env ← initializeEngineHeadless
+        EngineInitResult env ← initializeEngineHeadlessQuiet
         writeIORef (lifecycleRef env) before
         let action ∷ EngineM' ()
             action = runStartupHandshake headlessMode env
@@ -107,7 +108,7 @@ spec = describe "shared main-loop startup handshake (#1022)" $ do
         , (EngineStopped,  False, "withholds it when the engine already stopped")
         ] $ \(before, announced, label) →
     it ("running line: " ⧺ label) $ do
-      EngineInitResult env ← initializeEngineHeadless
+      EngineInitResult env ← initializeEngineHeadlessQuiet
       capturedRef ← newIORef []
       testLogger ← initLogger defaultLogConfig
         { lcBackend = LogToCallback (\e → modifyIORef' capturedRef (e :))
@@ -133,7 +134,7 @@ spec = describe "shared main-loop startup handshake (#1022)" $ do
   -- would still lose this one, which is why the promotion has to be a
   -- single atomic step.
   it "keeps a quit that arrives midway THROUGH the handshake" $ do
-    EngineInitResult env ← initializeEngineHeadless
+    EngineInitResult env ← initializeEngineHeadlessQuiet
     writeIORef (lifecycleRef env) EngineStarting
     -- Inside the settle the handshake performs before promoting.
     _ ← forkIO $ do

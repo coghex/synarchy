@@ -468,14 +468,19 @@ python3 tools/world_check.py --quick
 # retaining on a pass, a failure and a boot abort while naming only what
 # the run actually produced, a cleanup failure making an otherwise clean
 # run non-zero through #1620's own reporting, and an outside same-named
-# decoy left byte-identical. It also pins what the probe still proves:
-# all seven boots through the one funnel that hands each this
-# invocation's log and registers its process as it is launched, both
-# log-reading ASSERTIONS reading that same log, the five fixture bodies
-# by sha256, their registration order and loaders, load_fixture_yaml
-# still guarding every one of them, and the three helpers
-# portal_ghost_probe imports still intact. That probe is manual-only and
-# boots seven engines; the companion boots nothing.
+# decoy left byte-identical. It also pins what the probe still proves,
+# scanning the COMPLETE reorganized surface (#2095 -- the facade plus
+# every scenario owner under tools/location_content/, so an
+# exclusion-style check cannot go vacuous once the bodies leave run):
+# all seven boot CALL SITES through the one funnel that hands each this
+# invocation's log and registers its process as it is launched, the
+# regeneration site still a loop over the two visit orders so a run
+# LAUNCHES eight processes, both log-reading ASSERTIONS reading that
+# same log, the five fixture bodies by sha256 resolved at their single
+# source, their registration order and loaders, load_fixture_yaml still
+# guarding every one of them, and the three helpers portal_ghost_probe
+# imports still the same function objects. That probe is manual-only and
+# launches eight engine processes; the companion boots nothing.
 # test_movement_probe is #1586's: tools/movement_probe.py --list is a
 # metadata query answered from scripts/movement_arena.lua before any
 # boot(), for every --mode, and the derived view is held to the runtime
@@ -508,6 +513,27 @@ python3 tools/world_check.py --quick
 # and are manual-only, so without this companion a re-shared log would
 # only ever be noticed by a dev-machine run; the companion boots
 # nothing.
+# test_item_list_widget_probe is #1911's: the #1251 unit-to-unit escort
+# scenario in tools/item_list_widget_probe.py stages an escort and a
+# target that must be OUTSIDE the transfer contract's reach at the
+# instant a Mode A session is created. That precondition used to record
+# its result and DISCARD the Boolean, so a staging loop that exhausted
+# its four terrain-sensitive retries went on to create the session and
+# grade five checks against a pair already in reach -- where "the pair
+# opens" passes with no approach at all and "the target did not move for
+# the whole of the approach" measures a walk that never happened. It is
+# terminal now, and this companion is what executes that path: a
+# scripted console parks the target at a maximum-axis gap of exactly
+# 1.0, and the run is asserted to fail at SETUP, to send no
+# transfer_session.create, to grade none of the five, to leave the
+# simulation running with the session cleared, and to retain all four
+# attempted destinations and paused snapshots in the failure line. Its
+# positive control drives the same scenario over a console that lets the
+# gap open, so the negative result is a real difference rather than a
+# scenario that stops early either way. That probe is manual-only
+# needs-gpu and takes about fifteen minutes, and the failing path
+# depends on live terrain, so an ordinary run cannot be relied on to
+# reach it; the companion boots nothing.
 #
 # tools/test_deflake_diagnosis.py (#1437) is deliberately absent from
 # this list as well, and from the CI job it mirrors: that issue's
@@ -536,6 +562,7 @@ python3 tools/test_location_content_probe.py
 python3 tools/test_movement_probe.py
 python3 tools/test_farm_ai_probe.py
 python3 tools/test_probe_boot_logs.py
+python3 tools/test_item_list_widget_probe.py
 
 # The decision .github/workflows/review-gate.yml makes on every
 # synchronize push: keep `reviewed:approve` only when the push left the

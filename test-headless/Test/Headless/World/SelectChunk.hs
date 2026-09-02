@@ -29,7 +29,8 @@ import qualified Data.Text.IO as TIO
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector.Unboxed as VU
 import Data.IORef (readIORef, writeIORef, modifyIORef')
-import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
+import Engine.Core.Init (EngineInitResult(..))
+import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Asset.Handle (TextureHandle)
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..), defaultCamera)
@@ -74,7 +75,7 @@ freshPage = do
 
 initEnv ∷ IO EngineEnv
 initEnv = do
-    EngineInitResult env ← initializeEngineHeadless
+    EngineInitResult env ← initializeEngineHeadlessQuiet
     pure env
 
 -- | Register a single page as the whole world manager and give the

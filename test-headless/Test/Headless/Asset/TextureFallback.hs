@@ -36,7 +36,8 @@ import System.Directory
 import System.FilePath ((</>))
 import qualified Data.Text as T
 import qualified Data.Vector.Storable as Vec
-import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
+import Engine.Core.Init (EngineInitResult(..))
+import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 import Engine.Core.State (EngineEnv, floraCatalogRef, luaToEngineQueue, luaQueue
     , assetPoolRef, nextObjectIdRef, inputStateRef, loggerRef
     , textureSystemRef, textureSizeRef)
@@ -193,7 +194,7 @@ spec = do
             -- registry. Reverting an insert into all of those correctly
             -- (rather than just flushing the one queue message round-7
             -- caught) risks missing another one down the line. A private,
-            -- lightweight `initializeEngineHeadless` env (the same
+            -- lightweight `initializeEngineHeadlessQuiet` env (the same
             -- primitive Test.Headless.World.LocationDiscovery/CursorInfo/
             -- Unit.LineOfSight already use for exactly this "needs its
             -- own throwaway engine state" case, no world/unit thread
@@ -201,7 +202,7 @@ spec = do
             -- mutations only ever touch its own engine, discarded whole
             -- when the test ends, and the aroundAll-shared `_sharedEnv`
             -- above is deliberately unused.
-            EngineInitResult env ← initializeEngineHeadless
+            EngineInitResult env ← initializeEngineHeadlessQuiet
             tmp ← getTemporaryDirectory
             let dir = tmp </> "synarchy-texture-fallback-spec"
                 path = dir </> "no_harvest_texture.yaml"
@@ -1059,7 +1060,7 @@ residentBindlessHandle = toBindlessHandle residentSlot residentHandle
 --   really runs here rather than short-circuiting somewhere harmless.
 withRegistrationFixture ∷ (RegistrationFixture → IO α) → IO α
 withRegistrationFixture action = withHandleSlotTable $ \table → do
-    EngineInitResult env ← initializeEngineHeadless
+    EngineInitResult env ← initializeEngineHeadlessQuiet
     logRef ← newIORef []
     logger ← initLogger defaultLogConfig
         { lcBackend = LogToCallback (\e → modifyIORef' logRef (e :)) }
