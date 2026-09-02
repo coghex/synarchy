@@ -333,17 +333,24 @@ ghostPieceTint tileAlpha factor valid =
 --   (#1673's page-qualification discipline).
 --
 --   Deliberately NOT on grid z. A designation's stake is its stake
---   however the ground under it has moved, and the two failures of
---   requiring z are both worse than the drift it would notice: the
---   designation and the instance would BOTH draw, which is exactly the
---   doubled 60 % this predicate exists to prevent, and the Lua mirror
---   ('unit_ai_construct_site.stakedBuildingAt') would fail to recognize
---   its own completed stake, try to re-spawn onto the occupied tile and
---   cancel a job that had really been built. Elevation drift is handled
+--   however the ground under it has moved, and requiring z would make
+--   the designation and the instance BOTH draw — exactly the doubled
+--   60 % this predicate exists to prevent. Elevation drift is handled
 --   where it arises instead: the designation ghost draws at the z
 --   'Building.Placement.buildingAnchorZ' says the stake will land on,
 --   not at the level stored when the player clicked, so there is no
 --   drift left for the hand-off to jump over.
+--
+--   This is a question about the PIXEL, and it is deliberately a
+--   different question from the one the build AI asks. A building of
+--   this description already stands here, so a translucent plan of the
+--   same thing drawn on top of it is noise whoever put it there —
+--   designation admission does not check occupancy, so "whoever" can be
+--   the player. Whether a given JOB may report itself complete is a
+--   question about PROVENANCE, and
+--   'unit_ai_construct_site.stakedBuildingAt' answers that one from the
+--   job's own spawned building id rather than from what the tile looks
+--   like.
 buildingStakedAt ∷ WorldPageId → Text → (Int, Int)
                  → HM.HashMap BuildingId BuildingInstance → Bool
 buildingStakedAt page defName (ax, ay) =

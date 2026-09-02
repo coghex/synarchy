@@ -2495,6 +2495,18 @@ spec = do
             , "  'stripping staking must not mutate the live constructJob table')"
             , "assert(payload:find('staking') == nil,"
             , "  'no trace of the stake hand-off clock may reach the encoded payload')"
+            -- …while the spawned id BESIDE it survives: it is a DECLARED
+            -- building reference (unit_ai_ref_schema.lua), and it is the
+            -- only thing that tells a resumed job whether its OWN stake
+            -- landed rather than whether something that merely looks like
+            -- it is standing at the tile.
+            , "fakeAiState[1].constructJob.stakedBid = 42"
+            , "local snapRef = saveModules.registry.unit_ai.snapshot()"
+            , "local st = snapRef[1].constructJob.stakedBid"
+            , "assert(type(st) == 'table' and st.__ref == 'building'"
+            , "       and st.id == 42,"
+            , "  'the staked id survives as a TYPED building reference')"
+            , "fakeAiState[1].constructJob.stakedBid = nil"
             -- …and a job carrying ONLY the stake clock (no .build, which
             -- a building-category job never has) must still be stripped:
             -- the two are independent reasons on one shallow copy, and a

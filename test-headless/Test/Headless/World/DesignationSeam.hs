@@ -808,6 +808,24 @@ engineSpec = beforeAll setup $ do
           [ "local js = construction.getPendingJobs(16, -16, 17, -14); "
           , "return tostring(#js)" ])
         `shouldReturn` "1"
+      -- #1845: the optional trailing page. The build AI supplies it
+      -- because its lifecycle spans many ticks and the ACTIVE page can
+      -- move between any two of them. A named page answers for THAT
+      -- page, and one that is not registered answers with nothing —
+      -- falling back to the active page is the bug this argument
+      -- exists to prevent.
+      evalDebug ls (T.concat
+          [ "local js = construction.getPendingJobs(16, -16, 17, -14, '"
+          , pageText, "'); return tostring(#js)" ])
+        `shouldReturn` "1"
+      -- An unregistered page answers NOTHING AT ALL — the same nil the
+      -- verb has always given when it could resolve no world, which
+      -- 'unit_ai_construct_site.pendingJobsOn' normalises to an empty
+      -- list. Not the active page's jobs under another page's name.
+      evalDebug ls (T.concat
+          [ "local js = construction.getPendingJobs(16, -16, 17, -14, "
+          , "'no_such_page'); return tostring(js)" ])
+        `shouldReturn` "nil"
       -- Nearest reports the canonical key, measured through its nearest
       -- alias to the (aliased) query point.
       evalDebug ls (T.concat

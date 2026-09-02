@@ -157,8 +157,9 @@ local function findConstructJob(uid, fromX, fromY, params)
     local ccx = math.floor(fromX / 16)   -- chunkSize
     local ccy = math.floor(fromY / 16)
     local r = params.construct_scan_chunks
-    local jobs = construction.getPendingJobs(ccx - r, ccy - r,
-                                             ccx + r, ccy + r)
+    -- #1845: scanned on the ACTOR's page — see site.pendingJobsOn.
+    local jobs = site.pendingJobsOn(wid, ccx - r, ccy - r,
+                                    ccx + r, ccy + r)
     if not jobs or #jobs == 0 then return nil end
     local now = engine.gameTime()
     site.sweepClaims(constructClaims, constructKey, wid, jobs, now,

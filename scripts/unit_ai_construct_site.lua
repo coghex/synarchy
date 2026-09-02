@@ -194,6 +194,18 @@ function M.sweepClaims(constructClaims, constructKey, wid, jobs, now, timeout)
     end
 end
 
+-- The pending construction jobs in one chunk region ON A GIVEN PAGE.
+--
+-- The ONE place the scan is issued, so the page cannot be forgotten at
+-- one call site and supplied at another. Without it the query answers
+-- for whatever page is SELECTED, and a selection change between the
+-- scan and the claim would have this actor claim, status, stake and
+-- cancel one world's designations using another world's coordinates and
+-- attempt ids.
+function M.pendingJobsOn(wid, cx1, cy1, cx2, cy2)
+    return construction.getPendingJobs(cx1, cy1, cx2, cy2, wid) or {}
+end
+
 -- The page a construction job belongs to: the ACTING UNIT's own, never
 -- the active one (#1673).
 --
@@ -232,38 +244,43 @@ function M.cancelBuildingJob(wid, job)
     end
 end
 
--- Is the building this job plans already standing at its anchor?
+-- Is the building THIS job staked already standing at its anchor?
 --
--- Derived from the world every time, never remembered (#1845). The
--- alternative -- writing the spawned id onto the job -- would put a raw
--- BuildingId into the persisted `constructJob`, where
--- `unit_ai_save_refs.lua` declares no reference kind for it and the
--- integrity graph could not check it; a save taken during the stake
--- hand-off would then reload holding an id with no instance behind it.
--- The world answers the same question with nothing to reconcile.
+-- Answered from the job's OWN spawned id, not by scanning for something
+-- that looks like it. Two things follow from that, and both are the
+-- point:
 --
--- Page-qualified against the JOB's own page (#1673): `getActiveIds`
--- snapshots whatever page is active, which is not necessarily this one.
+--   * `building.getInfo` is page-agnostic — it looks the instance up in
+--     the global manager — so the answer does not depend on which page
+--     happens to be selected. `building.getActiveIds` would: it
+--     snapshots the ACTIVE page, so after a selection change an A-page
+--     stake would be invisible to an A-page job, the wait would expire,
+--     and a designation whose building had really landed would be
+--     cancelled.
+--   * A building someone else put here is not this job's stake. Building
+--     designation admission deliberately does not check occupancy, so a
+--     player can designate over an existing identical building; matching
+--     on page/definition/anchor alone would read that stranger as this
+--     job's own work and complete a designation nothing was built for.
 --
--- Deliberately z-blind, exactly as its render-side mirror
--- (Building.Visual.buildingStakedAt) is: `building.spawn` stamps the
--- instance with the anchor's terrain z READ AT SPAWN TIME, so a terrain
--- edit under a live designation leaves the two at different levels.
--- Requiring them to agree would make this job fail to recognize its own
--- completed stake, re-spawn onto the now-occupied tile, be refused, and
--- cancel a designation whose building really is standing there.
+-- The id survives a save as a TYPED building reference
+-- (unit_ai_ref_schema.lua). If the stake never landed, that reference
+-- dangles and the post-load reconcile drops the whole job — the
+-- designation stays pending and is re-claimed and re-staked, which is
+-- exactly right, because nothing was built.
+--
+-- The identity is still CHECKED rather than trusted: page, definition
+-- and anchor must all match what this job planned, so a recycled or
+-- mis-stored id cannot complete the wrong job.
 function M.stakedBuildingAt(wid, job)
-    if not (building.getActiveIds and building.getInfo) then return false end
-    local page = require("scripts.unit_ai_page")
-    for _, bid in ipairs(building.getActiveIds() or {}) do
-        local info = building.getInfo(bid)
-        if info and info.defName == job.building
-           and info.gridX == job.x and info.gridY == job.y
-           and page.same(info.page, wid) then
-            return true
-        end
-    end
-    return false
+    if not job.stakedBid then return false end
+    if not building.getInfo then return false end
+    local info = building.getInfo(job.stakedBid)
+    return info ~= nil
+       and info.defName == job.building
+       and info.gridX == job.x
+       and info.gridY == job.y
+       and require("scripts.unit_ai_page").same(info.page, wid)
 end
 
 -- Stake a BUILDING blueprint, and hold the designation until the
@@ -281,11 +298,11 @@ end
 -- holding the designation until the building is observable makes the
 -- whole hand-off invisible.
 --
--- `job.staking` is the CLOCK that wait is bounded by, and nothing else.
--- It is stripped at save (unit_ai_save.lua) because a load discards the
--- building queue the stake was riding: on the other side the building
--- either stands there already -- which `stakedBuildingAt` sees, and the
--- job completes -- or it never will, and the site is correctly empty.
+-- `job.staking` is the CLOCK that wait is bounded by, and nothing else;
+-- it is stripped at save (unit_ai_save.lua), because a wait cannot
+-- outlive the session whose building queue it was waiting on. The
+-- spawned id BESIDE it is persisted, as a typed building reference, and
+-- is what tells a resumed job whether its own stake landed.
 --
 -- The deadline is for the one case where the queued spawn is dropped
 -- outright, its page torn down or its definition unregistered. Nothing
@@ -298,47 +315,52 @@ end
 function M.stakeBuilding(wid, job, uid, info, now, params)
     local core = require("scripts.unit_ai_core")
     local mv = require("scripts.movement_speed")
-    if not job.staking then
-        if core.distance(info.gridX, info.gridY,
-                         job.x + 0.5, job.y + 0.5) > 2.2 then
-            unit.moveTo(uid, job.x + 0.5, job.y + 1.5, mv.comfort(uid))
+    -- Asked FIRST, and on every tick: this job's own stake may have
+    -- landed since the last one, or -- for a job resumed from a save --
+    -- before it. Either way the job is finished and nothing else it
+    -- could do matters.
+    if M.stakedBuildingAt(wid, job) then
+        construction.setJobStatus(wid, job.x, job.y, "complete", job.attempt)
+        return "done"
+    end
+    if job.stakedBid then
+        -- Staked, not yet observable. A resumed job's clock was
+        -- stripped at save, so it starts its wait here rather than
+        -- inheriting an expired one.
+        job.staking = job.staking or now
+        if now - job.staking
+           <= (params.construct_stake_visible_timeout or 5.0) then
             return "working"
-        end
-        unit.stop(uid)
-        -- PAGE-QUALIFIED (#1673): an unbound `building.spawn` resolves
-        -- whatever page is ACTIVE, which is not necessarily the one this
-        -- job is on and can move between two Lua calls in the same tick.
-        -- Naming `wid` makes the spawn validate against, and land on,
-        -- the page the completion, the cancellation and
-        -- `stakedBuildingAt` all target. Not the BOUND form: that one
-        -- additionally refuses a page that is not the visible one, and a
-        -- construction job on a loaded-but-hidden page is legitimate.
-        if building.spawn(job.building, job.x, job.y, wid) then
-            job.staking = now
-            return "working"
-        end
-        -- Refused. If what this job planned is ALREADY standing here,
-        -- the refusal is this job's own earlier stake occupying the
-        -- tile: a save landed between the spawn and the completion, and
-        -- the job is simply finished. Only otherwise is the site really
-        -- unbuildable (terrain changed, overlap), and retrying could
-        -- not succeed.
-        if M.stakedBuildingAt(wid, job) then
-            construction.setJobStatus(wid, job.x, job.y, "complete",
-                                      job.attempt)
-            return "done"
         end
         core.reportFailure(uid, "Can't build here — blueprint cancelled")
         M.cancelBuildingJob(wid, job)
         return "gone"
     end
-    if M.stakedBuildingAt(wid, job) then
-        construction.setJobStatus(wid, job.x, job.y, "complete", job.attempt)
-        return "done"
-    end
-    if now - job.staking <= (params.construct_stake_visible_timeout or 5.0) then
+    if core.distance(info.gridX, info.gridY,
+                     job.x + 0.5, job.y + 0.5) > 2.2 then
+        unit.moveTo(uid, job.x + 0.5, job.y + 1.5, mv.comfort(uid))
         return "working"
     end
+    unit.stop(uid)
+    -- PAGE-QUALIFIED (#1673): an unbound `building.spawn` resolves
+    -- whatever page is ACTIVE, which is not necessarily the one this job
+    -- is on and can move between two Lua calls in the same tick. Naming
+    -- `wid` makes the spawn validate against, and land on, the page the
+    -- completion, the cancellation and `stakedBuildingAt` all target.
+    -- Not the BOUND form: that one additionally refuses a page that is
+    -- not the visible one, and a construction job on a loaded-but-hidden
+    -- page is legitimate.
+    local bid = building.spawn(job.building, job.x, job.y, wid)
+    if bid then
+        job.stakedBid = bid
+        job.staking = now
+        return "working"
+    end
+    -- Refused, and this job holds no stake of its own — so the tile is
+    -- occupied by something that is not this job's work, or the site
+    -- stopped being buildable. Retrying cannot succeed. (A job whose OWN
+    -- stake landed never reaches here: it still holds the id, and the
+    -- check at the top completed it.)
     core.reportFailure(uid, "Can't build here — blueprint cancelled")
     M.cancelBuildingJob(wid, job)
     return "gone"

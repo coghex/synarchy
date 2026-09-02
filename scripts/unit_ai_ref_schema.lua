@@ -93,6 +93,17 @@ local REF_SCHEMA = {
       absentOk = true, drop = "repairJob" },
     { holder = "table", field = "repairJob", sub = "groundGid",
       kind = "ground_item", absentOk = true, drop = "repairJob" },
+    -- #1845: the building a construct job STAKED, held only between the
+    -- queued spawn and the completion that retires the job. `absentOk`
+    -- because that window is a phase, not the whole job -- a structure
+    -- job never has one, and a building job does not until it arrives.
+    -- A PRESENT id that no longer resolves means the stake never landed
+    -- (its page torn down, its definition gone, the load that discarded
+    -- the building queue): the job is dropped whole, its designation
+    -- stays pending, and it is re-claimed and re-staked. That is the
+    -- honest outcome -- nothing was built.
+    { holder = "table", field = "constructJob", sub = "stakedBid",
+      kind = "building", absentOk = true },
     { holder = "table", field = "pickupOrder", sub = "gid",
       kind = "ground_item" },
     { holder = "table", field = "forageTarget", sub = "gid",

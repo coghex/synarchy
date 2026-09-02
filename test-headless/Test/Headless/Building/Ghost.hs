@@ -725,10 +725,9 @@ stakePrelude = lns
     , "    assert(page ~= nil,"
     , "      'a staking spawn must name the job\\'s own page')"
     , "    return spawnResult end,"
-    , "  getActiveIds = function()"
-    , "    local ids = {}"
-    , "    for i = 1, #world do ids[i] = i end"
-    , "    return ids end,"
+    -- Deliberately NOT provided: `getActiveIds` snapshots the ACTIVE
+    -- page, and stake observation must not depend on which page that
+    -- is. Its absence here is the assertion.
     , "  getInfo = function(bid) return world[bid] end }"
     , "site = require('scripts.unit_ai_construct_site')"
     , "local params = { construct_stake_visible_timeout = 5.0 }"
@@ -789,11 +788,46 @@ stakeHandoffSpec =
         [ stakePrelude
         , "local j = job()"
         , "stake(j, at(4, 7), 100)"
+        , "assert(j.stakedBid == 1, 'the job holds its own spawned id')"
         , "world[1] = { defName = 'hall', gridX = 4, gridY = 7, page = 'p1' }"
         , "assert(stake(j, at(4, 7), 101) == 'done')"
         , "local c = only('status')"
         , "assert(c[4] == 'complete' and c[2] == 4 and c[3] == 7"
         , "       and c[5] == 11, 'the exact attempt is completed')"
+        ]
+
+    it "observes its stake WITHOUT enumerating the active page" $ runsOk $ lns
+        [ stakePrelude
+        -- `building.getActiveIds` answers for whatever page is selected,
+        -- so a job on A could not see its own A-page stake once the
+        -- selection moved to B: the wait would expire and cancel a
+        -- designation whose building had really landed. The fixture
+        -- provides no such verb at all, and the observation still works.
+        , "assert(building.getActiveIds == nil,"
+        , "  'the fixture deliberately offers no active-page enumeration')"
+        , "local j = job()"
+        , "stake(j, at(4, 7), 100)"
+        , "world[1] = { defName = 'hall', gridX = 4, gridY = 7, page = 'p1' }"
+        , "assert(stake(j, at(4, 7), 101) == 'done')"
+        , "assert(only('status')[4] == 'complete')"
+        ]
+
+    it "does not read a stranger's building as its own stake" $ runsOk $ lns
+        [ stakePrelude
+        -- Designation admission does not check building occupancy, so a
+        -- player can designate over an existing identical building.
+        -- Matching page/definition/anchor alone would read that stranger
+        -- as this job's work and complete a designation nothing was
+        -- built for.
+        , "local j = job()"
+        , "world[1] = { defName = 'hall', gridX = 4, gridY = 7, page = 'p1' }"
+        , "spawnResult = nil"
+        , "assert(stake(j, at(4, 7), 100) == 'gone')"
+        , "local kinds = {}"
+        , "for _, c in ipairs(calls) do kinds[c[1]] = true end"
+        , "assert(kinds['cancel'], 'the refused job is cancelled')"
+        , "assert(not kinds['status'],"
+        , "  'and never completed off a building it did not stake')"
         ]
 
     it "does not mistake another page's building for this job's stake" $
@@ -841,12 +875,33 @@ stakeHandoffSpec =
         -- occupancy check, and that refusal must be read as "already
         -- done", not as "unbuildable".
         , "local j = job()"
+        , "j.stakedBid = 1"
         , "assert(j.staking == nil, 'a reloaded job carries no clock')"
         , "world[1] = { defName = 'hall', gridX = 4, gridY = 7, page = 'p1' }"
         , "spawnResult = nil"
         , "assert(stake(j, at(4, 7), 500) == 'done')"
         , "local c = only('status')"
         , "assert(c[4] == 'complete', 'the finished job is completed')"
+        ]
+
+    it "scans for work on the job's page, never the active selection" $
+      runsOk $ lns
+        [ stakePrelude
+        -- The whole lifecycle is page-scoped or none of it is: a scan
+        -- answered for the selected page, then claimed and completed
+        -- against the actor's own, mutates one world's designations
+        -- with another world's coordinates.
+        , "local seen = nil"
+        , "construction.getPendingJobs = function(_a, _b, _c, _d, page)"
+        , "  seen = page; return {} end"
+        , "site.pendingJobsOn('p1', 1, 2, 3, 4)"
+        , "assert(seen == 'p1', 'the scan names the job page, got '"
+        , "  .. tostring(seen))"
+        -- …and a query that answers nothing is an empty list, not nil,
+        -- so the caller's own emptiness check stays the only one.
+        , "construction.getPendingJobs = function() return nil end"
+        , "local got = site.pendingJobsOn('p1', 1, 2, 3, 4)"
+        , "assert(type(got) == 'table' and #got == 0)"
         ]
 
     it "takes the job's page from the ACTING UNIT, never from the active\
