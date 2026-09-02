@@ -163,11 +163,36 @@ scriptIsTimed s = not (scriptPaused s) ∧ not (isEventOnlyInterval (scriptTickR
 scriptIsDue ∷ Double → LuaScript → Bool
 scriptIsDue now s = scriptIsTimed s ∧ now ≥ scriptNextTick s
 
--- | Reschedule a script whose @update@ has just run. Only ever applied
---   to a script 'scriptIsDue' selected, so the rate added here is always
---   an accepted, finite, non-zero interval.
-advanceTick ∷ LuaScript → LuaScript
-advanceTick s = s { scriptNextTick = scriptNextTick s + scriptTickRate s }
+-- | Reschedule a script whose @update@ has just run, given the
+--   scheduler time @now@ it was found due at. Only ever applied to a
+--   script 'scriptIsDue' selected, so the rate here is always an
+--   accepted, finite, non-zero interval and @now@ is at or past the old
+--   deadline.
+--
+--   The deadline rule (#2204), in interval multiples and independent of
+--   "Engine.Core.Clock"'s elapsed cap:
+--
+--   * lateness (@now - oldDeadline@) BELOW one complete interval keeps
+--     #1695's cadence — the next deadline is @oldDeadline + interval@,
+--     so ordinary scheduler jitter neither drifts the phase nor stacks
+--     up;
+--   * lateness of one complete interval OR MORE drops the missed
+--     executions — the next deadline is @now + interval@. The old rule
+--     added the interval to the old deadline unconditionally, which
+--     after a stall (host sleep, a long queue drain) left the script
+--     still due on the very next pass and replayed every missed
+--     interval as a burst.
+--
+--   So a script whose clock jumps across several intervals runs ONCE,
+--   ends up with a deadline strictly later than the jumped clock, and is
+--   not due again when the pass is repeated at that same clock value.
+advanceTick ∷ Double → LuaScript → LuaScript
+advanceTick now s
+  | now - oldDeadline < interval = s { scriptNextTick = oldDeadline + interval }
+  | otherwise                    = s { scriptNextTick = now + interval }
+  where
+    oldDeadline = scriptNextTick s
+    interval    = scriptTickRate s
 
 -- | The earliest wake time among the scripts actually on a timer, or
 --   'Nothing' when none is — which is the ordinary idle case, not an

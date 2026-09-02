@@ -1,6 +1,10 @@
 {-# LANGUAGE Strict #-}
 module Unit.Thread
     ( startUnitThread
+    , unitTickRate
+    , UnitTickSeams(..)
+    , productionUnitTickSeams
+    , unitTickWith
     ) where
 
 import UPrelude
@@ -14,7 +18,7 @@ import qualified Data.HashMap.Strict as HM
 import Data.IORef (IORef, readIORef, writeIORef, newIORef, atomicModifyIORef'
                   , modifyIORef')
 import Control.Concurrent (threadDelay)
-import Data.Time.Clock.POSIX (getPOSIXTime)
+import Engine.Core.Clock (monotonicSeconds, sampleElapsed, sanitiseElapsed)
 import Engine.Core.Thread
     (ThreadState, WorkerFailLevel(..), WorkerSpec(..), noRefusal
     , startWorkerThread)
@@ -33,6 +37,28 @@ import Building.Thread.Command (processAllBuildingCommands)
 unitTickRate ∷ Double
 unitTickRate = 1.0 / 30.0
 
+-- | The unit tick's injectable seams (#2204): the clock it samples, the
+--   movement integrator it hands the sanitised @dt@ to, and the sleep it
+--   paces itself with. Production uses 'productionUnitTickSeams'; the
+--   headless gate substitutes a scripted clock and recording movement /
+--   sleep so the bound on each can be asserted directly rather than
+--   inferred from a unit's displacement.
+data UnitTickSeams = UnitTickSeams
+    { tickClock    ∷ IO Double
+      -- ^ Elapsed-time source, seconds. 'monotonicSeconds' in production.
+    , tickMovement ∷ Double → EngineEnv → IORef UnitThreadState → IO ()
+      -- ^ 'tickAllMovement' in production; receives the SANITISED @dt@.
+    , tickSleep    ∷ Int → IO ()
+      -- ^ 'threadDelay' in production, microseconds.
+    }
+
+productionUnitTickSeams ∷ UnitTickSeams
+productionUnitTickSeams = UnitTickSeams
+    { tickClock    = monotonicSeconds
+    , tickMovement = tickAllMovement
+    , tickSleep    = threadDelay
+    }
+
 startUnitThread ∷ EngineEnv → IO ThreadState
 startUnitThread env = startWorkerThread WorkerSpec
     { wsName        = "Unit"
@@ -44,12 +70,12 @@ startUnitThread env = startWorkerThread WorkerSpec
     , wsFailLevel   = WorkerFailError
     , wsFailFatal   = "Unit thread start failure."
     , wsStartup     = \_ → noRefusal $ do
-        lastTimeRef ← getPOSIXTime ⌦ newIORef . realToFrac
+        lastTimeRef ← monotonicSeconds ⌦ newIORef
         -- utsRef now lives on EngineEnv (Phase 4 of save/load v2) so
         -- the world thread can read+write sim state at save/load.
         let uts = ucUtsRef (toUnitCombatCapability env)
         pure (lastTimeRef, uts)
-    , wsTick        = uncurry (unitTick env)
+    , wsTick        = uncurry (unitTickWith productionUnitTickSeams env)
     , wsOnStop      = \_ → do
         logger ← readIORef (loggerRef env)
         logDebug logger CatThread "Unit thread stopping..."
@@ -59,20 +85,26 @@ startUnitThread env = startWorkerThread WorkerSpec
         writeIORef (lifecycleRef env) CleaningUp
     }
 
-unitTick ∷ EngineEnv → IORef Double → IORef UnitThreadState
-         → IO (Maybe (IORef Double, IORef UnitThreadState))
-unitTick env lastTimeRef utsRef = do
-    tickStart ← realToFrac ⊚ getPOSIXTime
-    lastTime ← readIORef lastTimeRef
-    let dt = tickStart - lastTime
-    writeIORef lastTimeRef tickStart
+-- | One unit tick against the given seams (#2204). The simulation @dt@
+--   is the SANITISED elapsed since the previous raw sample (which
+--   'sampleElapsed' replaces unconditionally, dropping any excess above
+--   the shared cap), so 'wsGameTimeRef' and movement each advance by at
+--   most 'Engine.Core.Clock.maxElapsedStep' per tick. The execution
+--   measurement that paces the sleep at the end goes through the same
+--   sanitiser: a negative or NaN difference would otherwise turn into an
+--   over-long or arbitrary 'threadDelay'.
+unitTickWith ∷ UnitTickSeams → EngineEnv → IORef Double → IORef UnitThreadState
+             → IO (Maybe (IORef Double, IORef UnitThreadState))
+unitTickWith seams env lastTimeRef utsRef = do
+    dt ← sampleElapsed (tickClock seams) lastTimeRef
+    tickStart ← readIORef lastTimeRef
 
     locked ← captureLocked (saveBarrierRef env)
     unless locked $ processAllUnitCommands env utsRef
     paused ← readIORef (wsEnginePausedRef (toWorldSimCapability env))
     unless paused $ do
         modifyIORef' (wsGameTimeRef (toWorldSimCapability env)) (+ dt)
-        tickAllMovement dt env utsRef
+        tickMovement seams dt env utsRef
     -- Issue #763: a load publish
     -- (World.Load.Publish.publishStagedSession) swaps
     -- unitManagerRef and utsRef itself while THIS thread is
@@ -104,10 +136,10 @@ unitTick env lastTimeRef utsRef = do
     acknowledgeCurrent (saveBarrierRef env) SaveUnit
     acknowledgeCurrent (saveBarrierRef env) SaveBuilding
 
-    tickEnd ← realToFrac ⊚ getPOSIXTime
-    let elapsed = tickEnd - tickStart ∷ Double
+    tickEnd ← tickClock seams
+    let elapsed = sanitiseElapsed (tickEnd - tickStart)
         sleepTime = max 0 (unitTickRate - elapsed)
-    threadDelay (floor (sleepTime * 1000000))
+    tickSleep seams (floor (sleepTime * 1000000))
     pure (Just (lastTimeRef, utsRef))
 
 -- | Copy sim-thread positions/facing into the render-visible UnitManager.
