@@ -10,10 +10,12 @@
 --     while no command is in flight;
 --   * the assembled line is bounded by 'dslMaxLineBytes', in raw
 --     received bytes excluding the newline, checked before any decoding
---     so an over-cap buffer is never retained;
+--     so an over-cap buffer is never retained — in BOTH forms, the
+--     terminated line that is one byte too long and the unterminated
+--     buffer that has already run past the cap;
 --   * the request handed to @recv@ is itself sized from the room left
 --     under that cap, so the peak per-connection buffer is the cap plus
---     one byte rather than the cap plus a whole read.
+--     two bytes rather than the cap plus a whole read.
 --
 --   The 'commandResponseTimeoutMicros' wait for the Lua thread is
 --   deliberately OUTSIDE the idle bound and deliberately unchanged: a
@@ -60,12 +62,20 @@ serveClient cfg cmdQueue conn = do
 clientLoop ∷ DebugServerConfig → TQueue DebugCommand → Socket
            → BS.ByteString → IO ()
 clientLoop cfg cmdQueue conn leftover = do
-    -- Ask for only the room left under the cap (never less than one
-    -- byte, so the over-cap case is always DETECTED rather than
-    -- deadlocked on a zero-length read). Away from the cap this is the
-    -- historical 4096.
+    -- Ask for only the room left under the cap PLUS the two bytes that
+    -- make an overrun distinguishable: one byte past the cap, and the
+    -- newline that would have terminated it. Without that headroom a
+    -- terminated over-cap line could never be SEEN as terminated — the
+    -- read would stop one byte short of its newline every time — and
+    -- the two rejections below would collapse into one. Away from the
+    -- cap this is the historical 4096.
+    --
+    -- 'leftover' is a newline-free partial line and is never longer
+    -- than the cap (the rejection below is what guarantees that), so
+    -- the request is always at least two bytes and the buffer peaks at
+    -- the cap plus two.
     let cap  = dslMaxLineBytes (dscLimits cfg)
-        room = max 1 (min 4096 (cap + 1 - BS.length leftover))
+        room = min 4096 (cap + 2 - BS.length leftover)
     mChunk ← timeout (dslIdleTimeoutMicros (dscLimits cfg)) (recv conn room)
     case mChunk of
         Nothing → disconnectWith conn $
