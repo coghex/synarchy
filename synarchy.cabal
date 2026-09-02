@@ -708,6 +708,7 @@ library
                      World.Render.Solar
                      World.Render.WaterSlope
                      World.Render.CursorQuads
+                     World.Render.StructureGhost
                      World.Render.TileQuads
                      World.Render.FloraQuads
                      World.Render.FloraProjection
@@ -877,8 +878,19 @@ library
                      World.Save.Payload
                      World.Save.Reference
                      World.Save.Integrity
+                     World.Save.Storage.Durable
                      World.Save.Storage
                      World.Save.Serialize
+                     World.GeneratedLibrary.Types
+                     World.GeneratedLibrary.Layout
+                     World.GeneratedLibrary.Entry
+                     World.GeneratedLibrary.Lock
+                     World.GeneratedLibrary.Registry
+                     World.GeneratedLibrary.References
+                     World.GeneratedLibrary.Publish
+                     World.GeneratedLibrary.Pins
+                     World.GeneratedLibrary.Cleanup
+                     World.GeneratedLibrary
                      World.Scale
                      World.Slope
                      World.Slope.Compute
@@ -953,6 +965,7 @@ library
                      World.ZoomMap.Cache.Classify
                      World.ZoomMap.Cache.Noise
                      World.ZoomMap.Cache.Pixels
+                     World.ZoomMap.Artifact
                      World.ZoomMap.ChunkTexture
                      World.ZoomMap.ColorPalette
                      World.ZoomMap.Types
@@ -1148,6 +1161,7 @@ test-suite synarchy-test-headless
                    Test.Headless.WorldGen.SoilRedistribution
                    Test.Headless.WorldGen.Exposure
                    Test.Headless.WorldGen.ZoomParity
+                   Test.Headless.WorldGen.ZoomArtifact
                    Test.Headless.WorldGen.BorderProbe
                    Test.Headless.WorldGen.WrapSeam
                    Test.Headless.WorldGen.CoastBreach
@@ -1212,9 +1226,14 @@ test-suite synarchy-test-headless
                    Test.Headless.World.FluidWritebackStaleness
                    Test.Headless.World.PauseSpeed
                    Test.Headless.World.Save.Compat
+                   Test.Headless.World.Save.Compat.B1Fixture
+                   Test.Headless.World.Save.Compat.Baselines
+                   Test.Headless.World.Save.Compat.Historical
+                   Test.Headless.World.Save.Compat.Legacy
                    Test.Headless.World.Save.Integrity
                    Test.Headless.World.Save.Storage
                    Test.Headless.World.Save.Contract
+                   Test.Headless.World.GeneratedLibrary
                    Test.Headless.Save.AutosaveGuards
                    Test.Headless.Save.AutosaveListing
                    Test.Headless.Save.MenuListingOrder
@@ -1282,6 +1301,8 @@ test-suite synarchy-test-headless
                    Test.Headless.Construct.Fixture
                    Test.Headless.Construct.Footprint
                    Test.Headless.Construct.Plan
+                   Test.Headless.Render.StructureGhost
+                   Test.Headless.Render.StructureGhostFixture
                    Test.Headless.Construct.PlanInvalidation
                    Test.Headless.Construct.PendingRefusal
                    Test.Headless.Craft.Execute
@@ -1328,6 +1349,11 @@ test-suite synarchy-test-headless
                    Test.Headless.UI.PopupQueueTeardown
                    Test.Headless.UI.ResponsiveMenus
                    Test.Headless.UI.ResponsiveGameplay
+                   Test.Headless.UI.ResponsiveGameplay.Fixture
+                   Test.Headless.UI.ResponsiveGameplay.Lifecycle
+                   Test.Headless.UI.ResponsiveGameplay.Surfaces
+                   Test.Headless.UI.ResponsiveGameplay.Container
+                   Test.Headless.UI.ResponsiveGameplay.Etymology
                    Test.Headless.UI.SettingsDefaultsKeybinds
                    Test.Headless.UI.SettingsRevert
                    Test.Headless.UI.TutorialHud
@@ -1493,4 +1519,9 @@ test-suite synarchy-test-headless
                 -- frame) that `directory` cannot create; the library
                 -- already depends on `unix`.
                 , unix
+                -- The generated-world library's cross-process lock proof
+                -- (#2024) holds the library lock from a real second
+                -- process, which nothing in-process can imitate: POSIX
+                -- record locks never conflict within one process.
+                , process
     ghc-options: "-with-rtsopts=-N -A128M"

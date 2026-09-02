@@ -6,7 +6,7 @@ import argparse
 import json
 import os
 
-from critic import build_signals, friction_candidates
+from critic_signals import build_signals, friction_candidates
 from trace import load_meta, load_turns
 
 

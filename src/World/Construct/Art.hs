@@ -36,10 +36,12 @@ module World.Construct.Art
     , wallCapsAt
     , wireDesignatedAt
     , wireNeighborsAt
+    , wireNeighborsWithProposed
     ) where
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
+import qualified Data.HashSet as HS
 import Structure.Facing (WallEdge, WallCaps(..), PostCorner(..), wallEdgeEnds)
 import Structure.Types
     ( StructureSlot(..), StructureStage(..), StagedStructurePiece(..)
@@ -126,13 +128,39 @@ wireDesignatedAt worldSize designations gx gy =
 --   will look like.
 wireNeighborsAt ∷ Int → WorldTileData → StructureStage
                 → Maybe ConstructDesignations → Int → Int → WireNeighbors
-wireNeighborsAt worldSize tileData stage mDesignations gx gy = WireNeighbors
-    { wnNorth = wired gx       (gy - 1)
-    , wnEast  = wired (gx + 1) gy
-    , wnSouth = wired gx       (gy + 1)
-    , wnWest  = wired (gx - 1) gy
-    }
+wireNeighborsAt worldSize tileData stage mDesignations =
+    wireNeighborsWithProposed worldSize tileData stage mDesignations HS.empty
+
+-- | 'wireNeighborsAt' plus a set of tiles a gesture is PROPOSING to wire
+--   but has not committed — the anchor→hover preview's own candidates
+--   (#1846).
+--
+--   D-22 wants a drawn run to read as one connected line, and a run being
+--   dragged is not in the designation map yet, so without this every
+--   previewed segment resolves 'WireIsolated' and the player sees a row
+--   of unrelated stubs turn into a line only on release. The caller
+--   supplies only the candidates the shared resolver returned
+--   @PlanValid@ for: an invalid candidate is not going to be built, so
+--   letting it complete a neighbour's shape would draw a connection that
+--   the commit will not make.
+--
+--   Tiles must arrive CANONICAL, like the designation map's own keys
+--   ('World.Generate.Coordinates.canonicalTile'), because the neighbour
+--   probe canonicalizes before it tests membership. The empty set is
+--   exactly 'wireNeighborsAt', which is why that one is defined as this.
+wireNeighborsWithProposed
+    ∷ Int → WorldTileData → StructureStage → Maybe ConstructDesignations
+    → HS.HashSet (Int, Int)   -- ^ canonical proposed-VALID wire tiles
+    → Int → Int → WireNeighbors
+wireNeighborsWithProposed worldSize tileData stage mDesignations proposed gx gy =
+    WireNeighbors
+        { wnNorth = wired gx       (gy - 1)
+        , wnEast  = wired (gx + 1) gy
+        , wnSouth = wired gx       (gy + 1)
+        , wnWest  = wired (gx - 1) gy
+        }
   where
     wired nx ny =
         structurePresentAt worldSize tileData stage SWire nx ny
           ∨ maybe False (\d → wireDesignatedAt worldSize d nx ny) mDesignations
+          ∨ HS.member (canonicalTile worldSize nx ny) proposed

@@ -42,6 +42,10 @@ module Structure.Render
     , structureChunkQuads
     , structureChunkQuadsScanned
     , structurePieceQuads
+    , ResolvedPieceArt(..)
+    , structurePieceQuadsResolved
+    , opaqueTint
+    , translateQuad
     , isScreenFrontWall
     , wallTieBreak
     , frontWallDepthSteps
@@ -262,6 +266,34 @@ translateQuad (offX, offY) sq
   where
     move v = let Vec2 x y = pos v in v { pos = Vec2 (x + offX) (y + offY) }
 
+-- | One piece's art already resolved to RUNTIME handles, with the source
+--   PATHS the wall-rotation catalogue keys on.
+--
+--   The seam between the two ways a piece's art can be known (#1846). A
+--   PLACED piece stores palette ids and the ids resolve to handles and
+--   paths; an UNPLACED one — a construction ghost — has neither, because
+--   interning art nobody built into the saved palette is exactly the
+--   residue #1675 forbids. #1842's catalogue hands the ghost a
+--   @(path, handle)@ pair directly, which is this.
+--
+--   The paths are 'Maybe' only because the PALETTE half can legitimately
+--   answer a handle and no path (an id whose entry has gone). A ghost
+--   always has both; a missing path merely skips the wall rotation, the
+--   same fallback the palette path has always taken.
+data ResolvedPieceArt = ResolvedPieceArt
+    { rpaTexture     ∷ !TextureHandle      -- ^ the 96×64 sprite
+    , rpaFacemap     ∷ !TextureHandle      -- ^ its facemap (sun shading)
+    , rpaTexturePath ∷ !(Maybe Text)
+    , rpaFacemapPath ∷ !(Maybe Text)
+    } deriving (Show, Eq)
+
+-- | The tint a fully opaque piece draws with at a given @tileAlpha@ —
+--   what every PLACED piece has always used, named so a ghost's
+--   lifecycle multiplier is visibly a departure from it rather than an
+--   unexplained literal.
+opaqueTint ∷ Float → Vec4
+opaqueTint = Vec4 1.0 1.0 1.0
+
 -- | The whole per-piece pipeline, pure: resolve the piece's palette ids to
 --   runtime handles, rotate a wall's art onto the sprite its edge is drawn
 --   with at this facing, then emit the quad(s) the slot calls for — a
@@ -284,18 +316,50 @@ structurePieceQuads catalog palette handles lookupSlot texSizes
     case ( HM.lookup (spdTexId spd) handles
          , HM.lookup (spdFaceId spd) handles ) of
         (Just th, Just fh) →
-            let (th', fh') = rotatedArt th fh
-                piece = StructurePiece th' fh' (spdGridZ spd)
-            in if isPost slot
-               then toList $ postToQuad lookupSlot facing zSlice effDepth
-                                        tileAlpha gx gy slot piece texSizes
-               else if isScreenFrontWall facing slot
-               then frontWallStrips lookupSlot facing zSlice effDepth
-                                    tileAlpha gx gy slot piece texSizes
-               else toList $ structureToQuad lookupSlot facing zSlice effDepth
-                                             tileAlpha gx gy slot piece texSizes
+            structurePieceQuadsResolved catalog lookupSlot texSizes facing
+                zSlice effDepth (opaqueTint tileAlpha) gx gy slot
+                ResolvedPieceArt
+                    { rpaTexture     = th
+                    , rpaFacemap     = fh
+                    , rpaTexturePath = lookupPath (spdTexId spd) palette
+                    , rpaFacemapPath = lookupPath (spdFaceId spd) palette
+                    }
+                (spdGridZ spd)
         _ → []
+
+-- | 'structurePieceQuads' from RESOLVED art rather than palette ids, and
+--   at an explicit tint rather than a bare alpha (#1846).
+--
+--   This is the whole shared body: the wall rotation, the post \/
+--   front-wall-strip \/ ordinary dispatch and the geometry are reached
+--   through it from both callers, so a construction ghost cannot draw a
+--   piece any differently from the way the placer will build it. The two
+--   entry points differ in exactly the two things a ghost genuinely does
+--   differ in — where its art came from, and that it is translucent (and,
+--   for an invalid preview, red).
+structurePieceQuadsResolved
+    ∷ StructureWallCatalog
+    → (TextureHandle → Word32)                 -- ^ handle → bindless slot id
+    → HM.HashMap TextureHandle (Int, Int)      -- ^ texture pixel sizes
+    → CameraFacing → Int → Int
+    → Vec4                                     -- ^ tint (RGB + final alpha)
+    → Int → Int → StructureSlot
+    → ResolvedPieceArt
+    → Int                                      -- ^ grid z the piece sits at
+    → [SortableQuad]
+structurePieceQuadsResolved catalog lookupSlot texSizes facing zSlice effDepth
+                            tint gx gy slot art gridZ =
+    if isPost slot
+    then toList $ postToQuad lookupSlot facing zSlice effDepth
+                             tint gx gy slot piece texSizes
+    else if isScreenFrontWall facing slot
+    then frontWallStrips lookupSlot facing zSlice effDepth
+                         tint gx gy slot piece texSizes
+    else toList $ structureToQuad lookupSlot facing zSlice effDepth
+                                  tint gx gy slot piece texSizes
   where
+    (th', fh') = rotatedArt (rpaTexture art) (rpaFacemap art)
+    piece = StructurePiece th' fh' gridZ
     isPost s = s ≡ SPostN ∨ s ≡ SPostE ∨ s ≡ SPostS ∨ s ≡ SPostW
     toList = maybe [] (:[])
     -- A wall's sprite + cap facemap travel together onto the screen edge
@@ -305,8 +369,8 @@ structurePieceQuads catalog palette handles lookupSlot texSizes
     -- keeps exactly the handles it was placed with.
     rotatedArt th fh = fromMaybe (th, fh) $ do
         edge  ← wallEdgeOfSlot slot
-        tPath ← lookupPath (spdTexId spd) palette
-        fPath ← lookupPath (spdFaceId spd) palette
+        tPath ← rpaTexturePath art
+        fPath ← rpaFacemapPath art
         rotatedWallArt catalog facing edge (tPath, th) (fPath, fh)
 
 -- | The active z band a structure piece has to sit in to be emitted at
@@ -347,11 +411,11 @@ isScreenFrontWall facing slot =
 --   single iso-sorted quad. Front walls go through 'frontWallStrips' instead.
 structureToQuad
     ∷ (TextureHandle → Word32)
-    → CameraFacing → Int → Int → Float
+    → CameraFacing → Int → Int → Vec4
     → Int → Int → StructureSlot → StructurePiece
     → HM.HashMap TextureHandle (Int, Int)
     → Maybe SortableQuad
-structureToQuad lookupSlot facing zSlice effDepth tileAlpha gx gy slot piece texSizes =
+structureToQuad lookupSlot facing zSlice effDepth tint gx gy slot piece texSizes =
     let gridZ     = spGridZ piece
         relativeZ = gridZ - zSlice
     in if not (pieceWithinSliceBand zSlice effDepth gridZ)
@@ -406,7 +470,6 @@ structureToQuad lookupSlot facing zSlice effDepth tileAlpha gx gy slot piece tex
 
             actualSlot = lookupSlot texHandle
             faceSlot   = fromIntegral (lookupSlot (spFaceMap piece))
-            tint  = Vec4 1.0 1.0 1.0 tileAlpha
             flags = 0
             wuv   = tileWorldUV gx gy
 
@@ -463,11 +526,11 @@ wallStripCount = 16
 --   range are transparent.
 frontWallStrips
     ∷ (TextureHandle → Word32)
-    → CameraFacing → Int → Int → Float
+    → CameraFacing → Int → Int → Vec4
     → Int → Int → StructureSlot → StructurePiece
     → HM.HashMap TextureHandle (Int, Int)
     → [SortableQuad]
-frontWallStrips lookupSlot facing zSlice effDepth tileAlpha gx gy slot piece texSizes =
+frontWallStrips lookupSlot facing zSlice effDepth tint gx gy slot piece texSizes =
     let gridZ     = spGridZ piece
         relativeZ = gridZ - zSlice
     in if not (pieceWithinSliceBand zSlice effDepth gridZ)
@@ -491,7 +554,6 @@ frontWallStrips lookupSlot facing zSlice effDepth tileAlpha gx gy slot piece tex
 
             actualSlot = lookupSlot texHandle
             faceSlot   = fromIntegral (lookupSlot (spFaceMap piece))
-            tint  = Vec4 1.0 1.0 1.0 tileAlpha
             flags = 0
             wuv   = tileWorldUV gx gy
 
@@ -567,11 +629,11 @@ postInset = 0.0
 --   facemap slot.
 postToQuad
     ∷ (TextureHandle → Word32)
-    → CameraFacing → Int → Int → Float
+    → CameraFacing → Int → Int → Vec4
     → Int → Int → StructureSlot → StructurePiece
     → HM.HashMap TextureHandle (Int, Int)
     → Maybe SortableQuad
-postToQuad lookupSlot facing zSlice effDepth tileAlpha gx gy slot piece texSizes =
+postToQuad lookupSlot facing zSlice effDepth tint gx gy slot piece texSizes =
     let gridZ     = spGridZ piece
         relativeZ = gridZ - zSlice
     in if not (pieceWithinSliceBand zSlice effDepth gridZ)
@@ -624,7 +686,6 @@ postToQuad lookupSlot facing zSlice effDepth tileAlpha gx gy slot piece texSizes
 
             actualSlot = lookupSlot texHandle
             faceSlot   = fromIntegral (lookupSlot (spFaceMap piece))  -- postface
-            tint  = Vec4 1.0 1.0 1.0 tileAlpha
             flags = 0
             wuv   = tileWorldUV gx gy
             (v0, v1, v2, v3) =

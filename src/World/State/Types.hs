@@ -251,7 +251,11 @@ data WorldState = WorldState
       --   (surface z, build target, status, progress; see
       --   World.Construct.Types). Written by the world thread
       --   (WorldDesignateConstruct / cancel / set-status commands), read
-      --   by the render pass (blueprint ghost) and the build AI (#96).
+      --   by the render pass and the build AI (#96). The render pass
+      --   draws a BUILDING as a category blueprint and a STRUCTURE as
+      --   the piece's own art (#1846), and reads this map for a second
+      --   reason besides drawing it: a wire ghost's connection variant
+      --   counts designated neighbours (D-22).
       --   Persisted in saves (wpsConstructDesignations).
     , wsConstructAttemptRef ∷ IORef ConstructAttemptId
       -- ^ This page's construction ATTEMPT allocator (#1844): the id the

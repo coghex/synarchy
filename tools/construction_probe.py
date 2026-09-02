@@ -4,8 +4,10 @@
 Verifies the construct_job AI end-to-end on a flat arena world, WITHOUT a
 GPU or a human watching: acolytes claim construction designations (#95),
 source materials (inventory → ground items → technomule), pour progress
-into the job (ghost solidifies), place the structure piece, and stake
-designated buildings for the existing deliver/build machinery.
+into the job, place the structure piece, and stake designated buildings
+for the existing deliver/build machinery. (A structure ghost does not
+solidify with that progress: since #1846 it disappears once materials
+are paid for and the site is empty until the piece lands.)
 
 Phases (each spawns its own units and destroys them afterwards so the
 next phase's utility scan is clean):

@@ -436,8 +436,14 @@ spec = do
             regSrc ← TIO.readFile "scripts/ui/registry.lua"
             T.isInfixOf "interactiveBounds" regSrc `shouldBe` True
         it "the oracle's widget_at prefers interactiveBounds over content bounds" $ do
-            criticSrc ← TIO.readFile "tools/playtest/critic.py"
-            T.isInfixOf "interactiveBounds" criticSrc `shouldBe` True
+            -- #2069 moved the join out of the critic.py façade into its
+            -- click-correlation owner. Read the file that DEFINES
+            -- widget_at and require both facts of it, so this cannot
+            -- decay into a check of a façade that merely mentions the
+            -- word in a docstring.
+            clickSrc ← TIO.readFile "tools/playtest/critic_click.py"
+            T.isInfixOf "def widget_at" clickSrc `shouldBe` True
+            T.isInfixOf "interactiveBounds" clickSrc `shouldBe` True
 
 -- * Helpers
 
