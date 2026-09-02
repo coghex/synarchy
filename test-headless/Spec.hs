@@ -271,6 +271,7 @@ import qualified Test.Headless.Building.Placement as BuildingPlacement
 import qualified Test.Headless.Building.RemoteWarning as BuildingRemoteWarning
 import qualified Test.Headless.Building.AssetSchema as BuildingAssetSchema
 import qualified Test.Headless.Building.CameraFacing as BuildingCameraFacing
+import qualified Test.Headless.Building.DestructionPresentation as BuildingDestruction
 import qualified Test.Headless.Building.MachineShopConstruction
     as MachineShopConstruction
 import qualified Test.Headless.Building.WorkbenchConstruction
@@ -604,6 +605,7 @@ main = hspec $ do
     describe "building asset schema and lifecycle roles"
         BuildingAssetSchema.spec
     BuildingCameraFacing.spec
+    BuildingDestruction.spec
     describe "Machine Shop construction animation" MachineShopConstruction.spec
     describe "Preview.KeyboardNavigation" PreviewKeyboardNavigation.spec
     describe "Workbench construction animation" WorkbenchConstruction.spec
