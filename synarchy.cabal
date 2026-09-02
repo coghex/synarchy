@@ -1212,6 +1212,10 @@ test-suite synarchy-test-headless
                    Test.Headless.World.FluidWritebackStaleness
                    Test.Headless.World.PauseSpeed
                    Test.Headless.World.Save.Compat
+                   Test.Headless.World.Save.Compat.B1Fixture
+                   Test.Headless.World.Save.Compat.Baselines
+                   Test.Headless.World.Save.Compat.Historical
+                   Test.Headless.World.Save.Compat.Legacy
                    Test.Headless.World.Save.Integrity
                    Test.Headless.World.Save.Storage
                    Test.Headless.World.Save.Contract
