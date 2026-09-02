@@ -48,6 +48,7 @@ exactly why the detail could move out of the always-loaded file.
 - [Location and river naming (#1101/#1102)](#location-and-river-naming-11011102)
 - [Name etymology: internals (#1104)](#name-etymology-internals-1104)
 - [Location instances (#911)](#location-instances-911)
+- [Guaranteed significant contents and compound clearance (#917)](#guaranteed-significant-contents-and-compound-clearance-917)
 - [Location discovery, map icons, and per-unit knowledge (#780/#781/#915)](#location-discovery-map-icons-and-per-unit-knowledge-780781915)
 
 **Gameplay systems**
@@ -653,7 +654,7 @@ per policy**, because one slot cannot carry two samplers:
 | art | scene handle | UI handle |
 |---|---|---|
 | item `sprite:` | `idTexture` (ground-item quads) | `idIconTexture` (inventory / equipment / container rows) |
-| building `sprite:` | `bdTexture` (`Building.Render`) | `bdIconTexture` (`building.listDefs`'s `iconTex`) |
+| building `sprites:`/legacy `sprite:` | `bdTextures`' four camera views, selected per facing by `Building.Visual` (#2088) | `bdIconTexture` (`building.listDefs`'s `iconTex`) |
 | broken-equipment badge | texture name `broken_equipment` | texture name `broken_equipment_ui` |
 
 **Known live-frame exception:** when a unit has no authored `portrait:`,
@@ -1385,13 +1386,17 @@ name.
 
 ### Persistence
 
-`world-pages` v8 (v7 frozen by #916 as
+`world-pages` v10 (v9 frozen by #917 as
+`PageCoreDTOv9`/`WorldGenParamsDTOv7`/`LocationInstancesDTOv5`/
+`LocationInstanceDTOv5`/`LocationEncounterDTOv1`; v7 frozen by #916 as
 `PageCoreDTOv7`/`WorldGenParamsDTOv6`/`LocationInstancesDTOv4`/
 `LocationInstanceDTOv4`; v6 frozen by #1230 as
 `PageCoreDTOv6`/`WorldGenParamsDTOv5`/`LocationInstancesDTOv3`), with
 `PageCoreDTOv5`/`WorldGenParamsDTOv4`/`WorldIdentityDTOv2`/
 `LocationInstanceDTOv2`/`RiverNameDTOv1` frozen — every historical shape
-decodes with the source ABSENT, never inferred.
+decodes with the source ABSENT, never inferred. #917 changed nothing
+about etymology itself: v9 is a frozen migration boundary that carries
+each stored source across untouched.
 
 ---
 
@@ -1410,13 +1415,17 @@ unreachable but must NOT be deleted (the enum is positionally serialized
 and append-only). #916's ruin encounters are the first runtime owner of
 `active` and `cleared`: first autonomous aggression activates an encounter
 (without revealing an unknown location), while first sight exposes an already
-activated ruin as `active`; a zero-occupant or death-cleared ruin is exposed as
-`cleared`.
+activated ruin as `active`. Since #917 `cleared` is no longer the
+encounter's to grant on its own — see §Guaranteed significant contents
+below: it is the conjunction of every condition the location authors,
+and `leCleared` records ENCOUNTER completion alone.
 
 A generated `ruin_small` also stores its one-time uniform 0–3 occupant
 roll. Once content spawning completes, its exact nomad roster is durable:
 each entry carries the unit id, distinct home tile, and guard-policy state. A zero
-roll starts cleared but remains undiscovered until sight. A positive roster
+roll starts with its ENCOUNTER half complete, and (since #917) still
+waits on the location's significant items before it can clear at all;
+either way it remains undiscovered until sight. A positive roster
 clears only when every originally assigned unit is exactly dead; collapsed,
 crawling, absent, or disengaged occupants keep it uncleared. Missing ids
 remain in the roster, while an occupant resolved on another page is a hard
@@ -1439,13 +1448,263 @@ the encounter-wide, once-per-episode notification state through
 `hasSpawnedLocationContents`/`markLocationContentsSpawned` remain
 compatibility wrappers resolving to the chunk's first instance.
 
-Persistence: `world-pages` v8, with v7's pre-encounter location record
-frozen as `LocationInstanceDTOv4`; migration adds no encounter rather than
-letting current content reinterpret a materialized world. The frozen v1 DTO's
-per-chunk flags still decode PENDING and resolve against the registry at the
-load path's content-validation stage (`resolveLegacyLocations`).
+Persistence: `world-pages` v10, with v9's pre-significant-contents
+location record frozen as `LocationInstanceDTOv5` (its encounter, still
+carrying the clearance-notice flag, as `LocationEncounterDTOv1`) and
+v7's pre-encounter one as `LocationInstanceDTOv4`. Each migration adds
+NOTHING the payload did not carry — `migrateWorldPagesV9` gains no
+significant obligations and `migrateWorldPagesV7` no encounter — rather
+than letting current content reinterpret a materialized world; #917's
+own §Guaranteed significant contents has the detail, including where
+the notice moves to. The frozen v1 DTO's per-chunk flags still decode
+PENDING and resolve against the registry at the load path's
+content-validation stage (`resolveLegacyLocations`).
 
 ---
+
+## Guaranteed significant contents and compound clearance (#917)
+
+Enforced by hspec `--match "Location significant contents"` (pure) and
+`--match "compound clearance with significant contents"` (the real
+discovery tick and the real ground boundary), plus
+`tools/location_content_probe.py` and `tools/expedition_loop_probe.py`.
+CLAUDE.md keeps the headline rules; this is the mechanism.
+
+**The predicate.** A location clears when EVERY condition it actually
+authors is satisfied, and it authors at most two: an encounter (#916)
+and a set of guaranteed significant items. `locationClearanceSatisfied`
+is the conjunction over the conditions present —
+`locationEncounterCondition` and `locationSignificantCondition` each
+answer `Maybe Bool`, `Nothing` meaning "not authored". A location
+authoring ONE clears on that one. A location authoring NEITHER never
+clears: the empty conjunction is deliberately `False`, not the vacuous
+`True`, which is what keeps every pre-#917 location — and every
+historical save's — behaving exactly as it did.
+
+**Where the two halves live, and why they are separate.**
+`markLocationEncounterCleared` records encounter completion and nothing
+else: no lifecycle move, no event. So `leCleared` may be true while the
+location is uncleared, which is the whole point — a ruin with its nomads
+down and its reward still on the floor is not finished with.
+`resolveLocationClearance` is the SINGLE writer of the cleared
+transition and of the one player-facing notice, and it is called from
+both places a condition can land: the clearance pass in
+`World.Thread.Discovery` (which polls, because the item latch is set on
+the Lua thread and has no edge of its own) and the discovery edge (for a
+location completed while it was still unknown). Whichever conjunct lands
+last promotes exactly once.
+
+**The notice is on the INSTANCE.** `liClearEventEmitted` generalizes
+#916's per-encounter `leClearEventEmitted` so a location authoring
+significant items and no encounter has one too. It starts SPENT exactly
+when the instance is born already clearance-satisfied — a zero-roll
+encounter owing no items, i.e. #916's own `rolled == 0` rule — because
+nobody cleared such a place and discovering it must not say otherwise.
+A hidden completion stays private: `resolveLocationClearance` requires
+`isDiscoveredLifecycle`, so it defers until sight and then fires once.
+
+**Authoring.** `significant: true` is legal ONLY on a fixed
+`kind: item` content entry; `Engine.Asset.YamlLocations` rejects it on
+any other kind, which is what keeps a `loot_table` draw out of the
+predicate whatever it rolls. Its item id must also RESOLVE against the
+live item registry, checked by
+`Engine.Asset.YamlLocations.significantItemErrors` and enforced by the
+API loader, which rejects the whole file — the same all-or-nothing
+outcome a bad naming scheme earns. That is deliberately stricter than an
+ordinary content id, which may warn and be skipped at spawn time (#90):
+an incidental entry that spawns nothing costs the location some salvage,
+while a significant one that spawns nothing costs it its clearance
+forever, because the obligation is created at placement and
+`item.spawnGround` then fails on every chunk load.
+
+The LOAD path holds the same line from the other side
+(`World.Save.Types.missingSignificantItemReferences`, folded into
+`engine.loadSave`'s content-validation ladder): a save whose UNSPAWNED
+obligation names an item definition this build no longer registers is
+refused before anything publishes, because that obligation is exactly
+what the next chunk load would try to spawn. A BOUND obligation is
+exempt — nothing re-spawns a filled slot, so its def name is a
+historical record and the item may legitimately have been consumed or
+destroyed.
+
+That makes an ORDERING requirement load-bearing: items must be
+registered before `engine.loadLocationYaml` runs, or the shipped ruin is
+rejected and no location registers at all.
+`scripts/startup_loader.lua` already does this in both profiles and
+`data/locations/*.yaml`'s own header states it; anything else that loads
+location YAML directly — a probe, a fixture harness — owes the same
+order. `data/locations/ruin_small.yaml` authors
+one `processing_unit` — appended AFTER the existing contents, because
+#948 keys each incidental draw on the entry's positional index, so
+reordering those lines would silently change what every
+already-generated ruin rolls. It is deliberately not `radio` (D-6).
+
+**Cardinality is fixed at PLACEMENT.** `significantItemsFromDef` builds
+the whole obligation list when the instance is created, one slot per
+authored item per `count`, with no item bound yet. That is what stops an
+empty collection reading as satisfied before `scripts/locations.lua` has
+spawned anything, and what makes an unspawned or failed-to-spawn item
+keep the condition incomplete rather than silently vanish.
+
+**Provenance is the PHYSICAL item.** `lsiInstanceId` holds
+`Item.Types.iiInstanceId`, never a page-local ground id: the physical id
+survives pickup, transfer, storage and drop, while `spawnGroundItem`
+hands out a NEW ground id every time an item is dropped or a failed
+pickup is rolled back. `Location.Instance.registerLocationSignificantSpawn`
+— the pure binding step behind the verb, not a verb of its own — is
+WRITE-ONCE
+per slot — a retried content spawn cannot repoint an obligation and
+orphan the item it first named, and the refusal is exactly the edge a
+resuming spawn uses to tell "still owed" from "already done". It also
+refuses an item that is not the DEFINITION the slot names — an
+obligation says what is owed, so binding a ration to a
+`processing_unit` slot would otherwise let picking the ration up latch
+the slot and clear the location with the guaranteed item still on the
+floor — and an item ALREADY owed by any obligation on the page, because
+`latchLocationSignificantTaken` latches every entry naming that id, so
+one physical item bound twice would let a single pickup discharge two
+required items. Both refusals live at the registration boundary rather
+than only in the validators: the verb is public Lua, and the decode and
+save rules reject the duplicate state only once it is already on disk. `significantProvenanceErrors` holds the same line at the save
+boundary, for an untaken obligation whose item is on the right ground
+but is the wrong thing.
+
+There is deliberately NO public binding verb. `world.spawnLocationSignificantItem(instanceId, slot, x, y [, pageId])`
+spawns the item AND binds it in one engine call, and it is the only way
+an obligation is ever filled. A separate bind-this-ground-item API
+would let a caller spawn or pick out an unrelated item of the right
+definition, bind it, and take THAT: the location would never spawn its
+own guaranteed item — a bound slot is skipped — and the unrelated
+pickup would clear the ruin. Neither the definition nor the
+duplicate-identity check can see that, because the substitute is
+exactly the right kind of item. So Lua chooses only WHERE: the
+definition comes from the obligation's own persisted
+`lsiItemDefName`, the item is materialized engine-side through the same
+`spawnSalvageOnPage` core `item.spawnGround` uses (so a guaranteed
+reward is worn by #1421's rules like any other find), and the binding
+names the instance that call just created — never one read back off the
+ground map, which is the very window a substitution needs. A refused
+call spawns nothing, and a binding that loses a race takes its item
+back off the ground rather than leaving an unowned duplicate reward.
+
+The binding commits SYNCHRONOUSLY, on the calling thread — unlike every
+sibling location editor, which queues to the world thread. That is load-bearing rather
+than a shortcut: every ground pickup runs on that same thread
+(`pickupGroundOnPage` is reached only from `item.pickupGround`) and its
+latch matches on the obligation's BOUND id, so a queued binding would
+leave a window in which the item is already pickable with its slot
+unbound. A pickup landing there latches nothing, the binding then names
+an item already in an inventory, no second ground pickup can happen,
+`contents_spawned` blocks a respawn, and the location is permanently
+unclearable — with a save `significantProvenanceErrors` would then
+refuse, an untaken obligation resolving inside an inventory. Committing
+on the calling thread puts the spawn, the binding and any pickup in one
+serial order, so the window does not exist.
+
+`item.spawnGround` answers exactly ONE value and must keep doing so: the
+debug console serializes every return value tab-separated, so a second
+one would turn `return item.spawnGround(...)` — which several probes
+parse as a bare number — into `"0\t14"`.
+
+**A latch alone is not enough.** `significantRecovered` counts an
+obligation as discharged only when it names a spawned item AND that item
+was taken. No engine path can produce the other shape —
+`latchLocationSignificantTaken` matches on a bound id — but it is
+precisely the shape the session provenance rules below cannot see, since
+there is no id for them to resolve, so a corrupt payload would otherwise
+clear a location with nothing ever spawned.
+`locationSignificantItemErrors` rejects it at decode as well.
+
+**The latch.** `taken` is set by
+`Engine.Scripting.Lua.API.Items.Ground.pickupGroundOnPage`, the
+authoritative ground→inventory boundary, on the first SUCCESSFUL insert
+— never on the rollback — by ANY unit of ANY faction. Nothing anywhere
+writes it back to false: dropping, transferring, losing, consuming or
+destroying the item afterwards changes nothing, because the location was
+looted and that does not become untrue.
+
+**Spawning.** `scripts/locations.lua`'s `spawnSignificantContent` fills
+only the slots still empty, registering each item the instant it spawns,
+and the ordinary content loop skips significant entries (they have their
+own pass, exactly like the ranged roster). If ANY obligation cannot be
+filled the whole spawn returns WITHOUT marking `contents_spawned`, so
+the next chunk load retries — warning and skipping would burn the
+location's exactly-once content lifecycle on a location that could then
+never be cleared. A hand-stamped location has no `LocationInstanceId`,
+so it owes nothing and its incidental contents are unaffected.
+
+**Persistence.** `world-pages` v10. `migrateWorldPagesV9` preserves every
+stored value, lifts the encounter's clearance-notice flag onto the
+instance, and adds NO obligations — reading them off today's YAML would
+owe a materialized world an item it never spawned, permanently blocking
+a clearance the pre-#917 build had already granted. The v1
+reconstruction discards both for the same reason.
+`Location.Instance.significantEntryErrors` is the ONE per-entry rule
+set, and both boundaries that can admit an obligation consult it —
+component decode through `locationSignificantItemErrors`, and
+`Location.Instance.registerLocationSignificantSpawn`, the pure binding
+step, which refuses a binding whose
+RESULTING entry would fail it. That sharing is deliberate: every rule
+below was added because some path could reach a state the other checks
+could not see, and two copies is how the next one gets added to a
+validator and missed by the live API. The rules are: a slot below 1
+(unbindable — the registration boundary refuses a non-positive slot, so
+the content spawn would orphan an item on every load for ever); a bound
+item id of 0 (the never-minted "no id given" sentinel; because the
+provenance rules skip a TAKEN obligation by design, it is the one value
+that would otherwise satisfy clearance with nothing ever spawned —
+`significantRecovered` refuses to count it either way); a
+CONTENTS-SPAWNED instance still owing an unbound slot (unrecoverable —
+`spawnContents` returns at its one-time `hasSpawnedLocationContents`
+gate and never fills it, and neither the missing-definition check nor
+the provenance rules can see the shape); and an obligation marked taken
+that names no item. Two SET-wide rules stay with the table walk, since
+they are about the relationship between entries rather than any one of
+them: a duplicated slot, and same-page duplicate ownership;
+`World.Save.Integrity.significantProvenanceErrors` hard-fails an UNTAKEN
+obligation whose item resolves on another page, in an inventory or
+storage (it cannot be held without having been picked up), or only
+NESTED inside a ground container; one whose ground item is the wrong
+DEFINITION; and one physical id owed by two obligations. Meanwhile
+`significantDanglingWarnings` reports an absent item and tolerates it,
+leaving the obligation untaken. Once taken there is no rule at all —
+with ONE exception.
+
+That exception is the item-id CURSOR. A bound `lsiInstanceId` at or
+above the session's `snapNextItemId` names an identity the monotonic
+allocator could never have minted, and that is a hard error for a
+TAKEN obligation as much as an untaken one. Every other rule can skip
+a taken entry because a taken item is legitimately allowed to be
+anywhere or gone — but "gone" is precisely what an unmintable id looks
+like to a resolution check, so a forged `taken: true` paired with an
+id past the cursor would resolve nowhere, draw at most a tolerated
+dangling warning, and then satisfy `significantRecovered`, clearing a
+location with no spawn and no pickup having ever happened.
+`itemAllocatorErrors` already refuses a live `ItemInstance` above the
+cursor, but an obligation is not an item: its id is a bare reference
+nothing else in the session has to agree with. The lower bound (0, the
+never-minted sentinel) is component decode's, in
+`significantEntryErrors`; this upper one has to be session-wide,
+because the cursor lives in `core-session`.
+
+The ground set it resolves against is each ground entry's OUTER item
+only, never recursed through `iiContents`, and that is load-bearing:
+`pickupGroundOnPage` removes a ground-map entry and latches the OUTER
+item, so an id reachable only from inside a container is not pickable
+as its own ground item and could never discharge its obligation —
+accepting it would pass a save that is permanently unclearable. The
+container ITSELF is a perfectly good obligation item; a top-level
+ground entry is pickable whatever it holds. `peItems` still flattens,
+because the question it answers — does this id exist anywhere on the
+page — is a different one.
+
+**Queries.** `world.listPlacedLocations` / `world.getLocationInstance`
+expose `significant` (always an array; `{slot, item, taken}` plus
+`item_instance_id` once bound — OMITTED before that, which is how
+"not spawned yet" is expressed) beside `authors_clearance`,
+`clearance_satisfied` and `clear_event_emitted`. The predicate is
+REPORTED rather than left for callers to re-derive, because a second
+implementation is what would drift.
 
 ## Location discovery, map icons, and per-unit knowledge (#780/#781/#915)
 

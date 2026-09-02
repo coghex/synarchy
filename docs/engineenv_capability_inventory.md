@@ -194,12 +194,13 @@ here:
   `EngineEnv` already carries — the projection aliases live state, it
   does not snapshot or duplicate it.
 * **Every binding must be readable, and grouping is free** (#2059).
-  `tools/engine_env_capability_audit.py` derives the whole
-  capability-accessor ownership map behind §5's write map and §6.5's
-  residue from these projections, so a binding it cannot pair with an
-  `EngineEnv` accessor takes that selector out of enforcement. It
-  therefore canonicalizes each right-hand side structurally: semantically
-  inert grouping — `(accessor env)`, `(accessor) env`, and the same
+  `tools/engine_env_capability_writers.py` (the writer-scanner half
+  of `tools/engine_env_capability_audit.py`'s gate, #2036) derives the
+  whole capability-accessor ownership map behind §5's write map and
+  §6.5's residue from these projections, so a binding it cannot pair
+  with an `EngineEnv` accessor takes that selector out of enforcement.
+  It therefore canonicalizes each right-hand side structurally:
+  semantically inert grouping — `(accessor env)`, `(accessor) env`, and the same
   freedom inside the wrapped form below — reads exactly as the ungrouped
   spelling, so no legal respelling can quietly drop a field. Anything
   else is a *hard audit failure* naming the module, projection and
@@ -225,9 +226,11 @@ here:
   since it is a reference discipline rather than a capability record.
   A consumer narrowed to the wrapped form must not retain another route
   to the raw handle, or the boundary is decorative —
-  `tools/engine_env_capability_audit.py` knows the wrapper by name
-  (`ALIAS_PRESERVING_WRAPPERS`) so a wrapped field still canonicalizes
-  onto its `EngineEnv` field for the §5 write map and the §6.5 residue.
+  `tools/engine_env_capability_common.py` knows the wrapper by name
+  (`ALIAS_PRESERVING_WRAPPERS`, the projection canonicalizer both the
+  audit's E8 check and its writer scanner read) so a wrapped field
+  still canonicalizes onto its `EngineEnv` field for the §5 write map
+  and the §6.5 residue.
 * **No capability module imports its own consumers.** A capability
   module may be imported freely by the modules it narrows access for,
   but must never import back into them.
@@ -494,10 +497,12 @@ role is one of §2.2's, and the row cites real source — never for
 truth. A role claim here is prose and stays prose. Since #1892 there
 is a second, independent mechanism that pins the same ownership
 question at a granularity a source scan can actually verify:
-`tools/engine_env_capability_audit.py`'s checked-in
-`CAPABILITY_WRITER_MODULES` map, which fixes each field's direct
-writing **modules** and rejects an undeclared write and a stale entry
-alike. Read §6.5 before you conclude that either half proves the
+`tools/engine_env_capability_writers.py`'s checked-in
+`CAPABILITY_WRITER_MODULES` map (run as part of
+`tools/engine_env_capability_audit.py`'s single gate), which fixes each
+field's direct writing **modules** and rejects an undeclared write and
+a stale entry alike. Read §6.5 before you conclude that either half
+proves the
 other — they verify different things, and the map deliberately does
 not attempt the role claim.
 
@@ -1136,7 +1141,10 @@ complete set of requirements:
    identity/reference`**, **`Rebuild`**, **`Reset to default`**, or
    **`Exclude`**. Not a phrase of your own.
 
-**`tools/engine_env_capability_audit.py`** — this document's §5:
+**`tools/engine_env_capability_audit.py`** — this document's §5. It is
+one gate over two modules since #2036: items 3–10 are its own checks,
+and item 11's map lives in the writer scanner it runs,
+`tools/engine_env_capability_writers.py`:
 
 3. A capability-inventory row, under the `### <capability>` heading
    for the capability the field belongs to.
@@ -1162,9 +1170,10 @@ complete set of requirements:
     count and names the record's real first and last field. The audit
     re-derives all three from the live declaration, so a correct §5 row
     with a stale §1 block still fails (issue #1669).
-11. A `CAPABILITY_WRITER_MODULES` entry for the field, mapping it to
-    the modules that directly write it — `frozenset()` when nothing
-    does, which is the common case for a field only
+11. A `CAPABILITY_WRITER_MODULES` entry
+    (`tools/engine_env_capability_writers.py`) for the field, mapping
+    it to the modules that directly write it — `frozenset()` when
+    nothing does, which is the common case for a field only
     `Engine.Core.Init` seeds. The map's keys are checked against the
     live record in both directions, so a new field with no entry
     fails on its own. See §6.5.
@@ -1242,8 +1251,10 @@ An approved addition requires, in lockstep:
   `audit_permanent_boundary` rejects an empty or placeholder cell, so
   a name-only row will not pass.
 - The matching `PERMANENT_IMPORTERS` (or `PERMANENT_DEFINER`) update
-  in `tools/engine_env_capability_audit.py`. Neither change admits a
-  module on its own: the constants are checked against the live source
+  in `tools/engine_env_capability_common.py` — the one definition the
+  audit's ratchet and boundary checks and its writer scanner's D-4
+  exemption all read. Neither change admits a module on its own: the
+  constants are checked against the live source
   in both directions *and* against this section's documented set.
 - Self-test coverage in `tools/test_engine_env_capability_audit.py`,
   including the end-state case's live-set equality assertion.
@@ -1253,7 +1264,11 @@ including a new §3/§7.3-style thread-private field owner.
 
 ### 6.5 Writing-module authority and the pass-on residue (#1892, CMA-1)
 
-`tools/engine_env_capability_audit.py` carries a checked-in
+`tools/engine_env_capability_writers.py` — the writer-scanner module
+`tools/engine_env_capability_audit.py` runs as part of its single gate
+since #2036; `tools/test_engine_env_capability_writers.py` is its
+focused self-test, run from the aggregate
+`tools/test_engine_env_capability_audit.py` — carries a checked-in
 `CAPABILITY_WRITER_MODULES` map: for every live `EngineEnv` field, the
 production modules that **directly mutate** it. It is maintained the
 same way `RENDER_MAIN_ONLY_MODULES` is, and checked the same two ways —

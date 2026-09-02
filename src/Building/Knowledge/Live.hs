@@ -222,7 +222,8 @@ markPendingSeed co bid = do
 --   Re-evaluates 'currentActivity' rather than storing a precomputed
 --   deadline, so this can never disagree with the one function that
 --   decides whether a building is Built. An entry whose building has
---   vanished is dropped; one still 'Appearing' is kept for next tick.
+--   vanished is dropped; one not yet 'Built' — 'Constructing' or
+--   'Appearing' alike — is kept for next tick.
 --
 --   The set it walks is exactly "containers this session placed and
 --   has not finished watching" — never every already-built container —
@@ -243,7 +244,7 @@ sweepPendingSeeds co = do
                 classify bid = case verdict bid of
                     Nothing    → (False, False)  -- gone: drop, don't seed
                     Just True  → (False, True)   -- Built: seed, then drop
-                    Just False → (True,  False)  -- still Appearing: keep
+                    Just False → (True,  False)  -- not Built yet: keep
                 results = [ (bid, classify bid) | bid ← HS.toList pending ]
                 keep    = HS.fromList [ b | (b, (k, _)) ← results, k ]
                 ready   = [ b | (b, (_, r)) ← results, r ]

@@ -508,12 +508,14 @@ library
                      Unit.Thread.Movement.Timers
                      Unit.Thread.Movement.Climb
                      Unit.Thread.Movement.PathAdvance
+                     Building.Schema
                      Building.Types
                      Building.Knowledge
                      Building.Knowledge.Live
                      Building.Command.Types
                      Building.Thread.Command
                      Building.Render
+                     Building.Visual
                      Building.Placement
                      Building.HitTest
                      Structure.Types
@@ -708,6 +710,10 @@ library
                      World.Render.CursorQuads
                      World.Render.TileQuads
                      World.Render.FloraQuads
+                     World.Render.FloraProjection
+                     World.Render.FloraDraws
+                     World.Render.FloraMarker
+                     World.Render.SpriteDepth
                      World.Render.GroundItemQuads
                      World.Render.SideDecoQuads
                      World.Render.Textures
@@ -902,6 +908,7 @@ library
                      World.Flora.Identity
                      World.Flora.Types
                      World.Flora.Designation
+                     World.Flora.HitTest
                      World.Flora.Growth
                      World.Flora.Placement
                      World.Flora.Render
@@ -957,6 +964,7 @@ library
                      World.ZoomMap.Cache.Classify
                      World.ZoomMap.Cache.Noise
                      World.ZoomMap.Cache.Pixels
+                     World.ZoomMap.Artifact
                      World.ZoomMap.ChunkTexture
                      World.ZoomMap.ColorPalette
                      World.ZoomMap.Types
@@ -1141,6 +1149,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Harness
                    Test.Headless.Harness.GeneratedIds
                    Test.Headless.Harness.Isolation
+                   Test.Headless.Harness.Log
                    Test.Headless.Harness.WorkerHealth
                    Test.Headless.WorldGen
                    Test.Headless.WorldGen.Geology
@@ -1151,6 +1160,7 @@ test-suite synarchy-test-headless
                    Test.Headless.WorldGen.SoilRedistribution
                    Test.Headless.WorldGen.Exposure
                    Test.Headless.WorldGen.ZoomParity
+                   Test.Headless.WorldGen.ZoomArtifact
                    Test.Headless.WorldGen.BorderProbe
                    Test.Headless.WorldGen.WrapSeam
                    Test.Headless.WorldGen.CoastBreach
@@ -1215,6 +1225,10 @@ test-suite synarchy-test-headless
                    Test.Headless.World.FluidWritebackStaleness
                    Test.Headless.World.PauseSpeed
                    Test.Headless.World.Save.Compat
+                   Test.Headless.World.Save.Compat.B1Fixture
+                   Test.Headless.World.Save.Compat.Baselines
+                   Test.Headless.World.Save.Compat.Historical
+                   Test.Headless.World.Save.Compat.Legacy
                    Test.Headless.World.Save.Integrity
                    Test.Headless.World.Save.Storage
                    Test.Headless.World.Save.Contract
@@ -1238,6 +1252,9 @@ test-suite synarchy-test-headless
                    Test.Headless.World.ChunkIdentity
                    Test.Headless.World.ChunkQueueFrame
                    Test.Headless.World.DesignationSeam
+                   Test.Headless.World.Chop.Selection
+                   Test.Headless.World.Chop.Authority
+                   Test.Headless.Lua.ChopGesture
                    Test.Headless.World.CropPlant
                    Test.Headless.World.StructureStage
                    Test.Headless.World.StructurePaletteResidue
@@ -1373,6 +1390,7 @@ test-suite synarchy-test-headless
                    Test.Headless.App.PreviewConfig
                    Test.Headless.App.ResourceRoot
                    Test.Headless.Core.LogCategoryEnv
+                   Test.Headless.Core.FixtureLogging
                    Test.Headless.Core.LogMonad
                    Test.Headless.Core.LogParity
                    Test.Headless.Core.LogThresholdEnv
@@ -1390,6 +1408,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.Faction
                    Test.Headless.Lua.Faction
                    Test.Headless.Location.Instance
+                   Test.Headless.Location.SignificantContents
                    Test.Headless.Location.Naming
                    Test.Headless.River.Naming
                    Test.Headless.Location.LootDeterminism
@@ -1397,6 +1416,8 @@ test-suite synarchy-test-headless
                    Test.Headless.Location.StampCommit
                    Test.Headless.Location.Stamping
                    Test.Headless.Tutorial.Definitions
+                   Test.Headless.Building.AssetSchema
+                   Test.Headless.Building.CameraFacing
                    Test.Headless.Building.Knowledge
                    Test.Headless.Building.MachineShopConstruction
                    Test.Headless.Item.NestedContents

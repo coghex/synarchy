@@ -8,14 +8,19 @@ buildings:
     placement: "flat_ground"
     is_starting: true
     race: "acolyte_cult"
+    # Which art family owns this building's textures (#2080).
+    visual_class: "gateway"
 
+    # Zero build_work: nobody constructs the portal, it materialises
+    # on a clock. That is the `appearance` role (#2080) — distinct from
+    # `construction`, which the worker-driven buildings declare.
     state_animations:
-      appearing: portal-appear
-      built:     portal-idle
+      appearance: portal-appear
+      built:      portal-idle
 
     animations:
-      # 16 frames at 8fps = 2 seconds total. The unit auto-transitions
-      # to the "built" state once the appear anim completes.
+      # 16 frames at 8fps = 2 seconds total. The portal auto-transitions
+      # to the `built` role once the appearance anim completes.
       portal-appear:
         fps: 8
         loop: false

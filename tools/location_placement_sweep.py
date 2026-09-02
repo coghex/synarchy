@@ -129,6 +129,16 @@ def run_one(port: int, seed: int, size: int, plates: int) -> dict:
     page = "sweep"
     proc = boot(port, log=LOG)
     try:
+        # Items FIRST: since #917 a location's guaranteed significant
+        # content must resolve against the item registry, so
+        # engine.loadLocationYaml rejects the whole file when the item
+        # it names is unregistered — the same order
+        # scripts/startup_loader.lua uses and data/locations/*.yaml's
+        # own header states.
+        send(port, "local fs = engine.listFiles('data/items', '.yaml') or {}; "
+                   "for _, f in ipairs(fs) do "
+                   "engine.loadItemYaml('data/items/' .. f) end; return #fs",
+             timeout=30.0)
         send(port, "engine.loadLocationYaml('data/locations/ruin_small.yaml'); return 'ok'")
         send(port, f"world.init('{page}', {seed}, {size}, {plates}); return 'ok'")
         budget = INIT_TIMEOUT[size]

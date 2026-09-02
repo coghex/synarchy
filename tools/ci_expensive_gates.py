@@ -103,8 +103,17 @@ UNIT_ASSET_GLOBS = [
     # compiler-owned atlas/ artifacts both live under this one subtree.
     "assets/textures/units/*", "data/units/*.yaml",
     # The checker, its self-test, this selector, and the CI wiring that
-    # invokes them.
-    "tools/pack_atlas.py", "tools/test_pack_atlas.py",
+    # invokes them. Since issue #2054 the checker is a façade over one
+    # `tools/pack_atlas_<owner>.py` implementation module per concern
+    # (shared, image, declarations, inventory, compiler, index, budget),
+    # and a change to any owner has to select this gate exactly as a
+    # change to the façade does. That family is matched by prefix, unlike
+    # SAVE_COMPAT_GLOBS' explicit per-module list below: nothing
+    # unrelated under tools/ shares the `pack_atlas_` prefix, and a
+    # future owner module must not be able to escape the gate by being
+    # left off a list. `tools/pack_atlas_*.py` does not match the
+    # self-test (`tools/test_pack_atlas.py`), which is named on its own.
+    "tools/pack_atlas.py", "tools/pack_atlas_*.py", "tools/test_pack_atlas.py",
     "tools/ci_expensive_gates.py", "tools/ci-local.sh", "Makefile",
     ".github/workflows/ci.yml", ".github/ci/Dockerfile",
     # The budget policy the strict run enforces (#1262). Editing a
@@ -158,10 +167,22 @@ UNIT_ASSET_GLOBS = [
 #
 # NB these are fnmatch patterns, not globs: `*` crosses `/`.
 SAVE_COMPAT_GLOBS = [
-    # The audit and its self-test. normalize_fixture_timestamp lives in
-    # the first; the reproducibility member and its GHCi setup script
-    # live in the second.
+    # The audit and its self-test. The reproducibility member and its
+    # GHCi setup script live in the self-test; normalize_fixture_timestamp
+    # -- the very thing that member covers -- lives in the codec bridge
+    # since issue #2049 split the tool into owner modules, so EVERY owner
+    # is named here. Explicit per-module patterns, not a blanket
+    # `tools/save_compat*`: that would newly capture the unrelated
+    # tools/save_compat_migration_probe.py, whose negative case sits
+    # beside save_storage_probe.py's below.
     "tools/save_compat_audit.py", "tools/test_save_compat_audit.py",
+    "tools/save_compat_audit_common.py",
+    "tools/save_compat_audit_components.py",
+    "tools/save_compat_audit_fingerprint.py",
+    "tools/save_compat_audit_codec.py",
+    "tools/save_compat_audit_manifest.py",
+    "tools/save_compat_audit_register.py",
+    "tools/save_compat_audit_generate.py",
     # The manifest the audit reads, and the tracked fixture corpus the
     # test decodes. `_CURRENT_FORMAT_FIXTURE_PATH` points into the
     # second, and is re-pointed whenever the metadata component's
@@ -500,6 +521,16 @@ def self_test() -> int:
         # fell back to the graphical patterns.
         ("unit-assets", ["data/units/acolyte.yaml"], True),
         ("unit-assets", ["tools/pack_atlas.py"], True),
+        # ...and every implementation owner behind the façade (#2054),
+        # each pinned by name so the prefix pattern cannot be narrowed to
+        # a subset without failing here.
+        ("unit-assets", ["tools/pack_atlas_shared.py"], True),
+        ("unit-assets", ["tools/pack_atlas_image.py"], True),
+        ("unit-assets", ["tools/pack_atlas_declarations.py"], True),
+        ("unit-assets", ["tools/pack_atlas_inventory.py"], True),
+        ("unit-assets", ["tools/pack_atlas_compiler.py"], True),
+        ("unit-assets", ["tools/pack_atlas_index.py"], True),
+        ("unit-assets", ["tools/pack_atlas_budget.py"], True),
         ("unit-assets", ["tools/test_pack_atlas.py"], True),
         ("unit-assets", ["tools/ci_expensive_gates.py"], True),
         ("unit-assets", ["tools/ci-local.sh"], True),
@@ -552,6 +583,22 @@ def self_test() -> int:
         ("worldgen", ["data/units/acolyte.yaml"], False),
         ("graphical", ["data/units/acolyte.yaml"], False),
         ("graphical", ["tools/pack_atlas.py"], False),
+        # ...nor do the façade's owner modules (#2054): a pack_atlas
+        # module never drags in an unrelated expensive gate.
+        ("worldgen", ["tools/pack_atlas_shared.py"], False),
+        ("worldgen", ["tools/pack_atlas_image.py"], False),
+        ("worldgen", ["tools/pack_atlas_declarations.py"], False),
+        ("worldgen", ["tools/pack_atlas_inventory.py"], False),
+        ("worldgen", ["tools/pack_atlas_compiler.py"], False),
+        ("worldgen", ["tools/pack_atlas_index.py"], False),
+        ("worldgen", ["tools/pack_atlas_budget.py"], False),
+        ("graphical", ["tools/pack_atlas_shared.py"], False),
+        ("graphical", ["tools/pack_atlas_image.py"], False),
+        ("graphical", ["tools/pack_atlas_declarations.py"], False),
+        ("graphical", ["tools/pack_atlas_inventory.py"], False),
+        ("graphical", ["tools/pack_atlas_compiler.py"], False),
+        ("graphical", ["tools/pack_atlas_index.py"], False),
+        ("graphical", ["tools/pack_atlas_budget.py"], False),
         # ...including the #1318 additions, which are worldgen-only.
         ("graphical", ["src/Sim/Thread.hs"], False),
         ("graphical", ["src/Sim/Fluid/Active.hs"], False),
@@ -567,6 +614,18 @@ def self_test() -> int:
         # trigger-path table, so narrowing any entry fails here.
         ("save-compat", ["tools/save_compat_audit.py"], True),
         ("save-compat", ["tools/test_save_compat_audit.py"], True),
+        # Issue #2049's owner modules. Each is named individually, so a
+        # PR touching only one of them still pays for the repl coverage
+        # that exercises it -- the codec bridge in particular owns
+        # normalize_fixture_timestamp, which is exactly what the
+        # reproducibility member proves.
+        ("save-compat", ["tools/save_compat_audit_common.py"], True),
+        ("save-compat", ["tools/save_compat_audit_components.py"], True),
+        ("save-compat", ["tools/save_compat_audit_fingerprint.py"], True),
+        ("save-compat", ["tools/save_compat_audit_codec.py"], True),
+        ("save-compat", ["tools/save_compat_audit_manifest.py"], True),
+        ("save-compat", ["tools/save_compat_audit_register.py"], True),
+        ("save-compat", ["tools/save_compat_audit_generate.py"], True),
         ("save-compat", ["docs/save_compat/manifest.json"], True),
         ("save-compat", ["docs/save_compat/enum_baseline.json"], True),
         ("save-compat",
@@ -626,15 +685,28 @@ def self_test() -> int:
         ("save-compat", [".github/workflows/ntfy-notify.yml"], False),
         ("save-compat", [".github/workflows/review-gate.yml"], False),
         ("save-compat", ["tools/pack_atlas.py"], False),
+        ("save-compat", ["tools/pack_atlas_shared.py"], False),
+        ("save-compat", ["tools/pack_atlas_image.py"], False),
+        ("save-compat", ["tools/pack_atlas_declarations.py"], False),
+        ("save-compat", ["tools/pack_atlas_inventory.py"], False),
+        ("save-compat", ["tools/pack_atlas_compiler.py"], False),
+        ("save-compat", ["tools/pack_atlas_index.py"], False),
+        ("save-compat", ["tools/pack_atlas_budget.py"], False),
         # The save-adjacent Haskell that is NOT the format: the world
         # thread's save command and the barrier live outside
         # src/World/Save, and a save PROBE is not the fixture corpus.
         ("save-compat", ["src/World/Thread/Command/Save.hs"], False),
         ("save-compat", ["src/Engine/Save/Barrier.hs"], False),
         ("save-compat", ["tools/save_storage_probe.py"], False),
+        # ...and a save-compat-PREFIXED probe is still not the tool: the
+        # patterns above name each owner module exactly, so this stays
+        # unselected. A blanket `tools/save_compat*` would capture it.
+        ("save-compat", ["tools/save_compat_migration_probe.py"], False),
         # A path selecting one gate must not drag in the others, in
         # either direction.
         ("worldgen", ["tools/test_save_compat_audit.py"], False),
+        ("worldgen", ["tools/save_compat_audit_codec.py"], False),
+        ("unit-assets", ["tools/save_compat_audit_manifest.py"], False),
         ("worldgen", ["src/World/Save/Envelope/Codec.hs"], False),
         ("unit-assets", ["src/World/Save/Envelope/Codec.hs"], False),
         ("unit-assets", ["docs/save_compat/manifest.json"], False),

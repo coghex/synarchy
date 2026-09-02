@@ -38,7 +38,10 @@
 --   The frozen-DTO boundary rule is stated ONCE, in
 --   "World.Save.Component.Types".
 module World.Save.Component.WorldGenHistory
-    ( WorldGenParamsDTOv6(..)
+    ( WorldGenParamsDTOv7(..)
+    , toWorldGenParamsDTOv7
+    , fromWorldGenParamsDTOv7
+    , WorldGenParamsDTOv6(..)
     , WorldGenParamsDTOv5(..)
     , WorldGenParamsDTOv4(..)
     , WorldGenParamsDTOv3(..)
@@ -162,6 +165,98 @@ fromWorldGenParamsDTOv6 d = withVolcanoCtx WorldGenParams
     , wgpRiverNames              = fromRiverNamesDTO (gp6RiverNames d)
     , wgpVolcanoCtx              = emptyVolcanoCtx
     }
+
+-- Frozen pre-#917 worldgen params (@world-pages@ v8 and v9) ---------
+
+-- | The FROZEN pre-significant-contents gen-params shape, carried by
+--   BOTH @world-pages@ v8 and v9: identical to 'WorldGenParamsDTO'
+--   except that its location table is the frozen
+--   'LocationInstancesDTOv5'. #2021 changed the PAGE, not the gen
+--   params, so its own v8 freeze pointed at the live type — this is the
+--   "later schema change" that note anticipated, repointing the field
+--   onto a frozen copy and leaving both versions' bytes unchanged.
+data WorldGenParamsDTOv7 = WorldGenParamsDTOv7
+    { gp7Seed                     ∷ !Word64
+    , gp7WorldSize                ∷ !Int
+    , gp7PlateCount               ∷ !Int
+    , gp7Plates                   ∷ ![TectonicPlateDTO]
+    , gp7Calender                 ∷ !CalendarConfigDTO
+    , gp7SunConfig                ∷ !SunConfigDTO
+    , gp7MoonConfig               ∷ !MoonConfigDTO
+    , gp7GeoTimeline              ∷ !GeoTimeline
+    , gp7OceanMap                 ∷ !OceanMap
+    , gp7OceanDist                ∷ !OceanDistMap
+    , gp7ClimateParams            ∷ !ClimateParamsDTO
+    , gp7ClimateState             ∷ !ClimateStateDTO
+    , gp7ErosionIntensity         ∷ !Float
+    , gp7VolcanicActivity         ∷ !Float
+    , gp7LavaPoolDepth            ∷ !Int
+    , gp7LavaPoolRadius           ∷ !Int
+    , gp7WaterfallQuantum         ∷ !Int
+    , gp7OreLevers                ∷ !OreLeversDTO
+    , gp7TimelineParams           ∷ !TimelineParamsDTO
+    , gp7LocationOverlay          ∷ !LocationOverlay
+    , gp7LocationInstances        ∷ !LocationInstancesDTOv5
+    , gp7LocationStamped          ∷ !(HS.HashSet ChunkCoord)
+    , gp7RiverNames               ∷ !RiverNamesDTO
+    } deriving (Show, Eq, Generic, Serialize)
+
+toWorldGenParamsDTOv7 ∷ WorldGenParams → WorldGenParamsDTOv7
+toWorldGenParamsDTOv7 p = WorldGenParamsDTOv7
+    { gp7Seed                     = wgpSeed p
+    , gp7WorldSize                = wgpWorldSize p
+    , gp7PlateCount               = wgpPlateCount p
+    , gp7Plates                   = map toTectonicPlateDTO (wgpPlates p)
+    , gp7Calender                 = toCalendarConfigDTO (wgpCalender p)
+    , gp7SunConfig                = toSunConfigDTO (wgpSunConfig p)
+    , gp7MoonConfig               = toMoonConfigDTO (wgpMoonConfig p)
+    , gp7GeoTimeline              = wgpGeoTimeline p
+    , gp7OceanMap                 = wgpOceanMap p
+    , gp7OceanDist                = wgpOceanDist p
+    , gp7ClimateParams            = toClimateParamsDTO (wgpClimateParams p)
+    , gp7ClimateState             = toClimateStateDTO (wgpClimateState p)
+    , gp7ErosionIntensity         = wgpErosionIntensity p
+    , gp7VolcanicActivity         = wgpVolcanicActivity p
+    , gp7LavaPoolDepth            = wgpLavaPoolDepth p
+    , gp7LavaPoolRadius           = wgpLavaPoolRadius p
+    , gp7WaterfallQuantum         = wgpWaterfallQuantum p
+    , gp7OreLevers                = toOreLeversDTO (wgpOreLevers p)
+    , gp7TimelineParams           = toTimelineParamsDTO (wgpTimelineParams p)
+    , gp7LocationOverlay          = wgpLocationOverlay p
+    , gp7LocationInstances        = toLocationInstancesDTOv5 (wgpLocationInstances p)
+    , gp7LocationStamped          = wgpLocationStamped p
+    , gp7RiverNames               = toRiverNamesDTO (wgpRiverNames p)
+    }
+
+fromWorldGenParamsDTOv7 ∷ WorldGenParamsDTOv7 → WorldGenParams
+fromWorldGenParamsDTOv7 d = withVolcanoCtx WorldGenParams
+    { wgpSeed                     = gp7Seed d
+    , wgpWorldSize                = gp7WorldSize d
+    , wgpPlateCount               = gp7PlateCount d
+    , wgpPlates                   = map fromTectonicPlateDTO (gp7Plates d)
+    , wgpCalender                 = fromCalendarConfigDTO (gp7Calender d)
+    , wgpSunConfig                = fromSunConfigDTO (gp7SunConfig d)
+    , wgpMoonConfig               = fromMoonConfigDTO (gp7MoonConfig d)
+    , wgpGeoTimeline              = gp7GeoTimeline d
+    , wgpOceanMap                 = gp7OceanMap d
+    , wgpOceanDist                = gp7OceanDist d
+    , wgpClimateParams            = fromClimateParamsDTO (gp7ClimateParams d)
+    , wgpClimateState             = fromClimateStateDTO (gp7ClimateState d)
+    , wgpErosionIntensity         = gp7ErosionIntensity d
+    , wgpVolcanicActivity         = gp7VolcanicActivity d
+    , wgpLavaPoolDepth            = gp7LavaPoolDepth d
+    , wgpLavaPoolRadius           = gp7LavaPoolRadius d
+    , wgpWaterfallQuantum         = gp7WaterfallQuantum d
+    , wgpOreLevers                = fromOreLeversDTO (gp7OreLevers d)
+    , wgpTimelineParams           = fromTimelineParamsDTO (gp7TimelineParams d)
+    , wgpLocationOverlay          = gp7LocationOverlay d
+    , wgpLocationInstances        = fromLocationInstancesDTOv5 (gp7LocationInstances d)
+    , wgpLocationStamped          = gp7LocationStamped d
+    , wgpRiverNames               = fromRiverNamesDTO (gp7RiverNames d)
+    , wgpVolcanoCtx              = emptyVolcanoCtx
+    }
+
+
 
 -- Frozen pre-#1230 worldgen params (@world-pages@ v6) ----------------
 

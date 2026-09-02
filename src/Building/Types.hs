@@ -4,7 +4,9 @@ module Building.Types
     , BuildingAnimation(..)
     , buildingAnimMaxFrames
     , BuildingActivity(..)
+    , buildingActivityLabel
     , BuildingDef(..)
+    , bdSouthTexture
     , BuildingInstance(..)
     , BuildingGhost(..)
     , BuildingManager(..)
@@ -29,48 +31,68 @@ import qualified Data.HashSet as HS
 import qualified Data.Map.Strict as Map
 import qualified Data.Vector as V
 import Engine.Asset.Handle (TextureHandle(..))
-import Unit.Direction (Direction(..))
+import Engine.Graphics.Camera (CameraFacing(..))
+import Building.Schema
 import World.Page.Types (WorldPageId(..))
 import Item.Types (ItemInstance)
 import Power.Base (PowerNodeSpec)
 
 -- | One building animation: a flat per-frame sequence of whole-image
---   textures.
+--   textures, held once per camera facing.
 --
 --   Buildings used to share the unit 'Unit.Types.Def.Animation' record,
 --   whose per-frame representation #1261 (TEX-6) retired for units. D-8
---   leaves building animation storage untouched — nothing compiles a
+--   leaves building animation STORAGE untouched — nothing compiles a
 --   building to an atlas and no building index exists — so the
---   representation moved here instead of being deleted, and the
---   building path is byte-for-byte the behaviour it always had.
+--   representation moved here instead of being deleted.
 --
---   Frames stay keyed by 'Direction' because that is exactly what the
---   loader built and the renderer read: buildings don't rotate, so the
---   map is a singleton under 'Unit.Direction.DirS' and the mirror path
---   never fires. There is no `flip` field for the same reason.
+--   Frames are keyed by 'Engine.Graphics.Camera.CameraFacing' (#2080),
+--   not by 'Unit.Direction.Direction': a building has four camera views,
+--   never eight unit facings, and there is no mirror flag because a
+--   canonical declaration never mirrors one view into another. The four
+--   views are independently addressable, and 'faSource' records whether
+--   they came from four declared frame lists or from one legacy
+--   @frames.default@ list exposed through all four (BDA-13 rejects the
+--   latter from shipped definitions once the art slices have landed).
 data BuildingAnimation = BuildingAnimation
     { banFps    ∷ !Float
     , banLoop   ∷ !Bool
-    , banFrames ∷ !(Map.Map Direction (V.Vector TextureHandle))
+    , banFrames ∷ !(FacingAssets (V.Vector TextureHandle))
     } deriving (Show, Eq)
 
--- | The longest direction's frame count (0 when the animation has no
+-- | The longest facing's frame count (0 when the animation has no
 --   frames at all) — the clip-LENGTH question 'currentActivity' asks to
---   derive an appear animation's duration.
+--   derive an appear animation's duration. The decoder equalizes the
+--   four counts, so this is simply the clip length; it stays a maximum
+--   so a hand-built fixture cannot read short.
 buildingAnimMaxFrames ∷ BuildingAnimation → Int
 buildingAnimMaxFrames anim =
-    let counts = V.length <$> Map.elems (banFrames anim)
-    in if null counts then 0 else maximum counts
+    maximum (V.length <$> [ facingAsset f (banFrames anim)
+                          | f ← canonicalFacings ])
 
 newtype BuildingId = BuildingId { unBuildingId ∷ Word32 }
     deriving stock (Show, Eq, Ord, Generic)
     deriving anyclass (Hashable, Serialize)
 
--- | Derived from elapsed time, NOT stored on the instance:
---   elapsed < appear-anim duration → Appearing.
---   otherwise                       → Built.
-data BuildingActivity = Appearing | Built
+-- | Derived from build progress or elapsed time, NOT stored on the
+--   instance (#2080 splits the old overloaded @Appearing@ in two):
+--
+--   * 'Constructing' — a positive-@build_work@ definition whose
+--     'biBuildProgress' has not reached 'bdBuildWork' yet. Worker-driven,
+--     and frozen whenever no worker is contributing.
+--   * 'Appearing' — a zero-work definition still inside its declared
+--     timed appearance. Elapsed-game-time driven; nobody builds it.
+--   * 'Built' — both eventually reach this.
+data BuildingActivity = Constructing | Appearing | Built
     deriving (Show, Eq)
+
+-- | The string @building.getActivity@ hands Lua. Lives here beside the
+--   type so the wire vocabulary and the Haskell one cannot drift, and
+--   so the mapping is assertable without a live Lua state.
+buildingActivityLabel ∷ BuildingActivity → Text
+buildingActivityLabel Constructing = "constructing"
+buildingActivityLabel Appearing    = "appearing"
+buildingActivityLabel Built        = "built"
 
 -- | Definition loaded from YAML, immutable after load. Mirrors UnitDef
 --   in shape but minus the directional-sprite + state-machine concerns
@@ -80,10 +102,18 @@ data BuildingDef = BuildingDef
     , bdDisplayName ∷ !Text               -- ^ shown in build menu + tooltips
     , bdCategory    ∷ !Text               -- ^ build-menu tab key ("Starting", "Cargo", ...)
     , bdDescription ∷ !Text               -- ^ build-menu tooltip hint body
-    , bdTexture     ∷ !TextureHandle      -- ^ static fallback
+    , bdTextures    ∷ !(FacingAssets TextureHandle)
+      -- ^ The four static views (#2080), one independently addressable
+      --   handle per camera facing, plus whether they were declared
+      --   canonically or came from one legacy @sprite@ path. The view
+      --   on screen is the ACTIVE CAMERA's (#2088,
+      --   'Building.Visual.previewBuildingTexture'); 'bdSouthTexture'
+      --   is the camera-blind south view the build menu and the
+      --   instance's stamped fallback handle keep.
     , bdIconTexture ∷ !TextureHandle
-      -- ^ The SAME sprite uploaded under the UI policy (#2075), for the
-      --   build menu's `iconTex`. A second handle on a second slot,
+      -- ^ The SAME south sprite uploaded under the UI policy (#2075),
+      --   for the build menu's `iconTex`. The menu shows one view, and
+      --   south is it. A second handle on a second slot,
       --   because a slot's sampler is fixed by the policy that uploaded
       --   it and this art is drawn both in the world and in a panel.
       --   Never used by 'Building.Render'.
@@ -105,8 +135,9 @@ data BuildingDef = BuildingDef
       --   worker base rate. 0 = instant-built (portal-style: the
       --   building flips to Built as soon as the appearing animation
       --   completes, with no acolyte assignment needed). When > 0,
-      --   Appearing→Built and the appearing-anim frame are derived
-      --   from biBuildProgress / bdBuildWork instead of elapsed time.
+      --   Constructing→Built and the construction-anim frame are
+      --   derived from biBuildProgress / bdBuildWork instead of
+      --   elapsed time — at every camera facing alike.
     , bdMaterials   ∷ !(HM.HashMap Text Int)
       -- ^ Materials required to start construction. Item def name →
       --   integer count. Empty (default) = no materials gate: progress
@@ -131,8 +162,16 @@ data BuildingDef = BuildingDef
       --   validates the recipe's rdStation against this list;
       --   building.findStation routes by it.
     , bdAnimations  ∷ !(HM.HashMap Text BuildingAnimation)
-    , bdStateAnims  ∷ !(HM.HashMap Text Text)
-      -- ^ "appearing" / "built" → animation name in bdAnimations.
+    , bdRoleAnims   ∷ !(Map.Map BuildingRole Text)
+      -- ^ Lifecycle role → animation name in bdAnimations (#2080).
+      --   Construction, timed appearance, the built loop and
+      --   destruction are separately addressable; a definition declares
+      --   only the roles it has art for. 'RoleDestruction' is
+      --   declarable and not yet played — BDA-3 owns that.
+    , bdVisualClass ∷ !BuildingVisualClass
+      -- ^ Which art family owns this building's textures (#2080).
+      --   Records ownership for the art slices; it changes no
+      --   placement or gameplay behaviour.
     , bdPowerDrain    ∷ !Float
       -- ^ Watts drawn whenever this building is Built (#361) — flat,
       --   not scaled by whether anything is actively happening at it;
@@ -183,7 +222,11 @@ data BuildingInstance = BuildingInstance
       --   serialized — a save holds one world; loaded buildings are
       --   stamped with the load target page). Scopes placement/render so
       --   a building in one world never blocks or draws in another (#76).
-    , biTexture    ∷ !TextureHandle      -- ^ copied from def
+    , biTexture    ∷ !TextureHandle
+      -- ^ The def's SOUTH view, copied at spawn and re-resolved at load.
+      --   Not what is drawn: rendering and hit-testing select the active
+      --   facing's asset from the def by 'biDefName' (#2088), and read
+      --   this only when that def is missing from the manager.
     , biAnchorX    ∷ !Int                -- ^ tile coords (footprint origin)
     , biAnchorY    ∷ !Int
     , biGridZ      ∷ !Int                -- ^ vertical layer (terrain Z at place time)
@@ -199,7 +242,7 @@ data BuildingInstance = BuildingInstance
       --   separate Lua serializer.
     , biBuildProgress  ∷ !Float
       -- ^ Accumulated worker-seconds toward bdBuildWork. Reaches
-      --   bdBuildWork → Appearing flips to Built. Driven by Lua's
+      --   bdBuildWork → Constructing flips to Built. Driven by Lua's
       --   construction tick via building.addBuildProgress; engine
       --   only reads it via currentActivity / pickBuildingFrame.
     , biMaterialsDelivered ∷ !(HM.HashMap Text [ItemInstance])
@@ -271,15 +314,14 @@ buildingsOnPages ∷ HS.HashSet WorldPageId
                  → HM.HashMap BuildingId BuildingInstance
 buildingsOnPages pages = HM.filter (\bi → HS.member (biPage bi) pages)
 
--- | Pure derivation of activity. Two modes:
---
---   * bdBuildWork > 0 (worker-driven): Appearing while biBuildProgress
---     < bdBuildWork. The portal and other instant-build defs leave
---     bdBuildWork at 0 and use the time-based fallback.
---
---   * bdBuildWork == 0 (time-based, legacy): Appearing while elapsed
---     game-time < appearing-anim duration. If no appearing anim is
---     defined, the building is Built from the moment it spawns.
+-- | The south view: the camera-blind handle a placed instance is
+--   stamped with ('biTexture') and the view the build menu shows. Not
+--   a render lookup — 'Building.Visual' selects the ACTIVE facing's
+--   view (#2088); this stays the one stable view for camera-independent
+--   consumers.
+bdSouthTexture ∷ BuildingDef → TextureHandle
+bdSouthTexture = facingAsset FaceSouth ∘ bdTextures
+
 -- | True iff every entry in bdMaterials has at least the required
 --   count delivered. Empty bdMaterials trivially satisfies (the
 --   portal and other legacy defs).
@@ -334,13 +376,23 @@ footprintDistBetween (ax, ay) (aw, ah) (bx, by) (bw, bh) =
         dy = maximum [ay - byHi, 0, by - ayHi]
     in max dx dy
 
+-- | Pure derivation of activity (#2080). Two modes, and they now
+--   report DIFFERENT activities rather than sharing one:
+--
+--   * bdBuildWork > 0 (worker-driven): 'Constructing' while
+--     biBuildProgress < bdBuildWork.
+--
+--   * bdBuildWork == 0 (time-based): 'Appearing' while elapsed
+--     game-time is inside the 'RoleAppearance' animation's duration. A
+--     definition with no appearance animation is 'Built' from the
+--     moment it spawns.
 currentActivity ∷ Double → BuildingInstance → BuildingDef → BuildingActivity
 currentActivity now inst def
     | bdBuildWork def > 0 =
-        if biBuildProgress inst < bdBuildWork def then Appearing else Built
+        if biBuildProgress inst < bdBuildWork def then Constructing else Built
     | otherwise =
         let elapsed = now - biSpawnedAt inst
-            appearDuration = case HM.lookup "appearing" (bdStateAnims def) of
+            appearDuration = case Map.lookup RoleAppearance (bdRoleAnims def) of
                 Nothing       → 0
                 Just animName → case HM.lookup animName (bdAnimations def) of
                     Nothing  → 0

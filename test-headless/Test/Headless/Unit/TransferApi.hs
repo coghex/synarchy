@@ -39,6 +39,7 @@ import qualified Data.Map.Strict as Map
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
 import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
+import Building.Schema
 import Building.Types
     ( BuildingDef(..), BuildingId(..), BuildingInstance(..)
     , BuildingManager(..), emptyBuildingManager )
@@ -156,13 +157,14 @@ mkUnit defName f (gx, gy) cap inv worn = UnitInstance
 storageDef ∷ Text → Text → (Int, Int) → Float → Float → BuildingDef
 storageDef name display (w, h) work cap = BuildingDef
     { bdName = name, bdDisplayName = display, bdCategory = "Test"
-    , bdDescription = "", bdTexture = TextureHandle 0, bdIconTexture = TextureHandle 0
+    , bdDescription = "", bdTextures = legacyAssets (TextureHandle 0), bdIconTexture = TextureHandle 0
     , bdTileW = w, bdTileH = h, bdPlacement = "flat_ground"
     , bdIsStarting = False, bdRace = "acolyte_cult"
     , bdSpriteAnchor = "diamond_bottom", bdBuildWork = work
     , bdMaterials = HM.empty, bdStorageCapacity = cap
     , bdOperations = [], bdAnimations = HM.empty
-    , bdStateAnims = HM.empty, bdPowerDrain = 0, bdPowerNode = Nothing
+    , bdRoleAnims = Map.empty
+    , bdVisualClass     = FreestandingInstallation, bdPowerDrain = 0, bdPowerNode = Nothing
     }
 
 mkBuilding ∷ Text → (Int, Int) → (Int, Int) → [ItemInstance] → BuildingInstance

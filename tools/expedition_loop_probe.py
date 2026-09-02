@@ -2,11 +2,14 @@
 """The first expedition, end to end — the arc's final integrated gate (#923).
 
 `docs/expedition_gameplay_loop.md` step 9 asks for one scenario proving
-the whole loop holds together. The ruin encounter now ships in #916, but
-this survival-control scenario deliberately selects a zero-occupant ruin;
-#917 still owns a guaranteed progression reward. What this gate proves is
-the **man-versus-nature** loop without hostile combat confounding the food
-control:
+the whole loop holds together. The ruin encounter ships in #916, but this
+survival-control scenario deliberately selects a zero-occupant ruin, so
+the loop is proved without hostile combat confounding the food control.
+Since #917 that choice also makes the ruin's GUARANTEED significant item
+the only outstanding half of its clearance predicate — the sharpest
+available test of the conjunction, because nothing but recovering that
+item can be what clears the place. What this gate proves is the
+**man-versus-nature** loop:
 
     prepare -> travel -> discover -> extract -> return -> invest
 
@@ -199,18 +202,31 @@ WHAT IS DELIBERATELY NOT DONE
   * No lifecycle is manufactured. `world.setLocationLifecycle` is never
     called. The selected ruin's persisted zero-occupant encounter starts
     clear internally but stays `unknown` until sight, then becomes
-    `cleared`; an occupied ruin would first become `discovered`, then
-    `active` on autonomous aggression, and remain so until every assigned
-    nomad is dead.
-  * No item is staged in the ruin. The extraction target is whichever
-    def the ruin's own two `ruin_common` rolls produced (#921 removed the
-    fixed entries; #948 made the draw seed-stable per instance), chosen
-    by a deterministic preference rule and reported in the fingerprint.
-  * No progression project is completed. For this deferred-reward slice
-    "invest" means the recovered loot is banked in colony storage and is
-    afterwards indistinguishable from a locally produced item — a
-    different colonist withdraws that exact instance and holds it with
-    every property intact. #917 is what would make it unlock something.
+    `discovered` — and only reaches `cleared` once its #917 guaranteed
+    significant item has actually been carried out, which this run does
+    through the real pickup boundary. WHO carries it is not asserted:
+    `processing_unit` is a Materials def, so a colonist standing in the
+    ruin may recover it of its own accord before the player's gesture,
+    which clears the location just as legitimately. An occupied ruin
+    would first become `discovered`,
+    then `active` on autonomous aggression, and remain so until every
+    assigned nomad is dead AND that item is taken.
+  * No item is staged in the ruin. The measured extraction target is
+    whichever def the ruin's own two `ruin_common` rolls produced (#921
+    removed the fixed entries; #948 made the draw seed-stable per
+    instance), chosen by a deterministic preference rule and reported in
+    the fingerprint. #917's guaranteed item is recovered too, on the
+    same trip and through the same player gesture, but it is deliberately
+    NOT the measured target: it is a Materials def whose `store_materials`
+    AI would bank it autonomously mid-return, and the journey
+    measurements have to be about a carried item nothing else moves.
+  * No progression project is completed. "Invest" means the recovered
+    loot is banked in colony storage and is afterwards indistinguishable
+    from a locally produced item — a different colonist withdraws that
+    exact instance and holds it with every property intact. #917's
+    reward earns its place by being worth the trip and by gating the
+    ruin's cleared state (D-6, as amended by D-17), not by unlocking a
+    capability; a technology tree remains out of scope.
   * Nothing is teleported, and no state is written to satisfy a loop
     stage. Direct mutation appears only in clearly separated fixture
     setup (finishing the storage building, seeding the shared hunger
@@ -222,6 +238,7 @@ Fixed seed, fixed size, fixed plate count; the ruin and colony site are
 chosen by a total order over the world's own deterministic placement
 list. The run prints a single `FINGERPRINT` line carrying the selected
 ruin instance, its anchor, its rolled loot, the extraction target, the
+guaranteed significant item's def and physical instance id, the
 colony and water tiles, the completed objective set, and the per-stage
 outcomes — so two consecutive invocations can be diffed as one line for
 identity AND result, not merely compared on exit status. Sampled
@@ -984,7 +1001,7 @@ def await_roster(chk: Checks, port: int, bid: int):
 def build_storage(chk: Checks, port: int, hx: int, hy: int) -> int:
     """The colony's storage: a real cargo_hold_S beside the portal.
 
-    Finished immediately on purpose. A cargo_hold_S spawns Appearing
+    Finished immediately on purpose. A cargo_hold_S spawns Constructing
     (build_work 240) and an unfinished building is a CONSTRUCTION SITE:
     build_nearby and deliver_to_build_site (utility 6.0, with a lock-in)
     would pull the whole colony — travellers included — off to finish it.
@@ -1305,14 +1322,36 @@ def seed_departure_deficit(port: int, uids) -> bool:
 # [travel] / [extract]
 # --------------------------------------------------------------------------
 def loot_in(port: int, ruin: dict) -> list:
-    """The ground items lying inside one ruin's own absolute bounds
-    (#777). ruin_small declares min_spacing 5 chunks, so no two ruin
-    footprints can overlap and the attribution is unambiguous."""
+    """The INCIDENTAL ground items lying inside one ruin's own absolute
+    bounds (#777) — its `ruin_common` rolls, and nothing else.
+    ruin_small declares min_spacing 5 chunks, so no two ruin footprints
+    can overlap and the attribution is unambiguous.
+
+    #917's guaranteed significant item is EXCLUDED, by the physical ids
+    the instance's own `significant` rows report rather than by def
+    name, so the exclusion follows provenance rather than a guess about
+    what the reward happens to be. Two things depend on it:
+
+      * the count below is a real check on the loot table. Folding the
+        guaranteed item in would let a missing incidental roll hide
+        behind a constant.
+      * `choose_target` must never pick it. It skips Materials and food
+        so the carrier's own AI cannot move the target mid-return — but
+        it FALLS BACK to the first entry when both rolls are excluded,
+        and `processing_unit` sorts first among this ruin's contents.
+        Extracting it there would latch it and clear the ruin long
+        before the extract stage asserts it is still untaken."""
     b = ruin.get("bounds") or {}
     if not b:
         return []
+    # Read LIVE: `ruin` is the placement-time row from `pick_site`, taken
+    # before any content spawned, so its obligations carry no ids yet.
+    reserved = {r.get("item_instance_id")
+                for r in significant_rows(port, int(ruin["instance_id"]))
+                if r.get("item_instance_id") is not None}
     inside = [g for g in ground_items(port)
-              if b["min_x"] <= g.get("x", 1e9) <= b["max_x"]
+              if g.get("instanceId") not in reserved
+              and b["min_x"] <= g.get("x", 1e9) <= b["max_x"]
               and b["min_y"] <= g.get("y", 1e9) <= b["max_y"]]
     return sorted(inside, key=lambda g: (g.get("defName", ""), g.get("id", 0)))
 
@@ -1354,6 +1393,23 @@ def choose_target(port: int, loot: list):
         if cat != "Materials" and not edible:
             return g
     return loot[0] if loot else None
+
+
+def significant_rows(port: int, instance_id: int) -> list:
+    """#917's guaranteed significant obligations for one placed ruin, in
+    slot order — read straight from the engine's own reported field, not
+    re-derived here."""
+    inst = instance_by_id(port, PAGE, instance_id)
+    rows = (inst or {}).get("significant") or []
+    return sorted(rows, key=lambda r: r.get("slot", 0))
+
+
+def clearance_events(port: int) -> list:
+    """Every player-facing clearance notice on the log so far. #917
+    promises exactly ONE per location, so the interesting assertion is
+    always a count."""
+    return [e for e in event_log(port)
+            if e.get("category") == "location_clearance"]
 
 
 def walk_until_adjacent(port: int, uid: int, foot, seconds: float,
@@ -1474,6 +1530,28 @@ def main() -> int:
             chk.ok(isinstance(inst, dict) and inst.get("lifecycle") == "unknown",
                    f"the ruin starts undiscovered — lifecycle "
                    f"{(inst or {}).get('lifecycle')!r} (nothing has approached it)")
+            # #917's conjunction, proved HERE because this is the only
+            # moment it is guaranteed observable: nothing has been near
+            # the ruin, so nothing can have recovered its guaranteed
+            # item yet. The selected ruin is zero-occupant, so its
+            # ENCOUNTER half has been satisfied since placement — and it
+            # is still not clearance-satisfied, which is exactly what
+            # the guaranteed item is authored to hold back.
+            chk.ok(isinstance(inst, dict)
+                   and inst.get("authors_clearance") is True
+                   and inst.get("clearance_satisfied") is False,
+                   f"…and is NOT clearance-satisfied even though its "
+                   f"zero-nomad encounter half already is — the guaranteed "
+                   f"item is what holds it back "
+                   f"(authors={(inst or {}).get('authors_clearance')!r}, "
+                   f"satisfied={(inst or {}).get('clearance_satisfied')!r})")
+            enc0 = (inst or {}).get("encounter") or {}
+            chk.ok(int(enc0.get("rolled_count", -1)) == 0
+                   and enc0.get("cleared") is True,
+                   f"the encounter half really is complete already (rolled "
+                   f"{enc0.get('rolled_count')!r}, cleared "
+                   f"{enc0.get('cleared')!r}), so the item is the ONLY "
+                   f"outstanding condition")
 
             portal_bid = place_portal(chk, port, home[0], home[1])
             if portal_bid < 0:
@@ -1509,11 +1587,18 @@ def main() -> int:
             deposit_spot, foot = adjacent_tile(port, storage_bid)
 
             loot = loot_in(port, ruin)
-            chk.ok(len(loot) >= 2,
-                   f"the ruin spawned its own loot-table contents: "
+            # EXACTLY the two `ruin_common` rolls
+            # (data/locations/ruin_small.yaml). Exact, not a floor:
+            # `loot_in` now excludes #917's guaranteed item by its own
+            # physical id, so a third entry here would mean an
+            # unaccounted-for ground item and a missing one would mean a
+            # lost roll — neither of which a `>=` could see.
+            chk.ok(len(loot) == 2,
+                   f"the ruin spawned its own two loot-table rolls: "
                    f"{[g['defName'] for g in loot]} "
-                   f"({len(loot)} ground items inside its bounds)")
-            if len(loot) < 2:
+                   f"({len(loot)} incidental ground items inside its bounds, "
+                   f"the guaranteed item excluded)")
+            if len(loot) != 2:
                 return 2
             target = choose_target(port, loot)
             fingerprint.update(loot=sorted(g["defName"] for g in loot),
@@ -1792,13 +1877,27 @@ def main() -> int:
                    f"{arrive[control]['pose']!r})")
 
             # -- discovery: lifecycle, player event, per-unit knowledge
+            #
+            # Since #917 the expected state here is `discovered`, NOT
+            # `cleared`. This ruin's zero-nomad encounter half has been
+            # satisfied since placement, so before #917 first sight took
+            # it straight to `cleared`; now its guaranteed significant
+            # item is still outstanding, so the compound predicate is
+            # unsatisfied and sight can only reveal it. `cleared` is
+            # still accepted, because a colonist's own `store_materials`
+            # AI may already have recovered the item on the way in —
+            # which clears it legitimately, just not by the player's
+            # gesture. `active` remains accepted for the occupied ruins
+            # this scenario does not select.
             inst = poll_until(60.0, lambda: (
                 lambda i: i if isinstance(i, dict)
-                and i.get("lifecycle") in ("active", "cleared") else None)(
+                and i.get("lifecycle") in ("discovered", "active", "cleared")
+                else None)(
                     instance_by_id(port, PAGE, ruin_id)), interval=1.0)
             chk.ok(inst is not None,
-                   f"approaching the ruin promotes its encounter lifecycle to "
-                   f"'active' or 'cleared' "
+                   f"approaching the ruin reveals it — lifecycle "
+                   f"'discovered' (its guaranteed item is still outstanding), "
+                   f"or 'active'/'cleared' "
                    f"({(instance_by_id(port, PAGE, ruin_id) or {}).get('lifecycle')!r})")
             # The WHOLE log, deliberately not a slice from a mark taken
             # before departure. `Engine.PlayerEvent.Emit.pushBounded`
@@ -1904,6 +2003,82 @@ def main() -> int:
                   flush=True)
             fingerprint["recovered_def"] = recovered.get("defName")
 
+            # --- #917: the ruin's GUARANTEED significant item, which is
+            # what its cleared state actually waits on.
+            #
+            # WHO carries it out is deliberately not asserted. It is a
+            # Materials def, so `store_materials` fires on any colonist
+            # holding one with the colony cargo in reach — and a
+            # colonist standing in the ruin will pick a loose Materials
+            # item up of its own accord. That is ordinary shipped
+            # behaviour, not a defect, and an observed run had the
+            # travelling acolyte recover it during the leg. What #917
+            # promises is that the location does not clear until the
+            # item is RECOVERED, not that a particular gesture recovers
+            # it, so the assertions below are about the outcome. The
+            # "still outstanding" half is proved at `setup`, at the only
+            # moment it is guaranteed observable: before anyone has been
+            # near the ruin.
+            sig_now = significant_rows(port, ruin_id)
+            sig_phys = (sig_now[0].get("item_instance_id") if sig_now else None)
+            if not chk.ok(len(sig_now) == 1 and sig_phys is not None,
+                          f"the ruin still owes exactly one guaranteed "
+                          f"significant item, bound to its spawned instance "
+                          f"({sig_now})"):
+                return 2
+
+            # Issue the player gesture only if it is still there to take;
+            # otherwise a colonist has already recovered it, which
+            # satisfies the loop just as well.
+            sig_gid = next((int(g["id"]) for g in ground_items(port)
+                            if int(g.get("instanceId", -1)) == sig_phys), None)
+            if sig_gid is not None:
+                acc_s = send(port,
+                             f"return require('scripts.unit_ai').commandPickup("
+                             f"{prepared},{sig_gid})")
+                chk.ok(acc_s.strip() == "true",
+                       f"the retrieval order for it is accepted (commandPickup "
+                       f"-> {acc_s!r})")
+            else:
+                print("  the guaranteed item was already recovered by the "
+                      "colony's own AI before the player gesture — the loop "
+                      "is unaffected, only who carried it", flush=True)
+
+            sig_after = poll_until(
+                180.0,
+                lambda: (significant_rows(port, ruin_id)
+                         if all(r.get("taken")
+                                for r in significant_rows(port, ruin_id))
+                         else None),
+                interval=1.0)
+            chk.ok(sig_after is not None
+                   and sig_after[0].get("item_instance_id") == sig_phys,
+                   f"recovering it latches THAT physical item as taken, keeping "
+                   f"its provenance ({sig_after})")
+            cleared_inst = poll_until(
+                60.0,
+                lambda: (lambda i: i if isinstance(i, dict)
+                         and i.get("lifecycle") == "cleared" else None)(
+                             instance_by_id(port, PAGE, ruin_id)),
+                interval=1.0)
+            chk.ok(cleared_inst is not None
+                   and cleared_inst.get("clearance_satisfied") is True,
+                   f"and THAT is what clears the ruin — the last outstanding "
+                   f"condition ({(cleared_inst or {}).get('lifecycle')!r})")
+            # Exactly one notice for THIS ruin across the whole run,
+            # counted by its own name rather than by a delta, since the
+            # recovery may have happened before this stage.
+            ruin_name = (cleared_inst or {}).get("name") or ""
+            clear_evs = [e for e in clearance_events(port)
+                         if ruin_name and ruin_name in (e.get("text") or "")]
+            chk.ok(len(clear_evs) == 1,
+                   f"exactly one clearance notice is emitted for it across the "
+                   f"whole run, not zero and not two "
+                   f"({[e.get('text') for e in clear_evs]})")
+            fingerprint.update(significant_def=sig_after[0].get("item")
+                               if sig_after else None,
+                               significant_instance=sig_phys)
+
             # --------------------------------------------------- return
             chk.enter("return", "walk home and bank it in colony storage")
             send(port, f"require('scripts.unit_ai').commandMove({prepared},"
@@ -1938,6 +2113,37 @@ def main() -> int:
                                  instance_id) is not None,
                    f"the exact recovered instance is in colony storage "
                    f"(bid {storage_bid})")
+
+            # #917: the guaranteed item makes the same trip, whoever
+            # ended up carrying it. It may already have been banked
+            # autonomously — `processing_unit` is a Materials def, and
+            # `store_materials` fires on any Materials in inventory with
+            # the colony's cargo in reach — so the deposit is issued
+            # only if this carrier still holds it, and the assertion is
+            # on the OUTCOME either way: that exact physical instance
+            # ends up in colony storage.
+            held_sig = find_instance(inventory(port, prepared), sig_phys)
+            if held_sig is not None:
+                send(port, f"return unit.depositToCargo({prepared},"
+                           f"{storage_bid},'{held_sig['defName']}',{sig_phys})")
+            banked = poll_until(
+                60.0,
+                lambda: find_instance(
+                    (lambda v: v if isinstance(v, list) else [])(
+                        send_json(port,
+                                  f"return building.getStorage({storage_bid})")),
+                    sig_phys),
+                interval=1.0)
+            chk.ok(banked is not None,
+                   f"the guaranteed item is banked in colony storage as that "
+                   f"exact physical instance ({sig_phys})")
+            # Taking it out of the ruin and moving it around cannot undo
+            # the latch: the ruin was looted, and that does not become
+            # untrue.
+            chk.ok(all(r.get("taken") for r in significant_rows(port, ruin_id)),
+                   f"and the taken latch is unmoved by the return, the deposit "
+                   f"and every transfer in between "
+                   f"({significant_rows(port, ruin_id)})")
 
             # ----------------------------------------------------- save
             chk.enter("save", "capture the finished expedition")
@@ -2035,6 +2241,47 @@ def main() -> int:
             chk.ok(isinstance(inst, dict) and inst.get("contents_spawned") is True,
                    f"and its contents are still recorded as spawned exactly once "
                    f"(contents_spawned={(inst or {}).get('contents_spawned')!r})")
+
+            # #917: the whole durable half of the significant-contents
+            # contract, re-checked in a FRESH PROCESS — identity,
+            # provenance, the taken latch, the compound predicate, and
+            # the one-shot notice. Nothing here was written by this
+            # engine: it all came off the disk.
+            rows_after = significant_rows(port, ruin_id)
+            chk.ok(len(rows_after) == 1
+                   and rows_after[0].get("item_instance_id") == sig_phys
+                   and rows_after[0].get("taken") is True,
+                   f"the guaranteed item's identity, provenance and taken latch "
+                   f"survive the restart ({rows_after})")
+            chk.ok(isinstance(inst, dict)
+                   and inst.get("lifecycle") == "cleared"
+                   and inst.get("clearance_satisfied") is True,
+                   f"the ruin is still CLEARED, with its compound predicate still "
+                   f"satisfied ({(inst or {}).get('lifecycle')!r})")
+            # The notice is a spent one-shot, and player events are
+            # per-session and never saved — so a reloaded, already-cleared
+            # ruin must announce nothing at all, however long the
+            # discovery tick polls it.
+            chk.ok(isinstance(inst, dict)
+                   and inst.get("clear_event_emitted") is True,
+                   f"its one clearance notice is recorded as already spent "
+                   f"(clear_event_emitted="
+                   f"{(inst or {}).get('clear_event_emitted')!r})")
+            time.sleep(5.0)
+            repeat = clearance_events(port)
+            chk.ok(not repeat,
+                   f"and the reload re-announces nothing "
+                   f"({[e.get('text') for e in repeat]})")
+            # The item itself is somewhere else entirely now, which is
+            # explicitly allowed: the latch records that the ruin was
+            # looted, not where the loot went.
+            stored_now = send_json(port,
+                                   f"return building.getStorage({storage_bid})")
+            chk.ok(find_instance(
+                       stored_now if isinstance(stored_now, list) else [],
+                       sig_phys) is not None,
+                   f"the guaranteed item is still in colony storage as that same "
+                   f"physical instance ({sig_phys})")
             chk.ok(isinstance(inst, dict)
                    and int(inst.get("gx", 0)) == int(ruin["gx"])
                    and int(inst.get("gy", 0)) == int(ruin["gy"])

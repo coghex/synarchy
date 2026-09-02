@@ -36,7 +36,7 @@ be invisible to this probe and "rows and counts" unverifiable there.
 Registers a throwaway 1x1 storage fixture (`build_work: 0.0`, positive
 `storage_capacity`) rather than spawning the shipped `cargo_hold_S`:
 that def's real `build_work` (240s, worker-driven) would leave a
-`building.spawn`ed instance stuck "appearing" forever with no
+`building.spawn`ed instance stuck "constructing" forever with no
 construct_job AI running. Mirrors tools/transfer_context_menu_probe.py's
 own throwaway-def technique.
 
@@ -195,6 +195,7 @@ buildings:
     category: "Test"
     description: "Throwaway #1088 test fixture — not shipped content."
     sprite: "assets/textures/buildings/cargo_hold_S/default.png"
+    visual_class: "freestanding_installation"
     tile_size: {{ x: 1, y: 1 }}
     placement: "flat_ground"
     race: "acolyte_cult"
@@ -205,6 +206,7 @@ buildings:
     category: "Test"
     description: "Throwaway #1237 known-empty fixture — not shipped content."
     sprite: "assets/textures/buildings/cargo_hold_S/default.png"
+    visual_class: "freestanding_installation"
     tile_size: {{ x: 1, y: 1 }}
     placement: "flat_ground"
     race: "acolyte_cult"
@@ -215,6 +217,7 @@ buildings:
     category: "Test"
     description: "Throwaway #1237 never-inspected fixture — not shipped content."
     sprite: "assets/textures/buildings/cargo_hold_S/default.png"
+    visual_class: "freestanding_installation"
     tile_size: {{ x: 1, y: 1 }}
     placement: "flat_ground"
     race: "acolyte_cult"
@@ -318,6 +321,19 @@ ITEM_CONTENTS_LIST_ID = f"{DEEP_LEVEL}.listId"
 UNIT_INV_LIST_ID = "require('scripts.unit_info_v2').invListId"
 
 failures = 0
+
+
+def probe_result() -> int:
+    """The run's exit status: non-zero whenever ANY check failed.
+
+    A SETUP failure is one of those (#1911): a scenario that cannot
+    establish its fixture reports it and the run is red, rather than the
+    probe grading the fixture anyway and exiting green."""
+    if failures:
+        print(f"\nitem_list_widget_probe: {failures} check(s) FAILED")
+        return 1
+    print("\nitem_list_widget_probe: all checks passed")
+    return 0
 
 
 def check(name: str, ok: bool, detail: str = "") -> bool:
@@ -2181,6 +2197,125 @@ def chebyshev(a, b) -> float:
     return max(abs(b[0] - a[0]), abs(b[1] - a[1]))
 
 
+class EscortSeparation:
+    """Everything the escort staging loop below observed, retained per
+    ATTEMPT rather than only for the last one (#1911).
+
+    A single pair of variables used to hold the destination and the
+    paused snapshot, overwritten on every retry — so a run that
+    exhausted all four attempts reported one bearing and one gap and
+    lost the three tries before it. That is exactly the evidence needed
+    to tell "this world never had room" from "one bearing kept pointing
+    back at the escort", and it was unavailable without rerunning a
+    fifteen-minute GPU probe. The retained coordinated run of
+    2026-08-26 is the case in point: it recorded a maximum-axis gap of
+    exactly `1.0` and nothing about the three attempts that preceded it.
+
+    Recorded per attempt: where the target was actually sent, both
+    units' positions at the paused instant whenever a snapshot was taken
+    at all, and the Chebyshev gap those imply — the contract's OWN
+    measure, so `separated` answers the same question `withinReach`
+    does."""
+
+    def __init__(self) -> None:
+        self.attempts: list[dict] = []
+
+    def record(self, sent_to, src, dst) -> None:
+        """One attempt. `sent_to` is None when the target's AI never took
+        a move order up, in which case no snapshot was taken either."""
+        self.attempts.append({"sent_to": sent_to, "src": src, "dst": dst,
+                              "gap": chebyshev(src, dst)})
+
+    @property
+    def last(self) -> dict:
+        return self.attempts[-1] if self.attempts else {}
+
+    @property
+    def ordered(self) -> bool:
+        """Did the target end up under a real player move order?"""
+        return self.last.get("sent_to") is not None
+
+    @property
+    def separated(self) -> bool:
+        """Is the pair OUTSIDE the transfer contract's own reach rule —
+        Chebyshev > 1 — at the paused instant a session would be created?"""
+        return self.ordered and self.last.get("gap", -1.0) > 1.0
+
+    @property
+    def sent_to(self):
+        return self.last.get("sent_to")
+
+    @property
+    def at_create(self):
+        return self.last.get("dst")
+
+    def detail(self) -> str:
+        """Every attempt, in order, so a setup failure is attributable
+        from the run's own output instead of from a rerun."""
+        if not self.attempts:
+            return "no attempt was made"
+        return "; ".join(
+            f"#{n} sent to {a['sent_to']!r}, escort at {a['src']!r}, "
+            f"target at {a['dst']!r}, Chebyshev {a['gap']:.3f}"
+            for n, a in enumerate(self.attempts, 1))
+
+
+def stage_escort_separation(port: int, src_uid: int, dst_uid: int,
+                            attempts: int = 4,
+                            settle: float = 1.5) -> EscortSeparation:
+    """Order the target away until the pair is outside the transfer
+    contract's reach with the simulation stopped, and answer everything
+    observed on the way.
+
+    Both acolytes keep ticking, so a separation observed a moment ago
+    can be gone a couple of console round trips later — which is how two
+    earlier versions of this check failed (once at 0.84 tiles apart,
+    once at 0.58, each having been clear moments before).
+    `engine.setPaused` is the only thing that really holds a unit still
+    (`unit.setFrozen` is a render pin, CLAUDE.md) and positions must be
+    re-read AFTER pausing; the order points away, so a gap that has not
+    opened yet opens by waiting rather than by trying something else.
+    Nothing new is tried when it does not open: a third staging
+    heuristic is exactly what the two documented failures above warn
+    against, so an exhausted loop is reported rather than worked around.
+
+    Hands back with the simulation stopped at the instant of its last
+    snapshot, whether or not that snapshot separated: the caller either
+    creates the session right there, or gives the pause to
+    `end_escort_setup` along with everything else it restores. Only the
+    world BETWEEN attempts is resumed, and only because the next attempt
+    needs somewhere to walk."""
+    staging = EscortSeparation()
+    for _ in range(attempts):
+        if staging.attempts:
+            set_paused(port, False)
+        sent_to = order_target_away(port, dst_uid, src_uid)
+        if sent_to is None:
+            staging.record(None, None, None)
+            break
+        time.sleep(settle)
+        set_paused(port, True)
+        at_create = unit_pos(port, dst_uid)
+        src_at_create = unit_pos(port, src_uid)
+        staging.record(sent_to, src_at_create, at_create)
+        if staging.separated:
+            break
+    return staging
+
+
+def end_escort_setup(port: int) -> None:
+    """Leave the engine as a completed run leaves it: running, with no
+    session behind it.
+
+    Every early return from the escort scenario goes through this one
+    helper. The setup-failure path needs it as much as the later ones
+    do — the staging loop pauses in order to measure, so a scenario
+    returning from there without it would hand whatever runs next a
+    stopped simulation."""
+    set_paused(port, False)
+    send(port, "require('scripts.transfer_session').clear(); return 'ok'")
+
+
 def spawn_pair_apart(port: int, ax: int, ay: int):
     """Put the escort a few tiles from its target, and answer
     `(src_uid, dst_uid)`.
@@ -2359,17 +2494,25 @@ def unit_escort_session_scenario(port: int, aax: int, aay: int) -> None:
     dismissal closing both.
 
     Deliberately after the building escort, whose stack this takes over
-    and leaves empty again."""
+    and leaves empty again.
+
+    This function is the SETUP half only, and each of its three `setup:`
+    preconditions is terminal: a fixture it cannot establish ends the
+    scenario here (#1911). `escort_hold_measurement` — everything that
+    grades the hold, the approach and the rendered pair — is reached
+    only once all three hold, so no check downstream of them can be
+    graded against a pair the probe has already reported invalid."""
     print("== #1251 unit-to-unit escort (the two-sided hold) ==")
     send(port, "require('scripts.cargo_inventory_panel').closeIfOpen();"
                " return 'ok'")
 
     src_uid, dst_uid = spawn_pair_apart(port, aax, aay)
-    if not check("the escort stands a few tiles from its target, over ground "
-                 "it has WALKED — so its approach below is a leg this world "
-                 "is known to admit",
+    if not check("setup: the escort stands a few tiles from its target, over "
+                 "ground it has WALKED — so its approach below is a leg this "
+                 "world is known to admit",
                  src_uid is not None and dst_uid is not None,
                  f"escort={src_uid!r} target={dst_uid!r}"):
+        end_escort_setup(port)
         return
     for uid in (src_uid, dst_uid):
         check(f"unit {uid}'s standing find_water goal is retired",
@@ -2388,35 +2531,16 @@ def unit_escort_session_scenario(port: int, aax: int, aay: int) -> None:
 
     # Order the target away, let it open the gap, and COMMIT to the
     # measurement with the simulation stopped.
-    #
-    # Both acolytes keep ticking, so a separation observed a moment ago
-    # can be gone a couple of console round trips later — which is how
-    # two earlier versions of this check failed (once at 0.84 tiles
-    # apart, once at 0.58, each having been clear moments before).
-    # `engine.setPaused` is the only thing that really holds a unit still
-    # (`unit.setFrozen` is a render pin, CLAUDE.md) and positions must be
-    # re-read AFTER pausing; the order points away, so a gap that has not
-    # opened yet opens by waiting rather than by trying something else.
-    sent_to, at_create, src_at_create = None, None, None
-    for _ in range(4):
-        sent_to = order_target_away(port, dst_uid, src_uid)
-        if sent_to is None:
-            break
-        time.sleep(1.5)
-        set_paused(port, True)
-        at_create = unit_pos(port, dst_uid)
-        src_at_create = unit_pos(port, src_uid)
-        if chebyshev(src_at_create, at_create) > 1.0:
-            break
-        set_paused(port, False)
-    if not check("the target is under a real player move order before the "
-                 "session exists — its own AI has SELECTED follow_command "
-                 "(7.0, above every routine-work lock), so an idle unit "
-                 "standing still afterwards is not what gets measured",
-                 sent_to is not None,
+    staging = stage_escort_separation(port, src_uid, dst_uid)
+    if not check("setup: the target is under a real player move order "
+                 "before the session exists — its own AI has SELECTED "
+                 "follow_command (7.0, above every routine-work lock), so "
+                 "an idle unit standing still afterwards is not what gets "
+                 "measured",
+                 staging.ordered,
                  f"running {ai_action(port, dst_uid)!r} at "
-                 f"{unit_pos(port, dst_uid)!r}"):
-        set_paused(port, False)
+                 f"{unit_pos(port, dst_uid)!r}; {staging.detail()}"):
+        end_escort_setup(port)
         return
 
     # WHICH action is pending matters as much as that one is: the claim
@@ -2430,13 +2554,34 @@ def unit_escort_session_scenario(port: int, aax: int, aay: int) -> None:
           "action that happens to walk",
           walking_under == "follow_command", f"got {walking_under!r}")
 
-    check("the escort has a real approach to make — the pair is outside "
-          "the contract's own reach rule at the moment the session is "
-          "created, so 'held still through the approach' is a claim about "
-          "an approach that happened",
-          chebyshev(src_at_create, at_create) > 1.0,
-          f"escort at {src_at_create!r}, target at {at_create!r}")
-    # Created while STOPPED, so nothing can drift between the check above
+    # TERMINAL, because every check past it is a claim about an approach
+    # (#1911). A pair already within Chebyshev 1 makes "the pair opens"
+    # pass with no approach at all and "the target did not move for the
+    # whole of the approach" measure a walk that never happened — so a
+    # staging loop that ran out of attempts fails the scenario at SETUP
+    # rather than grading five checks against a fixture the probe itself
+    # has just reported invalid.
+    if not check("setup: the escort has a real approach to make — the pair "
+                 "is outside the contract's own reach rule at the moment "
+                 "the session is created, so 'held still through the "
+                 "approach' is a claim about an approach that happened",
+                 staging.separated, staging.detail()):
+        end_escort_setup(port)
+        return
+    escort_hold_measurement(port, src_uid, dst_uid, staging, aax, aay)
+
+
+def escort_hold_measurement(port: int, src_uid: int, dst_uid: int,
+                            staging: EscortSeparation,
+                            aax: int, aay: int) -> None:
+    """The half that only means anything once the pair really is staged
+    apart, in its own function so that it CANNOT run against a fixture
+    the gate above rejected (#1911 requirement 4).
+
+    Enters with the simulation stopped at the instant `staging`
+    measured, and hands back with it running."""
+    sent_to, at_create = staging.sent_to, staging.at_create
+    # Created while STOPPED, so nothing can drift between the gate above
     # and the session it is a precondition for. The target's move order
     # is still pending and un-preempted at this instant; the very next
     # tick after the sim resumes is what has to take it over.
@@ -2445,6 +2590,7 @@ def unit_escort_session_scenario(port: int, aax: int, aay: int) -> None:
     set_paused(port, False)
     if not check("a unit-to-unit Mode A session is created",
                  made.strip().strip('"') == "true", f"got {made!r}"):
+        end_escort_setup(port)
         return
     # `escort_hold`, not `escort_transfer`: the TARGET side is its own
     # registered action so that every commandable species has it, while
@@ -2469,7 +2615,7 @@ def unit_escort_session_scenario(port: int, aax: int, aay: int) -> None:
                         " return (a and a.phase or 'gone') .. ' src='"
                         f" .. tostring(s.roleOf({src_uid})) .. ' dst='"
                         f" .. tostring(s.roleOf({dst_uid}))")):
-        send(port, "require('scripts.transfer_session').clear(); return 'ok'")
+        end_escort_setup(port)
         return
     held = unit_pos(port, dst_uid)
     # Between the create call and the tick that acts on it the target is
@@ -2486,7 +2632,7 @@ def unit_escort_session_scenario(port: int, aax: int, aay: int) -> None:
         interval=0.5)
     if not check("the source walks over to the held target and the pair "
                  "opens", bool(opened)):
-        send(port, "require('scripts.transfer_session').clear(); return 'ok'")
+        end_escort_setup(port)
         return
     settled = unit_pos(port, dst_uid)
     check("the target's position did not move for the WHOLE of the "
@@ -3139,11 +3285,7 @@ def _run(port: int, args) -> int:
     #    scenario just emptied.
     unit_escort_session_scenario(port, aax, aay)
 
-    if failures:
-        print(f"\nitem_list_widget_probe: {failures} check(s) FAILED")
-        return 1
-    print("\nitem_list_widget_probe: all checks passed")
-    return 0
+    return probe_result()
 
 
 if __name__ == "__main__":

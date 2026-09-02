@@ -25,7 +25,7 @@ ASCII by construction, so `≠` is never lexed as a candidate token and a
 tree spelled entirely `≠` would audit clean.
 
 Mirrors tools/haskell_module_budget.py's label+check()+main() shape and
-tools/engine_env_capability_audit.py's comment/string-aware line scan
+tools/engine_env_capability_common.py's comment/string-aware line scan
 (`_strip_haskell_comments` there; `_code_runs`/`_code_only` here),
 extended with string-literal and GLSL quasiquote awareness since a
 false hit here would rewrite content this guard must never touch.

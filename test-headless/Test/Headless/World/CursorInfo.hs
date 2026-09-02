@@ -33,7 +33,8 @@ import Test.Hspec
 import qualified Data.Text as T
 import Data.IORef (writeIORef, modifyIORef')
 import qualified Engine.Core.Queue as Q
-import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
+import Engine.Core.Init (EngineInitResult(..))
+import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Scripting.Lua.Types (LuaMsg(..))
 import World.Thread.Cursor (pollCursorInfo)
@@ -217,5 +218,5 @@ spec = beforeAll initEnv $ do
   where
     initEnv ∷ IO EngineEnv
     initEnv = do
-        EngineInitResult env ← initializeEngineHeadless
+        EngineInitResult env ← initializeEngineHeadlessQuiet
         pure env

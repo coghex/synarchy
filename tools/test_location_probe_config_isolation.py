@@ -67,15 +67,25 @@ import location_content_probe as content  # type: ignore  # noqa: E402
 import location_overlay_probe as overlay  # type: ignore  # noqa: E402
 import location_stamp_idempotent_probe as stamp  # type: ignore  # noqa: E402
 import portal_ghost_probe as portal  # type: ignore  # noqa: E402
+# Since #2095 `location_content_probe` RE-EXPORTS its root builder from
+# the invocation module the scenario split put it in. The re-export is
+# the same function object — which is what
+# `test_portal_ghost_shares_the_corrected_builder` below asserts against
+# `content` — but the builder reads `REPO` from the module that DEFINES
+# it, so the synthetic-checkout fixture must patch that module's global.
+from location_content import invocation as content_builder  # type: ignore  # noqa: E402
 
 import selftestlib  # noqa: E402
 from selftestlib import FAILURES, expect  # noqa: E402
 
-#: Every DISTINCT root builder in scope. `portal_ghost_probe` is
-#: deliberately absent: it does not define one, and the test below pins
-#: that it still shares this list's first entry.
+#: Every DISTINCT root builder in scope, registered against the module
+#: that DEFINES it rather than one that re-exports it — the fixture
+#: below swaps `REPO` on the registered module, and a builder resolves
+#: that name in its own globals. `portal_ghost_probe` is deliberately
+#: absent: it does not define one, and the test below pins that it still
+#: shares this list's first entry.
 BUILDERS = (
-    ("location_content_probe", content),
+    ("location_content_probe", content_builder),
     ("location_overlay_probe", overlay),
     ("location_stamp_idempotent_probe", stamp),
 )

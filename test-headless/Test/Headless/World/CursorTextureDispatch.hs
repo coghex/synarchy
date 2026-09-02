@@ -38,7 +38,8 @@ import Data.IORef (IORef, newIORef, readIORef, writeIORef, modifyIORef')
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability, toWorldSimCapability)
-import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
+import Engine.Core.Init (EngineInitResult(..))
+import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 import Engine.Core.Log
     ( initLogger, defaultLogConfig, LogConfig(..), LogBackend(..)
     , LogCategory(..), LogLevel(..), LogEntry(..), LoggerState
@@ -124,7 +125,7 @@ spec = beforeAll scene $ describe "cursor texture dispatch (#1366)" $ do
 -- | A capability whose manager holds 'presentPage' and nothing else.
 scene ∷ IO (WorldSimCapability, WorldState)
 scene = do
-    EngineInitResult env ← initializeEngineHeadless
+    EngineInitResult env ← initializeEngineHeadlessQuiet
     ws ← emptyWorldState
     writeIORef (worldManagerRef env) emptyWorldManager
         { wmWorlds = [(presentPage, ws)], wmVisible = [] }

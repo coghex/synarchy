@@ -13,6 +13,8 @@ module World.Save.Types
     , BuildingInstanceSnapshot(..)
     , toBuildingSnapshot
     , fromBuildingSnapshot
+    , toBuildingInstanceSnapshot
+    , fromBuildingInstanceSnapshot
     , UnitSnapshot(..)
     , UnitInstanceSnapshot(..)
     , toUnitSnapshot
@@ -26,6 +28,9 @@ module World.Save.Types
     , MissingItemDefRef(..)
     , renderMissingItemDefRef
     , missingItemDefReferences
+    , MissingSignificantItemRef(..)
+    , renderMissingSignificantItemRef
+    , missingSignificantItemReferences
     , MissingRecipeRef(..)
     , renderMissingRecipeRef
     , missingRecipeReferences
@@ -60,7 +65,8 @@ import qualified Data.List as L
 import qualified Data.Text as T
 import Structure.Palette (TexPalette)
 import Location.Instance
-    ( LocationGeometryError, LocationInstance(..), instancesToList
+    ( LocationGeometryError, LocationInstance(..), LocationInstanceId(..)
+    , LocationSignificantItem(..), instancesToList
     , resolveLegacyLocationInstances )
 import Location.Types (LocationRegistry)
 import World.Generate.Types (WorldGenParams(..))
@@ -91,7 +97,7 @@ import Infection.Types (InfectionManager, lookupInfection)
 import Item.Ground (GroundItems(..), GroundItem(..))
 import Engine.Graphics.Camera (CameraFacing(..))
 import Building.Types (BuildingId(..), BuildingInstance(..), BuildingDef(..)
-                      , BuildingManager(..), buildingsOnPage)
+                      , BuildingManager(..), buildingsOnPage, bdSouthTexture)
 import Unit.Types (UnitId(..), UnitInstance(..), UnitDef(..), UnitManager(..)
                   , StatModifier(..), Wound(..), Scar(..), unitsOnPage)
 import Unit.Direction (Direction(..))
@@ -338,7 +344,12 @@ data WorldPageSave = WorldPageSave
         -- ^ Chop designations (#97): flora INSTANCE id → surface z plus
         --   the plant's canonical tile (#1854). Like the other
         --   designation layers, restored straight into
-        --   wsChopDesignationsRef; markers re-render from the stored z.
+        --   wsChopDesignationsRef. #1856: the MARKER no longer reads
+        --   that z — it anchors to the live flora instance's own
+        --   projected ground contact, because a stored z drifts the
+        --   annotation off the sprite as soon as the column changes.
+        --   The z survives as the value the @chop.*@ query verbs report
+        --   to the AI.
     , wpsPendingChopMigration ∷ !PendingChopDesignations
         -- ^ #1854: pre-identity tile-keyed chop designations that could
         --   not be resolved to an instance at load time because their
@@ -622,7 +633,7 @@ fromBuildingInstanceSnapshot ∷ WorldPageId → BuildingDef
 fromBuildingInstanceSnapshot page def s = BuildingInstance
     { biDefName        = bisDefName s
     , biPage           = page             -- runtime world scoping (#76)
-    , biTexture        = bdTexture def    -- re-resolved
+    , biTexture        = bdSouthTexture def  -- re-resolved
     , biAnchorX        = bisAnchorX s
     , biAnchorY        = bisAnchorY s
     , biGridZ          = bisGridZ s
@@ -1039,6 +1050,58 @@ missingItemDefReferences itemDefs pages = concatMap pageRefs pages
         [ MissingItemDefRef src pid (iiInstanceId i) (iiDefName i)
         | i ← flattenItemInstances inst
         , not (HS.member (iiDefName i) itemDefs) ]
+
+-- | A saved GUARANTEED SIGNIFICANT obligation (#917) that has not been
+--   spawned yet and whose stored item def name no longer resolves.
+--
+--   Same load-validation contract as 'MissingItemDefRef', and for a
+--   sharper reason than most: the obligation is what
+--   @scripts\/locations.lua@ will try to spawn the next time the
+--   location's chunk loads. If its def is gone, that spawn fails on
+--   every attempt, @contents_spawned@ is never marked, and the location
+--   can never satisfy its clearance predicate — the same unrecoverable
+--   outcome 'Engine.Asset.YamlLocations.significantItemErrors' refuses
+--   at the AUTHORING boundary, arriving here by the other route: a save
+--   written before the item spawned, loaded against a build whose
+--   definition set has moved on.
+--
+--   Deliberately restricted to UNSPAWNED obligations. Once one names a
+--   physical item, nothing re-spawns it — the def name is then a
+--   historical record of what was made, and the item may legitimately
+--   have been consumed or destroyed — so a deregistered def there is
+--   inert rather than fatal, and rejecting the load over it would
+--   refuse a save nothing is actually wrong with.
+data MissingSignificantItemRef = MissingSignificantItemRef
+    { msirPage     ∷ !WorldPageId
+    , msirInstance ∷ !Int          -- ^ the owning 'LocationInstanceId'
+    , msirSlot     ∷ !Int          -- ^ the obligation's own slot
+    , msirDefName  ∷ !Text         -- ^ the unresolved item definition name
+    } deriving (Show, Eq)
+
+renderMissingSignificantItemRef ∷ MissingSignificantItemRef → Text
+renderMissingSignificantItemRef r =
+    "location #" <> tshow (msirInstance r) <> " on page '"
+        <> unWorldPageId (msirPage r) <> "' owes an unspawned significant \
+           \item at slot " <> tshow (msirSlot r)
+        <> " referencing unknown item definition '" <> msirDefName r <> "'"
+
+-- | Every unspawned significant obligation across every page whose
+--   stored def name is absent from the registered item-definition key
+--   set. Empty ⇒ every obligation the load would still have to spawn
+--   can actually be spawned.
+missingSignificantItemReferences
+    ∷ HS.HashSet Text                     -- ^ registered item def names
+    → [(WorldPageId, WorldPageSave)]
+    → [MissingSignificantItemRef]
+missingSignificantItemReferences itemDefs pages =
+    [ MissingSignificantItemRef pid (unLocationInstanceId (liId inst))
+                                (lsiSlot e) (lsiItemDefName e)
+    | (pid, w) ← pages
+    , inst ← instancesToList (wgpLocationInstances (wpsGenParams w))
+    , e ← liSignificant inst
+    , isNothing (lsiInstanceId e)
+    , not (HS.member (lsiItemDefName e) itemDefs)
+    ]
 
 -- | A saved craft bill whose 'cbRecipe' does not resolve against the
 --   currently-registered recipe catalogue. Same load-validation

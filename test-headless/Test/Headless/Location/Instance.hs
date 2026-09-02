@@ -57,7 +57,7 @@ encounterDef = (mkDef "ruin_small" "Small Ruin"
                     (RelBounds (-2) (-2) 2 2))
     { ldContents =
         [ LocationContent "unit" "nomad_primitive" 1 Nothing
-            (Just "hostile") 1 (Just (0, 3)) (Just "death_only")
+            (Just "hostile") 1 (Just (0, 3)) (Just "death_only") False
         ]
     }
 
@@ -519,10 +519,15 @@ spec = describe "Location instance identity" $ do
                 encounter = fromMaybe (error "encounter fixture missing")
                     (liEncounter inst)
             liLifecycle inst `shouldBe` LifecycleUnknown
-            encounterDiscoveryLifecycle inst `shouldBe` LifecycleCleared
+            locationDiscoveryLifecycle inst `shouldBe` LifecycleCleared
             leRosterComplete encounter `shouldBe` True
             leCleared encounter `shouldBe` True
-            leClearEventEmitted encounter `shouldBe` True
+            -- #917 generalized the notice onto the INSTANCE, and it
+            -- starts spent for exactly the case #916 spent it for: a
+            -- location born already clearance-satisfied. This def
+            -- authors no significant item, so a zero roll satisfies the
+            -- whole predicate at birth and nobody cleared anything.
+            liClearEventEmitted inst `shouldBe` True
             leOccupants encounter `shouldBe` []
 
         it "persists the exact allocated roster and homes once, then \
@@ -598,17 +603,30 @@ spec = describe "Location instance identity" $ do
             -- the location; ordinary sight later exposes it as active.
             fmap liLifecycle (lookupLocationInstance iid episodic)
                 `shouldBe` Just LifecycleUnknown
-            fmap encounterDiscoveryLifecycle
+            fmap locationDiscoveryLifecycle
                 (lookupLocationInstance iid episodic)
                 `shouldBe` Just LifecycleActive
             markLocationEncounterCleared iid episodic `shouldSatisfy` isJust
             let cleared = fromMaybe (error "expected clearance edge")
                     (markLocationEncounterCleared iid episodic)
-            (leClearEventEmitted ⊚
-                (liEncounter =<< lookupLocationInstance iid cleared))
+            -- #917: completing the ENCOUNTER records only that. It
+            -- neither moves the lifecycle nor spends the notice — the
+            -- location is still undiscovered, so its completion stays
+            -- private until sight reveals it.
+            fmap liLifecycle (lookupLocationInstance iid cleared)
+                `shouldBe` Just LifecycleUnknown
+            fmap liClearEventEmitted (lookupLocationInstance iid cleared)
                 `shouldBe` Just False
-            markLocationEncounterClearEventEmitted iid cleared
-                `shouldSatisfy` isJust
+            resolveLocationClearance iid cleared `shouldBe` Nothing
+            -- Once it IS visible, the deferred notice is spent exactly
+            -- once and the location lands on cleared.
+            let seen = fromMaybe (error "expected discovery promotion")
+                    (setLocationLifecycle iid LifecycleDiscovered cleared)
+                announced = fromMaybe (error "expected deferred clearance")
+                    (resolveLocationClearance iid seen)
+            fmap liLifecycle (lookupLocationInstance iid announced)
+                `shouldBe` Just LifecycleCleared
+            resolveLocationClearance iid announced `shouldBe` Nothing
             markLocationEncounterCleared iid cleared `shouldBe` Nothing
 
     describe "pre-#911 chunk-set migration" $ do

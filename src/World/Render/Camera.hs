@@ -3,6 +3,7 @@ module World.Render.Camera
     ( camEpsilon
     , quadCacheMargins
     , cameraChanged
+    , placementCamera
     ) where
 
 import UPrelude
@@ -54,3 +55,38 @@ cameraChanged old new =
      ∨ wcsZSlice old ≢ wcsZSlice new
      ∨ wcsFbSize old ≢ wcsFbSize new
      ∨ wcsFacing old ≢ wcsFacing new
+
+-- * Placement parity
+
+-- | The camera the world quads currently ON SCREEN were built with
+--   (#1856).
+--
+--   Cached tile and flora quads carry WORLD coordinates, and a chunk's
+--   wrap alias ('World.Render.ChunkCulling.bestWrapOffset') is baked
+--   into them: it is chosen by distance to the camera, so it switches
+--   DISCONTINUOUSLY at the cylindrical seam's midpoint. 'cameraChanged'
+--   deliberately tolerates a pan of up to 'camEpsilon' plus the cache
+--   margins before rebuilding — and that pan can cross the midpoint. In
+--   the window between the crossing and the next rebuild, a tree is
+--   DRAWN at the old alias while anything reading the live camera
+--   computes the new one, a whole world width away.
+--
+--   So anything that has to agree with where a sprite is drawn —
+--   Chop's screen-space selection oracle, and the designation marker
+--   anchored to whatever it picked — derives its PLACEMENT from here.
+--   No prediction is involved: after every frame 'wsQuadCacheRef' holds
+--   the cache whose quads were drawn, and a reuse leaves its snapshot
+--   untouched while a rebuild overwrites it with the one it built at,
+--   so this is the placement camera whatever the render pass decided
+--   and whyever it decided it.
+--
+--   The LIVE camera still supplies the VIEW transform — the
+--   pixel→world unprojection — which is correct and unaffected: cached
+--   world coordinates are viewed through the live camera every frame.
+--
+--   Falls back to the live snapshot when no cache exists yet (the first
+--   frame of a page), where the live camera is what the imminent build
+--   will use.
+placementCamera
+    ∷ Maybe WorldQuadCache → WorldCameraSnapshot → WorldCameraSnapshot
+placementCamera cached live = maybe live wqcCamera cached

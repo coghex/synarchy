@@ -17,6 +17,8 @@ module Test.Headless.Construct.Footprint (spec) where
 import UPrelude
 import Test.Hspec
 import qualified Data.HashMap.Strict as HM
+import qualified Data.Map.Strict as Map
+import Building.Schema
 import Building.Types (BuildingDef(..), footprintTiles)
 import Engine.Asset.Handle (TextureHandle(..))
 import World.Construct.Attempt (firstConstructAttemptId)
@@ -36,7 +38,7 @@ fixtureDef name w h = BuildingDef
     , bdDisplayName     = name
     , bdCategory        = "Test"
     , bdDescription     = ""
-    , bdTexture         = TextureHandle 0, bdIconTexture         = TextureHandle 0
+    , bdTextures         = legacyAssets (TextureHandle 0), bdIconTexture         = TextureHandle 0
     , bdTileW           = w
     , bdTileH           = h
     , bdPlacement       = "flat_ground"
@@ -48,7 +50,8 @@ fixtureDef name w h = BuildingDef
     , bdStorageCapacity = 0
     , bdOperations      = []
     , bdAnimations      = HM.empty
-    , bdStateAnims      = HM.empty
+    , bdRoleAnims      = Map.empty
+    , bdVisualClass     = FreestandingInstallation
     , bdPowerDrain      = 0, bdPowerNode      = Nothing
     }
 

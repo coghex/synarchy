@@ -112,9 +112,11 @@ module World.Save.Component.Page
     , PageCoreDTOv6(..)
     , WorldPagesDTOv6(..)
     , PageCoreDTOv7(..)
-    , WorldPagesDTOv7(..)
     , PageCoreDTOv8(..)
+    , WorldPagesDTOv7(..)
     , WorldPagesDTOv8(..)
+    , PageCoreDTOv9(..)
+    , WorldPagesDTOv9(..)
     , PageEditsDTOv1(..)
     , WorldEditsDTOv1(..)
     , WorldPages(..)
@@ -127,6 +129,7 @@ module World.Save.Component.Page
     , migrateWorldPagesV6
     , migrateWorldPagesV7
     , migrateWorldPagesV8
+    , migrateWorldPagesV9
     , PageEditsDTO(..)
     , WorldEditsDTO(..)
     , PageActivityDTO(..)
@@ -146,6 +149,7 @@ module World.Save.Component.Page
     , WorldGenParamsDTOv4(..)
     , WorldGenParamsDTOv5(..)
     , WorldGenParamsDTOv6(..)
+    , WorldGenParamsDTOv7(..)
     , RiverNameDTO(..)
     , RiverNamesDTO(..)
     , EtymologySourceDTO(..)
@@ -193,6 +197,8 @@ module World.Save.Component.Page
     , toWorldGenParamsDTOv5
     , fromWorldGenParamsDTOv6
     , toWorldGenParamsDTOv6
+    , fromWorldGenParamsDTOv7
+    , toWorldGenParamsDTOv7
     , toEtymologySourceDTO
     , fromEtymologySourceDTO
     , toItemInstanceDTO
@@ -234,11 +240,14 @@ import World.Save.Component.WorldGen
     , toWorldGenParamsDTOv5
     , WorldGenParamsDTOv6(..), fromWorldGenParamsDTOv6
     , toWorldGenParamsDTOv6
+    , WorldGenParamsDTOv7(..), fromWorldGenParamsDTOv7
+    , toWorldGenParamsDTOv7
     , EtymologySourceDTO(..)
     , toEtymologySourceDTO, fromEtymologySourceDTO
     , RiverNameDTO(..), RiverNamesDTO(..) )
 import Location.Instance
-    ( locationInstanceAllocatorErrors, locationInstanceBoundsErrors )
+    ( locationInstanceAllocatorErrors, locationInstanceBoundsErrors
+    , locationSignificantItemErrors )
 import World.Generate.Types (WorldGenParams(..))
 import World.Generate.Coordinates (canonicalTile)
 import World.Chunk.Types (ChunkCoord(..), wrapChunkCoordU)
@@ -284,7 +293,7 @@ orderedPages = L.sortOn pgsPageId . HM.elems . snapPages
 
 -- Frozen leaf DTOs (requirement 4) -----------------------------------
 
--- | Frozen mirror of 'WorldIdentity' — the CURRENT (world-pages v8)
+-- | Frozen mirror of 'WorldIdentity' — the CURRENT (world-pages v10)
 --   shape: the optional language provenance #1092 added, plus the
 --   optional etymology source #1104 added. #1230 took the component to
 --   v7 and #916 took it to v8 without touching the identity, so both
@@ -989,7 +998,8 @@ fromEditsDTO = HM.map (map fromWorldEditDTO)
 
 -- | One page's identity / clock / camera core. All evolving records are
 --   frozen DTOs; 'ZoomMapMode' is a payload-free append-only leaf enum.
---   This is the CURRENT (v9) wire shape — see 'PageCoreDTOv8' for the
+--   This is the CURRENT (v10) wire shape — see 'PageCoreDTOv9' for the
+--   frozen pre-#917 one, 'PageCoreDTOv8' for the
 --   frozen pre-#2021 one, 'PageCoreDTOv7' for the
 --   frozen pre-#916 one, 'PageCoreDTOv6' for the
 --   frozen pre-#1230 one, 'PageCoreDTOv5' for the
@@ -1202,14 +1212,22 @@ newtype WorldPagesDTOv7 = WorldPagesDTOv7 { wpd7Pages ∷ [PageCoreDTOv7] }
     deriving newtype (Show, Serialize)
 
 -- | The FROZEN v8 wire shape (#916 through #2021): the current page
---   identity and the current worldgen\/location DTO, but no
---   generated-world id — v8 predates 'GeneratedWorldId' entirely, which
---   is exactly why 'migrateWorldPagesV8' leaves it absent rather than
---   inventing one. Never edited; a further schema change adds a newer
---   type instead (frozen-DTO boundary rule).
+--   identity, but no generated-world id — v8 predates
+--   'GeneratedWorldId' entirely, which is exactly why
+--   'migrateWorldPagesV8' leaves it absent rather than inventing one.
+--   Never edited; a further schema change adds a newer type instead
+--   (frozen-DTO boundary rule).
+--
+--   Its gen params are 'WorldGenParamsDTOv7', the frozen pre-#917
+--   shape — #917 was the "later schema change" master's own note here
+--   anticipated, so the field was repointed off the current type onto
+--   the frozen copy exactly as described, leaving these bytes
+--   unchanged. A v8 payload's locations carry #916's encounter, with
+--   its clearance-notice flag still nested inside it, and no
+--   significant-item obligations.
 data PageCoreDTOv8 = PageCoreDTOv8
     { pc8PageId      ∷ !WorldPageId
-    , pc8GenParams   ∷ !WorldGenParamsDTO
+    , pc8GenParams   ∷ !WorldGenParamsDTOv7
     , pc8CameraX     ∷ !Float
     , pc8CameraY     ∷ !Float
     , pc8TimeHour    ∷ !Int
@@ -1219,11 +1237,10 @@ data PageCoreDTOv8 = PageCoreDTOv8
     , pc8DateDay     ∷ !Int
     , pc8MapMode     ∷ !ZoomMapMode
     , pc8Identity    ∷ !(Maybe WorldIdentityDTO)
-      -- ^ the CURRENT identity shape, and 'pc8GenParams' the CURRENT
-      --   worldgen shape: #2021 changed neither. Should a later schema
-      --   change freeze either, this field is repointed onto that
-      --   frozen copy — leaving these bytes unchanged — exactly as
-      --   'PageCoreDTOv2' documents for its own gen params.
+      -- ^ the CURRENT identity shape: neither #2021 nor #917 changed
+      --   it. Its gen-params sibling above was repointed by #917, which
+      --   is the repointing the frozen-DTO boundary rule prescribes and
+      --   'PageCoreDTOv2' documents for its own.
     } deriving (Show, Generic, Serialize)
 
 newtype WorldPagesDTOv8 = WorldPagesDTOv8 { wpd8Pages ∷ [PageCoreDTOv8] }
@@ -1256,8 +1273,9 @@ data WorldPages = WorldPages
       --   without guessing which version it is looking at.
     } deriving (Show)
 
--- | Encoding always writes the current v9 shape; v8 payloads decode
---   through their own frozen DTO via 'migrateWorldPagesV8' (#2021), v7
+-- | Encoding always writes the current v10 shape; v9 payloads decode
+--   through their own frozen DTO via 'migrateWorldPagesV9' (#917), v8
+--   via 'migrateWorldPagesV8' (#2021), v7
 --   via 'migrateWorldPagesV7' (#916), v6
 --   via 'migrateWorldPagesV6' (#1230), v5
 --   via 'migrateWorldPagesV5' (#1104), v4
@@ -1270,13 +1288,14 @@ data WorldPages = WorldPages
 worldPagesCodec ∷ ComponentCodec WorldPages
 worldPagesCodec = componentCodec ComponentSpec
     { csComponent     = worldPagesComponentId
-    , csVersion       = 9
+    , csVersion       = 10
     , csRequired      = True
     , csDeps          = []
     , csEncode        = \snap →
         WorldPagesDTO (map toPageCore (orderedPages snap))
     , csDecode        = basePageSnapshots
-    , csOlderVersions = [ atVersion 8 migrateWorldPagesV8
+    , csOlderVersions = [ atVersion 9 migrateWorldPagesV9
+                        , atVersion 8 migrateWorldPagesV8
                         , atVersion 7 migrateWorldPagesV7
                         , atVersion 6 migrateWorldPagesV6
                         , atVersion 5 migrateWorldPagesV5
@@ -1353,14 +1372,15 @@ validatePages wp
           , let lis = wgpLocationInstances (pgsGenParams p)
           , msg ← locationInstanceAllocatorErrors lis
                     ⧺ locationInstanceBoundsErrors lis
+                    ⧺ locationSignificantItemErrors lis
           ]
   where
-    err = ComponentError worldPagesComponentId 9 ValidatePhase
+    err = ComponentError worldPagesComponentId 10 ValidatePhase
     -- Each repeated value once, in ascending order, so the report is
     -- deterministic rather than a hash-map traversal order.
     duplicates xs = [ y | (y : _ : _) ← L.group (L.sort xs) ]
 
--- | Turn the decoded current v8 page cores into the base 'PageSnapshot' map every
+-- | Turn the decoded current v10 page cores into the base 'PageSnapshot' map every
 --   other page-scoped component then writes onto (assembly). All entity/
 --   activity/edit fields start empty and are overwritten by their own
 --   REQUIRED components; a valid save leaves none of these placeholders.
@@ -1411,7 +1431,7 @@ migrateWorldPagesV8 (WorldPagesDTOv8 ps) = WorldPages
     }
   where
     toBase p = (blankPageSnapshot (pc8PageId p)
-                    (fromWorldGenParamsDTO (pc8GenParams p)))
+                    (fromWorldGenParamsDTOv7 (pc8GenParams p)))
         { pgsCameraX    = pc8CameraX p
         , pgsCameraY    = pc8CameraY p
         , pgsTimeHour   = pc8TimeHour p
@@ -1421,6 +1441,76 @@ migrateWorldPagesV8 (WorldPagesDTOv8 ps) = WorldPages
         , pgsDateDay    = pc8DateDay p
         , pgsMapMode    = pc8MapMode p
         , pgsIdentity   = fromWorldIdentityDTO <$> pc8Identity p
+        }
+
+-- | The FROZEN v9 wire shape (#2021 through #917): #2021's page,
+--   generated-world id and all, over the frozen pre-significant-contents
+--   worldgen/location DTO ('WorldGenParamsDTOv7') — whose locations
+--   carry #916's encounter, with its clearance-notice flag still nested
+--   inside it, and no significant-item obligations. Never edited; a
+--   further schema change adds a newer type instead (frozen-DTO
+--   boundary rule).
+data PageCoreDTOv9 = PageCoreDTOv9
+    { pc9PageId      ∷ !WorldPageId
+    , pc9GenParams   ∷ !WorldGenParamsDTOv7
+    , pc9CameraX     ∷ !Float
+    , pc9CameraY     ∷ !Float
+    , pc9TimeHour    ∷ !Int
+    , pc9TimeMinute  ∷ !Int
+    , pc9DateYear    ∷ !Int
+    , pc9DateMonth   ∷ !Int
+    , pc9DateDay     ∷ !Int
+    , pc9MapMode     ∷ !ZoomMapMode
+    , pc9Identity    ∷ !(Maybe WorldIdentityDTO)
+    , pc9GeneratedId ∷ !(Maybe GeneratedWorldId)
+    } deriving (Show, Generic, Serialize)
+
+newtype WorldPagesDTOv9 = WorldPagesDTOv9 { wpd9Pages ∷ [PageCoreDTOv9] }
+    deriving stock (Generic)
+    deriving newtype (Show, Serialize)
+
+-- | The v9→v10 migration (#917): every historical placed location keeps
+--   its exact stored identity, geometry, name, lifecycle, content flag
+--   and encounter — including whether that encounter had already been
+--   completed and whether its clearance notice had been spent, which is
+--   lifted out of the encounter onto the instance where the
+--   generalized latch now lives
+--   ('World.Save.Component.WorldGen.fromLocationInstanceDTOv5'). So a
+--   ruin defeated before it was ever seen still announces itself once
+--   on sight, and one that already announced never announces again.
+--
+--   #2021's generated-world id rides across untouched, and
+--   'wpIdsFromPayload' stays TRUE: a v9 payload DOES carry the field, so
+--   an absent id in one is corruption exactly as it is in a v10 payload,
+--   and @validatePages@ must keep saying so. That is the one thing this
+--   migration must not borrow from 'migrateWorldPagesV8', which reports
+--   'False' because v8 genuinely predates the field.
+--
+--   It gains NO significant-item obligations. Reading them off today's
+--   YAML would hand a previously materialized world an item it never
+--   spawned and nobody could take, permanently blocking a clearance the
+--   pre-#917 build had already granted on the encounter alone — the
+--   same reason 'migrateWorldPagesV7' refuses to roll an encounter, and
+--   the same reason the v1 reconstruction discards both.
+migrateWorldPagesV9 ∷ WorldPagesDTOv9 → WorldPages
+migrateWorldPagesV9 (WorldPagesDTOv9 ps) = WorldPages
+    { wpPageIds = map pc9PageId ps
+    , wpBase    = HM.fromList [ (pc9PageId p, toBase p) | p ← ps ]
+    , wpIdsFromPayload = True
+    }
+  where
+    toBase p = (blankPageSnapshot (pc9PageId p)
+                    (fromWorldGenParamsDTOv7 (pc9GenParams p)))
+        { pgsCameraX    = pc9CameraX p
+        , pgsCameraY    = pc9CameraY p
+        , pgsTimeHour   = pc9TimeHour p
+        , pgsTimeMinute = pc9TimeMinute p
+        , pgsDateYear   = pc9DateYear p
+        , pgsDateMonth  = pc9DateMonth p
+        , pgsDateDay    = pc9DateDay p
+        , pgsMapMode    = pc9MapMode p
+        , pgsIdentity   = fromWorldIdentityDTO <$> pc9Identity p
+        , pgsGeneratedId = pc9GeneratedId p
         }
 
 -- | The v7→v8 migration (#916): every historical placed location keeps

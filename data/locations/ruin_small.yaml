@@ -11,6 +11,12 @@
 # `kind`, by contrast, is checked HERE at load: the vocabulary is closed
 # to unit / item / loot_table / building (#1708), and anything else
 # fails this whole file's load rather than registering and warning later.
+#
+# ONE content id is checked at load too: a `significant: true` item
+# (#917). It must already be in the item registry — hence "after items"
+# above being load-bearing rather than incidental — because an
+# obligation that can never spawn leaves the location permanently
+# unclearable, which a spawn-time warning could not recover from.
 locations:
   - id: ruin_small
     label: "Small Ruin"
@@ -82,15 +88,38 @@ locations:
     # of 0–3 primitive nomads. `count_range` is intentionally distinct
     # from positive `count`: zero is a real cleared-encounter outcome.
     #
-    # #921: nothing here is a fixed `kind: item` entry any more. A ruin
-    # guarantees NO specific item — its contents come solely from the
-    # weighted loot table, so what a given ruin is worth is a draw, not
-    # a promise. (The radio and canteen that used to sit here are
-    # spawn-only starting equipment, data/units/acolyte.yaml; they are
-    # deliberately absent from ruin_common too.) Which items a
-    # particular ruin yields is still seed-stable and rolled exactly
-    # once per instance (#948) — the draw is fixed, just not authored.
+    # #921 governs the INCIDENTAL half: what a ruin's salvage is worth
+    # is a draw, not a promise, and it stays that way — the two
+    # `ruin_common` rolls below guarantee nothing in particular. (The
+    # radio and canteen that used to sit here are spawn-only starting
+    # equipment, data/units/acolyte.yaml; they are deliberately absent
+    # from ruin_common too.) Which items a particular ruin yields is
+    # seed-stable and rolled exactly once per instance (#948).
+    #
+    # #917 adds the other half: ONE guaranteed significant item, which
+    # is a promise, and which the ruin's cleared state waits on. A ruin
+    # is cleared only when its authored encounter is satisfied AND every
+    # significant item it spawned has been taken — so a zero-nomad ruin
+    # stays uncleared until someone actually carries the processing unit
+    # out. `significant` is legal only on a fixed `kind: item` entry
+    # (the loader rejects it anywhere else): a loot-table draw must
+    # never decide what a location owes.
+    #
+    # ORDER IS LOAD-BEARING. The `ruin_common` entry keeps authored
+    # index 1 with its two rolls, and the significant entry is APPENDED
+    # after the existing contents, because #948 keys each incidental
+    # draw on the entry's positional index — reordering these lines
+    # would silently change what every already-generated ruin in every
+    # existing world rolls.
+    #
+    # The reward is `processing_unit`: pre-collapse fabrication salvage
+    # that `make: factory` puts permanently out of the colony's own
+    # reach (data/items/processing_unit.yaml), so it is worth the trip
+    # and cannot be crafted instead of fetched. Deliberately not
+    # `radio`, which D-6 in docs/expedition_gameplay_loop.md reserves
+    # for unit communication.
     contents:
       - { kind: loot_table, id: ruin_common, rolls: 2 }
       - { kind: unit, id: nomad_primitive, faction: hostile,
           count_range: { min: 0, max: 3 }, clearance: death_only }
+      - { kind: item, id: processing_unit, significant: true }

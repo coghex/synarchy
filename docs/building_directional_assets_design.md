@@ -56,6 +56,14 @@ concrete precondition
 
 ## Current state and evidence
 
+**Superseded for BDA-1 by what landed (#2080).** Everything in this
+section is the PRE-slice snapshot the arc was designed against, kept as
+the evidence for those decisions. `BuildingActivity`, the `DirS`-keyed
+animation map, the single `bdTexture` and the overloaded `appearing`
+lifecycle described below no longer exist;
+[`building_asset_schema.md`](building_asset_schema.md) is the as-built
+reference for what replaced them.
+
 Verified against `b4631ca6` on 2026-08-31:
 
 - The camera has exactly four 90-degree facings: `FaceSouth`, `FaceWest`,
