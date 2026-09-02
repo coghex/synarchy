@@ -35,6 +35,14 @@
 --   removes no final entry at all during that run. Cleanup is
 --   conservative in exactly one direction.
 --
+--   ABSENCE IS POSITIVE, never inferred. @doesFileExist@ answers 'False'
+--   for a file inside a directory this process cannot search exactly as
+--   it does for a file that is not there, and treating those alike would
+--   let an inaccessible slot's valid generation read as "nothing to
+--   reference". Every existence question here is a real @stat@
+--   ('presence'): only a not-found answer is absence; any other failure
+--   to reach a path is indeterminate.
+--
 --   Leftover save-transaction artifacts (@world-synworld-tmp…@,
 --   @world-synworld-stale…@) are not generations: the loader never
 --   selects them, so they neither reference nor block.
@@ -48,9 +56,11 @@ import qualified Data.HashSet as HS
 import qualified Data.Set as Set
 import qualified Data.Text as T
 import Control.Exception (IOException, try)
-import System.Directory
-    (doesDirectoryExist, doesFileExist, listDirectory)
+import System.Directory (listDirectory)
 import System.FilePath ((</>), takeExtension, dropExtension)
+import System.IO.Error (isDoesNotExistError)
+import System.Posix.Files
+    (FileStatus, getSymbolicLinkStatus, isDirectory, isRegularFile, isSymbolicLink)
 import World.Save.Types (SaveMetadata(..))
 import World.Save.Envelope
     ( decodeSaveEnvelopeMetadata, decodeSaveEnvelopeMetadataClassified
@@ -71,16 +81,23 @@ scanSaveReferences savesDir luaKnownNames = do
     case linkSafe of
         Left reason → pure (indeterminate (T.pack savesDir) reason)
         Right () → do
-            exists ← doesDirectoryExist savesDir
-            if not exists then pure emptyReferenceScan else do
-                listed ← try (listDirectory savesDir)
-                case listed of
-                    Left (e ∷ IOException) →
+            root ← presence savesDir
+            case root of
+                Absent → pure emptyReferenceScan
+                Inaccessible why → pure (indeterminate (T.pack savesDir) why)
+                Present st
+                    | not (isDirectory st) →
                         pure (indeterminate (T.pack savesDir)
-                                            ("cannot list saves directory: " <> tshow e))
-                    Right entries → do
-                        scans ← mapM scanEntry entries
-                        pure (foldr merge emptyReferenceScan scans)
+                                            ("saves path is not a directory: " <> T.pack savesDir))
+                    | otherwise → do
+                        listed ← try (listDirectory savesDir)
+                        case listed of
+                            Left (e ∷ IOException) →
+                                pure (indeterminate (T.pack savesDir)
+                                                    ("cannot list saves directory: " <> tshow e))
+                            Right entries → do
+                                scans ← mapM scanEntry entries
+                                pure (foldr merge emptyReferenceScan scans)
   where
     indeterminate slot reason = emptyReferenceScan { rsIndeterminate = [(slot, reason)] }
 
@@ -92,12 +109,21 @@ scanSaveReferences savesDir luaKnownNames = do
 
     scanEntry entry = do
         let fullPath = savesDir </> entry
-        isDir ← doesDirectoryExist fullPath
-        if isDir
-            then scanSlot (T.pack entry) fullPath
-            else if takeExtension entry ≡ saveExtension
-                then scanLegacy (T.pack (dropExtension entry)) fullPath
-                else pure emptyReferenceScan
+            slot = T.pack entry
+        p ← presence fullPath
+        case p of
+            Inaccessible why → pure (indeterminate slot why)
+            -- Listed a moment ago and gone now: released by its owner;
+            -- there is nothing there to reference.
+            Absent → pure emptyReferenceScan
+            Present st
+                | isSymbolicLink st →
+                    pure (indeterminate slot ("path is a symlink, refusing to \
+                                              \operate through it: " <> T.pack fullPath))
+                | isDirectory st → scanSlot slot fullPath
+                | isRegularFile st ∧ takeExtension entry ≡ saveExtension →
+                    scanLegacy (T.pack (dropExtension entry)) fullPath
+                | otherwise → pure emptyReferenceScan
 
     -- A slot directory: both generation files, each on its own.
     scanSlot slot dir = do
@@ -114,18 +140,24 @@ scanSaveReferences savesDir luaKnownNames = do
         case linkSafe of
             Left reason → pure (indeterminate slot reason)
             Right () → do
-                exists ← doesFileExist path
-                if not exists then pure emptyReferenceScan else do
-                    readResult ← try (BS.readFile path)
-                    pure $ case readResult of
-                        Left (e ∷ IOException) →
-                            indeterminate slot ("cannot read " <> T.pack path <> ": " <> tshow e)
-                        Right bytes →
-                            case decodeSaveEnvelopeMetadataClassified luaKnownNames bytes of
-                                Right meta → found meta
-                                Left failure →
-                                    indeterminate slot (T.pack path <> ": "
-                                                        <> renderGenerationFailure failure)
+                p ← presence path
+                case p of
+                    Absent → pure emptyReferenceScan
+                    Inaccessible why → pure (indeterminate slot why)
+                    Present st | not (isRegularFile st) →
+                        pure (indeterminate slot ("generation path is not a regular \
+                                                  \file: " <> T.pack path))
+                    Present _ → do
+                        readResult ← try (BS.readFile path)
+                        pure $ case readResult of
+                            Left (e ∷ IOException) →
+                                indeterminate slot ("cannot read " <> T.pack path <> ": " <> tshow e)
+                            Right bytes →
+                                case decodeSaveEnvelopeMetadataClassified luaKnownNames bytes of
+                                    Right meta → found meta
+                                    Left failure →
+                                        indeterminate slot (T.pack path <> ": "
+                                                            <> renderGenerationFailure failure)
 
     -- A legacy flat file has no slot directory; the containment check
     -- covers the file and the saves directory, as 'listSaves' does.
@@ -148,3 +180,23 @@ scanSaveReferences savesDir luaKnownNames = do
         , rsSourcesRead   = 1
         , rsIndeterminate = []
         }
+
+-- | What a real @stat@ says about a path. Only 'Absent' may be treated
+--   as "nothing there".
+data Presence
+    = Absent
+    | Present !FileStatus
+    | Inaccessible !Text
+
+-- | 'getSymbolicLinkStatus' rather than a @does…Exist@ query: it does
+--   not follow a final symlink, and it distinguishes a missing path
+--   ('isDoesNotExistError') from one this process is not allowed to
+--   reach, which the boolean queries collapse into 'False'.
+presence ∷ FilePath → IO Presence
+presence path = do
+    r ← try (getSymbolicLinkStatus path)
+    pure $ case r of
+        Right st → Present st
+        Left (e ∷ IOException)
+            | isDoesNotExistError e → Absent
+            | otherwise → Inaccessible ("cannot access " <> T.pack path <> ": " <> tshow e)

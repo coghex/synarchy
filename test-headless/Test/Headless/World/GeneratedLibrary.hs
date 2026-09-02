@@ -30,9 +30,10 @@ import System.Directory
     ( getTemporaryDirectory, createDirectoryIfMissing, createDirectory
     , createDirectoryLink, copyFile, doesDirectoryExist, doesFileExist
     , doesPathExist, listDirectory, removeDirectoryRecursive, removeFile
-    , removePathForcibly )
+    , removePathForcibly, getPermissions, setPermissions, Permissions(..) )
 import System.FilePath ((</>))
 import System.IO (hClose, hGetLine)
+import System.Posix.User (getEffectiveUserID)
 import System.Process
     ( createProcess, proc, StdStream(..), CreateProcess(..), waitForProcess
     , readProcess )
@@ -667,6 +668,37 @@ referenceSpec = describe "references and cleanup" $ do
             r4 ← cleanupOK lib
             crDeletionSuppressed r4 `shouldBe` False
             crRemoved r4 `shouldBe` [gidA]
+
+    it "a slot this process cannot search is indeterminate, never mistaken for absent" $
+        withScratch $ \root → do
+            lib ← openOK root
+            _ ← publishOK lib gidA payload1
+            _ ← publishOK lib gidB payload2
+            saveSlot root "sealed" "t1" [gidA]
+            let dir = slotDir root "sealed"
+            perms ← getPermissions dir
+            setPermissions dir perms { readable = False, searchable = False, writable = False }
+            euid ← getEffectiveUserID
+            report ← cleanupOK lib `finally` setPermissions dir perms
+            crRemoved report `shouldSatisfy` (gidA `notElem`)
+            doesDirectoryExist (finalDir root gidA) `shouldReturn` True
+            if euid ≡ 0
+                -- Root is not subject to mode bits (CI containers run as
+                -- root): the slot simply reads, and it references A.
+                then do
+                    crRetainedReferenced report `shouldBe` [gidA]
+                    crRemoved report `shouldBe` [gidB]
+                -- Anyone else cannot reach the generation inside, and a
+                -- generation that cannot be reached is not one that is
+                -- not there: nothing is removed, and the slot is named.
+                else do
+                    crDeletionSuppressed report `shouldBe` True
+                    -- Both generation paths inside are unreachable, and
+                    -- each is reported.
+                    L.nub (map fst (rsIndeterminate (crReferences report)))
+                        `shouldBe` ["sealed"]
+                    crRemoved report `shouldBe` []
+                    doesDirectoryExist (finalDir root gidB) `shouldReturn` True
 
     it "a symlinked save slot is indeterminate, never followed" $
         withScratch $ \root → do
