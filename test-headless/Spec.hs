@@ -86,6 +86,7 @@ import qualified Test.Headless.World.Save.Storage as SaveStorage
 import qualified Test.Headless.World.Save.Contract as SaveContract
 import qualified Test.Headless.World.Identity as WorldIdentity
 import qualified Test.Headless.World.GeneratedIdentity as GeneratedIdentity
+import qualified Test.Headless.World.GeneratedLibrary as GeneratedLibrary
 import qualified Test.Headless.World.MapImagePlan as MapImagePlan
 import qualified Test.Headless.World.MapImageAdmission as MapImageAdmission
 import qualified Test.Headless.World.TransferOrders as WorldTransferOrders
@@ -658,6 +659,7 @@ main = hspec $ do
     describe "persistence reference integrity" SaveIntegrity.spec
     describe "persistence reference integrity" LuaSaveBridge.spec
     describe "atomic save storage" SaveStorage.spec
+    describe "generated world library" GeneratedLibrary.spec
     describe "persistence contract" SaveContract.spec
     describe "autosave staging slots (#1413)" AutosaveListing.spec
     MenuListingOrder.spec
