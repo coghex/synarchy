@@ -123,6 +123,7 @@ import Unit.Direction (Direction(..))
 import World.Flora.Identity
     ( firstPlantedFloraCursor, generatedFloraInstanceId
     , plantedFloraInstanceId )
+import Test.Headless.Harness.GeneratedIds (fixtureGeneratedWorldIdForPage)
 
 page1, page2 ∷ WorldPageId
 page1 = WorldPageId "page1"
@@ -339,6 +340,7 @@ richNodes = PowerNodes
 richPage ∷ PageSnapshot
 richPage = PageSnapshot
     { pgsPageId       = page1
+    , pgsGeneratedId  = Just (fixtureGeneratedWorldIdForPage page1)
     , pgsGenParams    = canon defaultWorldGenParams
                           { wgpSeed = 424242
                           -- #1101: a placed location named in this
@@ -519,6 +521,7 @@ richRiverNames = RiverNames $ HM.fromList
 minimalPage2 ∷ PageSnapshot
 minimalPage2 = PageSnapshot
     { pgsPageId       = page2
+    , pgsGeneratedId  = Just (fixtureGeneratedWorldIdForPage page2)
     , pgsGenParams    = canon defaultWorldGenParams { wgpSeed = 99 }
     , pgsCameraX      = 0, pgsCameraY = 0
     , pgsTimeHour     = 0, pgsTimeMinute = 0

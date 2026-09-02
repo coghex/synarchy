@@ -69,6 +69,7 @@ import Location.Instance
 import Location.Types (LocationRegistry)
 import World.Generate.Types (WorldGenParams(..))
 import World.Page.Types (WorldPageId(..), WorldIdentity(..))
+import World.Page.GeneratedId (GeneratedWorldId)
 import World.Render.Zoom.Types (ZoomMapMode(..))
 import World.Tool.Types (ToolMode(..))
 import World.Edit.Types (WorldEdits, WorldEdit(..))
@@ -127,7 +128,7 @@ saveMagic = 0x53595241
 --   @docs\/persistence_contract.md@ both instruct maintainers to bump
 --   it, so it is a documented maintainer-facing marker, not dead code.
 currentSaveVersion ∷ Int
-currentSaveVersion = 96
+currentSaveVersion = 97
 
 -- | The shape of the tagged save envelope's fixed 16-byte header
 --   (issue #759, save-overhaul B1): magic, the envelope FRAMING
@@ -180,6 +181,37 @@ data SaveMetadata = SaveMetadata
         --   component v2; every v1 payload migrates with this 'False'
         --   ("legacy saves are manual saves") — see
         --   "World.Save.Compat.MetadataV1".
+    , smGeneratedWorldIds ∷ ![GeneratedWorldId]
+        -- ^ #2021: every page's opaque 'GeneratedWorldId', as a
+        --   duplicate-free collection written in ascending canonical
+        --   order — EVERY page in the save, not just the active one, so
+        --   the list is the complete inventory of generated foundations
+        --   this save references.
+        --
+        --   Carried here for the same reason 'smWorldName' is (#707):
+        --   so a read can obtain it WITHOUT decoding a gameplay
+        --   component. 'World.Save.Serialize.listSaves' decodes only
+        --   @"metadata"@ by documented design, and later
+        --   reference-aware library cleanup has to decide which
+        --   generated worlds are still referenced by some save — paying
+        --   a full per-slot component decode for that would also mean a
+        --   save with a broken @world-pages@ could never be PROVEN to
+        --   reference anything, and so could never be safely cleaned
+        --   up.
+        --
+        --   @world-pages@ stays AUTHORITATIVE; this is a copy. Both are
+        --   written from one value
+        --   ('World.Save.Snapshot.pgsGeneratedId', through
+        --   'World.Save.Snapshot.Adapter.snapshotSaveMetadata'), and a
+        --   save whose two copies disagree is rejected for full load by
+        --   'World.Save.Component.metadataErrors' rather than silently
+        --   preferring either.
+        --
+        --   Added by @"metadata"@ component v3. Every v1 and v2 payload
+        --   migrates with this EMPTY — those formats predate generated
+        --   world identity, and their pages get fresh ids at load
+        --   staging — see "World.Save.Compat.MetadataV1" and
+        --   "World.Save.Compat.MetadataV2".
     } deriving (Show, Eq, Serialize, Generic)
 
 -- | #913: the extra request state an AUTOSAVE carries that a manual
@@ -407,6 +439,16 @@ data WorldPageSave = WorldPageSave
         --   page → main_world, collisions → "<id>#N") while the
         --   identity must follow the page itself. Restored straight
         --   into wsIdentityRef. Appended for save v82.
+    , wpsGeneratedId ∷ !(Maybe GeneratedWorldId)
+        -- ^ #2021: this page's opaque generated-world identity, carried
+        --   across the in-memory load bridge so "World.Load.Stage" can
+        --   restore it onto the staged page's 'wsGeneratedIdRef'.
+        --
+        --   'Nothing' means the save predates the id entirely (a
+        --   @world-pages@ payload older than v9). Staging then keeps the
+        --   fresh id the staged 'World.State.Types.WorldState' minted
+        --   for itself, and — because loading never rewrites its source
+        --   — the file it came from still says nothing afterwards.
     } deriving (Show, Serialize, Generic)
 
 -- | Everything needed to reconstruct the saved game. Per-world state is

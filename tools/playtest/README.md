@@ -557,6 +557,36 @@ clean and additive.
   shape plus both pinned medium-effort provider invocations, normalized usage,
   and projected token reserve (FakeEngine + scripted agent; no window, no
   build, no model call).
+
+  That command is unchanged, and so is its output format; since #2040
+  the checks behind it live in one module per ownership boundary
+  instead of one function in `run.py`:
+
+  | Module | Owns |
+  |---|---|
+  | `selftest.py` | the coordinator: the component registry, the coverage check that compares it against the component modules actually on disk, the sequential dispatch, and the failure roll-up |
+  | `selftest_session.py` | session, replay, trace-phase and trace-dir-allocation behavior |
+  | `selftest_player.py` | player prompt, provider, response, action, usage and budget behavior |
+  | `selftest_engine.py` | render/boot-mode threading, the event-log progress oracle, and the critic-facing evidence path |
+  | `selftest_setup.py` | setup, readiness, deadlines, lifecycle metadata and process-tree teardown |
+
+  Each component owns its own fixtures, fake classes and temporary
+  trace directories and never reads state or a trace dir another
+  component produced. None of them is a command of its own: the
+  coordinator imports each and calls its `run(check)`, and
+  `run.py --selftest` remains the only documented way in. They run
+  sequentially in one process by design: several patch a
+  process-global (`time.sleep`,
+  `agent.subprocess.run`, `launch.teardown_setup`,
+  `launch.subprocess.Popen`) for the duration of a check, each restored
+  in its own `finally`.
+
+  The session/replay implementation the CLI and these components share
+  lives in `session.py`, imported by both — the components never import
+  `run.py`, so nothing re-executes the command-line entry point as a
+  second module, and a production run never imports a test module or
+  `FakeEngine`.
+
 - `python3 tools/playtest/run.py --smoke` — few-turn scripted session
   against a real instance (windowed by default; add
   `--render-mode offscreen` for the windowless #650 substrate —

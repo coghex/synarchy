@@ -125,6 +125,8 @@ import Item.Ground (GroundItems(..))
 import Item.Types (ItemInstance(..))
 import Building.Knowledge
     (ContainerKnowledge(..), ContainerRecord(..), emptyContainerKnowledge)
+import Test.Headless.Harness.GeneratedIds (fixtureGeneratedWorldIdForPage)
+import World.Page.GeneratedId (newGeneratedWorldId)
 
 hexDecode ∷ String → BS.ByteString
 hexDecode = BS.pack . go
@@ -385,13 +387,13 @@ spec = do
                 case decodeSessionEnvelope luaNames luaNames bytes of
                     Left err → expectationFailure
                         (mfrPath fixture <> ": " <> T.unpack err)
-                    Right (meta, snap, luaComponents, isMigrated) → do
+                    Right (rawMeta, snap, luaComponents, isMigrated) → do
                         let em = esMeta expected
-                        smSeed meta `shouldBe` emSeed em
-                        smWorldSize meta `shouldBe` emWorldSize em
-                        smPlateCount meta `shouldBe` emPlateCount em
-                        smWorldName meta `shouldBe` emWorldName em
-                        smWorldGloss meta `shouldBe` emWorldGloss em
+                        smSeed rawMeta `shouldBe` emSeed em
+                        smWorldSize rawMeta `shouldBe` emWorldSize em
+                        smPlateCount rawMeta `shouldBe` emPlateCount em
+                        smWorldName rawMeta `shouldBe` emWorldName em
+                        smWorldGloss rawMeta `shouldBe` emWorldGloss em
                         snapActivePage snap `shouldBe` WorldPageId (esActivePage expected)
                         snapVisiblePages snap
                             `shouldBe` map WorldPageId (esVisiblePages expected)
@@ -566,8 +568,19 @@ spec = do
                         -- equivalence check on the shape production
                         -- actually re-encodes (these fixtures place no
                         -- locations, so the registry is empty).
-                        let resolved = resolveSnapshotLocations snap
-                            reencoded =
+                        -- #2021, on exactly the same terms: a pre-v9
+                        -- fixture decodes with every page's
+                        -- generated-world id ABSENT, and transactional
+                        -- load staging mints a fresh one per page before
+                        -- anything can be saved again -- so a re-encode
+                        -- of the raw migrated value is a shape no real
+                        -- save ever writes. Staging it here (and
+                        -- deriving the metadata inventory from the
+                        -- staged pages, as the next save's own metadata
+                        -- is derived) keeps the equivalence honest.
+                        (meta, resolved) ← stageGeneratedWorldIds
+                            (rawMeta, resolveSnapshotLocations snap)
+                        let reencoded =
                                 encodeSessionSnapshot meta resolved luaComponents
                             actualLuaNames =
                                 HS.fromList (map lcsId luaComponents)
@@ -615,6 +628,10 @@ spec = do
                     , smTimestamp = "2026-07-16T00:00:00.000000Z"
                     , smWorldName = Just "Test World"
                     , smWorldGloss = Just "a fixture world", smAutosave = False
+                    -- #2021: a v1 metadata payload predates generated
+                    -- world identity; the migration leaves it empty
+                    -- rather than inventing an id the file never had.
+                    , smGeneratedWorldIds = []
                     }
 
         it "decodes the real, tracked B1 envelope fixture's session \
@@ -2088,6 +2105,8 @@ currentPageCore = PageCoreDTO
                                (Just (LanguageProvenanceDTO
                                           0xABCDEF0123456789 1))
                                Nothing)
+    , pcGeneratedId = Just (fixtureGeneratedWorldIdForPage
+                                (WorldPageId "legacy_page"))
     }
 
 -- | The production concept catalogue, read from disk. The tracked
@@ -2127,6 +2146,7 @@ minimalSaveMetadataForExtra = SaveMetadata
     { smName = "extra-test", smSeed = 42, smWorldSize = 128, smPlateCount = 10
     , smTimestamp = "2026-07-16T00:00:00.000000Z"
     , smWorldName = Nothing, smWorldGloss = Nothing, smAutosave = False
+    , smGeneratedWorldIds = []
     }
 
 -- | The SAME values in the frozen v1 metadata shape (#913). A hand-built
@@ -2200,6 +2220,33 @@ trackedB1EnvelopeFixtureHex =
 -- | The load path's own pre-#911 location resolution
 --   ('World.Save.Types.resolveLegacyLocationParams'), applied to every
 --   page of a decoded snapshot.
+-- | #2021: mint a fresh 'GeneratedWorldId' for every page that has
+--   none, and rebuild the metadata inventory from the result — the two
+--   things transactional load staging and the following save do, in
+--   that order, to a session decoded from a pre-v9 payload.
+--
+--   The manifest gate re-encodes a migrated fixture and fresh-decodes
+--   it, asserting the two agree. Without this step that re-encode would
+--   write a v9 @world-pages@ payload carrying no ids at all — a shape no
+--   real save can produce (every live page has an id) and one the reader
+--   correctly refuses. Applying staging first is the same move
+--   'resolveSnapshotLocations' already makes for #911's pending
+--   locations: compare against the shape production actually writes.
+stageGeneratedWorldIds
+    ∷ (SaveMetadata, SessionSnapshot) → IO (SaveMetadata, SessionSnapshot)
+stageGeneratedWorldIds (meta, snap) = do
+    staged ← traverse stagePage (snapPages snap)
+    let ids = L.sort (L.nub [ gid | p ← HM.elems staged
+                                  , Just gid ← [pgsGeneratedId p] ])
+    pure ( meta { smGeneratedWorldIds = ids }
+         , snap { snapPages = staged } )
+  where
+    stagePage p = case pgsGeneratedId p of
+        Just _  → pure p
+        Nothing → do
+            gid ← newGeneratedWorldId
+            pure p { pgsGeneratedId = Just gid }
+
 resolveSnapshotLocations ∷ SessionSnapshot → SessionSnapshot
 resolveSnapshotLocations snap = snap
     { snapPages = HM.map resolvePage (snapPages snap) }

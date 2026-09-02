@@ -77,6 +77,7 @@ import Unit.Direction (Direction(..))
 import Building.Knowledge (emptyContainerKnowledge)
 import World.Construct.Attempt (firstConstructAttemptId)
 import World.Flora.Identity (firstPlantedFloraCursor)
+import Test.Headless.Harness.GeneratedIds (fixtureGeneratedWorldIdForPage)
 
 page1, page2 ∷ WorldPageId
 page1 = WorldPageId "page1"
@@ -116,6 +117,7 @@ minimalPage pid = PageSnapshot
     , pgsPlantDesignations = HM.empty
     , pgsContainerKnowledge = emptyContainerKnowledge
     , pgsIdentity     = Nothing
+    , pgsGeneratedId  = Just (fixtureGeneratedWorldIdForPage pid)
     }
 
 minimalBuilding ∷ BuildingInstanceSnapshot

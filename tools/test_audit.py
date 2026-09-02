@@ -33,6 +33,9 @@ from world_check import (  # type: ignore
     check_seed, format_result, PASS, FAIL, IMPROVED, SKIP,
 )
 
+import selftestlib  # noqa: E402
+from selftestlib import FAILURES, expect  # noqa: E402
+
 
 # ----- Emitted-category inventory ------------------------------------------
 #
@@ -382,16 +385,6 @@ def count_category(result_dict: dict[str, Any], cat: str) -> int:
 
 
 # ----- Tests ---------------------------------------------------------------
-
-FAILURES: list[str] = []
-
-
-def expect(cond: bool, msg: str) -> None:
-    if not cond:
-        FAILURES.append(msg)
-        print(f"  FAIL: {msg}")
-    else:
-        print(f"  OK:   {msg}")
 
 
 def test_dry_below_sea() -> None:
@@ -2328,6 +2321,7 @@ def test_missing_baseline_keeps_its_skip_disposition() -> None:
 # ----- Runner --------------------------------------------------------------
 
 def main() -> int:
+    selftestlib.parse_verbose()
     tests = [
         test_clean_grid,
         test_stats,
@@ -2401,10 +2395,9 @@ def main() -> int:
         print(f"\n{len(FAILURES)} test failure(s):")
         for f in FAILURES:
             print(f"  {f}")
-        return 1
+        return selftestlib.concluded(1)
 
-    print(f"\nAll {len(tests)} test groups passed")
-    return 0
+    return selftestlib.concluded(0, f"\nAll {len(tests)} test groups passed")
 
 
 if __name__ == "__main__":

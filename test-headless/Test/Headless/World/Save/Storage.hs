@@ -69,6 +69,7 @@ import Power.Types (emptyPowerNodes)
 import Building.Knowledge (emptyContainerKnowledge)
 import World.Construct.Attempt (firstConstructAttemptId)
 import World.Flora.Identity (firstPlantedFloraCursor)
+import Test.Headless.Harness.GeneratedIds (fixtureGeneratedWorldIdForPage)
 
 -- ---------------------------------------------------------------------
 -- Fixtures (mirror Test.Headless.Save.Snapshot's minimal* pattern)
@@ -122,6 +123,7 @@ minimalPage gp = PageSnapshot
     , pgsPlantDesignations = HM.empty
     , pgsContainerKnowledge = emptyContainerKnowledge
     , pgsIdentity     = Nothing
+    , pgsGeneratedId  = Just (fixtureGeneratedWorldIdForPage page1)
     }
 
 minimalGlobals ∷ SessionGlobals

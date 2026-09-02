@@ -191,6 +191,8 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                                 containerKnowledge ← readIORef
                                     (wsContainerKnowledgeRef ws)
                                 identity  ← readIORef (wsIdentityRef ws)
+                                generatedId ← readIORef
+                                    (wsGeneratedIdRef ws)
                                 WorldCamera wcx wcy ← readIORef (wsCameraRef ws)
                                 let buildings = toBuildingSnapshot pid bm
                                     units     = toUnitSnapshot pid um
@@ -234,6 +236,9 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                                     , pgsCropPlots   = cropPlots
                                     , pgsPlantDesignations = plantDesigs
                                     , pgsIdentity    = identity
+                                    -- #2021: always 'Just' — the
+                                    -- live ref is not optional.
+                                    , pgsGeneratedId = Just generatedId
                                     }
                     case sequence maybePages of
                       Left err → do

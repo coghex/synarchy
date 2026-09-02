@@ -67,15 +67,8 @@ TOOLS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TOOLS))
 import location_embark_probe as probe  # type: ignore  # noqa: E402
 
-FAILURES: list[str] = []
-
-
-def expect(cond: bool, msg: str) -> None:
-    if not cond:
-        FAILURES.append(msg)
-        print(f"  FAIL: {msg}")
-    else:
-        print(f"  OK:   {msg}")
+import selftestlib  # noqa: E402
+from selftestlib import FAILURES, expect  # noqa: E402
 
 
 @contextlib.contextmanager
@@ -752,6 +745,7 @@ def test_a_failed_session_b_save_suppresses_only_session_c() -> None:
 
 
 def main() -> int:
+    selftestlib.parse_verbose()
     test_root_symlinks_content_and_copies_config()
     test_a_read_only_checkout_still_yields_a_removable_tree()
     test_the_read_only_source_itself_is_never_modified()
@@ -779,10 +773,10 @@ def main() -> int:
         print(f"\n{len(FAILURES)} test(s) failed:")
         for failure in FAILURES:
             print(f"  {failure}")
-        return 1
-    print("\nAll location_embark_probe artifact-ownership and durable-save "
-          "tests passed")
-    return 0
+        return selftestlib.concluded(1)
+    return selftestlib.concluded(
+        0, "\nAll location_embark_probe artifact-ownership and durable-save "
+        "tests passed")
 
 
 if __name__ == "__main__":
