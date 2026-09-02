@@ -2399,7 +2399,7 @@ spec = do
             , "local liveBuild = { materials = { wood = 2 }, build_work = 3 }"
             , "local fakeAiState = { [1] = { constructJob = {"
             , "  category = 'structure', pack = 'known_pack', kind = 'wall',"
-            , "  build = liveBuild, need = { wood = 2 } } } }"
+            , "  build = liveBuild, need = { wood = 2 }, staking = 12.5 } } }"
             , "unitAiSave.register(fakeAiState)"
             , "local function prepareWith(state)"
             , "  return saveModules.prepareLoad({"
@@ -2482,6 +2482,33 @@ spec = do
             , "local payload = codec.encode(snap)"
             , "assert(payload:find('build_work') == nil,"
             , "  'no trace of the live build-cost content may reach the encoded payload')"
+            -- #1845: the building-stake hand-off's clock is stripped by
+            -- the SAME shallow copy, and for a reason the reference
+            -- schema makes non-negotiable — a wait that outlives its
+            -- session would be resumed against a building queue the
+            -- load discarded. Its absence is what lets the resumed job
+            -- re-derive the answer from the world instead of carrying
+            -- an unreconcilable BuildingId.
+            , "assert(snap[1].constructJob.staking == nil,"
+            , "  'constructJob.staking must be stripped from the snapshot')"
+            , "assert(fakeAiState[1].constructJob.staking == 12.5,"
+            , "  'stripping staking must not mutate the live constructJob table')"
+            , "assert(payload:find('staking') == nil,"
+            , "  'no trace of the stake hand-off clock may reach the encoded payload')"
+            -- …and a job carrying ONLY the stake clock (no .build, which
+            -- a building-category job never has) must still be stripped:
+            -- the two are independent reasons on one shallow copy, and a
+            -- guard that fired on .build alone would carry the clock
+            -- straight through for exactly the jobs that own one.
+            , "fakeAiState[1].constructJob = { category = 'building',"
+            , "  building = 'workbench', x = 1, y = 1, staking = 4.0 }"
+            , "local snap2 = saveModules.registry.unit_ai.snapshot()"
+            , "assert(snap2[1].constructJob.staking == nil,"
+            , "  'a building job with no .build must still lose its staking clock')"
+            , "assert(snap2[1].constructJob.building == 'workbench',"
+            , "  'sibling fields must survive that strip too')"
+            , "assert(fakeAiState[1].constructJob.staking == 4.0,"
+            , "  'that strip must not mutate the live job either')"
             ]
 
         it "includes the OUTER per-unit key itself as a unit reference \

@@ -38,6 +38,9 @@ module Test.Headless.Building.Ghost (spec) where
 
 import UPrelude
 import Test.Hspec
+import qualified HsLua as Lua
+import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
 import Test.Headless.Harness.Isolation (withIsolatedResourceRoot)
 import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 import Data.IORef (readIORef, writeIORef)
@@ -493,6 +496,207 @@ renderSpec = describe "the committed designation render pass" $ do
             "assets/textures/ui/hud/utility/construct_designate_building.png"
         exists `shouldBe` False
 
+
+-- * The staking hand-off (Lua)
+
+-- | Same standalone-Lua-VM pattern as
+--   'Test.Headless.Lua.WorkClaimCapacity': one self-contained chunk per
+--   example in a fresh interpreter, asserting inside Lua, with a non-OK
+--   status surfaced as an hspec failure carrying the Lua message.
+runsOk ∷ Text → Expectation
+runsOk chunkText = do
+    result ← Lua.run @Lua.Exception $ do
+        Lua.openlibs
+        status ← Lua.dostring (TE.encodeUtf8 chunkText)
+        case status of
+            Lua.OK → return Nothing
+            _ → do
+                err ← Lua.tostring (-1)
+                return (Just (maybe "<no message>" TE.decodeUtf8Lenient err))
+    case result of
+        Nothing  → pure ()
+        Just msg → expectationFailure (T.unpack msg)
+
+lns ∷ [Text] → Text
+lns = T.intercalate "\n"
+
+-- | Everything @unit_ai_construct_site.stakeBuilding@ reaches, stubbed,
+--   plus a recorder for the two engine calls whose CHOICE is the whole
+--   contract: a completion retires the job, a cancellation discards it,
+--   and confusing them either strands a built site or silently loses an
+--   unbuilt one.
+--
+--   @spawnResult@ and @world@ are what each case varies: whether the
+--   engine accepts the queued spawn, and which buildings are standing
+--   on which page.
+stakePrelude ∷ Text
+stakePrelude = lns
+    [ "package.loaded['scripts.unit_ai_fetch'] = {"
+    , "  inventoryCountOf = function() return 0 end,"
+    , "  groundCountOf = function() return 0 end,"
+    , "  findTechnomule = function() return nil end,"
+    , "  loadFeasible = function() return true end }"
+    , "package.loaded['scripts.movement_speed'] = {"
+    , "  comfort = function() return 1.0 end }"
+    , "package.loaded['scripts.unit_ai_core'] = {"
+    , "  distance = function(ax, ay, bx, by)"
+    , "    return math.sqrt((ax-bx)^2 + (ay-by)^2) end,"
+    , "  reportFailure = function(_uid, msg) calls[#calls+1] ="
+    , "    { 'failure', msg } end }"
+    , "calls = {}"
+    , "moved = 0"
+    , "unit = { moveTo = function() moved = moved + 1 end,"
+    , "         stop = function() end }"
+    , "construction = {"
+    , "  setJobStatus = function(_w, x, y, st, at)"
+    , "    calls[#calls+1] = { 'status', x, y, st, at } end,"
+    , "  cancelDesignation = function(x, y, at)"
+    , "    calls[#calls+1] = { 'cancel', x, y, at } end }"
+    , "engine = { loadYaml = function() return nil end }"
+    , "structure = nil"
+    -- `world` is the building manager this fixture answers
+    -- getActiveIds/getInfo from; `spawnResult` is what the engine says
+    -- about the queued spawn.
+    , "world = {}"
+    , "spawnResult = 1"
+    , "spawned = 0"
+    , "building = {"
+    , "  spawn = function() spawned = spawned + 1; return spawnResult end,"
+    , "  getActiveIds = function()"
+    , "    local ids = {}"
+    , "    for i = 1, #world do ids[i] = i end"
+    , "    return ids end,"
+    , "  getInfo = function(bid) return world[bid] end }"
+    , "local site = require('scripts.unit_ai_construct_site')"
+    , "local params = { construct_stake_visible_timeout = 5.0 }"
+    , "local function job()"
+    , "  return { category = 'building', building = 'hall',"
+    , "           x = 4, y = 7, attempt = 11 }"
+    , "end"
+    , "local function at(gx, gy) return { gridX = gx, gridY = gy } end"
+    , "local function stake(j, info, now)"
+    , "  return site.stakeBuilding('p1', j, 1, info, now, params)"
+    , "end"
+    , "local function only(kind)"
+    , "  assert(#calls == 1, 'expected exactly one engine call, got '"
+    , "    .. #calls)"
+    , "  assert(calls[1][1] == kind, 'expected a ' .. kind .. ' call, got '"
+    , "    .. calls[1][1])"
+    , "  return calls[1]"
+    , "end"
+    ]
+
+stakeHandoffSpec ∷ Spec
+stakeHandoffSpec =
+  describe "the staking hand-off holds the designation until the building\
+           \ is observable" $ do
+
+    it "walks to the site before staking anything" $ runsOk $ lns
+        [ stakePrelude
+        , "local j = job()"
+        , "assert(stake(j, at(40, 40), 0) == 'working')"
+        , "assert(moved == 1, 'a distant worker must walk')"
+        , "assert(spawned == 0, 'and must not stake from across the map')"
+        , "assert(#calls == 0, 'and must not touch the designation')"
+        ]
+
+    it "does NOT complete the designation on the tick it stakes" $ runsOk $ lns
+        [ stakePrelude
+        -- The whole point: building.spawn returns on QUEUED. Completing
+        -- here removes the designation ghost before the building it
+        -- planned exists to draw its own, and the site blinks empty.
+        , "local j = job()"
+        , "assert(stake(j, at(4, 7), 100) == 'working')"
+        , "assert(spawned == 1, 'the stake is queued')"
+        , "assert(#calls == 0, 'but the job is NOT reported complete yet')"
+        , "assert(j.staking == 100, 'the wait records its own clock')"
+        ]
+
+    it "keeps waiting while the queued stake is not observable yet" $ runsOk $ lns
+        [ stakePrelude
+        , "local j = job()"
+        , "stake(j, at(4, 7), 100)"
+        , "assert(stake(j, at(4, 7), 102) == 'working')"
+        , "assert(spawned == 1, 'and never re-stakes while it waits')"
+        , "assert(#calls == 0)"
+        ]
+
+    it "completes the moment the staked building is observable" $ runsOk $ lns
+        [ stakePrelude
+        , "local j = job()"
+        , "stake(j, at(4, 7), 100)"
+        , "world[1] = { defName = 'hall', gridX = 4, gridY = 7, page = 'p1' }"
+        , "assert(stake(j, at(4, 7), 101) == 'done')"
+        , "local c = only('status')"
+        , "assert(c[4] == 'complete' and c[2] == 4 and c[3] == 7"
+        , "       and c[5] == 11, 'the exact attempt is completed')"
+        ]
+
+    it "does not mistake another page's building for this job's stake" $
+      runsOk $ lns
+        [ stakePrelude
+        -- #1673: getActiveIds snapshots whatever page is active, which
+        -- is not necessarily the job's own.
+        , "local j = job()"
+        , "stake(j, at(4, 7), 100)"
+        , "world[1] = { defName = 'hall', gridX = 4, gridY = 7,"
+        , "             page = 'somewhere_else' }"
+        , "assert(stake(j, at(4, 7), 101) == 'working')"
+        , "assert(#calls == 0, 'nothing is completed on another page')"
+        -- Nor another definition, nor another anchor, on this one.
+        , "world[1] = { defName = 'other', gridX = 4, gridY = 7, page = 'p1' }"
+        , "assert(stake(j, at(4, 7), 101) == 'working')"
+        , "world[1] = { defName = 'hall', gridX = 9, gridY = 9, page = 'p1' }"
+        , "assert(stake(j, at(4, 7), 101) == 'working')"
+        , "assert(#calls == 0)"
+        ]
+
+    it "CANCELS, never completes, when the accepted stake never lands" $
+      runsOk $ lns
+        [ stakePrelude
+        -- The deadline is for a spawn the queue dropped outright. Nothing
+        -- was built, so completing would retire a job that produced
+        -- nothing and lose the site silently.
+        , "local j = job()"
+        , "stake(j, at(4, 7), 100)"
+        , "assert(stake(j, at(4, 7), 200) == 'gone')"
+        , "local kinds = {}"
+        , "for _, c in ipairs(calls) do kinds[c[1]] = true end"
+        , "assert(kinds['cancel'], 'the unbuilt designation is cancelled')"
+        , "assert(not kinds['status'], 'and never reported complete')"
+        , "assert(kinds['failure'], 'and the player is told')"
+        ]
+
+    it "completes a RESUMED job whose stake already landed before the save" $
+      runsOk $ lns
+        [ stakePrelude
+        -- unit_ai_save strips `staking`, so a job reloaded mid-hand-off
+        -- looks like a fresh one — and the load discarded the building
+        -- queue its spawn was riding. The building either stands there
+        -- (this case) or never will. Re-spawning is refused by the
+        -- occupancy check, and that refusal must be read as "already
+        -- done", not as "unbuildable".
+        , "local j = job()"
+        , "assert(j.staking == nil, 'a reloaded job carries no clock')"
+        , "world[1] = { defName = 'hall', gridX = 4, gridY = 7, page = 'p1' }"
+        , "spawnResult = nil"
+        , "assert(stake(j, at(4, 7), 500) == 'done')"
+        , "local c = only('status')"
+        , "assert(c[4] == 'complete', 'the finished job is completed')"
+        ]
+
+    it "still cancels a refused stake when nothing was built" $ runsOk $ lns
+        [ stakePrelude
+        , "local j = job()"
+        , "spawnResult = nil"
+        , "assert(stake(j, at(4, 7), 500) == 'gone')"
+        , "local kinds = {}"
+        , "for _, c in ipairs(calls) do kinds[c[1]] = true end"
+        , "assert(kinds['cancel'] and kinds['failure'],"
+        , "  'an unbuildable site is cancelled and reported')"
+        , "assert(not kinds['status'], 'and never reported complete')"
+        ]
+
 -- * Engine fixture
 
 fixturePage ∷ WorldPageId
@@ -570,6 +774,7 @@ cursorPass env ws =
 spec ∷ Spec
 spec = describe "building ghost" $ do
     presentationSpec
+    stakeHandoffSpec
     aroundAll setup renderSpec
   where
     -- Isolation wraps the boot (#1357): engine init is itself a config

@@ -104,10 +104,26 @@ local function snapshotUnitState(s)
     -- REFUND does not consult it at all -- that comes from the
     -- designation's own durable receipt, which is engine-side state this
     -- payload never carried.
-    if copy.constructJob and copy.constructJob.build ~= nil then
+    --
+    -- constructJob.staking (#1845) is stripped on the same shallow copy
+    -- and for a different reason: it is the CLOCK a building stake's
+    -- visibility wait is bounded by, and a wait that outlives the
+    -- session it was started in is meaningless -- the load discards the
+    -- building queue the stake was riding, so on the other side either
+    -- the building is standing there or it never will be. Deliberately
+    -- NOT the spawned building's id: that would be a raw BuildingId this
+    -- payload carried with no declared reference kind for
+    -- unit_ai_save_refs.lua to wrap and the integrity graph to check,
+    -- exactly the hazard the chopJob.iid note below records. The resumed
+    -- job re-derives the answer from the world instead -- see
+    -- unit_ai_construct_site.stakedBuildingAt.
+    if copy.constructJob
+       and (copy.constructJob.build ~= nil
+            or copy.constructJob.staking ~= nil) then
         local jobCopy = {}
         for jk, jv in pairs(copy.constructJob) do jobCopy[jk] = jv end
         jobCopy.build = nil
+        jobCopy.staking = nil
         copy.constructJob = jobCopy
     end
     -- chopJob.iid (#1854) is stripped on exactly the constructJob.build

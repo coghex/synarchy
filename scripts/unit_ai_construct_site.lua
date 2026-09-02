@@ -194,6 +194,32 @@ function M.sweepClaims(constructClaims, constructKey, wid, jobs, now, timeout)
     end
 end
 
+-- Is the building this job plans already standing at its anchor?
+--
+-- Derived from the world every time, never remembered (#1845). The
+-- alternative -- writing the spawned id onto the job -- would put a raw
+-- BuildingId into the persisted `constructJob`, where
+-- `unit_ai_save_refs.lua` declares no reference kind for it and the
+-- integrity graph could not check it; a save taken during the stake
+-- hand-off would then reload holding an id with no instance behind it.
+-- The world answers the same question with nothing to reconcile.
+--
+-- Page-qualified against the JOB's own page (#1673): `getActiveIds`
+-- snapshots whatever page is active, which is not necessarily this one.
+function M.stakedBuildingAt(wid, job)
+    if not (building.getActiveIds and building.getInfo) then return false end
+    local page = require("scripts.unit_ai_page")
+    for _, bid in ipairs(building.getActiveIds() or {}) do
+        local info = building.getInfo(bid)
+        if info and info.defName == job.building
+           and info.gridX == job.x and info.gridY == job.y
+           and page.same(info.page, wid) then
+            return true
+        end
+    end
+    return false
+end
+
 -- Stake a BUILDING blueprint, and hold the designation until the
 -- building it stakes is really on screen (#1845).
 --
@@ -206,13 +232,19 @@ end
 -- blinks empty. The designation ghost and the staked pre-delivery ghost
 -- are the same 60 % picture of the same definition at the same anchor
 -- (the renderer yields the designation once both exist), so simply
--- holding the designation until the instance is observable makes the
+-- holding the designation until the building is observable makes the
 -- whole hand-off invisible.
 --
--- The wait normally ends on the very next tick. The deadline is for the
--- one case where the queued spawn is dropped outright — its page torn
--- down, its definition unregistered — and there an empty site is the
--- honest picture, because nothing was built.
+-- `job.staking` is the CLOCK that wait is bounded by, and nothing else.
+-- It is stripped at save (unit_ai_save.lua) because a load discards the
+-- building queue the stake was riding: on the other side the building
+-- either stands there already -- which `stakedBuildingAt` sees, and the
+-- job completes -- or it never will, and the site is correctly empty.
+--
+-- The deadline is for the one case where the queued spawn is dropped
+-- outright, its page torn down or its definition unregistered. Nothing
+-- was built, so the designation is CANCELLED rather than completed:
+-- retiring a job that produced nothing would lose the site silently.
 --
 -- Returns "working" while the unit still owes this job something
 -- (walking, or waiting on the stake), and "done" or "gone" when the
@@ -220,32 +252,42 @@ end
 function M.stakeBuilding(wid, job, uid, info, now, params)
     local core = require("scripts.unit_ai_core")
     local mv = require("scripts.movement_speed")
-    if not job.stakedBid then
+    if not job.staking then
         if core.distance(info.gridX, info.gridY,
                          job.x + 0.5, job.y + 0.5) > 2.2 then
             unit.moveTo(uid, job.x + 0.5, job.y + 1.5, mv.comfort(uid))
             return "working"
         end
         unit.stop(uid)
-        job.stakedBid = building.spawn(job.building, job.x, job.y)
-        job.stakedAt = now
-        if not job.stakedBid then
-            -- Placement invalid (terrain changed, overlap) — retrying
-            -- can't succeed, so cancel the blueprint and say so.
-            core.reportFailure(uid, "Can't build here — blueprint cancelled")
-            construction.cancelDesignation(job.x, job.y, job.attempt)
-            return "gone"
+        if building.spawn(job.building, job.x, job.y) then
+            job.staking = now
+            return "working"
         end
+        -- Refused. If what this job planned is ALREADY standing here,
+        -- the refusal is this job's own earlier stake occupying the
+        -- tile: a save landed between the spawn and the completion, and
+        -- the job is simply finished. Only otherwise is the site really
+        -- unbuildable (terrain changed, overlap), and retrying could
+        -- not succeed.
+        if M.stakedBuildingAt(wid, job) then
+            construction.setJobStatus(wid, job.x, job.y, "complete",
+                                      job.attempt)
+            return "done"
+        end
+        core.reportFailure(uid, "Can't build here — blueprint cancelled")
+        construction.cancelDesignation(job.x, job.y, job.attempt)
+        return "gone"
     end
-    -- `building.getInfo` reads the same manager the renderer draws from,
-    -- so "observable here" is exactly "drawable there".
-    local visible = building.getInfo and building.getInfo(job.stakedBid)
-    local timeout = params.construct_stake_visible_timeout or 5.0
-    if not visible and (now - (job.stakedAt or now)) <= timeout then
+    if M.stakedBuildingAt(wid, job) then
+        construction.setJobStatus(wid, job.x, job.y, "complete", job.attempt)
+        return "done"
+    end
+    if now - job.staking <= (params.construct_stake_visible_timeout or 5.0) then
         return "working"
     end
-    construction.setJobStatus(wid, job.x, job.y, "complete", job.attempt)
-    return "done"
+    core.reportFailure(uid, "Can't build here — blueprint cancelled")
+    construction.cancelDesignation(job.x, job.y, job.attempt)
+    return "gone"
 end
 
 -- Finish one job: requirement 10's third re-check, requirement 18's
