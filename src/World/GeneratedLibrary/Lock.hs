@@ -49,7 +49,7 @@ import System.IO.Unsafe (unsafePerformIO)
 import System.Posix.IO
     ( OpenMode(..), OpenFileFlags(..), LockRequest(..), closeFd
     , defaultFileFlags, openFd, setLock )
-import World.Save.Storage.Durable (rejectSymlinkedPath)
+import World.Save.Storage.Durable (rejectSymlinkedPath, rejectSymlinkedManagedPath)
 import World.GeneratedLibrary.Types
 import World.GeneratedLibrary.Layout (lockFileName)
 
@@ -59,24 +59,33 @@ import World.GeneratedLibrary.Layout (lockFileName)
 --   itself raises propagates after the lock is released.
 withLibraryLock ∷ LibraryConfig → IO (Either LibraryFailure a) → IO (Either LibraryFailure a)
 withLibraryLock cfg action = withLibraryProcessMutex $ do
-    let lockPath = lcRoot cfg </> lockFileName
-        failure phase reason = Left (LibraryFailure phase Nothing (Just lockPath) reason)
-    -- A symlinked lock file would be opened THROUGH, locking (and
-    -- creating) whatever it points at outside the library.
-    linkSafe ← rejectSymlinkedPath lockPath
-    case linkSafe of
-        Left reason → pure (failure LibUnsafePath reason)
-        Right () → do
+    let root     = lcRoot cfg
+        lockPath = root </> lockFileName
+        failure phase path reason = Left (LibraryFailure phase Nothing (Just path) reason)
+    -- Containment is re-established HERE, on every acquisition, not
+    -- only when the library was opened: the root, its parent, and then
+    -- the lock file itself. A root renamed away and replaced by a
+    -- symlink after 'openLibrary' would otherwise have its lock file
+    -- created — and locked — inside the symlink's target, outside the
+    -- resource root, before any caller's own root check ran. Checking
+    -- only the lock path cannot catch that: 'pathIsSymbolicLink' looks
+    -- at a path's final component and resolves everything before it.
+    rootSafe ← rejectSymlinkedManagedPath root
+    lockSafe ← rejectSymlinkedPath lockPath
+    case (rootSafe, lockSafe) of
+        (Left reason, _) → pure (failure LibUnsafePath root reason)
+        (_, Left reason) → pure (failure LibUnsafePath lockPath reason)
+        (Right (), Right ()) → do
             opened ← try (openFd lockPath ReadWrite
                             defaultFileFlags { creat = Just 0o644 })
             case opened of
                 Left (e ∷ IOException) →
-                    pure (failure LibLock ("cannot open lock file: " <> tshow e))
+                    pure (failure LibLock lockPath ("cannot open lock file: " <> tshow e))
                 Right fd → bracket (pure fd) closeFd $ \_ → do
                     deadline ← (+ micros) ⊚ getMonotonicTimeNSec
                     acquired ← acquire fd deadline
                     case acquired of
-                        Left reason → pure (failure LibLock reason)
+                        Left reason → pure (failure LibLock lockPath reason)
                         Right ()    → action
   where
     micros = fromIntegral (max 0 (lcLockWaitMicros cfg)) * 1000

@@ -30,7 +30,8 @@ import System.Directory
     ( getTemporaryDirectory, createDirectoryIfMissing, createDirectory
     , createDirectoryLink, copyFile, doesDirectoryExist, doesFileExist
     , doesPathExist, listDirectory, removeDirectoryRecursive, removeFile
-    , removePathForcibly, getPermissions, setPermissions, Permissions(..) )
+    , removePathForcibly, getPermissions, setPermissions, Permissions(..)
+    , renameDirectory )
 import System.FilePath ((</>))
 import System.IO (hClose, hGetLine)
 import System.Posix.User (getEffectiveUserID)
@@ -987,6 +988,28 @@ containmentSpec = describe "containment" $ do
             leDigest e `shouldBe` Just (digestOf payload2)
             doesFileExist (finalDir root gidB </> "coarse.page") `shouldReturn` True
 
+    it "a root replaced by a symlink after opening is refused before any lock file is touched" $
+        withScratch $ \root → do
+            lib ← openOK root
+            _ ← publishOK lib gidA payload1
+            -- The opened root is renamed away and a symlink to somewhere
+            -- else put in its place. Every path the handle computes now
+            -- resolves through that link.
+            let elsewhere = root </> "elsewhere"
+            createDirectoryIfMissing True elsewhere
+            renameDirectory (libraryRoot root) (root </> "moved-away")
+            createDirectoryLink elsewhere (libraryRoot root)
+            publishEntry lib gidB payload2 `shouldSatisfyM` failedIn LibUnsafePath
+            cleanupLibrary lib HS.empty `shouldSatisfyM` failedIn LibUnsafePath
+            reconcileLibrary lib `shouldSatisfyM` failedIn LibUnsafePath
+            pinResult ← withPinnedReferences lib [gidA] (pure ())
+            expectPhase LibUnsafePath pinResult
+            listDirectory elsewhere `shouldReturn` []
+            doesFileExist (elsewhere </> lockFileName) `shouldReturn` False
+            -- The real library, wherever it was moved, is untouched.
+            listDirectory (root </> "moved-away")
+                `shouldReturn'` L.sort [entryDirectoryName gidA, registryFileName, lockFileName]
+
     it "refuses to lock through a symlinked lock file" $
         withScratch $ \root → do
             lib ← openOK root
@@ -995,6 +1018,7 @@ containmentSpec = describe "containment" $ do
             publishEntry lib gidA payload1 `shouldSatisfyM` failedIn LibUnsafePath
   where
     shouldSatisfyM action p = action ≫= (`shouldSatisfy` p)
+    shouldReturn' action expected = (L.sort ⊚ action) `shouldReturn` expected
 
 -- Coordination ----------------------------------------------------------------------
 
