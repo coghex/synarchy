@@ -58,7 +58,7 @@ import Control.Exception (SomeException, fromException)
 import GHC.IO.Exception (IOErrorType(..))
 import Network.Socket (Socket, SockAddr, accept)
 import System.IO (hPutStrLn, hFlush, stderr)
-import System.IO.Error (ioeGetErrorType)
+import System.IO.Error (ioeGetErrorType, tryIOError)
 
 -- | One line of Lua handed from a client connection to the Lua thread,
 --   with the channel its answer comes back on.
@@ -318,8 +318,15 @@ defaultDebugServerConfig port builtin = DebugServerConfig
         putStderrLine (listenerLostMessage port cause)
     }
 
+-- | Write a diagnostic to stderr, BEST EFFORT.
+--
+--   A closed stderr, or a consumer that went away, must not become an
+--   exception in the accept loop: the retry hook would stop retrying
+--   and the loss hook would skip whatever the caller layered after it.
+--   A diagnostic nobody can read is a lost diagnostic, not a fault.
 putStderrLine ∷ Text → IO ()
-putStderrLine t = hPutStrLn stderr (T.unpack t) >> hFlush stderr
+putStderrLine t = void ∘ tryIOError $
+    hPutStrLn stderr (T.unpack t) >> hFlush stderr
 
 -- | What a started console hands back: the queue the Lua thread polls,
 --   and the listener to stop at shutdown.

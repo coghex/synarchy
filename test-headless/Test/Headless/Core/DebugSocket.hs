@@ -26,13 +26,15 @@ import Test.Hspec
 import qualified Data.ByteString as BS
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
-import Control.Concurrent (threadDelay)
+import Control.Concurrent (forkIO, killThread, threadDelay)
+import Control.Concurrent.MVar (putMVar)
 import Control.Concurrent.STM (atomically)
-import Control.Concurrent.STM.TQueue (tryReadTQueue)
+import Control.Concurrent.STM.TQueue (TQueue, tryReadTQueue)
 import Control.Exception
     ( ArithException(..), Exception, IOException, SomeException, bracket
     , finally, throwIO, toException, try )
-import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
+import Data.IORef
+    (IORef, atomicModifyIORef', newIORef, readIORef, writeIORef)
 import GHC.Clock (getMonotonicTimeNSec)
 import GHC.IO.Exception (IOErrorType(..))
 import System.IO.Error (mkIOError)
@@ -203,6 +205,18 @@ lossPolicySpec = describe "the per-mode response to a lost listener" $ do
      \is lost" $
     lifecycleAfterLoss ModeGraphical `shouldReturn` EngineRunning
 
+  it "shuts a console-required engine down even when the diagnostic \
+     \cannot be written" $ do
+    -- The report used to come FIRST and hand the decision back for the
+    -- caller to act on, so a closed stderr took the shutdown with it.
+    lifecycle ← newIORef EngineRunning
+    handleDebugListenerLossWith
+        (\_ → throwIO (userError "stderr is gone"))
+        ModeHeadless 9008
+        (void (requestEngineCleanup lifecycle))
+        "boom"
+    readIORef lifecycle `shouldReturn` CleaningUp
+
   it "advances the lifecycle monotonically and answers whether it was \
      \this call that did it" $ do
     let step from = do
@@ -230,8 +244,8 @@ lifecycleAfterLoss mode = do
             { dscBuiltin = neverBuiltin
             , dscAccept  = \_ → throwIO deadListener
             , dscOnLoss  = \cause → do
-                shouldStop ← reportDebugListenerLoss mode port cause
-                when shouldStop $ void (requestEngineCleanup lifecycle)
+                handleDebugListenerLoss mode port
+                    (void (requestEngineCleanup lifecycle)) cause
                 atomicModifyIORef' reported (\n → (n + 1, ()))
             }
     withServer tweak $ \_ _ → do
@@ -390,6 +404,52 @@ idleSpec = describe "the idle timeout" $ do
             sendAll client "quick\n"
             quick ← readUntilContains twoSeconds "ok:quick" client
             quick `shouldSatisfy` BS.isInfixOf "ok:quick"
+
+  it "does not count a QUEUED evaluator command as idle either: a \
+     \response that outlasts the timeout still arrives, over the \
+     \unchanged 30-second production wait" $ do
+    diags ← newDiagnostics
+    let idleMicros = 400000
+        -- Nothing is a built-in here, so every line takes the queue.
+        tweak cfg = cfg
+            { dscBuiltin = neverBuiltin
+            , dscLimits  = (dscLimits cfg)
+                { dslIdleTimeoutMicros = idleMicros } }
+    withServer (testConfig diags tweak) $ \port console →
+        withClient port $ \client → do
+            void $ readUntilContains oneSecond "> " client
+            -- Stand in for the Lua thread: dequeue the command, then
+            -- answer it only well after the idle timeout would have
+            -- fired had the wait been counted as idle.
+            dequeued ← newIORef Nothing
+            responder ← forkIO $ do
+                mCmd ← waitForCommand (consoleQueue console) twoSeconds
+                forM_ mCmd $ \(DebugCommand text mvar) → do
+                    writeIORef dequeued (Just text)
+                    threadDelay (idleMicros * 3)
+                    putMVar mvar "queued-ok"
+            sendAll client "return 1\n"
+            reply ← readUntilContains fiveSeconds "queued-ok" client
+            killThread responder
+            reply `shouldSatisfy` BS.isInfixOf "queued-ok"
+            reply `shouldSatisfy` (not ∘ BS.isInfixOf "idle for")
+            -- It really went through the QUEUE, not the built-in table.
+            readIORef dequeued `shouldReturn` Just "return 1"
+
+  it "leaves the queued-command response wait at the production 30 \
+     \seconds, which the idle timeout neither shortens nor replaces" $
+    commandResponseTimeoutMicros `shouldBe` 30000000
+
+-- | Poll the command queue the way the Lua thread's own tick does.
+waitForCommand ∷ TQueue DebugCommand → Int → IO (Maybe DebugCommand)
+waitForCommand queue budget = do
+    found ← newIORef Nothing
+    void ∘ waitUntil budget $ do
+        mCmd ← pollDebugCommand queue
+        case mCmd of
+            Nothing  → return False
+            Just cmd → writeIORef found (Just cmd) >> return True
+    readIORef found
 
 -- ---------------------------------------------------------------- --
 -- The default classification

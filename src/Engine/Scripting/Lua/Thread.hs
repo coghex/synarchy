@@ -29,7 +29,7 @@ import Engine.Scripting.Lua.DebugServer
     , defaultDebugServerConfig, startDebugServer, stopDebugConsole
     , inertDebugConsole, pollDebugCommand
     , DebugListenerFailure(..), ListenerAction(..), listenerAction
-    , reportDebugListenerFailure, reportDebugListenerLoss
+    , reportDebugListenerFailure, handleDebugListenerLoss
     , reportBootCleanup )
 import Engine.Scripting.Lua.Thread.Console (processDebugCommands, debugBuiltin)
 import Engine.Scripting.Lua.Thread.Dispatch (processLuaMsg, processLuaMsgs)
@@ -198,10 +198,8 @@ luaStartup env stateRef = do
         -- console-required one, and the mode is knowledge this layer
         -- has and 'startDebugServer' deliberately does not.
         serverConfig = (defaultDebugServerConfig port (debugBuiltin env))
-            { dscOnLoss = \cause → do
-                shouldStop ← reportDebugListenerLoss mode port cause
-                when shouldStop $
-                    void $ requestEngineCleanup (lifecycleRef env)
+            { dscOnLoss = handleDebugListenerLoss mode port $
+                void (requestEngineCleanup (lifecycleRef env))
             }
         -- Shared by both branches that actually touch a socket.
         attemptBind = startDebugServer serverConfig

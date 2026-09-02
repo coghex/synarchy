@@ -81,7 +81,8 @@ module Engine.Scripting.Lua.DebugServer
       -- * Per-boot-mode response to a listener LOST after boot (#2170)
     , ListenerLossResponse(..)
     , listenerLossResponse
-    , reportDebugListenerLoss
+    , handleDebugListenerLoss
+    , handleDebugListenerLossWith
     ) where
 
 import UPrelude
@@ -89,7 +90,9 @@ import Engine.Core.Types (BootMode(..), bootModeName)
 import Engine.Scripting.Lua.DebugServer.Types
 import Engine.Scripting.Lua.DebugServer.Listener
 import qualified Data.Text as T
+import Control.Exception (SomeException, try)
 import System.IO (hPutStrLn, hFlush, stderr)
+import System.IO.Error (tryIOError)
 
 -- | Whether a boot mode can run without a debug console (#1190).
 --
@@ -236,14 +239,36 @@ listenerLossResponse mode port cause = case debugConsolePolicy mode of
   where
     base = listenerLostMessage port cause
 
--- | Report a lost listener on stderr and answer whether the engine must
---   stop. The caller owns the shutdown itself, because this module
---   deliberately knows nothing of 'Engine.Core.State.EngineEnv'.
-reportDebugListenerLoss ∷ BootMode → Int → Text → IO Bool
-reportDebugListenerLoss mode port cause = do
+-- | React to a lost listener: run @onShutdown@ if the mode requires it,
+--   then report the loss on stderr.
+--
+--   That order, and the best-effort write, are both load-bearing. This
+--   used to report FIRST and hand the decision back as a 'Bool' for the
+--   caller to act on — so a closed stderr, or a consumer that had gone
+--   away, raised out of the diagnostic and the shutdown never
+--   happened. In @--headless@ that recreates the exact failure the hook
+--   exists to prevent: a live engine, a dead listener, and no reachable
+--   @engine.quit()@. The transition cannot depend on a diagnostic
+--   landing.
+--
+--   @onShutdown@ is the caller's, because this module deliberately
+--   knows nothing of 'Engine.Core.State.EngineEnv'; it is run at most
+--   once per loss, and only for a 'ConsoleRequired' mode.
+handleDebugListenerLoss ∷ BootMode → Int → IO () → Text → IO ()
+handleDebugListenerLoss = handleDebugListenerLossWith putStderrLine
+
+-- | 'handleDebugListenerLoss' with the report sink injected, so a test
+--   can prove the shutdown survives a sink that raises.
+handleDebugListenerLossWith ∷ (Text → IO ()) → BootMode → Int → IO ()
+                            → Text → IO ()
+handleDebugListenerLossWith sink mode port onShutdown cause = do
     let response = listenerLossResponse mode port cause
-    putStderrLine (llrMessage response)
-    return (llrShutdown response)
+    when (llrShutdown response) onShutdown
+    void ∘ tryAnyIO $ sink (llrMessage response)
 
 putStderrLine ∷ Text → IO ()
-putStderrLine t = hPutStrLn stderr (T.unpack t) >> hFlush stderr
+putStderrLine t = void ∘ tryIOError $
+    hPutStrLn stderr (T.unpack t) >> hFlush stderr
+
+tryAnyIO ∷ IO α → IO (Either SomeException α)
+tryAnyIO = try
