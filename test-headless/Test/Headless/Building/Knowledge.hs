@@ -24,6 +24,7 @@ import qualified Data.Text as T
 import qualified Data.Vector as V
 import Data.IORef (IORef, newIORef, readIORef, writeIORef, modifyIORef')
 import Engine.Core.ReadOnlyRef (toReadOnlyRef)
+import Building.Schema
 import Building.Knowledge
 import Building.Knowledge.Live
 import Building.Types
@@ -95,18 +96,24 @@ instantCargoDef ∷ BuildingDef
 instantCargoDef = (bareDef "drop_pod")
     { bdBuildWork = 0, bdStorageCapacity = 150 }
 
--- | The same zero-work class, but with a real appearing animation — so
+-- | The same zero-work class, but with a real APPEARANCE animation — so
 --   'currentActivity' reports @Appearing@ for its duration (4 frames at
 --   2 fps = 2 game-seconds) before flipping to @Built@. Seeding at
 --   PLACEMENT would be wrong for this one; the drain's sweep has to
 --   wait for the genuine transition.
+--
+--   The role must be 'RoleAppearance', not construction: a zero-work
+--   definition is exactly the arm 'currentActivity' reads the appearance
+--   clip's duration on, and any other role would make this def report
+--   @Built@ at spawn — collapsing the distinction it draws against
+--   'instantCargoDef' silently rather than as a failure.
 animatedCargoDef ∷ BuildingDef
 animatedCargoDef = (bareDef "unfolding_pod")
     { bdBuildWork = 0, bdStorageCapacity = 150
-    , bdStateAnims = HM.singleton "appearing" "unfold"
+    , bdRoleAnims = Map.singleton RoleAppearance "unfold"
     , bdAnimations = HM.singleton "unfold" BuildingAnimation
         { banFps = 2, banLoop = False
-        , banFrames = Map.singleton DirS (V.replicate 4 (TextureHandle 0)) }
+        , banFrames = legacyAssets (V.replicate 4 (TextureHandle 0)) }
     }
 
 bareDef ∷ Text → BuildingDef
@@ -115,7 +122,7 @@ bareDef name = BuildingDef
     , bdDisplayName     = name
     , bdCategory        = "Test"
     , bdDescription     = ""
-    , bdTexture         = TextureHandle 0, bdIconTexture         = TextureHandle 0
+    , bdTextures         = legacyAssets (TextureHandle 0), bdIconTexture         = TextureHandle 0
     , bdTileW           = 1
     , bdTileH           = 1
     , bdPlacement       = "flat_ground"
@@ -127,7 +134,8 @@ bareDef name = BuildingDef
     , bdStorageCapacity = 0
     , bdOperations      = []
     , bdAnimations      = HM.empty
-    , bdStateAnims      = HM.empty
+    , bdRoleAnims      = Map.empty
+    , bdVisualClass     = FreestandingInstallation
     , bdPowerDrain      = 0, bdPowerNode      = Nothing
     }
 

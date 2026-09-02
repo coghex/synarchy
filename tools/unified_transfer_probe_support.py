@@ -110,7 +110,7 @@ DEF_UNSEEN = "probe_ut_unseen"
 # (and with no `state_animations` block the computed appear duration is 0),
 # so a `building.spawn`ed instance reports Built immediately — the shipped
 # `cargo_hold_S`'s real 240 s of worker-driven work would leave one stuck
-# "appearing" forever with no construct_job AI running.
+# "constructing" forever with no construct_job AI running.
 #
 # DEF_UNSEEN is the exception, and deliberately so: worker-built and left
 # at zero progress, it never reaches Built, so A3's seed-at-completion
@@ -126,6 +126,7 @@ BUILDINGS_YAML = "".join([
     category: "Test"
     description: "Throwaway #1255 test fixture - not shipped content."
     sprite: "assets/textures/buildings/cargo_hold_S/default.png"
+    visual_class: "freestanding_installation"
     tile_size: {{ x: 1, y: 1 }}
     placement: "flat_ground"
     race: "acolyte_cult"
@@ -136,6 +137,7 @@ BUILDINGS_YAML = "".join([
     category: "Test"
     description: "Throwaway #1255 test fixture - not shipped content."
     sprite: "assets/textures/buildings/cargo_hold_S/default.png"
+    visual_class: "freestanding_installation"
     tile_size: {{ x: 1, y: 1 }}
     placement: "flat_ground"
     race: "acolyte_cult"
@@ -146,6 +148,7 @@ BUILDINGS_YAML = "".join([
     category: "Test"
     description: "Throwaway #1255 test fixture - not shipped content."
     sprite: "assets/textures/buildings/cargo_hold_S/default.png"
+    visual_class: "freestanding_installation"
     tile_size: {{ x: 1, y: 1 }}
     placement: "flat_ground"
     race: "acolyte_cult"
@@ -156,6 +159,7 @@ BUILDINGS_YAML = "".join([
     category: "Test"
     description: "Throwaway #1255 test fixture - not shipped content."
     sprite: "assets/textures/buildings/cargo_hold_S/default.png"
+    visual_class: "freestanding_installation"
     tile_size: {{ x: 1, y: 1 }}
     placement: "flat_ground"
     race: "acolyte_cult"

@@ -175,7 +175,7 @@ end
 -----------------------------------------------------------
 -- Action: build_nearby
 --
--- Fires when an under-construction building (Appearing activity,
+-- Fires when an under-construction building (Constructing activity,
 -- bdBuildWork > 0) is within build_scan_range. Once adjacent
 -- (Chebyshev ≤ 1) the unit stands still; the construction tick in
 -- scripts/building_spawn.lua counts adjacent workers and applies
@@ -187,7 +187,7 @@ end
 -----------------------------------------------------------
 
 -- Returns {bid, gridX, gridY, tileW, tileH, distance} for the
--- nearest Appearing building with bdBuildWork > 0 within maxRange,
+-- nearest Constructing building with bdBuildWork > 0 within maxRange,
 -- or nil. Uses building.getActiveIds() / getActivity / getBuildRequired /
 -- getInfo — all cheap on a small N of placed buildings.
 local function findNearestUnbuilt(fromX, fromY, maxRange, myPage)
@@ -201,7 +201,7 @@ local function findNearestUnbuilt(fromX, fromY, maxRange, myPage)
         if bid then
             local activity = building.getActivity(bid)
             local required = building.getBuildRequired(bid)
-            if activity == "appearing" and required and required > 0 then
+            if activity == "constructing" and required and required > 0 then
                 local info = building.getInfo(bid)
                 if info and info.gridX and info.gridY
                    and page.same(myPage, info.page) then

@@ -35,7 +35,8 @@ import System.Exit (ExitCode(..))
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Core.Error.Exception
     (EngineException(..), ExceptionType(..), SystemError(..), mkErrorContext)
-import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
+import Engine.Core.Init (EngineInitResult(..))
+import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 import Engine.Core.Monad
     (EngineM', MonadError(..), MonadIO(..), runEngineM, modifyGraphicsState)
 import Engine.Core.State
@@ -81,7 +82,7 @@ bareTargets = ShutdownTargets
 -- | Run an engine action against a fresh headless engine.
 withEngine ∷ (EngineEnv → EngineM' ()) → IO (EngineEnv, Either EngineException ())
 withEngine act = do
-    EngineInitResult env ← initializeEngineHeadless
+    EngineInitResult env ← initializeEngineHeadlessQuiet
     result ← runEngineM (act env) env pure
     pure (env, result)
 
@@ -154,7 +155,7 @@ spec = describe "shutdown loaded-atlas release (#1691)" $ do
     -- failures. Swallowing an explicit exit would be the new way to
     -- fail to exit that the issue forbids.
     it "propagates an ExitCode rather than containing it" $ do
-      EngineInitResult env ← initializeEngineHeadless
+      EngineInitResult env ← initializeEngineHeadlessQuiet
       let action ∷ EngineM' ()
           action = releaseLoadedAtlasesWith ReleaseAtlases
                      (liftIO (throwIO (ExitFailure 3)))

@@ -7,6 +7,8 @@ buildings:
     tile_size: { x: 1, y: 1 }
     placement: "flat_ground"
     race: "acolyte_cult"
+    # Which art family owns this building's textures (#2080).
+    visual_class: "indoor_fixture"
 
     # Worker-seconds at the solo rate — heavier than the workbench's
     # hand tools, lighter than the furnace's masonry build.
@@ -38,7 +40,7 @@ buildings:
     # workers stop. With no "built" animation the final frame pins as the
     # completed sprite, matching default.png exactly with no visual snap.
     state_animations:
-      appearing: machine-shop-construct
+      construction: machine-shop-construct
 
     animations:
       machine-shop-construct:

@@ -16,6 +16,8 @@ import Test.Hspec
 import qualified Data.HashMap.Strict as HM
 import Engine.Asset.Handle (TextureHandle(..))
 import World.Chunk.Types (ChunkCoord(..))
+import qualified Data.Map.Strict as Map
+import Building.Schema
 import Building.Types
 import Building.Placement (RemoteCheck(..), remoteCheck, isRemote)
 import Location.Types
@@ -47,7 +49,7 @@ mkDef starting w h = BuildingDef
     , bdDisplayName     = "Test Building"
     , bdCategory        = "Test"
     , bdDescription     = ""
-    , bdTexture         = TextureHandle 0, bdIconTexture         = TextureHandle 0
+    , bdTextures         = legacyAssets (TextureHandle 0), bdIconTexture         = TextureHandle 0
     , bdTileW           = w
     , bdTileH           = h
     , bdPlacement       = "flat_ground"
@@ -59,7 +61,8 @@ mkDef starting w h = BuildingDef
     , bdStorageCapacity = 0
     , bdOperations      = []
     , bdAnimations      = HM.empty
-    , bdStateAnims      = HM.empty
+    , bdRoleAnims      = Map.empty
+    , bdVisualClass     = FreestandingInstallation
     , bdPowerDrain      = 0, bdPowerNode      = Nothing
     }
 

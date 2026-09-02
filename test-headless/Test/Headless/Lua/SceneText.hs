@@ -29,7 +29,7 @@
 --   rather than of 'TextObject's.
 --
 --   The one thing headless does NOT give us is an active scene:
---   'initializeEngineHeadless' inherits @defaultEngineState@'s empty
+--   'initializeEngineHeadlessQuiet' inherits @defaultEngineState@'s empty
 --   'sceneManager', and the default scene is created by
 --   "Engine.Graphics.Vulkan.Init". 'withActiveScene' installs the same
 --   @\"default\"@ scene that boot does and restores BOTH the previous

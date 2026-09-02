@@ -508,6 +508,7 @@ library
                      Unit.Thread.Movement.Timers
                      Unit.Thread.Movement.Climb
                      Unit.Thread.Movement.PathAdvance
+                     Building.Schema
                      Building.Types
                      Building.Knowledge
                      Building.Knowledge.Live
@@ -1130,6 +1131,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Harness
                    Test.Headless.Harness.GeneratedIds
                    Test.Headless.Harness.Isolation
+                   Test.Headless.Harness.Log
                    Test.Headless.Harness.WorkerHealth
                    Test.Headless.WorldGen
                    Test.Headless.WorldGen.Geology
@@ -1361,6 +1363,7 @@ test-suite synarchy-test-headless
                    Test.Headless.App.PreviewConfig
                    Test.Headless.App.ResourceRoot
                    Test.Headless.Core.LogCategoryEnv
+                   Test.Headless.Core.FixtureLogging
                    Test.Headless.Core.LogMonad
                    Test.Headless.Core.LogParity
                    Test.Headless.Core.LogThresholdEnv
@@ -1385,6 +1388,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Location.StampCommit
                    Test.Headless.Location.Stamping
                    Test.Headless.Tutorial.Definitions
+                   Test.Headless.Building.AssetSchema
                    Test.Headless.Building.Knowledge
                    Test.Headless.Building.MachineShopConstruction
                    Test.Headless.Item.NestedContents

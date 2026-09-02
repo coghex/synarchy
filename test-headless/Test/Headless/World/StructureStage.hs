@@ -20,7 +20,7 @@
 --   dispatches the captured command through the production
 --   'handleWorldCommand'.
 --
---   The engine is this module's own 'initializeEngineHeadless' (the
+--   The engine is this module's own 'initializeEngineHeadlessQuiet' (the
 --   'Test.Headless.Building.PageBinding' shape): it runs NO worker
 --   threads, so a queued command waits to be dequeued here rather than
 --   being raced away by a drainer. Both pages are in-memory
@@ -43,7 +43,8 @@ import qualified Data.Text as T
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 
-import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
+import Engine.Core.Init (EngineInitResult(..))
+import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 import Engine.Core.Log (LoggerState)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Thread (ThreadControl(..))
@@ -358,7 +359,7 @@ spec = describe "Declined structure placements retract their stage (#1674)"
     -- Isolation wraps the boot (#1357): engine init is itself a config
     -- writer, so a scratch root established afterwards is too late.
     setup act = withIsolatedResourceRoot $ do
-        EngineInitResult env ← initializeEngineHeadless
+        EngineInitResult env ← initializeEngineHeadlessQuiet
         ls ← newBareLuaBackend env
         act (env, ls)
 

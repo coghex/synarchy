@@ -36,7 +36,7 @@ be invisible to this probe and "rows and counts" unverifiable there.
 Registers a throwaway 1x1 storage fixture (`build_work: 0.0`, positive
 `storage_capacity`) rather than spawning the shipped `cargo_hold_S`:
 that def's real `build_work` (240s, worker-driven) would leave a
-`building.spawn`ed instance stuck "appearing" forever with no
+`building.spawn`ed instance stuck "constructing" forever with no
 construct_job AI running. Mirrors tools/transfer_context_menu_probe.py's
 own throwaway-def technique.
 
@@ -195,6 +195,7 @@ buildings:
     category: "Test"
     description: "Throwaway #1088 test fixture — not shipped content."
     sprite: "assets/textures/buildings/cargo_hold_S/default.png"
+    visual_class: "freestanding_installation"
     tile_size: {{ x: 1, y: 1 }}
     placement: "flat_ground"
     race: "acolyte_cult"
@@ -205,6 +206,7 @@ buildings:
     category: "Test"
     description: "Throwaway #1237 known-empty fixture — not shipped content."
     sprite: "assets/textures/buildings/cargo_hold_S/default.png"
+    visual_class: "freestanding_installation"
     tile_size: {{ x: 1, y: 1 }}
     placement: "flat_ground"
     race: "acolyte_cult"
@@ -215,6 +217,7 @@ buildings:
     category: "Test"
     description: "Throwaway #1237 never-inspected fixture — not shipped content."
     sprite: "assets/textures/buildings/cargo_hold_S/default.png"
+    visual_class: "freestanding_installation"
     tile_size: {{ x: 1, y: 1 }}
     placement: "flat_ground"
     race: "acolyte_cult"

@@ -7,6 +7,8 @@ buildings:
     tile_size: { x: 1, y: 1 }
     placement: "flat_ground"
     race: "acolyte_cult"
+    # Which art family owns this building's textures (#2080).
+    visual_class: "freestanding_installation"
 
     # Worker-seconds at the solo rate (same scaling as cargo_hold_S:
     # n^2 up to 3 workers, log taper above).
@@ -43,10 +45,10 @@ buildings:
     # tracking build progress directly (build_work > 0 — see
     # Building.Render.pickBuildingFrame) rather than real time, so fps
     # only matters if bdBuildWork were ever dropped to 0. With no
-    # "built" anim defined, the engine pins frame 8 as the built
-    # sprite — same picture, no snap.
+    # `built` anim defined, the engine pins frame 8 of the
+    # `construction` role as the built sprite — same picture, no snap.
     state_animations:
-      appearing: furnace-construct
+      construction: furnace-construct
 
     animations:
       furnace-construct:

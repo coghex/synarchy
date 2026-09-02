@@ -29,7 +29,8 @@ import Data.List (intercalate)
 import Data.IORef (readIORef, writeIORef, modifyIORef')
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
-import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
+import Engine.Core.Init (EngineInitResult(..))
+import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
 import Engine.Core.Thread (ThreadState(..), shutdownThread)
 import Engine.Graphics.Camera (Camera2D(..))
@@ -225,7 +226,7 @@ withHeadlessEngineExpectingStopped expectedStopped action =
         withHeadlessWorkerCheck expectedStopped workers (action env)
   where
     setup = do
-        EngineInitResult env ← initializeEngineHeadless
+        EngineInitResult env ← initializeEngineHeadlessQuiet
         -- Set zoom low enough for chunk loading (needs < zoomFadeEnd + 0.5 = 2.1)
         modifyIORef' (cameraRef env) $ \cam → cam { camZoom = 0.5 }
         writeIORef (lifecycleRef env) EngineRunning
@@ -237,7 +238,7 @@ withHeadlessEngineExpectingStopped expectedStopped action =
     -- blocks on @takeMVar (tsDone ts)@, and 'World.Thread.startWorldThread'
     -- fills that @MVar@ from a @finally@ at the fork site. So the worker's
     -- loop has provably exited by the time this returns, and the harness
-    -- starts no other thread — @initializeEngineHeadless@ binds no socket
+    -- starts no other thread — @initializeEngineHeadlessQuiet@ binds no socket
     -- and starts no debug server. A fixed sleep here waited for nothing
     -- and cost 100 ms per engine, ~27 s across the suite's 270 boots.
     --
@@ -269,7 +270,7 @@ withHeadlessEngineExpectingStopped expectedStopped action =
 --   example runs against a dead worker and a cleaning-up engine while
 --   hspec still reports green.
 --
---   Booting 'initializeEngineHeadless' with no thread at all is the
+--   Booting 'initializeEngineHeadlessQuiet' with no thread at all is the
 --   in-tree idiom for that shape: 'Test.Headless.Unit.LineOfSight' and
 --   'Test.Headless.Core.LoopStartup' both do it directly. This is the
 --   same thing as an 'aroundAll'-shaped wrapper, so a spec written
@@ -283,7 +284,7 @@ withHeadlessEngineNoWorld ∷ (EngineEnv → IO α) → IO α
 withHeadlessEngineNoWorld = bracket setup teardown
   where
     setup = do
-        EngineInitResult env ← initializeEngineHeadless
+        EngineInitResult env ← initializeEngineHeadlessQuiet
         writeIORef (lifecycleRef env) EngineRunning
         pure env
     teardown env = writeIORef (lifecycleRef env) CleaningUp
