@@ -1332,6 +1332,11 @@ test-suite synarchy-test-headless
                    Test.Headless.UI.PopupQueueTeardown
                    Test.Headless.UI.ResponsiveMenus
                    Test.Headless.UI.ResponsiveGameplay
+                   Test.Headless.UI.ResponsiveGameplay.Fixture
+                   Test.Headless.UI.ResponsiveGameplay.Lifecycle
+                   Test.Headless.UI.ResponsiveGameplay.Surfaces
+                   Test.Headless.UI.ResponsiveGameplay.Container
+                   Test.Headless.UI.ResponsiveGameplay.Etymology
                    Test.Headless.UI.SettingsDefaultsKeybinds
                    Test.Headless.UI.SettingsRevert
                    Test.Headless.UI.TutorialHud
